@@ -117,19 +117,19 @@ func (l *Ledger) floor() uint64 {
 }
 
 // charge is e's charge at now: the larger of reading and allowance during
-// the allowance's time, then the reading; a lesser reading never under the
-// allowance, and a place with no reading for StaleAfter never under its
+// the allowance's time, then the reading; a place whose reading is lesser,
+// or that has none for StaleAfter, never under its allowance nor under its
 // last charge; an ending's frozen charge.
 func (l *Ledger) charge(e *Entry, now time.Time) uint64 {
 	if e.ending {
 		return e.frozen
 	}
 	allowance := Allowance(e.class())
-	if e.spawnedAt.IsZero() || now.Before(e.spawnedAt.Add(AllowanceFor)) || e.lesser {
+	if e.spawnedAt.IsZero() || now.Before(e.spawnedAt.Add(AllowanceFor)) {
 		return max(e.reading, allowance)
 	}
-	if e.readAt.IsZero() || now.Sub(e.readAt) >= StaleAfter {
-		return max(e.reading, e.last)
+	if e.lesser || e.readAt.IsZero() || now.Sub(e.readAt) >= StaleAfter {
+		return max(e.reading, allowance, e.last)
 	}
 	return e.reading
 }
@@ -192,16 +192,14 @@ func (l *Ledger) sessions(athanor string, now time.Time) uint64 {
 	return sum
 }
 
-// fits says e fits now.
-func (l *Ledger) fits(e *Entry, in map[*Entry]bool, now time.Time) bool {
-	if l.fillsFloor(e, in) {
-		return l.work >= FloorBytes
-	}
-	need := Allowance(e.class())
-	if need > l.free(in, now) {
-		return false
-	}
-	return e.AthanorMax == 0 || l.sessions(e.Athanor, now)+need <= e.AthanorMax
+// fitsWork says e's allowance fits what W leaves now.
+func (l *Ledger) fitsWork(e *Entry, in map[*Entry]bool, now time.Time) bool {
+	return Allowance(e.class()) <= l.free(in, now)
+}
+
+// withinCeiling says e's allowance fits its athanor's own ceiling now.
+func (l *Ledger) withinCeiling(e *Entry, now time.Time) bool {
+	return e.AthanorMax == 0 || l.sessions(e.Athanor, now)+Allowance(e.class()) <= e.AthanorMax
 }
 
 // everFits says e could fit in a pool holding nothing else.
@@ -213,17 +211,30 @@ func (l *Ledger) everFits(e *Entry) bool {
 	return need <= sub(l.work, l.floor()) && (e.AthanorMax == 0 || need <= e.AthanorMax)
 }
 
-// Place enters a new place at now, behind every start already waiting:
-// admitted at once if it fits and nothing waits before it, refused at
-// once if it could never fit, else left waiting, and the idle runners
-// that cover what is short are asked to give way.
+// Place enters a new place at now. A refill of an empty place of the floor
+// is admitted at once, outside the queue, since F holds it; any other
+// start goes behind every start already waiting: admitted at once if it
+// fits and nothing waiting for W is before it, refused at once if it could
+// never fit, else left waiting, and the idle runners that cover what is
+// short are asked to give way.
 func (l *Ledger) Place(e *Entry, now time.Time) Events {
 	e.placedAt, e.assignedAt = now, now
 	if !l.everFits(e) {
 		return Events{Refused: []Refusal{{Entry: e, Held: l.held(e, l.inFloor(), now)}}}
 	}
+	if l.fillsFloor(e, l.inFloor()) {
+		l.admit(e)
+		ev := l.step(now, false)
+		ev.Admitted = append([]*Entry{e}, ev.Admitted...)
+		return ev
+	}
 	l.waiting = append(l.waiting, e)
 	return l.step(now, false)
+}
+
+func (l *Ledger) admit(e *Entry) {
+	e.admitted = true
+	l.admitted = append(l.admitted, e)
 }
 
 // Drop takes e out, waiting or admitted, at its drop or its release, and
@@ -243,12 +254,18 @@ func (l *Ledger) Read(e *Entry, bytes uint64, lesser bool, now time.Time) {
 	e.last = l.charge(e, now)
 }
 
-// Assign gives e another kind, athanor and subject: a runner given work
-// leaves the floor and is charged by itself, and one at rest again may be
-// asked to give way again.
-func (l *Ledger) Assign(e *Entry, kind, athanor, subject string, now time.Time) {
+// Assign gives e another kind of its class, athanor and subject: a runner
+// given work leaves the floor and is charged by itself, and one at rest
+// again may be asked to give way again. An assign to another class, which
+// would dodge the room and the ceiling its place was admitted by, changes
+// nothing and answers false.
+func (l *Ledger) Assign(e *Entry, kind, athanor, subject string, now time.Time) bool {
+	if c, ok := Kinds[kind]; !ok || c != e.class() {
+		return false
+	}
 	e.Kind, e.Athanor, e.Subject = kind, athanor, subject
 	e.assignedAt, e.asked = now, false
+	return true
 }
 
 // Ending freezes e's charge until it is free.
@@ -266,28 +283,46 @@ func (l *Ledger) Tick(now time.Time) Events { return l.step(now, true) }
 
 func (l *Ledger) step(now time.Time, second bool) Events {
 	var ev Events
-	// In arrival order: none passes a start that waits before it.
-	for len(l.waiting) > 0 {
-		e := l.waiting[0]
+	// In arrival order for room in W: none passes a start that waits for W
+	// before it. A start that fits W but not its athanor's own ceiling
+	// steps aside, holding no one, and is admitted when its athanor's
+	// charges allow. A start that would fill an empty place of the floor,
+	// a fresh runner become the floor's, needs no room and passes all.
+	var kept []*Entry
+	blocked := false
+	for _, e := range l.waiting {
 		in := l.inFloor()
-		if !l.fits(e, in, now) {
-			break
+		switch {
+		case l.fillsFloor(e, in) && l.work >= FloorBytes:
+		case blocked || !l.fitsWork(e, in, now):
+			blocked = true
+			kept = append(kept, e)
+			continue
+		case !l.withinCeiling(e, now):
+			kept = append(kept, e)
+			continue
 		}
-		l.waiting = l.waiting[1:]
-		e.admitted = true
-		l.admitted = append(l.admitted, e)
+		l.admit(e)
 		ev.Admitted = append(ev.Admitted, e)
 	}
+	l.waiting = kept
+	if second {
+		// An ask covers what is short only in the tick it was sent: one
+		// still standing at the next may be asked again.
+		for _, e := range l.admitted {
+			e.asked = false
+		}
+	}
 	in := l.inFloor()
-	kept := l.waiting[:0]
+	waiting := l.waiting[:0]
 	for _, e := range l.waiting {
 		if now.Sub(e.placedAt) >= RoomWait {
 			ev.Refused = append(ev.Refused, Refusal{Entry: e, Held: l.held(e, in, now)})
 			continue
 		}
-		kept = append(kept, e)
+		waiting = append(waiting, e)
 	}
-	l.waiting = kept
+	l.waiting = waiting
 	ev.merge(Events{GiveWay: l.giveWay(in, now, second)})
 	return ev
 }
@@ -299,6 +334,10 @@ func (l *Ledger) step(now time.Time, second bool) Events {
 func (l *Ledger) giveWay(in map[*Entry]bool, now time.Time, second bool) []*Entry {
 	var need uint64
 	for _, e := range l.waiting {
+		// A start held by its athanor's ceiling alone needs no room of W.
+		if l.fitsWork(e, in, now) && !l.withinCeiling(e, now) {
+			continue
+		}
 		need += l.need(e, in)
 	}
 	if second {

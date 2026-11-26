@@ -548,7 +548,6 @@ func (s *server) retireKept(sp *spawn, grace time.Duration, notify bool) {
 			s.mu.Lock()
 			s.leave(sp, removed, removal{notify: notify})
 			s.mu.Unlock()
-			s.flush()
 			if !removed {
 				return
 			}

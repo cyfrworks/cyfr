@@ -98,6 +98,11 @@ func TestLesserAndUnknownReadingsFreeNothing(t *testing.T) {
 	if got := l.charge(b, at(15.9)); got != 100*mib {
 		t.Fatalf("b unread for 2.9 seconds is charged %d", got)
 	}
+	// Unread for three seconds since a reading of 100 MiB, it is charged no
+	// less than its allowance.
+	if got := l.charge(b, at(16)); got != Allowance(Session) {
+		t.Fatalf("b unread for three seconds since 100 MiB is charged %d", got)
+	}
 }
 
 // A runner is charged 164 MiB for its first ten seconds, then its reading.
@@ -190,9 +195,10 @@ func TestIdleGivesWayBeforeARefusal(t *testing.T) {
 	if len(ev.Admitted) != 0 || !slices.Equal(ev.GiveWay, []*Entry{old, young}) {
 		t.Fatalf("asked %v, admitted %v; want the two kept ones, oldest first", ev.GiveWay, ev.Admitted)
 	}
-	// Asked once: the next second asks no one again while they cover it.
-	if ev := l.Tick(at(31)); len(ev.GiveWay) != 0 {
-		t.Fatalf("asked again: %v", ev.GiveWay)
+	// An ask covers what is short only in its own tick: the next second
+	// asks the two still standing again, and no one else.
+	if ev := l.Tick(at(31)); !slices.Equal(ev.GiveWay, []*Entry{old, young}) {
+		t.Fatalf("asked at the next second %v", ev.GiveWay)
 	}
 	l.Drop(old, at(31.5))
 	admitted(t, l.Drop(young, at(31.6)), b)
@@ -342,4 +348,169 @@ func TestASecondShortOfAProgramsAllowanceGivesWay(t *testing.T) {
 	if ev := l.Tick(at(21)); !slices.Equal(ev.GiveWay, []*Entry{kept}) {
 		t.Fatalf("with 236 MiB free asked %v", ev.GiveWay)
 	}
+}
+
+// A place spawned and never read, as one whose group's every read fails,
+// keeps its allowance past its window: it never falls to nothing.
+func TestAPlaceNeverReadKeepsItsAllowance(t *testing.T) {
+	l := New(1000*mib, false)
+	a := session("ath_a", "p1")
+	admitted(t, l.Place(a, at(0)), a)
+	l.Spawned(a, at(0))
+	if got := l.charge(a, at(5)); got != Allowance(Session) {
+		t.Fatalf("in its window: %d", got)
+	}
+	if got := l.charge(a, at(12)); got < Allowance(Session) {
+		t.Fatalf("a session never read, past its window, is charged %d MiB, under its allowance", got/mib)
+	}
+}
+
+// A refill of the floor never waits: the floor's runner given work while a
+// build waits for room, the runtime's refill is admitted at once, past it.
+func TestARefillDoesNotWaitBehindAStart(t *testing.T) {
+	l := New(1300*mib, true)
+	floor := runner("runtime")
+	spawned(t, l, floor, 0, 120*mib)
+	s := session("ath_a", "p1")
+	spawned(t, l, s, 0, 700*mib)
+	l.Read(s, 700*mib, false, at(20))
+	// 1,136 beside F, 700 held: a build's 800 waits.
+	b := build("ath_b")
+	if ev := l.Place(b, at(20)); len(ev.Admitted) != 0 {
+		t.Fatalf("the build fits: %+v", ev)
+	}
+	l.Assign(floor, "run", "ath_c", "", at(20.5))
+	refill := runner("runtime")
+	if ev := l.Place(refill, at(20.6)); !slices.Contains(ev.Admitted, refill) {
+		t.Fatalf("the floor's refill waits behind the build: admitted %v", ev.Admitted)
+	}
+}
+
+// Nor is it refused with the starts it came behind.
+func TestARefillIsNeverRefused(t *testing.T) {
+	l := New(1300*mib, true)
+	floor := runner("runtime")
+	spawned(t, l, floor, 0, 120*mib)
+	s := session("ath_a", "p1")
+	spawned(t, l, s, 0, 700*mib)
+	l.Read(s, 700*mib, false, at(20))
+	b1, b2 := build("ath_b"), build("ath_b")
+	l.Place(b1, at(20))
+	l.Place(b2, at(20.5))
+	l.Assign(floor, "run", "ath_c", "", at(21))
+	refill := runner("runtime")
+	if ev := l.Place(refill, at(21)); !slices.Contains(ev.Admitted, refill) {
+		t.Fatalf("the refill is not admitted at once: %+v", ev)
+	}
+	for sec := 22.0; sec <= 40; sec++ {
+		l.Read(floor, 120*mib, false, at(sec))
+		l.Read(s, 700*mib, false, at(sec))
+		for _, r := range l.Tick(at(sec)).Refused {
+			if r.Entry == refill {
+				t.Fatalf("the floor's refill was refused at %vs: %+v", sec, r.Held)
+			}
+		}
+	}
+}
+
+// An athanor at its own ceiling holds no other athanor's start: W has room
+// for both, and only ath_a's ceiling stops its second session, which steps
+// aside, is admitted once its athanor's charges allow, and is refused with
+// held at 17 seconds otherwise.
+func TestAnAthanorAtItsCeilingHoldsNoOtherAthanorsStart(t *testing.T) {
+	l := New(4096*mib, false)
+	a := session("ath_a", "p1")
+	a.AthanorMax = 500 * mib
+	admitted(t, l.Place(a, at(0)), a)
+	a2 := session("ath_a", "p2")
+	a2.AthanorMax = 500 * mib
+	if ev := l.Place(a2, at(1)); len(ev.Admitted) != 0 || len(ev.GiveWay) != 0 {
+		t.Fatalf("past its ceiling: %+v", ev)
+	}
+	other := session("ath_b", "p3")
+	if ev := l.Place(other, at(1)); !slices.Contains(ev.Admitted, other) {
+		t.Fatalf("ath_b's session, with %d MiB free, waits behind ath_a's ceiling", free(l, 1)/mib)
+	}
+	admitted(t, l.Drop(a, at(2)), a2)
+	a3 := session("ath_a", "p4")
+	a3.AthanorMax = 500 * mib
+	l.Place(a3, at(3))
+	ev := l.Tick(at(20))
+	if len(ev.Refused) != 1 || ev.Refused[0].Entry != a3 || ev.Refused[0].Held.Need != 384*mib {
+		t.Fatalf("a start held by its ceiling at 17 s: %+v", ev)
+	}
+}
+
+// A start that waits for W still holds the order, a start held by its
+// ceiling before it or not: a later one that fits does not pass it.
+func TestAStartWaitingForWorkHoldsTheOrderPastACeiling(t *testing.T) {
+	l := New(1600*mib, false)
+	a := session("ath_a", "p1")
+	a.AthanorMax = 400 * mib
+	spawned(t, l, a, 0, 384*mib)
+	held := session("ath_a", "p2")
+	held.AthanorMax = 400 * mib
+	b := build("ath_b")
+	c := session("ath_c", "p3")
+	l.Place(held, at(1))
+	// 1,216 free: the build's 800 fits past the start its ceiling holds;
+	// then 416, which a second build's 800 waits for, and c's 384, which
+	// would fit, waits behind it.
+	admitted(t, l.Place(b, at(1)), b)
+	big := build("ath_d")
+	if ev := l.Place(big, at(1)); len(ev.Admitted) != 0 {
+		t.Fatalf("a second build fits: %+v", ev)
+	}
+	if ev := l.Place(c, at(1)); len(ev.Admitted) != 0 {
+		t.Fatalf("a session passed the build waiting for W before it: %+v", ev)
+	}
+}
+
+// An assign never changes a place's class: room was checked for a
+// session's 384, and the place stays a session, charged so and counted in
+// its athanor's ceiling.
+func TestAnAssignAcrossClassesChangesNothing(t *testing.T) {
+	l := New(4096*mib, false)
+	a := session("ath_a", "p1")
+	a.AthanorMax = 400 * mib
+	admitted(t, l.Place(a, at(0)), a)
+	if l.Assign(a, "build", "ath_a", "", at(0.1)) || a.Kind != "program" {
+		t.Fatalf("a session's place was assigned a build's kind: %s", a.Kind)
+	}
+	if got := l.used(l.inFloor(), at(0.1)); got != 384*mib {
+		t.Errorf("a place admitted with 384 MiB of room is charged %d", got/mib)
+	}
+	b := session("ath_a", "p2")
+	b.AthanorMax = 400 * mib
+	if ev := l.Place(b, at(0.2)); len(ev.Admitted) != 0 {
+		t.Errorf("a second session of ath_a is admitted under a 400 MiB ceiling beside its first")
+	}
+	if !l.Assign(a, "terminal", "ath_a", "", at(0.3)) {
+		t.Error("a session's place may not be assigned a terminal's kind")
+	}
+}
+
+// An ask lasts one tick: a runner that turned an ask down, as one still
+// spawning, is asked again at the next second, and the waiting start is
+// served once it goes.
+func TestAnAskLastsOneTick(t *testing.T) {
+	l := New(1000*mib, true)
+	floor, kept := runner("runtime"), runner("runtime")
+	spawned(t, l, floor, 0, 100*mib)
+	spawned(t, l, kept, 0, 300*mib)
+	l.Assign(kept, "warm", "ath_a", "", at(1))
+	s := session("ath_b", "p1")
+	spawned(t, l, s, 0, 300*mib)
+	l.Read(kept, 300*mib, false, at(20))
+	l.Read(s, 300*mib, false, at(20))
+	next := session("ath_c", "p2")
+	if ev := l.Place(next, at(20)); !slices.Equal(ev.GiveWay, []*Entry{kept}) {
+		t.Fatalf("asked %v", ev.GiveWay)
+	}
+	// The pool turned it down: no drop. The next second asks it again.
+	l.Read(kept, 300*mib, false, at(21))
+	if ev := l.Tick(at(21)); !slices.Equal(ev.GiveWay, []*Entry{kept}) {
+		t.Fatalf("asked again %v", ev.GiveWay)
+	}
+	admitted(t, l.Drop(kept, at(21.5)), next)
 }

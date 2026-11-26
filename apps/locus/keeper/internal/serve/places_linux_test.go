@@ -362,9 +362,8 @@ func TestASpawnNamingAPlaceNotHeldOrNamedIsRefusedAndStartsNothing(t *testing.T)
 	assertRetired(t, k, uid)
 }
 
-// A place is measured from its spawn's readings as whose it is at the
-// moment: an assign changes whose it is and not its reading, a drop leaves
-// it, and neither the kill of the spawn's processes nor its leader's exit
+// A place is measured from its spawn's readings as whose it is: a refused
+// assign changes nothing of it, a drop leaves it, and neither the kill of the spawn's processes nor its leader's exit
 // frees it before its `released`, here held back until after both.
 func TestAPlaceIsMeasuredFromItsSpawnUntilItsRelease(t *testing.T) {
 	k := keptKeeper(t)
@@ -390,12 +389,12 @@ func TestAPlaceIsMeasuredFromItsSpawnUntilItsRelease(t *testing.T) {
 		t.Fatalf("measured %+v, want %+v", first, want)
 	}
 
-	// The assign is answered and the drop is not: the next reply after the
-	// assign's is the measure's.
+	// A session's role assigns nothing, and the drop of a named place is not
+	// answered: the next reply after the assign's refusal is the measure's,
+	// whose the place was.
 	k.s.handle(k.c, parsed(t, `{"v":7,"type":"assign","id":"as","place":"pl","kind":"terminal","athanor":"ath-2"}`))
-	k.expect(t, protocol.NewAssigned("as"))
+	k.expect(t, protocol.NewError("as", "", protocol.CodeBadRequest))
 	k.s.handle(k.c, parsed(t, `{"v":7,"type":"drop","place":"pl"}`))
-	whose = protocol.Whose{Kind: protocol.KindTerminal, Athanor: "ath-2"}
 	sameReading := func(when string) {
 		t.Helper()
 		got := asMeasured(t, k.measure(t, "pl"))

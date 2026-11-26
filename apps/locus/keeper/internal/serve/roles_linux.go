@@ -48,7 +48,7 @@ func (s *server) startRole(r *role) (*client, error) {
 		_ = unix.Close(fds[1])
 		return nil, fmt.Errorf("its channel: %w", err)
 	}
-	c := &client{role: r, id: randomHex(16), channel: os.NewFile(uintptr(fds[0]), "channel-"+r.spec.Name), places: map[string]*place{}}
+	c := &client{role: r, id: randomHex(16), channel: os.NewFile(uintptr(fds[0]), "channel-"+r.spec.Name), places: map[string]*place{}, wake: make(chan struct{}, 1)}
 	theirs := os.NewFile(uintptr(fds[1]), "role-channel-"+r.spec.Name)
 	s.mu.Lock()
 	r.starting = c
@@ -254,7 +254,6 @@ func (s *server) endClient(c *client) {
 		}
 	}
 	s.mu.Unlock()
-	s.flush()
 	_ = c.channel.Close()
 	s.signalChild(c.proc, unix.SIGKILL)
 	emptied := c.role.leaf.KillBy(time.Now())

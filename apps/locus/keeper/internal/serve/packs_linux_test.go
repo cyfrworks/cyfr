@@ -346,7 +346,8 @@ func TestAClaimedPlaceKeepsItsPacksAthanor(t *testing.T) {
 	if whose != testAthanor {
 		t.Fatalf("the place is %s's", whose)
 	}
-	if r := handle(`{"v":7,"type":"assign","id":"a2","place":"p1","kind":"program","athanor":"` + testAthanor + `","subject":"prg_2"}`); r["type"] != protocol.TypeAssigned {
+	// No role but the floor's assigns: a session's place keeps whose it is.
+	if r := handle(`{"v":7,"type":"assign","id":"a2","place":"p1","kind":"program","athanor":"` + testAthanor + `","subject":"prg_2"}`); r["type"] != protocol.TypeError || r["code"] != protocol.CodeBadRequest {
 		t.Fatalf("an assign keeping the athanor: %v", r)
 	}
 

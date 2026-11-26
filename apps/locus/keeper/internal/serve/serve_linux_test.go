@@ -218,7 +218,7 @@ type keeper struct {
 // runtime's is.
 func testClient(channel *os.File, spec pool.Spec, acct Account) *client {
 	r := &role{spec: RoleSpec{Name: "test", UID: acct.UID, Pool: spec.Name, Floor: spec.Name == "runner"}, pool: spec, account: acct}
-	c := &client{role: r, id: randomHex(16), channel: channel, places: map[string]*place{}}
+	c := &client{role: r, id: randomHex(16), channel: channel, places: map[string]*place{}, wake: make(chan struct{}, 1)}
 	r.client = c
 	return c
 }

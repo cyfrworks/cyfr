@@ -7,6 +7,7 @@ package serve
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -187,14 +188,16 @@ func TestAStartAsksIdleRunnersToGiveWayAndIsAdmittedAfter(t *testing.T) {
 	backends.write(t, placeLine("p1", "program", "ath_c", ""), placeLine("p2", "program", "ath_c", ""))
 	backends.expect(t, protocol.NewPlaced("p1", admission.LimitsOf(protocol.KindProgram, 1100*mibs).MemoryBytes))
 	runtime.expect(t, protocol.NewGiveWay("k1"))
+	// The ask lasts its tick: still standing at the next, k1 is asked again,
+	// and no one else.
 	clock.advance(time.Second)
 	s.admitTick()
+	runtime.expect(t, protocol.NewGiveWay("k1"))
 	runtime.quiet(t)
 	backends.quiet(t)
 	s.mu.Lock()
 	s.freePlace(runtime.c, "k1")
 	s.mu.Unlock()
-	s.flush()
 	backends.expect(t, protocol.NewPlaced("p2", admission.LimitsOf(protocol.KindProgram, 1100*mibs).MemoryBytes))
 }
 
@@ -224,4 +227,38 @@ func TestARefusalForRoomSaysWhatHoldsAndNothingOfOthers(t *testing.T) {
 		Others: 384 * mibs}))
 	backends.write(t, placeLine("next", "program", "ath_mine", "mcp_next"))
 	backends.sync(t)
+}
+
+// One role that stops reading its channel holds no other role's place and
+// not the admission's second: the runtime's channel fills with `placed`
+// lines it never reads, and backends' place in a pool with room is still
+// answered at once, and the second still steps. The control, with nothing
+// stalled, passes alike.
+func TestAStalledRoleHoldsNoOtherRolesPlace(t *testing.T) {
+	for name, lines := range map[string]int{"stalled": 40000, "control": 0} {
+		t.Run(name, func(t *testing.T) {
+			s, runtime, backends, _ := poolKeeper(t, 1<<50)
+			// Runs first: unblocks the keeper's write so every reader ends.
+			t.Cleanup(func() { runtime.theirs.Close() })
+			go func() {
+				for i := range lines {
+					if _, err := runtime.theirs.Write([]byte(placeLine(fmt.Sprintf("w%d", i), "warm", "", "") + "\n")); err != nil {
+						return
+					}
+				}
+			}()
+			// sleep-ok: the stall's fill has no event to wait on
+			time.Sleep(2 * time.Second)
+			backends.write(t, placeLine("p1", "program", "ath_a", ""))
+			_ = backends.theirs.SetReadDeadline(time.Now().Add(3 * time.Second))
+			backends.expect(t, protocol.NewPlaced("p1", admission.LimitsOf(protocol.KindProgram, 1<<50).MemoryBytes))
+			ticked := make(chan struct{})
+			go func() { s.admitTick(); close(ticked) }()
+			select {
+			case <-ticked:
+			case <-time.After(2 * time.Second):
+				t.Fatal("the admission's second did not step within 2 s while the runtime does not read")
+			}
+		})
+	}
 }

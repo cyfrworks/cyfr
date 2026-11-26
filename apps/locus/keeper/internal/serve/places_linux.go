@@ -112,7 +112,7 @@ func (s *server) handlePlace(c *client, req *protocol.Request) {
 		s.send(c, protocol.NewError(req.ID, "", protocol.CodeBadRequest))
 		return
 	}
-	s.flush()
+	s.drain(c)
 }
 
 // handleDrop frees a place no spawn has named, one still waiting for room
@@ -123,11 +123,11 @@ func (s *server) handleDrop(c *client, req *protocol.Request) {
 		s.freePlace(c, req.Place)
 	}
 	s.mu.Unlock()
-	s.flush()
+	s.drain(c)
 }
 
 // freePlace frees c's place id, in the keeper's admission too, with s.mu
-// held: what then fits is admitted at the next flush.
+// held: what then fits is queued for its clients.
 func (s *server) freePlace(c *client, id string) {
 	if p := c.places[id]; p != nil {
 		delete(c.places, id)
@@ -143,26 +143,28 @@ func (s *server) ending(sp *spawn) {
 }
 
 // admit queues, with s.mu held, what a step of the admission asks the
-// keeper to send, in its order, for the next flush: each place admitted
-// is answered `placed` with its spawn's memory bound, each start refused
-// is freed and answered `no_memory` with what holds the memory, and each
-// idle runner asked to give way is named to its role.
+// keeper to send, on each client's own queue in its order (client.queue):
+// each place admitted is answered `placed` with its spawn's memory bound,
+// each start refused is freed and answered `no_memory` with what holds the
+// memory, and each idle runner asked to give way is named to its role. No
+// step waits for a line to be written: a client that stops reading holds
+// only its own lines.
 func (s *server) admit(ev admission.Events) {
 	for _, e := range ev.Admitted {
 		ref := e.Ref.(placeRef)
 		limits := limitsOf(e.Kind, s.ledger.Work())
-		s.outbox = append(s.outbox, outgoing{ref.c, protocol.NewPlaced(ref.id, limits.MemoryBytes)})
+		ref.c.queue(protocol.NewPlaced(ref.id, limits.MemoryBytes))
 	}
 	for _, r := range ev.Refused {
 		ref := r.Entry.Ref.(placeRef)
 		delete(ref.c.places, ref.id)
 		s.log.Warn("place %s of role %s refused: no room in the pool for a %s (needs %s, %s free)", ref.id,
 			ref.c.role.spec.Name, r.Entry.Kind, describeBytes(r.Held.Need), describeBytes(r.Held.Free))
-		s.outbox = append(s.outbox, outgoing{ref.c, protocol.NewNoMemory(ref.id, heldOf(r.Held))})
+		ref.c.queue(protocol.NewNoMemory(ref.id, heldOf(r.Held)))
 	}
 	for _, e := range ev.GiveWay {
 		ref := e.Ref.(placeRef)
-		s.outbox = append(s.outbox, outgoing{ref.c, protocol.NewGiveWay(ref.id)})
+		ref.c.queue(protocol.NewGiveWay(ref.id))
 	}
 }
 
@@ -174,39 +176,12 @@ func heldOf(h admission.Held) protocol.Held {
 	return held
 }
 
-// outgoing is one line the admission queued for a client's channel.
-type outgoing struct {
-	c    *client
-	line any
-}
-
-// flush sends what the admission queued, in its order, outside s.mu: every
-// step that may have queued something flushes once it let s.mu go, and
-// flushes are one at a time, so no line passes another queued before it.
-func (s *server) flush() {
-	s.flushMu.Lock()
-	defer s.flushMu.Unlock()
-	for {
-		s.mu.Lock()
-		out := s.outbox
-		s.outbox = nil
-		s.mu.Unlock()
-		if len(out) == 0 {
-			return
-		}
-		for _, o := range out {
-			s.send(o.c, o.line)
-		}
-	}
-}
-
 // admitTick is the admission's second: starts admitted as room came,
 // those that waited their time refused, idle runners asked to give way.
 func (s *server) admitTick() {
 	s.mu.Lock()
 	s.admit(s.ledger.Tick(now()))
 	s.mu.Unlock()
-	s.flush()
 }
 
 // handleAssign makes a place whose the request says, an athanor or a subject
@@ -214,20 +189,24 @@ func (s *server) admitTick() {
 // keeper does not hold, or naming another athanor than the one whose packs
 // its spawn binds, is refused.
 func (s *server) handleAssign(c *client, req *protocol.Request) {
-	if !kindOfRole(c, req.Kind) {
-		s.log.Warn("assign %s refused: role %s does not place a %s", req.ID, c.role.spec.Name, req.Kind)
+	if !c.role.spec.Floor || !kindOfRole(c, req.Kind) {
+		s.log.Warn("assign %s refused: role %s does not assign a %s", req.ID, c.role.spec.Name, req.Kind)
 		s.send(c, protocol.NewError(req.ID, "", protocol.CodeBadRequest))
 		return
 	}
 	s.mu.Lock()
 	p := c.places[req.Place]
 	bound := p != nil && p.packs != "" && p.packs != req.Athanor
+	other := false
 	if p != nil && !bound {
-		p.whose = whoseOf(req)
-		s.ledger.Assign(p.entry, req.Kind, req.Athanor, req.Subject, now())
+		if other = !s.ledger.Assign(p.entry, req.Kind, req.Athanor, req.Subject, now()); !other {
+			p.whose = whoseOf(req)
+		}
 	}
 	s.mu.Unlock()
 	switch {
+	case other:
+		s.log.Warn("assign %s refused: place %s is of another class than a %s", req.ID, req.Place, req.Kind)
 	case p == nil:
 		s.log.Warn("assign %s refused: role %s holds no place %s", req.ID, c.role.spec.Name, req.Place)
 	case bound:
@@ -418,7 +397,6 @@ func (s *server) retryRemoval(sp *spawn, remove func(*cgroup.Group) error) {
 	s.forget(sp)
 	delete(s.unremoved, sp)
 	s.mu.Unlock()
-	s.flush()
 	s.log.Info("spawn %s: its memory group of uid %d removed on a retry; retired", sp.id, sp.account.UID)
 	if r.notify {
 		s.send(sp.client, protocol.NewReleased(sp.id))

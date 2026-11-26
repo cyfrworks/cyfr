@@ -733,6 +733,13 @@ type client struct {
 	starts sync.WaitGroup
 	// packs owns its puts at the packs' store (packview), ended with it.
 	packs packview.Owner
+	// out holds the lines queued for its channel, in order (queue); drainMu
+	// lets one drain at a time write them, and wake tells its writer that
+	// more are queued.
+	outMu   sync.Mutex
+	out     []any
+	drainMu sync.Mutex
+	wake    chan struct{}
 }
 
 type server struct {
@@ -750,18 +757,15 @@ type server struct {
 	roles   []*role
 	runRoot string
 
-	// mu guards pools, spawns, every client's places, the ledger, the
-	// outbox, unremoved and waiters, and is held across every fork, reap
-	// and signal, so a pid is never signalled after it was reaped.
+	// mu guards pools, spawns, every client's places, the ledger,
+	// unremoved and waiters, and is held across every fork, reap and
+	// signal, so a pid is never signalled after it was reaped.
 	mu sync.Mutex
 	// ledger is the one admission of every role's places (package
-	// admission); outbox holds what its steps queued for the channels,
-	// which flush sends in order outside mu, one flush at a time (flushMu).
-	ledger  *admission.Ledger
-	outbox  []outgoing
-	flushMu sync.Mutex
-	pools   map[string]*pool.Pool
-	spawns  map[string]*spawn
+	// admission).
+	ledger *admission.Ledger
+	pools  map[string]*pool.Pool
+	spawns map[string]*spawn
 	// unremoved holds every retired spawn whose group could not be removed,
 	// out of spawns, with what its retirement leaves to the retry that
 	// removes the group: until then its place stays, read as a live
@@ -1042,6 +1046,9 @@ func (s *server) signalChild(c *child, sig syscall.Signal) {
 
 // serveChannel answers c's requests until its channel ends.
 func (s *server) serveChannel(c *client) {
+	stop := make(chan struct{})
+	defer close(stop)
+	go s.writer(c, stop)
 	lr := protocol.NewLineReader(c.channel)
 	for {
 		line, tooLong, err := lr.Next()
@@ -1075,9 +1082,62 @@ func (s *server) serveChannel(c *client) {
 	}
 }
 
-// send writes reply to c's channel: every reply goes to the channel its
-// request came on, every report of a spawn to its client's.
+// send writes reply to c's channel, after every line queued before it:
+// every reply goes to the channel its request came on, every report of a
+// spawn to its client's. It waits for c's own channel alone.
 func (s *server) send(c *client, reply any) {
+	c.queue(reply)
+	s.drain(c)
+}
+
+// queue puts line at the end of c's lines and wakes its writer: it never
+// waits for a write, so a step of the admission under s.mu, or another
+// client's handler, never waits on c.
+func (c *client) queue(line any) {
+	c.outMu.Lock()
+	c.out = append(c.out, line)
+	c.outMu.Unlock()
+	select {
+	case c.wake <- struct{}{}:
+	default:
+	}
+}
+
+// drain writes c's queued lines in their order, one drain at a time.
+func (s *server) drain(c *client) {
+	c.drainMu.Lock()
+	defer c.drainMu.Unlock()
+	for {
+		c.outMu.Lock()
+		out := c.out
+		c.out = nil
+		c.outMu.Unlock()
+		if len(out) == 0 {
+			return
+		}
+		for _, line := range out {
+			s.write(c, line)
+		}
+	}
+}
+
+// writer drains c's lines whenever more are queued, until stop closes: the
+// lines another client's step queued for c are written by c's writer
+// alone.
+func (s *server) writer(c *client, stop <-chan struct{}) {
+	for {
+		select {
+		case <-stop:
+			return
+		case <-c.wake:
+			s.drain(c)
+		}
+	}
+}
+
+// write writes one line to c's channel, within writeTimeout; a write that
+// fails closes the channel.
+func (s *server) write(c *client, reply any) {
 	line, err := protocol.Encode(reply)
 	if err != nil {
 		s.log.Error("encoding a reply: %v", err)
@@ -1251,7 +1311,6 @@ func (s *server) handleSpawn(c *client, req *protocol.Request) {
 		return
 	case claimOthersPacks:
 		s.log.Warn("spawn %s refused: its packs are not its place's athanor's, or role %s keeps none", req.ID, c.role.spec.Name)
-		s.flush()
 		s.send(c, protocol.NewError(req.ID, "", protocol.CodeBadRequest))
 		return
 	}
@@ -1262,7 +1321,6 @@ func (s *server) handleSpawn(c *client, req *protocol.Request) {
 		s.mu.Lock()
 		s.freePlace(c, req.Place)
 		s.mu.Unlock()
-		s.flush()
 		s.send(c, protocol.NewError(req.ID, "", code))
 	default:
 		// A start refused once made is retired before it counts as done
@@ -1859,7 +1917,6 @@ func (s *server) retire(sp *spawn, grace time.Duration, notify bool) {
 			}
 			s.leave(sp, removed, removal{notify: notify, clean: clean})
 			s.mu.Unlock()
-			s.flush()
 
 			if !clean {
 				s.log.Warn("spawn %s: uid %d quarantined: a process or something it left outlived retirement", sp.id, uid)
