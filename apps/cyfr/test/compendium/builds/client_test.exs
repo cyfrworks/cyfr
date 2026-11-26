@@ -424,7 +424,7 @@ defmodule Compendium.Builds.ClientTest do
       ])
 
       assert {:error, {:protocol_mismatch, ^builder, ^client}} = build()
-      assert {:error, {:protocol_mismatch, 1, 2}} = build()
+      assert {:error, {:protocol_mismatch, 1, 3}} = build()
     end
   end
 
@@ -665,7 +665,7 @@ defmodule Compendium.Builds.ClientTest do
       health = Jason.decode!(@fixture["lines"]["health"]["body"])
 
       ScriptedBuilder.health({:line, Jason.encode!(%{health | "version" => 1})})
-      assert {:error, {:protocol_mismatch, 1, 2}} = Client.toolchains()
+      assert {:error, {:protocol_mismatch, 1, 3}} = Client.toolchains()
 
       ScriptedBuilder.health({:line, Jason.encode!(Map.delete(health, "toolchains"))})
       assert {:error, {:malformed, {:missing_field, "toolchains"}}} = Client.toolchains()

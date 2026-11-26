@@ -577,7 +577,7 @@ defmodule Cyfr.TwoWorkersTest do
   defp report(worker_key, service, boot, runner, attempts) do
     body =
       Jason.encode!(%{
-        "v" => 1,
+        "v" => 2,
         "op" => "runner_exited",
         "args" => %{
           "member" => Opus.Keys.member(),

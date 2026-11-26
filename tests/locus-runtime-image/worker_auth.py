@@ -15,7 +15,7 @@ than imported, so the suite runs wherever `python3` does.
 The wire (`Prima.WorkerWire`) is versioned: a header's first token is the
 version token `v1`, and one spelling another version (`v` and a decimal
 number) is `unknown_version` before the body is read; every body and answer
-carries `"v": 1` as its first member, and a body without it, or at another
+carries `"v": 2` as its first member, and a body without it, or at another
 version, is `unknown_version` once opened and before its `op` is read. A
 guest's outbound target is an `egress_pin` host call answered with a
 `Prima.PinnedTarget` or refused by name (`read_pin_request`, `read_pin`),
@@ -46,7 +46,7 @@ import time
 import urllib.parse
 
 PREFIX = "cyfr-locus/v1/runtime"
-VERSION = 1
+VERSION = 2
 VERSION_TOKEN = "v1"
 ANY_VERSION_TOKEN = re.compile(r"v(0|[1-9][0-9]*)")
 ATTEMPT_FIELDS = ("athanor_id", "execution_id", "attempt", "fence", "generation", "service")

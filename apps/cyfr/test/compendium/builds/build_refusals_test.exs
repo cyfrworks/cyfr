@@ -112,6 +112,21 @@ defmodule Compendium.Builds.BuildRefusalsTest do
          &assert({:timeout, "Compilation timed out after 270000 ms"} == &1)},
         {{:refuse, {:memory, 1_073_741_824}, log},
          &assert(err_msg(&1) =~ "reached its memory bound of 1073741824 bytes")},
+        {{:refuse,
+          {:no_memory,
+           %{
+             need: 800 * 1024 * 1024,
+             free: 0,
+             mine: [%{kind: "program", subject: "mcp_private", bytes: 384 * 1024 * 1024}],
+             others_bytes: 1024 * 1024 * 1024
+           }}},
+         fn reason ->
+           # What holds the memory, said once, in the one sentence: the
+           # person's own by kind, everyone else's as one sum, no name.
+           assert err_msg(reason) ==
+                    "Builder: This CYFR has not enough memory free. Of yours, a program uses " <>
+                      "384.0 MB. Others use 1.0 GB. Stop one on the Programs page, or wait."
+         end},
         {{:refuse, {:unavailable, "the rust toolchain is not installed in this image"}},
          &assert(err_msg(&1) =~ "cannot build this: the rust toolchain is not installed")},
         {{:refuse, {:failed, {:status, 101}}, log},

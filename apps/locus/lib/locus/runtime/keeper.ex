@@ -174,7 +174,8 @@ defmodule Locus.Runtime.Keeper do
   What `reason`, the reason a spawn was refused before any runner process
   started (`t:event/0`'s `{:refused, reason}`, or `c:spawn/1`'s error),
   means for an operator: a code and a sentence, as
-  `t:Prima.WorkerAPI.refusal/0` spells them.
+  `t:Prima.WorkerAPI.refusal/0` spells them, and for a place refused for
+  room (`{:no_memory, held}`) the keeper's `held` beside them.
   """
   @callback refusal(term()) :: Prima.WorkerAPI.refusal()
 

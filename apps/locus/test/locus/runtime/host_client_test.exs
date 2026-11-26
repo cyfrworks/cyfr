@@ -84,8 +84,8 @@ defmodule Locus.Runtime.HostClientTest do
 
     for %{op: op, header: header, body: body, caller: caller} <- ScriptedHost.requests(host) do
       assert String.starts_with?(header, "v1 kind=call ")
-      assert %{"v" => 1, "op" => ^op, "args" => %{}} = Jason.decode!(body)
-      assert String.starts_with?(body, ~s({"v":1,))
+      assert %{"v" => 2, "op" => ^op, "args" => %{}} = Jason.decode!(body)
+      assert String.starts_with?(body, ~s({"v":2,))
       assert caller.execution_id == attempt.execution_id
       assert caller.runner == client.runner
       assert caller.boot == client.boot
@@ -157,7 +157,7 @@ defmodule Locus.Runtime.HostClientTest do
     cases = Map.new(@host_api["connection_cases"], &{&1["name"], &1})
 
     for name <- ~w(omitted named) do
-      %{"v" => 1, "op" => "admit_child", "args" => args} = Jason.decode!(cases[name]["body"])
+      %{"v" => 2, "op" => "admit_child", "args" => args} = Jason.decode!(cases[name]["body"])
       ScriptedHost.script(host, "admit_child", {:answer, cases["named"]["answer"]})
 
       assert {:error, {:guest_error, "connection_not_granted", message}} =
@@ -227,7 +227,7 @@ defmodule Locus.Runtime.HostClientTest do
          %{host: host, client: client} do
       # An idempotent call, one retried as a batch, and one never retried,
       # whose refusal is final rather than uncertain.
-      ScriptedHost.script(host, "renew", {:raw, 413, ~s({"v":1,"error":"lost"})})
+      ScriptedHost.script(host, "renew", {:raw, 413, ~s({"v":2,"error":"lost"})})
       ScriptedHost.script(host, "push_deltas", {:raw, 413, "not json"})
       ScriptedHost.script(host, "take_rate", {:raw, 413, ""})
 
@@ -272,7 +272,7 @@ defmodule Locus.Runtime.HostClientTest do
       host: host,
       client: client
     } do
-      ScriptedHost.script(host, "renew", [:drop, {:raw, 413, ~s({"v":1,"error":"lost"})}])
+      ScriptedHost.script(host, "renew", [:drop, {:raw, 413, ~s({"v":2,"error":"lost"})}])
 
       assert {:error, :too_large} = HostClient.renew(client, [client.attempt])
       assert [first, second] = ScriptedHost.requests(host, "renew")
@@ -281,7 +281,7 @@ defmodule Locus.Runtime.HostClientTest do
 
     test "is refused for good through a runner's relay too", %{host: host} do
       attempt = ScriptedHost.attempt!(host) |> Locus.Runtime.Test.ScriptedKeeper.relayed!()
-      ScriptedHost.script(host, "renew", {:raw, 413, ~s({"v":1,"error":"lost"})})
+      ScriptedHost.script(host, "renew", {:raw, 413, ~s({"v":2,"error":"lost"})})
 
       assert {:error, :too_large} = HostClient.renew(attempt.client, [attempt.attempt])
       assert [_once] = ScriptedHost.requests(host, "renew")
@@ -309,17 +309,17 @@ defmodule Locus.Runtime.HostClientTest do
          %{host: host, client: client} do
       ScriptedHost.script(host, "renew", [
         {:answer, ~s({"ok":{}})},
-        {:answer, ~s({"v":2,"ok":{}})}
+        {:answer, ~s({"v":3,"ok":{}})}
       ])
 
       assert {:error, :lost} = HostClient.renew(client, [client.attempt])
       assert length(ScriptedHost.requests(host, "renew")) == 2
 
-      ScriptedHost.script(host, "take_rate", {:answer, ~s({"v":"1","ok":true})})
+      ScriptedHost.script(host, "take_rate", {:answer, ~s({"v":"2","ok":true})})
       assert {:error, {:uncertain, _}} = HostClient.take_rate(client, "http:x")
       assert length(ScriptedHost.requests(host, "take_rate")) == 1
 
-      ScriptedHost.script(host, "renew", {:answer, ~s({"v":1,"ok":{},"extra":true})})
+      ScriptedHost.script(host, "renew", {:answer, ~s({"v":2,"ok":{},"extra":true})})
       assert {:error, :lost} = HostClient.renew(client, [client.attempt])
     end
 
@@ -327,8 +327,8 @@ defmodule Locus.Runtime.HostClientTest do
          %{host: host, client: client} do
       # Refused before the body, plain, whatever version the host speaks.
       for refusal <- [
-            ~s({"v":1,"error":"unknown_version"}),
-            ~s({"v":2,"error":"unknown_version"})
+            ~s({"v":2,"error":"unknown_version"}),
+            ~s({"v":3,"error":"unknown_version"})
           ] do
         ScriptedHost.script(host, "renew", {:raw, 401, refusal})
         before = length(ScriptedHost.requests(host, "renew"))
@@ -350,7 +350,7 @@ defmodule Locus.Runtime.HostClientTest do
       end)
 
       # Any other refusal by status is lost, and asked again as its class allows.
-      ScriptedHost.script(host, "renew", {:raw, 401, ~s({"v":1,"error":"bad_mac"})})
+      ScriptedHost.script(host, "renew", {:raw, 401, ~s({"v":2,"error":"bad_mac"})})
       before = length(ScriptedHost.requests(host, "renew"))
       assert {:error, :lost} = HostClient.renew(client, [client.attempt])
       assert length(ScriptedHost.requests(host, "renew")) == before + 2
@@ -372,7 +372,7 @@ defmodule Locus.Runtime.HostClientTest do
                   redirect_other_host fetch_ipv6 redirect_ipv6_spelling)
 
       for vector <- cases do
-        %{"v" => 1, "op" => "egress_pin", "args" => args} = Jason.decode!(vector["body"])
+        %{"v" => 2, "op" => "egress_pin", "args" => args} = Jason.decode!(vector["body"])
         ScriptedHost.script(host, "egress_pin", {:answer, vector["answer"]})
 
         opts =
@@ -676,7 +676,7 @@ defmodule Locus.Runtime.HostClientTest do
       assert :error = posted.(asking.(:full))
       assert asked() == [byte_size(answer)]
 
-      refusal = ~s({"v":1,"error":"unknown_version"})
+      refusal = ~s({"v":2,"error":"unknown_version"})
       ScriptedHost.script(host, "renew", {:raw, 401, refusal})
       assert {:ok, 401, ""} = posted.(asking.(:full))
       assert asked() == [byte_size(refusal)]
@@ -937,7 +937,7 @@ defmodule Locus.Runtime.HostClientTest do
     end
 
     test "any other status is lost, and nothing is asked again", %{host: host, client: client} do
-      for answer <- [:drop, {:raw, 401, ~s({"v":1,"error":"lost"})}] do
+      for answer <- [:drop, {:raw, 401, ~s({"v":2,"error":"lost"})}] do
         ScriptedHost.script(host, "attached_fetch", answer)
         assert {:error, "lost"} = HostClient.attached_fetch(client, attached(), options(sink()))
         assert events() == []
@@ -1216,10 +1216,10 @@ defmodule Locus.Runtime.HostClientTest do
 
   # The answer envelope the client reads is the one `Prima.WorkerWire` builds.
   test "the answers read are the worker protocol's envelopes" do
-    assert WorkerWire.ok(1) |> Jason.encode!() |> Jason.decode!() == %{"v" => 1, "ok" => 1}
+    assert WorkerWire.ok(1) |> Jason.encode!() |> Jason.decode!() == %{"v" => 2, "ok" => 1}
 
     assert WorkerWire.error(:lost) |> Jason.encode!() |> Jason.decode!() ==
-             %{"v" => 1, "error" => "lost"}
+             %{"v" => 2, "error" => "lost"}
   end
 end
 

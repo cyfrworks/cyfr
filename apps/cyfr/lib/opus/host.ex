@@ -11,7 +11,7 @@ defmodule Opus.Host do
 
   `call/3` is the one entry point. It takes a host call's header
   (`Prima.WorkerAuth.host_call_header/3`), its JSON body,
-  `{"v": 1, "op": name, "args": {...}}` (`Prima.WorkerWire.request_body/2`),
+  `{"v": 2, "op": name, "args": {...}}` (`Prima.WorkerWire.request_body/2`),
   and the `emit` an admitted `attached_fetch` writes its sealed frames
   with, and answers JSON. The operation is named inside the body, so the
   header's MAC covers it; the body's version is read before its operation
@@ -77,8 +77,8 @@ defmodule Opus.Host do
   ## Answers
 
   Every answer carries the wire's version first
-  (`Prima.WorkerWire.ok/1` and `error/2`): `{"v": 1, "ok": value}` on
-  success, and a refusal is `{"v": 1, "error": name}`:
+  (`Prima.WorkerWire.ok/1` and `error/2`): `{"v": 2, "ok": value}` on
+  success, and a refusal is `{"v": 2, "error": name}`:
 
     * `lost` — this boot does not hold the control plane, the header does
       not verify, the header names another member, the body is not an
@@ -138,7 +138,7 @@ defmodule Opus.Host do
   ## A worker service's report
 
   `runner_exited/2` takes a report's header (`Prima.WorkerAuth.report_header/3`)
-  and its JSON body, `{"v": 1, "op": "runner_exited", "args": {"member":
+  and its JSON body, `{"v": 2, "op": "runner_exited", "args": {"member":
   boot, "runner": id, "attempts": [ids], "refusal"?: code}}`, and
   answers JSON; `refusal`, when present, is a code
   (`Prima.WorkerAPI.refusal_code?/1`), or the report is lost. The header must
@@ -159,9 +159,9 @@ defmodule Opus.Host do
   attempt named beside others can be the runner's word and is never
   closed so. A report from another boot of the same service lapses
   nothing.
-  It answers `{"v": 1, "ok": true}`, `{"v": 1, "error": "lost"}` for a
+  It answers `{"v": 2, "ok": true}`, `{"v": 2, "error": "lost"}` for a
   report that does not verify, is not a report at this version or names
-  another member, and `{"v": 1, "error": "unavailable"}` when this boot
+  another member, and `{"v": 2, "error": "unavailable"}` when this boot
   does not hold the control plane (nothing is lapsed) or the store cannot
   list the attempts.
   """

@@ -10,7 +10,9 @@ defmodule Opus.StartRefusalTest do
   lost may have started the run, so dispatch reconciles against the
   attempt: with no runner attached it closes the run failed as a start the
   worker did not answer. The row and the caller's result tell the two
-  apart. (A lost start whose runner did attach keeps the run:
+  apart. A start refused for room, `503` `no_memory` with what holds the
+  memory, closes the run failed with that one sentence alone
+  (`Prima.LocusPool.refusal_sentence/1`). (A lost start whose runner did attach keeps the run:
   `Cyfr.Test.ScriptedWorkerTest` and `Cyfr.TwoWorkersTest`.)
 
   The worker service is a stub listener that answers `status` as a
@@ -191,6 +193,46 @@ defmodule Opus.StartRefusalTest do
              Arca.ExecutionAttempts.current(Sanctum.Context.actor(ctx), id)
 
     refute state == "running"
+  end
+
+  @tag :capture_log
+  test "a start refused for room closes the run failed with the one sentence of what holds it, and nothing else",
+       %{ctx: ctx, refusal: refusal} do
+    # A runner's place is no one's until its work is assigned, so what the
+    # keeper says holds the memory names nobody's work as the person's own:
+    # all of it is one sum, and the sentence says it is work under way.
+    held = %{
+      "need" => 171_966_464,
+      "free" => 8_388_608,
+      "mine" => [],
+      "others_bytes" => 2_147_483_648
+    }
+
+    serve!({503, WorkerWire.error(:no_memory, %{"held" => held})}, refusal)
+
+    {result, row, id} = run(ctx)
+
+    sentence =
+      "This CYFR has not enough memory free. Work under way uses 2.0 GB. Wait, or try again later."
+
+    assert result == {:error, sentence}
+    assert row.status == "failed"
+    assert row.error_message == sentence
+
+    assert_received {:request, "/worker/v1/start"}
+    refute_received {:request, "/worker/v1/start"}
+    assert %{claimed_by: nil} = Arca.ExecutionAttempts.current(Sanctum.Context.actor(ctx), id)
+  end
+
+  @tag :capture_log
+  test "a 503 for room whose held does not read is a lost start, not a refusal",
+       %{ctx: ctx, refusal: refusal} do
+    serve!({503, WorkerWire.error(:no_memory, %{"held" => %{"need" => 1}})}, refusal)
+
+    {result, row, _id} = run(ctx)
+
+    assert result == {:error, "the execution worker did not answer the start"}
+    assert row.error_message == "the execution worker did not answer the start"
   end
 
   @tag :capture_log

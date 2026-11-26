@@ -95,9 +95,15 @@ defmodule Prima.WorkerAPI do
   operator naming what the deployment lacks. While it refuses, a `start`
   no fresh or idle runner can take asks the keeper for a runner and waits
   for that spawn: it is refused `unavailable` with the keeper's sentence
-  for that spawn, or given the runner.
+  for that spawn, or given the runner. A refusal for room (`no_memory`)
+  also carries, inside the worker service, the keeper's `held`, which a
+  start refused for it answers (`c:start/3`) and a status never carries.
   """
-  @type refusal :: %{reason: String.t(), message: String.t()}
+  @type refusal :: %{
+          required(:reason) => String.t(),
+          required(:message) => String.t(),
+          optional(:held) => Prima.LocusPool.held()
+        }
 
   @runner_states [:fresh, :idle, :busy, :tainted]
   @status_members ~w(service boot runners attempts memory_bytes refusal)
@@ -277,10 +283,20 @@ defmodule Prima.WorkerAPI do
   run is closed failed with the sentence. A `503` without one is a lost
   answer, reconciled against the attempt's claim, since the listener
   answers one too when its call into the worker service timed out, after
-  which the run may still start.
+  which the run may still start. `{:no_memory, held}` means the keeper
+  found no room for the start's runner within its wait: nothing started,
+  and `held` is what holds the memory as the keeper gave it
+  (`Prima.LocusPool.read_held/1`). Its listener refuses it `503`
+  `no_memory` with `held` (`Prima.LocusPool.encode_held/1`), and CYFR
+  closes the run failed with `Prima.LocusPool.refusal_sentence/1` alone.
   """
   @callback start(Prima.Assignment.token(), input :: binary(), sealed_keys :: String.t()) ::
-              :ok | {:error, :malformed | :unavailable | {:unavailable, String.t()}}
+              :ok
+              | {:error,
+                 :malformed
+                 | :unavailable
+                 | {:unavailable, String.t()}
+                 | {:no_memory, Prima.LocusPool.held()}}
 
   @doc """
   Stop an execution a runner of this worker service runs. For a subtree
