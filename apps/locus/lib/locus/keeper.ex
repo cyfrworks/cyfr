@@ -994,7 +994,9 @@ defmodule Locus.Keeper do
          # and its caller until cyfr-locus placed it.
          places: %{},
          # The place each spawn named, to the spawn's ref, for as long as
-         # the spawn is followed: a `give_way` of it reaches its owner.
+         # the spawn is followed: a `give_way` of it reaches its owner. A
+         # second spawn naming a place one already holds, which cyfr-locus
+         # refuses, neither takes the place's entry nor removes it.
          named: %{},
          # The heir tags fenced while no spawn of them was held: a spawn
          # naming one is refused, so none starts after the fence's answer.
@@ -1828,7 +1830,7 @@ defmodule Locus.Keeper do
            requests: Map.put(state.requests, ref, entry),
            ids: Map.put(state.ids, id, ref),
            tokens: Map.put(state.tokens, token, ref),
-           named: Map.put(state.named, request.place, ref)
+           named: Map.put_new(state.named, request.place, ref)
        }}
     end
   end
@@ -2667,13 +2669,22 @@ defmodule Locus.Keeper do
     %{
       state
       | requests: requests,
-        named: Map.delete(state.named, entry.place),
+        named: unnamed(state.named, entry.place, ref),
         ids: Map.delete(state.ids, entry.id),
         spawns:
           if(entry.spawn_id, do: Map.delete(state.spawns, entry.spawn_id), else: state.spawns),
         tokens: Map.delete(state.tokens, entry.token),
         conns: if(entry.conn, do: Map.delete(state.conns, entry.conn), else: state.conns)
     }
+  end
+
+  # The place index without `place`'s entry, where that entry is the
+  # request `ref`'s.
+  defp unnamed(named, place, ref) do
+    case named do
+      %{^place => ^ref} -> Map.delete(named, place)
+      _another_or_none -> named
+    end
   end
 
   # A release is written once: a second asks for nothing more of cyfr-locus,

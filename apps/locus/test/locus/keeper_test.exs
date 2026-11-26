@@ -2042,6 +2042,16 @@ defmodule Locus.KeeperTest do
       assert Process.alive?(client)
     end
 
+    test "a second spawn naming a place a spawn holds is refused and leaves the place's give_way to the first",
+         %{name: name, fake: fake} do
+      id = place!(name, "warm")
+      assert {:ok, %{ref: ref}} = spawn_live(name, "exec cat", %{}, id)
+      assert {:error, {:refused, "bad_request"}} = spawn_live(name, "exec cat", %{}, id)
+
+      :ok = FakeKeeper.give_way(fake, id)
+      assert_receive {Keeper, ^ref, {:give_way, ^id}}, 5_000
+    end
+
     test "a place of an id the client follows is refused unasked, and one the keeper holds is the keeper's refusal",
          %{name: name, fake: fake} do
       assert {:ok, _bytes} = Keeper.place(name, "pl-1", %{kind: "warm"}, self())
