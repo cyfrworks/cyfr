@@ -16,6 +16,18 @@
 # proof.js runs it as the app's entry: the proof bundle (pack.mjs) takes
 # the place of the installed app.asar in that container alone.
 #
+# What the scripts share is the client image, made once a run before the
+# first of them (client.sh): ubuntu:24.04 with the DEB installed by apt and
+# the packages a proof runs under, committed from a container that has
+# done nothing else, named for this run and the DEB's digest. The fetch
+# from the archive is the one step tried again, up to three times
+# (scripts/ci/retry.sh), each a fresh index, so that an archive answering
+# wrongly for a minute fails no proof; the install from what it fetched
+# runs once. Each script's client is a fresh container of that image: its
+# user, its trust of its run's authority, its bundle and everything it
+# writes are its own and end with it. The image is removed when the run
+# ends, whether it passes or fails.
+#
 # Usage: tests/desktop-proof/home.sh DEB IMAGE
 #   DEB    the candidate cyfr-desktop package
 #   IMAGE  the app image, loaded, of the same architecture as DEB
@@ -46,17 +58,42 @@ if [ "${1:-}" != --one ]; then
     echo "::error::no tests/desktop-proof/*/run.sh is tracked" >&2
     exit 1
   fi
+  digest="$(sha256sum "$deb" | cut -c1-12)"
+  client_image="${PROOF_RUN_PREFIX:-}cyfr-desktop-client-$$:$digest"
+  prep="${PROOF_RUN_PREFIX:-}cyfr-desktop-client-prep-$$"
+  prep_log="$(mktemp "${TMPDIR:-/tmp}/${PROOF_RUN_PREFIX:-}cyfr-desktop-client-XXXXXX.log")"
+  trap 'docker rm -f "$prep" >/dev/null 2>&1 || true; docker image rm -f "$client_image" >/dev/null 2>&1 || true; rm -f "$prep_log"' EXIT
+  echo "=== the client image $client_image, for every script"
+  docker rm -f "$prep" >/dev/null 2>&1 || true
+  docker run -d --name "$prep" --network host -v "$deb:/deb/cyfr-desktop.deb:ro" -v "$HERE:/proof:ro" \
+    ubuntu:24.04 sleep infinity >/dev/null
+  if ! "$HERE/../../scripts/ci/retry.sh" docker exec "$prep" bash /proof/client.sh fetch >"$prep_log" 2>&1; then
+    tail -n 40 "$prep_log" >&2
+    echo "::error::the client's packages could not be fetched from the archive in three tries" >&2
+    exit 1
+  fi
+  if grep -q "failed (attempt" "$prep_log"; then
+    echo "the archive answered wrongly before the client's packages were fetched:"
+    grep -E "^  |failed \(attempt" "$prep_log"
+  fi
+  docker exec "$prep" bash /proof/client.sh install >"$prep_log" 2>&1 || {
+    tail -n 40 "$prep_log" >&2
+    echo "::error::the candidate package could not be installed in the client" >&2
+    exit 1
+  }
+  docker commit "$prep" "$client_image" >/dev/null
+  docker rm -f "$prep" >/dev/null
   status=0
   for script in "${scripts[@]}"; do
     echo "=== $script"
-    bash "$0" --one "$HERE/../../$script" "$deb" "$image" || { echo "::error::$script failed" >&2; status=1; }
+    bash "$0" --one "$HERE/../../$script" "$image" "$client_image" || { echo "::error::$script failed" >&2; status=1; }
   done
   exit "$status"
 fi
 
 SCRIPT="$(realpath "$2")"
-DEB="$3"
-IMAGE="$4"
+IMAGE="$3"
+CLIENT_IMAGE="$4"
 NAME="$(basename "$(dirname "$SCRIPT")")"
 ADAPTER=sqlite
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/${PROOF_RUN_PREFIX:-}cyfr-desktop-proof-XXXXXX")"
@@ -211,9 +248,9 @@ for host in "${!IDENTITY_FRONTS[@]}"; do hosts+=(--add-host "$host:${IDENTITY_FR
 docker rm -f "$CLIENT" >/dev/null 2>&1 || true
 docker run -d --name "$CLIENT" --network host --security-opt seccomp=unconfined \
   "${hosts[@]}" \
-  -v "$DEB:/deb/cyfr-desktop.deb:ro" -v "$HERE:/proof:ro" -v "$FIXTURE:/fixture" \
-  ubuntu:24.04 sleep infinity >/dev/null
-docker exec "$CLIENT" bash /proof/client.sh >"$WORK/client.log" 2>&1 || {
+  -v "$HERE:/proof:ro" -v "$FIXTURE:/fixture" \
+  "$CLIENT_IMAGE" sleep infinity >/dev/null
+docker exec "$CLIENT" bash /proof/client.sh proof >"$WORK/client.log" 2>&1 || {
   tail -n 40 "$WORK/client.log" >&2
   fail "the client container could not be prepared"
 }

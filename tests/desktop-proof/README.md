@@ -50,7 +50,7 @@ Each has a setup token of the run's own.
 | Part | What it is |
 |---|---|
 | the fronts | the identity proof's TLS front for each name (`tests/identity-proof/front.sh`), on the run's own loopback addresses, forwarding WebSocket upgrades too; each records what reached it, by user agent, and can go down on demand |
-| the client | an `ubuntu:24.04` container on the host's network: the DEB installed as a person installs it, its sandbox under the container's own namespaces, a display (Xvfb) and a session bus, the user `proof`, and the run's authority trusted by the system (which `cyfr` reads) and by that user's NSS store (which the app's engine reads); no Docker program or socket, and nothing else configured |
+| the client | a container of the run's client image on the host's network: `ubuntu:24.04` with the DEB installed by apt as a person installs it, its sandbox under the container's own namespaces, a display (Xvfb) and a session bus, the user `proof`, and the run's authority trusted by the system (which `cyfr` reads) and by that user's NSS store (which the app's engine reads); no Docker program or socket, and nothing else configured |
 
 Both CYFRs are the release inside `IMAGE`, the app image of the DEB's
 architecture, run as this user on the host's network with each cell's own
@@ -78,10 +78,18 @@ process's code, `startApp` and everything it runs. What it does not: the
 entry file, which here starts `startApp` and then drives it, and one window
 of the proof's own beside the app's, the person's second client.
 
+The client image is the one thing the scripts share: `home.sh` makes it
+once a run, before the first script (`client.sh`'s `fetch` and `install`),
+named for the run and the DEB's digest. Its fetch from the archive is
+tried up to three times, each with a fresh index, and names the fetch that
+failed; the install from what it fetched runs once. Each script's client
+is a fresh container of it, whose user, trust, bundle and writes are its
+own. `client-image-test.sh` proves this against a stand-in Docker.
+
 Everything a script's run starts, the homes, fronts, client and scratch
 directory with the run's authority key and setup token, is removed when it
-ends; its record (`out/`) is copied to `PROOF_OUT`. The run needs
-127.0.0.1:7340 free on this machine.
+ends, and the client image when the run ends; its record (`out/`) is copied
+to `PROOF_OUT`. The run needs 127.0.0.1:7340 free on this machine.
 
 The fronts' control (`tests/identity-proof/front.mjs`) breaks or bends a
 CYFR on purpose: `down` (unreachable), `hold` (each request waits
