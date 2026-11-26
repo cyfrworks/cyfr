@@ -18,11 +18,11 @@ defmodule Locus.Runtime.SettingsTest do
   alias Locus.Runtime.Settings
 
   describe "pool/2" do
-    test "defaults: a 30 s idle TTL, a 5 s watchdog grace, a 2 s release grace, and nothing else" do
+    test "defaults: a 15 min idle TTL, a 5 s watchdog grace, a 2 s release grace, and nothing else" do
       assert Settings.pool([], %{}) ==
                {:ok,
                 %{
-                  idle_ttl_ms: 30_000,
+                  idle_ttl_ms: 900_000,
                   watchdog_grace_ms: 5_000,
                   release_grace_ms: 2_000,
                   keeper: :channel,
@@ -31,7 +31,7 @@ defmodule Locus.Runtime.SettingsTest do
 
       # Each default has one definition, which a runner's grace takes too.
       for {key, value} <- [
-            idle_ttl_ms: 30_000,
+            idle_ttl_ms: 900_000,
             watchdog_grace_ms: 5_000,
             release_grace_ms: 2_000
           ] do

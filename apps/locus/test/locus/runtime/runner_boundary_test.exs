@@ -30,13 +30,12 @@ defmodule Locus.Runtime.RunnerBoundaryTest do
   # A runner is a VM booting from nothing: its first attach takes seconds.
   @boot_ms 30_000
 
-  @settings [:keeper, :pool_size, :idle_ttl_ms, :watchdog_grace_ms, :release_grace_ms]
+  @settings [:keeper, :idle_ttl_ms, :watchdog_grace_ms, :release_grace_ms]
 
   setup context do
     previous =
       Locus.Runtime.Test.Env.merge(
         keeper: :direct,
-        pool_size: 1,
         idle_ttl_ms: 30_000,
         watchdog_grace_ms: context[:watchdog_grace_ms] || 1_000,
         release_grace_ms: 1_000

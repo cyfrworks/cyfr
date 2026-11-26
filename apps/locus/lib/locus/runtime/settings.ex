@@ -16,8 +16,12 @@ defmodule Locus.Runtime.Settings do
   ## The pool
 
   The service role reads its pool from `config :locus, :runtime`
-  (`pool/2`): how long an idle runner is kept for its athanor
-  (`:idle_ttl_ms`, 30 000), how far past its assignment's deadline a runner may live
+  (`pool/2`): how long at most an idle runner is kept for its athanor
+  (`:idle_ttl_ms`, 900 000: 15 minutes, the life of the components a
+  runner has compiled, `Locus.Runtime.ComponentCache`, so a runner kept
+  longer compiles them again on its next run; it gives way sooner when
+  the keeper needs its memory or a spawn its uid,
+  `Locus.Runtime.RunnerPool`), how far past its assignment's deadline a runner may live
   before it halts itself (`:watchdog_grace_ms`, 5 000), how long a
   released runner is given to report its open attempts before its
   process group is killed (`:release_grace_ms`, 2 000), which keeper
@@ -49,7 +53,7 @@ defmodule Locus.Runtime.Settings do
   """
 
   @pool_defaults %{
-    idle_ttl_ms: 30_000,
+    idle_ttl_ms: 900_000,
     watchdog_grace_ms: 5_000,
     release_grace_ms: 2_000
   }

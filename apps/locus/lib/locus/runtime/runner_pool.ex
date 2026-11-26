@@ -9,8 +9,9 @@ defmodule Locus.Runtime.RunnerPool do
     * `fresh` — spawned ahead, or spawning, and never assigned: it
       belongs to no athanor. The pool keeps the warm floor's
       (`Prima.LocusPool.floor_runners/0`) of them.
-    * `idle` — completed a subtree cleanly for one athanor, and kept for
-      `:idle_ttl_ms` for that athanor's next subtree only.
+    * `idle` — completed a subtree cleanly for one athanor, and kept up
+      to `:idle_ttl_ms` for that athanor's next subtree only, giving way
+      before then when the keeper needs its memory or a spawn its uid.
     * `busy` — running a subtree.
     * `tainted` — being terminated after a kill, an unclean completion,
       an exit with attempts open, or a failure of its channel or keeper;
@@ -56,6 +57,21 @@ defmodule Locus.Runtime.RunnerPool do
   names, as an idle runner's time running out releases it, only while it
   is still idle for its athanor or fresh with no take on it, and leaves a
   busy, taken or ending one alone.
+
+  ## Uids
+
+  Every runner the pool holds holds one of its role's uids
+  (`Prima.LocusRoles`, `:uids`, the keeper's `--pool`), or will once it
+  spawns, until the keeper reports it released. A take or a refill that
+  needs a spawn while every uid is held waits for one: for that of a
+  runner already being ended that no start waits on yet, or else of the
+  oldest kept runner, which is released for it. A take so waits on that
+  runner, by its own deadline, and `withdraw/2` ends its wait, as it ends
+  a wait on a spawn; the runner released for it stays released. At the
+  runner's release the takes waiting are taken again first, then the pool
+  fills. A busy or fresh runner never gives way for a uid: with every uid
+  held by them a take spawns all the same, and the keeper's refusal for
+  want of a uid answers it.
 
   A tainted runner leaves the pool only once the keeper reports it
   retired, its handle stopped then: what a runner holds, its uid and its
@@ -143,7 +159,10 @@ defmodule Locus.Runtime.RunnerPool do
   the handles run under), `:command` (`t:Locus.Runtime.Release.command/0`, default
   this boot's), `:retire_bound_ms` (how long past a release's grace the
   pool waits for the keeper to retire the runner before it says so,
-  default #{@retire_bound_ms}), `:name` (default `#{inspect(__MODULE__)}`).
+  default #{@retire_bound_ms}), `:uids` (how many uids the keeper's pool
+  for runners has, default its role's, `Prima.LocusRoles`), `:clock` (the
+  monotonic milliseconds an idle runner's time is read on, default the
+  system's), `:name` (default `#{inspect(__MODULE__)}`).
   """
   def start_link(opts),
     do: GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
@@ -263,6 +282,8 @@ defmodule Locus.Runtime.RunnerPool do
        supervisor: Keyword.fetch!(opts, :supervisor),
        command: Keyword.get_lazy(opts, :command, &Locus.Runtime.Release.runner_command/0),
        retire_bound_ms: Keyword.get(opts, :retire_bound_ms, @retire_bound_ms),
+       uids: Keyword.get_lazy(opts, :uids, &role_uids/0),
+       clock: Keyword.get(opts, :clock, &now/0),
        service: nil,
        assignee: nil,
        runners: %{},
@@ -281,45 +302,8 @@ defmodule Locus.Runtime.RunnerPool do
     do: {:reply, {:error, :not_serving}, state}
 
   def handle_call({:take, athanor, execution_id, deadline}, from, state) do
-    case pick(state, athanor) do
-      {:ok, pid, entry} ->
-        entry = %{
-          entry
-          | state: :busy,
-            athanor: athanor,
-            execution_id: execution_id,
-            idle_timer: nil
-        }
-
-        state = put_runner(state, pid, entry)
-        {:reply, {:ok, pid, entry.id}, refill(state)}
-
-      :none when state.refusal != nil ->
-        case spawn_runner(state) do
-          {:ok, pid, entry} ->
-            waiter = %{
-              from: from,
-              athanor: athanor,
-              execution_id: execution_id,
-              timer: Process.send_after(self(), {:take_due, pid}, max(deadline - now(), 0))
-            }
-
-            {:noreply, refill(put_runner(state, pid, %{entry | waiter: waiter}))}
-
-          {:error, reason} ->
-            {:reply, {:error, reason}, state}
-        end
-
-      :none ->
-        case spawn_runner(state) do
-          {:ok, pid, entry} ->
-            entry = %{entry | state: :busy, athanor: athanor, execution_id: execution_id}
-            {:reply, {:ok, pid, entry.id}, refill(put_runner(state, pid, entry))}
-
-          {:error, reason} ->
-            {:reply, {:error, reason}, state}
-        end
-    end
+    take = %{from: from, athanor: athanor, execution_id: execution_id, deadline: deadline}
+    {:noreply, take_for(state, take)}
   end
 
   def handle_call({:taint, pid, grace_ms, execution_id}, _from, state) do
@@ -343,8 +327,11 @@ defmodule Locus.Runtime.RunnerPool do
         state = answer(state, pid, entry, {:error, :killed})
 
         case state.runners[pid] do
-          %{placed: false} = entry -> {:reply, :ok, taint_runner(state, pid, entry, 0)}
-          _placed -> {:reply, :ok, state}
+          %{state: :spawning, placed: false} = entry ->
+            {:reply, :ok, taint_runner(state, pid, entry, 0)}
+
+          _placed_or_going ->
+            {:reply, :ok, state}
         end
 
       nil ->
@@ -430,14 +417,20 @@ defmodule Locus.Runtime.RunnerPool do
 
   def handle_info({RunnerProcess, pid, event}, state) do
     case state.runners[pid] do
-      nil -> {:noreply, state}
-      %{waiter: waiter} = entry when waiter != nil -> {:noreply, waited(event, pid, entry, state)}
-      entry -> {:noreply, on_event(event, pid, entry, state)}
+      nil ->
+        {:noreply, state}
+
+      %{state: :spawning, waiter: waiter} = entry when waiter != nil ->
+        {:noreply, waited(event, pid, entry, state)}
+
+      entry ->
+        {:noreply, on_event(event, pid, entry, state)}
     end
   end
 
-  # A start that waits on its runner's spawn, its deadline passed first, is
-  # answered so; the runner stays the pool's, spawned ahead.
+  # A start that waits on its runner's spawn, or for the uid of a runner
+  # going, its deadline passed first, is answered so; the runner stays the
+  # pool's, spawned ahead, or going as it was.
   def handle_info({:take_due, pid}, state) do
     case state.runners[pid] do
       %{waiter: %{from: from}} = entry ->
@@ -449,10 +442,14 @@ defmodule Locus.Runtime.RunnerPool do
     end
   end
 
-  def handle_info({:idle_expired, pid, timer}, state) do
+  # An idle runner's time is read on the pool's clock: a timer armed for an
+  # earlier keeping of it, which ends before this one's, ends nothing.
+  def handle_info({:idle_expired, pid}, state) do
     case state.runners[pid] do
-      %{state: :idle, idle_timer: ^timer} = entry ->
-        {:noreply, refill(retire_resting(state, pid, entry))}
+      %{state: :idle, kept_at: kept_at} = entry ->
+        if state.clock.() - kept_at >= state.settings.idle_ttl_ms,
+          do: {:noreply, refill(retire_resting(state, pid, entry))},
+          else: {:noreply, state}
 
       _ ->
         {:noreply, state}
@@ -508,8 +505,10 @@ defmodule Locus.Runtime.RunnerPool do
         {:noreply, state}
 
       # The start hears its runner's handle ended; why is the pool's own
-      # log line's (`handle_down/4`).
-      %{waiter: waiter} = entry when waiter != nil ->
+      # log line's (`handle_down/4`). One that waits for the uid of a
+      # runner already going waits on: the runner is held until its
+      # release all the same.
+      %{state: :spawning, waiter: waiter} = entry when waiter != nil ->
         state = answer(state, pid, entry, {:error, {:spawn_failed, :handle_down}})
         {:noreply, handle_down(state, pid, state.runners[pid], reason)}
 
@@ -523,7 +522,7 @@ defmodule Locus.Runtime.RunnerPool do
   # runner's heir. One the keeper did not answer stays held.
   def handle_info({:fenced, id, :none}, state) do
     case Enum.find(state.runners, fn {_pid, entry} -> entry.id == id end) do
-      {pid, %{down: true}} -> {:noreply, refill(forget(state, pid))}
+      {pid, %{down: true} = entry} -> {:noreply, refill(resume(forget(state, pid), entry))}
       _held -> {:noreply, state}
     end
   end
@@ -627,9 +626,8 @@ defmodule Locus.Runtime.RunnerPool do
         state
 
       message.clean ->
-        timer = make_ref()
-        Process.send_after(self(), {:idle_expired, pid, timer}, state.settings.idle_ttl_ms)
-        put_runner(state, pid, %{entry | state: :idle, idle_timer: timer})
+        Process.send_after(self(), {:idle_expired, pid}, state.settings.idle_ttl_ms)
+        put_runner(state, pid, %{entry | state: :idle, kept_at: state.clock.()})
 
       true ->
         taint_runner(state, pid, entry, 0)
@@ -693,29 +691,30 @@ defmodule Locus.Runtime.RunnerPool do
     end
 
     state = told(state, pid, entry, {:gone, {:handle_down, reason}})
-    entry = %{state.runners[pid] | down: true, idle_timer: nil}
+    entry = %{state.runners[pid] | down: true, kept_at: nil}
     entry = if entry.state == :refused, do: entry, else: %{entry | state: :tainted}
     fence(state, entry.id)
     refill_later(put_runner(state, pid, entry))
   end
 
-  # The keeper released the runner, freeing its uid: a refusal the pool
+  # The keeper released the runner, freeing its uid: a start that waited
+  # for that uid is taken again before the pool fills. A refusal the pool
   # remembers may have lacked it, so the refusal ends and the pool fills at
   # once. The release of a runner the keeper refused after making it frees
   # only what its own refusal held, and the refusal stands.
-  defp released(%{refusal: refusal} = state, pid, %{state: held})
-       when refusal != nil and held != :refused do
-    Logger.info("[Locus.Runtime.RunnerPool] a runner's release ends the keeper's refusal")
+  defp released(state, pid, entry) do
+    state = forget(state, pid)
 
-    refill(%{
-      forget(state, pid)
-      | refusal: nil,
-        backoff_ms: @refill_backoff_ms,
-        refill_scheduled: false
-    })
+    state =
+      if state.refusal != nil and entry.state != :refused do
+        Logger.info("[Locus.Runtime.RunnerPool] a runner's release ends the keeper's refusal")
+        %{state | refusal: nil, backoff_ms: @refill_backoff_ms, refill_scheduled: false}
+      else
+        state
+      end
+
+    state |> resume(entry) |> refill()
   end
-
-  defp released(state, pid, _entry), do: refill(forget(state, pid))
 
   # The runner is no longer usable: what it was running is gone, and the
   # keeper is asked to end whatever is left of it.
@@ -751,8 +750,8 @@ defmodule Locus.Runtime.RunnerPool do
     put_runner(state, pid, %{entry | execution_id: nil})
   end
 
-  # An idle timer left running is harmless: its message names the timer
-  # it was armed with, and a runner no longer idle on that timer ignores it.
+  # An idle timer left running is harmless: a runner no longer idle, or
+  # kept again since, is not yet due by the clock and ignores it.
   # A runner already released keeps the retirement timer its first release
   # armed: its handle releases it once, so a later taint asks the keeper
   # for nothing and must not put its deadline off. One refused after it was
@@ -767,7 +766,7 @@ defmodule Locus.Runtime.RunnerPool do
   # handle's is (`handle_down/4`), with no retirement bound.
   defp taint_runner(state, pid, %{placed: false} = entry, _grace_ms) do
     Process.exit(pid, :kill)
-    refill_later(put_runner(state, pid, %{entry | state: :tainted, idle_timer: nil}))
+    refill_later(put_runner(state, pid, %{entry | state: :tainted, kept_at: nil}))
   end
 
   defp taint_runner(state, pid, entry, grace_ms) do
@@ -775,7 +774,7 @@ defmodule Locus.Runtime.RunnerPool do
     timer = entry.retire_timer || retire_due(state, pid, grace_ms)
 
     refill_later(
-      put_runner(state, pid, %{entry | state: :tainted, idle_timer: nil, retire_timer: timer})
+      put_runner(state, pid, %{entry | state: :tainted, kept_at: nil, retire_timer: timer})
     )
   end
 
@@ -787,7 +786,7 @@ defmodule Locus.Runtime.RunnerPool do
     put_runner(state, pid, %{
       entry
       | state: :retiring,
-        idle_timer: nil,
+        kept_at: nil,
         retire_timer: retire_due(state, pid, 0)
     })
   end
@@ -808,6 +807,118 @@ defmodule Locus.Runtime.RunnerPool do
   # ---------------------------------------------------------------------------
   # Picking and spawning
   # ---------------------------------------------------------------------------
+
+  # A take, from its call or again once the uid it waited for is free: an
+  # idle runner of its athanor or a fresh one; otherwise a spawn, on a uid
+  # free, or once one is: it waits for the uid of a runner already going,
+  # or of the oldest kept runner, which gives way for it. With every uid
+  # held by runners at work it spawns all the same, and the keeper's
+  # refusal for want of a uid answers it.
+  defp take_for(state, take) do
+    case pick(state, take.athanor) do
+      {:ok, pid, entry} ->
+        entry = %{
+          entry
+          | state: :busy,
+            athanor: take.athanor,
+            execution_id: take.execution_id,
+            kept_at: nil
+        }
+
+        GenServer.reply(take.from, {:ok, pid, entry.id})
+        refill(put_runner(state, pid, entry))
+
+      :none ->
+        case uid_for(state) do
+          {:wait, pid, state} ->
+            put_runner(state, pid, %{state.runners[pid] | waiter: waiter(take, pid)})
+
+          _free_or_none ->
+            spawn_for(state, take)
+        end
+    end
+  end
+
+  defp spawn_for(state, take) do
+    case spawn_runner(state) do
+      {:ok, pid, entry} when state.refusal != nil ->
+        refill(put_runner(state, pid, %{entry | waiter: waiter(take, pid)}))
+
+      {:ok, pid, entry} ->
+        entry = %{entry | state: :busy, athanor: take.athanor, execution_id: take.execution_id}
+        GenServer.reply(take.from, {:ok, pid, entry.id})
+        refill(put_runner(state, pid, entry))
+
+      {:error, reason} ->
+        GenServer.reply(take.from, {:error, reason})
+        state
+    end
+  end
+
+  # A take's wait on the runner `pid`, by its own deadline.
+  defp waiter(take, pid) do
+    Map.put(
+      take,
+      :timer,
+      Process.send_after(self(), {:take_due, pid}, max(take.deadline - now(), 0))
+    )
+  end
+
+  # A start that waited for the uid of a runner now gone is taken again.
+  defp resume(state, %{waiter: nil}), do: state
+
+  defp resume(state, %{waiter: waiter}) do
+    Process.cancel_timer(waiter.timer)
+    take_for(state, Map.delete(waiter, :timer))
+  end
+
+  # Where a spawn's uid comes from: one free, or that of a runner going
+  # that no start waits on yet, or of the oldest kept runner, released for
+  # it; or none, every uid held by a runner at work, fresh or waited on.
+  # Every runner the pool holds holds a uid of its role, or will once it
+  # spawns, until the keeper reports it released.
+  defp uid_for(state) do
+    if map_size(state.runners) < state.uids do
+      :free
+    else
+      case Enum.find(state.runners, fn {_pid, e} -> going?(e) and e.waiter == nil end) do
+        {pid, _entry} ->
+          {:wait, pid, state}
+
+        nil ->
+          case oldest_kept(state) do
+            {pid, entry} -> {:wait, pid, retire_resting(state, pid, entry)}
+            nil -> :none
+          end
+      end
+    end
+  end
+
+  defp going?(entry), do: entry.state in [:retiring, :tainted, :refused]
+
+  defp oldest_kept(state) do
+    state.runners
+    |> Enum.filter(fn {_pid, e} -> e.state == :idle end)
+    |> Enum.min_by(fn {_pid, e} -> e.kept_at end, fn -> nil end)
+  end
+
+  # Kept runners give way, oldest first, for the uids `short` spawns lack
+  # beyond those that runners already going, and waited on by no start,
+  # will free.
+  defp make_way(state, short) do
+    coming = Enum.count(state.runners, fn {_pid, e} -> going?(e) and e.waiter == nil end)
+
+    Enum.reduce_while(1..max(short - coming, 0)//1, state, fn _n, state ->
+      case oldest_kept(state) do
+        {pid, entry} -> {:cont, retire_resting(state, pid, entry)}
+        nil -> {:halt, state}
+      end
+    end)
+  end
+
+  # The uids of the role whose runners the pool spawns, as the keeper's
+  # `--pool` names them (`Prima.LocusRoles`).
+  defp role_uids, do: Enum.count(Prima.LocusRoles.role!(:runtime).uids)
 
   # An idle runner of the athanor, then a fresh one (attached or still
   # spawning, since an assign waits for the channel, unless the keeper
@@ -875,15 +986,16 @@ defmodule Locus.Runtime.RunnerPool do
            state: :spawning,
            athanor: nil,
            execution_id: nil,
-           idle_timer: nil,
+           # When it was last kept idle, on the pool's clock; nil unless idle.
+           kept_at: nil,
            retire_timer: nil,
            # Its handle died, and the keeper's release reaches the pool as
            # the runner's heir.
            down: false,
            # The keeper's release reached the pool as the runner's heir.
            released: false,
-           # The start that waits on this runner's spawn, while the pool
-           # remembers a refusal.
+           # The start that waits on this runner: on its spawn while it
+           # spawns (the pool remembers a refusal), for its uid while it goes.
            waiter: nil,
            # The keeper placed it: its process no longer waits for room.
            placed: false
@@ -908,12 +1020,18 @@ defmodule Locus.Runtime.RunnerPool do
        do: state
 
   # A runner refused after it was made holds its uid and place at the
-  # keeper until its release, so it counts among the runners ahead.
+  # keeper until its release, so it counts among the runners ahead. A
+  # spawn no uid is free for waits for one: kept runners give way for it,
+  # and the pool fills at their release.
   defp refill(state) do
     ahead =
       Enum.count(state.runners, fn {_pid, e} -> e.state in [:fresh, :spawning, :refused] end)
 
-    Enum.reduce_while(1..max(target(state) - ahead, 0)//1, state, fn _n, state ->
+    wanted = max(target(state) - ahead, 0)
+    free = max(state.uids - map_size(state.runners), 0)
+    state = make_way(state, wanted - free)
+
+    Enum.reduce_while(1..min(wanted, free)//1, state, fn _n, state ->
       case spawn_runner(state) do
         {:ok, pid, entry} -> {:cont, put_runner(state, pid, entry)}
         {:error, _reason} -> {:halt, refill_later(state)}
