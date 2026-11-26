@@ -55,7 +55,7 @@ defmodule Arca.MemoryRecordTest do
   end
 
   defp store(claim, after_rev, report, names \\ %{}),
-    do: MemoryRecord.store(claim, :none, @endpoint, after_rev, report, names)
+    do: MemoryRecord.store(claim, :none, @endpoint, after_rev, report, names, 90)
 
   defp all, do: elem(MemoryRecord.counters(Prima.Actor.system()), 1)
 
@@ -197,6 +197,76 @@ defmodule Arca.MemoryRecordTest do
 
       assert %{shown: "terminal", name: "aqua-browser"} =
                Enum.find(all(), &(&1.subject == "srv_b"))
+    end
+  end
+
+  describe "the retention's window" do
+    test "a counter of a day outside the last kept days or after tomorrow is dropped, and still moves the cursor",
+         %{claim: claim} do
+      page =
+        report([
+          counter(1, "ath_a", subject: "srv_far", day: ~D[9999-12-31]),
+          counter(2, "ath_a", subject: "srv_late", day: Date.add(today(), 2)),
+          counter(3, "ath_a", subject: "srv_old", day: Date.add(today(), -90)),
+          counter(4, "ath_a", subject: "srv_first", day: Date.add(today(), -89)),
+          counter(5, "ath_a", subject: "srv_tomorrow", day: Date.add(today(), 1)),
+          counter(6, "ath_a", subject: "srv_today")
+        ])
+
+      assert {:ok, %{after: 6, stored: 3, dropped: 3}} = store(claim, 0, page)
+
+      assert all() |> Enum.map(& &1.subject) |> Enum.sort() ==
+               ~w(srv_first srv_today srv_tomorrow)
+    end
+
+    test "a kept window of one day keeps today alone", %{claim: claim} do
+      page = report([counter(1, "ath_a", day: Date.add(today(), -1)), counter(2, "ath_a")])
+
+      assert {:ok, %{stored: 1, dropped: 1}} =
+               MemoryRecord.store(claim, :none, @endpoint, 0, page, %{}, 1)
+
+      assert [%{day: day}] = all()
+      assert day == today()
+    end
+  end
+
+  describe "forget/3" do
+    test "deletes the endpoints no longer asked, and keeps their days", %{claim: claim} do
+      assert {:ok, _} = store(claim, 0, report([counter(1, "ath_a")]))
+
+      assert {:ok, _} =
+               MemoryRecord.store(
+                 claim,
+                 :none,
+                 "wrk_kept",
+                 0,
+                 report([counter(1, "ath_b")]),
+                 %{},
+                 90
+               )
+
+      assert {:ok, 1} = MemoryRecord.forget(claim, :none, ["wrk_kept"])
+      assert {:ok, [%{endpoint: "wrk_kept"}]} = MemoryRecord.endpoints(Prima.Actor.system())
+      assert length(all()) == 2
+    end
+
+    test "forgets nothing under a claim another member took", %{claim: claim} do
+      assert {:ok, _} = store(claim, 0, report([counter(1, "ath_a")]))
+      :ok = JobClaims.release(claim)
+      {:ok, _peer} = JobClaims.claim("memory", JobClaims.cell_key(), "boot_peer", 60_000)
+
+      assert :taken = MemoryRecord.forget(claim, :none, [])
+      assert %{endpoint: @endpoint} = endpoint()
+    end
+
+    test "forgets nothing on a member that holds no slot", %{claim: claim} do
+      assert {:ok, _} = store(claim, 0, report([counter(1, "ath_a")]))
+
+      Prima.Test.Env.with_app_env(:arca, :control_plane_claim_enabled, true, fn ->
+        assert {:error, :not_owner} = MemoryRecord.forget(claim, :none, [])
+      end)
+
+      assert %{endpoint: @endpoint} = endpoint()
     end
   end
 

@@ -12,6 +12,7 @@ defmodule Opus.MemoryTest do
   use ExUnit.Case, async: false
 
   import ExUnit.CaptureLog
+  import Ecto.Query, only: [from: 2]
 
   alias Arca.JobClaims
   alias Cyfr.Test.ShareFixtures
@@ -146,9 +147,9 @@ defmodule Opus.MemoryTest do
          %{alice: alice, claim: claim} do
       athanor = alice.actor.athanor_id
 
+      # 513 programs whose rows are gone: a day each, by its subject.
       counters =
-        for rev <- 1..513,
-            do: counter(rev, athanor, kind: "build", day: Date.add(Date.utc_today(), -rev))
+        for rev <- 1..513, do: counter(rev, athanor, subject: "srv_#{rev}", bytes: 1)
 
       pages = fn after_rev ->
         page = counters |> Enum.filter(&(&1.rev > after_rev)) |> Enum.take(256)
@@ -315,7 +316,7 @@ defmodule Opus.MemoryTest do
   end
 
   describe "the pool request" do
-    test "is signed with the worker service's pool key, and the poller logs its failure without key or header" do
+    test "is signed with the worker service's pool key, and the poller logs its failure once, without key or header" do
       stub = Cyfr.Test.HTTPStub.open()
       test = self()
 
@@ -332,8 +333,8 @@ defmodule Opus.MemoryTest do
         %{name: worker.id, service: :runtime, ask: &Opus.WorkerClient.pool(worker, &1)}
       ]
 
-      log =
-        capture_log(fn ->
+      {{header, body}, log} =
+        with_log(fn ->
           poller =
             start_supervised!(
               {Opus.Memory, endpoints: endpoints, owner: "boot_test", name: :memory_test}
@@ -344,10 +345,17 @@ defmodule Opus.MemoryTest do
             "the poller to fail its ask"
           )
 
+          # A second poll fails the same way and logs nothing more; the
+          # state read waits for that poll to finish.
+          assert_receive {:pool, header, body}, 5_000
+          send(poller, :poll)
+          assert_receive {:pool, _again, _body_again}, 5_000
+          _state = :sys.get_state(poller)
           stop_supervised!(Opus.Memory)
+          {header, body}
         end)
 
-      assert_received {:pool, header, body}
+      assert log |> String.split("did not report who used what") |> length() == 2
       {:ok, worker_key} = Opus.Keys.locus_runtime_key(worker.id)
       pool_key = Prima.LocusPool.pool_key(:runtime, worker_key)
       now = System.system_time(:millisecond)
@@ -389,6 +397,242 @@ defmodule Opus.MemoryTest do
 
       assert {:ok, %{machines: [%{holders: [%{kind: :run, bytes: 12}]}]}} =
                Opus.Memory.read(alice.ctx, :mine)
+    end
+  end
+
+  describe "machines and endpoints that do not answer" do
+    test "an endpoint no longer asked is forgotten, and its last holders are read as nobody's now",
+         %{alice: alice, claim: claim} do
+      athanor = alice.actor.athanor_id
+
+      Opus.Memory.poll(
+        [
+          endpoint(
+            "wrk_gone",
+            :runtime,
+            once(report([counter(1, athanor, kind: "run", bytes: 40)]))
+          )
+        ],
+        claim,
+        :none
+      )
+
+      # From here on the poller asks only wrk_local, on another boot.
+      Opus.Memory.poll(
+        [
+          endpoint(
+            "wrk_local",
+            :runtime,
+            once(report([counter(1, athanor, kind: "run", bytes: 5)], boot: @new_boot))
+          )
+        ],
+        claim,
+        :none
+      )
+
+      assert {:ok, %{machines: [machine], unanswered: []}} = Opus.Memory.read(alice.ctx, :mine)
+      assert machine.machine == "wrk_local"
+      assert [%{kind: :run, bytes: 5}] = machine.holders
+    end
+
+    test "an endpoint that has not answered within three polls holds nothing now and joins no machine",
+         %{terry: terry, alice: alice, claim: claim} do
+      tool = row!(alice, "github", "mcp")
+
+      Opus.Memory.poll(
+        [
+          endpoint(
+            "wrk_local",
+            :runtime,
+            once(report([counter(1, alice.actor.athanor_id, kind: "run", bytes: 40)]))
+          ),
+          endpoint(
+            "local",
+            :backends,
+            once(
+              report([
+                counter(1, alice.actor.athanor_id, subject: tool.id, bytes: 300),
+                counter(2, terry.actor.athanor_id, kind: "terminal", subject: "srv_t", bytes: 7)
+              ])
+            )
+          )
+        ],
+        claim,
+        :none
+      )
+
+      # The backends service stopped answering a minute ago; its row lags
+      # while the runtime still answers on the same boot.
+      silent = DateTime.add(DateTime.utc_now(), -60, :second)
+
+      Arca.Repo.update_all(
+        from(e in Arca.Schemas.MemoryEndpoint, where: e.endpoint == "local"),
+        set: [heard_at: silent]
+      )
+
+      assert {:ok, %{machines: [machine], unanswered: [unanswered]}} =
+               Opus.Memory.read(alice.ctx, :mine)
+
+      assert machine.machine == "wrk_local"
+      assert [%{kind: :run, bytes: 40}] = machine.holders
+      assert machine.others == 0
+      assert %{endpoint: "local", heard_at: heard_at} = unanswered
+      assert DateTime.diff(heard_at, silent, :second) == 0
+    end
+  end
+
+  describe "who may read" do
+    test ":mine reads only a context scoped to one athanor", %{
+      terry: terry,
+      alice: alice,
+      claim: claim
+    } do
+      Opus.Memory.poll(
+        [
+          endpoint(
+            "wrk_local",
+            :runtime,
+            once(
+              report([
+                counter(1, alice.actor.athanor_id, kind: "run", bytes: 1),
+                counter(2, terry.actor.athanor_id, kind: "run", bytes: 2)
+              ])
+            )
+          )
+        ],
+        claim,
+        :none
+      )
+
+      assert {:error, :forbidden} = Opus.Memory.read(%{terry.ctx | scope: :platform}, :mine)
+
+      assert {:error, :forbidden} =
+               Opus.Memory.read(
+                 Sanctum.Context.internal(athanor_id: alice.actor.athanor_id),
+                 :mine
+               )
+
+      assert {:ok, %{days: days}} = Opus.Memory.read(terry.ctx, :mine)
+      assert days |> Enum.map(& &1.person.athanor) |> Enum.uniq() == [terry.actor.athanor_id]
+    end
+
+    test ":everyone believes no mark a context carries: one of no person, or bound to a key, is refused",
+         %{terry: terry, admin: admin, claim: claim} do
+      Opus.Memory.poll(
+        [
+          endpoint(
+            "wrk_local",
+            :runtime,
+            once(report([counter(1, terry.actor.athanor_id, kind: "run", bytes: 10)]))
+          )
+        ],
+        claim,
+        :none
+      )
+
+      for claimer <- [
+            Sanctum.Context.build(platform_admin: true),
+            %{terry.ctx | user_id: nil, platform_admin: true},
+            %{terry.ctx | auth_method: :api_key, platform_admin: true},
+            %{admin | auth_method: :api_key},
+            %{terry.ctx | platform_admin: true}
+          ] do
+        assert {:error, :forbidden} = Opus.Memory.read(claimer, :everyone)
+      end
+
+      assert {:ok, %{machines: [%{holders: [%{bytes: 10}]}]}} = Opus.Memory.read(admin, :everyone)
+    end
+  end
+
+  describe "the endpoints asked" do
+    test "are each worker, the builds service when this CYFR has one, and the backends service unless a cluster runs" do
+      key = :crypto.strong_rand_bytes(32)
+
+      assert ["wrk_local"] = Enum.map(Opus.Memory.endpoints([]), & &1.name)
+
+      Prima.Test.Env.with_app_env(:cyfr, :locus_builds_url, "http://127.0.0.1:1", fn ->
+        Prima.Test.Env.with_app_env(:cyfr, :locus_builds_key, key, fn ->
+          programs = [url: "http://127.0.0.1:2", root: key]
+
+          assert [{"wrk_local", :runtime}, {"builds", :builds}, {"local", :backends}] =
+                   Enum.map(Opus.Memory.endpoints(programs), &{&1.name, &1.service})
+
+          assert [{"wrk_local", :runtime}, {"builds", :builds}] =
+                   Enum.map(
+                     Opus.Memory.endpoints(programs ++ [cluster: true]),
+                     &{&1.name, &1.service}
+                   )
+        end)
+      end)
+    end
+
+    test "the builds service is asked under its pool key, through the component domain's root",
+         %{alice: alice} do
+      key = :crypto.strong_rand_bytes(32)
+      stub = Cyfr.Test.HTTPStub.open()
+
+      answer =
+        Prima.LocusPool.answer(
+          report([counter(3, alice.actor.athanor_id, kind: "build", bytes: 9)])
+        )
+
+      Cyfr.Test.HTTPStub.expect(stub, "POST", Prima.LocusPool.route(), fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        [header] = Plug.Conn.get_req_header(conn, "x-cyfr-auth")
+        pool_key = Prima.LocusPool.pool_key(:builds, key)
+        now = System.system_time(:millisecond)
+
+        case Prima.LocusPool.verify_header(:builds, pool_key, header, now) do
+          {:ok, hash} ->
+            :ok = Prima.LocusPool.verify_body(hash, body)
+            Plug.Conn.send_resp(conn, 200, answer)
+
+          {:error, _refused} ->
+            Plug.Conn.send_resp(conn, 401, "")
+        end
+      end)
+
+      Prima.Test.Env.with_app_env(:cyfr, :locus_builds_url, "http://127.0.0.1:#{stub.port}", fn ->
+        Prima.Test.Env.with_app_env(:cyfr, :locus_builds_key, key, fn ->
+          assert {:ok, %{counters: [%{rev: 3, bytes: 9}]}} = Compendium.builds_pool(0)
+          [builds] = Enum.filter(Opus.Memory.endpoints([]), &(&1.name == "builds"))
+          assert {:ok, %{counters: [%{rev: 3}]}} = builds.ask.(0)
+        end)
+      end)
+    end
+
+    test "the backends service is asked under its pool key", %{alice: alice} do
+      root = :crypto.strong_rand_bytes(32)
+      stub = Cyfr.Test.HTTPStub.open()
+
+      answer =
+        Prima.LocusPool.answer(
+          report([
+            counter(5, alice.actor.athanor_id, kind: "program", subject: "srv_b", bytes: 11)
+          ])
+        )
+
+      Cyfr.Test.HTTPStub.expect(stub, "POST", Prima.LocusPool.route(), fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        [header] = Plug.Conn.get_req_header(conn, "x-cyfr-auth")
+        pool_key = Prima.LocusPool.pool_key(:backends, root)
+        now = System.system_time(:millisecond)
+
+        case Prima.LocusPool.verify_header(:backends, pool_key, header, now) do
+          {:ok, hash} ->
+            :ok = Prima.LocusPool.verify_body(hash, body)
+            Plug.Conn.send_resp(conn, 200, answer)
+
+          {:error, _refused} ->
+            Plug.Conn.send_resp(conn, 401, "")
+        end
+      end)
+
+      [backends] =
+        Opus.Memory.endpoints(url: "http://127.0.0.1:#{stub.port}", root: root)
+        |> Enum.filter(&(&1.service == :backends))
+
+      assert {:ok, %{counters: [%{rev: 5, bytes: 11}]}} = backends.ask.(0)
     end
   end
 

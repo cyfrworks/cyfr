@@ -52,7 +52,7 @@ The order describes dependencies, not a request's path. Codex shares no code wit
 ### Prima: shared contracts
 
 - The actor, authority data, operation declarations, refusals and the provider, host and worker behaviours.
-- The wire shapes and signing domains more than one part implements, such as the HostAPI, the WorkerAPI and the keeper's protocol. Two wires across the trust island are Opus's own instead: the brain wire and the browser framing.
+- The wire shapes and signing domains more than one part implements, such as the HostAPI, the WorkerAPI and the keeper's protocol.
 - The pure network policy and the Locus role table (`Prima.LocusRoles`).
 - No persistence, no product policy and no process: its two process modules run under the applications that start them.
 
@@ -183,15 +183,15 @@ The person decides; Sanctum validates, records and checks; and the place that re
 
 - The athanor is the one tenancy unit, one person's own, and every person admitted to a CYFR has one there.
 - Tenant identity comes from the authenticated actor, never from a guest's argument, and ownership travels with rows, blobs, events and cache keys.
-- The one widening across athanors is a share of a vault entry, which its audience uses only through their own consent and never sees the material of (`Sanctum.Shares`).
-- A platform administrator holds a capability over the instance, not a wider scope: what the instance holds for them is the host's own, never another athanor's. The host's record of memory use holds person, kind, program name and day, never content.
+- Two widenings cross athanors: a share of a vault entry, which its audience uses only through their own consent and never sees the material of (`Sanctum.Shares`); and the record of memory use (`Opus.Memory`), where the platform administrator reads use by person, kind, program name and day, never a thread or content, and a person reads others' use as one sum.
+- A platform administrator holds a capability over the instance, not a wider scope: what the instance holds for them is the host's own, never another athanor's but that record.
 - A shared thread belongs to no athanor and holds no assistant or execution; every read and write checks the caller's seat (`Sanctum.SharedThreads`).
 - Outsiders learn nothing of an athanor's private resources: for those, anyone but its person gets the answer a missing athanor gets. What a person published is public.
 - Nothing lands in an athanor its person did not accept.
 
 ### 5.2 Identity and standing
 
-Identity and standing are established at the authentication boundary (`Sanctum.Caller`), and a long-lived context revalidates them before protected work. A session, a device certificate and a pending confirmation are bound to the key that signed for them, so removing the key from the account ends each at every home that reads the removal (§9.1). A standing channel, an API key or a schedule, acts under its creator's standing.
+Identity and standing are established at the authentication boundary (`Sanctum.Caller`), and a long-lived context revalidates them before protected work. A session, a device certificate and a pending confirmation are bound to the key that signed for them, so removing the key from the account ends each at every home that reads the removal (§9.1). A standing channel, such as an API key or a schedule, acts under its creator's standing.
 
 ### 5.3 One gate
 
@@ -211,7 +211,7 @@ Guest egress is a HostAPI operation: Opus decides it under the attempt's authori
 
 ### 5.7 Isolation of untrusted processes
 
-Untrusted processes run apart from the control plane, with restricted privileges and bounded resources. A pooled uid, and a retired kept folder's, is cleaned in full before reuse. Every role process, runner, build and program session runs in a space of its own: a user, network, IPC, pid, mount and cgroup namespace, its ids mapped to themselves, no capability and a filter that refuses every namespace and mount. It sees its own processes alone, which end with its command, its own home and system files, and the image read-only. A runner's space has no route and no resolver: its relay is its one way out. Any other has its own loopback and one route, which the egress guard makes before the start and holds to the island's rules and, for a start that names hosts, to the addresses its keeper resolved then; the guard answers its names on the space's own resolver address. No space reaches another, and each session keeps the route of its own start. A space has no IPv6 egress. A route is withdrawn only when the guard has done it and said so, connections of its address included, and a route the guard cannot withdraw within its bound ends the guard. If the keeper's connection to the guard is lost, the guard withdraws every route made over it; if the guard dies, the keeper kills every routed space and ends. A role's death retires its spawns and restarts it alone. A host that cannot give a space refuses the keeper's boot. The container's system paths are unmasked; the AppArmor profile denies them again, and without AppArmor only the keeper may write `/proc/sys`. The sessions of one kept folder share its uid and files, and a second starts beside a live one with no cleanup between. The assistant's browser runs without its engine's sandbox, so a page breaking its renderer gets that browser's process: its profile with the person's sign-ins, its route's egress and the driver's protocol to the host. All of a machine's Locus work shares one memory bound, outside which the services run; at that bound the kernel may end any work, even under its own. Work's processor bounds may together exceed the machine's, so full work slows the control plane.
+Untrusted processes run apart from the control plane, with restricted privileges and bounded resources. A pooled uid, and a retired kept folder's, is cleaned in full before reuse. Every role process, runner, build and program session runs in a space of its own: a user, network, IPC, pid, mount and cgroup namespace, its ids mapped to themselves, no capability and a filter that refuses every namespace and mount. It sees its own processes alone, which end with its command, its own home and system files, and the image read-only. A runner's space has no route and no resolver: its relay is its one way out. Any other has its own loopback and one route, which the egress guard makes before the start and holds to the island's rules and, for a start that names hosts, to the addresses its keeper resolved then; the guard answers its names on the space's own resolver address. No space reaches another, and each session keeps the route of its own start. A space has no IPv6 egress. A route is withdrawn only when the guard has done it and said so, connections of its address included, and a route the guard cannot withdraw within its bound ends the guard. If the keeper's connection to the guard is lost, the guard withdraws every route made over it; if the guard dies, the keeper kills every routed space and ends. A role's death retires its spawns and restarts it alone. A host that cannot give a space refuses the keeper's boot. The container's system paths are unmasked; the AppArmor profile denies them again, and without AppArmor only the keeper may write `/proc/sys`. The sessions of one kept folder share its uid and files, and a second starts beside a live one with no cleanup between. The assistant's browser runs without its engine's sandbox, so a page breaking its renderer gets that browser's process: its profile with the person's sign-ins, its route's egress and the driver's protocol. All of a machine's Locus work shares one memory bound, outside which the services run; at that bound the kernel may end any work, even under its own. Work's processor bounds may together exceed the machine's, so full work slows the control plane.
 
 ### 5.8 Separate meanings
 
@@ -264,7 +264,7 @@ Configuration is parsed explicitly, and an invalid security-relevant value is re
 
 ## 7. The screen and tinctures
 
-Prism is one screen in two layers: the desktop and its apps, tinctures in frames, and CYFR's own code drawn over them, the system layer above everything.
+Prism is one screen in two layers: the desktop and its apps, tinctures in frames, and CYFR's own code drawn over them, the system layer.
 
 - **The system layer** is the one place the screen presents a consent, on Sanctum's preview, and draws every grant, confirmation, frame's request and component's question above every frame (`PrismWeb.SystemLayer`).
 - **A frame performs nothing itself.** Prism creates every frame under the sandbox Compendium's tincture rules derive, and a frame reaches data only under a per-open credential Sanctum mints and revokes (`Sanctum.TinctureAuth`). What it asks for the person runs as the person, on the preview of exactly that call, once they approve.

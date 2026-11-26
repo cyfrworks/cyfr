@@ -3,11 +3,13 @@
 
 defmodule Arca.MemoryRecord do
   @moduledoc """
-  The host's record of who used what: what each Locus service's keeper
-  counted of each athanor's work (`Prima.LocusPool`, "Who used what"),
-  as CYFR asked each endpoint for it (`Opus.Memory`). It holds a
-  person's athanor, the kind of work, the name of the program it ran and
-  the UTC day, and no content.
+  The record of who used what: what each Locus service's keeper counted
+  of each athanor's work (`Prima.LocusPool`, "Who used what"), as CYFR
+  asked each endpoint for it (`Opus.Memory`). It holds a person's
+  athanor, the kind of work, the name of the program it ran and the UTC
+  day, and no content. Each counter is its athanor's row; the two reads
+  across athanors (`counters/1` for a platform actor, `others_bytes/1`)
+  are the widening ARCHITECTURE.md §5.1 names beside a share.
 
   ## The rows
 
@@ -23,7 +25,7 @@ defmodule Arca.MemoryRecord do
 
   ## Storing a page
 
-  `store/6` writes one page of one endpoint's report in one locking
+  `store/7` writes one page of one endpoint's report in one locking
   transaction, under the poller's member's slot and its claim: the slot
   verified live as every holder-only write is (`Arca.Repo.owned/3`), then
   the claim held (`Arca.JobClaims.hold/1`) and judged on the clock read
@@ -41,8 +43,11 @@ defmodule Arca.MemoryRecord do
     * A page asked after another `after` than the row's is another
       writer's, and stores nothing (`{:error, :moved}`).
 
-  A counter with no athanor, or of an athanor this CYFR does not hold, is
-  dropped. Any other replaces the stored counter of its key only with a
+  A counter with no athanor, of an athanor this CYFR does not hold, or of
+  a day outside the retention's window (before the first of its last
+  `keep_days` days on the database's clock, or after tomorrow) is
+  dropped, so nothing escapes the purge and a re-read from 0 cannot store
+  a purged day again. Any other replaces the stored counter of its key only with a
   higher `rev`; a lower or equal one changes nothing. Every counter of
   the page moves `after`, dropped or not, and the endpoint's row takes
   the machine's numbers and the database's time it was heard at.
@@ -55,7 +60,8 @@ defmodule Arca.MemoryRecord do
   platform actor. `others_bytes/1` answers, for each endpoint, what every
   other athanor's counters of its current boot hold now, as one sum and
   nothing else. `purge/2` deletes the counters of days before a day, in
-  every athanor, for a platform actor alone.
+  every athanor, for a platform actor alone. `forget/3` deletes, under
+  the poller's claim and slot, the endpoints it no longer asks.
   """
 
   import Ecto.Query
@@ -135,21 +141,24 @@ defmodule Arca.MemoryRecord do
           String.t(),
           non_neg_integer(),
           Prima.LocusPool.report(),
-          names()
+          names(),
+          pos_integer()
         ) ::
           {:ok,
            %{after: non_neg_integer(), stored: non_neg_integer(), dropped: non_neg_integer()}}
           | {:ok, %{after: 0, boot: :new}}
           | Arca.JobClaims.lost()
           | {:error, :not_owner | :moved | :database_error}
-  def store(%{} = claim, slot, endpoint, after_rev, %{boot: boot} = report, names)
+  def store(%{} = claim, slot, endpoint, after_rev, %{boot: boot} = report, names, keep_days)
       when is_binary(endpoint) and endpoint != "" and is_integer(after_rev) and after_rev >= 0 and
-             is_binary(boot) and is_map(names) do
+             is_binary(boot) and is_map(names) and is_integer(keep_days) and keep_days > 0 do
     # The member's slot first, as every holder-only write is fenced
     # (`Arca.Repo.owned/3`), then the claim, judged on the clock read after
     # its row's lock was won.
     "Arca.MemoryRecord.store"
-    |> Arca.Repo.owned(slot, fn -> store!(claim, endpoint, after_rev, report, names) end)
+    |> Arca.Repo.owned(slot, fn ->
+      store!(claim, endpoint, after_rev, report, names, keep_days)
+    end)
     |> case do
       {:ok, stored} -> {:ok, stored}
       {:error, lost} when lost in [:taken, :lapsed] -> lost
@@ -158,13 +167,15 @@ defmodule Arca.MemoryRecord do
   end
 
   # arca:db-raise-ok a step inside the store's own transaction; a refusal rolls it back.
-  defp store!(claim, endpoint, after_rev, report, names) do
+  defp store!(claim, endpoint, after_rev, report, names, keep_days) do
     with {:ok, _held} <- Arca.JobClaims.hold(claim) do
       now = Arca.ServerMetaStorage.now!()
+      today = DateTime.to_date(now)
+      window = Date.range(Date.add(today, -(keep_days - 1)), Date.add(today, 1))
 
       case cursor(locked_endpoint(endpoint), report.boot, after_rev) do
         :store ->
-          {stored, dropped} = put_counters!(endpoint, report, names)
+          {stored, dropped} = put_counters!(endpoint, report, names, window)
           next = report.counters |> Enum.map(& &1.rev) |> Enum.max(fn -> after_rev end)
           put_endpoint!(endpoint, report, next, now)
           {:ok, %{after: next, stored: stored, dropped: dropped}}
@@ -194,11 +205,11 @@ defmodule Arca.MemoryRecord do
   defp cursor(%{boot: boot}, boot, _after), do: :moved
   defp cursor(%{}, _another_boot, _after), do: :new_boot
 
-  defp put_counters!(endpoint, report, names) do
+  defp put_counters!(endpoint, report, names, window) do
     known = held_athanors(report.counters)
 
     Enum.reduce(report.counters, {0, 0}, fn counter, {stored, dropped} ->
-      if MapSet.member?(known, counter.athanor) do
+      if MapSet.member?(known, counter.athanor) and counter.day in window do
         put_counter!(endpoint, report.boot, counter, names)
         {stored + 1, dropped}
       else
@@ -300,6 +311,39 @@ defmodule Arca.MemoryRecord do
   end
 
   @doc """
+  Delete, under `claim` and the member's `slot` as `store/7` writes, every
+  endpoint's row whose name is not in `asked`: the endpoints the poller no
+  longer asks, so none of them is read as a machine. Their counters stay
+  as their days, until the purge. Answers how many went, or the claim or
+  slot lost, with nothing deleted.
+  """
+  @spec forget(Arca.JobClaims.held(), map() | :none, [String.t()]) ::
+          {:ok, non_neg_integer()}
+          | Arca.JobClaims.lost()
+          | {:error, :not_owner | :database_error}
+  def forget(%{} = claim, slot, asked) when is_list(asked) do
+    "Arca.MemoryRecord.forget"
+    |> Arca.Repo.owned(slot, fn -> forget!(claim, asked) end)
+    |> case do
+      {:ok, count} -> {:ok, count}
+      {:error, lost} when lost in [:taken, :lapsed] -> lost
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  # arca:unscoped-ok the host's own rows of the endpoints the poller no longer asks.
+  defp forget!(claim, asked) do
+    with {:ok, _held} <- Arca.JobClaims.hold(claim) do
+      {count, _} =
+        Arca.Repo.delete_all(from(e in MemoryEndpoint, where: e.endpoint not in ^asked))
+
+      {:ok, count}
+    else
+      lost when lost in [:taken, :lapsed] -> {:error, lost}
+    end
+  end
+
+  @doc """
   Every endpoint's row: the machine's numbers its last answer carried,
   the boot it was of and when it was heard. A machine's numbers are the
   whole machine's, as a refusal's `held` shows them to anyone, so any
@@ -323,7 +367,9 @@ defmodule Arca.MemoryRecord do
   @spec counters(Prima.Actor.t()) :: {:ok, [counter()]} | {:error, :no_athanor | term()}
   def counters(%Prima.Actor{} = actor) when platform(actor) do
     Errors.with_db_rescue("Arca.MemoryRecord.counters", fn ->
-      # arca:unscoped-ok the platform's read of the host's whole record; Opus asks it only for the administrator.
+      # arca:unscoped-ok a platform actor reads every athanor's counters, the administrator's
+      # widening ARCHITECTURE.md §5.1 names; `Opus.Memory.read/2` builds one only for a person
+      # whose standing as the administrator it read from their row at the call.
       {:ok, from(c in MemoryCounter, order_by: [desc: c.day]) |> Arca.Repo.all() |> rows()}
     end)
   end
@@ -350,8 +396,8 @@ defmodule Arca.MemoryRecord do
           {:ok, %{String.t() => non_neg_integer()}} | {:error, :no_athanor | term()}
   def others_bytes(%Prima.Actor{athanor_id: athanor_id}) when resolved(athanor_id) do
     Errors.with_db_rescue("Arca.MemoryRecord.others_bytes", fn ->
-      # arca:unscoped-ok one sum per endpoint of every other athanor's current bytes, the one
-      # widening the record makes for a person: no other athanor's row leaves it.
+      # arca:unscoped-ok one sum per endpoint of every other athanor's current bytes, a person's
+      # widening ARCHITECTURE.md §5.1 names: no other athanor's row leaves it.
       sums =
         from(c in MemoryCounter,
           join: e in MemoryEndpoint,
