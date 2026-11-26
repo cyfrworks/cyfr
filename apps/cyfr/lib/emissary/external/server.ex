@@ -76,8 +76,9 @@ defmodule Emissary.External.Server do
   awaiting it fails, saying so (and, where memory ended it, which of its
   three causes did, `Prima.Refusal`'s `{:memory, name, cause}`), and the
   next call opens the session again, initializing the program afresh. A
-  session refused for room says what holds the memory, the athanor's own
-  programs by name (`Opus.Programs.full/3`). The tools listed stay listed meanwhile.
+  session refused for room says that this CYFR has not enough memory free,
+  and names no program, size or sum: a component calling the tool is told
+  as much as anyone. The tools listed stay listed meanwhile.
 
   One member of the cell runs an owner; a member that does not hold its
   claim refuses the connection (`:claimed_elsewhere`). A call the service
@@ -1528,22 +1529,24 @@ defmodule Emissary.External.Server do
 
   defp upstream(state, body), do: http_post(state, body)
 
-  # A start refused for room says what holds the memory, the athanor's own
-  # holdings named from its own rows (`Opus.Programs.full/3`), tagged so
-  # that its log line says only that it was refused for room.
-  defp backends_words(state, {:refused, {:capacity, held}, _boot}), do: full(state, held)
-  defp backends_words(state, {:refused, :capacity, _boot}), do: full(state, nil)
-  defp backends_words(state, :capacity), do: full(state, nil)
+  # A start refused for room says so and no more: its words reach whoever
+  # called the tool, a component in a chain among them, which is untrusted
+  # code, so they name no program, size or sum (the person reads those on
+  # Aqua's turn, the terminal and the Aqua page). Tagged so that its log
+  # line says only that it was refused for room.
+  defp backends_words(state, {:refused, {:capacity, _held}, _boot}), do: no_room(state, :memory)
+  defp backends_words(state, {:refused, :capacity, _boot}), do: no_room(state, :places)
+  defp backends_words(state, :capacity), do: no_room(state, :places)
   defp backends_words(_state, reason), do: backends_reason(reason)
 
-  defp full(state, held) do
-    actor =
-      Sanctum.Context.actor(
-        Sanctum.Context.internal(athanor_id: state.athanor_id, scope: :athanor)
-      )
+  defp no_room(state, :memory),
+    do:
+      {:no_room,
+       "#{state.name} could not start: this CYFR has not enough memory free. Stop one on " <>
+         "the Programs page, or wait."}
 
-    {:no_room, Prima.Refusal.message(Opus.Programs.full(actor, state.name, held))}
-  end
+  defp no_room(state, :places),
+    do: {:no_room, Prima.Refusal.message({:program_full, state.name, nil, %{}})}
 
   defp said({:no_room, sentence}), do: sentence
   defp said(words), do: words

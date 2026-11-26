@@ -1545,7 +1545,7 @@ defmodule Opus.ProgramsTest do
       end
     end
 
-    test "a tool's start refused for room names the athanor's own programs, by their rows",
+    test "a tool's start refused for room says so, naming no program, size or sum",
          %{ctx: ctx, fake: fake} do
       start_controller(fake)
       other = mcp_row(ctx, "holder", %{"NODE_ENV" => "production"})
@@ -1563,10 +1563,44 @@ defmodule Opus.ProgramsTest do
       assert {:error, sentence} = Servers.ensure_started(row, ctx)
 
       assert sentence =~
-               "refused could not start: this CYFR has not enough memory free. Of yours, " <>
-                 "holder uses 500.0 MB. Others use 100.0 MB. Stop one on the Programs page, or wait."
+               "refused could not start: this CYFR has not enough memory free. Stop one on the " <>
+                 "Programs page, or wait."
+
+      refute sentence =~ "holder"
 
       refute sentence =~ "backends"
+    end
+
+    # A component in a chain is untrusted code: what its call of a program's
+    # tool is told of a start refused for room names no program, size or sum.
+    test "a component's call of a program tool refused for room is told no name, size or sum",
+         %{ctx: ctx, fake: fake} do
+      start_controller(fake)
+      other = mcp_row(ctx, "holder", %{"NODE_ENV" => "production"})
+      row = mcp_row(ctx, "refused", %{"NODE_ENV" => "production"})
+
+      held = %{
+        need: 402_653_184,
+        free: 0,
+        mine: [%{kind: "program", subject: other.id, bytes: 524_288_000}],
+        others_bytes: 104_857_600
+      }
+
+      Scripted.refuse_once(fake, "open", {"capacity", held})
+
+      # As the proxy reaches it (`Emissary.External.Proxy.dispatch_external/5`).
+      assert {:ok, pid} =
+               Emissary.External.ServerSupervisor.ensure_started(Servers.server_config(row, ctx))
+
+      assert {:error, reason} = Emissary.External.Server.call_tool(pid, "search", %{})
+
+      # The proxy's `classified/1`, then `Opus.Host.Children.tool_refusal/2`'s message.
+      message = reason |> Sanctum.Refusals.classify() |> Sanctum.Refusals.render()
+
+      assert message =~ "not enough memory free"
+      refute message =~ "holder"
+      refute message =~ ~r/\d+(\.\d+)? ?[KMGT]?B\b/
+      refute message =~ ~r/others|of yours/i
     end
 
     test "a driven program syncs its program with its settings and has no MCP process",
