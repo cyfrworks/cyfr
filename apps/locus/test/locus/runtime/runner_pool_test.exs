@@ -1235,8 +1235,10 @@ defmodule Locus.Runtime.RunnerPoolTest do
                           message: "the scripted keeper refuses (memory_unavailable)"
                         }}}}
 
+      # It left the pool at once; the floor's runner spawned behind the
+      # take is the pool's next try, refused in its own time.
       assert counts(pool) == %{fresh: 0, idle: 0, busy: 0, tainted: 0}
-      assert Runners.runners(pool) == []
+      refute Enum.any?(Runners.runners(pool), &(&1.pid == pid))
 
       # The next start asks the keeper again and waits for its answer, the
       # refusal of its own spawn.
