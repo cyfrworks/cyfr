@@ -1267,6 +1267,15 @@ defmodule Locus.KeeperTest do
       end
     end
 
+    # The piece the keeper tells on the owner's last word, which comes
+    # whenever anything is still to come: one read, and no word after it.
+    defp on_the_last_word(_ref, 0), do: 0
+
+    defp on_the_last_word(ref, _to_come) do
+      assert_receive {Keeper, ^ref, {:stdout, piece}}, 5_000
+      byte_size(piece)
+    end
+
     @tag timeout: 60_000
     test "from the release on, the connection is read on the owner's word until the relay ends, and what it left at once" do
       c = plain_client!()
@@ -1283,8 +1292,11 @@ defmodule Locus.KeeperTest do
       assert Task.yield(sending, 0) == nil
 
       # Taking each piece it is told, the owner lets the relay write the
-      # rest; the relay ends and the keeper reports its end.
+      # rest; the relay ends and the keeper reports its end. Its last word
+      # lets the keeper read once more: what is still to come begins with
+      # that read's piece, told on the word, and it is taken with the rest.
       taken = take_while_sending(handle, sending, relay, byte_size(first))
+      taken = taken + on_the_last_word(ref, total - taken)
       :ok = :gen_tcp.close(relay)
 
       channel_reply(c, %{
