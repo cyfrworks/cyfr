@@ -269,26 +269,21 @@ defmodule Locus.ApplicationTest do
     end
   end
 
-  test "the build slots take their caps from the builder's settings and refuse, never queue" do
+  test "the build slots take their one cap from the builder's settings, an athanor's alike, and refuse, never queue" do
     assert {Prima.Slots, opts} = App.build_slots()
     assert opts[:name] == Locus.BuildSlots
     assert opts[:max] == Locus.Config.max_concurrent()
-    assert opts[:key_max] == Locus.Config.max_concurrent_per_tenant()
+    assert opts[:key_max] == Locus.Config.max_concurrent()
     assert opts[:policy] == :reject
     assert opts[:child_reserve] == 0
     # A slot whose connection died is given back on the executor's word.
     assert opts[:fence] == {Locus.Executor, :fence, []}
 
     Application.put_env(:locus, :max_concurrent, 5)
-    Application.put_env(:locus, :max_concurrent_per_tenant, 3)
-
-    on_exit(fn ->
-      Application.delete_env(:locus, :max_concurrent)
-      Application.delete_env(:locus, :max_concurrent_per_tenant)
-    end)
+    on_exit(fn -> Application.delete_env(:locus, :max_concurrent) end)
 
     assert {Prima.Slots, opts} = App.build_slots()
-    assert {opts[:max], opts[:key_max]} == {5, 3}
+    assert {opts[:max], opts[:key_max]} == {5, 5}
   end
 
   test "the listener serves the builds service on the configured address, over HTTP/1.1 alone" do

@@ -1166,6 +1166,8 @@ defmodule PrismWeb.ProgramsLiveTest do
     # A program's folder is its own: no other program's is offered.
     refute has_element?(view, ~s(form#add-program [name="login_entry"]))
     refute has_element?(view, ~s(form#add-program [name="backend"]))
+    # No program is given a memory number: CYFR bounds every one alike.
+    refute has_element?(view, ~s(form#add-program [name="memory_mib"]))
 
     view
     |> form("form#add-program", %{
@@ -1173,7 +1175,6 @@ defmodule PrismWeb.ProgramsLiveTest do
       "command" => "npx -y @anthropic-ai/claude-code",
       "mark" => "driven",
       "home" => "kept",
-      "memory_mib" => "1024",
       "disk_mib" => "2048"
     })
     |> render_submit()
@@ -1186,16 +1187,18 @@ defmodule PrismWeb.ProgramsLiveTest do
     assert %{
              "operation" => "mcp_servers.create",
              "resource" => "claude",
-             "details" => %{
-               "command" => "npx -y @anthropic-ai/claude-code",
-               "mark" => "driven",
-               "folder" => "new",
-               "hosts" => "every public host",
-               "memory_bytes" => "1073741824",
-               "home_max_bytes" => "2147483648",
-               "environment" => "none"
-             }
+             "details" =>
+               %{
+                 "command" => "npx -y @anthropic-ai/claude-code",
+                 "mark" => "driven",
+                 "folder" => "new",
+                 "hosts" => "every public host",
+                 "home_max_bytes" => "2147483648",
+                 "environment" => "none"
+               } = details
            } = asked(user, athanor, "mcp_servers.create")
+
+    refute Map.has_key?(details, "memory_bytes")
 
     assert has_element?(view, ~s([data-test="confirmation"]))
     confirm!(view, user, athanor, "mcp_servers.create")
@@ -1203,7 +1206,7 @@ defmodule PrismWeb.ProgramsLiveTest do
     assert {:ok, row} = Arca.McpServerStorage.get(ctx(athanor), "claude")
     assert {row.transport, row.mark} == {"program", "driven"}
     assert row.home == "kept"
-    assert row.memory_bytes == 1024 * 1_048_576
+    refute Map.has_key?(row, :memory_bytes)
     assert row.home_max_bytes == 2048 * 1_048_576
     assert {:ok, []} = Arca.VaultStorage.list(ctx(athanor))
 
@@ -1211,6 +1214,11 @@ defmodule PrismWeb.ProgramsLiveTest do
     assert open_confirmations(user, athanor) == []
     refute_received {:session, "open", _message, _fields}
     refute has_element?(view, ~s([data-test="terminal"]))
+
+    # Its details show the bounds a row sets, and no memory one.
+    view |> element("tr[phx-value-name=claude]") |> render_click()
+    assert has_element?(view, ~s([data-test="program-settings"]), "Disk bound")
+    refute has_element?(view, ~s([data-test="program-settings"]), "Memory")
   end
 
   test "Aqua's browser is added from its own definition, prefilled, and confirmed as any program is",
@@ -1222,23 +1230,25 @@ defmodule PrismWeb.ProgramsLiveTest do
     assert has_element?(view, ~s([data-test="add-browser"]), "asks you to confirm the program")
     assert has_element?(view, ~s(form#add-program input[name="name"][value="aqua-browser"]))
     assert has_element?(view, ~s(form#add-program input[name="command"][value="cyfr-browser"]))
-    assert has_element?(view, ~s(form#add-program input[name="memory_mib"][value="1024"]))
+    refute has_element?(view, ~s(form#add-program [name="memory_mib"]))
     assert has_element?(view, ~s(form#add-program input[name="disk_mib"][value="2048"]))
 
     view |> form("form#add-program", %{}) |> render_submit()
     answered(view)
 
     assert %{
-             "details" => %{
-               "command" => "cyfr-browser",
-               "mark" => "driven",
-               "folder" => "new",
-               "hosts" => "every public host",
-               "memory_bytes" => "1073741824",
-               "home_max_bytes" => "2147483648",
-               "environment" => "none"
-             }
+             "details" =>
+               %{
+                 "command" => "cyfr-browser",
+                 "mark" => "driven",
+                 "folder" => "new",
+                 "hosts" => "every public host",
+                 "home_max_bytes" => "2147483648",
+                 "environment" => "none"
+               } = details
            } = asked(user, athanor, "mcp_servers.create")
+
+    refute Map.has_key?(details, "memory_bytes")
 
     confirm!(view, user, athanor, "mcp_servers.create")
 
@@ -1583,8 +1593,7 @@ defmodule PrismWeb.ProgramsLiveTest do
     |> form("form#add-program", %{
       "command" => "npx -y @anthropic-ai/claude-code@2.1.400",
       "mark" => "driven",
-      "home" => "kept",
-      "memory_mib" => "1024"
+      "home" => "kept"
     })
     |> render_submit()
 
@@ -1603,7 +1612,6 @@ defmodule PrismWeb.ProgramsLiveTest do
     assert saved.id == row.id
     assert saved.epoch == row.epoch + 1
     assert {saved.transport, saved.mark, saved.home} == {"program", "driven", "kept"}
-    assert saved.memory_bytes == 1024 * 1_048_576
 
     assert Arca.McpServerStorage.config(saved) == %{
              "command" => "npx -y @anthropic-ai/claude-code@2.1.400",
@@ -1631,7 +1639,7 @@ defmodule PrismWeb.ProgramsLiveTest do
         url: nil,
         enabled: false,
         home: "kept",
-        memory_bytes: 2_147_483_648,
+        home_max_bytes: 2_147_483_648,
         config_json: Jason.encode!(%{"command" => "gh mcp", "env" => %{}})
       })
 
@@ -1639,10 +1647,10 @@ defmodule PrismWeb.ProgramsLiveTest do
     view |> element("tr[phx-value-name=gh]") |> render_click()
     view |> element(~s(button[data-test="edit"])) |> render_click()
 
-    view |> form("form#add-program", %{"memory_mib" => "1024"}) |> render_submit()
+    view |> form("form#add-program", %{"disk_mib" => "1024"}) |> render_submit()
     answered(view)
 
-    assert %{"details" => %{"memory_bytes" => "1073741824", "grants_asking_again" => "none"}} =
+    assert %{"details" => %{"home_max_bytes" => "1073741824", "grants_asking_again" => "none"}} =
              asked(user, athanor, "mcp_servers.update")
 
     assert has_element?(view, ~s([data-test="confirmation-consequence"]), "No grant uses it.")
@@ -1651,18 +1659,18 @@ defmodule PrismWeb.ProgramsLiveTest do
     confirm!(view, user, athanor, "mcp_servers.update")
     assert open_confirmations(user, athanor) == []
     assert {:ok, saved} = Arca.McpServerStorage.get(ctx(athanor), "gh")
-    assert {saved.id, saved.home, saved.memory_bytes} == {row.id, "kept", 1_073_741_824}
+    assert {saved.id, saved.home, saved.home_max_bytes} == {row.id, "kept", 1_073_741_824}
 
     # An edit opened before another change is refused, and changes nothing.
     view |> element(~s(button[data-test="edit"])) |> render_click()
     {:ok, _} = Arca.McpServerStorage.update(ctx(athanor), "gh", %{enabled: false})
 
-    view |> form("form#add-program", %{"memory_mib" => "512"}) |> render_submit()
+    view |> form("form#add-program", %{"disk_mib" => "512"}) |> render_submit()
 
     html = answered(view)
     assert html =~ "Failed to save:"
     assert html =~ "changed since epoch"
-    assert {:ok, %{memory_bytes: 1_073_741_824}} = Arca.McpServerStorage.get(ctx(athanor), "gh")
+    assert {:ok, %{home_max_bytes: 1_073_741_824}} = Arca.McpServerStorage.get(ctx(athanor), "gh")
   end
 
   test "a disabled program's details read as stopped: no program running, no tools",
@@ -1714,8 +1722,7 @@ defmodule PrismWeb.ProgramsLiveTest do
         url: nil,
         enabled: false,
         home: "kept",
-        memory_bytes: 16_777_217,
-        home_max_bytes: 2_147_483_648,
+        home_max_bytes: 16_777_217,
         hosts: Jason.encode!(["api.github.com", "github.com"]),
         config_json:
           Jason.encode!(%{
@@ -1743,7 +1750,7 @@ defmodule PrismWeb.ProgramsLiveTest do
     # The bound of no whole MiB is shown exactly.
     assert has_element?(
              view,
-             ~s(form#add-program input[name="memory_mib"][value="16777217 bytes"])
+             ~s(form#add-program input[name="disk_mib"][value="16777217 bytes"])
            )
 
     view |> form("form#add-program", %{}) |> render_submit()
@@ -1771,14 +1778,12 @@ defmodule PrismWeb.ProgramsLiveTest do
     assert Map.take(saved, [
              :mark,
              :home,
-             :memory_bytes,
              :home_max_bytes,
              :hosts
            ]) ==
              Map.take(before, [
                :mark,
                :home,
-               :memory_bytes,
                :home_max_bytes,
                :hosts
              ])

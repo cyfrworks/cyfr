@@ -179,9 +179,9 @@ defmodule Opus.Programs do
   another member of the cell holds the owner's claim (`:claimed_elsewhere`)
   or the claim row cannot be read (`:claim_unavailable`), when the row no
   longer passes the fence, an env template does not resolve or names an
-  attach-only entry (`:disclosure_refused`), the athanor would define more
-  than its share of the pool, this member does not hold its slot in the
-  cell (`:control_plane_lost`), or the service cannot be reached.
+  attach-only entry (`:disclosure_refused`), this member does not hold its
+  slot in the cell (`:control_plane_lost`), or the service cannot be
+  reached.
   """
   @spec hold(owner(), pos_integer()) :: {:ok, grant()} | {:error, term()}
   def hold(owner, timeout_ms \\ Box.hold_timeout_ms()),

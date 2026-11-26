@@ -103,9 +103,7 @@ defmodule Opus.Programs.Box do
   last confirmed on its sync; while it differs from the one read, the
   owner is synced again at every tick this member holds its slot, and a
   session open of it waits for that sync's answer, so the service never
-  admits a session by a ceiling the platform no longer names. A hello's answer
-  tells the box's pool size, a quarter of which (at least one) is the most
-  programs one athanor's owners may define.
+  admits a session by a ceiling the platform no longer names.
 
   Nothing is sent, and no claim renewed, while this member does not hold its
   slot in the cell (`Arca.ControlPlane.held?/0`) or its generation cannot be
@@ -180,11 +178,6 @@ defmodule Opus.Programs.Box do
   a caller may close from the id and the caller alone, after a restart
   too, and reads nothing from an id that is forged or another person's
   (`named_terminal/3`). It carries no key and grants no session.
-
-  ## Shares
-
-  Every live owner of one athanor together defines at most a quarter of the
-  service's pool in programs; a sync past that share is refused.
   """
 
   use GenServer
@@ -271,7 +264,6 @@ defmodule Opus.Programs.Box do
       :cyfr_boot,
       :boot,
       :generation,
-      :pool_size,
       :inflight,
       generation_source: &Arca.ControlPlane.generation/0,
       # The periods the caller fixed; the rest are read at every tick.
@@ -792,7 +784,6 @@ defmodule Opus.Programs.Box do
           generation: nil,
           live?: false,
           names: [],
-          programs: 0,
           # Whether the program its sync defined loads the person's packs,
           # which its opens hold first (`Opus.Programs.Session`).
           packs: false,
@@ -953,15 +944,6 @@ defmodule Opus.Programs.Box do
     for {key, %{live?: true, generation: generation}} <- state.owners,
         generation == state.generation,
         do: key
-  end
-
-  # The programs every other live owner in `key`'s athanor defines.
-  defp held_by_others(state, {athanor_id, _server} = key) do
-    for {{^athanor_id, _} = other, %{live?: true} = entry} <- state.owners,
-        other != key,
-        reduce: 0 do
-      held -> held + entry.programs
-    end
   end
 
   defp grant_waiters(state, key) do
@@ -1220,9 +1202,7 @@ defmodule Opus.Programs.Box do
             server_id: server_id,
             epoch: entry.epoch,
             idle_ms: state.idle_ms,
-            athanor_memory_bytes: state.athanor_memory_bytes,
-            share: share(state),
-            athanor_programs: held_by_others(state, key)
+            athanor_memory_bytes: state.athanor_memory_bytes
           })
           |> claim_spec(state)
 
@@ -1304,10 +1284,6 @@ defmodule Opus.Programs.Box do
   defp claim_spec(spec, state),
     do: Map.merge(spec, %{claim_owner: state.cyfr_boot, claim_lease_ms: state.lease_ms})
 
-  # The most programs one athanor's owners may define.
-  defp share(%State{pool_size: size}) when is_integer(size), do: max(div(size, 4), 1)
-  defp share(_state), do: nil
-
   # ============================================================================
   # Performing: store reads, vault reads and HTTP, in the task
   # ============================================================================
@@ -1366,7 +1342,6 @@ defmodule Opus.Programs.Box do
     with {:ok, row} <- fence_one(owner),
          {:ok, definition} <- Definition.validate(Arca.McpServerStorage.config(row)),
          {:ok, program} <- Definition.program(row, definition),
-         :ok <- within_share(spec),
          {:ok, sealed} <- seal_env(spec, keys.seal, program) do
       # A definition's warnings never stop its program: the administrator
       # was told when it was saved, and each sync says so once in the log.
@@ -1390,7 +1365,7 @@ defmodule Opus.Programs.Box do
 
       case post(spec, keys.control, body) do
         {:http, _status, _boot, _body} = answer ->
-          {:synced, answer, Definition.entry_names(definition), 1, program.packs}
+          {:synced, answer, Definition.entry_names(definition), program.packs}
 
         error ->
           error
@@ -1481,14 +1456,6 @@ defmodule Opus.Programs.Box do
   defp program(_row), do: {:error, :not_a_program}
 
   defp passes_fence?(fenced, epoch), do: match?({:ok, _row}, fence_verdict(fenced, epoch))
-
-  defp within_share(%{share: nil}), do: :ok
-
-  defp within_share(spec) do
-    if spec.athanor_programs + 1 > spec.share,
-      do: {:error, {:pool_share, spec.share}},
-      else: :ok
-  end
 
   # The sealed env is keyed by the program's wire name, as a sync names it.
   defp seal_env(spec, seal_key, program) do
@@ -1683,7 +1650,7 @@ defmodule Opus.Programs.Box do
   defp stale_boot?(sent_under, answered), do: is_binary(answered) and answered != sent_under
 
   defp answer_boot({:http, _status, boot, _body}), do: boot
-  defp answer_boot({:synced, answer, _names, _count, _packs}), do: answer_boot(answer)
+  defp answer_boot({:synced, answer, _names, _packs}), do: answer_boot(answer)
   defp answer_boot({:renewed, answer, _fenced_out}), do: answer_boot(answer)
   defp answer_boot({:claimed, _claim, result}), do: answer_boot(result)
   defp answer_boot({:released, answer, _given_up}), do: answer_boot(answer)
@@ -1693,18 +1660,13 @@ defmodule Opus.Programs.Box do
          state,
          {:hello},
          spec,
-         {:http, 200, _boot, %{boot: boot, pool: pool}}
+         {:http, 200, _boot, %{boot: boot}}
        ) do
     Logger.info(
       "[Opus.Programs] greeted the backends service #{boot} under generation #{spec.generation}"
     )
 
-    state = %{
-      state
-      | boot: boot,
-        generation: spec.generation,
-        pool_size: pool.size
-    }
+    state = %{state | boot: boot, generation: spec.generation}
 
     resyncs = for {key, %{live?: false}} <- state.owners, do: {:sync, key}
 
@@ -1752,7 +1714,7 @@ defmodule Opus.Programs.Box do
          state,
          {:sync, key},
          spec,
-         {:synced, {:http, 200, _boot, %{status: _status}}, names, count, packs}
+         {:synced, {:http, 200, _boot, %{status: _status}}, names, packs}
        ) do
     case state.owners[key] do
       %{epoch: epoch} = entry when epoch == spec.epoch ->
@@ -1761,7 +1723,6 @@ defmodule Opus.Programs.Box do
           | live?: true,
             generation: spec.generation,
             names: names,
-            programs: count,
             packs: packs,
             ceiling: spec.athanor_memory_bytes
         }
@@ -2386,7 +2347,7 @@ defmodule Opus.Programs.Box do
   @spec refusal_name(LocusBackends.code()) :: atom()
   def refusal_name(code), do: Map.get(@renamed_refusals, code, code)
 
-  defp refusal({:synced, answer, _names, _count, _packs}), do: refusal(answer)
+  defp refusal({:synced, answer, _names, _packs}), do: refusal(answer)
   defp refusal({:renewed, answer, _fenced_out}), do: refusal(answer)
   defp refusal({:claimed, _claim, result}), do: refusal(result)
   defp refusal({:released, answer, _given_up}), do: refusal(answer)

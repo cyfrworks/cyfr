@@ -125,7 +125,7 @@ defmodule Prima.LocusBackendsTest do
       assert :ok = LocusBackends.read_health(LocusBackends.health_body())
       assert {:error, {:version, 1}} = LocusBackends.read_health(~s({"version":1}))
       assert {:error, {:version, nil}} = LocusBackends.read_health("{}")
-      assert {:error, {:unknown_field, "x"}} = LocusBackends.read_health(~s({"version":6,"x":1}))
+      assert {:error, {:unknown_field, "x"}} = LocusBackends.read_health(~s({"version":7,"x":1}))
       assert {:error, :not_json} = LocusBackends.read_health("[]")
     end
 
@@ -787,11 +787,11 @@ defmodule Prima.LocusBackendsTest do
       assert {:error, {:version, 1}} = LocusBackends.read_control(~s({"version":1,"type":"nope"}))
       assert {:error, {:version, nil}} = LocusBackends.read_control(~s({"type":"hello"}))
       assert {:error, {:version, 1}} = LocusBackends.read_session(~s({"version":1,"type":"open"}))
-      assert {:protocol_mismatch, 6, 2} = LocusBackends.refusal_for({:version, 2})
-      assert {:protocol_mismatch, 6, nil} = LocusBackends.refusal_for({:version, "6"})
+      assert {:protocol_mismatch, 7, 2} = LocusBackends.refusal_for({:version, 2})
+      assert {:protocol_mismatch, 7, nil} = LocusBackends.refusal_for({:version, "7"})
 
-      assert LocusBackends.encode_refusal({:protocol_mismatch, 6, 2}) ==
-               ~s({"error":"version","version":6})
+      assert LocusBackends.encode_refusal({:protocol_mismatch, 7, 2}) ==
+               ~s({"error":"version","version":7})
 
       assert LocusBackends.status({:protocol_mismatch, 5, nil}) == 409
 
@@ -886,6 +886,25 @@ defmodule Prima.LocusBackendsTest do
         assert {:error, {:invalid_field, "athanor_memory_bytes"}} =
                  LocusBackends.encode_control(%{sync | athanor_memory_bytes: value})
       end
+    end
+
+    test "a sync's program names no memory bound: one that does is refused, written or read" do
+      {:ok, %{programs: [program]} = sync} = LocusBackends.read_control(@vectors["sync"]["body"])
+      refute Map.has_key?(program, :memory_bytes)
+
+      named = %{sync | programs: [Map.put(program, :memory_bytes, 268_435_456)]}
+
+      assert {:error, {:unknown_field, "programs[0].memory_bytes"}} =
+               LocusBackends.encode_control(named)
+
+      body =
+        @vectors["sync"]["body"]
+        |> Jason.decode!()
+        |> update_in(["programs", Access.at(0)], &Map.put(&1, "memory_bytes", 268_435_456))
+        |> Jason.encode!()
+
+      assert {:error, {:unknown_field, "programs[0].memory_bytes"}} =
+               LocusBackends.read_control(body)
     end
 
     test "the buffer is bounded by lines as well as bytes, each line charged its framing" do

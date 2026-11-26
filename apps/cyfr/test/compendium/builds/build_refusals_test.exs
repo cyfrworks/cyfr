@@ -4,8 +4,8 @@
 defmodule Compendium.Builds.BuildRefusalsTest do
   @moduledoc """
   What the build tool answers when a build does not happen. This server
-  holds no build slots: the builds service caps its builds, on the whole
-  and per athanor, and its `capacity` refusal is the one retryable
+  holds no build slots: the builds service caps the builds it runs at
+  once, whoever asks, and its `capacity` refusal is the one retryable
   message. Every other way the service refuses, or fails to answer, has a
   sentence of its own; and a build id nobody recorded is not found.
   """

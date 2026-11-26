@@ -364,7 +364,6 @@ defmodule Locus.Backends.OwnersTest do
         command: command,
         env: %{},
         home: :scratch,
-        memory_bytes: nil,
         home_max_bytes: nil,
         hosts: nil
       },
@@ -1848,14 +1847,13 @@ defmodule Locus.Backends.OwnersTest do
              }
     end
 
-    test "its place names its athanor's ceiling, at most the keeper's, whatever its row's own bound",
-         ctx do
+    test "its place names its athanor's ceiling, at most the keeper's", ctx do
       owners = start_owners(ctx, session_opts: placing(ctx))
       max = Prima.KeeperProtocol.request_bounds().max_athanor_bytes
 
       programs = [
-        program("big", @idle, memory_bytes: 1024 * @mib),
-        program("small", @idle, memory_bytes: 16 * @mib)
+        program("big", @idle),
+        program("small", @idle)
       ]
 
       assert {:ok, %{programs: [%{status: :idle}, %{status: :idle}]}} =

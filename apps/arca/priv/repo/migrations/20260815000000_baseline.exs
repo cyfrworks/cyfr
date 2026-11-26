@@ -2254,8 +2254,6 @@ defmodule Arca.Repo.Migrations.Baseline do
       # A program's home: `scratch` is scrubbed at retirement, `kept` is the
       # row's own folder, named by its id, under a uid of its own.
       add :home, :string, null: false, default: "scratch", check: if(sqlite?, do: home_known)
-      # A program's memory bound; null means the backends service's total.
-      add :memory_bytes, :bigint
       # A kept home's size cap.
       add :home_max_bytes, :bigint
       # A program's network list (JSON).

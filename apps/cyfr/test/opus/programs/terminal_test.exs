@@ -70,7 +70,6 @@ defmodule Opus.Programs.TerminalTest do
             mark: "driven",
             url: nil,
             home: "kept",
-            memory_bytes: 1_073_741_824,
             home_max_bytes: 2_147_483_648,
             config_json:
               Jason.encode!(%{"command" => "npx -y @anthropic-ai/claude-code", "env" => %{}})
@@ -1201,7 +1200,6 @@ defmodule Opus.Programs.TerminalTest do
   defp browser_row(ctx, chrome \\ :person),
     do:
       program_row(ctx, Programs.Definition.browser_name(chrome), %{
-        memory_bytes: 1_073_741_824,
         home_max_bytes: nil,
         config_json: Jason.encode!(%{"command" => "cyfr-browser", "env" => %{}})
       })

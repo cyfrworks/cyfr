@@ -24,7 +24,7 @@ defmodule Prima.LocusBackends do
 
   | Operation | Route | Body | Answer |
   |---|---|---|---|
-  | `:health` | `/locus/v1/backends/health` | `{"version": 6}` | unauthenticated |
+  | `:health` | `/locus/v1/backends/health` | `{"version": 7}` | unauthenticated |
   | `:control` | `/locus/v1/backends/control` | a control message | its answer, or a refusal |
   | `:session` | `/locus/v1/backends/session` | a session message | its answer, or a refusal |
   | `:close` | `/locus/v1/backends/close` | a close | `status` `closed`, or a refusal |
@@ -52,16 +52,15 @@ defmodule Prima.LocusBackends do
   | `home` | `op`, `athanor`, `home_id` | `home_id`, `state` |
   | `homes` | none | `homes[]` |
 
-  A sync's program is `{name, command, env_names, home, memory_bytes?,
-  home_max_bytes?, hosts?, packs?}`: a `name` of lowercase letters, digits and
+  A sync's program is `{name, command, env_names, home, home_max_bytes?,
+  hosts?, packs?}`: a `name` of lowercase letters, digits and
   hyphens, a `command` meeting `check_command/1`, the `env_names` its sealed
   environment carries (each an uppercase variable name, none reserved:
   `reserved_env_names/0`, `reserved_env_prefixes/0`), its `home`
   (`"scratch"`, scrubbed at retirement, or `"kept"`, the program row's own
-  folder, which survives retirement), its `memory_bytes` (read and
-  ignored: the keeper bounds every session alike, `Prima.LocusPool`) and,
-  for a kept home only, its `home_max_bytes` (absent: the homes
-  volume is the only bound), and its `hosts`, the only hosts its processes
+  folder, which survives retirement), for a kept home only its
+  `home_max_bytes` (absent: the homes volume is the only bound), and its
+  `hosts`, the only hosts its processes
   may reach beside the resolver and the deployment's private hosts
   (`Prima.KeeperProtocol.valid_hosts?/1`), resolved when each process
   starts and held there by the island's egress guard on the addresses they
@@ -268,7 +267,7 @@ defmodule Prima.LocusBackends do
   ## Refusals
 
   A refusal is answered at its code's HTTP status (`status/1`) as
-  `{"version": 6, "error": <code>}` (`encode_refusal/1`), and a session's
+  `{"version": 7, "error": <code>}` (`encode_refusal/1`), and a session's
   `capacity` for room with `held` beside them.
 
   ## Authentication
@@ -314,7 +313,7 @@ defmodule Prima.LocusBackends do
 
   alias Prima.{KeeperProtocol, MacEnvelope, VaultRef}
 
-  @version 6
+  @version 7
   @domain MacEnvelope.domain()
   @service MacEnvelope.service(:backends)
   @label MacEnvelope.label(:backends)
@@ -342,9 +341,6 @@ defmodule Prima.LocusBackends do
   @max_session_bytes 16_777_216
   @max_recv_wait_ms 30_000
   @close_wait_ms 17_000
-  # A program's `memory_bytes` lies in this range.
-  @min_memory_bytes 16 * 1024 * 1024
-  @max_memory_bytes 1024 * 1024 * 1024 * 1024
   @max_status_owners 64
   # A put's part is one keeper line's (`Prima.KeeperProtocol`), so a part's
   # seq means one thing on both wires.
@@ -497,7 +493,7 @@ defmodule Prima.LocusBackends do
     packs_put: ~w(digest)
   }
   @program_fields ~w(name command env_names home)
-  @program_optional ~w(memory_bytes home_max_bytes hosts packs)
+  @program_optional ~w(home_max_bytes hosts packs)
   @program_report_fields ~w(name status restarts home over_cap sessions)
   @program_report_optional ~w(error stderr_tail stderr_bytes home_bytes)
   @program_name ~r/\A[a-z0-9][a-z0-9-]{0,31}\z/
@@ -597,7 +593,6 @@ defmodule Prima.LocusBackends do
           command: String.t(),
           env_names: [String.t()],
           home: home(),
-          memory_bytes: pos_integer() | nil,
           home_max_bytes: pos_integer() | nil,
           hosts: [String.t(), ...] | nil,
           packs: boolean()
@@ -968,16 +963,6 @@ defmodule Prima.LocusBackends do
   """
   @spec close_wait_ms() :: pos_integer()
   def close_wait_ms, do: @close_wait_ms
-
-  @doc """
-  The least a program's `memory_bytes` may be, 16 MiB.
-  """
-  @spec min_memory_bytes() :: pos_integer()
-  def min_memory_bytes, do: @min_memory_bytes
-
-  @doc "The most a program's `memory_bytes` may be, 1 TiB."
-  @spec max_memory_bytes() :: pos_integer()
-  def max_memory_bytes, do: @max_memory_bytes
 
   @doc """
   A lifetime's text, of the service's `boot` and told from every other by
@@ -1469,8 +1454,6 @@ defmodule Prima.LocusBackends do
          {:ok, command} <- command(wire["command"], at <> ".command"),
          {:ok, env_names} <- env_names(wire["env_names"], at <> ".env_names"),
          {:ok, home} <- roster(wire, "home", @homes, at <> "."),
-         {:ok, memory_bytes} <-
-           optional(wire, "memory_bytes", &memory_bytes(&1, at <> ".memory_bytes")),
          {:ok, home_max_bytes} <-
            optional(wire, "home_max_bytes", &home_max_bytes(&1, home, at <> ".home_max_bytes")),
          {:ok, hosts} <- optional(wire, "hosts", &hosts(&1, at <> ".hosts")),
@@ -1481,7 +1464,6 @@ defmodule Prima.LocusBackends do
          command: command,
          env_names: env_names,
          home: home,
-         memory_bytes: memory_bytes,
          home_max_bytes: home_max_bytes,
          hosts: hosts,
          packs: packs == true
@@ -1490,12 +1472,6 @@ defmodule Prima.LocusBackends do
   end
 
   defp program(_wire, at), do: {:error, {:invalid_field, at}}
-
-  defp memory_bytes(value, at) do
-    if is_integer(value) and value >= @min_memory_bytes and value <= @max_memory_bytes,
-      do: {:ok, value},
-      else: {:error, {:invalid_field, at}}
-  end
 
   # A disk bound is a kept home's alone.
   defp home_max_bytes(value, :kept, at) do

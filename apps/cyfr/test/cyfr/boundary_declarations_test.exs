@@ -207,7 +207,7 @@ defmodule Cyfr.BoundaryDeclarationsTest do
          "(`Aqua.Harness.Program`) opens, writes and reads, rostered in `Cyfr.Boundaries`"},
       {~w(Browser),
        "Aqua's browser's holder, which the assistant's browser tool acts through and the " <>
-         "Programs page reads the browser's memory setting from, rostered for both in " <>
+         "workspace's browser view shows the person's windows through, rostered for both in " <>
          "`Cyfr.Boundaries`' surface rows"}
     ],
     Aqua => [{~w(Supervisor), "the tree the composition root starts"}]

@@ -434,7 +434,6 @@ defmodule Prima.Authority.BlobTest do
         ],
         "folder" => "kept",
         "hosts" => ["api.github.com", "github.com"],
-        "memory_bytes" => 268_435_456,
         "home_max_bytes" => 1_073_741_824
       }
 
@@ -470,9 +469,11 @@ defmodule Prima.Authority.BlobTest do
             %{held | "hosts" => ["github.com", "api.github.com"]},
             %{held | "hosts" => ["github.com", "github.com"]},
             %{held | "hosts" => [""]},
-            %{held | "memory_bytes" => nil},
-            %{held | "memory_bytes" => 0},
+            %{held | "home_max_bytes" => nil},
+            %{held | "home_max_bytes" => 0},
             %{held | "home_max_bytes" => "1 GiB"},
+            # A record written while a program could name its memory bound.
+            Map.put(held, "memory_bytes", 268_435_456),
             Map.put(held, "sign_in_command", "gh auth login"),
             Map.put(http, "folder", "kept"),
             Map.put(http, "hosts", ["mcp.example"])

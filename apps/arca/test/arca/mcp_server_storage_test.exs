@@ -106,11 +106,11 @@ defmodule Arca.McpServerStorageTest do
 
       assert %{
                home: "scratch",
-               memory_bytes: nil,
                home_max_bytes: nil,
                hosts: nil
              } = server
 
+      refute Map.has_key?(server, :memory_bytes)
       refute Map.has_key?(server, :login_entry_id)
       refute Map.has_key?(server, :login_command)
 
@@ -127,7 +127,6 @@ defmodule Arca.McpServerStorageTest do
                  mark: "driven",
                  url: nil,
                  home: "kept",
-                 memory_bytes: 1_073_741_824,
                  home_max_bytes: 2_147_483_648
                })
 
@@ -144,23 +143,27 @@ defmodule Arca.McpServerStorageTest do
                  home: "kept"
                })
 
+      assert {:ok, bounded} =
+               McpServerStorage.update(
+                 actor,
+                 "gh",
+                 %{home: "kept", home_max_bytes: 1_073_741_824},
+                 %{id: gh, epoch: 1}
+               )
+
+      assert %{epoch: 2, home: "kept", home_max_bytes: 1_073_741_824} = bounded
+      assert {:ok, ^bounded} = McpServerStorage.get(actor, "gh")
+
+      # A setting named nil is cleared.
       assert {:ok, updated} =
                McpServerStorage.update(
                  actor,
                  "gh",
-                 %{
-                   home: "scratch",
-                   memory_bytes: 268_435_456,
-                   home_max_bytes: nil
-                 },
-                 %{id: gh, epoch: 1}
+                 %{home: "scratch", home_max_bytes: nil},
+                 %{id: gh, epoch: 2}
                )
 
-      assert %{
-               epoch: 2,
-               home: "scratch",
-               memory_bytes: 268_435_456
-             } = updated
+      assert %{epoch: 3, home: "scratch", home_max_bytes: nil} = updated
 
       # A store-level constraint still holds: a program has no url.
       assert {:error, _} =
@@ -325,7 +328,6 @@ defmodule Arca.McpServerStorageTest do
             mark: "driven",
             url: nil,
             home: home,
-            memory_bytes: 1_073_741_824,
             config_json: config.(command)
           })
 

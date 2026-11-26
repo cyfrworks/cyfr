@@ -1,5 +1,5 @@
 {
-  "comment": "The vectors pinning Prima.ConsentPreview: every side reads the preview, which holds a row of every kind, and writes it back to the same map, and refuses each refusal with the named reason. A preview carries no sentence. Only egress, storage, tools and limits can be narrowed. A row is one per kind and node; a credential one per binding, keyed by its binding_key: the row's node, the edge it rides (@ingress for the node's own key, otherwise the dependency's name-level ref, ref|need for a named need) and its slot (default, or name:<connection> for a named account); a stream one per name and subject; a tool server one per name, with its record: its address and each header (or a program's environment variable) by name with the vault entry it names, a literal by its name alone and marked literal, never its value, and a program's folder (kept or scratch) and, each absent when unset and never null, its hosts (sorted, each once; absent is every public host, [] none), its memory and folder bounds in bytes (home_max_bytes, positive whole numbers) and its sign-in command; an http server's record holds no setting. So one entry lent on two edges is two rows, and so is one stream under two subjects. A credential row names its fields as a map from each field the component reads to the entry field that answers it, the entry's provider hint (absent when it has none), its destination in Prima.Destination's canonical spelling, its source (own, share or provided), whether it is disclosed, suggested and a choice the person must make, and its lifetime: standing, until an RFC 3339 UTC time, or once. A controls row is one per desktop that offers any control: its controls in the order of their ids, each its label (at most 32 code points), its operation as tool.action and, for a control with a pick, the pick's stream, the feed's name as its subject for a feed's results, and the RFC 6901 pointer field into that stream's shape; at most 32. A tools row names tool.action names, or * alone and never narrowed when the ask names every tool and the grant is the whole ask. A preview names the bindings of the profile's head the revision removes, as removed: a list, empty when it removes none, sorted by binding_key, each key once. Each removal is one binding as the head's row holds it: its binding_key, node, edge and connection (absent for a default) spelled as a credential row's, the need it was bound for (null when it cannot be told), exactly one of entry_id, share_id and via (the lender's label), and the entry's name and source (own or share), each absent when the entry cannot be read.",
+  "comment": "The vectors pinning Prima.ConsentPreview: every side reads the preview, which holds a row of every kind, and writes it back to the same map, and refuses each refusal with the named reason. A preview carries no sentence. Only egress, storage, tools and limits can be narrowed. A row is one per kind and node; a credential one per binding, keyed by its binding_key: the row's node, the edge it rides (@ingress for the node's own key, otherwise the dependency's name-level ref, ref|need for a named need) and its slot (default, or name:<connection> for a named account); a stream one per name and subject; a tool server one per name, with its record: its address and each header (or a program's environment variable) by name with the vault entry it names, a literal by its name alone and marked literal, never its value, and a program's folder (kept or scratch) and, each absent when unset and never null, its hosts (sorted, each once; absent is every public host, [] none) and its folder bound in bytes (home_max_bytes, a positive whole number), and no other setting: one naming a memory bound or a sign-in command is refused; an http server's record holds no setting. So one entry lent on two edges is two rows, and so is one stream under two subjects. A credential row names its fields as a map from each field the component reads to the entry field that answers it, the entry's provider hint (absent when it has none), its destination in Prima.Destination's canonical spelling, its source (own, share or provided), whether it is disclosed, suggested and a choice the person must make, and its lifetime: standing, until an RFC 3339 UTC time, or once. A controls row is one per desktop that offers any control: its controls in the order of their ids, each its label (at most 32 code points), its operation as tool.action and, for a control with a pick, the pick's stream, the feed's name as its subject for a feed's results, and the RFC 6901 pointer field into that stream's shape; at most 32. A tools row names tool.action names, or * alone and never narrowed when the ask names every tool and the grant is the whole ask. A preview names the bindings of the profile's head the revision removes, as removed: a list, empty when it removes none, sorted by binding_key, each key once. Each removal is one binding as the head's row holds it: its binding_key, node, edge and connection (absent for a default) spelled as a credential row's, the need it was bound for (null when it cannot be told), exactly one of entry_id, share_id and via (the lender's label), and the entry's name and source (own or share), each absent when the entry cannot be read.",
   "kinds": [
     "credential",
     "egress",
@@ -335,7 +335,6 @@
               "api.github.com",
               "github.com"
             ],
-            "memory_bytes": 268435456,
             "home_max_bytes": 1073741824
           }
         }
@@ -874,7 +873,6 @@
                   "api.github.com",
                   "github.com"
                 ],
-                "memory_bytes": 268435456,
                 "home_max_bytes": 1073741824
               }
             }
@@ -3435,7 +3433,6 @@
                 ],
                 "folder": "kept",
                 "hosts": null,
-                "memory_bytes": 268435456,
                 "home_max_bytes": 1073741824
               }
             }
@@ -3478,7 +3475,6 @@
                   "github.com",
                   "api.github.com"
                 ],
-                "memory_bytes": 268435456,
                 "home_max_bytes": 1073741824
               }
             }
@@ -3522,7 +3518,6 @@
                   "github.com",
                   "github.com"
                 ],
-                "memory_bytes": 268435456,
                 "home_max_bytes": 1073741824
               }
             }
@@ -3565,7 +3560,6 @@
                   "",
                   "github.com"
                 ],
-                "memory_bytes": 268435456,
                 "home_max_bytes": 1073741824
               }
             }
@@ -3607,7 +3601,6 @@
                   "api.github.com",
                   "github.com"
                 ],
-                "memory_bytes": 268435456,
                 "home_max_bytes": 1073741824
               }
             }
@@ -3650,7 +3643,6 @@
                   "api.github.com",
                   "github.com"
                 ],
-                "memory_bytes": 268435456,
                 "home_max_bytes": 1073741824
               }
             }
@@ -3661,7 +3653,7 @@
     },
     {
       "error": "invalid_field",
-      "name": "a program record naming its memory bound as null",
+      "name": "a program record naming its folder bound as null",
       "preview": {
         "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
         "removed": [],
@@ -3693,8 +3685,7 @@
                   "api.github.com",
                   "github.com"
                 ],
-                "memory_bytes": null,
-                "home_max_bytes": 1073741824
+                "home_max_bytes": null
               }
             }
           }
@@ -3736,7 +3727,6 @@
                   "api.github.com",
                   "github.com"
                 ],
-                "memory_bytes": 268435456,
                 "home_max_bytes": 0
               }
             }
@@ -3779,7 +3769,49 @@
                   "api.github.com",
                   "github.com"
                 ],
-                "memory_bytes": 1.5,
+                "home_max_bytes": 1.5
+              }
+            }
+          }
+        ],
+        "v": 1
+      }
+    },
+    {
+      "error": "invalid_field",
+      "name": "a program record naming a memory bound",
+      "preview": {
+        "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
+        "removed": [],
+        "rows": [
+          {
+            "kind": "tool_servers",
+            "narrowed": false,
+            "node": "reagent:local.weather",
+            "values": {
+              "digest": "sha256:5b0c1e7f4f2d8a9e6c3b1a0d9e8f7c6b5a4d3c2b1a0f9e8d7c6b5a4f3e2d1c0b",
+              "name": "github",
+              "tool_patterns": [
+                "issues.*"
+              ],
+              "record": {
+                "address": "npx -y @modelcontextprotocol/server-github",
+                "env": [
+                  {
+                    "entry": "github-token",
+                    "name": "GITHUB_TOKEN"
+                  },
+                  {
+                    "literal": true,
+                    "name": "NODE_ENV"
+                  }
+                ],
+                "folder": "kept",
+                "hosts": [
+                  "api.github.com",
+                  "github.com"
+                ],
+                "memory_bytes": 268435456,
                 "home_max_bytes": 1073741824
               }
             }
@@ -3822,7 +3854,6 @@
                   "api.github.com",
                   "github.com"
                 ],
-                "memory_bytes": 268435456,
                 "home_max_bytes": 1073741824,
                 "start_command": "gh auth login"
               }

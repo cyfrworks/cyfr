@@ -270,13 +270,12 @@ defmodule Cyfr.ConsentPreviewRenderTest do
 
   # A program's record: its command as its address, each variable as a
   # header is, and its settings in the person's words (the vectors'
-  # program keeps its folder and has whole-MiB bounds).
+  # program keeps its folder and has a whole-MiB folder bound).
   defp expected(_row, "record", %{"address" => address, "env" => env} = record) do
     ["Address: #{address}" | named_lines("Variable", env)] ++
       [
         "Folder: a folder kept between runs",
         "Hosts: #{Enum.join(record["hosts"], ", ")}",
-        "Memory bound: #{div(record["memory_bytes"], 1_048_576)} MiB",
         "Folder bound: #{div(record["home_max_bytes"], 1_048_576)} MiB"
       ]
   end

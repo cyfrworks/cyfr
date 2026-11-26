@@ -239,13 +239,6 @@ defmodule Opus.Browser do
   def put_bound, do: %{files: Frame.put_max_files(), bytes: Frame.put_max_bytes()}
 
   @doc """
-  The bound a newly added browser's row is given (the `browser_memory_bytes`
-  platform setting).
-  """
-  @spec memory_bytes() :: pos_integer()
-  def memory_bytes, do: setting("browser_memory_bytes")
-
-  @doc """
   The athanor's row of Aqua's browser `chrome`, the person's unless
   named: `{:ok, row}`, `{:error, :not_added}` when it holds none,
   `{:error, :not_browser}` for a row of the browser's name with another

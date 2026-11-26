@@ -15,11 +15,11 @@ defmodule PrismWeb.ProgramsLive do
 
   A program's home is `scratch`, made for each process and scrubbed when
   it ends, or `kept`: the row's own folder, which survives its sessions
-  and is removed with the row. A row may set its memory bound and a kept
-  home's disk bound. A program's hosts are its network list: the only hosts
-  it reaches beside the deployment's private hosts, exact names resolved
-  each time it starts, which the program forms set and an expanded
-  program row changes (`mcp_servers.update` with the row's config and the
+  and is removed with the row. A row may set a kept home's disk bound;
+  no row sets a memory bound. A program's hosts are its network list: the
+  only hosts it reaches beside the deployment's private hosts, exact names
+  resolved each time it starts, which the program forms set and an
+  expanded program row changes (`mcp_servers.update` with the row's config and the
   new list); none named, every public host.
 
   Forms add an http server (its config as JSON) and a program, its mark
@@ -666,7 +666,7 @@ defmodule PrismWeb.ProgramsLive do
   # program form does not show (the timeout, the tool patterns, console
   # reach), exactly as read. The members it shows are its own, a blank one
   # clearing its member.
-  @shown ~w(command env mark home memory_bytes home_max_bytes hosts)
+  @shown ~w(command env mark home home_max_bytes hosts)
 
   defp edited_base(%{config: config}), do: Map.drop(config, @shown)
   defp edited_base(nil), do: %{}
@@ -701,7 +701,6 @@ defmodule PrismWeb.ProgramsLive do
          Enum.map_join(Enum.sort(config["env"] || %{}), "\n", fn {k, v} -> "#{k}=#{v}" end),
        "mark" => config["mark"],
        "home" => config["home"],
-       "memory_mib" => mib_text(config["memory_bytes"]),
        "disk_mib" => mib_text(config["home_max_bytes"]),
        "hosts" => config["hosts"]
      }}
@@ -722,11 +721,10 @@ defmodule PrismWeb.ProgramsLive do
     {:noreply, call(socket, working(answer), answer, "mcp_servers/create", args)}
   end
 
-  # The program form's settings: the mark, the env, the home, the bounds
-  # in MiB and the hosts. Only what is set is sent.
+  # The program form's settings: the mark, the env, the home, a kept
+  # home's disk bound in MiB and the hosts. Only what is set is sent.
   defp program_config(params) do
     with {:ok, env} <- parse_env(params["env"] || ""),
-         {:ok, memory} <- mib(params, "memory_mib", "Memory"),
          {:ok, disk} <- mib(params, "disk_mib", "Disk") do
       home = if params["home"] == "kept", do: "kept", else: "scratch"
 
@@ -734,7 +732,6 @@ defmodule PrismWeb.ProgramsLive do
 
       {:ok,
        %{"env" => env, "home" => home, "mark" => mark}
-       |> put_present("memory_bytes", memory)
        |> put_present("home_max_bytes", if(home == "kept", do: disk))
        |> put_present("hosts", host_list(params))}
     end
@@ -844,13 +841,13 @@ defmodule PrismWeb.ProgramsLive do
   end
 
   # The program form, prefilled with the definition of Aqua's browser
-  # `chrome`, the person's or the second (`Opus.Programs.Definition.browser/1`):
-  # the driver's command, driven, in a kept folder of its bound, at the
-  # browser's memory setting, under that browser's name. Adding it asks the
+  # `chrome`, the person's or the second (`Opus.Programs.Definition.browser/0`):
+  # the driver's command, driven, in a kept folder of its bound, under that
+  # browser's name. Adding it asks the
   # person to confirm the program, as any program's addition does; a
   # command changed here is not the browser.
   defp prefill_browser(socket, chrome) do
-    browser = Opus.Programs.Definition.browser(Opus.Browser.memory_bytes())
+    browser = Opus.Programs.Definition.browser()
 
     socket
     |> assign(:show_add, "program")
@@ -863,7 +860,6 @@ defmodule PrismWeb.ProgramsLive do
       "home" => browser["home"],
       "name" => Opus.Programs.Definition.browser_name(chrome),
       "command" => browser["command"],
-      "memory_mib" => Integer.to_string(div(browser["memory_bytes"], @mib)),
       "disk_mib" => Integer.to_string(div(browser["home_max_bytes"], @mib))
     })
   end
@@ -1243,10 +1239,6 @@ defmodule PrismWeb.ProgramsLive do
                         class="grid grid-cols-2 gap-x-6 gap-y-1 text-xs md:grid-cols-4"
                         data-test="program-settings"
                       >
-                        <dt class="text-gray-500">Memory bound</dt>
-                        <dd class="text-gray-300">
-                          {bytes(config(@detail)["memory_bytes"], "the service's")}
-                        </dd>
                         <dt class="text-gray-500">Disk bound</dt>
                         <dd class="text-gray-300">
                           {if server[:home] == "kept",
@@ -1415,7 +1407,7 @@ defmodule PrismWeb.ProgramsLive do
   # A program's settings beside its name, command and mark.
   defp program_fields(assigns) do
     ~H"""
-    <div class="grid gap-3 md:grid-cols-3">
+    <div class="grid gap-3 md:grid-cols-2">
       <div>
         <label class="block text-xs text-gray-500 uppercase mb-1">Folder</label>
         <select
@@ -1429,15 +1421,6 @@ defmodule PrismWeb.ProgramsLive do
             scratch: a fresh folder each run
           </option>
         </select>
-      </div>
-      <div>
-        <label class="block text-xs text-gray-500 uppercase mb-1">Memory bound (MiB)</label>
-        <.input
-          name="memory_mib"
-          value={@prefill["memory_mib"]}
-          placeholder="the service's"
-          class="font-mono"
-        />
       </div>
       <div>
         <label class="block text-xs text-gray-500 uppercase mb-1">Disk bound (MiB, kept)</label>

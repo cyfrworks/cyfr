@@ -465,18 +465,21 @@ defmodule Locus.BuilderServiceTest do
       assert %{active: 2, queued: 0} = Slots.status(@slots)
     end
 
-    test "at its athanor's cap a build is refused capacity naming that cap, while another athanor builds",
+    # No count of builds is a person's: one athanor builds in every slot
+    # the machine has, and past them it meets the machine's count.
+    test "one athanor may hold every build slot, and past them is refused capacity naming the machine's",
          %{port: port} do
-      restart_build_slots(max: 3, key_max: 1)
-      _holder = hold([Wire.athanor()])
-
-      assert {:capacity, 1} = refused(port, Wire.request("true"))
-      assert %{active: 1, queued: 0} = Slots.status(@slots)
+      max = Locus.Config.max_concurrent()
+      assert max > 1
+      _holder = hold(List.duplicate(Wire.athanor(), max - 1))
 
       script = "mkdir dist && echo ok > dist/index.html"
-      other = Wire.request(script, %{athanor_id: "ath_another"})
-      assert {200, lines} = Wire.build(port, other)
+      assert {200, lines} = Wire.build(port, Wire.request(script))
       assert {{:result, _}, _log, %{"index.html" => "ok\n"}} = ended(lines)
+
+      _last = hold([Wire.athanor()])
+      assert {:capacity, ^max} = refused(port, Wire.request("true"))
+      assert %{active: ^max, queued: 0} = Slots.status(@slots)
     end
 
     test "that are down refuse a build as unavailable, never admit it unaccounted", %{port: port} do

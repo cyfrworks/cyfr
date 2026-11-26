@@ -218,11 +218,10 @@ defmodule Opus.ProgramsTest do
   } do
     controller = start_controller(fake)
 
-    assert %{
-             boot: "bb_first",
-             generation: 1,
-             pool_size: 32
-           } = :sys.get_state(controller)
+    assert %{boot: "bb_first", generation: 1} = state = :sys.get_state(controller)
+    # The hello's pool of uids is the service's own: the controller keeps
+    # no count of it.
+    refute Map.has_key?(state, :pool_size)
   end
 
   test "an mcp program syncs with its env sealed for its version and lifetime, and signs every request",
@@ -245,7 +244,7 @@ defmodule Opus.ProgramsTest do
            } = sync
 
     assert {athanor, server} == {ctx.athanor_id, row.id}
-    # No ceiling is set: the box holds the athanor to its own budget.
+    # No ceiling is set: the athanor has none but the machine's memory.
     refute Map.has_key?(sync, "athanor_memory_bytes")
     refute Map.has_key?(hd(sync["programs"]), "env")
     refute Map.has_key?(hd(sync["programs"]), "memory_bytes")
@@ -940,18 +939,22 @@ defmodule Opus.ProgramsTest do
     refute_receive {:control, "sync", _sync, _fields}, 200
   end
 
-  test "one athanor holds at most a quarter of the service's pool", %{ctx: ctx, fake: fake} do
+  # No count of programs is a person's: one athanor may define as many as
+  # memory holds, however small the service's pool of uids.
+  test "one athanor's programs hold no share of the service's pool", %{ctx: ctx, fake: fake} do
     Scripted.set(fake, :pool, 4)
     start_controller(fake)
     first = mcp_row(ctx, "first", %{"NODE_ENV" => "production"})
     second = mcp_row(ctx, "second", %{"NODE_ENV" => "production"})
     connect(ctx, first)
-    assert_receive {:control, "sync", _sync, _fields}, 2_000
+    first_id = first.id
+    assert_receive {:control, "sync", %{"owner" => %{"server" => ^first_id}}, _fields}, 2_000
 
-    assert {:error, {:pool_share, 1}} =
+    assert {:ok, %{epoch: 1}} =
              Programs.hold(%{athanor_id: ctx.athanor_id, server_id: second.id, epoch: 1})
 
-    refute_receive {:control, "sync", _sync, _fields}, 200
+    second_id = second.id
+    assert_receive {:control, "sync", %{"owner" => %{"server" => ^second_id}}, _fields}, 2_000
   end
 
   test "an env template that does not resolve refuses the sync and sends nothing", %{
@@ -1280,7 +1283,6 @@ defmodule Opus.ProgramsTest do
             mark: "driven",
             url: nil,
             home: "kept",
-            memory_bytes: 1_073_741_824,
             home_max_bytes: 2_147_483_648,
             config_json:
               Jason.encode!(%{
@@ -1528,7 +1530,6 @@ defmodule Opus.ProgramsTest do
                           %{
                             "name" => "program",
                             "home" => "kept",
-                            "memory_bytes" => 1_073_741_824,
                             "home_max_bytes" => 2_147_483_648,
                             "env_names" => []
                           }
@@ -1713,7 +1714,8 @@ defmodule Opus.ProgramsTest do
             program.(%{"command" => String.duplicate("x", 5_000)}),
             program.(%{"command" => nil}),
             program.(%{"hosts" => ["*.example.com"]}),
-            program.(%{"command" => "run vault:gh-token", "env" => %{}})
+            program.(%{"command" => "run vault:gh-token", "env" => %{}}),
+            program.(%{"memory_bytes" => 1_073_741_824})
           ] do
         # A create of the same name validates the definition before it
         # meets the row that exists, so the two refusals are comparable.
@@ -1735,6 +1737,18 @@ defmodule Opus.ProgramsTest do
       end
 
       assert {:ok, ^before} = Arca.McpServerStorage.get(actor, "editable")
+
+      # No program names a memory bound: one asked for is refused by its
+      # name, never dropped and saved without it.
+      assert {:error, {:invalid_argument, sentence}} =
+               Provider.handle("mcp_servers", admin, %{
+                 "action" => "create",
+                 "name" => "bounded",
+                 "config" => program.(%{"memory_bytes" => 1_073_741_824})
+               })
+
+      assert sentence == "config has unknown keys: memory_bytes"
+      assert {:error, :not_found} = Arca.McpServerStorage.get(actor, "bounded")
     end
 
     # A program's definition is the person's confirmed act
@@ -1755,7 +1769,6 @@ defmodule Opus.ProgramsTest do
           "home" => "kept",
           "command" => "npx -y coder",
           "hosts" => ["api.coder.test"],
-          "memory_bytes" => 1_073_741_824,
           "env" => %{"TOKEN" => "vault:personal", "NODE_ENV" => "production"}
         }
       }
@@ -1773,7 +1786,6 @@ defmodule Opus.ProgramsTest do
                  "mark" => "driven",
                  "folder" => "new",
                  "hosts" => ["api.coder.test"],
-                 "memory_bytes" => "1073741824",
                  "home_max_bytes" => "the folders' volume",
                  "environment" => ["NODE_ENV (a literal, not shown)", "TOKEN=vault:personal"]
                }
@@ -1865,7 +1877,6 @@ defmodule Opus.ProgramsTest do
           "mark" => "driven",
           "home" => "kept",
           "command" => command,
-          "memory_bytes" => 1_073_741_824,
           "home_max_bytes" => 2_147_483_648,
           "env" => %{}
         }
@@ -1933,7 +1944,6 @@ defmodule Opus.ProgramsTest do
         "home" => "kept",
         "command" => "npx -y @anthropic-ai/claude-code",
         "hosts" => ["a.example", "b.example"],
-        "memory_bytes" => 1_073_741_824,
         "home_max_bytes" => 2_147_483_648,
         "env" => %{"TOKEN" => "vault:personal", "NODE_ENV" => "production"}
       }
@@ -1961,8 +1971,6 @@ defmodule Opus.ProgramsTest do
             {"a host removed", Map.put(wide, "hosts", ["a.example"])},
             {"a host added", Map.put(wide, "hosts", ["a.example", "b.example", "c.example"])},
             {"no host list", Map.delete(wide, "hosts")},
-            {"a smaller memory bound", Map.put(wide, "memory_bytes", 536_870_912)},
-            {"no memory bound", Map.delete(wide, "memory_bytes")},
             {"a smaller disk bound", Map.put(wide, "home_max_bytes", 1_073_741_824)},
             {"a binding removed", Map.put(wide, "env", %{"NODE_ENV" => "production"})},
             {"a binding changed", put_in(wide, ["env", "TOKEN"], "vault:work")},
@@ -1998,7 +2006,6 @@ defmodule Opus.ProgramsTest do
             "mark" => "driven",
             "home" => "kept",
             "command" => ~s(sh -c "$DEBUG"),
-            "memory_bytes" => 1_073_741_824,
             "home_max_bytes" => 2_147_483_648,
             "env" => %{"DEBUG" => debug}
           }
@@ -2313,7 +2320,6 @@ defmodule Opus.ProgramsTest do
             "mark" => "driven",
             "home" => "kept",
             "command" => "npx -y @anthropic-ai/claude-code",
-            "memory_bytes" => 1_073_741_824,
             "home_max_bytes" => 2_147_483_648,
             "hosts" => ["api.anthropic.com"],
             "env" => %{}

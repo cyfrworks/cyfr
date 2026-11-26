@@ -16,8 +16,8 @@ defmodule Sanctum.ToolServerDigest do
   program's settings: its `folder` (`"kept"`, the row's own folder kept
   between runs, or `"scratch"`), its `hosts` (the set of names it
   reaches, sorted, each once; absent, every public host, which `[]`
-  never reads as), and its `memory_bytes` and `home_max_bytes` bounds,
-  each absent when the row leaves it unset:
+  never reads as), and its `home_max_bytes` bound, absent when the row
+  leaves it unset:
 
       %{"address" => "https://mcp.example/v1",
         "headers" => [%{"name" => "authorization", "entry" => "github", "scheme" => "Bearer"},
@@ -28,7 +28,6 @@ defmodule Sanctum.ToolServerDigest do
                   %{"name" => "NODE_ENV", "literal" => true}],
         "folder" => "kept",
         "hosts" => ["api.github.com", "github.com"],
-        "memory_bytes" => 268435456,
         "home_max_bytes" => 1073741824}
 
   A literal's value is never recorded: it is a secret the page never sees.
@@ -78,6 +77,9 @@ defmodule Sanctum.ToolServerDigest do
   alias Prima.JCS
   alias Prima.ToolPattern
   alias Prima.VaultRef
+
+  # Every setting of a program a record may hold.
+  @program_settings ~w(home hosts home_max_bytes)
 
   @typedoc "What is recorded of a tool server (`recorded/1`)."
   @type server_record :: %{
@@ -172,15 +174,16 @@ defmodule Sanctum.ToolServerDigest do
 
   # A program's settings as the record holds them, each one it leaves
   # unset absent: JCS takes no null, and absent hosts (every public host)
-  # must never read as a list. A setting that does not read leaves the row
-  # without a record, never with one that reads it as wider.
+  # must never read as a list. A setting that does not read, or one no
+  # record holds (a memory bound among them), leaves the row without a
+  # record, never with one that reads past it.
   defp settings(%{"home" => folder} = program) when folder in ["kept", "scratch"] do
-    with {:ok, hosts} <- host_set(program["hosts"]),
-         true <- Enum.all?(["memory_bytes", "home_max_bytes"], &bound?(program[&1])) do
+    with [] <- Map.keys(program) -- @program_settings,
+         {:ok, hosts} <- host_set(program["hosts"]),
+         true <- bound?(program["home_max_bytes"]) do
       {:ok,
        %{"folder" => folder}
        |> put_present("hosts", hosts)
-       |> put_present("memory_bytes", program["memory_bytes"])
        |> put_present("home_max_bytes", program["home_max_bytes"])}
     else
       _unreadable -> :error
@@ -262,7 +265,6 @@ defmodule Sanctum.ToolServerDigest do
     %{
       "hosts" => stored_hosts(Map.get(server, :hosts)),
       "home" => Map.get(server, :home),
-      "memory_bytes" => Map.get(server, :memory_bytes),
       "home_max_bytes" => Map.get(server, :home_max_bytes)
     }
   end

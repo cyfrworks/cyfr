@@ -62,7 +62,6 @@ defmodule Opus.Brain.CleanupTest do
         mark: "driven",
         url: nil,
         home: "kept",
-        memory_bytes: 1_073_741_824,
         config_json: Jason.encode!(%{"command" => command, "env" => %{}})
       })
 
