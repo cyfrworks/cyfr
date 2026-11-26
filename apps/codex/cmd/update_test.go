@@ -1403,7 +1403,8 @@ func newThreeContainerScenario(t *testing.T) *updateScenario {
 		"CYFR_LOCUS_BUILDS_URL=http://locus-builds:4100\n"+
 		"CYFR_LOCUS_BUILDS_KEY="+threeContainerBuildsKey+"\n"+
 		"CYFR_PRIVATE_EGRESS_TARGETS=locus-backends\n"+
-		"CYFR_LOCUS_RUNTIME_WORKERS=wrk_locus=http://locus-runtime:4200\n")
+		"CYFR_LOCUS_RUNTIME_WORKERS=wrk_locus=http://locus-runtime:4200\n"+
+		"LOCUS_RUNTIME_MEMORY_LIMIT=4GB\n")
 	return s
 }
 
@@ -1579,8 +1580,12 @@ func TestUpdateFromThreeContainers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, held := got["CYFR_LOCUS_BUILDS_URL"]; held {
-		t.Error(".env still holds CYFR_LOCUS_BUILDS_URL")
+	// The bound the person gave the old runtime container is a setting the
+	// release no longer reads: it goes from .env, named.
+	for _, retired := range []string{"CYFR_LOCUS_BUILDS_URL", "LOCUS_RUNTIME_MEMORY_LIMIT"} {
+		if _, held := got[retired]; held {
+			t.Errorf(".env still holds %s", retired)
+		}
 	}
 	for name, want := range map[string]string{
 		"CYFR_LOCUS_BUILDS_KEY":       buildsKey,
@@ -1593,7 +1598,7 @@ func TestUpdateFromThreeContainers(t *testing.T) {
 	}
 	for _, said := range []string{
 		"\nstopped locus-backends-guard, locus-runtime, locus-builds, locus-builds-guard, locus-backends in ",
-		"Removed from .env the settings release 0.8.0 shipped and release 0.9.0 no longer reads: CYFR_LOCUS_BUILDS_URL.\n",
+		"Removed from .env the settings release 0.8.0 shipped and release 0.9.0 no longer reads: CYFR_LOCUS_BUILDS_URL, LOCUS_RUNTIME_MEMORY_LIMIT.\n",
 		"Set in .env to release 0.9.0's shipped values the settings that held release 0.8.0's: CYFR_PRIVATE_EGRESS_TARGETS=locus.\n",
 		"Removed this project's containers of services release 0.9.0 does not run: locus-backends, locus-backends-guard, locus-builds, locus-builds-guard, locus-runtime.\n",
 		"Removed this project's networks release 0.9.0 does not use: locus-backends, locus-builds, locus-runtime.\n",

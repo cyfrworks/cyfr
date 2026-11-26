@@ -146,7 +146,8 @@ defmodule Cyfr.StackShapeTest do
       )
   end
 
-  # The keys compose hands Locus and each role's bounds: every role's key,
+  # The keys compose hands Locus, the pool's numbers and each role's
+  # processors: every role's key,
   # the builds' and the backends' from the names cyfr reads them under.
   defp locus_environment do
     [
@@ -1109,20 +1110,12 @@ defmodule Cyfr.StackShapeTest do
     end
   end
 
-  # The reserve beside core is 2,304 MiB and the services' share 800 MiB
-  # (the plan's 2.9, by P4 and P6), and the processors each role's old
-  # container's; .env.example documents each, and .env.locus.example says
-  # where they are without setting one, since compose's environment wins
-  # over that file.
+  # .env.example documents the pool's numbers and each role's processors,
+  # and .env.locus.example says where they are without setting one, since
+  # compose's environment wins over that file.
   test "the locus service holds the three keys, the pool's numbers and each role's processors, their one default" do
     environment = compose!()["services"][LocusRoles.release().service]["environment"]
     assert environment == locus_environment()
-
-    assert List.keyfind(@bounds, "LOCUS_CORE_RESERVE_BYTES", 0) ==
-             {"LOCUS_CORE_RESERVE_BYTES", Integer.to_string(2304 * 1024 * 1024)}
-
-    assert List.keyfind(@bounds, "LOCUS_SERVICE_BYTES", 0) ==
-             {"LOCUS_SERVICE_BYTES", Integer.to_string(800 * 1024 * 1024)}
 
     example = read!(".env.example")
     locus_example = read!(".env.locus.example")

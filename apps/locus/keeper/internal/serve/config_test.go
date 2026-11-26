@@ -61,7 +61,7 @@ func TestParseRoleRefusals(t *testing.T) {
 		"a:100:4000", "a:100:4000:p:private:kept:x", "A:100:4000:p", "a_b:100:4000:p", "log:100:4000:p", "1a:100:4000:p",
 		"a:0:4000:p", "a:-1:4000:p", "a:4294967295:4000:p", "a:x:4000:p", "a:100:0:p", "a:100:65536:p", "a:100:04000:p",
 		"a:100:4000:", "a:100:4000:p:kept:private", "a:100:4000:p:private:private", "a:100:4000:p:kept:kept", "a:100:4000:p:shared",
-		"keeper:100:4000:p", "rest:100:4000:p", "a:100:4000:p:floor:kept", "a:100:4000:p:floor:floor", "a:100:4000:p:floor:private",
+		"keeper:100:4000:p", "rest:100:4000:p", "core:100:4000:p", "service:100:4000:p", "a:100:4000:p:floor:kept", "a:100:4000:p:floor:floor", "a:100:4000:p:floor:private",
 		"a:100:4000:p:private:kept:floor:x",
 	} {
 		if r, err := ParseRole(value); err == nil {

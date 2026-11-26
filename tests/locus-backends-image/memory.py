@@ -8,7 +8,7 @@ bound (LOCUS_BACKENDS_MEMORY_BYTES) set low, and driven only by requests
 signed as CYFR signs them (harness.py):
 
 - Every session's process runs in a cgroup of its own whose memory.max is
-  the bound, inside the backends role's own bound; a program whose row names
+  the bound, inside the pool's rest; a program whose row names
   its own `memory_bytes` is bounded at that instead.
 - A process that holds less than its bound answers.
 - A process that reaches past its bound is ended there by the kernel: its

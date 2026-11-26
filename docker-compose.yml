@@ -276,8 +276,8 @@ services:
       - LOCUS_RUNTIME_PORT=4200
       # The pool, the one definition of its defaults: all of Locus's work
       # shares one memory bound, the machine's memory less the reserve kept
-      # for core beside it (2304 MiB, which holds a core of about 1.7 GiB at
-      # its peak, the screen's app included), less the services' share
+      # for CYFR itself beside it (2304 MiB, which holds about 1.7 GiB at its
+      # peak, the screen's app included), less the services' share
       # (800 MiB); the services sit outside it (Prima.LocusPool,
       # configuration-guide.md). Each role's processors are split between
       # its service and its work, neither lending to the other; the

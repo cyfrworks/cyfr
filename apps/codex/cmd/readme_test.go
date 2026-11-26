@@ -184,7 +184,7 @@ func TestReadmeSizingIsTheComposeLimits(t *testing.T) {
 	}
 	for _, want := range []string{
 		fmt.Sprintf("Under load cyfr grows up to its bound of %d GB", whole("cyfr", cyfr.Memory, "G")),
-		fmt.Sprintf("the machine's memory less a reserve of %d MiB for core and %d MiB for Locus's services",
+		fmt.Sprintf("the machine's memory less a reserve of %d MiB for CYFR itself (the cyfr container and the screen) and %d MiB for Locus's services",
 			mib("LOCUS_CORE_RESERVE_BYTES"), mib("LOCUS_SERVICE_BYTES")),
 		fmt.Sprintf("Their processor bounds are %d cores for cyfr, %d for the runtime and %d for builds",
 			whole("cyfr", cyfr.CPUs, ""), whole("LOCUS_RUNTIME_CPU_LIMIT", locus["LOCUS_RUNTIME_CPU_LIMIT"], ""),

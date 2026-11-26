@@ -73,9 +73,10 @@ func (r RoleSpec) envPrefix() string { return "LOCUS_" + strings.ToUpper(r.Name)
 func (r RoleSpec) User() string { return "locus-" + r.Name }
 
 // ParseRole parses `<name>:<uid>:<port>:<pool>[:private][:kept][:floor]`.
-// The name is a role's (cgroup.ValidRoleName) and not `log`, whose
-// variables are every role's; the uid is not root's and the port is
-// 1..65535.
+// The name is a role's (cgroup.ValidRoleName) and none of `log`, whose
+// variables are every role's, `core` and `service`, whose would be the
+// pool's LOCUS_CORE_RESERVE_BYTES and LOCUS_SERVICE_BYTES; the uid is not
+// root's and the port is 1..65535.
 func ParseRole(value string) (RoleSpec, error) {
 	fields := strings.Split(value, ":")
 	bad := func(why string) (RoleSpec, error) {
@@ -85,8 +86,8 @@ func ParseRole(value string) (RoleSpec, error) {
 		return bad("four to seven fields")
 	}
 	r := RoleSpec{Name: fields[0], Pool: fields[3]}
-	if !cgroup.ValidRoleName(r.Name) || r.Name == "log" {
-		return bad("its name is a lowercase letter, then lowercase letters and digits, and not log, keeper or rest")
+	if !cgroup.ValidRoleName(r.Name) || r.Name == "log" || r.Name == "core" || r.Name == "service" {
+		return bad("its name is a lowercase letter, then lowercase letters and digits, and not log, core, service, keeper or rest")
 	}
 	uid, err := parseID(fields[1])
 	if err != nil || uid == 0 {

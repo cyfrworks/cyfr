@@ -105,9 +105,10 @@ defmodule Prima.LocusRoles do
   holds every other spelling of a role's facts to it: the Locus image's
   users, directories, entrypoint and health probe, compose's services,
   the image suites' overlays, Locus's own pool names, reaches and listener
-  ports, and the image suites' harnesses. Each role's memory and processor
-  bounds are compose's (the `locus` service's environment), which the
-  keeper writes into the role's group; they are not facts of this table,
+  ports, and the image suites' harnesses. The pool's memory bound and
+  each role's processors are compose's (the `locus` service's
+  environment), which the keeper writes into its groups; they are not
+  facts of this table,
   and neither is the rule that a node serving the runtime serves no other
   role (`Locus.Application`).
   """
