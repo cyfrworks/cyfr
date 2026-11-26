@@ -116,15 +116,23 @@ defmodule Prima.WorkerAPITest do
     end
   end
 
-  # A runner holds one of the runtime's uids, so a refusal for want of one
-  # says, in a person's words, how many runs that is.
-  test "a run refused for want of room says how many runs this CYFR runs at once" do
+  # A runner holds one of its machine's runtime uids, so a refusal for want
+  # of one says, in a person's words, how many runs that is on the machine
+  # that would run it; every refusal's words stand alone.
+  test "a run refused for want of room says how many runs its machine runs at once" do
     runs = Enum.count(Prima.LocusRoles.role!(:runtime).uids)
-    sentence = WorkerAPI.runner_refusal("capacity")
 
-    assert sentence == "this CYFR already runs #{runs} runs at once, as many as it can"
+    assert WorkerAPI.runner_refusal("capacity") ==
+             "Nothing ran: the machine that would run it already runs #{runs} runs at once, " <>
+               "as many as it can."
 
-    for word <- ~w(pool ledger place runner warm uid),
-        do: refute(sentence =~ ~r/\b#{word}/i, word)
+    for code <- ~w(capacity memory_unavailable exec_failed guard_unavailable hosts_unresolved) do
+      sentence = WorkerAPI.runner_refusal(code)
+      assert sentence =~ ~r/\ANothing ran: .+\.\z/, code
+      refute sentence =~ ~r/CYFR already/, code
+
+      for word <- ~w(pool ledger place runner warm uid worker),
+          do: refute(sentence =~ ~r/\b#{word}/i, word)
+    end
   end
 end

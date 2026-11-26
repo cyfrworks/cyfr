@@ -1142,10 +1142,7 @@ defmodule Opus.Attempt do
   # The run is closed as its waiter would close it, in this process, and
   # what the run held goes back before the waiter hears the result.
   defp close_lost(state, memory \\ nil) do
-    result =
-      if memory,
-        do: Close.lost(state.close, Lapse.ended_for_memory(memory)),
-        else: Close.lost(state.close)
+    result = Close.lost(state.close, memory)
 
     state = release_holds(state)
     send(state.waiter, {__MODULE__, self(), result})
@@ -1160,12 +1157,7 @@ defmodule Opus.Attempt do
 
   # What a run its runner never took closes with: why, when the keeper's
   # refusal of that runner names a code CYFR has words for.
-  defp untaken(code) do
-    case Prima.WorkerAPI.runner_refusal(code) do
-      nil -> @untaken
-      why -> "#{@untaken}: #{why}"
-    end
-  end
+  defp untaken(code), do: Prima.WorkerAPI.runner_refusal(code) || @untaken
 
   # A waiter that exited kills its run and lapses its row. The kill of a
   # runner that attached is counted before the attempt gives back its slot,

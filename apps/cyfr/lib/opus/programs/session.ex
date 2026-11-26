@@ -439,7 +439,7 @@ defmodule Opus.Programs.Session do
   end
 
   # A capacity for room keeps what holds the pool, which the refusal's
-  # sentence names (`Opus.Programs.full/4`); every other refusal is its code.
+  # sentence names (`Opus.Programs.full/3`); every other refusal is its code.
   defp named_refusal({:capacity, _held} = capacity), do: capacity
   defp named_refusal(code), do: Opus.Programs.Box.refusal_name(code)
 end

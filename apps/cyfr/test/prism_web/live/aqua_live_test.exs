@@ -3390,8 +3390,8 @@ defmodule PrismWeb.AquaLiveTest do
           has_element?(
             view,
             card <> ~s( [data-test="listing-failed"]),
-            "could not start: this CYFR runs as many programs as it can at once. Stop one on " <>
-              "the Programs page, or wait."
+            "could not start: no more programs, or no more of this program's sessions, may " <>
+              "run on this CYFR at once. Stop one on the Programs page, or wait."
           )
         end,
         "no room said"

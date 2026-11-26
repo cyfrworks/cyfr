@@ -123,7 +123,7 @@ defmodule Opus.Programs.RoomRefusalTest do
     assert names == %{}
 
     assert Prima.Refusal.message(Programs.full(ana.actor, "Aqua", nil)) ==
-             "Aqua could not start: this CYFR runs as many programs as it can at once. " <>
-               "Stop one on the Programs page, or wait."
+             "Aqua could not start: no more programs, or no more of this program's sessions, " <>
+               "may run on this CYFR at once. Stop one on the Programs page, or wait."
   end
 end

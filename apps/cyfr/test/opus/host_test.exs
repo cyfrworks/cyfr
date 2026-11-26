@@ -886,7 +886,9 @@ defmodule Opus.HostTest do
 
       assert %{"ok" => true} = report(fixture, args: %{"refusal" => "capacity"})
 
-      said = @untaken <> ": this CYFR already runs 8 runs at once, as many as it can"
+      said =
+        "Nothing ran: the machine that would run it already runs 8 runs at once, as many as it can."
+
       assert {:error, ^said} = AttemptWaiter.await(fixture.pid, fixture.close)
       assert %{status: "failed", error_message: ^said} = row(fixture)
     end

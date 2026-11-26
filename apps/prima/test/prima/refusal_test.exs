@@ -424,8 +424,8 @@ defmodule Prima.RefusalTest do
     {{:crew_unready, "Aqua", :signed_out}, :setup_required,
      "Aqua's program is signed out. Sign it in, or choose another, on the Aqua page."},
     {{:program_full, "Aqua", nil, %{}}, :rate_limited,
-     "Aqua could not start: this CYFR runs as many programs as it can at once. " <>
-       "Stop one on the Programs page, or wait."},
+     "Aqua could not start: no more programs, or no more of this program's sessions, " <>
+       "may run on this CYFR at once. Stop one on the Programs page, or wait."},
     {{:program_full, "Aqua",
       %{
         need: 384 * 1_048_576,

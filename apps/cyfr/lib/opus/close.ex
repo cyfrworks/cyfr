@@ -197,11 +197,12 @@ defmodule Opus.Close do
   end
 
   @doc """
-  Close a run whose attempt ended before it closed the run itself, under
-  `message`: "Execution attempt ended before it closed" unless the caller
-  knows why it ended, as for a runner the kernel ended for memory
-  (`Opus.Lapse.ended_for_memory/1`). The message is CYFR's own and
-  carries nothing the guest produced, so it needs no masking set.
+  Close a run whose attempt ended before it closed the run itself: its
+  message is "Execution attempt ended before it closed", or, where the
+  kernel ended its runner for memory, `memory`'s cause (`:cap`, `:machine`
+  or `:either`), that cause's sentence (`Opus.Lapse.ended_for_memory/1`).
+  Either is CYFR's own, chosen by its argument's type and never given as
+  text, and carries nothing the guest produced, so it needs no masking set.
 
   What the run did before its attempt ended is not known: a step past
   which nothing is replay-safe may have taken effect. The row closes
@@ -225,12 +226,16 @@ defmodule Opus.Close do
   hold the control plane (`Arca.ControlPlane.held?/0`) writes nothing and
   answers the same way.
   """
-  @spec lost(t(), String.t()) ::
+  @spec lost(t(), :cap | :machine | :either | nil) ::
           {:ok, map()}
           | {:error, String.t() | {:uncertain, String.t()} | {:result_lost, String.t()}}
-  def lost(%__MODULE__{} = close, message \\ "Execution attempt ended before it closed")
-      when is_binary(message),
-      do: uncertain(close, message)
+  def lost(close, memory \\ nil)
+
+  def lost(%__MODULE__{} = close, nil),
+    do: uncertain(close, "Execution attempt ended before it closed")
+
+  def lost(%__MODULE__{} = close, cause) when cause in [:cap, :machine, :either],
+    do: uncertain(close, Opus.Lapse.ended_for_memory(cause))
 
   @doc """
   Close a run its runtime abandoned at its time budget: the component was

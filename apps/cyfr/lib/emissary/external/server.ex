@@ -1522,14 +1522,15 @@ defmodule Emissary.External.Server do
         {:backends_refused, code, boot}
 
       {:error, reason} ->
-        {:error, backends_words(state, reason)}
+        {:error, said(backends_words(state, reason))}
     end
   end
 
   defp upstream(state, body), do: http_post(state, body)
 
   # A start refused for room says what holds the memory, the athanor's own
-  # holdings named from its own rows (`Opus.Programs.full/3`).
+  # holdings named from its own rows (`Opus.Programs.full/3`), tagged so
+  # that its log line says only that it was refused for room.
   defp backends_words(state, {:refused, {:capacity, held}, _boot}), do: full(state, held)
   defp backends_words(state, {:refused, :capacity, _boot}), do: full(state, nil)
   defp backends_words(state, :capacity), do: full(state, nil)
@@ -1541,8 +1542,11 @@ defmodule Emissary.External.Server do
         Sanctum.Context.internal(athanor_id: state.athanor_id, scope: :athanor)
       )
 
-    Prima.Refusal.message(Opus.Programs.full(actor, state.name, held))
+    {:no_room, Prima.Refusal.message(Opus.Programs.full(actor, state.name, held))}
   end
+
+  defp said({:no_room, sentence}), do: sentence
+  defp said(words), do: words
 
   defp backends_reason({:refused, code, _boot}),
     do: "the backends service refused (#{code})"
@@ -1598,6 +1602,7 @@ defmodule Emissary.External.Server do
   end
 
   defp failure_sentence({:outside_error, words}), do: words
+  defp failure_sentence({:no_room, sentence}), do: sentence
   defp failure_sentence(reason) when is_binary(reason), do: reason
   defp failure_sentence(%{__exception__: true} = exception), do: Exception.message(exception)
   defp failure_sentence(reason), do: Refusals.render(reason)
@@ -2402,6 +2407,10 @@ defmodule Emissary.External.Server do
   # their arity and renders it in any form (escaped, or as bytes when a
   # binary is not printable), cut to its usual bounds; the printed line is
   # masked once more for a value the term held as a charlist.
+  # A refusal for room is logged as that alone: its sentence names the
+  # person's programs and their sizes, which no log line carries.
+  defp log_reason({:no_room, _sentence}, _state), do: "a start was refused for room"
+
   defp log_reason(reason, state) do
     values = sensitive_header_values(state)
 

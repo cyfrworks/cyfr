@@ -833,12 +833,14 @@ defmodule Prima.Refusal do
   # refused for want of room: what holds the memory (`held`, the keeper's),
   # the person's own holdings named by the names CYFR read for them under
   # the person's own scope (`Prima.LocusPool.refusal_sentence/2`); or, with
-  # no `held`, for want of a program's place on this CYFR.
+  # no `held`, for want of a program's place on this CYFR or of a session
+  # of this one program's own, which the wire does not tell apart: one
+  # sentence true of both, naming no count.
   defp row({:program_full, member, nil, _names}) when is_binary(member),
     do:
       {:rate_limited,
-       "#{member} could not start: this CYFR runs as many programs as it can at once. " <>
-         "Stop one on the Programs page, or wait."}
+       "#{member} could not start: no more programs, or no more of this program's " <>
+         "sessions, may run on this CYFR at once. Stop one on the Programs page, or wait."}
 
   defp row({:program_full, member, %{} = held, %{} = names}) when is_binary(member),
     do:

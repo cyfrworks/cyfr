@@ -111,16 +111,20 @@ defmodule Prima.WorkerAPI do
   @reason ~r/\A[a-z][a-z0-9_]{0,63}\z/
   @max_message_bytes 1024
   # The keeper's refusals of a runner that a run's failure names, by code
-  # (`runner_refusal/1`): CYFR's words, never the keeper's. A runner holds
-  # one of the runtime's uids, so `capacity`, no uid free, is that many
-  # runs at once.
+  # (`runner_refusal/1`): CYFR's words, never the keeper's, each a sentence
+  # that stands alone. A runner holds one of its machine's runtime uids, so
+  # `capacity`, no uid free, is that many runs at once on the machine that
+  # would have run it, whichever of a CYFR's machines that is.
   @runs_at_once Enum.count(Prima.LocusRoles.role!(:runtime).uids)
   @runner_refusals %{
-    "capacity" => "this CYFR already runs #{@runs_at_once} runs at once, as many as it can",
-    "memory_unavailable" => "its memory and CPU could not be bounded where it would run",
-    "exec_failed" => "it could not be started",
-    "guard_unavailable" => "its network access could not be confirmed",
-    "hosts_unresolved" => "a host it reaches did not resolve to an address"
+    "capacity" =>
+      "Nothing ran: the machine that would run it already runs #{@runs_at_once} runs at " <>
+        "once, as many as it can.",
+    "memory_unavailable" =>
+      "Nothing ran: its memory and CPU could not be bounded where it would run.",
+    "exec_failed" => "Nothing ran: it could not be started.",
+    "guard_unavailable" => "Nothing ran: its network access could not be confirmed.",
+    "hosts_unresolved" => "Nothing ran: a host it reaches did not resolve to an address."
   }
   # 2^53 − 1: the largest integer every JSON reader holds exactly.
   @max_integer 9_007_199_254_740_991
@@ -233,8 +237,9 @@ defmodule Prima.WorkerAPI do
   runner, by the refusal's code (`t:refusal/0`'s `reason`), which a worker
   service's report carries and nothing beside it
   (`c:Prima.HostAPI.runner_exited/5`): a sentence of CYFR's own for each
-  code of this list, and `nil` for any other, which the run's failure
-  names no reason for. A service sends no code outside the list.
+  code of this list, which the run's failure says alone, and `nil` for any
+  other, which the run's failure names no reason for. A service sends no
+  code outside the list.
   """
   @spec runner_refusal(term()) :: String.t() | nil
   def runner_refusal(code), do: Map.get(@runner_refusals, code)
