@@ -181,13 +181,7 @@ defmodule Locus.BuilderService do
   defp pool(conn) do
     report = &Locus.Keeper.report(keeper(conn), &1)
 
-    case Locus.PoolRoute.serve(
-           conn,
-           :builds,
-           Locus.Config.request_key(),
-           report,
-           Locus.Listener.now(conn)
-         ) do
+    case Locus.PoolRoute.serve(conn, :builds, pool_root(conn), report, Locus.Listener.now(conn)) do
       {:ok, conn} -> conn
       {:refused, conn, refusal} -> refuse(conn, pool_refusal(refusal))
     end
@@ -206,6 +200,10 @@ defmodule Locus.BuilderService do
 
   defp keeper(%Plug.Conn{assigns: %{service_opts: opts}}),
     do: Keyword.get(opts, :keeper, Locus.Keeper)
+
+  # The key the pool key derives from: the request key this service holds.
+  defp pool_root(%Plug.Conn{assigns: %{service_opts: opts}}),
+    do: Keyword.get_lazy(opts, :request_key, &Locus.Config.request_key/0)
 
   # ————— health —————
 

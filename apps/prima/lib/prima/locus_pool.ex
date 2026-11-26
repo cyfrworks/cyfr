@@ -91,8 +91,9 @@ defmodule Prima.LocusPool do
   body's hash, within `window_ms/0` of the listener's clock
   (`header/4`, `verify_header/4`, `verify_body/2`). No nonce is kept: the
   call reads only. The key is the **pool key** (`pool_key/2`), derived
-  from that service's own key over the same label: the builds service's
-  `LOCUS_BUILDS_KEY`, the backends service's `LOCUS_BACKENDS_KEY`, a
+  from the key that service holds, over the same label: the builds
+  service's request key (`Prima.BuilderProtocol.request_key/1` of
+  `LOCUS_BUILDS_KEY`), the backends service's `LOCUS_BACKENDS_KEY`, a
   worker service's `LOCUS_RUNTIME_KEY` (`Prima.WorkerAuth.worker_key/2`).
   It signs and verifies this route at that one service and nothing else:
   no other verifier takes a key derived over a `/pool` label, and the key
@@ -281,8 +282,9 @@ defmodule Prima.LocusPool do
   def label(service) when service in @services, do: Prima.MacEnvelope.label(service) <> "/pool"
 
   @doc """
-  The pool key of `service`, derived from that service's own key: the
-  builds or backends service key, or a worker service's key
+  The pool key of `service`, derived from the key that service holds: the
+  builds service's request key (`Prima.BuilderProtocol.request_key/1`),
+  the backends service key, or a worker service's key
   (`Prima.WorkerAuth.worker_key/2`).
   """
   @spec pool_key(service(), binary()) :: binary()

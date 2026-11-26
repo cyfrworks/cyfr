@@ -12,8 +12,8 @@ defmodule Locus.PoolRouteTest do
   derived from one.
   """
 
-  # The builds key and the runtime's credentials are the node's own,
-  # shared by every test: this module sets them, and puts them back.
+  # The runtime's credentials are the node's own, shared by every test:
+  # this module sets them, and puts them back.
   use ExUnit.Case, async: false
 
   import ExUnit.CaptureLog
@@ -86,21 +86,13 @@ defmodule Locus.PoolRouteTest do
   }
 
   setup do
-    builds_key = Application.fetch_env(:locus, :request_key)
     credentials = Locus.Runtime.Credentials.current()
 
     on_exit(fn ->
-      case builds_key do
-        {:ok, key} -> Application.put_env(:locus, :request_key, key)
-        :error -> Application.delete_env(:locus, :request_key)
-      end
-
       if credentials,
         do: Locus.Runtime.Credentials.install(credentials),
         else: :persistent_term.erase({Locus.Runtime.Credentials, :current})
     end)
-
-    Application.put_env(:locus, :request_key, @key)
 
     Locus.Runtime.Credentials.install(%Locus.Runtime.Credentials{
       service_id: "wrk_pool",
@@ -153,7 +145,8 @@ defmodule Locus.PoolRouteTest do
   defp listener(:backends), do: Service
 
   defp opts(:backends, keeper), do: [keeper: keeper, owners: @owners, key: @key]
-  defp opts(_service, keeper), do: [keeper: keeper]
+  defp opts(:builds, keeper), do: [keeper: keeper, request_key: @key]
+  defp opts(:runtime, keeper), do: [keeper: keeper]
 
   # What each listener answers for a refused header, in its own words.
   defp unauthorized?(:runtime, 401, body),
