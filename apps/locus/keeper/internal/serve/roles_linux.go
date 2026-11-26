@@ -228,7 +228,9 @@ func (s *server) publishRole(r *role, c *client) (ending bool) {
 
 // endClient ends c and everything it held: its channel, every process of
 // its space and its relays, which its role's leaf holds, its route, and
-// every spawn and place it held, each spawn retired before it returns. A
+// every spawn and place it held, each spawn retired before it returns. The
+// places' bytes leave their counters, and the counters and their revs stay
+// the role's, kept by its name, for its next start's reports. A
 // role whose processes outlive their group's kill, or whose spawns do not
 // retire within retireTimeout, or whose spawn starts in flight do not end
 // within startsTimeout, ends the keeper: a role does not start again beside

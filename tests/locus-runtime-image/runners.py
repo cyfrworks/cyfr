@@ -40,7 +40,9 @@ scrubbed, the container's CPU flat).
   lets it have, hold more than the bound together in its runner ends with
   that runner there, the sibling, the release and the container
   untouched; without the `writable-cgroups=true` security option no runner
-  starts at all (memory.py, whose cases these are).
+  starts at all (memory.py, whose cases these are). The runtime's report
+  on the pool wire holds its runners alone, under its own pool key alone
+  (memory.py's `pool`).
 - A runner has no route: from inside its network namespace a connect to
   the host gateway fails as unreachable, while from the container's own
   namespace the same dial finds a route. Every host call and every fetch
@@ -1257,6 +1259,7 @@ def main(image):
         stack.up()
         print(f"the service runs boot {stack.boot} with a warm floor of {FLOOR_RUNNERS}, watchdog grace {stack.watchdog_grace_ms} ms, release grace {stack.release_grace_ms} ms", flush=True)
         test_process_model(stack)
+        memory.test_pool_report(stack, plane)
         test_runner_has_no_route(stack, plane)
         test_pinned_egress(stack, plane)
         test_attached_fetch(stack, plane)

@@ -3,7 +3,7 @@
 
 // Package protocol defines the messages between `cyfr-locus serve` and its
 // clients, one role process each, over each one's inherited socket (fd 3):
-// one JSON object per line, each carrying `"v": 7` and a `type`.
+// one JSON object per line, each carrying `"v": 8` and a `type`.
 //
 // Each role's channel is its own. A request names only what is its role's:
 // a pool another role draws from is unknown (CodeUnknownPool), a spawn
@@ -15,40 +15,42 @@
 //
 // Client to keeper:
 //
-//	{"v":7,"type":"place","id":…,"kind":…,"athanor":…,"subject":…,"athanor_max_bytes":…}
-//	{"v":7,"type":"drop","place":…}
-//	{"v":7,"type":"assign","id":…,"place":…,"kind":…,"athanor":…,"subject":…}
-//	{"v":7,"type":"spawn","id":…,"place":…,"pool":…,"argv":[…],"env":{…},"rlimits":{…},"control":true,"attach":{"path":…,"token":…},"home_mode":"kept","home":…,"home_max_bytes":…,"pty":{"rows":…,"cols":…},"hosts":[…],"packs":{"athanor":…,"digest":…}}
-//	{"v":7,"type":"signal","spawn_id":…,"sig":"SIGTERM"}
-//	{"v":7,"type":"resize","spawn_id":…,"rows":…,"cols":…}
-//	{"v":7,"type":"release","spawn_id":…,"grace_ms":…}
-//	{"v":7,"type":"measure","id":…,"place":…}
-//	{"v":7,"type":"pool","id":…,"pool":…}
-//	{"v":7,"type":"home_make","id":…,"home":…}
-//	{"v":7,"type":"home_measure","id":…,"home":…}
-//	{"v":7,"type":"home_reset","id":…,"home":…}
-//	{"v":7,"type":"home_retire","id":…,"home":…}
-//	{"v":7,"type":"home_list","id":…,"after":…}
-//	{"v":7,"type":"packs_hold","id":…,"athanor":…,"lifetime":…,"digest":…}
-//	{"v":7,"type":"packs_put","id":…,"athanor":…,"lifetime":…,"digest":…,"seq":…,"last":…,"data":…}
+//	{"v":8,"type":"place","id":…,"kind":…,"athanor":…,"subject":…,"athanor_max_bytes":…}
+//	{"v":8,"type":"drop","place":…}
+//	{"v":8,"type":"assign","id":…,"place":…,"kind":…,"athanor":…,"subject":…}
+//	{"v":8,"type":"spawn","id":…,"place":…,"pool":…,"argv":[…],"env":{…},"rlimits":{…},"control":true,"attach":{"path":…,"token":…},"home_mode":"kept","home":…,"home_max_bytes":…,"pty":{"rows":…,"cols":…},"hosts":[…],"packs":{"athanor":…,"digest":…}}
+//	{"v":8,"type":"signal","spawn_id":…,"sig":"SIGTERM"}
+//	{"v":8,"type":"resize","spawn_id":…,"rows":…,"cols":…}
+//	{"v":8,"type":"release","spawn_id":…,"grace_ms":…}
+//	{"v":8,"type":"measure","id":…,"place":…}
+//	{"v":8,"type":"pool","id":…,"pool":…}
+//	{"v":8,"type":"home_make","id":…,"home":…}
+//	{"v":8,"type":"home_measure","id":…,"home":…}
+//	{"v":8,"type":"home_reset","id":…,"home":…}
+//	{"v":8,"type":"home_retire","id":…,"home":…}
+//	{"v":8,"type":"home_list","id":…,"after":…}
+//	{"v":8,"type":"report","id":…,"after":…}
+//	{"v":8,"type":"packs_hold","id":…,"athanor":…,"lifetime":…,"digest":…}
+//	{"v":8,"type":"packs_put","id":…,"athanor":…,"lifetime":…,"digest":…,"seq":…,"last":…,"data":…}
 //
 // Keeper to client:
 //
-//	{"v":7,"type":"placed","id":…,"memory_bytes":…}
-//	{"v":7,"type":"assigned","id":…}
-//	{"v":7,"type":"spawned","id":…,"spawn_id":…,"uid":…,"pid":…}
-//	{"v":7,"type":"error","id":…,"spawn_id":…,"code":…}   (id or spawn_id names the request; a spawn refused once made carries both)
-//	{"v":7,"type":"error","id":…,"code":"no_memory","held":{"need":…,"free":…,"mine":[{"kind":…,"subject":…,"bytes":…}],"others_bytes":…}}
-//	{"v":7,"type":"give_way","place":…}
-//	{"v":7,"type":"exited","spawn_id":…,"code":…,"signal":…,"memory":null | "cap" | "machine" | "either"}
-//	{"v":7,"type":"measured","id":…,"kind":…,"athanor":…,"subject":…,"bytes":…,"lesser":…,"age_ms":…}
-//	{"v":7,"type":"released","spawn_id":…}
-//	{"v":7,"type":"pool","id":…,"pool":…,"size":…,"free":…,"quarantined":…}
-//	{"v":7,"type":"home_made","id":…,"uid":…}
-//	{"v":7,"type":"home_measured","id":…,"bytes":…}
-//	{"v":7,"type":"home_retired","id":…}
-//	{"v":7,"type":"homes","id":…,"ids":[…],"next":…}
-//	{"v":7,"type":"packs","id":…,"state":"held" | "missing" | "taken"}
+//	{"v":8,"type":"placed","id":…,"memory_bytes":…}
+//	{"v":8,"type":"assigned","id":…}
+//	{"v":8,"type":"spawned","id":…,"spawn_id":…,"uid":…,"pid":…}
+//	{"v":8,"type":"error","id":…,"spawn_id":…,"code":…}   (id or spawn_id names the request; a spawn refused once made carries both)
+//	{"v":8,"type":"error","id":…,"code":"no_memory","held":{"need":…,"free":…,"mine":[{"kind":…,"subject":…,"bytes":…}],"others_bytes":…}}
+//	{"v":8,"type":"give_way","place":…}
+//	{"v":8,"type":"exited","spawn_id":…,"code":…,"signal":…,"memory":null | "cap" | "machine" | "either"}
+//	{"v":8,"type":"measured","id":…,"kind":…,"athanor":…,"subject":…,"bytes":…,"lesser":…,"age_ms":…}
+//	{"v":8,"type":"released","spawn_id":…}
+//	{"v":8,"type":"pool","id":…,"pool":…,"size":…,"free":…,"quarantined":…}
+//	{"v":8,"type":"home_made","id":…,"uid":…}
+//	{"v":8,"type":"home_measured","id":…,"bytes":…}
+//	{"v":8,"type":"home_retired","id":…}
+//	{"v":8,"type":"homes","id":…,"ids":[…],"next":…}
+//	{"v":8,"type":"reported","id":…,"report":{"boot":…,"budget":…,"work":…,"floor":…,"used":…,"counters":[…],"next":…}}
+//	{"v":8,"type":"packs","id":…,"state":"held" | "missing" | "taken"}
 //
 // A place follows one piece of work from before its preparation to its
 // release. The client names it with an `id` of its own minted before any
@@ -143,6 +145,23 @@
 // the moment, the reading and its `age_ms`. A place the keeper does not
 // hold, and one with no reading yet, are refused as CodeUnmeasured: no
 // reading is ever answered as zero.
+//
+// The keeper counts who used what (package admission's counters): for each
+// role, UTC day, athanor, kind and subject, a `counter` of the bytes its
+// places' latest readings hold now, the `mib_ms` and `measured_ms` its
+// readings measured, its `peak_bytes`, and the kills for memory at its
+// places' releases, each `cap`, `machine` or `either` as the `exited`
+// said. A counter's `athanor` and `subject` are absent where its places had
+// none. A `report` has an id of its own and an `after`, a whole number
+// within 0..MaxRev, and is answered `reported` under that id: the asking
+// role's counters whose `rev` is past `after`, by rev, at most
+// admission.ReportCounters of them, with `next`, the last one's rev, when
+// more follow; another role's counters are never in it. Beside them it
+// carries the keeper's `boot`, an id minted at each start, and the machine's
+// `budget`, `work` (W), `floor` (F where kept, else 0) and `used`, every
+// charge outside the floor. Each change of a counter takes its role's next
+// rev, from 1 at each boot, which is why every report carries the boot. A
+// counter goes 48 hours after its last change, never while it holds bytes.
 //
 // A spawn with `"control": true` also gets a control channel: the keeper
 // makes an AF_UNIX stream socketpair, installs one end as the command's file
@@ -276,13 +295,14 @@ import (
 	"io"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/cyfr/locus/keeper/internal/home"
 )
 
 // Version is the protocol version every message carries as `v`.
-const Version = 7
+const Version = 8
 
 // A place's kinds: a runner at rest and one given a run, a build, and a
 // program's and a terminal's session.
@@ -350,6 +370,8 @@ const (
 	TypeHomeMeasured = "home_measured"
 	TypeHomeRetired  = "home_retired"
 	TypeHomes        = "homes"
+	TypeReport       = "report"
+	TypeReported     = "reported"
 	TypePacksHold    = "packs_hold"
 	TypePacksPut     = "packs_put"
 	TypePacks        = "packs"
@@ -447,6 +469,9 @@ const (
 	// MaxPackSeq is the highest seq a packs_put may carry: a set's stream
 	// at its bounds is far fewer parts.
 	MaxPackSeq = 1 << 16
+	// MaxRev is the most a report's `after` may be, the most every client's
+	// JSON carries exactly.
+	MaxRev = 1<<53 - 1
 )
 
 // Signals a `signal` request may name.
@@ -660,8 +685,8 @@ type Request struct {
 	// Home is the id of the kept home a HomeKept spawn or a home request
 	// names (home.ValidID).
 	Home string `json:"home,omitempty"`
-	// After is the id a home_list's page follows.
-	After string `json:"after,omitempty"`
+	// After is what a home_list's or a report's page follows.
+	After *Cursor `json:"after,omitempty"`
 	// Pty is the size of a spawn's pseudo-terminal; nil, it has none.
 	Pty *PtySize `json:"pty,omitempty"`
 	// Hosts are the only hosts a spawn may reach (beside the resolver and
@@ -688,6 +713,66 @@ type Request struct {
 	// request that does not carry them is refused, as CYFR's codec refuses
 	// them (Prima.KeeperProtocol).
 	present map[string]bool
+}
+
+// Cursor is a request's `after`, remembering which JSON it was: a string,
+// the kept home id a home_list's page follows, or a whole number within
+// 0..MaxRev, the rev a report's page follows. Any other value decodes, so
+// that its request is refused under its id.
+type Cursor struct {
+	form cursorForm
+	id   string
+	rev  uint64
+}
+
+type cursorForm uint8
+
+const (
+	cursorOther cursorForm = iota
+	cursorID
+	cursorRev
+)
+
+// revPattern is a JSON whole number: no sign, fraction or exponent.
+var revPattern = regexp.MustCompile(`^(?:0|[1-9][0-9]*)$`)
+
+// AfterID is the cursor of a home_list after the kept home id.
+func AfterID(id string) *Cursor { return &Cursor{form: cursorID, id: id} }
+
+// ID is the kept home id a string cursor names; "" for none and for any
+// other cursor.
+func (c *Cursor) ID() string {
+	if c == nil || c.form != cursorID {
+		return ""
+	}
+	return c.id
+}
+
+// Rev is the rev a whole-number cursor names, and whether it is one.
+func (c *Cursor) Rev() (uint64, bool) {
+	if c == nil || c.form != cursorRev {
+		return 0, false
+	}
+	return c.rev, true
+}
+
+// UnmarshalJSON remembers a string, or a whole number within 0..MaxRev, and
+// any other value as neither.
+func (c *Cursor) UnmarshalJSON(data []byte) error {
+	*c = Cursor{}
+	switch {
+	case len(data) > 0 && data[0] == '"':
+		var id string
+		if err := json.Unmarshal(data, &id); err != nil {
+			return err
+		}
+		*c = Cursor{form: cursorID, id: id}
+	case revPattern.Match(data):
+		if rev, err := strconv.ParseUint(string(data), 10, 64); err == nil && rev <= MaxRev {
+			*c = Cursor{form: cursorRev, rev: rev}
+		}
+	}
+	return nil
 }
 
 // RequestError is a refused request: the code to reply with, the request's
@@ -856,8 +941,18 @@ func ParseRequest(line []byte) (*Request, *RequestError) {
 		if !idPattern.MatchString(req.ID) {
 			return nil, refuse("id must match " + idPattern.String())
 		}
-		if req.present["after"] && !home.ValidID(req.After) {
+		if req.present["after"] && !home.ValidID(req.After.ID()) {
 			return nil, refuse("after must be a kept home's id")
+		}
+	case TypeReport:
+		if !req.only("id", "after") {
+			return nil, refuse("report carries only id and after")
+		}
+		if !idPattern.MatchString(req.ID) {
+			return nil, refuse("id must match " + idPattern.String())
+		}
+		if _, ok := req.After.Rev(); !ok {
+			return nil, refuse(fmt.Sprintf("after must be a whole number within 0..%d", uint64(MaxRev)))
 		}
 	case TypePacksHold:
 		if !req.only("id", "athanor", "lifetime", "digest") {
@@ -1337,6 +1432,53 @@ func NewHomes(id string, ids []string, next string) Homes {
 		ids = []string{}
 	}
 	return Homes{V: Version, Type: TypeHomes, ID: id, IDs: ids, Next: next}
+}
+
+// Reported answers a `report` with the asking role's page of counters.
+type Reported struct {
+	V      int    `json:"v"`
+	Type   string `json:"type"`
+	ID     string `json:"id"`
+	Report Report `json:"report"`
+}
+
+// Report is a page of one role's counters, past a rev, beside the keeper's
+// boot and the machine's numbers. Next, the last counter's rev, is set
+// only when more follow; every rev is at least 1.
+type Report struct {
+	Boot     string    `json:"boot"`
+	Budget   uint64    `json:"budget"`
+	Work     uint64    `json:"work"`
+	Floor    uint64    `json:"floor"`
+	Used     uint64    `json:"used"`
+	Counters []Counter `json:"counters"`
+	Next     uint64    `json:"next,omitempty"`
+}
+
+// Counter is what the keeper counted of one role's places of one kind,
+// athanor and subject on one UTC day ("YYYY-MM-DD"), as of its last change,
+// Rev.
+type Counter struct {
+	Rev        uint64 `json:"rev"`
+	Day        string `json:"day"`
+	Athanor    string `json:"athanor,omitempty"`
+	Kind       string `json:"kind"`
+	Subject    string `json:"subject,omitempty"`
+	Bytes      uint64 `json:"bytes"`
+	MiBMs      uint64 `json:"mib_ms"`
+	MeasuredMs uint64 `json:"measured_ms"`
+	PeakBytes  uint64 `json:"peak_bytes"`
+	Cap        uint64 `json:"cap"`
+	Machine    uint64 `json:"machine"`
+	Either     uint64 `json:"either"`
+}
+
+// NewReported builds a `reported` reply; no counters are an empty list.
+func NewReported(id string, report Report) Reported {
+	if report.Counters == nil {
+		report.Counters = []Counter{}
+	}
+	return Reported{V: Version, Type: TypeReported, ID: id, Report: report}
 }
 
 // PacksReply answers a packs_hold or a packs_put.

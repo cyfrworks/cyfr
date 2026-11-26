@@ -175,10 +175,18 @@ func heldOf(h admission.Held) protocol.Held {
 
 // admitTick is the admission's second: starts admitted as room came,
 // those that waited their time refused, idle runners asked to give way.
+// A second in which uses went uncounted, every counter held, logs their
+// count alone: no athanor, subject or role of theirs.
 func (s *server) admitTick() {
 	s.mu.Lock()
 	s.admit(s.ledger.Tick(now()))
+	uncounted := s.ledger.Uncounted()
+	grew := uncounted > s.uncounted
+	s.uncounted = uncounted
 	s.mu.Unlock()
+	if grew {
+		s.log.Warn("%d uses went uncounted since the keeper started: every counter is held and none may go yet", uncounted)
+	}
 }
 
 // handleAssign makes a place whose the request says, an athanor or a subject
@@ -271,6 +279,26 @@ func (s *server) handleMeasure(c *client, req *protocol.Request) {
 	}
 	s.mu.Unlock()
 	s.send(c, reply)
+}
+
+// handleReport answers the asking role's counters past the report's after,
+// a page of them, beside the keeper's boot and the machine's numbers: a
+// role sees only its own counters, kept by its name across its process's
+// restarts.
+func (s *server) handleReport(c *client, req *protocol.Request) {
+	after, _ := req.After.Rev()
+	s.mu.Lock()
+	r := s.ledger.Report(c.role.spec.Name, after, now())
+	boot, budget := s.boot, s.budget
+	s.mu.Unlock()
+	report := protocol.Report{Boot: boot, Budget: budget, Work: r.Work, Floor: r.Floor, Used: r.Used, Next: r.Next,
+		Counters: make([]protocol.Counter, 0, len(r.Counters))}
+	for _, k := range r.Counters {
+		report.Counters = append(report.Counters, protocol.Counter{Rev: k.Rev, Day: k.Day, Athanor: k.Athanor, Kind: k.Kind,
+			Subject: k.Subject, Bytes: k.Bytes, MiBMs: k.MiBMs, MeasuredMs: k.MeasuredMs, PeakBytes: k.PeakBytes,
+			Cap: k.Cap, Machine: k.Machine, Either: k.Either})
+	}
+	s.send(c, protocol.NewReported(req.ID, report))
 }
 
 // reader reads every live spawn's group, retries the removal of every
