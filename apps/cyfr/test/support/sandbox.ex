@@ -205,22 +205,23 @@ defmodule Cyfr.Test.Sandbox do
   between two of its messages, so none holds the shared connection as it
   goes; what the views started beside themselves (a load, a component
   call whose answer no view now waits for) is awaited to its own end, and
-  so is what that work starts in turn, found again once what was found
-  has ended.
+  so is what that work starts in turn: the work is looked for again until
+  a look finds none and sees nothing end while it reads.
   Left to the test's end, the views are shut down with the test
   supervisor, before any `on_exit` runs, at whatever point they have
   reached, and their work is stopped by the sweep, at whatever point it
   has reached: either one, inside a query, takes the connection with it,
   and the next query of the work still running finds no owner.
 
-  The views and their work are awaited within one deadline,
-  `end_views_deadline_ms/0` unless `deadline_ms` names another; past it
-  the test fails naming each process still running, and the sweep stops
-  them.
+  The views and their work are awaited within one deadline for the whole
+  call, `end_views_deadline_ms/0` unless `deadline_ms` names another; past
+  it the test fails naming each process still running, and the sweep
+  stops them. `opts[:list]` is the process list each look reads
+  (`Process.list/0`), a seam for the sandbox's own tests.
   """
-  @spec end_views(pos_integer()) :: :ok
-  def end_views(deadline_ms \\ @end_views_deadline_ms)
-      when is_integer(deadline_ms) and deadline_ms > 0 do
+  @spec end_views(pos_integer(), keyword()) :: :ok
+  def end_views(deadline_ms \\ @end_views_deadline_ms, opts \\ [])
+      when is_integer(deadline_ms) and deadline_ms > 0 and is_list(opts) do
     deadline = System.monotonic_time(:millisecond) + deadline_ms
 
     {supervisor, views} =
@@ -261,27 +262,69 @@ defmodule Cyfr.Test.Sandbox do
     # its caller's callers behind its own, so the work of any view, at any
     # depth, names it too. The test supervisor names the test as well, and
     # it and what it supervises stay until the test ends.
-    await_work(self(), supervisor, deadline, deadline_ms)
+    list = Keyword.get(opts, :list, &Process.list/0)
+    await_work(self(), supervisor, list, deadline, deadline_ms)
   end
 
   # Work awaited may start more as it ends (a write it does not wait for),
-  # which names the test too and was not there to be found before: the
-  # work is found again once what was found has ended, until none is left.
-  defp await_work(test, supervisor, deadline, deadline_ms) do
-    work =
-      for pid <- Process.list(),
-          pid != test and pid != supervisor,
-          {:dictionary, dictionary} <- [Process.info(pid, :dictionary)],
-          test in Keyword.get(dictionary, :"$callers", []),
-          supervisor not in Keyword.get(dictionary, :"$ancestors", []),
-          do: {Process.monitor(pid), pid}
+  # which names the test too. A look lists every process, then reads each
+  # one's dictionary. Work that starts after a list descends from a
+  # process alive at it that names the test: one read as work is awaited
+  # and looked past again; one that ended between the list and its reading
+  # is counted, and what it started is alive at the next list or has
+  # started work of its own that is. So a look that finds no work and in
+  # which nothing listed ended leaves none. Work handed to a process that
+  # names neither the test nor its work, to start later, is not followed.
+  # The deadline is the whole call's: a look past it that still finds work
+  # fails naming it, and one that still sees processes end fails as well.
+  defp await_work(test, supervisor, list, deadline, deadline_ms) do
+    {work, ended} = look(test, supervisor, list)
 
-    if work != [] do
-      await_down(work, deadline, deadline_ms)
-      await_work(test, supervisor, deadline, deadline_ms)
+    cond do
+      work == [] and ended == 0 ->
+        :ok
+
+      time_left(deadline) == 0 ->
+        still_working(work, deadline_ms)
+
+      true ->
+        await_down(for(pid <- work, do: {Process.monitor(pid), pid}), deadline, deadline_ms)
+        await_work(test, supervisor, list, deadline, deadline_ms)
     end
+  end
 
-    :ok
+  # The work a list holds, and how many it listed ended before it was read.
+  defp look(test, supervisor, list) do
+    Enum.reduce(list.(), {[], 0}, fn
+      pid, found when pid == test or pid == supervisor ->
+        found
+
+      pid, {work, ended} ->
+        case Process.info(pid, :dictionary) do
+          nil ->
+            {work, ended + 1}
+
+          {:dictionary, dictionary} ->
+            if test in Keyword.get(dictionary, :"$callers", []) and
+                 supervisor not in Keyword.get(dictionary, :"$ancestors", []),
+               do: {[pid | work], ended},
+               else: {work, ended}
+        end
+    end)
+  end
+
+  defp still_working([], deadline_ms) do
+    ExUnit.Assertions.flunk(
+      "end_views/0 waited out its #{deadline_ms} ms deadline, and processes still ended " <>
+        "as it looked for the test's work"
+    )
+  end
+
+  defp still_working(work, deadline_ms) do
+    ExUnit.Assertions.flunk(
+      "end_views/0 waited out its #{deadline_ms} ms deadline, and these still run: " <>
+        Enum.map_join(work, "; ", &still_running/1)
+    )
   end
 
   @doc "How long `end_views/0` waits for the views and their work, in milliseconds."

@@ -883,6 +883,58 @@ defmodule Cyfr.Test.SandboxTest do
       end
     end
 
+    test "work a process hands on as it ends, between a look's list and its reading, is awaited" do
+      test = self()
+
+      {:ok, parent} =
+        Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
+          receive do: (:hand_on -> :ok)
+
+          {:ok, _child} =
+            Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
+              send(test, {:child, self()})
+              ends_once_watched(test)
+            end)
+        end)
+
+      parent_ref = Process.monitor(parent)
+
+      # The first look's list holds the parent; before the look reads it,
+      # the parent hands its work on to a child the list does not hold, and
+      # ends.
+      list = fn ->
+        listed = Process.list()
+
+        if Process.delete(:hand_on) do
+          send(parent, :hand_on)
+          assert_receive {:child, child}, 5_000
+          assert_receive {:DOWN, ^parent_ref, :process, ^parent, :normal}, 5_000
+          refute child in listed
+          Process.put(:child, child)
+        end
+
+        listed
+      end
+
+      Process.put(:hand_on, true)
+      assert :ok = Sandbox.end_views(5_000, list: list)
+      refute Process.alive?(Process.get(:child)), "end_views/0 returned with the child at work"
+    end
+
+    @tag timeout: 20_000
+    test "work that keeps handing itself on past the deadline fails it there, though each is gone when waited for" do
+      stop = :atomics.new(1, [])
+      handing_on(stop)
+      started = System.monotonic_time(:millisecond)
+
+      error = assert_raise ExUnit.AssertionError, fn -> Sandbox.end_views(300) end
+      assert error.message =~ "300 ms deadline"
+      # One deadline for the whole call, not for each wait: it ends near it,
+      # far inside the test's own timeout.
+      assert System.monotonic_time(:millisecond) - started < 5_000
+      :atomics.put(stop, 1, 1)
+    end
+
     test "a view's stop and its work's end share one deadline", %{conn: conn} do
       # Each fits the deadline on its own; together they outlast it.
       {:ok, view, _html} =
@@ -897,6 +949,25 @@ defmodule Cyfr.Test.SandboxTest do
       # The work, unless a loaded host kept the view's stop past it too.
       assert error.message =~ inspect(work) or error.message =~ inspect(view.pid)
     end
+  end
+
+  # Work that ends once the test watches it, so a look that finds it
+  # awaits it, and one that does not leaves it at work.
+  defp ends_once_watched(test) do
+    Prima.Test.Wait.wait_until(
+      fn -> test in elem(Process.info(self(), :monitored_by), 1) end,
+      30_000,
+      "the test watching this work"
+    )
+  end
+
+  # Work that starts the next generation and ends at once, until `stop`
+  # is set: each generation is gone as soon as it has started the next.
+  defp handing_on(stop) do
+    {:ok, _pid} =
+      Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
+        if :atomics.get(stop, 1) == 0, do: handing_on(stop)
+      end)
   end
 
   # The dynamic supervisors a sweep stops the children of. The children of
