@@ -519,6 +519,18 @@ defmodule Locus.Runtime.RunnerPoolTest do
     :ok
   end
 
+  # How many runners the keeper has spawned, read once every runner the
+  # pool holds is one the keeper spawned: a take is answered, and a refill
+  # decides, before the runner's own process has placed and spawned it.
+  defp spawned!(pool, keeper) do
+    wait_until(fn ->
+      ids = MapSet.new(spawns(keeper), & &1.spec.runner)
+      Enum.all?(Runners.runners(pool), &MapSet.member?(ids, &1.id))
+    end)
+
+    length(spawns(keeper))
+  end
+
   defp state_of(pool, pid),
     do: Enum.find_value(Runners.runners(pool), &(&1.pid == pid && &1.state))
 
@@ -603,7 +615,7 @@ defmodule Locus.Runtime.RunnerPoolTest do
     serve!(pool)
     [{a, a_id}, {b, b_id}] = kept!(pool, keeper, clock, ["ath_a", "ath_b"])
     wait_until(fn -> counts(pool) == %{fresh: 1, idle: 2, busy: 0, tainted: 0} end)
-    assert length(spawns(keeper)) == 3
+    assert spawned!(pool, keeper) == 3
 
     {starts, c} =
       never_retired(spawn_of(keeper, a), fn ->
@@ -622,7 +634,7 @@ defmodule Locus.Runtime.RunnerPoolTest do
           end)
         end)
 
-        assert {Task.yield(starts, 0), length(spawns(keeper)), state_of(pool, b)} ==
+        assert {Task.yield(starts, 0), spawned!(pool, keeper), state_of(pool, b)} ==
                  {nil, 3, :idle}
 
         {starts, c}
@@ -636,7 +648,7 @@ defmodule Locus.Runtime.RunnerPoolTest do
     left!(pool, b)
     wait_until(fn -> counts(pool) == %{fresh: 1, idle: 0, busy: 2, tainted: 0} end)
     assert ScriptedKeeper.releases(keeper) == [{a_id, 0}, {b_id, 0}]
-    assert length(spawns(keeper)) == 5
+    assert spawned!(pool, keeper) == 5
   end
 
   test "a refill releases only the uids it is short: one kept runner already going counts, " <>
@@ -753,7 +765,7 @@ defmodule Locus.Runtime.RunnerPoolTest do
 
       refute waiting?(pool, "exec_d") or waiting?(pool, "exec_e")
 
-      assert {state_of(pool, a), state_of(pool, b), length(spawns(keeper))} ==
+      assert {state_of(pool, a), state_of(pool, b), spawned!(pool, keeper)} ==
                {:retiring, :idle, 3}
     end)
 
@@ -763,7 +775,7 @@ defmodule Locus.Runtime.RunnerPoolTest do
     wait_until(fn -> counts(pool) == %{fresh: 1, idle: 1, busy: 1, tainted: 0} end)
     assert ScriptedKeeper.releases(keeper) == [{a_id, 0}]
     assert state_of(pool, b) == :idle
-    assert length(spawns(keeper)) == 4
+    assert spawned!(pool, keeper) == 4
     refute Enum.any?(Runners.runners(pool), &(&1.execution_id in ["exec_d", "exec_e"]))
   end
 
@@ -861,9 +873,10 @@ defmodule Locus.Runtime.RunnerPoolTest do
     {:ok, a, _a_id} = RunnerPool.take(pool, "ath_a", "exec_a")
     wait_until(fn -> counts(pool) == %{fresh: 1, idle: 0, busy: 1, tainted: 0} end)
     {:ok, b, _b_id} = RunnerPool.take(pool, "ath_b", "exec_b")
+    # The refill finds no uid and no kept runner: it spawns nothing. Both
+    # runners spawned before the keeper refuses, so neither is refused.
     assert counts(pool) == %{fresh: 0, idle: 0, busy: 2, tainted: 0}
-    # The refill finds no uid and no kept runner: it spawns nothing.
-    assert length(spawns(keeper)) == 2
+    assert spawned!(pool, keeper) == 2
 
     :ok = ScriptedKeeper.refuse(keeper, :capacity)
     {:ok, c, _c_id} = RunnerPool.take(pool, "ath_c", "exec_c")
