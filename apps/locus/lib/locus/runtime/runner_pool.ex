@@ -32,7 +32,13 @@ defmodule Locus.Runtime.RunnerPool do
   in the same move as its completion is heard; `taint/4` does
   the same for a kill, with the grace the runner is given to report, of a
   runner that still runs the execution it names: one that has completed
-  it, or been taken for another since, is left alone.
+  it, or been taken for another since, is left alone. A runner tainted
+  while its process still waits for its place, which reads no release
+  then, has its handle ended at once: the handle is the place's owner, so
+  the keeper's client drops the place (`Locus.Launcher`, "Places") and the
+  starts queued behind it for room move, and the runner is held as one
+  whose handle died is, below, with no retirement bound, which the wait
+  for room would outlast.
   `cancel_child/3` sends one busy runner a `cancel_child`, and
   `cancel_child/2` every busy runner; one that does not run the child
   ignores it.
@@ -347,9 +353,14 @@ defmodule Locus.Runtime.RunnerPool do
 
   @impl true
   def handle_info({RunnerProcess, pid, {:placed, memory_bytes}}, state) do
-    if Map.has_key?(state.runners, pid),
-      do: {:noreply, %{state | memory_bytes: memory_bytes}},
-      else: {:noreply, state}
+    case state.runners[pid] do
+      nil ->
+        {:noreply, state}
+
+      entry ->
+        state = put_runner(state, pid, %{entry | placed: true})
+        {:noreply, %{state | memory_bytes: memory_bytes}}
+    end
   end
 
   # The keeper's ask that a runner give way to a start waiting for room:
@@ -621,10 +632,14 @@ defmodule Locus.Runtime.RunnerPool do
     do: released(state, pid, entry)
 
   defp handle_down(state, pid, entry, reason) do
-    Logger.error(
-      "[Locus.Runtime.RunnerPool] runner #{entry.id}'s handle ended " <>
-        "(#{Prima.LogFilter.inspect_reason(reason)}); held until its keeper retires it"
-    )
+    # A runner tainted before it was placed had its handle ended by the
+    # pool itself (`taint_runner/4`), which is no failure.
+    unless entry.state == :tainted and not entry.placed do
+      Logger.error(
+        "[Locus.Runtime.RunnerPool] runner #{entry.id}'s handle ended " <>
+          "(#{Prima.LogFilter.inspect_reason(reason)}); held until its keeper retires it"
+      )
+    end
 
     state = told(state, pid, entry, {:gone, {:handle_down, reason}})
     entry = %{state.runners[pid] | down: true, idle_timer: nil}
@@ -693,6 +708,16 @@ defmodule Locus.Runtime.RunnerPool do
   # made is the keeper's to free, and waits for that with no deadline.
   defp taint_runner(state, _pid, %{state: ending}, _grace_ms) when ending in [:tainted, :refused],
     do: state
+
+  # A runner whose process still waits for its place reads no release
+  # until the keeper answers, and holds its turn in the keeper's queue
+  # meanwhile: its handle, the place's owner, is ended, so the keeper's
+  # client drops the place at once, and the runner is held as a dead
+  # handle's is (`handle_down/4`), with no retirement bound.
+  defp taint_runner(state, pid, %{placed: false} = entry, _grace_ms) do
+    Process.exit(pid, :kill)
+    refill_later(put_runner(state, pid, %{entry | state: :tainted, idle_timer: nil}))
+  end
 
   defp taint_runner(state, pid, entry, grace_ms) do
     RunnerProcess.release(pid, grace_ms)
@@ -808,7 +833,9 @@ defmodule Locus.Runtime.RunnerPool do
            released: false,
            # The start that waits on this runner's spawn, while the pool
            # remembers a refusal.
-           waiter: nil
+           waiter: nil,
+           # The keeper placed it: its process no longer waits for room.
+           placed: false
          }}
 
       {:error, reason} ->

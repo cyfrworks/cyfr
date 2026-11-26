@@ -37,7 +37,8 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
   until `answer_places/2` places every one held or refuses each with a
   reason, `{:no_memory, held}` as cyfr-locus refuses one for room; a
   place's caller waits for it as the keeper's client's caller does
-  (`Locus.Launcher.place_wait_ms/0`). `give_way/2` asks a spawned runner
+  (`Locus.Launcher.place_wait_ms/0`), and one held whose caller dies is
+  dropped, as the keeper's client drops it. `give_way/2` asks a spawned runner
   to give way, as cyfr-locus asks the floor's role: its owner hears
   `:give_way`. `spawning/2` makes every spawn from
   then on and leaves it unanswered, as a keeper's client that wrote a
@@ -454,8 +455,13 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
   def handle_call({:place, id, _whose}, _from, state) when is_map_key(state.places, id),
     do: {:reply, {:error, :bad_request}, state}
 
-  def handle_call({:place, id, _whose} = place, from, %{placing: :held} = state),
-    do: {:noreply, %{state | held_places: state.held_places ++ [{from, id, place}]}}
+  # A held place's caller is followed, as the keeper's client follows a
+  # place's owner: one that dies drops its place, and the places behind it
+  # move up.
+  def handle_call({:place, id, _whose} = place, {caller, _tag} = from, %{placing: :held} = state) do
+    held = {from, id, place, Process.monitor(caller)}
+    {:noreply, %{state | held_places: state.held_places ++ [held]}}
+  end
 
   def handle_call({:place, id, whose}, {owner, _tag}, state) do
     place = %{whose: whose, spawned: false, owner: Process.monitor(owner)}
@@ -465,12 +471,14 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
   def handle_call({:answer_places, answer}, _from, state) do
     state =
       Enum.reduce(state.held_places, %{state | held_places: [], placing: :answered}, fn
-        {from, _id, place}, state when answer == :ok ->
+        {from, _id, place, monitor}, state when answer == :ok ->
+          Process.demonitor(monitor, [:flush])
           {:reply, reply, state} = handle_call(place, from, state)
           GenServer.reply(from, reply)
           state
 
-        {from, _id, _place}, state ->
+        {from, _id, _place, monitor}, state ->
+          Process.demonitor(monitor, [:flush])
           GenServer.reply(from, answer)
           state
       end)
@@ -490,7 +498,7 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
   def handle_call({:placing, how}, _from, state), do: {:reply, :ok, %{state | placing: how}}
 
   def handle_call(:held_places, _from, state),
-    do: {:reply, Enum.map(state.held_places, fn {_from, id, _place} -> id end), state}
+    do: {:reply, Enum.map(state.held_places, fn {_from, id, _place, _monitor} -> id end), state}
 
   def handle_call({:spawning, how}, _from, state), do: {:reply, :ok, %{state | spawning: how}}
 
@@ -656,9 +664,9 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
     end
   end
 
-  # An owner gone before a spawn named its place has the place dropped; a
-  # place a spawn named is freed at that spawn's release alone. A runner
-  # whose owner died is released with no grace.
+  # An owner gone before a spawn named its place has the place dropped,
+  # held or made; a place a spawn named is freed at that spawn's release
+  # alone. A runner whose owner died is released with no grace.
   @impl GenServer
   def handle_info({:DOWN, monitor, :process, _pid, _reason}, state) do
     for %{monitor: ^monitor, runner: runner} <- state.spawns,
@@ -667,7 +675,8 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
     places =
       Map.reject(state.places, fn {_id, place} -> place.owner == monitor and not place.spawned end)
 
-    {:noreply, %{state | places: places}}
+    held_places = Enum.reject(state.held_places, &match?({_from, _id, _place, ^monitor}, &1))
+    {:noreply, %{state | places: places, held_places: held_places}}
   end
 
   # A held assign whose wait has ended is answered so, as the keeper's

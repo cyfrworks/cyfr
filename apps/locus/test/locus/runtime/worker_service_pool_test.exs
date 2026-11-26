@@ -31,7 +31,9 @@ defmodule Locus.Runtime.WorkerServicePoolTest do
   one's is left unanswered too is unavailable with its work written to
   neither runner, both retired. A start whose runner waits for the
   keeper's room is served once the keeper places it, past 5 s, while the
-  service answers its status and kills, or refused naming `no_memory`.
+  service answers its status and kills, or refused naming `no_memory`;
+  one a kill reached is `:ok` to the kill and unavailable, its runner's place
+  gone from the keeper's queue at the kill.
 
   A keeper that refuses every runner makes the status report the
   refusal, with the keeper's reason and the sentence naming what the
@@ -380,6 +382,28 @@ defmodule Locus.Runtime.WorkerServicePoolTest do
                 "message" => "cyfr-locus refused to start a runner (no_memory)"
               }} = Task.await(started, 15_000)
 
+      assert given(context, attempt) == []
+      refute attempt.attempt in elem(WorkerService.status(), 1).attempts
+    end
+
+    @tag :capture_log
+    @tag timeout: 60_000
+    test "is unavailable once a kill reached it, its runner's place gone from the keeper's queue at the kill and its work given to no runner",
+         context do
+      {attempt, started} = waiting_for_room!(context)
+      wait_until(fn -> map_size(:sys.get_state(WorkerService).assigning) == 1 end)
+      [%{runner: runner}] = Map.values(:sys.get_state(WorkerService).assigning)
+      assert runner in ScriptedKeeper.held_places(context.keeper)
+
+      assert post(context, :kill, %{"execution_id" => attempt.execution_id}) ==
+               {200, %{"ok" => true, "v" => 1}}
+
+      # The place leaves the queue before the keeper finds room for anyone.
+      wait_until(fn -> runner not in ScriptedKeeper.held_places(context.keeper) end)
+      assert {503, %{"error" => "unavailable"} = refused} = Task.await(started, 15_000)
+      refute Map.has_key?(refused, "message")
+
+      :ok = ScriptedKeeper.answer_places(context.keeper, :ok)
       assert given(context, attempt) == []
       refute attempt.attempt in elem(WorkerService.status(), 1).attempts
     end

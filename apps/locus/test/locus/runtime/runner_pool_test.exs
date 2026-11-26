@@ -16,7 +16,9 @@ defmodule Locus.Runtime.RunnerPoolTest do
   has not retired, busy or idle, said so once at the retirement bound and
   held, tainted, until its keeper retires it, one retired in time left
   alone by the bound's timer, and one whose handle died held until its
-  keeper's release reaches the pool as the runner's heir; every busy
+  keeper's release reaches the pool as the runner's heir, and one tainted
+  while its place waits for room giving the place up at once, never said
+  unretired; every busy
   runner offered a
   `cancel_child`; a frame from a runner already ended ignored; a keeper
   that refuses runners leaving none in the pool, tainted or otherwise,
@@ -957,6 +959,32 @@ defmodule Locus.Runtime.RunnerPoolTest do
 
     # The runner spawned ahead in its stead waits for its place too.
     assert counts(pool) == %{fresh: 1, idle: 0, busy: 0, tainted: 0}
+    assert spawns(keeper) == []
+  end
+
+  test "a runner tainted while its place awaits the keeper's room gives the place up at once and is never said unretired",
+       %{keeper: keeper} do
+    pool = start_pool!(keeper, retire_bound_ms: 100)
+    :ok = ScriptedKeeper.placing(keeper, :held)
+    serve!(pool)
+    {:ok, pid, id} = RunnerPool.take(pool, "ath_a", "exec_1")
+    wait_until(fn -> hd(ScriptedKeeper.held_places(keeper)) == id end)
+
+    log =
+      capture_log(fn ->
+        assert :ok = RunnerPool.taint(pool, pid, 0, "exec_1")
+
+        wait_until(
+          fn -> id not in ScriptedKeeper.held_places(keeper) end,
+          2_000,
+          "the place to leave the keeper's queue"
+        )
+
+        left!(pool, pid, 5_000)
+      end)
+
+    refute log =~ "runner #{id} #{@unretired}"
+    refute log =~ "runner #{id}'s handle ended"
     assert spawns(keeper) == []
   end
 

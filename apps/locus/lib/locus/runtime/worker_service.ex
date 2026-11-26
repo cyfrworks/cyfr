@@ -102,6 +102,12 @@ defmodule Locus.Runtime.WorkerService do
   with the grace to report its open attempts; for a child a runner said
   it holds, that runner is sent a `cancel_child`, kills the child and
   completes unclean, and the service reports its end naming the child.
+  A kill of an execution whose start is still under way, its take or its
+  assign not yet answered, is `:ok` too: the start answers `{:error,
+  :unavailable}` once its take or its assign returns, and the runner it
+  was given is tainted under that execution, at once where the assign is
+  in flight, so a runner still waiting for the keeper's room gives up its
+  place in the keeper's queue then (`Locus.Runtime.RunnerPool.taint/4`).
   Either kill is `:ok`, and `:ok` again for an
   execution a runner of this boot already ended; the ids of the last ten
   thousand roots and children ended are remembered for it. A kill of an
@@ -217,6 +223,8 @@ defmodule Locus.Runtime.WorkerService do
        # assigns in flight, by their task's ref (`taken/3`).
        takes: :gen_server.reqids_new(),
        assigning: %{},
+       # The executions whose start a kill reached while it was under way.
+       killed: MapSet.new(),
        seq: 0
      }}
   end
@@ -259,6 +267,9 @@ defmodule Locus.Runtime.WorkerService do
       pid = holder(state, execution_id) ->
         :ok = RunnerPool.cancel_child(RunnerPool, pid, execution_id)
         {:reply, :ok, cancelled(state, pid, execution_id)}
+
+      starting = starting(state, execution_id) ->
+        {:reply, :ok, kill_start(state, starting, execution_id)}
 
       ended?(state, execution_id) ->
         {:reply, :ok, state}
@@ -456,15 +467,57 @@ defmodule Locus.Runtime.WorkerService do
 
   # An execution a runner of this boot holds, or one a start is under way
   # for, is not started again.
-  defp held_or_starting?(state, execution_id) do
-    Map.has_key?(state.executions, execution_id) or
+  defp held_or_starting?(state, execution_id),
+    do: Map.has_key?(state.executions, execution_id) or starting(state, execution_id) != nil
+
+  # The start under way for `execution_id`: `:taking` while its take is
+  # asked of the pool, `{:assigning, pid}` while its assign to the runner
+  # `pid` is in flight, nil for none.
+  defp starting(state, execution_id) do
+    cond do
       Enum.any?(:gen_server.reqids_to_list(state.takes), fn {_request, start} ->
         start.assignment.execution_id == execution_id
-      end) or
-      Enum.any?(state.assigning, fn {_ref, a} ->
-        a.start.assignment.execution_id == execution_id
-      end)
+      end) ->
+        :taking
+
+      a =
+          Enum.find_value(state.assigning, fn {_ref, a} ->
+            if a.start.assignment.execution_id == execution_id, do: a
+          end) ->
+        {:assigning, a.pid}
+
+      true ->
+        nil
+    end
   end
+
+  # A kill of a start under way: the start is marked, and answers once its
+  # take or assign returns (`killed/3`). A runner it is being assigned is
+  # tainted now, which ends one still waiting for its place, so that place
+  # does not hold its turn in the keeper's queue for a start already dead.
+  defp kill_start(state, starting, execution_id) do
+    case starting do
+      {:assigning, pid} ->
+        :ok = RunnerPool.taint(RunnerPool, pid, state.settings.release_grace_ms, execution_id)
+
+      :taking ->
+        :ok
+    end
+
+    %{state | killed: MapSet.put(state.killed, execution_id)}
+  end
+
+  # The start a kill reached while it was under way, now that its take or
+  # its assign has returned: its runner, if it was given one, is tainted
+  # under its execution, and it answers `{:error, :unavailable}`.
+  defp killed(state, start, pid) do
+    execution_id = start.assignment.execution_id
+    if pid, do: :ok = RunnerPool.taint(RunnerPool, pid, 0, execution_id)
+    state = %{state | killed: MapSet.delete(state.killed, execution_id)}
+    answer(state, start, {:error, :unavailable})
+  end
+
+  defp killed?(state, start), do: MapSet.member?(state.killed, start.assignment.execution_id)
 
   # A runner for the start, asked of the pool while its deadline has not
   # passed; the answer reaches the service as a message (`handle_info/2`).
@@ -487,8 +540,24 @@ defmodule Locus.Runtime.WorkerService do
   end
 
   # The pool's answer to a start's take: the runner is assigned in a task,
-  # or the start is answered.
-  defp taken(state, start, {:ok, pid, runner}) do
+  # or the start is answered; a start a kill reached meanwhile answers as
+  # killed, its runner read as any runner handed out is first.
+  defp taken(state, start, answer) do
+    case {killed?(state, start), answer} do
+      {false, answer} ->
+        given(state, start, answer)
+
+      {true, {:ok, pid, runner}} ->
+        state
+        |> completed_unread(pid, runner, start.assignment.execution_id)
+        |> killed(start, pid)
+
+      {true, _no_runner} ->
+        killed(state, start, nil)
+    end
+  end
+
+  defp given(state, start, {:ok, pid, runner}) do
     execution_id = start.assignment.execution_id
     state = completed_unread(state, pid, runner, execution_id)
     host_url = state.credentials.host_url
@@ -502,10 +571,10 @@ defmodule Locus.Runtime.WorkerService do
     %{state | assigning: Map.put(state.assigning, task.ref, a)}
   end
 
-  defp taken(state, start, {:error, {:refused, refusal}}),
+  defp given(state, start, {:error, {:refused, refusal}}),
     do: answer(state, start, {:error, {:unavailable, refusal.message}})
 
-  defp taken(state, start, {:error, reason}) do
+  defp given(state, start, {:error, reason}) do
     Logger.error(
       "[Locus.Runtime.WorkerService] no runner for #{start.assignment.execution_id}: " <>
         inspect(reason)
@@ -518,7 +587,12 @@ defmodule Locus.Runtime.WorkerService do
   # in the order it came.
   defp assign_done(state, ref, outcome) do
     {a, assigning} = Map.pop(state.assigning, ref)
-    state = assigned(%{state | assigning: assigning}, a, outcome)
+    state = %{state | assigning: assigning}
+
+    state =
+      if killed?(state, a.start),
+        do: killed(state, a.start, a.pid),
+        else: assigned(state, a, outcome)
 
     a.buffered
     |> Enum.reverse()
