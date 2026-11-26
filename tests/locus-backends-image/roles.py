@@ -229,6 +229,18 @@ def test_reach(stack, c):
     judge_reach("a build", reach_lines(builder.output_file(answer, "index.html") or ""), "builds")
 
 
+def counted_build(stack):
+    """A build of the builds role that lasts past the keeper's readings, so its role has a counter: test_reach's ends
+    before any reading."""
+    b = builder.Stack.__new__(builder.Stack)
+    b.base, b.key = stack.port("builds"), stack.builds_key
+    status, answer = b.build(builder.tincture("sleep 4\nmkdir -p dist\necho counted > dist/index.html\n"),
+                             "javascript", "tincture", athanor_id="ath_roles-build")
+    expect(status == 200, "a build that lasts a few seconds succeeds", builder.brief(answer))
+    eventually(lambda: [k for k in reports(stack)["builds"][1] if k.get("athanor") == "ath_roles-build"],
+               "the builds role to count the build", timeout_s=30)
+
+
 def test_run(stack, plane):
     base = stack.port("runtime")
     status = eventually(lambda: (lambda s: s if s[0] == 200 else None)(plane.status(base)),
@@ -423,8 +435,9 @@ def main():
         test_run(stack, plane)
         test_reports(stack)
         test_reach(stack, c)
-        # Every role has counted by now: the build of test_reach, the run,
-        # the program and the floor's runner.
+        counted_build(stack)
+        # Every role has counted by now: the build that lasts, the run, the
+        # program and the floor's runner.
         before = reports(stack)
         expect(all(before[role][1] for role in ROLES), "every role has counters before its restart",
                {role: len(counters) for role, (_, counters) in before.items()})
