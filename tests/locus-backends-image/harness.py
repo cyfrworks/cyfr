@@ -8,7 +8,7 @@ with the backends key alone, layered with compose.backends.yml, which adds
 only the
 image under test, the probe program (probe-backend.mjs, an MCP server), the
 residue canary, the pool's uid range, the kept homes' root and uid range
-(the keeper's `--kept-homes`) and the per-program memory bound, on the guard
+(the keeper's `--kept-homes`), on the guard
 a loopback port and a tools directory first on its PATH, a stand-in for
 cyfr and IPv6 on the locus network, and lets compose name the containers
 after the project. Everything else (the backends key from
@@ -371,7 +371,7 @@ def open_sealed(sealing_key, owner, boot, sealed):
 
 
 def program_wire(program):
-    """A program as a sync defines it, from {name, command, env} and the optional home, bounds, hosts and packs.
+    """A program as a sync defines it, from {name, command, env} and the optional home, its disk bound, hosts and packs.
 
     An optional member with no value is absent, never null: the wire refuses a present null.
     """
@@ -381,7 +381,7 @@ def program_wire(program):
         "env_names": sorted((program.get("env") or {}).keys()),
         "home": program.get("home", "scratch"),
     }
-    for name in ["memory_bytes", "home_max_bytes", "hosts"]:
+    for name in ["home_max_bytes", "hosts"]:
         if program.get(name) is not None:
             wire[name] = program[name]
     if program.get("packs"):
@@ -407,7 +407,7 @@ def check_vectors():
     compare("owner_key", owner_key(key, owner["athanor"], owner["server"], owner["generation"],
                                    owner["epoch"]).hex(), WIRE["owner_key_hex"])
 
-    compare("version", VERSION, 6)
+    compare("version", VERSION, 7)
     compare("routes", sorted(ROUTES), ["close", "control", "health", "session"])
     for kind in ["hello", "reconcile", "sync", "renew", "release", "status", "home"]:
         vector = WIRE[kind]

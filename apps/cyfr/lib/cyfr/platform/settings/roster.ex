@@ -375,8 +375,6 @@ defmodule Cyfr.Platform.Settings.Roster do
       "How long Aqua's browser runs with no action of Aqua's before it stops, in milliseconds; its profile stays in its folder, and Aqua's next action starts it again.",
     "program_silence_ms" =>
       "How long a program used as a brain may say nothing while it owes its work an answer before that work ends, in milliseconds; waits on a person or on CYFR are not counted, and no work has a limit of its own.",
-    "browser_memory_bytes" =>
-      "The memory bound Aqua's browser's row is added with, for its Chromium and its four windows at most, which the Programs page shows. The backends service reads a row's bound and ignores it: each session, the browser's among them, runs under half of the memory all of Locus's work shares (the machine's memory less `LOCUS_CORE_RESERVE_BYTES` and `LOCUS_SERVICE_BYTES`), 384 MiB at least, and is counted at 384 MiB for its first ten seconds, then at what it uses. Measured with the image suite's pages, one, three and six windows held 97, 145 and 225 MiB, 81, 113 and 167 MiB of it the browser's own and the rest file cache, which the kernel gives back first; all six fit well within the 1 GiB default. A heavy page can still reach the bound the browser runs under: the browser then ends, every window with it, and the next action starts it again. Its folder, bounded at 2 GiB, holds its profile; the Chromium it runs is the image's, Debian's, and it fetches nothing.",
     "locus_backends_idle_ms" =>
       "How long a stdio backend runs without a tool call before it is stopped and its slot freed, in milliseconds; its next call starts it again.",
     "log_level" =>
@@ -648,7 +646,7 @@ defmodule Cyfr.Platform.Settings.Roster do
         :backends
       ),
       # Carried on every sync as the athanor's ceiling; unset, the sync
-      # names none and the box holds the athanor to its own budget.
+      # names none and the athanor has no ceiling but the machine's memory.
       limit(
         :athanor_program_memory_bytes,
         "CYFR_ATHANOR_PROGRAM_MEMORY_BYTES",
@@ -670,15 +668,6 @@ defmodule Cyfr.Platform.Settings.Roster do
         "CYFR_PROGRAM_SILENCE_MS",
         1_800_000,
         whole(60_000..86_400_000, "milliseconds"),
-        :backends
-      ),
-      limit(
-        :browser_memory_bytes,
-        "CYFR_BROWSER_MEMORY_BYTES",
-        1_073_741_824,
-        byte_count(
-          Prima.LocusBackends.min_memory_bytes()..Prima.LocusBackends.max_memory_bytes()
-        ),
         :backends
       ),
       %Entry{

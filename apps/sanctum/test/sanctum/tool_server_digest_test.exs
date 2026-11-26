@@ -25,7 +25,6 @@ defmodule Sanctum.ToolServerDigestTest do
       program: %{
         "hosts" => ["api.github.com", "github.com"],
         "home" => "kept",
-        "memory_bytes" => 268_435_456,
         "home_max_bytes" => 1_073_741_824
       },
       url: nil,
@@ -139,8 +138,7 @@ defmodule Sanctum.ToolServerDigestTest do
             {"hosts", ["api.github.com"]},
             {"hosts", []},
             {"home", "scratch"},
-            {"memory_bytes", nil},
-            {"memory_bytes", 536_870_912},
+            {"home_max_bytes", nil},
             {"home_max_bytes", 2_147_483_648}
           ] do
         variant = put_in(@program, [:program, key], value)
@@ -166,7 +164,6 @@ defmodule Sanctum.ToolServerDigestTest do
                ],
                "folder" => "kept",
                "hosts" => ["api.github.com", "github.com"],
-               "memory_bytes" => 268_435_456,
                "home_max_bytes" => 1_073_741_824
              }
 
@@ -195,8 +192,10 @@ defmodule Sanctum.ToolServerDigestTest do
             {"home", "shared"},
             {"hosts", "github.com"},
             {"hosts", [""]},
-            {"memory_bytes", 0},
-            {"home_max_bytes", "1 GiB"}
+            {"home_max_bytes", 0},
+            {"home_max_bytes", "1 GiB"},
+            # No record holds a memory bound: one named is no setting.
+            {"memory_bytes", 268_435_456}
           ] do
         row = put_in(@program, [:program, key], value)
         assert {:error, {:invalid_server_config, ^row}} = ToolServerDigest.compute(row)
@@ -230,7 +229,6 @@ defmodule Sanctum.ToolServerDigestTest do
           enabled: true,
           hosts: hosts,
           home: "kept",
-          memory_bytes: 268_435_456,
           home_max_bytes: 1_073_741_824,
           config_json: Jason.encode!(%{"command" => @program.command, "env" => @program.env})
         }
@@ -311,7 +309,6 @@ defmodule Sanctum.ToolServerDigestTest do
       enabled: server.enabled,
       hosts: server.program["hosts"] && Jason.encode!(server.program["hosts"]),
       home: server.program["home"],
-      memory_bytes: server.program["memory_bytes"],
       home_max_bytes: server.program["home_max_bytes"],
       config_json: Jason.encode!(%{"command" => server.command, "env" => server.env})
     }
@@ -336,7 +333,6 @@ defmodule Sanctum.ToolServerDigestTest do
           enabled: true,
           hosts: nil,
           home: "scratch",
-          memory_bytes: nil,
           home_max_bytes: nil,
           config_json:
             Jason.encode!(%{

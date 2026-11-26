@@ -12,8 +12,8 @@ defmodule Arca.Schemas.McpServer do
   `"driven"`, run by a person or a brain; an http row has none. A
   program's `home` is `"scratch"`, scrubbed at retirement, or `"kept"`,
   the row's own folder, named by the row's id and retired with the row;
-  `memory_bytes` and `home_max_bytes` are its bounds (nil: the service's
-  own bound, the homes volume).
+  `home_max_bytes` is a kept folder's disk bound (nil: the homes volume).
+  No row bounds its program's memory: Locus sets every session's.
   `hosts` is a program's network list as JSON text, the
   only hosts it reaches (`Opus.Programs.Definition`), nil for every public
   host.
@@ -49,7 +49,6 @@ defmodule Arca.Schemas.McpServer do
     field :transport, :string
     field :mark, :string
     field :home, :string, default: "scratch"
-    field :memory_bytes, :integer
     field :home_max_bytes, :integer
     field :hosts, :string
     field :url, :string

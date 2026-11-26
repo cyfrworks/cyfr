@@ -8505,7 +8505,6 @@ defmodule Aqua.ProgramTest do
         mark: "driven",
         url: nil,
         home: "kept",
-        memory_bytes: 1_073_741_824,
         config_json: Jason.encode!(%{"command" => command, "env" => %{}})
       })
 
@@ -8522,7 +8521,6 @@ defmodule Aqua.ProgramTest do
         mark: "driven",
         url: nil,
         home: "kept",
-        memory_bytes: 1_073_741_824,
         config_json: Jason.encode!(%{"command" => "npx -y notes-cli@1.0.0", "env" => %{}})
       })
 

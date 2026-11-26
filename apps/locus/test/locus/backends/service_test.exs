@@ -368,7 +368,6 @@ defmodule Locus.Backends.ServiceTest do
       command: command,
       env_names: ["API_TOKEN"],
       home: :scratch,
-      memory_bytes: nil,
       home_max_bytes: nil
     }
 
@@ -522,12 +521,12 @@ defmodule Locus.Backends.ServiceTest do
       answer = post(ctx.port, route("health"), LB.health_body())
       assert answer.status == 200
       assert answer.headers["x-cyfr-boot"] == @boot
-      assert json(answer) == %{"version" => 6, "release" => Prima.Version.current()}
+      assert json(answer) == %{"version" => 7, "release" => Prima.Version.current()}
 
       assert_refused(post(ctx.port, route("health"), ~s({"version":1})), "version")
       assert_refused(post(ctx.port, route("health"), ~s({"version":2})), "version")
       assert_refused(post(ctx.port, route("health"), ~s({})), "version")
-      assert_refused(post(ctx.port, route("health"), ~s({"version":6,"x":1})), "bad_request")
+      assert_refused(post(ctx.port, route("health"), ~s({"version":7,"x":1})), "bad_request")
       assert_refused(post(ctx.port, route("health"), "nope"), "bad_request")
 
       too_large = post(ctx.port, route("health"), String.duplicate(" ", 4097))
@@ -636,7 +635,7 @@ defmodule Locus.Backends.ServiceTest do
 
     test "a body past its bound is refused unread, one not the one signed is unauthorized", ctx do
       max = LB.max_control_bytes()
-      body = ~s({"version":6,"type":"status","owners":[]})
+      body = ~s({"version":7,"type":"status","owners":[]})
 
       fields = %{generation: @g, seq: seq(), cyfr_boot: @cyfr_boot, boot: @boot, ts: @instant}
       {:ok, header} = LB.control_header(LB.control_key(@key), fields, body)

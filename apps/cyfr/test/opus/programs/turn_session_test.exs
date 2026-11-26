@@ -69,7 +69,6 @@ defmodule Opus.Programs.TurnSessionTest do
             mark: "driven",
             url: nil,
             home: "kept",
-            memory_bytes: 1_073_741_824,
             home_max_bytes: 2_147_483_648,
             config_json: Jason.encode!(%{"command" => name, "env" => %{}})
           },
@@ -866,7 +865,6 @@ defmodule Opus.Programs.TurnSessionTest do
           mark: "driven",
           url: nil,
           home: "kept",
-          memory_bytes: 1_073_741_824,
           config_json: Jason.encode!(%{"command" => "cyfr-browser", "env" => %{}})
         })
 

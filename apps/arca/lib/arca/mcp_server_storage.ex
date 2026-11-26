@@ -18,7 +18,7 @@ defmodule Arca.McpServerStorage do
   - transport: `"http"` or `"program"`
   - mark: a program's `"mcp"` or `"driven"`; nil for http
   - url: MCP server endpoint URL (http); nil for a program
-  - home, memory_bytes, home_max_bytes, hosts: a program's
+  - home, home_max_bytes, hosts: a program's
     settings (`Arca.Schemas.McpServer`)
   - config_json: JSON text with headers (http), command and env (program),
     timeout_ms, etc.
@@ -59,7 +59,6 @@ defmodule Arca.McpServerStorage do
   @program_columns [
     :mark,
     :home,
-    :memory_bytes,
     :home_max_bytes,
     :hosts
   ]

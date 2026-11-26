@@ -236,11 +236,12 @@ defmodule Locus.Application do
   end
 
   @doc """
-  The build slots, `Locus.BuildSlots`: one `Prima.Slots` instance whose caps
-  are read once at boot, `Locus.Config.max_concurrent/0` in all and
-  `Locus.Config.max_concurrent_per_tenant/0` for one athanor, keyed by a
-  request's `athanor_id`. A build past either cap is refused, never queued:
-  a backlog of multi-minute builds behind a waiting caller helps nobody.
+  The build slots, `Locus.BuildSlots`: one `Prima.Slots` instance keyed by a
+  request's `athanor_id`, whose one cap, `Locus.Config.max_concurrent/0`,
+  is read once at boot and bounds every athanor's builds and each one's
+  alike: one athanor may hold every slot. A build past it is refused, never
+  queued: a backlog of multi-minute builds behind a waiting caller helps
+  nobody.
   The connection serving a build holds its slot and names the slots the
   heir of the build's run, so a connection that dies gives the slot back
   once the executor holds nothing of the run (`Locus.Executor.fence/1`).
@@ -250,7 +251,7 @@ defmodule Locus.Application do
     {Prima.Slots,
      name: Locus.BuildSlots,
      max: Locus.Config.max_concurrent(),
-     key_max: Locus.Config.max_concurrent_per_tenant(),
+     key_max: Locus.Config.max_concurrent(),
      child_reserve: 0,
      policy: :reject,
      fence: {Locus.Executor, :fence, []}}

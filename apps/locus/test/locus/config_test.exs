@@ -88,7 +88,6 @@ defmodule Locus.ConfigTest do
       "LOCUS_BUILDS_PORT" => "4101",
       "LOCUS_BUILDS_TIMEOUT_MS" => "60000",
       "LOCUS_BUILDS_MAX_CONCURRENT" => "4",
-      "LOCUS_BUILDS_MAX_CONCURRENT_PER_TENANT" => "2",
       "LOCUS_BUILDS_CARGO_SEED" => "/opt/cyfr/cargo-seed",
       "LOCUS_LOG_LEVEL" => "debug",
       "LOCUS_LOG_FORMAT" => "json",
@@ -202,7 +201,6 @@ defmodule Locus.ConfigTest do
              port: 4101,
              timeout_ms: 60_000,
              max_concurrent: 4,
-             max_concurrent_per_tenant: 2,
              cargo_seed: "/opt/cyfr/cargo-seed",
              log_level: :debug,
              log_format: :json,
@@ -226,7 +224,6 @@ defmodule Locus.ConfigTest do
                port: 4100,
                timeout_ms: 270_000,
                max_concurrent: 2,
-               max_concurrent_per_tenant: 1,
                cargo_seed: nil,
                log_level: :info,
                log_format: :text
@@ -243,7 +240,6 @@ defmodule Locus.ConfigTest do
                port: 4100,
                timeout_ms: 270_000,
                max_concurrent: 2,
-               max_concurrent_per_tenant: 1,
                cargo_seed: nil,
                log_level: :info,
                log_format: :text
@@ -319,7 +315,7 @@ defmodule Locus.ConfigTest do
           {"LOCUS_BUILDS_TIMEOUT_MS", "999", "milliseconds from 1000 to 600000"},
           {"LOCUS_BUILDS_TIMEOUT_MS", "5m", "milliseconds from 1000 to 600000"},
           {"LOCUS_BUILDS_MAX_CONCURRENT", "0", "builds from 1 to 1024"},
-          {"LOCUS_BUILDS_MAX_CONCURRENT_PER_TENANT", "1025", "builds from 1 to 1024"},
+          {"LOCUS_BUILDS_MAX_CONCURRENT", "1025", "builds from 1 to 1024"},
           {"LOCUS_LOG_LEVEL", "verbose", "Logger level"},
           {"LOCUS_LOG_FORMAT", "xml", "text or json"},
           {"LOCUS_BACKENDS_KEY", "not-a-key", "64 hexadecimal digits"},
@@ -346,7 +342,8 @@ defmodule Locus.ConfigTest do
     gone =
       ~w(LOCUS_BUILDS_MEMORY_BYTES LOCUS_BUILDS_CPU_QUOTA LOCUS_BACKENDS_MEMORY_BYTES
          LOCUS_BACKENDS_CPU_QUOTA LOCUS_RUNTIME_POOL_SIZE LOCUS_RUNTIME_MEMORY_BYTES
-         LOCUS_RUNTIME_CPU_QUOTA LOCUS_BACKENDS_MEMORY_BUDGET LOCUS_BACKENDS_MEMORY_OVERCOMMIT)
+         LOCUS_RUNTIME_CPU_QUOTA LOCUS_BACKENDS_MEMORY_BUDGET LOCUS_BACKENDS_MEMORY_OVERCOMMIT
+         LOCUS_BUILDS_MAX_CONCURRENT_PER_TENANT)
 
     assert Config.unknown_names(gone) == Enum.sort(gone)
   end
@@ -458,7 +455,6 @@ defmodule Locus.ConfigTest do
     assert Config.port() == 4100
     assert Config.timeout_ms() == 270_000
     assert Config.max_concurrent() == 2
-    assert Config.max_concurrent_per_tenant() == 1
     assert Config.cargo_seed() == nil
     assert Config.log_level() == :info
     assert Config.log_format() == :text

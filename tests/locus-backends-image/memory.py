@@ -11,8 +11,7 @@ half of the pool's work, never under a session's least bound
 least, and no setting names a bound:
 
 - Every session's process runs in a cgroup of its own whose memory.max is
-  that bound, inside the pool's rest; a program whose row names its own
-  `memory_bytes` is bounded alike, the keeper ignoring the row's bound.
+  that bound, inside the pool's rest.
 - A process that holds less than its bound answers.
 - A process that reaches past its bound is ended there by the kernel: its
   session ends before it answers, its status counts the crash and names
@@ -78,9 +77,7 @@ import imagesuite  # noqa: E402
 # room until an allowance's time has passed, within the keeper's wait.
 WORK = 2 * imagesuite.LEAST_CAP_BYTES["session"]
 BOUND = imagesuite.cap_bytes("program", WORK)
-# A row's own bound, which the keeper ignores: it bounds every session alike.
-ROW_BOUND = 96 * 1024 * 1024
-HOG, SIBLING, OWN = owner_of("hog"), owner_of("sibling"), owner_of("own")
+HOG, SIBLING = owner_of("hog"), owner_of("sibling")
 
 MIB = 1024 * 1024
 # The backends role's own memory and the release's shared figures
@@ -188,14 +185,8 @@ def bounds_each_program(stack):
 
     expect(c.tool(SIBLING, "probe__whoami")["pid"] == sibling["pid"], "the sibling runs on untouched")
 
-    status, answer, _ = c.sync(OWN, [probe(memory_bytes=ROW_BOUND)])
-    expect(status == 200, "a program whose row names its own bound is synced", answer)
-    own = c.tool(OWN, "probe__whoami")
-    expect(cgroup_limit(stack, stack.outside(own)["pid"])[1] == str(BOUND),
-           f"a row's own bound, {ROW_BOUND} bytes, is ignored: its process is bounded at a session's, {BOUND} bytes, "
-           "as every other is", own)
     wait_healthy(stack.base)
-    expect(c.renew([{**HOG}, {**SIBLING}, {**OWN}])[0] == 200, "the service answers throughout")
+    expect(c.renew([{**HOG}, {**SIBLING}])[0] == 200, "the service answers throughout")
 
 
 def group_memory(stack, group=SERVICE_GROUP):

@@ -328,8 +328,8 @@ class Sessions(unittest.TestCase):
         self.assertEqual(harness.program_wire(harness.probe()),
                          {"name": "probe", "command": harness.PROBE, "env_names": [], "home": "scratch"})
         kept = harness.program_wire(harness.probe(home="kept", home_max_bytes=7))
-        self.assertEqual((kept["home"], kept["home_max_bytes"]), ("kept", 7))
-        self.assertNotIn("memory_bytes", kept)
+        self.assertEqual(kept, {"name": "probe", "command": harness.PROBE, "env_names": [], "home": "kept",
+                                "home_max_bytes": 7})
 
     def test_a_terminal_names_its_size_and_carries_its_bytes_in_padded_base64(self):
         status, opened = self.c.open(OWNER, "probe", key="person", mode="terminal", argv=["login"], rows=24, cols=80)

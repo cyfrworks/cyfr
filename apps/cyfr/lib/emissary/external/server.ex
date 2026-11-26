@@ -1524,9 +1524,6 @@ defmodule Emissary.External.Server do
   defp backends_reason(:claim_unavailable),
     do: "which server holds this server's program could not be read"
 
-  defp backends_reason({:pool_share, limit}),
-    do: "this athanor already runs its share of the backends service (#{limit} programs)"
-
   defp backends_reason({:control_too_large, limit}),
     do: "this server's program and its env exceed what one sync may carry (#{limit} bytes)"
 

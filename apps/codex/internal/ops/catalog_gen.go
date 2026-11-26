@@ -2181,8 +2181,6 @@ type McpServersCreateArgsConfig struct {
 	Mark Field[string] `json:"mark,omitzero"`
 	// A program's home: scratch (default), scrubbed at retirement, or kept, the program's own folder, kept until the program is deleted.
 	Home Field[string] `json:"home,omitzero"`
-	// A program's memory bound in bytes (default: the backends service's own bound).
-	MemoryBytes Field[int] `json:"memory_bytes,omitzero"`
 	// A kept home's disk bound in bytes (default: none beyond the homes volume).
 	HomeMaxBytes Field[int] `json:"home_max_bytes,omitzero"`
 	// A program's network list: the only hosts it reaches beside the deployment's private hosts, at most 32 exact hostnames (no wildcard, scheme or port), resolved each time it starts. A name sharing an address with another admits that other. Default: every public host.
@@ -2396,8 +2394,6 @@ type McpServersUpdateArgsConfig struct {
 	Mark Field[string] `json:"mark,omitzero"`
 	// A program's home: scratch (default), scrubbed at retirement, or kept, the program's own folder, kept until the program is deleted.
 	Home Field[string] `json:"home,omitzero"`
-	// A program's memory bound in bytes (default: the backends service's own bound).
-	MemoryBytes Field[int] `json:"memory_bytes,omitzero"`
 	// A kept home's disk bound in bytes (default: none beyond the homes volume).
 	HomeMaxBytes Field[int] `json:"home_max_bytes,omitzero"`
 	// A program's network list: the only hosts it reaches beside the deployment's private hosts, at most 32 exact hostnames (no wildcard, scheme or port), resolved each time it starts. A name sharing an address with another admits that other. Default: every public host.

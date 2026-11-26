@@ -56,7 +56,7 @@ defmodule Opus.Programs.Definition do
   @max_literal_bytes 4096
   @program_name "program"
 
-  @program_keys ~w(mark home memory_bytes home_max_bytes hosts)
+  @program_keys ~w(mark home home_max_bytes hosts)
   # What a program's config may hold: its definition, its settings, and
   # the keys every row's config shares.
   @config_keys ~w(command env transport timeout_ms tool_patterns console) ++ @program_keys
@@ -170,17 +170,16 @@ defmodule Opus.Programs.Definition do
   the Programs page's form is filled from: the browser driver's command,
   which starts the image's Chromium over its debugging pipe inside the
   box, with no environment, driven, in the row's kept folder, which holds
-  its profile, bounded at `memory_bytes` and its folder at 2 GiB.
+  its profile, bounded at 2 GiB.
   """
-  @spec browser(pos_integer()) :: map()
-  def browser(memory_bytes) when is_integer(memory_bytes) do
+  @spec browser() :: map()
+  def browser do
     %{
       "transport" => "program",
       "command" => @browser_command,
       "env" => %{},
       "mark" => "driven",
       "home" => "kept",
-      "memory_bytes" => memory_bytes,
       "home_max_bytes" => @browser_home_bytes
     }
   end
@@ -299,7 +298,6 @@ defmodule Opus.Programs.Definition do
           command: String.t(),
           env: %{String.t() => String.t()},
           home: :scratch | :kept,
-          memory_bytes: pos_integer() | nil,
           home_max_bytes: pos_integer() | nil,
           hosts: [String.t(), ...] | nil,
           packs: boolean()
@@ -309,10 +307,8 @@ defmodule Opus.Programs.Definition do
   The program settings a row carries beside its definition, checked: the
   `transport` is `program` (an `http` row has none); its `mark` is `mcp`
   or `driven`; `home` is `"scratch"` or `"kept"`, a kept home being the
-  row's own folder; `memory_bytes` lies in the backends' range
-  (`Prima.LocusBackends.min_memory_bytes/0` to `max_memory_bytes/0`; the
-  keeper bounds every session alike and reads none);
-  `home_max_bytes` is a kept home's alone, at least 1 MiB; `hosts`, the only hosts the
+  row's own folder; `home_max_bytes` is a kept home's alone, at least
+  1 MiB; `hosts`, the only hosts the
   program reaches beside the resolver and the deployment's private hosts,
   is a list the keeper takes (`Prima.KeeperProtocol.valid_hosts?/1`: 1 to
   32 distinct exact hostnames, no wildcard, scheme, port or trailing dot),
@@ -327,14 +323,12 @@ defmodule Opus.Programs.Definition do
 
     with :ok <- check_mark(mark),
          :ok <- check_home(home),
-         :ok <- check_memory(config["memory_bytes"]),
          :ok <- check_home_max(home, config["home_max_bytes"]),
          {:ok, hosts} <- check_hosts(config["hosts"]) do
       {:ok,
        %{
          mark: mark,
          home: home,
-         memory_bytes: config["memory_bytes"],
          home_max_bytes: config["home_max_bytes"],
          hosts: hosts
        }}
@@ -358,20 +352,6 @@ defmodule Opus.Programs.Definition do
 
   defp check_home(home) when home in ["scratch", "kept"], do: :ok
   defp check_home(_home), do: invalid("config.home must be scratch or kept")
-
-  defp check_memory(nil), do: :ok
-
-  defp check_memory(bytes) when is_integer(bytes) do
-    if bytes >= LocusBackends.min_memory_bytes() and bytes <= LocusBackends.max_memory_bytes(),
-      do: :ok,
-      else:
-        invalid(
-          "config.memory_bytes must be from #{LocusBackends.min_memory_bytes()} to " <>
-            "#{LocusBackends.max_memory_bytes()} bytes"
-        )
-  end
-
-  defp check_memory(_bytes), do: invalid("config.memory_bytes must be a whole number of bytes")
 
   @min_home_bytes 1_048_576
 
@@ -467,7 +447,6 @@ defmodule Opus.Programs.Definition do
          command: command,
          env: env,
          home: if(Map.get(row, :home) == "kept", do: :kept, else: :scratch),
-         memory_bytes: Map.get(row, :memory_bytes),
          home_max_bytes: Map.get(row, :home_max_bytes),
          hosts: hosts,
          packs: loads_packs?(Arca.McpServerStorage.driver(row))
@@ -483,7 +462,6 @@ defmodule Opus.Programs.Definition do
       command: program.command,
       env_names: program.env |> Map.keys() |> Enum.sort(),
       home: program.home,
-      memory_bytes: program.memory_bytes,
       home_max_bytes: program.home_max_bytes,
       hosts: program.hosts,
       packs: program.packs

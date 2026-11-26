@@ -868,9 +868,8 @@ defmodule Cyfr.Boundaries do
           "shows the person's program terminals through the programs controller's facade " <>
           "(`Opus.Programs.attach/2`, `taken/3`, `detach/2`, `input/3`, `resize/4`, `keep/3`, " <>
           "`close/2`, `running/1`) under the person's own context, prefills the program " <>
-          "form with Aqua's browser's definition and its memory setting " <>
-          "(`Opus.Browser.memory_bytes/0`), and names none of " <>
-          "either's internals. " <>
+          "form with Aqua's browser's definition (`Opus.Programs.Definition.browser/0`), " <>
+          "and names none of either's internals. " <>
           "Boundary's exports are global, and `Opus` exports `Brain`, `Browser`, `Host.Children`, " <>
           "`Keys`, `Programs`, `Programs.Definition`, `Programs.Session`, " <>
           "`Programs.StatusRedaction`, `Programs.Words`, `Schedules.Scheduler` and " <>

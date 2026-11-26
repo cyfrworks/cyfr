@@ -188,7 +188,6 @@ defmodule Prima.ConsentPreviewTest do
                    ],
                    "folder" => "kept",
                    "hosts" => ["api.github.com", "github.com"],
-                   "memory_bytes" => 268_435_456,
                    "home_max_bytes" => 1_073_741_824
                  }
                }
@@ -218,9 +217,10 @@ defmodule Prima.ConsentPreviewTest do
           "a program record naming an empty host",
           "a program record naming no folder",
           "a program record naming another kind of folder",
-          "a program record naming its memory bound as null",
+          "a program record naming its folder bound as null",
           "a program record naming a bound of no bytes",
           "a program record naming a bound that is no whole number",
+          "a program record naming a memory bound",
           "a program record naming a setting no record holds",
           "an http record naming a program's folder"
         ] do

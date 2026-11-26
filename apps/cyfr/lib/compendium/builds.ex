@@ -21,9 +21,9 @@ defmodule Compendium.Builds do
   This server runs no toolchain. It builds exactly when a builds service
   is configured (`Cyfr.RuntimeConfig.builds_enabled?/0`); otherwise every
   build is refused before a row is written or a request made. It keeps no
-  build slots either: the builds service caps its builds, on the whole and
-  per athanor, and refuses one past a cap as `capacity`, which is answered
-  here as a refusal to retry, never queued.
+  build slots either: the builds service caps the builds it runs at once,
+  whoever asks, and refuses one past the cap as `capacity`, which is
+  answered here as a refusal to retry, never queued.
 
   ## A staged build
 
@@ -591,7 +591,7 @@ defmodule Compendium.Builds do
   defp refusal(:deadline),
     do: {:timeout, "The build passed its deadline and was ended; nothing was saved"}
 
-  # The builds service caps its builds, on the whole and per athanor: a
+  # The builds service caps the builds it runs at once, whoever asks: a
   # refusal to retry, never a queue.
   defp refusal({:refused, {:capacity, max}, _diagnostics}),
     do: "Build capacity is full (#{max} concurrent) — retry shortly"

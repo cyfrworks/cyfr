@@ -26,7 +26,6 @@ defmodule Locus.Config do
   | `LOCUS_BUILDS_PORT` | `:port` | 1..65535 | 4100 |
   | `LOCUS_BUILDS_TIMEOUT_MS` | `:timeout_ms` | 1000..600000 | 270000 |
   | `LOCUS_BUILDS_MAX_CONCURRENT` | `:max_concurrent` | 1..1024 | 2 |
-  | `LOCUS_BUILDS_MAX_CONCURRENT_PER_TENANT` | `:max_concurrent_per_tenant` | 1..1024 | 1 |
   | `LOCUS_BUILDS_CARGO_SEED` | `:cargo_seed` | a directory | none |
   | `LOCUS_LOG_LEVEL` | `:log_level` | a Logger level | `info` |
   | `LOCUS_LOG_FORMAT` | `:log_format` | `text` or `json` | `text` |
@@ -108,14 +107,12 @@ defmodule Locus.Config do
   @default_timeout_ms 270_000
 
   # A `cargo component build` or npm bundle occupies a CPU core and hundreds
-  # of MB for minutes, so a builder accepts a couple at once, and one per
-  # athanor: a single athanor must not be able to hold every slot.
+  # of MB for minutes, so a builder accepts a couple at once.
   @defaults [
     bind: {0, 0, 0, 0},
     port: 4100,
     timeout_ms: @default_timeout_ms,
     max_concurrent: 2,
-    max_concurrent_per_tenant: 1,
     cargo_seed: nil,
     log_level: :info,
     log_format: :text,
@@ -141,7 +138,6 @@ defmodule Locus.Config do
     {"LOCUS_BUILDS_PORT", :builds, :port},
     {"LOCUS_BUILDS_TIMEOUT_MS", :builds, :timeout_ms},
     {"LOCUS_BUILDS_MAX_CONCURRENT", :builds, :max_concurrent},
-    {"LOCUS_BUILDS_MAX_CONCURRENT_PER_TENANT", :builds, :max_concurrent_per_tenant},
     {"LOCUS_BUILDS_CARGO_SEED", :builds, :cargo_seed},
     {"LOCUS_LOG_LEVEL", :release, :log_level},
     {"LOCUS_LOG_FORMAT", :release, :log_format},
@@ -206,7 +202,6 @@ defmodule Locus.Config do
           port: :inet.port_number(),
           timeout_ms: pos_integer(),
           max_concurrent: pos_integer(),
-          max_concurrent_per_tenant: pos_integer(),
           cargo_seed: String.t() | nil,
           log_level: Logger.level(),
           log_format: :text | :json,
@@ -259,13 +254,6 @@ defmodule Locus.Config do
            EnvValue.milliseconds(getenv, variable(:builds, :timeout_ms), 1_000..600_000),
          {:ok, max} <-
            EnvValue.whole_number(getenv, variable(:builds, :max_concurrent), 1..1024, "builds"),
-         {:ok, per_tenant} <-
-           EnvValue.whole_number(
-             getenv,
-             variable(:builds, :max_concurrent_per_tenant),
-             1..1024,
-             "builds"
-           ),
          {:ok, cargo_seed} <- EnvValue.text(getenv, variable(:builds, :cargo_seed)) do
       {:ok,
        [
@@ -274,7 +262,6 @@ defmodule Locus.Config do
          port: port || @defaults[:port],
          timeout_ms: timeout_ms || @defaults[:timeout_ms],
          max_concurrent: max || @defaults[:max_concurrent],
-         max_concurrent_per_tenant: per_tenant || @defaults[:max_concurrent_per_tenant],
          cargo_seed: cargo_seed
        ]}
     end
@@ -627,10 +614,6 @@ defmodule Locus.Config do
   @doc "Concurrent builds this builder runs in all."
   @spec max_concurrent() :: pos_integer()
   def max_concurrent, do: get(:max_concurrent)
-
-  @doc "Concurrent builds this builder runs for one athanor."
-  @spec max_concurrent_per_tenant() :: pos_integer()
-  def max_concurrent_per_tenant, do: get(:max_concurrent_per_tenant)
 
   @doc "The Cargo home whose registry cache a Rust build starts from, or nil."
   @spec cargo_seed() :: String.t() | nil

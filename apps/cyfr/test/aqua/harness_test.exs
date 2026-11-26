@@ -326,7 +326,6 @@ defmodule Aqua.HarnessTest do
         mark: "driven",
         url: nil,
         home: "kept",
-        memory_bytes: 1_073_741_824,
         config_json:
           Jason.encode!(%{
             "command" => "cyfr-claude-code npx -y @anthropic-ai/claude-code@2.1.323",

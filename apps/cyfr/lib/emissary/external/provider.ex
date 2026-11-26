@@ -20,9 +20,9 @@ defmodule Emissary.External.Provider do
   A program also carries its settings, stored as columns of its row
   (`Opus.Programs.Definition.validate_row/1`): its mark, its home
   (`scratch`, or `kept`: the row's own folder, which survives its
-  sessions and is retired with the row), its memory bound, a kept home's
-  disk bound and the hosts it may reach
-  (none named: every public host). A program is refused when this server
+  sessions and is retired with the row), a kept home's disk bound and the
+  hosts it may reach (none named: every public host). No row names a
+  memory bound: a config naming `memory_bytes` is refused. A program is refused when this server
   runs no programs controller (`Opus.Programs`) or runs as a cluster.
 
   `open` starts any program row's command,
@@ -193,10 +193,6 @@ defmodule Emissary.External.Provider do
              description:
                "A program's home: scratch (default), scrubbed at retirement, or kept, the program's own folder, kept until the program is deleted.",
              enum: ["scratch", "kept"]
-           ),
-           Arg.new("memory_bytes", :integer,
-             description:
-               "A program's memory bound in bytes (default: the backends service's own bound)."
            ),
            Arg.new("home_max_bytes", :integer,
              description:
@@ -692,7 +688,6 @@ defmodule Emissary.External.Provider do
     do: %{
       mark: nil,
       home: "scratch",
-      memory_bytes: nil,
       home_max_bytes: nil,
       hosts: nil
     }
@@ -1044,8 +1039,7 @@ defmodule Emissary.External.Provider do
   entry it names (`TOKEN=vault:personal`), a literal by its name alone,
   and its settings: the folder (a kept program's is the row's own,
   `"new"` until it is made; a scratch program's is `"scratch"`), the
-  hosts, and the memory and disk bounds; and beside
-  it the mark. A change to a stored row also names `grants`, the
+  hosts, and the disk bound; and beside it the mark. A change to a stored row also names `grants`, the
   components whose grant stands on the row and asks again
   (`Sanctum.Mount.granted_to/2`), `nil` for an add of a new row. A
   program made a tool server elsewhere names `becomes`, the row it
@@ -1072,7 +1066,6 @@ defmodule Emissary.External.Provider do
           "mark" => row.mark,
           "folder" => if(kept?, do: row.id, else: "scratch"),
           "hosts" => record["hosts"] || "every public host",
-          "memory_bytes" => bound(record["memory_bytes"], "the backends service's bound"),
           "home_max_bytes" =>
             if(kept?,
               do: bound(record["home_max_bytes"], "the folders' volume"),

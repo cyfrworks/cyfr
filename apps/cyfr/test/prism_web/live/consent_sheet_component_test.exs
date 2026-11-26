@@ -734,7 +734,6 @@ defmodule PrismWeb.ConsentSheetComponentTest do
       ],
       "folder" => "kept",
       "hosts" => ["api.github.com", "github.com"],
-      "memory_bytes" => 268_435_456,
       "home_max_bytes" => 1_073_741_824
     }
 
@@ -879,13 +878,9 @@ defmodule PrismWeb.ConsentSheetComponentTest do
              ]
     end
 
-    test "names a program's memory bound and folder bound, an unset one as the default" do
-      assert changes(program_card(%{@held_program | "memory_bytes" => 536_870_912})) == [
-               "Its memory bound changed from 256 MiB to 512 MiB."
-             ]
-
-      assert changes(program_card(Map.delete(@held_program, "memory_bytes"))) == [
-               "Its memory bound changed from 256 MiB to the default."
+    test "names a program's folder bound, an unset one as the default" do
+      assert changes(program_card(Map.delete(@held_program, "home_max_bytes"))) == [
+               "Its folder bound changed from 1024 MiB to the default."
              ]
 
       # A bound that is no whole MiB reads exactly, never as its neighbour.
@@ -938,7 +933,6 @@ defmodule PrismWeb.ConsentSheetComponentTest do
                "Variable NODE_ENV: a literal, its value not shown",
                "Folder: a folder kept between runs",
                "Hosts: api.github.com, github.com",
-               "Memory bound: 256 MiB",
                "Folder bound: 1024 MiB"
              ]
 
@@ -948,7 +942,6 @@ defmodule PrismWeb.ConsentSheetComponentTest do
              |> Enum.drop(3) == [
                "Folder: a scratch folder",
                "Hosts: every public host",
-               "Memory bound: the default",
                "Folder bound: the default"
              ]
     end

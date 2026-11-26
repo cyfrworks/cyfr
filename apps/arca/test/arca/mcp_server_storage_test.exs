@@ -106,11 +106,11 @@ defmodule Arca.McpServerStorageTest do
 
       assert %{
                home: "scratch",
-               memory_bytes: nil,
                home_max_bytes: nil,
                hosts: nil
              } = server
 
+      refute Map.has_key?(server, :memory_bytes)
       refute Map.has_key?(server, :login_entry_id)
       refute Map.has_key?(server, :login_command)
 
@@ -127,7 +127,6 @@ defmodule Arca.McpServerStorageTest do
                  mark: "driven",
                  url: nil,
                  home: "kept",
-                 memory_bytes: 1_073_741_824,
                  home_max_bytes: 2_147_483_648
                })
 
@@ -150,7 +149,6 @@ defmodule Arca.McpServerStorageTest do
                  "gh",
                  %{
                    home: "scratch",
-                   memory_bytes: 268_435_456,
                    home_max_bytes: nil
                  },
                  %{id: gh, epoch: 1}
@@ -159,7 +157,7 @@ defmodule Arca.McpServerStorageTest do
       assert %{
                epoch: 2,
                home: "scratch",
-               memory_bytes: 268_435_456
+               home_max_bytes: nil
              } = updated
 
       # A store-level constraint still holds: a program has no url.
@@ -325,7 +323,6 @@ defmodule Arca.McpServerStorageTest do
             mark: "driven",
             url: nil,
             home: home,
-            memory_bytes: 1_073_741_824,
             config_json: config.(command)
           })
 

@@ -197,10 +197,9 @@ OWNER = owner_of("browser")
 BROWSER_HOME = "mcp_01890000-0000-7000-8000-00000000b005"
 BROKEN_HOME, OTHER_HOME, OFFLINE_HOME, TOOLS_HOME, FULL_HOME, COOKIE_HOME, TERM_HOME = (
     f"mcp_browser-{name}" for name in ("broken", "other", "offline", "tools", "full", "cookie", "term"))
-# The bound Opus.Programs.Definition.browser/1 gives the browser's home.
+# The bound Opus.Programs.Definition.browser/0 gives the browser's home.
 HOME_MAX_BYTES = 2 << 30
-BROWSER = {"name": "browser", "command": "cyfr-browser", "env": {}, "home": "kept", "memory_bytes": 1536 << 20,
-           "home_max_bytes": HOME_MAX_BYTES}
+BROWSER = {"name": "browser", "command": "cyfr-browser", "env": {}, "home": "kept", "home_max_bytes": HOME_MAX_BYTES}
 # The image's Chromium headless shell, which the driver starts by its path.
 CHROMIUM = "/usr/lib/chromium/chromium-headless-shell"
 # A row held to the stack's own service name, which the guard admits, reaches no public host: a program under it
