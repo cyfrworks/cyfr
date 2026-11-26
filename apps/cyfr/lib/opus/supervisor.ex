@@ -5,7 +5,8 @@ defmodule Opus.Supervisor do
   @moduledoc """
   The execution domain's processes: the slots, the attempt tree, the
   background roots, the watches and sweeper, the node's pin table and the
-  host API listener, the programs controller (`Opus.Programs`), each
+  host API listener, the programs controller (`Opus.Programs`), the
+  record of who used what (`Opus.Memory`), each
   person's browser holder (`Opus.Browser`), each thread's brain holder
   (`Opus.Brain`) and the consumer of the removals forgetting owes
   (`Opus.Brain.Cleanup`).
@@ -98,6 +99,13 @@ defmodule Opus.Supervisor do
         # homes. Last, and started before Emissary's tree, so Emissary's
         # servers stop first at shutdown and still release through it.
         {Opus.Programs, Keyword.get(opts, :programs, [])},
+        # Who used what: asks every Locus endpoint for its report and keeps
+        # the host's record of it (`Opus.Memory`), after the programs
+        # controller whose backends service it asks too; started only when
+        # `:memory_enabled`. 5 s: its terminate giving up the claim it holds.
+        Supervisor.child_spec({Opus.Memory, programs: Keyword.get(opts, :programs, [])},
+          shutdown: 5_000
+        ),
         # Each person's browser holder (`Opus.Browser`), registered by
         # person, after the programs controller whose sessions they hold, so
         # they stop first at shutdown and close their sessions through it.

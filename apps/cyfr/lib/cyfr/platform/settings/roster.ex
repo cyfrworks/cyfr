@@ -363,6 +363,8 @@ defmodule Cyfr.Platform.Settings.Roster do
       "How long `/health/ready` reuses its last probe, in milliseconds; on S3 every uncached probe is a billable write.",
     "decision_retention_days" =>
       "Days the server keeps the admission decisions it made before any athanor was resolved; each athanor keeps its own under its retention settings.",
+    "memory_retention_days" =>
+      "Days the server keeps its record of who used what memory, by person, kind, program name and UTC day; a day older than this is deleted.",
     "locus_runtime_watch_poll_ms" =>
       "How often cyfr asks each worker service for its status, in milliseconds.",
     "locus_runtime_watch_misses" =>
@@ -606,6 +608,13 @@ defmodule Cyfr.Platform.Settings.Roster do
         :decision_retention_days,
         "CYFR_DECISION_RETENTION_DAYS",
         365,
+        whole(1..36_500, "days"),
+        :retention
+      ),
+      limit(
+        :memory_retention_days,
+        "CYFR_MEMORY_RETENTION_DAYS",
+        90,
         whole(1..36_500, "days"),
         :retention
       ),

@@ -10,7 +10,8 @@ defmodule Cyfr.RetentionScheduler do
   kind in `Arca.Retention.kinds/0` inside every active athanor, each
   under its own settings, plus the declared sweeps below — among them the
   host's own decisions, the ones made before any tenant was resolved,
-  purged past the `decision_retention_days` platform setting. The tick
+  purged past the `decision_retention_days` platform setting, and its
+  record of who used what, past `memory_retention_days`. The tick
   repeats every 6 hours to prevent unbounded storage growth. Every step
   runs behind one crash barrier: a fault in one is logged and the cycle
   moves on.
@@ -108,6 +109,7 @@ defmodule Cyfr.RetentionScheduler do
     {"flush", "record sink flush"},
     {"retention", "retention cleanup"},
     {"decisions_global", "host decision purge"},
+    {"memory", "memory record purge"},
     {"sessions", "expired session sweep"},
     {"heads", "unheld account head sweep"},
     {"webhooks", "webhook delivery sweep"},
@@ -426,6 +428,7 @@ defmodule Cyfr.RetentionScheduler do
   end
 
   defp step_fun("decisions_global"), do: &purge_host_decisions/0
+  defp step_fun("memory"), do: &purge_memory_record/0
   defp step_fun("sessions"), do: &sweep_expired_sessions/0
   defp step_fun("heads"), do: fn -> sweep_heads(@head_batches, 0) end
   defp step_fun("webhooks"), do: &sweep_webhook_deliveries/0
@@ -489,6 +492,25 @@ defmodule Cyfr.RetentionScheduler do
 
       {:error, reason} ->
         Logger.warning("[RetentionScheduler] Host decision purge failed: #{inspect(reason)}")
+    end
+  end
+
+  # The host's record of who used what keeps the last
+  # `memory_retention_days` UTC days, today among them, in every athanor,
+  # and the endpoints heard from in them (`Arca.MemoryRecord.purge/2`).
+  defp purge_memory_record do
+    {:ok, days} = Arca.PlatformSettings.effective("memory_retention_days")
+    before = Date.add(Date.utc_today(), -(days - 1))
+
+    case Arca.MemoryRecord.purge(Prima.Actor.system(), before) do
+      {:ok, 0} ->
+        :ok
+
+      {:ok, count} ->
+        Logger.info("[RetentionScheduler] Purged #{count} memory record row(s)")
+
+      {:error, reason} ->
+        Logger.warning("[RetentionScheduler] Memory record purge failed: #{inspect(reason)}")
     end
   end
 

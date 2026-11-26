@@ -252,6 +252,11 @@ config :cyfr, execution_archive_watch_enabled: false
 # finds. Its own suite starts it with the endpoints it serves.
 config :cyfr, worker_watch_enabled: false
 
+# Who used what polls every Locus endpoint on a timer and writes what it
+# hears; off here for the same reason. Its own suite starts it with the
+# endpoints it serves.
+config :cyfr, memory_enabled: false
+
 # The control-plane claim is the same shape again (a permanent process
 # renewing a DB lease) and is exercised directly. The key is
 # `Arca.ControlPlane`'s, which holds the lease row: off, it answers as a

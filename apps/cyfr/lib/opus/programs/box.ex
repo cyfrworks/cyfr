@@ -344,6 +344,48 @@ defmodule Opus.Programs.Box do
   def child_spec(opts),
     do: %{id: {__MODULE__, Keyword.fetch!(opts, :box)}, start: {__MODULE__, :start_link, [opts]}}
 
+  @doc """
+  The backends service's report of who used what after `after_rev`
+  (`Prima.LocusPool`, the pool wire), at the service `url` given the key
+  `root`: a `POST` to its pool route through `Sanctum.Egress`, signed with
+  its pool key (`Prima.LocusPool.pool_key/2` of `root`), read strictly
+  (`Prima.LocusPool.read_answer/1`). It asks the service directly and
+  nothing of a box's state, so a box at work waits for none of it.
+  `{:error, :unreachable}` for no answer, `{:error, :unreadable}` for
+  anything else in an answer's place.
+  """
+  @spec pool(String.t(), binary(), non_neg_integer()) ::
+          {:ok, Prima.LocusPool.report()} | {:error, :unreachable | :unreadable}
+  def pool(url, root, after_rev)
+      when is_binary(url) and byte_size(root) == 32 and is_integer(after_rev) and after_rev >= 0 do
+    body = Prima.LocusPool.request_body(after_rev)
+    pool_key = Prima.LocusPool.pool_key(:backends, root)
+    header = Prima.LocusPool.header(:backends, pool_key, System.system_time(:millisecond), body)
+    headers = [{"content-type", "application/json"}, {LocusBackends.auth_header(), header}]
+
+    opts = [
+      receive_timeout: @control_timeout_ms,
+      private_policy: :operator,
+      max_response_bytes: Prima.Limits.default_max_response_size()
+    ]
+
+    url = String.trim_trailing(url, "/") <> Prima.LocusPool.route()
+
+    case Sanctum.Egress.pinned_request(:post, url, headers, body, opts) do
+      {:ok, 200, _headers, answer} ->
+        case Prima.LocusPool.read_answer(answer) do
+          {:ok, report} -> {:ok, report}
+          :error -> {:error, :unreadable}
+        end
+
+      {:ok, _status, _headers, _answer} ->
+        {:error, :unreadable}
+
+      {:error, _reason} ->
+        {:error, :unreachable}
+    end
+  end
+
   @doc "How long `Opus.Programs.hold/1` waits on a box."
   @spec hold_timeout_ms() :: pos_integer()
   def hold_timeout_ms, do: 3 * @control_timeout_ms

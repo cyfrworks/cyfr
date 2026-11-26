@@ -179,6 +179,7 @@ defmodule Arca do
       Layouts,
       McpLog,
       McpServerStorage,
+      MemoryRecord,
       ObjectRevisions,
       Outbox,
       Overlay,

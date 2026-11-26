@@ -86,7 +86,8 @@ defmodule Arca.TenantTables do
     "schedule_occurrences",
     "cron_schedules",
     "build_records",
-    "provisioning_claims"
+    "provisioning_claims",
+    "memory_counters"
   ]
 
   # Reached through a parent instead of by `athanor_id`, deleted first.
@@ -152,6 +153,10 @@ defmodule Arca.TenantTables do
   #
   # `invitations` are invitations to this CYFR: the instance's admission,
   # naming at most a shared thread, which no athanor holds either.
+  #
+  # `memory_endpoints` are the endpoints the host asks who used what of:
+  # a machine's numbers and the cursor of its reports, the host's own,
+  # which no athanor holds (`Arca.MemoryRecord`).
   @not_athanor_scoped [
     "registry_tokens",
     "server_meta",
@@ -170,7 +175,8 @@ defmodule Arca.TenantTables do
     "shared_threads",
     "shared_thread_members",
     "shared_messages",
-    "invitations"
+    "invitations",
+    "memory_endpoints"
   ]
 
   @doc "The closed roster, children first."

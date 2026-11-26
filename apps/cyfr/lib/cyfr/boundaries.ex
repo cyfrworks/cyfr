@@ -2551,6 +2551,7 @@ defmodule Cyfr.Boundaries do
     execution_sweeper_enabled: :seam,
     execution_archive_watch_enabled: :seam,
     worker_watch_enabled: :seam,
+    memory_enabled: :seam,
     external_server_reconciler_enabled: :seam,
     provisioning_boot_enabled: :seam,
     retention_scheduler_enabled: :seam,
