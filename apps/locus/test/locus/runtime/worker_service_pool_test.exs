@@ -31,8 +31,9 @@ defmodule Locus.Runtime.WorkerServicePoolTest do
   one's is left unanswered too is unavailable with its work written to
   neither runner, both retired. A start whose runner waits for the
   keeper's room is served once the keeper places it, past 5 s, while the
-  service answers its status and kills, or refused naming `no_memory`;
-  one a kill reached is `:ok` to the kill and unavailable, its runner's place
+  service answers its status and kills, or refused naming `no_memory`,
+  which the pool does not take for a keeper that refuses runners; one a
+  kill reached is `:ok` to the kill and unavailable, its runner's place
   gone from the keeper's queue at the kill.
 
   A keeper that refuses every runner makes the status report the
@@ -45,6 +46,7 @@ defmodule Locus.Runtime.WorkerServicePoolTest do
 
   use ExUnit.Case, async: false
 
+  import ExUnit.CaptureLog
   import Prima.Test.Wait
 
   alias Prima.{RunnerControl, WorkerAPI, WorkerAuth, WorkerWire}
@@ -374,14 +376,23 @@ defmodule Locus.Runtime.WorkerServicePoolTest do
       assert Task.yield(started, 6_000) == nil
 
       held = %{need: 402_653_184, free: 0, mine: [], others_bytes: 0}
-      :ok = ScriptedKeeper.answer_places(context.keeper, {:error, {:no_memory, held}})
 
-      assert {503,
-              %{
-                "error" => "unavailable",
-                "message" => "cyfr-locus refused to start a runner (no_memory)"
-              }} = Task.await(started, 15_000)
+      log =
+        capture_log(fn ->
+          :ok = ScriptedKeeper.answer_places(context.keeper, {:error, {:no_memory, held}})
 
+          assert {503,
+                  %{
+                    "error" => "unavailable",
+                    "message" => "cyfr-locus refused to start a runner (no_memory)"
+                  }} = Task.await(started, 15_000)
+
+          # The refusal was that start's alone: the keeper still starts
+          # runners, and the pool and the worker's status say none refused.
+          assert {:ok, %{refusal: nil}} = WorkerService.status()
+        end)
+
+      refute log =~ "the keeper refuses runners"
       assert given(context, attempt) == []
       refute attempt.attempt in elem(WorkerService.status(), 1).attempts
     end
