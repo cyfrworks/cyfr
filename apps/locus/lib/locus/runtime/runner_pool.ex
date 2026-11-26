@@ -106,7 +106,10 @@ defmodule Locus.Runtime.RunnerPool do
   answer, and is given the runner once it attached, or refused with the
   keeper's account of why it refused that spawn, so a start during a lack
   that lasts is refused with the reason of that moment and leaves no
-  run. A runner refused after the keeper made it is held, as above, until
+  run. `withdraw/2` ends such a wait for a start a kill reached: the take
+  is answered `{:error, :killed}`, and its runner, while its process
+  still waits for its place, has its handle ended as a tainted one's is
+  (below), so the place leaves the keeper's queue then. A runner refused after the keeper made it is held, as above, until
   the keeper releases it, which it does at once, so a start holds at most
   one such runner. With no refusal remembered a take answers at once, its
   runner spawning or not. The first runner that attaches ends the refusal, and
@@ -164,6 +167,7 @@ defmodule Locus.Runtime.RunnerPool do
           | {:error,
              {:refused, Prima.WorkerAPI.refusal()}
              | :past_deadline
+             | :killed
              | :not_serving
              | {:spawn_failed, term()}}
   def take(pool, athanor, execution_id, deadline \\ now() + take_wait_ms())
@@ -206,6 +210,17 @@ defmodule Locus.Runtime.RunnerPool do
   def taint(pool, pid, grace_ms, execution_id)
       when is_pid(pid) and is_integer(grace_ms) and grace_ms >= 0 and is_binary(execution_id),
       do: GenServer.call(pool, {:taint, pid, grace_ms, execution_id})
+
+  @doc """
+  Withdraw the take that waits on a runner's spawn for `execution_id`, if
+  one does: it is answered `{:error, :killed}`, and the runner spawned for
+  it, while it still waits for its place, has its handle ended, which
+  drops the place from the keeper's queue; one already placed stays the
+  pool's, spawned ahead.
+  """
+  @spec withdraw(GenServer.server(), String.t()) :: :ok
+  def withdraw(pool, execution_id) when is_binary(execution_id),
+    do: GenServer.call(pool, {:withdraw, execution_id})
 
   @doc "Send every busy runner a `cancel_child` for `execution_id`."
   @spec cancel_child(GenServer.server(), String.t()) :: :ok
@@ -313,6 +328,26 @@ defmodule Locus.Runtime.RunnerPool do
         {:reply, :ok, taint_runner(state, pid, entry, grace_ms)}
 
       _done_or_another ->
+        {:reply, :ok, state}
+    end
+  end
+
+  def handle_call({:withdraw, execution_id}, _from, state) do
+    waiting =
+      Enum.find(state.runners, fn {_pid, e} ->
+        e.waiter != nil and e.waiter.execution_id == execution_id
+      end)
+
+    case waiting do
+      {pid, entry} ->
+        state = answer(state, pid, entry, {:error, :killed})
+
+        case state.runners[pid] do
+          %{placed: false} = entry -> {:reply, :ok, taint_runner(state, pid, entry, 0)}
+          _placed -> {:reply, :ok, state}
+        end
+
+      nil ->
         {:reply, :ok, state}
     end
   end

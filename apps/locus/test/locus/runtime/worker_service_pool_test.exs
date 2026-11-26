@@ -34,7 +34,9 @@ defmodule Locus.Runtime.WorkerServicePoolTest do
   service answers its status and kills, or refused naming `no_memory`,
   which the pool does not take for a keeper that refuses runners; one a
   kill reached is `:ok` to the kill and unavailable, its runner's place
-  gone from the keeper's queue at the kill.
+  gone from the keeper's queue at the kill, whether its runner's assign
+  was in flight or its take waited inside a pool that remembers a
+  refusal.
 
   A keeper that refuses every runner makes the status report the
   refusal, with the keeper's reason and the sentence naming what the
@@ -421,6 +423,43 @@ defmodule Locus.Runtime.WorkerServicePoolTest do
       wait_until(fn -> map_size(:sys.get_state(WorkerService).assigning) == 1 end)
       [%{runner: runner}] = Map.values(:sys.get_state(WorkerService).assigning)
       assert runner in ScriptedKeeper.held_places(context.keeper)
+
+      assert post(context, :kill, %{"execution_id" => attempt.execution_id}) ==
+               {200, %{"ok" => true, "v" => 1}}
+
+      # The place leaves the queue before the keeper finds room for anyone.
+      wait_until(fn -> runner not in ScriptedKeeper.held_places(context.keeper) end)
+      assert {503, %{"error" => "unavailable"} = refused} = Task.await(started, 15_000)
+      refute Map.has_key?(refused, "message")
+
+      :ok = ScriptedKeeper.answer_places(context.keeper, :ok)
+      assert given(context, attempt) == []
+      refute attempt.attempt in elem(WorkerService.status(), 1).attempts
+    end
+
+    @tag :refusing
+    @tag :capture_log
+    @tag timeout: 60_000
+    test "is unavailable once a kill reached its take waiting on a refused pool, its runner's place gone from the keeper's queue at the kill",
+         context do
+      wait_until(fn -> match?({:ok, %{refusal: %{}}}, WorkerService.status()) end, 5_000)
+      :ok = ScriptedKeeper.refuse(context.keeper, nil)
+      :ok = ScriptedKeeper.placing(context.keeper, :held)
+      attempt = ScriptedHost.attempt!(context.host, boot: context.boot)
+      started = Task.async(fn -> post(context, :start, start_args(attempt)) end)
+
+      # The pool remembers the refusal, so the take waits on a runner of its
+      # own, whose place waits for room.
+      waiter = fn ->
+        :sys.get_state(Locus.Runtime.RunnerPool).runners
+        |> Map.values()
+        |> Enum.find(&(&1.waiter != nil and &1.waiter.execution_id == attempt.execution_id))
+      end
+
+      wait_until(fn -> waiter.() != nil end, 5_000, "the take's runner")
+      %{id: runner} = waiter.()
+      wait_until(fn -> runner in ScriptedKeeper.held_places(context.keeper) end)
+      assert :gen_server.reqids_size(:sys.get_state(WorkerService).takes) == 1
 
       assert post(context, :kill, %{"execution_id" => attempt.execution_id}) ==
                {200, %{"ok" => true, "v" => 1}}

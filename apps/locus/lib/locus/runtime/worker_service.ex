@@ -106,8 +106,10 @@ defmodule Locus.Runtime.WorkerService do
   assign not yet answered, is `:ok` too: the start answers `{:error,
   :unavailable}` once its take or its assign returns, and the runner it
   was given is tainted under that execution, at once where the assign is
-  in flight, so a runner still waiting for the keeper's room gives up its
-  place in the keeper's queue then (`Locus.Runtime.RunnerPool.taint/4`).
+  in flight, and a take that waits inside the pool on its runner's spawn
+  is withdrawn at once, so a runner still waiting for the keeper's room
+  gives up its place in the keeper's queue then
+  (`Locus.Runtime.RunnerPool.taint/4`, `Locus.Runtime.RunnerPool.withdraw/2`).
   Either kill is `:ok`, and `:ok` again for an
   execution a runner of this boot already ended; the ids of the last ten
   thousand roots and children ended are remembered for it. A kill of an
@@ -493,15 +495,18 @@ defmodule Locus.Runtime.WorkerService do
 
   # A kill of a start under way: the start is marked, and answers once its
   # take or assign returns (`killed/3`). A runner it is being assigned is
-  # tainted now, which ends one still waiting for its place, so that place
-  # does not hold its turn in the keeper's queue for a start already dead.
+  # tainted now, and a take waiting inside the pool on its runner's spawn
+  # withdrawn, either of which ends a runner still waiting for its place,
+  # so that place does not hold its turn in the keeper's queue for a start
+  # already dead. A take the pool has already answered is read as killed
+  # when its answer arrives.
   defp kill_start(state, starting, execution_id) do
     case starting do
       {:assigning, pid} ->
         :ok = RunnerPool.taint(RunnerPool, pid, state.settings.release_grace_ms, execution_id)
 
       :taking ->
-        :ok
+        :ok = RunnerPool.withdraw(RunnerPool, execution_id)
     end
 
     %{state | killed: MapSet.put(state.killed, execution_id)}
