@@ -282,8 +282,8 @@ let channel = null;
 
 function finish(timedOut) {
   if (!timedOut && !spawns.every((s) => s.done && (!s.spawn_id || s.drained))) return;
-  const report = spawns.map(({ name, place, uid, replies, measures, holding_ms, stdout, done }) => (
-    { name, place, uid, replies, measures, holding_ms, stdout: stdout.slice(-400), done }));
+  const report = spawns.map(({ name, place, uid, replies, measures, holding_ms, bound, stdout, done }) => (
+    { name, place, uid, replies, measures, holding_ms, bound, stdout: stdout.slice(-400), done }));
   process.stdout.write("<<<" + JSON.stringify({ timed_out: timedOut, spawns: report }) + ">>>\n", () => {
     fs.rmSync(dir, { recursive: true, force: true });
     // A role's process that ends is started again by its keeper, which
@@ -353,6 +353,8 @@ const server = net.createServer((conn) => {
         if (!spawn) return conn.destroy();
       } else if (stream === 1 && spawn) {
         spawn.stdout += payload.toString("utf8");
+        const bound = /^bound:(\S+)$/m.exec(spawn.stdout);
+        if (bound && spawn.bound === undefined) spawn.bound = bound[1];
         if (spawn.measure && spawn.holding_ms === undefined && spawn.stdout.includes(scenario.measure.holding)) {
           spawn.holding_ms = Date.now() - started;
         }
@@ -521,6 +523,19 @@ def shell(script):
     return ["/bin/sh", "-c", script]
 
 
+# The first act of every bounded build: it reads its own group's bound from
+# inside its space, where the space's cgroup root is that group, before it
+# does anything that could end it. A hostile build is ended at its bound
+# within a second, often before a sampler outside reads its group; this
+# read cannot miss it.
+READ_BOUND = 'echo "bound:$(cat /sys/fs/cgroup/memory.max)"\n'
+
+
+def bounded(script, *args):
+    """A build's command: READ_BOUND, then `script` with `args` as its $0 on."""
+    return shell(READ_BOUND + script) + list(args)
+
+
 # The spawns that name a bound of their own, which the keeper refuses: it sets every bound by the place's kind.
 REFUSED = ("a spawn naming its memory bound", "a spawn naming its CPU quota")
 # The spawns the keeper bounds at a build's bound.
@@ -534,11 +549,11 @@ def scenario():
     return [
         {"name": REFUSED[0], "argv": ["true"], "extra": {"memory_bytes": BOUND}},
         {"name": REFUSED[1], "argv": ["true"], "extra": {"cpu_quota": 100_000}},
-        {"name": "sibling", "argv": ["node", "-e", sibling]},
-        {"name": "process", "argv": shell(DAEMON + f"exec node -e '{NODE_ALLOCATOR}'")},
-        {"name": "tree", "argv": shell(holders)},
-        {"name": "home", "argv": shell(FILL_HOME)},
-        {"name": "build", "athanor": ATHANOR, "measure": True, "argv": shell(MEASURED_BUILD) + ["measured-build"]},
+        {"name": "sibling", "argv": bounded('exec node -e "$0"', sibling)},
+        {"name": "process", "argv": bounded(DAEMON + f"exec node -e '{NODE_ALLOCATOR}'")},
+        {"name": "tree", "argv": bounded(holders)},
+        {"name": "home", "argv": bounded(FILL_HOME)},
+        {"name": "build", "athanor": ATHANOR, "measure": True, "argv": bounded(MEASURED_BUILD, "measured-build")},
     ]
 
 
@@ -906,12 +921,15 @@ def test_keeper(stack, limit, canary):
     placed = {name: reply(name, "placed") for name in BOUNDED}
     expect(all(answer and answer.get("memory_bytes") == BOUND for answer in placed.values()),
            f"every build's place is answered placed with a build's bound, {mib(BOUND)}", placed)
-    # A hostile group may live for less than one of the sampler's reads; the
-    # sibling's and the build's live for seconds.
-    bounds = {name: sampler.group_bounds.get(spawns[name]["uid"]) for name in BOUNDED}
-    expect(bounds["sibling"] and bounds["build"] and all(bound in (None, {str(BOUND)}) for bound in bounds.values()),
-           f"every build's group is bounded at exactly {BOUND} bytes whenever it was read, the sibling's and the "
-           "measured build's among them", bounds)
+    # Each build read its own group's bound from inside before anything
+    # else, so none is missed; a hostile group may live for less than one
+    # of the sampler's reads from outside, which must agree wherever it read.
+    inside = {name: spawns[name].get("bound") for name in BOUNDED}
+    expect(all(bound == str(BOUND) for bound in inside.values()),
+           f"every build's group is bounded at exactly {BOUND} bytes, as each read it from inside its space", inside)
+    outside = {name: sampler.group_bounds.get(spawns[name]["uid"]) for name in BOUNDED}
+    expect(all(bound in (None, {str(BOUND)}) for bound in outside.values()),
+           f"every build's group the sampler read is bounded at exactly {BOUND} bytes", outside)
     sibling = reply("sibling", "exited")
     expect(sibling and sibling["code"] == 0 and sibling["memory"] is None and "held 1" in spawns["sibling"]["stdout"],
            "a sibling spawn holding 64 MiB under its bound completes", spawns["sibling"])

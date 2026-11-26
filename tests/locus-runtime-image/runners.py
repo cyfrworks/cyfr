@@ -1193,24 +1193,28 @@ def tainted_runner_case(stack, plane, athanor, last):
 
 
 def fresh_runners_booted(stack, first_seen, settle_s=4.0):
-    """Whether the pool is full of fresh runners whose VMs have had `settle_s`
-    to boot and nothing idle is left: a runner counts as fresh from its
-    spawn, seconds before its VM reads its first assignment."""
+    """Whether the pool holds only its fresh runners, each of whose VMs has
+    had `settle_s` to boot, and nothing idle, busy or ending is left: a
+    runner counts as fresh from its spawn, seconds before its VM reads its
+    first assignment, and the VM of a runner still ending is no fresh one's."""
     now = time.monotonic()
     live = {r["runner"] for r in stack.runner_processes()}
     for runner in live:
         first_seen.setdefault(runner, now)
     counts = stack.runners()
     booted = [r for r in live if now - first_seen[r] >= settle_s]
-    return counts["idle"] == 0 and counts["busy"] == 0 and counts["fresh"] >= FLOOR_RUNNERS and len(booted) >= FLOOR_RUNNERS
+    return (counts["idle"] == 0 and counts["busy"] == 0 and counts["tainted"] == 0
+            and counts["fresh"] == FLOOR_RUNNERS and len(live) == FLOOR_RUNNERS and len(booted) == FLOOR_RUNNERS)
 
 
 def measure_acquisition(stack, plane, count=12):
     """Queue age: from the start request to the runner's attach, with the
-    pool's fresh runners booted. The service is recreated with a short idle
-    time, so each distinct athanor's runner is retired before the next start
-    and the eight uids are never exhausted."""
-    stack.idle_ttl_ms = 300
+    pool's fresh runners booted, and with the athanor's own idle runner. The
+    service is recreated with a short idle time, so each distinct athanor's
+    runner is retired before the next start and the eight uids are never
+    exhausted, yet long enough that the athanor's runner is still idle when
+    its next start comes."""
+    stack.idle_ttl_ms = 1_500
     stack.up()
     fresh_ages, warm_ages, first_seen = [], [], {}
     for i in range(count):
@@ -1220,6 +1224,7 @@ def measure_acquisition(stack, plane, count=12):
         expect(stack.start(attempt)[1] == {"v": 1, "ok": True}, f"queued start {i + 1}")
         attach = plane.wait_seen("attach", attempt["execution_id"], BOOT_S)[0]
         fresh_ages.append((attach["at"] - t_send) * 1000)
+        print(f"queued start {i + 1}: {fresh_ages[-1]:.1f} ms", flush=True)
         plane.wait_seen("complete", attempt["execution_id"], BOOT_S)
     for i in range(count):
         attempt = plane.mint(stack.boot, "reagent", REFS["echo"], WASM["echo"], {"n": i}, "ath_queue_warm", 10_000)
@@ -1229,6 +1234,7 @@ def measure_acquisition(stack, plane, count=12):
         expect(stack.start(attempt)[1] == {"v": 1, "ok": True}, f"warm start {i + 1}")
         attach = plane.wait_seen("attach", attempt["execution_id"], BOOT_S)[0]
         warm_ages.append((attach["at"] - t_send) * 1000)
+        print(f"warm start {i + 1}: {warm_ages[-1]:.1f} ms", flush=True)
         plane.wait_seen("complete", attempt["execution_id"], BOOT_S)
     report = {
         "fresh": {"p50": round(percentile(fresh_ages, 50), 1), "p95": round(percentile(fresh_ages, 95), 1), "max": round(max(fresh_ages), 1)},
