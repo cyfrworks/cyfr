@@ -344,10 +344,9 @@ class Stack(imagesuite.Stack):
     def build_lines(self, sources, language, target_type, resolve=False, version=VERSION, athanor_id=None, key=None):
         """Signs and POSTs a build, and reads its answer: (HTTP status, progress lines, terminal line).
 
-        Each build is for an athanor of its own unless one is named, so
-        concurrent builds do not meet the per-athanor cap. `version` is the
-        protocol version the body presents and `key` the builds key it is
-        signed with, this run's by default.
+        Each build is for an athanor of its own unless one is named.
+        `version` is the protocol version the body presents and `key` the
+        builds key it is signed with, this run's by default.
         """
         body = json.dumps({
             "version": version,

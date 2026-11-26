@@ -85,8 +85,9 @@ defmodule Prima.Slots do
     execution for cancellation stays with the caller, as does emitting the
     unreaped-kill telemetry from the count `note_unreaped/3` answers.
   - The build slots (Locus's instance, `Locus.BuildSlots`): `max: 2,
-    key_max: 1, child_reserve: 0, policy: :reject`, the sweep and hold
-    default, and the fence of Locus's launcher. A caller past the total cap
+    key_max: 2` (the machine's count for one athanor as for all),
+    `child_reserve: 0, policy: :reject`, the sweep and hold default, and
+    the fence of Locus's launcher. A caller past the total cap
     is answered `:capacity` at once and one past its key's cap `:key_cap`;
     the same holder may take several slots, each released on its own ref,
     and its death releases them all but the ones that name an heir.

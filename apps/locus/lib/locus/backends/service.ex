@@ -15,7 +15,7 @@ defmodule Locus.Backends.Service do
   ## Health
 
   `POST /locus/v1/backends/health` answers without authentication: a
-  `{"version": 6}` body (`Prima.LocusBackends.read_health/1`), read within
+  `{"version": 7}` body (`Prima.LocusBackends.read_health/1`), read within
   #{@max_health_bytes} bytes, is answered with the protocol version and the
   release; a body at another version is refused `version`.
 
