@@ -57,10 +57,10 @@ class ReleaseSetting(unittest.TestCase):
 
     def test_a_failed_eval_is_no_answer_even_with_the_marker_printed(self):
         with self.assertRaises(SystemExit):
-            headroom.setting(Exec(1, "<<<5>>>\n"), "builds_memory_bytes")
+            headroom.setting(Exec(1, "<<<5>>>\n"), "max_concurrent")
 
     def test_the_setting_that_was_read_is_the_control(self):
-        self.assertEqual(headroom.setting(Exec(0, "<<<5>>>\n"), "builds_memory_bytes"), 5)
+        self.assertEqual(headroom.setting(Exec(0, "<<<5>>>\n"), "max_concurrent"), 5)
 
 
 if __name__ == "__main__":

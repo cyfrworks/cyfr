@@ -89,7 +89,9 @@ defmodule Locus.Backends.BackendTest do
 
     # The keeper's client spawns only in a place it placed.
     if Keyword.get(opts, :launcher) == Locus.Keeper,
-      do: :ok = Locus.Keeper.place(opts[:launcher_server], place, %{kind: "program"}, self())
+      do:
+        {:ok, _bytes} =
+          Locus.Keeper.place(opts[:launcher_server], place, %{kind: "program"}, self())
 
     spec =
       Map.merge(
@@ -97,9 +99,7 @@ defmodule Locus.Backends.BackendTest do
           place: place,
           argv: ["/bin/sh", "-c", command],
           env: %{"PROBE_TOKEN" => @token},
-          pool: "backends",
-          memory_bytes: Locus.Config.backends_memory_bytes(),
-          cpu_quota: Locus.Config.backends_cpu_quota()
+          pool: "backends"
         },
         Map.new(Keyword.get(opts, :spec, []))
       )
@@ -633,8 +633,7 @@ defmodule Locus.Backends.BackendTest do
         place: "pl-delayed",
         argv: ["/bin/sh", "-c", "exec cat"],
         env: %{},
-        pool: "backends",
-        memory_bytes: 1
+        pool: "backends"
       },
       launcher: Locus.DirectLauncher,
       notify: self(),
@@ -665,14 +664,14 @@ defmodule Locus.Backends.BackendTest do
       {:ok, fake: fake, keeper: client}
     end
 
-    test "the spawn is in the pool backends, with its argv, its env block and its bound",
+    test "the spawn is in the pool backends, with its argv and its env block, and names no bound",
          %{supervisor: supervisor, fake: fake, keeper: keeper} do
       env = %{"PROBE_TOKEN" => @token, "NODE_ENV" => "test"}
       argv = ["/bin/sh", "-c", "exec cat \"$@\"", "sh", "--flag"]
 
       session =
         start_session(supervisor, "unused",
-          spec: [argv: argv, env: env, memory_bytes: 268_435_456],
+          spec: [argv: argv, env: env],
           launcher: Locus.Keeper,
           launcher_server: keeper
         )
@@ -682,8 +681,7 @@ defmodule Locus.Backends.BackendTest do
       assert spawn["pool"] == "backends"
       assert spawn["argv"] == argv
       assert spawn["env"] == env
-      assert spawn["memory_bytes"] == 268_435_456
-      assert spawn["cpu_quota"] == Locus.Config.backends_cpu_quota()
+      refute Map.has_key?(spawn, "memory_bytes") or Map.has_key?(spawn, "cpu_quota")
       refute Map.has_key?(spawn, "control")
 
       assert :ok = Backend.stop(session, 0)

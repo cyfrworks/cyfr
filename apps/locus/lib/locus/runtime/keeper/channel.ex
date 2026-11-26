@@ -12,8 +12,8 @@ defmodule Locus.Runtime.Keeper.Channel do
   ## A runner
 
   `spawn/1` runs in the runner's own process (`Locus.Runtime.RunnerProcess`):
-  it asks this process which client to spawn through and the bound every
-  runner runs under, then asks the client itself, so that process owns
+  it asks this process which client to spawn through, then asks the
+  client itself, so that process owns
   the spawn and hears its events, which `handle_message/2` reads as
   `Locus.Runtime.Keeper.event/1` maps them. The spawn names the runner's
   argv and its explicit environment (only `RUNTIME_*` variables and the
@@ -30,19 +30,19 @@ defmodule Locus.Runtime.Keeper.Channel do
   every process of the uid killed and everything it left removed before
   another runner gets it. A spawn `cyfr-locus` refuses after it made it
   is heard as `{:refused, code, :release_follows}`, and its release
-  follows. When the channel closes, `cyfr-locus` is exiting: it kills this
+  follows. The keeper's `give_way` of a runner's place reaches the
+  runner's process, before its spawn as after it, as `:give_way`. When the
+  channel closes, `cyfr-locus` is exiting: it kills this
   node, then retires every spawn. Every runner's owner hears
   `{:error, :channel_lost}`, and the client stops, taking the runtime
   with it.
 
   ## The memory bound
 
-  Every spawn this adapter asks for carries `memory_bytes`, the pool's
-  `:runner_memory_bytes` (`Locus.Runtime.Settings.runner_memory_bytes/1`),
-  or the `:memory_bytes` it was started with, and `cpu_quota`, the pool's
-  `:runner_cpu_quota` (`Locus.Runtime.Settings.runner_cpu_quota/1`); nothing
-  asks for none.
-  `cyfr-locus` gives the runner a cgroup of its own at that bound: its VM,
+  No spawn this adapter asks for names a bound: `cyfr-locus` sets a
+  runner's memory and processor by its kind (`Prima.LocusPool`), the
+  memory its place was answered with (`place/3`), and gives the runner a
+  cgroup of its own at that bound: its VM,
   every guest's linear memory, the pages of its home and the kernel
   memory charged to it, together. A runner that cannot stay under it
   loses every process at once; the leader's `exited` then says
@@ -93,10 +93,8 @@ defmodule Locus.Runtime.Keeper.Channel do
 
   @doc """
   Start the adapter. Options: `:client`, the `Locus.Keeper` every runner is
-  spawned through (default `Locus.Keeper`); `:memory_bytes`, the bound
-  every runner is spawned with in place of the pool's
-  `:runner_memory_bytes`, in the same range and never none; `:name`
-  (default `#{inspect(__MODULE__)}`).
+  spawned through (default `Locus.Keeper`); `:name` (default
+  `#{inspect(__MODULE__)}`).
   """
   def start_link(opts \\ []),
     do: GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
@@ -114,9 +112,9 @@ defmodule Locus.Runtime.Keeper.Channel do
   # does; the pool's runners use the registered one.
   @impl Locus.Runtime.Keeper
   def place(id, whose, opts) when is_list(opts) do
-    with {:ok, client, _bound, _cpu_quota} <- client(Keyword.get(opts, :server, __MODULE__)),
-         :ok <- Locus.Keeper.place(client, id, whose, self()) do
-      :ok
+    with {:ok, client} <- client(Keyword.get(opts, :server, __MODULE__)),
+         {:ok, memory_bytes} <- Locus.Keeper.place(client, id, whose, self()) do
+      {:ok, memory_bytes}
     else
       {:error, reason} -> {:error, failure(reason)}
     end
@@ -124,7 +122,7 @@ defmodule Locus.Runtime.Keeper.Channel do
 
   @impl Locus.Runtime.Keeper
   def assign(place, whose, until, opts) when is_integer(until) and is_list(opts) do
-    with {:ok, client, _bound, _cpu_quota} <- client(Keyword.get(opts, :server, __MODULE__)),
+    with {:ok, client} <- client(Keyword.get(opts, :server, __MODULE__)),
          :ok <- Locus.Keeper.assign(client, place, whose, until) do
       :ok
     else
@@ -135,7 +133,7 @@ defmodule Locus.Runtime.Keeper.Channel do
   @impl Locus.Runtime.Keeper
   def fence(tag, opts) when is_list(opts) do
     case client(Keyword.get(opts, :server, __MODULE__)) do
-      {:ok, client, _bound, _cpu_quota} -> Locus.Keeper.fence(client, tag)
+      {:ok, client} -> Locus.Keeper.fence(client, tag)
       {:error, reason} -> {:error, reason}
     end
   end
@@ -155,13 +153,14 @@ defmodule Locus.Runtime.Keeper.Channel do
       heir: Map.get(spec, :heir)
     }
 
-    with {:ok, client, bound, cpu_quota} <- client(adapter),
-         {:ok, handle} <-
-           Locus.Keeper.spawn(
-             client,
-             Map.merge(request, %{memory_bytes: bound, cpu_quota: cpu_quota})
-           ) do
-      {:ok, Map.merge(handle, %{runner: runner, memory_bytes: bound, adapter: adapter}), []}
+    with {:ok, client} <- client(adapter),
+         {:ok, handle} <- Locus.Keeper.spawn(client, request) do
+      {:ok,
+       Map.merge(handle, %{
+         runner: runner,
+         adapter: adapter,
+         memory_bytes: Map.get(spec, :memory_bytes)
+       }), []}
     else
       {:error, reason} -> {:error, failure(reason)}
     end
@@ -170,6 +169,11 @@ defmodule Locus.Runtime.Keeper.Channel do
   @impl Locus.Runtime.Keeper
   def handle_message(%{ref: ref} = channel, {Locus.Keeper, ref, event}),
     do: {:events, [Locus.Runtime.Keeper.event(event)], observe(channel, event)}
+
+  # A `give_way` the keeper sent while no spawn had named the runner's
+  # place yet, read once the spawn is.
+  def handle_message(%{runner: place} = channel, {Locus.Keeper, {:place, place}, event}),
+    do: {:events, [Locus.Runtime.Keeper.event(event)], channel}
 
   def handle_message(_channel, _message), do: :unknown
 
@@ -190,19 +194,14 @@ defmodule Locus.Runtime.Keeper.Channel do
       when is_integer(grace_ms) and grace_ms >= 0,
       do: Locus.Keeper.release(client, channel, grace_ms)
 
-  @impl Locus.Runtime.Keeper
-  def memory_bytes(opts) when is_list(opts) do
-    case bound(opts) do
-      {:ok, bytes} -> bytes
-      {:error, _malformed} -> nil
-    end
-  end
-
   # The keeper's refusals of a spawn: its code, and what an operator makes
-  # of it. `memory_unavailable` names what the deployment lacks.
+  # of it. `memory_unavailable` names what the deployment lacks; a place
+  # refused for room is `no_memory`.
   @impl Locus.Runtime.Keeper
   def refusal(:memory_unavailable),
     do: %{reason: "memory_unavailable", message: @memory_unavailable}
+
+  def refusal({:no_memory, _held}), do: refusal("no_memory")
 
   def refusal(code) when is_binary(code) do
     reason = if Regex.match?(~r/\A[a-z][a-z0-9_]{0,63}\z/, code), do: code, else: "refused"
@@ -264,37 +263,11 @@ defmodule Locus.Runtime.Keeper.Channel do
   # ---------------------------------------------------------------------------
 
   @impl GenServer
-  def init(opts) do
-    with {:ok, memory_bytes} <- bound(opts),
-         {:ok, cpu_quota} <- Locus.Runtime.Settings.runner_cpu_quota(Locus.Runtime.Settings.env()) do
-      {:ok,
-       %{
-         client: Keyword.get(opts, :client, Locus.Keeper),
-         memory_bytes: memory_bytes,
-         cpu_quota: cpu_quota,
-         bound_refused: false
-       }}
-    else
-      {:error, reason} -> {:stop, {:keeper_unavailable, reason}}
-    end
-  end
-
-  # The bound every spawn carries: the one the adapter was started with,
-  # or the pool's setting; a malformed one stops the adapter, and the pool
-  # and service with it, rather than start a runner without it.
-  defp bound(opts) do
-    env =
-      case Keyword.fetch(opts, :memory_bytes) do
-        {:ok, bytes} -> [runner_memory_bytes: bytes]
-        :error -> Locus.Runtime.Settings.env()
-      end
-
-    Locus.Runtime.Settings.runner_memory_bytes(env)
-  end
+  def init(opts),
+    do: {:ok, %{client: Keyword.get(opts, :client, Locus.Keeper), bound_refused: false}}
 
   @impl GenServer
-  def handle_call(:client, _from, state),
-    do: {:reply, {:ok, state.client, state.memory_bytes, state.cpu_quota}, state}
+  def handle_call(:client, _from, state), do: {:reply, {:ok, state.client}, state}
 
   # What the deployment lacks is logged once for each run of refusals; a
   # runner spawned again under its bound ends the run.

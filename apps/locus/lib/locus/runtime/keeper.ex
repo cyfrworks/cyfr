@@ -49,12 +49,15 @@ defmodule Locus.Runtime.Keeper do
   relay bytes with `c:send_relay/2`, callable from any process once the
   runner attached, and `c:close_relay/1` ends the relay;
   `c:release/2` ends the runner: a term signal, a grace to report what it
-  holds, then the group kill. `c:memory_bytes/1` is the bound every
-  runner runs under, nil for a keeper that applies none.
+  holds, then the group kill. A keeper that asks a runner of its own
+  accord to give way (`{:give_way, place}` of `t:Locus.Launcher.control_event/0`)
+  is heard as `:give_way`.
 
   Every runner runs in a place (`Locus.Launcher`, `Prima.KeeperProtocol`
   "Places") under the runner's id, which the runner's process makes for
-  itself before its spawn (`c:place/3`): a fresh runner's is `warm` and no
+  itself before its spawn (`c:place/3`), answered once the keeper has room
+  for it with the memory bound the runner will run under (nil for a keeper
+  that applies none), or refused for room: a fresh runner's is `warm` and no
   athanor's, it is assigned `run` for an athanor before the runner is
   given work and `warm` again, still that athanor's, when it completes
   cleanly (`c:assign/4`), each by the runner's process, which goes on only
@@ -64,8 +67,8 @@ defmodule Locus.Runtime.Keeper do
   keeper's client.
 
   The keeper's own process, one per pool (`c:child_spec/1`), holds what
-  its runners share: the client they spawn through and their bound
-  (Channel), or the janitor that ends every runner it started when the
+  its runners share: the client they spawn through (Channel), or the
+  janitor that ends every runner it started when the
   pool goes down (`:direct`); the pool starts it as a sibling and is
   restarted with it.
   """
@@ -79,7 +82,8 @@ defmodule Locus.Runtime.Keeper do
           required(:runner) => String.t(),
           required(:argv) => [String.t()],
           required(:env) => %{String.t() => String.t()},
-          optional(:heir) => {pid(), term()}
+          optional(:heir) => {pid(), term()},
+          optional(:memory_bytes) => pos_integer()
         }
 
   @typedoc "A keeper's handle on one runner, kept by the process that spawned it."
@@ -102,11 +106,11 @@ defmodule Locus.Runtime.Keeper do
           | {:refused, term()}
           | {:refused, term(), :release_follows}
           | {:error, term()}
+          | :give_way
 
   @doc """
   The keeper's process for a pool, from the pool's options: the adapter's
-  `:client`, `:memory_bytes` and `:name` (Channel), the janitor's `:name`
-  (`:direct`).
+  `:client` and `:name` (Channel), the janitor's `:name` (`:direct`).
   """
   @callback child_spec(keyword()) :: Supervisor.child_spec()
 
@@ -117,8 +121,13 @@ defmodule Locus.Runtime.Keeper do
   """
   @callback available(inherited? :: boolean(), keyword()) :: :ok | {:error, term()}
 
-  @doc "A new place `id` of `whose` for the calling process, from the pool's keeper options."
-  @callback place(String.t(), Locus.Launcher.whose(), keyword()) :: :ok | {:error, term()}
+  @doc """
+  A new place `id` of `whose` for the calling process, from the pool's
+  keeper options: the memory bound its runner will run under once the
+  keeper placed it, nil for a keeper that applies none.
+  """
+  @callback place(String.t(), Locus.Launcher.whose(), keyword()) ::
+              {:ok, pos_integer() | nil} | {:error, term()}
 
   @doc """
   Give the place another kind, athanor and subject: `:ok` once the keeper
@@ -160,12 +169,6 @@ defmodule Locus.Runtime.Keeper do
 
   @doc "End the runner: a term signal, `grace_ms` to report, then the kill of everything it started."
   @callback release(channel(), non_neg_integer()) :: :ok
-
-  @doc """
-  The memory bound, in bytes, every runner this keeper starts with the
-  pool's keeper options runs under, or nil when it applies none.
-  """
-  @callback memory_bytes(keyword()) :: pos_integer() | nil
 
   @doc """
   What `reason`, the reason a spawn was refused before any runner process
@@ -215,7 +218,8 @@ defmodule Locus.Runtime.Keeper do
   its code, one the keeper made something of first with
   `:release_follows` in place of its spawn id, stdout and stderr as the
   runner's log, an exit without its memory report (the keeper logs an end
-  at the bound itself), and every other event as it is.
+  at the bound itself), the keeper's ask to give way as `:give_way`, and
+  every other event as it is.
   """
   @spec event(Locus.Launcher.control_event()) :: event()
   def event({:spawned, _spawn_id, _uid, pid}), do: {:spawned, pid}
@@ -231,6 +235,7 @@ defmodule Locus.Runtime.Keeper do
   def event({:relay, bytes}), do: {:relay, bytes}
   def event(:relay_closed), do: :relay_closed
   def event({:error, reason}), do: {:error, reason}
+  def event({:give_way, _place}), do: :give_way
   def event(:released), do: :released
 
   @doc """

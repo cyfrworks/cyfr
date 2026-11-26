@@ -393,11 +393,13 @@ defmodule Locus.DirectLauncher do
   @impl Locus.Launcher
   def pool_stats(_opts, pool) when is_binary(pool), do: {:ok, %{size: 1, free: 1, quarantined: 0}}
 
-  # A place here is an id and nothing else: no keeper holds it, so a drop
-  # and an assign have nothing to change, and a process here has no group
-  # of its own, so what it uses is not known.
+  # A place here is an id and nothing else: no keeper holds it, so it is
+  # placed at once and bounded by nothing, a drop and an assign have
+  # nothing to change, and a process here has no group of its own, so what
+  # it uses is not known.
   @impl Locus.Launcher
-  def place(_opts, id, %{kind: _kind}, owner) when is_binary(id) and is_pid(owner), do: :ok
+  def place(_opts, id, %{kind: _kind}, owner) when is_binary(id) and is_pid(owner),
+    do: {:ok, nil}
 
   @impl Locus.Launcher
   def drop(_opts, place) when is_binary(place), do: :ok
@@ -1376,10 +1378,6 @@ defmodule Locus.DirectLauncher.Runner do
   @impl Locus.Runtime.Keeper
   def release(channel, grace_ms) when is_integer(grace_ms) and grace_ms >= 0,
     do: DirectLauncher.release([], channel, grace_ms)
-
-  # A plain child process gets no cgroup of its own, so no bound.
-  @impl Locus.Runtime.Keeper
-  def memory_bytes(_opts), do: nil
 
   # A spawn fails here only when its home or its janitor cannot be had.
   @impl Locus.Runtime.Keeper

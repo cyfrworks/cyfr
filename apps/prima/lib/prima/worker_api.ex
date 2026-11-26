@@ -60,8 +60,8 @@ defmodule Prima.WorkerAPI do
   A worker service's state: its configured service id; its boot id, which
   changes on every start; its runners, counted by state
   (`runner_states/0`); the attempts its runners have claimed; the memory
-  bound, in bytes, every runner it starts runs under, `nil` when its
-  keeper applies none; and its `refusal`, `nil` while its keeper starts
+  bound, in bytes, its keeper last placed a runner with, `nil` before any
+  and when its keeper applies none; and its `refusal`, `nil` while its keeper starts
   runners. A runner is in exactly one state:
 
     * `fresh` — started and not yet assigned, so it belongs to no

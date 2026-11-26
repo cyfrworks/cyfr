@@ -547,12 +547,10 @@ defmodule Cyfr.CrossLanguageDriftTest do
        ~w(pack_bounds pack_waits pack_archive pack_paths)},
       {"apps/locus/keeper/internal/relay/relay_test.go", ~w(relay_streams)},
       {"apps/locus/keeper/internal/serve/serve_linux_test.go", ~w(home_requests)},
-      {"apps/locus/test/locus/config_test.exs", ~w(valid_requests invalid_requests)},
       {"apps/locus/test/locus/keeper_test.exs", ~w(valid_requests)},
       {"apps/locus/test/locus/keeper_vectors_test.exs",
        ~w(control_frames relay_frames valid_requests replies)},
-      {"apps/locus/test/locus/runtime/keeper_channel_test.exs",
-       ~w(control_frames valid_requests replies)},
+      {"apps/locus/test/locus/runtime/keeper_channel_test.exs", ~w(control_frames replies)},
       {"apps/locus/test/locus/runtime/keeper_memory_test.exs", ~w(valid_requests replies)},
       {"apps/prima/test/prima/keeper_protocol_test.exs",
        ~w(reserved_env_prefixes reserved_env signals bounds request_bounds rlimits kept_unbounded_rlimits frames control_frames relay_frames relay_streams valid_requests invalid_requests home_requests replies home_replies packs_requests packs_replies)}
@@ -587,8 +585,11 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"tests/builder-image/stack_test.py", ~w(bounds lines)}
     ],
     "locus_pool.json" => [
-      {"apps/locus/keeper/internal/admission/size_test.go", ~w(floor_bytes)},
-      {"apps/prima/test/prima/locus_pool_test.exs", ~w(floor_bytes)},
+      {"apps/locus/keeper/internal/admission/size_test.go",
+       ~w(allowance_bytes allowance_ms cap_bytes floor_bytes floor_runners kinds least_cap_bytes processors room_wait_ms stale_ms)},
+      {"apps/prima/test/prima/locus_pool_test.exs",
+       ~w(allowance_bytes allowance_ms cap_bytes floor_bytes floor_runners kinds least_cap_bytes processors room_wait_ms stale_ms)},
+      {"tests/imagesuite.py", ~w(cap_bytes floor_runners kinds least_cap_bytes)},
       {"tests/locus-backends-image/roles.py", ~w(floor_bytes)}
     ],
     "locus_roles.json" => [

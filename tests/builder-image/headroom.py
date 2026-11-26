@@ -3,9 +3,9 @@
 # Copyright 2026 CYFR Works Inc.
 """The builds role's service sits outside the pool's work, and its own memory is bounded by its count.
 
-Every build runs in a cgroup of its own, bounded at
-LOCUS_BUILDS_MEMORY_BYTES (tests/builder-image/memory.py proves that
-bound), inside the builds role's group in the pool's work,
+Every build runs in a cgroup of its own, bounded at a build's bound, which
+the keeper sets on every build (Prima.LocusPool; tests/builder-image/memory.py
+proves that bound), inside the builds role's group in the pool's work,
 `work/rest/builds`, under rest's bound, which the keeper writes from the
 machine's memory (Prima.LocusPool). What is not a build runs in the role's
 leaf, `service/builds`, outside work: the locus release serving the role
@@ -34,8 +34,9 @@ It prints every figure, the allowance beside the rise, and fails unless
 every build answered its result intact, one largest result raised the
 `service/builds` leaf's peak over idle by no more than its allowance, each
 build's group stayed within its bound while coming close to it, and the
-kernel killed nothing for rest's bound. The bound and the concurrency are
-read from the running service, so the shipped defaults are what is judged;
+kernel killed nothing for rest's bound. The concurrency is read from the
+running service, and the bound is the one the keeper sets on every build,
+so the shipped defaults are what is judged;
 settings named after the image are judged in their place, the service's
 given to it as .env.locus gives them and the role's processors
 (LOCUS_BUILDS_CPU_LIMIT) to compose as .env gives them.
@@ -196,7 +197,7 @@ def main(image, settings):
         limit = read(stack, f"{BOUND}/memory.max")
         expect(limit.isdigit(), "rest, over the builds, has a memory bound", limit)
         limit = int(limit)
-        bound, concurrent = setting(stack, "memory_bytes"), setting(stack, "max_concurrent")
+        bound, concurrent = imagesuite.BUILD_CAP_BYTES, setting(stack, "max_concurrent")
         release = [p["pid"] for p in stack.processes() if "beam.smp" in p["cmd"]]
         print(f"rest's bound is {mib(limit)}; the service runs {concurrent} builds at once, each bounded at {mib(bound)}")
         expect(limit >= concurrent * bound, "rest holds the concurrent builds' bounds on this machine",

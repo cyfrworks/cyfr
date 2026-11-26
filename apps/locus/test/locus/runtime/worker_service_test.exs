@@ -104,6 +104,13 @@ defmodule Locus.Runtime.WorkerServiceTest do
   defp attempts, do: elem(WorkerService.status(), 1).attempts
 
   describe "start/3" do
+    # A start's deadline is its claim window at most, and its runner's
+    # place may wait the whole of the place's wait before the keeper
+    # answers it.
+    test "lasts past the longest a runner's place waits for the keeper's room" do
+      assert Prima.Assignment.claim_window_ms() > Locus.Launcher.place_wait_ms()
+    end
+
     test "refuses an assignment addressed to another worker service, or another boot of this one",
          %{host: host, boot: boot} do
       other_service = ScriptedHost.attempt!(host, service: "wrk_other", boot: boot)
@@ -288,16 +295,34 @@ defmodule Locus.Runtime.WorkerServiceTest do
 
     status = %{
       state: %{credentials: :held, executions: %{}},
-      message:
-        {:start, "token-planted-6d1a", "input-planted-0c4e", "keys-planted-93b7", caller, 42},
+      message: {:start, "token-planted-6d1a", "input-planted-0c4e", "keys-planted-93b7", caller},
       reason: :function_clause,
       log: []
     }
 
     reduced = WorkerService.format_status(status)
-    assert reduced.message == {:start, :redacted, :redacted, :redacted, caller, 42}
+    assert reduced.message == {:start, :redacted, :redacted, :redacted, caller}
     assert reduced.state == %{executions: %{}}
     refute inspect(reduced, limit: :infinity, printable_limit: :infinity) =~ "planted"
+
+    # A start in flight, its take asked or its assign running, holds them
+    # with its opened keys: the state shows how many, and nothing of them.
+    start = %{token: "token-planted-77aa", input: "input-planted-1b2c", keys: "keys-planted-5d"}
+    takes = :gen_server.send_request(self(), :probe, start, :gen_server.reqids_new())
+
+    in_flight =
+      WorkerService.format_status(%{
+        status
+        | state: %{
+            credentials: :held,
+            executions: %{},
+            takes: takes,
+            assigning: %{make_ref() => %{start: start}}
+          }
+      })
+
+    assert in_flight.state == %{executions: %{}, takes: 1, assigning: 1}
+    refute inspect(in_flight, limit: :infinity, printable_limit: :infinity) =~ "planted"
 
     # A status read carries no message and gains none.
     refute Map.has_key?(WorkerService.format_status(%{state: %{credentials: :held}}), :message)
@@ -551,7 +576,7 @@ defmodule Locus.Runtime.WorkerServiceTest do
 
       assert {:messages,
               [
-                {:"$gen_call", _from, {:start, _token, _input, _sealed, _caller, _deadline}},
+                {:"$gen_call", _from, {:start, _token, _input, _sealed, _caller}},
                 {RunnerPool, _pid, {:complete, ^first_id, true}}
               ]} = Process.info(service, :messages)
 
@@ -663,7 +688,7 @@ defmodule Locus.Runtime.WorkerServiceTest do
 
       assert {:messages,
               [
-                {:"$gen_call", _from, {:start, _token, _input, _sealed, _caller, _deadline}},
+                {:"$gen_call", _from, {:start, _token, _input, _sealed, _caller}},
                 {RunnerPool, _, {:child, "exec_late_child", "att_late_child"}},
                 {RunnerPool, _, {:complete, ^first_id, true}}
               ]} = Process.info(service, :messages)

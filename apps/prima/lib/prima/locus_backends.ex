@@ -58,9 +58,9 @@ defmodule Prima.LocusBackends do
   environment carries (each an uppercase variable name, none reserved:
   `reserved_env_names/0`, `reserved_env_prefixes/0`), its `home`
   (`"scratch"`, scrubbed at retirement, or `"kept"`, the program row's own
-  folder, which survives retirement), its `memory_bytes` (absent: the
-  service's own bound, `LOCUS_BACKENDS_MEMORY_BYTES`, bounds each process)
-  and, for a kept home only, its `home_max_bytes` (absent: the homes
+  folder, which survives retirement), its `memory_bytes` (read and
+  ignored: the keeper bounds every session alike, `Prima.LocusPool`) and,
+  for a kept home only, its `home_max_bytes` (absent: the homes
   volume is the only bound), and its `hosts`, the only hosts its processes
   may reach beside the resolver and the deployment's private hosts
   (`Prima.KeeperProtocol.valid_hosts?/1`), resolved when each process
@@ -86,11 +86,8 @@ defmodule Prima.LocusBackends do
   stderr_tail?, stderr_bytes?, home, home_bytes?, over_cap, sessions}`:
   its status (`program_statuses/0`: `idle` with no process running,
   `running` with one, `failed` once `max_crashes/0` processes of one
-  session key crashed within `crash_window_ms/0`, or while its memory
-  bound alone is past the box's `admission_limit_bytes`, so it can never
-  start there), the processes that crashed since its sync, the last crash
-  or, for a program past the limit, a sentence naming its bound and the
-  limit (absent before either), for a
+  session key crashed within `crash_window_ms/0`), the processes that
+  crashed since its sync, the last crash (absent before one), for a
   scratch program the masked tail of its stderr (`stderr_tail`) and for a
   kept one only how many bytes of stderr it kept (`stderr_bytes`), since a
   kept home's contents are the person's and its stderr may carry them; its
@@ -345,6 +342,9 @@ defmodule Prima.LocusBackends do
   @max_session_bytes 16_777_216
   @max_recv_wait_ms 30_000
   @close_wait_ms 17_000
+  # A program's `memory_bytes` and the box's budget lie in this range.
+  @min_memory_bytes 16 * 1024 * 1024
+  @max_memory_bytes 1024 * 1024 * 1024 * 1024
   @max_status_owners 64
   # A put's part is one keeper line's (`Prima.KeeperProtocol`), so a part's
   # seq means one thing on both wires.
@@ -973,6 +973,17 @@ defmodule Prima.LocusBackends do
   def close_wait_ms, do: @close_wait_ms
 
   @doc """
+  The least a program's `memory_bytes` and the box's budget
+  (`LOCUS_BACKENDS_MEMORY_BUDGET`) may be, 16 MiB.
+  """
+  @spec min_memory_bytes() :: pos_integer()
+  def min_memory_bytes, do: @min_memory_bytes
+
+  @doc "The most a program's `memory_bytes` and the box's budget may be, 1 TiB."
+  @spec max_memory_bytes() :: pos_integer()
+  def max_memory_bytes, do: @max_memory_bytes
+
+  @doc """
   A lifetime's text, of the service's `boot` and told from every other by
   `random`, 16 bytes its caller drew.
   """
@@ -1485,10 +1496,9 @@ defmodule Prima.LocusBackends do
   defp program(_wire, at), do: {:error, {:invalid_field, at}}
 
   defp memory_bytes(value, at) do
-    if is_integer(value) and value >= KeeperProtocol.min_memory_bytes() and
-         value <= KeeperProtocol.max_memory_bytes(),
-       do: {:ok, value},
-       else: {:error, {:invalid_field, at}}
+    if is_integer(value) and value >= @min_memory_bytes and value <= @max_memory_bytes,
+      do: {:ok, value},
+      else: {:error, {:invalid_field, at}}
   end
 
   # A disk bound is a kept home's alone.

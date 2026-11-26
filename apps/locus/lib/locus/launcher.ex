@@ -9,9 +9,9 @@ defmodule Locus.Launcher do
 
   `c:spawn/2` starts `argv` with `env` as its whole environment beyond the
   launcher's own `HOME`, `TMPDIR`, `USER`, `LOGNAME` and `PATH`, in the uid
-  pool `pool`, under `memory_bytes` and `cpu_quota` (microseconds of CPU
-  time in every 100000), and answers
-  the process's `t:handle/0`. A spec naming a kept `home` runs the process
+  pool `pool`, under the memory and processors the launcher sets by its
+  place's kind (`Prima.LocusPool`), and answers the process's
+  `t:handle/0`. A spec naming a kept `home` runs the process
   in that home, under the home's own uid, and takes no uid of the pool;
   `pty: %{rows: r, cols: c}` gives the process a pseudo-terminal of that
   size as its stdin, stdout and stderr, so its stdout carries what it
@@ -70,7 +70,11 @@ defmodule Locus.Launcher do
   caller minted, of a kind, and an athanor and a subject where it has
   them, for an owner, whose death before a spawn names the place drops
   it, as does the end, for any reason but `:normal`, of a caller that
-  asked for it for another owner; `c:drop/2` frees one no spawn
+  asked for it for another owner. The keeper answers a place once there
+  is room for it, with the memory its spawn will be bounded to, or
+  refuses it for room (`{:no_memory, held}`) after its room's wait, so a
+  caller waits for the answer `place_wait_ms/0`, and every wait of a
+  start that holds one outlasts it. `c:drop/2` frees one no spawn
   named, after a preparation that failed or a waiter that left;
   `c:assign/4` gives one another kind, athanor and subject, answering once
   the keeper has applied it, or `{:launcher_unavailable, :timeout}` once
@@ -88,7 +92,11 @@ defmodule Locus.Launcher do
   space, its pool's, has its relay as its only way out. Such a process is
   answered as soon as it is
   asked for, its spawn id, uid and pid following as the first event, and
-  its owner hears `t:control_event/0` in place of `t:event/0`.
+  its owner hears `t:control_event/0` in place of `t:event/0`: among them
+  `{:give_way, place}`, the keeper's ask, unasked for, that the idle
+  runner of its place be released, which the owner of a place no spawn
+  has named yet hears too, as `{launcher_module, {:place, place},
+  {:give_way, place}}`.
   `c:send_control/2` writes to its control channel, holding what it is
   sent until the process attaches; `c:send_relay/2` writes to its relay
   from any process, and `c:close_relay/1` ends the relay.
@@ -98,17 +106,21 @@ defmodule Locus.Launcher do
   direct launcher, which makes no space, alone otherwise.
   """
 
-  @typedoc "Whose a place is: its kind, and its athanor and subject where it has them."
+  @typedoc """
+  Whose a place is: its kind, and its athanor and subject where it has
+  them; a session's place may name its athanor's ceiling there,
+  `athanor_max_bytes` (`Prima.KeeperProtocol`), which an assign does not.
+  """
   @type whose :: %{
           required(:kind) => Prima.KeeperProtocol.kind(),
           optional(:athanor) => String.t(),
-          optional(:subject) => String.t()
+          optional(:subject) => String.t(),
+          optional(:athanor_max_bytes) => pos_integer()
         }
 
   @typedoc """
-  What a process is started with: its place, the memory and the CPU it is bounded
-  by, which every process has, `control` where it has a control channel, a
-  program's kept `home` with its bound and
+  What a process is started with: its place, `control` where it has a
+  control channel, a program's kept `home` with its bound and
   `pty`, `hosts`, the only hosts it may reach where its row names them, and
   `packs`, the person's pack generation its space binds read only at
   `/run/cyfr/scrolls` where its program loads packs.
@@ -118,8 +130,6 @@ defmodule Locus.Launcher do
           required(:env) => %{optional(String.t()) => String.t()},
           required(:place) => String.t(),
           required(:pool) => String.t(),
-          required(:memory_bytes) => pos_integer(),
-          required(:cpu_quota) => pos_integer(),
           optional(:control) => boolean(),
           optional(:home) => String.t(),
           optional(:home_max_bytes) => pos_integer(),
@@ -185,6 +195,7 @@ defmodule Locus.Launcher do
           | {:exited, {:status, integer()} | {:signal, String.t()},
              Prima.KeeperProtocol.memory_end()}
           | {:error, :relay_protocol | :channel_lost}
+          | {:give_way, String.t()}
           | :released
 
   @typedoc "A pool's uids: all of them, the free ones and the quarantined ones."
@@ -204,6 +215,7 @@ defmodule Locus.Launcher do
           {:refused, String.t()}
           | {:refused, String.t(), handle()}
           | {:spawn_failed, term()}
+          | {:no_memory, Prima.KeeperProtocol.held()}
           | {:launcher_unavailable, term()}
           | :unknown_spawn
           | :unencodable
@@ -230,9 +242,13 @@ defmodule Locus.Launcher do
   @doc "End the process: a term signal, `grace_ms`, then the kill; `:released` follows."
   @callback release(GenServer.server() | keyword(), handle(), non_neg_integer()) :: :ok
 
-  @doc "A new place `id` of `whose` for the process `owner`."
+  @doc """
+  A new place `id` of `whose` for the process `owner`, answered once the
+  keeper placed it with the memory bound its spawn will have, nil from a
+  launcher that bounds none.
+  """
   @callback place(GenServer.server() | keyword(), String.t(), whose(), pid()) ::
-              :ok | {:error, error() | :dropped | :unencodable}
+              {:ok, pos_integer() | nil} | {:error, error() | :dropped | :unencodable}
 
   @doc "Free the place no spawn named."
   @callback drop(GenServer.server() | keyword(), String.t()) :: :ok
@@ -307,6 +323,18 @@ defmodule Locus.Launcher do
   @doc "Become the heir of every process held whose tag's `ledger` is `ledger`; answers their tags."
   @callback adopt(GenServer.server() | keyword(), term(), pid()) ::
               {:ok, [term()]} | {:error, error()}
+
+  # The keeper's tick, which a start's room is next looked for at, and a
+  # margin past it.
+  @place_margin_ms 5_000
+
+  @doc """
+  How long a caller of `c:place/4` waits for its answer, and so the least
+  every wait a start that holds a place dies by: the room's wait
+  (`Prima.LocusPool.room_wait_ms/0`), the keeper's tick and a margin.
+  """
+  @spec place_wait_ms() :: pos_integer()
+  def place_wait_ms, do: Prima.LocusPool.room_wait_ms() + @place_margin_ms
 
   @optional_callbacks send_control: 2,
                       send_relay: 2,

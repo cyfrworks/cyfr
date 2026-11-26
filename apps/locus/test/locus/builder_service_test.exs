@@ -805,22 +805,20 @@ defmodule Locus.BuilderServiceTest do
   describe "under the keeper" do
     @describetag :requires_node
 
-    setup do
-      Application.put_env(:locus, :memory_bytes, 268_435_456)
-      on_exit(fn -> Application.delete_env(:locus, :memory_bytes) end)
-    end
-
-    test "a build ended at its memory bound answers memory with the configured limit", %{
+    test "a build ended at its memory bound answers memory with a build's bound", %{
       port: port
     } do
       fake = keeper!({:exit, %{code: nil, signal: "SIGKILL", memory: "cap"}})
 
       assert {200, lines} = Wire.build(port, Wire.request("true"))
-      assert {{:refusal, {:memory, 268_435_456}}, diagnostics, nil} = ended(lines)
+      bound = Prima.LocusPool.build_cap_bytes()
+      assert {{:refusal, {:memory, ^bound}}, diagnostics, nil} = ended(lines)
       assert "output: the command's last words" in diagnostics
 
-      # The bound it was ended at is the one its spawn asked for.
-      assert [%{"pool" => "build", "memory_bytes" => 268_435_456}] = spawns(fake)
+      # The bound it was ended at is the keeper's for a build: its spawn
+      # names none.
+      assert [%{"pool" => "build"} = spawn] = spawns(fake)
+      refute Map.has_key?(spawn, "memory_bytes") or Map.has_key?(spawn, "cpu_quota")
       wait_until(fn -> match?(%{active: 0}, Slots.status(@slots)) end, 10_000)
     end
 
@@ -843,6 +841,35 @@ defmodule Locus.BuilderServiceTest do
                named: placed["id"],
                spawned: "spawn"
              }
+    end
+
+    # A build's place waits for the keeper's room: the build waits past the
+    # room's wait, and is run once placed or refused naming no_memory.
+    test "a build whose place the keeper answers past 5 s runs, and one it refuses for room is unavailable naming no_memory",
+         %{port: port} do
+      fake = keeper!({:place_held, self()})
+
+      placed = Task.async(fn -> Wire.build(port, Wire.request("true")) end)
+      assert_receive {:place_held, first}, 10_000
+      assert Task.yield(placed, 6_000) == nil
+      :ok = FakeKeeper.answer_place(fake, first, :placed)
+      wait_until(fn -> spawns(fake) != [] end, 10_000)
+      assert [%{"place" => ^first}] = spawns(fake)
+      assert {200, _lines} = Task.await(placed, 120_000)
+
+      held = %{"need" => 838_860_800, "free" => 0, "mine" => [], "others_bytes" => 0}
+      refused = Task.async(fn -> Wire.build(port, Wire.request("true")) end)
+      assert_receive {:place_held, second}, 10_000
+      assert Task.yield(refused, 6_000) == nil
+      :ok = FakeKeeper.answer_place(fake, second, {:no_memory, held})
+
+      refusal = {:unavailable, "cyfr-locus could not hold the build (no_memory)"}
+
+      assert Task.await(refused, 30_000) ==
+               {BuilderProtocol.status(refusal), [{:refusal, refusal}]}
+
+      assert length(spawns(fake)) == 1
+      wait_until(fn -> match?(%{active: 0}, Slots.status(@slots)) end, 10_000)
     end
 
     test "a build killed for any other reason is failed with its signal", %{port: port} do
@@ -888,9 +915,9 @@ defmodule Locus.BuilderServiceTest do
       assert sentence =~ "writable-cgroups=true"
       assert sentence =~ "runs none"
 
-      # It asked for the bound, in the build's place, and ran nothing when
-      # it could not have it; the refused spawn freed the place.
-      assert [%{"memory_bytes" => 268_435_456}] = spawns(fake)
+      # It asked for its spawn, in the build's place, and ran nothing when
+      # the keeper could not bound it; the refused spawn freed the place.
+      assert [_spawn] = spawns(fake)
       assert request_types(fake) == ["place", "spawn"]
       assert FakeKeeper.places(fake) == %{}
       wait_until(fn -> match?(%{active: 0}, Slots.status(@slots)) end, 10_000)

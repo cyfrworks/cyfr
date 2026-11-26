@@ -3,13 +3,16 @@
 # Copyright 2026 CYFR Works Inc.
 """Every program's process in the backends image is held to its memory bound, alone.
 
-Run as docker-compose.yml's locus-backends service with the service's own
-bound (LOCUS_BACKENDS_MEMORY_BYTES) set low, and driven only by requests
-signed as CYFR signs them (harness.py):
+Run as docker-compose.yml's locus-backends service, driven only by requests
+signed as CYFR signs them (harness.py). The keeper bounds every session at
+half of the pool's work, never under a session's least bound
+(Prima.LocusPool); the suite makes the work twice that least on this machine
+(`WORK`, through the reserve compose reads), so a session's bound is its
+least, and no setting names a bound:
 
 - Every session's process runs in a cgroup of its own whose memory.max is
-  the bound, inside the pool's rest; a program whose row names
-  its own `memory_bytes` is bounded at that instead.
+  that bound, inside the pool's rest; a program whose row names its own
+  `memory_bytes` is bounded alike, the keeper ignoring the row's bound.
 - A process that holds less than its bound answers.
 - A process that reaches past its bound is ended there by the kernel: its
   session ends before it answers, its status counts the crash and names
@@ -60,8 +63,14 @@ from harness import (  # noqa: E402
 )
 import imagesuite  # noqa: E402
 
-BOUND = 128 * 1024 * 1024
-# A row's own bound, which the service passes to the keeper in place of its own.
+# The pool's work of the bound case: twice a session's least bound, so a
+# session's bound, half of the work, is that least. The hog's session and its
+# sibling's are charged their allowance (the least) together for their first
+# seconds, which is the whole work: a session opened beside them waits for
+# room until an allowance's time has passed, within the keeper's wait.
+WORK = 2 * imagesuite.LEAST_CAP_BYTES["session"]
+BOUND = imagesuite.cap_bytes("program", WORK)
+# A row's own bound, which the keeper ignores: it bounds every session alike.
 ROW_BOUND = 96 * 1024 * 1024
 HOG, SIBLING, OWN = owner_of("hog"), owner_of("sibling"), owner_of("own")
 
@@ -123,7 +132,9 @@ def container_limit(stack):
 
 def bounds_each_program(stack):
     """Every program's process held to its bound, alone, its sibling and the service untouched."""
-    stack.up(memory_bytes=BOUND)
+    stack.up(work_bytes=WORK)
+    work = imagesuite.read_output(stack.exec(f"cat {imagesuite.CGROUP}/work/memory.max"), "work's memory.max").strip()
+    expect(work == str(WORK), f"the pool's work is {WORK} bytes, so a session's bound is half of it, its least, {BOUND}", work)
     c = stack.controller()
     expect(c.hello()[0] == 200, "the service is greeted")
     for owner in [HOG, SIBLING]:
@@ -172,8 +183,9 @@ def bounds_each_program(stack):
     status, answer, _ = c.sync(OWN, [probe(memory_bytes=ROW_BOUND)])
     expect(status == 200, "a program whose row names its own bound is synced", answer)
     own = c.tool(OWN, "probe__whoami")
-    expect(cgroup_limit(stack, stack.outside(own)["pid"])[1] == str(ROW_BOUND),
-           f"a row's own bound, {ROW_BOUND} bytes, bounds its process in place of the service's", own)
+    expect(cgroup_limit(stack, stack.outside(own)["pid"])[1] == str(BOUND),
+           f"a row's own bound, {ROW_BOUND} bytes, is ignored: its process is bounded at a session's, {BOUND} bytes, "
+           "as every other is", own)
     wait_healthy(stack.base)
     expect(c.renew([{**HOG}, {**SIBLING}, {**OWN}])[0] == 200, "the service answers throughout")
 

@@ -4,9 +4,11 @@
 defmodule Locus.Runtime.RunnerPoolTest do
   @moduledoc """
   The pool's accounting over the real handles and codec, with runners a
-  scripted keeper hands the test: the configured number of fresh runners
+  scripted keeper hands the test: the warm floor's one fresh runner
   spawned ahead and refilled; an idle runner reused for its athanor only,
-  a fresh one for another; an idle runner retired at its TTL; a clean
+  a fresh one for another; an idle runner retired at its TTL, and one the
+  keeper asks to give way retired at once, while a busy or taken one is
+  left alone, as is a runner a taint names another execution of; a clean
   completion to idle, an unclean one, an exit, a closed channel, a closed
   relay and a kill to tainted, released and gone, and a clean completion
   whose place the keeper did not make warm again to tainted as it is
@@ -14,7 +16,9 @@ defmodule Locus.Runtime.RunnerPoolTest do
   has not retired, busy or idle, said so once at the retirement bound and
   held, tainted, until its keeper retires it, one retired in time left
   alone by the bound's timer, and one whose handle died held until its
-  keeper's release reaches the pool as the runner's heir; every busy
+  keeper's release reaches the pool as the runner's heir, and one tainted
+  while its place waits for room giving the place up at once, never said
+  unretired; every busy
   runner offered a
   `cancel_child`; a frame from a runner already ended ignored; a keeper
   that refuses runners leaving none in the pool, tainted or otherwise,
@@ -65,7 +69,16 @@ defmodule Locus.Runtime.RunnerPoolTest do
 
   defp spawns(keeper), do: ScriptedKeeper.spawns(keeper)
 
+  defp wait_for_spawns(keeper, count) do
+    wait_until(fn -> length(spawns(keeper)) == count end)
+    spawns(keeper)
+  end
+
   defp counts(pool), do: RunnerPool.status(pool).runners
+
+  # The runner `pid` has left the pool, the floor's runner staying.
+  defp left!(pool, pid, timeout_ms \\ 2_000),
+    do: wait_until(fn -> not Enum.any?(Runners.runners(pool), &(&1.pid == pid)) end, timeout_ms)
 
   # A start's deadline far enough off for an answer that comes at once.
   defp soon, do: System.monotonic_time(:millisecond) + 5_000
@@ -184,19 +197,19 @@ defmodule Locus.Runtime.RunnerPoolTest do
     {:ok, keeper: keeper}
   end
 
-  test "nothing is spawned before the pool serves, then the fresh runners are spawned ahead", %{
-    keeper: keeper
-  } do
-    pool = start_pool!(keeper, pool_size: 3)
+  test "nothing is spawned before the pool serves, then the warm floor's one runner is spawned ahead",
+       %{keeper: keeper} do
+    pool = start_pool!(keeper, [])
     # sleep-ok: 50 ms in which a pool that does not serve yet must spawn nothing
     Process.sleep(50)
     assert spawns(keeper) == []
     assert counts(pool) == %{fresh: 0, idle: 0, busy: 0, tainted: 0}
 
     serve!(pool)
-    wait_until(fn -> counts(pool).fresh == 3 end)
+    wait_until(fn -> counts(pool).fresh == Prima.LocusPool.floor_runners() end)
     # A runner counts fresh while it spawns: it places itself first.
-    wait_until(fn -> length(spawns(keeper)) == 3 end)
+    wait_until(fn -> length(spawns(keeper)) == 1 end)
+    assert counts(pool).fresh == 1
 
     for spawn <- spawns(keeper) do
       assert %{
@@ -222,7 +235,7 @@ defmodule Locus.Runtime.RunnerPoolTest do
   test "a take uses an idle runner of the athanor first, a fresh one otherwise, and refills", %{
     keeper: keeper
   } do
-    pool = start_pool!(keeper, pool_size: 1)
+    pool = start_pool!(keeper, [])
     serve!(pool)
     wait_until(fn -> counts(pool).fresh == 1 end)
 
@@ -259,7 +272,7 @@ defmodule Locus.Runtime.RunnerPoolTest do
   test "a runner's place is warm until its work, run for the work's athanor once its assign is answered, " <>
          "warm again at a clean end before the pool hears it, run at its reuse, and freed once it is released",
        %{keeper: keeper} do
-    pool = start_pool!(keeper, pool_size: 1)
+    pool = start_pool!(keeper, [])
     serve!(pool)
     wait_until(fn -> length(spawns(keeper)) == 1 end)
     [fresh] = spawns(keeper)
@@ -277,7 +290,7 @@ defmodule Locus.Runtime.RunnerPoolTest do
     assert {:ok, ^pid, ^id} = RunnerPool.take(pool, "ath_a", "exec_2")
     assert {:ok, _token} = assign(pid, "ath_a")
     reused = whose(keeper)[id]
-    assert :ok = RunnerPool.taint(pool, pid, 0)
+    assert :ok = RunnerPool.taint(pool, pid, 0, "exec_2")
     assert_receive {RunnerPool, ^pid, {:gone, _reason}}, 5_000
     wait_until(fn -> not Map.has_key?(ScriptedKeeper.places(keeper), id) end)
 
@@ -306,7 +319,7 @@ defmodule Locus.Runtime.RunnerPoolTest do
 
   test "a clean completion whose place the keeper does not make warm again ends its runner as the pool hears it: a take queued right after it never gets that runner",
        %{keeper: keeper} do
-    pool = start_pool!(keeper, pool_size: 1)
+    pool = start_pool!(keeper, [])
     serve!(pool)
     {:ok, pid, _id} = RunnerPool.take(pool, "ath_a", "exec_1")
     spawn = spawn_of(keeper, pid)
@@ -366,7 +379,7 @@ defmodule Locus.Runtime.RunnerPoolTest do
 
   test "a runner's work is written only once the keeper has answered the assign of its place",
        %{keeper: keeper} do
-    pool = start_pool!(keeper, pool_size: 1)
+    pool = start_pool!(keeper, [])
     serve!(pool)
     {:ok, pid, id} = RunnerPool.take(pool, "family@example", "exec_1")
     spawn = spawn_of(keeper, pid)
@@ -409,7 +422,7 @@ defmodule Locus.Runtime.RunnerPoolTest do
 
   test "a refused assign sends the runner none of its work, and its caller hears the refusal",
        %{keeper: keeper} do
-    pool = start_pool!(keeper, pool_size: 1)
+    pool = start_pool!(keeper, [])
     serve!(pool)
     {:ok, pid, id} = RunnerPool.take(pool, "family@example", "exec_1")
     spawn = spawn_of(keeper, pid)
@@ -425,12 +438,13 @@ defmodule Locus.Runtime.RunnerPoolTest do
 
   test "a runner whose process dies before it spawns, or that is refused, leaves no place",
        %{keeper: keeper} do
-    pool = start_pool!(keeper, pool_size: 0)
-    serve!(pool)
+    pool = start_pool!(keeper, [])
 
-    # Held at the keeper as it places itself, the runner's process dies.
+    # Held at the keeper as it places itself, the floor's runner's process
+    # dies.
     :ok = :sys.suspend(keeper)
-    {:ok, dying, _id} = RunnerPool.take(pool, "ath_a", "exec_1")
+    serve!(pool)
+    {:ok, dying, dying_id} = RunnerPool.take(pool, "ath_a", "exec_1")
 
     wait_until(fn ->
       {:message_queue_len, waiting} = Process.info(Process.whereis(keeper), :message_queue_len)
@@ -440,22 +454,25 @@ defmodule Locus.Runtime.RunnerPoolTest do
     Process.exit(dying, :kill)
     assert_receive {RunnerPool, ^dying, {:gone, _reason}}, 5_000
     :ok = :sys.resume(keeper)
-    wait_until(fn -> ScriptedKeeper.places(keeper) == %{} end)
 
+    # The runner the pool spawned behind it starts; the next one the keeper
+    # refuses.
+    wait_until(fn -> counts(pool).fresh == 1 and length(spawns(keeper)) == 1 end)
+    [%{spec: %{runner: started}}] = spawns(keeper)
     :ok = ScriptedKeeper.refuse(keeper, :memory_unavailable)
-    {:ok, refused, _id} = RunnerPool.take(pool, "ath_a", "exec_2")
+    {:ok, _started, ^started} = RunnerPool.take(pool, "ath_a", "exec_2")
+    wait_until(fn -> ScriptedKeeper.refused(keeper) == 1 end)
 
-    assert_receive {RunnerPool, ^refused,
-                    {:gone, {:refused, %{reason: "memory_unavailable", message: _}}}}
+    assert %{
+             places: Map.keys(ScriptedKeeper.places(keeper)),
+             spawned: Enum.map(spawns(keeper), & &1.spec.runner)
+           } == %{places: [started], spawned: [started]}
 
-    assert %{places: ScriptedKeeper.places(keeper), spawned: Enum.count(spawns(keeper))} == %{
-             places: %{},
-             spawned: 0
-           }
+    refute started == dying_id
   end
 
   test "an idle runner is retired at its TTL and the pool refills", %{keeper: keeper} do
-    pool = start_pool!(keeper, pool_size: 1, idle_ttl_ms: 100)
+    pool = start_pool!(keeper, idle_ttl_ms: 100)
     serve!(pool)
     {:ok, pid, id} = RunnerPool.take(pool, "ath_a", "exec_1")
     spawn = spawn_of(keeper, pid)
@@ -469,17 +486,132 @@ defmodule Locus.Runtime.RunnerPoolTest do
     refute Process.alive?(pid)
   end
 
+  # A runner idle for `athanor`, its subtree completed cleanly.
+  defp idle!(pool, keeper, athanor, execution_id) do
+    {:ok, pid, id} = RunnerPool.take(pool, athanor, execution_id)
+    assert {:ok, _token} = assign(pid, athanor)
+    complete(spawn_of(keeper, pid), execution_id, true)
+    assert_receive {RunnerPool, ^pid, {:complete, ^execution_id, true}}, 5_000
+    wait_until(fn -> Enum.any?(Runners.runners(pool), &(&1.pid == pid and &1.state == :idle)) end)
+    {pid, id}
+  end
+
+  defp queued?(pid, pattern_fun) do
+    {:messages, messages} = Process.info(pid, :messages)
+    Enum.any?(messages, pattern_fun)
+  end
+
+  test "a give_way ends exactly the idle runner it names: a busy runner, one taken before the pool heard it, the fresh one and the pool live",
+       %{keeper: keeper} do
+    pool = start_pool!(keeper, [])
+    serve!(pool)
+    {idle, idle_id} = idle!(pool, keeper, "ath_a", "exec_1")
+    {:ok, busy, busy_id} = RunnerPool.take(pool, "ath_b", "exec_2")
+    assert {:ok, _token} = assign(busy, "ath_b")
+    wait_until(fn -> counts(pool) == %{fresh: 1, idle: 1, busy: 1, tainted: 0} end)
+    %{pid: fresh} = Enum.find(Runners.runners(pool), &(&1.state == :fresh))
+
+    :ok = ScriptedKeeper.give_way(keeper, busy_id)
+    _info = RunnerProcess.info(busy)
+    :ok = ScriptedKeeper.give_way(keeper, idle_id)
+    wait_until(fn -> ScriptedKeeper.releases(keeper) != [] end)
+    wait_until(fn -> not Enum.any?(Runners.runners(pool), &(&1.pid == idle)) end)
+
+    # One idle the keeper names while a take of it waits at the pool ahead
+    # of the pool hearing the ask: the take has it, and the ask ends nothing.
+    {taken, taken_id} = idle!(pool, keeper, "ath_c", "exec_3")
+    :ok = :sys.suspend(pool)
+    taking = Task.async(fn -> RunnerPool.take(pool, "ath_c", "exec_4") end)
+
+    wait_until(fn ->
+      queued?(pool, &match?({:"$gen_call", _from, {:take, "ath_c", _, _}}, &1))
+    end)
+
+    :ok = ScriptedKeeper.give_way(keeper, taken_id)
+    wait_until(fn -> queued?(pool, &match?({RunnerProcess, ^taken, :give_way}, &1)) end)
+    :ok = :sys.resume(pool)
+    assert {:ok, ^taken, ^taken_id} = Task.await(taking)
+
+    _status = RunnerPool.status(pool)
+
+    assert %{
+             releases: ScriptedKeeper.releases(keeper),
+             alive: Enum.map([busy, fresh, taken, pool], &Process.alive?/1),
+             counts: counts(pool)
+           } == %{
+             releases: [{idle_id, 0}],
+             alive: [true, true, true, true],
+             counts: %{fresh: 1, idle: 0, busy: 2, tainted: 0}
+           }
+  end
+
+  test "a give_way never takes the floor's one fresh runner, and a runner that turned one down goes at the next once idle",
+       %{keeper: keeper} do
+    pool = start_pool!(keeper, [])
+    serve!(pool)
+    {:ok, busy, busy_id} = RunnerPool.take(pool, "ath_a", "exec_1")
+    assert {:ok, _token} = assign(busy, "ath_a")
+    wait_until(fn -> counts(pool) == %{fresh: 1, idle: 0, busy: 1, tainted: 0} end)
+    %{pid: fresh, id: fresh_id} = Enum.find(Runners.runners(pool), &(&1.state == :fresh))
+
+    # The floor's runner, asked after the runner above it was taken, stays.
+    :ok = ScriptedKeeper.give_way(keeper, fresh_id)
+    # Turned down while busy...
+    :ok = ScriptedKeeper.give_way(keeper, busy_id)
+    _status = RunnerPool.status(pool)
+    assert ScriptedKeeper.releases(keeper) == []
+
+    # ...and asked again once it is idle, it goes; a second ask of it
+    # while it goes ends nothing more.
+    complete(spawn_of(keeper, busy), "exec_1", true)
+    assert_receive {RunnerPool, ^busy, {:complete, "exec_1", true}}, 5_000
+    wait_until(fn -> counts(pool) == %{fresh: 1, idle: 1, busy: 0, tainted: 0} end)
+    :ok = ScriptedKeeper.give_way(keeper, busy_id)
+    :ok = ScriptedKeeper.give_way(keeper, busy_id)
+    wait_until(fn -> not Enum.any?(Runners.runners(pool), &(&1.pid == busy)) end)
+
+    assert %{
+             releases: ScriptedKeeper.releases(keeper),
+             fresh: Process.alive?(fresh),
+             counts: counts(pool)
+           } == %{
+             releases: [{busy_id, 0}],
+             fresh: true,
+             counts: %{fresh: 1, idle: 0, busy: 0, tainted: 0}
+           }
+  end
+
+  # The service may read an ask to end a runner after the pool handed the
+  # runner out again: the ask names the execution it was for.
+  test "a taint naming an execution its runner has completed, or another than it runs, ends nothing",
+       %{keeper: keeper} do
+    pool = start_pool!(keeper, [])
+    serve!(pool)
+    {runner, id} = idle!(pool, keeper, "ath_a", "exec_1")
+    assert :ok = RunnerPool.taint(pool, runner, 0, "exec_1")
+    assert {:ok, ^runner, ^id} = RunnerPool.take(pool, "ath_a", "exec_2")
+    assert :ok = RunnerPool.taint(pool, runner, 0, "exec_1")
+
+    assert %{
+             releases: ScriptedKeeper.releases(keeper),
+             runner: Enum.find(Runners.runners(pool), &(&1.pid == runner)).execution_id
+           } == %{releases: [], runner: "exec_2"}
+
+    assert :ok = RunnerPool.taint(pool, runner, 0, "exec_2")
+    wait_until(fn -> ScriptedKeeper.releases(keeper) == [{id, 0}] end)
+  end
+
   test "an unclean completion, an exit and a kill taint the runner, which is released and gone",
        %{
          keeper: keeper
        } do
-    pool = start_pool!(keeper, pool_size: 0)
+    pool = start_pool!(keeper, [])
     serve!(pool)
 
     {:ok, unclean, unclean_id} = RunnerPool.take(pool, "ath_a", "exec_1")
     complete(spawn_of(keeper, unclean), "exec_1", false)
     assert_receive {RunnerPool, ^unclean, {:complete, "exec_1", false}}
-    wait_until(fn -> Enum.empty?(Runners.runners(pool)) end)
+    left!(pool, unclean)
     assert {unclean_id, 0} in ScriptedKeeper.releases(keeper)
 
     {:ok, exited, exited_id} = RunnerPool.take(pool, "ath_a", "exec_2")
@@ -490,22 +622,22 @@ defmodule Locus.Runtime.RunnerPoolTest do
     )
 
     assert_receive {RunnerPool, ^exited, {:exit, ^exited_id, ["att_2", "att_child"]}}
-    wait_until(fn -> Enum.empty?(Runners.runners(pool)) end)
+    left!(pool, exited)
     assert {exited_id, 0} in ScriptedKeeper.releases(keeper)
 
     {:ok, killed, killed_id} = RunnerPool.take(pool, "ath_a", "exec_3")
-    assert :ok = RunnerPool.taint(pool, killed, 250)
-    assert counts(pool) == %{fresh: 0, idle: 0, busy: 0, tainted: 1}
+    assert :ok = RunnerPool.taint(pool, killed, 250, "exec_3")
+    assert counts(pool) == %{fresh: 1, idle: 0, busy: 0, tainted: 1}
     wait_until(fn -> {killed_id, 250} in ScriptedKeeper.releases(keeper) end)
 
     # Ended by the keeper after its grace, without a frame of its own.
     assert_receive {RunnerPool, ^killed, {:gone, _reason}}, 2_000
-    wait_until(fn -> Enum.empty?(Runners.runners(pool)) end)
+    left!(pool, killed)
   end
 
   test "a runner's exit frame heard after the keeper's exited still reports its open attempts",
        %{keeper: keeper} do
-    pool = start_pool!(keeper, pool_size: 0)
+    pool = start_pool!(keeper, [])
     serve!(pool)
     {:ok, pid, id} = RunnerPool.take(pool, "ath_a", "exec_1")
     spawn = spawn_of(keeper, pid)
@@ -525,7 +657,7 @@ defmodule Locus.Runtime.RunnerPoolTest do
   test "an exited runner whose control channel stays open is reported gone within a bound", %{
     keeper: keeper
   } do
-    pool = start_pool!(keeper, pool_size: 0)
+    pool = start_pool!(keeper, [])
     serve!(pool)
     {:ok, pid, _id} = RunnerPool.take(pool, "ath_a", "exec_1")
     spawn = spawn_of(keeper, pid)
@@ -537,10 +669,10 @@ defmodule Locus.Runtime.RunnerPoolTest do
   end
 
   test "a killed runner's own exit frame still reaches the assignee, once", %{keeper: keeper} do
-    pool = start_pool!(keeper, pool_size: 0)
+    pool = start_pool!(keeper, [])
     serve!(pool)
     {:ok, pid, id} = RunnerPool.take(pool, "ath_a", "exec_1")
-    assert :ok = RunnerPool.taint(pool, pid, 1_000)
+    assert :ok = RunnerPool.taint(pool, pid, 1_000, "exec_1")
 
     ScriptedKeeper.write(
       spawn_of(keeper, pid),
@@ -553,14 +685,14 @@ defmodule Locus.Runtime.RunnerPoolTest do
     # answers once the keeper has retired it, by when anything the pool
     # tells of its end has been sent.
     assert :ok = Runners.retire_busy(pool)
-    assert Runners.runners(pool) == []
+    refute Enum.any?(Runners.runners(pool), &(&1.pid == pid))
     refute_received {RunnerPool, ^pid, _}
   end
 
   test "a closed channel or an exited process with the subtree assigned is reported gone", %{
     keeper: keeper
   } do
-    pool = start_pool!(keeper, pool_size: 0)
+    pool = start_pool!(keeper, [])
     serve!(pool)
 
     {:ok, closed, _id} = RunnerPool.take(pool, "ath_a", "exec_1")
@@ -570,7 +702,8 @@ defmodule Locus.Runtime.RunnerPoolTest do
     {:ok, exited, _id} = RunnerPool.take(pool, "ath_a", "exec_2")
     ScriptedKeeper.exit(spawn_of(keeper, exited), 1)
     assert_receive {RunnerPool, ^exited, {:gone, _}}
-    wait_until(fn -> Enum.empty?(Runners.runners(pool)) end)
+    left!(pool, exited)
+    left!(pool, closed)
 
     # Reported once: the exit that follows the close is not a second event.
     refute_receive {RunnerPool, ^closed, _}, 100
@@ -579,23 +712,23 @@ defmodule Locus.Runtime.RunnerPoolTest do
   test "a killed runner that still completes is heard once and never returns to the pool", %{
     keeper: keeper
   } do
-    pool = start_pool!(keeper, pool_size: 0)
+    pool = start_pool!(keeper, [])
     serve!(pool)
 
     {:ok, pid, _id} = RunnerPool.take(pool, "ath_a", "exec_1")
     spawn = spawn_of(keeper, pid)
-    assert :ok = RunnerPool.taint(pool, pid, 300)
+    assert :ok = RunnerPool.taint(pool, pid, 300, "exec_1")
     complete(spawn, "exec_1", true)
     assert_receive {RunnerPool, ^pid, {:complete, "exec_1", true}}
-    assert counts(pool) == %{fresh: 0, idle: 0, busy: 0, tainted: 1}
+    assert counts(pool) == %{fresh: 1, idle: 0, busy: 0, tainted: 1}
 
     # Its end after the grace is not a second event, and it is gone.
-    wait_until(fn -> Enum.empty?(Runners.runners(pool)) end, 2_000)
+    left!(pool, pid)
     refute_received {RunnerPool, ^pid, _}
   end
 
   test "every busy runner is offered a cancel_child", %{keeper: keeper} do
-    pool = start_pool!(keeper, pool_size: 1)
+    pool = start_pool!(keeper, [])
     serve!(pool)
     {:ok, a, _} = RunnerPool.take(pool, "ath_a", "exec_1")
     {:ok, b, _} = RunnerPool.take(pool, "ath_b", "exec_2")
@@ -620,7 +753,7 @@ defmodule Locus.Runtime.RunnerPoolTest do
   end
 
   test "a line that is not a runner's frame taints the runner", %{keeper: keeper} do
-    pool = start_pool!(keeper, pool_size: 0)
+    pool = start_pool!(keeper, [])
     serve!(pool)
     {:ok, pid, _id} = RunnerPool.take(pool, "ath_a", "exec_1")
     spawn = spawn_of(keeper, pid)
@@ -631,7 +764,7 @@ defmodule Locus.Runtime.RunnerPoolTest do
     )
 
     assert_receive {RunnerPool, ^pid, {:gone, {:protocol, {:not_a_runner_frame, :cancel_child}}}}
-    wait_until(fn -> Enum.empty?(Runners.runners(pool)) end)
+    left!(pool, pid)
 
     {:ok, pid, _id} = RunnerPool.take(pool, "ath_a", "exec_2")
     ScriptedKeeper.write(spawn_of(keeper, pid), "not json\n")
@@ -640,7 +773,7 @@ defmodule Locus.Runtime.RunnerPoolTest do
 
   test "a runner's control bytes are taken once handled, and its relay bytes once its relay read them",
        %{keeper: keeper} do
-    pool = start_pool!(keeper, pool_size: 0)
+    pool = start_pool!(keeper, [])
     serve!(pool)
     {:ok, pid, _id} = RunnerPool.take(pool, "ath_a", "exec_1")
     assert {:ok, _token} = assign(pid)
@@ -662,7 +795,7 @@ defmodule Locus.Runtime.RunnerPoolTest do
   test "a runner whose relay closes is retired: the service tells it why and ends the stream", %{
     keeper: keeper
   } do
-    pool = start_pool!(keeper, pool_size: 0)
+    pool = start_pool!(keeper, [])
     serve!(pool)
     {:ok, pid, _id} = RunnerPool.take(pool, "ath_a", "exec_1")
     assert {:ok, _token} = assign(pid)
@@ -676,12 +809,12 @@ defmodule Locus.Runtime.RunnerPoolTest do
 
     wait_until(fn -> ScriptedKeeper.relay_closed?(spawn) end)
     assert ScriptedKeeper.read_relay(spawn) =~ ~s("kind":"close")
-    wait_until(fn -> Enum.empty?(Runners.runners(pool)) end)
+    left!(pool, pid)
   end
 
   test "retiring the busy runners ends each at once and answers once they are gone, keeping the fresh and idle",
        %{keeper: keeper} do
-    pool = start_pool!(keeper, pool_size: 1, retire_bound_ms: 100)
+    pool = start_pool!(keeper, retire_bound_ms: 100)
     serve!(pool)
     wait_until(fn -> counts(pool).fresh == 1 end)
 
@@ -691,6 +824,9 @@ defmodule Locus.Runtime.RunnerPoolTest do
     {:ok, a, a_id} = RunnerPool.take(pool, "ath_b", "exec_1")
     {:ok, b, b_id} = RunnerPool.take(pool, "ath_c", "exec_2")
     wait_until(fn -> counts(pool) == %{fresh: 1, idle: 1, busy: 2, tainted: 0} end)
+    # Each released through its keeper: a runner taken while it still waits
+    # for its place has its handle ended instead, and no release is asked.
+    wait_until(fn -> Enum.all?(Map.values(:sys.get_state(pool).runners), & &1.placed) end)
 
     assert :ok = Runners.retire_busy(pool)
 
@@ -711,7 +847,7 @@ defmodule Locus.Runtime.RunnerPoolTest do
     {late_id, log} =
       with_log(fn ->
         {:ok, late, late_id} = RunnerPool.take(pool, "ath_d", "exec_3")
-        assert :ok = RunnerPool.taint(pool, late, 400)
+        assert :ok = RunnerPool.taint(pool, late, 400, "exec_3")
         wait_until(fn -> not Enum.any?(Runners.runners(pool), &(&1.pid == late)) end)
         late_id
       end)
@@ -723,7 +859,7 @@ defmodule Locus.Runtime.RunnerPoolTest do
 
   test "a busy runner its keeper has not retired is said so once at the retirement bound and held until it is",
        %{keeper: keeper} do
-    pool = start_pool!(keeper, pool_size: 0, retire_bound_ms: 200)
+    pool = start_pool!(keeper, retire_bound_ms: 200)
     serve!(pool)
     {:ok, pid, id} = RunnerPool.take(pool, "ath_a", "exec_1")
     spawn = spawn_of(keeper, pid)
@@ -731,7 +867,7 @@ defmodule Locus.Runtime.RunnerPoolTest do
     never_retired(spawn, fn ->
       log =
         capture_log(fn ->
-          assert :ok = RunnerPool.taint(pool, pid, 0)
+          assert :ok = RunnerPool.taint(pool, pid, 0, "exec_1")
           assert_receive {RunnerPool, ^pid, {:gone, :retire_bound}}, 5_000
           # Ten times the bound: the runner is still the pool's, and the
           # bound is not said again.
@@ -741,19 +877,19 @@ defmodule Locus.Runtime.RunnerPoolTest do
       assert length(String.split(log, "runner #{id} #{@unretired}")) == 2
       assert {id, 0} in ScriptedKeeper.releases(keeper)
       assert Process.alive?(pid)
-      assert counts(pool) == %{fresh: 0, idle: 0, busy: 0, tainted: 1}
+      assert counts(pool) == %{fresh: 1, idle: 0, busy: 0, tainted: 1}
     end)
 
     # The keeper retires it: only then does it leave the pool.
-    wait_until(fn -> Runners.runners(pool) == [] end, 5_000, "the runner to leave once retired")
+    left!(pool, pid, 5_000)
     refute Process.alive?(pid)
-    assert counts(pool) == %{fresh: 0, idle: 0, busy: 0, tainted: 0}
+    assert counts(pool) == %{fresh: 1, idle: 0, busy: 0, tainted: 0}
     assert :ok = Runners.retire_busy(pool, 5_000)
   end
 
   test "an idle runner its keeper has not retired at its TTL is held past the retirement bound until it is",
        %{keeper: keeper} do
-    pool = start_pool!(keeper, pool_size: 0, idle_ttl_ms: 100, retire_bound_ms: 200)
+    pool = start_pool!(keeper, idle_ttl_ms: 100, retire_bound_ms: 200)
     serve!(pool)
     {:ok, pid, id} = RunnerPool.take(pool, "ath_a", "exec_1")
     spawn = spawn_of(keeper, pid)
@@ -776,16 +912,16 @@ defmodule Locus.Runtime.RunnerPoolTest do
       assert Process.alive?(pid)
       refute_received {RunnerPool, ^pid, {:gone, _}}
       # Held, it is counted among the runners being ended.
-      assert counts(pool) == %{fresh: 0, idle: 0, busy: 0, tainted: 1}
+      assert counts(pool) == %{fresh: 1, idle: 0, busy: 0, tainted: 1}
     end)
 
-    wait_until(fn -> Runners.runners(pool) == [] end, 5_000, "the runner to leave once retired")
+    left!(pool, pid, 5_000)
     refute Process.alive?(pid)
   end
 
   test "a runner whose handle dies is held, tainted, until its keeper's release reaches the pool as its heir",
        %{keeper: keeper} do
-    pool = start_pool!(keeper, pool_size: 1)
+    pool = start_pool!(keeper, [])
     serve!(pool)
     wait_until(fn -> counts(pool).fresh == 1 end)
     [%{pid: pid, id: id}] = Runners.runners(pool)
@@ -812,31 +948,60 @@ defmodule Locus.Runtime.RunnerPoolTest do
 
   test "a runner whose handle dies while its place awaits the keeper is forgotten once the keeper says none of it started",
        %{keeper: keeper} do
-    pool = start_pool!(keeper, pool_size: 0)
-    serve!(pool)
+    pool = start_pool!(keeper, [])
     :ok = ScriptedKeeper.placing(keeper, :held)
+    serve!(pool)
     {:ok, pid, id} = RunnerPool.take(pool, "ath_a", "exec_1")
-    wait_until(fn -> ScriptedKeeper.held_places(keeper) == [id] end)
+    wait_until(fn -> hd(ScriptedKeeper.held_places(keeper)) == id end)
 
     capture_log(fn ->
       Process.exit(pid, :kill)
       assert_receive {RunnerPool, ^pid, {:gone, {:handle_down, :killed}}}
-      wait_until(fn -> Runners.runners(pool) == [] end, 5_000, "the runner to be forgotten")
+      left!(pool, pid, 5_000)
     end)
 
-    assert counts(pool) == %{fresh: 0, idle: 0, busy: 0, tainted: 0}
+    # The runner spawned ahead in its stead waits for its place too.
+    assert counts(pool) == %{fresh: 1, idle: 0, busy: 0, tainted: 0}
+    assert spawns(keeper) == []
+  end
+
+  test "a runner tainted while its place awaits the keeper's room gives the place up at once and is never said unretired",
+       %{keeper: keeper} do
+    pool = start_pool!(keeper, retire_bound_ms: 100)
+    :ok = ScriptedKeeper.placing(keeper, :held)
+    serve!(pool)
+    {:ok, pid, id} = RunnerPool.take(pool, "ath_a", "exec_1")
+    wait_until(fn -> hd(ScriptedKeeper.held_places(keeper)) == id end)
+
+    log =
+      capture_log(fn ->
+        assert :ok = RunnerPool.taint(pool, pid, 0, "exec_1")
+
+        wait_until(
+          fn -> id not in ScriptedKeeper.held_places(keeper) end,
+          2_000,
+          "the place to leave the keeper's queue"
+        )
+
+        left!(pool, pid, 5_000)
+      end)
+
+    refute log =~ "runner #{id} #{@unretired}"
+    refute log =~ "runner #{id}'s handle ended"
     assert spawns(keeper) == []
   end
 
   test "a runner whose spawn went unanswered, the spawn made, is held until its keeper's release",
        %{keeper: keeper} do
-    pool = start_pool!(keeper, pool_size: 0)
-    serve!(pool)
+    pool = start_pool!(keeper, [])
     :ok = ScriptedKeeper.spawning(keeper, :held)
-    {:ok, pid, _id} = RunnerPool.take(pool, "ath_a", "exec_1")
-    spawn = spawn_of(keeper, pid)
-    # Only this spawn goes unanswered: the pool's next try is answered.
+    serve!(pool)
+    [%{owner: pid} = spawn] = wait_for_spawns(keeper, 1)
+    # Only this spawn goes unanswered: the runner spawned ahead in its
+    # stead waits for its place.
+    :ok = ScriptedKeeper.placing(keeper, :held)
     :ok = ScriptedKeeper.spawning(keeper, :answered)
+    {:ok, ^pid, _id} = RunnerPool.take(pool, "ath_a", "exec_1")
 
     never_retired(spawn, fn ->
       capture_log(fn ->
@@ -859,7 +1024,7 @@ defmodule Locus.Runtime.RunnerPoolTest do
     test "a start after the keeper freed its uids is given its runner once it attaches, though the pool's last spawn was refused",
          %{keeper: keeper} do
       :ok = ScriptedKeeper.refuse(keeper, :capacity)
-      pool = start_pool!(keeper, pool_size: 1)
+      pool = start_pool!(keeper, [])
       serve!(pool)
       wait_until(fn -> RunnerPool.status(pool).refusal != nil end)
 
@@ -874,7 +1039,7 @@ defmodule Locus.Runtime.RunnerPoolTest do
     test "a start during a lasting lack is refused with its own spawn's reason, not the one remembered, and leaves no run",
          %{keeper: keeper} do
       :ok = ScriptedKeeper.refuse(keeper, :capacity)
-      pool = start_pool!(keeper, pool_size: 1)
+      pool = start_pool!(keeper, [])
       serve!(pool)
       wait_until(fn -> RunnerPool.status(pool).refusal != nil end)
 
@@ -889,7 +1054,7 @@ defmodule Locus.Runtime.RunnerPoolTest do
 
     test "a start after a release ends the refusal answers at once, its runner still spawning",
          %{keeper: keeper} do
-      pool = start_pool!(keeper, pool_size: 1)
+      pool = start_pool!(keeper, [])
       serve!(pool)
       wait_until(fn -> match?([%{state: :fresh}], Runners.runners(pool)) end)
       :ok = ScriptedKeeper.refuse(keeper, :capacity)
@@ -910,7 +1075,7 @@ defmodule Locus.Runtime.RunnerPoolTest do
 
     test "a backoff a release cut short leaves no timer behind to spawn early",
          %{keeper: keeper} do
-      pool = start_pool!(keeper, pool_size: 1)
+      pool = start_pool!(keeper, [])
       serve!(pool)
       wait_until(fn -> match?([%{state: :fresh}], Runners.runners(pool)) end)
 
@@ -936,7 +1101,7 @@ defmodule Locus.Runtime.RunnerPoolTest do
 
     test "a release ends the pool's refusal, and it spawns ahead at once, before its wait",
          %{keeper: keeper} do
-      pool = start_pool!(keeper, pool_size: 1)
+      pool = start_pool!(keeper, [])
       serve!(pool)
       # Attached, not still spawning, so the refusals below never meet it.
       wait_until(fn -> match?([%{state: :fresh}], Runners.runners(pool)) end)
@@ -969,7 +1134,7 @@ defmodule Locus.Runtime.RunnerPoolTest do
     test "starts in a row during a lasting refusal are refused, holding one refused runner each, none once released",
          %{keeper: keeper} do
       :ok = ScriptedKeeper.refuse(keeper, {:made, :exec_failed})
-      pool = start_pool!(keeper, pool_size: 1)
+      pool = start_pool!(keeper, [])
       serve!(pool)
       wait_until(fn -> RunnerPool.status(pool).refusal != nil end)
 
@@ -996,19 +1161,20 @@ defmodule Locus.Runtime.RunnerPoolTest do
     test "leaves no runner in the pool, which backs off and reports the keeper's account",
          %{keeper: keeper} do
       :ok = ScriptedKeeper.refuse(keeper, :memory_unavailable)
-      pool = start_pool!(keeper, pool_size: 3, keeper_opts: [memory_bytes: 402_653_184])
+      pool = start_pool!(keeper, keeper_opts: [memory_bytes: 402_653_184])
       started = System.monotonic_time(:millisecond)
       serve!(pool)
 
       # The keeper counts a refusal as it answers a spawn, and the pool
       # hears of it through the runner's handle after that, so the pool is
-      # read once it has heard of all three: then, and until the wait it
-      # starts has run out, it holds no runner.
+      # read once it has heard of the floor's: then, and until the wait it
+      # starts has run out, it holds no runner. Its bound is what the keeper
+      # placed the refused runner with.
       assert %{
                runners: %{fresh: 0, idle: 0, busy: 0, tainted: 0},
                memory_bytes: 402_653_184,
                refusal: %{reason: "memory_unavailable", message: message}
-             } = emptied!(pool, keeper, 3)
+             } = emptied!(pool, keeper, 1)
 
       assert message =~ "refuses"
 
@@ -1033,18 +1199,18 @@ defmodule Locus.Runtime.RunnerPoolTest do
       # measured from a reading taken before the count it follows moved
       # to one taken after the count it ends moved: never shorter than
       # the wait, and a second or so if the wait did not double.
-      {before_first, first_retry} = refused_at(keeper, 4, started, 3_000)
+      {before_first, first_retry} = refused_at(keeper, 2, started, 3_000)
       assert first_retry - started >= 900
 
-      {_before_second, second_retry} = refused_at(keeper, 5, first_retry, 4_000)
+      {_before_second, second_retry} = refused_at(keeper, 3, first_retry, 4_000)
       assert second_retry - before_first >= 1_900
 
-      assert %{runners: %{fresh: 0, idle: 0, busy: 0, tainted: 0}} = emptied!(pool, keeper, 5)
+      assert %{runners: %{fresh: 0, idle: 0, busy: 0, tainted: 0}} = emptied!(pool, keeper, 3)
 
       # The keeper starts runners again: the next one tried ends the refusal
       # and the pool fills.
       :ok = ScriptedKeeper.refuse(keeper, nil)
-      wait_until(fn -> counts(pool).fresh == 3 end, 10_000)
+      wait_until(fn -> counts(pool).fresh == 1 end, 10_000)
       assert %{refusal: nil} = RunnerPool.status(pool)
       assert {:ok, _pid, _id} = RunnerPool.take(pool, "ath_a", "exec_2")
     end
@@ -1052,10 +1218,14 @@ defmodule Locus.Runtime.RunnerPoolTest do
     test "a runner taken while spawning and then refused is gone for its assignee, never tainted",
          %{keeper: keeper} do
       :ok = ScriptedKeeper.refuse(keeper, :memory_unavailable)
-      pool = start_pool!(keeper, pool_size: 0)
+      pool = start_pool!(keeper, [])
+      # The floor's runner is still spawning, the keeper held, as it is
+      # taken.
+      :ok = :sys.suspend(keeper)
       serve!(pool)
 
       {:ok, pid, _id} = RunnerPool.take(pool, "ath_a", "exec_1")
+      :ok = :sys.resume(keeper)
       # Its assignee hears the keeper's own code and sentence for it.
       assert_receive {RunnerPool, ^pid,
                       {:gone,
@@ -1065,8 +1235,10 @@ defmodule Locus.Runtime.RunnerPoolTest do
                           message: "the scripted keeper refuses (memory_unavailable)"
                         }}}}
 
+      # It left the pool at once; the floor's runner spawned behind the
+      # take is the pool's next try, refused in its own time.
       assert counts(pool) == %{fresh: 0, idle: 0, busy: 0, tainted: 0}
-      assert Runners.runners(pool) == []
+      refute Enum.any?(Runners.runners(pool), &(&1.pid == pid))
 
       # The next start asks the keeper again and waits for its answer, the
       # refusal of its own spawn.
@@ -1076,7 +1248,7 @@ defmodule Locus.Runtime.RunnerPoolTest do
 
     test "a runner refused after the keeper made it keeps its place among the runners ahead until the keeper's release: none is started in its stead, and a take goes to another",
          %{keeper: keeper} do
-      pool = start_pool!(keeper, pool_size: 1)
+      pool = start_pool!(keeper, [])
       serve!(pool)
       # Attached, not still spawning, so the keeper's refusals below are
       # never ended by its start.
@@ -1126,7 +1298,7 @@ defmodule Locus.Runtime.RunnerPoolTest do
   end
 
   test "the keeper's loss ends every runner, the busy ones reported gone", %{keeper: keeper} do
-    pool = start_pool!(keeper, pool_size: 1)
+    pool = start_pool!(keeper, [])
     serve!(pool)
     {:ok, busy, _} = RunnerPool.take(pool, "ath_a", "exec_1")
     wait_until(fn -> counts(pool) == %{fresh: 1, idle: 0, busy: 1, tainted: 0} end)

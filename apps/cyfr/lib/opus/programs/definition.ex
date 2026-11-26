@@ -309,7 +309,9 @@ defmodule Opus.Programs.Definition do
   The program settings a row carries beside its definition, checked: the
   `transport` is `program` (an `http` row has none); its `mark` is `mcp`
   or `driven`; `home` is `"scratch"` or `"kept"`, a kept home being the
-  row's own folder; `memory_bytes` lies in the keeper's range;
+  row's own folder; `memory_bytes` lies in the backends' range
+  (`Prima.LocusBackends.min_memory_bytes/0` to `max_memory_bytes/0`; the
+  keeper bounds every session alike and reads none);
   `home_max_bytes` is a kept home's alone, at least 1 MiB; `hosts`, the only hosts the
   program reaches beside the resolver and the deployment's private hosts,
   is a list the keeper takes (`Prima.KeeperProtocol.valid_hosts?/1`: 1 to
@@ -360,12 +362,12 @@ defmodule Opus.Programs.Definition do
   defp check_memory(nil), do: :ok
 
   defp check_memory(bytes) when is_integer(bytes) do
-    if bytes >= KeeperProtocol.min_memory_bytes() and bytes <= KeeperProtocol.max_memory_bytes(),
+    if bytes >= LocusBackends.min_memory_bytes() and bytes <= LocusBackends.max_memory_bytes(),
       do: :ok,
       else:
         invalid(
-          "config.memory_bytes must be from #{KeeperProtocol.min_memory_bytes()} to " <>
-            "#{KeeperProtocol.max_memory_bytes()} bytes"
+          "config.memory_bytes must be from #{LocusBackends.min_memory_bytes()} to " <>
+            "#{LocusBackends.max_memory_bytes()} bytes"
         )
   end
 

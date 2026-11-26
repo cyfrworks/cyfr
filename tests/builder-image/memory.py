@@ -3,14 +3,16 @@
 # Copyright 2026 CYFR Works Inc.
 """A build cannot take more memory than its bound, run as docker-compose.yml's builder service.
 
-cyfr-locus bounds a spawn that asks for `memory_bytes` with a cgroup of its
-own (apps/locus/keeper/internal/cgroup): the kernel never lets the spawn's whole
+cyfr-locus bounds every spawn by its place's kind, a build at a build's
+bound (Prima.LocusPool's, 1 GiB), with a cgroup of its own
+(apps/locus/keeper/internal/cgroup): the kernel never lets the spawn's whole
 process tree, the tmpfs pages of its home and the kernel memory charged to
 it pass the bound, kills every process of the spawn when they cannot stay
 under it, and cyfr-locus reports that end as `memory` `cap`. It can do
 so only where the service mounts the container's cgroup writable
-(`security_opt: writable-cgroups=true`); anywhere else it refuses a spawn
-that asks for a bound.
+(`security_opt: writable-cgroups=true`); anywhere else it can make no
+role's group and refuses its own boot, so no build runs at all
+(tests/builder-image/isolation.py proves that refusal).
 
 `keeper` drives a second cyfr-locus inside the running service, over its
 own uids, with a client that speaks the keeper's protocol
@@ -25,20 +27,40 @@ sends it:
   the build holds its memory counts it; after its `release`, a measure sent
   with it is still answered with a reading before `released`, and one after
   `released` is `unmeasured`;
-- a spawn naming no bound, or a bound that is zero, not a number or above
-  the maximum, is refused as a bad request and nothing is spawned, and a
-  command runs under the least bound the protocol allows;
+- a spawn naming its own memory bound or CPU quota, which the keeper sets
+  by its kind, is refused as a bad request and nothing is spawned; the
+  client drops its place;
+- every other place is answered `placed` with a build's bound, and its
+  spawn's group is bounded at exactly that;
 - beside a sibling spawn that holds 64 MiB under its bound and completes,
   three hostile spawns end at theirs, reported `memory` `cap` with
   SIGKILL: one process allocating without end, with a daemon in a session
-  of its own that ignores SIGTERM; 48 processes of 16 MiB, none of them
-  large; and one filling its home, which no process holds;
+  of its own that ignores SIGTERM; processes of 16 MiB, none of them
+  large, twice the bound together; and one filling its home, which no
+  process holds;
 - no group's peak, as the kernel accounts it, passed its bound; no process
   of their uids, no home and no group is left; the release and the
   container were not touched;
-- where the service gives cyfr-locus no writable cgroup, every spawn,
-  each of which asks for a bound, is refused as `memory_unavailable`, and
-  this suite fails, naming the option the service lacks.
+- where the service gives cyfr-locus no writable cgroup, cyfr-locus
+  refuses its boot, the builds service never answers, and this suite fails
+  with the service's log, which says what could not be made.
+
+`room` drives a second cyfr-locus as `keeper` does, its pool's work sized
+at ROOM_WORK, which holds one build's allowance and not two, to show the
+keeper's one admission (apps/locus/keeper/internal/admission) on the
+image:
+
+- a holder build of an athanor holds more than a build's allowance, and
+  once the keeper's reading of its place counts it, two builds are placed,
+  one of the holder's athanor and one of another;
+- while the holder holds the room neither is placed, and each is refused
+  `no_memory` between the room's wait and two seconds after it, its `held`
+  whole: what a build needs, its allowance; what is free, the work less
+  the holder's charge; and the holder, charged its reading above its
+  allowance, among the asking athanor's own places with its kind and
+  subject, or, for the other athanor, only in the sum of everyone else's;
+- once the holder is released, the first of them placed again is placed
+  at once with a build's bound.
 
 The build cases run the same hostile work through the builder's own build
 path, each beside a sibling build: `javascript` (a build script allocating
@@ -46,9 +68,9 @@ without end), `rust` (a build.rs doing so), `tree` (100 processes of
 64 MiB) and `home` (files until the home is full). Each must be answered
 with the build wire's `memory` class (`Prima.BuilderProtocol`), leave no
 process of its uid and no home, and leave its sibling, the release and the
-container as they were. The builder asks cyfr-locus for a bound for every
-build (`Locus.Keeper`, LOCUS_BUILDS_MEMORY_BYTES); a build ended by the
-container's own limit or the deadline instead fails its case here.
+container as they were. cyfr-locus bounds every build the builder places
+at a build's bound; a build ended by the container's own limit or the
+deadline instead fails its case here.
 
 Every case prints what it measured: the peak of the hostile tree (the
 resident sets of its uid's processes, sampled from /proc about ten times a
@@ -56,11 +78,11 @@ second, and its group's memory.peak where it has one), what ended it and
 when, what it left, the sibling's end, and the container's memory before,
 at its peak and after, its OOM counters and whether the release or the
 container was started again. `--measure` prints without judging a build's
-end, to see what a build without a bound does. The hostile work is bounded
+end, to see what a build does at its bound. The hostile work is bounded
 by the container's own memory limit, which the suite reads from the
 container and refuses to run without.
 
-Usage: tests/builder-image/memory.py IMAGE [--measure] [keeper|javascript|rust|tree|home]...
+Usage: tests/builder-image/memory.py IMAGE [--measure] [keeper|room|javascript|rust|tree|home]...
 """
 
 import copy
@@ -86,15 +108,19 @@ DEADLINE_MS = 60_000
 # The second cyfr-locus's uids, one for each spawn of its scenario that
 # runs: the last of the image's pool, which the service's own keeper is
 # started without, as a pool of their own the builds role names.
-PROBE_FIRST, PROBE_LAST = POOL_LAST - 5, POOL_LAST
+PROBE_FIRST, PROBE_LAST = POOL_LAST - 4, POOL_LAST
 PROBE_POOL = "probe"
 # The builds role's group in the pool's work, which holds every build's
 # group, and the group above it, rest, whose memory.max bounds the hostile
 # work beside every other role's but the floor's.
 ROLE_GROUP = imagesuite.work_group(ROLE)
 BOUND_GROUP = imagesuite.bound_group(ROLE)
-# The bound the keeper cases ask for.
-BOUND = 256 * MIB
+# The bound the keeper sets on every build (Prima.LocusPool), which the
+# keeper cases' hostile spawns pass.
+BOUND = imagesuite.BUILD_CAP_BYTES
+# The tree case's processes, each holding 16 MiB: twice the bound together.
+TREE_EACH = 16 * MIB
+TREE_PROCESSES = 2 * BOUND // TREE_EACH
 # The measured build: a tincture's `npm run build`, the image's npm running
 # node, which builds dist/index.html from HELD bytes it touches once and keeps
 # until it is released, so its use is steady rather than a compiler's phases
@@ -125,10 +151,33 @@ EOF
 exec npm run build
 """ % (HELD, HOLDING)
 MEASURE = {"holding": HOLDING, "poll_ms": 200, "margin_ms": 100, "grace_ms": 0}
-# The least and the most the keeper's protocol lets a bound be.
-MIN_BOUND, MAX_BOUND = 16 * MIB, 1 << 40
+# The keeper's protocol: every line carries its version.
+V = 7
 
-# One line per sample: `uid:rss_kb:processes,...|memory.current|shmem|uid:memory.peak,...`.
+# The room case. A build's allowance (Prima.LocusPool), the room it needs
+# and its least charge until ten seconds after its spawn; the pool's work,
+# which holds one and not two; and the holder's bytes, more than the
+# allowance, so the room it leaves is less than a build needs both before
+# its reading, at its allowance, and after, at its reading.
+BUILD_ALLOWANCE = imagesuite.ALLOWANCE_BYTES["build"]
+ROOM_WORK = 1280 * MIB
+ROOM_HELD = BUILD_ALLOWANCE + 64 * MIB
+# Its places: the holder's, an athanor's with a subject; the asker of that
+# athanor, whose `held` names the holder; and the asker of another, whose
+# `held` counts it only among everyone else's.
+ROOM_HOLDER = {"place": "holder", "athanor": ATHANOR, "subject": "holder"}
+ROOM_ASKERS = [{"name": "mine", "place": "ask-mine", "athanor": ATHANOR},
+               {"name": "other", "place": "ask-other", "athanor": "neighbour@example"}]
+# How long a start waits for room before it is refused (Prima.LocusPool).
+# The refusal is sent at the ledger's first second after it; two seconds
+# bound that second and the line's way to the client.
+ROOM_WAIT_MS = imagesuite.ROOM_WAIT_MS
+ROOM_LATE_MS = 2000
+# A start placed into an empty pool is answered by the step its place
+# makes, well within this.
+ROOM_AT_ONCE_MS = 1000
+
+# One line per sample: `uid:rss_kb:processes,...|memory.current|shmem|uid:memory.peak:memory.max,...`.
 SAMPLER = r"""
 while :; do
   cat /proc/[0-9]*/status 2>/dev/null | awk -v first=%d -v last=%d '
@@ -138,7 +187,8 @@ while :; do
     END { for (u in n) printf "%%s:%%d:%%d,", u, rss[u], n[u] }'
   groups=""
   for d in %s/keeper-*; do
-    peak="$(cat "$d/bound/memory.peak" 2>/dev/null)" && groups="$groups${d##*keeper-}:$peak,"
+    peak="$(cat "$d/bound/memory.peak" 2>/dev/null)" && max="$(cat "$d/bound/memory.max" 2>/dev/null)" \
+      && groups="$groups${d##*keeper-}:$peak:$max,"
   done
   printf '|%%s|%%s|%%s\n' "$(cat %s/memory.current)" "$(awk '$1 == "shmem" {print $2}' %s/memory.stat)" "$groups"
   sleep 0.1
@@ -200,10 +250,13 @@ impl Guest for Hostile {
 # The keeper cases' client: cyfr-locus starts it as the release's user with
 # the channel on fd 3. It places every spawn of the scenario and sends each
 # spawn once its place is answered, attaches their relays, and prints what
-# the keeper answered for each. The spawn marked `measure` is measured until
-# a reading the keeper took after the build said it holds its memory, then
-# released with a measure in the same write, and measured once more after
-# its `released`.
+# the keeper answered for each. A spawn with `extra` members, which the
+# protocol does not know, is refused before the keeper reads its id: such
+# refusals are taken in the order those spawns were sent, and each one's
+# place is dropped. The spawn marked `measure` is measured until a reading
+# the keeper took after the build said it holds its memory, then released
+# with a measure in the same write, and measured once more after its
+# `released`.
 CLIENT = r"""
 import fs from "node:fs";
 import net from "node:net";
@@ -211,6 +264,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 
 const scenario = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+const v = scenario.v;
 const dir = fs.mkdtempSync(path.join(process.env.RELEASE_TMP, "memory-"));
 const attach = path.join(dir, "attach.sock");
 const spawns = scenario.spawns.map((s, i) => ({
@@ -219,6 +273,8 @@ const spawns = scenario.spawns.map((s, i) => ({
 }));
 // Each measure's spawn and its entry in that spawn's `measures`, by the measure's id.
 const measures = new Map();
+// The spawns sent with members the protocol does not know, in the order sent, until each is refused.
+const refusable = [];
 const started = Date.now();
 // The number of the keeper's last line, so the report says in what order every reply came.
 let seq = 0;
@@ -226,8 +282,8 @@ let channel = null;
 
 function finish(timedOut) {
   if (!timedOut && !spawns.every((s) => s.done && (!s.spawn_id || s.drained))) return;
-  const report = spawns.map(({ name, place, uid, replies, measures, holding_ms, stdout, done }) => (
-    { name, place, uid, replies, measures, holding_ms, stdout: stdout.slice(-400), done }));
+  const report = spawns.map(({ name, place, uid, replies, measures, holding_ms, bound, stdout, done }) => (
+    { name, place, uid, replies, measures, holding_ms, bound, stdout: stdout.slice(-400), done }));
   process.stdout.write("<<<" + JSON.stringify({ timed_out: timedOut, spawns: report }) + ">>>\n", () => {
     fs.rmSync(dir, { recursive: true, force: true });
     // A role's process that ends is started again by its keeper, which
@@ -242,7 +298,7 @@ function measure(spawn, phase, before = "") {
   const entry = { phase, id, sent_ms: Date.now() - started };
   measures.set(id, { spawn, entry });
   spawn.measures.push(entry);
-  channel.write(before + JSON.stringify({ v: 6, type: "measure", id, place: spawn.place }) + "\n");
+  channel.write(before + JSON.stringify({ v, type: "measure", id, place: spawn.place }) + "\n");
 }
 
 function measured(spawn, entry, reply) {
@@ -254,7 +310,7 @@ function measured(spawn, entry, reply) {
   if (entry.phase !== "running" || spawn.replies.some((r) => r.type === "released")) return;
   const readAt = reply.type === "measured" ? entry.at_ms - reply.age_ms : -Infinity;
   if (spawn.holding_ms !== undefined && readAt > spawn.holding_ms + scenario.measure.margin_ms) {
-    const release = { v: 6, type: "release", spawn_id: spawn.spawn_id, grace_ms: scenario.measure.grace_ms };
+    const release = { v, type: "release", spawn_id: spawn.spawn_id, grace_ms: scenario.measure.grace_ms };
     measure(spawn, "release", JSON.stringify(release) + "\n");
   } else {
     setTimeout(() => measure(spawn, "running"), scenario.measure.poll_ms);
@@ -265,10 +321,10 @@ function settle(spawn, reply) {
   spawn.replies.push({ ...reply, at_ms: Date.now() - started, seq });
   if (reply.type === "placed") {
     const request = {
-      v: 6, type: "spawn", id: spawn.id, place: spawn.place, pool: scenario.pool, argv: spawn.argv, env: {}, cpu_quota: 100000,
-      attach: { path: attach, token: spawn.token },
+      v, type: "spawn", id: spawn.id, place: spawn.place, pool: scenario.pool, argv: spawn.argv, env: {},
+      attach: { path: attach, token: spawn.token }, ...(spawn.extra || {}),
     };
-    if ("memory_bytes" in spawn) request.memory_bytes = spawn.memory_bytes;
+    if (spawn.extra) refusable.push(spawn);
     channel.write(JSON.stringify(request) + "\n");
   }
   if (reply.type === "spawned") {
@@ -297,6 +353,8 @@ const server = net.createServer((conn) => {
         if (!spawn) return conn.destroy();
       } else if (stream === 1 && spawn) {
         spawn.stdout += payload.toString("utf8");
+        const bound = /^bound:(\S+)$/m.exec(spawn.stdout);
+        if (bound && spawn.bound === undefined) spawn.bound = bound[1];
         if (spawn.measure && spawn.holding_ms === undefined && spawn.stdout.includes(scenario.measure.holding)) {
           spawn.holding_ms = Date.now() - started;
         }
@@ -319,20 +377,142 @@ server.listen(attach, () => {
         measured(asked.spawn, asked.entry, reply);
         continue;
       }
-      // A request whose fields do not decode is refused without its id: the
-      // scenario holds one such request, the bound that is not a number.
+      // A request with a member the protocol does not know is refused
+      // without its id, in the order the keeper read it, and frees nothing:
+      // its place is dropped.
       const unnamed = reply.type === "error" && !reply.id && !reply.spawn_id;
       const spawn = unnamed
-        ? spawns.find((s) => !s.done && "memory_bytes" in s && typeof s.memory_bytes !== "number")
+        ? refusable.shift()
         : spawns.find((s) => s.id === reply.id || s.place === reply.id || (reply.spawn_id && s.spawn_id === reply.spawn_id));
+      if (spawn && unnamed) channel.write(JSON.stringify({ v, type: "drop", place: spawn.place }) + "\n");
       if (spawn) settle(spawn, unnamed ? { ...reply, id: spawn.id } : reply);
     }
   });
   for (const s of spawns) {
-    const place = { v: 6, type: "place", id: s.place, kind: "build" };
+    const place = { v, type: "place", id: s.place, kind: "build" };
     if (s.athanor) place.athanor = s.athanor;
     channel.write(JSON.stringify(place) + "\n");
   }
+});
+
+setTimeout(() => finish(true), scenario.timeout_ms);
+"""
+
+# The room case's client, started as CLIENT is. It places the holder and
+# spawns it once placed, measures its place every poll_ms until a reading
+# holds `held` bytes, then places every asker in one write; once each asker
+# is answered it releases the holder (an asker answered `placed` is dropped
+# first), and after the holder's `released` places the first asker again
+# under its own place and drops it once answered. It reports every reply
+# with when it came and its number among the keeper's lines, and when each
+# place was sent.
+ROOM_CLIENT = r"""
+import fs from "node:fs";
+import net from "node:net";
+import path from "node:path";
+import crypto from "node:crypto";
+
+const scenario = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+const v = scenario.v;
+const dir = fs.mkdtempSync(path.join(process.env.RELEASE_TMP, "room-"));
+const attach = path.join(dir, "attach.sock");
+const token = crypto.randomBytes(32).toString("hex");
+const started = Date.now();
+const holder = { ...scenario.holder, replies: [], measures: [], spawn_id: null };
+const askers = scenario.askers.map((a) => ({ ...a, replies: [] }));
+const again = { ...scenario.askers[0], replies: [] };
+const measures = new Map();
+let phase = "holding";
+let seq = 0;
+let ended = false;
+let channel = null;
+
+function send(message) { channel.write(JSON.stringify({ v, ...message }) + "\n"); }
+function stamp(reply) { return { ...reply, at_ms: Date.now() - started, seq }; }
+
+function finish(timedOut) {
+  if (ended) return;
+  ended = true;
+  const report = { timed_out: timedOut, holder, askers, again };
+  process.stdout.write("<<<" + JSON.stringify(report) + ">>>\n", () => {
+    fs.rmSync(dir, { recursive: true, force: true });
+    if (scenario.stay) setInterval(() => {}, 1 << 30);
+    else process.exit(timedOut ? 1 : 0);
+  });
+}
+
+function measure() {
+  const id = "m" + (measures.size + 1);
+  const entry = { id, sent_ms: Date.now() - started };
+  measures.set(id, entry);
+  holder.measures.push(entry);
+  send({ type: "measure", id, place: holder.place });
+}
+
+function place(who) {
+  who.sent_ms = Date.now() - started;
+  const request = { type: "place", id: who.place, kind: "build", athanor: who.athanor };
+  if (who.subject) request.subject = who.subject;
+  return request;
+}
+
+function onReply(reply) {
+  const asked = reply.id === undefined ? undefined : measures.get(reply.id);
+  if (asked) {
+    Object.assign(asked, { reply, at_ms: Date.now() - started, seq });
+    if (phase !== "holding") return;
+    if (reply.type === "measured" && reply.bytes >= scenario.held) {
+      phase = "asking";
+      channel.write(askers.map((a) => JSON.stringify({ v, ...place(a) })).join("\n") + "\n");
+    } else {
+      setTimeout(measure, scenario.poll_ms);
+    }
+    return;
+  }
+  if (reply.id === holder.place || reply.id === holder.spawn || (reply.spawn_id && reply.spawn_id === holder.spawn_id)) {
+    holder.replies.push(stamp(reply));
+    if (reply.type === "placed") {
+      send({ type: "spawn", id: holder.spawn, place: holder.place, pool: scenario.pool, argv: holder.argv, env: {},
+             attach: { path: attach, token } });
+    } else if (reply.type === "spawned") {
+      holder.spawn_id = reply.spawn_id;
+      measure();
+    } else if (reply.type === "released" && phase === "asking") {
+      phase = "again";
+      send(place(again));
+    }
+    return;
+  }
+  if (phase === "again" && reply.id === again.place) {
+    again.replies.push(stamp(reply));
+    if (reply.type === "placed") send({ type: "drop", place: again.place });
+    return finish(false);
+  }
+  const asker = askers.find((a) => a.place === reply.id);
+  if (!asker || phase !== "asking") return;
+  asker.replies.push(stamp(reply));
+  if (reply.type === "placed") send({ type: "drop", place: asker.place });
+  if (askers.every((a) => a.replies.length > 0)) {
+    send({ type: "release", spawn_id: holder.spawn_id, grace_ms: 0 });
+  }
+}
+
+// The holder's relay is read and its bytes thrown away: the case reads its place, not its output.
+const server = net.createServer((conn) => { conn.on("error", () => {}); conn.resume(); });
+
+server.listen(attach, () => {
+  channel = new net.Socket({ fd: 3, readable: true, writable: true });
+  let lines = "";
+  channel.on("data", (chunk) => {
+    lines += chunk.toString("utf8");
+    for (let at = lines.indexOf("\n"); at >= 0; at = lines.indexOf("\n")) {
+      const reply = JSON.parse(lines.slice(0, at));
+      lines = lines.slice(at + 1);
+      seq += 1;
+      onReply(reply);
+    }
+  });
+  send(place(holder));
 });
 
 setTimeout(() => finish(true), scenario.timeout_ms);
@@ -343,20 +523,37 @@ def shell(script):
     return ["/bin/sh", "-c", script]
 
 
+# The first act of every bounded build: it reads its own group's bound from
+# inside its space, where the space's cgroup root is that group, before it
+# does anything that could end it. A hostile build is ended at its bound
+# within a second, often before a sampler outside reads its group; this
+# read cannot miss it.
+READ_BOUND = 'echo "bound:$(cat /sys/fs/cgroup/memory.max)"\n'
+
+
+def bounded(script, *args):
+    """A build's command: READ_BOUND, then `script` with `args` as its $0 on."""
+    return shell(READ_BOUND + script) + list(args)
+
+
+# The spawns that name a bound of their own, which the keeper refuses: it sets every bound by the place's kind.
+REFUSED = ("a spawn naming its memory bound", "a spawn naming its CPU quota")
+# The spawns the keeper bounds at a build's bound.
+BOUNDED = ("sibling", "process", "tree", "home", "build")
+
+
 def scenario():
-    holders = "for i in $(seq 1 48); do perl -e '$held = \"x\" x (16 << 20); sleep 120' & done\nwait\n"
+    holders = (f"for i in $(seq 1 {TREE_PROCESSES}); do perl -e '$held = \"x\" x {TREE_EACH}; sleep 120' & done\n"
+               "wait\n")
     sibling = "const held = Buffer.alloc(64 << 20, 1); setTimeout(() => console.log('held ' + held[5]), 8000);"
     return [
-        {"name": "a bound of zero", "argv": ["true"], "memory_bytes": 0},
-        {"name": "a bound that is not a number", "argv": ["true"], "memory_bytes": "1G"},
-        {"name": "a bound above the maximum", "argv": ["true"], "memory_bytes": MAX_BOUND + 1},
-        {"name": "a spawn with no bound", "argv": ["true"]},
-        {"name": "the least bound", "argv": shell("echo ran"), "memory_bytes": MIN_BOUND},
-        {"name": "sibling", "argv": ["node", "-e", sibling], "memory_bytes": BOUND},
-        {"name": "process", "argv": shell(DAEMON + f"exec node -e '{NODE_ALLOCATOR}'"), "memory_bytes": BOUND},
-        {"name": "tree", "argv": shell(holders), "memory_bytes": BOUND},
-        {"name": "home", "argv": shell(FILL_HOME), "memory_bytes": BOUND},
-        {"name": "build", "athanor": ATHANOR, "measure": True, "argv": shell(MEASURED_BUILD) + ["measured-build"], "memory_bytes": BOUND},
+        {"name": REFUSED[0], "argv": ["true"], "extra": {"memory_bytes": BOUND}},
+        {"name": REFUSED[1], "argv": ["true"], "extra": {"cpu_quota": 100_000}},
+        {"name": "sibling", "argv": bounded('exec node -e "$0"', sibling)},
+        {"name": "process", "argv": bounded(DAEMON + f"exec node -e '{NODE_ALLOCATOR}'")},
+        {"name": "tree", "argv": bounded(holders)},
+        {"name": "home", "argv": bounded(FILL_HOME)},
+        {"name": "build", "athanor": ATHANOR, "measure": True, "argv": bounded(MEASURED_BUILD, "measured-build")},
     ]
 
 
@@ -365,14 +562,14 @@ def reading(entry, athanor):
     reply = entry.get("reply")
     if not isinstance(reply, dict):
         return False
-    owner = {"v": 6, "type": "measured", "id": entry["id"], "kind": "build", "athanor": athanor}
+    owner = {"v": V, "type": "measured", "id": entry["id"], "kind": "build", "athanor": athanor}
     return ({key: value for key, value in reply.items() if key not in ("bytes", "lesser", "age_ms")} == owner
             and type(reply.get("bytes")) is int and reply["bytes"] > 0 and type(reply.get("lesser")) is bool
             and type(reply.get("age_ms")) is int and reply["age_ms"] >= 0)
 
 
 def unmeasured(entry):
-    return entry.get("reply") == {"v": 6, "type": "error", "id": entry["id"], "code": "unmeasured"}
+    return entry.get("reply") == {"v": V, "type": "error", "id": entry["id"], "code": "unmeasured"}
 
 
 def judge_build(spawn):
@@ -380,8 +577,9 @@ def judge_build(spawn):
     replies = spawn["replies"]
     types = [reply["type"] for reply in replies]
     expect(types[:2] == ["placed", "spawned"] and types[-1:] == ["released"] and set(types[2:-1]) <= {"exited"}
-           and {key: value for key, value in replies[0].items() if key not in ("at_ms", "seq")} == {"v": 6, "type": "placed", "id": spawn["place"]},
-           "the build's place is placed before its spawn names it, and the build is released", spawn)
+           and {key: value for key, value in replies[0].items() if key not in ("at_ms", "seq")}
+           == {"v": V, "type": "placed", "id": spawn["place"], "memory_bytes": BOUND},
+           "the build's place is placed with a build's bound before its spawn names it, and the build is released", spawn)
     released = replies[-1]["seq"]
     phases = {phase: [entry for entry in spawn["measures"] if entry["phase"] == phase] for phase in ("running", "release", "after")}
     running = phases["running"]
@@ -400,6 +598,69 @@ def judge_build(spawn):
     after = (phases["after"] or [{"id": None}])[0]
     expect(len(phases["after"]) == 1 and unmeasured(after) and after["seq"] > released,
            "after its released, the build's place is free: its measure is unmeasured", [phases["after"], replies[-1]])
+
+
+def room_scenario():
+    """The room case's scenario: the holder, which touches ROOM_HELD bytes and keeps them until it is released, and
+    the askers."""
+    holder = dict(ROOM_HOLDER, spawn="holder-spawn",
+                  argv=["node", "-e", f"const held = Buffer.alloc({ROOM_HELD}, 1); setInterval(() => held[5], 60000);"])
+    return {"v": V, "pool": PROBE_POOL, "timeout_ms": 60_000, "poll_ms": 200, "held": ROOM_HELD, "holder": holder,
+            "askers": ROOM_ASKERS, "stay": True}
+
+
+def unstamped(reply):
+    return {key: value for key, value in reply.items() if key not in ("at_ms", "seq")}
+
+
+def judge_room(report, work=ROOM_WORK):
+    """The room case's verdict, from what its client reported: each asker refused for room after the room's wait with
+    its `held` whole while the holder holds the room, and the first placed at once after the holder's release."""
+    expect(not report["timed_out"], "the room case's client was answered at every step", report)
+    holder = report["holder"]
+    replies = holder["replies"]
+    types = [reply["type"] for reply in replies]
+    expect(types[:2] == ["placed", "spawned"] and types[-1:] == ["released"] and set(types[2:-1]) <= {"exited"}
+           and unstamped(replies[0]) == {"v": V, "type": "placed", "id": holder["place"], "memory_bytes": BOUND},
+           "the holder is placed with a build's bound, spawned, and released", replies)
+    readings = [entry for entry in holder["measures"] if entry.get("reply", {}).get("type") == "measured"]
+    expect(readings and readings[-1]["reply"]["bytes"] >= ROOM_HELD,
+           f"the keeper's reading of the holder's place counts the {mib(ROOM_HELD)} it holds before any asker is placed",
+           holder["measures"])
+    released = replies[-1]["seq"]
+    for asker in report["askers"]:
+        answers = asker["replies"]
+        expect(len(answers) == 1 and answers[0]["type"] == "error" and answers[0].get("code") == "no_memory",
+               f"the {asker['name']} asker is not placed while the holder holds the room: it is refused no_memory", answers)
+        refusal = answers[0]
+        waited = refusal["at_ms"] - asker["sent_ms"]
+        expect(ROOM_WAIT_MS <= waited < ROOM_WAIT_MS + ROOM_LATE_MS and refusal["seq"] < released,
+               f"the {asker['name']} asker is refused after the room's wait of {ROOM_WAIT_MS} ms and within "
+               f"{ROOM_LATE_MS} ms of it, while the holder holds the room: {waited} ms", [asker, replies[-1]])
+        held = refusal.get("held") if isinstance(refusal.get("held"), dict) else {}
+        same = asker["athanor"] == holder["athanor"]
+        if same:
+            mine = held.get("mine")
+            charge = mine[0].get("bytes") if isinstance(mine, list) and mine and isinstance(mine[0], dict) else None
+            expected = {"mine": [{"kind": "build", "subject": holder["subject"], "bytes": charge}], "others_bytes": 0}
+        else:
+            charge = held.get("others_bytes")
+            expected = {"mine": [], "others_bytes": charge}
+        # The holder's charge is its reading, which holds ROOM_HELD, more than a build's allowance, and never its bound.
+        expect(type(charge) is int and ROOM_HELD <= charge <= BOUND,
+               f"the {asker['name']} asker's refusal charges the holder its reading, at least the {mib(ROOM_HELD)} it "
+               f"holds, more than a build's allowance of {mib(BUILD_ALLOWANCE)}", refusal)
+        expect(unstamped(refusal) == {"v": V, "type": "error", "id": asker["place"], "code": "no_memory",
+                                      "held": {"need": BUILD_ALLOWANCE, "free": work - charge, **expected}},
+               f"the {asker['name']} asker's held is whole: a build's allowance needed, the work less the holder's "
+               f"charge free, and the holder " + ("among its own athanor's places, with its kind and subject" if same
+                                                   else "only in the sum of everyone else's"), refusal)
+    again = report["again"]
+    answers = again["replies"]
+    expect(len(answers) == 1 and answers[0]["seq"] > released and answers[0]["at_ms"] - again["sent_ms"] < ROOM_AT_ONCE_MS
+           and unstamped(answers[0]) == {"v": V, "type": "placed", "id": again["place"], "memory_bytes": BOUND},
+           f"once the holder is released, the {again['name']} asker placed again is placed at once with a build's bound",
+           [again, replies[-1]])
 
 
 def hostile_sources(case):
@@ -427,6 +688,8 @@ class Sampler(threading.Thread):
             ["docker", "exec", container, "sh", "-c", SAMPLER], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
         self.samples = []
         self.group_peaks = {}
+        # Each group's memory.max, every value it was read at.
+        self.group_bounds = {}
 
     def run(self):
         for line in self.process.stdout:
@@ -437,8 +700,9 @@ class Sampler(threading.Thread):
                     uid, rss_kb, count = entry.split(":")
                     tree[int(uid)] = (int(rss_kb) * 1024, int(count))
                 for entry in filter(None, groups.split(",")):
-                    uid, peak = entry.split(":")
+                    uid, peak, bound = entry.split(":")
                     self.group_peaks[int(uid)] = max(self.group_peaks.get(int(uid), 0), int(peak))
+                    self.group_bounds.setdefault(int(uid), set()).add(bound)
                 self.samples.append((time.monotonic(), tree, int(current), int(shmem or 0)))
             except ValueError:
                 continue
@@ -550,46 +814,63 @@ def keeper_report(name, timeout_s=300):
     return run("docker", "logs", name, check=False)
 
 
-def test_keeper(stack, limit, canary):
-    with open(os.path.join(canary, "memory-client.mjs"), "w") as out:
-        out.write(CLIENT)
-    with open(os.path.join(canary, "memory-scenario.json"), "w") as out:
-        json.dump({"pool": PROBE_POOL, "timeout_ms": 90_000, "measure": MEASURE, "spawns": scenario(), "stay": True}, out)
+def write_client(canary, client, source, scenario_file, scenario_value):
+    """Writes a client and its scenario into the canary directory, which the probe mounts at /canary."""
+    with open(os.path.join(canary, client), "w") as out:
+        out.write(source)
+    with open(os.path.join(canary, scenario_file), "w") as out:
+        json.dump(scenario_value, out)
     # The container's user reads them, whatever the caller's umask.
-    os.chmod(os.path.join(canary, "memory-client.mjs"), 0o644)
-    os.chmod(os.path.join(canary, "memory-scenario.json"), 0o644)
+    os.chmod(os.path.join(canary, client), 0o644)
+    os.chmod(os.path.join(canary, scenario_file), 0o644)
     os.chmod(canary, 0o755)
 
-    # A second cyfr-locus, in a container of its own under the service's
-    # options behind a guard of its own, whose builds role is the scenario's
-    # client over the probe pool, relay spaces that need no route.
-    guard = imagesuite.Guard(stack.image, f"{stack.project}-keeper-guard")
+
+def start_probe(stack, guard, canary, name, client, scenario_file, work, total):
+    """A second cyfr-locus, in a container of its own under the service's options behind a guard of its own, whose
+    builds role is the client over the probe pool, relay spaces that need no route, its pool's work `work` bytes: the
+    machine's memory, `total`, less a reserve, with no share and no floor. Answers its container's id."""
+    if total <= work:
+        sys.exit(f"FAIL: this machine's {total} bytes do not hold a pool of {work} bytes")
+    return run("docker", "run", "--detach", *imagesuite.run_name(name), *guard.keeper_args(),
+               "-v", f"{canary}:/canary:ro",
+               "--cap-drop", "ALL", "--cap-add", "SETUID", "--cap-add", "SETGID", "--cap-add", "KILL",
+               "--security-opt", "no-new-privileges:true", "--security-opt", "writable-cgroups=true",
+               "--security-opt", f"seccomp={os.path.join(ROOT, 'apps', 'locus', 'keeper', 'seccomp', 'keeper.json')}",
+               "--security-opt", f"apparmor={imagesuite.APPARMOR}", "--security-opt", "systempaths=unconfined",
+               "--read-only", "--ipc", "none", "--init", *imagesuite.role_mounts(RELEASE, ROLE),
+               "-e", f"{ROLE['key']}={stack.key}", "-e", f"LOCUS_CORE_RESERVE_BYTES={total - work}",
+               "-e", "LOCUS_SERVICE_BYTES=0",
+               "--entrypoint", "cyfr-locus", stack.image, "serve",
+               "--role", imagesuite.role_spec(dict(ROLE, pool=PROBE_POOL)),
+               "--pool", f"{PROBE_POOL}:{PROBE_FIRST}-{PROBE_LAST}:relay", "--home-root", RELEASE["home_root"],
+               "--guard", imagesuite.Guard.CONTROL, "--", "node", f"/canary/{client}",
+               f"/canary/{scenario_file}").stdout.strip()
+
+
+def await_probe(stack, container, work):
+    """The stack as an observer of the probe's container, once rest is bounded at `work`, which the keeper writes as it
+    boots, before the role starts."""
     probe = copy.copy(stack)
+    probe.container = container
+    deadline = time.monotonic() + 60
+    while probe.exec(f"test -f {ROLE_GROUP}/memory.events && grep -qx {work} {BOUND_GROUP}/memory.max").returncode != 0:
+        expect(time.monotonic() < deadline, "the second cyfr-locus makes the builds role's group and bounds rest",
+               run("docker", "logs", container, check=False).stderr[-2000:])
+        time.sleep(0.2)  # sleep-ok: polling for the group the keeper makes as it boots
+    return probe
+
+
+def test_keeper(stack, limit, canary):
+    write_client(canary, "memory-client.mjs", CLIENT, "memory-scenario.json",
+                 {"v": V, "pool": PROBE_POOL, "timeout_ms": 90_000, "measure": MEASURE, "spawns": scenario(), "stay": True})
+    # The pool's bound at the service's, which the hostile work meets beside its own.
+    guard = imagesuite.Guard(stack.image, f"{stack.project}-keeper-guard")
     name = None
     try:
-        name = run("docker", "run", "--detach", *imagesuite.run_name(f"{stack.project}-keeper"), *guard.keeper_args(),
-                   "-v", f"{canary}:/canary:ro",
-            "--cap-drop", "ALL", "--cap-add", "SETUID", "--cap-add", "SETGID", "--cap-add", "KILL",
-            "--security-opt", "no-new-privileges:true", "--security-opt", "writable-cgroups=true",
-            "--security-opt", f"seccomp={os.path.join(ROOT, 'apps', 'locus', 'keeper', 'seccomp', 'keeper.json')}",
-            "--security-opt", f"apparmor={imagesuite.APPARMOR}", "--security-opt", "systempaths=unconfined",
-            "--read-only", "--ipc", "none", "--init", *imagesuite.role_mounts(RELEASE, ROLE),
-            # The pool's bound at the service's, which the hostile work meets beside its own: the machine's
-            # memory less a reserve, with no share and no floor, is that bound.
-            "-e", f"{ROLE['key']}={stack.key}", "-e", f"LOCUS_CORE_RESERVE_BYTES={mem_total(stack) - limit}",
-            "-e", "LOCUS_SERVICE_BYTES=0",
-            "--entrypoint", "cyfr-locus", stack.image, "serve",
-            "--role", imagesuite.role_spec(dict(ROLE, pool=PROBE_POOL)),
-            "--pool", f"{PROBE_POOL}:{PROBE_FIRST}-{PROBE_LAST}:relay", "--home-root", RELEASE["home_root"],
-            "--guard", imagesuite.Guard.CONTROL, "--", "node", "/canary/memory-client.mjs",
-                   "/canary/memory-scenario.json").stdout.strip()
-        probe.container = name
-        # The pool's bound is written as the keeper boots, before the role starts.
-        deadline = time.monotonic() + 60
-        while probe.exec(f"test -f {ROLE_GROUP}/memory.events && grep -qx {limit} {BOUND_GROUP}/memory.max").returncode != 0:
-            expect(time.monotonic() < deadline, "the second cyfr-locus makes the builds role's group and bounds rest",
-                   run("docker", "logs", name, check=False).stderr[-2000:])
-            time.sleep(0.2)  # sleep-ok: polling for the group the keeper makes as it boots
+        name = start_probe(stack, guard, canary, f"{stack.project}-keeper", "memory-client.mjs", "memory-scenario.json",
+                           limit, mem_total(stack))
+        probe = await_probe(stack, name, limit)
         before = container_state(probe)
         sampler = Sampler(name)
         sampler.start()
@@ -633,19 +914,22 @@ def test_keeper(stack, limit, canary):
             print("  keeper: " + line.split("] ", 1)[-1][:300])
 
     expect(not report["timed_out"], "every spawn of the scenario was answered and released", report)
-    for name in (
-        "a spawn with no bound",
-        "a bound of zero",
-        "a bound that is not a number",
-        "a bound above the maximum",
-    ):
+    for name in REFUSED:
         expect(reply(name, "error") and reply(name, "error")["code"] == "bad_request" and not reply(name, "spawned"),
-               f"{name} is refused as a bad request", spawns[name])
+               f"{name}, which the keeper sets by its kind, is refused as a bad request", spawns[name])
 
-    bounded = ("the least bound", "sibling", "process", "tree", "home", "build")
-    least = reply("the least bound", "exited")
-    expect(least and least["code"] == 0 and least["memory"] is None and "ran" in spawns["the least bound"]["stdout"],
-           f"a command runs under the least bound the protocol allows, {mib(MIN_BOUND)}", spawns["the least bound"])
+    placed = {name: reply(name, "placed") for name in BOUNDED}
+    expect(all(answer and answer.get("memory_bytes") == BOUND for answer in placed.values()),
+           f"every build's place is answered placed with a build's bound, {mib(BOUND)}", placed)
+    # Each build read its own group's bound from inside before anything
+    # else, so none is missed; a hostile group may live for less than one
+    # of the sampler's reads from outside, which must agree wherever it read.
+    inside = {name: spawns[name].get("bound") for name in BOUNDED}
+    expect(all(bound == str(BOUND) for bound in inside.values()),
+           f"every build's group is bounded at exactly {BOUND} bytes, as each read it from inside its space", inside)
+    outside = {name: sampler.group_bounds.get(spawns[name]["uid"]) for name in BOUNDED}
+    expect(all(bound in (None, {str(BOUND)}) for bound in outside.values()),
+           f"every build's group the sampler read is bounded at exactly {BOUND} bytes", outside)
     sibling = reply("sibling", "exited")
     expect(sibling and sibling["code"] == 0 and sibling["memory"] is None and "held 1" in spawns["sibling"]["stdout"],
            "a sibling spawn holding 64 MiB under its bound completes", spawns["sibling"])
@@ -658,15 +942,49 @@ def test_keeper(stack, limit, canary):
     # A hostile group lives for less than a second, so the sampler may miss
     # its last pages; that it reached its bound is the kernel's own count,
     # which `memory` `cap` reports. What was sampled never passed it.
-    asked = {spawn["name"]: spawn.get("memory_bytes") for spawn in scenario()}
-    seen = {name: sampler.group_peaks.get(spawns[name]["uid"]) for name in bounded}
-    expect(seen["sibling"] and all(peak is None or peak <= asked[name] for name, peak in seen.items()),
-           "no group's peak, as the kernel accounts it, passed the bound its spawn asked for", {"asked": asked, "seen": seen})
+    seen = {name: sampler.group_peaks.get(spawns[name]["uid"]) for name in BOUNDED}
+    expect(seen["sibling"] and all(peak is None or peak <= BOUND for peak in seen.values()),
+           "no group's peak, as the kernel accounts it, passed its bound", {"bound": BOUND, "seen": seen})
 
     expect(left == [], "no process of any spawn's uid is left, the daemon included", left)
     expect(homes == [], "no home is left", homes)
     expect(groups == [], "no spawn's cgroup is left", groups)
     expect(not again, "the container was not started again", {"before": before, "after": after})
+
+
+def test_room(stack, canary):
+    write_client(canary, "memory-room-client.mjs", ROOM_CLIENT, "memory-room.json", room_scenario())
+    # The probe alone: the builds service is not needed, and its pool's work is the case's own.
+    guard = imagesuite.Guard(stack.image, f"{stack.project}-room-guard")
+    name = None
+    try:
+        name = start_probe(stack, guard, canary, f"{stack.project}-room", "memory-room-client.mjs", "memory-room.json",
+                           ROOM_WORK, imagesuite.mem_total(stack.image))
+        probe = await_probe(stack, name, ROOM_WORK)
+        result = keeper_report(name, timeout_s=120)
+        expect("<<<" in result.stdout, "the second cyfr-locus ran the room case's client", result.stdout + result.stderr)
+        left = probe.pool_processes()
+        homes = probe.homes()
+        groups = keeper_groups(probe)
+    finally:
+        if name:
+            run("docker", "rm", "--force", name, check=False)
+        guard.down()
+    report = json.loads(result.stdout.split("<<<", 1)[1].rsplit(">>>", 1)[0])
+
+    print("--- room")
+    print(f"the pool's work {mib(ROOM_WORK)}, a build's allowance {mib(BUILD_ALLOWANCE)}; the holder holds {mib(ROOM_HELD)}")
+    for asker in report["askers"] + [report["again"]]:
+        for answer in asker["replies"]:
+            print(f"{asker['name']} ({asker['athanor']}): {answer['type']} {answer.get('code', '')} "
+                  f"{answer['at_ms'] - asker['sent_ms']} ms after its place {json.dumps(answer.get('held'))}")
+    for line in result.stderr.splitlines():
+        if "refused" in line or "the pool:" in line:
+            print("  keeper: " + line.split("] ", 1)[-1][:300])
+
+    judge_room(report)
+    expect(left == [] and homes == [] and groups == [], "the holder left no process, home or group",
+           {"processes": left, "homes": homes, "groups": groups})
 
 
 def test_build(stack, case, limit, measure):
@@ -750,6 +1068,9 @@ def main(image, measure, cases):
     stack = Stack("locus-builds-memory", image, canary)
     try:
         for case in cases:
+            if case == "room":
+                test_room(stack, canary)
+                continue
             # A fresh container per case, so one case's damage is not the next one's start.
             stack.up(pool=f"{POOL_FIRST}-{PROBE_FIRST - 1}", timeout_ms=DEADLINE_MS)
             limit = container_limit(stack)
@@ -767,4 +1088,4 @@ if __name__ == "__main__":
     arguments = [argument for argument in sys.argv[1:] if argument != "--measure"]
     if not arguments:
         sys.exit(__doc__)
-    main(arguments[0], "--measure" in sys.argv, arguments[1:] or ["keeper", "javascript", "rust", "tree", "home"])
+    main(arguments[0], "--measure" in sys.argv, arguments[1:] or ["keeper", "room", "javascript", "rust", "tree", "home"])

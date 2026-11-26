@@ -39,14 +39,15 @@ defmodule Locus.Runtime.Test.Runners do
 
   @doc """
   Taint every busy runner of `pool` and end it at once, with no grace
-  (`Locus.Runtime.RunnerPool.taint/3`), and answer once no runner is left
+  (`Locus.Runtime.RunnerPool.taint/4`), and answer once no runner is left
   being ended: each retired by its keeper or dropped at the pool's
   retirement bound. Fresh and idle runners stay pooled. Fails past
   `timeout_ms`.
   """
   @spec retire_busy(GenServer.server(), non_neg_integer()) :: :ok
   def retire_busy(pool, timeout_ms \\ 30_000) do
-    for %{pid: pid, state: :busy} <- runners(pool), do: :ok = RunnerPool.taint(pool, pid, 0)
+    for %{pid: pid, state: :busy, execution_id: execution_id} <- runners(pool),
+        do: :ok = RunnerPool.taint(pool, pid, 0, execution_id)
 
     wait_until(
       fn -> not Enum.any?(runners(pool), &(&1.state in [:tainted, :retiring])) end,

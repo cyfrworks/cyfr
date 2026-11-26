@@ -4,9 +4,10 @@
 
 A runner's keeper group counts as removed only on a probe whose successful
 exec says so. A failed exec is no answer, whatever its status, and it fails
-the kill. The measure step's client speaks keeper protocol 3 to a keeper
-that answers as cyfr-locus does, beside a stand-in for this machine's
-marks, and its verdict refuses a refused assign, a place read under
+the kill. The measure step's client speaks the keeper's protocol to a
+keeper that answers as cyfr-locus does, beside a stand-in for this
+machine's marks, naming no bound on its spawn, and its verdict refuses a
+place answered without a runner's bound, a refused assign, a place read under
 another owner, a reading at the work taken before the work held its memory
 or not holding it, a reading answered only after `released`, and a reading
 of a place after `released`. The service's frames reproduce the control
@@ -122,10 +123,21 @@ class RunnerFacts(unittest.TestCase):
 
 
 SPAWN_ID = "ab" * 16
+V = namespace.V
+
+
+def memtotal_kb():
+    """This machine's MemTotal, in kB, which the client prints."""
+    with open("/proc/meminfo") as meminfo:
+        return next(int(line.split()[1]) for line in meminfo if line.startswith("MemTotal:"))
+
+
+# The bound the keeper answers the runner's place with: half of the machine's memory, never under a runner's least.
+BOUND = imagesuite.cap_bytes("warm", memtotal_kb() * 1024)
 
 
 def keeper(sock, requests, marks):
-    """A keeper on the client's channel, answering as cyfr-locus does: a place `placed`, a spawn `spawned`, an assign
+    """A keeper on the client's channel, answering as cyfr-locus does: a place `placed` with a runner's bound, a spawn `spawned`, an assign
     `assigned` under its id; a measure `unmeasured` until the place's first reading, which the first measure finds
     missing, then the reading under the place's owner of the moment, 64 MiB more while the work holds its memory (from
     the mark `holding` to `complete` in `marks`); a measure sent with a release is answered before `exited` and
@@ -143,24 +155,24 @@ def keeper(sock, requests, marks):
         requests.append(request)
         if request["type"] == "place":
             owner = {key: request[key] for key in ("kind", "athanor") if key in request}
-            send({"v": 6, "type": "placed", "id": request["id"]})
+            send({"v": V, "type": "placed", "id": request["id"], "memory_bytes": BOUND})
         elif request["type"] == "spawn":
-            send({"v": 6, "type": "spawned", "id": request["id"], "spawn_id": SPAWN_ID, "uid": UID, "pid": 4242})
+            send({"v": V, "type": "spawned", "id": request["id"], "spawn_id": SPAWN_ID, "uid": UID, "pid": 4242})
         elif request["type"] == "assign":
             owner = {key: request[key] for key in ("kind", "athanor") if key in request}
-            send({"v": 6, "type": "assigned", "id": request["id"]})
+            send({"v": V, "type": "assigned", "id": request["id"]})
         elif request["type"] == "release":
             releasing = True
         elif request["type"] == "measure":
             measures += 1
             if free or measures == 1:
-                send({"v": 6, "type": "error", "id": request["id"], "code": "unmeasured"})
+                send({"v": V, "type": "error", "id": request["id"], "code": "unmeasured"})
             else:
-                send({"v": 6, "type": "measured", "id": request["id"], **owner, "bytes": (180 << 20) + (64 << 20) * holding(),
+                send({"v": V, "type": "measured", "id": request["id"], **owner, "bytes": (180 << 20) + (64 << 20) * holding(),
                       "lesser": False, "age_ms": 412})
             if releasing:
-                send({"v": 6, "type": "exited", "spawn_id": SPAWN_ID, "code": None, "signal": "SIGTERM", "memory": None})
-                send({"v": 6, "type": "released", "spawn_id": SPAWN_ID})
+                send({"v": V, "type": "exited", "spawn_id": SPAWN_ID, "code": None, "signal": "SIGTERM", "memory": None})
+                send({"v": V, "type": "released", "spawn_id": SPAWN_ID})
                 releasing, free = False, True
 
 
@@ -213,35 +225,40 @@ class PlacesClient(unittest.TestCase):
         at = [n for n, (read_in, _) in enumerate(self.read) if read_in == step]
         return self.read[:at[0]] + [(step, reply) for reply in edit([self.read[n][1] for n in at])] + self.read[at[-1] + 1:]
 
-    def test_the_client_speaks_version_3_and_places_before_its_spawn(self):
+    def test_the_client_speaks_the_protocols_version_and_places_before_its_spawn_naming_no_bound(self):
         self.assertEqual(self.returncode, 0, self.stderr)
         place = namespace.RUNNER
-        assign = {"v": 6, "type": "assign", "place": place, "athanor": namespace.ATHANOR}
+        assign = {"v": V, "type": "assign", "place": place, "athanor": namespace.ATHANOR}
         self.assertEqual([r["type"] for r in self.requests],
                          ["place", "spawn", "measure", "measure", "assign", "measure", "measure", "assign", "measure", "assign",
                           "measure", "release", "measure", "measure"])
-        self.assertEqual(self.requests[0], {"v": 6, "type": "place", "id": place, "kind": "warm"})
+        self.assertEqual(self.requests[0], {"v": V, "type": "place", "id": place, "kind": "warm"})
         spawn = self.requests[1]
         self.assertNotIn("isolation", spawn)
-        self.assertEqual({key: spawn[key] for key in ("v", "id", "place", "pool", "argv", "env", "memory_bytes", "control")},
-                         {"v": 6, "id": "1", "place": place, "pool": stack.ROLE["pool"], "argv": namespace.RUNNER_ARGV,
-                          "env": {"LANG": "C.UTF-8", **namespace.RUNNER_ENV}, "memory_bytes": namespace.RUNNER_MEMORY_BYTES,
-                          "control": True})
+        self.assertFalse({"memory_bytes", "cpu_quota"} & spawn.keys(), spawn)
+        self.assertEqual({key: spawn[key] for key in ("v", "id", "place", "pool", "argv", "env", "control")},
+                         {"v": V, "id": "1", "place": place, "pool": stack.ROLE["pool"], "argv": namespace.RUNNER_ARGV,
+                          "env": {"LANG": "C.UTF-8", **namespace.RUNNER_ENV}, "control": True})
         self.assertEqual([r for r in self.requests if r["type"] == "assign"],
                          [{**assign, "id": "as1", "kind": "run"}, {**assign, "id": "as2", "kind": "warm"},
                           {**assign, "id": "as3", "kind": "run"}])
-        self.assertEqual(self.requests[11], {"v": 6, "type": "release", "spawn_id": SPAWN_ID, "grace_ms": namespace.RELEASE_GRACE_MS})
+        self.assertEqual(self.requests[11], {"v": V, "type": "release", "spawn_id": SPAWN_ID, "grace_ms": namespace.RELEASE_GRACE_MS})
         self.assertEqual([r["id"] for r in self.requests if r["type"] == "measure"], [f"m{n}" for n in range(1, 9)])
         self.assertTrue(all(r["place"] == place for r in self.requests if r["type"] == "measure"))
 
     def test_a_runner_read_under_each_owner_and_free_only_after_released_passes(self):
         self.assertEqual([step for step, _ in self.read],
-                         ["placed", "spawned", "fresh", "fresh", "assigned.assign", "assigned", "working", "warm.assign", "warm",
-                          "reused.assign", "reused", "release", "release", "release", "after"])
+                         ["memtotal", "placed", "spawned", "fresh", "fresh", "assigned.assign", "assigned", "working", "warm.assign",
+                          "warm", "reused.assign", "reused", "release", "release", "release", "after"])
         self.judge(self.read)
 
+    def test_a_place_answered_without_a_runners_bound_fails(self):
+        for edit in ({"memory_bytes": BOUND // 2}, {"memory_bytes": None}):
+            self.fails(self.edited("placed", lambda got: [{**reply, **edit} for reply in got]), "with a runner's bound")
+        self.fails(self.edited("memtotal", lambda got: ["no meminfo"]), "with a runner's bound")
+
     def test_a_refused_assign_fails(self):
-        self.fails(self.edited("warm.assign", lambda got: [{"v": 6, "type": "error", "id": got[0]["id"], "code": "bad_request"}]),
+        self.fails(self.edited("warm.assign", lambda got: [{"v": V, "type": "error", "id": got[0]["id"], "code": "bad_request"}]),
                    "before warm, the keeper applied the assign")
 
     def test_a_reading_at_the_work_under_nobody_or_another_fails(self):
@@ -267,7 +284,7 @@ class PlacesClient(unittest.TestCase):
         self.fails(self.edited("reused", lambda got: [{**reply, "bytes": 0} for reply in got]), "reused for another run")
 
     def test_a_runner_that_ended_before_its_release_fails(self):
-        exited = {"v": 6, "type": "exited", "spawn_id": SPAWN_ID, "code": 1, "signal": None, "memory": None}
+        exited = {"v": V, "type": "exited", "spawn_id": SPAWN_ID, "code": 1, "signal": None, "memory": None}
         self.fails(self.edited("warm", lambda got: [exited] + got), "back at rest")
 
     def test_a_reading_answered_only_after_released_fails(self):
@@ -276,10 +293,33 @@ class PlacesClient(unittest.TestCase):
                    "answered before its released")
 
     def test_a_place_read_after_released_fails(self):
-        self.fails(self.edited("after", lambda got: [{"v": 6, "type": "measured", "id": got[0]["id"], "kind": "run",
+        self.fails(self.edited("after", lambda got: [{"v": V, "type": "measured", "id": got[0]["id"], "kind": "run",
                                                       "athanor": namespace.ATHANOR, "bytes": 1 << 20, "lesser": False,
                                                       "age_ms": 9}]),
                    "the runner's place is free")
+
+
+class AfterPlaced(unittest.TestCase):
+    """The keeper steps' first reply is the place's `placed` with a runner's bound, half of the memory the client
+    printed, never under a runner's least; anything else fails the step."""
+
+    def ran(self, memtotal_kb, placed):
+        stdout = (f"memtotal:{memtotal_kb}\nreply:{json.dumps(placed)}\n"
+                  + 'reply:{"v": 7, "type": "spawned", "id": "1", "spawn_id": "x", "uid": 1, "pid": 2}\n')
+        return subprocess.CompletedProcess([], 0, stdout, "")
+
+    def test_the_place_placed_with_half_the_machine_passes_and_the_rest_is_answered(self):
+        half = {**namespace.placed(namespace.PLACE, 4 << 30)}
+        self.assertEqual([r["type"] for r in namespace.after_placed(self.ran(8 << 20, half), "step")], ["spawned"])
+
+    def test_a_small_machine_bounds_a_runner_at_its_least(self):
+        least = namespace.placed(namespace.PLACE, imagesuite.LEAST_CAP_BYTES["runner"])
+        namespace.after_placed(self.ran(512 << 10, least), "step")
+
+    def test_another_bound_or_none_fails(self):
+        for placed in (namespace.placed(namespace.PLACE, 2 << 30), {"v": V, "type": "placed", "id": namespace.PLACE}):
+            with self.subTest(placed=placed), self.assertRaises(SystemExit):
+                namespace.after_placed(self.ran(8 << 20, placed), "step")
 
 
 with open(os.path.join(stack.ROOT, "tests", "fixtures", "runner_control.json")) as f:

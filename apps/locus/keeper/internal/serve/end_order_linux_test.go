@@ -64,7 +64,7 @@ func heldLeader(then string) string {
 // answers the leader, the group and a log file the script writes to as $L.
 func endingGroup(t *testing.T, k *keeper, uid int, script string) (*child, *cgroup.Group, string) {
 	t.Helper()
-	group, err := k.c.role.groups.Create(cgroup.Name(uid), 256<<20, protocol.CPUPeriod)
+	group, err := k.c.role.groups.Create(cgroup.Name(uid), 256<<20, cgroup.CPUPeriod)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -324,7 +324,7 @@ func TestANewcomerWaitsForTheLastSessionsEnd(t *testing.T) {
 		t.Fatalf("home_make of another home: %v", made)
 	}
 
-	if placed := k.place(t, "newcomer", protocol.KindProgram); placed["type"] != protocol.TypePlaced {
+	if placed := k.place(t, "newcomer", k.kind()); placed["type"] != protocol.TypePlaced {
 		t.Fatalf("the newcomer's place answered %v", placed)
 	}
 	go k.s.handleSpawn(k.c, keptRequest(t, k.attach, "newcomer", `echo newcomer-started >> "$HOME/log"; sleep 600`, home, nil))

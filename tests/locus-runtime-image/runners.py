@@ -34,8 +34,9 @@ scrubbed, the container's CPU flat).
   before the next assignment for its athanor takes a fresh one.
 - Taking a fresh runner from the pool is quick: its queue age, from the
   start request to the runner's attach, has a p95 of at most one second.
-- Every runner runs in a memory group of its own at the service's runner
-  bound, and a formula whose children, each within the memory the engine
+- Every runner runs in a memory group of its own at a runner's bound, half
+  of the pool's work (the service recreated with a work sized for the
+  case), and a formula whose children, each within the memory the engine
   lets it have, hold more than the bound together in its runner ends with
   that runner there, the sibling, the release and the container
   untouched; without the `writable-cgroups=true` security option no runner
@@ -132,7 +133,7 @@ from stack import (  # noqa: E402
     KEEPER_CAPS, POOL_FIRST, POOL_LAST, RELEASE, ROLE, ROOT, SERVICE, SERVICE_UID, SERVICE_USER, Stack, StatusSampler, expect, run,
     wait_until,
 )
-from imagesuite import run_name  # noqa: E402
+from imagesuite import FLOOR_RUNNERS, run_name  # noqa: E402
 
 FIXTURES = {
     "spin": os.path.join(ROOT, "apps", "locus", "test", "support", "runtime", "test_wasm", "spin.wasm"),
@@ -509,9 +510,9 @@ def test_process_model(stack):
            "cyfr-locus runs as root holding exactly SETUID, SETGID and KILL", procs)
     expect(len(service) == 1 and [p for p in procs if p["pid"] == service[0]["pid"]][0]["cap_eff"] == "0000000000000000",
            f"the service runs as {SERVICE_USER} with no capability", procs)
-    expect(len(runners) == stack.pool_size and all(POOL_FIRST <= r["uid"] <= POOL_LAST for r in runners)
+    expect(len(runners) == FLOOR_RUNNERS and all(POOL_FIRST <= r["uid"] <= POOL_LAST for r in runners)
            and len({r["uid"] for r in runners}) == len(runners) and all(r["runner"] for r in runners),
-           f"{stack.pool_size} fresh runners run ahead, each a VM under a pooled uid of its own", runners)
+           f"the warm floor's {FLOOR_RUNNERS} fresh runner(s) run ahead, each a VM under a pooled uid of its own", runners)
     homes = stack.homes()
     expect(sorted(homes) == sorted(os.path.basename(r["home"]) for r in runners),
            "the home root holds exactly the fresh runners' homes", {"homes": homes, "runners": runners})
@@ -955,8 +956,11 @@ def test_spinning_guest_killed_at_bound(stack, plane):
 
 
 def test_sibling_survives(stack, plane):
-    spinner = plane.mint(stack.boot, "reagent", REFS["spin"], WASM["spin"], {"spin": True}, "ath_sib_spin", 2_000)
-    sibling = plane.mint(stack.boot, "reagent", REFS["echo"], WASM["echo"], {"sibling": "alive"}, "ath_sib_echo", 10_000)
+    # The warm floor holds one fresh runner: the spinner takes it, and the
+    # sibling the runner the pool boots behind it, so the spinner's deadline
+    # outlasts that boot and the sibling's its wait for it.
+    spinner = plane.mint(stack.boot, "reagent", REFS["spin"], WASM["spin"], {"spin": True}, "ath_sib_spin", 15_000)
+    sibling = plane.mint(stack.boot, "reagent", REFS["echo"], WASM["echo"], {"sibling": "alive"}, "ath_sib_echo", 30_000)
     expect(stack.start(spinner)[1] == {"v": 1, "ok": True} and stack.start(sibling)[1] == {"v": 1, "ok": True},
            "a spinning guest and a sibling echo start in two runners")
     spin_runner = attached_runner(stack, plane, spinner)
@@ -964,7 +968,7 @@ def test_sibling_survives(stack, plane):
     expect(spin_runner["uid"] != echo_runner["uid"], "the two subtrees run under different uids", [spin_runner, echo_runner])
 
     complete = plane.wait_seen("complete", sibling["execution_id"], BOOT_S)[0]
-    fail = plane.wait_seen("fail", spinner["execution_id"], 10)[0]
+    fail = plane.wait_seen("fail", spinner["execution_id"], 20)[0]
     expect(complete["args"]["outcome"]["output"] == {"sibling": "alive"} and complete["t"] < fail["t"] + 1,
            f"detection: the sibling completed {ms(fail['t'] - complete['t'])} ms before the spinner was killed", [complete, fail])
     wait_gone(stack, spin_runner, 10, "the spinner's process to be gone")
@@ -1189,24 +1193,28 @@ def tainted_runner_case(stack, plane, athanor, last):
 
 
 def fresh_runners_booted(stack, first_seen, settle_s=4.0):
-    """Whether the pool is full of fresh runners whose VMs have had `settle_s`
-    to boot and nothing idle is left: a runner counts as fresh from its
-    spawn, seconds before its VM reads its first assignment."""
+    """Whether the pool holds only its fresh runners, each of whose VMs has
+    had `settle_s` to boot, and nothing idle, busy or ending is left: a
+    runner counts as fresh from its spawn, seconds before its VM reads its
+    first assignment, and the VM of a runner still ending is no fresh one's."""
     now = time.monotonic()
     live = {r["runner"] for r in stack.runner_processes()}
     for runner in live:
         first_seen.setdefault(runner, now)
     counts = stack.runners()
     booted = [r for r in live if now - first_seen[r] >= settle_s]
-    return counts["idle"] == 0 and counts["busy"] == 0 and counts["fresh"] >= stack.pool_size and len(booted) >= stack.pool_size
+    return (counts["idle"] == 0 and counts["busy"] == 0 and counts["tainted"] == 0
+            and counts["fresh"] == FLOOR_RUNNERS and len(live) == FLOOR_RUNNERS and len(booted) == FLOOR_RUNNERS)
 
 
 def measure_acquisition(stack, plane, count=12):
     """Queue age: from the start request to the runner's attach, with the
-    pool's fresh runners booted. The service is recreated with a short idle
-    time, so each distinct athanor's runner is retired before the next start
-    and the eight uids are never exhausted."""
-    stack.idle_ttl_ms = 300
+    pool's fresh runners booted, and with the athanor's own idle runner. The
+    service is recreated with a short idle time, so each distinct athanor's
+    runner is retired before the next start and the eight uids are never
+    exhausted, yet long enough that the athanor's runner is still idle when
+    its next start comes."""
+    stack.idle_ttl_ms = 1_500
     stack.up()
     fresh_ages, warm_ages, first_seen = [], [], {}
     for i in range(count):
@@ -1216,7 +1224,12 @@ def measure_acquisition(stack, plane, count=12):
         expect(stack.start(attempt)[1] == {"v": 1, "ok": True}, f"queued start {i + 1}")
         attach = plane.wait_seen("attach", attempt["execution_id"], BOOT_S)[0]
         fresh_ages.append((attach["at"] - t_send) * 1000)
+        print(f"queued start {i + 1}: {fresh_ages[-1]:.1f} ms", flush=True)
         plane.wait_seen("complete", attempt["execution_id"], BOOT_S)
+    # The warm starts begin as the queued ones did, the last athanor's runner
+    # gone and the floor's runner booted: the first takes that fresh runner,
+    # and each later one finds the athanor's own idle runner, the only one.
+    wait_until(lambda: fresh_runners_booted(stack, first_seen), BOOT_S, "the pool's fresh runners to have booted", interval=0.25)
     for i in range(count):
         attempt = plane.mint(stack.boot, "reagent", REFS["echo"], WASM["echo"], {"n": i}, "ath_queue_warm", 10_000)
         if i:
@@ -1225,6 +1238,7 @@ def measure_acquisition(stack, plane, count=12):
         expect(stack.start(attempt)[1] == {"v": 1, "ok": True}, f"warm start {i + 1}")
         attach = plane.wait_seen("attach", attempt["execution_id"], BOOT_S)[0]
         warm_ages.append((attach["at"] - t_send) * 1000)
+        print(f"warm start {i + 1}: {warm_ages[-1]:.1f} ms", flush=True)
         plane.wait_seen("complete", attempt["execution_id"], BOOT_S)
     report = {
         "fresh": {"p50": round(percentile(fresh_ages, 50), 1), "p95": round(percentile(fresh_ages, 95), 1), "max": round(max(fresh_ages), 1)},
@@ -1241,7 +1255,7 @@ def main(image):
     stack = Stack("cyfr-locus-runtime-runners", image, plane)
     try:
         stack.up()
-        print(f"the service runs boot {stack.boot} with a pool of {stack.pool_size}, watchdog grace {stack.watchdog_grace_ms} ms, release grace {stack.release_grace_ms} ms", flush=True)
+        print(f"the service runs boot {stack.boot} with a warm floor of {FLOOR_RUNNERS}, watchdog grace {stack.watchdog_grace_ms} ms, release grace {stack.release_grace_ms} ms", flush=True)
         test_process_model(stack)
         test_runner_has_no_route(stack, plane)
         test_pinned_egress(stack, plane)
@@ -1257,6 +1271,10 @@ def main(image):
         test_control_plane_cut(stack, plane)
         test_service_death(stack, plane)
         measure_acquisition(stack, plane)
+        # The bound case's runner is bounded at half of a pool's work sized
+        # for it: the service is recreated with that work.
+        stack.work_bytes = memory.WORK
+        stack.up()
         memory.test_runner_bound(stack, plane)
         # The runners spawned behind the last starts are VMs still booting.
         settled = {}

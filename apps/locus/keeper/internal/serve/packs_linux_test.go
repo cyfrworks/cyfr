@@ -243,7 +243,7 @@ func TestASpaceSeesItsPersonsPacksReadOnly(t *testing.T) {
 
 	placeOf := func(id, athanor string) {
 		t.Helper()
-		k.s.handle(k.c, parsed(t, `{"v":6,"type":"place","id":"`+id+`","kind":"program","athanor":"`+athanor+`"}`))
+		k.s.handle(k.c, parsed(t, `{"v":7,"type":"place","id":"`+id+`","kind":"program","athanor":"`+athanor+`"}`))
 		if placed := k.reply(t); placed["type"] != protocol.TypePlaced {
 			t.Fatalf("place %s: %v", id, placed)
 		}
@@ -311,9 +311,10 @@ func TestASpaceSeesItsPersonsPacksReadOnly(t *testing.T) {
 
 // Whose packs a spawn binds is decided at its claim of its place, under
 // the one lock: a spawn naming another athanor's packs than its place's
-// is refused and its place freed, and from a claim naming packs no assign
-// gives the place another athanor, so the athanor checked is the athanor
-// bound. None needs root.
+// is refused and its place freed, and no assign gives the place another
+// athanor, since only a kept role's spawns bind packs and a kept role
+// assigns nothing (only the floor's role assigns, and no role is both), so
+// the athanor checked is the athanor bound. None needs root.
 func TestAClaimedPlaceKeepsItsPacksAthanor(t *testing.T) {
 	me := os.Getuid()
 	kept := &home.Kept{Root: t.TempDir(), First: me, Last: me}
@@ -331,14 +332,14 @@ func TestAClaimedPlaceKeepsItsPacksAthanor(t *testing.T) {
 		return m
 	}
 	packs := &protocol.SpawnPacks{Athanor: testAthanor, Digest: setDigest("claim")}
-	if r := handle(`{"v":6,"type":"place","id":"p1","kind":"program","athanor":"` + testAthanor + `"}`); r["type"] != protocol.TypePlaced {
+	if r := handle(`{"v":7,"type":"place","id":"p1","kind":"program","athanor":"` + testAthanor + `"}`); r["type"] != protocol.TypePlaced {
 		t.Fatalf("place: %v", r)
 	}
-	if got := s.claimPlace(c, &protocol.Request{Place: "p1", Packs: packs}); got != claimed {
+	if got, _ := s.claimPlace(c, &protocol.Request{Place: "p1", Packs: packs}); got != claimed {
 		t.Fatalf("a claim naming its place's athanor's packs: %v", got)
 	}
-	if r := handle(`{"v":6,"type":"assign","id":"a1","place":"p1","kind":"program","athanor":"ath_other"}`); r["type"] != protocol.TypeError || r["code"] != protocol.CodeBadRequest {
-		t.Fatalf("an assign of another athanor to a place whose spawn binds packs: %v", r)
+	if r := handle(`{"v":7,"type":"assign","id":"a1","place":"p1","kind":"program","athanor":"ath_other"}`); r["type"] != protocol.TypeError || r["code"] != protocol.CodeBadRequest {
+		t.Fatalf("an assign by the kept role, of another athanor, to a place whose spawn binds packs: %v", r)
 	}
 	s.mu.Lock()
 	whose := c.places["p1"].whose.Athanor
@@ -346,14 +347,15 @@ func TestAClaimedPlaceKeepsItsPacksAthanor(t *testing.T) {
 	if whose != testAthanor {
 		t.Fatalf("the place is %s's", whose)
 	}
-	if r := handle(`{"v":6,"type":"assign","id":"a2","place":"p1","kind":"program","athanor":"` + testAthanor + `","subject":"prg_2"}`); r["type"] != protocol.TypeAssigned {
+	// No role but the floor's assigns: a session's place keeps whose it is.
+	if r := handle(`{"v":7,"type":"assign","id":"a2","place":"p1","kind":"program","athanor":"` + testAthanor + `","subject":"prg_2"}`); r["type"] != protocol.TypeError || r["code"] != protocol.CodeBadRequest {
 		t.Fatalf("an assign keeping the athanor: %v", r)
 	}
 
-	if r := handle(`{"v":6,"type":"place","id":"p2","kind":"program","athanor":"ath_other"}`); r["type"] != protocol.TypePlaced {
+	if r := handle(`{"v":7,"type":"place","id":"p2","kind":"program","athanor":"ath_other"}`); r["type"] != protocol.TypePlaced {
 		t.Fatalf("place: %v", r)
 	}
-	if got := s.claimPlace(c, &protocol.Request{Place: "p2", Packs: packs}); got != claimOthersPacks {
+	if got, _ := s.claimPlace(c, &protocol.Request{Place: "p2", Packs: packs}); got != claimOthersPacks {
 		t.Fatalf("a claim naming another athanor's packs: %v", got)
 	}
 	s.mu.Lock()
@@ -389,7 +391,7 @@ func TestAGenerationGoesWithItsPlacesFinalRelease(t *testing.T) {
 	for _, d := range []string{store.Dir(), filepath.Dir(gen)} {
 		_ = os.Chmod(d, 0o711)
 	}
-	k.s.handle(k.c, parsed(t, `{"v":6,"type":"place","id":"k1","kind":"program","athanor":"`+testAthanor+`"}`))
+	k.s.handle(k.c, parsed(t, `{"v":7,"type":"place","id":"k1","kind":"program","athanor":"`+testAthanor+`"}`))
 	if placed := k.reply(t); placed["type"] != protocol.TypePlaced {
 		t.Fatalf("place: %v", placed)
 	}

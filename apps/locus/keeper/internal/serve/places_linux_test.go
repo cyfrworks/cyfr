@@ -21,6 +21,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/cyfr/locus/keeper/internal/admission"
 	"github.com/cyfr/locus/keeper/internal/cgroup"
 	"github.com/cyfr/locus/keeper/internal/frame"
 	"github.com/cyfr/locus/keeper/internal/logx"
@@ -52,6 +53,7 @@ func placesKeeper(t *testing.T) (*keeper, *os.File) {
 		spawns:    map[string]*spawn{},
 		unremoved: map[*spawn]*removal{},
 		waiters:   map[int]*child{},
+		ledger:    admission.New(testWork, true),
 	}
 	c := testClient(ours, pool.Spec{Name: "runner"}, Account{})
 	done := make(chan struct{})
@@ -59,6 +61,31 @@ func placesKeeper(t *testing.T) (*keeper, *os.File) {
 	t.Cleanup(func() { theirs.Close(); <-done; ours.Close() })
 	return &keeper{s: s, c: c, channel: protocol.NewLineReader(theirs)}, theirs
 }
+
+// testWork is the pool's work in the keepers under test: room for every
+// start they make, whose own tests hold admission.
+const testWork = 64 << 30
+
+// admittedPlace is a place of c's whose the admission has given room, as
+// one answered `placed`.
+func admittedPlace(s *server, c *client, whose protocol.Whose) *place {
+	e := &admission.Entry{Role: c.role.spec.Name, Floor: c.role.spec.Floor, Kind: whose.Kind, Athanor: whose.Athanor, Subject: whose.Subject}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if ev := s.ledger.Place(e, now()); len(ev.Admitted) != 1 || ev.Admitted[0] != e {
+		panic("the place found no room")
+	}
+	return &place{whose: whose, entry: e}
+}
+
+// placedOf is the `placed` of a place of the kind, with the bound the
+// keeper sets its spawn to now.
+func placedOf(id, kind string) protocol.Placed {
+	return protocol.NewPlaced(id, limitsOf(kind, testWork).MemoryBytes)
+}
+
+// placedRunner is the `placed` of a runner's place.
+func placedRunner(id string) protocol.Placed { return placedOf(id, protocol.KindRun) }
 
 // write sends the lines in one write, as a client sends requests at once.
 func write(t *testing.T, client *os.File, lines ...string) {
@@ -91,7 +118,7 @@ func (k *keeper) expect(t *testing.T, want ...any) {
 // that claimed it is made in it and held once it starts.
 func (k *keeper) spawnedIn(t *testing.T, id string, sp *spawn) {
 	t.Helper()
-	if k.s.claimPlace(k.c, &protocol.Request{Place: id}) != claimed {
+	if got, _ := k.s.claimPlace(k.c, &protocol.Request{Place: id}); got != claimed {
 		t.Fatalf("place %s cannot be claimed", id)
 	}
 	sp.client = k.c
@@ -156,9 +183,9 @@ func asMeasured(t *testing.T, m map[string]any) protocol.Measured {
 func TestAPlaceIsPlacedAndItsIDAgainIsRefused(t *testing.T) {
 	k, client := placesKeeper(t)
 	write(t, client,
-		`{"v":6,"type":"place","id":"p","kind":"warm"}`,
-		`{"v":6,"type":"place","id":"p","kind":"run","athanor":"ath-1"}`)
-	k.expect(t, protocol.NewPlaced("p"), protocol.NewError("p", "", protocol.CodeBadRequest))
+		`{"v":7,"type":"place","id":"p","kind":"warm"}`,
+		`{"v":7,"type":"place","id":"p","kind":"run","athanor":"ath-1"}`)
+	k.expect(t, placedRunner("p"), protocol.NewError("p", "", protocol.CodeBadRequest))
 }
 
 // A spawn refused after it claimed its place frees it before the refusal is
@@ -167,15 +194,15 @@ func TestAPlaceIsPlacedAndItsIDAgainIsRefused(t *testing.T) {
 func TestARefusedSpawnFreesItsPlace(t *testing.T) {
 	k, client := placesKeeper(t)
 	write(t, client,
-		`{"v":6,"type":"place","id":"p","kind":"build"}`,
-		`{"v":6,"type":"spawn","id":"s","place":"p","pool":"runner","argv":["true"],"memory_bytes":67108864,"cpu_quota":100000,"attach":{"path":"/run/a.sock","token":"`+testToken+`"}}`)
+		`{"v":7,"type":"place","id":"p","kind":"run"}`,
+		`{"v":7,"type":"spawn","id":"s","place":"p","pool":"runner","argv":["true"],"attach":{"path":"/run/a.sock","token":"`+testToken+`"}}`)
 	// This keeper enforces no bound: the spawn is refused for that, not for
 	// its place.
-	k.expect(t, protocol.NewPlaced("p"), protocol.NewError("s", "", protocol.CodeMemoryUnavailable))
-	write(t, client, `{"v":6,"type":"measure","id":"m","place":"p"}`)
+	k.expect(t, placedRunner("p"), protocol.NewError("s", "", protocol.CodeMemoryUnavailable))
+	write(t, client, `{"v":7,"type":"measure","id":"m","place":"p"}`)
 	k.expect(t, protocol.NewError("m", "", protocol.CodeUnmeasured))
-	write(t, client, `{"v":6,"type":"place","id":"p","kind":"build"}`)
-	k.expect(t, protocol.NewPlaced("p"))
+	write(t, client, `{"v":7,"type":"place","id":"p","kind":"run"}`)
+	k.expect(t, placedRunner("p"))
 }
 
 // A drop frees a place no spawn named, the place sent at once before it
@@ -185,15 +212,15 @@ func TestARefusedSpawnFreesItsPlace(t *testing.T) {
 func TestADroppedPlaceIsGoneAndAnUnknownOneIsLeftAlone(t *testing.T) {
 	k, client := placesKeeper(t)
 	write(t, client,
-		`{"v":6,"type":"place","id":"p","kind":"warm"}`,
-		`{"v":6,"type":"drop","place":"p"}`)
-	k.expect(t, protocol.NewPlaced("p"))
+		`{"v":7,"type":"place","id":"p","kind":"warm"}`,
+		`{"v":7,"type":"drop","place":"p"}`)
+	k.expect(t, placedRunner("p"))
 	write(t, client,
-		`{"v":6,"type":"drop","place":"q"}`,
-		`{"v":6,"type":"assign","id":"as","place":"q","kind":"run"}`,
-		`{"v":6,"type":"place","id":"p","kind":"warm"}`,
-		`{"v":6,"type":"place","id":"q","kind":"warm"}`)
-	k.expect(t, protocol.NewError("as", "", protocol.CodeBadRequest), protocol.NewPlaced("p"), protocol.NewPlaced("q"))
+		`{"v":7,"type":"drop","place":"q"}`,
+		`{"v":7,"type":"assign","id":"as","place":"q","kind":"run"}`,
+		`{"v":7,"type":"place","id":"p","kind":"warm"}`,
+		`{"v":7,"type":"place","id":"q","kind":"warm"}`)
+	k.expect(t, protocol.NewError("as", "", protocol.CodeBadRequest), placedRunner("p"), placedRunner("q"))
 }
 
 // Assigns sent at once apply in the order sent, each answered under its own
@@ -204,16 +231,16 @@ func TestAPlaceIsWhoseItsLastAssignSays(t *testing.T) {
 	clock := clockAt(t, time.Unix(1_800_000_000, 0))
 	readsAs(t, func(*cgroup.Group) (cgroup.Use, error) { return cgroup.Use{Bytes: 3 << 20}, nil })
 	write(t, client,
-		`{"v":6,"type":"place","id":"p","kind":"warm"}`,
-		`{"v":6,"type":"assign","id":"as-1","place":"p","kind":"run","athanor":"ath-1","subject":"run-1"}`,
-		`{"v":6,"type":"assign","id":"as-2","place":"p","kind":"warm","athanor":"ath-2"}`)
-	k.expect(t, protocol.NewPlaced("p"), protocol.NewAssigned("as-1"), protocol.NewAssigned("as-2"))
+		`{"v":7,"type":"place","id":"p","kind":"warm"}`,
+		`{"v":7,"type":"assign","id":"as-1","place":"p","kind":"run","athanor":"ath-1","subject":"run-1"}`,
+		`{"v":7,"type":"assign","id":"as-2","place":"p","kind":"warm","athanor":"ath-2"}`)
+	k.expect(t, placedRunner("p"), protocol.NewAssigned("as-1"), protocol.NewAssigned("as-2"))
 	k.spawnedIn(t, "p", &spawn{id: strings.Repeat("a", 32)})
 	k.s.read()()
 	clock.advance(250 * time.Millisecond)
 	write(t, client,
-		`{"v":6,"type":"drop","place":"p"}`,
-		`{"v":6,"type":"measure","id":"m","place":"p"}`)
+		`{"v":7,"type":"drop","place":"p"}`,
+		`{"v":7,"type":"measure","id":"m","place":"p"}`)
 	k.expect(t, protocol.NewMeasured("m", protocol.Whose{Kind: protocol.KindWarm, Athanor: "ath-2"}, protocol.Reading{Bytes: 3 << 20}, 250))
 }
 
@@ -238,8 +265,8 @@ func TestASlowReadDelaysNoMeasureAndNoOtherRequest(t *testing.T) {
 	readEvery = time.Millisecond
 	t.Cleanup(func() { readEvery = every })
 
-	write(t, client, `{"v":6,"type":"place","id":"p","kind":"run","athanor":"ath-1"}`)
-	k.expect(t, protocol.NewPlaced("p"))
+	write(t, client, `{"v":7,"type":"place","id":"p","kind":"run","athanor":"ath-1"}`)
+	k.expect(t, placedRunner("p"))
 	k.spawnedIn(t, "p", &spawn{id: strings.Repeat("a", 32)})
 	stop, stopped := make(chan struct{}), make(chan struct{})
 	go func() { k.s.reader(stop); close(stopped) }()
@@ -254,14 +281,14 @@ func TestASlowReadDelaysNoMeasureAndNoOtherRequest(t *testing.T) {
 	// The first reading was stored before the second read began.
 	whose := protocol.Whose{Kind: protocol.KindRun, Athanor: "ath-1"}
 	clock.advance(1500 * time.Millisecond)
-	write(t, client, `{"v":6,"type":"measure","id":"m1","place":"p"}`)
+	write(t, client, `{"v":7,"type":"measure","id":"m1","place":"p"}`)
 	k.expect(t, protocol.NewMeasured("m1", whose, protocol.Reading{Bytes: 5 << 20}, 1500))
-	write(t, client, `{"v":6,"type":"place","id":"q","kind":"warm"}`)
-	k.expect(t, protocol.NewPlaced("q"))
-	write(t, client, `{"v":6,"type":"pool","id":"after","pool":"runner"}`)
+	write(t, client, `{"v":7,"type":"place","id":"q","kind":"warm"}`)
+	k.expect(t, placedRunner("q"))
+	write(t, client, `{"v":7,"type":"pool","id":"after","pool":"runner"}`)
 	k.expect(t, protocol.NewError("after", "", protocol.CodeUnknownPool))
 	clock.advance(time.Second)
-	write(t, client, `{"v":6,"type":"measure","id":"m2","place":"p"}`)
+	write(t, client, `{"v":7,"type":"measure","id":"m2","place":"p"}`)
 	k.expect(t, protocol.NewMeasured("m2", whose, protocol.Reading{Bytes: 5 << 20}, 2500))
 }
 
@@ -275,8 +302,8 @@ func TestAReadingOfASpawnGoneIsNotStored(t *testing.T) {
 		<-gate
 		return cgroup.Use{Bytes: 5 << 20}, nil
 	})
-	write(t, client, `{"v":6,"type":"place","id":"p","kind":"run"}`)
-	k.expect(t, protocol.NewPlaced("p"))
+	write(t, client, `{"v":7,"type":"place","id":"p","kind":"run"}`)
+	k.expect(t, placedRunner("p"))
 	gone := &spawn{id: strings.Repeat("a", 32)}
 	k.spawnedIn(t, "p", gone)
 	read := k.s.read()
@@ -295,13 +322,13 @@ func TestAReadingOfASpawnGoneIsNotStored(t *testing.T) {
 	delete(k.s.spawns, gone.id)
 	delete(k.c.places, gone.place)
 	k.s.mu.Unlock()
-	write(t, client, `{"v":6,"type":"place","id":"p","kind":"build"}`)
-	k.expect(t, protocol.NewPlaced("p"))
+	write(t, client, `{"v":7,"type":"place","id":"p","kind":"run"}`)
+	k.expect(t, placedRunner("p"))
 	k.spawnedIn(t, "p", &spawn{id: strings.Repeat("b", 32)})
 	release()
 	read()
 
-	write(t, client, `{"v":6,"type":"measure","id":"m","place":"p"}`)
+	write(t, client, `{"v":7,"type":"measure","id":"m","place":"p"}`)
 	k.expect(t, protocol.NewError("m", "", protocol.CodeUnmeasured))
 }
 
@@ -335,9 +362,8 @@ func TestASpawnNamingAPlaceNotHeldOrNamedIsRefusedAndStartsNothing(t *testing.T)
 	assertRetired(t, k, uid)
 }
 
-// A place is measured from its spawn's readings as whose it is at the
-// moment: an assign changes whose it is and not its reading, a drop leaves
-// it, and neither the kill of the spawn's processes nor its leader's exit
+// A place is measured from its spawn's readings as whose it is: a refused
+// assign changes nothing of it, a drop leaves it, and neither the kill of the spawn's processes nor its leader's exit
 // frees it before its `released`, here held back until after both.
 func TestAPlaceIsMeasuredFromItsSpawnUntilItsRelease(t *testing.T) {
 	k := keptKeeper(t)
@@ -346,8 +372,8 @@ func TestAPlaceIsMeasuredFromItsSpawnUntilItsRelease(t *testing.T) {
 	if made := k.homeRequest(t, protocol.TypeHomeMake, "m1", path, uid); made["type"] != protocol.TypeHomeMade {
 		t.Fatalf("home_make: %v", made)
 	}
-	k.s.handle(k.c, parsed(t, `{"v":6,"type":"place","id":"pl","kind":"program","athanor":"ath-1","subject":"mcp-1"}`))
-	k.expect(t, protocol.NewPlaced("pl"))
+	k.s.handle(k.c, parsed(t, `{"v":7,"type":"place","id":"pl","kind":"program","athanor":"ath-1","subject":"mcp-1"}`))
+	k.expect(t, placedOf("pl", protocol.KindProgram))
 	k.s.handleSpawn(k.c, keptRequest(t, k.attach, "pl", "exec "+k.helper+" hold 4 60", path, nil))
 	spawned := k.reply(t)
 	if spawned["type"] != protocol.TypeSpawned {
@@ -363,12 +389,12 @@ func TestAPlaceIsMeasuredFromItsSpawnUntilItsRelease(t *testing.T) {
 		t.Fatalf("measured %+v, want %+v", first, want)
 	}
 
-	// The assign is answered and the drop is not: the next reply after the
-	// assign's is the measure's.
-	k.s.handle(k.c, parsed(t, `{"v":6,"type":"assign","id":"as","place":"pl","kind":"terminal","athanor":"ath-2"}`))
-	k.expect(t, protocol.NewAssigned("as"))
-	k.s.handle(k.c, parsed(t, `{"v":6,"type":"drop","place":"pl"}`))
-	whose = protocol.Whose{Kind: protocol.KindTerminal, Athanor: "ath-2"}
+	// A session's role assigns nothing, and the drop of a named place is not
+	// answered: the next reply after the assign's refusal is the measure's,
+	// whose the place was.
+	k.s.handle(k.c, parsed(t, `{"v":7,"type":"assign","id":"as","place":"pl","kind":"terminal","athanor":"ath-2"}`))
+	k.expect(t, protocol.NewError("as", "", protocol.CodeBadRequest))
+	k.s.handle(k.c, parsed(t, `{"v":7,"type":"drop","place":"pl"}`))
 	sameReading := func(when string) {
 		t.Helper()
 		got := asMeasured(t, k.measure(t, "pl"))
@@ -421,9 +447,9 @@ func TestAHeldReadDelaysNoOtherSpawnsReading(t *testing.T) {
 	t.Cleanup(func() { readEvery = every })
 
 	write(t, client,
-		`{"v":6,"type":"place","id":"p","kind":"run"}`,
-		`{"v":6,"type":"place","id":"q","kind":"build"}`)
-	k.expect(t, protocol.NewPlaced("p"), protocol.NewPlaced("q"))
+		`{"v":7,"type":"place","id":"p","kind":"run"}`,
+		`{"v":7,"type":"place","id":"q","kind":"run"}`)
+	k.expect(t, placedRunner("p"), placedRunner("q"))
 	k.spawnedIn(t, "p", &spawn{id: strings.Repeat("a", 32), group: held})
 	k.spawnedIn(t, "q", &spawn{id: strings.Repeat("b", 32), group: other})
 	stop, stopped := make(chan struct{}), make(chan struct{})
@@ -460,7 +486,7 @@ func TestAHeldReadDelaysNoOtherSpawnsReading(t *testing.T) {
 // reader's pass over a spawn whose group went ends so and stores nothing.
 func TestAReadOfARemovedGroupEndsWithAnError(t *testing.T) {
 	k := boundedKeeper(t)
-	group, err := k.c.role.groups.Create(cgroup.SpawnName(randomHex(16)), 64<<20, protocol.CPUPeriod)
+	group, err := k.c.role.groups.Create(cgroup.SpawnName(randomHex(16)), 64<<20, cgroup.CPUPeriod)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -483,7 +509,7 @@ func TestAReadOfARemovedGroupEndsWithAnError(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer stat.Close()
-	if placed := k.place(t, "p", protocol.KindRun); placed["type"] != protocol.TypePlaced {
+	if placed := k.place(t, "p", k.kind()); placed["type"] != protocol.TypePlaced {
 		t.Fatalf("place answered %v", placed)
 	}
 	sp := &spawn{id: randomHex(16), group: group}
@@ -608,7 +634,7 @@ func TestASpawnWhoseGroupStaysKeepsItsPlaceUntilARetryRemovesIt(t *testing.T) {
 				t.Fatalf("a spawn whose group stays was told %v; want its exit and no release", told)
 			}
 			k.measuredAtLeast(t, "a", 4<<20)
-			if again := k.place(t, "a", protocol.KindRun); again["type"] != protocol.TypeError || again["code"] != protocol.CodeBadRequest {
+			if again := k.place(t, "a", k.kind()); again["type"] != protocol.TypeError || again["code"] != protocol.CodeBadRequest {
 				t.Fatalf("a place of its id answered %v; want it refused, the place still held", again)
 			}
 			k.s.mu.Lock()
@@ -711,7 +737,7 @@ func TestARefusedLaunchIsReleasedOnceItsGroupIsRemoved(t *testing.T) {
 			early.Pool = "absent"
 			k.handleSpawn(t, early)
 			k.expect(t, protocol.NewError("e", "", protocol.CodeUnknownPool))
-			if again := k.place(t, "e", protocol.KindRun); again["type"] != protocol.TypePlaced {
+			if again := k.place(t, "e", k.kind()); again["type"] != protocol.TypePlaced {
 				t.Fatalf("a place of the early refusal's id answered %v; want it placed, the place freed at once", again)
 			}
 
@@ -719,7 +745,7 @@ func TestARefusedLaunchIsReleasedOnceItsGroupIsRemoved(t *testing.T) {
 			if told := k.toldSoFar(t); len(told) != 0 {
 				t.Fatalf("while the refused spawn's group stays the keeper told %v; want nothing", told)
 			}
-			if again := k.place(t, "r", protocol.KindRun); again["type"] != protocol.TypeError || again["code"] != protocol.CodeBadRequest {
+			if again := k.place(t, "r", k.kind()); again["type"] != protocol.TypeError || again["code"] != protocol.CodeBadRequest {
 				t.Fatalf("a place of the refused spawn's id answered %v once its retirement left the group; want it refused, the place still held", again)
 			}
 
@@ -728,7 +754,7 @@ func TestARefusedLaunchIsReleasedOnceItsGroupIsRemoved(t *testing.T) {
 			if told := k.toldSoFar(t); !reflect.DeepEqual(told, []map[string]any{wire(t, protocol.NewReleased(spawnID))}) {
 				t.Fatalf("the retry that removed the refused spawn's group told %v; want its one release", told)
 			}
-			if again := k.place(t, "r", protocol.KindRun); again["type"] != protocol.TypePlaced {
+			if again := k.place(t, "r", k.kind()); again["type"] != protocol.TypePlaced {
 				t.Fatalf("a place of the refused spawn's id answered %v once it was released; want it placed", again)
 			}
 			if !kept {

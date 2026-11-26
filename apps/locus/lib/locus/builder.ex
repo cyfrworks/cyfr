@@ -88,7 +88,7 @@ defmodule Locus.Builder do
   | Refusal | When |
   |---|---|
   | `malformed` | the sources do not make a build of that language |
-  | `unavailable` | the toolchain, the Cargo seed or cyfr-locus is missing, or cyfr-locus cannot bound the build's memory |
+  | `unavailable` | the toolchain, the Cargo seed or cyfr-locus is missing, cyfr-locus cannot bound the build's memory, or it found no room for the build (`no_memory`) |
   | `capacity` | no pooled uid is free |
   | `timeout` | the build passed its `:deadline` and was ended |
   | `memory` | the build was ended for memory: at its bound, at a limit above it, or at one of the two where the kernel does not say which |
@@ -249,8 +249,9 @@ defmodule Locus.Builder do
   @doc """
   The place a build of `request` runs in (`Locus.Executor`), made before it
   is prepared, for the calling process: a `build` of the request's
-  athanor, under an id of its own. `{:error, refusal}` where no executor
-  can make one.
+  athanor, under an id of its own, answered once the keeper has room for
+  it. `{:error, refusal}` where no executor can make one, or where the
+  keeper found no room (`unavailable`, naming `no_memory`).
   """
   @spec place(%{required(:athanor_id) => String.t(), optional(atom()) => term()}) ::
           {:ok, String.t()} | {:error, BuilderProtocol.refusal()}
@@ -259,7 +260,7 @@ defmodule Locus.Builder do
 
     with {:ok, executor} <- executor() do
       case executor.place(place, %{kind: "build", athanor: athanor_id}) do
-        :ok ->
+        {:ok, _memory_bytes} ->
           {:ok, place}
 
         {:error, reason} ->

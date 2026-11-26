@@ -64,7 +64,7 @@ defmodule Locus.KeeperTest do
   # id new to the run, as every spawn's is before it is asked for.
   defp place!(name, kind \\ "program") do
     id = "pl-" <> Integer.to_string(System.unique_integer([:positive]))
-    assert :ok = Keeper.place(name, id, %{kind: kind}, self())
+    assert {:ok, _bytes} = Keeper.place(name, id, %{kind: kind}, self())
     id
   end
 
@@ -93,13 +93,11 @@ defmodule Locus.KeeperTest do
           env: %{"GREETING" => "hello"},
           stdin: Keyword.get(opts, :stdin, "")
         },
-        [
-          place: place!(name, "build"),
-          deadline: within(Keyword.get(opts, :timeout_ms, 10_000)),
-          max_stdout_bytes: Keyword.get(opts, :max_stdout_bytes, 1_000_000),
-          on_stdout: {[], fn piece, taken -> {:ok, [taken, piece]} end},
-          on_output: fn line -> Agent.update(lines, &[line | &1]) end
-        ] ++ Keyword.take(opts, [:memory_bytes])
+        place: place!(name, "build"),
+        deadline: within(Keyword.get(opts, :timeout_ms, 10_000)),
+        max_stdout_bytes: Keyword.get(opts, :max_stdout_bytes, 1_000_000),
+        on_stdout: {[], fn piece, taken -> {:ok, [taken, piece]} end},
+        on_output: fn line -> Agent.update(lines, &[line | &1]) end
       )
 
     {stdout(result), Agent.get(lines, &Enum.reverse/1)}
@@ -130,8 +128,6 @@ defmodule Locus.KeeperTest do
         env: %{},
         place: place!(name),
         pool: "backends",
-        memory_bytes: 268_435_456,
-        cpu_quota: 100_000,
         heir: {self(), tag}
       }
 
@@ -197,20 +193,18 @@ defmodule Locus.KeeperTest do
       assert spawn["attach"]["token"] =~ ~r/^[0-9a-f]{64}$/
     end
 
-    test "a spawn ended at its memory bound answers the wire's memory refusal with the bound", %{
-      name: name,
-      fake: fake
-    } do
+    test "a spawn ended at its memory bound answers the wire's memory refusal with a build's bound",
+         %{name: name, fake: fake} do
       :ok =
         FakeKeeper.mode(fake, {:exit, %{code: nil, signal: "SIGKILL", memory: "cap"}})
 
-      assert {{:error, {:memory, 33_554_432}}, ["the command's last words"]} =
-               run(name, "true", memory_bytes: 33_554_432)
+      bound = Prima.LocusPool.build_cap_bytes()
+      assert {{:error, {:memory, ^bound}}, ["the command's last words"]} = run(name, "true")
 
       # A kill for memory that is not at the bound names its cause and no bytes.
       for {spelled, cause} <- [{"machine", :machine}, {"either", :either}] do
         :ok = FakeKeeper.mode(fake, {:exit, %{code: nil, signal: "SIGKILL", memory: spelled}})
-        assert {{:error, {:memory, ^cause}}, _} = run(name, "true", memory_bytes: 33_554_432)
+        assert {{:error, {:memory, ^cause}}, _} = run(name, "true")
       end
 
       # The same end without the kernel's report is a signal like any other.
@@ -651,8 +645,9 @@ defmodule Locus.KeeperTest do
       owner = self()
       task = Task.async(fn -> Keeper.place(c.name, id, %{kind: "warm"}, owner) end)
       assert %{"type" => "place", "id" => ^id} = request(c.peer)
-      :ok = :socket.send(c.peer, [Jason.encode!(%{v: 6, type: "placed", id: id}), ?\n])
-      assert :ok = Task.await(task)
+      placed = %{v: 7, type: "placed", id: id, memory_bytes: 402_653_184}
+      :ok = :socket.send(c.peer, [Jason.encode!(placed), ?\n])
+      assert {:ok, 402_653_184} = Task.await(task)
     end
 
     test "(a) a runner's held assign, its partial frames and every payload message show no key or environment value" do
@@ -660,10 +655,7 @@ defmodule Locus.KeeperTest do
       c = plain_client!()
 
       adapter =
-        start_supervised!(
-          {Locus.Runtime.Keeper.Channel,
-           client: c.name, memory_bytes: 268_435_456, cpu_quota: 100_000, name: nil}
-        )
+        start_supervised!({Locus.Runtime.Keeper.Channel, client: c.name, name: nil})
 
       # The runtime's adapter asks for the runner, as a runner's process
       # does, with the planted environment.
@@ -681,7 +673,7 @@ defmodule Locus.KeeperTest do
 
       :ok =
         :socket.send(c.peer, [
-          Jason.encode!(%{v: 6, type: "spawned", id: id, spawn_id: spawn_id, uid: 1, pid: 1}),
+          Jason.encode!(%{v: 7, type: "spawned", id: id, spawn_id: spawn_id, uid: 1, pid: 1}),
           ?\n
         ])
 
@@ -733,13 +725,10 @@ defmodule Locus.KeeperTest do
             {:stdin, ref, p.assign},
             {:control, ref, p.assign},
             {:relay, ref, p.assign},
-            {:spawn, ["/app/bin/locus", "start"], p.env,
-             %{memory_bytes: 268_435_456, cpu_quota: 100_000}},
+            {:spawn, ["/app/bin/locus", "start"], p.env, %{place: "pl-1"}, nil},
             {:spawn_handle, ref, ["/app/bin/locus", "start"], p.env,
              %{
                pool: "runner",
-               memory_bytes: 268_435_456,
-               cpu_quota: 100_000,
                control: true
              }}
           ] do
@@ -784,9 +773,7 @@ defmodule Locus.KeeperTest do
           argv: ["/bin/true"],
           env: p.env,
           place: "pl-gone",
-          pool: "runner",
-          memory_bytes: 268_435_456,
-          cpu_quota: 100_000
+          pool: "runner"
         })
 
       answers = [spawned, sent, relayed, run, launched, Keeper.send_control(gone, p.assign)]
@@ -865,15 +852,13 @@ defmodule Locus.KeeperTest do
                  env: %{},
                  place: "runner_attached",
                  pool: "runner",
-                 memory_bytes: 268_435_456,
-                 cpu_quota: 100_000,
                  control: true
                })
 
       %{"id" => id, "attach" => %{"token" => token}} = request(c.peer)
       spawn_id = String.duplicate("cd", 16)
 
-      spawned = %{v: 6, type: "spawned", id: id, spawn_id: spawn_id, uid: 1, pid: 1}
+      spawned = %{v: 7, type: "spawned", id: id, spawn_id: spawn_id, uid: 1, pid: 1}
       :ok = :socket.send(c.peer, [Jason.encode!(spawned), ?\n])
       assert_receive {Keeper, ^ref, {:spawned, ^spawn_id, 1, 1}}, 5_000
 
@@ -1004,8 +989,8 @@ defmodule Locus.KeeperTest do
       :ok = :gen_tcp.send(relay, KeeperProtocol.frames(:control, "last"))
       :ok = :gen_tcp.close(relay)
       id = String.duplicate("cd", 16)
-      exit = %{v: 6, type: "exited", spawn_id: id, code: 0, signal: nil, memory: nil}
-      released = %{v: 6, type: "released", spawn_id: id}
+      exit = %{v: 7, type: "exited", spawn_id: id, code: 0, signal: nil, memory: nil}
+      released = %{v: 7, type: "released", spawn_id: id}
       :ok = :socket.send(c.peer, [Jason.encode!(exit), ?\n, Jason.encode!(released), ?\n])
 
       assert until_released(ref) ==
@@ -1033,7 +1018,7 @@ defmodule Locus.KeeperTest do
         Task.async(fn ->
           %{"id" => request_id, "attach" => %{"token" => token}} = request(peer)
           spawn_id = Base.encode16(:crypto.strong_rand_bytes(16), case: :lower)
-          spawned = %{v: 6, type: "spawned", id: request_id, spawn_id: spawn_id, uid: 1, pid: 1}
+          spawned = %{v: 7, type: "spawned", id: request_id, spawn_id: spawn_id, uid: 1, pid: 1}
           :ok = :socket.send(peer, [Jason.encode!(spawned), ?\n])
           token
         end)
@@ -1043,9 +1028,7 @@ defmodule Locus.KeeperTest do
                  argv: ["/bin/cat"],
                  env: %{},
                  place: id,
-                 pool: "backends",
-                 memory_bytes: 268_435_456,
-                 cpu_quota: 100_000
+                 pool: "backends"
                })
 
       token = Task.await(answering)
@@ -1230,7 +1213,7 @@ defmodule Locus.KeeperTest do
       # The leader exits while the owner holds its first frame untaken and
       # the relay still carries the last: that waits for the owner's word as
       # any read does, and the exit waits behind it.
-      channel_reply(c, %{v: 6, type: "exited", spawn_id: id, code: 0, signal: nil, memory: nil})
+      channel_reply(c, %{v: 7, type: "exited", spawn_id: id, code: 0, signal: nil, memory: nil})
       :ok = :gen_tcp.send(relay, KeeperProtocol.frames(:stdout, "two"))
       :ok = :gen_tcp.close(relay)
       refute_receive {Keeper, ^ref, _event}, 500
@@ -1240,7 +1223,7 @@ defmodule Locus.KeeperTest do
       :ok = Keeper.taken(handle)
       assert until_released(ref, &match?({:exited, _, _, _}, &1)) == [{:exited, 0, nil, nil}]
 
-      channel_reply(c, %{v: 6, type: "released", spawn_id: id})
+      channel_reply(c, %{v: 7, type: "released", spawn_id: id})
       assert until_released(ref) == [:released]
     end
 
@@ -1305,7 +1288,7 @@ defmodule Locus.KeeperTest do
       :ok = :gen_tcp.close(relay)
 
       channel_reply(c, %{
-        v: 6,
+        v: 7,
         type: "exited",
         spawn_id: id,
         code: nil,
@@ -1313,7 +1296,7 @@ defmodule Locus.KeeperTest do
         memory: nil
       })
 
-      channel_reply(c, %{v: 6, type: "released", spawn_id: id})
+      channel_reply(c, %{v: 7, type: "released", spawn_id: id})
 
       # What the relay left is handed over at once, without the owner's
       # word: at most the table's figure for it, the relay's socket queue
@@ -1354,7 +1337,7 @@ defmodule Locus.KeeperTest do
       assert told(ref) == {0, 0}
 
       channel_reply(c, %{
-        v: 6,
+        v: 7,
         type: "exited",
         spawn_id: id,
         code: nil,
@@ -1362,7 +1345,7 @@ defmodule Locus.KeeperTest do
         memory: nil
       })
 
-      channel_reply(c, %{v: 6, type: "released", spawn_id: id})
+      channel_reply(c, %{v: 7, type: "released", spawn_id: id})
       assert until_released(ref) == [{:exited, nil, "SIGKILL", nil}, :released]
     end
 
@@ -1486,7 +1469,7 @@ defmodule Locus.KeeperTest do
             :ok =
               :socket.send(peer, [
                 Jason.encode!(%{
-                  v: 6,
+                  v: 7,
                   type: "spawned",
                   id: request_id,
                   spawn_id: spawn_id,
@@ -1504,9 +1487,7 @@ defmodule Locus.KeeperTest do
             argv: ["/bin/cat"],
             env: %{},
             place: id,
-            pool: "backends",
-            memory_bytes: 268_435_456,
-            cpu_quota: 100_000
+            pool: "backends"
           })
 
         {token, spawn_id} = Task.await(answering)
@@ -1527,7 +1508,7 @@ defmodule Locus.KeeperTest do
           assert Task.await(writing) == :ok
           :gen_tcp.close(relay)
         else
-          channel_reply(c, %{v: 6, type: "released", spawn_id: spawn_id})
+          channel_reply(c, %{v: 7, type: "released", spawn_id: spawn_id})
           assert {:error, :stdin_closed} = Task.await(writing)
         end
       end
@@ -1555,9 +1536,7 @@ defmodule Locus.KeeperTest do
         argv: ["/bin/sh", "-c", script],
         env: env,
         place: place || place!(name),
-        pool: "backends",
-        memory_bytes: 268_435_456,
-        cpu_quota: 100_000
+        pool: "backends"
       })
     end
 
@@ -1633,27 +1612,11 @@ defmodule Locus.KeeperTest do
 
       [spawn] = recorded(fake, "spawn")
       assert spawn["pool"] == "backends"
-      assert spawn["memory_bytes"] == 268_435_456
+      refute Map.has_key?(spawn, "memory_bytes") or Map.has_key?(spawn, "cpu_quota")
       assert spawn["env"] == %{"GREETING" => "hello"}
 
       # Nothing is heard of a spawn after its release.
       refute_receive {Keeper, _ref, _event}, 200
-    end
-
-    test "a spec without a memory bound or a CPU quota is refused before cyfr-locus is asked anything",
-         %{name: name, fake: fake} do
-      for spec <- [
-            %{argv: ["true"], env: %{}, pool: "backends", cpu_quota: 100_000},
-            %{argv: ["true"], env: %{}, pool: "backends", memory_bytes: nil, cpu_quota: 100_000},
-            %{argv: ["true"], env: %{}, pool: "backends", memory_bytes: 0, cpu_quota: 100_000},
-            %{argv: ["true"], env: %{}, pool: "backends", memory_bytes: 268_435_456},
-            %{argv: ["true"], env: %{}, pool: "backends", memory_bytes: 268_435_456, cpu_quota: 0}
-          ] do
-        spec = Map.put(spec, :place, "pl-1")
-        assert_raise FunctionClauseError, fn -> Keeper.spawn(name, spec) end
-      end
-
-      assert requests(fake, "spawn") == []
     end
 
     test "stdin is written as frames of the codec's bound, held until the relay attaches", %{
@@ -1773,7 +1736,7 @@ defmodule Locus.KeeperTest do
       vector = Enum.find(@vectors["valid_requests"], &(&1["type"] == "measure"))
       place = vector["place"]
       whose = %{kind: "program", athanor: "ath_measured", subject: "mcp_measured"}
-      assert :ok = Keeper.place(name, place, whose, self())
+      assert {:ok, _bytes} = Keeper.place(name, place, whose, self())
       assert {:ok, _handle} = spawn_live(name, "exec cat", %{}, place)
 
       # A place the keeper has not read yet has no reading, never a zero.
@@ -1880,8 +1843,6 @@ defmodule Locus.KeeperTest do
           env: %{},
           place: place!(name),
           pool: "backends",
-          memory_bytes: 268_435_456,
-          cpu_quota: 100_000,
           heir: {self(), tag}
         })
 
@@ -1930,8 +1891,6 @@ defmodule Locus.KeeperTest do
             env: %{},
             place: place,
             pool: "backends",
-            memory_bytes: 268_435_456,
-            cpu_quota: 100_000,
             heir: {heir, tag}
           })
         end)
@@ -1950,9 +1909,7 @@ defmodule Locus.KeeperTest do
                  argv: ["true"],
                  env: %{},
                  place: "pl-1",
-                 pool: "backends",
-                 memory_bytes: 268_435_456,
-                 cpu_quota: 100_000
+                 pool: "backends"
                })
 
       assert {:error, {:launcher_unavailable, :noproc}} =
@@ -1975,8 +1932,6 @@ defmodule Locus.KeeperTest do
                  env: %{},
                  place: place!(name),
                  pool: "backends",
-                 memory_bytes: 268_435_456,
-                 cpu_quota: 100_000,
                  heir: {self(), tag}
                })
 
@@ -1998,16 +1953,16 @@ defmodule Locus.KeeperTest do
 
     defp vectors(type), do: Enum.filter(@vectors["valid_requests"], &(&1["type"] == type))
 
-    test "a place is the vectors' request with its kind, athanor and subject, answered once the keeper holds it",
+    test "a place is the vectors' request with its kind, athanor, subject and athanor ceiling, answered once the keeper holds it",
          %{name: name, fake: fake} do
       for vector <- vectors("place") do
         whose =
           for {key, value} <- vector,
-              key in ~w(kind athanor subject),
+              key in ~w(kind athanor subject athanor_max_bytes),
               into: %{},
               do: {String.to_existing_atom(key), value}
 
-        assert :ok = Keeper.place(name, vector["id"], whose, self())
+        assert {:ok, _bytes} = Keeper.place(name, vector["id"], whose, self())
         assert %{whose: held, spawn: nil} = FakeKeeper.places(fake)[vector["id"]]
         assert held == Map.take(vector, ~w(kind athanor subject))
       end
@@ -2015,9 +1970,91 @@ defmodule Locus.KeeperTest do
       assert requests(fake, "place") == vectors("place")
     end
 
+    # A start waits for the keeper's room: the place's caller waits past
+    # the room's wait, so one the keeper answers after 5 s is placed, and
+    # one it refuses for room is refused with what held the pool.
+    test "a place that waits for room is placed when the keeper answers past 5 s, or refused no_memory with what held the pool",
+         %{name: name, fake: fake} do
+      :ok = FakeKeeper.mode(fake, {:place_held, self()})
+      test = self()
+
+      waiting =
+        Task.async(fn ->
+          Keeper.place(name, "pl-wait", %{kind: "build", athanor: "ath_1"}, test)
+        end)
+
+      assert_receive {:place_held, "pl-wait"}, 5_000
+      assert Task.yield(waiting, 6_000) == nil
+      :ok = FakeKeeper.answer_place(fake, "pl-wait", :placed)
+      assert Task.await(waiting) == {:ok, Prima.LocusPool.build_cap_bytes()}
+
+      held = %{
+        "need" => 402_653_184,
+        "free" => 0,
+        "mine" => [%{"kind" => "program", "subject" => "srv_1", "bytes" => 402_653_184}],
+        "others_bytes" => 1_073_741_824
+      }
+
+      refused =
+        Task.async(fn ->
+          Keeper.place(name, "pl-full", %{kind: "program", athanor: "ath_1"}, test)
+        end)
+
+      assert_receive {:place_held, "pl-full"}, 5_000
+      assert Task.yield(refused, 6_000) == nil
+      :ok = FakeKeeper.answer_place(fake, "pl-full", {:no_memory, held})
+
+      assert Task.await(refused) ==
+               {:error,
+                {:no_memory,
+                 %{
+                   need: 402_653_184,
+                   free: 0,
+                   mine: [%{kind: "program", subject: "srv_1", bytes: 402_653_184}],
+                   others_bytes: 1_073_741_824
+                 }}}
+
+      # A place refused is no place: its id is free to place again.
+      :ok = FakeKeeper.mode(fake, :normal)
+      assert {:ok, _bytes} = Keeper.place(name, "pl-full", %{kind: "program"}, self())
+    end
+
+    test "a give_way reaches the owner of the spawn that named its place, the place's owner before one did, and no one for a place the client does not follow",
+         %{name: name, fake: fake, client: client} do
+      id = place!(name, "warm")
+      :ok = FakeKeeper.give_way(fake, id)
+      assert_receive {Keeper, {:place, ^id}, {:give_way, ^id}}, 5_000
+
+      assert {:ok, %{ref: ref}} = spawn_live(name, "exec cat", %{}, id)
+      :ok = FakeKeeper.give_way(fake, id)
+      assert_receive {Keeper, ^ref, {:give_way, ^id}}, 5_000
+
+      # The channel's order: the next give_way is read after the unknown one.
+      log =
+        capture_log(fn ->
+          :ok = FakeKeeper.give_way(fake, "pl-unknown")
+          :ok = FakeKeeper.give_way(fake, id)
+          assert_receive {Keeper, ^ref, {:give_way, ^id}}, 5_000
+        end)
+
+      assert log =~ "does not follow"
+      refute_receive {Keeper, _ref, {:give_way, _place}}, 200
+      assert Process.alive?(client)
+    end
+
+    test "a second spawn naming a place a spawn holds is refused and leaves the place's give_way to the first",
+         %{name: name, fake: fake} do
+      id = place!(name, "warm")
+      assert {:ok, %{ref: ref}} = spawn_live(name, "exec cat", %{}, id)
+      assert {:error, {:refused, "bad_request"}} = spawn_live(name, "exec cat", %{}, id)
+
+      :ok = FakeKeeper.give_way(fake, id)
+      assert_receive {Keeper, ^ref, {:give_way, ^id}}, 5_000
+    end
+
     test "a place of an id the client follows is refused unasked, and one the keeper holds is the keeper's refusal",
          %{name: name, fake: fake} do
-      assert :ok = Keeper.place(name, "pl-1", %{kind: "warm"}, self())
+      assert {:ok, _bytes} = Keeper.place(name, "pl-1", %{kind: "warm"}, self())
 
       assert {:error, {:refused, "bad_request"}} =
                Keeper.place(name, "pl-1", %{kind: "run"}, self())
@@ -2041,7 +2078,7 @@ defmodule Locus.KeeperTest do
     test "a place whose owner dies before a spawn names it is dropped", %{name: name, fake: fake} do
       [drop] = vectors("drop")
       owner = spawn(fn -> Process.sleep(:infinity) end)
-      assert :ok = Keeper.place(name, drop["place"], %{kind: "build"}, owner)
+      assert {:ok, _bytes} = Keeper.place(name, drop["place"], %{kind: "build"}, owner)
       Process.exit(owner, :kill)
 
       wait_until(fn -> requests(fake, "drop") != [] end, 5_000, "the place to be dropped")
@@ -2049,7 +2086,7 @@ defmodule Locus.KeeperTest do
       assert FakeKeeper.places(fake) == %{}
 
       # The client follows it no more: its id is free to place again.
-      assert :ok = Keeper.place(name, drop["place"], %{kind: "build"}, self())
+      assert {:ok, _bytes} = Keeper.place(name, drop["place"], %{kind: "build"}, self())
     end
 
     test "a place whose owner dies while it is being placed is dropped, and its caller hears so",
@@ -2103,11 +2140,11 @@ defmodule Locus.KeeperTest do
                again: Keeper.place(name, "pl-1", %{kind: "program"}, self())
              } == %{
                requests: [
-                 %{"v" => 6, "type" => "place", "id" => "pl-1", "kind" => "program"},
-                 %{"v" => 6, "type" => "drop", "place" => "pl-1"}
+                 %{"v" => 7, "type" => "place", "id" => "pl-1", "kind" => "program"},
+                 %{"v" => 7, "type" => "drop", "place" => "pl-1"}
                ],
                places: %{},
-               again: :ok
+               again: {:ok, Prima.LocusPool.cap_bytes(:session, 4096 * 1_048_576)}
              }
     end
 
@@ -2130,11 +2167,11 @@ defmodule Locus.KeeperTest do
                again: Keeper.place(name, "pl-1", %{kind: "build"}, self())
              } == %{
                requests: [
-                 %{"v" => 6, "type" => "place", "id" => "pl-1", "kind" => "build"},
-                 %{"v" => 6, "type" => "drop", "place" => "pl-1"}
+                 %{"v" => 7, "type" => "place", "id" => "pl-1", "kind" => "build"},
+                 %{"v" => 7, "type" => "drop", "place" => "pl-1"}
                ],
                places: %{},
-               again: :ok
+               again: {:ok, Prima.LocusPool.build_cap_bytes()}
              }
     end
 
@@ -2142,7 +2179,7 @@ defmodule Locus.KeeperTest do
          %{name: name, fake: fake} do
       owner = spawn(fn -> Process.sleep(:infinity) end)
       monitor = Process.monitor(owner)
-      assert :ok = Keeper.place(name, "pl-1", %{kind: "program"}, owner)
+      assert {:ok, _bytes} = Keeper.place(name, "pl-1", %{kind: "program"}, owner)
       assert {:ok, %{spawn_id: spawn_id} = handle} = spawn_live(name, "exec cat", %{}, "pl-1")
 
       Process.exit(owner, :kill)
@@ -2162,8 +2199,8 @@ defmodule Locus.KeeperTest do
     test "drop frees a place no spawn named, and leaves one a spawn named",
          %{name: name, fake: fake} do
       [drop] = vectors("drop")
-      assert :ok = Keeper.place(name, drop["place"], %{kind: "build"}, self())
-      assert :ok = Keeper.place(name, "pl-1", %{kind: "program"}, self())
+      assert {:ok, _bytes} = Keeper.place(name, drop["place"], %{kind: "build"}, self())
+      assert {:ok, _bytes} = Keeper.place(name, "pl-1", %{kind: "program"}, self())
       assert {:ok, _handle} = spawn_live(name, "exec cat", %{}, "pl-1")
 
       :ok = Keeper.drop(name, drop["place"])
@@ -2175,14 +2212,14 @@ defmodule Locus.KeeperTest do
       assert Map.keys(FakeKeeper.places(fake)) == ["pl-1"]
 
       # The dropped id is free to place again.
-      assert :ok = Keeper.place(name, drop["place"], %{kind: "build"}, self())
+      assert {:ok, _bytes} = Keeper.place(name, drop["place"], %{kind: "build"}, self())
     end
 
     test "assign changes whose the place is, answered once the keeper applied it: a measure answers its new kind and athanor",
          %{name: name, fake: fake} do
       assign = Enum.find(vectors("assign"), &(&1["kind"] == "run"))
       place = assign["place"]
-      assert :ok = Keeper.place(name, place, %{kind: "warm"}, self())
+      assert {:ok, _bytes} = Keeper.place(name, place, %{kind: "warm"}, self())
       assert {:ok, _handle} = spawn_live(name, "exec cat", %{}, place)
       :ok = FakeKeeper.mode(fake, {:measured, %{bytes: 1_048_576, lesser: false, age_ms: 7}})
       assert {:ok, %{kind: "warm", athanor: nil, subject: nil}} = Keeper.measure(name, place)
@@ -2220,14 +2257,14 @@ defmodule Locus.KeeperTest do
     end
 
     test "a refused spawn frees its place", %{name: name, fake: fake} do
-      assert :ok = Keeper.place(name, "pl-1", %{kind: "program"}, self())
+      assert {:ok, _bytes} = Keeper.place(name, "pl-1", %{kind: "program"}, self())
       :ok = FakeKeeper.mode(fake, :capacity)
       assert {:error, {:refused, "capacity"}} = spawn_live(name, "true", %{}, "pl-1")
       assert FakeKeeper.places(fake) == %{}
 
       # The client follows it no more: its id is free to place again.
       :ok = FakeKeeper.mode(fake, :normal)
-      assert :ok = Keeper.place(name, "pl-1", %{kind: "program"}, self())
+      assert {:ok, _bytes} = Keeper.place(name, "pl-1", %{kind: "program"}, self())
     end
   end
 
@@ -2256,8 +2293,8 @@ defmodule Locus.KeeperTest do
       assert {:error, {:refused, "bad_request"}} = Keeper.home_ensure(name, "../x")
 
       assert [
-               %{"v" => 6, "type" => "home_make", "id" => first, "home" => "vlt_a"},
-               %{"v" => 6, "type" => "home_make", "id" => second, "home" => "vlt_a"}
+               %{"v" => 7, "type" => "home_make", "id" => first, "home" => "vlt_a"},
+               %{"v" => 7, "type" => "home_make", "id" => second, "home" => "vlt_a"}
              ] = home_requests(fake)
 
       assert first != second
@@ -2334,9 +2371,7 @@ defmodule Locus.KeeperTest do
       spec = %{
         argv: ["true"],
         env: %{},
-        pool: "backends",
-        memory_bytes: 268_435_456,
-        cpu_quota: 100_000
+        pool: "backends"
       }
 
       assert {:error, {:refused, "home_absent"}} =
@@ -2380,9 +2415,7 @@ defmodule Locus.KeeperTest do
       spec = %{
         argv: ["true"],
         env: %{},
-        pool: "backends",
-        memory_bytes: 268_435_456,
-        cpu_quota: 100_000
+        pool: "backends"
       }
 
       assert {:ok, _handle} =
@@ -2485,8 +2518,6 @@ defmodule Locus.KeeperTest do
                  env: %{},
                  place: place!(name),
                  pool: "backends",
-                 memory_bytes: 268_435_456,
-                 cpu_quota: 100_000,
                  home: "vlt_a"
                })
 

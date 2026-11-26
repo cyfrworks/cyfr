@@ -275,10 +275,16 @@ func Main(args []string) int {
 		})
 		roleCPUs = append(roleCPUs, cpus[i])
 	}
-	if _, err := makePool(log, tree, s.roles, roleCPUs, memory, "/proc/meminfo", reserve, share); err != nil {
+	sizes, err := makePool(log, tree, s.roles, roleCPUs, memory, "/proc/meminfo", reserve, share)
+	if err != nil {
 		log.Error("refusing to start: %v", err)
 		return ExitConfig
 	}
+	floor := false
+	for _, r := range s.roles {
+		floor = floor || r.spec.Floor
+	}
+	s.ledger = admission.New(sizes.Work, floor)
 	if err := makeRunDirs(s.runRoot, s.roles); err != nil {
 		log.Error("refusing to start: %v", err)
 		return ExitConfig
@@ -640,8 +646,10 @@ type spawn struct {
 	home    string
 	leader  *child
 	relay   *child
-	// group is the spawn's memory-bounded cgroup, nil until it is created.
-	group *cgroup.Group
+	// group is the spawn's memory-bounded cgroup, nil until it is created,
+	// with limits, its place's kind's at its claim.
+	group  *cgroup.Group
+	limits admission.Limits
 	// place is the id of the place the spawn was made in, set as it is
 	// made; its retirement frees the place in the step that follows its
 	// group's removal, so no measure answers a place whose spawn's group is
@@ -725,6 +733,13 @@ type client struct {
 	starts sync.WaitGroup
 	// packs owns its puts at the packs' store (packview), ended with it.
 	packs packview.Owner
+	// out holds the lines queued for its channel, in order (queue); drainMu
+	// lets one drain at a time write them, and wake tells its writer that
+	// more are queued.
+	outMu   sync.Mutex
+	out     []any
+	drainMu sync.Mutex
+	wake    chan struct{}
 }
 
 type server struct {
@@ -742,10 +757,13 @@ type server struct {
 	roles   []*role
 	runRoot string
 
-	// mu guards pools, spawns, every client's places, unremoved and
-	// waiters, and is held across every fork, reap and signal, so a pid is
-	// never signalled after it was reaped.
-	mu     sync.Mutex
+	// mu guards pools, spawns, every client's places, the ledger,
+	// unremoved and waiters, and is held across every fork, reap and
+	// signal, so a pid is never signalled after it was reaped.
+	mu sync.Mutex
+	// ledger is the one admission of every role's places (package
+	// admission).
+	ledger *admission.Ledger
 	pools  map[string]*pool.Pool
 	spawns map[string]*spawn
 	// unremoved holds every retired spawn whose group could not be removed,
@@ -1028,6 +1046,9 @@ func (s *server) signalChild(c *child, sig syscall.Signal) {
 
 // serveChannel answers c's requests until its channel ends.
 func (s *server) serveChannel(c *client) {
+	stop := make(chan struct{})
+	defer close(stop)
+	go s.writer(c, stop)
 	lr := protocol.NewLineReader(c.channel)
 	for {
 		line, tooLong, err := lr.Next()
@@ -1061,9 +1082,62 @@ func (s *server) serveChannel(c *client) {
 	}
 }
 
-// send writes reply to c's channel: every reply goes to the channel its
-// request came on, every report of a spawn to its client's.
+// send writes reply to c's channel, after every line queued before it:
+// every reply goes to the channel its request came on, every report of a
+// spawn to its client's. It waits for c's own channel alone.
 func (s *server) send(c *client, reply any) {
+	c.queue(reply)
+	s.drain(c)
+}
+
+// queue puts line at the end of c's lines and wakes its writer: it never
+// waits for a write, so a step of the admission under s.mu, or another
+// client's handler, never waits on c.
+func (c *client) queue(line any) {
+	c.outMu.Lock()
+	c.out = append(c.out, line)
+	c.outMu.Unlock()
+	select {
+	case c.wake <- struct{}{}:
+	default:
+	}
+}
+
+// drain writes c's queued lines in their order, one drain at a time.
+func (s *server) drain(c *client) {
+	c.drainMu.Lock()
+	defer c.drainMu.Unlock()
+	for {
+		c.outMu.Lock()
+		out := c.out
+		c.out = nil
+		c.outMu.Unlock()
+		if len(out) == 0 {
+			return
+		}
+		for _, line := range out {
+			s.write(c, line)
+		}
+	}
+}
+
+// writer drains c's lines whenever more are queued, until stop closes: the
+// lines another client's step queued for c are written by c's writer
+// alone.
+func (s *server) writer(c *client, stop <-chan struct{}) {
+	for {
+		select {
+		case <-stop:
+			return
+		case <-c.wake:
+			s.drain(c)
+		}
+	}
+}
+
+// write writes one line to c's channel, within writeTimeout; a write that
+// fails closes the channel.
+func (s *server) write(c *client, reply any) {
 	line, err := protocol.Encode(reply)
 	if err != nil {
 		s.log.Error("encoding a reply: %v", err)
@@ -1229,9 +1303,10 @@ func (s *server) handleSpawn(c *client, req *protocol.Request) {
 		return
 	}
 	defer c.starts.Done()
-	switch s.claimPlace(c, req) {
+	claim, limits := s.claimPlace(c, req)
+	switch claim {
 	case claimNone:
-		s.log.Warn("spawn %s refused: the keeper holds no place %s of role %s, or another spawn named it", req.ID, req.Place, c.role.spec.Name)
+		s.log.Warn("spawn %s refused: the keeper holds no place %s of role %s with room, or another spawn named it", req.ID, req.Place, c.role.spec.Name)
 		s.send(c, protocol.NewError(req.ID, "", protocol.CodeBadRequest))
 		return
 	case claimOthersPacks:
@@ -1239,12 +1314,12 @@ func (s *server) handleSpawn(c *client, req *protocol.Request) {
 		s.send(c, protocol.NewError(req.ID, "", protocol.CodeBadRequest))
 		return
 	}
-	made, code := s.startSpawn(c, req)
+	made, code := s.startSpawn(c, req, limits)
 	switch {
 	case code == "":
 	case made == nil:
 		s.mu.Lock()
-		delete(c.places, req.Place)
+		s.freePlace(c, req.Place)
 		s.mu.Unlock()
 		s.send(c, protocol.NewError(req.ID, "", code))
 	default:
@@ -1260,7 +1335,7 @@ func (s *server) handleSpawn(c *client, req *protocol.Request) {
 // startSpawn starts the spawn req asks for in the place it claimed. It
 // answers the code it is refused with, or "" once it is spawned, and the
 // spawn it made in the place, nil when it is refused before it made one.
-func (s *server) startSpawn(c *client, req *protocol.Request) (*spawn, string) {
+func (s *server) startSpawn(c *client, req *protocol.Request, limits admission.Limits) (*spawn, string) {
 	// A relay pool's space reaches nothing: it takes no hosts, and no kept
 	// home or terminal, which are a program's, whose pool is routed. A pool
 	// that is not the role's is refused below, as one the keeper does not
@@ -1286,7 +1361,7 @@ func (s *server) startSpawn(c *client, req *protocol.Request) (*spawn, string) {
 		return nil, protocol.CodeInternal
 	}
 	if req.HomeMode == protocol.HomeKept {
-		return s.startKeptSpawn(c, req, spec.Reach, reach, known)
+		return s.startKeptSpawn(c, req, spec.Reach, reach, known, limits)
 	}
 	s.mu.Lock()
 	var p *pool.Pool
@@ -1313,7 +1388,7 @@ func (s *server) startSpawn(c *client, req *protocol.Request) (*spawn, string) {
 		return nil, protocol.CodeCapacity
 	}
 
-	sp := &spawn{id: randomHex(16), client: c, pool: p, account: s.accounts[uid], reach: spec.Reach, retired: make(chan struct{})}
+	sp := &spawn{id: randomHex(16), client: c, pool: p, account: s.accounts[uid], reach: spec.Reach, limits: limits, retired: make(chan struct{})}
 	s.madeIn(req.Place, sp)
 	name, err := home.NewName(uid)
 	if err != nil {
@@ -1469,7 +1544,7 @@ func (s *server) launch(sp *spawn, req *protocol.Request, e egress) (string, err
 		groupName = cgroup.SpawnName(sp.id)
 		homeRoot = s.cfg.Kept.Root
 	}
-	group, err := r.groups.Create(groupName, *req.MemoryBytes, *req.CPUQuota)
+	group, err := r.groups.Create(groupName, sp.limits.MemoryBytes, sp.limits.Processors*cgroup.CPUPeriod)
 	if err != nil {
 		return protocol.CodeInternal, err
 	}
@@ -1802,6 +1877,9 @@ func (s *server) retire(sp *spawn, grace time.Duration, notify bool) {
 		return
 	}
 	sp.retireOnce.Do(func() {
+		s.mu.Lock()
+		s.ending(sp)
+		s.mu.Unlock()
 		go func() {
 			defer close(sp.retired)
 			uid := sp.account.UID
@@ -1891,7 +1969,7 @@ func (s *server) leave(sp *spawn, removed bool, left removal) {
 // of it may still read.
 func (s *server) forget(sp *spawn) {
 	delete(s.spawns, sp.id)
-	delete(sp.client.places, sp.place)
+	s.freePlace(sp.client, sp.place)
 	delete(s.routing, sp.id)
 	sp.releasePacks()
 }

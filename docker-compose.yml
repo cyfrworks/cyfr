@@ -195,11 +195,11 @@ services:
     # cyfr-locus makes the pool's groups there: every build, runner and
     # backend in one memory bound for all of Locus's work, each role's at
     # its processors (below), and each a group of its own inside it,
-    # bounded at its role's LOCUS_BUILDS_MEMORY_BYTES,
-    # LOCUS_RUNTIME_MEMORY_BYTES or LOCUS_BACKENDS_MEMORY_BYTES. Without the
-    # option nothing runs unbounded and nothing runs: cyfr-locus refuses to
-    # start, since no role's group can be made, and the container
-    # restart-loops.
+    # bounded by its kind: a build at 1 GiB, a runner and a session at half
+    # of that one bound, never under 420 MiB and 384 MiB (Prima.LocusPool).
+    # Without the option nothing runs unbounded and nothing runs:
+    # cyfr-locus refuses to start, since no role's group can be made, and
+    # the container restart-loops.
     # seccomp=./keeper.seccomp.json: cyfr-locus clones each role process
     # and every build, runner and backend into a space of its own, a user,
     # network, IPC, pid, mount and cgroup namespace with files of its own,

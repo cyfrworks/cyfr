@@ -745,5 +745,47 @@ class GuardFailed(unittest.TestCase):
         self.assertFalse(imagesuite.guard_failed(self.record("running", 0, 0, health="starting")))
 
 
+class PoolBounds(unittest.TestCase):
+    """The bound of each kind of spawn as the keeper sets it, and the settings that size the pool's work."""
+
+    MIB = 1 << 20
+
+    def test_a_build_is_bounded_alike_on_every_pool(self):
+        for work in (0, 512 * self.MIB, 64 << 30):
+            self.assertEqual(imagesuite.cap_bytes("build", work), 1 << 30)
+
+    def test_a_runner_and_a_session_take_half_of_the_work_never_under_their_least(self):
+        self.assertEqual([imagesuite.cap_bytes(kind, 0) for kind in ("warm", "run", "program", "terminal")],
+                         [420 * self.MIB, 420 * self.MIB, 384 * self.MIB, 384 * self.MIB])
+        self.assertEqual(imagesuite.cap_bytes("run", 840 * self.MIB), 420 * self.MIB)
+        self.assertEqual(imagesuite.cap_bytes("program", 840 * self.MIB + 2), 420 * self.MIB + 1)
+
+    def meminfo(self, status, stdout):
+        calls = []
+
+        def run(*args, check=True, env=None, timeout=None):
+            calls.append(args)
+            return subprocess.CompletedProcess(args, status, stdout, "" if status == 0 else "daemon error")
+
+        patch = mock.patch.object(imagesuite, "run", run)
+        patch.start()
+        self.addCleanup(patch.stop)
+        return calls
+
+    def test_the_reserve_leaves_exactly_the_work_and_no_share(self):
+        calls = self.meminfo(0, "16000000\n")
+        self.assertEqual(imagesuite.work_settings("image", 1 << 30),
+                         {"LOCUS_CORE_RESERVE_BYTES": str(16_000_000 * 1024 - (1 << 30)), "LOCUS_SERVICE_BYTES": "0"})
+        self.assertEqual(calls[0][:2], ("docker", "run"))
+        self.assertIn("/proc/meminfo", calls[0])
+
+    def test_a_failed_read_or_a_machine_too_small_is_no_pool(self):
+        for status, stdout, work in ((1, "16000000\n", 1 << 30), (0, "\n", 1 << 30), (0, "1024\n", 1 << 30)):
+            with self.subTest(status=status, stdout=stdout):
+                self.meminfo(status, stdout)
+                with self.assertRaises(SystemExit):
+                    imagesuite.work_settings("image", work)
+
+
 if __name__ == "__main__":
     unittest.main()

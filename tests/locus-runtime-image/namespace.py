@@ -72,7 +72,7 @@ runner's own uid, outside that namespace, may not):
   measure answers above zero under the owner of the moment; after its
   `release`, a measure sent with it is still answered with a reading
   before `released`, and one after `released` is `unmeasured`.
-- `spawn`: the shipped service fills its pool; every runner runs under a
+- `spawn`: the shipped service fills its warm floor; every runner runs under a
   pooled uid whose user namespace maps only that uid and gid to themselves
   with setgroups denied, and holds no capability in any of the five sets,
   with no_new_privs.
@@ -102,8 +102,11 @@ lists no `name=apparmor` security option). The service steps sign their
 requests with the scripted control plane's keys (control_plane.py); none
 of them needs the service to reach it. `measure`'s work is that plane's
 too, reached by this machine alone, as the runner's relay reaches it
-through its service. The keeper steps' clients speak keeper protocol 3,
-each placing the place its spawn names first.
+through its service. The keeper steps' clients speak the keeper's
+protocol (`V`), each placing the place its spawn names first, naming no
+bound on a spawn, and reading the place's `placed` answer with the bound
+the keeper sets on a runner: half of the pool's work, the machine's whole
+memory here, never under a runner's least.
 
 Usage: tests/locus-runtime-image/namespace.py IMAGE [STEP]...
 """
@@ -142,10 +145,8 @@ POOL = f"{ROLE['pool']}:{POOL_FIRST}-{POOL_LAST}:{ROLE['reach']}"
 TOKEN = "0123456789abcdef" * 4
 # The place every spawn of the keeper steps but `measure` names.
 PLACE = "p1"
-# The bound every spawn names (`memory_bytes`, which the keeper requires): room enough for a shell and curl.
-MEMORY_BYTES = 64 << 20
-# One CPU of every 100000-microsecond period.
-CPU_QUOTA = 100_000
+# The keeper's protocol: every line carries its version.
+V = 7
 BOOT_S = 90
 NO_CAPS = "0000000000000000"
 
@@ -274,34 +275,52 @@ def keeper_run(image, client_script, seccomp=True, timeout=120, mounts=(), guard
 
 
 def place_line(place, kind="warm", athanor=None):
-    request = {"v": 6, "type": "place", "id": place, "kind": kind}
+    request = {"v": V, "type": "place", "id": place, "kind": kind}
     if athanor:
         request["athanor"] = athanor
     return json.dumps(request)
 
 
-def spawn_line(spawn_id, argv, env=None, control=False, attach=f"{RUN_DIR}/attach.sock", place=PLACE,
-               memory_bytes=MEMORY_BYTES, **extra):
-    request = {"v": 6, "type": "spawn", "id": spawn_id, "place": place, "pool": ROLE["pool"], "argv": argv, "env": env or {},
-               "memory_bytes": memory_bytes, "cpu_quota": CPU_QUOTA, "attach": {"path": attach, "token": TOKEN}, **extra}
+def spawn_line(spawn_id, argv, env=None, control=False, attach=f"{RUN_DIR}/attach.sock", place=PLACE, **extra):
+    """A spawn naming its place and no bound: the keeper sets a spawn's bound by its place's kind."""
+    request = {"v": V, "type": "spawn", "id": spawn_id, "place": place, "pool": ROLE["pool"], "argv": argv, "env": env or {},
+               "attach": {"path": attach, "token": TOKEN}, **extra}
     if control:
         request["control"] = True
     return json.dumps(request)
 
 
+# What the client prints of the machine's memory, MemTotal in kB, which the keeper sizes its pool's work from.
+MEMTOTAL = "printf 'memtotal:%s\\n' \"$(awk '$1 == \"MemTotal:\" {print $2}' /proc/meminfo)\"; "
 # The client's first request: the place its spawn names, whose answer it prints before it sends the spawn.
-PLACE_FIRST = f"printf '%s\\n' '{place_line(PLACE)}' >&3; read -r line <&3; echo \"reply:$line\"; "
+PLACE_FIRST = MEMTOTAL + f"printf '%s\\n' '{place_line(PLACE)}' >&3; read -r line <&3; echo \"reply:$line\"; "
 
 
 def replies(stdout):
     return [json.loads(line[len("reply:"):]) for line in stdout.splitlines() if line.startswith("reply:")]
 
 
+def runner_bound(stdout):
+    """The bound the keeper sets on a runner of the keeper steps: half of the pool's work, which with no reserve, no
+    share and no limit of its container is the machine's whole memory, as the client printed it; None where it did
+    not."""
+    found = re.findall(r"^memtotal:(\d+)$", stdout, re.M)
+    return imagesuite.cap_bytes("warm", int(found[0]) * 1024) if len(found) == 1 else None
+
+
+def placed(place, bound):
+    """The keeper's `placed` answer to the place `place`, with the bound its spawn will have."""
+    return {"v": V, "type": "placed", "id": place, "memory_bytes": bound}
+
+
 def after_placed(ran, step):
-    """The replies the client read after its first, which must be the keeper's `placed` for the place its spawn names."""
+    """The replies the client read after its first, which must be the keeper's `placed` for the place its spawn names,
+    with a runner's bound."""
     got = replies(ran.stdout)
-    expect(got[:1] == [{"v": 6, "type": "placed", "id": PLACE}],
-           f"{step}: the keeper placed {PLACE} before the client sent the spawn naming it", {"replies": got, "stderr": ran.stderr[-2000:]})
+    bound = runner_bound(ran.stdout)
+    expect(bound is not None and got[:1] == [placed(PLACE, bound)],
+           f"{step}: the keeper placed {PLACE} with a runner's bound, {bound} bytes, before the client sent the spawn naming it",
+           {"replies": got, "stderr": ran.stderr[-2000:]})
     return got[1:]
 
 
@@ -656,14 +675,13 @@ def test_compat_killed(image):
 
 # The runner as the shipped service spawns it from a release (Locus.Runtime.Release.runner_command/1): the release's
 # own command, the service's environment it shares (that module's shared names, as the image sets them) and the
-# runner's own (Locus.Runtime.Settings.runner_environment/1), under the bound and grace the service's defaults give
-# (Locus.Runtime.Settings). Its id names its place, as the runner pool's does.
+# runner's own (Locus.Runtime.Settings.runner_environment/1), under the grace the service's defaults give
+# (Locus.Runtime.Settings) and the bound the keeper sets on a runner. Its id names its place, as the runner pool's does.
 RUNNER_ARGV = ["/bin/sh", "-c", 'RELEASE_TMP="${TMPDIR:-/tmp}" exec "$0" start', RELEASE["bin"]]
 SHARED_ENVIRONMENT = ("LANG", "LANGUAGE", "LC_ALL", "ELIXIR_ERL_OPTIONS")
 RUNNER = "runner_measured"
 RUNNER_ENV = {"RELEASE_DISTRIBUTION": "none", "RUNTIME_ROLE": "runner", "RUNTIME_RUNNER_ID": RUNNER, "RUNTIME_SERVICE_ID": SERVICE,
               "RUNTIME_BOOT_ID": "boot_measured", "RUNTIME_WATCHDOG_GRACE_MS": "5000"}
-RUNNER_MEMORY_BYTES = 384 << 20
 RELEASE_GRACE_MS = 2_000
 ATHANOR = "ath_measured"
 # The runner's owners, one step each, read once the keeper has read its group: the place's own, then the owner an
@@ -687,12 +705,12 @@ WORK_TIMEOUT_MS = 120_000
 # reads up to its answer; `poll` asks until a reading answers it, the keeper reading each group once a second;
 # `assign` sends an assign and reads up to its answer. Every reply read is printed as `read:<step>:<reply>`, an
 # assign's as `read:<step>.assign:<reply>`. `mark` leaves a mark for this machine in the attach directory and
-# `marked` waits for one of its. The release and a measure go in one write, and the replies are read up to
-# `released`; then one more measure.
+# `marked` waits for one of its. It prints the machine's memory first, as `read:memtotal:<kB>`. The release and a
+# measure go in one write, and the replies are read up to `released`; then one more measure.
 PLACES_CLIENT = r"""
 ask() {
   n=$((n + 1))
-  printf '{"v":6,"type":"measure","id":"m%s","place":"%s"}\n' "$n" "$place" >&3
+  printf '{"v":@V@,"type":"measure","id":"m%s","place":"%s"}\n' "$n" "$place" >&3
   while read -r line <&3; do
     echo "read:$1:$line"
     case "$line" in *"\"id\":\"m$n\","*) return 0 ;; esac
@@ -727,13 +745,14 @@ marked() {
   done
 }
 n=0
+echo "read:memtotal:$(awk '$1 == "MemTotal:" {print $2}' /proc/meminfo)"
 printf '%s\n' "$placing" >&3; read -r line <&3; echo "read:placed:$line"
 printf '%s\n' "$spawning" >&3; read -r line <&3; echo "read:spawned:$line"
 sid=$(printf '%s' "$line" | sed -n 's/.*"spawn_id":"\([0-9a-f]*\)".*/\1/p')
 [ -n "$sid" ] || exit 1
 @OWNERS@
 n=$((n + 1))
-printf '{"v":6,"type":"release","spawn_id":"%s","grace_ms":%s}\n{"v":6,"type":"measure","id":"m%s","place":"%s"}\n' \
+printf '{"v":@V@,"type":"release","spawn_id":"%s","grace_ms":%s}\n{"v":@V@,"type":"measure","id":"m%s","place":"%s"}\n' \
   "$sid" "$grace" "$n" "$place" >&3
 while read -r line <&3; do
   echo "read:release:$line"
@@ -756,7 +775,7 @@ def assigns():
     sent, before = {}, OWNERS[0][1:3]
     for step, kind, athanor, _ in OWNERS[1:]:
         if (kind, athanor) != before:
-            sent[step] = {"v": 6, "type": "assign", "id": f"as{len(sent) + 1}", "place": RUNNER, "kind": kind, "athanor": athanor}
+            sent[step] = {"v": V, "type": "assign", "id": f"as{len(sent) + 1}", "place": RUNNER, "kind": kind, "athanor": athanor}
         before = (kind, athanor)
     return sent
 
@@ -789,8 +808,7 @@ def places_client(env, marks=Attach.MOUNT, client_marks=ClientMarks.MOUNT):
         "marks": marks,
         "own_marks": client_marks,
         "placing": place_line(RUNNER),
-        "spawning": spawn_line("1", RUNNER_ARGV, env=env, control=True, attach=f"{Attach.MOUNT}/a.sock", place=RUNNER,
-                               memory_bytes=RUNNER_MEMORY_BYTES),
+        "spawning": spawn_line("1", RUNNER_ARGV, env=env, control=True, attach=f"{Attach.MOUNT}/a.sock", place=RUNNER),
     }
     sent = {step: (request["id"], json.dumps(request)) for step, request in assigns().items()}
     assert "'" not in "".join(variables.values()) + "".join(line for _, line in sent.values())
@@ -803,7 +821,8 @@ def places_client(env, marks=Attach.MOUNT, client_marks=ClientMarks.MOUNT):
         owners += f"poll {step} || exit 1\n"
         if step == WORKING:
             owners += "mark measured\nmarked complete || exit 1\n"
-    return "".join(f"{name}='{value}'\n" for name, value in variables.items()) + PLACES_CLIENT.replace("@OWNERS@\n", owners)
+    return ("".join(f"{name}='{value}'\n" for name, value in variables.items())
+            + PLACES_CLIENT.replace("@OWNERS@\n", owners).replace("@V@", str(V)))
 
 
 def transcript(stdout):
@@ -823,14 +842,14 @@ def reading(reply, kind, athanor=None):
     """Whether `reply` answers its measure with a reading above zero of a place whose owner is `kind` and `athanor`, and nothing else."""
     if not isinstance(reply, dict):
         return False
-    owner = {"v": 6, "type": "measured", "id": reply.get("id"), "kind": kind, **({"athanor": athanor} if athanor else {})}
+    owner = {"v": V, "type": "measured", "id": reply.get("id"), "kind": kind, **({"athanor": athanor} if athanor else {})}
     return ({key: value for key, value in reply.items() if key not in ("bytes", "lesser", "age_ms")} == owner
             and type(reply.get("bytes")) is int and reply["bytes"] > 0 and type(reply.get("lesser")) is bool
             and type(reply.get("age_ms")) is int and reply["age_ms"] >= 0)
 
 
 def unmeasured(reply):
-    return isinstance(reply, dict) and reply == {"v": 6, "type": "error", "id": reply.get("id"), "code": "unmeasured"}
+    return isinstance(reply, dict) and reply == {"v": V, "type": "error", "id": reply.get("id"), "code": "unmeasured"}
 
 
 def judge_places(read, detail):
@@ -838,11 +857,14 @@ def judge_places(read, detail):
     steps = {}
     for step, reply in read:
         steps.setdefault(step, []).append(reply)
-    expect(steps.get("placed") == [{"v": 6, "type": "placed", "id": RUNNER}], f"measure: the keeper placed the runner's place {RUNNER}, warm",
-           detail)
+    memtotal = steps.get("memtotal", [None])
+    bound = imagesuite.cap_bytes("warm", memtotal[0] * 1024) if len(memtotal) == 1 and type(memtotal[0]) is int else None
+    expect(bound is not None and steps.get("placed") == [placed(RUNNER, bound)],
+           f"measure: the keeper placed the runner's place {RUNNER}, warm, with a runner's bound, {bound} bytes, half of the "
+           "machine's memory, never under a runner's least", detail)
     spawned = (steps.get("spawned") or [None])[0]
     expect(isinstance(spawned, dict)
-           and {key: value for key, value in spawned.items() if key not in ("spawn_id", "uid", "pid")} == {"v": 6, "type": "spawned", "id": "1"}
+           and {key: value for key, value in spawned.items() if key not in ("spawn_id", "uid", "pid")} == {"v": V, "type": "spawned", "id": "1"}
            and re.fullmatch(r"[0-9a-f]{32}", str(spawned.get("spawn_id"))) is not None
            and type(spawned.get("uid")) is int and POOL_FIRST <= spawned["uid"] <= POOL_LAST
            and type(spawned.get("pid")) is int and spawned["pid"] > 0,
@@ -854,7 +876,7 @@ def judge_places(read, detail):
     sent = assigns()
     for step, kind, athanor, what in OWNERS:
         if step in sent:
-            expect(steps.get(f"{step}.assign") == [{"v": 6, "type": "assigned", "id": sent[step]["id"]}],
+            expect(steps.get(f"{step}.assign") == [{"v": V, "type": "assigned", "id": sent[step]["id"]}],
                    f"measure: before {step}, the keeper applied the assign of {kind} for {athanor} and answered it under its id, "
                    "and nothing else came before that answer", detail)
         got = steps.get(step, [])
@@ -871,7 +893,7 @@ def judge_places(read, detail):
     released = steps.get("release", [])
     end = next((n for n, reply in enumerate(released) if isinstance(reply, dict) and reply.get("type") == "released"), None)
     measures = [n for n, reply in enumerate(released) if isinstance(reply, dict) and reply.get("type") in ("measured", "error")]
-    expect(end is not None and released[end] == {"v": 6, "type": "released", "spawn_id": spawned["spawn_id"]}
+    expect(end is not None and released[end] == {"v": V, "type": "released", "spawn_id": spawned["spawn_id"]}
            and len(measures) == 1 and measures[0] < end and reading(released[measures[0]], kind, athanor),
            "measure: after its release, the runner's place is still read above zero, answered before its released", detail)
     after = steps.get("after", [])
@@ -1087,8 +1109,8 @@ def assert_isolated(stack, runner, label):
 
 def test_spawn(stack):
     runners = stack.runner_processes()
-    expect(len(runners) == stack.pool_size and all(POOL_FIRST <= r["uid"] <= POOL_LAST for r in runners),
-           f"the shipped service under the profile fills its pool of {stack.pool_size} runners", runners)
+    expect(len(runners) == imagesuite.FLOOR_RUNNERS and all(POOL_FIRST <= r["uid"] <= POOL_LAST for r in runners),
+           f"the shipped service under the profile fills its warm floor of {imagesuite.FLOOR_RUNNERS} runner(s)", runners)
     for runner in runners:
         assert_isolated(stack, runner, "spawn")
 
@@ -1220,7 +1242,7 @@ def main(image, steps):
     if not service_steps:
         return
     plane = ControlPlane(secrets.token_bytes(32), SERVICE).serve()
-    stack = IsolatedStack("cyfr-locus-runtime-namespace", image, plane, pool_size=1)
+    stack = IsolatedStack("cyfr-locus-runtime-namespace", image, plane)
     try:
         stack.up()
         for step in ("spawn", "cgroup", "network", "descriptors", "kill", "reuse", "restart"):

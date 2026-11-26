@@ -48,7 +48,7 @@ func (s *server) startRole(r *role) (*client, error) {
 		_ = unix.Close(fds[1])
 		return nil, fmt.Errorf("its channel: %w", err)
 	}
-	c := &client{role: r, id: randomHex(16), channel: os.NewFile(uintptr(fds[0]), "channel-"+r.spec.Name), places: map[string]*place{}}
+	c := &client{role: r, id: randomHex(16), channel: os.NewFile(uintptr(fds[0]), "channel-"+r.spec.Name), places: map[string]*place{}, wake: make(chan struct{}, 1)}
 	theirs := os.NewFile(uintptr(fds[1]), "role-channel-"+r.spec.Name)
 	s.mu.Lock()
 	r.starting = c
@@ -239,6 +239,13 @@ func (s *server) endClient(c *client) {
 	c.ended = true
 	if c.role.client == c {
 		c.role.client = nil
+	}
+	// Its places no spawn named go now, those still waiting for room among
+	// them; a named one's goes with its spawn, or at its start's refusal.
+	for id, p := range c.places {
+		if !p.named {
+			s.freePlace(c, id)
+		}
 	}
 	var held []*spawn
 	for _, sp := range s.spawns {

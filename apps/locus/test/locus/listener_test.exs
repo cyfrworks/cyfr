@@ -123,7 +123,7 @@ defmodule Locus.ListenerTest do
     def release(_server, _handle, _grace_ms), do: :ok
     def fence(_server, _tag), do: :pending
     def adopt(_server, _ledger, _heir), do: {:ok, []}
-    def place(_server, _id, _whose, _owner), do: :ok
+    def place(_server, _id, _whose, _owner), do: {:ok, nil}
     def drop(_server, _id), do: :ok
   end
 

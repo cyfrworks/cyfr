@@ -56,10 +56,8 @@ defmodule Locus.ConfigTest do
     backends_key: nil,
     backends_bind: {0, 0, 0, 0},
     backends_port: 4101,
-    backends_memory_bytes: 536_870_912,
     backends_memory_budget: 1_879_048_192,
-    backends_memory_overcommit: {1, 1},
-    backends_cpu_quota: 200_000
+    backends_memory_overcommit: {1, 1}
   ]
 
   defp env(map), do: fn key -> Map.get(map, key) end
@@ -93,18 +91,14 @@ defmodule Locus.ConfigTest do
       "LOCUS_BUILDS_TIMEOUT_MS" => "60000",
       "LOCUS_BUILDS_MAX_CONCURRENT" => "4",
       "LOCUS_BUILDS_MAX_CONCURRENT_PER_TENANT" => "2",
-      "LOCUS_BUILDS_MEMORY_BYTES" => "2147483648",
-      "LOCUS_BUILDS_CPU_QUOTA" => "300000",
       "LOCUS_BUILDS_CARGO_SEED" => "/opt/cyfr/cargo-seed",
       "LOCUS_LOG_LEVEL" => "debug",
       "LOCUS_LOG_FORMAT" => "json",
       "LOCUS_BACKENDS_KEY" => @backends_key_hex,
       "LOCUS_BACKENDS_BIND" => "127.0.0.2",
       "LOCUS_BACKENDS_PORT" => "4201",
-      "LOCUS_BACKENDS_MEMORY_BYTES" => "268435456",
       "LOCUS_BACKENDS_MEMORY_BUDGET" => "1073741824",
-      "LOCUS_BACKENDS_MEMORY_OVERCOMMIT" => "1.25",
-      "LOCUS_BACKENDS_CPU_QUOTA" => "50000"
+      "LOCUS_BACKENDS_MEMORY_OVERCOMMIT" => "1.25"
     }
   end
 
@@ -213,18 +207,14 @@ defmodule Locus.ConfigTest do
              timeout_ms: 60_000,
              max_concurrent: 4,
              max_concurrent_per_tenant: 2,
-             memory_bytes: 2_147_483_648,
-             cpu_quota: 300_000,
              cargo_seed: "/opt/cyfr/cargo-seed",
              log_level: :debug,
              log_format: :json,
              backends_key: @backends_key,
              backends_bind: {127, 0, 0, 2},
              backends_port: 4201,
-             backends_memory_bytes: 268_435_456,
              backends_memory_budget: 1_073_741_824,
-             backends_memory_overcommit: {125, 100},
-             backends_cpu_quota: 50_000
+             backends_memory_overcommit: {125, 100}
            ]
 
     refute settings[:request_key] == @key
@@ -243,8 +233,6 @@ defmodule Locus.ConfigTest do
                timeout_ms: 270_000,
                max_concurrent: 2,
                max_concurrent_per_tenant: 1,
-               memory_bytes: 1_073_741_824,
-               cpu_quota: 100_000,
                cargo_seed: nil,
                log_level: :info,
                log_format: :text
@@ -262,8 +250,6 @@ defmodule Locus.ConfigTest do
                timeout_ms: 270_000,
                max_concurrent: 2,
                max_concurrent_per_tenant: 1,
-               memory_bytes: 1_073_741_824,
-               cpu_quota: 100_000,
                cargo_seed: nil,
                log_level: :info,
                log_format: :text
@@ -340,20 +326,11 @@ defmodule Locus.ConfigTest do
           {"LOCUS_BUILDS_TIMEOUT_MS", "5m", "milliseconds from 1000 to 600000"},
           {"LOCUS_BUILDS_MAX_CONCURRENT", "0", "builds from 1 to 1024"},
           {"LOCUS_BUILDS_MAX_CONCURRENT_PER_TENANT", "1025", "builds from 1 to 1024"},
-          {"LOCUS_BUILDS_MEMORY_BYTES", "0", "bytes from 16777216 to 1099511627776"},
-          {"LOCUS_BUILDS_MEMORY_BYTES", "16777215", "bytes from 16777216 to 1099511627776"},
-          {"LOCUS_BUILDS_MEMORY_BYTES", "1099511627777", "bytes from 16777216 to 1099511627776"},
-          {"LOCUS_BUILDS_MEMORY_BYTES", "1G", "bytes from 16777216 to 1099511627776"},
-          {"LOCUS_BUILDS_MEMORY_BYTES", "1073741824.5", "bytes from 16777216 to 1099511627776"},
-          {"LOCUS_BUILDS_MEMORY_BYTES", "-1073741824", "bytes from 16777216 to 1099511627776"},
-          {"LOCUS_BUILDS_MEMORY_BYTES", "unlimited", "bytes from 16777216 to 1099511627776"},
           {"LOCUS_LOG_LEVEL", "verbose", "Logger level"},
           {"LOCUS_LOG_FORMAT", "xml", "text or json"},
           {"LOCUS_BACKENDS_KEY", "not-a-key", "64 hexadecimal digits"},
           {"LOCUS_BACKENDS_BIND", "backends", "IPv4 or IPv6 address"},
-          {"LOCUS_BACKENDS_PORT", "65536", "port from 1 to 65535"},
-          {"LOCUS_BACKENDS_MEMORY_BYTES", "16777215", "bytes from 16777216 to 1099511627776"},
-          {"LOCUS_BACKENDS_MEMORY_BYTES", "unlimited", "bytes from 16777216 to 1099511627776"}
+          {"LOCUS_BACKENDS_PORT", "65536", "port from 1 to 65535"}
         ] do
       assert {:error, message} = Config.from_env(env(Map.put(full(), variable, bad))), variable
       assert message =~ variable, message
@@ -371,27 +348,7 @@ defmodule Locus.ConfigTest do
     refute message =~ "not-a-key"
   end
 
-  # Whether the protocol's codec refuses `bytes` as a spawn's memory bound,
-  # on a spawn whose every other member is well formed.
-  defp bound_refused?(bytes) do
-    spawn = %{
-      type: :spawn,
-      id: "1",
-      place: "pl-1",
-      pool: "build",
-      argv: ["true"],
-      attach: %{path: "/run/a.sock", token: String.duplicate("ab", 32)},
-      memory_bytes: bytes,
-      cpu_quota: 100_000
-    }
-
-    _line = Prima.KeeperProtocol.encode(spawn)
-    false
-  rescue
-    error in ArgumentError -> String.starts_with?(error.message, "memory_bytes ")
-  end
-
-  describe "the backends service's admission and every role's CPU" do
+  describe "the backends service's admission" do
     defp backends(extra),
       do: Config.from_env(env(Map.put(extra, "LOCUS_BACKENDS_KEY", @backends_key_hex)))
 
@@ -471,94 +428,20 @@ defmodule Locus.ConfigTest do
                Config.backends_memory_overcommit()
              ) == 1_879_048_192
     end
-
-    test "every role's CPU quota is microseconds in the keeper's range; zero refuses the boot" do
-      assert Config.cpu_quota_range() ==
-               Prima.KeeperProtocol.min_cpu_quota()..Prima.KeeperProtocol.max_cpu_quota()//1
-
-      runtime = %{
-        "LOCUS_RUNTIME_KEY" => @runtime_key_hex,
-        "LOCUS_RUNTIME_HOST_API_URL" => "http://cyfr:4300"
-      }
-
-      for {base, variable, read} <- [
-            {full(), "LOCUS_BUILDS_CPU_QUOTA", & &1[:cpu_quota]},
-            {full(), "LOCUS_BACKENDS_CPU_QUOTA", & &1[:backends_cpu_quota]},
-            {runtime, "LOCUS_RUNTIME_CPU_QUOTA", & &1[:runtime][:runner_cpu_quota]}
-          ] do
-        for quota <- [1_000, 100_000, 102_400_000] do
-          assert {:ok, settings} = Config.from_env(env(Map.put(base, variable, "#{quota}")))
-          assert read.(settings) == quota
-        end
-
-        for value <- ["0", "999", "102400001", "-100000", "2 cpus", "1.5"] do
-          assert {:error, message} = Config.from_env(env(Map.put(base, variable, value))), value
-          assert message =~ variable
-        end
-      end
-    end
   end
 
-  test "the memory bound takes the whole of the keeper's range, both ends, and nothing outside it" do
-    # One range, the keeper protocol's.
+  test "the memory range is the backends' own, and no setting bounds a build, a session or a runner" do
     assert Config.memory_range() ==
-             Prima.KeeperProtocol.min_memory_bytes()..Prima.KeeperProtocol.max_memory_bytes()//1
+             Prima.LocusBackends.min_memory_bytes()..Prima.LocusBackends.max_memory_bytes()//1
 
     assert Config.memory_range() == 16_777_216..1_099_511_627_776
 
-    vectors =
-      Path.expand("../../../../tests/fixtures/keeper_protocol.json", __DIR__)
-      |> File.read!()
-      |> Jason.decode!()
+    gone =
+      ~w(LOCUS_BUILDS_MEMORY_BYTES LOCUS_BUILDS_CPU_QUOTA LOCUS_BACKENDS_MEMORY_BYTES
+         LOCUS_BACKENDS_CPU_QUOTA LOCUS_RUNTIME_POOL_SIZE LOCUS_RUNTIME_MEMORY_BYTES
+         LOCUS_RUNTIME_CPU_QUOTA)
 
-    # The whole-number bounds the refused spawns carry, split by what the
-    # protocol's codec refuses on a spawn otherwise well formed: a bound
-    # refused for what it is, and a well-formed bound carried by a spawn
-    # refused for another of its members.
-    {refused, carried} =
-      for(
-        %{"request" => %{"type" => "spawn", "memory_bytes" => bytes}} <-
-          vectors["invalid_requests"],
-        is_integer(bytes),
-        do: bytes
-      )
-      |> Enum.split_with(&bound_refused?/1)
-
-    assert refused != []
-
-    accepted =
-      for %{"memory_bytes" => bytes} <- vectors["valid_requests"], do: bytes
-
-    assert 16_777_216 in accepted and 1_099_511_627_776 in accepted
-
-    runtime = %{
-      "LOCUS_RUNTIME_KEY" => @runtime_key_hex,
-      "LOCUS_RUNTIME_HOST_API_URL" => "http://cyfr:4300"
-    }
-
-    # What the keeper accepts as a spawn's bound, this setting accepts.
-    # The same for a build's bound, a backend's and a runner's.
-    # A bound a refused spawn carries beside its malformed member is one
-    # the keeper accepts, and so does this setting.
-    for {base, variable, read} <- [
-          {full(), "LOCUS_BUILDS_MEMORY_BYTES", & &1[:memory_bytes]},
-          {full(), "LOCUS_BACKENDS_MEMORY_BYTES", & &1[:backends_memory_bytes]},
-          {runtime, "LOCUS_RUNTIME_MEMORY_BYTES", & &1[:runtime][:runner_memory_bytes]}
-        ] do
-      for bytes <- accepted ++ carried do
-        env = env(Map.put(base, variable, Integer.to_string(bytes)))
-        assert {:ok, settings} = Config.from_env(env)
-        assert read.(settings) == bytes
-      end
-
-      # And what the keeper refuses as a bound, this setting refuses at
-      # the boot.
-      for bytes <- refused do
-        env = env(Map.put(base, variable, Integer.to_string(bytes)))
-        assert {:error, message} = Config.from_env(env)
-        assert message =~ variable
-      end
-    end
+    assert Config.unknown_names(gone) == Enum.sort(gone)
   end
 
   # The release carries no host module, so the prefix is declared here.
@@ -669,7 +552,6 @@ defmodule Locus.ConfigTest do
     assert Config.timeout_ms() == 270_000
     assert Config.max_concurrent() == 2
     assert Config.max_concurrent_per_tenant() == 1
-    assert Config.memory_bytes() == 1_073_741_824
     assert Config.cargo_seed() == nil
     assert Config.log_level() == :info
     assert Config.log_format() == :text
@@ -678,7 +560,6 @@ defmodule Locus.ConfigTest do
     assert Config.backends_key() == nil
     assert Config.backends_bind() == {0, 0, 0, 0}
     assert Config.backends_port() == 4101
-    assert Config.backends_memory_bytes() == 536_870_912
 
     # The facade's listener reads the same settings.
     assert Locus.Backends.bind() == Config.backends_bind()
@@ -701,11 +582,9 @@ defmodule Locus.ConfigTest do
         "LOCUS_RUNTIME_HOST_API_URL" => "http://cyfr:4300/",
         "LOCUS_RUNTIME_BIND" => "0.0.0.0",
         "LOCUS_RUNTIME_PORT" => "4200",
-        "LOCUS_RUNTIME_POOL_SIZE" => "6",
         "LOCUS_RUNTIME_IDLE_TTL_MS" => "1000",
         "LOCUS_RUNTIME_WATCHDOG_GRACE_MS" => "2000",
         "LOCUS_RUNTIME_RELEASE_GRACE_MS" => "3000",
-        "LOCUS_RUNTIME_MEMORY_BYTES" => "268435456",
         "LOCUS_RUNTIME_ATTACH_DIR" => "/run/locus"
       }
 
@@ -717,18 +596,17 @@ defmodule Locus.ConfigTest do
                host_url: "http://cyfr:4300/",
                bind: "0.0.0.0",
                port: 4200,
-               pool_size: 6,
                idle_ttl_ms: 1000,
                watchdog_grace_ms: 2000,
                release_grace_ms: 3000,
-               runner_memory_bytes: 268_435_456,
                attach_dir: "/run/locus"
              ]
 
       assert {:ok, %Locus.Runtime.Credentials{port: 4200}} =
                Locus.Runtime.Credentials.load(runtime)
 
-      assert {:ok, %{pool_size: 6, keeper: :channel}} = Locus.Runtime.Settings.pool(runtime, %{})
+      assert {:ok, %{idle_ttl_ms: 1000, keeper: :channel}} =
+               Locus.Runtime.Settings.pool(runtime, %{})
     end
 
     test "unset, a setting is the service's default; the pool's stay unset" do
@@ -764,7 +642,6 @@ defmodule Locus.ConfigTest do
             {%{"LOCUS_RUNTIME_BIND" => "cyfr"}, "LOCUS_RUNTIME_BIND must be"},
             {%{"LOCUS_RUNTIME_PORT" => "http"}, "LOCUS_RUNTIME_PORT must be"},
             {%{"LOCUS_RUNTIME_PORT" => "65536"}, "LOCUS_RUNTIME_PORT must be"},
-            {%{"LOCUS_RUNTIME_POOL_SIZE" => "0"}, "LOCUS_RUNTIME_POOL_SIZE"},
             {%{"LOCUS_RUNTIME_IDLE_TTL_MS" => "1s"}, "LOCUS_RUNTIME_IDLE_TTL_MS"},
             {%{"LOCUS_RUNTIME_WATCHDOG_GRACE_MS" => "600001"}, "LOCUS_RUNTIME_WATCHDOG_GRACE_MS"},
             {%{"LOCUS_RUNTIME_RELEASE_GRACE_MS" => "-1"}, "LOCUS_RUNTIME_RELEASE_GRACE_MS"},
@@ -777,29 +654,6 @@ defmodule Locus.ConfigTest do
 
         assert refusal =~ message, refusal
         refute refusal =~ @runtime_key_hex
-      end
-    end
-
-    test "the memory bound takes the whole of the keeper's range, and nothing outside it" do
-      base = %{
-        "LOCUS_RUNTIME_KEY" => @runtime_key_hex,
-        "LOCUS_RUNTIME_HOST_API_URL" => "http://cyfr:4300"
-      }
-
-      assert {:ok, runtime} = Config.runtime_from_env(env(base))
-      refute Keyword.has_key?(runtime, :runner_memory_bytes)
-
-      for bytes <- ["16777216", "402653184", "1099511627776"] do
-        environment = Map.put(base, "LOCUS_RUNTIME_MEMORY_BYTES", bytes)
-        assert {:ok, runtime} = Config.runtime_from_env(env(environment))
-        assert runtime[:runner_memory_bytes] == String.to_integer(bytes)
-      end
-
-      for bad <- ["16777215", "1099511627777", "384M", "402653184.5", "-1", "none"] do
-        environment = Map.put(base, "LOCUS_RUNTIME_MEMORY_BYTES", bad)
-        assert {:error, refusal} = Config.runtime_from_env(env(environment))
-        assert refusal =~ "LOCUS_RUNTIME_MEMORY_BYTES"
-        assert refusal =~ "bytes from 16777216 to 1099511627776"
       end
     end
 
@@ -961,7 +815,7 @@ defmodule Locus.RuntimeConfigFileTest do
     set = %{
       "LOCUS_BUILDS_KEY" => @key_hex,
       "LOCUS_BUILDS_PORT" => "4102",
-      "LOCUS_BUILDS_MEMORY_BYTES" => "536870912"
+      "LOCUS_BUILDS_TIMEOUT_MS" => "60000"
     }
 
     with_env(set, fn ->
@@ -971,9 +825,9 @@ defmodule Locus.RuntimeConfigFileTest do
       assert Keyword.keys(config) == [:locus]
       assert Enum.sort(config[:locus]) == Enum.sort(expected)
       assert config[:locus][:port] == 4102
-      # The bound reaches `:locus` through the file as it stands: it writes
+      # A setting reaches `:locus` through the file as it stands: it writes
       # whatever `from_env/1` answers.
-      assert config[:locus][:memory_bytes] == 536_870_912
+      assert config[:locus][:timeout_ms] == 60_000
     end)
 
     # A node given the backends key alone boots, serving backends.
@@ -994,7 +848,7 @@ defmodule Locus.RuntimeConfigFileTest do
     set = %{
       "LOCUS_RUNTIME_KEY" => @key_hex,
       "LOCUS_RUNTIME_HOST_API_URL" => "http://cyfr:4300",
-      "LOCUS_RUNTIME_POOL_SIZE" => "2"
+      "LOCUS_RUNTIME_IDLE_TTL_MS" => "2000"
     }
 
     with_env(set, fn ->
@@ -1004,7 +858,7 @@ defmodule Locus.RuntimeConfigFileTest do
       assert Keyword.keys(config) == [:locus]
       assert Enum.sort(config[:locus]) == Enum.sort(expected)
       assert config[:locus][:runtime][:service_key] == @key_hex
-      assert config[:locus][:runtime][:pool_size] == 2
+      assert config[:locus][:runtime][:idle_ttl_ms] == 2000
       assert config[:locus][:request_key] == nil
     end)
 

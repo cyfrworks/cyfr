@@ -611,7 +611,6 @@ defmodule Cyfr.StackShapeTest do
           ],
           "entrypoint" => chosen_pool_argv(release, roles, backends, "BACKENDS_POOL"),
           "environment" => [
-            "LOCUS_BACKENDS_MEMORY_BYTES=${LOCUS_BACKENDS_MEMORY_BYTES:-}",
             "LOCUS_BACKENDS_MEMORY_BUDGET=${LOCUS_BACKENDS_MEMORY_BUDGET:-}"
           ]
         }),
@@ -625,7 +624,6 @@ defmodule Cyfr.StackShapeTest do
              "container_name" => nil,
              "pull_policy" => "never",
              "environment" => [
-               "LOCUS_RUNTIME_POOL_SIZE=${LOCUS_RUNTIME_POOL_SIZE:?set LOCUS_RUNTIME_POOL_SIZE}",
                "LOCUS_RUNTIME_IDLE_TTL_MS=${LOCUS_RUNTIME_IDLE_TTL_MS:?set LOCUS_RUNTIME_IDLE_TTL_MS}",
                "LOCUS_RUNTIME_WATCHDOG_GRACE_MS=${LOCUS_RUNTIME_WATCHDOG_GRACE_MS:?set LOCUS_RUNTIME_WATCHDOG_GRACE_MS}",
                "LOCUS_RUNTIME_RELEASE_GRACE_MS=${LOCUS_RUNTIME_RELEASE_GRACE_MS:?set LOCUS_RUNTIME_RELEASE_GRACE_MS}"
@@ -1647,7 +1645,7 @@ defmodule Cyfr.StackShapeTest do
       )
       |> List.flatten()
 
-    assert "LOCUS_BUILDS_KEY" in knobs and "LOCUS_BUILDS_MEMORY_BYTES" in knobs
+    assert "LOCUS_BUILDS_KEY" in knobs and "LOCUS_BUILDS_TIMEOUT_MS" in knobs
 
     for knob <- knobs -- ["LOCUS_BUILDS_KEY"] do
       assert example =~ ~r/^# #{knob}=/m, "#{knob} is missing from .env.locus.example"
