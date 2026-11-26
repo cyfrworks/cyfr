@@ -1225,8 +1225,7 @@ defmodule Locus.Backends.Owners do
 
           {_ref, state} =
             run(state, {:open, [from], ask}, state.place_wait_ms + @home_timeout_ms * 2, fn ->
-              with {:placed, bytes} <- place.(),
-                   do: {:placed, bytes, kept_ready(launcher, server, message.home_id, cap)}
+              with :placed <- place.(), do: kept_ready(launcher, server, message.home_id, cap)
             end)
 
           {:noreply, state}
@@ -1234,8 +1233,7 @@ defmodule Locus.Backends.Owners do
         :scratch ->
           {_ref, state} =
             run(state, {:open, [from], ask}, state.place_wait_ms + state.pool_timeout_ms, fn ->
-              with {:placed, bytes} <- place.(),
-                   do: {:placed, bytes, launcher.pool_stats(server, @pool)}
+              with :placed <- place.(), do: launcher.pool_stats(server, @pool)
             end)
 
           {:noreply, state}
@@ -1282,7 +1280,7 @@ defmodule Locus.Backends.Owners do
 
     fn ->
       case launcher.place(server, ask.session, whose, table) do
-        {:ok, memory_bytes} -> {:placed, memory_bytes}
+        {:ok, _memory_bytes} -> :placed
         {:error, reason} -> {:unplaced, reason}
       end
     end
@@ -1441,15 +1439,13 @@ defmodule Locus.Backends.Owners do
   # key is asked again as its process is about to start: a process of the
   # key that began ending while it was prepared holds it as one found at
   # admission does, its reservation given back first.
-  defp opened(state, froms, ask, prepared) do
-    {memory_bytes, result} = placed(prepared)
-
+  defp opened(state, froms, ask, result) do
     with {:ok, owner} <- still_open(state, ask),
          :ok <- admissible(state, ask.named),
          program = Enum.find(owner.definition, &(&1.name == ask.program)),
          :ok <- claimed(state, program, ask, result),
          :ok <- gone_before(state, owner, ask.key) do
-      start_session(state, owner, program, ask, memory_bytes, froms)
+      start_session(state, owner, program, ask, froms)
     else
       :behind ->
         state = reservation(state, {ask.owner, ask.session}, :abandoned)
@@ -1474,11 +1470,6 @@ defmodule Locus.Backends.Owners do
       _gone -> {:error, :lapsed}
     end
   end
-
-  # The bound the keeper placed the session with, and what its preparation
-  # came to after the place.
-  defp placed({:placed, memory_bytes, result}), do: {memory_bytes, result}
-  defp placed(result), do: {nil, result}
 
   # A scratch session's uid of the pool, claimed in this step; a kept
   # session's home ready under its bound. A session whose place was not
@@ -1523,7 +1514,7 @@ defmodule Locus.Backends.Owners do
     end
   end
 
-  defp start_session(state, owner, program, ask, memory_bytes, froms) do
+  defp start_session(state, owner, program, ask, froms) do
     session_id = ask.session
     record = owner.programs[program.name]
 
@@ -1559,8 +1550,6 @@ defmodule Locus.Backends.Owners do
           packs: ask.packs,
           running: true,
           started: false,
-          # The bound the keeper placed it with.
-          memory_bytes: memory_bytes,
           opened: System.unique_integer([:monotonic]),
           waiting: froms
         }
@@ -1973,7 +1962,7 @@ defmodule Locus.Backends.Owners do
   # the row and key it runs under, included), so a table that adopts it
   # holds the same, closes it by the same name and holds back the next
   # open of its key.
-  defp heir_tag(state, owner, session_id, session) do
+  defp heir_tag(state, owner, session_id, ask) do
     %{
       ledger: state.ledger,
       session: {owner.id, session_id},
@@ -1981,10 +1970,10 @@ defmodule Locus.Backends.Owners do
       server: owner.server,
       g: owner.g,
       e: owner.e,
-      key: session.key,
-      lifetime: session.lifetime,
-      memory_bytes: session.memory_bytes,
-      home_id: session.home_id
+      key: ask.key,
+      lifetime: ask.lifetime,
+      memory_bytes: ask.memory_bytes,
+      home_id: ask.home_id
     }
   end
 
