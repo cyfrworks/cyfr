@@ -829,13 +829,40 @@ defmodule Prima.Refusal do
       {:setup_required,
        "#{member}'s program is signed out. Sign it in, or choose another, on the Aqua page."}
 
-  # A program brain whose start the backends refused for want of room: each
-  # running program holds a place until its turn's work ends.
-  defp row({:program_full, member}) when is_binary(member),
+  # A program, a terminal, a tool or the browser whose start the backends
+  # refused for want of room: what holds the memory (`held`, the keeper's),
+  # the person's own holdings named by the names CYFR read for them under
+  # the person's own scope (`Prima.LocusPool.refusal_sentence/2`); or, with
+  # no `held`, for want of a program's place on this CYFR.
+  defp row({:program_full, member, nil, _names}) when is_binary(member),
     do:
       {:rate_limited,
-       "#{member} could not start: this CYFR has no room for another running program. Stop " <>
-         "work in another thread or wait for it to end, then send your message again."}
+       "#{member} could not start: this CYFR runs as many programs as it can at once. " <>
+         "Stop one on the Programs page, or wait."}
+
+  defp row({:program_full, member, %{} = held, %{} = names}) when is_binary(member),
+    do:
+      {:rate_limited,
+       "#{member} could not start: " <>
+         lower_first(Prima.LocusPool.refusal_sentence(held, names))}
+
+  # Work the machine ended for memory, by the cause the kernel's counts
+  # gave (plan 2.2): its own cap, a limit above it, or one of the two
+  # where the counts cannot say which. `what` is the work as the person
+  # knows it, a sentence's subject.
+  defp row({:memory, what, :cap}) when is_binary(what),
+    do:
+      {:unavailable,
+       "#{what} stopped: it needed more memory than one piece of work may use on this machine."}
+
+  defp row({:memory, what, :machine}) when is_binary(what),
+    do: {:unavailable, "#{what} stopped: CYFR ran out of memory for what it runs."}
+
+  defp row({:memory, what, :either}) when is_binary(what),
+    do:
+      {:unavailable,
+       "#{what} stopped: it ran out of memory, and CYFR could not tell whether its own cap " <>
+         "or a limit above it did it."}
 
   # A program that loads the person's packs starts only once its box holds
   # them (`Opus.Programs.Session`): a copy not made ready, or a selection
@@ -2077,4 +2104,7 @@ defmodule Prima.Refusal do
   defp again(_member, :message), do: " Send a message to try again."
   defp again(member, :ask), do: " Ask #{member} for it again."
   defp again(_member, :none), do: ""
+
+  # A sentence carried on after a colon: its first letter in lower case.
+  defp lower_first(<<first::utf8, rest::binary>>), do: String.downcase(<<first::utf8>>) <> rest
 end
