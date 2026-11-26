@@ -773,7 +773,7 @@ defmodule Cyfr.Boundaries do
     %{
       from: ["apps/cyfr/lib/aqua/**/*.ex", "apps/cyfr/lib/aqua.ex"],
       into: "Opus",
-      allow: ~w(Opus Opus.Brain Opus.Browser),
+      allow: ~w(Opus Opus.Brain Opus.Browser Opus.Programs),
       reason:
         "the assistant runs what it runs through the execution domain's root facade " <>
           "alone: a turn claims, pauses, resumes and releases its root there, and a " <>
@@ -787,6 +787,9 @@ defmodule Cyfr.Boundaries do
           "checked " <>
           "there against the work it is bound to; a thread's deletion closes at once the " <>
           "holders of the program sessions it owed their removal (`Opus.Brain.forgotten/2`). " <>
+          "A program brain refused for room is said by its sentence, the person's own " <>
+          "programs named from their rows under the person's own scope " <>
+          "(`Opus.Programs.full/3`), the one read of those names. " <>
           "Boundary's exports are global, and `Opus` exports `Brain`, `Browser`, `Host.Children`, " <>
           "`Keys`, `Programs`, `Programs.Definition`, `Programs.Session`, " <>
           "`Programs.StatusRedaction`, `Programs.Words`, `Schedules.Scheduler` and " <>
