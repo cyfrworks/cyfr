@@ -171,6 +171,8 @@ defmodule Opus.Brain do
   it to stand down), when the driver's process ends (`:exited`, or
   `{:exited, why}` when its last line, an `ending`, said why: one of
   `Opus.Brain.Wire.endings/0` as an atom, the driver's own finding), when
+  memory ended the driver's process (`{:ended_by, cause}`, the service's
+  `:cap`, `:machine` or `:either`, `Opus.Programs.Session`), when
   the service it ran on started again (`:restarted`: a read refused for a
   stale boot, or the box syncing the owner again under another boot; a
   sync under the same boot leaves the session going on under the new
@@ -1379,6 +1381,9 @@ defmodule Opus.Brain do
   defp lines(state, %{dropped: dropped}) when dropped > 0,
     do: {:stop, :normal, ended(state, :dropped)}
 
+  defp lines(state, %{lines: [], running: false, ended_by: cause}) when cause != nil,
+    do: {:stop, :normal, ended(state, {:ended_by, cause})}
+
   defp lines(state, %{lines: [], running: false}),
     do: {:stop, :normal, ended(state, exited(state))}
 
@@ -1544,6 +1549,10 @@ defmodule Opus.Brain do
       # The service answers ended too for a write that failed part way.
       {:ok, :ended} ->
         {:stop, :normal, {:error, :uncertain}, ended(state, :interrupted)}
+
+      # Memory ended the process, the write among what it may have taken.
+      {:ok, {:ended_by, _cause} = ended_by} ->
+        {:stop, :normal, {:error, :uncertain}, ended(state, ended_by)}
 
       {:error, {:refused, :stale_boot, _boot}} ->
         {:stop, :normal, {:error, :ended}, ended(state, :restarted)}

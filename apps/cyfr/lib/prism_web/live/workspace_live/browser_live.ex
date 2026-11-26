@@ -228,6 +228,9 @@ defmodule PrismWeb.WorkspaceLive.BrowserLive do
   defp ended(:replaced), do: :taken
   defp ended(:turned_off), do: {:ended, Aqua.browser_turned_off()}
 
+  defp ended({:ended, {:ended_by, cause}}),
+    do: {:ended, Prima.Refusal.message({:memory, "Aqua's browser", cause})}
+
   defp ended(_stopped),
     do: {:ended, "Aqua's browser stopped. It starts again when Aqua next uses it."}
 

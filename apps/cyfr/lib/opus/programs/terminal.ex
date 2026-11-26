@@ -43,6 +43,8 @@ defmodule Opus.Programs.Terminal do
 
     * `:exited`: the program exited, or the service no longer runs it
       (its answer says so, or it could not be read for a minute);
+    * `{:ended_by, cause}`: memory ended the program, as the service's
+      answer says by its cause (`:cap`, `:machine` or `:either`);
     * `:restarted`: the service it ran on started again (a read refused
       for a stale boot, or the box syncing the owner again under another
       boot once the session stood; a sync under the same boot leaves it
@@ -415,13 +417,15 @@ defmodule Opus.Programs.Terminal do
     {:stop, :normal, %{state | opening: nil}}
   end
 
-  def handle_info({:read, %Output{} = output, running}, state) do
+  def handle_info({:read, %Output{} = output, running, ended_by}, state) do
     if state.reader, do: send(state.reader, :taken)
     state = output(state, output)
 
-    if running,
-      do: {:noreply, state},
-      else: finish(state, :exited)
+    cond do
+      running -> {:noreply, state}
+      ended_by != nil -> finish(state, {:ended_by, ended_by})
+      true -> finish(state, :exited)
+    end
   end
 
   def handle_info({:read_failed, {:refused, :stale_boot, _boot}}, state),
@@ -868,10 +872,10 @@ defmodule Opus.Programs.Terminal do
   # asked again each second for a minute.
   defp read(terminal, grant, session, after_seq, failures) do
     case Session.output(grant, session, after_seq, @recv_wait_ms) do
-      {:ok, %{chunks: chunks, running: running}} ->
+      {:ok, %{chunks: chunks, running: running, ended_by: ended_by}} ->
         output = Output.new(IO.iodata_to_binary(Enum.map(chunks, & &1.bytes)))
         last = if chunks == [], do: after_seq, else: List.last(chunks).seq
-        send(terminal, {:read, output, running})
+        send(terminal, {:read, output, running, ended_by})
 
         if running, do: read_on(terminal, grant, session, last)
 

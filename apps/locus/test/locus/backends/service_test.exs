@@ -506,6 +506,10 @@ defmodule Locus.Backends.ServiceTest do
 
   defp json(%{body: body}), do: Jason.decode!(body)
 
+  # The owner version the session messages here are signed by, as the
+  # owners' table admits it.
+  defp owner_invoke, do: %{athanor: @athanor, server: @server, generation: @g, epoch: @e}
+
   defp refusal(code), do: Enum.find(@vectors["refusals"], &(&1["code"] == code))
 
   defp assert_refused(answer, code) do
@@ -521,12 +525,12 @@ defmodule Locus.Backends.ServiceTest do
       answer = post(ctx.port, route("health"), LB.health_body())
       assert answer.status == 200
       assert answer.headers["x-cyfr-boot"] == @boot
-      assert json(answer) == %{"version" => 7, "release" => Prima.Version.current()}
+      assert json(answer) == %{"version" => 8, "release" => Prima.Version.current()}
 
       assert_refused(post(ctx.port, route("health"), ~s({"version":1})), "version")
       assert_refused(post(ctx.port, route("health"), ~s({"version":2})), "version")
       assert_refused(post(ctx.port, route("health"), ~s({})), "version")
-      assert_refused(post(ctx.port, route("health"), ~s({"version":7,"x":1})), "bad_request")
+      assert_refused(post(ctx.port, route("health"), ~s({"version":8,"x":1})), "bad_request")
       assert_refused(post(ctx.port, route("health"), "nope"), "bad_request")
 
       too_large = post(ctx.port, route("health"), String.duplicate(" ", 4097))
@@ -635,7 +639,7 @@ defmodule Locus.Backends.ServiceTest do
 
     test "a body past its bound is refused unread, one not the one signed is unauthorized", ctx do
       max = LB.max_control_bytes()
-      body = ~s({"version":7,"type":"status","owners":[]})
+      body = ~s({"version":8,"type":"status","owners":[]})
 
       fields = %{generation: @g, seq: seq(), cyfr_boot: @cyfr_boot, boot: @boot, ts: @instant}
       {:ok, header} = LB.control_header(LB.control_key(@key), fields, body)
@@ -1212,6 +1216,78 @@ defmodule Locus.Backends.ServiceTest do
 
       sized = body |> Jason.decode!() |> Map.merge(%{"rows" => 24, "cols" => 80})
       assert_refused(invoke(ctx, Jason.encode!(sized)), "bad_request")
+    end
+
+    test "memory's cause, then the session's vacancy, then its end: every later answer names the cause",
+         ctx do
+      for {cause, spelled} <- [cap: "cap", machine: "machine", either: "either"] do
+        fetch_sync(ctx)
+        # A key of its own for each cause: each is a process of its own.
+        opened = invoke(ctx, open_message(key: spelled))
+        assert {:ok, %{session: session}} = LB.read_session_answer(:open, opened.body)
+        {:ok, pid, :run, nil} = Owners.session(ctx.owners, owner_invoke(), session)
+        %{handle: %{ref: ref}} = :sys.get_state(pid)
+
+        # The launcher says the leader was killed for memory, then that
+        # nothing of it is left: the cause reaches the owners before the
+        # vacancy.
+        Kernel.send(pid, {Launcher, ref, {:exited, nil, "SIGKILL", cause}})
+        Kernel.send(pid, {Launcher, ref, :released})
+
+        wait_until(
+          fn ->
+            match?({:ok, _, _, ^cause}, Owners.session(ctx.owners, owner_invoke(), session))
+          end,
+          5_000
+        )
+
+        recv = fn ->
+          answer = invoke(ctx, %{type: :recv, session: session, after: 0, max_wait_ms: 0})
+          assert answer.status == 200, answer.body
+          assert Jason.decode!(answer.body)["ended_by"] == spelled
+          LB.read_session_answer(:recv, answer.body)
+        end
+
+        assert {:ok, %{running: false, ended_by: ^cause}} = recv.()
+
+        sent = invoke(ctx, %{type: :send, session: session, lines: ["late"]})
+
+        assert {:ok, %{status: :ended, ended_by: ^cause}} =
+                 LB.read_session_answer(:send, sent.body)
+
+        # With no process left to answer, the owners' kept cause answers.
+        ref = Process.monitor(pid)
+        Process.exit(pid, :kill)
+        assert_receive {:DOWN, ^ref, :process, ^pid, _}, 5_000
+
+        wait_until(
+          fn -> match?({:ok, nil, _, _}, Owners.session(ctx.owners, owner_invoke(), session)) end,
+          5_000
+        )
+
+        assert {:ok, %{running: false, ended_by: ^cause}} = recv.()
+
+        sent = invoke(ctx, %{type: :send, session: session, lines: ["later"]})
+
+        assert {:ok, %{status: :ended, ended_by: ^cause}} =
+                 LB.read_session_answer(:send, sent.body)
+      end
+    end
+
+    test "a session ended for no memory says no cause", ctx do
+      fetch_sync(ctx)
+      opened = invoke(ctx, open_message())
+      assert {:ok, %{session: session}} = LB.read_session_answer(:open, opened.body)
+      {:ok, pid, :run, nil} = Owners.session(ctx.owners, owner_invoke(), session)
+      %{handle: %{ref: ref}} = :sys.get_state(pid)
+      Kernel.send(pid, {Launcher, ref, {:exited, 1, nil, nil}})
+      Kernel.send(pid, {Launcher, ref, :released})
+
+      answer =
+        invoke(ctx, %{type: :recv, session: session, after: 0, max_wait_ms: 2_000})
+
+      assert {:ok, %{running: false, ended_by: nil}} = LB.read_session_answer(:recv, answer.body)
+      refute answer.body =~ "ended_by"
     end
 
     @tag launcher: :direct

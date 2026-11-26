@@ -1515,6 +1515,60 @@ defmodule Opus.ProgramsTest do
       assert_receive {:invoke, "initialize", _fields}, 2_000
     end
 
+    for {cause, words} <- [
+          cap: "it needed more memory than one piece of work may use on this machine.",
+          machine: "CYFR ran out of memory for what it runs.",
+          either:
+            "it ran out of memory, and CYFR could not tell whether its own cap or a limit " <>
+              "above it did it."
+        ] do
+      @cause cause
+      @words words
+      test "a session memory ends (#{cause}) fails the call awaiting it saying so, and the " <>
+             "next call opens it again",
+           %{ctx: ctx, fake: fake} do
+        start_controller(fake)
+        row = mcp_row(ctx, "hungry-#{@cause}", %{"NODE_ENV" => "production"})
+        pid = connect(ctx, row)
+        Scripted.set(fake, :silent, ["tools/call"])
+
+        call = Task.async(fn -> Emissary.External.Server.call_tool(pid, "search", %{}) end)
+        assert_receive {:invoke, "tools/call", _fields}, 2_000
+        Scripted.end_sessions_for_memory(fake, row.id, @cause)
+
+        assert {:error, sentence} = Task.await(call, 5_000)
+        assert sentence =~ "#{row.name} stopped: #{@words}"
+
+        Scripted.set(fake, :silent, [])
+        assert {:ok, _} = Emissary.External.Server.call_tool(pid, "search", %{})
+        assert_receive {:invoke, "initialize", _fields}, 2_000
+      end
+    end
+
+    test "a tool's start refused for room names the athanor's own programs, by their rows",
+         %{ctx: ctx, fake: fake} do
+      start_controller(fake)
+      other = mcp_row(ctx, "holder", %{"NODE_ENV" => "production"})
+      row = mcp_row(ctx, "refused", %{"NODE_ENV" => "production"})
+
+      held = %{
+        need: 402_653_184,
+        free: 0,
+        mine: [%{kind: "program", subject: other.id, bytes: 524_288_000}],
+        others_bytes: 104_857_600
+      }
+
+      Scripted.refuse_once(fake, "open", {"capacity", held})
+
+      assert {:error, sentence} = Servers.ensure_started(row, ctx)
+
+      assert sentence =~
+               "refused could not start: this CYFR has not enough memory free. Of yours, " <>
+                 "holder uses 500.0 MB. Others use 100.0 MB. Stop one on the Programs page, or wait."
+
+      refute sentence =~ "backends"
+    end
+
     test "a driven program syncs its program with its settings and has no MCP process",
          %{ctx: ctx, fake: fake} do
       start_controller(fake)

@@ -242,7 +242,7 @@ defmodule Locus.Backends.BackendTest do
     assert %{running: false, lines: [%{text: "kept"}], exit_code: nil} =
              Backend.recv(session, 0, 5_000)
 
-    assert :ended = Backend.send_lines(session, ["late"])
+    assert {:ended, nil} = Backend.send_lines(session, ["late"])
     assert_receive {Backend, ^session, {:ended, %{crash: false}}}, 5_000
     assert_receive {Backend, ^session, :vacated}, 5_000
   end
@@ -563,7 +563,7 @@ defmodule Locus.Backends.BackendTest do
     {:ok, room} = Locus.Output.reserve(output, 1_000, System.monotonic_time(:millisecond))
     started = System.monotonic_time(:millisecond)
     answer = Backend.recv(session, 0, 300)
-    assert answer == %{lines: [], dropped: 0, running: true, exit_code: nil}
+    assert answer == %{lines: [], dropped: 0, running: true, exit_code: nil, ended_by: nil}
     assert System.monotonic_time(:millisecond) - started >= 300
 
     # The room given back, as the count has taken it, before the next ask.
@@ -707,6 +707,11 @@ defmodule Locus.Backends.BackendTest do
 
         ended = %{crash: true, error: "exited code=null signal=SIGKILL", exit_code: nil}
         assert until_vacated(session) == told ++ [{:ended, ended}, :vacated]
+
+        # Every later answer of the session says what ended it.
+        cause = Keyword.get(told, :memory)
+        assert %{running: false, ended_by: ^cause} = Backend.recv(session, 0, 0)
+        assert {:ended, ^cause} = Backend.send_lines(session, ["late"])
       end
     end
 

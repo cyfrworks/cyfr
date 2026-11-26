@@ -15,7 +15,7 @@ defmodule Locus.Backends.Service do
   ## Health
 
   `POST /locus/v1/backends/health` answers without authentication: a
-  `{"version": 7}` body (`Prima.LocusBackends.read_health/1`), read within
+  `{"version": 8}` body (`Prima.LocusBackends.read_health/1`), read within
   #{@max_health_bytes} bytes, is answered with the protocol version and the
   release; a body at another version is refused `version`.
 
@@ -433,9 +433,9 @@ defmodule Locus.Backends.Service do
   end
 
   defp served(conn, invoke, message) do
-    with {:ok, pid, mode} <- Owners.session(owners(conn), invoke, message.session),
+    with {:ok, pid, mode, ended_by} <- Owners.session(owners(conn), invoke, message.session),
          :ok <- of_mode(message, mode) do
-      reach(conn, pid, message)
+      reach({conn, invoke}, pid, message, ended_by)
     else
       {:error, code} -> {:refused, conn, code}
     end
@@ -471,30 +471,46 @@ defmodule Locus.Backends.Service do
   defp of_mode(%{type: type}, mode),
     do: if(type in LocusBackends.mode_types(mode), do: :ok, else: {:error, :bad_request})
 
-  # A session whose process record is gone has ended.
-  defp reach(_conn, nil, %{type: type}) when type in [:send, :input, :resize],
-    do: {:ok, %{status: :ended}}
+  # A session whose process record is gone has ended, by the cause its
+  # owners kept for it.
+  defp reach(_asked, nil, %{type: type}, ended_by) when type in [:send, :input, :resize],
+    do: {:ok, %{status: :ended, ended_by: ended_by}}
 
-  defp reach(_conn, nil, %{type: :recv}), do: {:ok, %{lines: [], dropped: 0, running: false}}
-  defp reach(_conn, nil, %{type: :output}), do: {:ok, %{chunks: [], dropped: 0, running: false}}
+  defp reach(_asked, nil, %{type: :recv}, ended_by),
+    do: {:ok, %{lines: [], dropped: 0, running: false, ended_by: ended_by}}
 
-  defp reach(conn, pid, message) do
+  defp reach(_asked, nil, %{type: :output}, ended_by),
+    do: {:ok, %{chunks: [], dropped: 0, running: false, ended_by: ended_by}}
+
+  defp reach(asked, pid, message, ended_by) do
     case message.type do
       :send ->
-        {:ok, %{status: Backend.send_lines(pid, message.lines)}}
+        {:ok, written(Backend.send_lines(pid, message.lines))}
 
       :input ->
-        {:ok, %{status: Backend.input(pid, message.bytes)}}
+        {:ok, written(Backend.input(pid, message.bytes))}
 
       :resize ->
-        {:ok, %{status: Backend.resize(pid, message.rows, message.cols)}}
+        {:ok, written(Backend.resize(pid, message.rows, message.cols))}
 
       type when type in [:recv, :output] ->
         {:ok, Backend.recv(pid, message.after, message.max_wait_ms)}
     end
   catch
-    :exit, _reason -> reach(conn, nil, message)
+    # The session went between its owners' answer and its own: its cause,
+    # told before it went, is asked of them again.
+    :exit, _reason -> gone(asked, message, ended_by)
   end
+
+  defp gone({conn, invoke} = asked, message, ended_by) do
+    case Owners.session(owners(conn), invoke, message.session) do
+      {:ok, _pid, _mode, kept} -> reach(asked, nil, message, kept || ended_by)
+      {:error, _code} -> reach(asked, nil, message, ended_by)
+    end
+  end
+
+  defp written(:running), do: %{status: :running}
+  defp written({:ended, ended_by}), do: %{status: :ended, ended_by: ended_by}
 
   # ————— closes —————
 

@@ -493,10 +493,17 @@ defmodule Aqua.Harness.Program do
   defp refused_open(work, {:not_admitted, :generation_moved}), do: lost(work, :forgotten)
   defp refused_open(work, {:not_admitted, _reason}), do: refused(work, :not_admitted)
 
-  # The backends refused for want of room, at its owner's hold or at the
-  # session's open: the person reads why, not that the program is away.
+  # The backends refused for want of room, at the session's open with what
+  # holds the memory, or for want of a program's place at its owner's
+  # hold: the person reads why, their own holdings by name, not that the
+  # program is away.
+  defp refused_open(work, {:refused, {:capacity, held}, _boot}),
+    do: {:refused, Opus.Programs.full(Sanctum.Context.actor(work.ctx), work.title, held)}
+
   defp refused_open(work, {:refused, :capacity, _boot}), do: refused_open(work, :capacity)
-  defp refused_open(work, :capacity), do: {:refused, {:program_full, work.title}}
+
+  defp refused_open(work, :capacity),
+    do: {:refused, Opus.Programs.full(Sanctum.Context.actor(work.ctx), work.title, nil)}
 
   # A program that loads the person's packs did not open for them: said
   # as the refusal says it (`Prima.Refusal`).
@@ -1635,6 +1642,13 @@ defmodule Aqua.Harness.Program do
   end
 
   defp ended(%{phase: :over} = state, _reason), do: state
+
+  # Memory ended the program, starting or at work: the turn ends lost,
+  # saying so, and nothing opens it again into the same kill; the next
+  # turn resumes its session afresh.
+  defp ended(%{work: work} = state, {:ended_by, cause}),
+    do: fail(state, {:lost, {:memory, work.title, cause}})
+
   defp ended(%{work: work} = state, :forgotten), do: fail(state, lost(work, :forgotten))
   defp ended(%{work: work} = state, :replaced), do: fail(state, lost(work, :ended))
 

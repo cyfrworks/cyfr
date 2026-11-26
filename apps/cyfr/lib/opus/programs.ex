@@ -302,7 +302,14 @@ defmodule Opus.Programs do
 
   @typedoc "Why a terminal session ended (`Opus.Programs.Terminal`)."
   @type ended ::
-          :exited | :restarted | :closed | :unanswered | :idle | :row_changed | :standing
+          :exited
+          | {:ended_by, Prima.LocusBackends.ended_by()}
+          | :restarted
+          | :closed
+          | :unanswered
+          | :idle
+          | :row_changed
+          | :standing
 
   @typedoc """
   Who calls: a person at a screen, as a `Sanctum.Context` the gate reads as
@@ -414,6 +421,39 @@ defmodule Opus.Programs do
       do: {:browser, athanor_id, user_id}
 
   @doc """
+  A start of `what` refused for room, as the reason its sentence is
+  (`Prima.Refusal`, `{:program_full, what, held, names}`): `held` the
+  keeper's account of what holds the memory, its holdings of the
+  person's own athanor carrying their subjects only where they are
+  programs' and terminals' (`Prima.LocusPool.t:held/0`); or nil for a
+  start refused for want of a program's place, which carries none.
+  `names` are the names of the person's own rows among those subjects,
+  read under `actor`, the person's own scope, first: a subject of a row
+  the actor cannot read (deleted, or of an athanor they left) is no name
+  and is counted by its kind, and what anyone else holds is only ever
+  `held`'s one sum, which names nobody. A store that does not answer
+  names nothing.
+  """
+  @spec full(Prima.Actor.t(), String.t(), Prima.LocusPool.held() | nil) ::
+          {:program_full, String.t(), Prima.LocusPool.held() | nil, %{String.t() => String.t()}}
+  def full(%Prima.Actor{}, what, nil) when is_binary(what), do: {:program_full, what, nil, %{}}
+
+  def full(%Prima.Actor{} = actor, what, %{mine: mine} = held) when is_binary(what),
+    do: {:program_full, what, held, holder_names(actor, mine)}
+
+  defp holder_names(actor, mine) do
+    subjects =
+      for %{subject: subject} when is_binary(subject) <- mine, into: MapSet.new(), do: subject
+
+    with true <- MapSet.size(subjects) > 0,
+         {:ok, rows} <- Arca.McpServerStorage.list(actor) do
+      for %{id: id, name: name} <- rows, MapSet.member?(subjects, id), into: %{}, do: {id, name}
+    else
+      _none_or_unread -> %{}
+    end
+  end
+
+  @doc """
   Who `caller` is to a session, proved from the store as every call
   here proves it: `{athanor, user}` for a person at a screen,
   `{athanor, user, turn}` for a running turn of theirs that made the call
@@ -499,7 +539,9 @@ defmodule Opus.Programs do
         cols: cols
       ]
 
-      started(principal, spec, deadline, _again? = true)
+      principal
+      |> started(spec, deadline, _again? = true)
+      |> roomless(caller_actor(caller), row.name)
     end
   catch
     :exit, _ -> {:error, :backends_unavailable}
@@ -540,6 +582,16 @@ defmodule Opus.Programs do
       end
     end
   end
+
+  # A start refused for room is said by its sentence, the person's own
+  # holdings named under the person's own scope (`full/3`).
+  defp roomless({:error, {:refused, {:capacity, held}, _boot}}, actor, name),
+    do: {:error, full(actor, name, held)}
+
+  defp roomless({:error, {:refused, :capacity, _boot}}, actor, name),
+    do: {:error, full(actor, name, nil)}
+
+  defp roomless(answer, _actor, _name), do: answer
 
   # The terminal's id, made by the box, whose root proves it: the handle
   # of the one lifetime this try is, fixed before anything is asked.
@@ -1081,6 +1133,10 @@ defmodule Opus.Programs do
   # What a write to a terminal answered.
   defp typed({:ok, :running}), do: :ok
   defp typed({:ok, :ended}), do: {:error, :ended}
+
+  # The terminal's own reader says why it ended; a write to it is refused
+  # as to any ended session.
+  defp typed({:ok, {:ended_by, _cause}}), do: {:error, :ended}
 
   defp typed({:error, {:refused, code, _boot}}) when code in [:unknown_session | @stale],
     do: {:error, :ended}

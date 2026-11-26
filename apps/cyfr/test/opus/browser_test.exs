@@ -830,6 +830,29 @@ defmodule Opus.BrowserTest do
       eventually(fn -> holder(ctx) == nil end, "the holder to stop")
     end
 
+    test "memory ending it answers the call it ended with why, and its watch hears it",
+         %{ctx: ctx, lineage: lineage, fake: fake} = context do
+      assert {:ok, _} = call(ctx, lineage, "open", %{"url" => "https://example.com/"})
+      [%{session: session, row_id: row_id}] = browser_sessions(ctx)
+      answers(context, "screenshot", :hold)
+      task = Task.async(fn -> call(ctx, lineage, "screenshot") end)
+      assert_receive {:driver, :holding, _session, _id}, 5_000
+
+      Scripted.end_sessions_for_memory(fake, row_id, :machine)
+
+      assert refusal(Task.await(task, 10_000)) ==
+               "Aqua's browser stopped: CYFR ran out of memory for what it runs."
+
+      assert_receive %Cyfr.Bus.Program{
+                       kind: :ended,
+                       session: ^session,
+                       reason: {:ended_by, :machine}
+                     },
+                     5_000
+
+      eventually(fn -> holder(ctx) == nil end, "the holder to stop")
+    end
+
     test "it ends when its person no longer stands", %{ctx: ctx, user: user, lineage: lineage} do
       assert {:ok, _} = call(ctx, lineage, "open", %{"url" => "https://example.com/"})
       [%{session: session}] = browser_sessions(ctx)
