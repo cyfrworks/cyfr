@@ -72,7 +72,7 @@ func (r RoleSpec) envPrefix() string { return "LOCUS_" + strings.ToUpper(r.Name)
 // User is the role's user name.
 func (r RoleSpec) User() string { return "locus-" + r.Name }
 
-// ParseRole parses `<name>:<uid>:<port>:<pool>[:private][:kept][:floor]`.
+// ParseRole parses `<name>:<uid>:<port>:<pool>[:private][:kept|:floor]`.
 // The name is a role's (cgroup.ValidRoleName) and none of `log`, whose
 // variables are every role's, `core` and `service`, whose would be the
 // pool's LOCUS_CORE_RESERVE_BYTES and LOCUS_SERVICE_BYTES; the uid is not
@@ -80,7 +80,7 @@ func (r RoleSpec) User() string { return "locus-" + r.Name }
 func ParseRole(value string) (RoleSpec, error) {
 	fields := strings.Split(value, ":")
 	bad := func(why string) (RoleSpec, error) {
-		return RoleSpec{}, fmt.Errorf("role %q: %s; want <name>:<uid>:<port>:<pool>[:private][:kept][:floor]", value, why)
+		return RoleSpec{}, fmt.Errorf("role %q: %s; want <name>:<uid>:<port>:<pool>[:private][:kept|:floor]", value, why)
 	}
 	if len(fields) < 4 || len(fields) > 7 {
 		return bad("four to seven fields")
@@ -107,12 +107,15 @@ func ParseRole(value string) (RoleSpec, error) {
 		switch {
 		case f == "private" && i == 0 && !r.Private:
 			r.Private = true
+		// A role keeps homes or the floor, never both: only the floor's role
+		// assigns, and only a kept role's spawns bind packs, so no assign
+		// can move a place whose spawn binds them.
 		case f == "kept" && !r.Kept && !r.Floor:
 			r.Kept = true
-		case f == "floor" && !r.Floor:
+		case f == "floor" && !r.Floor && !r.Kept:
 			r.Floor = true
 		default:
-			return bad("its flags are private, then kept, then floor")
+			return bad("its flags are private, then kept or floor")
 		}
 	}
 	return r, nil

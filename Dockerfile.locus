@@ -467,7 +467,7 @@ HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=3 \
 # /run/locus tmpfs mounts, the kept homes' volume, and the guard's control
 # mounted read-only at /run/cyfr-guard-control, behind that guard
 # (docker-compose.yml's locus service). cyfr-locus starts a role process
-# for each `--role <name>:<uid>:<port>:<pool>[:private][:kept][:floor]`
+# for each `--role <name>:<uid>:<port>:<pool>[:private][:kept|:floor]`
 # whose key (LOCUS_<NAME>_KEY) is set: the runtime's, private, reaching
 # core's host API, whose runners the warm floor keeps; the builds'; and the
 # backends', whose programs keep their homes

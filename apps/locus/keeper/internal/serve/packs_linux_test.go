@@ -311,9 +311,10 @@ func TestASpaceSeesItsPersonsPacksReadOnly(t *testing.T) {
 
 // Whose packs a spawn binds is decided at its claim of its place, under
 // the one lock: a spawn naming another athanor's packs than its place's
-// is refused and its place freed, and from a claim naming packs no assign
-// gives the place another athanor, so the athanor checked is the athanor
-// bound. None needs root.
+// is refused and its place freed, and no assign gives the place another
+// athanor, since only a kept role's spawns bind packs and a kept role
+// assigns nothing (only the floor's role assigns, and no role is both), so
+// the athanor checked is the athanor bound. None needs root.
 func TestAClaimedPlaceKeepsItsPacksAthanor(t *testing.T) {
 	me := os.Getuid()
 	kept := &home.Kept{Root: t.TempDir(), First: me, Last: me}
@@ -338,7 +339,7 @@ func TestAClaimedPlaceKeepsItsPacksAthanor(t *testing.T) {
 		t.Fatalf("a claim naming its place's athanor's packs: %v", got)
 	}
 	if r := handle(`{"v":7,"type":"assign","id":"a1","place":"p1","kind":"program","athanor":"ath_other"}`); r["type"] != protocol.TypeError || r["code"] != protocol.CodeBadRequest {
-		t.Fatalf("an assign of another athanor to a place whose spawn binds packs: %v", r)
+		t.Fatalf("an assign by the kept role, of another athanor, to a place whose spawn binds packs: %v", r)
 	}
 	s.mu.Lock()
 	whose := c.places["p1"].whose.Athanor

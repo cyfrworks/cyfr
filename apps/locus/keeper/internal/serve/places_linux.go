@@ -51,9 +51,6 @@ type place struct {
 	// zero readAt is no reading yet.
 	reading protocol.Reading
 	readAt  time.Time
-	// packs is the athanor whose packs its spawn binds, fixed at its claim
-	// (claimPlace): an assign naming another is refused.
-	packs string
 }
 
 // removal is what a retirement whose group could not be removed leaves to
@@ -185,9 +182,11 @@ func (s *server) admitTick() {
 }
 
 // handleAssign makes a place whose the request says, an athanor or a subject
-// it does not name cleared, answered `assigned`; an assign of a place the
-// keeper does not hold, or naming another athanor than the one whose packs
-// its spawn binds, is refused.
+// it does not name cleared, answered `assigned`. Only the floor's role
+// assigns, and within its place's class: an assign of another role, of
+// another class or of a place the keeper does not hold is refused. No
+// assign reaches a place whose spawn binds packs: only a kept role's do,
+// and a kept role is never the floor's (ParseRole).
 func (s *server) handleAssign(c *client, req *protocol.Request) {
 	if !c.role.spec.Floor || !kindOfRole(c, req.Kind) {
 		s.log.Warn("assign %s refused: role %s does not assign a %s", req.ID, c.role.spec.Name, req.Kind)
@@ -196,9 +195,8 @@ func (s *server) handleAssign(c *client, req *protocol.Request) {
 	}
 	s.mu.Lock()
 	p := c.places[req.Place]
-	bound := p != nil && p.packs != "" && p.packs != req.Athanor
 	other := false
-	if p != nil && !bound {
+	if p != nil {
 		if other = !s.ledger.Assign(p.entry, req.Kind, req.Athanor, req.Subject, now()); !other {
 			p.whose = whoseOf(req)
 		}
@@ -209,8 +207,6 @@ func (s *server) handleAssign(c *client, req *protocol.Request) {
 		s.log.Warn("assign %s refused: place %s is of another class than a %s", req.ID, req.Place, req.Kind)
 	case p == nil:
 		s.log.Warn("assign %s refused: role %s holds no place %s", req.ID, c.role.spec.Name, req.Place)
-	case bound:
-		s.log.Warn("assign %s refused: the spawn of place %s binds its athanor's packs", req.ID, req.Place)
 	default:
 		s.send(c, protocol.NewAssigned(req.ID))
 		return
@@ -233,10 +229,10 @@ const (
 
 // claimPlace has a starting spawn of c name its place. Whose packs it
 // binds is decided in the same step, under s.mu: only its place's
-// athanor's, of the kept role whose keeper keeps them, and from here the
-// place keeps that athanor (handleAssign), so the athanor checked is the
-// athanor bound. A claimed spawn's bounds are those of its place's kind at
-// its claim.
+// athanor's, of the kept role whose keeper keeps them; no assign reaches
+// that role's places (handleAssign), so the athanor checked is the athanor
+// bound. A claimed spawn's bounds are those of its place's kind at its
+// claim.
 func (s *server) claimPlace(c *client, req *protocol.Request) (claim, admission.Limits) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -249,7 +245,6 @@ func (s *server) claimPlace(c *client, req *protocol.Request) (claim, admission.
 			s.freePlace(c, req.Place)
 			return claimOthersPacks, admission.Limits{}
 		}
-		p.packs = req.Packs.Athanor
 	}
 	p.named = true
 	return claimed, limitsOf(p.whose.Kind, s.ledger.Work())
