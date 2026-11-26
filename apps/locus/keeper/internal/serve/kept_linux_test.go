@@ -23,6 +23,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/cyfr/locus/keeper/internal/admission"
 	"github.com/cyfr/locus/keeper/internal/frame"
 	"github.com/cyfr/locus/keeper/internal/home"
 	"github.com/cyfr/locus/keeper/internal/logx"
@@ -51,7 +52,8 @@ func keptKeeper(t *testing.T) *keeper {
 		t.Fatal(err)
 	}
 	k.s.cfg.Kept = &home.Kept{Root: root, First: testKeptFirst, Last: testKeptLast}
-	k.c.role.spec.Kept = true
+	// A kept role is a session's, not the floor's.
+	k.c.role.spec.Kept, k.c.role.spec.Floor = true, false
 	if err := home.CheckKeptRoot(root, heldGID(k.s.cfg, []Account{k.c.role.account}, k.s.accounts)); err != nil {
 		t.Fatal(err)
 	}
@@ -75,10 +77,10 @@ func (k *keeper) homeRequest(t *testing.T, typ, id, path string, uid int) map[st
 // in the kept home at path, in the place of its own id.
 func keptRequest(t *testing.T, attach, id, script, path string, maxBytes *uint64) *protocol.Request {
 	t.Helper()
+	boundAt(t, 64<<20)
 	message := map[string]any{
 		"v": protocol.Version, "type": protocol.TypeSpawn, "id": id, "place": id, "pool": "runner",
 		"argv": []string{"/bin/sh", "-c", script}, "env": map[string]string{},
-		"memory_bytes": 64 << 20, "cpu_quota": protocol.CPUPeriod,
 		"attach":    map[string]string{"path": attach, "token": testToken},
 		"home_mode": protocol.HomeKept, "home": filepath.Base(path),
 	}
@@ -470,7 +472,7 @@ func TestAResizeReachesAPtySpawnsTerminal(t *testing.T) {
 	spawnID := spawned["spawn_id"].(string)
 	rc := k.accept(t)
 	rc.readUntil(t, func() bool { return strings.Contains(string(rc.got[frame.StreamStdout]), "24 80") })
-	resize, rerr := protocol.ParseRequest([]byte(`{"v":6,"type":"resize","spawn_id":"` + spawnID + `","rows":50,"cols":132}`))
+	resize, rerr := protocol.ParseRequest([]byte(`{"v":7,"type":"resize","spawn_id":"` + spawnID + `","rows":50,"cols":132}`))
 	if rerr != nil {
 		t.Fatal(rerr.Detail)
 	}
@@ -743,7 +745,7 @@ func channelServer(t *testing.T, kept *home.Kept) (*server, *client, *protocol.L
 	}
 	ours, theirs := os.NewFile(uintptr(fds[0]), "channel"), os.NewFile(uintptr(fds[1]), "client-channel")
 	t.Cleanup(func() { ours.Close(); theirs.Close() })
-	s := &server{cfg: Config{Kept: kept}, log: logx.NewWriter(io.Discard, "cyfr-locus", false)}
+	s := &server{cfg: Config{Kept: kept}, log: logx.NewWriter(io.Discard, "cyfr-locus", false), ledger: admission.New(testWork, false)}
 	c := testClient(ours, pool.Spec{Name: "backends", Reach: pool.ReachRouted}, Account{})
 	c.role.spec.Kept = true
 	return s, c, protocol.NewLineReader(theirs)
@@ -796,7 +798,7 @@ func TestHomeListPagesTheHomesInOrder(t *testing.T) {
 	kept.Root = filepath.Join(kept.Root, "absent")
 	s.handle(c, &protocol.Request{V: protocol.Version, Type: protocol.TypeHomeList, ID: "l"})
 	line, _, _ := replies.Next()
-	if want := `{"v":6,"type":"error","id":"l","code":"unavailable"}`; string(line) != want {
+	if want := `{"v":7,"type":"error","id":"l","code":"unavailable"}`; string(line) != want {
 		t.Fatalf("a list of a root that cannot be read: %s", line)
 	}
 }

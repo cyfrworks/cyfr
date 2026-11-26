@@ -16,6 +16,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/cyfr/locus/keeper/internal/admission"
 	"github.com/cyfr/locus/keeper/internal/cgroup"
 	"github.com/cyfr/locus/keeper/internal/frame"
 	"github.com/cyfr/locus/keeper/internal/logx"
@@ -97,9 +98,10 @@ func TestASpawnAskingForABoundIsRefusedWhereNoneCanBeEnforced(t *testing.T) {
 		log:    logx.NewWriter(os.Stderr, "cyfr-locus", false),
 		pools:  map[string]*pool.Pool{spec.Name: pool.New(spec)},
 		spawns: map[string]*spawn{},
+		ledger: admission.New(testWork, true),
 	}
 	c := testClient(os.NewFile(uintptr(fds[0]), "channel"), spec, Account{UID: 65534, GID: 65534, Name: "nobody"})
-	c.places["41"] = &place{whose: protocol.Whose{Kind: protocol.KindRun}}
+	c.places["41"] = admittedPlace(s, c, protocol.Whose{Kind: protocol.KindRun})
 	defer c.channel.Close()
 
 	s.handleSpawn(c, spawnRequest(t, "/run/a.sock", "41", "true", map[string]string{}, false, 64<<20))
@@ -131,7 +133,7 @@ cat /proc/self/cgroup`
 	rc.readUntil(t, func() bool { return false })
 	// The space's cgroup namespace has the spawn's group at its root.
 	group := "0::/\n"
-	want := group + fmt.Sprintf("max=67108864 swap=0 group=1 cpu=%d %d\n", protocol.CPUPeriod, protocol.CPUPeriod) + group
+	want := group + fmt.Sprintf("max=67108864 swap=0 group=1 cpu=%d %d\n", cgroup.CPUPeriod, cgroup.CPUPeriod) + group
 	if got := string(rc.got[frame.StreamStdout]); got != want {
 		t.Fatalf("the spawn saw\n%s\nwant\n%s", got, want)
 	}
@@ -214,7 +216,7 @@ func TestAnExitForAnotherReasonIsNotAMemoryEnd(t *testing.T) {
 func (k *keeper) measure(t *testing.T, place string) map[string]any {
 	t.Helper()
 	id := "measure-" + place
-	k.s.handle(k.c, parsed(t, `{"v":6,"type":"measure","id":"`+id+`","place":"`+place+`"}`))
+	k.s.handle(k.c, parsed(t, `{"v":7,"type":"measure","id":"`+id+`","place":"`+place+`"}`))
 	m := k.reply(t)
 	if _, named := m["spawn_id"]; named || m["id"] != id {
 		t.Fatalf("measuring %s answered %v", place, m)
@@ -335,7 +337,7 @@ func TestAFileReaderIsNotChargedItsCacheAndATmpfsWriterIsChargedItsPages(t *test
 	t.Cleanup(func() { _ = os.Remove(written.Name()) })
 
 	measured := func(id string, uid int, script, counter string, atLeast int) float64 {
-		group, err := k.c.role.groups.Create(cgroup.Name(uid), 256*mib, protocol.CPUPeriod)
+		group, err := k.c.role.groups.Create(cgroup.Name(uid), 256*mib, cgroup.CPUPeriod)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -442,7 +444,7 @@ func TestAKillForALimitAboveTheSpawnsIsTheMachines(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			group, err := under.Create(cgroup.Name(testPoolFirst), c.bound, protocol.CPUPeriod)
+			group, err := under.Create(cgroup.Name(testPoolFirst), c.bound, cgroup.CPUPeriod)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -695,7 +697,7 @@ func endedSpawn(t *testing.T, kept bool, script string) (*keeper, *spawn, string
 		sp.account = k.s.accounts[uid]
 	}
 	sp.client = k.c
-	group, err := k.c.role.groups.Create(name, 32<<20, protocol.CPUPeriod)
+	group, err := k.c.role.groups.Create(name, 32<<20, cgroup.CPUPeriod)
 	if err != nil {
 		t.Fatal(err)
 	}

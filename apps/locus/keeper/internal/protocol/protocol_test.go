@@ -130,12 +130,8 @@ func TestSharedRequestBounds(t *testing.T) {
 		"max_spec_bytes":        MaxSpecBytes,
 		"max_grace_ms":          MaxGraceMs,
 		"max_socket_path_bytes": MaxSocketPath,
-		"min_memory_bytes":      MinMemoryBytes,
-		"max_memory_bytes":      MaxMemoryBytes,
-		"cpu_period":            CPUPeriod,
-		"min_cpu_quota":         MinCPUQuota,
-		"max_cpu_quota":         MaxCPUQuota,
 		"max_home_bytes":        MaxHomeBytes,
+		"max_athanor_bytes":     MaxAthanorBytes,
 		"max_hosts":             MaxHosts,
 		"max_pty_size":          MaxPtySize,
 		"max_pack_part_bytes":   MaxPackPartBytes,
@@ -266,30 +262,30 @@ func TestHomeRequestBounds(t *testing.T) {
 		line string
 		ok   bool
 	}{
-		{`{"v":6,"type":"home_retire","id":"1","home":"vlt_a-1"}`, true},
-		{`{"v":6,"type":"home_reset","id":"1","home":"` + longest + `"}`, true},
-		{`{"v":6,"type":"home_reset","id":"1","home":"` + longest + `a"}`, false},
-		{`{"v":6,"type":"home_retire","id":"1","home":"_a"}`, false},
-		{`{"v":6,"type":"home_retire","id":"1","home":"a.b"}`, false},
-		{`{"v":6,"type":"home_retire","id":"1","home":""}`, false},
-		{`{"v":6,"type":"home_retire","id":"1"}`, false},
-		{`{"v":6,"type":"home_retire","id":"1","home":"k","pool":"backends"}`, false},
-		{`{"v":6,"type":"home_retire","id":"1","home":"k","home_mode":"kept"}`, false},
-		{`{"v":6,"type":"home_retire","id":"1","home":"k","uid":1}`, false},
-		{`{"v":6,"type":"home_make","home":"k"}`, false},
-		{`{"v":6,"type":"home_list","id":"1"}`, true},
-		{`{"v":6,"type":"home_list","id":"1","after":"k"}`, true},
-		{`{"v":6,"type":"home_list","id":"1","after":""}`, false},
-		{`{"v":6,"type":"home_list","id":"1","after":"k","home":"k"}`, false},
-		{`{"v":6,"type":"pool","id":"1","pool":"backends","home":"k"}`, false},
-		{`{"v":6,"type":"pool","id":"1","pool":"backends","pty":{"rows":24,"cols":80}}`, false},
+		{`{"v":7,"type":"home_retire","id":"1","home":"vlt_a-1"}`, true},
+		{`{"v":7,"type":"home_reset","id":"1","home":"` + longest + `"}`, true},
+		{`{"v":7,"type":"home_reset","id":"1","home":"` + longest + `a"}`, false},
+		{`{"v":7,"type":"home_retire","id":"1","home":"_a"}`, false},
+		{`{"v":7,"type":"home_retire","id":"1","home":"a.b"}`, false},
+		{`{"v":7,"type":"home_retire","id":"1","home":""}`, false},
+		{`{"v":7,"type":"home_retire","id":"1"}`, false},
+		{`{"v":7,"type":"home_retire","id":"1","home":"k","pool":"backends"}`, false},
+		{`{"v":7,"type":"home_retire","id":"1","home":"k","home_mode":"kept"}`, false},
+		{`{"v":7,"type":"home_retire","id":"1","home":"k","uid":1}`, false},
+		{`{"v":7,"type":"home_make","home":"k"}`, false},
+		{`{"v":7,"type":"home_list","id":"1"}`, true},
+		{`{"v":7,"type":"home_list","id":"1","after":"k"}`, true},
+		{`{"v":7,"type":"home_list","id":"1","after":""}`, false},
+		{`{"v":7,"type":"home_list","id":"1","after":"k","home":"k"}`, false},
+		{`{"v":7,"type":"pool","id":"1","pool":"backends","home":"k"}`, false},
+		{`{"v":7,"type":"pool","id":"1","pool":"backends","pty":{"rows":24,"cols":80}}`, false},
 	} {
 		req, err := ParseRequest([]byte(c.line))
 		if c.ok != (err == nil) {
 			t.Errorf("%s: request %+v, refusal %+v", c.line, req, err)
 		}
 	}
-	spawn := `{"v":6,"type":"spawn","id":"1","place":"pl-1","pool":"backends","argv":["x"],"memory_bytes":16777216,"cpu_quota":100000,"attach":{"path":"/run/a.sock","token":"` + strings.Repeat("a", 64) + `"}`
+	spawn := `{"v":7,"type":"spawn","id":"1","place":"pl-1","pool":"backends","argv":["x"],"attach":{"path":"/run/a.sock","token":"` + strings.Repeat("a", 64) + `"}`
 	for _, c := range []struct {
 		fields string
 		ok     bool
@@ -327,7 +323,7 @@ func TestAPageOfHomesFitsAFrame(t *testing.T) {
 	if len(line) > frame.MaxPayload {
 		t.Fatalf("a full page of homes is %d bytes, past a frame's %d", len(line), frame.MaxPayload)
 	}
-	if empty, _ := Encode(NewHomes("1", nil, "")); string(empty) != `{"v":6,"type":"homes","id":"1","ids":[]}`+"\n" {
+	if empty, _ := Encode(NewHomes("1", nil, "")); string(empty) != `{"v":7,"type":"homes","id":"1","ids":[]}`+"\n" {
 		t.Fatalf("an empty page is %s", empty)
 	}
 }
@@ -363,7 +359,7 @@ func TestSharedRepliesMatchTheEncoders(t *testing.T) {
 		NewError("31", "", CodeHostsUnresolved),
 		NewError("31", "", CodeGuardUnavailable),
 		NewExited("00112233445566778899aabbccddeeff", nil, &signal, &byMachine),
-		NewPlaced("pl-1"),
+		NewPlaced("pl-1", 384<<20),
 		NewAssigned("as-1"),
 		NewMeasured("26", Whose{Kind: KindBuild, Athanor: "family@example"}, Reading{Bytes: 1 << 20}, 3),
 		NewError("pl-1", "", CodeBadRequest),
@@ -371,6 +367,12 @@ func TestSharedRepliesMatchTheEncoders(t *testing.T) {
 		NewMeasured("25", Whose{Kind: KindWarm}, Reading{Bytes: 192 << 20, Lesser: true}, 0),
 		NewError("25", "", CodeUnmeasured),
 		NewExited("00112233445566778899aabbccddeeff", nil, &signal, &byEither),
+		NewPlaced("pl-5", 2416<<20),
+		NewNoMemory("pl-3", Held{Need: 800 << 20, Free: 256 << 20,
+			Mine:   []Holding{{Kind: KindProgram, Subject: "mcp_one", Bytes: 384 << 20}, {Kind: KindRun, Bytes: 144 << 20}},
+			Others: 1536 << 20}),
+		NewNoMemory("pl-4", Held{Need: 800 << 20}),
+		NewGiveWay("pl-2"),
 	}
 	want := loadVectors(t).Replies
 	if len(want) != len(built) {
@@ -450,7 +452,7 @@ func TestSharedPacksRepliesMatchTheEncoders(t *testing.T) {
 // of the request.
 func TestAPacksPutsLargestPartFitsALine(t *testing.T) {
 	data := base64.StdEncoding.EncodeToString(make([]byte, MaxPackPartBytes))
-	line := `{"v":6,"type":"packs_put","id":"` + strings.Repeat("i", 64) + `","athanor":"` + strings.Repeat("a", 256) +
+	line := `{"v":7,"type":"packs_put","id":"` + strings.Repeat("i", 64) + `","athanor":"` + strings.Repeat("a", 256) +
 		`","lifetime":"` + strings.Repeat("l", 128) + `","digest":"sha256:` + strings.Repeat("0", 64) + `","seq":65536,"last":true,"data":"` + data + `"}`
 	if len(line) > MaxLineBytes {
 		t.Fatalf("the largest put is %d bytes, past a line's %d", len(line), MaxLineBytes)
@@ -559,45 +561,31 @@ func TestControlIsDecodedAndDefaultsToNone(t *testing.T) {
 	}
 }
 
-func TestMemoryBoundIsDecodedForEveryPool(t *testing.T) {
-	v := loadVectors(t)
-	bounds := map[string][]uint64{}
-	for _, raw := range v.ValidRequests {
-		req, err := ParseRequest(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
-		switch {
-		case req.Type != TypeSpawn:
-			if req.MemoryBytes != nil {
-				t.Fatalf("%s decoded a memory bound", raw)
+// A spawn names no bound of its own, whatever its pool: the keeper sets
+// its memory and processors by its place's kind, so one naming either is
+// refused, and a session's place carries its athanor's ceiling.
+func TestASpawnNamesNoBound(t *testing.T) {
+	for _, pool := range []string{"build", "backends", "runner"} {
+		for member, value := range map[string]any{"memory_bytes": 1 << 30, "cpu_quota": 100_000} {
+			message := map[string]any{
+				"v": Version, "type": TypeSpawn, "id": "bound-check", "place": "pl-1", "pool": pool,
+				"argv": []string{"true"}, "env": map[string]string{}, member: value,
+				"attach": Attach{Path: "/run/a.sock", Token: strings.Repeat("a", 64)},
 			}
-		case req.MemoryBytes == nil:
-			t.Fatalf("spawn %s decoded without a memory bound", req.ID)
-		default:
-			bounds[req.Pool] = append(bounds[req.Pool], *req.MemoryBytes)
+			line, err := json.Marshal(message)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req, refused := ParseRequest(line)
+			// An unknown member is refused before any id is read.
+			if req != nil || refused == nil || refused.Reply() != NewError("", "", CodeBadRequest) {
+				t.Errorf("%s spawn naming %s: request %+v, refusal %+v", pool, member, req, refused)
+			}
 		}
 	}
-	want := map[string][]uint64{
-		"backends": {512 << 20, 512 << 20, 512 << 20, 512 << 20},
-		"build":    {1 << 30, MinMemoryBytes, MaxMemoryBytes},
-		"runner":   {384 << 20, 384 << 20, 512 << 20},
-	}
-	if !reflect.DeepEqual(bounds, want) {
-		t.Fatalf("vectors: bounds %v, want %v", bounds, want)
-	}
-	if MinMemoryBytes != 16<<20 || MaxMemoryBytes != 1<<40 {
-		t.Fatalf("bounds %d..%d", uint64(MinMemoryBytes), uint64(MaxMemoryBytes))
-	}
-
-	var refused int
-	for _, c := range v.InvalidRequests {
-		if strings.Contains(c.Why, "memory bound") {
-			refused++
-		}
-	}
-	if refused < 10 {
-		t.Fatalf("%d vectors refuse a malformed memory bound, want absent, null, zero, below, above, negative, fractional, not a number, misplaced and on another request", refused)
+	req, refused := ParseRequest([]byte(`{"v":7,"type":"place","id":"pl-5","kind":"terminal","athanor":"ath_one","athanor_max_bytes":2147483648}`))
+	if refused != nil || req.AthanorMax == nil || *req.AthanorMax != 2<<30 {
+		t.Fatalf("a session's place with its athanor's ceiling: %+v, %+v", req, refused)
 	}
 }
 
@@ -634,145 +622,11 @@ func TestRlimitsDefaultToTheCeilings(t *testing.T) {
 	}
 }
 
-func TestSpawnRequiresMemoryBound(t *testing.T) {
-	for _, pool := range []string{"build", "backends", "runner"} {
-		for _, c := range []struct {
-			name    string
-			present bool
-			value   any
-			bound   uint64
-			detail  string
-		}{
-			{name: "absent", detail: "memory_bytes is required"},
-			{name: "null", present: true, detail: "memory_bytes must not be null"},
-			{name: "zero", present: true, value: uint64(0), detail: "memory_bytes must be within 16777216..1099511627776"},
-			{name: "below minimum", present: true, value: uint64(MinMemoryBytes - 1), detail: "memory_bytes must be within 16777216..1099511627776"},
-			{name: "above maximum", present: true, value: uint64(MaxMemoryBytes + 1), detail: "memory_bytes must be within 16777216..1099511627776"},
-			{name: "minimum", present: true, value: uint64(MinMemoryBytes), bound: MinMemoryBytes},
-			{name: "maximum", present: true, value: uint64(MaxMemoryBytes), bound: MaxMemoryBytes},
-		} {
-			t.Run(pool+"/"+c.name, func(t *testing.T) {
-				message := map[string]any{
-					"v": Version, "type": TypeSpawn, "id": "memory-check", "place": "pl-1", "pool": pool,
-					"argv": []string{"true"}, "env": map[string]string{}, "cpu_quota": CPUPeriod,
-					"attach": Attach{Path: "/run/a.sock", Token: strings.Repeat("a", 64)},
-				}
-				if c.present {
-					message["memory_bytes"] = c.value
-				}
-				if pool == "runner" {
-					message["control"] = true
-				}
-				line, err := json.Marshal(message)
-				if err != nil {
-					t.Fatal(err)
-				}
-				req, refused := ParseRequest(line)
-				if c.detail == "" {
-					if refused != nil {
-						t.Fatalf("valid bound refused: %+v", refused)
-					}
-					if req == nil || req.MemoryBytes == nil || *req.MemoryBytes != c.bound {
-						t.Fatalf("bound %d decoded to %+v", c.bound, req)
-					}
-					return
-				}
-				if req != nil || refused == nil {
-					t.Fatalf("invalid bound returned request %+v, refusal %+v", req, refused)
-				}
-				if refused.Detail != c.detail || refused.Reply() != NewError("memory-check", "", CodeBadRequest) {
-					t.Fatalf("refusal %+v, reply %+v", refused, refused.Reply())
-				}
-			})
-		}
-	}
-}
-
-// Every spawn of the vectors carries its CPU quota, and a spawn is refused
-// without one, with a null one or with one outside its range, whatever its
-// pool, as a missing memory bound is.
-func TestSpawnRequiresCPUQuota(t *testing.T) {
-	v := loadVectors(t)
-	for _, raw := range v.ValidRequests {
-		req, err := ParseRequest(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if (req.Type == TypeSpawn) != (req.CPUQuota != nil) {
-			t.Fatalf("%s decoded a CPU quota %v", raw, req.CPUQuota)
-		}
-	}
-	var refused int
-	for _, c := range v.InvalidRequests {
-		if strings.Contains(c.Why, "CPU quota") {
-			refused++
-		}
-	}
-	if refused < 7 {
-		t.Fatalf("%d vectors refuse a malformed CPU quota, want absent, null, zero, below, above, fractional and on another request", refused)
-	}
-	if CPUPeriod != 100_000 || MinCPUQuota != 1_000 || MaxCPUQuota != 102_400_000 {
-		t.Fatalf("CPU bounds %d, %d..%d", CPUPeriod, MinCPUQuota, MaxCPUQuota)
-	}
-
-	for _, pool := range []string{"build", "backends", "runner"} {
-		for _, c := range []struct {
-			name    string
-			present bool
-			value   any
-			quota   uint64
-			detail  string
-		}{
-			{name: "absent", detail: "cpu_quota is required"},
-			{name: "null", present: true, detail: "cpu_quota must not be null"},
-			{name: "zero", present: true, value: uint64(0), detail: "cpu_quota must be within 1000..102400000"},
-			{name: "below minimum", present: true, value: uint64(MinCPUQuota - 1), detail: "cpu_quota must be within 1000..102400000"},
-			{name: "above maximum", present: true, value: uint64(MaxCPUQuota + 1), detail: "cpu_quota must be within 1000..102400000"},
-			{name: "minimum", present: true, value: uint64(MinCPUQuota), quota: MinCPUQuota},
-			{name: "maximum", present: true, value: uint64(MaxCPUQuota), quota: MaxCPUQuota},
-		} {
-			t.Run(pool+"/"+c.name, func(t *testing.T) {
-				message := map[string]any{
-					"v": Version, "type": TypeSpawn, "id": "cpu-check", "place": "pl-1", "pool": pool,
-					"argv": []string{"true"}, "env": map[string]string{}, "memory_bytes": MinMemoryBytes,
-					"attach": Attach{Path: "/run/a.sock", Token: strings.Repeat("a", 64)},
-				}
-				if c.present {
-					message["cpu_quota"] = c.value
-				}
-				if pool == "runner" {
-					message["control"] = true
-				}
-				line, err := json.Marshal(message)
-				if err != nil {
-					t.Fatal(err)
-				}
-				req, refused := ParseRequest(line)
-				if c.detail == "" {
-					if refused != nil {
-						t.Fatalf("valid quota refused: %+v", refused)
-					}
-					if req == nil || req.CPUQuota == nil || *req.CPUQuota != c.quota {
-						t.Fatalf("quota %d decoded to %+v", c.quota, req)
-					}
-					return
-				}
-				if req != nil || refused == nil {
-					t.Fatalf("invalid quota returned request %+v, refusal %+v", req, refused)
-				}
-				if refused.Detail != c.detail || refused.Reply() != NewError("cpu-check", "", CodeBadRequest) {
-					t.Fatalf("refusal %+v, reply %+v", refused, refused.Reply())
-				}
-			})
-		}
-	}
-}
-
 func TestMalformedJSONIsRefusedWithoutEchoingInput(t *testing.T) {
 	for _, line := range []string{
 		`not json`,
-		`{"v":6,"type":"pool","id":"1","pool":"backends"} {"v":2}`,
-		`{"v":6,"type":"spawn","id":"1","pool":"backends","argv":"secret-value","memory_bytes":536870912}`,
+		`{"v":7,"type":"pool","id":"1","pool":"backends"} {"v":2}`,
+		`{"v":7,"type":"spawn","id":"1","pool":"backends","argv":"secret-value"}`,
 		`[]`,
 		``,
 	} {
@@ -791,7 +645,7 @@ func TestMalformedJSONIsRefusedWithoutEchoingInput(t *testing.T) {
 }
 
 func TestEnvValueNeverAppearsInARefusal(t *testing.T) {
-	line := `{"v":6,"type":"spawn","id":"1","pool":"backends","argv":["x"],"env":{"TOKEN":"secret-value\u0000"},"memory_bytes":536870912,"attach":{"path":"/run/a.sock","token":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}}`
+	line := `{"v":7,"type":"spawn","id":"1","pool":"backends","argv":["x"],"env":{"TOKEN":"secret-value\u0000"},"memory_bytes":536870912,"attach":{"path":"/run/a.sock","token":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}}`
 	_, err := ParseRequest([]byte(line))
 	if err == nil {
 		t.Fatal("a NUL in an env value was accepted")

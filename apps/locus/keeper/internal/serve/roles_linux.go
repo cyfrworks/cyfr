@@ -240,6 +240,13 @@ func (s *server) endClient(c *client) {
 	if c.role.client == c {
 		c.role.client = nil
 	}
+	// Its places no spawn named go now, those still waiting for room among
+	// them; a named one's goes with its spawn, or at its start's refusal.
+	for id, p := range c.places {
+		if !p.named {
+			s.freePlace(c, id)
+		}
+	}
 	var held []*spawn
 	for _, sp := range s.spawns {
 		if sp.client == c {
@@ -247,6 +254,7 @@ func (s *server) endClient(c *client) {
 		}
 	}
 	s.mu.Unlock()
+	s.flush()
 	_ = c.channel.Close()
 	s.signalChild(c.proc, unix.SIGKILL)
 	emptied := c.role.leaf.KillBy(time.Now())

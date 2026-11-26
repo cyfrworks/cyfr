@@ -275,10 +275,16 @@ func Main(args []string) int {
 		})
 		roleCPUs = append(roleCPUs, cpus[i])
 	}
-	if _, err := makePool(log, tree, s.roles, roleCPUs, memory, "/proc/meminfo", reserve, share); err != nil {
+	sizes, err := makePool(log, tree, s.roles, roleCPUs, memory, "/proc/meminfo", reserve, share)
+	if err != nil {
 		log.Error("refusing to start: %v", err)
 		return ExitConfig
 	}
+	floor := false
+	for _, r := range s.roles {
+		floor = floor || r.spec.Floor
+	}
+	s.ledger = admission.New(sizes.Work, floor)
 	if err := makeRunDirs(s.runRoot, s.roles); err != nil {
 		log.Error("refusing to start: %v", err)
 		return ExitConfig
@@ -640,8 +646,10 @@ type spawn struct {
 	home    string
 	leader  *child
 	relay   *child
-	// group is the spawn's memory-bounded cgroup, nil until it is created.
-	group *cgroup.Group
+	// group is the spawn's memory-bounded cgroup, nil until it is created,
+	// with limits, its place's kind's at its claim.
+	group  *cgroup.Group
+	limits admission.Limits
 	// place is the id of the place the spawn was made in, set as it is
 	// made; its retirement frees the place in the step that follows its
 	// group's removal, so no measure answers a place whose spawn's group is
@@ -742,12 +750,18 @@ type server struct {
 	roles   []*role
 	runRoot string
 
-	// mu guards pools, spawns, every client's places, unremoved and
-	// waiters, and is held across every fork, reap and signal, so a pid is
-	// never signalled after it was reaped.
-	mu     sync.Mutex
-	pools  map[string]*pool.Pool
-	spawns map[string]*spawn
+	// mu guards pools, spawns, every client's places, the ledger, the
+	// outbox, unremoved and waiters, and is held across every fork, reap
+	// and signal, so a pid is never signalled after it was reaped.
+	mu sync.Mutex
+	// ledger is the one admission of every role's places (package
+	// admission); outbox holds what its steps queued for the channels,
+	// which flush sends in order outside mu, one flush at a time (flushMu).
+	ledger  *admission.Ledger
+	outbox  []outgoing
+	flushMu sync.Mutex
+	pools   map[string]*pool.Pool
+	spawns  map[string]*spawn
 	// unremoved holds every retired spawn whose group could not be removed,
 	// out of spawns, with what its retirement leaves to the retry that
 	// removes the group: until then its place stays, read as a live
@@ -1229,23 +1243,26 @@ func (s *server) handleSpawn(c *client, req *protocol.Request) {
 		return
 	}
 	defer c.starts.Done()
-	switch s.claimPlace(c, req) {
+	claim, limits := s.claimPlace(c, req)
+	switch claim {
 	case claimNone:
-		s.log.Warn("spawn %s refused: the keeper holds no place %s of role %s, or another spawn named it", req.ID, req.Place, c.role.spec.Name)
+		s.log.Warn("spawn %s refused: the keeper holds no place %s of role %s with room, or another spawn named it", req.ID, req.Place, c.role.spec.Name)
 		s.send(c, protocol.NewError(req.ID, "", protocol.CodeBadRequest))
 		return
 	case claimOthersPacks:
 		s.log.Warn("spawn %s refused: its packs are not its place's athanor's, or role %s keeps none", req.ID, c.role.spec.Name)
+		s.flush()
 		s.send(c, protocol.NewError(req.ID, "", protocol.CodeBadRequest))
 		return
 	}
-	made, code := s.startSpawn(c, req)
+	made, code := s.startSpawn(c, req, limits)
 	switch {
 	case code == "":
 	case made == nil:
 		s.mu.Lock()
-		delete(c.places, req.Place)
+		s.freePlace(c, req.Place)
 		s.mu.Unlock()
+		s.flush()
 		s.send(c, protocol.NewError(req.ID, "", code))
 	default:
 		// A start refused once made is retired before it counts as done
@@ -1260,7 +1277,7 @@ func (s *server) handleSpawn(c *client, req *protocol.Request) {
 // startSpawn starts the spawn req asks for in the place it claimed. It
 // answers the code it is refused with, or "" once it is spawned, and the
 // spawn it made in the place, nil when it is refused before it made one.
-func (s *server) startSpawn(c *client, req *protocol.Request) (*spawn, string) {
+func (s *server) startSpawn(c *client, req *protocol.Request, limits admission.Limits) (*spawn, string) {
 	// A relay pool's space reaches nothing: it takes no hosts, and no kept
 	// home or terminal, which are a program's, whose pool is routed. A pool
 	// that is not the role's is refused below, as one the keeper does not
@@ -1286,7 +1303,7 @@ func (s *server) startSpawn(c *client, req *protocol.Request) (*spawn, string) {
 		return nil, protocol.CodeInternal
 	}
 	if req.HomeMode == protocol.HomeKept {
-		return s.startKeptSpawn(c, req, spec.Reach, reach, known)
+		return s.startKeptSpawn(c, req, spec.Reach, reach, known, limits)
 	}
 	s.mu.Lock()
 	var p *pool.Pool
@@ -1313,7 +1330,7 @@ func (s *server) startSpawn(c *client, req *protocol.Request) (*spawn, string) {
 		return nil, protocol.CodeCapacity
 	}
 
-	sp := &spawn{id: randomHex(16), client: c, pool: p, account: s.accounts[uid], reach: spec.Reach, retired: make(chan struct{})}
+	sp := &spawn{id: randomHex(16), client: c, pool: p, account: s.accounts[uid], reach: spec.Reach, limits: limits, retired: make(chan struct{})}
 	s.madeIn(req.Place, sp)
 	name, err := home.NewName(uid)
 	if err != nil {
@@ -1469,7 +1486,7 @@ func (s *server) launch(sp *spawn, req *protocol.Request, e egress) (string, err
 		groupName = cgroup.SpawnName(sp.id)
 		homeRoot = s.cfg.Kept.Root
 	}
-	group, err := r.groups.Create(groupName, *req.MemoryBytes, *req.CPUQuota)
+	group, err := r.groups.Create(groupName, sp.limits.MemoryBytes, sp.limits.Processors*cgroup.CPUPeriod)
 	if err != nil {
 		return protocol.CodeInternal, err
 	}
@@ -1802,6 +1819,9 @@ func (s *server) retire(sp *spawn, grace time.Duration, notify bool) {
 		return
 	}
 	sp.retireOnce.Do(func() {
+		s.mu.Lock()
+		s.ending(sp)
+		s.mu.Unlock()
 		go func() {
 			defer close(sp.retired)
 			uid := sp.account.UID
@@ -1839,6 +1859,7 @@ func (s *server) retire(sp *spawn, grace time.Duration, notify bool) {
 			}
 			s.leave(sp, removed, removal{notify: notify, clean: clean})
 			s.mu.Unlock()
+			s.flush()
 
 			if !clean {
 				s.log.Warn("spawn %s: uid %d quarantined: a process or something it left outlived retirement", sp.id, uid)
@@ -1891,7 +1912,7 @@ func (s *server) leave(sp *spawn, removed bool, left removal) {
 // of it may still read.
 func (s *server) forget(sp *spawn) {
 	delete(s.spawns, sp.id)
-	delete(sp.client.places, sp.place)
+	s.freePlace(sp.client, sp.place)
 	delete(s.routing, sp.id)
 	sp.releasePacks()
 }

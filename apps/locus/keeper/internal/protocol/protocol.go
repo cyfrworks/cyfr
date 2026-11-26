@@ -3,7 +3,7 @@
 
 // Package protocol defines the messages between `cyfr-locus serve` and its
 // clients, one role process each, over each one's inherited socket (fd 3):
-// one JSON object per line, each carrying `"v": 6` and a `type`.
+// one JSON object per line, each carrying `"v": 7` and a `type`.
 //
 // Each role's channel is its own. A request names only what is its role's:
 // a pool another role draws from is unknown (CodeUnknownPool), a spawn
@@ -15,48 +15,54 @@
 //
 // Client to keeper:
 //
-//	{"v":6,"type":"place","id":…,"kind":…,"athanor":…,"subject":…}
-//	{"v":6,"type":"drop","place":…}
-//	{"v":6,"type":"assign","id":…,"place":…,"kind":…,"athanor":…,"subject":…}
-//	{"v":6,"type":"spawn","id":…,"place":…,"pool":…,"argv":[…],"env":{…},"rlimits":{…},"memory_bytes":…,"cpu_quota":…,"control":true,"attach":{"path":…,"token":…},"home_mode":"kept","home":…,"home_max_bytes":…,"pty":{"rows":…,"cols":…},"hosts":[…],"packs":{"athanor":…,"digest":…}}
-//	{"v":6,"type":"signal","spawn_id":…,"sig":"SIGTERM"}
-//	{"v":6,"type":"resize","spawn_id":…,"rows":…,"cols":…}
-//	{"v":6,"type":"release","spawn_id":…,"grace_ms":…}
-//	{"v":6,"type":"measure","id":…,"place":…}
-//	{"v":6,"type":"pool","id":…,"pool":…}
-//	{"v":6,"type":"home_make","id":…,"home":…}
-//	{"v":6,"type":"home_measure","id":…,"home":…}
-//	{"v":6,"type":"home_reset","id":…,"home":…}
-//	{"v":6,"type":"home_retire","id":…,"home":…}
-//	{"v":6,"type":"home_list","id":…,"after":…}
-//	{"v":6,"type":"packs_hold","id":…,"athanor":…,"lifetime":…,"digest":…}
-//	{"v":6,"type":"packs_put","id":…,"athanor":…,"lifetime":…,"digest":…,"seq":…,"last":…,"data":…}
+//	{"v":7,"type":"place","id":…,"kind":…,"athanor":…,"subject":…,"athanor_max_bytes":…}
+//	{"v":7,"type":"drop","place":…}
+//	{"v":7,"type":"assign","id":…,"place":…,"kind":…,"athanor":…,"subject":…}
+//	{"v":7,"type":"spawn","id":…,"place":…,"pool":…,"argv":[…],"env":{…},"rlimits":{…},"control":true,"attach":{"path":…,"token":…},"home_mode":"kept","home":…,"home_max_bytes":…,"pty":{"rows":…,"cols":…},"hosts":[…],"packs":{"athanor":…,"digest":…}}
+//	{"v":7,"type":"signal","spawn_id":…,"sig":"SIGTERM"}
+//	{"v":7,"type":"resize","spawn_id":…,"rows":…,"cols":…}
+//	{"v":7,"type":"release","spawn_id":…,"grace_ms":…}
+//	{"v":7,"type":"measure","id":…,"place":…}
+//	{"v":7,"type":"pool","id":…,"pool":…}
+//	{"v":7,"type":"home_make","id":…,"home":…}
+//	{"v":7,"type":"home_measure","id":…,"home":…}
+//	{"v":7,"type":"home_reset","id":…,"home":…}
+//	{"v":7,"type":"home_retire","id":…,"home":…}
+//	{"v":7,"type":"home_list","id":…,"after":…}
+//	{"v":7,"type":"packs_hold","id":…,"athanor":…,"lifetime":…,"digest":…}
+//	{"v":7,"type":"packs_put","id":…,"athanor":…,"lifetime":…,"digest":…,"seq":…,"last":…,"data":…}
 //
 // Keeper to client:
 //
-//	{"v":6,"type":"placed","id":…}
-//	{"v":6,"type":"assigned","id":…}
-//	{"v":6,"type":"spawned","id":…,"spawn_id":…,"uid":…,"pid":…}
-//	{"v":6,"type":"error","id":…,"spawn_id":…,"code":…}   (id or spawn_id names the request; a spawn refused once made carries both)
-//	{"v":6,"type":"exited","spawn_id":…,"code":…,"signal":…,"memory":null | "cap" | "machine" | "either"}
-//	{"v":6,"type":"measured","id":…,"kind":…,"athanor":…,"subject":…,"bytes":…,"lesser":…,"age_ms":…}
-//	{"v":6,"type":"released","spawn_id":…}
-//	{"v":6,"type":"pool","id":…,"pool":…,"size":…,"free":…,"quarantined":…}
-//	{"v":6,"type":"home_made","id":…,"uid":…}
-//	{"v":6,"type":"home_measured","id":…,"bytes":…}
-//	{"v":6,"type":"home_retired","id":…}
-//	{"v":6,"type":"homes","id":…,"ids":[…],"next":…}
-//	{"v":6,"type":"packs","id":…,"state":"held" | "missing" | "taken"}
+//	{"v":7,"type":"placed","id":…,"memory_bytes":…}
+//	{"v":7,"type":"assigned","id":…}
+//	{"v":7,"type":"spawned","id":…,"spawn_id":…,"uid":…,"pid":…}
+//	{"v":7,"type":"error","id":…,"spawn_id":…,"code":…}   (id or spawn_id names the request; a spawn refused once made carries both)
+//	{"v":7,"type":"error","id":…,"code":"no_memory","held":{"need":…,"free":…,"mine":[{"kind":…,"subject":…,"bytes":…}],"others_bytes":…}}
+//	{"v":7,"type":"give_way","place":…}
+//	{"v":7,"type":"exited","spawn_id":…,"code":…,"signal":…,"memory":null | "cap" | "machine" | "either"}
+//	{"v":7,"type":"measured","id":…,"kind":…,"athanor":…,"subject":…,"bytes":…,"lesser":…,"age_ms":…}
+//	{"v":7,"type":"released","spawn_id":…}
+//	{"v":7,"type":"pool","id":…,"pool":…,"size":…,"free":…,"quarantined":…}
+//	{"v":7,"type":"home_made","id":…,"uid":…}
+//	{"v":7,"type":"home_measured","id":…,"bytes":…}
+//	{"v":7,"type":"home_retired","id":…}
+//	{"v":7,"type":"homes","id":…,"ids":[…],"next":…}
+//	{"v":7,"type":"packs","id":…,"state":"held" | "missing" | "taken"}
 //
 // A place follows one piece of work from before its preparation to its
 // release. The client names it with an `id` of its own minted before any
 // preparation, with its `kind` (Kinds) and, where it has them, the
 // `athanor` it is for, of the grammar every Locus wire gives an athanor's
 // id, and its `subject` (a program's or a terminal's row), of the id
-// grammar, and the keeper answers `placed`; a place of an id the keeper
-// already holds is refused as CodeBadRequest. A `drop` frees a place no
+// grammar, and the keeper answers `placed` once it has room for it (below);
+// a place of an id the keeper already holds, and one of a kind its role
+// does not place, are refused as CodeBadRequest: only the role that keeps
+// the warm floor (`--role …:floor`) places and assigns a runner's kinds,
+// warm and run, and every other role only build, program and terminal. A `drop` frees a place no
 // spawn has named, as when its preparation fails, its waiter cancels or
-// whom it was for dies; it is never answered, and a place the keeper no
+// whom it was for dies, one still waiting for room among them; it is
+// never answered, and a place the keeper no
 // longer holds leaves it with nothing to do. An `assign` has an `id` of its
 // own beside the `place` it names and gives that place another kind,
 // athanor and subject, as a runner given work or back at rest; it is
@@ -64,7 +70,8 @@
 // CodeBadRequest where the keeper holds no such place, or where a spawn
 // naming packs claimed it and the assign names another athanor. A `spawn` names its
 // place, which no other spawn may name: one naming a place the keeper does
-// not hold, or one another spawn named, is refused as CodeBadRequest. Only
+// not hold, one still waiting for room, or one another spawn named, is
+// refused as CodeBadRequest. Only
 // the keeper frees a place a spawn named: a spawn refused before the keeper
 // made anything of it is refused under its `id` alone and frees its place
 // before the refusal is sent, and every other place is free at its spawn's
@@ -91,11 +98,27 @@
 // command, and a reserved name (ReservedEnv, ReservedEnvPrefixes) is
 // refused.
 //
-// A spawn's required `memory_bytes`, from MinMemoryBytes to MaxMemoryBytes,
-// bounds the memory of everything the spawn runs, whatever its pool: the
-// keeper puts the command in a cgroup of its own (package cgroup) limited
-// to that many bytes with no swap, so its processes, the pages of what it writes to
-// a tmpfs home and the kernel memory charged to it never exceed the bound
+// The keeper is the one admission of all a machine's Locus work (package
+// admission, plan 2.9): every role's places are charged against one memory
+// bound, W, the warm floor's F kept apart where a role keeps it. A place is
+// answered `placed` once it fits, in arrival order, with the `memory_bytes`
+// its spawn will be bounded to; while it does not, the idle runners that
+// cover what it needs are each sent a `give_way` naming their place, on
+// the floor's role's channel, and that role releases each one only if it
+// is still idle. A place that finds no room within RoomWait, or that no
+// pool of W could hold, is refused CodeNoMemory with `held`: what it
+// needs, what is free, the charges of its own athanor's places (the
+// subject only of places of the asking role) and the sum of all others'.
+// A session's place may carry `athanor_max_bytes`, the ceiling of its
+// athanor's sessions here, which it is admitted within.
+//
+// A spawn names no bound: the keeper sets each one's by its place's kind
+// (admission.LimitsOf), a runner's and a build's fixed, a session's half of
+// W, never under its allowance, each with its processors, and a spawn
+// carrying `memory_bytes` or `cpu_quota` is refused as CodeBadRequest. The
+// keeper puts the command in a cgroup of its own limited to that many bytes
+// with no swap, so its processes, the pages of what it writes to a tmpfs
+// home and the kernel memory charged to it never exceed the bound
 // together. When they cannot stay under it the kernel kills every process
 // of the spawn, and the leader's `exited` carries `"memory": "cap"`. A kill
 // for a limit above the spawn's, the container's or the machine's, carries
@@ -104,9 +127,9 @@
 // `"memory": "either"` and never "cap". All are read from the cgroup's own
 // counters and never inferred from the signal; an `exited` of no kill, or of
 // counters that could not be read, carries null. A keeper that cannot give
-// a spawn such a cgroup refuses the request as CodeMemoryUnavailable: the
-// bound is enforced or the command does not run. Missing, null and zero
-// `memory_bytes` are refused as CodeBadRequest.
+// a spawn such a cgroup, its CPU controller included, refuses the request
+// as CodeMemoryUnavailable: the bound is enforced or the command does not
+// run.
 //
 // The keeper reads every spawn's group once a second, whatever its kind:
 // the `bytes` of its cgroup that cannot be given back, anon + shmem +
@@ -120,14 +143,6 @@
 // the moment, the reading and its `age_ms`. A place the keeper does not
 // hold, and one with no reading yet, are refused as CodeUnmeasured: no
 // reading is ever answered as zero.
-//
-// A spawn's required `cpu_quota`, from MinCPUQuota to MaxCPUQuota, is the
-// microseconds of CPU time its group may use in every CPUPeriod (100000
-// microseconds): 100000 is one CPU, 200000 two. It is written to the same
-// group's cpu.max before the command starts, and a keeper whose cgroup has
-// no CPU controller cannot give a spawn its group at all, so it refuses
-// every spawn as CodeMemoryUnavailable alike. Missing, null and zero
-// `cpu_quota` are refused as CodeBadRequest.
 //
 // A spawn with `"control": true` also gets a control channel: the keeper
 // makes an AF_UNIX stream socketpair, installs one end as the command's file
@@ -267,7 +282,7 @@ import (
 )
 
 // Version is the protocol version every message carries as `v`.
-const Version = 6
+const Version = 7
 
 // A place's kinds: a runner at rest and one given a run, a build, and a
 // program's and a terminal's session.
@@ -338,6 +353,7 @@ const (
 	TypePacksHold    = "packs_hold"
 	TypePacksPut     = "packs_put"
 	TypePacks        = "packs"
+	TypeGiveWay      = "give_way"
 )
 
 // A `packs` reply's states.
@@ -392,6 +408,9 @@ const (
 	// CodePacksBusy refuses a packs_put's first part while another put of
 	// its athanor is under way: the start it is for holds again.
 	CodePacksBusy = "packs_busy"
+	// CodeNoMemory refuses a place the pool found no room for within
+	// RoomWait, or could never hold; its reply carries Held.
+	CodeNoMemory = "no_memory"
 )
 
 // Bounds on a request. These, Signals, ReservedEnv, Ceilings and Floors
@@ -405,26 +424,15 @@ const (
 	MaxSpecBytes  = 256 << 10
 	MaxGraceMs    = 60_000
 	MaxSocketPath = 107
-	// MinMemoryBytes is the least a spawn's memory bound may be: the stage
-	// and a command's start fit under it.
-	MinMemoryBytes = 16 << 20
-	// MaxMemoryBytes is the most a spawn's memory bound may be, a number
-	// every client's JSON carries exactly.
-	MaxMemoryBytes = 1 << 40
-	// CPUPeriod is the period, in microseconds, a spawn's cpu_quota is a
-	// share of.
-	CPUPeriod = 100_000
-	// MinCPUQuota is the least a spawn's CPU quota may be, the kernel's
-	// own least: a hundredth of a CPU.
-	MinCPUQuota = 1_000
-	// MaxCPUQuota is the most a spawn's CPU quota may be: 1024 CPUs.
-	MaxCPUQuota = 1024 * CPUPeriod
 	// MaxUID is the highest uid or gid an account may hold: (uid_t)-1 is
 	// no id.
 	MaxUID = 4294967294
 	// MaxHomeBytes is the most a kept home's bound may be, a number every
 	// client's JSON carries exactly.
 	MaxHomeBytes = 1 << 50
+	// MaxAthanorBytes is the most a session's athanor ceiling may be, a
+	// number every client's JSON carries exactly.
+	MaxAthanorBytes = 1 << 50
 	// MaxHosts is the most hosts a spawn may name.
 	MaxHosts = 32
 	// MaxPtySize is the most rows, and the most columns, a pseudo-terminal
@@ -631,12 +639,8 @@ type Request struct {
 	Argv    []string          `json:"argv,omitempty"`
 	Env     map[string]string `json:"env,omitempty"`
 	Rlimits *Rlimits          `json:"rlimits,omitempty"`
-	// MemoryBytes is required for a spawn and absent for other requests.
-	MemoryBytes *uint64 `json:"memory_bytes,omitempty"`
-	// CPUQuota is required for a spawn and absent for other requests.
-	CPUQuota *uint64 `json:"cpu_quota,omitempty"`
-	Control  bool    `json:"control,omitempty"`
-	Attach   *Attach `json:"attach,omitempty"`
+	Control bool              `json:"control,omitempty"`
+	Attach  *Attach           `json:"attach,omitempty"`
 	// Place names a spawn's and a measure's place, and the place a drop or
 	// an assign acts on.
 	Place string `json:"place,omitempty"`
@@ -644,9 +648,11 @@ type Request struct {
 	Kind    string `json:"kind,omitempty"`
 	Athanor string `json:"athanor,omitempty"`
 	Subject string `json:"subject,omitempty"`
-	SpawnID string `json:"spawn_id,omitempty"`
-	Sig     string `json:"sig,omitempty"`
-	GraceMs *int64 `json:"grace_ms,omitempty"`
+	// AthanorMax is a session's place's ceiling of its athanor's sessions.
+	AthanorMax *uint64 `json:"athanor_max_bytes,omitempty"`
+	SpawnID    string  `json:"spawn_id,omitempty"`
+	Sig        string  `json:"sig,omitempty"`
+	GraceMs    *int64  `json:"grace_ms,omitempty"`
 	// HomeMode is HomeScratch, HomeKept or empty (HomeScratch);
 	// HomeMaxBytes is set only on a HomeKept spawn.
 	HomeMode     string  `json:"home_mode,omitempty"`
@@ -786,14 +792,22 @@ func ParseRequest(line []byte) (*Request, *RequestError) {
 			return nil, refuse("place must match " + idPattern.String())
 		}
 	case TypePlace:
-		if !req.only("id", "kind", "athanor", "subject") {
-			return nil, refuse("place carries only id, kind, athanor and subject")
+		if !req.only("id", "kind", "athanor", "subject", "athanor_max_bytes") {
+			return nil, refuse("place carries only id, kind, athanor, subject and athanor_max_bytes")
 		}
 		if !idPattern.MatchString(req.ID) {
 			return nil, refuse("id must match " + idPattern.String())
 		}
 		if err := validateWhose(&req); err != nil {
 			return nil, refuse(err.Error())
+		}
+		if m := req.AthanorMax; m != nil {
+			if req.Kind != KindProgram && req.Kind != KindTerminal || !req.present["athanor"] {
+				return nil, refuse("athanor_max_bytes is a session's place's, of its athanor")
+			}
+			if *m == 0 || *m > MaxAthanorBytes {
+				return nil, refuse(fmt.Sprintf("athanor_max_bytes must be within 1..%d", uint64(MaxAthanorBytes)))
+			}
 		}
 	case TypeAssign:
 		if !req.only("id", "place", "kind", "athanor", "subject") {
@@ -916,8 +930,8 @@ func validateWhose(req *Request) error {
 }
 
 func validateSpawn(req *Request) error {
-	if !req.only("id", "place", "pool", "argv", "env", "rlimits", "memory_bytes", "cpu_quota", "control", "attach", "home_mode", "home", "home_max_bytes", "pty", "hosts", "packs") {
-		return errors.New("spawn carries only id, place, pool, argv, env, rlimits, memory_bytes, cpu_quota, control, attach, home_mode, home, home_max_bytes, pty, hosts and packs")
+	if !req.only("id", "place", "pool", "argv", "env", "rlimits", "control", "attach", "home_mode", "home", "home_max_bytes", "pty", "hosts", "packs") {
+		return errors.New("spawn carries only id, place, pool, argv, env, rlimits, control, attach, home_mode, home, home_max_bytes, pty, hosts and packs")
 	}
 	if p := req.Packs; p != nil && (!athanorPattern.MatchString(p.Athanor) || !digestPattern.MatchString(p.Digest)) {
 		return errors.New("packs must name an athanor and a set digest")
@@ -936,18 +950,6 @@ func validateSpawn(req *Request) error {
 	}
 	if err := req.Rlimits.validate(); err != nil {
 		return err
-	}
-	if req.MemoryBytes == nil {
-		return errors.New("memory_bytes is required")
-	}
-	if m := *req.MemoryBytes; m < MinMemoryBytes || m > MaxMemoryBytes {
-		return fmt.Errorf("memory_bytes must be within %d..%d", uint64(MinMemoryBytes), uint64(MaxMemoryBytes))
-	}
-	if req.CPUQuota == nil {
-		return errors.New("cpu_quota is required")
-	}
-	if q := *req.CPUQuota; q < MinCPUQuota || q > MaxCPUQuota {
-		return fmt.Errorf("cpu_quota must be within %d..%d", uint64(MinCPUQuota), uint64(MaxCPUQuota))
 	}
 	if req.Attach == nil {
 		return errors.New("attach is required")
@@ -1131,11 +1133,51 @@ type ErrorReply struct {
 	ID      string `json:"id,omitempty"`
 	SpawnID string `json:"spawn_id,omitempty"`
 	Code    string `json:"code"`
+	// Held is a CodeNoMemory refusal's account of the pool, and only its.
+	Held *Held `json:"held,omitempty"`
+}
+
+// Held says what holds a pool that refused a place: what the place needs,
+// what was free, the charges of its own athanor's places and the sum of
+// every other's.
+type Held struct {
+	Need   uint64    `json:"need"`
+	Free   uint64    `json:"free"`
+	Mine   []Holding `json:"mine"`
+	Others uint64    `json:"others_bytes"`
+}
+
+// Holding is one place of the asking place's athanor in a Held: its kind,
+// its subject only where the place is the asking role's, and its charge.
+type Holding struct {
+	Kind    string `json:"kind"`
+	Subject string `json:"subject,omitempty"`
+	Bytes   uint64 `json:"bytes"`
 }
 
 // NewError builds an `error` reply.
 func NewError(id, spawnID, code string) ErrorReply {
 	return ErrorReply{V: Version, Type: TypeError, ID: id, SpawnID: spawnID, Code: code}
+}
+
+// NewNoMemory builds the CodeNoMemory refusal of the place id.
+func NewNoMemory(id string, held Held) ErrorReply {
+	if held.Mine == nil {
+		held.Mine = []Holding{}
+	}
+	return ErrorReply{V: Version, Type: TypeError, ID: id, Code: CodeNoMemory, Held: &held}
+}
+
+// GiveWay asks the floor's role to release the idle runner of its place.
+type GiveWay struct {
+	V     int    `json:"v"`
+	Type  string `json:"type"`
+	Place string `json:"place"`
+}
+
+// NewGiveWay builds a `give_way` message.
+func NewGiveWay(place string) GiveWay {
+	return GiveWay{V: Version, Type: TypeGiveWay, Place: place}
 }
 
 // Exited reports a leader's end: its exit code, or the signal that ended it,
@@ -1155,16 +1197,17 @@ func NewExited(spawnID string, code *int, signal, memory *string) Exited {
 	return Exited{V: Version, Type: TypeExited, SpawnID: spawnID, Code: code, Signal: signal, Memory: memory}
 }
 
-// Placed acknowledges a `place`.
+// Placed admits a `place`, with the memory bound its spawn will have.
 type Placed struct {
-	V    int    `json:"v"`
-	Type string `json:"type"`
-	ID   string `json:"id"`
+	V           int    `json:"v"`
+	Type        string `json:"type"`
+	ID          string `json:"id"`
+	MemoryBytes uint64 `json:"memory_bytes"`
 }
 
 // NewPlaced builds a `placed` reply.
-func NewPlaced(id string) Placed {
-	return Placed{V: Version, Type: TypePlaced, ID: id}
+func NewPlaced(id string, memoryBytes uint64) Placed {
+	return Placed{V: Version, Type: TypePlaced, ID: id, MemoryBytes: memoryBytes}
 }
 
 // Assigned acknowledges an `assign` once the keeper applied it.

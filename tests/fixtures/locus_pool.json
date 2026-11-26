@@ -1,4 +1,12 @@
 {
-  "comment": "The pool's fixed numbers, Prima.LocusPool, for the keeper, which cannot call it: apps/prima/test/prima/locus_pool_test.exs holds this file to the module value by value, and apps/locus/keeper/internal/admission/size_test.go holds the keeper's constants to it. floor_bytes is F, what the warm floor keeps from builds and programs.",
-  "floor_bytes": 171966464
+  "comment": "The pool's fixed numbers, Prima.LocusPool, for the keeper, which cannot call it: apps/prima/test/prima/locus_pool_test.exs holds this file to the module value by value, and apps/locus/keeper/internal/admission/size_test.go holds the keeper's constants to it. floor_bytes is F, what the warm floor keeps from builds and programs, and floor_runners how many fresh runners it keeps. room_wait_ms is how long a start waits for room before it is refused, the close's own wait (Prima.LocusBackends.close_wait_ms). A place is charged at least its class's allowance_bytes from its place until allowance_ms after its spawn, and a place with no reading for stale_ms no less than its last charge. kinds gives each place's kind its class; a runner's and a build's memory bound is cap_bytes, a session's half of the pool's work, never under its allowance, and each class's processors are its spawns' bound.",
+  "floor_bytes": 171966464,
+  "floor_runners": 1,
+  "room_wait_ms": 17000,
+  "allowance_ms": 10000,
+  "stale_ms": 3000,
+  "kinds": { "warm": "runner", "run": "runner", "build": "build", "program": "session", "terminal": "session" },
+  "allowance_bytes": { "runner": 171966464, "build": 838860800, "session": 402653184 },
+  "cap_bytes": { "runner": 402653184, "build": 1073741824 },
+  "processors": { "runner": 1, "build": 1, "session": 2 }
 }

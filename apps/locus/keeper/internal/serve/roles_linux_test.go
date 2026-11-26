@@ -364,11 +364,11 @@ func (ru *roleUnderTest) ask(t *testing.T, request string) map[string]any {
 // attached in its run folder, and answers the spawn's id, uid and leader.
 func (ru *roleUnderTest) spawn(t *testing.T, id string) (string, int, *relayConn) {
 	t.Helper()
-	if placed := ru.ask(t, `{"v":6,"type":"place","id":"`+id+`","kind":"run"}`); placed["type"] != protocol.TypePlaced {
+	if placed := ru.ask(t, `{"v":7,"type":"place","id":"`+id+`","kind":"run"}`); placed["type"] != protocol.TypePlaced {
 		t.Fatalf("role %s's place: %v", ru.r.spec.Name, placed)
 	}
-	req := fmt.Sprintf(`{"v":6,"type":"spawn","id":%q,"place":%q,"pool":%q,"argv":["/bin/sh","-c","exec sleep 600"],"env":{},"rlimits":{},"memory_bytes":%d,"cpu_quota":%d,"control":false,"attach":{"path":%q,"token":%q}}`,
-		id, id, ru.r.pool.Name, 64<<20, protocol.CPUPeriod, filepath.Join(ru.r.runDir, "attach.sock"), testToken)
+	req := fmt.Sprintf(`{"v":7,"type":"spawn","id":%q,"place":%q,"pool":%q,"argv":["/bin/sh","-c","exec sleep 600"],"env":{},"rlimits":{},"memory_bytes":%d,"cpu_quota":%d,"control":false,"attach":{"path":%q,"token":%q}}`,
+		id, id, ru.r.pool.Name, 64<<20, cgroup.CPUPeriod, filepath.Join(ru.r.runDir, "attach.sock"), testToken)
 	spawned := ru.ask(t, req)
 	if spawned["type"] != protocol.TypeSpawned {
 		t.Fatalf("role %s's spawn: %v", ru.r.spec.Name, spawned)
@@ -516,18 +516,18 @@ func TestARoleNamesOnlyItsOwn(t *testing.T) {
 	alpha, beta := rk.roles["alpha"], rk.roles["beta"]
 	betaSpawn, betaUID, _ := beta.spawn(t, "b1")
 	alphaSpawn, _, _ := alpha.spawn(t, "a1")
-	if placed := beta.ask(t, `{"v":6,"type":"place","id":"bp","kind":"run"}`); placed["type"] != protocol.TypePlaced {
+	if placed := beta.ask(t, `{"v":7,"type":"place","id":"bp","kind":"run"}`); placed["type"] != protocol.TypePlaced {
 		t.Fatalf("beta's place: %v", placed)
 	}
 	refusals := map[string]string{
-		`{"v":6,"type":"pool","id":"x1","pool":"pbeta"}`:                             protocol.CodeUnknownPool,
-		`{"v":6,"type":"signal","spawn_id":"` + betaSpawn + `","sig":"SIGKILL"}`:     protocol.CodeUnknownSpawn,
-		`{"v":6,"type":"resize","spawn_id":"` + betaSpawn + `","rows":10,"cols":10}`: protocol.CodeUnknownSpawn,
-		`{"v":6,"type":"release","spawn_id":"` + betaSpawn + `","grace_ms":0}`:       protocol.CodeUnknownSpawn,
-		`{"v":6,"type":"measure","id":"x2","place":"b1"}`:                            protocol.CodeUnmeasured,
-		`{"v":6,"type":"assign","id":"x3","place":"bp","kind":"run"}`:                protocol.CodeBadRequest,
-		`{"v":6,"type":"home_list","id":"x4"}`:                                       protocol.CodeUnavailable,
-		`{"v":6,"type":"home_make","id":"x5","home":"vlt_alpha"}`:                    protocol.CodeUnavailable,
+		`{"v":7,"type":"pool","id":"x1","pool":"pbeta"}`:                             protocol.CodeUnknownPool,
+		`{"v":7,"type":"signal","spawn_id":"` + betaSpawn + `","sig":"SIGKILL"}`:     protocol.CodeUnknownSpawn,
+		`{"v":7,"type":"resize","spawn_id":"` + betaSpawn + `","rows":10,"cols":10}`: protocol.CodeUnknownSpawn,
+		`{"v":7,"type":"release","spawn_id":"` + betaSpawn + `","grace_ms":0}`:       protocol.CodeUnknownSpawn,
+		`{"v":7,"type":"measure","id":"x2","place":"b1"}`:                            protocol.CodeUnmeasured,
+		`{"v":7,"type":"assign","id":"x3","place":"bp","kind":"run"}`:                protocol.CodeBadRequest,
+		`{"v":7,"type":"home_list","id":"x4"}`:                                       protocol.CodeUnavailable,
+		`{"v":7,"type":"home_make","id":"x5","home":"vlt_alpha"}`:                    protocol.CodeUnavailable,
 	}
 	for request, code := range refusals {
 		reply := alpha.ask(t, request)
@@ -538,26 +538,26 @@ func TestARoleNamesOnlyItsOwn(t *testing.T) {
 	// A spawn naming beta's place, which alpha does not hold, or beta's
 	// pool from a place of alpha's own.
 	spawnIn := func(place, poolName string) string {
-		return fmt.Sprintf(`{"v":6,"type":"spawn","id":%q,"place":%q,"pool":%q,"argv":["true"],"env":{},"rlimits":{},"memory_bytes":%d,"cpu_quota":%d,"control":false,"attach":{"path":"/run/x.sock","token":%q}}`,
-			place, place, poolName, 64<<20, protocol.CPUPeriod, testToken)
+		return fmt.Sprintf(`{"v":7,"type":"spawn","id":%q,"place":%q,"pool":%q,"argv":["true"],"env":{},"rlimits":{},"memory_bytes":%d,"cpu_quota":%d,"control":false,"attach":{"path":"/run/x.sock","token":%q}}`,
+			place, place, poolName, 64<<20, cgroup.CPUPeriod, testToken)
 	}
 	if reply := alpha.ask(t, spawnIn("bp", "palpha")); reply["code"] != protocol.CodeBadRequest {
 		t.Errorf("alpha's spawn in beta's place answered %v", reply)
 	}
-	if placed := alpha.ask(t, `{"v":6,"type":"place","id":"ap","kind":"run"}`); placed["type"] != protocol.TypePlaced {
+	if placed := alpha.ask(t, `{"v":7,"type":"place","id":"ap","kind":"run"}`); placed["type"] != protocol.TypePlaced {
 		t.Fatalf("alpha's place: %v", placed)
 	}
 	if reply := alpha.ask(t, spawnIn("ap", "pbeta")); reply["code"] != protocol.CodeUnknownPool {
 		t.Errorf("alpha's spawn from beta's pool answered %v", reply)
 	}
 	// Each role's own are answered, on its own channel.
-	if reply := alpha.ask(t, `{"v":6,"type":"pool","id":"y1","pool":"palpha"}`); reply["type"] != protocol.TypePool || reply["free"] != float64(1) {
+	if reply := alpha.ask(t, `{"v":7,"type":"pool","id":"y1","pool":"palpha"}`); reply["type"] != protocol.TypePool || reply["free"] != float64(1) {
 		t.Errorf("alpha's own pool answered %v", reply)
 	}
-	if reply := beta.ask(t, `{"v":6,"type":"home_list","id":"y2"}`); reply["type"] != protocol.TypeHomes {
+	if reply := beta.ask(t, `{"v":7,"type":"home_list","id":"y2"}`); reply["type"] != protocol.TypeHomes {
 		t.Errorf("beta's own home_list answered %v", reply)
 	}
-	if reply := beta.ask(t, `{"v":6,"type":"assign","id":"y3","place":"bp","kind":"warm"}`); reply["type"] != protocol.TypeAssigned {
+	if reply := beta.ask(t, `{"v":7,"type":"assign","id":"y3","place":"bp","kind":"warm"}`); reply["type"] != protocol.TypeAssigned {
 		t.Errorf("beta's own assign answered %v", reply)
 	}
 	// Beta's spawn runs on under its uid.
@@ -645,14 +645,14 @@ func TestAPoolOfNoWorkStartsItsRolesAndRefusesEachSpawn(t *testing.T) {
 	rk.start(t)
 	for name, ru := range rk.roles {
 		pool := "p" + name
-		if reply := ru.ask(t, `{"v":6,"type":"pool","id":"z1","pool":"`+pool+`"}`); reply["type"] != protocol.TypePool {
+		if reply := ru.ask(t, `{"v":7,"type":"pool","id":"z1","pool":"`+pool+`"}`); reply["type"] != protocol.TypePool {
 			t.Fatalf("role %s at no work: its pool answered %v", name, reply)
 		}
-		if placed := ru.ask(t, `{"v":6,"type":"place","id":"zp","kind":"run"}`); placed["type"] != protocol.TypePlaced {
+		if placed := ru.ask(t, `{"v":7,"type":"place","id":"zp","kind":"run"}`); placed["type"] != protocol.TypePlaced {
 			t.Fatalf("role %s's place: %v", name, placed)
 		}
-		spawn := fmt.Sprintf(`{"v":6,"type":"spawn","id":"zp","place":"zp","pool":%q,"argv":["true"],"env":{},"rlimits":{},"memory_bytes":%d,"cpu_quota":%d,"control":false,"attach":{"path":"/run/x.sock","token":%q}}`,
-			pool, 64<<20, protocol.CPUPeriod, testToken)
+		spawn := fmt.Sprintf(`{"v":7,"type":"spawn","id":"zp","place":"zp","pool":%q,"argv":["true"],"env":{},"rlimits":{},"memory_bytes":%d,"cpu_quota":%d,"control":false,"attach":{"path":"/run/x.sock","token":%q}}`,
+			pool, 64<<20, cgroup.CPUPeriod, testToken)
 		refused := ru.ask(t, spawn)
 		if refused["type"] != protocol.TypeError || refused["id"] != "zp" {
 			t.Fatalf("role %s's spawn at no work answered %v", name, refused)
@@ -664,7 +664,7 @@ func TestAPoolOfNoWorkStartsItsRolesAndRefusesEachSpawn(t *testing.T) {
 				t.Fatalf("role %s's refused spawn: %v, %v", name, released, err)
 			}
 		}
-		if reply := ru.ask(t, `{"v":6,"type":"pool","id":"z2","pool":"`+pool+`"}`); reply["type"] != protocol.TypePool || reply["free"] != reply["size"] {
+		if reply := ru.ask(t, `{"v":7,"type":"pool","id":"z2","pool":"`+pool+`"}`); reply["type"] != protocol.TypePool || reply["free"] != reply["size"] {
 			t.Errorf("role %s after the refused spawn: its pool answered %v", name, reply)
 		}
 	}
@@ -715,10 +715,10 @@ func TestARoleThatEndsStartsAgainAloneWhileTheOtherRunsOn(t *testing.T) {
 	}
 	// Its new start holds nothing of its last: neither the spawn nor the
 	// place.
-	if reply := alpha.ask(t, `{"v":6,"type":"release","spawn_id":"`+alphaSpawn+`","grace_ms":0}`); reply["code"] != protocol.CodeUnknownSpawn {
+	if reply := alpha.ask(t, `{"v":7,"type":"release","spawn_id":"`+alphaSpawn+`","grace_ms":0}`); reply["code"] != protocol.CodeUnknownSpawn {
 		t.Fatalf("the new alpha's release of its last start's spawn answered %v", reply)
 	}
-	if reply := alpha.ask(t, `{"v":6,"type":"place","id":"a1","kind":"run"}`); reply["type"] != protocol.TypePlaced {
+	if reply := alpha.ask(t, `{"v":7,"type":"place","id":"a1","kind":"run"}`); reply["type"] != protocol.TypePlaced {
 		t.Fatalf("the new alpha's place of its last start's place id answered %v", reply)
 	}
 	// Its route was withdrawn before its new one was admitted.
@@ -741,7 +741,7 @@ func TestARoleThatEndsStartsAgainAloneWhileTheOtherRunsOn(t *testing.T) {
 	if c, err := procfs.ScanUID("/proc", betaUID, 0); err != nil || c.Total() == 0 {
 		t.Fatalf("beta's spawn's uid %d: %+v, %v", betaUID, c, err)
 	}
-	if reply := beta.ask(t, `{"v":6,"type":"pool","id":"bp","pool":"pbeta"}`); reply["type"] != protocol.TypePool || reply["free"] != float64(1) {
+	if reply := beta.ask(t, `{"v":7,"type":"pool","id":"bp","pool":"pbeta"}`); reply["type"] != protocol.TypePool || reply["free"] != float64(1) {
 		t.Fatalf("beta's channel after alpha's end answered %v", reply)
 	}
 	for _, call := range rk.guard.taken() {
@@ -768,7 +768,7 @@ func TestARoleKilledStartsAgain(t *testing.T) {
 	if again == nil || again == first || !ended {
 		t.Fatalf("beta after its kill: %+v", again)
 	}
-	if reply := beta.ask(t, `{"v":6,"type":"pool","id":"p","pool":"pbeta"}`); reply["type"] != protocol.TypePool {
+	if reply := beta.ask(t, `{"v":7,"type":"pool","id":"p","pool":"pbeta"}`); reply["type"] != protocol.TypePool {
 		t.Fatalf("beta's new channel answered %v", reply)
 	}
 }
@@ -898,7 +898,7 @@ func TestAnEndBeforeItsReaderRunsStartsTheRoleAgain(t *testing.T) {
 	time.Sleep(200 * time.Millisecond) // sleep-ok: well inside the restart's wait, where keepRole holds no client
 	close(release)
 	beta.accept(t)
-	if reply := beta.ask(t, `{"v":6,"type":"pool","id":"p","pool":"pbeta"}`); reply["type"] != protocol.TypePool {
+	if reply := beta.ask(t, `{"v":7,"type":"pool","id":"p","pool":"pbeta"}`); reply["type"] != protocol.TypePool {
 		t.Fatalf("beta's new channel answered %v", reply)
 	}
 }
@@ -924,7 +924,7 @@ func (rk *rolesKeeper) routed(name string) {
 // group. The guard's admits stay held until release is closed.
 func (rk *rolesKeeper) heldSpawn(t *testing.T, ru *roleUnderTest, id string) (release func()) {
 	t.Helper()
-	if placed := ru.ask(t, `{"v":6,"type":"place","id":"`+id+`","kind":"run"}`); placed["type"] != protocol.TypePlaced {
+	if placed := ru.ask(t, `{"v":7,"type":"place","id":"`+id+`","kind":"run"}`); placed["type"] != protocol.TypePlaced {
 		t.Fatalf("role %s's place: %v", ru.r.spec.Name, placed)
 	}
 	hold := make(chan struct{})
@@ -934,8 +934,8 @@ func (rk *rolesKeeper) heldSpawn(t *testing.T, ru *roleUnderTest, id string) (re
 	var once sync.Once
 	release = func() { once.Do(func() { close(hold) }) }
 	t.Cleanup(release)
-	req := fmt.Sprintf(`{"v":6,"type":"spawn","id":%q,"place":%q,"pool":%q,"argv":["/bin/sh","-c","exec sleep 600"],"env":{},"rlimits":{},"memory_bytes":%d,"cpu_quota":%d,"control":false,"attach":{"path":%q,"token":%q}}`,
-		id, id, ru.r.pool.Name, 64<<20, protocol.CPUPeriod, filepath.Join(ru.r.runDir, "attach.sock"), testToken)
+	req := fmt.Sprintf(`{"v":7,"type":"spawn","id":%q,"place":%q,"pool":%q,"argv":["/bin/sh","-c","exec sleep 600"],"env":{},"rlimits":{},"memory_bytes":%d,"cpu_quota":%d,"control":false,"attach":{"path":%q,"token":%q}}`,
+		id, id, ru.r.pool.Name, 64<<20, cgroup.CPUPeriod, filepath.Join(ru.r.runDir, "attach.sock"), testToken)
 	if _, err := ru.conn.Write([]byte(req + "\n")); err != nil {
 		t.Fatal(err)
 	}

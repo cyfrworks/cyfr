@@ -40,8 +40,6 @@ const (
 const (
 	checkVCPUs     = 2
 	checkMemoryMiB = 2560
-	// checkSpawnMemory is the bound of the check's one space.
-	checkSpawnMemory = 1 << 30
 	// exchangeWait bounds the whole control exchange of the check's one
 	// space, from its placing to its release, however many lines the guest
 	// sends.
@@ -330,16 +328,15 @@ func space(m *Machine, c *Control, argv []string, report *Report) error {
 	if err != nil {
 		return err
 	}
-	if err := c.Send(protocol.Request{V: protocol.Version, Type: "place", ID: place, Kind: protocol.KindRun}); err != nil {
+	// The guest's one role keeps sessions, so the space is placed as one.
+	if err := c.Send(protocol.Request{V: protocol.Version, Type: "place", ID: place, Kind: protocol.KindProgram}); err != nil {
 		return err
 	}
 	if line, err := expect(c, deadline, "placed", place, ""); err != nil {
 		return fmt.Errorf("placing the space: %w (%s)", err, line)
 	}
-	memory, quota := uint64(checkSpawnMemory), uint64(cgroup.CPUPeriod)
 	spawn := protocol.Request{V: protocol.Version, Type: "spawn", ID: "s-" + place, Place: place, Pool: GuestPool,
-		Argv: argv, MemoryBytes: &memory, CPUQuota: &quota,
-		Attach: &protocol.Attach{Path: GuestAttachPath, Token: token}}
+		Argv: argv, Attach: &protocol.Attach{Path: GuestAttachPath, Token: token}}
 	if err := c.Send(spawn); err != nil {
 		return err
 	}

@@ -28,6 +28,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/cyfr/locus/keeper/internal/admission"
 	"github.com/cyfr/locus/keeper/internal/frame"
 	"github.com/cyfr/locus/keeper/internal/home"
 	"github.com/cyfr/locus/keeper/internal/logx"
@@ -212,8 +213,11 @@ type keeper struct {
 // testClient is a client of a role "test" drawing from spec, of account
 // acct, on channel: a role's client as serve makes one, without its
 // process, groups or run folder.
+// testClient is a client of a role of the pool spec, the floor's (whose
+// kinds are a runner's) where its pool is the runner pool, as the
+// runtime's is.
 func testClient(channel *os.File, spec pool.Spec, acct Account) *client {
-	r := &role{spec: RoleSpec{Name: "test", UID: acct.UID, Pool: spec.Name}, pool: spec, account: acct}
+	r := &role{spec: RoleSpec{Name: "test", UID: acct.UID, Pool: spec.Name, Floor: spec.Name == "runner"}, pool: spec, account: acct}
 	c := &client{role: r, id: randomHex(16), channel: channel, places: map[string]*place{}}
 	r.client = c
 	return c
@@ -377,6 +381,7 @@ func newKeeperOf(t *testing.T, reach string) *keeper {
 		keptLive:  map[int]int{},
 		keptOps:   map[int]*sync.Mutex{},
 		ended:     make(chan struct{}),
+		ledger:    admission.New(testWork, true),
 	}
 	c := testClient(os.NewFile(uintptr(fds[0]), "channel"), spec, Account{UID: 65534, GID: 65534, Name: "nobody"})
 	c.role.homeRoot = homes
@@ -465,14 +470,26 @@ func (k *keeper) spawn(t *testing.T, id, script string, env map[string]string, c
 	return k.spawnBounded(t, id, script, env, control, 64<<20)
 }
 
+// boundAt has the keeper bound every spawn to memoryBytes and one
+// processor until the test ends, whatever its kind, as a test's work
+// needs; the bounds each kind has are held by their own tests.
+func boundAt(t *testing.T, memoryBytes uint64) {
+	t.Helper()
+	before := limitsOf
+	limitsOf = func(string, uint64) admission.Limits {
+		return admission.Limits{MemoryBytes: memoryBytes, Processors: 1}
+	}
+	t.Cleanup(func() { limitsOf = before })
+}
+
 // spawnRequest is the parsed request for a spawn of `/bin/sh -c script`
-// with the given memory bound, in the place of its own id.
+// in the place of its own id, the keeper bounding it to memoryBytes.
 func spawnRequest(t *testing.T, attach, id, script string, env map[string]string, control bool, memoryBytes uint64) *protocol.Request {
 	t.Helper()
+	boundAt(t, memoryBytes)
 	message := map[string]any{
 		"v": protocol.Version, "type": protocol.TypeSpawn, "id": id, "place": id, "pool": "runner",
 		"argv": []string{"/bin/sh", "-c", script}, "env": env, "control": control,
-		"memory_bytes": memoryBytes, "cpu_quota": protocol.CPUPeriod,
 		"attach": map[string]string{"path": attach, "token": testToken},
 	}
 	line, err := json.Marshal(message)
@@ -530,15 +547,20 @@ func parsed(t *testing.T, line string) *protocol.Request {
 // place has the keeper hold a place of id for kind, and answers its reply.
 func (k *keeper) place(t *testing.T, id, kind string) map[string]any {
 	t.Helper()
-	k.s.handle(k.c, parsed(t, `{"v":6,"type":"place","id":"`+id+`","kind":"`+kind+`"}`))
+	k.s.handle(k.c, parsed(t, `{"v":7,"type":"place","id":"`+id+`","kind":"`+kind+`"}`))
 	return k.reply(t)
 }
 
-// handleSpawn places the place req names and then asks for the spawn, as a
-// client does once its preparation is done.
+// handleSpawn places the place req names, a run's on the floor's role and
+// a program's on any other, and then asks for the spawn, as a client does
+// once its preparation is done.
 func (k *keeper) handleSpawn(t *testing.T, req *protocol.Request) {
 	t.Helper()
-	if placed := k.place(t, req.Place, protocol.KindRun); placed["type"] != protocol.TypePlaced || placed["id"] != req.Place {
+	kind := protocol.KindProgram
+	if k.c.role.spec.Floor {
+		kind = protocol.KindRun
+	}
+	if placed := k.place(t, req.Place, kind); placed["type"] != protocol.TypePlaced || placed["id"] != req.Place {
 		t.Fatalf("place %s answered %v", req.Place, placed)
 	}
 	k.s.handleSpawn(k.c, req)
@@ -811,6 +833,7 @@ func TestHomeRequestsWithoutKeptHomesAreRefused(t *testing.T) {
 		waiters:  map[int]*child{},
 		keptLive: map[int]int{},
 		keptOps:  map[int]*sync.Mutex{},
+		ledger:   admission.New(testWork, true),
 	}
 	done := make(chan struct{})
 	go func() { s.serveChannel(testClient(ours, pool.Spec{Name: "runner"}, Account{})); close(done) }()
@@ -836,7 +859,7 @@ func TestHomeRequestsWithoutKeptHomesAreRefused(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := theirs.Write([]byte(`{"v":6,"type":"pool","id":"after","pool":"backends"}` + "\n")); err != nil {
+	if _, err := theirs.Write([]byte(`{"v":7,"type":"pool","id":"after","pool":"backends"}` + "\n")); err != nil {
 		t.Fatal(err)
 	}
 	lr := protocol.NewLineReader(theirs)
@@ -890,11 +913,12 @@ func TestAResizeSetsTheTerminalOrIsRefused(t *testing.T) {
 	s := &server{
 		log:    logx.NewWriter(io.Discard, "cyfr-locus", false),
 		spawns: map[string]*spawn{withPty.id: withPty, plain.id: plain},
+		ledger: admission.New(testWork, true),
 	}
 	c := testClient(ours, pool.Spec{Name: "runner"}, Account{})
 	withPty.client, plain.client = c, c
 	resize := func(spawnID string) *protocol.Request {
-		req, rerr := protocol.ParseRequest([]byte(`{"v":6,"type":"resize","spawn_id":"` + spawnID + `","rows":50,"cols":132}`))
+		req, rerr := protocol.ParseRequest([]byte(`{"v":7,"type":"resize","spawn_id":"` + spawnID + `","rows":50,"cols":132}`))
 		if rerr != nil {
 			t.Fatal(rerr.Detail)
 		}

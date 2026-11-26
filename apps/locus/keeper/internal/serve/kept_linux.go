@@ -21,6 +21,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/cyfr/locus/keeper/internal/admission"
 	"github.com/cyfr/locus/keeper/internal/cgroup"
 	"github.com/cyfr/locus/keeper/internal/home"
 	"github.com/cyfr/locus/keeper/internal/protocol"
@@ -210,7 +211,7 @@ func (s *server) unmakeKept(uid int) {
 // of the home shares the uid and its files, and each has its own space and
 // route, which reaches what its own start resolved. It answers as
 // startSpawn does.
-func (s *server) startKeptSpawn(c *client, req *protocol.Request, reach string, e egress, known bool) (*spawn, string) {
+func (s *server) startKeptSpawn(c *client, req *protocol.Request, reach string, e egress, known bool, limits admission.Limits) (*spawn, string) {
 	// The home's uid, read under its lock, is the home's for its life: a
 	// home retired after this read is absent once the uid's lock is held,
 	// and a reset keeps the uid.
@@ -283,7 +284,7 @@ func (s *server) startKeptSpawn(c *client, req *protocol.Request, reach string, 
 	s.mu.Unlock()
 	lock.Unlock()
 
-	sp := &spawn{id: randomHex(16), client: c, kept: true, account: acct, home: path, reach: reach, retired: make(chan struct{})}
+	sp := &spawn{id: randomHex(16), client: c, kept: true, account: acct, home: path, reach: reach, limits: limits, retired: make(chan struct{})}
 	s.madeIn(req.Place, sp)
 	if code, err := s.launch(sp, req, e); err != nil {
 		s.log.Error("spawn %s on kept uid %d: %v", req.ID, uid, err)
@@ -485,6 +486,7 @@ func (s *server) retireKept(sp *spawn, grace time.Duration, notify bool) {
 		// home_make and no other spawn takes it until every process of it
 		// is gone, however a child of the spawn hides from its group's kill.
 		s.mu.Lock()
+		s.ending(sp)
 		s.keptMaps()
 		s.keptLive[uid]--
 		s.keptEnding[uid]++
@@ -546,6 +548,7 @@ func (s *server) retireKept(sp *spawn, grace time.Duration, notify bool) {
 			s.mu.Lock()
 			s.leave(sp, removed, removal{notify: notify})
 			s.mu.Unlock()
+			s.flush()
 			if !removed {
 				return
 			}

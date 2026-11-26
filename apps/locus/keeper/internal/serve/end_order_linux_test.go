@@ -64,7 +64,7 @@ func heldLeader(then string) string {
 // answers the leader, the group and a log file the script writes to as $L.
 func endingGroup(t *testing.T, k *keeper, uid int, script string) (*child, *cgroup.Group, string) {
 	t.Helper()
-	group, err := k.c.role.groups.Create(cgroup.Name(uid), 256<<20, protocol.CPUPeriod)
+	group, err := k.c.role.groups.Create(cgroup.Name(uid), 256<<20, cgroup.CPUPeriod)
 	if err != nil {
 		t.Fatal(err)
 	}
