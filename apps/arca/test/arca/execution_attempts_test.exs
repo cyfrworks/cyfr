@@ -165,23 +165,14 @@ defmodule Arca.ExecutionAttemptsTest do
                ExecutionAttempts.current(actor, execution.id)
     end
 
-    # A close and a takeover's retirement record none; a value not of the
-    # three is no lapse's.
+    # A close records none: only a lapse writes the cause. The column's
+    # check (`Arca.SchemaVocabularyTest`) refuses any value but the three.
     {execution, attempt} = admit!(actor)
 
     {:ok, _} =
       ExecutionAttempts.close(actor, attempt.attempt, "failed", "error", Arca.Test.Actor.stored())
 
-    assert %{ended_by: nil} = ExecutionAttempts.current(actor, execution.id)
-
-    {_execution, other} = admit!(actor)
-    {:ok, grant} = Prima.ExecutionGrant.new(other.athanor_id, other.athanor_generation)
-
-    assert_raise FunctionClauseError, fn ->
-      ExecutionAttempts.lapse!(other.attempt, other.lease_until, grant, :oom)
-    end
-
-    assert %{state: "running", ended_by: nil} = ExecutionAttempts.get(actor, other.attempt)
+    assert %{state: "failed", ended_by: nil} = ExecutionAttempts.current(actor, execution.id)
   end
 
   test "the sweeper retires an attempt on the lease it observed, and a takeover opens the successor",
