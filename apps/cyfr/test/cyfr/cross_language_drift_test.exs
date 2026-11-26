@@ -586,6 +586,10 @@ defmodule Cyfr.CrossLanguageDriftTest do
        ~w(version service label auth_header routes statuses key_hex request_key_hex request)},
       {"tests/builder-image/stack_test.py", ~w(bounds lines)}
     ],
+    "locus_pool.json" => [
+      {"apps/locus/keeper/internal/admission/size_test.go", ~w(floor_bytes)},
+      {"apps/prima/test/prima/locus_pool_test.exs", ~w(floor_bytes)}
+    ],
     "locus_roles.json" => [
       {"apps/prima/test/prima/locus_roles_test.exs", ~w(release roles)},
       {"tests/builder-image/stack.py", ~w(release roles)},

@@ -29,12 +29,25 @@
 // leaves the counters of a kill at the bound. So no group above a mark may
 // set memory.oom.group.
 //
-// A role's group, `role-<name>` under the namespace root, holds the role's
-// process and its relays in its leaf `service`, and its spawns' marks
-// beside it. It carries the role's memory bound, the same bound of swap, as
-// Docker sets beside a container's memory limit, and its CPU bound, and no
-// memory.oom.group, so a kill for the role's bound is counted in the mark
-// as a limit above the spawn's own.
+// The namespace root holds the pool's tree (Tree), whose groups are all
+// made before any memory bound is written, since the kernel makes no group
+// under one whose memory.max is already below what a group costs:
+//
+//	service          no memory bound: the services are outside work
+//	  keeper         the keeper and its helpers
+//	  <role>         a role's process and its relays, at its service share
+//	                 of the role's processors
+//	work             memory.max W: every spawn of every role
+//	  <floor role>   the role whose runners the warm floor keeps, at the
+//	                 rest of its processors
+//	  rest           memory.max W - F, so builds and programs never reach
+//	                 the floor's memory
+//	    <role>       every other role, at the rest of its processors
+//
+// A spawn's mark is made in its role's group under work. No group of the
+// tree sets memory.oom.group, so a kill for work's or rest's bound is
+// counted in the mark as a limit above the spawn's own, and every group of
+// it has memory.swap.max 0.
 //
 // Groups can be made only where the keeper's own cgroup is the root of a
 // cgroup namespace mounted writable, as a container started with Docker's
@@ -43,8 +56,8 @@
 // its boot. cgroup v2 lets a group hold processes or enable controllers for
 // its children, not both, so Delegate first moves every
 // process of the namespace root, the keeper among them, into the leaf
-// group `keeper`, which has no bound; the keeper's retirement and home
-// helpers stay there.
+// group `service/keeper`, which has no bound; the keeper's retirement and
+// home helpers stay there.
 //
 // Where the host mounts cgroup2 with `nsdelegate`, as systemd does, the
 // kernel refuses a write from inside the namespace to the root's own limits,
@@ -75,8 +88,13 @@ const (
 	Root = "/sys/fs/cgroup"
 	// SelfPath names the file holding the calling process's own cgroup.
 	SelfPath = "/proc/self/cgroup"
+	// serviceGroup holds the keeper's leaf and each role's, workGroup every
+	// spawn, and restGroup, in work, every role's but the floor role's.
+	serviceGroup = "service"
+	workGroup    = "work"
+	restGroup    = "rest"
 	// keeperLeaf is the group the namespace root's processes move to.
-	keeperLeaf = "keeper"
+	keeperLeaf = serviceGroup + "/keeper"
 	// drainAttempts and drainInterval bound the passes that empty the
 	// namespace root and the wait between two: a process joining it between
 	// two passes is moved by the next, and one of another pid namespace,
@@ -85,9 +103,6 @@ const (
 	drainInterval = 50 * time.Millisecond
 	// boundLeaf is the bound inside a spawn's mark.
 	boundLeaf = "bound"
-	// serviceLeaf is the leaf of a role's group that holds its process and
-	// its relays.
-	serviceLeaf = "service"
 	// settleAttempts and settleInterval bound the wait for the group kill's
 	// count, which the kernel writes just after it signals the first victim.
 	settleAttempts = 20
@@ -120,36 +135,38 @@ func SpawnName(id string) string { return "keeper-s-" + id }
 func ValidName(name string) bool { return namePattern.MatchString(name) }
 
 // ValidRoleName reports whether name is a role's: a lowercase letter, then
-// at most 15 lowercase letters and digits.
-func ValidRoleName(name string) bool { return roleNamePattern.MatchString(name) }
-
-// RoleName is the group of the role name.
-func RoleName(name string) string { return "role-" + name }
+// at most 15 lowercase letters and digits, and neither keeper nor rest,
+// whose groups are the tree's own.
+func ValidRoleName(name string) bool {
+	return roleNamePattern.MatchString(name) && name != "keeper" && name != restGroup
+}
 
 // RoleLeaf is the role name's leaf as Own reads it of a process in it.
-func RoleLeaf(name string) string { return "/" + RoleName(name) + "/" + serviceLeaf }
+func RoleLeaf(name string) string { return "/" + serviceGroup + "/" + name }
 
-// SplitPath splits a spawn's group as Own reads it, `/<name>` or
-// `/role-<role>/<name>`, into its role, "" for none, and its name, which is
-// a spawn's (ValidName). ok is false for any other path.
+// SplitPath splits a spawn's group as Own reads it, `/<name>`,
+// `/work/<role>/<name>` or `/work/rest/<role>/<name>`, into its role, ""
+// for none, and its name, which is a spawn's (ValidName). ok is false for
+// any other path.
 func SplitPath(p string) (role, name string, ok bool) {
 	rest, abs := strings.CutPrefix(p, "/")
 	if !abs {
 		return "", "", false
 	}
-	dir, name, nested := strings.Cut(rest, "/")
-	if !nested {
-		return "", dir, ValidName(dir)
+	parts := strings.Split(rest, "/")
+	switch {
+	case len(parts) == 1 && ValidName(parts[0]):
+		return "", parts[0], true
+	case len(parts) == 3 && parts[0] == workGroup && ValidRoleName(parts[1]) && ValidName(parts[2]):
+		return parts[1], parts[2], true
+	case len(parts) == 4 && parts[0] == workGroup && parts[1] == restGroup && ValidRoleName(parts[2]) && ValidName(parts[3]):
+		return parts[2], parts[3], true
 	}
-	role, isRole := strings.CutPrefix(dir, "role-")
-	if !isRole || !ValidRoleName(role) || !ValidName(name) {
-		return "", "", false
-	}
-	return role, name, true
+	return "", "", false
 }
 
 // Manager makes groups under the root of the keeper's cgroup namespace, or
-// under a role's group, whose path from that root is prefix.
+// under a role's group in work, whose path from that root is prefix.
 type Manager struct {
 	root   string
 	prefix string
@@ -189,8 +206,10 @@ func Delegate(root string, self []byte) (*Manager, error) {
 		return nil, fmt.Errorf("%s is not a delegated cgroup: %w", root, err)
 	}
 	leaf := filepath.Join(root, keeperLeaf)
-	if err := os.Mkdir(leaf, 0o755); err != nil && !errors.Is(err, fs.ErrExist) {
-		return nil, fmt.Errorf("%s is not writable: %w", root, err)
+	for _, dir := range []string{filepath.Dir(leaf), leaf} {
+		if err := os.Mkdir(dir, 0o755); err != nil && !errors.Is(err, fs.ErrExist) {
+			return nil, fmt.Errorf("%s is not writable: %w", root, err)
+		}
 	}
 	for attempt := 1; ; attempt++ {
 		hidden, err := drain(root, leaf)
@@ -209,7 +228,10 @@ func Delegate(root string, self []byte) (*Manager, error) {
 		}
 		pause(drainInterval)
 	}
-	// A child of the root now has the files a spawn's group is bounded
+	if err := os.WriteFile(filepath.Join(root, serviceGroup, "cgroup.subtree_control"), []byte("+memory +cpu"), 0o644); err != nil {
+		return nil, fmt.Errorf("enabling the memory and cpu controllers under %s: %w", filepath.Join(root, serviceGroup), err)
+	}
+	// A grandchild of the root now has the files a spawn's group is bounded
 	// with, or this kernel cannot hold a group to its bounds: without swap
 	// accounting a group swaps past it, without the group kill it loses one
 	// process and lives on, without cpu.max it takes every CPU.
@@ -346,53 +368,145 @@ func (m *Manager) Create(name string, memoryBytes, cpuQuota uint64) (*Group, err
 	return g, nil
 }
 
-// Limits are a role's bounds, each zero for none: its memory, in bytes,
-// which bounds its swap alike, and its CPU quota, in microseconds of every
-// CPUPeriod.
-type Limits struct {
-	MemoryBytes uint64
-	CPUQuota    uint64
+// A Tree is the pool's groups (the package doc's tree): service and work,
+// and in work rest. NewTree makes them with their controllers and no memory
+// bound; each role's groups are made in it (Role), and only then are work's
+// and rest's bounds written (Bound).
+type Tree struct {
+	root string
 }
 
-// Role makes the group of the role name with its limits, and in it the
-// role's leaf, and answers a Manager of the role's spawns' groups, which it
-// makes inside the role's group, and the leaf. A group of that name left
-// by an earlier keeper is removed first, empty as it must be.
-func (m *Manager) Role(name string, l Limits) (*Manager, *Group, error) {
-	if !ValidRoleName(name) || m.prefix != "" {
+// mkdir and write are the tree's two acts on the cgroup filesystem, apart
+// so a test can read their order.
+var (
+	mkdir = os.Mkdir
+	write = os.WriteFile
+)
+
+// NewTree makes the pool's groups under the namespace root m manages: those
+// an earlier keeper left are kept, empty of processes as they must be, and
+// each group's controllers are enabled and its swap is 0. No memory bound
+// is written: work's and rest's stay unbounded until Bound.
+func (m *Manager) NewTree() (*Tree, error) {
+	if m.prefix != "" {
+		return nil, errors.New("a tree inside a role's group")
+	}
+	for _, dir := range []string{serviceGroup, workGroup, workGroup + "/" + restGroup} {
+		if err := makeGroup(filepath.Join(m.root, dir), true); err != nil {
+			return nil, err
+		}
+	}
+	// A bound an earlier keeper wrote is lifted until Bound, so no group is
+	// made under one already at 0.
+	for _, dir := range []string{workGroup, workGroup + "/" + restGroup} {
+		if err := write(filepath.Join(m.root, dir, "memory.max"), []byte("max"), 0o644); err != nil {
+			return nil, fmt.Errorf("memory.max of %s: %w", dir, err)
+		}
+	}
+	return &Tree{root: m.root}, nil
+}
+
+// makeGroup makes the group dir, unless it exists, with swap 0, and when it
+// is a parent the memory and cpu controllers for its children.
+func makeGroup(dir string, parent bool) error {
+	if err := mkdir(dir, 0o755); err != nil && !errors.Is(err, fs.ErrExist) {
+		return err
+	}
+	settings := [][2]string{{"memory.swap.max", "0"}}
+	if parent {
+		settings = append(settings, [2]string{"cgroup.subtree_control", "+memory +cpu"})
+	}
+	for _, s := range settings {
+		if err := write(filepath.Join(dir, s[0]), []byte(s[1]), 0o644); err != nil {
+			return fmt.Errorf("%s of %s: %w", s[0], dir, err)
+		}
+	}
+	return nil
+}
+
+// A role's processors, in microseconds of every CPUPeriod, zero for no
+// bound: the role's whole bound, split between its service and its work.
+// ServiceCPU is what its service is given of a bound of cpu: the lesser of
+// half a processor and half the bound; its work has the rest. Neither lends
+// to the other.
+func ServiceCPU(cpu uint64) uint64 { return min(CPUPeriod/2, cpu/2) }
+
+// Role makes the role name's two groups: its leaf in service, which holds
+// its process and its relays, and its group in work, in which its spawns'
+// groups are made, directly in work for the floor's role and in rest for
+// every other. A bound of cpu is split between the two (ServiceCPU). It
+// answers the Manager of its spawns' groups and its leaf. Groups of that
+// name an earlier keeper left are removed first, empty as they must be.
+func (t *Tree) Role(name string, cpu uint64, floor bool) (*Manager, *Group, error) {
+	if !ValidRoleName(name) {
 		return nil, nil, fmt.Errorf("role group %q", name)
 	}
-	dir := filepath.Join(m.root, RoleName(name))
-	leaf := &Group{name: RoleName(name) + "/" + serviceLeaf, path: filepath.Join(dir, serviceLeaf)}
-	for _, d := range []string{leaf.path, dir} {
+	prefix := workGroup + "/" + restGroup + "/" + name
+	if floor {
+		prefix = workGroup + "/" + name
+	}
+	work := filepath.Join(t.root, prefix)
+	leaf := &Group{name: serviceGroup + "/" + name, path: filepath.Join(t.root, serviceGroup, name)}
+	for _, d := range []string{leaf.path, work} {
 		if err := os.Remove(d); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return nil, nil, fmt.Errorf("removing the group an earlier keeper left: %w", err)
 		}
 	}
-	type setting struct{ file, value string }
-	settings := []setting{{"cgroup.subtree_control", "+memory +cpu"}}
-	if l.MemoryBytes > 0 {
-		bytes := strconv.FormatUint(l.MemoryBytes, 10)
-		settings = append(settings, setting{"memory.max", bytes}, setting{"memory.swap.max", bytes})
+	service := cpu
+	if cpu > 0 {
+		service = ServiceCPU(cpu)
 	}
-	if l.CPUQuota > 0 {
-		settings = append(settings, setting{"cpu.max", strconv.FormatUint(l.CPUQuota, 10) + " " + strconv.Itoa(CPUPeriod)})
-	}
-	if err := os.Mkdir(dir, 0o755); err != nil {
-		return nil, nil, err
-	}
-	for _, s := range settings {
-		if err := os.WriteFile(filepath.Join(dir, s.file), []byte(s.value), 0o644); err != nil {
-			_ = os.Remove(dir)
-			return nil, nil, fmt.Errorf("%s of role %s: %w", s.file, name, err)
+	for _, g := range []struct {
+		dir    string
+		parent bool
+		cpu    uint64
+	}{{leaf.path, false, service}, {work, true, cpu - service}} {
+		if err := makeGroup(g.dir, g.parent); err != nil {
+			return nil, nil, fmt.Errorf("role %s: %w", name, err)
+		}
+		if g.cpu > 0 {
+			if err := write(filepath.Join(g.dir, "cpu.max"), []byte(strconv.FormatUint(g.cpu, 10)+" "+strconv.Itoa(CPUPeriod)), 0o644); err != nil {
+				return nil, nil, fmt.Errorf("cpu.max of role %s: %w", name, err)
+			}
 		}
 	}
-	if err := os.Mkdir(leaf.path, 0o755); err != nil {
-		_ = os.Remove(dir)
-		return nil, nil, err
-	}
-	return &Manager{root: dir, prefix: RoleName(name)}, leaf, nil
+	return &Manager{root: work, prefix: prefix}, leaf, nil
 }
+
+// Bound writes work's memory bound and rest's, once every group of the
+// tree is made.
+func (t *Tree) Bound(work, rest uint64) error {
+	for _, b := range []struct {
+		dir   string
+		bytes uint64
+	}{{workGroup, work}, {workGroup + "/" + restGroup, rest}} {
+		if err := write(filepath.Join(t.root, b.dir, "memory.max"), []byte(strconv.FormatUint(b.bytes, 10)), 0o644); err != nil {
+			return fmt.Errorf("memory.max of %s: %w", b.dir, err)
+		}
+	}
+	return nil
+}
+
+// Limit is the memory.max of the namespace root m manages, the container's
+// own limit, and false where it has none.
+func (m *Manager) Limit() (uint64, bool, error) {
+	raw, err := os.ReadFile(filepath.Join(m.root, "memory.max"))
+	if err != nil {
+		return 0, false, err
+	}
+	value := strings.TrimSpace(string(raw))
+	if value == "max" {
+		return 0, false, nil
+	}
+	bytes, err := strconv.ParseUint(value, 10, 64)
+	if err != nil {
+		return 0, false, fmt.Errorf("memory.max of %s holds %q", m.root, value)
+	}
+	return bytes, true, nil
+}
+
+// Path is the manager's group as Own reads it, "/" for the namespace root.
+func (m *Manager) Path() string { return "/" + m.prefix }
 
 // Dir is the directory the manager makes its groups in.
 func (m *Manager) Dir() string { return m.root }

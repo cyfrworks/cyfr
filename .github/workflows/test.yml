@@ -1430,10 +1430,9 @@ jobs:
         run: python3 tests/builder-image/memory.py cyfr-locus:smoke
 
       # The service's own memory, idle, answering a largest result, and
-      # answering two beside two builds at their bounds, fits in what the
-      # container's limit (LOCUS_BUILDS_MEMORY_LIMIT) leaves beside the
-      # concurrent builds' bounds.
-      - name: The container's limit holds the builds and the service
+      # answering two beside two builds at their bounds, stays within what
+      # it counts, outside the pool's work, and rest holds the builds.
+      - name: The service sits outside the builds' bound
         run: python3 tests/builder-image/headroom.py cyfr-locus:smoke
 
       # A tincture builds only from its lockfile: one without it is refused

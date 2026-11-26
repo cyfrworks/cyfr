@@ -149,7 +149,7 @@ func (s Spec) Validate() error {
 	}
 	// A pooled uid's group is named for its uid; a kept spawn's for the
 	// spawn, since the spawns of one kept home share its uid. Either is in
-	// its role's group, or at the namespace root.
+	// its role's group in work, or at the namespace root.
 	_, name, ok := cgroup.SplitPath(s.Cgroup)
 	if !ok || (name != cgroup.Name(s.UID) && !(s.Kept && strings.HasPrefix(name, cgroup.SpawnName("")))) {
 		return fmt.Errorf("cgroup %q is not the group of uid %d", s.Cgroup, s.UID)

@@ -1403,8 +1403,7 @@ func newThreeContainerScenario(t *testing.T) *updateScenario {
 		"CYFR_LOCUS_BUILDS_URL=http://locus-builds:4100\n"+
 		"CYFR_LOCUS_BUILDS_KEY="+threeContainerBuildsKey+"\n"+
 		"CYFR_PRIVATE_EGRESS_TARGETS=locus-backends\n"+
-		"CYFR_LOCUS_RUNTIME_WORKERS=wrk_locus=http://locus-runtime:4200\n"+
-		"LOCUS_RUNTIME_MEMORY_LIMIT=4GB\n")
+		"CYFR_LOCUS_RUNTIME_WORKERS=wrk_locus=http://locus-runtime:4200\n")
 	return s
 }
 
@@ -1587,17 +1586,10 @@ func TestUpdateFromThreeContainers(t *testing.T) {
 		"CYFR_LOCUS_BUILDS_KEY":       buildsKey,
 		"CYFR_PRIVATE_EGRESS_TARGETS": "locus",
 		"CYFR_LOCUS_RUNTIME_WORKERS":  "wrk_locus=http://locus-runtime:4200",
-		"LOCUS_RUNTIME_MEMORY_LIMIT":  "4GB",
 	} {
 		if got[name] != want {
 			t.Errorf(".env's %s is %q, want %q", name, got[name], want)
 		}
-	}
-	// The bound the person gave the old runtime container, in a form Compose
-	// read for its memory limit, reaches the keeper as written: the keeper
-	// reads every such form (apps/locus/keeper/internal/serve, RoleLimits).
-	if !strings.Contains(read(t, filepath.Join(s.project, "docker-compose.yml")), "- LOCUS_RUNTIME_MEMORY_LIMIT=${LOCUS_RUNTIME_MEMORY_LIMIT:-4G}\n") {
-		t.Error("the release's locus service does not take LOCUS_RUNTIME_MEMORY_LIMIT from .env")
 	}
 	for _, said := range []string{
 		"\nstopped locus-backends-guard, locus-runtime, locus-builds, locus-builds-guard, locus-backends in ",

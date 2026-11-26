@@ -80,12 +80,14 @@ OWNER = owner_of("roles")
 SERVICE_ID = "wrk_roles"
 ECHO = os.path.join(ROOT, "apps", "locus", "test", "support", "runtime", "test_wasm", "echo.wasm")
 ECHO_REF = "reagent:local.echo:0.1.0"
-# Each role's bounds as its container had them: memory and swap, in bytes,
-# and the processors as cgroup v2's `cpu.max` reads them.
+# Each role's process's bounds in its leaf, outside the pool's work: no
+# memory bound, no swap, and its service's share of the role's processors as
+# cgroup v2's `cpu.max` reads them (the lesser of half a processor and half
+# the role's LOCUS_<ROLE>_CPU_LIMIT; the backends' have none).
 BOUNDS = {
-    "runtime": ("4294967296", "4294967296", "400000 100000"),
-    "builds": ("4294967296", "4294967296", "200000 100000"),
-    "backends": ("2147483648", "2147483648", "max 100000"),
+    "runtime": ("max", "0", "50000 100000"),
+    "builds": ("max", "0", "50000 100000"),
+    "backends": ("max", "0", "max 100000"),
 }
 # What a build and a program try of the other roles, from their own spaces,
 # each printing `<what>:<answer>`: the other roles' run folders, homes and the
@@ -232,8 +234,9 @@ def effective_bounds(chain):
 
 
 def test_bounds(stack, pids):
-    """Each role's live process is in its role's group, and the bounds the kernel holds that process to, read from
-    its own group up to the container's, are its container's of before."""
+    """Each role's live process is in its role's leaf, outside the pool's work, and the bounds the kernel holds that
+    process to, read from its own group up to the container's, are its service's: no memory bound, no swap, and its
+    share of the role's processors."""
     files = ("memory.max", "memory.swap.max", "cpu.max")
     for name, want in BOUNDS.items():
         # Its own group, then each group up to the container's, at most eight.
@@ -243,9 +246,10 @@ def test_bounds(stack, pids):
                   "  [ \"$d\" = /sys/fs/cgroup ] && break; d=$(dirname \"$d\"); done")
         lines = imagesuite.read_output(stack.exec(script), f"{name}'s process's groups").strip().split("\n")
         group, chain = lines[0], [dict(kv.split("=", 1) for kv in line.strip(";").split(";")) for line in lines[1:]]
-        expect(group.startswith(f"/role-{name}/"), f"the {name} role's process runs in the {name} role's group", group)
+        leaf = imagesuite.service_leaf(ROLES[name]).removeprefix(imagesuite.CGROUP)
+        expect(group == leaf, f"the {name} role's process runs in the {name} role's leaf, {leaf}", group)
         expect(effective_bounds(chain) == list(want),
-               f"the {name} role's process is held to its container's bounds of before: memory {want[0]}, swap {want[1]}, "
+               f"the {name} role's process is held to its service's bounds: memory {want[0]}, swap {want[1]}, "
                f"cpu {want[2]}", [group, chain])
 
 

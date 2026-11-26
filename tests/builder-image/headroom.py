@@ -1,22 +1,21 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
-"""The builds role's bound holds its builds' bounds and the role's process itself.
+"""The builds role's service sits outside the pool's work, and its own memory is bounded by its count.
 
 Every build runs in a cgroup of its own, bounded at
 LOCUS_BUILDS_MEMORY_BYTES (tests/builder-image/memory.py proves that
-bound), inside the builds role's group, `role-builds`, which the keeper
-bounds at LOCUS_BUILDS_MEMORY_LIMIT. What is not a build runs in that
-group's leaf `service`: the locus release serving the role and its builds'
-relays. Nothing bounds that leaf but the role's bound, so
-docker-compose.yml's LOCUS_BUILDS_MEMORY_LIMIT must hold
-LOCUS_BUILDS_MAX_CONCURRENT bounds and the most the role takes, or a build
-the kernel kills for the role's bound is lost without being over its own.
+bound), inside the builds role's group in the pool's work,
+`work/rest/builds`, under rest's bound, which the keeper writes from the
+machine's memory (Prima.LocusPool). What is not a build runs in the role's
+leaf, `service/builds`, outside work: the locus release serving the role
+and its builds' relays. No memory bound holds that leaf; what bounds it is
+what the service counts.
 
 The service never holds a build's output whole: it reads the build's
 archive a relay frame at a time and sends each piece on as an output line
 before it reads the next, and what it holds of a build's output is
-counted to the builds role's bound (`Locus.Output`). So the largest
+counted (`Locus.Output`). So the largest
 result the wire allows (`Prima.BuilderProtocol.max_output_bytes/0`)
 raises the service's memory by no more than its allowance, `allowance/0`,
 computed from the role table as stack.py reads it (`Prima.LocusRoles`,
@@ -33,15 +32,13 @@ after each step:
 
 It prints every figure, the allowance beside the rise, and fails unless
 every build answered its result intact, one largest result raised the
-`service` leaf's peak over idle by no more than its allowance, each build's
-group stayed within its bound while coming close to it, the kernel killed
-nothing for the role's bound, and the `service` leaf's peak fits in what
-the role's bound leaves beside the concurrent builds' bounds. The limit, the bound and the concurrency are
+`service/builds` leaf's peak over idle by no more than its allowance, each
+build's group stayed within its bound while coming close to it, and the
+kernel killed nothing for rest's bound. The bound and the concurrency are
 read from the running service, so the shipped defaults are what is judged;
 settings named after the image are judged in their place, the service's
-given to it as .env.locus gives them and the role's bounds
-(LOCUS_BUILDS_MEMORY_LIMIT, LOCUS_BUILDS_CPU_LIMIT) to compose as .env
-gives them.
+given to it as .env.locus gives them and the role's processors
+(LOCUS_BUILDS_CPU_LIMIT) to compose as .env gives them.
 
 Usage: tests/builder-image/headroom.py IMAGE [LOCUS_BUILDS_NAME=VALUE]...
 """
@@ -71,26 +68,27 @@ CLOSE = 0.85
 # (Prima.LocusRoles).
 MEMORY, SHARED = ROLE["memory"], RELEASE["memory"]
 # The settings docker-compose.yml interpolates, which the service never sees.
-COMPOSE_SETTINGS = {"LOCUS_BUILDS_MEMORY_LIMIT", "LOCUS_BUILDS_CPU_LIMIT"}
+COMPOSE_SETTINGS = {"LOCUS_BUILDS_CPU_LIMIT"}
 
-# The builds role's group, which the keeper bounds at the role's
-# LOCUS_BUILDS_MEMORY_LIMIT: its leaf `service` holds the role's process and
-# its relays, and each build's group sits beside it.
-GROUP = f"/sys/fs/cgroup/role-{ROLE['name']}"
+# The builds role's leaf, which holds its process and its relays; its group
+# in work, which holds each build's; and rest, whose bound is over them.
+SERVICE = imagesuite.service_leaf(ROLE)
+SPAWNS = imagesuite.work_group(ROLE)
+BOUND = imagesuite.bound_group(ROLE)
 
-# One line per sample: `service's memory.current|its anon|its file|the role's memory.current|uid:current:peak,...`.
+# One line per sample: `service's memory.current|its anon|its file|rest's memory.current|uid:current:peak,...`.
 SAMPLER = r"""
 while :; do
   groups=""
-  for d in %(group)s/keeper-*; do
+  for d in %(spawns)s/keeper-*; do
     [ -d "$d" ] && groups="$groups${d##*keeper-}:$(cat "$d/memory.current" 2>/dev/null):$(cat "$d/memory.peak" 2>/dev/null),"
   done
-  printf '%%s|%%s|%%s|%%s\n' "$(cat %(group)s/service/memory.current)" \
-    "$(awk '$1 == "anon" {a = $2} $1 == "file" {f = $2} END {print a "|" f}' %(group)s/service/memory.stat)" \
-    "$(cat %(group)s/memory.current)" "$groups"
+  printf '%%s|%%s|%%s|%%s\n' "$(cat %(service)s/memory.current)" \
+    "$(awk '$1 == "anon" {a = $2} $1 == "file" {f = $2} END {print a "|" f}' %(service)s/memory.stat)" \
+    "$(cat %(bound)s/memory.current)" "$groups"
   sleep 0.1
 done
-""" % {"group": GROUP}
+""" % {"spawns": SPAWNS, "service": SERVICE, "bound": BOUND}
 
 
 def allowance():
@@ -149,11 +147,11 @@ def mib(count):
 
 
 def read(stack, path):
-    return imagesuite.read_output(stack.exec(f"cat {GROUP}/{path}"), f"the cgroup file {path}").strip()
+    return imagesuite.read_output(stack.exec(f"cat {path}"), f"the cgroup file {path}").strip()
 
 
 def events(stack, path):
-    return imagesuite.read_counters(stack.exec(f"cat {GROUP}/{path}"), ("oom", "oom_kill"), f"the cgroup events of {path}")
+    return imagesuite.read_counters(stack.exec(f"cat {path}"), ("oom", "oom_kill"), f"the cgroup events of {path}")
 
 
 def setting(stack, accessor):
@@ -187,32 +185,33 @@ def main(image, settings):
     empty = imagesuite.temporary_directory("locus-builds-headroom-")
     stack = Stack("locus-builds-headroom", image, empty)
     try:
-        # The role's bounds are compose's to read; the rest is the service's.
+        # The role's processors are compose's to read; the rest is the service's.
         for name in COMPOSE_SETTINGS & settings.keys():
             os.environ[name] = settings.pop(name)
         with open(os.path.join(stack.project_dir, ".env.locus"), "w") as out:
             out.writelines(f"{name}={value}\n" for name, value in settings.items())
         stack.up()
-        limit = read(stack, "memory.max")
-        expect(limit.isdigit(), "the builds role's group has a memory bound of its own", limit)
+        expect(read(stack, f"{SERVICE}/memory.max") == "max", "the builds role's service has no memory bound of its own",
+               read(stack, f"{SERVICE}/memory.max"))
+        limit = read(stack, f"{BOUND}/memory.max")
+        expect(limit.isdigit(), "rest, over the builds, has a memory bound", limit)
         limit = int(limit)
         bound, concurrent = setting(stack, "memory_bytes"), setting(stack, "max_concurrent")
-        headroom = limit - concurrent * bound
         release = [p["pid"] for p in stack.processes() if "beam.smp" in p["cmd"]]
-        print(f"the builds role's bound is {mib(limit)}; the service runs {concurrent} builds at once, each bounded at {mib(bound)}: "
-              f"{mib(headroom)} is left for the service")
-        expect(headroom > 0, "the role's bound is more than its concurrent builds' bounds", {"limit": limit, "bounds": concurrent * bound})
+        print(f"rest's bound is {mib(limit)}; the service runs {concurrent} builds at once, each bounded at {mib(bound)}")
+        expect(limit >= concurrent * bound, "rest holds the concurrent builds' bounds on this machine",
+               {"limit": limit, "bounds": concurrent * bound})
 
         time.sleep(3)
-        idle = int(read(stack, "service/memory.peak"))
-        print(f"idle: the service leaf holds {mib(int(read(stack, 'service/memory.current')))}, its peak {mib(idle)}")
+        idle = int(read(stack, f"{SERVICE}/memory.peak"))
+        print(f"idle: the service leaf holds {mib(int(read(stack, f'{SERVICE}/memory.current')))}, its peak {mib(idle)}")
 
         sampler = Sampler(stack.container)
         sampler.start()
         [(status, answer)] = builds(stack, [largest(0)])
         expect(status == 200 and len(output_bytes(answer, "blob.bin") or b"") == LARGEST,
                f"one build answers a largest result, {mib(LARGEST)}, intact", brief(answer))
-        single = int(read(stack, "service/memory.peak"))
+        single = int(read(stack, f"{SERVICE}/memory.peak"))
         allowed = allowance()
         print(f"one largest result: the service leaf's peak {mib(single)}, {mib(single - idle)} over idle "
               f"({single - idle} bytes) of the {allowed} allowed: {SHARED['byte_cost']} x ({MEMORY['answering']} "
@@ -233,27 +232,23 @@ def main(image, settings):
             expect(status == 200 and len(output_bytes(answer, "blob.bin") or b"") == LARGEST,
                    f"a build holding {hold_mib} MiB beside a sibling doing the same answers its largest result intact", brief(answer))
 
-        keeper = int(read(stack, "service/memory.peak"))
-        container = int(read(stack, "memory.peak"))
-        container_events, keeper_events = events(stack, "memory.events"), events(stack, "service/memory.events")
+        keeper = int(read(stack, f"{SERVICE}/memory.peak"))
+        container = int(read(stack, f"{BOUND}/memory.peak"))
+        container_events, keeper_events = events(stack, f"{BOUND}/memory.events"), events(stack, f"{SERVICE}/memory.events")
         peaks = sorted(sampler.groups.values(), reverse=True)[:concurrent]
         print(f"{concurrent} largest results together: the service leaf's peak {mib(keeper)} (sampled at most {mib(sampler.keeper)}, "
               f"{mib(sampler.keeper_anon)} of it anonymous and {mib(sampler.keeper_file)} file pages); "
               f"the builds' groups peaked at {[mib(peak) for peak in peaks]}, {mib(sampler.together)} together when sampled; "
-              f"the container's peak {mib(container)} (sampled at most {mib(sampler.container)})")
-        print(f"container events {container_events}; keeper events {keeper_events}")
-        print(f"the service's need is {mib(keeper)} of the {mib(headroom)} the limit leaves it: "
-              f"{mib(headroom - keeper)} to spare, {keeper / headroom:.0%} used")
+              f"rest's peak {mib(container)} (sampled at most {mib(sampler.container)})")
+        print(f"rest's events {container_events}; the service's events {keeper_events}")
 
         expect(len(peaks) == concurrent and all(CLOSE * bound <= peak <= bound for peak in peaks),
                f"each holding build's group came within {1 - CLOSE:.0%} of its bound and never passed it", sampler.groups)
-        expect(imagesuite.no_kills(container_events),
-               "the kernel killed nothing for the role's bound", container_events)
+        expect(imagesuite.no_kills(container_events) and imagesuite.no_kills(keeper_events),
+               "the kernel killed nothing for rest's bound or in the service", [container_events, keeper_events])
         expect(release and [p["pid"] for p in stack.processes() if "beam.smp" in p["cmd"]] == release
                and not json.loads(subprocess.run(["docker", "inspect", stack.container], capture_output=True, text=True).stdout)[0]["State"]["OOMKilled"],
                "the release and the container were not touched")
-        expect(keeper <= headroom, "the service's peak fits in what the role's bound leaves beside the concurrent builds' bounds",
-               {"keeper_peak": keeper, "headroom": headroom})
         expect(stack.pool_processes() == [] and stack.homes() == [], "no process of a build uid and no home is left",
                [stack.pool_processes(), stack.homes()])
     finally:

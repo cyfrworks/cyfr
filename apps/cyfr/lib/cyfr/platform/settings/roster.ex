@@ -267,24 +267,22 @@ defmodule Cyfr.Platform.Settings.Roster do
   ]
 
   # The `${…}` names docker-compose.yml interpolates that no release reads:
-  # cyfr's CPU limit, each Locus role's bounds, which cyfr-locus writes into
-  # the role's group, and Locus's AppArmor profile, each with the sentence
-  # `configuration-guide.md` gives it.
+  # cyfr's CPU limit, the Locus pool's numbers and each role's processors,
+  # which cyfr-locus writes into its groups, and Locus's AppArmor profile,
+  # each with the sentence `configuration-guide.md` gives it.
   @compose_only [
     {"CYFR_CPU_LIMIT",
      "The cyfr container's CPU limit (default 4): the control plane's own share of the host, since components run in Locus's runtime role under `LOCUS_RUNTIME_CPU_LIMIT`."},
     {"CYFR_LOCUS_APPARMOR",
      "The AppArmor profile the Locus container runs under on a host with AppArmor, by its name, `cyfr-locus-` and 12 hex digits of its content's hash: `cyfr init` and `cyfr update` write the profile built into `cyfr` here and load it, and a host without AppArmor ignores it."},
-    {"LOCUS_BACKENDS_MEMORY_LIMIT",
-     "The memory bound of Locus's backends role, its process and every program session of it together, with swap the same (default 2G): `LOCUS_BACKENDS_MEMORY_BUDGET` (1792 MiB by default, three program sessions at their default 512 MiB bound), the memory the programs' sessions may hold, plus 256 MiB for the role beside them. The role has no processor bound."},
     {"LOCUS_BUILDS_CPU_LIMIT",
-     "The processor bound of Locus's builds role, its process and every build together (default 2)."},
-    {"LOCUS_BUILDS_MEMORY_LIMIT",
-     "The memory bound of Locus's builds role, its process and every build together, with swap the same (default 4G), at least `LOCUS_BUILDS_MAX_CONCURRENT` x (`LOCUS_BUILDS_MEMORY_BYTES` + 1 GiB), so each build reaches its own bound before the role reaches this one."},
+     "The processor bound of Locus's builds role (default 2), split between its service, which takes the lesser of half a processor and half the bound, and its builds, which take the rest; neither lends to the other."},
+    {"LOCUS_CORE_RESERVE_BYTES",
+     "The memory kept for core beside Locus, in bytes (default 2415919104, 2304 MiB): all of Locus's work shares one memory bound, the machine's memory (or the Locus container's limit, where less) less this reserve, less `LOCUS_SERVICE_BYTES`, never below 0, and at 0 no work starts. The default holds a core of about 1.7 GiB at its peak, the screen's app included; a machine whose core holds more needs a higher reserve, about 3072 MiB for a core 700 MiB heavier."},
     {"LOCUS_RUNTIME_CPU_LIMIT",
-     "The processor bound of Locus's runtime role, its process and every runner together (default 4)."},
-    {"LOCUS_RUNTIME_MEMORY_LIMIT",
-     "The memory bound of Locus's runtime role, its process and every runner together, with swap the same (default 4G), at least 8 runner uids x `LOCUS_RUNTIME_MEMORY_BYTES` + 1 GiB, so each runner reaches its own bound before the role reaches this one."}
+     "The processor bound of Locus's runtime role (default 4), split between its service, which takes the lesser of half a processor and half the bound, and its runners, which take the rest; neither lends to the other. With the builds' it may exceed the machine's processors: core has no share set apart."},
+    {"LOCUS_SERVICE_BYTES",
+     "What Locus's three services hold beside their work, in bytes (default 838860800, 800 MiB): the services sit outside the work's shared memory bound, which leaves them this much of the budget."}
   ]
 
   # Names under the prefix that other programs own. A trailing `*` is a
@@ -378,7 +376,7 @@ defmodule Cyfr.Platform.Settings.Roster do
     "program_silence_ms" =>
       "How long a program used as a brain may say nothing while it owes its work an answer before that work ends, in milliseconds; waits on a person or on CYFR are not counted, and no work has a limit of its own.",
     "browser_memory_bytes" =>
-      "The memory bound Aqua's browser is added with, for its Chromium and its four windows at most; the person changes the bound of the row on the Programs page. The backends service's default total (`LOCUS_BACKENDS_MEMORY_BUDGET`, 1792 MiB) does not hold a 1 GiB browser beside a 1 GiB program: to run both, raise `LOCUS_BACKENDS_MEMORY_BUDGET` in `.env.locus` and `LOCUS_BACKENDS_MEMORY_LIMIT` in `.env` with it, the budget plus 256 MiB. Measured with the image suite's pages, one, three and six windows held 97, 145 and 225 MiB, 81, 113 and 167 MiB of it the browser's own and the rest file cache, which the kernel gives back first; all six fit well within the 1 GiB default. A heavy page can still reach the bound: the browser then ends, every window with it, and the next action starts it again. Its folder, bounded at 2 GiB, holds its profile; the Chromium it runs is the image's, Debian's, and it fetches nothing.",
+      "The memory bound Aqua's browser is added with, for its Chromium and its four windows at most; the person changes the bound of the row on the Programs page. The backends service's default total (`LOCUS_BACKENDS_MEMORY_BUDGET`, 1792 MiB) does not hold a 1 GiB browser beside a 1 GiB program: to run both, raise `LOCUS_BACKENDS_MEMORY_BUDGET` in `.env.locus`, within the pool's memory (`LOCUS_CORE_RESERVE_BYTES`). Measured with the image suite's pages, one, three and six windows held 97, 145 and 225 MiB, 81, 113 and 167 MiB of it the browser's own and the rest file cache, which the kernel gives back first; all six fit well within the 1 GiB default. A heavy page can still reach the bound: the browser then ends, every window with it, and the next action starts it again. Its folder, bounded at 2 GiB, holds its profile; the Chromium it runs is the image's, Debian's, and it fetches nothing.",
     "locus_backends_idle_ms" =>
       "How long a stdio backend runs without a tool call before it is stopped and its slot freed, in milliseconds; its next call starts it again.",
     "log_level" =>

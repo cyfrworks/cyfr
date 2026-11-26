@@ -30,7 +30,7 @@ services:
     pull_policy: never
     volumes:
       - ${CANARY_DIR:?set CANARY_DIR}:/canary:ro
-    entrypoint: ["cyfr-locus", "serve", "--role", "runtime:10011:4200:runner:private", "--role", "builds:10012:4100:build", "--role", "backends:10013:4101:backends:kept", "--pool", "runner:30101-30108:relay", "--pool", "build:${BUILD_POOL:?set BUILD_POOL}:routed", "--pool", "backends:20001-20032:routed", "--home-root", "/var/lib/locus/homes", "--kept-homes", "/var/lib/locus/kept:40001-49999", "--guard", "/run/cyfr-guard-control/guard.sock", "--", "/app/bin/locus", "start"]
+    entrypoint: ["cyfr-locus", "serve", "--role", "runtime:10011:4200:runner:private:floor", "--role", "builds:10012:4100:build", "--role", "backends:10013:4101:backends:kept", "--pool", "runner:30101-30108:relay", "--pool", "build:${BUILD_POOL:?set BUILD_POOL}:routed", "--pool", "backends:20001-20032:routed", "--home-root", "/var/lib/locus/homes", "--kept-homes", "/var/lib/locus/kept:40001-49999", "--guard", "/run/cyfr-guard-control/guard.sock", "--", "/app/bin/locus", "start"]
     environment:
       - LOCUS_BUILDS_TIMEOUT_MS=${LOCUS_BUILDS_TIMEOUT_MS:-}
   locus-guard:

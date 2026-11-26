@@ -29,7 +29,7 @@ defmodule Prima.LocusRolesTest do
                    edge_subnet edge_tailscale_address endpoint_address endpoint_ip_range
                    endpoint_network endpoint_subnet guard guard_container home_root
                    host_api_address ip_range memory network run_dir run_size service subnet)
-  @role_keys ~w(first_uid guest_root guest_volume home_root home_size kept_first_uid kept_gid
+  @role_keys ~w(first_uid floor guest_root guest_volume home_root home_size kept_first_uid kept_gid
                 kept_group kept_last_uid kept_root kept_volume key last_uid memory name pool port
                 private reach run_dir run_size uid user user_prefix)
   @release_memory_keys ~w(byte_cost keeper_read_bytes keeper_read_copies relay_queue_bytes
@@ -119,10 +119,10 @@ defmodule Prima.LocusRolesTest do
   # The runtime's runners reach nothing but their relays, and its process
   # alone reaches core's host API; a build or a program leaves through the
   # route the guard makes for its space.
-  test "the runtime alone is private and relays, the others route, and the backends alone keep homes" do
-    assert Enum.map(LocusRoles.roles(), &{&1.name, &1.reach, &1.private}) ==
+  test "the runtime alone is private, relays and keeps the floor, the others route, and the backends alone keep homes" do
+    assert Enum.map(LocusRoles.roles(), &{&1.name, &1.reach, &1.private, &1.floor}) ==
              [runtime: "relay", builds: "routed", backends: "routed"]
-             |> Enum.map(fn {name, reach} -> {name, reach, name == :runtime} end)
+             |> Enum.map(fn {name, reach} -> {name, reach, name == :runtime, name == :runtime} end)
 
     for role <- LocusRoles.roles() do
       kept = [role.kept_root, role.kept_volume, role.kept_uids, role.kept_group, role.kept_gid]

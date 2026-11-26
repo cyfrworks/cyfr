@@ -15,10 +15,11 @@ on:
     branches: [main]
     paths:
       - 'apps/locus/keeper/**'
-      # The keeper-protocol, browser-framing and brain-wire vectors the
-      # suite reproduces, and the residue canary, which the gofmt step
+      # The keeper-protocol, pool, browser-framing and brain-wire vectors
+      # the suite reproduces, and the residue canary, which the gofmt step
       # checks with them.
       - 'tests/fixtures/keeper_protocol.json'
+      - 'tests/fixtures/locus_pool.json'
       - 'tests/fixtures/browser_frames.json'
       - 'tests/fixtures/brain_wire.json'
       - 'tests/fixtures/residue-canary.go'
@@ -27,6 +28,7 @@ on:
     paths:
       - 'apps/locus/keeper/**'
       - 'tests/fixtures/keeper_protocol.json'
+      - 'tests/fixtures/locus_pool.json'
       - 'tests/fixtures/browser_frames.json'
       - 'tests/fixtures/brain_wire.json'
       - 'tests/fixtures/residue-canary.go'

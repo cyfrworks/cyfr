@@ -770,10 +770,16 @@ func TestServeRefusesNoKeyAndAnUnreadableBoundByName(t *testing.T) {
 		t.Fatalf("no key: exit %d, logged %q", code, logged)
 	}
 	t.Setenv("LOCUS_BUILDS_KEY", "secret-key")
-	t.Setenv("LOCUS_RUNTIME_MEMORY_LIMIT", "4 gigabytes")
+	t.Setenv("LOCUS_RUNTIME_CPU_LIMIT", "four")
 	code, logged = mainLogs(t, args)
-	if code != ExitConfig || !strings.Contains(logged, "role runtime: LOCUS_RUNTIME_MEMORY_LIMIT is not a size") || strings.Contains(logged, "gigabytes") || strings.Contains(logged, "secret-key") {
+	if code != ExitConfig || !strings.Contains(logged, "role runtime: LOCUS_RUNTIME_CPU_LIMIT is not a number of processors") || strings.Contains(logged, "four") || strings.Contains(logged, "secret-key") {
 		t.Fatalf("an unreadable bound: exit %d, logged %q", code, logged)
+	}
+	t.Setenv("LOCUS_RUNTIME_CPU_LIMIT", "")
+	t.Setenv("LOCUS_CORE_RESERVE_BYTES", "2G")
+	code, logged = mainLogs(t, args)
+	if code != ExitConfig || !strings.Contains(logged, "LOCUS_CORE_RESERVE_BYTES is not a count of bytes") || strings.Contains(logged, "2G") || strings.Contains(logged, "secret-key") {
+		t.Fatalf("an unreadable reserve: exit %d, logged %q", code, logged)
 	}
 }
 

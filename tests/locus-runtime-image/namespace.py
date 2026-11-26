@@ -1096,7 +1096,8 @@ def test_spawn(stack):
 def test_cgroup(stack):
     for runner in stack.runner_processes():
         facts = runner_facts(stack, runner)
-        expect(facts.get("cgroup") == f"0::/role-{ROLE['name']}/keeper-{runner['uid']}/bound",
+        cgroup = imagesuite.work_group(ROLE).removeprefix(imagesuite.CGROUP)
+        expect(facts.get("cgroup") == f"0::{cgroup}/keeper-{runner['uid']}/bound",
                f"cgroup: runner uid {runner['uid']} runs in its own group, placed from the parent side before it ran", facts)
 
 
@@ -1137,7 +1138,7 @@ def group_removed(stack, uid):
     A failed exec is no answer whatever its status, and a stopped or
     restarting container is not taken for a removed group either.
     """
-    probe = f"test -e /sys/fs/cgroup/role-{ROLE['name']}/keeper-{uid} && echo present || echo absent"
+    probe = f"test -e {imagesuite.work_group(ROLE)}/keeper-{uid} && echo present || echo absent"
     return read_word(stack.exec(probe), ("present", "absent"), f"the keeper group of uid {uid}") == "absent"
 
 

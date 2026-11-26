@@ -22,8 +22,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/docker/go-units"
-
 	"github.com/cyfr/locus/keeper/internal/cgroup"
 	"github.com/cyfr/locus/keeper/internal/home"
 	"github.com/cyfr/locus/keeper/internal/pool"
@@ -51,7 +49,9 @@ type Config struct {
 // RoleSpec is one --role: a process the keeper starts when its key is set,
 // under its own uid, which is its gid, listening on its port in its space,
 // whose spawns draw from its one pool. Private gives its route the guard's
-// private reach; Kept makes it the one role whose sessions keep homes.
+// private reach; Kept makes it the one role whose sessions keep homes;
+// Floor the one role whose runners the warm floor keeps, whose spawns'
+// groups are in work beside rest (package cgroup).
 type RoleSpec struct {
 	Name    string
 	UID     int
@@ -59,6 +59,7 @@ type RoleSpec struct {
 	Pool    string
 	Private bool
 	Kept    bool
+	Floor   bool
 }
 
 // KeyEnv is the role's key variable: the keeper starts the role only when
@@ -71,20 +72,21 @@ func (r RoleSpec) envPrefix() string { return "LOCUS_" + strings.ToUpper(r.Name)
 // User is the role's user name.
 func (r RoleSpec) User() string { return "locus-" + r.Name }
 
-// ParseRole parses `<name>:<uid>:<port>:<pool>[:private][:kept]`. The name
-// is a role's (cgroup.ValidRoleName) and not `log`, whose variables are
-// every role's; the uid is not root's and the port is 1..65535.
+// ParseRole parses `<name>:<uid>:<port>:<pool>[:private][:kept][:floor]`.
+// The name is a role's (cgroup.ValidRoleName) and not `log`, whose
+// variables are every role's; the uid is not root's and the port is
+// 1..65535.
 func ParseRole(value string) (RoleSpec, error) {
 	fields := strings.Split(value, ":")
 	bad := func(why string) (RoleSpec, error) {
-		return RoleSpec{}, fmt.Errorf("role %q: %s; want <name>:<uid>:<port>:<pool>[:private][:kept]", value, why)
+		return RoleSpec{}, fmt.Errorf("role %q: %s; want <name>:<uid>:<port>:<pool>[:private][:kept][:floor]", value, why)
 	}
-	if len(fields) < 4 || len(fields) > 6 {
-		return bad("four to six fields")
+	if len(fields) < 4 || len(fields) > 7 {
+		return bad("four to seven fields")
 	}
 	r := RoleSpec{Name: fields[0], Pool: fields[3]}
 	if !cgroup.ValidRoleName(r.Name) || r.Name == "log" {
-		return bad("its name is a lowercase letter, then lowercase letters and digits, and not log")
+		return bad("its name is a lowercase letter, then lowercase letters and digits, and not log, keeper or rest")
 	}
 	uid, err := parseID(fields[1])
 	if err != nil || uid == 0 {
@@ -104,10 +106,12 @@ func ParseRole(value string) (RoleSpec, error) {
 		switch {
 		case f == "private" && i == 0 && !r.Private:
 			r.Private = true
-		case f == "kept" && !r.Kept:
+		case f == "kept" && !r.Kept && !r.Floor:
 			r.Kept = true
+		case f == "floor" && !r.Floor:
+			r.Floor = true
 		default:
-			return bad("its flags are private, then kept")
+			return bad("its flags are private, then kept, then floor")
 		}
 	}
 	return r, nil
@@ -146,7 +150,8 @@ const Usage = "cyfr-locus serve --role <name>:<uid>:<port>:<pool>[:private][:kep
 // pools with distinct names and disjoint ranges, roles with distinct names,
 // uids and ports, each role's uid outside every pool and the kept range,
 // and each pool named by exactly one role. At most one role is kept, and it
-// names a routed pool; --kept-homes is given exactly when one is.
+// names a routed pool; --kept-homes is given exactly when one is. At most
+// one role keeps the floor.
 func ParseArgs(args []string) (Config, error) {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -247,6 +252,13 @@ func checkRoles(cfg Config) error {
 		}
 		if k := cfg.Kept; k != nil && k.Contains(r.UID) {
 			return fmt.Errorf("the kept-home uids %d-%d hold role %s's uid %d", k.First, k.Last, r.Name, r.UID)
+		}
+		if r.Floor {
+			for _, other := range cfg.Roles[:i] {
+				if other.Floor {
+					return fmt.Errorf("roles %s and %s both keep the floor", other.Name, r.Name)
+				}
+			}
 		}
 		if r.Kept {
 			if kept != nil {
@@ -452,16 +464,13 @@ func CheckEnviron(environ []string) error {
 // its run folder, which holds none.
 var releaseEnv = []string{"LANG", "LANGUAGE", "LC_ALL", "ELIXIR_ERL_OPTIONS", "RELEASE_DISTRIBUTION", "PATH", "RUSTUP_HOME", "CARGO_HOME"}
 
-// Limit variables are the keeper's alone: a role's bounds, which its group
-// holds and the role never reads.
-const (
-	memoryLimitEnv = "MEMORY_LIMIT"
-	cpuLimitEnv    = "CPU_LIMIT"
-)
+// cpuLimitEnv is the keeper's alone: a role's processors, which its groups
+// hold and the role never reads.
+const cpuLimitEnv = "CPU_LIMIT"
 
 // RoleEnviron is a role process's whole environment, built from nothing:
 // releaseEnv's variables as environ has them, every variable of the role's
-// own (LOCUS_<NAME>_…, its key among them) but its limits, every LOCUS_LOG_
+// own (LOCUS_<NAME>_…, its key among them) but its processors, every LOCUS_LOG_
 // variable, RELEASE_TMP and HOME naming its run folder, ChannelEnv naming
 // its channel socket and RunDirEnv its run folder. No other role's variable
 // reaches it.
@@ -472,7 +481,7 @@ func RoleEnviron(environ []string, r RoleSpec, runDir, channel string) map[strin
 		own, isOwn := strings.CutPrefix(name, r.envPrefix())
 		switch {
 		case slices.Contains(releaseEnv, name), strings.HasPrefix(name, "LOCUS_LOG_"):
-		case isOwn && own != memoryLimitEnv && own != cpuLimitEnv:
+		case isOwn && own != cpuLimitEnv:
 		default:
 			continue
 		}
@@ -499,44 +508,62 @@ var (
 	cpusPattern = regexp.MustCompile(`^[0-9]+(?:\.[0-9]+)?$`)
 )
 
-// RoleLimits reads the role's bounds from environ, as Compose reads a
-// container's: LOCUS_<NAME>_MEMORY_LIMIT a size read by the function
-// Compose reads one with (docker/go-units' RAMInBytes: 4G, 4GB, 4 GiB, .5g,
-// 4096m, 4294967296), at least a page;
-// LOCUS_<NAME>_CPU_LIMIT a number of processors, such as 2 or 0.5, at least
-// a hundredth of one. Each absent or empty is no bound; anything else is
+// RoleCPU reads the role's processors from environ, as Compose reads a
+// container's: LOCUS_<NAME>_CPU_LIMIT, a number of processors such as 2 or
+// 0.5, at least a hundredth of one, answered in microseconds of every
+// cgroup.CPUPeriod. Absent or empty is no bound, zero; anything else is
 // refused by its name, never its value.
-func RoleLimits(environ []string, r RoleSpec) (cgroup.Limits, error) {
-	var l cgroup.Limits
+func RoleCPU(environ []string, r RoleSpec) (uint64, error) {
+	var quota uint64
 	for _, kv := range environ {
 		name, value, _ := strings.Cut(kv, "=")
-		if value == "" {
+		if value == "" || name != r.envPrefix()+cpuLimitEnv {
 			continue
 		}
-		switch name {
-		case r.envPrefix() + memoryLimitEnv:
-			bytes, err := units.RAMInBytes(value)
-			if err != nil || bytes < 4096 {
-				return cgroup.Limits{}, fmt.Errorf("%s is not a size of at least 4096 bytes, such as 4G, 4GB or 512m", name)
-			}
-			l.MemoryBytes = uint64(bytes)
-		case r.envPrefix() + cpuLimitEnv:
-			cpus, ok := new(big.Rat), cpusPattern.MatchString(value)
-			if ok {
-				_, ok = cpus.SetString(value)
-			}
-			quota := new(big.Rat)
-			if ok {
-				quota.Mul(cpus, new(big.Rat).SetInt64(cgroup.CPUPeriod))
-				ok = quota.IsInt() && quota.Num().IsUint64() && quota.Num().Uint64() >= cgroup.CPUPeriod/100
-			}
-			if !ok {
-				return cgroup.Limits{}, fmt.Errorf("%s is not a number of processors of at least 0.01 in hundred-thousandths, such as 2 or 0.5", name)
-			}
-			l.CPUQuota = quota.Num().Uint64()
+		cpus, ok := new(big.Rat), cpusPattern.MatchString(value)
+		if ok {
+			_, ok = cpus.SetString(value)
+		}
+		q := new(big.Rat)
+		if ok {
+			q.Mul(cpus, new(big.Rat).SetInt64(cgroup.CPUPeriod))
+			ok = q.IsInt() && q.Num().IsUint64() && q.Num().Uint64() >= cgroup.CPUPeriod/100
+		}
+		if !ok {
+			return 0, fmt.Errorf("%s is not a number of processors of at least 0.01 in hundred-thousandths, such as 2 or 0.5", name)
+		}
+		quota = q.Num().Uint64()
+	}
+	return quota, nil
+}
+
+// The pool's two numbers, the keeper's alone (no role reads them): the
+// memory kept for core beside Locus, or for the host itself, and the
+// services' share, each a count of bytes. Absent or empty is 0.
+const (
+	ReserveEnv = "LOCUS_CORE_RESERVE_BYTES"
+	ShareEnv   = "LOCUS_SERVICE_BYTES"
+)
+
+// PoolMemory reads the reserve and the share from environ: each a decimal
+// count of bytes, absent or empty 0, anything else refused by its name.
+func PoolMemory(environ []string) (reserve, share uint64, err error) {
+	for _, kv := range environ {
+		name, value, _ := strings.Cut(kv, "=")
+		if value == "" || (name != ReserveEnv && name != ShareEnv) {
+			continue
+		}
+		bytes, perr := strconv.ParseUint(value, 10, 64)
+		if perr != nil || value != strconv.FormatUint(bytes, 10) || bytes > 1<<50 {
+			return 0, 0, fmt.Errorf("%s is not a count of bytes, such as 2415919104", name)
+		}
+		if name == ReserveEnv {
+			reserve = bytes
+		} else {
+			share = bytes
 		}
 	}
-	return l, nil
+	return reserve, share, nil
 }
 
 // PoolAccounts is the set of pooled uids and gids.

@@ -88,9 +88,11 @@ DEADLINE_MS = 60_000
 # started without, as a pool of their own the builds role names.
 PROBE_FIRST, PROBE_LAST = POOL_LAST - 5, POOL_LAST
 PROBE_POOL = "probe"
-# The builds role's group, which holds its process and every build: its
-# memory.max bounds the hostile work.
-ROLE_GROUP = f"/sys/fs/cgroup/role-{ROLE['name']}"
+# The builds role's group in the pool's work, which holds every build's
+# group, and the group above it, rest, whose memory.max bounds the hostile
+# work beside every other role's but the floor's.
+ROLE_GROUP = imagesuite.work_group(ROLE)
+BOUND_GROUP = imagesuite.bound_group(ROLE)
 # The bound the keeper cases ask for.
 BOUND = 256 * MIB
 # The measured build: a tincture's `npm run build`, the image's npm running
@@ -141,7 +143,7 @@ while :; do
   printf '|%%s|%%s|%%s\n' "$(cat %s/memory.current)" "$(awk '$1 == "shmem" {print $2}' %s/memory.stat)" "$groups"
   sleep 0.1
 done
-""" % (POOL_FIRST, POOL_LAST, ROLE_GROUP, ROLE_GROUP, ROLE_GROUP)
+""" % (POOL_FIRST, POOL_LAST, ROLE_GROUP, BOUND_GROUP, BOUND_GROUP)
 
 # Touches every page it allocates, outside V8's heap, until something stops it.
 NODE_ALLOCATOR = "const held = []; for (;;) held.push(Buffer.alloc(16 << 20, 1));"
@@ -469,8 +471,8 @@ def container_state(stack):
     """
     inspect = json.loads(run("docker", "inspect", stack.container).stdout)[0]
     events = {}
-    for line in imagesuite.read_output(stack.exec(f"cat {ROLE_GROUP}/memory.events"),
-                                       "the builds role's memory events").splitlines():
+    for line in imagesuite.read_output(stack.exec(f"cat {BOUND_GROUP}/memory.events"),
+                                       "the builds' bound's memory events").splitlines():
         name, count = line.split()
         events[name] = int(count)
     pids = [1] + [p["pid"] for p in stack.processes() if "beam.smp" in p["cmd"]]
@@ -484,8 +486,8 @@ def container_state(stack):
         "init": started[:1],
         "events": events,
         "release": started[1:],
-        "current": int(imagesuite.read_output(stack.exec(f"cat {ROLE_GROUP}/memory.current"),
-                                              "the builds role's memory use").strip()),
+        "current": int(imagesuite.read_output(stack.exec(f"cat {BOUND_GROUP}/memory.current"),
+                                              "the builds' bound's memory use").strip()),
     }
 
 
@@ -572,18 +574,20 @@ def test_keeper(stack, limit, canary):
             "--security-opt", f"seccomp={os.path.join(ROOT, 'apps', 'locus', 'keeper', 'seccomp', 'keeper.json')}",
             "--security-opt", f"apparmor={imagesuite.APPARMOR}", "--security-opt", "systempaths=unconfined",
             "--read-only", "--ipc", "none", "--init", *imagesuite.role_mounts(RELEASE, ROLE),
-            # The role's own bound, the service's, which the hostile work meets beside its own.
-            "-e", f"{ROLE['key']}={stack.key}", "-e", f"LOCUS_{ROLE['name'].upper()}_MEMORY_LIMIT={limit}",
+            # The pool's bound at the service's, which the hostile work meets beside its own: the machine's
+            # memory less a reserve, with no share and no floor, is that bound.
+            "-e", f"{ROLE['key']}={stack.key}", "-e", f"LOCUS_CORE_RESERVE_BYTES={mem_total(stack) - limit}",
+            "-e", "LOCUS_SERVICE_BYTES=0",
             "--entrypoint", "cyfr-locus", stack.image, "serve",
             "--role", imagesuite.role_spec(dict(ROLE, pool=PROBE_POOL)),
             "--pool", f"{PROBE_POOL}:{PROBE_FIRST}-{PROBE_LAST}:relay", "--home-root", RELEASE["home_root"],
             "--guard", imagesuite.Guard.CONTROL, "--", "node", "/canary/memory-client.mjs",
                    "/canary/memory-scenario.json").stdout.strip()
         probe.container = name
-        # The role's group is made as the keeper boots, before the role starts.
+        # The pool's bound is written as the keeper boots, before the role starts.
         deadline = time.monotonic() + 60
-        while probe.exec(f"test -f {ROLE_GROUP}/memory.events").returncode != 0:
-            expect(time.monotonic() < deadline, "the second cyfr-locus makes the builds role's group",
+        while probe.exec(f"test -f {ROLE_GROUP}/memory.events && grep -qx {limit} {BOUND_GROUP}/memory.max").returncode != 0:
+            expect(time.monotonic() < deadline, "the second cyfr-locus makes the builds role's group and bounds rest",
                    run("docker", "logs", name, check=False).stderr[-2000:])
             time.sleep(0.2)  # sleep-ok: polling for the group the keeper makes as it boots
         before = container_state(probe)
@@ -727,8 +731,16 @@ def test_build(stack, case, limit, measure):
 
 
 def container_limit(stack):
-    """The builds role's memory.max, which bounds the hostile work: the container carries no limit of its own."""
-    return imagesuite.read_output(stack.exec(f"cat {ROLE_GROUP}/memory.max"), "the builds role's memory.max").strip()
+    """Rest's memory.max, the pool's bound over the builds, which bounds the hostile work: the container carries no
+    limit of its own."""
+    return imagesuite.read_output(stack.exec(f"cat {BOUND_GROUP}/memory.max"), "rest's memory.max").strip()
+
+
+def mem_total(stack):
+    """The machine's memory, in bytes, as the container's /proc/meminfo reads it."""
+    out = imagesuite.read_output(stack.exec("awk '$1 == \"MemTotal:\" {print $2}' /proc/meminfo"), "MemTotal").strip()
+    expect(out.isdigit(), "/proc/meminfo names the machine's memory", out)
+    return int(out) * 1024
 
 
 def main(image, measure, cases):
@@ -741,7 +753,7 @@ def main(image, measure, cases):
             # A fresh container per case, so one case's damage is not the next one's start.
             stack.up(pool=f"{POOL_FIRST}-{PROBE_FIRST - 1}", timeout_ms=DEADLINE_MS)
             limit = container_limit(stack)
-            expect(limit.isdigit(), "the builds role has a memory bound of its own, which bounds the hostile work", limit)
+            expect(limit.isdigit() and int(limit) > 0, "rest has a memory bound, which bounds the hostile work", limit)
             if case == "keeper":
                 test_keeper(stack, int(limit), canary)
             else:

@@ -25,6 +25,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/cyfr/locus/keeper/guard"
+	"github.com/cyfr/locus/keeper/internal/admission"
 	"github.com/cyfr/locus/keeper/internal/cgroup"
 	"github.com/cyfr/locus/keeper/internal/home"
 	"github.com/cyfr/locus/keeper/internal/logx"
@@ -102,10 +103,15 @@ func Main(args []string) int {
 		return ExitConfig
 	}
 	environ := os.Environ()
-	limits := make([]cgroup.Limits, len(cfg.Roles))
+	cpus := make([]uint64, len(cfg.Roles))
 	var keyed []int
+	reserve, share, err := PoolMemory(environ)
+	if err != nil {
+		log.Error("refusing to start: %v", err)
+		return ExitConfig
+	}
 	for i, r := range cfg.Roles {
-		if limits[i], err = RoleLimits(environ, r); err != nil {
+		if cpus[i], err = RoleCPU(environ, r); err != nil {
 			log.Error("refusing to start: role %s: %v", r.Name, err)
 			return ExitConfig
 		}
@@ -252,6 +258,12 @@ func Main(args []string) int {
 		return ExitConfig
 	}
 	log.Info("memory and CPU bounds are enforced: a cgroup under %s for each role and each spawn", cgroup.Root)
+	tree, err := memory.NewTree()
+	if err != nil {
+		log.Error("refusing to start: the pool's groups: %v", err)
+		return ExitConfig
+	}
+	floor := false
 	for _, i := range keyed {
 		spec, _ := poolOf(cfg.Pools, cfg.Roles[i].Pool)
 		r := &role{
@@ -261,12 +273,31 @@ func Main(args []string) int {
 			runDir:   filepath.Join(s.runRoot, cfg.Roles[i].Name),
 			homeRoot: filepath.Join(cfg.HomeRoot, cfg.Roles[i].Name),
 		}
-		if r.groups, r.leaf, err = memory.Role(r.spec.Name, limits[i]); err != nil {
+		if r.groups, r.leaf, err = tree.Role(r.spec.Name, cpus[i], r.spec.Floor); err != nil {
 			log.Error("refusing to start: role %s's group: %v", r.spec.Name, err)
 			return ExitConfig
 		}
-		log.Info("role %s: memory %s, processors %s", r.spec.Name, describeBytes(limits[i].MemoryBytes), describeQuota(limits[i].CPUQuota))
+		floor = floor || r.spec.Floor
+		service := cgroup.ServiceCPU(cpus[i])
+		log.Info("role %s: processors %s for its service and %s for its work, its spawns' groups in %s", r.spec.Name,
+			describeQuota(service), describeQuota(cpus[i]-service), r.groups.Path())
 		s.roles = append(s.roles, r)
+	}
+	// Every group is made before any memory bound is written: the kernel
+	// makes no group under one already bounded to 0.
+	sizes, err := poolSizes(memory, reserve, share, floor)
+	if err != nil {
+		log.Error("refusing to start: the pool's memory: %v", err)
+		return ExitConfig
+	}
+	if err := tree.Bound(sizes.Work, sizes.Rest); err != nil {
+		log.Error("refusing to start: the pool's memory: %v", err)
+		return ExitConfig
+	}
+	log.Info("the pool: budget %s, work %s, rest %s; the services outside it", describeBytes(sizes.Budget),
+		describeBytes(sizes.Work), describeBytes(sizes.Rest))
+	if sizes.Work == 0 {
+		log.Warn("the pool holds no memory for work: no spawn starts on a machine of no more memory than the reserve, %s, and the services' %s", describeBytes(reserve), describeBytes(share))
 	}
 	if err := makeRunDirs(s.runRoot, s.roles); err != nil {
 		log.Error("refusing to start: %v", err)
@@ -293,12 +324,9 @@ func heldGID(cfg Config, roles []Account, accounts map[int]Account) func(gid int
 	}
 }
 
-// describeBytes and describeQuota say a role's bound for the log.
+// describeBytes and describeQuota say a bound for the log.
 func describeBytes(n uint64) string {
-	if n == 0 {
-		return "unbounded"
-	}
-	return strconv.FormatUint(n, 10) + " bytes and as much swap"
+	return strconv.FormatUint(n>>20, 10) + " MiB"
 }
 
 func describeQuota(q uint64) string {
@@ -521,6 +549,39 @@ func delegateMemory() (*cgroup.Manager, error) {
 	return cgroup.Delegate(cgroup.Root, self)
 }
 
+// poolSizes is the sizing rule on this machine: its MemTotal, the
+// container's own limit, the reserve and the share, and whether a role
+// keeps the warm floor.
+func poolSizes(memory *cgroup.Manager, reserve, share uint64, floor bool) (admission.Sizes, error) {
+	total, err := memTotal("/proc/meminfo")
+	if err != nil {
+		return admission.Sizes{}, err
+	}
+	limit, limited, err := memory.Limit()
+	if err != nil {
+		return admission.Sizes{}, err
+	}
+	return admission.Size(total, limit, limited, reserve, share, floor), nil
+}
+
+// memTotal reads MemTotal of the meminfo file at path, in bytes.
+func memTotal(path string) (uint64, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return 0, err
+	}
+	for _, line := range strings.Split(string(raw), "\n") {
+		if rest, ok := strings.CutPrefix(line, "MemTotal:"); ok {
+			kb, err := strconv.ParseUint(strings.TrimSuffix(strings.TrimSpace(rest), " kB"), 10, 64)
+			if err != nil {
+				return 0, fmt.Errorf("%s: MemTotal %q", path, rest)
+			}
+			return kb << 10, nil
+		}
+	}
+	return 0, fmt.Errorf("%s has no MemTotal", path)
+}
+
 // child is a process this keeper started and will reap.
 type child struct {
 	pid    int
@@ -603,9 +664,9 @@ type role struct {
 	account  Account
 	runDir   string
 	homeRoot string
-	// groups makes the role's spawns' groups, inside the role's own group;
-	// nil where none can be made, and every spawn is refused. leaf is the
-	// role's group's leaf, which holds its process and its relays.
+	// groups makes the role's spawns' groups, inside the role's group in
+	// work; nil where none can be made, and every spawn is refused. leaf is
+	// the role's leaf in service, which holds its process and its relays.
 	groups *cgroup.Manager
 	leaf   *cgroup.Group
 	// client is the role's process standing, nil from its end until it is
@@ -824,13 +885,16 @@ func (s *server) bootRoles() bool {
 	return true
 }
 
-// killRoleGroups kills every role's group at once, its process, its relays
-// and every spawn group in it, by the kernel's group kill
-// (cgroup.Manager.Kill), and logs a group that will not empty.
+// killRoleGroups kills every role's groups, its leaf with its process and
+// its relays, and its group in work with every spawn group in it, by the
+// kernel's group kill, and logs a group that will not empty.
 func (s *server) killRoleGroups() {
 	for _, r := range s.roles {
+		if r.leaf != nil && !r.leaf.KillBy(time.Now()) {
+			s.log.Error("role %s: its leaf did not empty at the keeper's end", r.spec.Name)
+		}
 		if r.groups != nil && !r.groups.Kill() {
-			s.log.Error("role %s: its group did not empty at the keeper's end", r.spec.Name)
+			s.log.Error("role %s: its group in work did not empty at the keeper's end", r.spec.Name)
 		}
 	}
 }

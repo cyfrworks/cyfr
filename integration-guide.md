@@ -1425,9 +1425,9 @@ on another container platform, or on a host of its own. Its entrypoint,
 (`LOCUS_<ROLE>_KEY`) its environment holds, and hands each only its own
 `LOCUS_<ROLE>_*` variables, so the container is given what compose's
 `environment:` gives the `locus` service besides the settings of its env
-example (`.env.locus.example`), each role's bounds
-(`LOCUS_<ROLE>_MEMORY_LIMIT` and `_CPU_LIMIT`, which the keeper writes into
-the role's cgroup), and the hardening the compose file gives the service:
+example (`.env.locus.example`), the pool's numbers and each role's processors
+(`LOCUS_CORE_RESERVE_BYTES`, `LOCUS_SERVICE_BYTES` and `LOCUS_<ROLE>_CPU_LIMIT`,
+which the keeper writes into its cgroups), and the hardening the compose file gives the service:
 `cap_drop`, `cap_add`, `security_opt`, `init`, `ipc: none`, the read-only
 root and its tmpfs mounts. It runs in the network namespace of its egress
 guard, whose control socket the keeper names (`--guard`): the guard's

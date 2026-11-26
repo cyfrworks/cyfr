@@ -62,19 +62,19 @@ defmodule Cyfr.StackShapeTest do
   @container_seccomp "seccomp=./container.seccomp.json"
 
   # Keys that would hand Locus the host's privileges, namespaces, devices,
-  # a network of its own or a compose limit: each role's bounds are the
-  # keeper's to write into the role's group, from `@bounds`.
+  # a network of its own or a compose limit: the pool's bounds are the
+  # keeper's to write into its groups, from `@bounds`.
   @forbidden_keys ~w(privileged pid userns_mode cgroup devices networks ports expose deploy
                      entrypoint healthcheck mem_limit cpus)
 
-  # Each role's bounds and their defaults, compose's one definition of
-  # them: the backends role has no processor bound.
+  # The pool's numbers and each role's processors, and their defaults,
+  # compose's one definition of them: the reserve kept for core and the
+  # services' share, in bytes, and no processor bound for the backends.
   @bounds [
-    {"LOCUS_RUNTIME_MEMORY_LIMIT", "4G"},
+    {"LOCUS_CORE_RESERVE_BYTES", "2415919104"},
+    {"LOCUS_SERVICE_BYTES", "838860800"},
     {"LOCUS_RUNTIME_CPU_LIMIT", "4"},
-    {"LOCUS_BUILDS_MEMORY_LIMIT", "4G"},
-    {"LOCUS_BUILDS_CPU_LIMIT", "2"},
-    {"LOCUS_BACKENDS_MEMORY_LIMIT", "2G"}
+    {"LOCUS_BUILDS_CPU_LIMIT", "2"}
   ]
 
   # The files that spell a role's facts, beside docker-compose.yml and the
@@ -285,7 +285,8 @@ defmodule Cyfr.StackShapeTest do
   # `:kept` for the role whose sessions keep homes.
   defp role_spec(role) do
     "#{role.name}:#{role.uid}:#{role.port}:#{role.pool}" <>
-      if(role.private, do: ":private", else: "") <> if(role.kept_root, do: ":kept", else: "")
+      if(role.private, do: ":private", else: "") <>
+      if(role.kept_root, do: ":kept", else: "") <> if(role.floor, do: ":floor", else: "")
   end
 
   # The command that serves Locus: cyfr-locus over every role and its pool,
@@ -1108,18 +1109,20 @@ defmodule Cyfr.StackShapeTest do
     end
   end
 
-  # The bounds' defaults are each role's old container's limits, and the
-  # backends' is its budget's default plus the role's 256 MiB of headroom;
-  # .env.example documents each, and .env.locus.example says where they are
-  # without setting one, since compose's environment wins over that file.
-  test "the locus service holds the three keys and each role's bounds, their one default" do
+  # The reserve beside core is 2,304 MiB and the services' share 800 MiB
+  # (the plan's 2.9, by P4 and P6), and the processors each role's old
+  # container's; .env.example documents each, and .env.locus.example says
+  # where they are without setting one, since compose's environment wins
+  # over that file.
+  test "the locus service holds the three keys, the pool's numbers and each role's processors, their one default" do
     environment = compose!()["services"][LocusRoles.release().service]["environment"]
     assert environment == locus_environment()
 
-    env = %{"LOCUS_BACKENDS_KEY" => String.duplicate("ab", 32)}
-    {:ok, settings} = Locus.Config.from_env(&Map.get(env, &1), Map.keys(env))
-    {_, backends_limit} = List.keyfind(@bounds, "LOCUS_BACKENDS_MEMORY_LIMIT", 0)
-    assert limit_bytes(backends_limit) == settings[:backends_memory_budget] + 256 * 1024 * 1024
+    assert List.keyfind(@bounds, "LOCUS_CORE_RESERVE_BYTES", 0) ==
+             {"LOCUS_CORE_RESERVE_BYTES", Integer.to_string(2304 * 1024 * 1024)}
+
+    assert List.keyfind(@bounds, "LOCUS_SERVICE_BYTES", 0) ==
+             {"LOCUS_SERVICE_BYTES", Integer.to_string(800 * 1024 * 1024)}
 
     example = read!(".env.example")
     locus_example = read!(".env.locus.example")
@@ -1134,15 +1137,10 @@ defmodule Cyfr.StackShapeTest do
     refute Enum.any?(environment, &String.starts_with?(&1, "LOCUS_BACKENDS_CPU_LIMIT="))
   end
 
-  defp limit_bytes(limit) do
-    {count, unit} = Integer.parse(limit)
-    count * Map.fetch!(%{"M" => 1024 * 1024, "G" => 1024 * 1024 * 1024}, unit)
-  end
-
   # cyfr-locus bounds each role and each spawn only where the container's
   # cgroup is mounted writable, and clones each into a space of its own,
   # which takes the keeper's seccomp profile too. The container carries no
-  # compose limit: the keeper writes each role's bounds into its group.
+  # compose limit: the keeper writes the pool's bounds into its groups.
   test "the locus service keeps its hardening, its mounts and its guard's namespace" do
     assert locus_violations(read!("docker-compose.yml")) == []
   end
@@ -1167,8 +1165,8 @@ defmodule Cyfr.StackShapeTest do
       {"with a compose memory limit", "\n    stop_grace_period: 40s\n    # Healthcheck",
        "\n    stop_grace_period: 40s\n    deploy:\n      resources:\n        limits:\n          memory: 8G\n    # Healthcheck",
        ["deploy"]},
-      {"with the runtime's bound at another default", "LOCUS_RUNTIME_MEMORY_LIMIT:-4G}",
-       "LOCUS_RUNTIME_MEMORY_LIMIT:-8G}", ["environment"]},
+      {"with the reserve at another default", "LOCUS_CORE_RESERVE_BYTES:-2415919104}",
+       "LOCUS_CORE_RESERVE_BYTES:-0}", ["environment"]},
       {"on its own network", "    network_mode: service:#{release.guard}\n",
        "    networks:\n      - #{release.network}\n", ["network_mode", "networks"]},
       {"waiting for its guard's start, not its health",
@@ -1663,13 +1661,12 @@ defmodule Cyfr.StackShapeTest do
     end
 
     # The key reaches the role from the project .env through compose, and
-    # the role's bounds are compose's to read there: neither is set in this
-    # file, and the example says where each is.
+    # the role's processors are compose's to read there: neither is set in
+    # this file, and the example says where each is.
     assert example =~ "CYFR_LOCUS_BUILDS_KEY"
-    assert example =~ "LOCUS_BUILDS_MEMORY_LIMIT"
+    assert example =~ "LOCUS_BUILDS_CPU_LIMIT"
 
-    refute example =~
-             ~r/^#? ?(LOCUS_BUILDS_KEY|LOCUS_BUILDS_MEMORY_LIMIT|LOCUS_BUILDS_CPU_LIMIT)=/m
+    refute example =~ ~r/^#? ?(LOCUS_BUILDS_KEY|LOCUS_BUILDS_CPU_LIMIT)=/m
 
     # No setting of the control plane's is offered here: `Locus.Config`
     # refuses to start with the database, the keyring, the runtime's root

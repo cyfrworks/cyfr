@@ -41,7 +41,10 @@ defmodule Prima.LocusRoles do
   `user` with uid `uid` (its gid the same, alone in its group), listening
   on `port`, in a space of its own routed by the guard. The space's reach
   is the guard's `role` reach, with every private address and core's host
-  API besides where `private` is true (the runtime's). The role's run
+  API besides where `private` is true (the runtime's). Where `floor` is
+  true (the runtime's) its runners are the warm floor's, and its spawns'
+  groups lie in the pool's `work` beside `rest`, which holds every other
+  role's (`Prima.LocusPool`). The role's run
   folder is `run_dir` (its own, 0700, under the release's), and its
   spawns' homes lie on a tmpfs of `home_size` at `home_root`, the
   release's root and the role's name. Its run folder is a tmpfs of
@@ -153,6 +156,7 @@ defmodule Prima.LocusRoles do
           uid: pos_integer(),
           port: :inet.port_number(),
           private: boolean(),
+          floor: boolean(),
           run_dir: String.t(),
           run_size: String.t(),
           home_root: String.t(),
@@ -218,6 +222,7 @@ defmodule Prima.LocusRoles do
       uid: 10_011,
       port: 4200,
       private: true,
+      floor: true,
       run_dir: "/run/locus/runtime",
       run_size: "16m",
       home_root: "/var/lib/locus/homes/runtime",
@@ -249,6 +254,7 @@ defmodule Prima.LocusRoles do
       uid: 10_012,
       port: 4100,
       private: false,
+      floor: false,
       run_dir: "/run/locus/builds",
       run_size: "16m",
       home_root: "/var/lib/locus/homes/builds",
@@ -280,6 +286,7 @@ defmodule Prima.LocusRoles do
       uid: 10_013,
       port: 4101,
       private: false,
+      floor: false,
       run_dir: "/run/locus/backends",
       run_size: "16m",
       home_root: "/var/lib/locus/homes/backends",
