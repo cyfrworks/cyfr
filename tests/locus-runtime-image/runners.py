@@ -1226,6 +1226,10 @@ def measure_acquisition(stack, plane, count=12):
         fresh_ages.append((attach["at"] - t_send) * 1000)
         print(f"queued start {i + 1}: {fresh_ages[-1]:.1f} ms", flush=True)
         plane.wait_seen("complete", attempt["execution_id"], BOOT_S)
+    # The warm starts begin as the queued ones did, the last athanor's runner
+    # gone and the floor's runner booted: the first takes that fresh runner,
+    # and each later one finds the athanor's own idle runner, the only one.
+    wait_until(lambda: fresh_runners_booted(stack, first_seen), BOOT_S, "the pool's fresh runners to have booted", interval=0.25)
     for i in range(count):
         attempt = plane.mint(stack.boot, "reagent", REFS["echo"], WASM["echo"], {"n": i}, "ath_queue_warm", 10_000)
         if i:
