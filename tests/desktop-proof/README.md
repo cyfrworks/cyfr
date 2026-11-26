@@ -82,14 +82,24 @@ The client image is the one thing the scripts share: `home.sh` makes it
 once a run, before the first script (`client.sh`'s `fetch` and `install`),
 named for the run and the DEB's digest. Its fetch from the archive is
 tried up to three times, each with a fresh index, and names the fetch that
-failed; the install from what it fetched runs once. Each script's client
-is a fresh container of it, whose user, trust, bundle and writes are its
-own. `client-image-test.sh` proves this against a stand-in Docker.
+failed; the install from what it fetched runs once, in a container with no
+network. Each script's client is a fresh container of it, whose user,
+trust, bundle and writes are its own.
 
 Everything a script's run starts, the homes, fronts, client and scratch
 directory with the run's authority key and setup token, is removed when it
-ends, and the client image when the run ends; its record (`out/`) is copied
-to `PROOF_OUT`. The run needs 127.0.0.1:7340 free on this machine.
+ends, and the client image when the run ends; an image that could not be
+removed fails the run. A script's record (`out/`) is copied to
+`PROOF_OUT`. The run needs 127.0.0.1:7340 free on this machine.
+
+`client-image-test.sh` runs `home.sh` and `client.sh` with every CYFR and
+front, Docker, and the client's apt and system commands stood in. It
+proves the order of what `home.sh` asks of Docker: one image a run; a
+first fetch the archive fails, tried again; the install once, in a
+container with no network; each script's client started from that image
+with only its own user and trust added; the scripts after a failed one
+still run; and the image removed, its removal refused failing the run.
+It does not prove what apt or Docker themselves do.
 
 The fronts' control (`tests/identity-proof/front.mjs`) breaks or bends a
 CYFR on purpose: `down` (unreachable), `hold` (each request waits

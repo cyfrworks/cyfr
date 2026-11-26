@@ -10,9 +10,9 @@
 #            fresh index and nothing installed, so that home.sh may try it
 #            again when the archive answers wrongly
 #   install  the candidate package (/deb/cyfr-desktop.deb) installed as a
-#            person installs it, with apt, with those packages, which the
-#            cache already holds (apt's --no-download refuses a package
-#            named by its path)
+#            person installs it, with apt, with those packages, from the
+#            cache the fetch left, in a container with no network (apt's
+#            own --no-download refuses a package named by its path)
 #   proof    in a container of one proof's own, started from what install
 #            left: the user `proof`; the run's authority
 #            (/fixture/authority.pem) trusted by the system, which cyfr
@@ -29,13 +29,15 @@ case "${1:-}" in
   fetch)
     # An index any part of which fails to fetch fails the update, and the
     # fetches that failed are named last, where home.sh's tail shows them.
-    if ! apt-get update -qq --error-on=any >/tmp/fetch.log 2>&1 ||
-      ! apt-get install -y -qq --no-install-recommends --download-only "${packages[@]}" >>/tmp/fetch.log 2>&1; then
-      cat /tmp/fetch.log
+    log="$(mktemp)"
+    if ! apt-get update -qq --error-on=any >"$log" 2>&1 ||
+      ! apt-get install -y -qq --no-install-recommends --download-only "${packages[@]}" >>"$log" 2>&1; then
+      cat "$log"
       echo "the archive's answer that failed:"
-      grep -E '^(Err:|E:|W:)' /tmp/fetch.log | sed 's/^/  /'
+      grep -E '^(Err:|E:|W:)' "$log" | sed 's/^/  /'
       exit 1
     fi
+    rm -f "$log"
     ;;
   install)
     apt-get install -y -qq --no-install-recommends "${packages[@]}" >/dev/null
