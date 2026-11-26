@@ -171,12 +171,16 @@ defmodule Opus.Memory do
   defp people(counters) do
     ids = counters |> Enum.map(& &1.athanor_id) |> Enum.uniq()
 
-    named =
-      Map.new(Sanctum.Tenancy.Athanors.list_by_ids(ids), fn athanor ->
-        {athanor.id, Map.get(athanor, :slug)}
-      end)
+    # A record holds a handful of people; each athanor is read once.
+    Map.new(ids, fn id ->
+      name =
+        case Sanctum.Tenancy.Athanors.get(id) do
+          {:ok, athanor} -> Map.get(athanor, :slug)
+          {:error, _reason} -> nil
+        end
 
-    Map.new(ids, fn id -> {id, %{athanor: id, name: Map.get(named, id)}} end)
+      {id, %{athanor: id, name: name}}
+    end)
   end
 
   # The endpoints of one keeper boot are one machine.

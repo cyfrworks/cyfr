@@ -302,7 +302,7 @@ defmodule Cyfr.PlatformSettingsRosterTest do
                  mcp_subscription_max_concurrent mcp_subscription_max_ms
                  opus_events_max_concurrent opus_events_max_ms
                  session_ttl_hours webhook_max_skew_seconds webhook_idempotency_ttl_seconds
-                 device_label health_ready_cache_ms decision_retention_days
+                 device_label health_ready_cache_ms decision_retention_days memory_retention_days
                  locus_runtime_watch_poll_ms locus_runtime_watch_misses locus_backends_lease_ms
                  locus_backends_idle_ms athanor_program_memory_bytes
                  browser_idle_ms program_silence_ms log_level
