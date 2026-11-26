@@ -248,62 +248,6 @@ public static class W {
     [W]::All()' | tr -d '\r'
 }
 
-# Before a press on Windows, every visible window on the runner's desktop
-# that is not the app's is minimised, each said: whatever window a runner
-# shows (its consoles, wsl.exe's among them, whose input no other process
-# may join) then neither covers the app nor holds the keys. Two windows of
-# Windows itself are ended first instead, on this disposable machine, each
-# said. The first-run privacy page of the Arm runner image, "Microsoft
-# account", over the whole screen above any topmost window, stays the
-# foreground window after a minimise. Search's ending stays because no run
-# that forced Search without it finished, so that a minimise alone puts
-# Search aside is not shown.
-aside() {
-  pwsh -NoProfile -NonInteractive -Command '
-    Add-Type @"
-using System; using System.Text; using System.Collections.Generic; using System.Runtime.InteropServices;
-public static class A {
-  public delegate bool F(IntPtr h, IntPtr p);
-  [DllImport("user32.dll")] public static extern bool EnumWindows(F f, IntPtr p);
-  [DllImport("user32.dll")] public static extern IntPtr FindWindow(string c, string t);
-  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
-  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
-  [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h);
-  [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
-  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint p);
-  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int c);
-  [DllImport("user32.dll")] public static extern bool ShowWindowAsync(IntPtr h, int c);
-  public static uint Pid(IntPtr h) { uint p; GetWindowThreadProcessId(h, out p); return p; }
-  public static List<string> Aside() {
-    var said = new List<string>();
-    EnumWindows((h, p) => {
-      var s = new StringBuilder(512);
-      if (!IsWindowVisible(h) || IsIconic(h) || GetWindowText(h, s, 512) == 0) return true;
-      uint pid = Pid(h); string name = "none";
-      try { name = System.Diagnostics.Process.GetProcessById((int)pid).ProcessName; } catch {}
-      if (name != "CYFR") { ShowWindowAsync(h, 6); said.Add("\"" + s + "\" (" + name + ", " + pid + ")"); }
-      return true;
-    }, IntPtr.Zero);
-    return said;
-  }
-}
-"@
-    for ($i = 0; $i -lt 5; $i++) {
-      $o = [A]::FindWindow([NullString]::Value, "Microsoft account"); if ($o -eq [IntPtr]::Zero) { break }
-      $owner = [A]::Pid($o); $name = (Get-Process -Id $owner -ErrorAction SilentlyContinue).ProcessName
-      Stop-Process -Id $owner -Force -ErrorAction SilentlyContinue
-      [Console]::Error.WriteLine("update: the first-run page of Windows ($name, $owner) ended: " + $?)
-      [void][A]::ShowWindow($o, 0); Start-Sleep -Milliseconds 300
-    }
-    $holder = Get-Process -Id ([A]::Pid([A]::GetForegroundWindow())) -ErrorAction SilentlyContinue
-    if ($holder.ProcessName -eq "SearchHost") {
-      Stop-Process -Id $holder.Id -Force -ErrorAction SilentlyContinue
-      [Console]::Error.WriteLine("update: the Search of Windows (SearchHost, $($holder.Id)) held the keys and was ended: " + $?)
-    }
-    $said = [A]::Aside()
-    if ($said.Count -gt 0) { [Console]::Error.WriteLine("update: minimised " + ($said -join ", ")) }'
-}
-
 # What the app's windows are, for a row that failed: each one's title,
 # place and size.
 windows_said() {
@@ -347,7 +291,6 @@ press_rail_update() {
         for (const t of [\$.kCGEventLeftMouseDown, \$.kCGEventLeftMouseUp]) {
           \$.CGEventPost(\$.kCGHIDEventTap, \$.CGEventCreateMouseEvent(null, t, p, \$.kCGMouseButtonLeft)); delay(0.1) }" ;;
     windows)
-      aside
       pwsh -NoProfile -NonInteractive -Command '
         Add-Type @"
 using System; using System.Runtime.InteropServices;
@@ -361,8 +304,22 @@ public static class U {
   [DllImport("user32.dll")] public static extern bool ClientToScreen(IntPtr h, ref P p);
   [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
   [DllImport("user32.dll")] public static extern void mouse_event(uint f, uint x, uint y, uint d, UIntPtr e);
+  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint p);
+  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int c);
 }
 "@
+        # The Arm runner image shows the first-run privacy page of Windows,
+        # "Microsoft account", over the whole screen, above any topmost
+        # window: the process that owns it is ended and the window hidden
+        # first, on this disposable machine, each said.
+        for ($i = 0; $i -lt 5; $i++) {
+          $o = [U]::FindWindow([NullString]::Value, "Microsoft account"); if ($o -eq [IntPtr]::Zero) { break }
+          [uint32]$owner = 0; [void][U]::GetWindowThreadProcessId($o, [ref]$owner)
+          $name = (Get-Process -Id $owner -ErrorAction SilentlyContinue).ProcessName
+          Stop-Process -Id $owner -Force -ErrorAction SilentlyContinue
+          [Console]::Error.WriteLine("update: the first-run page of Windows ($name, $owner) ended: " + $?)
+          [void][U]::ShowWindow($o, 0); Start-Sleep -Milliseconds 300
+        }
         $h = [U]::FindWindow([NullString]::Value, "CYFR"); if ($h -eq [IntPtr]::Zero) { exit 1 }
         # Above every other window, the runner agent window among them, which
         # a background process may not bring forward (SetForegroundWindow).
@@ -402,15 +359,18 @@ key() {
         key code $code
       end tell" ;;
     windows)
-      # The key goes to the foreground window: every other window is
-      # minimised (aside), Update CYFR is made the foreground window and the
-      # key sent only once it is, within 10 s, or nothing is sent and the
-      # press fails naming the window that holds the keys. A background
-      # process may not hand the foreground on by itself: it joins the
-      # input of the foreground window's thread to do it.
+      # The key goes to the foreground window, which any other window on
+      # the runner's desktop may hold (System Properties, wsl.exe, Windows'
+      # first-run page, Search): Update CYFR is made the foreground window
+      # first and the key sent only once it is, within 10 s, or nothing is
+      # sent and the press fails naming the window that holds the keys. A
+      # background process may not hand the foreground on by itself: it
+      # joins the input of the foreground window's thread to do it. Windows'
+      # Search keeps the keys from that: where it holds them, its process
+      # is ended, on this disposable machine, and said, as the first-run
+      # page's is.
       local vk=13
       [ "$1" = Escape ] && vk=27
-      aside
       VK=$vk pwsh -NoProfile -NonInteractive -Command '
         Add-Type @"
 using System; using System.Text; using System.Runtime.InteropServices;
@@ -435,6 +395,7 @@ public static class K {
     }, IntPtr.Zero);
     return found;
   }
+  public static uint Pid(IntPtr h) { uint p; GetWindowThreadProcessId(h, out p); return p; }
   public static string Said(IntPtr h) {
     var s = new StringBuilder(512); GetWindowText(h, s, 512);
     uint p; GetWindowThreadProcessId(h, out p); string n = "none";
@@ -456,6 +417,11 @@ public static class K {
         if ($t -eq [IntPtr]::Zero) { [Console]::Error.WriteLine("update: no Update CYFR window to press a key in"); exit 1 }
         $until = (Get-Date).AddSeconds(10)
         while (-not [K]::Front($t)) {
+          $holder = Get-Process -Id ([K]::Pid([K]::GetForegroundWindow())) -ErrorAction SilentlyContinue
+          if ($holder.ProcessName -eq "SearchHost") {
+            Stop-Process -Id $holder.Id -Force -ErrorAction SilentlyContinue
+            [Console]::Error.WriteLine("update: the Search of Windows (SearchHost, $($holder.Id)) held the keys and was ended: " + $?)
+          }
           if ((Get-Date) -gt $until) {
             [Console]::Error.WriteLine("update: Update CYFR did not take the keys in 10 s; the window that holds them is " + [K]::Said([K]::GetForegroundWindow()))
             exit 1
