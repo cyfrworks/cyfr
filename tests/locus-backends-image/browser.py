@@ -580,12 +580,12 @@ def chrome_processes(stack, uid):
 
 def home_uid(stack, home):
     """The uid a kept home belongs to, read from its folder, which the release's user lists."""
-    return imagesuite.read_output(stack.exec(f"stat -c %u {KEPT_ROOT}/{home}"), f"{home}'s owner").strip()
+    return int(imagesuite.read_output(stack.exec(f"stat -c %u {KEPT_ROOT}/{home}"), f"{home}'s owner"))
 
 
 def as_home(stack, home, script, what):
     """`script` run as the home's own uid, which alone enters it."""
-    return imagesuite.read_output(stack.exec(script, user=home_uid(stack, home)), what)
+    return imagesuite.read_output(stack.exec(script, user=str(home_uid(stack, home))), what)
 
 
 def home_bytes(stack, home, path=""):
@@ -1422,14 +1422,14 @@ def in_image(stack, c):
     expect(drawn["title"] == 'cjk {"chinese":true,"japanese":true,"korean":true}',
            "a page draws the glyphs of Chinese, Japanese and Korean, not the missing-glyph box", drawn)
     b.close()
-    eventually(lambda: not stack.under_uid(int(home_uid(stack, OFFLINE_HOME))),
+    eventually(lambda: not stack.under_uid(home_uid(stack, OFFLINE_HOME)),
                "the offline browser's processes to end with its session")
 
     # What a person installs in the folder comes first in a shell, and never in CYFR's place.
     # The probe starts first, on the image's node, and stays: what is put in the folder below is found after.
     tool = c.mcp(OWNER, "probe", key="installs", home_id=TOOLS_HOME)
     tool.list_tools()
-    uid = int(home_uid(stack, TOOLS_HOME))
+    uid = home_uid(stack, TOOLS_HOME)
     home = f"{KEPT_ROOT}/{TOOLS_HOME}"
     as_home(stack, TOOLS_HOME,
             f"mkdir -p {home}/.local/bin && for t in node cyfr-stub; do "
@@ -1491,19 +1491,20 @@ def ended_before_ready(stack, c):
     """A driver asked to end before its hello, while its Chrome starts, ends as one asked later does: it says hello
     once Chrome answers, then closes Chrome and says bye, and exits 0. Its end is taken before it announces it is
     ready, so a TERM that comes then, or just after the hello, is never the default end. The TERM is sent from the
-    box the moment Chrome's first process runs: the driver then waits on Chrome's first answer, which takes far
-    longer, so the TERM lands before the hello.
+    box the moment Chrome's first process runs. The case relies on the driver's wait on Chrome's first answer
+    taking far longer than the signal does, so that the TERM lands before the hello; nothing holds that answer.
 
-    The watcher that sends it is the observer's, never a process of the home's uid: a kept session's end retires
-    the uid, which kills every process of it, so a watcher or a read of the uid's would be killed with the session
-    it watches. It starts once nothing of the first session is left, so the Chrome it sees is this driver's."""
+    The watcher that sends it runs as root in the box, never as the home's uid: a kept session's end retires the
+    uid, which kills every process of it, so a watcher or a read of the uid's would be killed with the session it
+    watches. It starts once no process of the first session is seen under the uid any more."""
     made = Host(stack, c, TERM_HOME)
     expect("error" not in made.hello(), "a home for a driver asked to end early is made")
-    made.close()
     uid = home_uid(stack, TERM_HOME)
+    expect(stack.under_uid(uid), "the first session's processes are seen under the home's uid", uid)
+    made.close()
     eventually(lambda: not stack.under_uid(uid), "the first session's processes to end")
     watcher = subprocess.Popen(
-        ["docker", "exec", "--privileged", "-u", "0", stack.container, "timeout", "60", "sh", "-c",
+        ["docker", "exec", "-u", "0", stack.container, "timeout", "60", "sh", "-c",
          f"until pgrep -u {uid} -f '^{CHROMIUM}' >/dev/null; do :; done; "
          f"kill -TERM $(pgrep -u {uid} -x cyfr-browser) && echo sent"],
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
@@ -1920,7 +1921,7 @@ def main():
         # the page; then one the shell made, ended abruptly with a public page open, whose cache holds it.
         def reopened(home, page):
             """What a start in `home` asks of `page`, read from Chrome's network log over its first seconds."""
-            home_owner = int(home_uid(stack, home))
+            home_owner = home_uid(stack, home)
             restore_log = f"{KEPT_ROOT}/{home}/restore-netlog.json"
             again = Host(stack, c, home, ["--net-log", restore_log])
             expect("error" not in again.hello(), f"the profile in {home} that holds a page starts")
@@ -1934,7 +1935,7 @@ def main():
         made = Host(stack, c, FULL_HOME)
         expect("error" not in made.hello(), "a home for the full Chrome's profile is made")
         made.close()
-        eventually(lambda: not stack.under_uid(int(home_uid(stack, FULL_HOME))), "its first session's processes to end")
+        eventually(lambda: not stack.under_uid(home_uid(stack, FULL_HOME)), "its first session's processes to end")
         profile_dir = f"{KEPT_ROOT}/{FULL_HOME}/chrome"
         as_home(stack, FULL_HOME, f"rm -rf {profile_dir} && mkdir {profile_dir} && echo {FULL_CHROME_PROFILE} | "
                                   f"base64 -d | tar xzf - -C {profile_dir}", "the full Chrome's profile put in its home")
