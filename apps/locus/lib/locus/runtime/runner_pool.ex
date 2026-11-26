@@ -355,12 +355,23 @@ defmodule Locus.Runtime.RunnerPool do
   # The keeper's ask that a runner give way to a start waiting for room:
   # one still idle, or fresh with no take on it, is released as an idle
   # runner whose time ran out is; a busy, taken or ending one is left alone.
+  # The keeper asks an idle runner to give way: one kept for its athanor
+  # goes, and a fresh one only while another fresh one stays for the floor,
+  # so an ask that comes after the floor's runner was taken ends nothing. A
+  # runner taken, still spawning or already going is left as it is: the
+  # keeper asks again at its next second if it is still short.
   def handle_info({RunnerProcess, pid, :give_way}, state) do
     case state.runners[pid] do
-      %{state: resting} = entry when resting in [:idle, :fresh] ->
+      %{state: :idle} = entry ->
         {:noreply, refill(retire_resting(state, pid, entry))}
 
-      _taken_or_ending ->
+      %{state: :fresh} = entry ->
+        if Enum.count(state.runners, fn {_pid, e} -> e.state == :fresh end) >
+             Prima.LocusPool.floor_runners(),
+           do: {:noreply, refill(retire_resting(state, pid, entry))},
+           else: {:noreply, state}
+
+      _taken_spawning_or_ending ->
         {:noreply, state}
     end
   end

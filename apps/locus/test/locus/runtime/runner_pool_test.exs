@@ -543,6 +543,42 @@ defmodule Locus.Runtime.RunnerPoolTest do
            }
   end
 
+  test "a give_way never takes the floor's one fresh runner, and a runner that turned one down goes at the next once idle",
+       %{keeper: keeper} do
+    pool = start_pool!(keeper, [])
+    serve!(pool)
+    {:ok, busy, busy_id} = RunnerPool.take(pool, "ath_a", "exec_1")
+    assert {:ok, _token} = assign(busy, "ath_a")
+    wait_until(fn -> counts(pool) == %{fresh: 1, idle: 0, busy: 1, tainted: 0} end)
+    %{pid: fresh, id: fresh_id} = Enum.find(Runners.runners(pool), &(&1.state == :fresh))
+
+    # The floor's runner, asked after the runner above it was taken, stays.
+    :ok = ScriptedKeeper.give_way(keeper, fresh_id)
+    # Turned down while busy...
+    :ok = ScriptedKeeper.give_way(keeper, busy_id)
+    _status = RunnerPool.status(pool)
+    assert ScriptedKeeper.releases(keeper) == []
+
+    # ...and asked again once it is idle, it goes; a second ask of it
+    # while it goes ends nothing more.
+    complete(spawn_of(keeper, busy), "exec_1", true)
+    assert_receive {RunnerPool, ^busy, {:complete, "exec_1", true}}, 5_000
+    wait_until(fn -> counts(pool) == %{fresh: 1, idle: 1, busy: 0, tainted: 0} end)
+    :ok = ScriptedKeeper.give_way(keeper, busy_id)
+    :ok = ScriptedKeeper.give_way(keeper, busy_id)
+    wait_until(fn -> not Enum.any?(Runners.runners(pool), &(&1.pid == busy)) end)
+
+    assert %{
+             releases: ScriptedKeeper.releases(keeper),
+             fresh: Process.alive?(fresh),
+             counts: counts(pool)
+           } == %{
+             releases: [{busy_id, 0}],
+             fresh: true,
+             counts: %{fresh: 1, idle: 0, busy: 0, tainted: 0}
+           }
+  end
+
   # The service may read an ask to end a runner after the pool handed the
   # runner out again: the ask names the execution it was for.
   test "a taint naming an execution its runner has completed, or another than it runs, ends nothing",
