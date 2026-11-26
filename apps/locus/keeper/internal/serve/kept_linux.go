@@ -701,8 +701,9 @@ func (s *server) handleHomeList(c *client, req *protocol.Request) {
 		s.send(c, protocol.NewError(req.ID, "", protocol.CodeUnavailable))
 		return
 	}
-	ids = ids[sort.SearchStrings(ids, req.After):]
-	if len(ids) > 0 && ids[0] == req.After {
+	after := req.After.ID()
+	ids = ids[sort.SearchStrings(ids, after):]
+	if len(ids) > 0 && ids[0] == after {
 		ids = ids[1:]
 	}
 	next := ""

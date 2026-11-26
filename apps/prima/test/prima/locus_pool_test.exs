@@ -27,7 +27,14 @@ defmodule Prima.LocusPoolTest do
 
   test "the vector file holds the module's numbers and nothing else" do
     assert Map.keys(@vectors) |> Enum.sort() ==
-             ~w(allowance_bytes allowance_ms cap_bytes comment floor_bytes floor_runners kinds least_cap_bytes processors room_wait_ms stale_ms)
+             ~w(allowance_bytes allowance_ms cap_bytes comment counters floor_bytes floor_runners kinds least_cap_bytes processors room_wait_ms stale_ms wire)
+
+    assert @vectors["counters"] == %{
+             "max_counters" => LocusPool.max_counters(),
+             "report_counters" => LocusPool.report_counters(),
+             "keep_ms" => LocusPool.keep_ms(),
+             "reading_gap_ms" => LocusPool.reading_gap_ms()
+           }
 
     assert @vectors["floor_bytes"] == LocusPool.floor_bytes()
     assert @vectors["floor_runners"] == LocusPool.floor_runners()
@@ -75,6 +82,193 @@ defmodule Prima.LocusPoolTest do
 
     assert LocusPool.room_wait_ms() == Prima.LocusBackends.close_wait_ms()
     assert Enum.sort(Map.keys(LocusPool.kinds())) == Enum.sort(Prima.KeeperProtocol.kinds())
+  end
+
+  test "the counters' numbers are the plan's" do
+    assert {LocusPool.max_counters(), LocusPool.report_counters()} == {16_384, 256}
+    assert LocusPool.keep_ms() == 48 * 60 * 60 * 1000
+    assert LocusPool.reading_gap_ms() == 2_000
+  end
+
+  describe "the pool wire" do
+    @wire @vectors["wire"]
+    @key @wire["key_hex"] |> Base.decode16!(case: :lower)
+
+    test "its vectors are the module's: the route, the body, each service's pool key and header" do
+      assert Map.keys(@wire) |> Enum.sort() ==
+               ~w(answer auth_header body key_hex max_request_bytes route services ts version window_ms)
+
+      assert {@wire["version"], @wire["route"], @wire["auth_header"]} ==
+               {LocusPool.version(), LocusPool.route(), Prima.MacEnvelope.auth_header()}
+
+      assert {@wire["window_ms"], @wire["max_request_bytes"]} ==
+               {LocusPool.window_ms(), LocusPool.max_request_bytes()}
+
+      assert LocusPool.window_ms() == Prima.BuilderProtocol.window_ms()
+      assert @wire["body"] == LocusPool.request_body(512)
+      assert LocusPool.read_request_body(@wire["body"]) == {:ok, 512}
+      assert Map.keys(@wire["services"]) |> Enum.sort() == ~w(backends builds runtime)
+
+      for service <- LocusPool.services(), vector = @wire["services"][Atom.to_string(service)] do
+        pool_key = LocusPool.pool_key(service, @key)
+        assert vector["label"] == "cyfr-locus/v1/#{service}/pool"
+        assert vector["label"] == LocusPool.label(service)
+        assert vector["pool_key_hex"] == Base.encode16(pool_key, case: :lower)
+        assert vector["header"] == LocusPool.header(service, pool_key, @wire["ts"], @wire["body"])
+      end
+
+      assert {:ok, report} = LocusPool.read_answer(@wire["answer"])
+      assert Jason.decode!(LocusPool.answer(report)) == Jason.decode!(@wire["answer"])
+    end
+
+    test "a pool header of one service is refused by the two others, all three given the same key" do
+      body = @wire["body"]
+      ts = @wire["ts"]
+
+      for service <- LocusPool.services() do
+        header = LocusPool.header(service, LocusPool.pool_key(service, @key), ts, body)
+
+        assert {:ok, hash} =
+                 LocusPool.verify_header(service, LocusPool.pool_key(service, @key), header, ts)
+
+        assert LocusPool.verify_body(hash, body) == :ok
+
+        for other <- LocusPool.services() -- [service] do
+          assert LocusPool.verify_header(other, LocusPool.pool_key(other, @key), header, ts) ==
+                   {:error, :bad_mac}
+        end
+
+        # The service's own key is not its pool key: what it signs is no pool request.
+        assert LocusPool.verify_header(service, @key, header, ts) == {:error, :bad_mac}
+
+        own = Prima.MacEnvelope.derive(@key, Prima.MacEnvelope.label(service))
+        assert LocusPool.verify_header(service, own, header, ts) == {:error, :bad_mac}
+      end
+    end
+
+    test "a header is refused outside its window, at another version, malformed, or over another body" do
+      key = LocusPool.pool_key(:builds, @key)
+      ts = @wire["ts"]
+      header = LocusPool.header(:builds, key, ts, @wire["body"])
+      window = LocusPool.window_ms()
+
+      for now <- [ts - window, ts + window],
+          do: assert({:ok, _hash} = LocusPool.verify_header(:builds, key, header, now))
+
+      for now <- [ts - window - 1, ts + window + 1],
+          do:
+            assert(
+              LocusPool.verify_header(:builds, key, header, now) == {:error, :outside_window}
+            )
+
+      assert LocusPool.verify_header(:builds, key, String.replace(header, "v1 ", "v2 "), ts) ==
+               {:error, :unknown_version}
+
+      for bad <- ["", "Bearer x", nil, String.replace(header, "kind=pool", "kind=request")],
+          do: assert(LocusPool.verify_header(:builds, key, bad, ts) == {:error, :malformed})
+
+      {:ok, hash} = LocusPool.verify_header(:builds, key, header, ts)
+      assert LocusPool.verify_body(hash, LocusPool.request_body(0)) == {:error, :bad_mac}
+    end
+
+    test "a body is exactly v and after, a whole number to 2^53 - 1, its version read first" do
+      max = 9_007_199_254_740_991
+      assert LocusPool.read_request_body(LocusPool.request_body(max)) == {:ok, max}
+      assert LocusPool.read_request_body(~s({"after":0,"v":1})) == {:ok, 0}
+
+      for body <- [~s({"v":2,"after":0}), ~s({"after":0}), ~s({"v":"1","after":0})],
+          do: assert(LocusPool.read_request_body(body) == {:error, :version})
+
+      for body <- [
+            ~s({"v":1}),
+            ~s({"v":1,"after":-1}),
+            ~s({"v":1,"after":"0"}),
+            ~s({"v":1,"after":1.5}),
+            ~s({"v":1,"after":#{max + 1}}),
+            ~s({"v":1,"after":0,"role":"builds"}),
+            "[]",
+            "not json"
+          ],
+          do: assert(LocusPool.read_request_body(body) == {:error, :malformed})
+    end
+  end
+
+  describe "a report" do
+    @counter %{
+      "rev" => 3,
+      "day" => "2026-11-27",
+      "athanor" => "ath_one",
+      "kind" => "program",
+      "subject" => "mcp_one",
+      "bytes" => 0,
+      "mib_ms" => 0,
+      "measured_ms" => 0,
+      "peak_bytes" => 0,
+      "cap" => 0,
+      "machine" => 0,
+      "either" => 1
+    }
+    @report %{
+      "boot" => String.duplicate("a", 32),
+      "budget" => 0,
+      "work" => 0,
+      "floor" => 0,
+      "used" => 0,
+      "counters" => [@counter]
+    }
+
+    test "reads exactly its members and writes them back, its optional ones absent" do
+      assert {:ok, read} = LocusPool.read_report(@report)
+      assert read.next == nil
+
+      assert [%{day: ~D[2026-11-27], athanor: "ath_one", subject: "mcp_one", either: 1}] =
+               read.counters
+
+      assert LocusPool.encode_report(read) == @report
+
+      bare = Map.drop(@counter, ["athanor", "subject"])
+
+      assert {:ok, %{counters: [%{athanor: nil, subject: nil}], next: 9}} =
+               LocusPool.read_report(%{@report | "counters" => [bare]} |> Map.put("next", 9))
+
+      assert {:ok, read} =
+               LocusPool.read_report(%{@report | "counters" => [bare]} |> Map.put("next", 9))
+
+      assert LocusPool.encode_report(read) ==
+               %{@report | "counters" => [bare]} |> Map.put("next", 9)
+    end
+
+    test "refuses what is not one" do
+      page = for rev <- 1..257, do: %{@counter | "rev" => rev}
+
+      for bad <- [
+            Map.delete(@report, "used"),
+            Map.put(@report, "role", "builds"),
+            Map.put(@report, "next", 0),
+            Map.put(@report, "next", nil),
+            %{@report | "boot" => "boot_1"},
+            %{@report | "budget" => -1},
+            %{@report | "counters" => page},
+            %{@report | "counters" => [@counter, @counter]},
+            %{@report | "counters" => [%{@counter | "rev" => 4}, @counter]},
+            %{@report | "counters" => [%{@counter | "rev" => 0}]},
+            %{@report | "counters" => [%{@counter | "day" => "2026-02-30"}]},
+            %{@report | "counters" => [%{@counter | "day" => "27-11-2026"}]},
+            %{@report | "counters" => [%{@counter | "kind" => "browser"}]},
+            %{@report | "counters" => [%{@counter | "athanor" => nil}]},
+            %{@report | "counters" => [%{@counter | "subject" => "../x"}]},
+            %{@report | "counters" => [Map.delete(@counter, "either")]},
+            %{@report | "counters" => [Map.put(@counter, "role", "backends")]},
+            %{@report | "counters" => [%{@counter | "mib_ms" => 9_007_199_254_740_992}]},
+            "report"
+          ],
+          do: assert(LocusPool.read_report(bad) == :error, inspect(bad))
+
+      assert {:ok, %{counters: counters}} =
+               LocusPool.read_report(%{@report | "counters" => Enum.take(page, 256)})
+
+      assert length(counters) == LocusPool.report_counters()
+    end
   end
 
   describe "what holds the pool" do

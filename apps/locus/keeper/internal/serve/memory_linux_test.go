@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -149,6 +150,7 @@ cat /proc/self/cgroup`
 
 func TestASpawnPastItsBoundIsKilledWholeAndReportedSoWhileASiblingCompletes(t *testing.T) {
 	k := boundedKeeper(t)
+	started := time.Now()
 	// The sibling holds 8 MiB under a bound of 64; the hostile spawn forks
 	// eight holders of 16 MiB under a bound of 64, none of them large, and
 	// a daemon in a session of its own that ignores SIGTERM.
@@ -166,6 +168,21 @@ wait`, k.helper)
 	}
 	if e := exited[siblingID]; e["code"] != float64(0) || e["memory"] != nil {
 		t.Fatalf("the sibling exited %v", e)
+	}
+	// The kill is counted once, at the hostile spawn's release, in the
+	// counter of the two spawns' places, which no reading made.
+	k.s.handle(k.c, parsed(t, `{"v":8,"type":"report","id":"rp","after":0}`))
+	report, _ := k.reply(t)["report"].(map[string]any)
+	counters, _ := report["counters"].([]any)
+	if len(counters) != 1 {
+		t.Fatalf("the report after the kill: %v", report)
+	}
+	counter, _ := counters[0].(map[string]any)
+	day := counter["day"]
+	want := map[string]any{"rev": 1.0, "day": day, "kind": k.kind(), "bytes": 0.0, "mib_ms": 0.0, "measured_ms": 0.0,
+		"peak_bytes": 0.0, "cap": 1.0, "machine": 0.0, "either": 0.0}
+	if !reflect.DeepEqual(counter, want) || day != started.UTC().Format(time.DateOnly) && day != time.Now().UTC().Format(time.DateOnly) {
+		t.Fatalf("the kill's counter %v, want %v", counter, want)
 	}
 	siblingConn.readUntil(t, func() bool { return false })
 	if got := string(siblingConn.got[frame.StreamStdout]); got != "held\n" {
@@ -216,7 +233,7 @@ func TestAnExitForAnotherReasonIsNotAMemoryEnd(t *testing.T) {
 func (k *keeper) measure(t *testing.T, place string) map[string]any {
 	t.Helper()
 	id := "measure-" + place
-	k.s.handle(k.c, parsed(t, `{"v":7,"type":"measure","id":"`+id+`","place":"`+place+`"}`))
+	k.s.handle(k.c, parsed(t, `{"v":8,"type":"measure","id":"`+id+`","place":"`+place+`"}`))
 	m := k.reply(t)
 	if _, named := m["spawn_id"]; named || m["id"] != id {
 		t.Fatalf("measuring %s answered %v", place, m)

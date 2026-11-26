@@ -284,12 +284,21 @@ func Main(args []string) int {
 	for _, r := range s.roles {
 		floor = floor || r.spec.Floor
 	}
-	s.ledger = admission.New(sizes.Work, floor)
+	s.begin(sizes, floor)
 	if err := makeRunDirs(s.runRoot, s.roles); err != nil {
 		log.Error("refusing to start: %v", err)
 		return ExitConfig
 	}
 	return s.run()
+}
+
+// begin gives this start of the keeper its boot id, minted here, and its
+// admission of a pool of the sizes, F kept where floor: it counts nothing
+// yet, so its revs begin at 1.
+func (s *server) begin(sizes admission.Sizes, floor bool) {
+	s.boot = randomHex(16)
+	s.budget = sizes.Budget
+	s.ledger = admission.New(sizes.Work, floor)
 }
 
 // heldGID says whether a gid is held by a process the keeper starts: a
@@ -670,6 +679,11 @@ type spawn struct {
 	// the retirement that removes the spawn from spawns closes it.
 	pty *os.File
 
+	// killedFor is what memory limit the kernel killed processes of the
+	// spawn for, an `exited`'s `memory`, once its exit settled one; "" for
+	// none. Its release counts it (forget). s.mu guards it.
+	killedFor string
+
 	// exitOnce settles the leader's one `exited`, sent or never to be:
 	// whichever of its watcher and the retirement comes first reads the
 	// cause and settles it, and the other waits for that. It is settled
@@ -762,7 +776,7 @@ type server struct {
 	// signal, so a pid is never signalled after it was reaped.
 	mu sync.Mutex
 	// ledger is the one admission of every role's places (package
-	// admission).
+	// admission), and what it counts of who used what.
 	ledger *admission.Ledger
 	pools  map[string]*pool.Pool
 	spawns map[string]*spawn
@@ -817,6 +831,15 @@ type server struct {
 	// packs is every person's packs (package packview) under the kept
 	// homes' root; nil for a keeper that keeps no homes.
 	packs *packview.Store
+
+	// boot is this start's id, 16 random bytes in hex, minted at the start
+	// and of nothing else: every report carries it, its counters' revs
+	// being this start's. budget is the pool's budget (admission.Sizes).
+	// uncounted is the ledger's uncounted uses as last logged; s.mu guards
+	// it.
+	boot      string
+	budget    uint64
+	uncounted uint64
 
 	stopping atomic.Bool
 	closing  atomic.Bool
@@ -1176,6 +1199,8 @@ func (s *server) handle(c *client, req *protocol.Request) {
 		s.handleHome(c, req)
 	case protocol.TypeHomeList:
 		s.handleHomeList(c, req)
+	case protocol.TypeReport:
+		s.handleReport(c, req)
 	case protocol.TypePacksHold, protocol.TypePacksPut:
 		s.handlePacks(c, req)
 	}
@@ -1811,6 +1836,11 @@ func (s *server) reportExit(sp *spawn) {
 		}
 		reaped := sp.leader.reaped()
 		memory := s.memoryEnd(sp)
+		if memory != nil {
+			s.mu.Lock()
+			sp.killedFor = *memory
+			s.mu.Unlock()
+		}
 		if !reaped && memory == nil {
 			return
 		}
@@ -1963,12 +1993,16 @@ func (s *server) leave(sp *spawn, removed bool, left removal) {
 	s.forget(sp)
 }
 
-// forget is a spawn's final release, with s.mu held: it leaves spawns, its
-// place and its routing go, and the generation of packs its space binds is
-// let go only now, its group gone, so no start can remove files a process
-// of it may still read.
+// forget is a spawn's final release, with s.mu held: it leaves spawns, a
+// kill for memory its exit settled is counted, once, as its place goes with
+// its routing, and the generation of packs its space binds is let go only
+// now, its group gone, so no start can remove files a process of it may
+// still read.
 func (s *server) forget(sp *spawn) {
 	delete(s.spawns, sp.id)
+	if p := sp.client.places[sp.place]; p != nil && p.spawn == sp && sp.killedFor != "" {
+		s.ledger.Killed(p.entry, sp.killedFor, now())
+	}
 	s.freePlace(sp.client, sp.place)
 	delete(s.routing, sp.id)
 	sp.releasePacks()

@@ -13,14 +13,14 @@ defmodule Prima.KeeperProtocol do
   ## Lines
 
   A request or a reply is one JSON object on one line, ending in `\\n`,
-  carrying `"v": 7` and a `type`, at most `max_line_bytes/0` bytes before
+  carrying `"v": 8` and a `type`, at most `max_line_bytes/0` bytes before
   its newline. A client sends `place`, `drop`, `assign`, `spawn`,
   `signal`, `resize`, `release`, `measure`, `pool`, `home_make`,
-  `home_measure`, `home_reset`, `home_retire`, `home_list`, `packs_hold`
-  and `packs_put`; the keeper answers `placed`, `assigned`, `spawned`,
-  `error`, `exited`, `released`, `measured`, `pool`, `home_made`,
-  `home_measured`, `home_retired`, `homes` and `packs`, and sends
-  `give_way` of its own.
+  `home_measure`, `home_reset`, `home_retire`, `home_list`, `packs_hold`,
+  `packs_put` and `report`; the keeper answers `placed`, `assigned`,
+  `spawned`, `error`, `exited`, `released`, `measured`, `pool`,
+  `home_made`, `home_measured`, `home_retired`, `homes`, `packs` and
+  `reported`, and sends `give_way` of its own.
 
   `encode/1` writes a request's members in name order, `v` and `type`
   among them, and refuses by raising `ArgumentError` what the keeper
@@ -102,6 +102,15 @@ defmodule Prima.KeeperProtocol do
   `signal`, or neither. The `bytes` of a `measured` is a whole number from
   1 and that of a `home_measured` from 0, each up to 2^53 - 1, the largest
   every JSON reader carries exactly.
+
+  ## Reports
+
+  The keeper counts who used what (`Prima.LocusPool`, "Who used what").
+  A `report` carries exactly `id` and `after`, a rev, a whole number from
+  0 to 2^53 - 1, and is answered under that `id` alone `reported` with
+  `report`, the asking role's counters after that rev
+  (`Prima.LocusPool.read_report/1`): a role is told only of the places it
+  made, and none of another role's.
 
   ## Packs
 
@@ -211,7 +220,7 @@ defmodule Prima.KeeperProtocol do
 
   alias Prima.RunnerControl
 
-  @version 7
+  @version 8
   # The keeper spells these as frame.MaxPayload and protocol.MaxLineBytes;
   # the vectors' `bounds` pin both sides to the same numbers.
   @max_frame_bytes 65_536
@@ -315,6 +324,7 @@ defmodule Prima.KeeperProtocol do
     home_reset: {"home_reset", [id: :required, home: :required]},
     home_retire: {"home_retire", [id: :required, home: :required]},
     home_list: {"home_list", [id: :required, after: :optional]},
+    report: {"report", [id: :required, after: :required]},
     packs_hold:
       {"packs_hold", [id: :required, athanor: :required, lifetime: :required, digest: :required]},
     packs_put:
@@ -365,7 +375,8 @@ defmodule Prima.KeeperProtocol do
     "home_measured" => {:home_measured, [id: :id, bytes: :measured_bytes]},
     "home_retired" => {:home_retired, [id: :id]},
     "homes" => {:homes, [id: :id, ids: :home_ids, next: :home_id]},
-    "packs" => {:packs, [id: :id, state: :packs_state]}
+    "packs" => {:packs, [id: :id, state: :packs_state]},
+    "reported" => {:reported, [id: :id, report: :report]}
   }
 
   # An `error` names its request by `id` or `spawn_id`, and a request the
@@ -396,7 +407,7 @@ defmodule Prima.KeeperProtocol do
   `"kept"`), `home`, `home_max_bytes`, `pty` and `hosts` are optional,
   `home` carried exactly when `home_mode` is `"kept"`, and `home_max_bytes`
   only then. A home request carries `id` and `home`; a `home_list`, `id`
-  and an optional `after`.
+  and an optional `after`; a `report`, `id` and `after`, a rev.
   """
   @type request ::
           %{
@@ -448,6 +459,7 @@ defmodule Prima.KeeperProtocol do
               required(:id) => String.t(),
               optional(:after) => String.t()
             }
+          | %{type: :report, id: String.t(), after: non_neg_integer()}
           | %{
               type: :packs_hold,
               id: String.t(),
@@ -499,7 +511,7 @@ defmodule Prima.KeeperProtocol do
 
   @typedoc """
   A reply. An `error` names the request it refuses by `id` (a place, an
-  assign, a spawn, a pool, a home request or a measure) or `spawn_id` (a
+  assign, a spawn, a pool, a home request, a measure or a report) or `spawn_id` (a
   signal or a release), and by both a spawn the keeper refused after it
   made it; a request the keeper could not read is named by neither. A
   place refused for room is `{:no_memory, id, held}`, never an `:error`.
@@ -524,6 +536,7 @@ defmodule Prima.KeeperProtocol do
           | {:home_retired, id :: String.t()}
           | {:homes, id :: String.t(), ids :: [String.t()], next :: String.t() | nil}
           | {:packs, id :: String.t(), :held | :missing | :taken}
+          | {:reported, id :: String.t(), Prima.LocusPool.report()}
 
   @typedoc "Why a line is not a reply (see the module's decoding order)."
   @type reason ::
@@ -864,6 +877,8 @@ defmodule Prima.KeeperProtocol do
 
   defp write(:home_list, {:after, id}), do: {"after", matching!(@home_id, "after", id)}
 
+  defp write(:report, {:after, rev}) when rev in 0..@max_measured_bytes//1, do: {"after", rev}
+
   defp write(type, {:lifetime, lifetime}) when type in @packs_requests,
     do: {"lifetime", matching!(@lifetime, "lifetime", lifetime)}
 
@@ -1094,6 +1109,13 @@ defmodule Prima.KeeperProtocol do
 
   defp read(:boolean, _name, value) when is_boolean(value), do: {:ok, value}
 
+  defp read(:report, name, %{} = report) do
+    case Prima.LocusPool.read_report(report) do
+      {:ok, report} -> {:ok, report}
+      :error -> {:error, {:invalid_field, name}}
+    end
+  end
+
   defp read(:held, name, %{} = held) do
     case Prima.LocusPool.read_held(held) do
       {:ok, held} -> {:ok, held}
@@ -1164,4 +1186,5 @@ defmodule Prima.KeeperProtocol do
 
   defp reply(:homes, %{id: id, ids: ids, next: next}), do: {:ok, {:homes, id, ids, next}}
   defp reply(:packs, %{id: id, state: state}), do: {:ok, {:packs, id, state}}
+  defp reply(:reported, %{id: id, report: report}), do: {:ok, {:reported, id, report}}
 end

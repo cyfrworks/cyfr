@@ -38,10 +38,18 @@ defmodule Locus.Runtime.WorkerListener do
   found no room for `503` `no_memory`, with `held`, what holds the memory
   as the keeper gave it (`Prima.LocusPool.encode_held/1`).
 
+  `POST /locus/v1/pool` serves the runtime role's report
+  (`Locus.PoolRoute`) under this service's pool key, derived from its own
+  key (`LOCUS_RUNTIME_KEY`): without credentials `503` `unavailable`; a
+  refused header `401` with its reason; a body past its bound `413`
+  `malformed`; one of another version `400` `unknown_version`, one that
+  does not read `400` `malformed`; a keeper that does not answer `503`
+  `unavailable`.
+
   Nothing a request carries is logged: a refusal is logged by its reason.
   """
 
-  use Plug.Router
+  use Plug.Router, copy_opts_to_assign: :service_opts
 
   require Logger
 
@@ -55,6 +63,10 @@ defmodule Locus.Runtime.WorkerListener do
   @doc "Create the table of nonces seen, owned by the calling process."
   @spec init_nonces() :: :ok
   def init_nonces, do: Locus.Listener.init_nonces(@nonces)
+
+  post Prima.LocusPool.route() do
+    pool(conn, System.system_time(:millisecond))
+  end
 
   post "/worker/v1/*_rest" do
     serve(conn, System.system_time(:millisecond))
@@ -83,6 +95,33 @@ defmodule Locus.Runtime.WorkerListener do
       {:over_bound, read} -> read |> refuse(413, :malformed) |> drain()
     end
   end
+
+  # This role's report on the pool wire (`Locus.PoolRoute`), under the
+  # pool key derived from this service's own key, refused in this wire's
+  # names and statuses.
+  defp pool(conn, now) do
+    case credentials() do
+      {:ok, credentials} ->
+        report = &Locus.Keeper.report(keeper(conn), &1)
+
+        case Locus.PoolRoute.serve(conn, :runtime, credentials.worker_key, report, now) do
+          {:ok, conn} -> conn
+          {:refused, conn, refusal} -> refuse_pool(conn, refusal)
+        end
+
+      {:refused, status, reason} ->
+        refuse(closing(conn), status, reason)
+    end
+  end
+
+  defp refuse_pool(conn, {:unauthorized, reason}), do: refuse(conn, 401, reason)
+  defp refuse_pool(conn, :too_large), do: refuse(conn, 413, :malformed)
+  defp refuse_pool(conn, {:bad_body, :version}), do: refuse(conn, 400, :unknown_version)
+  defp refuse_pool(conn, {:bad_body, :malformed}), do: refuse(conn, 400, :malformed)
+  defp refuse_pool(conn, :unavailable), do: refuse(conn, 503, :unavailable)
+
+  defp keeper(%Plug.Conn{assigns: %{service_opts: opts}}),
+    do: Keyword.get(opts, :keeper, Locus.Keeper)
 
   # A refusal made before the body was read ends the connection: the body
   # the caller sent is still on it, unread.

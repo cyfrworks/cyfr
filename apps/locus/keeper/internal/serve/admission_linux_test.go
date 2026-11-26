@@ -31,10 +31,11 @@ type poolRole struct {
 	channel *protocol.LineReader
 }
 
-// poolKeeper is a keeper of work W with two roles, the floor's (runtime,
-// runner pool) and a session's (backends), each channel read as serve
-// reads it, its clock the test's: it needs no root and starts nothing. Its
-// admission steps a second only when the test says (admitTick).
+// poolKeeper is a keeper of work W, begun as a start of the keeper is, its
+// budget twice W, with two roles, the floor's (runtime, runner pool) and a
+// session's (backends), each channel read as serve reads it, its clock the
+// test's: it needs no root and starts nothing. Its admission steps a
+// second only when the test says (admitTick).
 func poolKeeper(t *testing.T, work uint64) (*server, *poolRole, *poolRole, *fakeClock) {
 	t.Helper()
 	clock := clockAt(t, time.Date(2026, 11, 26, 12, 0, 0, 0, time.UTC))
@@ -44,32 +45,42 @@ func poolKeeper(t *testing.T, work uint64) (*server, *poolRole, *poolRole, *fake
 		spawns:    map[string]*spawn{},
 		unremoved: map[*spawn]*removal{},
 		waiters:   map[int]*child{},
-		ledger:    admission.New(work, true),
 	}
+	s.begin(admission.Sizes{Budget: 2 * work, Work: work}, true)
 	role := func(name string, spec pool.Spec, floor bool) *poolRole {
-		fds, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, 0)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, fd := range fds {
-			if err := unix.SetNonblock(fd, true); err != nil {
-				t.Fatal(err)
-			}
-		}
-		ours, theirs := os.NewFile(uintptr(fds[0]), name), os.NewFile(uintptr(fds[1]), name+"-client")
-		if err := theirs.SetReadDeadline(time.Now().Add(10 * time.Second)); err != nil {
-			t.Fatal(err)
-		}
-		c := testClient(ours, spec, Account{})
-		c.role.spec.Name, c.role.spec.Floor = name, floor
-		done := make(chan struct{})
-		go func() { s.serveChannel(c); close(done) }()
-		t.Cleanup(func() { theirs.Close(); <-done; ours.Close() })
-		return &poolRole{c: c, theirs: theirs, channel: protocol.NewLineReader(theirs)}
+		return served(t, s, name, func(channel *os.File) *client {
+			c := testClient(channel, spec, Account{})
+			c.role.spec.Name, c.role.spec.Floor = name, floor
+			return c
+		})
 	}
 	runtime := role("runtime", pool.Spec{Name: "runner"}, true)
 	backends := role("backends", pool.Spec{Name: "backends", Reach: pool.ReachRouted}, false)
 	return s, runtime, backends, clock
+}
+
+// served is the client newClient makes on a fresh channel, served as serve
+// serves a role's, the test holding the channel's other end.
+func served(t *testing.T, s *server, name string, newClient func(channel *os.File) *client) *poolRole {
+	t.Helper()
+	fds, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, fd := range fds {
+		if err := unix.SetNonblock(fd, true); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ours, theirs := os.NewFile(uintptr(fds[0]), name), os.NewFile(uintptr(fds[1]), name+"-client")
+	if err := theirs.SetReadDeadline(time.Now().Add(10 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	c := newClient(ours)
+	done := make(chan struct{})
+	go func() { s.serveChannel(c); close(done) }()
+	t.Cleanup(func() { theirs.Close(); <-done; ours.Close() })
+	return &poolRole{c: c, theirs: theirs, channel: protocol.NewLineReader(theirs)}
 }
 
 func (r *poolRole) write(t *testing.T, lines ...string) {
@@ -111,12 +122,12 @@ func (r *poolRole) quiet(t *testing.T) {
 // before: a measure is answered in order behind them.
 func (r *poolRole) sync(t *testing.T) {
 	t.Helper()
-	r.write(t, `{"v":7,"type":"measure","id":"sync","place":"none"}`)
+	r.write(t, `{"v":8,"type":"measure","id":"sync","place":"none"}`)
 	r.expect(t, protocol.NewError("sync", "", protocol.CodeUnmeasured))
 }
 
 func placeLine(id, kind, athanor, subject string) string {
-	m := map[string]any{"v": 7, "type": "place", "id": id, "kind": kind}
+	m := map[string]any{"v": 8, "type": "place", "id": id, "kind": kind}
 	if athanor != "" {
 		m["athanor"] = athanor
 	}
@@ -140,11 +151,11 @@ func sessionPlaced(id string) protocol.Placed {
 func TestARolePlacesOnlyItsOwnKinds(t *testing.T) {
 	_, runtime, backends, _ := poolKeeper(t, 4096*mibs)
 	runtime.write(t, placeLine("b", "build", "", ""), placeLine("p", "program", "ath_a", ""), placeLine("w", "warm", "", ""),
-		`{"v":7,"type":"assign","id":"as","place":"w","kind":"terminal","athanor":"ath_a"}`)
+		`{"v":8,"type":"assign","id":"as","place":"w","kind":"terminal","athanor":"ath_a"}`)
 	runtime.expect(t, protocol.NewError("b", "", protocol.CodeBadRequest), protocol.NewError("p", "", protocol.CodeBadRequest),
 		runnerPlaced("w", 4096*mibs), protocol.NewError("as", "", protocol.CodeBadRequest))
 	backends.write(t, placeLine("w", "warm", "", ""), placeLine("r", "run", "ath_a", ""), placeLine("p", "program", "ath_a", ""),
-		`{"v":7,"type":"assign","id":"as","place":"p","kind":"run","athanor":"ath_a"}`)
+		`{"v":8,"type":"assign","id":"as","place":"p","kind":"run","athanor":"ath_a"}`)
 	backends.expect(t, protocol.NewError("w", "", protocol.CodeBadRequest), protocol.NewError("r", "", protocol.CodeBadRequest),
 		protocol.NewPlaced("p", admission.LimitsOf(protocol.KindProgram, 4096*mibs).MemoryBytes),
 		protocol.NewError("as", "", protocol.CodeBadRequest))
@@ -159,9 +170,9 @@ func TestAWaitingPlaceIsNeitherSpawnedNorKeptPastItsDrop(t *testing.T) {
 	backends.write(t, placeLine("p1", "program", "ath_a", ""), placeLine("p2", "program", "ath_a", ""),
 		placeLine("p3", "program", "ath_a", ""), placeLine("p4", "program", "ath_b", ""))
 	backends.expect(t, sessionPlaced("p1"), sessionPlaced("p2"))
-	backends.write(t, `{"v":7,"type":"spawn","id":"s3","place":"p3","pool":"backends","argv":["true"],"attach":{"path":"/run/a.sock","token":"`+testToken+`"}}`)
+	backends.write(t, `{"v":8,"type":"spawn","id":"s3","place":"p3","pool":"backends","argv":["true"],"attach":{"path":"/run/a.sock","token":"`+testToken+`"}}`)
 	backends.expect(t, protocol.NewError("s3", "", protocol.CodeBadRequest))
-	backends.write(t, `{"v":7,"type":"drop","place":"p3"}`, `{"v":7,"type":"drop","place":"p1"}`)
+	backends.write(t, `{"v":8,"type":"drop","place":"p3"}`, `{"v":8,"type":"drop","place":"p1"}`)
 	backends.expect(t, sessionPlaced("p4"))
 	backends.sync(t)
 	s.mu.Lock()
@@ -180,8 +191,8 @@ func TestAStartAsksIdleRunnersToGiveWayAndIsAdmittedAfter(t *testing.T) {
 	s, runtime, backends, clock := poolKeeper(t, 1100*mibs)
 	runtime.write(t, placeLine("floor", "warm", "", ""), placeLine("k1", "warm", "", ""), placeLine("k2", "warm", "", ""))
 	runtime.expect(t, runnerPlaced("floor", 1100*mibs), runnerPlaced("k1", 1100*mibs), runnerPlaced("k2", 1100*mibs))
-	runtime.write(t, `{"v":7,"type":"assign","id":"a1","place":"k1","kind":"warm","athanor":"ath_a"}`,
-		`{"v":7,"type":"assign","id":"a2","place":"k2","kind":"warm","athanor":"ath_b"}`)
+	runtime.write(t, `{"v":8,"type":"assign","id":"a1","place":"k1","kind":"warm","athanor":"ath_a"}`,
+		`{"v":8,"type":"assign","id":"a2","place":"k2","kind":"warm","athanor":"ath_b"}`)
 	runtime.expect(t, protocol.NewAssigned("a1"), protocol.NewAssigned("a2"))
 	// 936 for work beside F, two kept runners of 164: a session's 384
 	// fits, a second's is 160 short, which the older kept runner covers.
@@ -209,7 +220,7 @@ func TestARefusalForRoomSaysWhatHoldsAndNothingOfOthers(t *testing.T) {
 	s, runtime, backends, clock := poolKeeper(t, 1300*mibs)
 	runtime.write(t, placeLine("floor", "warm", "", ""), placeLine("r1", "warm", "", ""))
 	runtime.expect(t, runnerPlaced("floor", 1300*mibs), runnerPlaced("r1", 1300*mibs))
-	runtime.write(t, `{"v":7,"type":"assign","id":"a1","place":"r1","kind":"run","athanor":"ath_mine","subject":"cmp_secret"}`)
+	runtime.write(t, `{"v":8,"type":"assign","id":"a1","place":"r1","kind":"run","athanor":"ath_mine","subject":"cmp_secret"}`)
 	runtime.expect(t, protocol.NewAssigned("a1"))
 	backends.write(t, placeLine("mine", "program", "ath_mine", "mcp_mine"), placeLine("theirs", "program", "ath_theirs", "mcp_theirs"),
 		placeLine("next", "program", "ath_mine", "mcp_next"))

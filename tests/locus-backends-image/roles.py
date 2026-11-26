@@ -32,6 +32,13 @@ signed as CYFR signs them:
 - A role killed starts again alone: the other two keep their processes and
   a program's session keeps running; the container started again serves
   all three.
+- Each role serves its own report on the pool wire (Prima.LocusPool) under
+  the pool key derived from its own key and refuses the other two's: the
+  three reports name one keeper boot, each holds its role's kinds alone and
+  each counter once, the run under its athanor and the program under its
+  owner's athanor and row. A role killed and started again keeps its
+  counters and its revs under the same boot; the container started again,
+  its keeper with it, reports under another boot.
 
 A request on a role's channel naming another role's pool, spawn, place or
 home is refused by the keeper itself, and a role's environment holds its
@@ -300,6 +307,34 @@ def serving(stack):
     return c
 
 
+def own_keys(stack):
+    return {"runtime": stack.plane.worker_key, "builds": bytes.fromhex(stack.builds_key), "backends": stack.key}
+
+
+def reports(stack):
+    """Each role's report, read whole: {role: (boot, counters)}."""
+    return {role: imagesuite.pool_reports(stack.port(role), role, key) for role, key in own_keys(stack).items()}
+
+
+def test_reports(stack):
+    read = reports(stack)
+    boots = {boot for boot, _ in read.values()}
+    expect(len(boots) == 1, "the three roles' reports name one keeper boot", boots)
+    runs = [c for c in read["runtime"][1] if c["kind"] == "run" and c.get("athanor") == "ath_roles"]
+    expect(len(runs) == 1, "the runtime reports the run once, under its athanor", read["runtime"][1])
+    programs = [c for c in read["backends"][1]
+                if (c.get("athanor"), c.get("subject")) == (OWNER["athanor"], OWNER["server"])]
+    expect(len(programs) == 1 and programs[0]["kind"] == "program",
+           "the backends report the program once, under its owner's athanor and row", read["backends"][1])
+    for role, key in own_keys(stack).items():
+        imagesuite.pool_refuses_others(stack.port(role), role, key)
+    return read
+
+
+def last_rev(counters):
+    return max((c["rev"] for c in counters), default=0)
+
+
 def mem_total(stack):
     """The machine's memory, in bytes, as the container's /proc/meminfo reads it."""
     out = imagesuite.read_output(stack.exec("awk '$1 == \"MemTotal:\" {print $2}' /proc/meminfo"), "MemTotal").strip()
@@ -367,15 +402,27 @@ def main():
         test_pool_bounds(stack)
         test_apart(stack, pids)
         test_run(stack, plane)
+        before = test_reports(stack)
         test_reach(stack, c)
         test_bounds(stack, pids)
         for victim in ("builds", "runtime", "backends"):
             test_restart_alone(stack, c, victim)
+        after = reports(stack)
+        for role in ROLES:
+            expect(after[role][0] == before[role][0] and last_rev(after[role][1]) >= last_rev(before[role][1]),
+                   f"the {role} role started again reports under the same boot, its revs going on",
+                   [before[role][0], after[role][0], last_rev(before[role][1]), last_rev(after[role][1])])
         run("docker", "restart", stack.container)
         stack.published()
         stack.healthy()
         expect(sorted(stack.role_pids()) == sorted(ROLES), "the container started again runs every role",
                stack.role_pids())
+        again = eventually(lambda: (lambda r: r if all(r[role][1] for role in ("runtime",)) else None)(reports(stack)),
+                           "the keeper started again to count", timeout_s=60)
+        expect(len({boot for boot, _ in again.values()}) == 1
+               and next(iter(again.values()))[0] != next(iter(before.values()))[0],
+               "the keeper started again reports under another boot, the same for every role",
+               {role: boot for role, (boot, _) in again.items()})
         test_no_work(stack)
     finally:
         stack.down()

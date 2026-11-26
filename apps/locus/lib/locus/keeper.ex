@@ -152,7 +152,9 @@ defmodule Locus.Keeper do
   `measure/2` answers a place's last reading as the keeper read it, whose
   it is and how old the reading is, and never waits for a read: a reading
   not made is an error, never a zero. cyfr-locus applies a place, a drop
-  and an assign in the order they are sent.
+  and an assign in the order they are sent. `report/2` answers what
+  cyfr-locus counted of this role's places, for the role's service to
+  serve on the pool wire (`Locus.PoolRoute`).
 
   ## Kept homes
 
@@ -604,6 +606,20 @@ defmodule Locus.Keeper do
   end
 
   @doc """
+  The report cyfr-locus keeps of this role's places after `after`, a rev
+  (`t:Prima.LocusPool.report/0`): the counters of the places this role
+  made alone, and the machine's numbers. A keeper that refuses it answers
+  `{:refused, code}`.
+  """
+  @spec report(GenServer.server(), non_neg_integer()) ::
+          {:ok, Prima.LocusPool.report()} | {:error, Locus.Launcher.error()}
+  def report(server, after_rev) when is_integer(after_rev) and after_rev >= 0 do
+    GenServer.call(server, {:report, after_rev}, @pool_timeout_ms)
+  catch
+    :exit, reason -> {:error, {:launcher_unavailable, exit_kind(reason)}}
+  end
+
+  @doc """
   Make the kept home `id` if it is absent and answer its uid, as
   cyfr-locus answers it: a made home's, or the lowest uid of the range
   that cyfr-locus finds no home owning, no process holding and nothing of
@@ -984,7 +1000,8 @@ defmodule Locus.Keeper do
          conns: %{},
          pools: %{},
          homes: %{},
-         # Each measure in flight by its id: its place and its caller.
+         # Each measure and report in flight by its id: its place (or
+         # `:report`) and its caller.
          measures: %{},
          # Each assign in flight by its id, `assign-N` beside every spawn's
          # `N`, measure's and pool's id: its caller.
@@ -1230,22 +1247,11 @@ defmodule Locus.Keeper do
   def handle_call({:resize, ref, rows, cols}, from, state),
     do: spawn_request(ref, &%{type: :resize, spawn_id: &1, rows: rows, cols: cols}, from, state)
 
-  def handle_call({:measure, place}, from, state) do
-    id = "measure-" <> Integer.to_string(state.next_id + 1)
-    state = %{state | next_id: state.next_id + 1}
+  def handle_call({:measure, place}, from, state),
+    do: ask_reading(state, "measure-", %{type: :measure, place: place}, place, from)
 
-    case send_request(state, %{type: :measure, id: id, place: place}) do
-      :ok ->
-        {:noreply, %{state | measures: Map.put(state.measures, id, {place, from})}}
-
-      {:error, :unencodable} ->
-        {:reply, {:error, :unencodable}, state}
-
-      {:error, reason} ->
-        {:stop, {:shutdown, {:channel_lost, reason}},
-         {:error, {:launcher_unavailable, :channel_lost}}, state}
-    end
-  end
+  def handle_call({:report, after_rev}, from, state),
+    do: ask_reading(state, "report-", %{type: :report, after: after_rev}, :report, from)
 
   # A place of an id this client still follows is the caller's error, and
   # cyfr-locus would refuse it.
@@ -1978,6 +1984,7 @@ defmodule Locus.Keeper do
   end
 
   defp on_reply({:measured, id, reading}, state), do: measured(state, id, {:ok, reading})
+  defp on_reply({:reported, id, report}, state), do: measured(state, id, {:ok, report})
   defp on_reply({:released, spawn_id}, state), do: released(state, spawn_id)
 
   defp on_reply({:pool, id, _pool, size, free, quarantined}, state) do
@@ -2066,8 +2073,27 @@ defmodule Locus.Keeper do
 
   defp exited(%{kind: :control}, exit, memory), do: {:exited, exit, memory}
 
-  # A reply settles the one measure it names; one whose caller stopped
-  # waiting reaches no one, and never the caller of another.
+  # A measure or a report under an id of its own, settled by the reply
+  # that names it (measured/3).
+  defp ask_reading(state, prefix, request, what, from) do
+    id = prefix <> Integer.to_string(state.next_id + 1)
+    state = %{state | next_id: state.next_id + 1}
+
+    case send_request(state, Map.put(request, :id, id)) do
+      :ok ->
+        {:noreply, %{state | measures: Map.put(state.measures, id, {what, from})}}
+
+      {:error, :unencodable} ->
+        {:reply, {:error, :unencodable}, state}
+
+      {:error, reason} ->
+        {:stop, {:shutdown, {:channel_lost, reason}},
+         {:error, {:launcher_unavailable, :channel_lost}}, state}
+    end
+  end
+
+  # A reply settles the one measure or report it names; one whose caller
+  # stopped waiting reaches no one, and never the caller of another.
   defp measured(state, id, answer) do
     case Map.pop(state.measures, id) do
       {nil, _measures} ->

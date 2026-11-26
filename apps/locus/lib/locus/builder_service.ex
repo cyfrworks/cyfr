@@ -21,6 +21,14 @@ defmodule Locus.BuilderService do
   protocol says: the release and the toolchains, from a body read within
   #{@max_health_bytes} bytes.
 
+  ## The pool
+
+  `POST /locus/v1/pool` serves the builds role's report
+  (`Locus.PoolRoute`) under this service's pool key, derived from its
+  key: a refused header is `unauthorized`, a body past its bound or one
+  that does not read `malformed`, and a keeper that does not answer
+  `unavailable`.
+
   ## A build, in order
 
   1. **The header, before any of the body.** The `x-cyfr-auth` header is
@@ -138,6 +146,8 @@ defmodule Locus.BuilderService do
   @slots Locus.BuildSlots
   @content_type "application/x-ndjson"
 
+  @pool_route Prima.LocusPool.route()
+
   plug(:match)
   plug(:dispatch)
 
@@ -153,6 +163,9 @@ defmodule Locus.BuilderService do
       {"POST", {:ok, :health}} ->
         health(conn)
 
+      {"POST", :error} when conn.request_path == @pool_route ->
+        pool(conn)
+
       _ ->
         refuse(
           conn,
@@ -160,6 +173,39 @@ defmodule Locus.BuilderService do
         )
     end
   end
+
+  # ————— the pool —————
+
+  # This role's report on the pool wire (`Locus.PoolRoute`), refused in
+  # this wire's classes.
+  defp pool(conn) do
+    report = &Locus.Keeper.report(keeper(conn), &1)
+
+    case Locus.PoolRoute.serve(
+           conn,
+           :builds,
+           Locus.Config.request_key(),
+           report,
+           Locus.Listener.now(conn)
+         ) do
+      {:ok, conn} -> conn
+      {:refused, conn, refusal} -> refuse(conn, pool_refusal(refusal))
+    end
+  end
+
+  defp pool_refusal({:unauthorized, reason}), do: {:unauthorized, reason}
+
+  defp pool_refusal(:too_large),
+    do: {:malformed, "the request runs past #{Prima.LocusPool.max_request_bytes()} bytes"}
+
+  defp pool_refusal({:bad_body, :version}),
+    do: {:malformed, "the request is of another version of the pool wire"}
+
+  defp pool_refusal({:bad_body, :malformed}), do: {:malformed, "the request does not read"}
+  defp pool_refusal(:unavailable), do: {:unavailable, "the keeper did not answer"}
+
+  defp keeper(%Plug.Conn{assigns: %{service_opts: opts}}),
+    do: Keyword.get(opts, :keeper, Locus.Keeper)
 
   # ————— health —————
 

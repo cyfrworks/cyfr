@@ -12,6 +12,14 @@ defmodule Locus.Backends.Service do
   status. Every answer carries `x-cyfr-boot`, the service's lifetime
   (`Locus.Backends.Owners.boot/1`).
 
+  ## The pool
+
+  `POST /locus/v1/pool` serves the backends role's report
+  (`Locus.PoolRoute`) under this service's pool key, derived from its
+  key: a refused header is `unauthorized`, a body past its bound
+  `too_large`, one that does not read `bad_request`, and a keeper that
+  does not answer `unavailable`.
+
   ## Health
 
   `POST /locus/v1/backends/health` answers without authentication: a
@@ -112,6 +120,7 @@ defmodule Locus.Backends.Service do
   alias Prima.LocusBackends
 
   @nonces __MODULE__.Nonces
+  @pool_route Prima.LocusPool.route()
   @json "application/json"
 
   plug(:match)
@@ -154,6 +163,7 @@ defmodule Locus.Backends.Service do
       {"POST", {:ok, :control}} -> control(conn, Listener.now(conn))
       {"POST", {:ok, :session}} -> session(conn, Listener.now(conn))
       {"POST", {:ok, :close}} -> close(conn, Listener.now(conn))
+      _ when conn.method == "POST" and conn.request_path == @pool_route -> pool(conn)
       _ -> refuse(closing(conn), :bad_request)
     end
   end
@@ -199,6 +209,33 @@ defmodule Locus.Backends.Service do
   end
 
   defp release, do: Prima.Version.current()
+
+  # ————— the pool —————
+
+  # This role's report on the pool wire (`Locus.PoolRoute`), refused in
+  # this wire's codes.
+  defp pool(conn) do
+    key =
+      case key(conn) do
+        {:ok, key} -> key
+        :error -> nil
+      end
+
+    report = &Locus.Keeper.report(keeper(conn), &1)
+
+    case Locus.PoolRoute.serve(conn, :backends, key, report, Listener.now(conn)) do
+      {:ok, conn} -> conn
+      {:refused, conn, refusal} -> refuse(conn, pool_refusal(refusal))
+    end
+  end
+
+  defp pool_refusal({:unauthorized, _reason}), do: :unauthorized
+  defp pool_refusal(:too_large), do: :too_large
+  defp pool_refusal({:bad_body, _reason}), do: :bad_request
+  defp pool_refusal(:unavailable), do: :unavailable
+
+  defp keeper(%Plug.Conn{assigns: %{service_opts: opts}}),
+    do: Keyword.get(opts, :keeper, Locus.Keeper)
 
   # ————— control —————
 
