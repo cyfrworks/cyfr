@@ -343,9 +343,11 @@ defmodule Locus.Runtime.WorkerServicePoolTest do
   end
 
   describe "a start whose runner waits for the keeper's room" do
-    # The fresh runner goes to a first start, and the runner the pool
-    # spawns behind it waits for its place, which a second start is given.
+    # The fresh runner, placed before the keeper holds every place, goes to
+    # a first start, and the runner the pool spawns behind it waits for its
+    # place, which a second start is given.
     defp waiting_for_room!(context) do
+      waiting!(context)
       :ok = ScriptedKeeper.placing(context.keeper, :held)
       started!(context)
       wait_until(fn -> ScriptedKeeper.held_places(context.keeper) != [] end)
