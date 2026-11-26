@@ -18,6 +18,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cyfr/locus/keeper/internal/admission"
 	"github.com/cyfr/locus/keeper/internal/frame"
 )
 
@@ -236,7 +237,7 @@ func TestHomeFieldsAreDecoded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if list.Type != TypeHomeList || list.ID != "27" || list.After != kept.Home {
+	if list.Type != TypeHomeList || list.ID != "27" || list.After.ID() != kept.Home {
 		t.Fatalf("home_list decoded to %+v", list)
 	}
 	var scratch int
@@ -262,30 +263,30 @@ func TestHomeRequestBounds(t *testing.T) {
 		line string
 		ok   bool
 	}{
-		{`{"v":7,"type":"home_retire","id":"1","home":"vlt_a-1"}`, true},
-		{`{"v":7,"type":"home_reset","id":"1","home":"` + longest + `"}`, true},
-		{`{"v":7,"type":"home_reset","id":"1","home":"` + longest + `a"}`, false},
-		{`{"v":7,"type":"home_retire","id":"1","home":"_a"}`, false},
-		{`{"v":7,"type":"home_retire","id":"1","home":"a.b"}`, false},
-		{`{"v":7,"type":"home_retire","id":"1","home":""}`, false},
-		{`{"v":7,"type":"home_retire","id":"1"}`, false},
-		{`{"v":7,"type":"home_retire","id":"1","home":"k","pool":"backends"}`, false},
-		{`{"v":7,"type":"home_retire","id":"1","home":"k","home_mode":"kept"}`, false},
-		{`{"v":7,"type":"home_retire","id":"1","home":"k","uid":1}`, false},
-		{`{"v":7,"type":"home_make","home":"k"}`, false},
-		{`{"v":7,"type":"home_list","id":"1"}`, true},
-		{`{"v":7,"type":"home_list","id":"1","after":"k"}`, true},
-		{`{"v":7,"type":"home_list","id":"1","after":""}`, false},
-		{`{"v":7,"type":"home_list","id":"1","after":"k","home":"k"}`, false},
-		{`{"v":7,"type":"pool","id":"1","pool":"backends","home":"k"}`, false},
-		{`{"v":7,"type":"pool","id":"1","pool":"backends","pty":{"rows":24,"cols":80}}`, false},
+		{`{"v":8,"type":"home_retire","id":"1","home":"vlt_a-1"}`, true},
+		{`{"v":8,"type":"home_reset","id":"1","home":"` + longest + `"}`, true},
+		{`{"v":8,"type":"home_reset","id":"1","home":"` + longest + `a"}`, false},
+		{`{"v":8,"type":"home_retire","id":"1","home":"_a"}`, false},
+		{`{"v":8,"type":"home_retire","id":"1","home":"a.b"}`, false},
+		{`{"v":8,"type":"home_retire","id":"1","home":""}`, false},
+		{`{"v":8,"type":"home_retire","id":"1"}`, false},
+		{`{"v":8,"type":"home_retire","id":"1","home":"k","pool":"backends"}`, false},
+		{`{"v":8,"type":"home_retire","id":"1","home":"k","home_mode":"kept"}`, false},
+		{`{"v":8,"type":"home_retire","id":"1","home":"k","uid":1}`, false},
+		{`{"v":8,"type":"home_make","home":"k"}`, false},
+		{`{"v":8,"type":"home_list","id":"1"}`, true},
+		{`{"v":8,"type":"home_list","id":"1","after":"k"}`, true},
+		{`{"v":8,"type":"home_list","id":"1","after":""}`, false},
+		{`{"v":8,"type":"home_list","id":"1","after":"k","home":"k"}`, false},
+		{`{"v":8,"type":"pool","id":"1","pool":"backends","home":"k"}`, false},
+		{`{"v":8,"type":"pool","id":"1","pool":"backends","pty":{"rows":24,"cols":80}}`, false},
 	} {
 		req, err := ParseRequest([]byte(c.line))
 		if c.ok != (err == nil) {
 			t.Errorf("%s: request %+v, refusal %+v", c.line, req, err)
 		}
 	}
-	spawn := `{"v":7,"type":"spawn","id":"1","place":"pl-1","pool":"backends","argv":["x"],"attach":{"path":"/run/a.sock","token":"` + strings.Repeat("a", 64) + `"}`
+	spawn := `{"v":8,"type":"spawn","id":"1","place":"pl-1","pool":"backends","argv":["x"],"attach":{"path":"/run/a.sock","token":"` + strings.Repeat("a", 64) + `"}`
 	for _, c := range []struct {
 		fields string
 		ok     bool
@@ -323,7 +324,7 @@ func TestAPageOfHomesFitsAFrame(t *testing.T) {
 	if len(line) > frame.MaxPayload {
 		t.Fatalf("a full page of homes is %d bytes, past a frame's %d", len(line), frame.MaxPayload)
 	}
-	if empty, _ := Encode(NewHomes("1", nil, "")); string(empty) != `{"v":7,"type":"homes","id":"1","ids":[]}`+"\n" {
+	if empty, _ := Encode(NewHomes("1", nil, "")); string(empty) != `{"v":8,"type":"homes","id":"1","ids":[]}`+"\n" {
 		t.Fatalf("an empty page is %s", empty)
 	}
 }
@@ -365,6 +366,16 @@ func TestSharedRepliesMatchTheEncoders(t *testing.T) {
 		NewError("pl-1", "", CodeBadRequest),
 		NewMeasured("25", Whose{Kind: KindProgram, Athanor: "ath_01a09fee-2c3d-7e4f-8a5b-6c7d8e9f0a1b", Subject: "mcp_01a09fee-2c3d-7e4f-8a5b-6c7d8e9f0a1c"}, Reading{Bytes: 256 << 20}, 412),
 		NewMeasured("25", Whose{Kind: KindWarm}, Reading{Bytes: 192 << 20, Lesser: true}, 0),
+		NewReported("rp-1", Report{Boot: "5f0c3a9e1b7d4c2a8e6f0b3d5a7c9e1f", Budget: 5888 << 20, Work: 4832 << 20, Floor: 164 << 20, Used: 640 << 20,
+			Counters: []Counter{
+				{Rev: 7, Day: "2026-11-27", Athanor: "ath_01a09fee-2c3d-7e4f-8a5b-6c7d8e9f0a1b", Kind: KindProgram, Subject: "mcp_01a09fee-2c3d-7e4f-8a5b-6c7d8e9f0a1c",
+					Bytes: 256 << 20, MiBMs: 512_000, MeasuredMs: 2000, PeakBytes: 288 << 20, Machine: 1},
+				{Rev: 9, Day: "2026-11-26", Athanor: "ath_01a09fee-2c3d-7e4f-8a5b-6c7d8e9f0a1b", Kind: KindTerminal, Subject: "mcp_01a09fee-2c3d-7e4f-8a5b-6c7d8e9f0a1c", Cap: 1},
+			},
+			Next: 9}),
+		NewReported("rp-2", Report{Boot: "5f0c3a9e1b7d4c2a8e6f0b3d5a7c9e1f",
+			Counters: []Counter{{Rev: 1, Day: "2026-11-27", Kind: KindWarm, Bytes: 192 << 20, MiBMs: 384, MeasuredMs: 2, PeakBytes: 192 << 20}}}),
+		NewReported("rp-3", Report{Boot: "5f0c3a9e1b7d4c2a8e6f0b3d5a7c9e1f", Budget: 5888 << 20, Work: 4832 << 20}),
 		NewError("25", "", CodeUnmeasured),
 		NewExited("00112233445566778899aabbccddeeff", nil, &signal, &byEither),
 		NewPlaced("pl-5", 2416<<20),
@@ -392,6 +403,59 @@ func TestSharedRepliesMatchTheEncoders(t *testing.T) {
 		if !reflect.DeepEqual(got, expected) {
 			t.Errorf("reply %d = %s, want %s", i, line, want[i])
 		}
+	}
+}
+
+// A report's after is a whole number, decoded as its rev, and a
+// home_list's a string, decoded as its id: neither takes the other's.
+func TestAReportsAfterIsARev(t *testing.T) {
+	var revs []uint64
+	for _, raw := range loadVectors(t).ValidRequests {
+		req, err := ParseRequest(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if req.Type != TypeReport {
+			continue
+		}
+		rev, ok := req.After.Rev()
+		if !ok || req.After.ID() != "" {
+			t.Fatalf("a report's after decoded to %+v", req.After)
+		}
+		revs = append(revs, rev)
+	}
+	if !slices.Equal(revs, []uint64{0, MaxRev}) {
+		t.Fatalf("the vectors' reports are after %v", revs)
+	}
+	for _, line := range []string{
+		`{"v":8,"type":"report","id":"r","after":1.0}`,
+		`{"v":8,"type":"report","id":"r","after":1e3}`,
+		`{"v":8,"type":"report","id":"r","after":true}`,
+		`{"v":8,"type":"report","id":"r","after":null}`,
+		`{"v":8,"type":"home_list","id":"r","after":{"id":"k"}}`,
+	} {
+		if _, err := ParseRequest([]byte(line)); err == nil || err.Reply() != NewError("r", "", CodeBadRequest) {
+			t.Errorf("%s: refusal %+v", line, err)
+		}
+	}
+}
+
+// A full page of counters of the longest athanors and subjects, every
+// number at its most, fits one line of the channel.
+func TestAPageOfCountersFitsALine(t *testing.T) {
+	most := ^uint64(0)
+	page := make([]Counter, admission.ReportCounters)
+	for i := range page {
+		page[i] = Counter{Rev: MaxRev, Day: "2026-11-27", Athanor: strings.Repeat("a", 256), Kind: KindTerminal, Subject: strings.Repeat("s", 64),
+			Bytes: most, MiBMs: most, MeasuredMs: most, PeakBytes: most, Cap: most, Machine: most, Either: most}
+	}
+	line, err := Encode(NewReported(strings.Repeat("i", 64), Report{Boot: strings.Repeat("b", 32), Budget: most, Work: most, Floor: most,
+		Used: most, Counters: page, Next: MaxRev}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(line) > MaxLineBytes {
+		t.Fatalf("a full page of counters is %d bytes, past a line's %d", len(line), MaxLineBytes)
 	}
 }
 
@@ -452,7 +516,7 @@ func TestSharedPacksRepliesMatchTheEncoders(t *testing.T) {
 // of the request.
 func TestAPacksPutsLargestPartFitsALine(t *testing.T) {
 	data := base64.StdEncoding.EncodeToString(make([]byte, MaxPackPartBytes))
-	line := `{"v":7,"type":"packs_put","id":"` + strings.Repeat("i", 64) + `","athanor":"` + strings.Repeat("a", 256) +
+	line := `{"v":8,"type":"packs_put","id":"` + strings.Repeat("i", 64) + `","athanor":"` + strings.Repeat("a", 256) +
 		`","lifetime":"` + strings.Repeat("l", 128) + `","digest":"sha256:` + strings.Repeat("0", 64) + `","seq":65536,"last":true,"data":"` + data + `"}`
 	if len(line) > MaxLineBytes {
 		t.Fatalf("the largest put is %d bytes, past a line's %d", len(line), MaxLineBytes)
@@ -583,7 +647,7 @@ func TestASpawnNamesNoBound(t *testing.T) {
 			}
 		}
 	}
-	req, refused := ParseRequest([]byte(`{"v":7,"type":"place","id":"pl-5","kind":"terminal","athanor":"ath_one","athanor_max_bytes":2147483648}`))
+	req, refused := ParseRequest([]byte(`{"v":8,"type":"place","id":"pl-5","kind":"terminal","athanor":"ath_one","athanor_max_bytes":2147483648}`))
 	if refused != nil || req.AthanorMax == nil || *req.AthanorMax != 2<<30 {
 		t.Fatalf("a session's place with its athanor's ceiling: %+v, %+v", req, refused)
 	}
@@ -625,8 +689,8 @@ func TestRlimitsDefaultToTheCeilings(t *testing.T) {
 func TestMalformedJSONIsRefusedWithoutEchoingInput(t *testing.T) {
 	for _, line := range []string{
 		`not json`,
-		`{"v":7,"type":"pool","id":"1","pool":"backends"} {"v":2}`,
-		`{"v":7,"type":"spawn","id":"1","pool":"backends","argv":"secret-value"}`,
+		`{"v":8,"type":"pool","id":"1","pool":"backends"} {"v":2}`,
+		`{"v":8,"type":"spawn","id":"1","pool":"backends","argv":"secret-value"}`,
 		`[]`,
 		``,
 	} {
@@ -645,7 +709,7 @@ func TestMalformedJSONIsRefusedWithoutEchoingInput(t *testing.T) {
 }
 
 func TestEnvValueNeverAppearsInARefusal(t *testing.T) {
-	line := `{"v":7,"type":"spawn","id":"1","pool":"backends","argv":["x"],"env":{"TOKEN":"secret-value\u0000"},"memory_bytes":536870912,"attach":{"path":"/run/a.sock","token":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}}`
+	line := `{"v":8,"type":"spawn","id":"1","pool":"backends","argv":["x"],"env":{"TOKEN":"secret-value\u0000"},"memory_bytes":536870912,"attach":{"path":"/run/a.sock","token":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}}`
 	_, err := ParseRequest([]byte(line))
 	if err == nil {
 		t.Fatal("a NUL in an env value was accepted")

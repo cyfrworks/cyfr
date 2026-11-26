@@ -9,8 +9,9 @@ the command runner (`run`), the teardown on a signal (`stop_on_signals`),
 the temporary directories removed at exit (`temporary_directory`), the
 default bridge's gateway (`bridge_gateway`), the reading of a guard's
 failure from its inspect record (`guard_failed`), the bound the keeper
-sets on each kind of spawn (`cap_bytes`) and the settings that size the
-pool's work on this machine (`work_settings`), and the part of a
+sets on each kind of spawn (`cap_bytes`), the settings that size the
+pool's work on this machine (`work_settings`), the pool wire a service
+reports its role's use on (`pool_reports`, `pool_refuses_others`), and the part of a
 compose stack that does not depend on the service (`Stack`: its project
 name, its project directory holding the seccomp profiles docker-compose.yml
 names, and `down`). What differs between them (compose files, services,
@@ -21,6 +22,9 @@ imports the runtime harness on every change.
 """
 
 import atexit
+import base64
+import hashlib
+import hmac
 import json
 import os
 import re
@@ -31,6 +35,8 @@ import sys
 import tempfile
 import threading
 import time
+import urllib.error
+import urllib.request
 
 # Prefixed to every compose project and container of a run, and so to its
 # project directory and network, for a host that tells one run's Docker
@@ -69,6 +75,86 @@ FLOOR_RUNNERS = _POOL["floor_runners"]
 ALLOWANCE_BYTES = _POOL["allowance_bytes"]
 ROOM_WAIT_MS = _POOL["room_wait_ms"]
 ALLOWANCE_MS = _POOL["allowance_ms"]
+
+# The pool wire (Prima.LocusPool, "The pool wire"), from the same file: the
+# route each service serves its role's report on, the header its requests
+# are signed in, and each place's kind by the role whose places they are.
+POOL_WIRE = _POOL["wire"]
+ROLE_KINDS = {"runtime": {"warm", "run"}, "builds": {"build"}, "backends": {"program", "terminal"}}
+
+
+def pool_key(service, given):
+    """The pool key of `service` (runtime, builds or backends) from the key it is given, as Prima.LocusPool.pool_key/2
+    derives it: the HMAC-SHA256 over its pool label of the key the service holds, which for the builds service is the
+    request key of the key it was given (the label `cyfr-locus/v1/builds` first)."""
+    held = hmac.new(given, b"cyfr-locus/v1/builds", hashlib.sha256).digest() if service == "builds" else given
+    return hmac.new(held, f"cyfr-locus/v1/{service}/pool".encode(), hashlib.sha256).digest()
+
+
+def pool_header(service, key, ts, body):
+    """The x-cyfr-auth header of a pool request of `body` to `service` at `ts`, signed with the pool key `key`."""
+    body_hash = hashlib.sha256(body).hexdigest()
+    canonical = f"cyfr-locus/v1/{service}/pool/pool\n{ts}\n{body_hash}".encode()
+    mac = base64.urlsafe_b64encode(hmac.new(key, canonical, hashlib.sha256).digest()).rstrip(b"=").decode()
+    return f"v1 kind=pool ts={ts} body={body_hash} mac={mac}"
+
+
+def pool_ask(base, service, own_key, after=0, signer=None):
+    """Asks `service` at `base` for its role's report after the rev `after`, signed with `signer`'s pool key derived
+    from `own_key`, the key the service was given (`pool_key`), the service's own by default: (HTTP status, the
+    decoded answer)."""
+    body = json.dumps({"v": POOL_WIRE["version"], "after": after}, separators=(",", ":")).encode()
+    header = pool_header(signer or service, pool_key(signer or service, own_key), int(time.time() * 1000), body)
+    request = urllib.request.Request(base + POOL_WIRE["route"], data=body, method="POST",
+                                     headers={"content-type": "application/json", POOL_WIRE["auth_header"]: header})
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            return response.status, json.loads(response.read())
+    except urllib.error.HTTPError as error:
+        return error.code, error.read().decode(errors="replace")
+
+
+def pool_reports(base, service, own_key):
+    """Every counter `service`'s role reports, paged by rev from 0, and the keeper's boot each page named, checked as
+    the wire says: each page within its bound and in ascending rev, each counter once, of the role's kinds alone, and
+    a page naming the last rev when more follow. Fails the suite otherwise."""
+    counters, boots, after = [], set(), 0
+    while True:
+        status, answer = pool_ask(base, service, own_key, after)
+        if status != 200 or not isinstance(answer, dict) or answer.get("v") != POOL_WIRE["version"]:
+            sys.exit(f"FAIL: {service}'s pool route answers {status}: {answer}")
+        report = answer["report"]
+        page = report["counters"]
+        revs = [c["rev"] for c in page]
+        if len(page) > _POOL["counters"]["report_counters"] or revs != sorted(set(revs)) or any(r <= after for r in revs):
+            sys.exit(f"FAIL: {service}'s report page after {after} is not in ascending rev within its bound: {revs}")
+        if not re.fullmatch(r"[0-9a-f]{32}", report["boot"]):
+            sys.exit(f"FAIL: {service}'s report names no keeper boot: {report['boot']!r}")
+        boots.add(report["boot"])
+        counters.extend(page)
+        if "next" not in report:
+            break
+        if report["next"] != revs[-1]:
+            sys.exit(f"FAIL: {service}'s report names next {report['next']}, not its page's last rev {revs[-1]}")
+        after = report["next"]
+    keys = [(c["day"], c.get("athanor"), c["kind"], c.get("subject")) for c in counters]
+    if len(set(keys)) != len(keys):
+        sys.exit(f"FAIL: {service} reports a counter more than once: {keys}")
+    others = [c for c in counters if c["kind"] not in ROLE_KINDS[service]]
+    if others:
+        sys.exit(f"FAIL: {service} reports counters of another role's kinds: {others}")
+    if len(boots) != 1:
+        sys.exit(f"FAIL: {service}'s report pages name more than one keeper boot: {boots}")
+    return boots.pop(), counters
+
+
+def pool_refuses_others(base, service, own_key):
+    """`service`'s pool route refuses, 401, a request signed with either other service's pool key derived from the same
+    key. Fails the suite otherwise."""
+    for signer in sorted(set(ROLE_KINDS) - {service}):
+        status, answer = pool_ask(base, service, own_key, signer=signer)
+        if status != 401:
+            sys.exit(f"FAIL: {service} answers {status} to a pool request signed with {signer}'s pool key: {answer}")
 
 
 def cap_bytes(kind, work):

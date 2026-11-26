@@ -31,6 +31,14 @@ func TestThePoolsNumbersArePrimasLocusPools(t *testing.T) {
 		CapBytes       map[string]uint64 `json:"cap_bytes"`
 		LeastCapBytes  map[string]uint64 `json:"least_cap_bytes"`
 		Processors     map[string]uint64 `json:"processors"`
+		Counters       struct {
+			MaxCounters    int   `json:"max_counters"`
+			ReportCounters int   `json:"report_counters"`
+			KeepMs         int64 `json:"keep_ms"`
+			ReadingGapMs   int64 `json:"reading_gap_ms"`
+		} `json:"counters"`
+		// Wire is the HTTP pool wire's vectors, none of them the keeper's.
+		Wire json.RawMessage `json:"wire"`
 	}
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
@@ -66,6 +74,10 @@ func TestThePoolsNumbersArePrimasLocusPools(t *testing.T) {
 	if len(v.LeastCapBytes) != 2 || v.LeastCapBytes["runner"] != LeastCapBytes[Runner] ||
 		v.LeastCapBytes["session"] != LeastCapBytes[Session] {
 		t.Errorf("the vector's least caps %v, the keeper's %v", v.LeastCapBytes, LeastCapBytes)
+	}
+	if c := v.Counters; c.MaxCounters != MaxCounters || c.ReportCounters != ReportCounters ||
+		c.KeepMs != ms(CounterKeep) || c.ReadingGapMs != ms(ReadingGap) {
+		t.Errorf("the vector's counters %+v differ from the keeper's", c)
 	}
 }
 

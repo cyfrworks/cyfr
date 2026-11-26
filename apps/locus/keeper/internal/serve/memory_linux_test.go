@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -149,6 +150,7 @@ cat /proc/self/cgroup`
 
 func TestASpawnPastItsBoundIsKilledWholeAndReportedSoWhileASiblingCompletes(t *testing.T) {
 	k := boundedKeeper(t)
+	started := time.Now()
 	// The sibling holds 8 MiB under a bound of 64; the hostile spawn forks
 	// eight holders of 16 MiB under a bound of 64, none of them large, and
 	// a daemon in a session of its own that ignores SIGTERM.
@@ -166,6 +168,21 @@ wait`, k.helper)
 	}
 	if e := exited[siblingID]; e["code"] != float64(0) || e["memory"] != nil {
 		t.Fatalf("the sibling exited %v", e)
+	}
+	// The kill is counted once, at the hostile spawn's release, in the
+	// counter of the two spawns' places, which no reading made.
+	k.s.handle(k.c, parsed(t, `{"v":8,"type":"report","id":"rp","after":0}`))
+	report, _ := k.reply(t)["report"].(map[string]any)
+	counters, _ := report["counters"].([]any)
+	if len(counters) != 1 {
+		t.Fatalf("the report after the kill: %v", report)
+	}
+	counter, _ := counters[0].(map[string]any)
+	day := counter["day"]
+	want := map[string]any{"rev": 1.0, "day": day, "kind": k.kind(), "bytes": 0.0, "mib_ms": 0.0, "measured_ms": 0.0,
+		"peak_bytes": 0.0, "cap": 1.0, "machine": 0.0, "either": 0.0}
+	if !reflect.DeepEqual(counter, want) || day != started.UTC().Format(time.DateOnly) && day != time.Now().UTC().Format(time.DateOnly) {
+		t.Fatalf("the kill's counter %v, want %v", counter, want)
 	}
 	siblingConn.readUntil(t, func() bool { return false })
 	if got := string(siblingConn.got[frame.StreamStdout]); got != "held\n" {
@@ -216,7 +233,7 @@ func TestAnExitForAnotherReasonIsNotAMemoryEnd(t *testing.T) {
 func (k *keeper) measure(t *testing.T, place string) map[string]any {
 	t.Helper()
 	id := "measure-" + place
-	k.s.handle(k.c, parsed(t, `{"v":7,"type":"measure","id":"`+id+`","place":"`+place+`"}`))
+	k.s.handle(k.c, parsed(t, `{"v":8,"type":"measure","id":"`+id+`","place":"`+place+`"}`))
 	m := k.reply(t)
 	if _, named := m["spawn_id"]; named || m["id"] != id {
 		t.Fatalf("measuring %s answered %v", place, m)
@@ -599,6 +616,41 @@ func TestARetirementLeavesTheCauseOfAKillToBeRead(t *testing.T) {
 			if len(told) != 2 || told[0]["type"] != protocol.TypeExited || told[0]["memory"] != protocol.MemoryCap ||
 				told[0]["signal"] != "SIGKILL" || told[1]["type"] != protocol.TypeReleased {
 				t.Fatalf("a spawn killed at its cap and retired was told %v; want its exit with cap, then its release", told)
+			}
+		})
+	}
+}
+
+// A retirement that reports no exit, as at its role's death, reads what
+// the kernel killed the spawn for while the group's counters stand, and the
+// release counts that kill once, though no exit and no watcher said it.
+func TestARetirementWithoutAnExitCountsItsKillAtTheRelease(t *testing.T) {
+	for _, kept := range []bool{false, true} {
+		t.Run(fmt.Sprintf("kept %t", kept), func(t *testing.T) {
+			k, sp, _ := killedAtItsCap(t, kept)
+			k.s.handle(k.c, parsed(t, fmt.Sprintf(`{"v":8,"type":"place","id":"pk","kind":%q,"athanor":"ath_k"}`, k.kind())))
+			if placed := k.reply(t); placed["type"] != protocol.TypePlaced {
+				t.Fatalf("the place: %v", placed)
+			}
+			k.s.mu.Lock()
+			p := k.c.places["pk"]
+			p.named, p.spawn, sp.place = true, sp, "pk"
+			k.s.mu.Unlock()
+
+			k.s.retire(sp, 0, false)
+			awaitRetired(t, sp)
+			if told := k.toldSoFar(t); len(told) != 0 {
+				t.Fatalf("a retirement without notice told %v", told)
+			}
+			k.s.handle(k.c, parsed(t, `{"v":8,"type":"report","id":"rp","after":0}`))
+			report, _ := k.reply(t)["report"].(map[string]any)
+			counters, _ := report["counters"].([]any)
+			if len(counters) != 1 {
+				t.Fatalf("the report after the kill: %v", report)
+			}
+			if counter, _ := counters[0].(map[string]any); counter["cap"] != 1.0 || counter["machine"] != 0.0 ||
+				counter["either"] != 0.0 || counter["athanor"] != "ath_k" || counter["kind"] != k.kind() {
+				t.Fatalf("the kill's counter %v; want one kill at its cap", counter)
 			}
 		})
 	}

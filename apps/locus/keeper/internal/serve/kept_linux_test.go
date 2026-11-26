@@ -472,7 +472,7 @@ func TestAResizeReachesAPtySpawnsTerminal(t *testing.T) {
 	spawnID := spawned["spawn_id"].(string)
 	rc := k.accept(t)
 	rc.readUntil(t, func() bool { return strings.Contains(string(rc.got[frame.StreamStdout]), "24 80") })
-	resize, rerr := protocol.ParseRequest([]byte(`{"v":7,"type":"resize","spawn_id":"` + spawnID + `","rows":50,"cols":132}`))
+	resize, rerr := protocol.ParseRequest([]byte(`{"v":8,"type":"resize","spawn_id":"` + spawnID + `","rows":50,"cols":132}`))
 	if rerr != nil {
 		t.Fatal(rerr.Detail)
 	}
@@ -772,7 +772,7 @@ func TestHomeListPagesTheHomesInOrder(t *testing.T) {
 	s, c, replies := channelServer(t, kept)
 	list := func(after string) protocol.Homes {
 		t.Helper()
-		s.handle(c, &protocol.Request{V: protocol.Version, Type: protocol.TypeHomeList, ID: "l", After: after})
+		s.handle(c, &protocol.Request{V: protocol.Version, Type: protocol.TypeHomeList, ID: "l", After: protocol.AfterID(after)})
 		line, _, err := replies.Next()
 		if err != nil {
 			t.Fatal(err)
@@ -798,7 +798,7 @@ func TestHomeListPagesTheHomesInOrder(t *testing.T) {
 	kept.Root = filepath.Join(kept.Root, "absent")
 	s.handle(c, &protocol.Request{V: protocol.Version, Type: protocol.TypeHomeList, ID: "l"})
 	line, _, _ := replies.Next()
-	if want := `{"v":7,"type":"error","id":"l","code":"unavailable"}`; string(line) != want {
+	if want := `{"v":8,"type":"error","id":"l","code":"unavailable"}`; string(line) != want {
 		t.Fatalf("a list of a root that cannot be read: %s", line)
 	}
 }

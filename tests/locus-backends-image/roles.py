@@ -32,6 +32,15 @@ signed as CYFR signs them:
 - A role killed starts again alone: the other two keep their processes and
   a program's session keeps running; the container started again serves
   all three.
+- Each role serves its own report on the pool wire (Prima.LocusPool) under
+  the pool key derived from its own key and refuses the other two's: the
+  three reports name one keeper boot, each holds its role's kinds alone and
+  each counter once, the run under its athanor and the program under its
+  owner's athanor and row. A role killed and started again reports under
+  the same boot every counter it had, with a rev and totals no smaller, and
+  a program opened after the backends' restart takes a rev past every one
+  before it; the container started again, its keeper with it, reports
+  under another boot.
 
 A request on a role's channel naming another role's pool, spawn, place or
 home is refused by the keeper itself, and a role's environment holds its
@@ -220,6 +229,18 @@ def test_reach(stack, c):
     judge_reach("a build", reach_lines(builder.output_file(answer, "index.html") or ""), "builds")
 
 
+def counted_build(stack):
+    """A build of the builds role that lasts past the keeper's readings, so its role has a counter: test_reach's ends
+    before any reading."""
+    b = builder.Stack.__new__(builder.Stack)
+    b.base, b.key = stack.port("builds"), stack.builds_key
+    status, answer = b.build(builder.tincture("sleep 4\nmkdir -p dist\necho counted > dist/index.html\n"),
+                             "javascript", "tincture", athanor_id="ath_roles-build")
+    expect(status == 200, "a build that lasts a few seconds succeeds", builder.brief(answer))
+    eventually(lambda: [k for k in reports(stack)["builds"][1] if k.get("athanor") == "ath_roles-build"],
+               "the builds role to count the build", timeout_s=30)
+
+
 def test_run(stack, plane):
     base = stack.port("runtime")
     status = eventually(lambda: (lambda s: s if s[0] == 200 else None)(plane.status(base)),
@@ -263,6 +284,12 @@ def test_bounds(stack, pids):
                f"cpu {want[2]}", [group, chain])
 
 
+def answering(stack, victim):
+    """Waits, bounded, until the image's probe (apps/locus/health.sh) says every role answers on its port."""
+    eventually(lambda: stack.exec("locus-health").returncode == 0,
+               f"every role to answer once the {victim} role started again", timeout_s=60)
+
+
 def test_restart_alone(stack, c, victim):
     before = stack.role_pids()
     session = c.mcp(OWNER, "scratch", key="steady")
@@ -276,8 +303,11 @@ def test_restart_alone(stack, c, victim):
             expect(after[name] == before[name], f"killing the {victim} role leaves the {name} role's process", [before, after])
     stack.healthy()
     # The container's health is read every ten seconds: the backends' own
-    # answer says the role started again listens.
+    # answer says the role started again listens, and the image's probe that
+    # every role answers again, the one started again among them, before
+    # anything asks it more.
     wait_healthy(stack.base)
+    answering(stack, victim)
     if victim != "backends":
         again = c.mcp(OWNER, "scratch", key="steady").call("whoami", {})
         expect(again[0] == 200 and json.loads(again[1]["result"]["content"][0]["text"])["pid"]
@@ -298,6 +328,51 @@ def serving(stack):
     status, answer, _ = c.sync(OWNER, [probe("scratch"), probe(home="kept")])
     expect(status == 200, "an owner of a pooled and a kept program is synced", answer)
     return c
+
+
+def own_keys(stack):
+    """The key each role's service was given, which imagesuite.pool_key derives its pool key from."""
+    return {"runtime": stack.plane.worker_key, "builds": bytes.fromhex(stack.builds_key), "backends": stack.key}
+
+
+def reports(stack):
+    """Each role's report, read whole: {role: (boot, counters)}."""
+    return {role: imagesuite.pool_reports(stack.port(role), role, key) for role, key in own_keys(stack).items()}
+
+
+def test_reports(stack):
+    read = reports(stack)
+    boots = {boot for boot, _ in read.values()}
+    expect(len(boots) == 1, "the three roles' reports name one keeper boot", boots)
+    runs = [c for c in read["runtime"][1] if c["kind"] == "run" and c.get("athanor") == "ath_roles"]
+    expect(len(runs) == 1, "the runtime reports the run once, under its athanor", read["runtime"][1])
+    programs = [c for c in read["backends"][1]
+                if (c.get("athanor"), c.get("subject")) == (OWNER["athanor"], OWNER["server"])]
+    expect(len(programs) == 1 and programs[0]["kind"] == "program",
+           "the backends report the program once, under its owner's athanor and row", read["backends"][1])
+    for role, key in own_keys(stack).items():
+        imagesuite.pool_refuses_others(stack.port(role), role, key)
+    return read
+
+
+def last_rev(counters):
+    return max((c["rev"] for c in counters), default=0)
+
+
+# What a counter only gains: its time, its use, its peak and its kills.
+GAINED = ("mib_ms", "measured_ms", "peak_bytes", "cap", "machine", "either")
+
+
+def kept_on(before, after, role):
+    """A role started again reports under the same boot every counter it had, with a rev and totals no smaller."""
+    (boot, old), (again, new) = before, after
+    expect(again == boot, f"the {role} role started again reports under the same boot", [boot, again])
+    by_key = {(c["day"], c.get("athanor"), c["kind"], c.get("subject")): c for c in new}
+    for counter in old:
+        now = by_key.get((counter["day"], counter.get("athanor"), counter["kind"], counter.get("subject")))
+        expect(now is not None and now["rev"] >= counter["rev"] and all(now[k] >= counter[k] for k in GAINED),
+               f"the {role} role started again still counts {counter['kind']} of {counter.get('athanor')}, "
+               "with a rev and totals no smaller", [counter, now])
 
 
 def mem_total(stack):
@@ -367,15 +442,42 @@ def main():
         test_pool_bounds(stack)
         test_apart(stack, pids)
         test_run(stack, plane)
+        test_reports(stack)
         test_reach(stack, c)
+        counted_build(stack)
+        # Every role has counted by now: the build that lasts, the run, the
+        # program and the floor's runner.
+        before = reports(stack)
+        expect(all(before[role][1] for role in ROLES), "every role has counters before its restart",
+               {role: len(counters) for role, (_, counters) in before.items()})
         test_bounds(stack, pids)
         for victim in ("builds", "runtime", "backends"):
             test_restart_alone(stack, c, victim)
+        after = reports(stack)
+        for role in ROLES:
+            kept_on(before[role], after[role], role)
+        # A program opened after the backends' restart is counted on, its
+        # rev past every rev before the restart.
+        c = stack.controller()
+        expect(c.hello()[0] == 200, "the backends role started again is greeted")
+        status, answer, _ = c.sync(OWNER, [probe("scratch"), probe(home="kept")])
+        expect(status == 200, "the owner is synced again", answer)
+        expect(c.mcp(OWNER, "scratch", key="after").call("whoami", {})[0] == 200,
+               "a program opens after the backends' restart")
+        old = last_rev(after["backends"][1])
+        eventually(lambda: [k for k in reports(stack)["backends"][1] if k["rev"] > old],
+                   "a change of the backends' counters past every rev before its restart", timeout_s=30)
         run("docker", "restart", stack.container)
         stack.published()
         stack.healthy()
         expect(sorted(stack.role_pids()) == sorted(ROLES), "the container started again runs every role",
                stack.role_pids())
+        again = eventually(lambda: (lambda r: r if all(r[role][1] for role in ("runtime",)) else None)(reports(stack)),
+                           "the keeper started again to count", timeout_s=60)
+        expect(len({boot for boot, _ in again.values()}) == 1
+               and next(iter(again.values()))[0] != next(iter(before.values()))[0],
+               "the keeper started again reports under another boot, the same for every role",
+               {role: boot for role, (boot, _) in again.items()})
         test_no_work(stack)
     finally:
         stack.down()

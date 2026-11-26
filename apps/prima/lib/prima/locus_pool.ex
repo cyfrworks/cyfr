@@ -48,6 +48,67 @@ defmodule Prima.LocusPool do
   The keeper's Go reads this module's values from
   `tests/fixtures/locus_pool.json`, which `Prima.LocusPoolTest` holds to
   them.
+
+  ## Who used what
+
+  The keeper alone counts, once, what each place used (`t:counter/0`): by
+  the role that made the place, the UTC day, athanor, kind and subject.
+  Each successful reading adds the time since that place's previous one,
+  at most `reading_gap_ms/0`, to `measured_ms`, and that time multiplied
+  by the reading's bytes to `mib_ms`; the first reading adds nothing and a
+  longer gap goes uncounted. A counter's `bytes` is the sum of its places'
+  latest readings, real use and not a charge, so during a start's first
+  `allowance_ms/0` it shows less than the start is charged; `peak_bytes`
+  is the most it held. A kill for memory is counted at the release, once,
+  in `cap`, `machine` or `either`, on the counter of whoever held the place
+  then, whether or not a reading followed. A place moved to another kind,
+  athanor or subject takes its bytes along, and at a day's end every live
+  place's bytes move to that day's counter, so the day before goes to 0.
+  Every change of a counter takes its role's next `rev`, one sequence per
+  role for the keeper's boot. A counter goes `keep_ms/0` after its last
+  change. At most `max_counters/0` are held: making another first drops
+  the oldest counter of a past day that holds nothing, and when today's
+  alone fill them the new one is not made and its use goes uncounted. A
+  counter of today is never dropped.
+
+  A role's report (`t:report/0`, `read_report/1`, `encode_report/1`) holds
+  the counters of its own places alone, at most `report_counters/0` by
+  rev after the one asked for, `next` naming the last when more follow,
+  beside the machine's numbers: the keeper's `boot`, its `budget`, `work`
+  (W), `floor` (F, where kept) and `used`, every charge outside the floor,
+  the sum a refusal's `free` is taken from. The keeper's boot id is minted
+  at its start, random: a restart of the keeper starts every counter and
+  rev again under another boot; a restart of a role process keeps them.
+
+  ## The pool wire
+
+  Each Locus service, runtime, builds and backends, serves its role's
+  report at `POST #{"/locus/v1/pool"}` (`route/0`). The body is
+  `{"v": 1, "after": rev}` (`request_body/1`, `read_request_body/1`), read
+  within `max_request_bytes/0`; the answer `{"v": 1, "report": report}`
+  (`answer/1`, `read_answer/1`). A request is signed, carried in
+  `x-cyfr-auth`, as `Prima.MacEnvelope` signs: the prefix
+  `cyfr-locus/v1/<service>/pool`, the kind `pool`, the field `ts` and the
+  body's hash, within `window_ms/0` of the listener's clock
+  (`header/4`, `verify_header/4`, `verify_body/2`). No nonce is kept: the
+  call reads only. The key is the **pool key**, derived over the same
+  label from the key the service is given (`pool_key/2`): the builds
+  service's `LOCUS_BUILDS_KEY`, through its request key
+  (`Prima.BuilderProtocol.request_key/1`), which is all the builds service
+  holds of it; the backends service's `LOCUS_BACKENDS_KEY`; a worker
+  service's `LOCUS_RUNTIME_KEY` (`Prima.WorkerAuth.worker_key/2` of CYFR's
+  root). CYFR and every test derive it from the given key with
+  `pool_key/2`; each listener derives it from the key it holds with
+  `held_pool_key/2`, the one definition `pool_key/2` takes its last step
+  through.
+  It signs and verifies this route at that one service and nothing else:
+  no other verifier takes a key derived over a `/pool` label, and the key
+  gives neither the service's own nor any other key derived from it. The
+  label names the service, so a pool header of one service is refused by
+  the two others even where all three were given the same key. The answer
+  is plain, as every answer a Locus service gives CYFR is: CYFR reads it on
+  the connection it made, so an attacker inside the island's network could
+  feed CYFR a false report, as it could a false build.
   """
 
   @mib 1024 * 1024
@@ -66,6 +127,17 @@ defmodule Prima.LocusPool do
     session: @allowance_bytes.session
   }
   @processors %{runner: 1, build: 1, session: 2}
+  @max_counters 16_384
+  @report_counters 256
+  @keep_ms 48 * 3_600_000
+  @reading_gap_ms 2_000
+
+  @version 1
+  @route "/locus/v1/pool"
+  @services [:runtime, :builds, :backends]
+  @max_request_bytes 1_024
+  @boot ~r/\A[0-9a-f]{32}\z/
+  @max_integer 9_007_199_254_740_991
 
   @typedoc "What a place's kind is charged and bounded as."
   @type class :: :runner | :build | :session
@@ -82,6 +154,45 @@ defmodule Prima.LocusPool do
           mine: [%{kind: String.t(), subject: String.t() | nil, bytes: non_neg_integer()}],
           others_bytes: non_neg_integer()
         }
+
+  @typedoc """
+  One counter of who used what: its role's `rev` at its last change, its
+  UTC `day`, its athanor and subject or nil, its kind, the sum of its
+  places' latest readings, its MiB-milliseconds and measured
+  milliseconds, the most bytes it held, and its kills for memory by cause.
+  """
+  @type counter :: %{
+          rev: pos_integer(),
+          day: Date.t(),
+          athanor: String.t() | nil,
+          kind: String.t(),
+          subject: String.t() | nil,
+          bytes: non_neg_integer(),
+          mib_ms: non_neg_integer(),
+          measured_ms: non_neg_integer(),
+          peak_bytes: non_neg_integer(),
+          cap: non_neg_integer(),
+          machine: non_neg_integer(),
+          either: non_neg_integer()
+        }
+
+  @typedoc """
+  A role's report: the keeper's boot id, the machine's budget, work, floor
+  and used bytes, the role's counters after the rev asked for, and the
+  last rev of the page when more follow.
+  """
+  @type report :: %{
+          boot: String.t(),
+          budget: non_neg_integer(),
+          work: non_neg_integer(),
+          floor: non_neg_integer(),
+          used: non_neg_integer(),
+          counters: [counter()],
+          next: pos_integer() | nil
+        }
+
+  @typedoc "A service that serves the pool wire."
+  @type service :: :runtime | :builds | :backends
 
   @doc "F, the memory the warm floor keeps from builds and programs: its one runner's allowance, 164 MiB."
   @spec floor_bytes() :: pos_integer()
@@ -135,6 +246,279 @@ defmodule Prima.LocusPool do
   @doc "The processors of each spawn of the class."
   @spec processors(class()) :: pos_integer()
   def processors(class), do: Map.fetch!(@processors, class)
+
+  @doc "The most counters the keeper holds."
+  @spec max_counters() :: pos_integer()
+  def max_counters, do: @max_counters
+
+  @doc "The most counters one report carries."
+  @spec report_counters() :: pos_integer()
+  def report_counters, do: @report_counters
+
+  @doc "How long a counter stays after its last change: 48 hours."
+  @spec keep_ms() :: pos_integer()
+  def keep_ms, do: @keep_ms
+
+  @doc "The longest gap between a place's readings that is counted."
+  @spec reading_gap_ms() :: pos_integer()
+  def reading_gap_ms, do: @reading_gap_ms
+
+  @doc "The pool wire's version, carried in every body and answer as `v`."
+  @spec version() :: pos_integer()
+  def version, do: @version
+
+  @doc "The pool wire's one route, on each service."
+  @spec route() :: String.t()
+  def route, do: @route
+
+  @doc "The services that serve the pool wire."
+  @spec services() :: [service()]
+  def services, do: @services
+
+  @doc "The most bytes a request body may be."
+  @spec max_request_bytes() :: pos_integer()
+  def max_request_bytes, do: @max_request_bytes
+
+  @doc "How far a header's `ts` may be from the listener's clock: the builds wire's window."
+  @spec window_ms() :: pos_integer()
+  def window_ms, do: Prima.BuilderProtocol.window_ms()
+
+  @doc "The label a service's pool key derives over and its headers sign under."
+  @spec label(service()) :: String.t()
+  def label(service) when service in @services, do: Prima.MacEnvelope.label(service) <> "/pool"
+
+  @doc """
+  The pool key of `service`, from the key the service is given: the
+  builds service key (`LOCUS_BUILDS_KEY`, whose request key is taken
+  first), the backends service key, or a worker service's key
+  (`Prima.WorkerAuth.worker_key/2`).
+  """
+  @spec pool_key(service(), binary()) :: binary()
+  def pool_key(:builds, given) when byte_size(given) == 32,
+    do: held_pool_key(:builds, Prima.BuilderProtocol.request_key(given))
+
+  def pool_key(service, given) when service in @services and byte_size(given) == 32,
+    do: held_pool_key(service, given)
+
+  @doc """
+  The pool key of `service`, from the key that service holds: the builds
+  service's request key (`Prima.BuilderProtocol.request_key/1`), the
+  backends service key, or a worker service's key.
+  """
+  @spec held_pool_key(service(), binary()) :: binary()
+  def held_pool_key(service, held) when service in @services and byte_size(held) == 32,
+    do: Prima.MacEnvelope.derive(held, label(service))
+
+  defp envelope(service),
+    do: %Prima.MacEnvelope{prefix: label(service), kind: "pool", fields: [ts: :integer]}
+
+  @doc "The `x-cyfr-auth` header of a request of `body` to `service` at `ts`, under its pool key."
+  @spec header(service(), binary(), non_neg_integer(), binary()) :: String.t()
+  def header(service, pool_key, ts, body)
+      when service in @services and byte_size(pool_key) == 32 and is_binary(body) do
+    {:ok, header} = Prima.MacEnvelope.header(envelope(service), pool_key, %{ts: ts}, body)
+    header
+  end
+
+  @doc """
+  The body hash a request's header names, once the header is a `v1`
+  header of `service`'s pool envelope, its `ts` within `window_ms/0` of
+  `now` and its MAC that of `service`'s pool key; otherwise the first of
+  `:unknown_version`, `:malformed`, `:outside_window` and `:bad_mac`.
+  """
+  @spec verify_header(service(), binary(), term(), integer()) ::
+          {:ok, String.t()} | {:error, :unknown_version | :malformed | :outside_window | :bad_mac}
+  def verify_header(service, pool_key, header, now)
+      when service in @services and byte_size(pool_key) == 32 and is_integer(now) do
+    envelope = envelope(service)
+
+    with {:ok, fields, mac} <- Prima.MacEnvelope.parse(envelope, header),
+         :ok <- within_window(fields.ts, now),
+         :ok <- authentic(Prima.MacEnvelope.verify_header(envelope, pool_key, fields, mac)) do
+      {:ok, fields.body_hash}
+    end
+  end
+
+  defp within_window(ts, now) do
+    if abs(ts - now) <= window_ms(), do: :ok, else: {:error, :outside_window}
+  end
+
+  defp authentic(true), do: :ok
+  defp authentic(false), do: {:error, :bad_mac}
+
+  @doc "Whether `body` is the one a verified header hashed."
+  @spec verify_body(String.t(), binary()) :: :ok | {:error, :bad_mac}
+  def verify_body(body_hash, body) when is_binary(body_hash) and is_binary(body) do
+    if Prima.MacEnvelope.verify_body(envelope(:builds), %{body_hash: body_hash}, body),
+      do: :ok,
+      else: {:error, :bad_mac}
+  end
+
+  @doc "A request's body: the rev the report follows."
+  @spec request_body(non_neg_integer()) :: binary()
+  def request_body(after_rev) when is_integer(after_rev) and after_rev in 0..@max_integer//1,
+    do: Jason.encode!(Jason.OrderedObject.new([{"v", @version}, {"after", after_rev}]))
+
+  @doc """
+  The rev a request's body asks after: an object of exactly `v` and
+  `after`, a whole number from 0 to 2^53 - 1. Another version, or none, is
+  `{:error, :version}` before anything else is read; anything else
+  `{:error, :malformed}`.
+  """
+  @spec read_request_body(binary()) :: {:ok, non_neg_integer()} | {:error, :version | :malformed}
+  def read_request_body(body) when is_binary(body) do
+    case Jason.decode(body) do
+      {:ok, %{"v" => @version} = object} ->
+        case object do
+          %{"after" => rev}
+          when map_size(object) == 2 and is_integer(rev) and rev in 0..@max_integer//1 ->
+            {:ok, rev}
+
+          _ ->
+            {:error, :malformed}
+        end
+
+      {:ok, %{}} ->
+        {:error, :version}
+
+      _ ->
+        {:error, :malformed}
+    end
+  end
+
+  @doc "The answer carrying `report`."
+  @spec answer(report()) :: binary()
+  def answer(report),
+    do:
+      Jason.encode!(Jason.OrderedObject.new([{"v", @version}, {"report", encode_report(report)}]))
+
+  @doc "The report an answer carries, read strictly (`read_report/1`), or `:error`."
+  @spec read_answer(binary()) :: {:ok, report()} | :error
+  def read_answer(body) when is_binary(body) do
+    case Jason.decode(body) do
+      {:ok, %{"v" => @version, "report" => report} = object} when map_size(object) == 2 ->
+        read_report(report)
+
+      _ ->
+        :error
+    end
+  end
+
+  @doc """
+  `report` as every wire carries it: exactly `boot`, `budget`, `work`,
+  `floor`, `used`, `counters` and, when more follow, `next`; each counter
+  exactly its members, `day` as `YYYY-MM-DD`, and `athanor` and `subject`
+  only where it has them.
+  """
+  @spec encode_report(report()) :: map()
+  def encode_report(%{counters: counters, next: next} = report) do
+    report
+    |> Map.take([:boot, :budget, :work, :floor, :used])
+    |> Map.new(fn {k, v} -> {Atom.to_string(k), v} end)
+    |> Map.put("counters", Enum.map(counters, &counter_wire/1))
+    |> put_present("next", next)
+  end
+
+  @counter_numbers ~w(rev bytes mib_ms measured_ms peak_bytes cap machine either)a
+
+  defp counter_wire(counter) do
+    counter
+    |> Map.take(@counter_numbers ++ [:kind])
+    |> Map.new(fn {k, v} -> {Atom.to_string(k), v} end)
+    |> Map.put("day", Date.to_iso8601(counter.day))
+    |> put_present("athanor", counter.athanor)
+    |> put_present("subject", counter.subject)
+  end
+
+  defp put_present(map, _name, nil), do: map
+  defp put_present(map, name, value), do: Map.put(map, name, value)
+
+  @doc """
+  `report` read strictly from its wire form (`encode_report/1`): exactly
+  its members, every number a whole number from 0 to 2^53 - 1 (a `rev` and
+  `next` from 1), `boot` 32 lowercase hexadecimal digits, at most
+  `report_counters/0` counters in ascending `rev`, each `day` a date, each
+  `kind` a place's kind (`kinds/0`), an `athanor` of the athanor grammar
+  and a `subject` of the keeper's id grammar where present, none null;
+  `:error` otherwise.
+  """
+  @spec read_report(term()) :: {:ok, report()} | :error
+  def read_report(%{} = report) do
+    members = Map.keys(report) -- ["next"]
+
+    with true <- Enum.sort(members) == ~w(boot budget counters floor used work),
+         true <- is_binary(report["boot"]) and Regex.match?(@boot, report["boot"]),
+         true <- Enum.all?(~w(budget work floor used), &whole?(report[&1])),
+         {:ok, next} <- read_next(report),
+         {:ok, counters} <- read_counters(report["counters"]) do
+      {:ok,
+       %{
+         boot: report["boot"],
+         budget: report["budget"],
+         work: report["work"],
+         floor: report["floor"],
+         used: report["used"],
+         counters: counters,
+         next: next
+       }}
+    else
+      _ -> :error
+    end
+  end
+
+  def read_report(_report), do: :error
+
+  defp read_next(%{"next" => next}), do: if(rev?(next), do: {:ok, next}, else: :error)
+  defp read_next(_report), do: {:ok, nil}
+
+  defp read_counters(counters) when is_list(counters) and length(counters) <= @report_counters do
+    read = Enum.map(counters, &read_counter/1)
+    revs = Enum.map(read, &(match?({:ok, _}, &1) && elem(&1, 1).rev))
+
+    if Enum.all?(revs) and revs == Enum.sort(Enum.uniq(revs)),
+      do: {:ok, Enum.map(read, &elem(&1, 1))},
+      else: :error
+  end
+
+  defp read_counters(_counters), do: :error
+
+  defp read_counter(%{} = c) do
+    numbers = Enum.map(@counter_numbers, &Atom.to_string/1)
+    optional = Map.keys(c) -- (numbers ++ ~w(day kind))
+
+    with true <- Enum.all?(numbers ++ ~w(day kind), &Map.has_key?(c, &1)),
+         true <- optional -- ~w(athanor subject) == [],
+         true <- Enum.all?(numbers, &whole?(c[&1])) and rev?(c["rev"]),
+         true <- is_map_key(@kinds, c["kind"]),
+         {:ok, day} <- read_day(c["day"]),
+         {:ok, athanor} <- read_optional(c, "athanor", &athanor?/1),
+         {:ok, subject} <- read_optional(c, "subject", &Prima.KeeperProtocol.id?/1) do
+      {:ok,
+       @counter_numbers
+       |> Map.new(&{&1, c[Atom.to_string(&1)]})
+       |> Map.merge(%{day: day, kind: c["kind"], athanor: athanor, subject: subject})}
+    else
+      _ -> :error
+    end
+  end
+
+  defp read_counter(_counter), do: :error
+
+  defp read_day(day) when is_binary(day) and byte_size(day) == 10, do: Date.from_iso8601(day)
+  defp read_day(_day), do: :error
+
+  defp read_optional(c, name, valid?) do
+    case Map.fetch(c, name) do
+      :error -> {:ok, nil}
+      {:ok, value} -> if valid?.(value), do: {:ok, value}, else: :error
+    end
+  end
+
+  defp athanor?(value),
+    do: is_binary(value) and Regex.match?(Prima.RunnerControl.athanor_id_pattern(), value)
+
+  defp whole?(value), do: is_integer(value) and value >= 0 and value <= @max_integer
+  defp rev?(value), do: whole?(value) and value >= 1
 
   @doc """
   `held` as every wire carries it: an object of exactly `need`, `free`,

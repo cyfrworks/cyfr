@@ -28,7 +28,11 @@ work, read by the keeper past their allowance's time. A start of each
 athanor then waits the room's wait and is refused `capacity` with `held`:
 its own athanor's holder by its row, the other's only in `others_bytes`,
 no name of it anywhere in the answer. Once the first athanor's holder is
-released, its next start is served.
+released, its next start is served. Meanwhile the backends role's report
+on the pool wire (Prima.LocusPool) holds a program's or a terminal's
+counters alone, each once: each holder under its athanor and row, holding
+what it holds, its time measured; a request signed with the runtime's or
+the builds' pool key, derived from the same key, is refused.
 
 And the service's own memory has a bound, in a service started afresh:
 
@@ -440,6 +444,19 @@ def room_owner(athanor, row):
     return {"athanor": f"ath_room-{athanor}", "server": f"mcp_room-{athanor}{row}", "e": 1}
 
 
+def reports_its_programs(stack, holders):
+    """The backends role's report holds its sessions' counters alone, each holder's under its athanor and row with
+    what it holds, and the route refuses the other services' pool keys."""
+    _boot, counters = imagesuite.pool_reports(stack.base, "backends", stack.key)
+    for holder in holders:
+        counted = [c for c in counters if (c.get("athanor"), c.get("subject")) == (holder["athanor"], holder["server"])]
+        expect(len(counted) == 1 and counted[0]["kind"] == "program" and counted[0]["bytes"] >= ROOM_HOLD
+               and counted[0]["peak_bytes"] >= counted[0]["bytes"] and counted[0]["measured_ms"] > 0,
+               f"{holder['server']}'s program is counted once under its athanor and row, holding what it holds",
+               counted)
+    imagesuite.pool_refuses_others(stack.base, "backends", stack.key)
+
+
 def refuses_for_room(stack):
     """A session refused by the pool alone, saying what holds it to its own athanor, served once a holder goes."""
     stack.up(work_bytes=WORK)
@@ -457,6 +474,8 @@ def refuses_for_room(stack):
     # sleep-ok: the keeper charges a reading only once the allowance's time has passed
     time.sleep(imagesuite.ALLOWANCE_MS / 1000 + 2)
     expect(c.renew([a1, a2, b1, b2], lease_ms=60_000)[0] == 200, "the owners are renewed")
+
+    reports_its_programs(stack, [a1, b1])
 
     for asking, own, other in [(a2, a1, b1), (b2, b1, a1)]:
         started = time.monotonic()

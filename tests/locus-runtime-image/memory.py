@@ -34,6 +34,12 @@ runner starts.
   process and completes; the release is not touched; and when the uid is
   next given to a runner, that runner has a home and a group of its own,
   which the ended one left nothing in.
+- `pool`: the service serves the runtime role's report on the pool wire
+  (Prima.LocusPool) under the pool key derived from its own key: every
+  counter of a runtime alone is a runner's (warm or run), each once, and
+  the warm floor's runner, read each second, is counted with time
+  measured; a request signed with the builds' or the backends' pool key,
+  derived from the same key, is refused.
 - `unavailable`: under the shipped service without `writable-cgroups=true`,
   cyfr-locus refuses its boot, saying it can make no cgroup group for a
   role, no runner process ever starts, and the container restart-loops.
@@ -50,7 +56,7 @@ It prints the service's own group peak and the largest runner peak beside
 a runner's least bound, which holds a component at the platform's ceiling
 beside its runner.
 
-Usage: tests/locus-runtime-image/memory.py IMAGE [--measure [ROUNDS]] [bound|unavailable]...
+Usage: tests/locus-runtime-image/memory.py IMAGE [--measure [ROUNDS]] [bound|pool|unavailable]...
 """
 
 import base64
@@ -823,6 +829,26 @@ def measure(image, rounds):
           f"({mib(least)}); the keeper group peaked at {', '.join(mib(p) for p in keeper_peaks)}")
 
 
+def test_pool_report(stack, plane):
+    """The runtime role's report holds a runner's counters alone, the floor's runner counted with time measured, and
+    the route refuses the other services' pool keys."""
+    key = plane.worker_key
+
+    def floor_counted():
+        _boot, counters = imagesuite.pool_reports(stack.base, "runtime", key)
+        return [c for c in counters if c["kind"] == "warm" and "athanor" not in c and c["measured_ms"] > 0
+                and c["bytes"] > 0]
+
+    counted = wait_until(floor_counted, 30, "the warm floor's runner is counted with time measured", interval=0.5)
+    expect(all(c["mib_ms"] > 0 and c["peak_bytes"] >= c["bytes"] for c in counted),
+           "a counted runner's MiB-milliseconds and peak follow its readings", counted)
+    boot, _ = imagesuite.pool_reports(stack.base, "runtime", key)
+    again, _ = imagesuite.pool_reports(stack.base, "runtime", key)
+    expect(boot == again, "the keeper's boot is the same from one report to the next", [boot, again])
+    imagesuite.pool_refuses_others(stack.base, "runtime", key)
+    print("ok: the runtime reports its runners alone, each once, under its own pool key alone", flush=True)
+
+
 def main(image, cases, rounds):
     if run("docker", "image", "inspect", image, check=False).returncode != 0:
         sys.exit(f"FAIL: prerequisite missing: the image {image} is not built")
@@ -838,6 +864,13 @@ def main(image, cases, rounds):
                 try:
                     stack.up()
                     test_runner_bound(stack, plane)
+                finally:
+                    stack.down()
+            elif case == "pool":
+                stack = Stack("cyfr-locus-runtime-pool", image, plane)
+                try:
+                    stack.up()
+                    test_pool_report(stack, plane)
                 finally:
                     stack.down()
             elif case == "unavailable":
@@ -857,4 +890,4 @@ if __name__ == "__main__":
         arguments = arguments[:at] + arguments[at + 1 + (1 if at + 1 < len(arguments) and arguments[at + 1].isdigit() else 0):]
     if not arguments:
         sys.exit(__doc__)
-    main(arguments[0], arguments[1:] or ["bound", "unavailable"], rounds)
+    main(arguments[0], arguments[1:] or ["bound", "pool", "unavailable"], rounds)
