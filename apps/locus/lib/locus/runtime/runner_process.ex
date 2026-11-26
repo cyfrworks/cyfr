@@ -19,9 +19,8 @@ defmodule Locus.Runtime.RunnerProcess do
   runner's end of the channel is closed, `{:exited, how, memory}` once
   its process ended, `memory` the limit that ended it
   (`t:Locus.Runtime.Keeper.ended_for_memory/0`), and, for an attached
-  runner, after every frame its channel carried and before `:closed`,
-  each waiting for the other a bound at most, `:released` once the keeper
-  has retired it,
+  runner, after its channel closed or a bound passed, `:released` once
+  the keeper has retired it,
   `{:refused, reason}` when the keeper refused the spawn, so no process of
   the runner ever ran and nothing is left to release,
   `{:refused, reason, :release_follows}` when it refused it after making
@@ -88,8 +87,7 @@ defmodule Locus.Runtime.RunnerProcess do
   # channel closed or unknown, or its socket (`:einval`) already closed.
   @unwritten [:control_closed, :unknown_runner, :einval]
 
-  # How long the process's end is held for its control stream to close,
-  # and that stream's close for the process's end.
+  # How long the process's end is held for its control stream to close.
   @control_drain_ms 1_000
 
   # The longest an assign of the runner's place waits for the keeper's
@@ -192,12 +190,7 @@ defmodule Locus.Runtime.RunnerProcess do
        pending: [],
        buffer: "",
        closed: false,
-       # The close of an attached runner, held for its end (a timer's ref).
-       closing: nil,
-       # The end of an attached runner, held for its close: its ref and event.
        exited: nil,
-       # Whether the owner has heard the runner's end.
-       ended: false,
        released: false
      }, {:continue, :spawn}}
   end
@@ -286,15 +279,10 @@ defmodule Locus.Runtime.RunnerProcess do
 
   def handle_info({:EXIT, _pid, _reason}, state), do: {:noreply, state}
 
-  def handle_info({:control_drained, ref}, %{exited: {ref, _end}} = state),
+  def handle_info({:control_drained, ref}, %{exited: {ref, _ended}} = state),
     do: {:noreply, flush_exited(state)}
 
   def handle_info({:control_drained, _ref}, state), do: {:noreply, state}
-
-  def handle_info({:close_drained, ref}, %{closing: ref} = state),
-    do: {:noreply, flush_closing(state)}
-
-  def handle_info({:close_drained, _ref}, state), do: {:noreply, state}
 
   def handle_info(msg, %{channel: channel} = state) when channel != nil do
     case state.keeper.handle_message(channel, msg) do
@@ -389,34 +377,19 @@ defmodule Locus.Runtime.RunnerProcess do
     taken(state)
   end
 
-  # The keeper hears a runner's end apart from its control stream, which
-  # comes on the relay's connection, so the two arrive in no defined
-  # order, and the owner hears the end first, then the close, so the end's
-  # cause (the memory limit that ended it) is what the runner's end is
-  # reported with. The close of an attached runner whose end is not yet
-  # heard is held for it, and the end of one whose stream is still open
-  # held for the close, so the frames the runner wrote before it ended (its
-  # `exit`, with what it holds) reach the owner first; each hold is bounded
-  # by `@control_drain_ms`.
-  defp on_event(:control_closed, %{closed: false, exited: {_ref, _end}} = state) do
-    state = flush_exited(%{state | closed: true})
-    notify(state, :closed)
-    state
-  end
-
-  defp on_event(:control_closed, %{closed: false, attached: true, ended: false} = state) do
-    ref = make_ref()
-    Process.send_after(self(), {:close_drained, ref}, @control_drain_ms)
-    %{state | closed: true, closing: ref}
-  end
-
   defp on_event(:control_closed, %{closed: false} = state) do
     notify(state, :closed)
-    %{state | closed: true}
+    flush_exited(%{state | closed: true})
   end
 
   defp on_event(:control_closed, state), do: state
 
+  # The keeper hears a runner's end apart from its control stream, which
+  # comes on the relay's connection, so the two arrive in no defined
+  # order. The end of a runner whose stream is still open is held until
+  # the stream closes, bounded by `@control_drain_ms`, so the frames the
+  # runner wrote before it ended (its `exit`, with what it holds) reach the
+  # owner first.
   defp on_event({:exited, how, memory}, %{attached: true, closed: false} = state) do
     ref = make_ref()
     Process.send_after(self(), {:control_drained, ref}, @control_drain_ms)
@@ -425,11 +398,11 @@ defmodule Locus.Runtime.RunnerProcess do
 
   defp on_event({:exited, how, memory}, state) do
     notify(state, {:exited, how, memory})
-    flush_closing(%{state | ended: true})
+    state
   end
 
   defp on_event(:released, state) do
-    state = state |> flush_exited() |> flush_closing()
+    state = flush_exited(state)
     notify(state, :released)
     %{state | released: true}
   end
@@ -559,17 +532,10 @@ defmodule Locus.Runtime.RunnerProcess do
 
   defp flush_exited(%{exited: {_ref, ended}} = state) do
     notify(state, ended)
-    %{state | exited: nil, ended: true}
+    %{state | exited: nil}
   end
 
   defp flush_exited(state), do: state
-
-  defp flush_closing(%{closing: ref} = state) when is_reference(ref) do
-    notify(state, :closed)
-    %{state | closing: nil}
-  end
-
-  defp flush_closing(state), do: state
 
   defp notify(state, event), do: send(state.owner, {__MODULE__, self(), event})
 

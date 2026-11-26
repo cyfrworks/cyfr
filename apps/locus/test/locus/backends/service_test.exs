@@ -1274,6 +1274,44 @@ defmodule Locus.Backends.ServiceTest do
       end
     end
 
+    test "a session whose process goes while a recv waits on it answers the cause its owners kept",
+         ctx do
+      fetch_sync(ctx)
+      opened = invoke(ctx, open_message(key: "gone"))
+      assert {:ok, %{session: session}} = LB.read_session_answer(:open, opened.body)
+      {:ok, pid, :run, nil} = Owners.session(ctx.owners, owner_invoke(), session)
+      %{handle: %{ref: ref}} = :sys.get_state(pid)
+
+      # The recv is answered by the session itself, which it waits in.
+      waiting =
+        Task.async(fn ->
+          invoke(ctx, %{type: :recv, session: session, after: 0, max_wait_ms: 10_000})
+        end)
+
+      wait_until(fn -> match?(%{waiters: [_]}, :sys.get_state(pid)) end, 5_000)
+
+      # Memory ends the leader; its owners keep the cause; the session's
+      # process then goes before it answers the recv.
+      Kernel.send(pid, {Launcher, ref, {:exited, nil, "SIGKILL", :machine}})
+
+      wait_until(
+        fn ->
+          match?({:ok, _, _, :machine}, Owners.session(ctx.owners, owner_invoke(), session))
+        end,
+        5_000
+      )
+
+      monitor = Process.monitor(pid)
+      Process.exit(pid, :kill)
+      assert_receive {:DOWN, ^monitor, :process, ^pid, _}, 5_000
+
+      answer = Task.await(waiting, 15_000)
+      assert answer.status == 200, answer.body
+
+      assert {:ok, %{running: false, ended_by: :machine}} =
+               LB.read_session_answer(:recv, answer.body)
+    end
+
     test "a session ended for no memory says no cause", ctx do
       fetch_sync(ctx)
       opened = invoke(ctx, open_message())

@@ -410,6 +410,10 @@ class ControlPlane:
             return {"ok": base64.b64encode(bytes_).decode()}
         if op == "egress_pin":
             return self.pin(args, caller)
+        # A report naming a memory limit CYFR does not read is refused as
+        # CYFR refuses it (Opus.Host): lost.
+        if op == "runner_exited" and "memory" in args and args["memory"] not in ("cap", "machine", "either"):
+            return {"error": "lost"}
         if op in ("take_rate", "record_denial", "release_child", "runner_exited"):
             return {"ok": True}
         return {"error": "guest_error", "type": "dispatch_error", "message": "The scripted control plane has no answer for this call."}

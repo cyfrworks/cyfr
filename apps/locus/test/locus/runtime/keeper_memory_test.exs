@@ -202,9 +202,10 @@ defmodule Locus.Runtime.KeeperMemoryTest do
           # follows the connection's.
           reply(keeper, at_bound)
           :gen_tcp.close(relay)
+          # The end is held for the stream's close, then told with its
+          # cause: the pool hears the cause at the end, whatever came first.
+          assert_receive {RunnerProcess, ^handle, :closed}, 5_000
           assert_receive {RunnerProcess, ^handle, {:exited, {:signal, "SIGKILL"}, :cap}}, 5_000
-          # The end is heard before the close, so the cause is the end's.
-          assert_received {RunnerProcess, ^handle, :closed}
         end)
 
       # The bound its place answered, which the image suite reads back.

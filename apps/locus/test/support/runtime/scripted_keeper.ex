@@ -422,6 +422,13 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
     end
   end
 
+  @doc """
+  Make runner `spawn`'s process outlive the releases asked of it, as one
+  the keeper is still reaping: it ends only when `exit/3` ends it.
+  """
+  @spec outlive_release(map()) :: :ok
+  def outlive_release(%{runner: runner}), do: GenServer.call(runner, :outlive_release)
+
   @doc "Close runner `spawn`'s end of its channel."
   @spec close(map()) :: :ok
   def close(%{runner: runner}), do: GenServer.call(runner, :close)
@@ -774,6 +781,9 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
            relay_inbox: "",
            relay_closed: false,
            ended: false,
+           # A release its process outlives, as one whose reaping the
+           # keeper still waits for (`outlive_release/1`).
+           outlives_release: false,
            write_refusal: nil,
            takings: 0
          })}
@@ -814,6 +824,9 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
       {:reply, :ok, state}
     end
 
+    def handle_call(:outlive_release, _from, state),
+      do: {:reply, :ok, %{state | outlives_release: true}}
+
     def handle_call(:close, _from, state) do
       notify(state, :control_closed)
       {:reply, :ok, state}
@@ -826,6 +839,9 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
     def handle_cast(:taken, state), do: {:noreply, %{state | takings: state.takings + 1}}
 
     @impl true
+    def handle_info({:released, _grace_ms}, %{outlives_release: true} = state),
+      do: {:noreply, state}
+
     def handle_info({:released, _grace_ms}, state), do: {:noreply, ended(state, 137, nil)}
 
     defp ended(%{ended: true} = state, _status, _memory), do: state

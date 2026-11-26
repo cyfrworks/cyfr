@@ -683,7 +683,21 @@ defmodule Locus.Runtime.RunnerPool do
     gone(state, pid, entry, {:protocol, message.type})
   end
 
-  defp on_event(:closed, pid, entry, state), do: gone(state, pid, entry, :closed)
+  # A runner whose channel closed is retired at once, its process ending
+  # with it, but its assignee hears its end only when that end comes: the
+  # keeper tells the process's exit, with the memory limit that ended it,
+  # before the runner's release, after a reaping its own bound waits for,
+  # and the retirement bound this pool keeps (`retire_due`) says it gone
+  # if neither comes.
+  defp on_event(:closed, pid, entry, state) do
+    state = put_runner(state, pid, %{entry | closed: true})
+    entry = state.runners[pid]
+
+    case entry.state do
+      ending when ending in [:retiring, :tainted, :refused] -> state
+      _ -> taint_runner(state, pid, entry, 0)
+    end
+  end
 
   defp on_event({:exited, how, memory}, pid, entry, state),
     do: gone(state, pid, entry, {:exited, how, memory})
@@ -695,7 +709,8 @@ defmodule Locus.Runtime.RunnerPool do
 
   defp on_event(:released, pid, entry, state) do
     _ = DynamicSupervisor.terminate_child(state.supervisor, pid)
-    released(state, pid, entry)
+    state = if entry.closed, do: told(state, pid, entry, {:gone, :closed}), else: state
+    released(state, pid, state.runners[pid])
   end
 
   defp handle_down(state, pid, %{released: true} = entry, _reason),
@@ -1015,6 +1030,10 @@ defmodule Locus.Runtime.RunnerPool do
            down: false,
            # The keeper's release reached the pool as the runner's heir.
            released: false,
+           # Its channel closed: its retirement is asked at once, and its
+           # assignee hears its end at the process's exit, or at its
+           # release when no exit comes.
+           closed: false,
            # The start that waits on this runner: on its spawn while it
            # spawns (the pool remembers a refusal), for its uid while it goes.
            waiter: nil,
