@@ -15,7 +15,11 @@ defmodule Arca.Schemas.ExecutionAttempt do
   running time is accounted once per interval. `athanor_generation` is
   the athanor standing the attempt was admitted under
   (`Prima.ExecutionGrant`), inherited unchanged by a successor and never
-  written after insert. Owned by the athanor.
+  written after insert. `ended_by` is what ended a lapsed attempt's runner
+  for memory, `cap`, `machine` or `either` (the kernel's counts, which a
+  worker service's report of the runner's end carries), written only in
+  the write that lapses the attempt (`Arca.ExecutionAttempts.lapse!/4`),
+  else nil. Owned by the athanor.
   """
 
   use Ecto.Schema
@@ -38,5 +42,6 @@ defmodule Arca.Schemas.ExecutionAttempt do
     field :started_at, :utc_datetime_usec
     field :running_since, :utc_datetime_usec
     field :ended_at, :utc_datetime_usec
+    field :ended_by, :string
   end
 end

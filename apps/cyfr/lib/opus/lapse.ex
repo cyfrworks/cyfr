@@ -39,10 +39,10 @@ defmodule Opus.Lapse do
   (`Arca.Execution.list_stale_running/2`). Answers whether it lapsed.
   """
   @spec lapse(map()) :: boolean()
-  def lapse(record), do: lapse(record, @message)
+  def lapse(record), do: lapse(record, nil)
 
-  defp lapse(record, message) do
-    Arca.ControlPlane.held?() and lapse_owned(record, message)
+  defp lapse(record, memory) do
+    Arca.ControlPlane.held?() and lapse_owned(record, memory)
   end
 
   @doc """
@@ -54,11 +54,17 @@ defmodule Opus.Lapse do
   def ended_for_memory(cause) when cause in [:cap, :machine, :either],
     do: Prima.Refusal.message({:memory, "The run", cause})
 
-  defp lapse_owned(record, message) do
+  # A lapse's words, by the memory limit that ended its runner where a
+  # report named one.
+  defp message(nil), do: @message
+  defp message(memory), do: ended_for_memory(memory)
+
+  defp lapse_owned(record, memory) do
     now = DateTime.utc_now()
     duration_ms = DateTime.diff(now, record.started_at, :millisecond)
+    message = message(memory)
 
-    case fail_row(record, message, now, duration_ms) do
+    case fail_row(record, memory, now, duration_ms) do
       {:ok, 0, _event_seq, _closed_questions} ->
         false
 
@@ -74,18 +80,19 @@ defmodule Opus.Lapse do
   # A lapse retires work: it needs the attempt's stored stamp, never a
   # grant that still stands (`Cyfr.Boundaries.system_responsibilities/0`).
   # A failure here commits nothing, and the lapse did not happen.
-  defp fail_row(record, message, now, duration_ms) do
+  defp fail_row(record, memory, now, duration_ms) do
     {count, event_seq, closed_questions} =
       Arca.Execution.mark_failed_if_running(
         record.id,
         %{
           completed_at: now,
           duration_ms: duration_ms,
-          error_message: message,
+          error_message: message(memory),
           error_class: "uncertain"
         },
         attempt: record.attempt,
         lease_until: record.lease_until,
+        ended_by: memory,
         grant: stamp(record),
         verify: &Sanctum.ExecutionStanding.stamp_only/1
       )
@@ -172,8 +179,9 @@ defmodule Opus.Lapse do
   `boot_id`, is claimed by `runner` when one is given, and still owns its
   running execution, saying that it ran out of memory where `memory`, a
   report's, names the limit that ended its runner
-  (`ended_for_memory/1`). `{:error, :unavailable}` when the store cannot
-  list them.
+  (`ended_for_memory/1`), and recording that limit on the attempt it
+  lapses (`Arca.ExecutionAttempts`' `ended_by`). `{:error, :unavailable}`
+  when the store cannot list them.
   """
   @spec dispatched(
           String.t() | nil,
@@ -184,9 +192,7 @@ defmodule Opus.Lapse do
         ) :: :ok | {:error, :unavailable}
   def dispatched(service_id, boot_id, runner, attempts, memory \\ nil)
       when is_binary(boot_id) and is_list(attempts) do
-    message = if memory, do: ended_for_memory(memory), else: @message
-
-    case listed(service_id, boot_id, runner, attempts, message) do
+    case listed(service_id, boot_id, runner, attempts, memory) do
       {:ok, _lapsed} -> :ok
       {:error, :unavailable} = unavailable -> unavailable
     end
@@ -204,15 +210,15 @@ defmodule Opus.Lapse do
   @spec boot(String.t(), String.t(), [String.t()]) :: {:ok, [map()]} | {:error, :unavailable}
   def boot(service_id, boot_id, attempts)
       when is_binary(service_id) and is_binary(boot_id) and is_list(attempts) do
-    listed(service_id, boot_id, nil, attempts, @message)
+    listed(service_id, boot_id, nil, attempts, nil)
   end
 
-  defp listed(_service_id, _boot_id, _runner, [], _message), do: {:ok, []}
+  defp listed(_service_id, _boot_id, _runner, [], _memory), do: {:ok, []}
 
-  defp listed(service_id, boot_id, runner, attempts, message) do
+  defp listed(service_id, boot_id, runner, attempts, memory) do
     case Arca.Execution.list_running_dispatched(attempts, service_id, boot_id, runner) do
       records when is_list(records) ->
-        {:ok, Enum.filter(records, &lapse(&1, message))}
+        {:ok, Enum.filter(records, &lapse(&1, memory))}
 
       {:error, _reason} ->
         {:error, :unavailable}

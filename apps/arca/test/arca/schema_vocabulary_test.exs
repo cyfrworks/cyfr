@@ -49,6 +49,8 @@ defmodule Arca.SchemaVocabularyTest do
        Prima.ExecutionState.attempt_states()},
       {"execution_attempts", "execution_attempts_outcome_known", "outcome",
        Prima.ExecutionState.outcomes()},
+      {"execution_attempts", "execution_attempts_ended_by_known", "ended_by",
+       Prima.HostAPI.memory_ends()},
       {"questions", "questions_state_known", "state", Arca.Schemas.Question.states()},
       {"question_answers", "question_answers_effect_known", "effect",
        Arca.Schemas.QuestionAnswer.effects()},

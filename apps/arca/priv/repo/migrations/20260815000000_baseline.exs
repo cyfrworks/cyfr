@@ -1396,6 +1396,10 @@ defmodule Arca.Repo.Migrations.Baseline do
         ~w(ok error result_lost cancelled uncertain)
       )
 
+    # What ended a lapsed attempt's runner for memory, else null.
+    attempt_ended_by =
+      known("execution_attempts_ended_by_known", "ended_by", ~w(cap machine either))
+
     create table(:execution_attempts, primary_key: false) do
       add :attempt, :string, primary_key: true, null: false
       add :athanor_id, :string, null: false
@@ -1430,9 +1434,15 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :started_at, :utc_datetime_usec, null: false
       add :running_since, :utc_datetime_usec
       add :ended_at, :utc_datetime_usec
+      add :ended_by, :string, check: if(sqlite?, do: attempt_ended_by)
     end
 
-    checked(sqlite?, :execution_attempts, [attempt_generation, attempt_state, attempt_outcome])
+    checked(sqlite?, :execution_attempts, [
+      attempt_generation,
+      attempt_state,
+      attempt_outcome,
+      attempt_ended_by
+    ])
 
     create unique_index(:execution_attempts, [:execution_id, :fence])
     create index(:execution_attempts, [:athanor_id, :state, :lease_until])
