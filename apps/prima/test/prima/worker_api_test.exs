@@ -99,9 +99,11 @@ defmodule Prima.WorkerAPITest do
           assert callback == "start" and name in ["unavailable", "no_memory"], why
 
           case name do
+            # held and nothing beside it is a refusal for room; any other
+            # member beside it makes the answer lost.
             "no_memory" ->
-              assert Map.keys(fields) == ["held"], why
               assert {:ok, _held} = Prima.LocusPool.read_held(fields["held"]), why
+              assert Map.keys(fields) == ["held"] or why =~ "lost", why
 
             "unavailable" ->
               assert WorkerAPI.valid_refusal_message?(fields["message"]) ==

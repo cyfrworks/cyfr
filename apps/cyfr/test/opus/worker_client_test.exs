@@ -392,6 +392,30 @@ defmodule Opus.WorkerClientTest do
         assert {:error, :lost} = WorkerClient.start(endpoint, "token", "{}", "sealed"), answer
       end
     end
+
+    test "a start refused for room is one only with held and nothing beside it" do
+      [start] = Enum.filter(@vectors["requests"], &(&1["callback"] == "start"))
+
+      for %{"status" => 503, "answer" => answer} <- start["refusals"],
+          %{"error" => "no_memory"} = decoded <- [Jason.decode!(answer)] do
+        endpoint = serve!(%{WorkerWire.worker_route(:start) => {:raw, 503, answer}})
+        read = WorkerClient.start(endpoint, "token", "{}", "sealed")
+
+        if Map.keys(decoded) |> Enum.sort() == ~w(error held v) do
+          {:ok, held} = Prima.LocusPool.read_held(decoded["held"])
+          assert read == {:error, {:no_memory, held}}, answer
+        else
+          assert read == {:error, :lost}, answer
+        end
+      end
+
+      # The vectors hold both: a refusal for room, and one with a member beside held.
+      assert start["refusals"]
+             |> Enum.map(&Jason.decode!(&1["answer"]))
+             |> Enum.filter(&(&1["error"] == "no_memory"))
+             |> Enum.map(&map_size/1)
+             |> Enum.sort() == [3, 4]
+    end
   end
 
   # The request of `callback` the vector's args make, as the client's own
@@ -430,7 +454,7 @@ defmodule Opus.WorkerClientTest do
           do: {:error, {:unavailable, sentence}},
           else: {:error, :lost}
 
-      {:error, "no_memory", %{"held" => wire}} ->
+      {:error, "no_memory", %{"held" => wire} = fields} when map_size(fields) == 1 ->
         {:ok, held} = Prima.LocusPool.read_held(wire)
         {:error, {:no_memory, held}}
 

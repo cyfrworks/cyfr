@@ -46,6 +46,11 @@
         },
         {
           "status": 503,
+          "answer": "{\"v\":2,\"error\":\"no_memory\",\"held\":{\"free\":0,\"mine\":[],\"need\":171966464,\"others_bytes\":2147483648},\"message\":\"writable-cgroups=true is missing\"}",
+          "why": "a refusal for room carries held and nothing beside it: one with another member is a lost answer, reconciled against the attempt's claim"
+        },
+        {
+          "status": 503,
           "answer": "{\"v\":2,\"error\":\"unavailable\"}",
           "why": "no sentence: a lost answer, reconciled against the attempt's claim"
         },
