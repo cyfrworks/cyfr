@@ -91,11 +91,13 @@ HOG_DIGESTS = {
 # What one child holds once every page is touched: all the linear memory
 # the engine lets one run have under the zero authority it runs under.
 CHILD_BYTES = 64 * MIB
-# The pool's work of the bound case. A runner's bound is half of it, never
-# under a runner's least: the other half holds the case's two other runners
-# beside the formula's, the sibling's and the warm floor's fresh one, each a
-# VM of at most RUNNER_VM (a VM alone measured 143-208 MiB), so the
-# kernel's bound over the pool is never what ends the formula's runner.
+# The pool's work of the bound case, 1 GiB. A runner's bound is half of
+# it, never under a runner's least, 512 MiB, so the formula's runner ends at
+# its bound with the other half left to the case's two other runners, the
+# sibling's and the warm floor's fresh one. A VM alone measured 143-208 MiB:
+# the two hold at most 416 MiB, 96 MiB under that half, so the kernel's
+# bound over the pool could end the formula's runner first only if each of
+# them held RUNNER_VM, 48 MiB above the largest measured, or more.
 RUNNER_VM = 256 * MIB
 WORK = 2 * max(imagesuite.LEAST_CAP_BYTES["runner"], 2 * RUNNER_VM)
 
@@ -417,9 +419,10 @@ def test_runner_bound(stack, plane):
            f"each of the {len(groups)} runners runs in a group of its own with one bound, no swap and the group killed whole",
            groups)
     bound = int(next(iter(groups.values()))["max"])
-    expect(stack.work_bytes == WORK and bound == imagesuite.cap_bytes("warm", WORK),
-           f"every runner is bounded at half of the pool's work of {mib(WORK)}, never under a runner's least bound: "
-           f"{mib(imagesuite.cap_bytes('warm', WORK))}", {"work": stack.work_bytes, "bound": bound})
+    work = imagesuite.read_output(stack.exec(f"cat {imagesuite.CGROUP}/work/memory.max"), "work's memory.max").strip()
+    expect(work == str(WORK) and bound == imagesuite.cap_bytes("warm", WORK),
+           f"the pool's work is {mib(WORK)} as the kernel bounds it, and every runner is bounded at half of it, never "
+           f"under a runner's least bound: {mib(imagesuite.cap_bytes('warm', WORK))}", {"work": work, "bound": bound})
     count = children_for(bound)
     print(f"the runner bound is {bound} bytes ({mib(bound)}); the formula's {count} children each hold {mib(CHILD_BYTES)} "
           f"of linear memory, {mib(count * CHILD_BYTES)} between them", flush=True)
