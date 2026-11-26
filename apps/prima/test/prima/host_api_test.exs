@@ -12,7 +12,8 @@ defmodule Prima.HostAPITest do
   bytes and its sealed answer, and it verifies at the vector standing. Each
   header a listener refuses before the body is refused with its error, in
   `Prima.WorkerAuth`'s order; the report verifies under its service's
-  dispatch key and names its member; a retried call is the same body under
+  dispatch key and names its member, and carries the memory limit its
+  runner was ended at as one of three words, any other refused; a retried call is the same body under
   a fresh header; a child's `connection` is an optional member of its
   `admit_child` args, an account its edge lacks is refused
   `connection_not_granted`, and a key repeated naming another connection
@@ -218,6 +219,43 @@ defmodule Prima.HostAPITest do
 
       assert other != member
       assert cross["error"] == "lost"
+    end
+
+    test "a report carries the memory limit its runner was ended at, and none other" do
+      %{"memory" => memory, "memory_refusals" => refusals} = @vectors["report"]
+
+      # The report and each it refuses verify as the report does: what makes
+      # one lost is its memory member alone.
+      for vector <- [memory | refusals] do
+        fields = atoms(vector["fields"], @dispatch_fields)
+
+        assert {:ok, vector["header"]} ==
+                 WorkerAuth.report_header(dispatch_key(), fields, vector["body"])
+
+        assert {:ok, ^fields} =
+                 WorkerAuth.verify_report(root(), vector["header"], vector["body"], fields.ts)
+      end
+
+      assert {:ok, :runner_exited, args} =
+               WorkerWire.read_request_body(HostAPI, Jason.decode!(memory["body"]))
+
+      assert {:ok, :cap} = HostAPI.read_memory_end(args)
+      assert HostAPI.put_memory_end(Map.delete(args, "memory"), :cap) == args
+      assert {:ok, nil} = HostAPI.read_memory_end(Map.delete(args, "memory"))
+      assert {:ok, true} = WorkerWire.read_answer(Jason.decode!(memory["answer"]))
+
+      assert ~w(another_value not_a_string) == Enum.map(refusals, & &1["name"])
+
+      for refusal <- refusals do
+        assert {:ok, :runner_exited, args} =
+                 WorkerWire.read_request_body(HostAPI, Jason.decode!(refusal["body"]))
+
+        assert :error = HostAPI.read_memory_end(args), refusal["name"]
+        assert refusal["error"] == "lost"
+      end
+
+      assert :error = HostAPI.read_memory_end(%{"memory" => nil})
+      assert Enum.sort(HostAPI.memory_ends()) == ~w(cap either machine)
     end
 
     test "a retried call is the same body under a fresh header" do
@@ -575,7 +613,7 @@ defmodule Prima.HostAPITest do
       assert [egress] = Enum.filter(call["refusals"], &(&1["answer"] =~ "domain_blocked"))
 
       assert Jason.decode!(egress["answer"]) == %{
-               "v" => 2,
+               "v" => 3,
                "error" => "guest_error",
                "type" => "domain_blocked",
                "message" => "HTTP egress refused: api.example.com is not in the egress domains",

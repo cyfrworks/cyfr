@@ -26,7 +26,8 @@ defmodule Locus.Runtime.RunnerPool do
   `{Locus.Runtime.RunnerPool, pid, event}`: `{:child, execution_id, attempt}` for
   each child it starts, `{:complete, execution_id, clean}`,
   `{:exit, runner_id, open}` or `{:gone, reason}` (its channel closed, its
-  process exited or its keeper failed with the subtree still assigned).
+  process exited, `{:exited, how, memory}` with the memory limit that
+  ended it, or its keeper failed with the subtree still assigned).
   The pool moves the runner itself: a clean completion to idle, anything
   else to tainted, released through the keeper at once, a clean
   completion whose place its keeper did not make warm again among them,
@@ -683,7 +684,9 @@ defmodule Locus.Runtime.RunnerPool do
   end
 
   defp on_event(:closed, pid, entry, state), do: gone(state, pid, entry, :closed)
-  defp on_event({:exited, how}, pid, entry, state), do: gone(state, pid, entry, {:exited, how})
+
+  defp on_event({:exited, how, memory}, pid, entry, state),
+    do: gone(state, pid, entry, {:exited, how, memory})
 
   defp on_event({:error, reason}, pid, entry, state) do
     Logger.warning("[Locus.Runtime.RunnerPool] runner #{entry.id}: #{inspect(reason)}")

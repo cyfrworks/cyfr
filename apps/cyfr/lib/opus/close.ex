@@ -197,9 +197,11 @@ defmodule Opus.Close do
   end
 
   @doc """
-  Close a run whose attempt ended before it closed the run itself. The
-  message is fixed and carries nothing the guest produced, so it needs no
-  masking set.
+  Close a run whose attempt ended before it closed the run itself, under
+  `message`: "Execution attempt ended before it closed" unless the caller
+  knows why it ended, as for a runner the kernel ended for memory
+  (`Opus.Lapse.ended_for_memory/1`). The message is CYFR's own and
+  carries nothing the guest produced, so it needs no masking set.
 
   What the run did before its attempt ended is not known: a step past
   which nothing is replay-safe may have taken effect. The row closes
@@ -223,11 +225,12 @@ defmodule Opus.Close do
   hold the control plane (`Arca.ControlPlane.held?/0`) writes nothing and
   answers the same way.
   """
-  @spec lost(t()) ::
+  @spec lost(t(), String.t()) ::
           {:ok, map()}
           | {:error, String.t() | {:uncertain, String.t()} | {:result_lost, String.t()}}
-  def lost(%__MODULE__{} = close),
-    do: uncertain(close, "Execution attempt ended before it closed")
+  def lost(%__MODULE__{} = close, message \\ "Execution attempt ended before it closed")
+      when is_binary(message),
+      do: uncertain(close, message)
 
   @doc """
   Close a run its runtime abandoned at its time budget: the component was

@@ -276,7 +276,7 @@ defmodule Locus.Runtime.KeeperChannelTest do
 
     # Its end is heard once its connection has carried its last frame.
     :gen_tcp.close(relay)
-    assert_receive {RunnerProcess, ^handle, {:exited, {:status, 0}}}, 5_000
+    assert_receive {RunnerProcess, ^handle, {:exited, {:status, 0}, nil}}, 5_000
     reply(keeper, %{v: 7, type: "released", spawn_id: spawn_id})
     assert_receive {RunnerProcess, ^handle, :released}, 5_000
   end
@@ -373,7 +373,7 @@ defmodule Locus.Runtime.KeeperChannelTest do
     # Its end follows its connection's.
     :gen_tcp.close(relay)
     assert_receive {RunnerProcess, ^handle, :closed}, 5_000
-    assert_receive {RunnerProcess, ^handle, {:exited, {:signal, "SIGKILL"}}}, 5_000
+    assert_receive {RunnerProcess, ^handle, {:exited, {:signal, "SIGKILL"}, nil}}, 5_000
   end
 
   test "a release is written once, and a runner whose owner is gone is followed until it is retired",
@@ -472,7 +472,8 @@ defmodule Locus.Runtime.KeeperChannelTest do
   end
 
   # The keeper bounds every runner: the report every `exited` carries is
-  # understood, and the runner's end reaches its handle as its signal.
+  # understood, and the runner's end reaches its handle as its signal and
+  # the bound that ended it.
   test "the keeper's memory vectors: an exit reported at a runner's bound is understood",
        %{keeper: keeper, name: name, dir: dir} do
     assert Enum.all?(
@@ -492,7 +493,7 @@ defmodule Locus.Runtime.KeeperChannelTest do
     reply(keeper, exited)
     :gen_tcp.close(relay)
     assert_receive {RunnerProcess, ^handle, :closed}, 5_000
-    assert_receive {RunnerProcess, ^handle, {:exited, {:signal, "SIGKILL"}}}, 5_000
+    assert_receive {RunnerProcess, ^handle, {:exited, {:signal, "SIGKILL"}, :cap}}, 5_000
   end
 
   # The keeper asks of its own accord that an idle runner give way: the ask

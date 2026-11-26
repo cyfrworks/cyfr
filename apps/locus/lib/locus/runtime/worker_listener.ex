@@ -29,9 +29,9 @@ defmodule Locus.Runtime.WorkerListener do
   refused `400`. `start` carries `assignment`, `input` and `sealed_keys`,
   `kill` an `execution_id`, `status` nothing. The callback runs on
   `Locus.Runtime.WorkerService`, and its answer is the plain, unsigned
-  `Prima.WorkerWire` answer at this wire's version: `{"v": 2, "ok": true}`
-  for a start or a kill, `{"v": 2, "ok": status}` for the status as
-  `Prima.WorkerAPI.status_to_wire/1` writes it, `{"v": 2, "error": name}`
+  `Prima.WorkerWire` answer at this wire's version: `{"v": 3, "ok": true}`
+  for a start or a kill, `{"v": 3, "ok": status}` for the status as
+  `Prima.WorkerAPI.status_to_wire/1` writes it, `{"v": 3, "error": name}`
   for a start that is `malformed` or a kill that finds nothing. A start no
   runner can take is refused `503` `unavailable`, with a `message` naming
   why while the keeper refuses runners, and one whose runner the keeper

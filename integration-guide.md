@@ -1373,7 +1373,7 @@ Locus process holding the runtime's key refuses to start with the builds
 or the backends key beside it.
 
 CYFR and its workers speak one versioned wire. Every body and answer
-carries `"v": 2` as its first field and every `x-cyfr-auth` header begins
+carries `"v": 3` as its first field and every `x-cyfr-auth` header begins
 with the version token `v1`; a header at another version is refused
 `unknown_version` before its body is read, and a body without `v` or at
 another version is refused `unknown_version` before its operation is read,

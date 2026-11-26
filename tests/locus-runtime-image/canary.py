@@ -364,7 +364,7 @@ def run_guest(stack, plane, reflector, athanor, attached_value, disclosed_value=
     planted = list((plants or {}).values())
     needles = [value.encode() for value in (attached_value, disclosed_value, *planted) if value] + [marker.encode()]
     try:
-        expect(stack.start(attempt)[1] == {"v": 2, "ok": True}, f"{athanor}: the canary guest starts")
+        expect(stack.start(attempt)[1] == {"v": 3, "ok": True}, f"{athanor}: the canary guest starts")
         runner = memory.attached_runner(stack, plane, attempt)
         complete = plane.wait_seen("complete", execution_id, BOOT_S)[0]
         service_pid = stack.service_beam_pid()
@@ -377,7 +377,7 @@ def run_guest(stack, plane, reflector, athanor, attached_value, disclosed_value=
         finally:
             if plants:
                 plant(stack, HOME_UNPLANT, runner["home"], plants)
-        expect(stack.kill(execution_id)[1] == {"v": 2, "ok": True},
+        expect(stack.kill(execution_id)[1] == {"v": 3, "ok": True},
                f"{athanor}: with every dump read, the attempt is killed while its close is held")
         exits = runners.exit_reports(plane, attempt, 15)
         runners.wait_gone(stack, runner, stack.release_grace_ms / 1000 + 10, "the canary runner's process to be gone")

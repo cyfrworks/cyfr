@@ -9,7 +9,7 @@ defmodule Prima.HostAPI do
 
   ## A runner's calls
 
-  Every callback but `c:runner_exited/4` answers a runner, for one attempt
+  Every callback but `c:runner_exited/5` answers a runner, for one attempt
   it runs. The call is signed with that attempt's call key
   (`Prima.WorkerAuth.host_call_header/3`), and its body and answer are
   sealed with the attempt's seal key (`Prima.WorkerAuth.seal_call/5`).
@@ -27,7 +27,7 @@ defmodule Prima.HostAPI do
 
   ## The worker service's report
 
-  `c:runner_exited/4` answers a worker service. The report is signed with
+  `c:runner_exited/5` answers a worker service. The report is signed with
   that worker service's own dispatch key (`Prima.WorkerAuth.report_header/3`)
   and verified with `Prima.WorkerAuth.verify_report/4`, so it speaks only
   for the runners of the worker service it names. Its `args` name the
@@ -108,6 +108,14 @@ defmodule Prima.HostAPI do
   `connection` member of an `admit_child` body's args, absent for nil.
   """
   @type connection :: String.t() | nil
+
+  @typedoc """
+  The memory limit a runner was ended at, as a worker service's report
+  carries it: the runner's own bound (`:cap`), a limit above it
+  (`:machine`), one its keeper could not lay to either (`:either`), or
+  none (nil).
+  """
+  @type memory_end :: :cap | :machine | :either | nil
 
   @child_key ~r/\A[A-Za-z0-9_-]{1,128}\z/
 
@@ -204,6 +212,42 @@ defmodule Prima.HostAPI do
   end
 
   def answer_from_wire(_wire), do: :error
+
+  @memory_ends %{"cap" => :cap, "machine" => :machine, "either" => :either}
+
+  @doc """
+  A report's args with the memory limit that ended its runner
+  (`t:memory_end/0`) as their `memory` member, `"cap"`, `"machine"` or
+  `"either"`; nil adds none.
+  """
+  @spec put_memory_end(map(), memory_end()) :: map()
+  def put_memory_end(args, nil) when is_map(args), do: args
+
+  def put_memory_end(args, memory) when is_map(args) and memory in [:cap, :machine, :either],
+    do: Map.put(args, "memory", Atom.to_string(memory))
+
+  @doc """
+  The memory limit a report's args name: nil where they carry no
+  `memory` member, the limit for one of `"cap"`, `"machine"` and
+  `"either"`, and `:error` for a member of any other value, null included.
+  """
+  @spec read_memory_end(map()) :: {:ok, memory_end()} | :error
+  def read_memory_end(args) when is_map(args) do
+    case Map.fetch(args, "memory") do
+      :error ->
+        {:ok, nil}
+
+      {:ok, memory} when is_map_key(@memory_ends, memory) ->
+        {:ok, Map.fetch!(@memory_ends, memory)}
+
+      {:ok, _other} ->
+        :error
+    end
+  end
+
+  @doc "Every value a report's `memory` member may carry."
+  @spec memory_ends() :: [String.t(), ...]
+  def memory_ends, do: Map.keys(@memory_ends)
 
   @doc "Whether `key` is a well-formed `t:child_key/0`."
   @spec valid_child_key?(term()) :: boolean()
@@ -567,13 +611,20 @@ defmodule Prima.HostAPI do
   `member` does not name. `refusal` is the code of the keeper's refusal
   of the runner after the service answered its start
   (`Prima.WorkerAPI.runner_refusal/1`), whose sentence an attempt the
-  runner never took closes with; `nil` otherwise.
+  runner never took closes with; `nil` otherwise. `memory` is the memory
+  limit the kernel ended the runner at (`t:memory_end/0`), whose sentence
+  a run the runner held closes with (`Prima.Refusal`'s `{:memory, what,
+  cause}`); `nil` for a runner that ended otherwise. It crosses as the
+  `memory` member of the report's args, `"cap"`, `"machine"` or
+  `"either"`, absent for nil; a report carrying any other is refused
+  `lost`.
   """
   @callback runner_exited(
               report :: WorkerAuth.dispatch(),
               runner :: String.t(),
               attempts :: [String.t()],
-              refusal :: String.t() | nil
+              refusal :: String.t() | nil,
+              memory :: memory_end()
             ) ::
               :ok | {:error, :unavailable}
 end
