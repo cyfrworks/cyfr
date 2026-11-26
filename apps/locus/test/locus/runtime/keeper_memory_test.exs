@@ -205,7 +205,8 @@ defmodule Locus.Runtime.KeeperMemoryTest do
           assert_receive {RunnerProcess, ^handle, {:exited, {:signal, "SIGKILL"}}}, 5_000
         end)
 
-      assert log =~ "runner runner_1 was ended at its memory bound"
+      # The bound its place answered, which the image suite reads back.
+      assert log =~ "runner runner_1 was ended at its memory bound of #{@bound} bytes"
       assert log =~ "spawn #{spawn_id}, signal SIGKILL"
 
       reply(keeper, %{v: 7, type: "released", spawn_id: spawn_id})

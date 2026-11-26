@@ -82,7 +82,8 @@ defmodule Locus.Runtime.Keeper do
           required(:runner) => String.t(),
           required(:argv) => [String.t()],
           required(:env) => %{String.t() => String.t()},
-          optional(:heir) => {pid(), term()}
+          optional(:heir) => {pid(), term()},
+          optional(:memory_bytes) => pos_integer()
         }
 
   @typedoc "A keeper's handle on one runner, kept by the process that spawned it."

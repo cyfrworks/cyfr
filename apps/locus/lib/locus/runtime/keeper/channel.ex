@@ -155,7 +155,12 @@ defmodule Locus.Runtime.Keeper.Channel do
 
     with {:ok, client} <- client(adapter),
          {:ok, handle} <- Locus.Keeper.spawn(client, request) do
-      {:ok, Map.merge(handle, %{runner: runner, adapter: adapter}), []}
+      {:ok,
+       Map.merge(handle, %{
+         runner: runner,
+         adapter: adapter,
+         memory_bytes: Map.get(spec, :memory_bytes)
+       }), []}
     else
       {:error, reason} -> {:error, failure(reason)}
     end
@@ -241,8 +246,8 @@ defmodule Locus.Runtime.Keeper.Channel do
   # the runner at its bound, not for the container's limit.
   defp observe(channel, {:exited, exit, :cap}) do
     Logger.warning(
-      "[Locus.Runtime.Keeper.Channel] runner #{channel.runner} was ended at its memory bound " <>
-        "(spawn #{channel.spawn_id}, #{format_exit(exit)})"
+      "[Locus.Runtime.Keeper.Channel] runner #{channel.runner} was ended at its memory bound of " <>
+        "#{channel.memory_bytes} bytes (spawn #{channel.spawn_id}, #{format_exit(exit)})"
     )
 
     channel

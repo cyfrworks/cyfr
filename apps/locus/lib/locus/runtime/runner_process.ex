@@ -199,7 +199,9 @@ defmodule Locus.Runtime.RunnerProcess do
       {:ok, memory_bytes} ->
         notify(state, {:placed, memory_bytes})
 
-        case state.keeper.spawn(state.spec) do
+        # The bound the keeper's place answered, which its end at the bound
+        # names.
+        case state.keeper.spawn(Map.put(state.spec, :memory_bytes, memory_bytes)) do
           {:ok, channel, events} ->
             {:noreply, Enum.reduce(events, %{state | channel: channel}, &on_event/2)}
 
