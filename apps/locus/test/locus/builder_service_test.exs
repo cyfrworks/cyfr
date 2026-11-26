@@ -17,7 +17,8 @@ defmodule Locus.BuilderServiceTest do
   mid-build ends the build's process group; a client that leaves ends its
   build within a bound and its slot goes back, under the keeper only once
   cyfr-locus reports the build's spawn released; the keeper's memory answers
-  are the wire's `memory` and `unavailable`. A build that waits for room
+  are the wire's `memory`, `unavailable` and, for a place it found no room
+  for, `no_memory` with what holds the memory. A build that waits for room
   in the builds count ends by the deadline its request set, and one whose
   client leaves while it waits ends at once.
   """
@@ -167,16 +168,16 @@ defmodule Locus.BuilderServiceTest do
     test "refuses another version, a field it does not have and a body past its bound", %{
       port: port
     } do
-      assert {409, [{:refusal, {:protocol_mismatch, 2, 1}}]} =
+      assert {409, [{:refusal, {:protocol_mismatch, 3, 1}}]} =
                Wire.post(port, @health, ~s({"version":1}))
 
       assert {400, [{:refusal, {:malformed, sentence}}]} =
-               Wire.post(port, @health, ~s({"version":2,"verbose":true}))
+               Wire.post(port, @health, ~s({"version":3,"verbose":true}))
 
       assert sentence =~ "verbose"
 
       assert {400, [{:refusal, {:malformed, sentence}}]} =
-               Wire.post(port, @health, String.duplicate(" ", 5_000) <> ~s({"version":2}))
+               Wire.post(port, @health, String.duplicate(" ", 5_000) <> ~s({"version":3}))
 
       assert sentence =~ "at most 4096"
     end
@@ -380,10 +381,10 @@ defmodule Locus.BuilderServiceTest do
     test "a body at another version, or at none, naming both ends", ctx do
       wire = "true" |> Wire.request() |> Wire.body() |> Jason.decode!()
 
-      assert {:protocol_mismatch, 2, 1} =
+      assert {:protocol_mismatch, 3, 1} =
                refused(ctx.port, Jason.encode!(%{wire | "version" => 1}))
 
-      assert {:protocol_mismatch, 2, nil} =
+      assert {:protocol_mismatch, 3, nil} =
                refused(ctx.port, Jason.encode!(Map.delete(wire, "version")))
 
       assert spawns(ctx.fake) == []
@@ -844,8 +845,13 @@ defmodule Locus.BuilderServiceTest do
     end
 
     # A build's place waits for the keeper's room: the build waits past the
-    # room's wait, and is run once placed or refused naming no_memory.
-    test "a build whose place the keeper answers past 5 s runs, and one it refuses for room is unavailable naming no_memory",
+    # room's wait, and is run once placed. One the keeper refuses for room
+    # is refused no_memory with what holds the memory as the keeper said it
+    # for that build's place, so of two people refused at once each is told
+    # only of their own work and everyone else's as one sum; and the next
+    # build runs once the keeper has room again.
+    test "a build whose place the keeper answers past 5 s runs, one it refuses for room says what holds it, " <>
+           "each to its own athanor, and the next runs once there is room",
          %{port: port} do
       fake = keeper!({:place_held, self()})
 
@@ -857,18 +863,53 @@ defmodule Locus.BuilderServiceTest do
       assert [%{"place" => ^first}] = spawns(fake)
       assert {200, _lines} = Task.await(placed, 120_000)
 
-      held = %{"need" => 838_860_800, "free" => 0, "mine" => [], "others_bytes" => 0}
-      refused = Task.async(fn -> Wire.build(port, Wire.request("true")) end)
-      assert_receive {:place_held, second}, 10_000
-      assert Task.yield(refused, 6_000) == nil
-      :ok = FakeKeeper.answer_place(fake, second, {:no_memory, held})
+      mib = 1024 * 1024
 
-      refusal = {:unavailable, "cyfr-locus could not hold the build (no_memory)"}
+      held = %{
+        "ath_one" => %{
+          "need" => 800 * mib,
+          "free" => 64 * mib,
+          "mine" => [%{"kind" => "program", "bytes" => 384 * mib}],
+          "others_bytes" => 512 * mib
+        },
+        "ath_two" => %{
+          "need" => 800 * mib,
+          "free" => 64 * mib,
+          "mine" => [],
+          "others_bytes" => 896 * mib
+        }
+      }
 
-      assert Task.await(refused, 30_000) ==
-               {BuilderProtocol.status(refusal), [{:refusal, refusal}]}
+      refused =
+        for athanor <- ["ath_one", "ath_two"], into: %{} do
+          request = Wire.request("true", %{athanor_id: athanor})
+          {athanor, Task.async(fn -> Wire.build(port, request) end)}
+        end
+
+      assert_receive {:place_held, one}, 10_000
+      assert_receive {:place_held, two}, 10_000
+      assert Enum.all?(Map.values(refused), &(Task.yield(&1, 6_000) == nil))
+
+      athanors = Map.new(FakeKeeper.requests(fake), &{&1["id"], &1["athanor"]})
+
+      for place <- [one, two],
+          do: :ok = FakeKeeper.answer_place(fake, place, {:no_memory, held[athanors[place]]})
+
+      for {athanor, task} <- refused do
+        {:ok, read} = Prima.LocusPool.read_held(held[athanor])
+        refusal = {:no_memory, read}
+
+        assert Task.await(task, 30_000) ==
+                 {BuilderProtocol.status(refusal), [{:refusal, refusal}]}
+      end
 
       assert length(spawns(fake)) == 1
+
+      again = Task.async(fn -> Wire.build(port, Wire.request("true")) end)
+      assert_receive {:place_held, third}, 10_000
+      :ok = FakeKeeper.answer_place(fake, third, :placed)
+      assert {200, _lines} = Task.await(again, 120_000)
+      assert [%{"place" => ^first}, %{"place" => ^third}] = spawns(fake)
       wait_until(fn -> match?(%{active: 0}, Slots.status(@slots)) end, 10_000)
     end
 
@@ -1021,13 +1062,18 @@ defmodule Locus.BuilderServiceTest do
 
       conn = Wire.open(port, @build, body, [{"x-cyfr-auth", Wire.header(body)}])
       assert {200, conn} = Wire.status(conn)
-      conn = await_line(conn, {:progress, :output, "running"})
+
+      # The deadline ends the run, which asks cyfr-locus to end the spawn:
+      # the build was spawned, and its release is held. Nothing is read
+      # off the stream for it, since the deadline may come before the
+      # build's script has said anything, and the run sends nothing after
+      # it. The script, which the held release leaves running, says it
+      # runs by the pids it writes.
+      assert_receive {:release_held, _spawn_id}, 10_000
       os_pids = pids_in(file)
 
-      # The deadline ends the run, which asks cyfr-locus to end the spawn;
-      # then the client leaves, and the cancel's bound passes with the
+      # Then the client leaves, and the cancel's bound passes with the
       # release still held, each cancel taken by the run.
-      assert_receive {:release_held, _spawn_id}, 10_000
       Wire.close(conn)
 
       capture_log(fn ->

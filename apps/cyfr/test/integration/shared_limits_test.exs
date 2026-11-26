@@ -604,7 +604,7 @@ defmodule Cyfr.SharedLimitsTest do
   defp exit_report(service, boot, runner, attempts) do
     body =
       Jason.encode!(%{
-        "v" => 1,
+        "v" => 2,
         "op" => "runner_exited",
         "args" => %{
           "member" => Keys.member(),

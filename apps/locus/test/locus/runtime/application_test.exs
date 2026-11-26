@@ -171,7 +171,7 @@ defmodule Locus.Runtime.ApplicationTest do
         decode_body: false
       )
 
-    assert Jason.decode!(body) == %{"v" => 1, "error" => "malformed"}
+    assert Jason.decode!(body) == %{"v" => 2, "error" => "malformed"}
   end
 
   test "the engine depends on and supervises nothing of the control plane" do

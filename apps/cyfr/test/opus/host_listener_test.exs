@@ -284,7 +284,7 @@ defmodule Opus.HostListenerTest do
       assert {200, answer} = call(url, fixture, "attached_fetch", args)
 
       assert answer == %{
-               "v" => 1,
+               "v" => 2,
                "error" => "guest_error",
                "type" => "connection_not_granted",
                "message" => Prima.Refusal.message(:connection_not_granted),
@@ -478,7 +478,7 @@ defmodule Opus.HostListenerTest do
                      )
 
             assert open_answer(fixture.keys.seal, fields(fixture, opts), sealed) ==
-                     %{"v" => 1, "error" => "lost"}
+                     %{"v" => 2, "error" => "lost"}
           end)
 
         assert log =~ "not claimed by the runner the header names", Atom.to_string(route)
@@ -770,7 +770,7 @@ defmodule Opus.HostListenerTest do
                  "#{shape} at #{timeout} ms closed after #{elapsed} ms"
         end
 
-        assert {200, %{"v" => 1, "ok" => _renewed}} =
+        assert {200, %{"v" => 2, "ok" => _renewed}} =
                  renew("http://127.0.0.1:#{port}", fixture)
       end
     end
@@ -976,7 +976,7 @@ defmodule Opus.HostListenerTest do
             # A peer at another version is told so; every other header is
             # refused as lost, its reason logged.
             name = if vector["error"] == "unknown_version", do: "unknown_version", else: "lost"
-            assert answer == %{"v" => 1, "error" => name}, vector["name"]
+            assert answer == %{"v" => 2, "error" => name}, vector["name"]
           end)
 
         assert log =~ vector["error"], vector["name"]
@@ -1085,7 +1085,7 @@ defmodule Opus.HostListenerTest do
         {:ok, sealed} = WorkerAuth.seal_call(fixture.keys.seal, :body, fields, json)
         {:ok, header} = WorkerAuth.host_call_header(fixture.call_key, fields, sealed)
 
-        assert {400, %{"v" => 1, "error" => ^error}} =
+        assert {400, %{"v" => 2, "error" => ^error}} =
                  post(url, WorkerWire.host_route(:renew), [header], sealed),
                name
       end
@@ -1113,9 +1113,9 @@ defmodule Opus.HostListenerTest do
 
       assert {200, raw} = post(url, WorkerWire.host_route(:renew), [header], sealed, raw: true)
       assert {:ok, answer} = WorkerAuth.open_call(fixture.keys.seal, :answer, fields, raw)
-      assert String.starts_with?(answer, ~s({"v":1,"ok":))
+      assert String.starts_with?(answer, ~s({"v":2,"ok":))
 
-      assert {200, %{"v" => 1, "ok" => true}} = report(url, fixture)
+      assert {200, %{"v" => 2, "ok" => true}} = report(url, fixture)
     end
   end
 
@@ -1274,7 +1274,7 @@ defmodule Opus.HostListenerTest do
       ])
 
     {status, answer} = read_answer(socket, "")
-    assert {status, Jason.decode!(answer)} == {413, %{"error" => "lost", "v" => 1}}
+    assert {status, Jason.decode!(answer)} == {413, %{"error" => "lost", "v" => 2}}
     refused_at = System.monotonic_time(:millisecond)
     trickler = spawn_link(fn -> trickle(socket, piece) end)
     watch = Process.monitor(trickler)

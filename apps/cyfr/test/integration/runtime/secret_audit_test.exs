@@ -352,7 +352,7 @@ defmodule Locus.Runtime.SecretAuditTest do
          %{mine: mine, other: other} do
       body =
         Jason.encode!(%{
-          "v" => 1,
+          "v" => 2,
           "op" => "record_denial",
           "args" => %{
             "type" => "secret_denied",

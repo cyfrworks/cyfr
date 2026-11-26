@@ -326,7 +326,7 @@ defmodule Opus.WorkerClientTest do
       for vector <- requests do
         callback = String.to_existing_atom(vector["callback"])
         route = WorkerWire.worker_route(callback)
-        %{"v" => 1, "op" => op, "args" => args} = Jason.decode!(vector["body"])
+        %{"v" => 2, "op" => op, "args" => args} = Jason.decode!(vector["body"])
         assert op == vector["callback"]
 
         answers =
@@ -361,12 +361,12 @@ defmodule Opus.WorkerClientTest do
 
       for answer <- [
             ~s({"ok":true}),
-            ~s({"v":2,"ok":true}),
-            ~s({"v":"1","ok":true}),
-            ~s({"v":1,"ok":true,"extra":1}),
+            ~s({"v":3,"ok":true}),
+            ~s({"v":"2","ok":true}),
+            ~s({"v":2,"ok":true,"extra":1}),
             ~s({"error":"not_found"}),
-            ~s({"v":2,"error":"not_found"}),
-            ~s({"v":1,"error":"unknown_version"})
+            ~s({"v":3,"error":"not_found"}),
+            ~s({"v":2,"error":"unknown_version"})
           ] do
         endpoint = serve!(routes({:raw, 200, answer}))
 
@@ -386,11 +386,35 @@ defmodule Opus.WorkerClientTest do
       # A start's refusal is one only at this version.
       for answer <- [
             Jason.encode!(%{"error" => "unavailable", "message" => sentence}),
-            Jason.encode!(%{"v" => 2, "error" => "unavailable", "message" => sentence})
+            Jason.encode!(%{"v" => 3, "error" => "unavailable", "message" => sentence})
           ] do
         endpoint = serve!(%{WorkerWire.worker_route(:start) => {:raw, 503, answer}})
         assert {:error, :lost} = WorkerClient.start(endpoint, "token", "{}", "sealed"), answer
       end
+    end
+
+    test "a start refused for room is one only with held and nothing beside it" do
+      [start] = Enum.filter(@vectors["requests"], &(&1["callback"] == "start"))
+
+      for %{"status" => 503, "answer" => answer} <- start["refusals"],
+          %{"error" => "no_memory"} = decoded <- [Jason.decode!(answer)] do
+        endpoint = serve!(%{WorkerWire.worker_route(:start) => {:raw, 503, answer}})
+        read = WorkerClient.start(endpoint, "token", "{}", "sealed")
+
+        if Map.keys(decoded) |> Enum.sort() == ~w(error held v) do
+          {:ok, held} = Prima.LocusPool.read_held(decoded["held"])
+          assert read == {:error, {:no_memory, held}}, answer
+        else
+          assert read == {:error, :lost}, answer
+        end
+      end
+
+      # The vectors hold both: a refusal for room, and one with a member beside held.
+      assert start["refusals"]
+             |> Enum.map(&Jason.decode!(&1["answer"]))
+             |> Enum.filter(&(&1["error"] == "no_memory"))
+             |> Enum.map(&map_size/1)
+             |> Enum.sort() == [3, 4]
     end
   end
 
@@ -429,6 +453,10 @@ defmodule Opus.WorkerClientTest do
         if WorkerAPI.valid_refusal_message?(sentence),
           do: {:error, {:unavailable, sentence}},
           else: {:error, :lost}
+
+      {:error, "no_memory", %{"held" => wire} = fields} when map_size(fields) == 1 ->
+        {:ok, held} = Prima.LocusPool.read_held(wire)
+        {:error, {:no_memory, held}}
 
       _other ->
         {:error, :lost}

@@ -76,8 +76,8 @@ defmodule Locus.Runtime.WorkerService do
   start waits. What a runner reports while its assign is in flight is
   read once the assign is answered, in the order it came, as if the
   assign had answered first. One whose runner's place the keeper refused
-  for room answers `{:error, {:unavailable, sentence}}` with the keeper's
-  account of it, `no_memory`, and is sent to no other runner. A runner whose assign went unanswered, or was answered
+  for room answers `{:error, {:no_memory, held}}`, what holds the memory
+  as the keeper gave it, and is sent to no other runner. A runner whose assign went unanswered, or was answered
   past the deadline, is retired, since whose its place is cannot be
   known. A `start` no runner can be found for answers `{:error,
   :unavailable}`, and one whose runner's spawn the keeper refused while
@@ -295,8 +295,14 @@ defmodule Locus.Runtime.WorkerService do
   end
 
   def handle_call(:status, _from, state) do
+    pool = RunnerPool.status(RunnerPool)
+
+    # A status says why the keeper refuses runners, never what holds the
+    # memory: that is the refused start's alone.
+    pool = %{pool | refusal: pool.refusal && Map.delete(pool.refusal, :held)}
+
     status =
-      Map.merge(RunnerPool.status(RunnerPool), %{
+      Map.merge(pool, %{
         service: state.service,
         boot: state.boot,
         attempts: held(state)
@@ -580,7 +586,7 @@ defmodule Locus.Runtime.WorkerService do
   end
 
   defp given(state, start, {:error, {:refused, refusal}}),
-    do: answer(state, start, {:error, {:unavailable, refusal.message}})
+    do: answer(state, start, {:error, refused(refusal)})
 
   defp given(state, start, {:error, reason}) do
     Logger.error(
@@ -590,6 +596,11 @@ defmodule Locus.Runtime.WorkerService do
 
     answer(state, start, {:error, :unavailable})
   end
+
+  # A start the keeper refused a runner for: for room, what holds the
+  # memory as the keeper gave it; otherwise the keeper's sentence.
+  defp refused(%{reason: "no_memory", held: held}), do: {:no_memory, held}
+  defp refused(refusal), do: {:unavailable, refusal.message}
 
   # The assign's outcome, then what the pool told of its runner meanwhile,
   # in the order it came. An assign that reached its runner after a kill
@@ -627,7 +638,7 @@ defmodule Locus.Runtime.WorkerService do
   # The runner's place was refused, for room or another reason: no runner
   # of it ran, and another would wait as it did.
   defp assigned(state, %{start: start}, {:error, {:unsent, {:refused, refusal}}}),
-    do: answer(state, start, {:error, {:unavailable, refusal.message}})
+    do: answer(state, start, {:error, refused(refusal)})
 
   defp assigned(state, %{start: %{resend?: true} = start, pid: pid, runner: runner}, {
          :error,

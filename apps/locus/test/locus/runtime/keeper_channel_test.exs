@@ -531,11 +531,15 @@ defmodule Locus.Runtime.KeeperChannelTest do
              :unknown
   end
 
-  test "a runner's place refused for room is the keeper's no_memory refusal" do
+  test "a runner's place refused for room is the keeper's no_memory refusal, keeping what holds the memory" do
     held = %{need: 402_653_184, free: 0, mine: [], others_bytes: 0}
 
     assert Channel.refusal({:no_memory, held}) ==
-             %{reason: "no_memory", message: "cyfr-locus refused to start a runner (no_memory)"}
+             %{
+               reason: "no_memory",
+               message: "cyfr-locus refused to start a runner (no_memory)",
+               held: held
+             }
   end
 
   test "the adapter runs only where the channel was inherited, and the direct launcher only where it was not" do

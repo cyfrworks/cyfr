@@ -310,13 +310,13 @@ defmodule Opus.HostTest do
 
       for body <- [
             "not json",
-            ~s({"v":1,"op":"storage","args":{}}),
-            ~s({"v":1,"op":"renew"}),
-            ~s({"v":1,"op":"runner_exited","args":{}}),
-            ~s({"v":1,"op":"renew","args":{"attempts":[]},"extra":true}),
+            ~s({"v":2,"op":"storage","args":{}}),
+            ~s({"v":2,"op":"renew"}),
+            ~s({"v":2,"op":"runner_exited","args":{}}),
+            ~s({"v":2,"op":"renew","args":{"attempts":[]},"extra":true}),
             ~s(["renew"])
           ] do
-        assert %{"v" => 1, "error" => "lost"} =
+        assert %{"v" => 2, "error" => "lost"} =
                  AttemptFixtures.call(fixture, "ignored", %{}, body: body),
                body
       end
@@ -324,11 +324,11 @@ defmodule Opus.HostTest do
       # The version is read before the operation.
       for body <- [
             ~s({"op":"renew","args":{"attempts":[]}}),
-            ~s({"v":2,"op":"renew","args":{"attempts":[]}}),
-            ~s({"v":"1","op":"renew","args":{"attempts":[]}}),
-            ~s({"v":2,"op":"nothing"})
+            ~s({"v":3,"op":"renew","args":{"attempts":[]}}),
+            ~s({"v":"2","op":"renew","args":{"attempts":[]}}),
+            ~s({"v":3,"op":"nothing"})
           ] do
-        assert %{"v" => 1, "error" => "unknown_version"} =
+        assert %{"v" => 2, "error" => "unknown_version"} =
                  AttemptFixtures.call(fixture, "ignored", %{}, body: body),
                body
       end
@@ -1027,7 +1027,7 @@ defmodule Opus.HostTest do
     test "a connection the node's edge does not bind is refused before admission, naming its call id" do
       [vector] = Enum.filter(@vectors["calls"], &(&1["callback"] == "attached_fetch"))
       fixture = AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api))
-      %{"v" => 1, "op" => "attached_fetch", "args" => args} = Jason.decode!(vector["body"])
+      %{"v" => 2, "op" => "attached_fetch", "args" => args} = Jason.decode!(vector["body"])
       body = :attached_fetch |> WorkerWire.request_body(args) |> Jason.encode!()
       test_pid = self()
 
@@ -1040,7 +1040,7 @@ defmodule Opus.HostTest do
         fixture |> AttemptFixtures.header(body) |> Opus.Host.call(body) |> Jason.decode!()
 
       assert answer == %{
-               "v" => 1,
+               "v" => 2,
                "error" => "guest_error",
                "type" => "connection_not_granted",
                "message" => Prima.Refusal.message(:connection_not_granted),
@@ -1106,7 +1106,7 @@ defmodule Opus.HostTest do
       # answers it as every host call: lost, with nothing decided.
       body = :attached_fetch |> WorkerWire.request_body(args) |> Jason.encode!()
 
-      assert %{"v" => 1, "error" => "lost"} =
+      assert %{"v" => 2, "error" => "lost"} =
                fixture
                |> AttemptFixtures.header(body, member: "cyfr@10.0.0.9#boot_another")
                |> Opus.Host.call(body)
@@ -1145,14 +1145,14 @@ defmodule Opus.HostTest do
         answer =
           fixture |> AttemptFixtures.header(body) |> Opus.Host.call(body) |> Jason.decode!()
 
-        assert %{"v" => 1, "error" => "guest_error"} = answer
+        assert %{"v" => 2, "error" => "guest_error"} = answer
         assert Map.take(answer, Map.keys(expected)) == expected
       end
 
       no_call_id = Map.delete(args, "call_id")
       body = :attached_fetch |> WorkerWire.request_body(no_call_id) |> Jason.encode!()
 
-      assert %{"v" => 1, "error" => "malformed"} =
+      assert %{"v" => 2, "error" => "malformed"} =
                fixture
                |> AttemptFixtures.header(body)
                |> Opus.Host.call(body)
@@ -1173,7 +1173,7 @@ defmodule Opus.HostTest do
       for vector <- calls do
         op = vector["callback"]
         fixture = vector_fixture(op)
-        %{"v" => 1, "op" => ^op, "args" => args} = Jason.decode!(vector["body"])
+        %{"v" => 2, "op" => ^op, "args" => args} = Jason.decode!(vector["body"])
 
         body =
           op
@@ -1187,11 +1187,11 @@ defmodule Opus.HostTest do
 
         # The version is the answer's first member, as the vector writes it.
         # An attached request's success is its frames, never one answer.
-        assert String.starts_with?(raw, ~s({"v":1,)), op
+        assert String.starts_with?(raw, ~s({"v":2,)), op
 
         if op == "attached_fetch",
           do: refute(Map.has_key?(vector, "answer")),
-          else: assert(String.starts_with?(vector["answer"], ~s({"v":1,)), op)
+          else: assert(String.starts_with?(vector["answer"], ~s({"v":2,)), op)
 
         listed = for %{"answer" => refused} <- vector["refusals"], do: Jason.decode!(refused)
 
@@ -1211,7 +1211,7 @@ defmodule Opus.HostTest do
       fixture =
         AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api), service_id: @service)
 
-      assert %{"v" => 1, "op" => "runner_exited", "args" => args} = Jason.decode!(report["body"])
+      assert %{"v" => 2, "op" => "runner_exited", "args" => args} = Jason.decode!(report["body"])
       args = %{args | "runner" => fixture.runner, "attempts" => [fixture.attempt]}
 
       cross = report["cross_member"]
@@ -1219,7 +1219,7 @@ defmodule Opus.HostTest do
       refute other == fixture.member
 
       # The report the vector's peer sends: another member than this one.
-      assert Jason.decode!(~s({"v":1,"error":"#{cross["error"]}"})) ==
+      assert Jason.decode!(~s({"v":2,"error":"#{cross["error"]}"})) ==
                report_of(fixture, %{args | "member" => other})
 
       assert row(fixture).status == "running"
@@ -1338,11 +1338,11 @@ defmodule Opus.HostTest do
       cases = Map.new(@vectors["connection_cases"], &{&1["name"], &1})
 
       play = fn name ->
-        %{"v" => 1, "op" => "admit_child", "args" => args} = Jason.decode!(cases[name]["body"])
+        %{"v" => 2, "op" => "admit_child", "args" => args} = Jason.decode!(cases[name]["body"])
         AttemptFixtures.call(fixture, "admit_child", args)
       end
 
-      assert %{"v" => 1, "ok" => %{"assignment" => token}} = play.("omitted")
+      assert %{"v" => 2, "ok" => %{"assignment" => token}} = play.("omitted")
       {:ok, admitted} = Assignment.read(token)
       {:ok, child} = Prima.Authority.from_wire(admitted.authority)
       assert child.cursor == {:bound, target}

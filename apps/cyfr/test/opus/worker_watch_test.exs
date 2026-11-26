@@ -273,9 +273,9 @@ defmodule Opus.WorkerWatchTest do
 
     outcome = AttemptFixtures.outcome(fixture, "completed", %{"output" => %{"round" => round}})
     {answered, lapsed} = terminal_writers(order, fixture, outcome)
-    completed = %{"v" => 1, "ok" => %{"round" => round}}
-    lost = %{"v" => 1, "error" => "lost"}
-    closed = %{"v" => 1, "error" => "failed", "message" => "Execution failed"}
+    completed = %{"v" => 2, "ok" => %{"round" => round}}
+    lost = %{"v" => 2, "error" => "lost"}
+    closed = %{"v" => 2, "error" => "failed", "message" => "Execution failed"}
 
     # Exactly one writer's row stands. A complete that found the row
     # lapsed already is answered lost by an attempt that stops; one held

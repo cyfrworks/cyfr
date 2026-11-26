@@ -62,11 +62,11 @@ defmodule Prima.WorkerWireTest do
 
   test "a request body carries the version first, names its callback and reads back for its behaviour only" do
     body = WorkerWire.request_body(:admit_child, %{"reference" => "r"})
-    assert Jason.encode!(body) == ~s({"v":1,"op":"admit_child","args":{"reference":"r"}})
-    assert WorkerWire.version() == 1
+    assert Jason.encode!(body) == ~s({"v":2,"op":"admit_child","args":{"reference":"r"}})
+    assert WorkerWire.version() == 2
 
     decoded = body |> Jason.encode!() |> Jason.decode!()
-    assert decoded == %{"v" => 1, "op" => "admit_child", "args" => %{"reference" => "r"}}
+    assert decoded == %{"v" => 2, "op" => "admit_child", "args" => %{"reference" => "r"}}
 
     assert {:ok, :admit_child, %{"reference" => "r"}} =
              WorkerWire.read_request_body(HostAPI, decoded)
@@ -74,15 +74,15 @@ defmodule Prima.WorkerWireTest do
     assert {:error, :malformed} = WorkerWire.read_request_body(WorkerAPI, decoded)
 
     assert {:ok, :kill, %{}} =
-             WorkerWire.read_request_body(WorkerAPI, %{"v" => 1, "op" => "kill", "args" => %{}})
+             WorkerWire.read_request_body(WorkerAPI, %{"v" => 2, "op" => "kill", "args" => %{}})
 
     for malformed <- [
-          %{"v" => 1, "op" => "nope", "args" => %{}},
-          %{"v" => 1, "op" => "attach", "args" => []},
-          %{"v" => 1, "op" => "attach"},
-          %{"v" => 1, "args" => %{}},
-          %{"v" => 1, "op" => :attach, "args" => %{}},
-          %{"v" => 1, "op" => "attach", "args" => %{}, "extra" => true},
+          %{"v" => 2, "op" => "nope", "args" => %{}},
+          %{"v" => 2, "op" => "attach", "args" => []},
+          %{"v" => 2, "op" => "attach"},
+          %{"v" => 2, "args" => %{}},
+          %{"v" => 2, "op" => :attach, "args" => %{}},
+          %{"v" => 2, "op" => "attach", "args" => %{}, "extra" => true},
           "attach",
           ["attach"],
           nil
@@ -95,10 +95,10 @@ defmodule Prima.WorkerWireTest do
   test "a body at no version or another is refused before its op is read" do
     for body <- [
           %{"op" => "attach", "args" => %{}},
-          %{"v" => 2, "op" => "attach", "args" => %{}},
+          %{"v" => 3, "op" => "attach", "args" => %{}},
           %{"v" => 0, "op" => "nope"},
-          %{"v" => "1", "op" => "attach", "args" => %{}},
-          %{"v" => 1.0, "op" => "attach", "args" => %{}},
+          %{"v" => "2", "op" => "attach", "args" => %{}},
+          %{"v" => 2.0, "op" => "attach", "args" => %{}},
           %{"v" => nil},
           %{}
         ] do
@@ -108,18 +108,18 @@ defmodule Prima.WorkerWireTest do
   end
 
   test "answers carry the version first and spell success as ok and a refusal by name with its fields" do
-    assert Jason.encode!(WorkerWire.ok(true)) == ~s({"v":1,"ok":true})
-    assert Jason.encode!(WorkerWire.ok(%{"a" => 1})) == ~s({"v":1,"ok":{"a":1}})
-    assert Jason.encode!(WorkerWire.error(:lost)) == ~s({"v":1,"error":"lost"})
+    assert Jason.encode!(WorkerWire.ok(true)) == ~s({"v":2,"ok":true})
+    assert Jason.encode!(WorkerWire.ok(%{"a" => 1})) == ~s({"v":2,"ok":{"a":1}})
+    assert Jason.encode!(WorkerWire.error(:lost)) == ~s({"v":2,"error":"lost"})
 
     assert Jason.encode!(WorkerWire.error(:guest_error, %{"type" => "denied", "message" => "no"})) ==
-             ~s({"v":1,"error":"guest_error","message":"no","type":"denied"})
+             ~s({"v":2,"error":"guest_error","message":"no","type":"denied"})
 
     assert Jason.encode!(WorkerWire.error("failed", %{"message" => "m"})) ==
-             ~s({"v":1,"error":"failed","message":"m"})
+             ~s({"v":2,"error":"failed","message":"m"})
 
-    assert Jason.encode!(WorkerWire.error("failed", %{"error" => "other", "v" => 2})) ==
-             ~s({"v":1,"error":"failed"})
+    assert Jason.encode!(WorkerWire.error("failed", %{"error" => "other", "v" => 3})) ==
+             ~s({"v":2,"error":"failed"})
   end
 
   test "an answer reads back to what it says, and anything else is a lost answer" do
@@ -136,13 +136,13 @@ defmodule Prima.WorkerWireTest do
     for lost <- [
           %{"ok" => true},
           %{"error" => "lost"},
-          %{"v" => 2, "ok" => true},
-          %{"v" => "1", "ok" => true},
-          %{"v" => 1},
-          %{"v" => 1, "ok" => true, "extra" => 1},
-          %{"v" => 1, "ok" => true, "error" => "lost"},
-          %{"v" => 1, "error" => :lost},
-          %{"v" => 1, "error" => nil},
+          %{"v" => 3, "ok" => true},
+          %{"v" => "2", "ok" => true},
+          %{"v" => 2},
+          %{"v" => 2, "ok" => true, "extra" => 1},
+          %{"v" => 2, "ok" => true, "error" => "lost"},
+          %{"v" => 2, "error" => :lost},
+          %{"v" => 2, "error" => nil},
           [1, true],
           "ok",
           nil
@@ -255,7 +255,7 @@ defmodule Prima.WorkerWireTest do
       for %{"answer" => answer} <- @host["calls"] ++ @worker["requests"] do
         unversioned = answer |> Jason.decode!() |> Map.delete("v")
         assert :lost = WorkerWire.read_answer(unversioned)
-        assert :lost = WorkerWire.read_answer(Map.put(unversioned, "v", 2))
+        assert :lost = WorkerWire.read_answer(Map.put(unversioned, "v", 3))
       end
     end
   end

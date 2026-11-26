@@ -34,7 +34,9 @@ defmodule Opus.Dispatch do
        input's JSON; a run that is not started is closed failed, and a
        start the worker service refused (`{:unavailable, sentence}`: its
        keeper starts no runner) is closed failed with the service's
-       sentence, "the execution worker refused the start: …". A start
+       sentence, "the execution worker refused the start: …", and one
+       refused for room (`{:no_memory, held}`) with the one sentence of
+       what holds the memory alone (`Prima.LocusPool.refusal_sentence/1`). A start
        whose answer was lost after the worker service may have acted is
        reconciled against the attempt, never dispatched again: a runner
        that attached keeps the run, and a run no runner attached to is
@@ -392,6 +394,10 @@ defmodule Opus.Dispatch do
       # sentence is the run's failure, and there is nothing to reconcile.
       {:error, {:unavailable, sentence}} ->
         refuse(admitted, "the execution worker refused the start: " <> sentence, :unavailable)
+
+      # Refused for room: what holds the memory, in its one sentence alone.
+      {:error, {:no_memory, held}} ->
+        refuse(admitted, Prima.LocusPool.refusal_sentence(held), :no_memory)
 
       {:error, :lost} ->
         case Attempt.refuse(admitted.attempt, "the execution worker did not answer the start") do

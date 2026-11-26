@@ -657,6 +657,14 @@ defmodule Prima.BuilderProtocolTest do
         {:memory, 1_073_741_824},
         {:memory, :machine},
         {:memory, :either},
+        {:no_memory, %{need: 838_860_800, free: 0, mine: [], others_bytes: 0}},
+        {:no_memory,
+         %{
+           need: 838_860_800,
+           free: 1,
+           mine: [%{kind: "build", subject: "bld_one", bytes: 2}],
+           others_bytes: 3
+         }},
         {:unavailable, "keeper"},
         {:failed, {:status, 0}},
         {:failed, {:status, -1}},
@@ -731,10 +739,10 @@ defmodule Prima.BuilderProtocolTest do
     end
 
     test "a read error maps to a refusal: another version to protocol_mismatch, anything else to malformed" do
-      assert BuilderProtocol.refusal_for({:version, 1}) == {:protocol_mismatch, 2, 1}
-      assert BuilderProtocol.refusal_for({:version, nil}) == {:protocol_mismatch, 2, nil}
-      assert BuilderProtocol.refusal_for({:version, "2"}) == {:protocol_mismatch, 2, nil}
-      assert BuilderProtocol.refusal_for({:version, 0}) == {:protocol_mismatch, 2, nil}
+      assert BuilderProtocol.refusal_for({:version, 1}) == {:protocol_mismatch, 3, 1}
+      assert BuilderProtocol.refusal_for({:version, nil}) == {:protocol_mismatch, 3, nil}
+      assert BuilderProtocol.refusal_for({:version, "3"}) == {:protocol_mismatch, 3, nil}
+      assert BuilderProtocol.refusal_for({:version, 0}) == {:protocol_mismatch, 3, nil}
 
       for error <- [
             :not_json,

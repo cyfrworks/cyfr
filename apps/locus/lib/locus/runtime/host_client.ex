@@ -27,7 +27,7 @@ defmodule Locus.Runtime.HostClient do
   whole deployment where only one member issues. Every call is one `POST`
   to the callback's route
   (`Prima.WorkerWire.host_route/1`): its body is the versioned JSON
-  `{"v": 1, "op": name, "args": {...}}` (`Prima.WorkerWire.request_body/2`)
+  `{"v": 2, "op": name, "args": {...}}` (`Prima.WorkerWire.request_body/2`)
   sealed with the attempt's seal key to the call's fields
   (`Prima.WorkerAuth.seal_call/5`), and its `x-cyfr-auth` header is the
   attempt's call-key signature over those fields — a fresh nonce and the

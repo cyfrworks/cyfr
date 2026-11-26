@@ -494,18 +494,8 @@ defmodule Prima.KeeperProtocol do
           age_ms: non_neg_integer()
         }
 
-  @typedoc """
-  What holds a pool that refused a place for room: what the place needs,
-  what was free, the charges of its own athanor's places (a `subject` only
-  where the place is the asking role's, else nil) and the sum of every
-  other's, all in bytes.
-  """
-  @type held :: %{
-          need: non_neg_integer(),
-          free: non_neg_integer(),
-          mine: [%{kind: kind(), subject: String.t() | nil, bytes: non_neg_integer()}],
-          others_bytes: non_neg_integer()
-        }
+  @typedoc "What holds a pool that refused a place for room (`Prima.LocusPool`)."
+  @type held :: Prima.LocusPool.held()
 
   @typedoc """
   A reply. An `error` names the request it refuses by `id` (a place, an
@@ -570,6 +560,14 @@ defmodule Prima.KeeperProtocol do
   @doc "The kinds a place may be."
   @spec kinds() :: [kind()]
   def kinds, do: @kinds
+
+  @doc "Whether `value` is of the id grammar a place, a request and a subject take."
+  @spec id?(term()) :: boolean()
+  def id?(value), do: is_binary(value) and Regex.match?(@id, value)
+
+  @doc "The largest count of bytes a reading carries, the largest integer JSON holds exactly."
+  @spec max_measured_bytes() :: pos_integer()
+  def max_measured_bytes, do: @max_measured_bytes
 
   @doc "The signals a `signal` request may name."
   @spec signals() :: [String.t()]
@@ -1097,13 +1095,9 @@ defmodule Prima.KeeperProtocol do
   defp read(:boolean, _name, value) when is_boolean(value), do: {:ok, value}
 
   defp read(:held, name, %{} = held) do
-    with true <- Enum.sort(Map.keys(held)) == ~w(free mine need others_bytes),
-         true <- Enum.all?(~w(free need others_bytes), &bytes?(held[&1])),
-         {:ok, mine} <- read_holdings(held["mine"]) do
-      {:ok,
-       %{need: held["need"], free: held["free"], mine: mine, others_bytes: held["others_bytes"]}}
-    else
-      _ -> {:error, {:invalid_field, name}}
+    case Prima.LocusPool.read_held(held) do
+      {:ok, held} -> {:ok, held}
+      :error -> {:error, {:invalid_field, name}}
     end
   end
 
@@ -1121,34 +1115,6 @@ defmodule Prima.KeeperProtocol do
 
   defp read(:memory_end, name, value) when is_binary(value), do: {:error, {:invalid_field, name}}
   defp read(_kind, name, _value), do: {:error, {:wrong_type, name}}
-
-  defp read_holdings(mine) when is_list(mine) do
-    Enum.reduce_while(mine, {:ok, []}, fn holding, {:ok, read} ->
-      case holding(holding) do
-        {:ok, h} -> {:cont, {:ok, [h | read]}}
-        :error -> {:halt, :error}
-      end
-    end)
-    |> case do
-      {:ok, read} -> {:ok, Enum.reverse(read)}
-      :error -> :error
-    end
-  end
-
-  defp read_holdings(_mine), do: :error
-
-  defp holding(%{"kind" => kind, "bytes" => bytes} = h) when kind in @kinds do
-    subject = Map.get(h, "subject")
-
-    if Map.keys(h) -- ~w(kind bytes subject) == [] and bytes?(bytes) and
-         (subject == nil or (is_binary(subject) and Regex.match?(@id, subject))),
-       do: {:ok, %{kind: kind, subject: subject, bytes: bytes}},
-       else: :error
-  end
-
-  defp holding(_holding), do: :error
-
-  defp bytes?(value), do: is_integer(value) and value >= 0 and value <= @max_measured_bytes
 
   defp reading(regex, name, value) do
     if Regex.match?(regex, value), do: {:ok, value}, else: {:error, {:invalid_field, name}}
