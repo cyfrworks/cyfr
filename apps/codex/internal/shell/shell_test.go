@@ -167,6 +167,18 @@ func (b *box) page() string {
 	return html.UnescapeString(b.do(http.MethodGet, "/", "", nil).Body.String())
 }
 
+// hides waits for the hide a lock begins with. The lock marks the shell
+// closed before it publishes its page and hides the screen, so a test that
+// reads the page or the hides waits for this, not for Unlocked.
+func (b *box) hides(what string) {
+	b.t.Helper()
+	select {
+	case <-b.hidden:
+	case <-time.After(10 * time.Second):
+		b.t.Fatalf("never hidden: %s", what)
+	}
+}
+
 func body(w *httptest.ResponseRecorder) string { return html.UnescapeString(w.Body.String()) }
 
 // otherPassphrase is a well-formed passphrase that is not p.
@@ -710,10 +722,7 @@ func TestChannel_AnEndedStandingLocksTheBox(t *testing.T) {
 	b := newBox(t, home, t.TempDir())
 	p := setUpAndOpen(t, home, b)
 	home.revoke()
-	deadline := time.Now().Add(5 * time.Second)
-	for b.shell.Unlocked() && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
-	}
+	b.hides("an ended standing")
 	if b.shell.Unlocked() || b.restarts.Load() != 1 || !strings.Contains(b.page(), "it was removed, CYFR does not admit your account") {
 		t.Fatal("an ended standing did not lock the box")
 	}
@@ -776,10 +785,7 @@ func TestChannel_AStandingEndedUnannouncedEndsAtTheNextReport(t *testing.T) {
 	b := newBox(t, home, t.TempDir())
 	setUpAndOpen(t, home, b)
 	home.endStanding()
-	deadline := time.Now().Add(5 * time.Second)
-	for b.shell.Unlocked() && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
-	}
+	b.hides("a standing ended unannounced")
 	if b.shell.Unlocked() || !strings.Contains(b.page(), "it was removed, CYFR does not admit your account") {
 		t.Fatal("a standing ended unannounced did not lock the box at its next report")
 	}
@@ -1369,10 +1375,7 @@ func TestChannel_ACompanySignInIsToldApartFromAnUnreachableCYFR(t *testing.T) {
 			for _, c := range conns {
 				c.Close(websocket.StatusTryAgainLater, tc.reason)
 			}
-			deadline := time.Now().Add(5 * time.Second)
-			for b.shell.Unlocked() && time.Now().Before(deadline) {
-				time.Sleep(10 * time.Millisecond) // sleep-ok: polls the lock the close starts, bounded by deadline
-			}
+			b.hides("a close to try again later")
 			if page := b.page(); b.shell.Unlocked() || !strings.Contains(html.UnescapeString(page), tc.want) {
 				t.Fatalf("the box did not lock saying %q: %s", tc.want, page)
 			}

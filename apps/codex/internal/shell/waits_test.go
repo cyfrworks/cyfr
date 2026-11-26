@@ -625,7 +625,7 @@ func TestLock_AChannelsEndWaitsForNoWorkInFlight(t *testing.T) {
 	if w.Code != http.StatusSeeOther {
 		t.Fatalf("the decision cut short answered %d:\n%s", w.Code, body(w))
 	}
-	becomesTrue(t, "it locked", func() bool { return !b.shell.Unlocked() })
+	b.hides("the channel's end")
 	if page := b.page(); !strings.Contains(page, "it was removed, CYFR does not admit your account") {
 		t.Fatalf("the lock page does not say why the channel ended:\n%s", page)
 	}
