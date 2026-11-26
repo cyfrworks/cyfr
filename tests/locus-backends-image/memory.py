@@ -475,7 +475,8 @@ def refuses_for_room(stack):
                f"{asking['server']}'s start, with no room, is refused capacity carrying what holds the pool", answer)
         held = answer["held"]
         mine = held["mine"]
-        expect(waited >= ROOM_WAIT_S - 1, f"the refusal came after the room's wait ({waited:.1f} s)", waited)
+        expect(ROOM_WAIT_S - 1 <= waited <= ROOM_WAIT_S + 5,
+               f"the refusal came after the room's wait and no later ({waited:.1f} s)", waited)
         expect(held["need"] == imagesuite.ALLOWANCE_BYTES["session"] and held["free"] < held["need"],
                "held names a session's allowance as the need, more than was free", held)
         expect([(h["kind"], h.get("subject")) for h in mine] == [("program", own["server"])]

@@ -74,7 +74,8 @@ defmodule Locus.Output do
       twice `fetch_read_ahead_bytes`, 524,288 bytes, to the fetch's end
       (`Locus.Runtime.Relay`, `Locus.Runtime.HostClient`).
 
-  Not counted, each capped in size and in number:
+  Not counted, each capped in size and in number, but for kept backends
+  sessions, whose number has no cap of its own (the first row):
 
     * **A held keeper connection's read**, every role: one read at a
       time, re-armed on its owner's word, of at most 65,541 bytes (a

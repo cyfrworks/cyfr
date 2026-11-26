@@ -74,7 +74,7 @@ defmodule Prima.LocusBackends do
   A session's memory is admitted by the machine's one pool alone
   (`Prima.LocusPool`), and nothing here reports it. A sync's
   `athanor_memory_bytes`, a positive count of bytes, is the ceiling of the
-  owner's athanor on what its work holds in that pool (absent: none but
+  owner's athanor on what its sessions hold in that pool (absent: none but
   the pool's). An open the pool finds no room for within its wait is
   refused `capacity` with `held` (`Prima.LocusPool.encode_held/1`): what
   the session needs, what was free, the charges of the owner's own

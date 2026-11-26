@@ -1401,6 +1401,7 @@ defmodule Locus.Backends.ServiceTest do
       {_pid, handle} = held_release(ctx)
 
       assert_refused(close(ctx, session), "unavailable")
+      assert map_size(:sys.get_state(ctx.owners).reservations) == 1
 
       resume(handle)
       assert_closed(close(ctx, session))
