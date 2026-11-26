@@ -438,8 +438,16 @@ defmodule Opus.Programs do
           {:program_full, String.t(), Prima.LocusPool.held() | nil, %{String.t() => String.t()}}
   def full(%Prima.Actor{}, what, nil) when is_binary(what), do: {:program_full, what, nil, %{}}
 
-  def full(%Prima.Actor{} = actor, what, %{mine: mine} = held) when is_binary(what),
-    do: {:program_full, what, held, holder_names(actor, mine)}
+  def full(%Prima.Actor{} = actor, what, held) when is_binary(what) and is_map(held),
+    do: {:program_full, what, held, held_names(actor, held)}
+
+  @doc """
+  The names of `actor`'s own rows among the subjects of `held` (`full/3`
+  says how they are read), by subject; none for no `held`.
+  """
+  @spec held_names(Prima.Actor.t(), Prima.LocusPool.held() | nil) :: %{String.t() => String.t()}
+  def held_names(%Prima.Actor{}, nil), do: %{}
+  def held_names(%Prima.Actor{} = actor, %{mine: mine}), do: holder_names(actor, mine)
 
   defp holder_names(actor, mine) do
     subjects =

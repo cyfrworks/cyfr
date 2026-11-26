@@ -327,7 +327,11 @@ defmodule Opus.Brain do
   opens the driver's session and after. Answers the held session, whose
   first line is the driver's `hello`; `{:error, {:not_admitted, reason}}`
   for a binding that does not prove, or the refusal of the owner's hold or
-  the session's open.
+  the session's open. A refusal for room is `{:error, {:no_room, held,
+  names}}`: what holds the memory as the keeper gave it, and the names of
+  the binding's person's own rows among its subjects, read under that
+  person's scope (`Opus.Programs.held_names/2`); or `held` nil and no
+  names for a refusal that carries none.
   """
   @spec open(binding()) :: {:ok, brain()} | {:error, term()}
   def open(%{ctx: %Sanctum.Context{athanor_id: athanor_id}} = binding)
@@ -336,14 +340,30 @@ defmodule Opus.Brain do
 
     with :ok <- replace(key, binding) do
       case DynamicSupervisor.start_child(@holders, {__MODULE__, key}) do
-        {:ok, pid} -> call(pid, {:open, self(), binding}, @open_ms + @answer_margin_ms)
-        {:error, {:already_started, _pid}} -> {:error, :busy}
-        {:error, _reason} -> {:error, :unavailable}
+        {:ok, pid} ->
+          pid
+          |> call({:open, self(), binding}, @open_ms + @answer_margin_ms)
+          |> roomless(binding)
+
+        {:error, {:already_started, _pid}} ->
+          {:error, :busy}
+
+        {:error, _reason} ->
+          {:error, :unavailable}
       end
     end
   catch
     :exit, _ -> {:error, :unavailable}
   end
+
+  defp roomless({:error, {:refused, {:capacity, held}, _boot}}, binding),
+    do: {:error, {:no_room, held, Programs.held_names(Sanctum.Context.actor(binding.ctx), held)}}
+
+  defp roomless({:error, {:refused, :capacity, _boot}}, _binding),
+    do: {:error, {:no_room, nil, %{}}}
+
+  defp roomless({:error, :capacity}, _binding), do: {:error, {:no_room, nil, %{}}}
+  defp roomless(answer, _binding), do: answer
 
   @doc """
   Write `command` (a brain wire command: `start`, `work`, `post` or

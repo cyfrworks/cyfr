@@ -495,15 +495,10 @@ defmodule Aqua.Harness.Program do
 
   # The backends refused for want of room, at the session's open with what
   # holds the memory, or for want of a program's place at its owner's
-  # hold: the person reads why, their own holdings by name, not that the
-  # program is away.
-  defp refused_open(work, {:refused, {:capacity, held}, _boot}),
-    do: {:refused, Opus.Programs.full(Sanctum.Context.actor(work.ctx), work.title, held)}
-
-  defp refused_open(work, {:refused, :capacity, _boot}), do: refused_open(work, :capacity)
-
-  defp refused_open(work, :capacity),
-    do: {:refused, Opus.Programs.full(Sanctum.Context.actor(work.ctx), work.title, nil)}
+  # hold: the person reads why, their own holdings by the names the brain
+  # read for them (`Opus.Brain.open/1`), not that the program is away.
+  defp refused_open(work, {:no_room, held, names}),
+    do: {:refused, {:program_full, work.title, held, names}}
 
   # A program that loads the person's packs did not open for them: said
   # as the refusal says it (`Prima.Refusal`).
