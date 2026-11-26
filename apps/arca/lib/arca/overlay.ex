@@ -1954,6 +1954,30 @@ defmodule Arca.Overlay do
     if whole_unit(path), do: {:error, :unsupported}, else: :ok
   end
 
+  @doc """
+  A unit's objects with `content` put at `rel`, as an ordinary write into
+  a unit committed whole puts it: `{:error, :eisdir}` when a folder is at
+  `rel`, `{:error, :enotdir}` when a file is at a folder above it, since a
+  file and a folder never share a name (the refusal `Arca.Files.clash/1`
+  words).
+  """
+  @spec put_object([{Arca.Storage.path(), binary()}], Arca.Storage.path(), iodata()) ::
+          {:ok, [{Arca.Storage.path(), binary()}]} | {:error, :eisdir | :enotdir}
+  def put_object(pairs, rel, content) when is_list(pairs) and is_list(rel) do
+    bytes = IO.iodata_to_binary(content)
+
+    cond do
+      Enum.any?(pairs, fn {path, _} -> List.starts_with?(path, rel) and path != rel end) ->
+        {:error, :eisdir}
+
+      Enum.any?(pairs, fn {path, _} -> List.starts_with?(rel, path) and path != rel end) ->
+        {:error, :enotdir}
+
+      true ->
+        {:ok, List.keystore(pairs, rel, 0, {rel, bytes})}
+    end
+  end
+
   # An ordinary write into a unit committed whole: never at its
   # sentinel, which its domain's verbs alone write; otherwise the change
   # applied to the committed objects, and the domain asked what the next
@@ -1971,20 +1995,7 @@ defmodule Arca.Overlay do
     end
   end
 
-  defp changed(pairs, rel, {:put, content}) do
-    bytes = IO.iodata_to_binary(content)
-
-    cond do
-      Enum.any?(pairs, fn {path, _} -> List.starts_with?(path, rel) and path != rel end) ->
-        {:error, :eisdir}
-
-      Enum.any?(pairs, fn {path, _} -> List.starts_with?(rel, path) and path != rel end) ->
-        {:error, :enotdir}
-
-      true ->
-        {:ok, List.keystore(pairs, rel, 0, {rel, bytes})}
-    end
-  end
+  defp changed(pairs, rel, {:put, content}), do: put_object(pairs, rel, content)
 
   defp changed(pairs, rel, {:append, content}) do
     case List.keyfind(pairs, rel, 0) do

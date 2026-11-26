@@ -1430,6 +1430,34 @@ defmodule Compendium.PacksTest do
       assert {:error, {:invalid_argument, ^set}} = Packs.file_proposal(ctx, "zz:fern", path, "x")
     end
 
+    # A file and a folder never share a name, as Files refuses: a file
+    # under a file, or a file where a folder is, is refused at the proposal
+    # and at the Save, in Files' own words, never as storage unavailable.
+    test "a file and a folder that would share a name are refused, in Files' words",
+         %{ctx: ctx, actor: actor} do
+      {:ok, _} = Files.write(actor, "aqua/scrolls/mine/skills/fern/notes.md", "n\n")
+
+      {:ok, _} =
+        Files.write(actor, "aqua/scrolls/mine/skills/fern/scripts/water.sh", "#!/bin/sh\n")
+
+      for path <- ["skills/fern/notes.md/x.txt", "skills/fern/scripts"] do
+        sentence = "'#{path}' cannot go there: a file and a folder would share a name"
+
+        assert {:error, {:conflict, ^sentence}} =
+                 Packs.file_proposal(ctx, "mine:fern", path, "x\n"),
+               path
+
+        assert {:error, {:conflict, ^sentence}} =
+                 Packs.put_file(ctx, "mine:fern", path, "x\n", "none"),
+               path
+
+        # Files refuses the same place in the same words.
+        files = "aqua/scrolls/mine/" <> path
+        files_sentence = "'#{files}' cannot go there: a file and a folder would share a name"
+        assert {:error, {:conflict, ^files_sentence}} = Files.write(actor, files, "x\n"), path
+      end
+    end
+
     test "a file for a scroll not stored yet is proposed, and its Save waits for the scroll",
          %{ctx: ctx, actor: actor} do
       first = "Save the scroll `mine:tulip` first: this file belongs to it"

@@ -355,9 +355,7 @@ defmodule Arca.Files do
         {:error, {:conflict, taken(join(to_segments))}}
 
       {:error, reason} when reason in [:enotdir, :eisdir] ->
-        {:error,
-         {:conflict,
-          "'#{join(to_segments)}' cannot go there: a file and a folder would share a name"}}
+        {:error, clash(join(to_segments))}
 
       {:error, {:invalid_argument, _}} = refused ->
         refused
@@ -666,8 +664,8 @@ defmodule Arca.Files do
       :reserved_name ->
         {:error, {:invalid_argument, "'#{path}' uses a name the server reserves"}}
 
-      {:limit_reached, :athanor_storage_bytes, cap} ->
-        {:error, {:invalid_argument, cap_message(cap)}}
+      {:limit_reached, :athanor_storage_bytes, _cap} = reason ->
+        {:error, {:invalid_argument, Prima.Refusal.message(reason)}}
 
       :storage_unverifiable ->
         {:error, {:unavailable, "Storage usage"}}
@@ -685,7 +683,7 @@ defmodule Arca.Files do
         {:error, {:invalid_argument, "'#{path}' is written by the server alone"}}
 
       reason when reason in [:eisdir, :enotdir] ->
-        {:error, {:conflict, "'#{path}' cannot go there: a file and a folder would share a name"}}
+        {:error, clash(path)}
 
       reason ->
         storage_error("write", path, reason)
@@ -755,8 +753,13 @@ defmodule Arca.Files do
   defp bundled_message(path),
     do: "'#{path}' ships with the server and cannot be deleted"
 
-  defp cap_message(cap),
-    do: "The athanor's storage is at its limit (#{cap} bytes) — remove something first"
+  @doc """
+  The refusal of a file and a folder that would share a name at `path`,
+  as a write or a move into a place one of them holds is refused.
+  """
+  @spec clash(String.t()) :: {:conflict, String.t()}
+  def clash(path) when is_binary(path),
+    do: {:conflict, "'#{path}' cannot go there: a file and a folder would share a name"}
 
   # A write or removal refused for this member's slot (a unit's commit or
   # retirement) changed nothing, and reads as the ownership refusal itself.
