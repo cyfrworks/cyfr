@@ -69,7 +69,10 @@ defmodule Locus.Runtime.RunnerPool do
   runner, by its own deadline, and `withdraw/2` ends its wait, as it ends
   a wait on a spawn; the runner released for it stays released. At the
   runner's release the takes waiting are taken again first, then the pool
-  fills. A busy or fresh runner never gives way for a uid: with every uid
+  fills. The floor comes before a kept runner: a runner kept while the
+  floor is short refills it by the same rule, so with every uid held the
+  oldest kept runner gives way, the one just kept if it is alone. A busy
+  or fresh runner never gives way for a uid: with every uid
   held by them a take spawns all the same, and the keeper's refusal for
   want of a uid answers it.
 
@@ -635,11 +638,14 @@ defmodule Locus.Runtime.RunnerPool do
         state
 
       # The clock is read before the timer is armed, so the timer never
-      # fires before the runner is due by it.
+      # fires before the runner is due by it. The floor comes before a
+      # kept runner: one kept while the floor is short fills it by the
+      # refill's rule, which with every uid held has the oldest kept runner
+      # give way, this one if it is the only one.
       message.clean ->
         kept_at = state.clock.()
         Process.send_after(self(), {:idle_expired, pid}, state.settings.idle_ttl_ms)
-        put_runner(state, pid, %{entry | state: :idle, kept_at: kept_at})
+        refill(put_runner(state, pid, %{entry | state: :idle, kept_at: kept_at}))
 
       true ->
         taint_runner(state, pid, entry, 0)
