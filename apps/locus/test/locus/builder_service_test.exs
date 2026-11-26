@@ -1062,13 +1062,18 @@ defmodule Locus.BuilderServiceTest do
 
       conn = Wire.open(port, @build, body, [{"x-cyfr-auth", Wire.header(body)}])
       assert {200, conn} = Wire.status(conn)
-      conn = await_line(conn, {:progress, :output, "running"})
+
+      # The deadline ends the run, which asks cyfr-locus to end the spawn:
+      # the build was spawned, and its release is held. Nothing is read
+      # off the stream for it, since the deadline may come before the
+      # build's script has said anything, and the run sends nothing after
+      # it. The script, which the held release leaves running, says it
+      # runs by the pids it writes.
+      assert_receive {:release_held, _spawn_id}, 10_000
       os_pids = pids_in(file)
 
-      # The deadline ends the run, which asks cyfr-locus to end the spawn;
-      # then the client leaves, and the cancel's bound passes with the
+      # Then the client leaves, and the cancel's bound passes with the
       # release still held, each cancel taken by the run.
-      assert_receive {:release_held, _spawn_id}, 10_000
       Wire.close(conn)
 
       capture_log(fn ->
