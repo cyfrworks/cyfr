@@ -861,10 +861,13 @@ defmodule Locus.Runtime.RunnerPoolTest do
     pool = start_pool!(keeper, [])
     serve!(pool)
     {:ok, pid, id} = RunnerPool.take(pool, "ath_a", "exec_1")
+    # Spawned, so placed: its runner tells the pool so before it spawns, and
+    # a runner tainted while it still waits for its place never spawns.
+    spawn = spawn_of(keeper, pid)
     assert :ok = RunnerPool.taint(pool, pid, 1_000, "exec_1")
 
     ScriptedKeeper.write(
-      spawn_of(keeper, pid),
+      spawn,
       RunnerControl.encode(%{type: :exit, runner: id, open: ["att_1", "att_child"]})
     )
 
