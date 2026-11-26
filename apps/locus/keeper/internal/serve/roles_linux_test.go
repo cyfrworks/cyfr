@@ -171,9 +171,11 @@ type rolesKeeper struct {
 	outsideTCP, outsideAbstract string
 	// running closes once every role's keepRole has returned.
 	running chan struct{}
+	// tree is the pool's groups the roles' groups were made in.
+	tree *cgroup.Tree
 }
 
-func newRolesKeeper(t *testing.T, limits map[string]cgroup.Limits) *rolesKeeper {
+func newRolesKeeper(t *testing.T, cpus map[string]uint64) *rolesKeeper {
 	t.Helper()
 	k := newKeeper(t)
 	restart := restartAfter
@@ -220,6 +222,11 @@ func newRolesKeeper(t *testing.T, limits map[string]cgroup.Limits) *rolesKeeper 
 	if err != nil {
 		t.Skipf("no memory bound can be enforced here: %v", err)
 	}
+	tree, err := root.NewTree()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rk.tree = tree
 	for i, name := range []string{"alpha", "beta"} {
 		first := 39011 + 2*i
 		spec := pool.Spec{Name: "p" + name, First: first, Last: first + 1, Reach: pool.ReachRelay}
@@ -229,16 +236,16 @@ func newRolesKeeper(t *testing.T, limits map[string]cgroup.Limits) *rolesKeeper 
 		}
 		k.s.cfg.Pools = append(k.s.cfg.Pools, spec)
 		uid := testRoleUID + i
-		rs := RoleSpec{Name: name, UID: uid, Port: uint16(4300 + i), Pool: spec.Name, Private: i == 0, Kept: i == 1}
+		rs := RoleSpec{Name: name, UID: uid, Port: uint16(4300 + i), Pool: spec.Name, Private: i == 0, Kept: i == 1, Floor: i == 0}
 		r := &role{spec: rs, pool: spec, account: Account{UID: uid, GID: uid, Name: rs.User()},
 			runDir: filepath.Join(k.s.runRoot, name), homeRoot: k.homes}
-		if r.groups, r.leaf, err = root.Role(name, limits[name]); err != nil {
+		if r.groups, r.leaf, err = tree.Role(name, cpus[name], rs.Floor); err != nil {
 			t.Fatal(err)
 		}
 		k.s.roles = append(k.s.roles, r)
 		rk.roles[name] = &roleUnderTest{r: r}
 		t.Setenv(rs.KeyEnv(), "key-of-"+name)
-		t.Setenv("LOCUS_"+strings.ToUpper(name)+"_MEMORY_LIMIT", "1G")
+		t.Setenv("LOCUS_"+strings.ToUpper(name)+"_CPU_LIMIT", "1")
 	}
 	if err := makeRunDirs(k.s.runRoot, k.s.roles); err != nil {
 		t.Fatal(err)
@@ -427,7 +434,7 @@ func TestARoleRunsInItsOwnSpace(t *testing.T) {
 			t.Errorf("role %s's environment %q, want %q", name, got, want)
 		}
 		for _, kv := range rep.Env {
-			if strings.HasPrefix(kv, "LOCUS_"+strings.ToUpper(other.r.spec.Name)+"_") || strings.Contains(kv, "_MEMORY_LIMIT=") {
+			if strings.HasPrefix(kv, "LOCUS_"+strings.ToUpper(other.r.spec.Name)+"_") || strings.Contains(kv, "_CPU_LIMIT=") {
 				t.Errorf("role %s holds %s", name, kv)
 			}
 		}
@@ -574,7 +581,7 @@ func TestARoleNamesOnlyItsOwn(t *testing.T) {
 		}{
 			"process":       {leader, cgroup.RoleLeaf(ru.r.spec.Name)},
 			"spawn's relay": {sp.relay.pid, cgroup.RoleLeaf(ru.r.spec.Name)},
-			"spawn":         {sp.leader.pid, "/" + cgroup.RoleName(ru.r.spec.Name) + "/" + cgroup.Name(sp.account.UID) + "/bound"},
+			"spawn":         {sp.leader.pid, ru.r.groups.Path() + "/" + cgroup.Name(sp.account.UID) + "/bound"},
 		} {
 			raw, err := os.ReadFile(fmt.Sprintf("/proc/%d/cgroup", c.pid))
 			if got := strings.TrimPrefix(strings.TrimSpace(string(raw)), "0::"); err != nil || got != c.want {
@@ -588,23 +595,84 @@ func TestARoleNamesOnlyItsOwn(t *testing.T) {
 	_ = alphaSpawn
 }
 
-// Each role's group holds its bounds: memory and as much swap, and its
-// processors where it has a bound of them, and no memory.oom.group, so a
-// kill for its bound is a limit above its spawns'.
+// Each role's two groups hold its processors, its service's share and its
+// work's the rest, where it has a bound of them, and no memory bound of
+// their own, no swap and no memory.oom.group, so a kill for work's or
+// rest's bound is a limit above its spawns'. The floor's role's work is
+// beside rest, every other's in it.
 func TestEachRolesGroupReadsItsLimits(t *testing.T) {
-	limits := map[string]cgroup.Limits{"alpha": {MemoryBytes: 256 << 20, CPUQuota: 50_000}, "beta": {MemoryBytes: 512 << 20}}
-	rk := newRolesKeeper(t, limits)
+	rk := newRolesKeeper(t, map[string]uint64{"alpha": 200_000})
 	rk.start(t)
-	for name, want := range map[string]map[string]string{
-		"alpha": {"memory.max": "268435456", "memory.swap.max": "268435456", "cpu.max": "50000 100000", "memory.oom.group": "0"},
-		"beta":  {"memory.max": "536870912", "memory.swap.max": "536870912", "cpu.max": "max 100000", "memory.oom.group": "0"},
+	for name, c := range map[string]struct {
+		work    string
+		service map[string]string
+		groups  map[string]string
+	}{
+		"alpha": {"/work/alpha", map[string]string{"cpu.max": "50000 100000", "memory.max": "max", "memory.swap.max": "0"},
+			map[string]string{"cpu.max": "150000 100000", "memory.max": "max", "memory.swap.max": "0", "memory.oom.group": "0"}},
+		"beta": {"/work/rest/beta", map[string]string{"cpu.max": "max 100000", "memory.max": "max", "memory.swap.max": "0"},
+			map[string]string{"cpu.max": "max 100000", "memory.max": "max", "memory.swap.max": "0", "memory.oom.group": "0"}},
 	} {
-		for file, value := range want {
-			raw, err := os.ReadFile(filepath.Join(rk.roles[name].r.groups.Dir(), file))
-			if got := strings.TrimSpace(string(raw)); err != nil || got != value {
-				t.Errorf("role %s's %s is %q (%v), want %q", name, file, got, err, value)
+		r := rk.roles[name].r
+		if r.groups.Path() != c.work || r.leaf.Path() != cgroup.RoleLeaf(name) {
+			t.Errorf("role %s's groups are %s and %s", name, r.leaf.Path(), r.groups.Path())
+		}
+		for dir, want := range map[string]map[string]string{filepath.Join(cgroup.Root, r.leaf.Path()): c.service, r.groups.Dir(): c.groups} {
+			for file, value := range want {
+				raw, err := os.ReadFile(filepath.Join(dir, file))
+				if got := strings.TrimSpace(string(raw)); err != nil || got != value {
+					t.Errorf("role %s's %s/%s is %q (%v), want %q", name, dir, file, got, err, value)
+				}
 			}
 		}
+	}
+}
+
+// A machine of no work boots: every group is made before work's bound is
+// written, so with work and rest at 0 each role starts outside them and
+// answers on its channel, and a spawn, whose group no bound of 0 holds, is
+// refused while its role runs on.
+func TestAPoolOfNoWorkStartsItsRolesAndRefusesEachSpawn(t *testing.T) {
+	rk := newRolesKeeper(t, nil)
+	t.Cleanup(func() {
+		if err := rk.tree.Bound(1<<62, 1<<62); err != nil {
+			t.Errorf("lifting the pool's bounds: %v", err)
+		}
+	})
+	if err := rk.tree.Bound(0, 0); err != nil {
+		t.Fatal(err)
+	}
+	rk.start(t)
+	for name, ru := range rk.roles {
+		pool := "p" + name
+		if reply := ru.ask(t, `{"v":6,"type":"pool","id":"z1","pool":"`+pool+`"}`); reply["type"] != protocol.TypePool {
+			t.Fatalf("role %s at no work: its pool answered %v", name, reply)
+		}
+		if placed := ru.ask(t, `{"v":6,"type":"place","id":"zp","kind":"run"}`); placed["type"] != protocol.TypePlaced {
+			t.Fatalf("role %s's place: %v", name, placed)
+		}
+		spawn := fmt.Sprintf(`{"v":6,"type":"spawn","id":"zp","place":"zp","pool":%q,"argv":["true"],"env":{},"rlimits":{},"memory_bytes":%d,"cpu_quota":%d,"control":false,"attach":{"path":"/run/x.sock","token":%q}}`,
+			pool, 64<<20, protocol.CPUPeriod, testToken)
+		refused := ru.ask(t, spawn)
+		if refused["type"] != protocol.TypeError || refused["id"] != "zp" {
+			t.Fatalf("role %s's spawn at no work answered %v", name, refused)
+		}
+		// A spawn refused once made is released once its cleanup is done.
+		if id, made := refused["spawn_id"].(string); made {
+			var released map[string]any
+			if err := json.Unmarshal([]byte(ru.line(t)), &released); err != nil || released["type"] != protocol.TypeReleased || released["spawn_id"] != id {
+				t.Fatalf("role %s's refused spawn: %v, %v", name, released, err)
+			}
+		}
+		if reply := ru.ask(t, `{"v":6,"type":"pool","id":"z2","pool":"`+pool+`"}`); reply["type"] != protocol.TypePool || reply["free"] != reply["size"] {
+			t.Errorf("role %s after the refused spawn: its pool answered %v", name, reply)
+		}
+	}
+	rk.s.mu.Lock()
+	held := len(rk.s.spawns)
+	rk.s.mu.Unlock()
+	if held != 0 {
+		t.Errorf("%d spawns are held at no work", held)
 	}
 }
 

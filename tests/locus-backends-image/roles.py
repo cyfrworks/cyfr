@@ -18,10 +18,17 @@ signed as CYFR signs them:
 - From a build and from a program, another role's key, processes, IPC
   objects, port, homes and run folder are each out of reach; a runner has no
   network at all (tests/locus-runtime-image/runners.py).
-- Each role's live process runs in its role's group and is held to the
-  bounds of its container of before, read from its own group up: runtime
-  4G of memory and as much swap, 4 processors; builds 4G and 2; backends 2G
-  and no processor bound.
+- Each role's live process runs in its role's leaf, outside the pool's
+  work, and is held to its service's bounds, read from its own group up: no
+  memory bound and no swap, and half a processor of the runtime's and the
+  builds' (the backends' have no processor bound).
+- At the shipped settings work is bounded at the machine's memory less
+  compose's reserve and share, and rest at that less the floor's memory
+  (tests/fixtures/locus_pool.json), the container having no limit of its
+  own.
+- On a machine with no memory for work (the reserve the whole machine's),
+  work and rest are bounded at 0 and the container still turns healthy, its
+  three roles running and answering, and stays so.
 - A role killed starts again alone: the other two keep their processes and
   a program's session keeps running; the container started again serves
   all three.
@@ -47,15 +54,18 @@ Prerequisites: harness.py's. Usage: tests/locus-backends-image/roles.py IMAGE
 import importlib.util
 import json
 import os
+import re
 import secrets
 import sys
+import time
 
 sys.dont_write_bytecode = True
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
 from harness import (  # noqa: E402
-    GUARD, KEPT_ROOT, RELEASE, ROOT, Stack, eventually, expect, owner_of, probe, require_docker, run, wait_healthy,
+    GUARD, KEPT_ROOT, RELEASE, ROOT, SERVICE, Stack, eventually, expect, owner_of, probe, require_docker, run,
+    wait_healthy,
 )
 import imagesuite  # noqa: E402
 from kept_home import sh  # noqa: E402
@@ -80,12 +90,14 @@ OWNER = owner_of("roles")
 SERVICE_ID = "wrk_roles"
 ECHO = os.path.join(ROOT, "apps", "locus", "test", "support", "runtime", "test_wasm", "echo.wasm")
 ECHO_REF = "reagent:local.echo:0.1.0"
-# Each role's bounds as its container had them: memory and swap, in bytes,
-# and the processors as cgroup v2's `cpu.max` reads them.
+# Each role's process's bounds in its leaf, outside the pool's work: no
+# memory bound, no swap, and its service's share of the role's processors as
+# cgroup v2's `cpu.max` reads them (the lesser of half a processor and half
+# the role's LOCUS_<ROLE>_CPU_LIMIT; the backends' have none).
 BOUNDS = {
-    "runtime": ("4294967296", "4294967296", "400000 100000"),
-    "builds": ("4294967296", "4294967296", "200000 100000"),
-    "backends": ("2147483648", "2147483648", "max 100000"),
+    "runtime": ("max", "0", "50000 100000"),
+    "builds": ("max", "0", "50000 100000"),
+    "backends": ("max", "0", "max 100000"),
 }
 # What a build and a program try of the other roles, from their own spaces,
 # each printing `<what>:<answer>`: the other roles' run folders, homes and the
@@ -232,8 +244,9 @@ def effective_bounds(chain):
 
 
 def test_bounds(stack, pids):
-    """Each role's live process is in its role's group, and the bounds the kernel holds that process to, read from
-    its own group up to the container's, are its container's of before."""
+    """Each role's live process is in its role's leaf, outside the pool's work, and the bounds the kernel holds that
+    process to, read from its own group up to the container's, are its service's: no memory bound, no swap, and its
+    share of the role's processors."""
     files = ("memory.max", "memory.swap.max", "cpu.max")
     for name, want in BOUNDS.items():
         # Its own group, then each group up to the container's, at most eight.
@@ -243,9 +256,10 @@ def test_bounds(stack, pids):
                   "  [ \"$d\" = /sys/fs/cgroup ] && break; d=$(dirname \"$d\"); done")
         lines = imagesuite.read_output(stack.exec(script), f"{name}'s process's groups").strip().split("\n")
         group, chain = lines[0], [dict(kv.split("=", 1) for kv in line.strip(";").split(";")) for line in lines[1:]]
-        expect(group.startswith(f"/role-{name}/"), f"the {name} role's process runs in the {name} role's group", group)
+        leaf = imagesuite.service_leaf(ROLES[name]).removeprefix(imagesuite.CGROUP)
+        expect(group == leaf, f"the {name} role's process runs in the {name} role's leaf, {leaf}", group)
         expect(effective_bounds(chain) == list(want),
-               f"the {name} role's process is held to its container's bounds of before: memory {want[0]}, swap {want[1]}, "
+               f"the {name} role's process is held to its service's bounds: memory {want[0]}, swap {want[1]}, "
                f"cpu {want[2]}", [group, chain])
 
 
@@ -286,6 +300,58 @@ def serving(stack):
     return c
 
 
+def mem_total(stack):
+    """The machine's memory, in bytes, as the container's /proc/meminfo reads it."""
+    out = imagesuite.read_output(stack.exec("awk '$1 == \"MemTotal:\" {print $2}' /proc/meminfo"), "MemTotal").strip()
+    expect(out.isdigit(), "/proc/meminfo names the machine's memory", out)
+    return int(out) * 1024
+
+
+def compose_default(name):
+    """The default docker-compose.yml gives the locus service's variable name, `${name:-<default>}`."""
+    with open(os.path.join(ROOT, "docker-compose.yml")) as compose:
+        found = re.findall(r"- " + name + r"=\$\{" + name + r":-([0-9]+)\}", compose.read())
+    expect(len(found) == 1, f"docker-compose.yml gives {name} one default", found)
+    return int(found[0])
+
+
+def test_pool_bounds(stack):
+    """At the shipped settings work is the machine's memory less the reserve and the share, the container having no
+    limit of its own, and rest is work less the floor's memory, which the runtime role keeps."""
+    with open(os.path.join(ROOT, "tests", "fixtures", "locus_pool.json")) as pool:
+        floor = json.load(pool)["floor_bytes"]
+    total = mem_total(stack)
+    reserve, share = compose_default("LOCUS_CORE_RESERVE_BYTES"), compose_default("LOCUS_SERVICE_BYTES")
+    container, work, rest = imagesuite.read_output(stack.exec(
+        f"cat {imagesuite.CGROUP}/memory.max {imagesuite.CGROUP}/work/memory.max {imagesuite.CGROUP}/work/rest/memory.max"),
+        "the pool's memory.max files").split()
+    expect(container == "max", "the Locus container has no memory limit of its own", container)
+    want = max(0, total - reserve - share)
+    expect(work == str(want), f"work is the machine's {total} bytes less the reserve, {reserve}, and the share, {share}",
+           {"work": work, "want": want})
+    expect(rest == str(max(0, want - floor)), f"rest is work less the floor's {floor} bytes",
+           {"rest": rest, "want": max(0, want - floor)})
+
+
+def test_no_work(stack):
+    """With the whole machine its reserve the pool holds no memory for work: every group is made before work's and
+    rest's bounds of 0 are written, so the keeper boots, every role starts outside work, and the container turns
+    healthy and stays so."""
+    env = stack.env(LOCUS_CORE_RESERVE_BYTES=str(mem_total(stack)))
+    stack.compose("up", "--detach", "--no-build", "--force-recreate", SERVICE, env=env)
+    stack.container = stack.compose("ps", "--quiet", SERVICE, env=env).stdout.strip()
+    stack.healthy()
+    bounds = imagesuite.read_output(
+        stack.exec(f"cat {imagesuite.CGROUP}/work/memory.max {imagesuite.CGROUP}/work/rest/memory.max"),
+        "work's and rest's memory.max").split()
+    expect(bounds == ["0", "0"], "with no memory for work, work and rest are bounded at 0", bounds)
+    expect(sorted(stack.role_pids()) == sorted(ROLES), "every role runs at no work", stack.role_pids())
+    for _ in range(30):
+        state = run("docker", "inspect", "--format", "{{.State.Health.Status}}", stack.container, check=False)
+        expect(state.stdout.strip() == "healthy", "the container stays healthy at no work", state.stdout)
+        time.sleep(1)  # sleep-ok: the health probe's own interval is what this watches across
+
+
 def main():
     if len(sys.argv) != 2:
         sys.exit("usage: roles.py IMAGE")
@@ -298,6 +364,7 @@ def main():
         expect(ran["stdout"] == "answered\n", "a program of the backends role answers", ran)
         pids = stack.role_pids()
         expect(sorted(pids) == sorted(ROLES), "one process runs for each role", pids)
+        test_pool_bounds(stack)
         test_apart(stack, pids)
         test_run(stack, plane)
         test_reach(stack, c)
@@ -309,6 +376,7 @@ def main():
         stack.healthy()
         expect(sorted(stack.role_pids()) == sorted(ROLES), "the container started again runs every role",
                stack.role_pids())
+        test_no_work(stack)
     finally:
         stack.down()
         plane.stop()

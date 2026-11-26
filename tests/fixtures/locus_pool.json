@@ -1,0 +1,4 @@
+{
+  "comment": "The pool's fixed numbers, Prima.LocusPool, for the keeper, which cannot call it: apps/prima/test/prima/locus_pool_test.exs holds this file to the module value by value, and apps/locus/keeper/internal/admission/size_test.go holds the keeper's constants to it. floor_bytes is F, what the warm floor keeps from builds and programs.",
+  "floor_bytes": 171966464
+}

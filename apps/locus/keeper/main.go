@@ -19,9 +19,10 @@
 // does, has the machine's keeper make and end one space, and reports
 // (package vm). `image-digest` prints the image's identity, which its build
 // writes last (package vm).
-// Every role and spawn is held in a cgroup group of its own, each role's
-// to its LOCUS_<NAME>_MEMORY_LIMIT and _CPU_LIMIT, each spawn's to its
-// memory bound. The keeper makes them only where its cgroup is the root of
+// Every role and spawn is held in a cgroup group of its own, every spawn
+// under one memory bound for all of Locus's work (LOCUS_CORE_RESERVE_BYTES,
+// LOCUS_SERVICE_BYTES), each role's at its LOCUS_<NAME>_CPU_LIMIT, each
+// spawn's at its memory bound. The keeper makes them only where its cgroup is the root of
 // a cgroup namespace mounted writable (Docker's `writable-cgroups=true`
 // security option, which adds no capability), and refuses its boot
 // anywhere else (package cgroup).

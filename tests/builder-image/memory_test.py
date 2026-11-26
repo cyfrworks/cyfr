@@ -135,7 +135,7 @@ class ContainerState(unittest.TestCase):
         with open(tool, "w") as f:
             f.write(f"#!/bin/sh\n{f'echo {value}' if value else ':'}\nexit {status}\n")
         os.chmod(tool, 0o700)
-        reads = {f"cat {memory.ROLE_GROUP}/memory.events": events, f"cat {memory.ROLE_GROUP}/memory.current": current}
+        reads = {f"cat {memory.BOUND_GROUP}/memory.events": events, f"cat {memory.BOUND_GROUP}/memory.current": current}
 
         class Shell:
             container = "stub-container"
@@ -174,7 +174,7 @@ class ContainerState(unittest.TestCase):
 
 
 class ContainerLimit(unittest.TestCase):
-    """The builds role's memory.max is read from a command that exits 0: a failed read fails the observation, and the value read is the control."""
+    """Rest's memory.max, over the builds, is read from a command that exits 0: a failed read fails the observation, and the value read is the control."""
 
     def exec_answering(self, status, stdout):
         class Observer:

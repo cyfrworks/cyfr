@@ -342,9 +342,32 @@ def refused_unbounded(container, logs, timeout_s=60):
 
 def role_spec(role):
     """A role of the role table, as a harness reads it, as cyfr-locus's `--role` takes it:
-    `<name>:<uid>:<port>:<pool>`, then `:private` and `:kept` where the role is either."""
+    `<name>:<uid>:<port>:<pool>`, then `:private`, `:kept` and `:floor` where the role is each."""
     return (f"{role['name']}:{role['uid']}:{role['port']}:{role['pool']}"
-            + (":private" if role["private"] else "") + (":kept" if role["kept_root"] else ""))
+            + (":private" if role["private"] else "") + (":kept" if role["kept_root"] else "")
+            + (":floor" if role["floor"] else ""))
+
+
+# Where a container's cgroup namespace is mounted, and the pool's tree the
+# keeper makes in it (apps/locus/keeper/internal/cgroup): each role's leaf
+# in service holds its process and its relays, and its spawns' groups lie in
+# its group in work, the floor's role's beside rest and every other's in it.
+CGROUP = "/sys/fs/cgroup"
+
+
+def service_leaf(role):
+    """The role's leaf: its process and its relays."""
+    return f"{CGROUP}/service/{role['name']}"
+
+
+def work_group(role):
+    """The role's group in work, which holds its spawns' groups."""
+    return f"{CGROUP}/work/{role['name']}" if role["floor"] else f"{CGROUP}/work/rest/{role['name']}"
+
+
+def bound_group(role):
+    """The group whose memory.max bounds the role's spawns together: work for the floor's role, rest for the rest."""
+    return f"{CGROUP}/work" if role["floor"] else f"{CGROUP}/work/rest"
 
 
 def role_mounts(release, role, home_size=None):

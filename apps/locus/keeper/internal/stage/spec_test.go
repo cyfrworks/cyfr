@@ -66,7 +66,7 @@ func TestSpecValidationRefusals(t *testing.T) {
 		"core dumps":           func(s *Spec) { s.Limits.Core = 1 },
 		"fsize above ceiling":  func(s *Spec) { s.Limits.Fsize = 1 << 30 },
 		"another uid's cgroup": func(s *Spec) { s.Cgroup = "/keeper-20008" },
-		"the keeper's cgroup":  func(s *Spec) { s.Cgroup = "/keeper" },
+		"the keeper's cgroup":  func(s *Spec) { s.Cgroup = "/service/keeper" },
 		"the root cgroup":      func(s *Spec) { s.Cgroup = "/" },
 		"no cgroup":            func(s *Spec) { s.Cgroup = "" },
 		"no reach":             func(s *Spec) { s.Reach = "" },
@@ -203,7 +203,7 @@ func TestRoleSpecValidation(t *testing.T) {
 		HomeRoot: "/run/locus", Home: "/run/locus/runtime",
 		Argv:    []string{"/app/bin/locus", "start"},
 		Env:     map[string]string{"HOME": "/run/locus/runtime", "PATH": "/usr/bin:/bin", "LOCUS_RUNTIME_KEY": "k", "KEEPER_CHANNEL": "socket:[1]"},
-		Control: true, Reach: pool.ReachRouted, Cgroup: "/role-runtime/service",
+		Control: true, Reach: pool.ReachRouted, Cgroup: "/service/runtime",
 	}
 	if err := role.Validate(); err != nil {
 		t.Fatal(err)
@@ -217,14 +217,14 @@ func TestRoleSpecValidation(t *testing.T) {
 	for name, mutate := range map[string]func(*Spec){
 		"another role's folder": func(s *Spec) { s.Home = "/run/locus/builds" },
 		"a relative run root":   func(s *Spec) { s.HomeRoot, s.Home = "run", "run/runtime" },
-		"a malformed role":      func(s *Spec) { s.Role, s.Home, s.Cgroup = "Run", "/run/locus/Run", "/role-Run/service" },
+		"a malformed role":      func(s *Spec) { s.Role, s.Home, s.Cgroup = "Run", "/run/locus/Run", "/service/Run" },
 		"a relay space":         func(s *Spec) { s.Reach = pool.ReachRelay },
 		"no channel":            func(s *Spec) { s.Control = false },
 		"a terminal":            func(s *Spec) { s.Terminal = true },
 		"a kept home":           func(s *Spec) { s.Kept = true },
 		"limits of its own":     func(s *Spec) { s.Limits = protocol.Ceilings },
-		"another role's leaf":   func(s *Spec) { s.Cgroup = "/role-builds/service" },
-		"a spawn's group":       func(s *Spec) { s.Cgroup = "/role-runtime/keeper-10011" },
+		"another role's leaf":   func(s *Spec) { s.Cgroup = "/service/builds" },
+		"a spawn's group":       func(s *Spec) { s.Cgroup = "/work/runtime/keeper-10011" },
 		"a malformed variable":  func(s *Spec) { s.Env = map[string]string{"A=B": "c"} },
 		"a NUL in a value":      func(s *Spec) { s.Env = map[string]string{"A": "b\x00"} },
 		"no command":            func(s *Spec) { s.Argv = nil },
@@ -237,11 +237,11 @@ func TestRoleSpecValidation(t *testing.T) {
 		}
 	}
 	inRole := validSpec()
-	inRole.Cgroup = "/role-builds/keeper-20007"
+	inRole.Cgroup = "/work/rest/builds/keeper-20007"
 	if err := inRole.Validate(); err != nil {
 		t.Fatalf("a spawn in its role's group: %v", err)
 	}
-	inRole.Cgroup = "/role-builds/keeper-20008"
+	inRole.Cgroup = "/work/rest/builds/keeper-20008"
 	if err := inRole.Validate(); err == nil {
 		t.Fatal("a spawn in another uid's group of its role was accepted")
 	}

@@ -1580,28 +1580,25 @@ func TestUpdateFromThreeContainers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, held := got["CYFR_LOCUS_BUILDS_URL"]; held {
-		t.Error(".env still holds CYFR_LOCUS_BUILDS_URL")
+	// The bound the person gave the old runtime container is a setting the
+	// release no longer reads: it goes from .env, named.
+	for _, retired := range []string{"CYFR_LOCUS_BUILDS_URL", "LOCUS_RUNTIME_MEMORY_LIMIT"} {
+		if _, held := got[retired]; held {
+			t.Errorf(".env still holds %s", retired)
+		}
 	}
 	for name, want := range map[string]string{
 		"CYFR_LOCUS_BUILDS_KEY":       buildsKey,
 		"CYFR_PRIVATE_EGRESS_TARGETS": "locus",
 		"CYFR_LOCUS_RUNTIME_WORKERS":  "wrk_locus=http://locus-runtime:4200",
-		"LOCUS_RUNTIME_MEMORY_LIMIT":  "4GB",
 	} {
 		if got[name] != want {
 			t.Errorf(".env's %s is %q, want %q", name, got[name], want)
 		}
 	}
-	// The bound the person gave the old runtime container, in a form Compose
-	// read for its memory limit, reaches the keeper as written: the keeper
-	// reads every such form (apps/locus/keeper/internal/serve, RoleLimits).
-	if !strings.Contains(read(t, filepath.Join(s.project, "docker-compose.yml")), "- LOCUS_RUNTIME_MEMORY_LIMIT=${LOCUS_RUNTIME_MEMORY_LIMIT:-4G}\n") {
-		t.Error("the release's locus service does not take LOCUS_RUNTIME_MEMORY_LIMIT from .env")
-	}
 	for _, said := range []string{
 		"\nstopped locus-backends-guard, locus-runtime, locus-builds, locus-builds-guard, locus-backends in ",
-		"Removed from .env the settings release 0.8.0 shipped and release 0.9.0 no longer reads: CYFR_LOCUS_BUILDS_URL.\n",
+		"Removed from .env the settings release 0.8.0 shipped and release 0.9.0 no longer reads: CYFR_LOCUS_BUILDS_URL, LOCUS_RUNTIME_MEMORY_LIMIT.\n",
 		"Set in .env to release 0.9.0's shipped values the settings that held release 0.8.0's: CYFR_PRIVATE_EGRESS_TARGETS=locus.\n",
 		"Removed this project's containers of services release 0.9.0 does not run: locus-backends, locus-backends-guard, locus-builds, locus-builds-guard, locus-runtime.\n",
 		"Removed this project's networks release 0.9.0 does not use: locus-backends, locus-builds, locus-runtime.\n",

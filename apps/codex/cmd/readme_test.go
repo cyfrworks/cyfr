@@ -129,9 +129,10 @@ func subcommand(parent *cobra.Command, name string) *cobra.Command {
 // default of the one ${NAME:-default} it reads.
 var composeDefault = regexp.MustCompile(`^(?:\$\{[A-Z_]+:-([^}]+)\}|(.+))$`)
 
-// The README's sizing names the shipped compose file's default limits:
-// cyfr's own, and each Locus role's bound in the environment of locus,
-// whose keeper writes it, so a change to a default changes the sentence.
+// The README's sizing names the shipped compose file's defaults: cyfr's
+// own limits, the Locus pool's reserve and share in the environment of
+// locus, whose keeper writes the pool's bound from them, and each role's
+// processors, so a change to a default changes the sentence.
 func TestReadmeSizingIsTheComposeLimits(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join(packageDir, "..", "..", "..", "docker-compose.yml"))
 	if err != nil {
@@ -153,16 +154,19 @@ func TestReadmeSizingIsTheComposeLimits(t *testing.T) {
 	if err := yaml.Unmarshal(raw, &compose); err != nil {
 		t.Fatal(err)
 	}
-	limit := func(name, value string) int {
+	value := func(name, setting string) string {
 		t.Helper()
-		m := composeDefault.FindStringSubmatch(value)
+		m := composeDefault.FindStringSubmatch(setting)
 		if m == nil {
-			t.Fatalf("%s has no limit", name)
+			t.Fatalf("%s has no default", name)
 		}
-		number := strings.TrimSuffix(m[1]+m[2], "G")
-		n, err := strconv.Atoi(number)
+		return m[1] + m[2]
+	}
+	whole := func(name, setting, unit string) int {
+		t.Helper()
+		n, err := strconv.Atoi(strings.TrimSuffix(value(name, setting), unit))
 		if err != nil {
-			t.Fatalf("%s's limit %q is not whole gigabytes or cores", name, value)
+			t.Fatalf("%s's default %q is not a whole number", name, setting)
 		}
 		return n
 	}
@@ -173,27 +177,18 @@ func TestReadmeSizingIsTheComposeLimits(t *testing.T) {
 		}
 	}
 	cyfr := compose.Services["cyfr"].Deploy.Resources.Limits
-	memory := map[string]int{"cyfr": limit("cyfr", cyfr.Memory)}
-	cpus := map[string]int{"cyfr": limit("cyfr", cyfr.CPUs)}
-	total := memory["cyfr"]
-	for _, role := range []string{"RUNTIME", "BUILDS", "BACKENDS"} {
-		key := "LOCUS_" + role + "_MEMORY_LIMIT"
-		memory[role] = limit(key, locus[key])
-		total += memory[role]
-		if role != "BACKENDS" {
-			key = "LOCUS_" + role + "_CPU_LIMIT"
-			cpus[role] = limit(key, locus[key])
-		}
-	}
+	mib := func(key string) int { return whole(key, locus[key], "") >> 20 }
 	readme, err := os.ReadFile(filepath.Join(packageDir, "..", "..", "..", "README.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
-		fmt.Sprintf("which add up to about %d GB (cyfr %d GB, the runtime %d GB, builds %d GB, the backends %d GB)",
-			total, memory["cyfr"], memory["RUNTIME"], memory["BUILDS"], memory["BACKENDS"]),
+		fmt.Sprintf("Under load cyfr grows up to its bound of %d GB", whole("cyfr", cyfr.Memory, "G")),
+		fmt.Sprintf("the machine's memory less a reserve of %d MiB for CYFR itself (the cyfr container and the screen) and %d MiB for Locus's services",
+			mib("LOCUS_CORE_RESERVE_BYTES"), mib("LOCUS_SERVICE_BYTES")),
 		fmt.Sprintf("Their processor bounds are %d cores for cyfr, %d for the runtime and %d for builds",
-			cpus["cyfr"], cpus["RUNTIME"], cpus["BUILDS"]),
+			whole("cyfr", cyfr.CPUs, ""), whole("LOCUS_RUNTIME_CPU_LIMIT", locus["LOCUS_RUNTIME_CPU_LIMIT"], ""),
+			whole("LOCUS_BUILDS_CPU_LIMIT", locus["LOCUS_BUILDS_CPU_LIMIT"], "")),
 	} {
 		if !strings.Contains(string(readme), want) {
 			t.Errorf("README.md's sizing does not say %q", want)

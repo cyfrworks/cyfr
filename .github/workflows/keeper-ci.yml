@@ -15,10 +15,11 @@ on:
     branches: [main]
     paths:
       - 'apps/locus/keeper/**'
-      # The keeper-protocol, browser-framing and brain-wire vectors the
-      # suite reproduces, and the residue canary, which the gofmt step
+      # The keeper-protocol, pool, browser-framing and brain-wire vectors
+      # the suite reproduces, and the residue canary, which the gofmt step
       # checks with them.
       - 'tests/fixtures/keeper_protocol.json'
+      - 'tests/fixtures/locus_pool.json'
       - 'tests/fixtures/browser_frames.json'
       - 'tests/fixtures/brain_wire.json'
       - 'tests/fixtures/residue-canary.go'
@@ -27,6 +28,7 @@ on:
     paths:
       - 'apps/locus/keeper/**'
       - 'tests/fixtures/keeper_protocol.json'
+      - 'tests/fixtures/locus_pool.json'
       - 'tests/fixtures/browser_frames.json'
       - 'tests/fixtures/brain_wire.json'
       - 'tests/fixtures/residue-canary.go'
@@ -138,7 +140,7 @@ jobs:
             echo "::error::a real-kernel test skipped for want of root or of a memory bound"
             exit 1
           fi
-          for t in TestTheProbeProvesTheSpaceWhereTheHostAllowsIt TestARelaySpaceHasItsOwnNamespacesAndNoCapability TestARelaySpacesRelayIsCarriedOnceOpened TestARelaySpacesRelayIsSilentUnopened TestASpaceRunsInItsBoundedGroup TestTwoSessionsOfOneFolderSeeAndSignalOnlyTheirOwn TestASpacesProcessesEndWithItsCommand TestASignalReachesTheCommandInsideItsSpace TestNoThreadOfASpaceHoldsACapability TestTheProbeRefusesAHostThatCannotBuildASpacesFiles TestTheProfileDeniesWhatDockerMasks TestTheWaiterNeverSignalsAPidItReaped TestARoleRunsInItsOwnSpace TestARoleNamesOnlyItsOwn TestEachRolesGroupReadsItsLimits TestARoleThatEndsStartsAgainAloneWhileTheOtherRunsOn TestARoleKilledStartsAgain TestTheGuardsLossUnderARoleEndsTheKeeper TestEachRolesRunFolderIsItsOwn; do grep -q -- "--- PASS: $t " "$RUNNER_TEMP/keeper-kernel.log" || { echo "::error::the isolation test $t did not run and pass"; exit 1; }; done
+          for t in TestTheProbeProvesTheSpaceWhereTheHostAllowsIt TestARelaySpaceHasItsOwnNamespacesAndNoCapability TestARelaySpacesRelayIsCarriedOnceOpened TestARelaySpacesRelayIsSilentUnopened TestASpaceRunsInItsBoundedGroup TestTwoSessionsOfOneFolderSeeAndSignalOnlyTheirOwn TestASpacesProcessesEndWithItsCommand TestASignalReachesTheCommandInsideItsSpace TestNoThreadOfASpaceHoldsACapability TestTheProbeRefusesAHostThatCannotBuildASpacesFiles TestTheProfileDeniesWhatDockerMasks TestTheWaiterNeverSignalsAPidItReaped TestARoleRunsInItsOwnSpace TestARoleNamesOnlyItsOwn TestEachRolesGroupReadsItsLimits TestAPoolOfNoWorkStartsItsRolesAndRefusesEachSpawn TestARoleThatEndsStartsAgainAloneWhileTheOtherRunsOn TestARoleKilledStartsAgain TestTheGuardsLossUnderARoleEndsTheKeeper TestEachRolesRunFolderIsItsOwn; do grep -q -- "--- PASS: $t " "$RUNNER_TEMP/keeper-kernel.log" || { echo "::error::the isolation test $t did not run and pass"; exit 1; }; done
 
       - name: Static build
         run: CGO_ENABLED=0 go build -o "$RUNNER_TEMP/cyfr-locus" .

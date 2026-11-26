@@ -8,7 +8,7 @@ bound (LOCUS_BACKENDS_MEMORY_BYTES) set low, and driven only by requests
 signed as CYFR signs them (harness.py):
 
 - Every session's process runs in a cgroup of its own whose memory.max is
-  the bound, inside the backends role's own bound; a program whose row names
+  the bound, inside the pool's rest; a program whose row names
   its own `memory_bytes` is bounded at that instead.
 - A process that holds less than its bound answers.
 - A process that reaches past its bound is ended there by the kernel: its
@@ -108,16 +108,17 @@ def cgroup_limit(stack, pid):
     return path, limit
 
 
-# The backends role's group, which the keeper bounds at the role's
-# LOCUS_BACKENDS_MEMORY_LIMIT: every backend's group inside it, beside its
-# leaf `service`, the role's process and its relays.
-ROLE_GROUP = f"role-{ROLE['name']}"
+# The backends role's leaf, its process and its relays, outside the pool's
+# work, and the group over every backend's group, rest, which the keeper
+# bounds at the pool's bound less the floor's, each from the cgroup root.
+SERVICE_GROUP = imagesuite.service_leaf(ROLE).removeprefix(imagesuite.CGROUP + "/")
+BOUND_GROUP = imagesuite.bound_group(ROLE).removeprefix(imagesuite.CGROUP + "/")
 
 
 def container_limit(stack):
-    """The backends role's memory.max, which every backend's bound must sit inside."""
-    return imagesuite.read_output(stack.exec(f"cat /sys/fs/cgroup/{ROLE_GROUP}/memory.max"),
-                                  "the backends role's memory.max").strip()
+    """Rest's memory.max, the pool's bound every backend's bound must sit inside."""
+    return imagesuite.read_output(stack.exec(f"cat /sys/fs/cgroup/{BOUND_GROUP}/memory.max"),
+                                  "rest's memory.max").strip()
 
 
 def bounds_each_program(stack):
@@ -138,7 +139,7 @@ def bounds_each_program(stack):
         expect(path not in ("", "/") and limit == str(BOUND),
                f"the {name} backend runs in a cgroup of its own bounded at {BOUND} bytes", [path, limit])
     expect(container.isdigit() and int(container) > BOUND,
-           "the bound sits inside the backends role's own bound", container)
+           "the bound sits inside the pool's rest", container)
 
     held = c.tool(HOG, "probe__hog", {"bytes": BOUND // 4})
     expect(held == {"held": BOUND // 4}, "a backend below its bound answers", held)
@@ -177,7 +178,7 @@ def bounds_each_program(stack):
     expect(c.renew([{**HOG}, {**SIBLING}, {**OWN}])[0] == 200, "the service answers throughout")
 
 
-def group_memory(stack, group=f"{ROLE_GROUP}/service"):
+def group_memory(stack, group=SERVICE_GROUP):
     """A cgroup's memory.current, memory.peak and the oom and oom_kill counts of its memory.events, each read or failed."""
     def value(name):
         text = imagesuite.read_output(stack.exec(f"cat /sys/fs/cgroup/{group}/{name}"), f"{group}/{name}").strip()
@@ -344,8 +345,8 @@ def bounds_the_service(stack):
         answering.join()
 
     after_flood = group_memory(stack)
-    container = imagesuite.read_counters(stack.exec(f"cat /sys/fs/cgroup/{ROLE_GROUP}/memory.events"), ("oom", "oom_kill"),
-                                         "the backends role's memory.events")
+    container = imagesuite.read_counters(stack.exec(f"cat /sys/fs/cgroup/{BOUND_GROUP}/memory.events"), ("oom", "oom_kill"),
+                                         "rest's memory.events")
     unread = sum(k for _d, k in reads) * LINE_CHARGE
     print(f"{len(floods)} unread sessions of {FLOOD_LINES * LINE_CHARGE // MIB} MiB: they keep {unread // MIB} MiB "
           f"together, {sum(d for d, _k in reads)} lines dropped; the service leaf holds "
@@ -403,8 +404,8 @@ def stops_a_flood(stack, label, env):
     eventually(lambda: not stack.pool_processes(), "nothing of the program to outlive its stop")
 
     after = group_memory(stack)
-    container = imagesuite.read_counters(stack.exec(f"cat /sys/fs/cgroup/{ROLE_GROUP}/memory.events"), ("oom", "oom_kill"),
-                                         "the backends role's memory.events")
+    container = imagesuite.read_counters(stack.exec(f"cat /sys/fs/cgroup/{BOUND_GROUP}/memory.events"), ("oom", "oom_kill"),
+                                         "rest's memory.events")
     rise = after["peak"] - idle["peak"]
     print(f"a stop while the program floods, its session {label}: the service leaf's idle peak "
           f"{idle['peak'] // MIB} MiB, its peak {after['peak'] // MIB} MiB ({rise // MIB} MiB past idle, {rise} bytes, "

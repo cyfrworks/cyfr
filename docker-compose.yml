@@ -192,9 +192,9 @@ services:
     # by executing a setuid or file-capability binary.
     # writable-cgroups=true (Docker Engine 28 or later, on a cgroup v2 host)
     # mounts the container's own cgroup writable, which adds no capability:
-    # cyfr-locus gives each role a group of its own there, bounded at the
-    # role's LOCUS_<ROLE>_MEMORY_LIMIT and _CPU_LIMIT (below), and every
-    # build, runner and backend a group of its own inside its role's,
+    # cyfr-locus makes the pool's groups there: every build, runner and
+    # backend in one memory bound for all of Locus's work, each role's at
+    # its processors (below), and each a group of its own inside it,
     # bounded at its role's LOCUS_BUILDS_MEMORY_BYTES,
     # LOCUS_RUNTIME_MEMORY_BYTES or LOCUS_BACKENDS_MEMORY_BYTES. Without the
     # option nothing runs unbounded and nothing runs: cyfr-locus refuses to
@@ -274,30 +274,18 @@ services:
       - LOCUS_RUNTIME_HOST_API_URL=${LOCUS_RUNTIME_HOST_API_URL:-http://cyfr:${CYFR_HOST_API_PORT:-4300}}
       - LOCUS_RUNTIME_BIND=0.0.0.0
       - LOCUS_RUNTIME_PORT=4200
-      # Each role's bounds, which the keeper writes into the role's group:
-      # its memory (with swap the same, as Docker gives a memory limit) and
-      # its processors, the one definition of their defaults. A role and
-      # every spawn of its own share them; the keeper's own processes have
-      # none. The runtime's holds every runner uid (8) at its bound
-      # (LOCUS_RUNTIME_MEMORY_BYTES, 384 MiB) and the role beside them,
-      # 8 x 384 MiB + 1 GiB, whose peak serving the seed components
-      # tests/locus-runtime-image/memory.py --measure measures; its
-      # processors cap the damage of components that never yield (a killed
-      # tight loop leaks a spinning native thread). The builds' holds
-      # LOCUS_BUILDS_MAX_CONCURRENT (2) builds at their bound
-      # (LOCUS_BUILDS_MEMORY_BYTES, 1 GiB) and up to 1 GiB the role takes
-      # for each result it answers at the wire's largest: 2 x (1 GiB +
-      # 1 GiB) (tests/builder-image/headroom.py repeats it). The backends'
-      # is LOCUS_BACKENDS_MEMORY_BUDGET (1792 MiB) times
-      # LOCUS_BACKENDS_MEMORY_OVERCOMMIT (1), which the sessions' bounds
-      # stay within, plus 256 MiB for the role beside them; it has no
-      # processor bound. Raise each with what it holds (.env.example has
-      # the arithmetic).
-      - LOCUS_RUNTIME_MEMORY_LIMIT=${LOCUS_RUNTIME_MEMORY_LIMIT:-4G}
+      # The pool, the one definition of its defaults: all of Locus's work
+      # shares one memory bound, the machine's memory less the reserve kept
+      # for CYFR itself beside it (2304 MiB, which holds about 1.7 GiB at its
+      # peak, the screen's app included), less the services' share
+      # (800 MiB); the services sit outside it (Prima.LocusPool,
+      # configuration-guide.md). Each role's processors are split between
+      # its service and its work, neither lending to the other; the
+      # backends' have no bound.
+      - LOCUS_CORE_RESERVE_BYTES=${LOCUS_CORE_RESERVE_BYTES:-2415919104}
+      - LOCUS_SERVICE_BYTES=${LOCUS_SERVICE_BYTES:-838860800}
       - LOCUS_RUNTIME_CPU_LIMIT=${LOCUS_RUNTIME_CPU_LIMIT:-4}
-      - LOCUS_BUILDS_MEMORY_LIMIT=${LOCUS_BUILDS_MEMORY_LIMIT:-4G}
       - LOCUS_BUILDS_CPU_LIMIT=${LOCUS_BUILDS_CPU_LIMIT:-2}
-      - LOCUS_BACKENDS_MEMORY_LIMIT=${LOCUS_BACKENDS_MEMORY_LIMIT:-2G}
     # Only cyfr reaches Locus: it shares the network namespace of its
     # guard, which sits on the locus network, which cyfr also joins; caddy
     # and tailscale never see a role's port. Each role process listens in

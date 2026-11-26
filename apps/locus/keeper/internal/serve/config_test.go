@@ -4,22 +4,18 @@
 package serve
 
 import (
-	"encoding/json"
-	"os"
 	"os/user"
-	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
 	"testing"
 
-	"github.com/cyfr/locus/keeper/internal/cgroup"
 	"github.com/cyfr/locus/keeper/internal/home"
 	"github.com/cyfr/locus/keeper/internal/pool"
 )
 
 // theRoles is the image's command line, before its pools.
-const theRoles = "--role runtime:10011:4200:runner:private --role builds:10012:4100:build --role backends:10013:4101:backends:kept " +
+const theRoles = "--role runtime:10011:4200:runner:private:floor --role builds:10012:4100:build --role backends:10013:4101:backends:kept " +
 	"--pool runner:30101-30108:relay --pool build:30001-30016:routed --pool backends:20001-20032:routed " +
 	"--home-root /var/lib/locus/homes --kept-homes /var/lib/locus/kept:40001-49999 --guard /run/g/guard.sock"
 
@@ -35,7 +31,7 @@ func TestParseArgs(t *testing.T) {
 			{Name: "backends", First: 20001, Last: 20032, Reach: pool.ReachRouted},
 		},
 		Roles: []RoleSpec{
-			{Name: "runtime", UID: 10011, Port: 4200, Pool: "runner", Private: true},
+			{Name: "runtime", UID: 10011, Port: 4200, Pool: "runner", Private: true, Floor: true},
 			{Name: "builds", UID: 10012, Port: 4100, Pool: "build"},
 			{Name: "backends", UID: 10013, Port: 4101, Pool: "backends", Kept: true},
 		},
@@ -65,6 +61,8 @@ func TestParseRoleRefusals(t *testing.T) {
 		"a:100:4000", "a:100:4000:p:private:kept:x", "A:100:4000:p", "a_b:100:4000:p", "log:100:4000:p", "1a:100:4000:p",
 		"a:0:4000:p", "a:-1:4000:p", "a:4294967295:4000:p", "a:x:4000:p", "a:100:0:p", "a:100:65536:p", "a:100:04000:p",
 		"a:100:4000:", "a:100:4000:p:kept:private", "a:100:4000:p:private:private", "a:100:4000:p:kept:kept", "a:100:4000:p:shared",
+		"keeper:100:4000:p", "rest:100:4000:p", "core:100:4000:p", "service:100:4000:p", "a:100:4000:p:floor:kept", "a:100:4000:p:floor:floor", "a:100:4000:p:floor:private",
+		"a:100:4000:p:private:kept:floor:x",
 	} {
 		if r, err := ParseRole(value); err == nil {
 			t.Errorf("role %q accepted as %+v", value, r)
@@ -107,6 +105,8 @@ func TestParseArgsRefusals(t *testing.T) {
 		"--role a:100:4000:p:kept --role b:101:4009:q" + pools + " -- run",
 		"--role a:100:4000:p --role b:101:4009:q" + pools + " --kept-homes /k:400-499 -- run",
 		"--role a:450:4000:p:kept --role b:101:4009:q" + pools + " --kept-homes /k:400-499 -- run",
+		// One role keeps the floor at most.
+		"--role a:100:4000:p:floor --role b:101:4009:q:floor" + pools + " -- run",
 	} {
 		if _, err := ParseArgs(strings.Fields(args)); err == nil {
 			t.Errorf("%q accepted", args)
@@ -182,15 +182,16 @@ func TestResolveAccountsRefusesSharedOrPrivilegedIdentities(t *testing.T) {
 }
 
 // A role's environment is built from nothing: its own variables but its
-// limits, the log's, the image's locale and release variables, and what
+// processors, the log's, the image's locale and release variables, and what
 // the keeper sets, its channel and run folder; never another role's.
 func TestRoleEnvironHoldsTheRolesOwnAndNothingOfAnothers(t *testing.T) {
 	environ := []string{
 		"PATH=/usr/bin", "HOME=/root", "USER=root", "LANG=C.UTF-8", "LC_ALL=C.UTF-8", "LANGUAGE=en", "ELIXIR_ERL_OPTIONS=+fnu",
 		"RELEASE_DISTRIBUTION=none", "RELEASE_TMP=/tmp", "HOSTNAME=locus", "CYFR_LOG_FORMAT=json",
 		"RUSTUP_HOME=/usr/local/rustup", "CARGO_HOME=/usr/local/cargo",
-		"LOCUS_RUNTIME_KEY=rk", "LOCUS_RUNTIME_PORT=4200", "LOCUS_RUNTIME_MEMORY_LIMIT=4G", "LOCUS_RUNTIME_CPU_LIMIT=4",
-		"LOCUS_BUILDS_KEY=bk", "LOCUS_BUILDS_MEMORY_LIMIT=4G", "LOCUS_RUNTIMES_KEY=x", "LOCUS_LOG_LEVEL=info",
+		"LOCUS_RUNTIME_KEY=rk", "LOCUS_RUNTIME_PORT=4200", "LOCUS_RUNTIME_CPU_LIMIT=4",
+		"LOCUS_BUILDS_KEY=bk", "LOCUS_BUILDS_CPU_LIMIT=2", "LOCUS_RUNTIMES_KEY=x", "LOCUS_LOG_LEVEL=info",
+		"LOCUS_CORE_RESERVE_BYTES=2415919104", "LOCUS_SERVICE_BYTES=838860800",
 		"KEEPER_CHANNEL=socket:[1]", "KEEPER_RUN_DIR=/elsewhere",
 	}
 	got := RoleEnviron(environ, RoleSpec{Name: "runtime"}, "/run/locus/runtime", "socket:[4242]")
@@ -216,58 +217,38 @@ func TestKeyedNeedsTheRolesOwnKeyNotEmpty(t *testing.T) {
 	}
 }
 
-// A role's bounds are read as Compose reads a container's, every form of a
-// memory size it takes among them, and anything else refuses the boot by
-// the variable's name.
-func TestRoleLimitsReadComposesSyntaxStrictly(t *testing.T) {
+// A role's processors are read as Compose reads a container's, and
+// anything else refuses the boot by the variable's name.
+func TestRoleCPUReadsComposesSyntaxStrictly(t *testing.T) {
 	r := RoleSpec{Name: "runtime"}
-	for _, c := range []struct {
-		memory, cpu string
-		want        cgroup.Limits
-	}{
-		{"4G", "4", cgroup.Limits{MemoryBytes: 4 << 30, CPUQuota: 400_000}},
-		{"2g", "0.5", cgroup.Limits{MemoryBytes: 2 << 30, CPUQuota: 50_000}},
-		{"512M", "1.25", cgroup.Limits{MemoryBytes: 512 << 20, CPUQuota: 125_000}},
-		{"1.5g", "0.01", cgroup.Limits{MemoryBytes: 3 << 29, CPUQuota: 1_000}},
-		{"", "", cgroup.Limits{}},
-	} {
-		environ := []string{"LOCUS_RUNTIME_MEMORY_LIMIT=" + c.memory, "LOCUS_RUNTIME_CPU_LIMIT=" + c.cpu, "LOCUS_BUILDS_MEMORY_LIMIT=nonsense"}
-		got, err := RoleLimits(environ, r)
-		if err != nil || got != c.want {
-			t.Errorf("memory %q, cpu %q: %+v, %v", c.memory, c.cpu, got, err)
+	for cpu, want := range map[string]uint64{"4": 400_000, "0.5": 50_000, "1.25": 125_000, "0.02": 2_000, "0.025": 2_500, "": 0} {
+		environ := []string{"LOCUS_RUNTIME_CPU_LIMIT=" + cpu, "LOCUS_BUILDS_CPU_LIMIT=nonsense"}
+		if got, err := RoleCPU(environ, r); err != nil || got != want {
+			t.Errorf("cpu %q: %d, %v", cpu, got, err)
 		}
 	}
-	// Every size reads as Compose resolved it on a real `docker compose
-	// config` (testdata/compose_memory_sizes.json), and one Compose refused
-	// or resolved to less than a page refuses the boot by the variable's
-	// name, never its value.
-	var sizes struct {
-		Vectors []struct {
-			Value string `json:"value"`
-			Bytes *int64 `json:"bytes"`
-		} `json:"vectors"`
-	}
-	raw, err := os.ReadFile(filepath.Join("testdata", "compose_memory_sizes.json"))
-	if err == nil {
-		err = json.Unmarshal(raw, &sizes)
-	}
-	if err != nil || len(sizes.Vectors) == 0 {
-		t.Fatalf("the vectors: %v", err)
-	}
-	for _, v := range sizes.Vectors {
-		got, err := RoleLimits([]string{"LOCUS_RUNTIME_MEMORY_LIMIT=" + v.Value}, r)
-		switch {
-		case v.Bytes != nil && *v.Bytes >= 4096:
-			if err != nil || got.MemoryBytes != uint64(*v.Bytes) {
-				t.Errorf("memory %q: %+v, %v; Compose read %d", v.Value, got, err, *v.Bytes)
-			}
-		case err == nil || !strings.Contains(err.Error(), "LOCUS_RUNTIME_MEMORY_LIMIT") || strings.Contains(err.Error(), strconv.Quote(v.Value)):
-			t.Errorf("memory %q: %+v, %v; Compose read %v", v.Value, got, err, v.Bytes)
-		}
-	}
-	for _, bad := range []string{"0", "0.009", "0.000001", "-1", "1e2", "two", "2 ", ".5", "0x2"} {
-		if _, err := RoleLimits([]string{"LOCUS_RUNTIME_CPU_LIMIT=" + bad}, r); err == nil || !strings.Contains(err.Error(), "LOCUS_RUNTIME_CPU_LIMIT") {
+	for _, bad := range []string{"0", "0.01", "0.015", "0.019", "0.009", "0.000001", "-1", "1e2", "two", "2 ", ".5", "0x2"} {
+		if _, err := RoleCPU([]string{"LOCUS_RUNTIME_CPU_LIMIT=" + bad}, r); err == nil || !strings.Contains(err.Error(), "LOCUS_RUNTIME_CPU_LIMIT") {
 			t.Errorf("cpu %q: %v", bad, err)
+		}
+	}
+}
+
+// The reserve and the share are counts of bytes, absent or empty 0, and
+// anything else refuses the boot by the variable's name, never its value.
+func TestPoolMemoryReadsTwoCountsOfBytes(t *testing.T) {
+	reserve, share, err := PoolMemory([]string{"LOCUS_CORE_RESERVE_BYTES=2415919104", "LOCUS_SERVICE_BYTES=838860800", "LOCUS_RUNTIME_CPU_LIMIT=4"})
+	if err != nil || reserve != 2304<<20 || share != 800<<20 {
+		t.Fatalf("%d, %d, %v", reserve, share, err)
+	}
+	if reserve, share, err := PoolMemory([]string{"LOCUS_CORE_RESERVE_BYTES=", "PATH=/usr/bin"}); err != nil || reserve != 0 || share != 0 {
+		t.Fatalf("absent: %d, %d, %v", reserve, share, err)
+	}
+	for _, name := range []string{ReserveEnv, ShareEnv} {
+		for _, bad := range []string{"2G", "-1", "1e9", "0x10", "01", " 1", "1.5", "99999999999999999999"} {
+			if _, _, err := PoolMemory([]string{name + "=" + bad}); err == nil || !strings.Contains(err.Error(), name) || strings.Contains(err.Error(), strconv.Quote(bad)) {
+				t.Errorf("%s=%q: %v", name, bad, err)
+			}
 		}
 	}
 }

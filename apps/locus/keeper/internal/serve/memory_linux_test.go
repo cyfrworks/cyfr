@@ -41,11 +41,16 @@ func (k *keeper) withMemory(t *testing.T) *keeper {
 	if err != nil {
 		t.Skipf("no memory bound can be enforced here: %v", err)
 	}
-	// The role's group is the test's own; newKeeperOf's cleanup removes it
-	// once every spawn in it is retired.
+	// The role's groups are the test's own, in the pool's tree;
+	// newKeeperOf's cleanup removes them once every spawn in them is
+	// retired.
 	r := k.c.role
 	r.spec.Name = "t" + randomHex(6)
-	if r.groups, r.leaf, err = memory.Role(r.spec.Name, cgroup.Limits{}); err != nil {
+	tree, err := memory.NewTree()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.groups, r.leaf, err = tree.Role(r.spec.Name, 0, false); err != nil {
 		t.Fatal(err)
 	}
 	return k
@@ -422,7 +427,8 @@ func TestAKillForALimitAboveTheSpawnsIsTheMachines(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Cleanup(func() {
-				_ = os.Remove(filepath.Join(above, "keeper"))
+				_ = os.Remove(filepath.Join(above, "service", "keeper"))
+				_ = os.Remove(filepath.Join(above, "service"))
 				if err := os.Remove(above); err != nil {
 					t.Error(err)
 				}

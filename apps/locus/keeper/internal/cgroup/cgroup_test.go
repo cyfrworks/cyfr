@@ -38,7 +38,7 @@ func delegated() map[string]string {
 // group with the files named.
 func keeperFiles(t *testing.T, root string, files ...string) {
 	t.Helper()
-	if err := os.Mkdir(filepath.Join(root, keeperLeaf), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(root, keeperLeaf), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	for _, file := range files {
@@ -52,18 +52,18 @@ func TestOwnReadsTheV2PathAndRefusesAnyOtherHierarchy(t *testing.T) {
 	for self, want := range map[string]string{
 		"0::/\n":                   "/",
 		"0::/keeper-30001/bound\n": "/keeper-30001",
-		"0::/keeper":               "/keeper",
-		"0::/keeper-s-0123456789abcdef0123456789abcdef/bound":               "/keeper-s-0123456789abcdef0123456789abcdef",
-		"0::/keeper-30001/bound/inner":                                      "/keeper-30001/bound/inner",
-		"0::/role-runtime/keeper-30101/bound":                               "/role-runtime/keeper-30101",
-		"0::/role-backends/keeper-s-0123456789abcdef0123456789abcdef/bound": "/role-backends/keeper-s-0123456789abcdef0123456789abcdef",
-		"0::/role-runtime/service":                                          "/role-runtime/service",
+		"0::/service/keeper":       "/service/keeper",
+		"0::/keeper-s-0123456789abcdef0123456789abcdef/bound":                    "/keeper-s-0123456789abcdef0123456789abcdef",
+		"0::/keeper-30001/bound/inner":                                           "/keeper-30001/bound/inner",
+		"0::/work/runtime/keeper-30101/bound":                                    "/work/runtime/keeper-30101",
+		"0::/work/rest/backends/keeper-s-0123456789abcdef0123456789abcdef/bound": "/work/rest/backends/keeper-s-0123456789abcdef0123456789abcdef",
+		"0::/service/runtime":                                                    "/service/runtime",
 	} {
 		if got, err := Own([]byte(self)); err != nil || got != want {
 			t.Errorf("Own(%q) = %q, %v; want %q", self, got, err, want)
 		}
 	}
-	for _, self := range []string{"", "\n", "12:memory:/docker/abc\n0::/docker/abc\n", "1:name=systemd:/\n", "0::relative\n", "0::/keeper-30001\n", "0::/role-runtime/keeper-30101\n"} {
+	for _, self := range []string{"", "\n", "12:memory:/docker/abc\n0::/docker/abc\n", "1:name=systemd:/\n", "0::relative\n", "0::/keeper-30001\n", "0::/work/runtime/keeper-30101\n", "0::/work/rest/builds/keeper-30001\n"} {
 		if got, err := Own([]byte(self)); err == nil {
 			t.Errorf("Own(%q) = %q, want a refusal", self, got)
 		}
@@ -73,7 +73,7 @@ func TestOwnReadsTheV2PathAndRefusesAnyOtherHierarchy(t *testing.T) {
 func TestDelegateMovesTheRootsProcessesAsideAndEnablesMemoryAndCPU(t *testing.T) {
 	root := namespaceRoot(t, delegated())
 	keeperFiles(t, root, boundFiles...)
-	for _, self := range []string{"0::/\n", "0::/keeper\n"} {
+	for _, self := range []string{"0::/\n", "0::/service/keeper\n"} {
 		m, err := Delegate(root, []byte(self))
 		if err != nil || m == nil {
 			t.Fatalf("Delegate from %q: %v", self, err)
@@ -82,8 +82,10 @@ func TestDelegateMovesTheRootsProcessesAsideAndEnablesMemoryAndCPU(t *testing.T)
 	if info, err := os.Stat(filepath.Join(root, keeperLeaf)); err != nil || !info.IsDir() {
 		t.Fatalf("no keeper group: %v", err)
 	}
-	if got, _ := os.ReadFile(filepath.Join(root, "cgroup.subtree_control")); string(got) != "+memory +cpu" {
-		t.Fatalf("cgroup.subtree_control holds %q", got)
+	for _, dir := range []string{root, filepath.Join(root, serviceGroup)} {
+		if got, _ := os.ReadFile(filepath.Join(dir, "cgroup.subtree_control")); string(got) != "+memory +cpu" {
+			t.Fatalf("%s's cgroup.subtree_control holds %q", dir, got)
+		}
 	}
 }
 
@@ -466,17 +468,23 @@ func TestUsedIsTheMemoryThatCannotBeGivenBack(t *testing.T) {
 
 func TestSplitPathNamesASpawnsGroupInItsRole(t *testing.T) {
 	for p, want := range map[string][3]string{
-		"/keeper-30001":                    {"", "keeper-30001", "true"},
-		"/role-runtime/keeper-30101":       {"runtime", "keeper-30101", "true"},
-		"/role-b2/keeper-s-" + hex32:       {"b2", "keeper-s-" + hex32, "true"},
-		"/role-runtime/service":            {"", "", "false"},
-		"/role-Runtime/keeper-30101":       {"", "", "false"},
-		"/other/keeper-30101":              {"", "", "false"},
-		"/role-runtime/keeper-30101/x":     {"", "", "false"},
-		"keeper-30001":                     {"", "", "false"},
-		"/":                                {"", "", "false"},
-		"/role-a/role-b/keeper-30101":      {"", "", "false"},
-		"/role-abcdefghijklmnopq/keeper-1": {"", "", "false"},
+		"/keeper-30001":                         {"", "keeper-30001", "true"},
+		"/work/runtime/keeper-30101":            {"runtime", "keeper-30101", "true"},
+		"/work/rest/b2/keeper-s-" + hex32:       {"b2", "keeper-s-" + hex32, "true"},
+		"/work/rest/builds/keeper-30001":        {"builds", "keeper-30001", "true"},
+		"/service/runtime":                      {"", "", "false"},
+		"/work/runtime":                         {"", "", "false"},
+		"/work/rest/keeper-30001":               {"", "", "false"},
+		"/work/keeper/keeper-30001":             {"", "", "false"},
+		"/work/Runtime/keeper-30101":            {"", "", "false"},
+		"/other/keeper-30101":                   {"", "", "false"},
+		"/work/runtime/keeper-30101/x":          {"", "", "false"},
+		"/work/rest/rest/keeper-30101":          {"", "", "false"},
+		"/role-runtime/keeper-30101":            {"", "", "false"},
+		"keeper-30001":                          {"", "", "false"},
+		"/":                                     {"", "", "false"},
+		"/work/rest/a/b/keeper-30101":           {"", "", "false"},
+		"/work/rest/abcdefghijklmnopq/keeper-1": {"", "", "false"},
 	} {
 		role, name, ok := SplitPath(p)
 		if got := [3]string{role, name, strconv.FormatBool(ok)}; ok != (want[2] == "true") || (ok && got != want) {
@@ -487,56 +495,164 @@ func TestSplitPathNamesASpawnsGroupInItsRole(t *testing.T) {
 
 const hex32 = "0123456789abcdef0123456789abcdef"
 
-// A role's group carries its bounds, memory and as much swap, and its
-// processors where it has a bound of them, and no group kill; its leaf and
-// its spawns' groups are made inside it, a spawn's named by its path from
-// the namespace root.
-func TestRoleMakesTheRolesGroupWithItsBounds(t *testing.T) {
+// recording replaces the tree's mkdir and write, which still act on the
+// test's folder, with ones that also note each act in order, for the rest
+// of the test.
+func recording(t *testing.T) *[]string {
+	t.Helper()
+	var acts []string
+	mkdir = func(dir string, mode os.FileMode) error {
+		acts = append(acts, "mkdir "+dir)
+		return os.Mkdir(dir, mode)
+	}
+	write = func(file string, data []byte, mode os.FileMode) error {
+		acts = append(acts, "write "+file+" "+string(data))
+		return os.WriteFile(file, data, mode)
+	}
+	t.Cleanup(func() { mkdir, write = os.Mkdir, os.WriteFile })
+	return &acts
+}
+
+// The tree is service, work and rest, each group's swap 0 and its
+// controllers on; a role's leaf is in service and its spawns' groups in
+// work, the floor role's beside rest and every other's in it, each at its
+// share of the role's processors; and no memory bound is written until
+// every group is made, work at W and rest at W - F.
+func TestTheTreeIsMadeWholeBeforeAnyMemoryBound(t *testing.T) {
 	root := t.TempDir()
-	m := &Manager{root: root}
-	groups, leaf, err := m.Role("runtime", Limits{MemoryBytes: 4 << 30, CPUQuota: 400_000})
+	acts := recording(t)
+	tree, err := (&Manager{root: root}).NewTree()
 	if err != nil {
 		t.Fatal(err)
 	}
-	dir := filepath.Join(root, "role-runtime")
+	runtime, runtimeLeaf, err := tree.Role("runtime", 400_000, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	builds, _, err := tree.Role("builds", 2*CPUPeriod, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	backends, backendsLeaf, err := tree.Role("backends", 0, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tree.Bound(0, 0); err != nil {
+		t.Fatal(err)
+	}
+
+	lastMkdir, firstBound := -1, -1
+	for i, act := range *acts {
+		if strings.HasPrefix(act, "mkdir ") {
+			lastMkdir = i
+		}
+		if firstBound < 0 && strings.HasSuffix(act, "/memory.max 0") {
+			firstBound = i
+		}
+	}
+	if firstBound < 0 || lastMkdir > firstBound {
+		t.Fatalf("a group was made after a memory bound was written: %q", *acts)
+	}
 	for file, want := range map[string]string{
-		"memory.max": "4294967296", "memory.swap.max": "4294967296", "cpu.max": "400000 100000", "cgroup.subtree_control": "+memory +cpu",
+		"service/memory.swap.max": "0", "service/cgroup.subtree_control": "+memory +cpu",
+		"work/memory.swap.max": "0", "work/cgroup.subtree_control": "+memory +cpu", "work/memory.max": "0",
+		"work/rest/memory.swap.max": "0", "work/rest/cgroup.subtree_control": "+memory +cpu", "work/rest/memory.max": "0",
+		"service/runtime/cpu.max": "50000 100000", "work/runtime/cpu.max": "350000 100000",
+		"service/builds/cpu.max": "50000 100000", "work/rest/builds/cpu.max": "150000 100000",
+		"service/backends/memory.swap.max": "0", "work/rest/backends/memory.swap.max": "0",
+		"work/rest/backends/cgroup.subtree_control": "+memory +cpu",
 	} {
-		if got, err := os.ReadFile(filepath.Join(dir, file)); err != nil || string(got) != want {
+		if got, err := os.ReadFile(filepath.Join(root, file)); err != nil || string(got) != want {
 			t.Errorf("%s: %q, %v; want %q", file, got, err, want)
 		}
 	}
-	if _, err := os.Stat(filepath.Join(dir, "memory.oom.group")); !errors.Is(err, fs.ErrNotExist) {
-		t.Errorf("the role's group sets memory.oom.group: %v", err)
+	for _, file := range []string{"service/backends/cpu.max", "work/rest/backends/cpu.max", "service/memory.max", "service/runtime/memory.max"} {
+		if _, err := os.Stat(filepath.Join(root, file)); !errors.Is(err, fs.ErrNotExist) {
+			t.Errorf("%s is written: %v", file, err)
+		}
 	}
-	if leaf.Path() != RoleLeaf("runtime") || leaf.path != filepath.Join(dir, "service") || groups.Dir() != dir {
-		t.Fatalf("leaf %+v, groups %+v", leaf, groups)
+	if runtimeLeaf.Path() != RoleLeaf("runtime") || backendsLeaf.Path() != "/service/backends" {
+		t.Errorf("leaves %q, %q", runtimeLeaf.Path(), backendsLeaf.Path())
 	}
-	if info, err := os.Stat(leaf.path); err != nil || !info.IsDir() {
-		t.Fatalf("the leaf: %v", err)
+	for m, want := range map[*Manager]string{runtime: "/work/runtime", builds: "/work/rest/builds", backends: "/work/rest/backends"} {
+		if m.Path() != want || m.Dir() != filepath.Join(root, want) {
+			t.Errorf("a role's spawns' groups in %q (%s), want %q", m.Path(), m.Dir(), want)
+		}
 	}
-	g, err := groups.Create(Name(30101), 1<<20, CPUPeriod)
+	g, err := builds.Create(Name(30001), 1<<20, CPUPeriod)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if g.Path() != "/role-runtime/keeper-30101" || g.mark != filepath.Join(dir, "keeper-30101") {
-		t.Fatalf("a spawn's group in the role's: %+v", g)
+	if g.Path() != "/work/rest/builds/keeper-30001" {
+		t.Fatalf("a spawn's group in its role's: %q", g.Path())
 	}
-
-	// No bound of processors writes none, and a role of no bounds none.
-	_, _, err = m.Role("backends", Limits{MemoryBytes: 2 << 30})
-	if err != nil {
-		t.Fatal(err)
+	if role, name, ok := SplitPath(g.Path()); !ok || role != "builds" || name != "keeper-30001" {
+		t.Errorf("SplitPath of a spawn's group: %q %q %v", role, name, ok)
 	}
-	if _, err := os.Stat(filepath.Join(root, "role-backends", "cpu.max")); !errors.Is(err, fs.ErrNotExist) {
-		t.Errorf("a role with no processor bound has a cpu.max: %v", err)
-	}
-	for _, bad := range []string{"", "Runtime", "a_b", "log-x"} {
-		if _, _, err := m.Role(bad, Limits{}); err == nil {
+	for _, bad := range []string{"", "Runtime", "a_b", "log-x", "rest", "keeper"} {
+		if _, _, err := tree.Role(bad, 0, false); err == nil {
 			t.Errorf("role %q accepted", bad)
 		}
 	}
-	if _, _, err := groups.Role("inner", Limits{}); err == nil {
-		t.Error("a role's group inside a role's was made")
+	if _, err := runtime.NewTree(); err == nil {
+		t.Error("a tree inside a role's group was made")
+	}
+}
+
+// A tree an earlier keeper left is made again: its groups kept, its bounds
+// lifted before a role's group is made under them, then written anew.
+func TestATreeLeftBoundedIsMadeAgain(t *testing.T) {
+	root := t.TempDir()
+	// The earlier keeper's role groups are gone with its roles; its tree
+	// stays, bounded to 0 (a test folder's files would keep a group from
+	// being removed, as a cgroup's never do).
+	tree, err := (&Manager{root: root}).NewTree()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tree.Bound(0, 0); err != nil {
+		t.Fatal(err)
+	}
+	acts := recording(t)
+	again, err := (&Manager{root: root}).NewTree()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := again.Role("runtime", 0, true); err != nil {
+		t.Fatal(err)
+	}
+	lifted := map[string]bool{}
+	for _, act := range *acts {
+		if strings.HasSuffix(act, "/memory.max max") {
+			lifted[strings.TrimSuffix(strings.TrimPrefix(act, "write "+root+"/"), "/memory.max max")] = true
+		}
+		if strings.HasPrefix(act, "mkdir "+root+"/work/runtime") && !(lifted["work"] && lifted["work/rest"]) {
+			t.Fatalf("%s before work's and rest's bounds were lifted: %q", act, *acts)
+		}
+	}
+	if err := again.Bound(2<<30, 2<<30-FloorBytesForTest); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(root, "work", "rest", "memory.max")); string(got) != strconv.FormatUint(2<<30-FloorBytesForTest, 10) {
+		t.Errorf("rest's bound %q", got)
+	}
+}
+
+// FloorBytesForTest is any floor: the tree writes the bounds it is given.
+const FloorBytesForTest = 164 << 20
+
+// The namespace root's own memory.max is the container's limit, none where
+// it reads max.
+func TestLimitReadsTheContainersOwn(t *testing.T) {
+	for content, want := range map[string][2]uint64{"max\n": {0, 0}, "8589934592\n": {8589934592, 1}} {
+		root := namespaceRoot(t, map[string]string{"memory.max": content})
+		limit, limited, err := (&Manager{root: root}).Limit()
+		if err != nil || limit != want[0] || limited != (want[1] == 1) {
+			t.Errorf("Limit of %q: %d, %v, %v", content, limit, limited, err)
+		}
+	}
+	root := namespaceRoot(t, map[string]string{"memory.max": "lots\n"})
+	if _, _, err := (&Manager{root: root}).Limit(); err == nil {
+		t.Error("a memory.max of no number was read")
 	}
 }
