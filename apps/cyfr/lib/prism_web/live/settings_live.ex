@@ -120,7 +120,7 @@ defmodule PrismWeb.SettingsLive do
       |> assign(:host_decision, nil)
       # Who used what memory (`Opus.memory/2`, `:everyone`), and how many
       # of its days the table shows.
-      |> assign(:memory_machines, [])
+      |> assign(:memory, %{machines: [], unanswered: []})
       |> assign(:memory_days, [])
       |> assign(:memory_shown, @memory_days)
       |> assign(:settings_revision, nil)
@@ -425,11 +425,17 @@ defmodule PrismWeb.SettingsLive do
     Process.send_after(self(), :memory, Opus.memory_poll_ms())
 
     case Opus.memory(socket.assigns.context, :everyone) do
-      {:ok, %{machines: machines, days: days}} ->
-        {:noreply, socket |> assign(:memory_machines, machines) |> assign(:memory_days, days)}
+      {:ok, %{machines: machines, unanswered: unanswered, days: days}} ->
+        {:noreply,
+         socket
+         |> assign(:memory, %{machines: machines, unanswered: unanswered})
+         |> assign(:memory_days, days)}
 
       {:error, _not_read} ->
-        {:noreply, socket |> assign(:memory_machines, []) |> assign(:memory_days, [])}
+        {:noreply,
+         socket
+         |> assign(:memory, %{machines: [], unanswered: []})
+         |> assign(:memory_days, [])}
     end
   end
 
@@ -1300,19 +1306,19 @@ defmodule PrismWeb.SettingsLive do
               Who used memory on this CYFR: each person's runs, builds and programs, by
               name and UTC day. No thread or content is kept.
             </p>
-            <div :if={@memory_machines == []} class="py-2">
+            <div :if={@memory == %{machines: [], unanswered: []}} class="py-2">
               <.empty_state message="Nothing has reported its memory yet" />
             </div>
             <div
-              :for={machine <- @memory_machines}
+              :for={machine <- @memory.machines}
               class="space-y-2 mb-4"
               data-test="memory-machine"
             >
               <h4
-                :if={MemoryWords.heading(@memory_machines, machine)}
+                :if={MemoryWords.heading(@memory, machine.machine)}
                 class="text-xs text-gray-500 uppercase"
               >
-                {MemoryWords.heading(@memory_machines, machine)}
+                {MemoryWords.heading(@memory, machine.machine)}
               </h4>
               <p class="text-sm text-gray-300">{machine_use(machine)}</p>
               <p :if={machine.holders == []} class="text-sm text-gray-300">
@@ -1329,6 +1335,19 @@ defmodule PrismWeb.SettingsLive do
                 <:col :let={h} label="Uses">{MemoryWords.size(h.bytes)}</:col>
               </.table>
               <p class="text-xs text-gray-500">{MemoryWords.counted(machine)}</p>
+            </div>
+            <div
+              :for={silent <- @memory.unanswered}
+              class="space-y-1 mb-4"
+              data-test="memory-unanswered"
+            >
+              <h4
+                :if={MemoryWords.heading(@memory, silent.endpoint)}
+                class="text-xs text-gray-500 uppercase"
+              >
+                {MemoryWords.heading(@memory, silent.endpoint)}
+              </h4>
+              <p class="text-xs text-gray-500">{MemoryWords.counted(silent)}</p>
             </div>
             <div :if={@memory_days != []} id="memory-days">
               <.table id="memory-day-rows" rows={shown_days(@memory_days, @memory_shown)}>

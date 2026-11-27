@@ -207,12 +207,14 @@ defmodule Compendium.Builds.Client do
   (`Prima.LocusPool`, the pool wire): a `POST` to its pool route signed
   with its pool key (`Prima.LocusPool.pool_key/2` of the builds key), read
   strictly (`Prima.LocusPool.read_answer/1`). `:not_configured` for no
-  builds service, `:unreachable` for no connection, `{:malformed, :pool}`
-  for anything else in an answer's place.
+  builds service, `:unreachable` for no connection, `:disconnected` for a
+  connection that closed, `:deadline` for an answer that did not come in
+  time, `{:malformed, :pool}` for anything else in an answer's place.
   """
   @spec pool(non_neg_integer()) ::
           {:ok, Prima.LocusPool.report()}
-          | {:error, :not_configured | :unreachable | :disconnected | {:malformed, :pool}}
+          | {:error,
+             :not_configured | :unreachable | :disconnected | :deadline | {:malformed, :pool}}
   def pool(after_rev) when is_integer(after_rev) and after_rev >= 0 do
     case {RuntimeConfig.locus_builds_url(), RuntimeConfig.locus_builds_key()} do
       {url, <<_::256>> = key} when is_binary(url) ->
@@ -220,6 +222,10 @@ defmodule Compendium.Builds.Client do
         pool_key = Prima.LocusPool.pool_key(:builds, key)
         header = Prima.LocusPool.header(:builds, pool_key, System.system_time(:millisecond), body)
         max = Prima.Limits.default_max_response_size()
+        # A connection is given its own bound and the answer twice that
+        # after it, so a timeout past the connection's bound is an answer
+        # that did not come (`:deadline`), never a connection not made.
+        deadline = System.system_time(:millisecond) + @connect_timeout_ms + 1_000
 
         response =
           Req.request(
@@ -231,7 +237,7 @@ defmodule Compendium.Builds.Client do
             ],
             body: body,
             connect_options: [timeout: @connect_timeout_ms],
-            receive_timeout: @health_timeout_ms,
+            receive_timeout: 2 * @health_timeout_ms,
             retry: false,
             redirect: false,
             compressed: false,
@@ -244,10 +250,13 @@ defmodule Compendium.Builds.Client do
              {:ok, report} <- Prima.LocusPool.read_answer(raw) do
           {:ok, report}
         else
-          # Asked every few seconds: a service that is down is said by the
-          # answer, never logged here.
-          {:error, %Req.TransportError{reason: reason}} when reason in @lost ->
-            {:error, :disconnected}
+          # A timeout, a connection closed and none made, each as the
+          # client's own transport tells them apart (`transport/2`). Asked
+          # every few seconds, a service that is down is said by the answer
+          # and never logged here.
+          {:error, %Req.TransportError{reason: reason} = exception}
+          when reason in [:timeout | @lost] ->
+            {:error, transport(exception, deadline)}
 
           {:error, %Req.TransportError{}} ->
             {:error, :unreachable}

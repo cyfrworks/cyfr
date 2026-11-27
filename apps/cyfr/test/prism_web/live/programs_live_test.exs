@@ -2051,7 +2051,9 @@ defmodule PrismWeb.ProgramsLiveTest do
           {:ok, []} -> 0
         end
 
-      {:ok, _stored} = Arca.MemoryRecord.store(claim, :none, "wrk_page", after_rev, report, names)
+      {:ok, _stored} =
+        Arca.MemoryRecord.store(claim, :none, "wrk_page", after_rev, report, names, 90)
+
       :ok
     end
 
@@ -2143,7 +2145,7 @@ defmodule PrismWeb.ProgramsLiveTest do
       refute panel =~ "their-secret-tool"
     end
 
-    test "a count its machine has not renewed within three polls says when it was, and that it may be out of date",
+    test "a machine that has not answered within three polls says when it was counted, and holds nothing of theirs now",
          %{conn: conn, athanor: athanor} do
       recorded!([held(1, athanor, "build", nil, 600)])
       an_hour_ago = DateTime.add(DateTime.utc_now(), -3_600, :second)

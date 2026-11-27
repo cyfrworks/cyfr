@@ -5,11 +5,11 @@ defmodule Opus.Supervisor do
   @moduledoc """
   The execution domain's processes: the slots, the attempt tree, the
   background roots, the watches and sweeper, the node's pin table and the
-  host API listener, the programs controller (`Opus.Programs`), the
-  record of who used what (`Opus.Memory`), each
+  host API listener, the programs controller (`Opus.Programs`), each
   person's browser holder (`Opus.Browser`), each thread's brain holder
   (`Opus.Brain`) and the consumer of the removals forgetting owes
-  (`Opus.Brain.Cleanup`).
+  (`Opus.Brain.Cleanup`), and last the record of who used what
+  (`Opus.Memory`).
   `rest_for_one`, because the watches, the sweeper and the listener read
   the attempt registries and the slots before them, and the listener must
   never outlive a fresh attempt tree: a restart of either restarts every
@@ -99,13 +99,6 @@ defmodule Opus.Supervisor do
         # homes. Last, and started before Emissary's tree, so Emissary's
         # servers stop first at shutdown and still release through it.
         {Opus.Programs, Keyword.get(opts, :programs, [])},
-        # Who used what: asks every Locus endpoint for its report and keeps
-        # the host's record of it (`Opus.Memory`), after the programs
-        # controller whose backends service it asks too; started only when
-        # `:memory_enabled`. 5 s: its terminate giving up the claim it holds.
-        Supervisor.child_spec({Opus.Memory, programs: Keyword.get(opts, :programs, [])},
-          shutdown: 5_000
-        ),
         # Each person's browser holder (`Opus.Browser`), registered by
         # person, after the programs controller whose sessions they hold, so
         # they stop first at shutdown and close their sessions through it.
@@ -125,7 +118,17 @@ defmodule Opus.Supervisor do
         # (`Opus.Brain.Cleanup`), after the holders it removes through;
         # started only when `:brain_cleanup_enabled`. 5 s: its stop, which
         # holds no work a later drain does not take up again.
-        Supervisor.child_spec(Opus.Brain.Cleanup, shutdown: 5_000)
+        Supervisor.child_spec(Opus.Brain.Cleanup, shutdown: 5_000),
+        # Who used what: asks every Locus endpoint for its report and keeps
+        # the record of it (`Opus.Memory`). Last, so its death restarts
+        # nothing after it; it asks each service directly and needs no
+        # child before it but the tree it runs in. Started only when
+        # `:memory_enabled`. 5 s: its terminate giving up its claim, when no
+        # ask is open; one open past the bound is killed with it, and the
+        # claim waits out its lease of three polls.
+        Supervisor.child_spec({Opus.Memory, programs: Keyword.get(opts, :programs, [])},
+          shutdown: 5_000
+        )
       ],
       strategy: :rest_for_one,
       max_restarts: 10,

@@ -153,8 +153,9 @@ defmodule PrismWeb.ProgramsLive do
       |> assign(:editing, nil)
       # The person's running sessions (`Opus.Programs.running/1`).
       |> assign(:running, [])
-      # What of the person's holds memory now, by machine (`Opus.memory/2`).
-      |> assign(:memory, [])
+      # What of the person's holds memory now, by machine, and the
+      # machines that have not answered (`Opus.memory/2`).
+      |> assign(:memory, %{machines: [], unanswered: []})
       # Whether a terminal this page opens adds the way back to Aqua.
       |> assign(:from_aqua, false)
       # What the page is doing until a call's answer comes; nil when idle.
@@ -420,8 +421,11 @@ defmodule PrismWeb.ProgramsLive do
     Process.send_after(self(), :memory, Opus.memory_poll_ms())
 
     case Opus.memory(socket.assigns.context, :mine) do
-      {:ok, %{machines: machines}} -> {:noreply, assign(socket, :memory, machines)}
-      {:error, _unread} -> {:noreply, socket}
+      {:ok, %{machines: machines, unanswered: unanswered}} ->
+        {:noreply, assign(socket, :memory, %{machines: machines, unanswered: unanswered})}
+
+      {:error, _unread} ->
+        {:noreply, socket}
     end
   end
 
@@ -1547,7 +1551,7 @@ defmodule PrismWeb.ProgramsLive do
     """
   end
 
-  attr :memory, :list, required: true
+  attr :memory, :map, required: true
   attr :servers, :list, required: true
   attr :running, :list, required: true
 
@@ -1560,15 +1564,18 @@ defmodule PrismWeb.ProgramsLive do
     <.card>
       <section data-test="memory" class="space-y-3">
         <h3 class="text-sm font-medium text-gray-400">Memory in use now</h3>
-        <p :if={Enum.all?(@memory, &(&1.holders == []))} class="text-sm text-gray-300">
+        <p
+          :if={Enum.all?(@memory.machines, &(&1.holders == []))}
+          class="text-sm text-gray-300"
+        >
           Nothing of yours uses memory now.
         </p>
-        <div :for={machine <- @memory} class="space-y-2" data-test="memory-machine">
+        <div :for={machine <- @memory.machines} class="space-y-2" data-test="memory-machine">
           <h4
-            :if={MemoryWords.heading(@memory, machine)}
+            :if={MemoryWords.heading(@memory, machine.machine)}
             class="text-xs text-gray-500 uppercase"
           >
-            {MemoryWords.heading(@memory, machine)}
+            {MemoryWords.heading(@memory, machine.machine)}
           </h4>
           <div
             :for={line <- MemoryWords.holders(machine.holders)}
@@ -1608,6 +1615,15 @@ defmodule PrismWeb.ProgramsLive do
           <p class="text-xs text-gray-500" data-test="memory-counted">
             {MemoryWords.counted(machine)}
           </p>
+        </div>
+        <div :for={silent <- @memory.unanswered} class="space-y-1" data-test="memory-unanswered">
+          <h4
+            :if={MemoryWords.heading(@memory, silent.endpoint)}
+            class="text-xs text-gray-500 uppercase"
+          >
+            {MemoryWords.heading(@memory, silent.endpoint)}
+          </h4>
+          <p class="text-xs text-gray-500">{MemoryWords.counted(silent)}</p>
         </div>
       </section>
     </.card>

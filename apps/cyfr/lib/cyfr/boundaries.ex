@@ -1998,6 +1998,7 @@ defmodule Cyfr.Boundaries do
       focus: 2,
       for_scheduled: 2,
       internal: 1,
+      key_bound?: 1,
       refocus: 2,
       require_permission: 2,
       require_tenant!: 1,

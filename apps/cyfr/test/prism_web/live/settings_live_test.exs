@@ -1084,7 +1084,7 @@ defmodule PrismWeb.SettingsLiveTest do
         next: nil
       }
 
-      {:ok, _stored} = Arca.MemoryRecord.store(claim, :none, "wrk_page", 0, report, names)
+      {:ok, _stored} = Arca.MemoryRecord.store(claim, :none, "wrk_page", 0, report, names, 90)
       :ok
     end
 

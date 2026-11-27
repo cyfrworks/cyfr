@@ -18,10 +18,14 @@ defmodule PrismWeb.MemoryWords do
     tool: {"tool", "tools"}
   }
 
-  @doc "A machine's heading: none on a CYFR of one machine, `Machine <name>` with several."
-  @spec heading([map()], map()) :: String.t() | nil
-  def heading([_one], _machine), do: nil
-  def heading(_machines, %{machine: name}), do: "Machine " <> name
+  @doc """
+  A machine's heading, by its name: none where the record names one
+  machine alone, answering or not, `Machine <name>` where it names several.
+  """
+  @spec heading(%{machines: [map()], unanswered: [map()]}, String.t()) :: String.t() | nil
+  def heading(%{machines: machines, unanswered: unanswered}, name) do
+    if length(machines) + length(unanswered) > 1, do: "Machine " <> name
+  end
 
   @doc """
   What holds a machine's memory now, a line each, the largest first: a
@@ -57,14 +61,15 @@ defmodule PrismWeb.MemoryWords do
   def others(%{others: bytes}), do: "Others use #{size(bytes)}."
 
   @doc """
-  How fresh a machine's numbers are: counted a few seconds ago while its
-  endpoint answers, otherwise when, and that it may be out of date.
+  How fresh a count is: a machine's, which answered within three polls,
+  was counted a few seconds ago; one that has not answered since says
+  when it last did, and that it may be out of date.
   """
   @spec counted(map()) :: String.t()
-  def counted(%{fresh: true}), do: "Counted a few seconds ago."
-
-  def counted(%{heard_at: at}),
+  def counted(%{endpoint: _name, heard_at: at}),
     do: "Counted at #{Calendar.strftime(at, "%H:%M UTC")}, and may be out of date."
+
+  def counted(%{machine: _name}), do: "Counted a few seconds ago."
 
   @doc "What a person calls a kind of holder."
   @spec kind(atom()) :: String.t()
