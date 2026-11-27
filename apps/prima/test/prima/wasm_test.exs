@@ -43,6 +43,24 @@ defmodule Prima.WasmTest do
                              <<0x0A, 0x04, 0x01, 0x02, 0x00, 0x0B>>
 
   describe "validate/1" do
+    test "admits a component as large as a runner can fetch, and refuses one byte more" do
+      max = Prima.HostAPI.max_artifact_bytes()
+      seed = File.read!(@seed_catalyst)
+
+      assert {:ok, %{size: ^max}} = Wasm.validate(Prima.Test.PaddedComponent.pad(seed, max))
+
+      over = Prima.Test.PaddedComponent.pad(seed, max + 1)
+      assert {:error, {:too_large, size, ^max} = reason} = Wasm.validate(over)
+      assert size == max + 1
+
+      assert %Prima.Refusal{class: :invalid_argument, message: message} =
+               Prima.Refusal.classify(reason)
+
+      assert message ==
+               "The component is #{max + 1} bytes, and a component runs only up to #{max} " <>
+                 "bytes; make it smaller to register it."
+    end
+
     test "validates Component Model binary" do
       {:ok, result} = Wasm.validate(@valid_component)
 

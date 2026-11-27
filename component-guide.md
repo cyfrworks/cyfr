@@ -1581,7 +1581,7 @@ For the full tincture reference (architecture, manifest, SDK, sandbox constraint
 | `wrong_world` | The binary's world does not match the type it is declared as | Build it against the world its type demands (`src/wit/world.wit`) |
 | `core_module` | The binary is a core WebAssembly module, not a component | Build a component: target `wasm32-wasip2` with `cargo component build` |
 | `malformed` (`invalid_wasm`) | Not valid WebAssembly, or uses a refused feature | Verify target is `wasm32-wasip2`, update toolchain, `wasm-tools validate` with the refused features off (**Refused features** under [Limits](#limits-capslimits)) |
-| `too_large` | Binary over 50 MiB | Enable `lto = true`, `opt-level = "s"`, remove unused deps |
+| `too_large` | Binary over 2,949,087 bytes, the largest a runner can fetch | Enable `lto = true`, `opt-level = "s"`, remove unused deps |
 | `consent_required` | The component has no granted capabilities | Grant it: on Components, open the component and choose **Grant access** |
 | `domain_blocked` | HTTP to a domain outside the consent | Declare it in `caps.egress.domains` and re-grant |
 | `rate_limited` | Too many requests in window | Wait for reset, or re-grant with a higher `limits.rate_limit` |

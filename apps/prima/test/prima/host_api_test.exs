@@ -430,6 +430,28 @@ defmodule Prima.HostAPITest do
     end
   end
 
+  describe "the largest component a runner can fetch" do
+    # The `fetch_artifact` answer as CYFR writes it (`Opus.Host.Storage`):
+    # the bytes in base64 as the answer's `ok`, sealed for the call.
+    defp sealed_artifact_answer(bytes) do
+      call = Enum.find(@vectors["calls"], &(&1["callback"] == "fetch_artifact"))
+      fields = atoms(call["fields"], @call_fields)
+      json = Jason.encode!(WorkerWire.ok(Base.encode64(bytes)))
+      {:ok, sealed} = WorkerAuth.seal_call(keys!(fields).seal, :answer, fields, json)
+      sealed
+    end
+
+    test "is one whose answer fits the answer bound, and one byte more does not fit" do
+      max = HostAPI.max_artifact_bytes()
+
+      assert byte_size(sealed_artifact_answer(:binary.copy(<<0>>, max))) <=
+               HostAPI.max_answer_bytes()
+
+      assert byte_size(sealed_artifact_answer(:binary.copy(<<0>>, max + 1))) >
+               HostAPI.max_answer_bytes()
+    end
+  end
+
   describe "the egress policy vectors" do
     test "pin only a host in domains and a hop on its pin's origin, refused by name otherwise" do
       cases = @vectors["egress_policy_cases"]

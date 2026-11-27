@@ -12,7 +12,9 @@ defmodule Prima.Wasm do
 
   ## Validation Steps
 
-  1. Size limits - Enforce maximum artifact size (50MB)
+  1. Size limits - At most the largest component a runner can fetch
+     (`Prima.HostAPI.max_artifact_bytes/0`), refused
+     `{:too_large, size, max}`
   2. Magic bytes check - Verify `\\0asm` header
   3. Preamble check - A component's layer preamble; a core module's
      version 1 is refused as a core module, anything else as unsupported
@@ -50,9 +52,6 @@ defmodule Prima.Wasm do
 
   # Component Model preamble (layer 0)
   @component_preamble <<0x0D, 0x00, 0x01, 0x00>>
-
-  # Maximum artifact size (50MB)
-  @max_size 50 * 1024 * 1024
 
   # Minimum valid WASM size (magic + version or preamble = 8 bytes)
   @min_size 8
@@ -193,11 +192,11 @@ defmodule Prima.Wasm do
     {:error, :too_small}
   end
 
-  defp check_size(bytes) when byte_size(bytes) > @max_size do
-    {:error, {:too_large, byte_size(bytes), @max_size}}
-  end
+  defp check_size(bytes) do
+    max = Prima.HostAPI.max_artifact_bytes()
 
-  defp check_size(_bytes), do: :ok
+    if byte_size(bytes) > max, do: {:error, {:too_large, byte_size(bytes), max}}, else: :ok
+  end
 
   defp check_magic(<<@wasm_magic, _rest::binary>>), do: :ok
   defp check_magic(_), do: {:error, :invalid_magic_bytes}
