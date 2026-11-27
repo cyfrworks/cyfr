@@ -434,8 +434,7 @@ defmodule Cyfr.CrossLanguageDriftTest do
     "component_features.json" => [
       {"apps/locus/runner/tests/engine.rs", ~w(refused families sentences cases)},
       {"apps/locus/runner/tests/process.rs", ~w(sentences)},
-      {"apps/prima/test/prima/component_features_test.exs",
-       ~w(refused families sentences cases)}
+      {"apps/prima/test/prima/component_features_test.exs", ~w(refused families sentences cases)}
     ],
     "component_refs.json" => [
       {"apps/codex/internal/ref/ref_fixture_test.go", ~w(cases version_ordering)},
