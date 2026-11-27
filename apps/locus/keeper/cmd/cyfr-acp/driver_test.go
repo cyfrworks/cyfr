@@ -684,6 +684,73 @@ func TestEachStopReasonAndErrorMaps(t *testing.T) {
 	}
 }
 
+// A turn Antigravity's model service failed comes as one chunk of its
+// executor's error and end_turn: a turn whose whole output is that chunk
+// ends with the error its status maps to, in CYFR's words, and any other
+// turn reads as before.
+func TestAntigravitysFailedTurnIsAnErrorOnlyWhenItIsAllTheTurnSaid(t *testing.T) {
+	s := startDriver(t)
+	startFresh(s, map[string]any{})
+	for i, c := range []struct{ status, kind, words string }{
+		{"RESOURCE_EXHAUSTED", "rate_limited", "Antigravity reported a usage or rate limit; ask again later."},
+		{"UNAVAILABLE", "overloaded", "Antigravity reported its model service overloaded; ask again later."},
+		{"UNAUTHENTICATED", "authentication", "The account or key Antigravity used was refused; check its sign-in on the program's terminal, or its key."},
+		{"PERMISSION_DENIED", "authentication", "The account or key Antigravity used was refused; check its sign-in on the program's terminal, or its key."},
+		{"INTERNAL", "provider_error", "Antigravity reported an error of its provider."},
+	} {
+		postText(s, fmt.Sprintf("stp_%d", i), "trn_1", "agyfail:"+c.status)
+		got := s.until("idle")
+		errs := ofType(got, "error")
+		if len(errs) != 1 || errs[0]["type"] != c.kind || errs[0]["message"] != c.words || got[len(got)-1]["stop"] != "error" ||
+			len(ofType(got, "text")) != 0 || len(ofType(got, "said")) != 0 {
+			t.Fatalf("%s: an error of its type in CYFR's words, and no text: %v", c.status, got)
+		}
+	}
+	if strings.Contains(s.output(), "HARNESS-WORDS") {
+		t.Fatal("no error carries the program's words")
+	}
+	postText(s, "stp_quoted", "trn_2", "agyquoted")
+	quoted := s.until("idle")
+	if len(ofType(quoted, "error")) != 0 || quoted[len(quoted)-1]["stop"] != "end_turn" ||
+		saidOf(quoted) != strings.Replace(agyRecorded503, "[]\n", "[] [quoted for context]\n", 1) {
+		t.Fatalf("the line with more on it is the member's reply: %v", quoted)
+	}
+	postText(s, "stp_then", "trn_3", "agyfailthen")
+	got := s.until("idle")
+	if len(ofType(got, "error")) != 0 || got[len(got)-1]["stop"] != "end_turn" || saidOf(got) != agyFailureText("UNAVAILABLE")+" and more" {
+		t.Fatalf("a turn that said more ends as it ended, its words its answer: %v", got)
+	}
+}
+
+// The form read as a failure is exactly agy's executor error, whole.
+func TestAntigravitysFailureFormIsExact(t *testing.T) {
+	for text, kind := range map[string]string{
+		agyFailureText("RESOURCE_EXHAUSTED"): "rate_limited",
+		agyFailureText("UNAVAILABLE"):        "overloaded",
+		agyFailureText("UNAUTHENTICATED"):    "authentication",
+		agyFailureText("PERMISSION_DENIED"):  "authentication",
+		agyFailureText("INTERNAL"):           "provider_error",
+		agyRecorded503:                       "overloaded",
+		// Anything more on it is the member's reply: the recorded chunk
+		// with words quoted before its close, words after its close on the
+		// same line, a second line, words before it, or details it was
+		// never seen with.
+		strings.Replace(agyRecorded503, "[]\n", "[] [quoted for context]\n", 1):                                                    "",
+		strings.Replace(agyRecorded503, "[]\n", "[]. That was the error.\n", 1):                                                    "",
+		agyRecorded503 + "Shall I try again?\n":                                                                                    "",
+		"Here is what it said:" + agyRecorded503:                                                                                   "",
+		"\n⚠ agent executor error: generating and executing: Error 429, Message: a, b, Status: RESOURCE_EXHAUSTED, Details: [x]\n": "",
+		strings.TrimSpace(agyFailureText("UNAVAILABLE")):                                                                           "",
+		agyFailureText("UNAVAILABLE") + "more":                                                                                     "",
+		"\n⚠ agent executor error: something else\n":                                                                               "",
+		"\nagent executor error: generating and executing: Error 503, Message: x, Status: UNAVAILABLE, Details: []\n":              "",
+	} {
+		if got, _ := antigravity.failure(text); got != kind {
+			t.Fatalf("%q reads %q, not %q", text, got, kind)
+		}
+	}
+}
+
 // Signed out is the one -32000 shape: the start is `started` signed out,
 // the process kept, and each post and listing refused so; another
 // failure, even in words naming a sign-in, is no sign-out.

@@ -49,15 +49,20 @@ func refuseLine(id json.RawMessage, method string) []byte {
 }
 
 // initializeParams advertise no file system and no terminal: the program
-// uses its own tools in its own folder.
-func initializeParams() map[string]any {
+// uses its own tools in its own folder. The profile's clientMeta, where it
+// has one, is the capabilities' `_meta`.
+func initializeParams(p *profile) map[string]any {
+	capabilities := map[string]any{
+		"fs":       map[string]any{"readTextFile": false, "writeTextFile": false},
+		"terminal": false,
+	}
+	if p.clientMeta != nil {
+		capabilities["_meta"] = p.clientMeta
+	}
 	return map[string]any{
-		"protocolVersion": protocolVersion,
-		"clientCapabilities": map[string]any{
-			"fs":       map[string]any{"readTextFile": false, "writeTextFile": false},
-			"terminal": false,
-		},
-		"clientInfo": map[string]any{"name": "cyfr", "title": "CYFR", "version": "1"},
+		"protocolVersion":    protocolVersion,
+		"clientCapabilities": capabilities,
+		"clientInfo":         map[string]any{"name": "cyfr", "title": "CYFR", "version": "1"},
 	}
 }
 
@@ -204,19 +209,31 @@ type sessionAnswer struct {
 	} `json:"models"`
 }
 
-// option is the session's config option of `category`, or nil.
+// option is the session's config option of `category`, or nil. A
+// `thought_level` option that is an on-off switch, false or true, is no
+// effort (Cursor gives some models a `thinking` switch beside their effort
+// in that category), and is never the one read.
 func option(options []configOption, category string) *configOption {
 	for i := range options {
-		if options[i].Category == category {
+		if options[i].Category == category && !(category == "thought_level" && options[i].isSwitch()) {
 			return &options[i]
 		}
 	}
 	return nil
 }
 
+// isSwitch is whether the option's choices are false and true alone.
+func (o *configOption) isSwitch() bool {
+	values := map[string]bool{}
+	for _, c := range o.choices() {
+		values[c.value] = true
+	}
+	return len(values) == 2 && values["false"] && values["true"]
+}
+
 // listedModels are the session's models, as its `model` option offers
 // them, each with its efforts: those `efforts` names for it where the
-// profile reads them by selecting the model, and otherwise those of the
+// profile reads them apart (profile's efforts), and otherwise those of the
 // session's `thought_level` option the program has a variant of, a
 // variant being an available model named `<model>-<effort>`, as Antigravity
 // names them.
@@ -254,8 +271,8 @@ func listedModels(answer sessionAnswer, efforts map[string][]string) []brainwire
 // own, which is never listed as one.
 const unsetEffort = "default"
 
-// selectedEfforts are the efforts a session's `thought_level` option offers
-// for the model it has now.
+// selectedEfforts are the efforts a `thought_level` option of options
+// offers: a session's for the model it has now, or a model's own.
 func selectedEfforts(options []configOption) []string {
 	out := []string{}
 	if o := option(options, "thought_level"); o != nil {

@@ -118,10 +118,14 @@ type profile struct {
 	// which says the counts may be short.
 	counted string
 	counts  map[string][]string
-	// selectEfforts says a model's efforts are offered only once it is the
-	// session's model: the listing selects each to read them. Otherwise
-	// they are its variants among the available models (listedModels).
-	selectEfforts bool
+	// efforts, where it is set, reads each model's efforts in the listing's
+	// own process, which the driver lists in even while a session runs:
+	// by selecting each model in the listing session (OpenCode), or by the
+	// program's own list of every model's options (Cursor). Otherwise they
+	// are its variants among the available models (listedModels).
+	efforts func(o *oneOff, listed sessionAnswer) map[string][]string
+	// clientMeta, where it is set, is initialize's clientCapabilities._meta.
+	clientMeta map[string]any
 	// namesTools says a tool_call's `name` is the program's own name of the
 	// tool, shown for its call where it is a bounded plain name.
 	namesTools bool
@@ -255,6 +259,7 @@ var antigravity = &profile{
 	counts: map[string][]string{"input_tokens": {"inputTokens"}, "output_tokens": {"outputTokens"},
 		"cache_read_tokens": {"cachedReadTokens"}, "cache_write_tokens": {"cachedWriteTokens"}},
 	signedOutSentence: "Antigravity has no sign-in it can use; sign it in on the program's terminal.",
+	failure:           agyFailure,
 	access: []brainwire.Access[nativeAccess]{
 		{Choice: brainwire.Choice{ID: "full-access", Name: "Full access, no approvals"}, Native: nativeAccess{mode: "default"}},
 	},
@@ -262,14 +267,43 @@ var antigravity = &profile{
 }
 
 // agyToolBudget is Antigravity's list budget. Measured on Antigravity
-// 1.5.16, the API-key path, with tools of ASCII text: it counts the sum of
-// each of CYFR's tools as its compact {name, description, parameters}, `<`,
-// `>` and `&` a byte each (four tools of 57,000 such bytes, 500 of them
-// `<`, all reached its model), never the person's own servers, and past
-// about 57,200 bytes and 39 more a tool it drops whole tools, largest
-// first, saying nothing. How it counts text outside ASCII, and the line
-// and paragraph separators Go escapes, was not measured.
+// 1.5.16 with tools of ASCII text, on the API-key path: it counts the sum
+// of each of CYFR's tools as its compact {name, description, parameters},
+// `<`, `>` and `&` a byte each (four tools of 57,000 such bytes, 500 of
+// them `<`, all reached its model), never the person's own servers, and
+// past about 57,200 bytes and 39 more a tool it drops whole tools, largest
+// first, saying nothing. On the account path, signed in, one tool of
+// 56,000 bytes reached its model and one of 57,600 was dropped. How it
+// counts text outside ASCII, and the line and paragraph separators Go
+// escapes, was not measured.
 const agyToolBudget = 57000
+
+// agyFailureForm is the whole of the chunk Antigravity 1.5.16 writes for a
+// turn whose model request failed, seen on the API-key path (429, 503, 401
+// and 500), before it ends the prompt end_turn: its executor's error, the
+// request's code, message and status, and the empty details it was always
+// seen with, closing the chunk. Anything more on it is the member's reply.
+var agyFailureForm = regexp.MustCompile(`^\n⚠ agent executor error: generating and executing: Error \d+, Message: .*, Status: ([A-Z_]+), Details: \[\]\n$`)
+
+// agyFailure is a failed turn's error type and CYFR's sentence for it, by
+// its status: an exhausted resource a limit's, an unavailable service an
+// overload's, a refused key or account the account's, and any other the
+// provider's. Antigravity retries a limit and an overload before it says
+// so, and names no time either lifts.
+func agyFailure(text string) (string, string) {
+	m := agyFailureForm.FindStringSubmatch(text)
+	switch {
+	case m == nil:
+		return "", ""
+	case m[1] == "RESOURCE_EXHAUSTED":
+		return "rate_limited", "Antigravity reported a usage or rate limit; " + brainwire.UntilWords(0) + "."
+	case m[1] == "UNAVAILABLE":
+		return "overloaded", "Antigravity reported its model service overloaded; ask again later."
+	case m[1] == "UNAUTHENTICATED" || m[1] == "PERMISSION_DENIED":
+		return "authentication", "The account or key Antigravity used was refused; check its sign-in on the program's terminal, or its key."
+	}
+	return "provider_error", "Antigravity reported an error of its provider."
+}
 
 // geminiPath is a way down Antigravity's folder: from GEMINI_HOME when it
 // is set, else from the home through `.gemini`.
@@ -348,7 +382,7 @@ var opencode = &profile{
 	// no cache-write count is given.
 	counts: map[string][]string{"input_tokens": {"inputTokens"}, "output_tokens": {"outputTokens", "thoughtTokens"},
 		"cache_read_tokens": {"cachedReadTokens"}, "cache_write_tokens": {}},
-	selectEfforts:     true,
+	efforts:           (*oneOff).selectEach,
 	signedOutSentence: "OpenCode has no provider it can use; connect one on the program's terminal, opened with the words `auth login`.",
 	// A provider's 401 is that provider refusing the credential OpenCode
 	// holds for it.
@@ -497,6 +531,33 @@ var cursor = &profile{
 	access: []brainwire.Access[nativeAccess]{
 		{Choice: brainwire.Choice{ID: "full-access", Name: "Full access, no approvals"}, Native: nativeAccess{mode: "agent"}},
 	},
+	// Seen in Cursor 2026.11.22-e9042b2: initialized with the parameterized
+	// picker, its `model` option lists base models, and the model's own
+	// options follow it, its effort among them, replaced when the model is
+	// set. Without, each value fixes a model's parameters in one.
+	clientMeta: map[string]any{"parameterizedModelPicker": true},
+	efforts:    cursorEfforts,
+}
+
+// cursorEfforts are each model's efforts as Cursor's own
+// cursor/list_available_models gives every model's options, with no
+// session; a listing it does not answer lists each model with none.
+func cursorEfforts(o *oneOff, _ sessionAnswer) map[string][]string {
+	efforts := map[string][]string{}
+	m, err := o.call("cursor/list_available_models", map[string]any{})
+	var answer struct {
+		Models []struct {
+			Value   string         `json:"value"`
+			Options []configOption `json:"configOptions"`
+		} `json:"models"`
+	}
+	if err != nil || m.Error != nil || json.Unmarshal(m.Result, &answer) != nil {
+		return efforts
+	}
+	for _, model := range answer.Models {
+		efforts[model.Value] = selectedEfforts(model.Options)
+	}
+	return efforts
 }
 
 // cursorPath is a way down Cursor's configuration folder, where it keeps
