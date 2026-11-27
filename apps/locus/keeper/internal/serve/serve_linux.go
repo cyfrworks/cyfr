@@ -294,7 +294,6 @@ func Main(args []string) int {
 		floor = floor || r.spec.Floor
 	}
 	s.begin(sizes, floor)
-	s.giveWall()
 	if err := makeRunDirs(s.runRoot, s.roles); err != nil {
 		log.Error("refusing to start: %v", err)
 		return ExitConfig
@@ -952,6 +951,9 @@ func (s *server) run() int {
 // or not, outlives the keeper.
 func (s *server) serve(stop <-chan os.Signal) int {
 	defer s.killRoleGroups()
+	// The wall is decided, and a disk of the directory form retired as its
+	// uid where it is given, once the reaper runs and before any role.
+	s.giveWall()
 	if !s.bootRoles() {
 		s.markClosing()
 		s.endRoles()

@@ -729,7 +729,9 @@ func (s *server) startInMachine(c *client, req *protocol.Request, at keptAt, rea
 	if code != "" {
 		return sp, code
 	}
+	s.mu.Lock()
 	sp.link = l
+	s.mu.Unlock()
 	if code := s.guestStart(l, sp, req, at); code != "" {
 		return sp, code
 	}
@@ -1135,14 +1137,20 @@ func (s *server) retireGuest(sp *spawn, grace time.Duration, notify bool) {
 // guestSignal passes a signal to a session in a VM; the guest answers only
 // a refusal, which comes back as this keeper's own.
 func (s *server) guestSignal(sp *spawn, req *protocol.Request) {
-	if err := sp.link.ctl.Send(protocol.Request{V: protocol.Version, Type: protocol.TypeSignal, SpawnID: sp.guest, Sig: req.Sig}); err != nil {
+	s.mu.Lock()
+	l, guest := sp.link, sp.guest
+	s.mu.Unlock()
+	if err := l.ctl.Send(protocol.Request{V: protocol.Version, Type: protocol.TypeSignal, SpawnID: guest, Sig: req.Sig}); err != nil {
 		s.send(sp.client, protocol.NewError("", req.SpawnID, protocol.CodeNotRunning))
 	}
 }
 
 // guestResize passes a resize to a session in a VM.
 func (s *server) guestResize(sp *spawn, req *protocol.Request) {
-	if err := sp.link.ctl.Send(protocol.Request{V: protocol.Version, Type: protocol.TypeResize, SpawnID: sp.guest, Rows: req.Rows, Cols: req.Cols}); err != nil {
+	s.mu.Lock()
+	l, guest := sp.link, sp.guest
+	s.mu.Unlock()
+	if err := l.ctl.Send(protocol.Request{V: protocol.Version, Type: protocol.TypeResize, SpawnID: guest, Rows: req.Rows, Cols: req.Cols}); err != nil {
 		s.send(sp.client, protocol.NewError("", req.SpawnID, protocol.CodeInternal))
 	}
 }

@@ -77,6 +77,12 @@ func (s *server) giveWall() {
 		return
 	}
 	s.log.Info("each person's work runs in a separate small computer on this machine: a VM of their own, booted at their first session")
+	s.retireDirectories()
+}
+
+// retireDirectories retires every disk of the directory form, on a keeper
+// that gives the wall.
+func (s *server) retireDirectories() {
 	s.mu.Lock()
 	s.keptMaps()
 	var directories []home.Disk
