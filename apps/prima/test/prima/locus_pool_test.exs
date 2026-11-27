@@ -38,7 +38,12 @@ defmodule Prima.LocusPoolTest do
 
     assert @vectors["floor_bytes"] == LocusPool.floor_bytes()
     assert @vectors["floor_runners"] == LocusPool.floor_runners()
-    assert @vectors["machine_bytes"] == LocusPool.machine_bytes()
+    machine = @vectors["machine_bytes"]
+    assert machine["base"] == LocusPool.machine_bytes(0)
+    assert machine["per_gib"] == LocusPool.machine_bytes(1024 * 1024 * 1024) - LocusPool.machine_bytes(0)
+
+    for [guest, bytes] <- machine["cases"],
+        do: assert(LocusPool.machine_bytes(guest) == bytes, "a guest of #{guest} bytes")
     assert @vectors["room_wait_ms"] == LocusPool.room_wait_ms()
     assert @vectors["allowance_ms"] == LocusPool.allowance_ms()
     assert @vectors["stale_ms"] == LocusPool.stale_ms()
@@ -61,7 +66,7 @@ defmodule Prima.LocusPoolTest do
   test "the pool's numbers are the plan's" do
     mib = 1024 * 1024
     assert LocusPool.floor_bytes() == 164 * mib
-    assert LocusPool.machine_bytes() == 326 * mib
+    assert LocusPool.machine_bytes(8 * 1024 * mib) == 460 * mib
     assert LocusPool.allowance_bytes(:runner) == LocusPool.floor_bytes()
 
     assert {LocusPool.allowance_bytes(:build), LocusPool.allowance_bytes(:session)} ==

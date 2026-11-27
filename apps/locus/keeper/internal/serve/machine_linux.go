@@ -236,7 +236,7 @@ func (s *server) machineFor(r *role, athanor string) *machine {
 	}
 	m := &machine{athanor: athanor, id: randomHex(16), sessions: map[string]*spawn{}, reach: guard.ReachNone,
 		done: make(chan struct{}), prev: s.vms[athanor]}
-	m.entry = admission.NewMachine(r.spec.Name, athanor, machineRef{m: m})
+	m.entry = admission.NewMachine(r.spec.Name, athanor, s.machineGuest(), machineRef{m: m})
 	s.vms[athanor] = m
 	return m
 }
@@ -355,6 +355,10 @@ func (s *server) bootMachine(m *machine, at keptAt, r *role) string {
 func (s *server) machineMiB() int {
 	return int(max(s.rest>>20, 128))
 }
+
+// machineGuest is a person's VM's memory in bytes (machineMiB), which its
+// own allowance follows (admission.MachineBytes).
+func (s *server) machineGuest() uint64 { return uint64(s.machineMiB()) << 20 }
 
 // machineVCPUs is a person's VM's processors: as many as its role's work
 // is given, or as the machine has where that is unbounded, as a person's

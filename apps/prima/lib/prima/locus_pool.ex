@@ -31,7 +31,8 @@ defmodule Prima.LocusPool do
   Where a machine runs each person's sessions in a VM of their own, the
   keeper charges that VM once, by its reading: its sessions are charged
   nothing of their own, and the start that boots it holds the VM's own
-  allowance (`machine_bytes/0`) beside its session's.
+  allowance (`machine_bytes/1`), which follows the guest's size, beside its
+  session's.
 
   A runner's least is its allowance and the components' hard ceiling
   together (`Prima.Limits.Ceiling`'s compiled `max_memory_bytes`), so one
@@ -118,7 +119,8 @@ defmodule Prima.LocusPool do
 
   @mib 1024 * 1024
   @floor_bytes 164 * @mib
-  @machine_bytes 326 * @mib
+  @machine_base_bytes 300 * @mib
+  @machine_per_gib_bytes 20 * @mib
   @kinds %{
     "warm" => :runner,
     "run" => :runner,
@@ -206,8 +208,13 @@ defmodule Prima.LocusPool do
   def floor_bytes, do: @floor_bytes
 
   @doc """
-  A person's VM's own allowance, 326 MiB: what a VM holds above a session,
-  the larger of the two figures measured on the image's programs' device.
+  A person's VM's own allowance for a guest of `guest_bytes` of memory, the
+  pool's work W in a keeper: 300 MiB, and 20 MiB a GiB of the guest, by the
+  guest's whole MiB (20 KiB a MiB). It is what a VM holds above its first
+  session. Measured with three guests of the image (2,560 MiB, 8 GiB and
+  this host's W of 57.9 GiB), a VMM's anonymous memory and the kernel's for
+  it were at most 290, 448 and 1,369 MiB, which the rule covers at 350, 460
+  and 1,458 MiB. A bound on large machines' guests is one more line here.
   Where a person's sessions run in their own VM, the start that boots it is
   admitted when its session's allowance and this one fit together, and the
   VM holds this one until `allowance_ms/0` after its VMM's start. The keeper
@@ -215,8 +222,9 @@ defmodule Prima.LocusPool do
   sessions are charged nothing of their own, and their readings, the
   guest's, are counted under their subjects alone, never added to it.
   """
-  @spec machine_bytes() :: pos_integer()
-  def machine_bytes, do: @machine_bytes
+  @spec machine_bytes(non_neg_integer()) :: pos_integer()
+  def machine_bytes(guest_bytes) when is_integer(guest_bytes) and guest_bytes >= 0,
+    do: @machine_base_bytes + div(@machine_per_gib_bytes, 1024) * div(guest_bytes, @mib)
 
   @doc "How many fresh runners the warm floor keeps: one."
   @spec floor_runners() :: pos_integer()

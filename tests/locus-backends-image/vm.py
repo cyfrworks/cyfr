@@ -346,14 +346,22 @@ def keeper_killed(stack, image, kept, guest, project):
 # ————— a person's sessions in their VM (plan V2) —————
 
 KVM_LAYER = os.path.join(HERE, "compose.kvm.yml")
-# What a person's first session holds while it starts: a session's allowance and the VM's own.
-SESSION_ALLOWANCE, MACHINE_BYTES = imagesuite.ALLOWANCE_BYTES["session"], imagesuite.MACHINE_BYTES
-FIRST_START = SESSION_ALLOWANCE + MACHINE_BYTES
+SESSION_ALLOWANCE = imagesuite.ALLOWANCE_BYTES["session"]
 MIB = 1 << 20
+
+
+def first_start(work):
+    """What a person's first session holds while it starts in a pool of the work `work`: a session's allowance and
+    the VM's own, which follows its guest's size, the pool's work."""
+    return SESSION_ALLOWANCE + imagesuite.machine_bytes(work)
+
+
 # The pool's work of a stack that gives the wall: two first starts at once fit it.
 WORK = 2048 * MIB
-# The pool's work that holds one VM's first start and not a second beside a running VM.
-TIGHT_WORK = FIRST_START + 16 * MIB
+FIRST_START = first_start(WORK)
+# The pool's work that holds one VM's first start and not a second beside a running VM: the least whole MiB that
+# holds a first start in it and 16 MiB more.
+TIGHT_WORK = next(w for w in range(first_start(0), WORK, MIB) if w >= first_start(w) + 16 * MIB)
 # How far apart the keeper's charge of a VM and the suite's own reading of its group may be: the two are read at
 # different instants of a guest that is idle but not still.
 CHARGE_SLACK = 16 * MIB
@@ -772,7 +780,7 @@ def ledger_one_vm(image):
         held = [used for t, used in running if t < boot + 9]
         expect(held and min(held) >= FIRST_START,
                f"from the VMM's start on, while its allowance's time runs, used holds at least "
-               f"{SESSION_ALLOWANCE // MIB} + {MACHINE_BYTES // MIB} MiB",
+               f"{SESSION_ALLOWANCE // MIB} + {imagesuite.machine_bytes(WORK) // MIB} MiB",
                {"samples": [u // MIB for u in held], "least": FIRST_START // MIB})
         print(f"used before the first boot {before['used'] // MIB} MiB; during the start at least "
               f"{min(held) // MIB} MiB over {len(held)} readings; as the open answered {opened['used'] // MIB} MiB",
@@ -832,7 +840,7 @@ def ledger_pressure(image):
         started = time.monotonic()
         status, answer = c.open(second, "probe", key="b", home_id=row_of(second), timeout=90)
         waited = time.monotonic() - started
-        expect(status == 409 and answer.get("error") == "capacity" and answer["held"]["need"] == FIRST_START
+        expect(status == 409 and answer.get("error") == "capacity" and answer["held"]["need"] == first_start(TIGHT_WORK)
                and answer["held"]["mine"] == [] and answer["held"]["others_bytes"] > 0,
                "with the first person's session live, the second person's start is refused capacity, needing a "
                "session's allowance and a VM's", [status, answer])

@@ -20,7 +20,8 @@ import (
 // it keeps homes, its kept role runs, it was given KVM (vm.KVM, a device
 // whose group is not root's, as every VMM holds it) and the image carries
 // the guest (vm.Firecracker, vm.Kernel), and a first session in a VM fits
-// rest beside the floor: a session's allowance and the VM's own. It decides
+// rest beside the floor: a session's allowance and the VM's own, which
+// follows the guest's size, rest (machineGuest). It decides
 // once, at its start, from its own W and F; elsewhere the same spaces run
 // on the shared kernel, as they do without KVM.
 
@@ -47,7 +48,7 @@ func (s *server) wallOf() (bool, string) {
 			return false, "the image carries no guest (" + f + ")"
 		}
 	}
-	if need := admission.Allowance(admission.Session) + admission.MachineBytes; s.rest < need {
+	if need := admission.Allowance(admission.Session) + admission.MachineBytes(s.machineGuest()); s.rest < need {
 		return false, "a first session in a VM, " + describeBytes(need) + ", does not fit the work pool's " + describeBytes(s.rest) + " beside the floor"
 	}
 	return true, ""

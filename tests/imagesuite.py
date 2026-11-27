@@ -63,8 +63,9 @@ SECCOMP_PROFILES = {
 # The pool's fixed numbers (Prima.LocusPool), from their vector file: each
 # place's kind and its class, a build's memory bound, a runner's and a
 # session's least bound, how many fresh runners the warm floor keeps, each
-# class's allowance, a person's VM's own allowance, which the start that
-# boots it holds beside its session's, and how long a start waits for room
+# class's allowance, a person's VM's own allowance, which follows its guest's
+# size and which the start that boots it holds beside its session's
+# (machine_bytes), and how long a start waits for room
 # before it is refused. The keeper sets every spawn's bound by its kind, and
 # no client names one.
 with open(os.path.join(_ROOT, "tests", "fixtures", "locus_pool.json")) as _pool:
@@ -74,7 +75,7 @@ BUILD_CAP_BYTES = _POOL["cap_bytes"]["build"]
 LEAST_CAP_BYTES = _POOL["least_cap_bytes"]
 FLOOR_RUNNERS = _POOL["floor_runners"]
 ALLOWANCE_BYTES = _POOL["allowance_bytes"]
-MACHINE_BYTES = _POOL["machine_bytes"]
+_MACHINE = _POOL["machine_bytes"]
 ROOM_WAIT_MS = _POOL["room_wait_ms"]
 ALLOWANCE_MS = _POOL["allowance_ms"]
 
@@ -83,6 +84,12 @@ ALLOWANCE_MS = _POOL["allowance_ms"]
 # are signed in, and each place's kind by the role whose places they are.
 POOL_WIRE = _POOL["wire"]
 ROLE_KINDS = {"runtime": {"warm", "run"}, "builds": {"build"}, "backends": {"program", "terminal"}}
+
+
+def machine_bytes(guest):
+    """A person's VM's own allowance for a guest of `guest` bytes, as Prima.LocusPool.machine_bytes/1 makes it: its
+    base, and its share a GiB of the guest by the guest's whole MiB."""
+    return _MACHINE["base"] + _MACHINE["per_gib"] // 1024 * (guest // (1 << 20))
 
 
 def pool_key(service, given):

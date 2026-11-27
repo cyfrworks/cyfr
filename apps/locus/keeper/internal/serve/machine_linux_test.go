@@ -82,11 +82,12 @@ func TestAPersonsSessionsRunInTheirOwnVM(t *testing.T) {
 		t.Fatalf("the guests read %v, want %v", made, want)
 	}
 	// The host charges each VM once: both of person a's sessions, starting,
-	// within one VM's charge, its own allowance beside the first's.
+	// within one VM's charge, its own allowance, which follows its guest's
+	// size, the keeper's rest, beside the first's.
 	k.s.mu.Lock()
 	used := k.s.ledger.Report("backends", 0, now()).Used
 	k.s.mu.Unlock()
-	if want := 2*(2*384+326)<<20 - 384<<20; used != uint64(want) {
+	if want := 2*(2*384<<20+admission.MachineBytes(k.s.machineGuest())) - 384<<20; used != want {
 		t.Fatalf("the pool holds %d, want two VMs' charges %d", used, want)
 	}
 }
@@ -571,7 +572,12 @@ func TestTheWallIsGivenOnlyWhereAFirstSessionInAVMFits(t *testing.T) {
 	// /dev/full is a character device whose group is root's, as no VMM may
 	// hold; a test host without a usable /dev/kvm stands it in for none.
 	guestFiles = files
-	fits := admission.Allowance(admission.Session) + admission.MachineBytes
+	// The least rest, by whole MiB, that holds a first session and its VM's
+	// own allowance, which follows the guest's size, that same rest.
+	fits := admission.Allowance(admission.Session) + admission.MachineBaseBytes
+	for fits < admission.Allowance(admission.Session)+admission.MachineBytes(fits) {
+		fits += 1 << 20
+	}
 	base := func() *server {
 		s := &server{cfg: Config{Kept: &home.Kept{Root: dev}}, rest: fits}
 		s.roles = []*role{{spec: RoleSpec{Name: "backends", Kept: true}}}
@@ -589,7 +595,7 @@ func TestTheWallIsGivenOnlyWhereAFirstSessionInAVMFits(t *testing.T) {
 		t.Fatalf("a keeper with everything a VM needs gave no wall: %s", why)
 	}
 	s := base()
-	s.rest = fits - 1
+	s.rest = fits - 1<<20
 	if wall, why := s.wallOf(); wall || !strings.Contains(why, "does not fit") {
 		t.Fatalf("a first session that does not fit gave the wall %t (%s)", wall, why)
 	}

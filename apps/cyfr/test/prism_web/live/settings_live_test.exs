@@ -1255,13 +1255,15 @@ defmodule PrismWeb.SettingsLiveTest do
       end
 
       # A first session boots the VM: its start holds its allowance and
-      # the VM's own, 384 and 326 MiB, and its guest reads it at 90 MiB.
+      # the VM's own, 384 MiB and the own of a guest of the work, 4,800 MiB
+      # (393 MiB, whole), and its guest reads it at 90 MiB.
+      first = 384 + div(Prima.LocusPool.machine_bytes(4_800 * @mib), @mib)
       record!([used(1, o, subject: "srv_a", mib: 90)], names)
-      charged.(384 + 326)
+      charged.(first)
       {view, _html} = build_conn() |> log_in_user(ops) |> mount_athanor("/settings")
 
       assert use_line.(view) ==
-               "In use: 710.0 MB of 4.7 GB, of which the work listed below uses 90.0 MB now."
+               "In use: #{first}.0 MB of 4.7 GB, of which the work listed below uses 90.0 MB now."
 
       assert cells(view, ~s(#memory-use [data-test="memory-machine"] table)) == [
                ["@#{ops_name(o)}", "program", "claude", "90.0 MB"]

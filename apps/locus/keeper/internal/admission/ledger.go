@@ -34,6 +34,9 @@ type Entry struct {
 	// vm says the place is a person's VM's own (NewMachine): the keeper's,
 	// of no kind, counted in no counter, admitted with its first session.
 	vm bool
+	// own is, for a VM's place, its own allowance (MachineBytes of its
+	// guest's size), which its first session's start holds beside its own.
+	own uint64
 	// base is, for a session in a VM, the VM's reading at the session's
 	// admission: while its allowance's time runs, the VM is charged at
 	// least that and the allowances of its sessions still starting.
@@ -68,11 +71,12 @@ func (e *Entry) Admitted() bool { return e.admitted }
 // it is placed. It is no role's kind and is in no counter: the host is
 // charged once for the VM, by its reading, and its sessions' readings are
 // subjects under it, never added to it. It is admitted with the first of
-// its sessions that is, its own allowance, MachineBytes, beside that
-// session's, charged from then until AllowanceFor after its Spawned, the
-// VMM's start; Drop takes it out at the VM's release.
-func NewMachine(role, athanor string, ref any) *Entry {
-	return &Entry{Role: role, Athanor: athanor, Ref: ref, vm: true}
+// its sessions that is, its own allowance, MachineBytes of guest, its
+// guest's memory, beside that session's, charged from then until
+// AllowanceFor after its Spawned, the VMM's start; Drop takes it out at the
+// VM's release.
+func NewMachine(role, athanor string, guest uint64, ref any) *Entry {
+	return &Entry{Role: role, Athanor: athanor, Ref: ref, vm: true, own: MachineBytes(guest)}
 }
 
 // IsMachine says the place is a person's VM's own.
@@ -86,7 +90,7 @@ func (e *Entry) class() Class { return Kinds[e.Kind] }
 func (e *Entry) startNeed() uint64 {
 	need := Allowance(e.class())
 	if e.Machine != nil && !e.Machine.admitted {
-		need += MachineBytes
+		need += e.Machine.own
 	}
 	return need
 }
@@ -188,7 +192,7 @@ func (l *Ledger) charge(e *Entry, now time.Time) uint64 {
 }
 
 // machineCharge is a VM's charge at now: the larger of its reading and
-// what its starts hold, its own MachineBytes from its admission until
+// what its starts hold, its own allowance from its admission until
 // AllowanceFor after its VMM's start, and, while any of its sessions'
 // allowances' time runs, the VM's reading at the earliest such session's
 // admission with the allowances of every one of them; a reading that is
@@ -196,7 +200,7 @@ func (l *Ledger) charge(e *Entry, now time.Time) uint64 {
 func (l *Ledger) machineCharge(m *Entry, now time.Time) uint64 {
 	var held uint64
 	if m.spawnedAt.IsZero() || now.Before(m.spawnedAt.Add(AllowanceFor)) {
-		held = MachineBytes
+		held = m.own
 	}
 	var earliest *Entry
 	for _, e := range l.admitted {

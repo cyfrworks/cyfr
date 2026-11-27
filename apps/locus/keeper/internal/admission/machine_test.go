@@ -9,6 +9,9 @@ import (
 )
 
 // inVM is a session of athanor's placed in its VM m.
+// testGuest is the tests' VMs' memory, whose own allowance is 330 MiB.
+const testGuest = 1536 * mib
+
 func inVM(m *Entry, subject string) *Entry {
 	e := session(m.Athanor, subject)
 	e.Machine = m
@@ -24,7 +27,7 @@ func used(l *Ledger, s float64) uint64 { return l.used(l.inFloor(), at(s)) }
 func TestAFirstSessionInAVMReservesItsAllowanceAndTheVMsOwn(t *testing.T) {
 	work := uint64(4096 * mib)
 	l := New(work, false)
-	m := NewMachine("backends", "ath_a", nil)
+	m := NewMachine("backends", "ath_a", testGuest, nil)
 	a := inVM(m, "p1")
 	if ev := l.Place(a, at(0)); !slices.Equal(ev.Admitted, []*Entry{a}) {
 		t.Fatalf("admitted %v, want the session alone: a VM is never answered placed", ev.Admitted)
@@ -32,7 +35,7 @@ func TestAFirstSessionInAVMReservesItsAllowanceAndTheVMsOwn(t *testing.T) {
 	if !m.Admitted() {
 		t.Fatal("the VM was not admitted with its first session")
 	}
-	if got, want := used(l, 0), uint64((384+326)*mib); got != want {
+	if got, want := used(l, 0), 384*mib+MachineBytes(testGuest); got != want {
 		t.Fatalf("a booting VM's first start holds %d, want %d", got, want)
 	}
 	// The VMM starts at 1 s and reads 200 MiB; the session spawns at 2 s
@@ -42,7 +45,7 @@ func TestAFirstSessionInAVMReservesItsAllowanceAndTheVMsOwn(t *testing.T) {
 	l.Read(m, 200*mib, false, at(1))
 	l.Spawned(a, at(2))
 	l.Read(a, 90*mib, false, at(2))
-	if got, want := used(l, 5), uint64((384+326)*mib); got != want {
+	if got, want := used(l, 5), 384*mib+MachineBytes(testGuest); got != want {
 		t.Fatalf("during both allowances' time the VM holds %d, want %d", got, want)
 	}
 	// Past the VM's own allowance (11 s) only the session's is held.
@@ -78,7 +81,7 @@ func TestAFirstSessionInAVMReservesItsAllowanceAndTheVMsOwn(t *testing.T) {
 // at its admission and its allowance, never the VM's own again.
 func TestASecondSessionJoinsItsVMsCharge(t *testing.T) {
 	l := New(4096*mib, false)
-	m := NewMachine("backends", "ath_a", nil)
+	m := NewMachine("backends", "ath_a", testGuest, nil)
 	a := inVM(m, "p1")
 	spawned(t, l, a, 0, 80*mib)
 	l.Spawned(m, at(0))
@@ -102,7 +105,7 @@ func TestASecondSessionJoinsItsVMsCharge(t *testing.T) {
 // ceiling is refused a start in their VM as they would be on the host.
 func TestAPersonAtTheirCeilingIsRefusedAStartInTheirVM(t *testing.T) {
 	l := New(8192*mib, false)
-	m := NewMachine("backends", "ath_a", nil)
+	m := NewMachine("backends", "ath_a", testGuest, nil)
 	a := inVM(m, "p1")
 	a.AthanorMax = 1200 * mib
 	spawned(t, l, a, 0, 100*mib)
@@ -135,7 +138,7 @@ func TestAPersonAtTheirCeilingIsRefusedAStartInTheirVM(t *testing.T) {
 // refused; a VM that holds a session, or one a waiting start needs, is not.
 func TestAnIdleVMGivesWayToAStartAtAFullPool(t *testing.T) {
 	l := New(2048*mib, false)
-	m := NewMachine("backends", "ath_a", "vm-a")
+	m := NewMachine("backends", "ath_a", testGuest, "vm-a")
 	a := inVM(m, "p1")
 	spawned(t, l, a, 0, 100*mib)
 	l.Spawned(m, at(0))
@@ -175,7 +178,7 @@ func TestAnIdleVMGivesWayToAStartAtAFullPool(t *testing.T) {
 // person's holdings together are the VM's charge, none of it another's.
 func TestARefusalCountsAPersonsVMAsTheirsThroughTheirSessions(t *testing.T) {
 	l := New(2048*mib, false)
-	m := NewMachine("backends", "ath_a", nil)
+	m := NewMachine("backends", "ath_a", testGuest, nil)
 	a, b := inVM(m, "p1"), inVM(m, "p2")
 	spawned(t, l, a, 0, 100*mib)
 	spawned(t, l, b, 0, 50*mib)
@@ -204,7 +207,7 @@ func TestARefusalCountsAPersonsVMAsTheirsThroughTheirSessions(t *testing.T) {
 // charged by itself from then on, and leaves the VM at rest.
 func TestADetachedSessionIsChargedByItself(t *testing.T) {
 	l := New(4096*mib, false)
-	m := NewMachine("backends", "ath_a", nil)
+	m := NewMachine("backends", "ath_a", testGuest, nil)
 	a := inVM(m, "p1")
 	admitted(t, l.Place(a, at(0)), a)
 	l.Detach(a, at(1))
@@ -222,14 +225,14 @@ func TestADetachedSessionIsChargedByItself(t *testing.T) {
 // already admitted needs its allowance alone.
 func TestABootingStartNeedsTheVMsOwnRoomBesideItsAllowance(t *testing.T) {
 	small := New(600*mib, false)
-	if ev := small.Place(inVM(NewMachine("backends", "ath_a", nil), "p1"), at(0)); len(ev.Refused) != 1 {
+	if ev := small.Place(inVM(NewMachine("backends", "ath_a", testGuest, nil), "p1"), at(0)); len(ev.Refused) != 1 {
 		t.Fatalf("a booting start no pool of 600 MiB holds was not refused at once: %+v", ev)
 	}
 	l := New(1100*mib, false)
 	held := session("ath_b", "q1")
 	spawned(t, l, held, 0, 500*mib)
 	l.Read(held, 500*mib, false, at(20))
-	m := NewMachine("backends", "ath_a", nil)
+	m := NewMachine("backends", "ath_a", testGuest, nil)
 	boot := inVM(m, "p1")
 	if ev := l.Place(boot, at(20)); len(ev.Admitted) != 0 {
 		t.Fatalf("a booting start was admitted with %d free beside its %d: %+v", free(l, 20), boot.startNeed(), ev)
@@ -238,12 +241,15 @@ func TestABootingStartNeedsTheVMsOwnRoomBesideItsAllowance(t *testing.T) {
 	l.Drop(held, at(21))
 	first := inVM(m, "p1")
 	admitted(t, l.Place(first, at(22)), first)
-	// 390 MiB are left: a session joining the admitted VM fits, another
+	// 386 MiB are left: a session joining the admitted VM fits, another
 	// person's booting start does not.
 	join := inVM(m, "p2")
 	admitted(t, l.Place(join, at(22)), join)
-	other := inVM(NewMachine("backends", "ath_c", nil), "r1")
+	other := inVM(NewMachine("backends", "ath_c", testGuest, nil), "r1")
 	if ev := l.Place(other, at(22)); len(ev.Admitted) != 0 {
 		t.Fatalf("another person's booting start was admitted: %+v", ev)
+	} // The VM's own allowance follows its guest's size.
+	if got, want := inVM(NewMachine("backends", "ath_d", 8192*mib, nil), "s1").startNeed(), uint64((384+460)*mib); got != want {
+		t.Fatalf("a booting start of an 8 GiB guest needs %d, want %d", got, want)
 	}
 }
