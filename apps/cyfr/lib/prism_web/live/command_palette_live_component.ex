@@ -390,9 +390,15 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
   defp filter_items(items, ""), do: items
   defp filter_items(items, nil), do: items
 
+  # What is typed matched; a row whose shown name holds it comes before one
+  # found only by its other words (an app's description), so the first
+  # result, the one Enter opens, is the one the person named.
   defp filter_items(items, query) do
     needle = String.downcase(query)
-    Enum.filter(items, fn item -> String.contains?(item.keywords, needle) end)
+
+    items
+    |> Enum.filter(fn item -> String.contains?(item.keywords, needle) end)
+    |> Enum.sort_by(fn item -> not String.contains?(String.downcase(item.label), needle) end)
   end
 
   # See `ExecutionsLive.short/1`: one truncation, in one unit.

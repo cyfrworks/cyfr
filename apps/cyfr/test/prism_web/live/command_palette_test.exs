@@ -120,8 +120,9 @@ defmodule PrismWeb.CommandPaletteTest do
   end
 
   # An app is listed by its name, the name its desktop tile shows, while
-  # its description still finds it; Enter opens the first result for what
-  # the field holds, and with none opens nothing.
+  # its description still finds it, after the rows whose name holds what is
+  # typed; Enter opens the first result for what the field holds, and with
+  # none opens nothing.
   test "an app is listed by its name, found by its description, and Enter opens the first result",
        %{conn: conn} do
     user = test_user()
@@ -139,6 +140,17 @@ defmodule PrismWeb.CommandPaletteTest do
         "tincture" => %{"entry" => "index.html"}
       },
       files: [{"index.html", "<!doctype html><title>palette-bird</title>"}]
+    )
+
+    Arca.Test.UnitFixtures.tenant_component!(ctx, "tincture", "local", "pipes-game", "1.0.0",
+      manifest: %{
+        "name" => "pipes-game",
+        "type" => "tincture",
+        "version" => "1.0.0",
+        "publisher" => "local",
+        "tincture" => %{"entry" => "index.html"}
+      },
+      files: [{"index.html", "<!doctype html><title>pipes-game</title>"}]
     )
 
     Prism.TinctureRegistry.reload_athanor(athanor.id)
@@ -162,6 +174,14 @@ defmodule PrismWeb.CommandPaletteTest do
 
     assert {:error, {:live_redirect, %{to: to}}} =
              view |> element("#command-palette form") |> render_submit(%{"value" => "pipes"})
+
+    assert to == athanor_path("/?publisher=local&tincture_name=pipes-game", athanor)
+
+    {view, _html} = mount_athanor(conn, "/settings")
+    view |> with_target("#command-palette") |> render_click("toggle", %{})
+
+    assert {:error, {:live_redirect, %{to: to}}} =
+             view |> element("#command-palette form") |> render_submit(%{"value" => "flying"})
 
     assert to == athanor_path("/?publisher=local&tincture_name=palette-bird", athanor)
   end
