@@ -13,7 +13,7 @@ defmodule Sanctum.Gate.ErrorRenderersTest do
   alias Prima.Refusal
 
   # Seven refusals a guest meets in a turn. Each has one sentence, and the
-  # runner's vocabulary, the in-chain guest view and the console render the
+  # guest's vocabulary (`Prima.GuestError`) and the console render the
   # same one, so a send that meets a full turn queue reads the same words
   # to a guest as to a person at the page, never the atom's name.
   @named_by_the_atom [
@@ -74,7 +74,7 @@ defmodule Sanctum.Gate.ErrorRenderersTest do
         assert PrismWeb.Ops.error_message(reason) == expected,
                "the console disagrees about #{inspect(reason)}"
 
-        assert Locus.Runtime.FormulaHandler.render_reason(reason) == expected,
+        assert Prima.GuestError.render(reason) == expected,
                "the guest view disagrees about #{inspect(reason)}"
       end
     end
@@ -100,7 +100,7 @@ defmodule Sanctum.Gate.ErrorRenderersTest do
         assert PrismWeb.Ops.error_message(reason) == expected,
                "the console disagrees about #{inspect(reason)}"
 
-        assert Locus.Runtime.FormulaHandler.render_reason(reason) == expected,
+        assert Prima.GuestError.render(reason) == expected,
                "the guest view disagrees about #{inspect(reason)}"
       end
     end
@@ -127,10 +127,7 @@ defmodule Sanctum.Gate.ErrorRenderersTest do
                "#{inspect(reason)} renders as its own name"
 
         assert Prima.GuestError.render(reason) == expected,
-               "the runner's vocabulary disagrees about #{inspect(reason)}"
-
-        assert Locus.Runtime.FormulaHandler.render_reason(reason) == expected,
-               "the in-chain guest view disagrees about #{inspect(reason)}"
+               "the guest's vocabulary disagrees about #{inspect(reason)}"
 
         assert PrismWeb.Ops.error_message(reason) == expected,
                "the console disagrees about #{inspect(reason)}"
@@ -138,39 +135,30 @@ defmodule Sanctum.Gate.ErrorRenderersTest do
     end
 
     test "an atom outside the vocabulary is internal, and is not spelled out" do
-      # The runner's renderer answers every atom it does not know this way.
-      assert Locus.Runtime.FormulaHandler.render_reason(:some_internal_state) ==
-               "The call failed."
-
       assert Prima.GuestError.render(:some_internal_state) == nil
     end
   end
 
   describe "the guest never sees an internal term" do
-    test "an unknown reason renders as a generic sentence, not inspect output" do
-      rendered =
-        Locus.Runtime.FormulaHandler.render_reason({:some_internal, %{"secret" => "leak"}})
-
-      refute rendered =~ "secret"
-      refute rendered =~ "leak"
-      refute rendered =~ "%{"
+    test "an unknown reason is internal, and is not spelled out" do
+      assert Prima.GuestError.render({:some_internal, %{"secret" => "leak"}}) == nil
     end
 
     test "a crafted binary still passes through" do
-      assert Locus.Runtime.FormulaHandler.render_reason("No provider found for scheme ftp") ==
+      assert Prima.GuestError.render("No provider found for scheme ftp") ==
                "No provider found for scheme ftp"
     end
 
     test "the other typed vocabularies render through their own module" do
-      assert Locus.Runtime.FormulaHandler.render_reason({:not_found, "component", "x"}) ==
+      assert Prima.GuestError.render({:not_found, "component", "x"}) ==
                Refusal.message({:not_found, "component", "x"})
 
-      # The runtime renders from contract data alone (`Prima.GuestError`): a Sanctum
-      # refusal reaches a guest only once CYFR has rendered it into the wire
-      # answer, so the bare term is internal to the engine and generalized.
+      # The guest's vocabulary is contract data alone (`Prima.GuestError`): a
+      # Sanctum refusal reaches a guest only once CYFR has rendered it into
+      # the wire answer, so the bare term is internal and not rendered.
       unauthorized = {:missing_permission, :vault_read}
       assert Sanctum.Unauthorized.reason?(unauthorized)
-      assert Locus.Runtime.FormulaHandler.render_reason(unauthorized) == "The call failed."
+      assert Prima.GuestError.render(unauthorized) == nil
     end
   end
 

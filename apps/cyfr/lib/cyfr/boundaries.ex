@@ -3207,9 +3207,6 @@ defmodule Cyfr.Boundaries do
     "apps/cyfr/test/opus/start_refusal_test.exs" =>
       "the refusal a keeper gives is `Locus.Runtime.Keeper.Channel.refusal/1`'s shape, and this " <>
         "case holds CYFR's rendering of it to that shape.",
-    "apps/cyfr/test/sanctum/gate/error_renderers_test.exs" =>
-      "the in-chain guest's renderer is the runtime's, and the one-vocabulary case is " <>
-        "that the three renderers agree sentence for sentence.",
     "apps/cyfr/test/cyfr/wit_abi_drift_test.exs" =>
       "names `Locus.Runtime.Engine` in the sentence its failure prints, so a reader is told " <>
         "which side of the ABI to look at."
