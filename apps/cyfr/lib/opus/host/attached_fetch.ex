@@ -928,12 +928,23 @@ defmodule Opus.Host.AttachedFetch do
   end
 
   # The request's process is stopped, which closes its connection, and
-  # nothing it sent is left behind.
+  # nothing it sent is left behind. A kill takes effect only when the
+  # killed process next yields, so a send of its own can land after a
+  # drain that does not wait: the drain waits for the `:DOWN`, which comes
+  # after everything the process sent. The monitor is a fresh one, since
+  # a stop can come after the original `:DOWN` was taken, or a second
+  # time. The wait lasts until the VM has ended the process, which a
+  # native call under way can delay; nothing here bounds it.
   defp stop(upstream) do
     Process.demonitor(upstream.monitor, [:flush])
+    ended = Process.monitor(upstream.pid)
     Process.exit(upstream.pid, :kill)
+
+    receive do
+      {:DOWN, ^ended, :process, _pid, _reason} -> :ok
+    end
+
     drain(upstream.tag)
-    :ok
   end
 
   defp drain(tag) do
