@@ -792,6 +792,39 @@ func channelServer(t *testing.T, kept *home.Kept) (*server, *client, *protocol.L
 	return s, c, protocol.NewLineReader(theirs)
 }
 
+// A disk that holds its most homes refuses another as capacity, writing no
+// record past what a keeper's boot reads, and still answers a make of a home
+// it holds. None needs root.
+func TestADiskAtItsMostHomesRefusesAnother(t *testing.T) {
+	me := os.Getuid()
+	kept := &home.Kept{Root: t.TempDir(), First: me, Last: me}
+	if err := os.Mkdir(filepath.Join(kept.Root, home.DisksDir), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	s, c, replies := channelServer(t, kept)
+	full := home.Disk{Athanor: "ath_full", Form: home.FormDirectory, UID: me, Homes: []string{}}
+	for i := 0; i < home.MaxDiskHomes; i++ {
+		full = full.With(fmt.Sprintf("vlt_%05d", i))
+	}
+	if err := s.putDisk(full); err != nil {
+		t.Fatal(err)
+	}
+	s.handle(c, &protocol.Request{V: protocol.Version, Type: protocol.TypeHomeMake, ID: "m", Home: "vlt_more", Athanor: "ath_full"})
+	line, _, err := replies.Next()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `{"v":9,"type":"error","id":"m","code":"capacity"}`; string(line) != want {
+		t.Fatalf("a make past the disk's most homes answered %s", line)
+	}
+	s.mu.Lock()
+	held := len(s.disks["ath_full"].Homes)
+	s.mu.Unlock()
+	if held != home.MaxDiskHomes {
+		t.Fatalf("the disk records %d homes", held)
+	}
+}
+
 // A home_list pages every home the disks' records hold in byte order,
 // whichever disk holds it; a folder under the root no record holds is no
 // home and is not listed. None needs root.

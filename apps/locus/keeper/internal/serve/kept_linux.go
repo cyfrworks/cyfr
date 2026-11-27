@@ -726,7 +726,9 @@ func (s *server) keepsNoHomes(c *client, req *protocol.Request) bool {
 // (drawKept), held as making until its record holds it. The record comes
 // first: it holds the home before the folder is made, so a keeper killed
 // between the two leaves a home its record lists and no folder, which the
-// next make makes, and never a folder no record knows. The make itself is
+// next make makes, and never a folder no record knows. A disk that holds
+// home.MaxDiskHomes refuses another as CodeCapacity, so no record is ever
+// written that a keeper's boot would refuse. The make itself is
 // the helper's, as the disk's uid, and makes the disk and its work folder
 // too where they are not yet made. A home another athanor's disk holds is
 // refused, and nothing changes.
@@ -764,6 +766,12 @@ func (s *server) makeHome(c *client, req *protocol.Request) {
 		}
 		defer s.unmakeKept(uid)
 		d = home.Disk{Athanor: req.Athanor, Form: home.FormDirectory, UID: uid, Homes: []string{}}
+	}
+	if recorded && !d.Holds(req.Home) && len(d.Homes) >= home.MaxDiskHomes {
+		unlockDisk()
+		s.log.Warn("home_make %s refused: the disk of kept home %s holds %d homes, its most", req.ID, req.Home, len(d.Homes))
+		s.send(c, protocol.NewError(req.ID, "", protocol.CodeCapacity))
+		return
 	}
 	if !recorded || !d.Holds(req.Home) {
 		if err := s.putDisk(d.With(req.Home)); err != nil {
