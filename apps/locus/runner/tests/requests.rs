@@ -628,7 +628,8 @@ fn a_guest_that_reads_part_of_a_stream_and_closes_it_completes_normally() {
         pinning("api.example.test"),
         Box::new(|_fetch, _job| {
             vec![
-                Upstream::Head(200, Vec::new(), b"data: one\n".to_vec()),
+                Upstream::Head(200, Vec::new(), Vec::new()),
+                Upstream::Chunk(b"data: one\n".to_vec()),
                 Upstream::Chunk(b"data: two\n".to_vec()),
             ]
         }),
@@ -652,8 +653,8 @@ fn a_guest_that_reads_part_of_a_stream_and_closes_it_completes_normally() {
             .any(|event| event["name"] == "http.request"
                 && event["metadata"]["status"] == json!(200))
     );
-    // The piece the guest read is granted as it read it, and the one it
-    // never read as the stream drains.
+    // The piece the guest read is granted as it read it, and the one that
+    // arrived with it and was never read as the stream drains.
     support::eventually(|| credit(&service) == 20);
 }
 

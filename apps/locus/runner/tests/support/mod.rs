@@ -570,6 +570,9 @@ pub fn relay_fetching(
         if frame["kind"] == "fetch" {
             let re = frame["seq"].as_u64().expect("a seq");
             let attempt = frame["attempt"].as_str().expect("an attempt").to_owned();
+            // One fetch's frames go in one write, so its runner reads them
+            // together.
+            let mut written = Vec::new();
             for upstream in fetches(&frame, &job) {
                 let mut sent = json!({"v": 1, "attempt": attempt, "seq": seq, "re": re});
                 let members = match upstream {
@@ -590,9 +593,13 @@ pub fn relay_fetching(
                     .expect("an object")
                     .extend(members.as_object().expect("an object").clone());
                 seq += 1;
-                if write_frame(&mut stream, &sent).is_err() {
-                    return;
-                }
+                let json = sent.to_string();
+                let length = u32::try_from(json.len()).expect("a frame under 4 GiB");
+                written.extend_from_slice(&length.to_be_bytes());
+                written.extend_from_slice(json.as_bytes());
+            }
+            if stream.write_all(&written).is_err() {
+                return;
             }
             continue;
         }
