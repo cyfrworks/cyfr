@@ -53,6 +53,11 @@ defmodule Cyfr.DocsDriftTest do
                   apps/cyfr/lib/cyfr/platform/settings/roster.ex
                   apps/locus/lib/locus/config.ex)
 
+  # Spelled in the keeper's Go and no variable: the egress guard's iptables
+  # chains (apps/locus/keeper/guard/rules.go).
+  @not_variables ~w(CYFR_GUARD CYFR_GUARD_REFUSE CYFR_GUARD_PRIVATE CYFR_GUARD_ROUTES
+                    CYFR_GUARD_REPLIES CYFR_GUARD_R CYFR_GUARD_P CYFR_GUARD_ROLES)
+
   # The names the roster spells that no release reads: those other
   # programs own (`Roster.foreign/0`), which their owners document, and
   # those compose reads alone (`Roster.compose_only/0`).
@@ -228,7 +233,7 @@ defmodule Cyfr.DocsDriftTest do
   end
 
   defp read_variables do
-    not_read = spelled_not_read()
+    not_read = MapSet.union(spelled_not_read(), MapSet.new(@not_variables))
 
     for file <- @env_readers ++ keeper_sources(),
         [name] <-
@@ -1329,7 +1334,13 @@ defmodule Cyfr.DocsDriftTest do
     "RUNTIME_BOOT_ID" => :worker_service,
     "RUNTIME_WATCHDOG_GRACE_MS" => :worker_service,
     "RUNTIME_CONTROL_FD" => :keeper,
-    "RUNTIME_RELAY_SOCKET" => :keeper
+    "RUNTIME_RELAY_SOCKET" => :keeper,
+    # Compose hands the egress guard cyfr's fixed address, core's host API
+    # and its control's socket (docker-compose.yml's locus-guard), as the
+    # guest's first process hands its own guard them.
+    "CYFR_GUARD_CONTROL_PLANE" => :compose,
+    "CYFR_GUARD_HOST_API" => :compose,
+    "CYFR_GUARD_CONTROL" => :compose
   }
 
   # Every quoted upper-case name the releases' readers spell: what a
@@ -1352,6 +1363,12 @@ defmodule Cyfr.DocsDriftTest do
   test "every variable the releases read is documented in exactly one home" do
     read = read_variables()
     homes = homes()
+
+    spelled = spelled_by_readers()
+
+    for name <- @not_variables do
+      assert name in spelled, "#{name} is on the not-a-variable roster, and nothing spells it"
+    end
 
     for {name, _starter} <- @set_by_the_starter do
       assert name in read, "#{name} is on the set-by-the-starter roster, and nothing reads it"
