@@ -1419,7 +1419,7 @@ defmodule Locus.Runtime.RunnerPoolTest do
     :ok = ScriptedKeeper.placing(keeper, :held)
     serve!(pool)
     {:ok, pid, id} = RunnerPool.take(pool, "ath_a", "exec_1")
-    wait_until(fn -> match?([^id | _], ScriptedKeeper.held_places(keeper)) end)
+    wait_until(fn -> id in ScriptedKeeper.held_places(keeper) end)
 
     capture_log(fn ->
       Process.exit(pid, :kill)
@@ -1438,7 +1438,7 @@ defmodule Locus.Runtime.RunnerPoolTest do
     :ok = ScriptedKeeper.placing(keeper, :held)
     serve!(pool)
     {:ok, pid, id} = RunnerPool.take(pool, "ath_a", "exec_1")
-    wait_until(fn -> match?([^id | _], ScriptedKeeper.held_places(keeper)) end)
+    wait_until(fn -> id in ScriptedKeeper.held_places(keeper) end)
 
     log =
       capture_log(fn ->
