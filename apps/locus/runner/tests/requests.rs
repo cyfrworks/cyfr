@@ -1522,3 +1522,190 @@ fn a_request_the_relays_frame_cannot_carry_is_refused_unsent() {
     assert!(service.frames_of("fetch").is_empty());
 }
 
+#[test]
+fn streams_closed_while_they_drain_keep_no_buffer() {
+    // Item 2: sixteen streams each given one byte and closed, each still
+    // the relay's until its end, against one whole fetch.
+    let mut service = Service::start();
+    let job = fetching(&json!({"method": "GET", "url": "https://api.example.test/x"}));
+    service.assign_fetching(
+        &job,
+        pinning("api.example.test"),
+        in_turn(vec![vec![
+            Upstream::Head(200, Vec::new(), b"x".to_vec()),
+            Upstream::End(None),
+        ]]),
+    );
+    let pid = service.pid();
+    let (alone, _) = peak_while(pid, || completed(&service, &job));
+    let mut service = Service::start();
+    let job = streaming(
+        "stream_flood",
+        &json!({"method": "GET", "url": "https://api.example.test/events"}),
+    );
+    service.assign_fetching(
+        &job,
+        pinning("api.example.test"),
+        Box::new(|_fetch, _job| vec![Upstream::Head(200, Vec::new(), b"x".to_vec())]),
+    );
+    let pid = service.pid();
+    let (flood, (output, _, _)) = peak_while(pid, || completed(&service, &job));
+    assert_eq!(output["error"]["type"], "stream_limit");
+    let after = support::resident_kib(pid);
+    eprintln!("draining: one fetch {alone} KiB; sixteen draining {flood} KiB, {after} KiB after");
+    assert!(
+        flood <= alone + 6 * 1024 && after <= alone + 6 * 1024,
+        "sixteen draining streams held {flood} KiB ({after} KiB after) against {alone} KiB"
+    );
+}
+
+#[test]
+fn an_attempt_waits_for_a_watchers_report_before_it_completes() {
+    // Item 3: the relay's refusal of the first stream arrives at once, and
+    // CYFR answers its report two seconds later, after the guest has
+    // returned: the attempt completes only once the report is answered.
+    let mut service = Service::start();
+    let job = streaming(
+        "stream_aside",
+        &json!({"method": "GET", "url": "https://api.example.test/events"}),
+    );
+    let mut pins = 0;
+    service.assign_fetching(
+        &job,
+        Box::new(move |call, job| match call.op.as_str() {
+            "egress_pin" => {
+                pins += 1;
+                pin(&format!("pin_{pins}"), "https", "api.example.test")
+            }
+            "record_denial" => Reply::Later(Duration::from_secs(2), json!(true)),
+            _ => standard(call, job),
+        }),
+        in_turn(vec![
+            vec![Upstream::End(Some("method_blocked"))],
+            vec![
+                Upstream::Head(200, Vec::new(), b"b".to_vec()),
+                Upstream::End(None),
+            ],
+        ]),
+    );
+    let _ = completed(&service, &job);
+    let ops = service.ops();
+    let answered = ops.iter().position(|op| op == "answered:record_denial");
+    let complete = ops.iter().position(|op| op == "complete");
+    assert!(
+        answered.is_some() && answered < complete,
+        "the attempt completed before its report was answered: {ops:?}"
+    );
+}
+
+#[test]
+fn a_streams_valid_text_is_read_before_the_invalid_byte_after_it() {
+    // Item 6: a whole event and an invalid byte arrive together.
+    let mut service = Service::start();
+    let job = streaming(
+        "stream_once",
+        &json!({"method": "GET", "url": "https://api.example.test/e"}),
+    );
+    let mut data = b"data: ready\n\n".to_vec();
+    data.push(0xff);
+    service.assign_fetching(
+        &job,
+        pinning("api.example.test"),
+        in_turn(vec![vec![
+            Upstream::Head(200, Vec::new(), Vec::new()),
+            Upstream::Chunk(data),
+        ]]),
+    );
+    let (output, _, _) = completed(&service, &job);
+    assert_eq!(
+        output,
+        json!({"data": "data: ready\n\n", "done": false, "status": 200})
+    );
+}
+
+#[test]
+fn an_answer_is_written_into_a_reservation_counted_to_the_byte() {
+    // Item 8: control characters, which escape to six bytes each, quotes,
+    // text outside ASCII, Latin-1, and repeated headers.
+    use cyfr_runner::imports::http::response;
+    use std::time::Instant;
+    let headers = vec![
+        ("x-a".to_owned(), "1\u{1}\"".to_owned()),
+        ("x-a".to_owned(), "two".to_owned()),
+        ("x-b".to_owned(), "\u{e9}t\u{e9}".to_owned()),
+    ];
+    let mut text = vec![0x01u8; 1024];
+    text.extend_from_slice("\"\\\n\u{e9}".as_bytes());
+    for (body, base64) in [
+        (text.clone(), false),
+        (vec![0xe9u8, 0x01, b'"'], false),
+        (text.clone(), true),
+        (Vec::new(), false),
+    ] {
+        let answer = response(200, &headers, &body, base64);
+        assert_eq!(answer.capacity(), answer.len(), "{body:?}");
+        let read: Value = serde_json::from_str(&answer).expect("an answer");
+        assert_eq!(
+            read["headers"],
+            json!({"x-a": "two", "x-b": "\u{e9}t\u{e9}"})
+        );
+        assert_eq!(read["status"], json!(200));
+    }
+    // The largest answer of control characters the ceiling allows, 50 MiB
+    // escaped to 300 MiB, timed.
+    let body = vec![0x01u8; 50 * 1024 * 1024];
+    let started = Instant::now();
+    let answer = response(200, &[], &body, false);
+    let ms = started.elapsed().as_millis();
+    eprintln!(
+        "an answer of 50 MiB of control characters: {} bytes in {ms} ms",
+        answer.len()
+    );
+    assert_eq!(answer.capacity(), answer.len());
+    // Six bytes written for each: the test build is unoptimized, and the
+    // release binary several times faster (the body gives both).
+    assert!(ms < 10_000, "{ms} ms");
+}
+
+#[tokio::test]
+async fn a_host_call_is_signed_only_once_it_has_its_place() {
+    // Item 9: the header's time is the place's, not the call's start.
+    use cyfr_runner::host::{self, Op, Place, Post, Reached};
+    struct Slow {
+        placed_at: u64,
+        signed_at: Option<u64>,
+    }
+    impl Post for Slow {
+        async fn place(&mut self) -> Option<Place> {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            self.placed_at = support::now_ms();
+            Some(Place::free())
+        }
+
+        async fn post(
+            &mut self,
+            _op: Op,
+            header: String,
+            _body: Vec<u8>,
+            _place: Place,
+        ) -> Option<Reached> {
+            self.signed_at = Some(support::call_fields(&header).ts);
+            None
+        }
+    }
+    let job = Job::new("catalyst", &format!("{HOSTILE}/vault_probe.wasm"), "{}");
+    let caller = support::caller(&job);
+    let mut post = Slow {
+        placed_at: 0,
+        signed_at: None,
+    };
+    let started = support::now_ms();
+    let op = Op::named("release_child").expect("a callback");
+    let _ = host::call(&mut post, &caller, op, &serde_json::Map::new()).await;
+    let signed = post.signed_at.expect("posted");
+    assert!(
+        signed >= post.placed_at && signed >= started + 300,
+        "signed {signed}, placed {}",
+        post.placed_at
+    );
+}

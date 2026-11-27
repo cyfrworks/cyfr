@@ -884,12 +884,14 @@ fn the_runner_adopts_descriptor_3_as_its_control_channel() {
 #[test]
 fn nothing_of_the_token_or_the_keys_is_left_in_the_runners_memory_after_its_close() {
     let mut service = Service::start_on(support::Control::Descriptor3, &[]);
-    // The input carries what a guest might fetch with.
+    // The input carries what a guest might fetch with, past the first 16
+    // bytes of the text it is written to, which an allocator overwrites
+    // once that text is freed.
     let input = "INPUTNEEDLEsk-live-0123456789abcdef";
     let job = Job::new(
         "catalyst",
         &format!("{HOSTILE}/vault_probe.wasm"),
-        &json!({"note": input}).to_string(),
+        &json!({"a_padding": "0123456789abcdef0123456789abcdef", "note": input}).to_string(),
     );
     let token = job.token();
     let sent = Message::Assign {
