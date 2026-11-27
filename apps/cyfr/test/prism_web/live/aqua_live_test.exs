@@ -1975,6 +1975,29 @@ defmodule PrismWeb.AquaLiveTest do
       Cyfr.Test.Sandbox.end_views()
     end
 
+    # Access as a choice shown only for two or more is a harness's: a key
+    # that declares an option of that name has it shown on the closed card
+    # as any other option it declares.
+    test "a key's own option named access shows on the closed card", %{conn: conn, ctx: ctx} do
+      described_open!(ctx, %{
+        "open-1" => [%{"name" => "access", "kind" => "enum", "values" => ["local-only", "wide"]}]
+      })
+
+      {:ok, _} =
+        Cyfr.Test.AquaTool.call(ctx, %{
+          "action" => "create",
+          "name" => "mine",
+          "catalyst_ref" => "catalyst:local.open",
+          "model" => "open-1",
+          "options" => %{"access" => "local-only"}
+        })
+
+      {view, _html} = mount_athanor(conn, "/aqua?setup=1")
+      settled(fn -> has_element?(view, "#aqua-card-mine-runs") end, "the closed card")
+      assert texts(view, "#aqua-card-mine-runs dd") == ["open", "open-1", "local-only"]
+      Cyfr.Test.Sandbox.end_views()
+    end
+
     # As a browser drives the form: each field's change is sent with the
     # form as it stands, and Make sends the form with nothing added. What
     # the form holds survives each render (a field the page did not show
@@ -2974,8 +2997,8 @@ defmodule PrismWeb.AquaLiveTest do
         assert texts(view, "#aqua-card-Kept-runs dd") ==
                  if(shown?, do: [title, "Opus", "Default mode"], else: [title, "Opus"])
 
-        # The editor offers it alike, and a write of another option keeps
-        # the access stored.
+        # The editor offers it alike and saves the one picked, and a write
+        # of another option keeps the access stored.
         edit!(view, "Kept")
 
         lists!(
@@ -2987,17 +3010,22 @@ defmodule PrismWeb.AquaLiveTest do
 
         assert has_element?(view, "#aqua-card-Kept-access") == shown?
 
+        # Where it is a choice, the one picked in the editor is saved.
         if shown? do
           assert choices(view, "#aqua-card-Kept-access select:not([disabled]) option") == [
                    {"default", "Default mode"},
                    {"plan", "Plan mode"}
                  ]
+
+          view |> form("#aqua-card-Kept-access", %{"value" => "plan"}) |> render_change()
+          assert {:ok, %{"options" => picked}} = get_agent(ctx, "Kept")
+          assert picked == %{"access" => "plan"}
         end
 
         view |> form("#aqua-card-Kept-option-effort", %{"value" => "low"}) |> render_change()
 
         assert {:ok, %{"options" => kept}} = get_agent(ctx, "Kept")
-        assert kept == %{"access" => "default", "effort" => "low"}
+        assert kept == %{"access" => if(shown?, do: "plan", else: "default"), "effort" => "low"}
         Cyfr.Test.Sandbox.end_views()
       end
     end

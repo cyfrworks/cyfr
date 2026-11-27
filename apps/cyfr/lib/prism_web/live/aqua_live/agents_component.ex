@@ -1119,9 +1119,9 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
     end
   end
 
-  # A closed card's values, each as the file holds it, a model and an
-  # access by the name last known for it, and an access only while it is
-  # a choice.
+  # A closed card's values, each as the file holds it, a model and a
+  # program's access by the name last known for it, and that access only
+  # while it is a choice.
   defp stored(agent, known) do
     {harness, title} = harness(agent)
     listing = get_in(known, [program_of(agent), :listing]) || %{models: [], access: []}
@@ -1133,12 +1133,16 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         true -> "none chosen yet"
       end
 
+    # Access is a program's; a key's option of that name is its own.
+    access? = program_of(agent) != nil
     choices = access_choices(listing)
 
     options =
       for {option, value} <- Enum.sort(agent["options"] || %{}),
-          option != "access" or choices != [] do
-        {option, if(option == "access", do: named_choice(choices, value), else: value)}
+          not (access? and option == "access" and choices == []) do
+        if access? and option == "access",
+          do: {option, named_choice(choices, value)},
+          else: {option, value}
       end
 
     runs_on = [{"Program or key", title || "none chosen yet"}]
