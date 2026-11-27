@@ -41,9 +41,12 @@ defmodule PrismWeb.SettingsLive do
       control, and with a sentence when it opens only on this computer
       (`local_only`).
     * **Memory use** — for the platform administrator, who used what memory
-      (`Opus.memory/2`, `:everyone`): each machine's numbers and what holds
-      it now, in order of person, kind and name, then each UTC day's use by person,
-      kind and name, the newest seven days first and seven more at a time,
+      (`Opus.memory/2`, `:everyone`): each machine's numbers, with how much
+      of its use the holders' rows account for where they account for
+      less, and what holds it now, in order of person,
+      kind and name, then each UTC day's use by person, kind and name, as
+      its average over the time measured, its most at once and that time,
+      the newest seven days first and seven more at a time,
       never a thread or content. It is read again every poll
       (`Prima.LocusPool.poll_ms/0`) and before more days are shown, so a
       mark taken away shows nothing more. An endpoint that has not
@@ -508,15 +511,30 @@ defmodule PrismWeb.SettingsLive do
     end
   end
 
-  # A machine's numbers: what is in use of what work may use, and what is
-  # kept ready for the next run beside it.
-  defp machine_use(%{used: used, work: work, floor: 0}),
-    do: "In use: #{MemoryWords.size(used)} of #{MemoryWords.size(work)}."
+  # A machine's numbers: what is in use of what work may use, how much of
+  # it the rows below account for, and what is kept ready for the next
+  # run beside it. "In use" is what the machine charges its work, which
+  # can exceed what the rows read for reasons the record does not carry
+  # (a start's allowance, a reading gone stale, a spare runner of no
+  # person's), so the page says how much the rows account for and never
+  # why. Rows that account for all of it, or none (the line below says
+  # so), or more (the services are asked a moment apart) add nothing.
+  defp machine_use(%{used: used, work: work, floor: floor, holders: holders}) do
+    listed = Enum.sum_by(holders, & &1.bytes)
 
-  defp machine_use(%{used: used, work: work, floor: floor}),
-    do:
-      "In use: #{MemoryWords.size(used)} of #{MemoryWords.size(work)}; " <>
-        "#{MemoryWords.size(floor)} more is kept ready for the next run."
+    IO.iodata_to_binary([
+      "In use: #{MemoryWords.size(used)} of #{MemoryWords.size(work)}",
+      if(holders != [] and used > listed,
+        do: ", of which the work listed below uses #{MemoryWords.size(listed)} now",
+        else: []
+      ),
+      if(floor > 0,
+        do: "; #{MemoryWords.size(floor)} more is kept ready for the next run",
+        else: []
+      ),
+      "."
+    ])
+  end
 
   defp person_name(%{name: name}) when is_binary(name), do: "@" <> name
   defp person_name(%{athanor: athanor}), do: athanor
@@ -530,9 +548,6 @@ defmodule PrismWeb.SettingsLive do
   defp more_days?(days, shown), do: days |> Enum.map(& &1.day) |> Enum.uniq() |> length() > shown
 
   defp more_days_words, do: "Show #{@memory_days} more days"
-
-  defp blank_as_dash(""), do: "—"
-  defp blank_as_dash(text), do: text
 
   # How a person is named in the administrators' list.
   defp admin_name(%{name: name}), do: "@" <> name
@@ -1334,7 +1349,7 @@ defmodule PrismWeb.SettingsLive do
               >
                 {MemoryWords.heading(@memory, machine.machine)}
               </h4>
-              <p class="text-sm text-gray-300">{machine_use(machine)}</p>
+              <p class="text-sm text-gray-300" data-test="memory-in-use">{machine_use(machine)}</p>
               <p :if={machine.holders == []} class="text-sm text-gray-300">
                 {if MemoryWords.heading(@memory, machine.machine),
                   do: "No person's work uses memory on it now.",
@@ -1360,16 +1375,31 @@ defmodule PrismWeb.SettingsLive do
               {MemoryWords.silent(silent)}
             </p>
             <div :if={is_map(@memory) and @memory.days != []} id="memory-days">
+              <%!-- Two measures stack in a cell, its second line and the
+                   causes wrap, so the table fits a narrow window; where it
+                   still scrolls, each row keeps its day in view. --%>
               <.table id="memory-day-rows" rows={shown_days(@memory.days, @memory_shown)}>
-                <:col :let={d} label="Day (UTC)">{Date.to_iso8601(d.day)}</:col>
+                <:col :let={d} label="Day (UTC)" sticky>{Date.to_iso8601(d.day)}</:col>
                 <:col :let={d} label="Person">{person_name(d.person)}</:col>
-                <:col :let={d} label="What">{MemoryWords.kind(d.kind)}</:col>
-                <:col :let={d} label="Name">{d.name || "—"}</:col>
-                <:col :let={d} label="Memory over time">{MemoryWords.over_time(d.mib_ms)}</:col>
-                <:col :let={d} label="Time measured">{MemoryWords.measured(d.measured_ms)}</:col>
-                <:col :let={d} label="Most at once">{MemoryWords.size(d.peak_bytes)}</:col>
+                <:col :let={d} label="What">
+                  <span :if={d.name} class="block">{d.name}</span>
+                  <span class={["block", d.name && "text-xs text-gray-500"]}>
+                    {MemoryWords.kind(d.kind)}
+                  </span>
+                </:col>
+                <:col :let={d} label="Used">
+                  <span class={["block", d.measured_ms == 0 && "text-gray-500"]}>
+                    {MemoryWords.average(d)}
+                  </span>
+                  <span class="block whitespace-normal text-xs text-gray-500">
+                    {MemoryWords.at_most(d)}
+                  </span>
+                </:col>
                 <:col :let={d} label="Ended for memory">
-                  {Enum.join(MemoryWords.ended(d.ended), "; ") |> blank_as_dash()}
+                  <span :for={cause <- MemoryWords.ended(d.ended)} class="block whitespace-normal">
+                    {cause}
+                  </span>
+                  <span :if={MemoryWords.ended(d.ended) == []} class="block">—</span>
                 </:col>
               </.table>
             </div>
