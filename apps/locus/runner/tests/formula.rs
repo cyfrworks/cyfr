@@ -777,7 +777,7 @@ fn tool_calls_and_tasks_answer_cyfrs_results_and_refusals_as_they_are() {
         ),
         ("spawn", tool("search")),
         ("spawn", named),
-        ("await-any", json!({"task_ids": ["task_2", "task_2"]})),
+        ("await-any", json!({"task_ids": ["task_2"]})),
         ("emit", json!({"type": "progress"})),
     ]);
     job = job.bound(json!({"max_concurrent_tasks": 1}));
@@ -923,7 +923,10 @@ fn a_task_is_awaited_polled_and_cancelled_and_one_given_up_on_is_stopped() {
 
 #[test]
 fn nothing_of_a_childs_token_or_keys_is_left_in_the_runners_memory_after_its_subtree() {
-    let mut service = Service::start();
+    // On descriptor 3, as the keeper hands it: standard input is read
+    // through a buffer of Tokio's own, which keeps the root's assign, and
+    // every token's first bytes are alike.
+    let mut service = Service::start_on(support::Control::Descriptor3, &[]);
     let job = formula(&[("call", run("run", "reagent:local.echo:0.1.0", json!({})))]);
     let child = echo(&job, "{}");
     let token = Arc::new(Mutex::new(String::new()));
