@@ -262,10 +262,13 @@ var antigravity = &profile{
 }
 
 // agyToolBudget is Antigravity's list budget. Measured on Antigravity
-// 1.5.16, the API-key path: it counts the sum of each of CYFR's tools as
-// its compact {name, description, parameters}, never the person's own
-// servers, and past about 57,200 bytes and 39 more a tool it drops whole
-// tools, largest first, saying nothing.
+// 1.5.16, the API-key path, with tools of ASCII text: it counts the sum of
+// each of CYFR's tools as its compact {name, description, parameters}, `<`,
+// `>` and `&` a byte each (four tools of 57,000 such bytes, 500 of them
+// `<`, all reached its model), never the person's own servers, and past
+// about 57,200 bytes and 39 more a tool it drops whole tools, largest
+// first, saying nothing. How it counts text outside ASCII, and the line
+// and paragraph separators Go escapes, was not measured.
 const agyToolBudget = 57000
 
 // geminiPath is a way down Antigravity's folder: from GEMINI_HOME when it

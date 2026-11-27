@@ -915,8 +915,9 @@ func TestAStartSetsItsConfigOptionsAndRefusesWhatIsNotOffered(t *testing.T) {
 
 // toolsOf are n tools whose compact {name, description, parameters}
 // together take exactly total bytes, as Antigravity counts a list, each
-// description within what every harness carries.
-func toolsOf(t *testing.T, n, total int) []any {
+// description within what every harness carries and filled with fill,
+// ASCII, repeated.
+func toolsOf(t *testing.T, n, total int, fill string) []any {
 	t.Helper()
 	tools := make([]any, 0, n)
 	for i := range n {
@@ -929,7 +930,8 @@ func toolsOf(t *testing.T, n, total int) []any {
 		if err != nil || size < len(bare) || size-len(bare) > brainwire.MaxDescription {
 			t.Fatalf("no tool %s of %d bytes: %v", name, size, err)
 		}
-		tools = append(tools, map[string]any{"name": name, "description": strings.Repeat("x", size-len(bare)), "parameters": map[string]any{"type": "object"}})
+		pad := size - len(bare)
+		tools = append(tools, map[string]any{"name": name, "description": strings.Repeat(fill, pad/len(fill)+1)[:pad], "parameters": map[string]any{"type": "object"}})
 	}
 	return tools
 }
@@ -937,23 +939,28 @@ func toolsOf(t *testing.T, n, total int) []any {
 // Antigravity drops whole tools from a list past its budget and says
 // nothing, so a start whose tools sum past the profile's budget ends the
 // driver with too_many_tools before the program runs, and a list at the
-// budget starts.
+// budget starts. `<`, `>` and `&` count one byte each, as Antigravity
+// counts them, never the six of an HTML escape.
 func TestAToolListPastAntigravitysBudgetEndsTheStart(t *testing.T) {
-	s := startDriver(t)
-	s.expect("hello")
-	s.send(startCommand("", map[string]any{}, toolsOf(t, 4, antigravity.toolBudget+1)...))
-	if why := s.why(); why != "too_many_tools" {
-		t.Fatalf("a list past the budget ends too_many_tools: %v", why)
-	}
-	if status := s.exit(); status != 2 || strings.Contains(s.output(), `"started"`) {
-		t.Fatalf("it ends the driver with 2 before anything starts: %d %q", status, s.stderr.String())
-	}
+	for _, fill := range []string{"x", "<>&x"} {
+		t.Run(fill, func(t *testing.T) {
+			s := startDriver(t)
+			s.expect("hello")
+			s.send(startCommand("", map[string]any{}, toolsOf(t, 4, antigravity.toolBudget+1, fill)...))
+			if why := s.why(); why != "too_many_tools" {
+				t.Fatalf("a list past the budget ends too_many_tools: %v", why)
+			}
+			if status := s.exit(); status != 2 || strings.Contains(s.output(), `"started"`) {
+				t.Fatalf("it ends the driver with 2 before anything starts: %d %q", status, s.stderr.String())
+			}
 
-	s = startDriver(t)
-	s.expect("hello")
-	s.send(startCommand("", map[string]any{}, toolsOf(t, 4, antigravity.toolBudget)...))
-	if started := s.expect("started"); started["fresh"] != true {
-		t.Fatalf("a list at the budget starts: %v", started)
+			s = startDriver(t)
+			s.expect("hello")
+			s.send(startCommand("", map[string]any{}, toolsOf(t, 4, antigravity.toolBudget, fill)...))
+			if started := s.expect("started"); started["fresh"] != true {
+				t.Fatalf("a list at the budget starts: %v", started)
+			}
+		})
 	}
 }
 

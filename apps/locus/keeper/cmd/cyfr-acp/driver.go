@@ -240,11 +240,12 @@ func (d *driver) unlistedAccess() string {
 }
 
 // toolsBytes is what tools take as a program counts its list: the sum of
-// each one's compact {name, description, parameters}.
+// each one's compact {name, description, parameters}, `<`, `>` and `&`
+// written as themselves.
 func toolsBytes(tools []brainwire.Tool) int {
 	size := 0
 	for _, t := range tools {
-		b, _ := json.Marshal(t)
+		b, _ := brainwire.Marshal(t)
 		size += len(b)
 	}
 	return size
@@ -273,8 +274,10 @@ func (d *driver) start(members map[string]json.RawMessage, str func(string) stri
 	if config.HarnessTools != nil {
 		return brainwire.Fail(2, brainwire.WhyBroken, "a start names the harness's own tools, which "+d.p.title+" has no switch for")
 	}
-	if size := toolsBytes(tools); d.p.toolBudget > 0 && size > d.p.toolBudget {
-		return brainwire.Fail(2, brainwire.WhyTooManyTools, fmt.Sprintf("CYFR's tools take %d bytes, past the %d %s takes whole, so nothing ran.", size, d.p.toolBudget, d.p.title))
+	if d.p.toolBudget > 0 {
+		if size := toolsBytes(tools); size > d.p.toolBudget {
+			return brainwire.Fail(2, brainwire.WhyTooManyTools, fmt.Sprintf("CYFR's tools take %d bytes, past the %d %s takes whole, so nothing ran.", size, d.p.toolBudget, d.p.title))
+		}
 	}
 	session := str("session")
 	resume := session != ""
