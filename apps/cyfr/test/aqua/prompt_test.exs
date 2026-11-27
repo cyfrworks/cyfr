@@ -436,6 +436,29 @@ defmodule Aqua.PromptTest do
 
       refute rest =~ "TAIL"
     end
+
+    # One grapheme can be any size: the bound counts code points, so the
+    # section is at most 80,000 bytes and a program's start stays on the wire.
+    test "a file of one huge grapheme is cut at 20,000 code points and a program's start carries it",
+         %{ctx: ctx} do
+      rules = "a" <> String.duplicate(<<0xCC, 0x81>>, 550_000)
+      assert String.length(rules) == 1
+      :ok = rules!(ctx, rules)
+
+      composed = Prompt.compose(ctx, agent: agent(), authority: nil)
+      [_before, rest] = String.split(composed.instructions, @rules_heading, parts: 2)
+
+      assert String.starts_with?(
+               rest,
+               "a" <>
+                 String.duplicate(<<0xCC, 0x81>>, 19_999) <>
+                 "\n\n(The rules file goes on past 20,000 characters; the rest is not read.)" <>
+                 "\n\n---\n\n## Notes"
+             )
+
+      start = %{"t" => "start", "gen" => 1, "config" => %{}, "system" => composed.instructions}
+      assert {:ok, _line} = Opus.Brain.Wire.encode(start)
+    end
   end
 
   describe "the athanor's notes" do

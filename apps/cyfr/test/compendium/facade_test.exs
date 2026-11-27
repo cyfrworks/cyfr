@@ -99,6 +99,9 @@ defmodule Compendium.FacadeTest do
     agent_tools_check: 1,
     agent_type_of: 1,
     agents: 1,
+    # The athanor's rules file's path, which every brain's instructions
+    # read (`Aqua.Prompt`) through the component domain's root.
+    aqua_rules_file: 0,
     bring_in_pack: 4,
     # The builds service's report of who used what, which the record of it
     # asks (`Opus.Memory`) through the component domain's root rather

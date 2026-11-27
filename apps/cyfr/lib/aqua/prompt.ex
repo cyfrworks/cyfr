@@ -503,7 +503,10 @@ defmodule Aqua.Prompt do
 
   # The athanor's rules file (`Compendium.aqua_rules_file/0`), which the
   # person keeps in Files, carried whole up to its bound in every brain's
-  # instructions: a missing or empty file adds nothing.
+  # instructions: a missing or empty file adds nothing. The bound counts
+  # code points, never graphemes, which can be any size: the section is at
+  # most 80,000 bytes of rules, so a program's start stays on the wire. A
+  # cut may split a combining sequence at its own edge.
   @rules_bound 20_000
 
   defp rules(ctx) do
@@ -532,12 +535,16 @@ defmodule Aqua.Prompt do
         text = String.trim_trailing(bytes)
 
         cut =
-          if String.length(text) > @rules_bound,
-            do: [
-              String.slice(text, 0, @rules_bound),
-              "\n\n(The rules file goes on past 20,000 characters; the rest is not read.)"
-            ],
-            else: text
+          case prefix_bytes(text, @rules_bound, 0) do
+            size when size == byte_size(text) ->
+              text
+
+            size ->
+              [
+                binary_part(text, 0, size),
+                "\n\n(The rules file goes on past 20,000 characters; the rest is not read.)"
+              ]
+          end
 
         [
           "\n\n---\n\n## Rules\n\n",
@@ -546,6 +553,14 @@ defmodule Aqua.Prompt do
         ]
     end
   end
+
+  # The bytes of `text`'s first `left` code points (the whole of a shorter
+  # text), read one code point at a time and never past the bound.
+  defp prefix_bytes(_rest, 0, size), do: size
+  defp prefix_bytes(<<>>, _left, size), do: size
+
+  defp prefix_bytes(<<point::utf8, rest::binary>>, left, size),
+    do: prefix_bytes(rest, left - 1, size + byte_size(<<point::utf8>>))
 
   defp notes(ctx) do
     interactive? = ctx.auth_method == :oidc

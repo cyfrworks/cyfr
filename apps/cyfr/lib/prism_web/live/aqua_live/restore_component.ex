@@ -23,8 +23,8 @@ defmodule PrismWeb.AquaLive.RestoreComponent do
 
   # Two restores, two confirms: the first reverts edited copies of what
   # ships and keeps what the athanor made; the second also deletes every
-  # crew member the athanor made, so Aqua's own files are exactly the shipped
-  # set again. The tool answers what it reverted and what it kept, and
+  # crew member the athanor made, so Aqua's own files, its rules file among
+  # them, are exactly the shipped set again. The tool answers what it reverted and what it kept, and
   # the page shows both lists rather than a bare "done".
   def handle_event("restore_shipped", _params, socket),
     do: CyfrWeb.ContextGuard.guard(socket, fn socket -> restore(socket, false) end)
@@ -62,14 +62,14 @@ defmodule PrismWeb.AquaLive.RestoreComponent do
           <div>
             <h4 class="text-sm font-medium text-gray-200">Shipped files</h4>
             <p class="text-[11px] text-gray-500">
-              Aqua's own file ships with the server. Restoring puts an edited copy back to what shipped; crew members this athanor made are kept, and so are your packs of scrolls.
+              Aqua's own file and the athanor's rules file, aqua/rules.md, ship with the server. Restoring puts an edited copy of either back to what shipped; crew members this athanor made are kept, and so are your packs of scrolls.
             </p>
           </div>
           <button
             type="button"
             phx-click="restore_shipped"
             phx-target={@myself}
-            data-confirm="Restore the shipped files? An edited copy of Aqua's own file goes back to what ships with the server. Crew members this athanor made and your packs of scrolls are kept."
+            data-confirm="Restore the shipped files? An edited copy of Aqua's own file or of the athanor's rules file, aqua/rules.md, goes back to what ships with the server. Crew members this athanor made and your packs of scrolls are kept."
             class="shrink-0 rounded border border-gray-700 px-3 py-1 text-xs text-gray-200 hover:bg-gray-800"
           >
             Restore shipped files
