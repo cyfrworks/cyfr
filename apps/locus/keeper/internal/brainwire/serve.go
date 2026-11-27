@@ -131,12 +131,9 @@ func (c *Conn) Emit(e *Event) error {
 const TextCutNote = "…[CYFR cut this text to fit one line of the wire.]"
 
 // QuestionsDeclined is what a harness's model reads when a driver declines
-// its harness's own question tool: in CYFR a question is the brain's
-// reply, and the answer comes in the person's own message, or, in a job
-// Aqua handed on, in Aqua's next message.
+// its harness's own question tool: it is told to ask in its reply instead.
 const QuestionsDeclined = "CYFR does not take this tool's questions. Ask the person in your reply instead, " +
-	"in words, with the choices as a short list, and end your turn. The answer comes in the person's own " +
-	"message, or, in a job Aqua handed you, in Aqua's next message to you."
+	"in words, with the choices as a short list, and end your turn."
 
 // EmitText writes an event carrying text as its member `name`, cut to fit
 // one line when it would not, with a note saying so.
