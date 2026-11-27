@@ -2,7 +2,6 @@
 # Copyright 2026 CYFR Works Inc.
 apps/sanctum/test/sanctum/admission_capacity_test.exs	1	pending
 apps/sanctum/test/sanctum/api_key_test.exs	1	pending
-apps/sanctum/test/sanctum/auth/workos_test.exs	1	pending
 apps/sanctum/test/sanctum/auth_tenant_resolution_test.exs	4	pending
 apps/sanctum/test/sanctum/caller_freshness_test.exs	10	pending
 apps/sanctum/test/sanctum/caller_test.exs	2	pending
@@ -10,7 +9,6 @@ apps/sanctum/test/sanctum/cipher/cipher_test.exs	3	pending
 apps/sanctum/test/sanctum/cipher/rotation_test.exs	3	pending
 apps/sanctum/test/sanctum/client_ip_proxy_trust_test.exs	2	pending
 apps/sanctum/test/sanctum/client_ip_test.exs	8	pending
-apps/sanctum/test/sanctum/company_login_test.exs	3	pending
 apps/sanctum/test/sanctum/directory_test.exs	2	pending
 apps/sanctum/test/sanctum/network_private_policy_test.exs	9	pending
 apps/sanctum/test/sanctum/policy/ceiling_test.exs	5	pending
@@ -23,4 +21,3 @@ apps/sanctum/test/support/directory_server.ex	3	pending
 apps/sanctum/test/support/registry_stub.ex	2	pending
 apps/sanctum/test/support/settings.ex	1	pending
 apps/sanctum/test/support/test_context.ex	1	pending
-apps/sanctum/test/support/workos_stub.ex	1	pending

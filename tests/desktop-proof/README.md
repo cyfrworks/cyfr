@@ -42,7 +42,6 @@ For each script `home.sh` starts afresh, in the pairing proof's topology
 |---|---|
 | `separate` | `x.test`, reading accounts at the account directory `dir.test` (`CYFR_DIRECTORY_SERVE=writer`) and names there |
 | `self` | `x.test` serving its own account pages: the CYFR and its account service share one origin |
-| `company` | `x.test` serving its own account pages and requiring a company sign-in (`CYFR_COMPANY_LOGIN=join`) at the OIDC issuer `idp.test`, a front with nothing behind it, which only records what reaches it. Only the client is told that front's address, so every request there is the client's and counts |
 | `pair` | `separate`'s two, with `dir.test` set up as a CYFR of its own too, its people's accounts at itself, with a setup token of its own: two CYFRs of one account. A CYFR's public address carries no port, so the two differ by name |
 
 Each has a setup token of the run's own.
@@ -133,7 +132,7 @@ that fails. The proof has 29 rows over three launches of the app (`run.sh`): `co
 | `prism` | the device is admitted and Prism opens in the content window, signed in | the content window and its session cookie |
 | `passkeys` | both passkey calls, in Prism's page and in a frame of it, are refused by the app's permissions policy (Prism's own policy names neither call) | each call's refusal, which names the denied feature, and the reported feature policy |
 | `media` | the camera and the microphone are refused to Prism's page and to a frame it allows them to | each request's `NotAllowedError` |
-| `navigation` | main refuses the top frame sent elsewhere, a window elsewhere, a frame sent to the CYFR's company sign-in and a frame moving the top frame (asked from inside the frame, so the engine's initiator is the frame); Prism's page and the frame allow each | main's decision on each navigation's event and on the window request, read from its window handler; nothing at the front for the company sign-in |
+| `navigation` | main refuses the top frame sent elsewhere, a window elsewhere and a frame moving the top frame (asked from inside the frame, so the engine's initiator is the frame); Prism's page and the frame allow each | main's decision on each navigation's event and on the window request, read from its window handler |
 | `prism_frame_rules` | Prism's own frame rules hold in the app: a frame Prism serves (a canvas) is given no window and cannot move the top frame. This is Prism's sandbox refusing, not the app | the engine's answers in the frame |
 | `confirm` | an API key asked for in Prism waits on the device's own window: a wrong passphrase is refused and asked again, the right one confirms it | the refusal and the same confirmation asked again, no key in Prism; then the key shown in Prism |
 | `lock` | Prism's Lock closes Prism at once, ends its session and forgets it | the content closed before anything is awaited; the session's cookie opening a page before and refused after; none left in the content's session; no sign-out posted by the app (`cyfr`'s lock ends the session through the device's channel); the chooser back and, with nothing to tell, gone on to the device's pages by itself, no button pressed |
@@ -212,7 +211,7 @@ An unanswered browser prompt can outlast the composer: its end doesn't
 withdraw the prompt, and whatever the prompt then gives is stopped at
 once and makes no file.
 
-## The passkey road: `passkey/`, `passkey-self/`, `passkey-company/`
+## The passkey road: `passkey/`, `passkey-self/`
 
 The app runs with the passkey road on, as on macOS and Windows; on Linux it
 offers the six-word road alone. The road is main's to say, in the chooser's
@@ -271,14 +270,6 @@ the CYFR's own account page in the account window), `same_origin_sign_in`,
 `passkeys_policy` (Prism's page, at the account pages' own origin, refused
 both calls) and `home_paths` (the account window refuses the CYFR's own
 page at that same origin, and the ceremony ends).
-
-**`passkey-company/`** (shape `company`).
-
-| Row | What holds | What the row observes |
-|---|---|---|
-| `account_road` | the passkey signs in, the CYFR's company page closes it in the app, and the chooser stays to send the person to a browser | the sentence's words and the chooser's way on, both in sight, with no move before it is pressed; no sign-out posted; no request starting a company sign-in and none at the issuer |
-| `notice_kept` | a reload over the chooser that is keeping a notice leaves the notice there | the words, staying, after it |
-| `device_road` | the device's page says the same once the CYFR refuses the device | the sentence on the device's page; the same two counts |
 
 The chooser is `cyfr`'s own, with nothing stood in: on the passkey road it
 stays with both ways on, and with a notice to show it stays on either road

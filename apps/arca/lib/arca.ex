@@ -146,8 +146,6 @@ defmodule Arca do
       CanvasPrefs,
       CanvasVersions,
       CipherRotation,
-      CompanyAuthorizations,
-      CompanyLoginAttempts,
       ComponentStorage,
       ConsumerReceipts,
       ConsentProofStorage,

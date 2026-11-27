@@ -599,40 +599,6 @@ if config_env() != :test do
 
   config :cyfr, :oci_registry_url, oci_registry_url_config
 
-  # The OpenID Connect issuer of a company's sign-in, offered exactly when
-  # all three of its settings are set; a partly set issuer refuses the
-  # boot. Its issuer is pinned at `:sanctum, :oidc_issuer`, the single
-  # source the boot reserved-host check
-  # (`Cyfr.Application.validate_oidc_issuer_config!/0`) and the company
-  # sign-in (`Sanctum.Auth.OIDC`) read.
-  oidc =
-    case Cyfr.RuntimeConfig.oidc_config(getenv) do
-      {:ok, oidc} -> oidc
-      {:error, message} -> raise message
-    end
-
-  if oidc do
-    config :sanctum, :oidc_issuer, oidc.issuer
-    config :sanctum, :oidc_client, %{client_id: oidc.client_id, client_secret: oidc.client_secret}
-    # The issuer's provider configuration worker, `:cyfr_oidc`, which the
-    # company sign-in's exchange names (`Sanctum.Auth.OIDC.Oidcc`).
-    config :ueberauth_oidcc, :issuers, [%{name: :cyfr_oidc, issuer: oidc.issuer}]
-  end
-
-  # The company sign-in this CYFR may require of every person
-  # (`Sanctum.CompanyLogin`), its issuer WorkOS or the OpenID Connect
-  # issuer above. Every refusal names its setting
-  # (`Cyfr.RuntimeConfig.company_login_config/2`); WorkOS's API key is a
-  # secret, never logged.
-  company_login =
-    case Cyfr.RuntimeConfig.company_login_config(getenv, oidc) do
-      {:ok, company_login} -> company_login
-      {:error, message} -> raise message
-    end
-
-  config :sanctum, :company_login, Map.delete(company_login, :workos)
-  config :sanctum, :workos, company_login.workos
-
   # Storage backend. Unset/`local` keeps the filesystem default from config.exs;
   # `s3` flips the adapter and requires the S3 credentials (fail loud if partial).
   case Cyfr.RuntimeConfig.resolve_storage(getenv) do

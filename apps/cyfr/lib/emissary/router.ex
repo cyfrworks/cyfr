@@ -65,8 +65,8 @@ defmodule Emissary.Router do
         plug CyfrWeb.Plugs.Authenticate
       end
 
-      # The OAuth grant callback's throttle, which the browser's sign-in
-      # callbacks share: one definition in the host's shared pipelines.
+      # The OAuth grant callback's throttle: its definition is the host's
+      # shared pipelines'.
       CyfrWeb.Pipelines.oauth_callback_throttle()
 
       # The OAuth grant callback serves a BROWSER page (CyfrWeb.MinimalPage,

@@ -430,28 +430,6 @@ defmodule Sanctum.CallerTest do
     end
   end
 
-  @oidc ~s(["oidc","https://idp.example.com","cid"])
-
-  # The company sign-in this CYFR requires under `mode`, through the
-  # issuer and client a binding names; each setting's restore is
-  # registered before it changes.
-  defp require_company_login!(mode, days) do
-    Prima.Test.Env.put_app_env(:sanctum, :oidc_issuer, "https://idp.example.com")
-
-    Prima.Test.Env.put_app_env(:sanctum, :oidc_client, %{client_id: "cid", client_secret: "csec"})
-
-    Prima.Test.Env.put_app_env(:sanctum, :company_login, %{
-      mode: mode,
-      days: days,
-      issuer: :oidc
-    })
-  end
-
-  defp company_sign_in!(user_id) do
-    {:ok, _bound_or_refreshed} = Arca.Test.CompanyLogin.bind(user_id, @oidc, "sub-" <> user_id)
-    :ok
-  end
-
   describe "stands?/1" do
     test "an active person stands; a denied one, an unknown id and no id do not" do
       user = known!(new_user())
@@ -469,33 +447,6 @@ defmodule Sanctum.CallerTest do
       for unknown <- [Prima.UUID7.generate_id(Prima.PersonId.prefix()), "", nil] do
         assert Caller.stands?(unknown) == {:ok, false}, inspect(unknown)
       end
-    end
-
-    test "a person the company sign-in this CYFR requires does not hold does not stand, and " <>
-           "stands again once they sign in" do
-      user = known!(new_user())
-
-      require_company_login!(:join, nil)
-      assert Caller.stands?(user.user_id) == {:ok, false}
-
-      :ok = company_sign_in!(user.user_id)
-      assert Caller.stands?(user.user_id) == {:ok, true}
-
-      # Under renew, a sign-in past its days lapses with nothing written,
-      # and a renewal restores it.
-      require_company_login!(:renew, 30)
-      past = DateTime.add(DateTime.utc_now(), -31 * 86_400, :second)
-      user_id = user.user_id
-
-      {1, _} =
-        Arca.Repo.update_all(
-          from(c in Arca.Schemas.CompanyAuthorization, where: c.user_id == ^user_id),
-          set: [authorized_at: past]
-        )
-
-      assert Caller.stands?(user.user_id) == {:ok, false}
-      :ok = company_sign_in!(user.user_id)
-      assert Caller.stands?(user.user_id) == {:ok, true}
     end
   end
 

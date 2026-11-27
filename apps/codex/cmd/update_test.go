@@ -2586,7 +2586,7 @@ func TestUpdateRetiresTheHeadlessSwitch(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := string(data)
-	older := now + "\n# A headless node: the API, /mcp and public tinctures, and no browser\n# page. Not with an OpenID Connect issuer or WorkOS.\n# CYFR_HEADLESS=on\n"
+	older := now + "\n# A headless node: the API, /mcp and public tinctures, and no browser\n# page.\n# CYFR_HEADLESS=on\n"
 	env := scenarioEnv + "CYFR_HEADLESS=on\n"
 	s := newUpdateScenario(t, shippedCompose(t), nil)
 	s.examples = map[string]string{"0.8.0": older, "0.9.0": now}

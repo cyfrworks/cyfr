@@ -34,7 +34,6 @@ defmodule PrismWeb do
       AuthController,
       BuildsLive,
       ChatRedirectLive,
-      CompanyLoginLive,
       ComponentDetailLive,
       ComponentsLive,
       DesktopLive,

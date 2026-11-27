@@ -20,7 +20,7 @@ const AccountsUnchanged = "Accounts and their passkeys do not change: they live 
 // before the change is made.
 var addressChanges = []string{
 	"Every browser signs in again at the new address, with the same passkey.",
-	"Update the redirect address in OAuth apps you registered (vault credentials, a company's sign-in issuer), the URL your webhook senders call, CLI contexts and MCP clients.",
+	"Update the redirect address in OAuth apps you registered (vault credentials), the URL your webhook senders call, CLI contexts and MCP clients.",
 	"Every device that saved the old address needs the new one.",
 }
 

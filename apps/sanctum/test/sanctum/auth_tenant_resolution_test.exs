@@ -36,8 +36,7 @@ defmodule Sanctum.AuthTenantResolutionTest do
     test "resolves a freshly-built (athanor-less) context via the resolver" do
       Application.put_env(:sanctum, :tenancy_resolver_override, Sanctum.Test.OtherAthanorResolver)
 
-      # Same shape as the contexts produced by OIDC.authenticate/1 and
-      # DeviceFlow's create_session/2 — Context.build/1 leaves athanor_id nil.
+      # A freshly built context: Context.build/1 leaves athanor_id nil.
       ctx = oauth_shaped_context()
       assert ctx.athanor_id == nil, "Context.build/1 should leave athanor_id unresolved"
 
