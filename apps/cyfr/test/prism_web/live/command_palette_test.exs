@@ -120,8 +120,8 @@ defmodule PrismWeb.CommandPaletteTest do
   end
 
   # An app is listed by its name, the name its desktop tile shows, while
-  # its description still finds it, after the rows whose name holds what is
-  # typed; Enter opens the first result for what the field holds, and with
+  # its description still finds it; a row whose name holds what is typed
+  # comes before one found by its other words; Enter opens the first result for what the field holds, and with
   # none opens nothing.
   test "an app is listed by its name, found by its description, and Enter opens the first result",
        %{conn: conn} do
@@ -142,15 +142,15 @@ defmodule PrismWeb.CommandPaletteTest do
       files: [{"index.html", "<!doctype html><title>palette-bird</title>"}]
     )
 
-    Arca.Test.UnitFixtures.tenant_component!(ctx, "tincture", "local", "pipes-game", "1.0.0",
+    Arca.Test.UnitFixtures.tenant_component!(ctx, "tincture", "local", "api-kit", "1.0.0",
       manifest: %{
-        "name" => "pipes-game",
+        "name" => "api-kit",
         "type" => "tincture",
         "version" => "1.0.0",
         "publisher" => "local",
         "tincture" => %{"entry" => "index.html"}
       },
-      files: [{"index.html", "<!doctype html><title>pipes-game</title>"}]
+      files: [{"index.html", "<!doctype html><title>api-kit</title>"}]
     )
 
     Prism.TinctureRegistry.reload_athanor(athanor.id)
@@ -172,10 +172,13 @@ defmodule PrismWeb.CommandPaletteTest do
     assert view |> element("#command-palette form") |> render_submit(%{"value" => "zz-none"}) =~
              "No matches."
 
+    # The API Keys page (`/api-keys`) matches "api-k" by its address alone,
+    # and pages are listed before apps; the app whose name holds it comes
+    # first.
     assert {:error, {:live_redirect, %{to: to}}} =
-             view |> element("#command-palette form") |> render_submit(%{"value" => "pipes"})
+             view |> element("#command-palette form") |> render_submit(%{"value" => "api-k"})
 
-    assert to == athanor_path("/?publisher=local&tincture_name=pipes-game", athanor)
+    assert to == athanor_path("/?publisher=local&tincture_name=api-kit", athanor)
 
     {view, _html} = mount_athanor(conn, "/settings")
     view |> with_target("#command-palette") |> render_click("toggle", %{})
