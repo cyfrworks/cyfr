@@ -706,8 +706,11 @@ type spawn struct {
 	retired    chan struct{}
 	retireOnce sync.Once
 	// ended says a kept spawn's group was found empty at its retirement,
-	// set before retired closes; s.mu guards it.
-	ended bool
+	// set before groupEnded closes, which a kept spawn's retirement closes
+	// once its group's end returned, before its relay drains; s.mu guards
+	// ended.
+	ended      bool
+	groupEnded chan struct{}
 	// packs is the generation its space binds (packview.Store.Acquire),
 	// whose release its final release calls (forget); nil for none.
 	packs func()

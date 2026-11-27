@@ -110,9 +110,10 @@ def refusal(code):
 
 
 def home_gone(stack, home):
-    """Whether `home` is gone, from the word a root shell prints after a stat it can make in the kept root."""
+    """Whether `home` is gone, from the word the observer prints: a home is inside its person's disk, 0700, which no
+    process of the container but its uid's searches."""
     probe_home = f"test -e {home} && echo present || echo absent"
-    return imagesuite.read_word(stack.exec(probe_home), ("present", "absent"), f"the probe of {home}") == "absent"
+    return imagesuite.read_word(stack.observe(probe_home), ("present", "absent"), f"the probe of {home}") == "absent"
 
 
 def sh(c, owner, script, program="probe", key="mcp", home_id=None):

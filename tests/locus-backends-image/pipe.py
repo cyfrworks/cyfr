@@ -101,8 +101,10 @@ def read_until(c, session, after, done, timeout_s=30):
 
 
 def home_gone(stack, home):
+    """Whether the kept `home` is gone, as the observer finds it inside its person's disk, which no process of the
+    container but its uid's searches."""
     probe_home = f"test -e {home} && echo present || echo absent"
-    return imagesuite.read_word(stack.exec(probe_home), ("present", "absent"), f"the probe of {home}") == "absent"
+    return imagesuite.read_word(stack.observe(probe_home), ("present", "absent"), f"the probe of {home}") == "absent"
 
 
 def scripted_controller(image):

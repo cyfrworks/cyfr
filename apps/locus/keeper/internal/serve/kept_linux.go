@@ -331,7 +331,7 @@ func (s *server) startKeptSpawn(c *client, req *protocol.Request, reach string, 
 	s.keptLive[uid]++
 	s.mu.Unlock()
 	sp := &spawn{id: randomHex(16), client: c, kept: true, account: acct, keptHome: req.Home, home: at.path, work: at.work, disk: at.disk,
-		reach: reach, limits: limits, retired: make(chan struct{})}
+		reach: reach, limits: limits, retired: make(chan struct{}), groupEnded: make(chan struct{})}
 	if max := req.HomeMaxBytes; max != nil {
 		bytes, err := s.measureHome(acct, at.path)
 		switch {
@@ -620,6 +620,9 @@ func (s *server) retireKept(sp *spawn, grace time.Duration, notify bool) {
 			s.mu.Lock()
 			sp.ended = ended
 			s.mu.Unlock()
+			if sp.groupEnded != nil {
+				close(sp.groupEnded)
+			}
 			// Its processes are gone, or past their group's kill: its route
 			// carries nothing more.
 			s.withdrawRoute(sp.id, &sp.route)
@@ -830,8 +833,10 @@ func (s *server) retireHome(c *client, req *protocol.Request, at keptAt) {
 }
 
 // endHomeSessions ends every spawn the keeper holds in the kept home id, as
-// a release with homeRetireGrace does, and waits for each to be retired.
-// It answers whether every one's group was found empty.
+// a release with homeRetireGrace does, and waits for each one's group to
+// end, by its kill's own bound: its relay drains, and its `released`
+// follows, on its reader's time, which the home's lock never waits for. It
+// answers whether every one's group was found empty.
 func (s *server) endHomeSessions(id string) bool {
 	s.mu.Lock()
 	var sessions []*spawn
@@ -846,7 +851,11 @@ func (s *server) endHomeSessions(id string) bool {
 	}
 	ended := true
 	for _, sp := range sessions {
-		<-sp.retired
+		if sp.groupEnded != nil {
+			<-sp.groupEnded
+		} else {
+			<-sp.retired
+		}
 		s.mu.Lock()
 		ended = ended && sp.ended
 		s.mu.Unlock()

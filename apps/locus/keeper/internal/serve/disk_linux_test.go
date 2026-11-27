@@ -156,6 +156,45 @@ func TestRetiringOneHomeLeavesThePersonsOthers(t *testing.T) {
 	}
 }
 
+// A retirement waits for its sessions' processes to end, never for their
+// output to be read: a session whose reader takes nothing, with more
+// written than the relay's socket holds, is retired and its folder removed,
+// and its `released` follows once its reader takes the rest.
+func TestARetirementWaitsForNoReader(t *testing.T) {
+	k := keptKeeper(t)
+	path := k.keptPath("vlt_unread")
+	if made := k.homeRequest(t, protocol.TypeHomeMake, "m", path, testKeptFirst); made["type"] != protocol.TypeHomeMade {
+		t.Fatalf("home_make: %v", made)
+	}
+	s, rc := k.spawnKept(t, "s", `head -c 16777216 /dev/zero; sleep 600`, path, testKeptFirst)
+	done := make(chan struct{})
+	go func() {
+		k.s.handle(k.c, &protocol.Request{V: protocol.Version, Type: protocol.TypeHomeRetire, ID: "r", Home: "vlt_unread"})
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(20 * time.Second):
+		t.Fatal("the retirement waited on a reader that takes nothing")
+	}
+	if m := k.homeAnswer(t, "r", s); m["type"] != protocol.TypeHomeRetired {
+		t.Fatalf("home_retire: %v", m)
+	}
+	if _, err := os.Lstat(path); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("the retired home: %v", err)
+	}
+	rc.readUntil(t, func() bool { return rc.eof })
+	for {
+		m := k.reply(t)
+		if m["spawn_id"] != s || (m["type"] != protocol.TypeExited && m["type"] != protocol.TypeReleased) {
+			t.Fatalf("after its reader took the rest: %v", m)
+		}
+		if m["type"] == protocol.TypeReleased {
+			break
+		}
+	}
+}
+
 // A readmission during a folder's retirement, a new home of the person's
 // made while the retirement ends the old one's session, finishes that
 // folder's alone: the new home is on the same disk, under the same uid,
