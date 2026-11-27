@@ -19,7 +19,9 @@ import (
 // The wall (plan D18). A keeper gives each person a VM of their own where
 // it keeps homes, its kept role runs, it was given KVM (vm.KVM, a device
 // whose group is not root's, as every VMM holds it) and the image carries
-// the guest (vm.Firecracker, vm.Kernel), and a first session in a VM fits
+// the guest (vm.Firecracker, vm.Kernel), its guard routes a person's VM
+// (the hello's machines member, guard.Client.Machines), and a first
+// session in a VM fits
 // rest beside the floor: a session's allowance and the VM's own, which
 // follows the guest's size, rest (machineGuest). It decides
 // once, at its start, from its own W and F; elsewhere the same spaces run
@@ -47,6 +49,13 @@ func (s *server) wallOf() (bool, string) {
 		if _, err := os.Stat(f); err != nil {
 			return false, "the image carries no guest (" + f + ")"
 		}
+	}
+	// The kept role's pool is routed, so the keeper's start has proved its
+	// guard (proveGuard) and read its hello. It is asked after KVM: a
+	// guest's own keeper, which has none, never takes its own guard's
+	// answer for the host's.
+	if why := s.guard.Machines(); why != "" {
+		return false, why
 	}
 	if need := admission.Allowance(admission.Session) + admission.MachineBytes(s.machineGuest()); s.rest < need {
 		return false, "a first session in a VM, " + describeBytes(need) + ", does not fit the work pool's " + describeBytes(s.rest) + " beside the floor"

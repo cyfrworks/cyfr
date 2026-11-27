@@ -579,7 +579,7 @@ func TestTheWallIsGivenOnlyWhereAFirstSessionInAVMFits(t *testing.T) {
 		fits += 1 << 20
 	}
 	base := func() *server {
-		s := &server{cfg: Config{Kept: &home.Kept{Root: dev}}, rest: fits}
+		s := &server{cfg: Config{Kept: &home.Kept{Root: dev}}, rest: fits, guard: &fakeRouteGuard{}}
 		s.roles = []*role{{spec: RoleSpec{Name: "backends", Kept: true}}}
 		return s
 	}
@@ -595,6 +595,11 @@ func TestTheWallIsGivenOnlyWhereAFirstSessionInAVMFits(t *testing.T) {
 		t.Fatalf("a keeper with everything a VM needs gave no wall: %s", why)
 	}
 	s := base()
+	s.guard = &fakeRouteGuard{machines: "the guard routes no machine: this kernel cannot hold a machine's route to whole IPv4 packets"}
+	if wall, why := s.wallOf(); wall || why != s.guard.Machines() {
+		t.Fatalf("a guard that routes no VM gave the wall %t (%s)", wall, why)
+	}
+	s = base()
 	s.rest = fits - 1<<20
 	if wall, why := s.wallOf(); wall || !strings.Contains(why, "does not fit") {
 		t.Fatalf("a first session that does not fit gave the wall %t (%s)", wall, why)

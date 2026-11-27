@@ -79,6 +79,8 @@ type fakeRouteGuard struct {
 	refuse bool
 	hold   chan struct{}
 	before func(spawnID string)
+	// machines is why it routes no person's VM, as a hello would say.
+	machines string
 	// refuseClears refuses that many clears before it answers one; dead
 	// says no connection is live.
 	refuseClears int
@@ -169,6 +171,12 @@ func (g *fakeRouteGuard) Change(spawnID string, r guard.Route, reach string, add
 		return err
 	}
 	return nil
+}
+
+func (g *fakeRouteGuard) Machines() string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.machines
 }
 
 func (g *fakeRouteGuard) Live(r guard.Route) bool {

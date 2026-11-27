@@ -74,6 +74,10 @@ type routeGuard interface {
 	// Live reports whether r's connection is the live one at this instant,
 	// with no end waiting unread on it.
 	Live(r guard.Route) bool
+	// Machines is why the guard of the last hello routes no person's VM,
+	// "" where it routes them or before any hello (guard.Client.Machines).
+	// It takes the client's lock, so it is read outside the keeper's.
+	Machines() string
 }
 
 // egress is what a routed spawn may reach, read from its request before it
