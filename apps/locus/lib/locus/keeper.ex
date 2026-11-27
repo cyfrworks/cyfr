@@ -227,12 +227,12 @@ defmodule Locus.Keeper do
   the relay closed. What the connection had already handed to this
   server before a write failed reaches the owner first. A frame the
   spawn sent that was still in the socket when the write failed is lost
-  with the connection, since the socket drops what it holds unread when
-  a write to it fails, as it is when the spawn dies before writing it:
-  the owner hears the close alone. A runner's attempts are then closed
-  by the worker service's report of its end
-  (`Locus.Runtime.WorkerService`), and any it held no record of by their
-  leases (`Opus.Sweeper`).
+  with the connection, as a frame is when the spawn dies before writing
+  it: the socket drops what it holds unread when a write to it fails,
+  and the owner hears the close alone. A runner's attempts are then
+  closed by the worker service's report of its end
+  (`Locus.Runtime.WorkerService`), and those the service has no record
+  of by their leases (`Opus.Sweeper`).
 
   ## The memory bound
 
@@ -2256,8 +2256,11 @@ defmodule Locus.Keeper do
   # frame of the last (`read_on/2`), so what its relay writes past that
   # waits in the socket and the relay behind it; it is written under the
   # bound. On a failed write, what the connection had handed this server
-  # reaches the owner before its close (`write_failed/2`); what was still
-  # in its socket is lost with it, as the module doc says.
+  # reaches the owner before its close: a frame handed before the failure
+  # is in this server's mailbox ahead of the writer's answer, so it is
+  # told to the owner first, and `write_failed/2` drains what is left of
+  # what was handed. What was still in its socket is lost with it, as the
+  # module doc says.
   defp hold(conn) do
     :inet.setopts(conn,
       active: :once,
