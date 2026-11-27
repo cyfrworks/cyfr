@@ -25,16 +25,8 @@ defmodule Locus.Runtime.ComponentSizeTest do
     test_path =
       Path.join(System.tmp_dir!(), "component_size_#{System.unique_integer([:positive])}")
 
-    original_base_path = Application.get_env(:arca, :base_path)
-    Application.put_env(:arca, :base_path, test_path)
-
-    on_exit(fn ->
-      File.rm_rf!(test_path)
-
-      if original_base_path,
-        do: Application.put_env(:arca, :base_path, original_base_path),
-        else: Application.delete_env(:arca, :base_path)
-    end)
+    on_exit(fn -> File.rm_rf!(test_path) end)
+    Prima.Test.Env.put_app_env(:arca, :base_path, test_path)
 
     Cyfr.Test.Sandbox.stop_work_on_exit()
     {:ok, ctx: Sanctum.TestContext.local(:api)}
