@@ -590,6 +590,13 @@ defmodule Compendium do
   @spec agent(Context.t(), String.t()) :: {:ok, AquaAgent.t()} | {:error, term()}
   defdelegate agent(ctx, name), to: AquaAgent, as: :get
 
+  @doc """
+  The athanor's rules file, which every brain's instructions carry
+  (`Compendium.AquaPath.rules_file/0`).
+  """
+  @spec aqua_rules_file() :: [String.t()]
+  defdelegate aqua_rules_file(), to: AquaPath, as: :rules_file
+
   @doc "An agent's type: the soul's or a crew member's (`Compendium.AquaAgent.type_of/1`)."
   @spec agent_type_of(AquaAgent.t()) :: String.t()
   defdelegate agent_type_of(agent), to: AquaAgent, as: :type_of

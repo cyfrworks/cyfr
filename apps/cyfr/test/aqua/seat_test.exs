@@ -316,6 +316,28 @@ defmodule Aqua.SeatTest do
     assert String.starts_with?(pinned.catalyst_ref, @model <> ":")
   end
 
+  # The athanor's rules file rides a model brain's system prompt: the
+  # shipped default on the first turn, the person's edit on the next.
+  test "a model brain receives the athanor's rules, and an edit reaches the next turn",
+       %{ctx: ctx, room: room} do
+    shipped =
+      Path.expand("../../../../seed/aqua/rules.md", __DIR__) |> File.read!() |> String.trim()
+
+    script!([reply("One."), reply("Two.")])
+    first = accept!(ctx, room, "first")
+    assert :completed = run(ctx, first)
+
+    {:ok, _} = Arca.Files.write(actor(ctx), "aqua/rules.md", "Answer in French.\n")
+    second = accept!(ctx, room, "second")
+    assert :completed = run(ctx, second)
+
+    assert [%{input: %{"params" => one}}, %{input: %{"params" => two}}] = chats(ctx, "aqua")
+    assert one["system"] =~ "\n\n---\n\n## Rules\n\n"
+    assert one["system"] =~ shipped
+    assert two["system"] =~ "`aqua/rules.md`:\n\nAnswer in French.\n\n---\n\n"
+    refute two["system"] =~ shipped
+  end
+
   # The member Aqua runs on is a worker too, under its own name, in its
   # own thread: a crew member's opening and CYFR's part, never Aqua's
   # prompt, and its own turn asks nobody.
