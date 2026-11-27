@@ -42,9 +42,14 @@ defmodule Locus.Output do
   when the role's answering bound has room, or answered `:full` at the
   asker's deadline, a monotonic instant in milliseconds. An ask may name
   room to leave (`leave:`): it is granted only while the count keeps that
-  much free beside it, so what it holds never takes the room the asks
-  behind it need. A request larger than the bound, with what it leaves,
-  is `:full` at once. The grant is the asker's; `give/2` moves it to the
+  much free beside it, and it waits in a queue of its own, granted only
+  while no ask that leaves none waits. So the asks that leave room never
+  hold, nor stand ahead of, the room left for the others: while every
+  one of them leaves at least `n`, what they hold together is at most
+  the bound less `n`, and an ask that leaves none, of at most `n`, is
+  granted once those that leave none ahead of and beside it are given
+  back. A request larger than the bound, with what it leaves, is `:full`
+  at once. The grant is the asker's; `give/2` moves it to the
   process the bytes are handed to, and `return/1` is its holder's word
   that they are gone.
 
@@ -74,15 +79,23 @@ defmodule Locus.Output do
       `egress_pin`, `runner_exited`) at twice what they declare until they
       are decoded, and a pinned fetch's larger read where it had room for
       it, asked without waiting: the read and the receive queue behind it,
-      twice `fetch_read_ahead_bytes`, 524,288 bytes, to the fetch's end,
-      and only while the count keeps free beside it the room of the
-      largest answer the role asks for at once (CYFR's refusal of an
-      attached fetch at the answer bound, 12,239,056 bytes): a fetch holds
-      its read-ahead while its upstream thinks and for the whole of a long
-      stream, so read-ahead takes at most the count less that answer,
-      eight fetches at once, and every other ask, granted in arrival order
-      and freed once written, gets its room as those ahead of it are
-      written (`Locus.Runtime.Relay`, `Locus.Runtime.HostClient`).
+      twice `fetch_read_ahead_bytes`, 524,288 bytes, to the fetch's end
+      (`Locus.Runtime.Relay`, `Locus.Runtime.HostClient`). The answers
+      (host calls', the service's own calls', CYFR's refusals) and a
+      fetch's head are given back once written or read, which waits on
+      no runner's credit and no upstream. A fetch's piece and an attached
+      fetch's frame wait on the runner's credit, and the read-ahead on the
+      upstream and the credit both, for as long as the attempt's deadline;
+      so each leaves the room of the largest answer the role asks for at
+      once (`Locus.Runtime.Relay.answer_room/0`, CYFR's refusal of an
+      attached fetch at the answer bound, 12,239,056 bytes), and the
+      read-ahead the largest piece's beside it (612,696 bytes, a larger
+      read's): a fetch's asks hold at most 4,538,160 bytes together, the
+      read-ahead seven fetches' at once, and every answer gets its room
+      once the answers and heads ahead of and beside it are given back. A
+      fetch whose
+      piece finds no room waits for it, its upstream held back, and ends
+      `timeout` at the deadline.
 
   Not counted, each capped in size and in number, but for kept backends
   sessions, whose number has no cap of its own (the first row):
@@ -371,8 +384,10 @@ defmodule Locus.Output do
        # Each grant by its ref: its holder and its bytes.
        grants: %{},
        answering_total: 0,
-       # The asks not yet granted, in arrival order, and each by its ref.
+       # The asks not yet granted, in arrival order: those that leave no
+       # room, then those that leave room; and each by its ref.
        queue: :queue.new(),
+       leaving: :queue.new(),
        waiters: %{},
        monitors: %{},
        peaks: %{unread: 0, answering: 0}
@@ -430,7 +445,8 @@ defmodule Locus.Output do
         send(pid, {__MODULE__, ref, :full})
         {:noreply, forget_if_idle(state, pid)}
 
-      :queue.is_empty(state.queue) and fits?(state, bytes + leave) ->
+      :queue.is_empty(state.queue) and (leave == 0 or :queue.is_empty(state.leaving)) and
+          fits?(state, bytes + leave) ->
         {:noreply, state |> grant(ref, pid, bytes) |> peak()}
 
       deadline <= now() ->
@@ -440,13 +456,11 @@ defmodule Locus.Output do
       true ->
         timer = Process.send_after(self(), {:deadline, ref}, deadline, abs: true)
         waiter = %{pid: pid, bytes: bytes, leave: leave, timer: timer}
+        lane = lane(waiter)
 
         {:noreply,
-         %{
-           state
-           | queue: :queue.in(ref, state.queue),
-             waiters: Map.put(state.waiters, ref, waiter)
-         }}
+         %{state | waiters: Map.put(state.waiters, ref, waiter)}
+         |> Map.update!(lane, &:queue.in(ref, &1))}
     end
   end
 
@@ -461,7 +475,8 @@ defmodule Locus.Output do
         {waiter, waiters} ->
           Process.cancel_timer(waiter.timer)
 
-          %{state | waiters: waiters, queue: :queue.delete(ref, state.queue)}
+          %{state | waiters: waiters}
+          |> unqueue(ref, waiter)
           |> forget_if_idle(waiter.pid)
       end
 
@@ -478,7 +493,8 @@ defmodule Locus.Output do
         send(waiter.pid, {__MODULE__, ref, :full})
 
         state =
-          %{state | waiters: waiters, queue: :queue.delete(ref, state.queue)}
+          %{state | waiters: waiters}
+          |> unqueue(ref, waiter)
           |> forget_if_idle(waiter.pid)
 
         {:noreply, pump(state)}
@@ -498,13 +514,9 @@ defmodule Locus.Output do
 
     state =
       Enum.reduce(asked, state, fn ref, state ->
-        Process.cancel_timer(state.waiters[ref].timer)
-
-        %{
-          state
-          | waiters: Map.delete(state.waiters, ref),
-            queue: :queue.delete(ref, state.queue)
-        }
+        {waiter, waiters} = Map.pop(state.waiters, ref)
+        Process.cancel_timer(waiter.timer)
+        unqueue(%{state | waiters: waiters}, ref, waiter)
       end)
 
     {:noreply, pump(state)}
@@ -589,15 +601,21 @@ defmodule Locus.Output do
     end
   end
 
-  # The asks are granted in arrival order: the first that does not fit
-  # holds every one behind it.
-  defp pump(state) do
-    with {:value, ref} <- :queue.peek(state.queue),
+  # The asks are granted in arrival order within their queue: the first
+  # that does not fit holds every one behind it. Those that leave room
+  # are granted only while none that leaves none waits, so none of them
+  # stands ahead of one that leaves none.
+  defp pump(state),
+    do: pump(state, if(:queue.is_empty(state.queue), do: :leaving, else: :queue))
+
+  defp pump(state, lane) do
+    with {:value, ref} <- :queue.peek(Map.fetch!(state, lane)),
          %{bytes: bytes, leave: leave, pid: pid, timer: timer} <- state.waiters[ref],
          true <- fits?(state, bytes + leave) do
       Process.cancel_timer(timer)
 
-      %{state | queue: :queue.drop(state.queue), waiters: Map.delete(state.waiters, ref)}
+      %{state | waiters: Map.delete(state.waiters, ref)}
+      |> Map.update!(lane, &:queue.drop/1)
       |> grant(ref, pid, bytes)
       |> peak()
       |> pump()
@@ -605,6 +623,11 @@ defmodule Locus.Output do
       _ -> state
     end
   end
+
+  defp lane(%{leave: 0}), do: :queue
+  defp lane(_leaves), do: :leaving
+
+  defp unqueue(state, ref, waiter), do: Map.update!(state, lane(waiter), &:queue.delete(ref, &1))
 
   # ————— holders —————
 

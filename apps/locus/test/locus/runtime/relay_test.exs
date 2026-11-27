@@ -1301,7 +1301,7 @@ defmodule Locus.Runtime.RelayCountTest do
 
   import Prima.Test.Wait
 
-  alias Prima.{Assignment, WorkerAuth}
+  alias Prima.{Assignment, RunnerRelay, WorkerAuth}
   alias Locus.Runtime.{Egress, HostClient, Relay}
   alias Locus.Runtime.Relay.Runner, as: Endpoint
   alias Locus.Runtime.Test.{EdgeFixtures, RelayFixtures, ScriptedHost, ScriptedKeeper}
@@ -1513,11 +1513,13 @@ defmodule Locus.Runtime.RelayCountTest do
     # A fetch's largest body, 50 MiB, comes within a catalyst's 3 minutes
     # over a 300 ms round trip only through a receive window past one
     # 64 KiB read's (`Prima.LocusRoles`, `fetch_read_ahead_bytes`).
-    test "reads ahead with room for its read and the queue behind it and the answer room beside them, asked without waiting and given back at its end, and 64 KiB at a time without",
+    test "reads ahead with room for its read and the queue behind it, and beside them the answer room and its next piece's, asked without waiting and given back at its end, and 64 KiB at a time without",
          %{host: host} do
       size = 3 * 262_144
       ahead = Prima.LocusRoles.role!(:runtime).memory.fetch_read_ahead_bytes
-      ahead_room = 2 * ahead + Relay.answer_room()
+      # Beside the read-ahead, the answers' room and one larger read's
+      # piece, in one frame.
+      ahead_room = 2 * ahead + Relay.answer_room() + Relay.held(ahead, 1)
 
       for {room, buffer} <- [{nil, ahead}, {ahead_room, ahead}, {ahead_room - 1, 65_536}] do
         {port, _server} = big_upstream!(size)
@@ -1632,6 +1634,126 @@ defmodule Locus.Runtime.RelayCountTest do
         end)
       end
     end
+  end
+
+  # A guest gives a fetch's credit back by reading its stream, so a guest
+  # that stops reading keeps, until its attempt's deadline, the piece or
+  # frame the relay holds past its credit window, and a pinned fetch its
+  # read-ahead beside it.
+  describe "guests that stop reading" do
+    test "leave the largest host call answer its room, on pinned and attached streams alike",
+         %{host: host} do
+      credit = RunnerRelay.initial_credit()
+      size = credit + 1_048_576
+      chunks = div(credit, WorkerAuth.max_chunk_bytes()) + 20
+      piece = String.duplicate("z", WorkerAuth.max_chunk_bytes())
+
+      ScriptedHost.script(
+        host,
+        "attached_fetch",
+        {:frames, [{:head, 200, []}] ++ List.duplicate({:chunk, piece}, chunks) ++ [:end]}
+      )
+
+      limits = EdgeFixtures.limits(timeout: "90s", max_response_size: 4 * size)
+      ports = for _n <- 1..8, do: elem(big_upstream!(size), 0)
+      test = self()
+
+      # One runner's eight pinned fetches, past the seven the read-ahead
+      # may hold, and another's sixteen attached ones; each stops reading
+      # once its credit window is sent, as far as the relay sends one: a
+      # pinned fetch to the byte, an attached one to the last whole frame.
+      runners =
+        for {kind, count, sent} <- [
+              {:pinned, 8, credit},
+              {:attached, 16, credit - 2 * byte_size(piece) - 4_096}
+            ] do
+          attempt =
+            attempt!(host, timeout_ms: 120_000, limits: limits) |> ScriptedKeeper.relayed!()
+
+          reader =
+            Task.async(fn ->
+              refs =
+                case kind do
+                  :pinned ->
+                    for port <- ports, do: pinned_fetch!(attempt, port, "/big")
+
+                  :attached ->
+                    for _n <- 1..count do
+                      assert {:ok, ref} = attached_fetch(attempt, attached())
+                      ref
+                    end
+                end
+
+              read = for ref <- refs, do: {ref, unread_to(ref, sent)}
+              send(test, {:stopped, self()})
+
+              receive do
+                :read ->
+                  for {ref, bytes} <- read, do: Endpoint.credit(attempt.endpoint, ref, bytes)
+                  for {ref, _bytes} <- read, do: events(attempt.endpoint, ref)
+              end
+            end)
+
+          {attempt, reader}
+        end
+
+      for {_attempt, %{pid: pid}} <- runners, do: assert_receive({:stopped, ^pid}, 60_000)
+
+      [{attempt, _reader} | _] = runners
+      answer = largest_answer(attempt)
+      ScriptedHost.script(host, "tool_call", {:ok, answer})
+      call = Task.async(fn -> HostClient.tool_call(attempt.client, "t", %{}, :call) end)
+
+      assert {:ok, ^answer} =
+               Task.await(call, Prima.HostAPI.request_timeout_ms(:tool_call) + 10_000)
+
+      # Both runners read again at once: one runner's guests that stop
+      # reading hold back the other's fetches until they read or end.
+      for {_attempt, reader} <- runners, do: send(reader.pid, :read)
+
+      for {_attempt, reader} <- runners,
+          do: assert(reader |> Task.await(60_000) |> Enum.all?(&match?({_events, nil}, &1)))
+
+      wait_until(fn ->
+        Locus.Output.held(@count) |> Map.take([:answering, :waiting]) == %{
+          answering: 0,
+          waiting: 0
+        }
+      end)
+    end
+  end
+
+  # A fetch's body bytes as the runner reads them, granting nothing back,
+  # until at least `bytes` have come: what was read.
+  defp unread_to(ref, bytes, read \\ 0) do
+    if read >= bytes do
+      read
+    else
+      receive do
+        {Endpoint, ^ref, {:head, _status, _headers, body}} ->
+          unread_to(ref, bytes, read + byte_size(body))
+
+        {Endpoint, ^ref, {:chunk, body}} ->
+          unread_to(ref, bytes, read + byte_size(body))
+
+        {Endpoint, ^ref, {:end, error}} ->
+          flunk("the fetch ended at #{read} bytes: #{inspect(error)}")
+      after
+        30_000 -> flunk("the fetch stalled at #{read} of #{bytes} bytes")
+      end
+    end
+  end
+
+  # A tool call's answer as long as a host call's answer may be, sealed
+  # for `attempt`: a seal's length grows as the answer's does, by about
+  # four bytes for three.
+  defp largest_answer(attempt) do
+    max = Prima.HostAPI.max_answer_bytes()
+    base = 3_000_000
+    sealed = sealed_bytes(attempt, {:ok, String.duplicate("a", base)})
+    answer = String.duplicate("a", base + div(3 * (max - sealed), 4) - 16)
+    assert sealed_bytes(attempt, {:ok, answer}) in (max - 64)..max
+    answer
   end
 
   # An upstream holding each of `n` requests open, with no answer yet
