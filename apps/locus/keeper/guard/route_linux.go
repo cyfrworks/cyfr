@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net/netip"
 	"os"
+	"runtime"
 	"strconv"
 	"syscall"
 	"time"
@@ -153,34 +154,7 @@ func removePair(slot int) error {
 // setLink gives the link name, in the namespace fd's socket belongs to,
 // address a in a /30, and brings it up.
 func setLink(fd int, name string, a netip.Addr) error {
-	for _, set := range []struct {
-		req  uint
-		addr netip.Addr
-	}{{unix.SIOCSIFADDR, a}, {unix.SIOCSIFNETMASK, netip.AddrFrom4([4]byte{255, 255, 255, 252})}} {
-		ifr, err := unix.NewIfreq(name)
-		if err != nil {
-			return err
-		}
-		v4 := set.addr.As4()
-		if err := ifr.SetInet4Addr(v4[:]); err != nil {
-			return err
-		}
-		if err := unix.IoctlIfreq(fd, set.req, ifr); err != nil {
-			return fmt.Errorf("%s of %s: %w", map[uint]string{unix.SIOCSIFADDR: "the address", unix.SIOCSIFNETMASK: "the mask"}[set.req], name, err)
-		}
-	}
-	ifr, err := unix.NewIfreq(name)
-	if err != nil {
-		return err
-	}
-	if err := unix.IoctlIfreq(fd, unix.SIOCGIFFLAGS, ifr); err != nil {
-		return fmt.Errorf("the flags of %s: %w", name, err)
-	}
-	ifr.SetUint16(ifr.Uint16() | unix.IFF_UP)
-	if err := unix.IoctlIfreq(fd, unix.SIOCSIFFLAGS, ifr); err != nil {
-		return fmt.Errorf("bringing %s up: %w", name, err)
-	}
-	return nil
+	return setAddress(fd, name, a, netip.AddrFrom4([4]byte{255, 255, 255, 252}))
 }
 
 // rtentry is struct rtentry of a 64-bit kernel, as SIOCADDRT takes it.
@@ -229,10 +203,15 @@ func nsInode(fd int) (uint64, error) {
 	return st.Ino, nil
 }
 
+// spaceNames is where a space's two name sockets are bound: its own
+// 127.0.0.11, port 53.
+var spaceNames = netip.AddrFrom4([4]byte{127, 0, 0, 11})
+
 // checkDescriptors holds an admit's three descriptors to what they must
 // be: a network namespace other than the guard's own, and a UDP and a
-// listening TCP socket of that namespace, each bound to 127.0.0.11:53.
-func checkDescriptors(netns, udp, tcp *os.File) error {
+// listening TCP socket of that namespace, each bound to names port 53:
+// spaceNames for a space's, MachineNames for a machine's.
+func checkDescriptors(netns, udp, tcp *os.File, names netip.Addr) error {
 	kind, err := unix.IoctlRetInt(int(netns.Fd()), nsGetNstype)
 	if err != nil || kind != unix.CLONE_NEWNET {
 		return errors.New("the first descriptor is not a network namespace")
@@ -266,8 +245,8 @@ func checkDescriptors(netns, udp, tcp *os.File) error {
 		}
 		sa, err := unix.Getsockname(fd)
 		in, ok := sa.(*unix.SockaddrInet4)
-		if err != nil || !ok || in.Port != 53 || in.Addr != [4]byte{127, 0, 0, 11} {
-			return fmt.Errorf("%s is not bound to 127.0.0.11:53", s.name)
+		if err != nil || !ok || in.Port != 53 || in.Addr != names.As4() {
+			return fmt.Errorf("%s is not bound to %s:53", s.name, names)
 		}
 		nsfd, err := unix.IoctlRetInt(fd, unix.SIOCGSKNS)
 		if err != nil {
@@ -522,6 +501,206 @@ func deleteConnections(addr netip.Addr, entries [][]byte) error {
 				}
 			}
 		}
+	}
+	return nil
+}
+
+// tunFlags are a machine's tap's: a tap with no packet information and
+// with the virtio-net header, as Firecracker attaches to one.
+const tunFlags = unix.IFF_TAP | unix.IFF_NO_PI | unix.IFF_VNET_HDR
+
+// tapName is slot's tap while it is in the guard's namespace, before it is
+// moved into its VMM's as MachineTap.
+func tapName(slot int) string { return "tp" + strconv.Itoa(slot) }
+
+// machineLinks makes what a machine's route holds in its VMM's namespace
+// beside the pair: a tap made here, persistent and owned by the VMM's uid,
+// moved in as MachineTap; a bridge joining it and the pair's inner end,
+// which holds MachineNames and a host route to the guest's address; all
+// of it up. space is the namespace's UDP name socket, by which every
+// change in it is made. A tap not yet moved is removed on a failure; what
+// stands in the VMM's namespace ends with it.
+func machineLinks(r *route) error {
+	if err := makeTap(tapName(r.slot), r.uid); err != nil {
+		return err
+	}
+	moved := false
+	defer func() {
+		if !moved {
+			_ = removeLink(tapName(r.slot))
+		}
+	}()
+	tap, err := linkIndex(tapName(r.slot))
+	if err != nil {
+		return err
+	}
+	if err := moveLink(tap, MachineTap, r.netns); err != nil {
+		return err
+	}
+	moved = true
+	space := int(r.udp.Fd())
+	if err := bridgeOf(space, MachineBridge, innerName, MachineTap); err != nil {
+		return err
+	}
+	if err := setAddress(space, MachineBridge, MachineNames, netip.AddrFrom4([4]byte{255, 255, 255, 255})); err != nil {
+		return err
+	}
+	return hostRoute(space, r.inner, MachineBridge)
+}
+
+// makeTap makes a persistent tap named name in the guard's namespace,
+// owned by uid, so that uid attaches to it with no capability.
+func makeTap(name string, uid int) error {
+	fd, err := unix.Open("/dev/net/tun", unix.O_RDWR|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return fmt.Errorf("the machine's tap: %w", err)
+	}
+	defer unix.Close(fd)
+	ifr, err := unix.NewIfreq(name)
+	if err != nil {
+		return err
+	}
+	ifr.SetUint16(tunFlags)
+	if err := unix.IoctlIfreq(fd, unix.TUNSETIFF, ifr); err != nil {
+		return fmt.Errorf("making the tap %s: %w", name, err)
+	}
+	if err := unix.IoctlSetInt(fd, unix.TUNSETOWNER, uid); err != nil {
+		return fmt.Errorf("the tap %s's owner: %w", name, err)
+	}
+	if err := unix.IoctlSetInt(fd, unix.TUNSETPERSIST, 1); err != nil {
+		return fmt.Errorf("keeping the tap %s: %w", name, err)
+	}
+	return nil
+}
+
+// linkIndex is the index of the link name in the guard's namespace.
+func linkIndex(name string) (int32, error) {
+	s, err := unix.Socket(unix.AF_INET, unix.SOCK_DGRAM|unix.SOCK_CLOEXEC, 0)
+	if err != nil {
+		return 0, err
+	}
+	defer unix.Close(s)
+	ifr, err := unix.NewIfreq(name)
+	if err != nil {
+		return 0, err
+	}
+	if err := unix.IoctlIfreq(s, unix.SIOCGIFINDEX, ifr); err != nil {
+		return 0, fmt.Errorf("the index of %s: %w", name, err)
+	}
+	return int32(ifr.Uint32()), nil
+}
+
+// moveLink moves the guard's link of index into the namespace netns names,
+// renamed to name there.
+func moveLink(index int32, name string, netns *os.File) error {
+	body := ifinfomsg()
+	binary.NativeEndian.PutUint32(body[4:8], uint32(index))
+	var nsfd [4]byte
+	binary.NativeEndian.PutUint32(nsfd[:], uint32(netns.Fd()))
+	body = rtattr(body, unix.IFLA_IFNAME, cstring(name))
+	body = rtattr(body, unix.IFLA_NET_NS_FD, nsfd[:])
+	if err := netlinkDo(unix.RTM_SETLINK, 0, body); err != nil {
+		return fmt.Errorf("moving the tap into the machine's namespace: %w", err)
+	}
+	return nil
+}
+
+// removeLink removes the guard's link name; one already gone is removed.
+func removeLink(name string) error {
+	err := netlinkDo(unix.RTM_DELLINK, 0, rtattr(ifinfomsg(), unix.IFLA_IFNAME, cstring(name)))
+	if errors.Is(err, unix.ENODEV) {
+		return nil
+	}
+	return err
+}
+
+// bridgeOf makes the bridge name in the namespace the socket fd belongs
+// to, joins ports to it and brings each up.
+func bridgeOf(fd int, name string, ports ...string) error {
+	br := cstring(name)
+	if _, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(fd), unix.SIOCBRADDBR, uintptr(unsafe.Pointer(&br[0]))); errno != 0 {
+		return fmt.Errorf("making the bridge %s: %w", name, errno)
+	}
+	for _, p := range ports {
+		idx, err := unix.NewIfreq(p)
+		if err != nil {
+			return err
+		}
+		if err := unix.IoctlIfreq(fd, unix.SIOCGIFINDEX, idx); err != nil {
+			return fmt.Errorf("the index of %s: %w", p, err)
+		}
+		join, err := unix.NewIfreq(name)
+		if err != nil {
+			return err
+		}
+		join.SetUint32(idx.Uint32())
+		if err := unix.IoctlIfreq(fd, unix.SIOCBRADDIF, join); err != nil {
+			return fmt.Errorf("joining %s to %s: %w", p, name, err)
+		}
+		if err := linkUp(fd, p); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// setAddress gives the link name, in the namespace fd's socket belongs to,
+// address a under mask, and brings it up.
+func setAddress(fd int, name string, a, mask netip.Addr) error {
+	for _, set := range []struct {
+		req  uint
+		addr netip.Addr
+	}{{unix.SIOCSIFADDR, a}, {unix.SIOCSIFNETMASK, mask}} {
+		ifr, err := unix.NewIfreq(name)
+		if err != nil {
+			return err
+		}
+		v4 := set.addr.As4()
+		if err := ifr.SetInet4Addr(v4[:]); err != nil {
+			return err
+		}
+		if err := unix.IoctlIfreq(fd, set.req, ifr); err != nil {
+			return fmt.Errorf("%s of %s: %w", map[uint]string{unix.SIOCSIFADDR: "the address", unix.SIOCSIFNETMASK: "the mask"}[set.req], name, err)
+		}
+	}
+	return linkUp(fd, name)
+}
+
+// linkUp brings the link name up, in the namespace fd's socket belongs to.
+func linkUp(fd int, name string) error {
+	ifr, err := unix.NewIfreq(name)
+	if err != nil {
+		return err
+	}
+	if err := unix.IoctlIfreq(fd, unix.SIOCGIFFLAGS, ifr); err != nil {
+		return fmt.Errorf("the flags of %s: %w", name, err)
+	}
+	ifr.SetUint16(ifr.Uint16() | unix.IFF_UP)
+	if err := unix.IoctlIfreq(fd, unix.SIOCSIFFLAGS, ifr); err != nil {
+		return fmt.Errorf("bringing %s up: %w", name, err)
+	}
+	return nil
+}
+
+// hostRoute sets a route to the one address a on dev, in the namespace
+// fd's socket belongs to.
+func hostRoute(fd int, a netip.Addr, dev string) error {
+	if unsafe.Sizeof(uintptr(0)) != 8 {
+		return errors.New("a route is set by ioctl on a 64-bit kernel only")
+	}
+	var rt rtentry
+	rt.dst.Family = unix.AF_INET
+	rt.dst.Addr = a.As4()
+	rt.genmask.Family = unix.AF_INET
+	rt.genmask.Addr = [4]byte{255, 255, 255, 255}
+	rt.gateway.Family = unix.AF_INET
+	rt.flags = unix.RTF_UP | unix.RTF_HOST
+	name := cstring(dev)
+	rt.dev = uintptr(unsafe.Pointer(&name[0]))
+	_, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(fd), unix.SIOCADDRT, uintptr(unsafe.Pointer(&rt)))
+	runtime.KeepAlive(name)
+	if errno != 0 {
+		return fmt.Errorf("the route to %s on %s: %w", a, dev, errno)
 	}
 	return nil
 }

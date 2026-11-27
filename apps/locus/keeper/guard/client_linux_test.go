@@ -7,6 +7,7 @@ package guard
 
 import (
 	"errors"
+	"fmt"
 	"net"
 	"net/netip"
 	"path/filepath"
@@ -141,6 +142,19 @@ func TestTheKeeperSendsTheVectors(t *testing.T) {
 		func() error { _, err := c.AdmitRole(testSpawn, 4200, true, netns, udp, tcp); return err },
 		func() error { _, err := c.AdmitRole(testSpawn, 4101, false, netns, udp, tcp); return err },
 		func() error { return c.Clear(testSpawn, Route{Conn: 1}) },
+		func() error { return machine(c.AdmitMachine(testSpawn, 30201, ReachNone, nil, netns, udp, tcp)) },
+		func() error { return machine(c.AdmitMachine(testSpawn, 30201, ReachIsland, nil, netns, udp, tcp)) },
+		func() error {
+			return machine(c.AdmitMachine(testSpawn, 30456, ReachHosts, []netip.Addr{netip.MustParseAddr("1.2.3.4")}, netns, udp, tcp))
+		},
+		func() error {
+			return c.Change(testSpawn, Route{Conn: 1}, ReachHosts, []netip.Addr{netip.MustParseAddr("1.2.3.4"), netip.MustParseAddr("2606:4700::1111")})
+		},
+		func() error { return c.Change(testSpawn, Route{Conn: 1}, ReachIsland, nil) },
+		func() error { return c.Change(testSpawn, Route{Conn: 1}, ReachNone, nil) },
+	}
+	if len(calls) != len(v.Requests) {
+		t.Fatalf("%d calls for %d requests", len(calls), len(v.Requests))
 	}
 	done := make(chan error, 1)
 	var conn *net.UnixConn
@@ -154,14 +168,54 @@ func TestTheKeeperSendsTheVectors(t *testing.T) {
 		if !sameJSON(t, out, req.Message) || n != req.Descriptors {
 			t.Fatalf("request %d sent as %s with %d descriptors, want %s with %d", i, out, n, req.Message, req.Descriptors)
 		}
-		reply := TypeAdmitted
-		if got.Type == TypeClear {
-			reply = TypeCleared
+		reply := Message{Type: TypeAdmitted, SpawnID: got.SpawnID}
+		switch {
+		case got.Type == TypeClear:
+			reply.Type = TypeCleared
+		case got.Type == TypeChange:
+			reply.Type = TypeChanged
+		case got.MachineUID != nil:
+			reply.Inner, reply.Gateway = "10.213.0.2", "10.213.0.1"
 		}
-		answer(t, conn, Message{Type: reply, SpawnID: got.SpawnID})
+		answer(t, conn, reply)
 		if err := <-done; err != nil {
 			t.Fatalf("request %d: %v", i, err)
 		}
+	}
+}
+
+// machine checks an admitted machine's two addresses, the slot 0 pair.
+func machine(m Machine, err error) error {
+	if err != nil {
+		return err
+	}
+	if m.Inner != netip.MustParseAddr("10.213.0.2") || m.Gateway != netip.MustParseAddr("10.213.0.1") {
+		return fmt.Errorf("the machine's addresses are %s and %s", m.Inner, m.Gateway)
+	}
+	return nil
+}
+
+// A machine's admit answered without its addresses, or a space's with
+// them, ends the connection and is refused: the keeper boots no guest it
+// cannot address, and takes no word it did not ask for.
+func TestAnAdmitAnsweredWithTheWrongAddressesIsRefused(t *testing.T) {
+	g := startScripted(t, "net:[7]")
+	c := NewClient(g.path, "net:[7]", nil)
+	netns, udp, tcp := descriptors(t)
+	done := make(chan error, 1)
+	go func() { _, err := c.AdmitMachine(testSpawn, 30201, ReachIsland, nil, netns, udp, tcp); done <- err }()
+	conn := g.accept(t)
+	request(t, conn)
+	answer(t, conn, Message{Type: TypeAdmitted, SpawnID: testSpawn})
+	if err := <-done; err == nil {
+		t.Fatal("a machine admitted without its addresses was taken")
+	}
+	go func() { _, err := c.Admit(testSpawn, ReachIsland, nil, netns, udp, tcp); done <- err }()
+	conn = g.accept(t)
+	request(t, conn)
+	answer(t, conn, Message{Type: TypeAdmitted, SpawnID: testSpawn, Inner: "10.213.0.2", Gateway: "10.213.0.1"})
+	if err := <-done; err == nil {
+		t.Fatal("a space admitted with a machine's addresses was taken")
 	}
 }
 

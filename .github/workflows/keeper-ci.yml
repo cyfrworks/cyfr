@@ -117,7 +117,8 @@ jobs:
       # files, so the container runs as the services do, under the keeper's
       # seccomp profile and this release's AppArmor profile, by the name
       # apps/codex/internal/apparmor/name holds, with its system
-      # paths unmasked. As the runner's user above they skip; here they run
+      # paths unmasked, and given /dev/net/tun, where a machine's route makes
+      # its tap. As the runner's user above they skip; here they run
       # as root in a Go container started with those options, and a skip
       # for want of root or of a bound fails the step.
       - name: go test as root with writable-cgroups=true (the real kernel)
@@ -132,6 +133,7 @@ jobs:
           go_version="$(sed -n 's/^go //p' go.mod)"
           docker run --rm --security-opt writable-cgroups=true --security-opt seccomp="$GITHUB_WORKSPACE/apps/locus/keeper/seccomp/keeper.json" \
             --security-opt "apparmor=$(cat "$GITHUB_WORKSPACE/apps/codex/internal/apparmor/name")" --security-opt systempaths=unconfined \
+            --device /dev/net/tun \
             -v "$GITHUB_WORKSPACE:/src:ro" -w /src/apps/locus/keeper \
             -e GOFLAGS=-buildvcs=false \
             "golang:$go_version" \
@@ -140,7 +142,7 @@ jobs:
             echo "::error::a real-kernel test skipped for want of root or of a memory bound"
             exit 1
           fi
-          for t in TestTheProbeProvesTheSpaceWhereTheHostAllowsIt TestARelaySpaceHasItsOwnNamespacesAndNoCapability TestARelaySpacesRelayIsCarriedOnceOpened TestARelaySpacesRelayIsSilentUnopened TestASpaceRunsInItsBoundedGroup TestTwoSessionsOfOneFolderSeeAndSignalOnlyTheirOwn TestASpacesProcessesEndWithItsCommand TestASignalReachesTheCommandInsideItsSpace TestNoThreadOfASpaceHoldsACapability TestTheProbeRefusesAHostThatCannotBuildASpacesFiles TestTheProfileDeniesWhatDockerMasks TestTheWaiterNeverSignalsAPidItReaped TestARoleRunsInItsOwnSpace TestARoleNamesOnlyItsOwn TestEachRolesGroupReadsItsLimits TestAPoolOfNoWorkStartsItsRolesAndRefusesEachSpawn TestARoleThatEndsStartsAgainAloneWhileTheOtherRunsOn TestARoleKilledStartsAgain TestTheGuardsLossUnderARoleEndsTheKeeper TestEachRolesRunFolderIsItsOwn; do grep -q -- "--- PASS: $t " "$RUNNER_TEMP/keeper-kernel.log" || { echo "::error::the isolation test $t did not run and pass"; exit 1; }; done
+          for t in TestTheProbeProvesTheSpaceWhereTheHostAllowsIt TestARelaySpaceHasItsOwnNamespacesAndNoCapability TestARelaySpacesRelayIsCarriedOnceOpened TestARelaySpacesRelayIsSilentUnopened TestASpaceRunsInItsBoundedGroup TestTwoSessionsOfOneFolderSeeAndSignalOnlyTheirOwn TestASpacesProcessesEndWithItsCommand TestASignalReachesTheCommandInsideItsSpace TestNoThreadOfASpaceHoldsACapability TestTheProbeRefusesAHostThatCannotBuildASpacesFiles TestTheProfileDeniesWhatDockerMasks TestTheWaiterNeverSignalsAPidItReaped TestARoleRunsInItsOwnSpace TestARoleNamesOnlyItsOwn TestEachRolesGroupReadsItsLimits TestAPoolOfNoWorkStartsItsRolesAndRefusesEachSpawn TestARoleThatEndsStartsAgainAloneWhileTheOtherRunsOn TestARoleKilledStartsAgain TestTheGuardsLossUnderARoleEndsTheKeeper TestEachRolesRunFolderIsItsOwn TestAMachinesRouteJoinsItsTapToTheGuardsEnd; do grep -q -- "--- PASS: $t " "$RUNNER_TEMP/keeper-kernel.log" || { echo "::error::the isolation test $t did not run and pass"; exit 1; }; done
 
       - name: Static build
         run: CGO_ENABLED=0 go build -o "$RUNNER_TEMP/cyfr-locus" .

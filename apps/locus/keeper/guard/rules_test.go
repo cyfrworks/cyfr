@@ -379,6 +379,30 @@ func TestEachReachsRouteIsItsChainsAndJumps(t *testing.T) {
 			t.Errorf("%s's route:\n%s\nwant:\n%s", c.name, got, c.want)
 		}
 	}
+
+	// A machine's route is a space's of its reach; with no live session it
+	// reaches nothing past the guard, not even a target the deployment
+	// names, and a change replaces its route chain alone, declaring it
+	// first so the commit flushes the old lines.
+	none := aRoute(ReachNone)
+	none.machine, none.uid = true, 30201
+	refuseAll := "-A CYFR_GUARD_R3 -j CYFR_GUARD_REFUSE\n-A CYFR_GUARD_R3 -j REJECT --reject-with icmp-admin-prohibited\n"
+	if got, want := routeRules(none, st), head+other+refuseAll+jumps+"COMMIT\n"; got != want {
+		t.Errorf("a machine's route with no session:\n%s\nwant:\n%s", got, want)
+	}
+	if got, want := changeRules(none, st), "*filter\n:CYFR_GUARD_R3 - [0:0]\n-A CYFR_GUARD_R3 ! -s 10.213.0.14/32 -j DROP\n"+other+refuseAll+"COMMIT\n"; got != want {
+		t.Errorf("a change to none:\n%s\nwant:\n%s", got, want)
+	}
+	machineHosts := *hosts
+	machineHosts.machine, machineHosts.uid = true, 30201
+	if got, want := routeRules(&machineHosts, st), routeRules(hosts, st); got != want {
+		t.Errorf("a machine's hosts route is not a space's:\n%s\nwant:\n%s", got, want)
+	}
+	if got, want := changeRules(&machineHosts, st), "*filter\n:CYFR_GUARD_R3 - [0:0]\n-A CYFR_GUARD_R3 ! -s 10.213.0.14/32 -j DROP\n"+other+held+
+		"-A CYFR_GUARD_R3 -d 1.2.3.4/32 -j CYFR_GUARD_P3\n-A CYFR_GUARD_R3 -d 5.6.7.8/32 -j CYFR_GUARD_P3\n"+
+		"-A CYFR_GUARD_R3 -j REJECT --reject-with icmp-admin-prohibited\nCOMMIT\n"; got != want {
+		t.Errorf("a change to hosts:\n%s\nwant:\n%s", got, want)
+	}
 }
 
 // A route's record is what the kernel lists of its chains and of its jumps,

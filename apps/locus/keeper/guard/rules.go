@@ -638,10 +638,38 @@ func routeRules(r *route, st static) string {
 	line(":%s - [0:0]", pc)
 	line("-A %s -m connmark --mark 0 -j CONNMARK --set-mark %s", pc, mark)
 	line("-A %s -j ACCEPT", pc)
-	line("-A %s ! -s %s/32 -j DROP", rc, inner)
-	// A role's replies on the connections forwarded to it.
+	b.WriteString(routeChain(r, st))
+	line("-A %s -i %s -j %s", chainOut, iface, rc)
+	line("-A %s -o %s -m connmark --mark %s -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT", chainIn, iface, mark)
+	// A connection forwarded to the role, which took the route's mark as
+	// it was forwarded. Through this route's pair, its destination is the
+	// space's address: the rule names none, as iptables lists `-d` before
+	// `-o` and every rule of a route in this chain is found by its `-o`.
 	if port != "" {
-		line("-A %s -p tcp --sport %s -m conntrack --ctstate DNAT --ctdir REPLY -m connmark --mark %s -j ACCEPT", rc, port, mark)
+		line("-A %s -o %s -p tcp --dport %s -m conntrack --ctstate DNAT --ctdir ORIGINAL -m connmark --mark %s -j ACCEPT", chainIn, iface, port, mark)
+	}
+	line("COMMIT")
+	if port != "" {
+		line("*nat")
+		line("-A %s -p tcp --dport %s -m comment --comment %s -j CONNMARK --set-mark %s", chainRoles, port, iface, mark)
+		line("-A %s -p tcp --dport %s -m comment --comment %s -j DNAT --to-destination %s:%s", chainRoles, port, iface, inner, port)
+		line("COMMIT")
+	}
+	return b.String()
+}
+
+// routeChain is the lines of r's route chain, which judges every packet of
+// its space's out through the route: from its own address alone, to no
+// other route, then by its reach. A machine's change replaces them alone
+// (changeRules).
+func routeChain(r *route, st static) string {
+	rc, pc := chainRoute+strconv.Itoa(r.slot), chainPass+strconv.Itoa(r.slot)
+	var b strings.Builder
+	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
+	line("-A %s ! -s %s/32 -j DROP", rc, r.inner)
+	// A role's replies on the connections forwarded to it.
+	if r.reach == ReachRole {
+		line("-A %s -p tcp --sport %d -m conntrack --ctstate DNAT --ctdir REPLY -m connmark --mark %d -j ACCEPT", rc, r.port, r.mark)
 	}
 	line("-A %s -o sp+ -j REJECT --reject-with %s", rc, reject4)
 	switch {
@@ -652,6 +680,10 @@ func routeRules(r *route, st static) string {
 		line("-A %s -j %s", rc, chainRefuse)
 		line("-A %s -d %s -j REJECT --reject-with %s", rc, st.rng, reject4)
 		line("-A %s -j %s", rc, pc)
+	case r.reach == ReachNone:
+		// A machine with no live session reaches nothing past the guard.
+		line("-A %s -j %s", rc, chainRefuse)
+		line("-A %s -j REJECT --reject-with %s", rc, reject4)
 	default:
 		line("-A %s -j %s", rc, chainRefuse)
 		for _, t := range st.targets {
@@ -671,23 +703,14 @@ func routeRules(r *route, st static) string {
 			line("-A %s -j %s", rc, pc)
 		}
 	}
-	line("-A %s -i %s -j %s", chainOut, iface, rc)
-	line("-A %s -o %s -m connmark --mark %s -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT", chainIn, iface, mark)
-	// A connection forwarded to the role, which took the route's mark as
-	// it was forwarded. Through this route's pair, its destination is the
-	// space's address: the rule names none, as iptables lists `-d` before
-	// `-o` and every rule of a route in this chain is found by its `-o`.
-	if port != "" {
-		line("-A %s -o %s -p tcp --dport %s -m conntrack --ctstate DNAT --ctdir ORIGINAL -m connmark --mark %s -j ACCEPT", chainIn, iface, port, mark)
-	}
-	line("COMMIT")
-	if port != "" {
-		line("*nat")
-		line("-A %s -p tcp --dport %s -m comment --comment %s -j CONNMARK --set-mark %s", chainRoles, port, iface, mark)
-		line("-A %s -p tcp --dport %s -m comment --comment %s -j DNAT --to-destination %s:%s", chainRoles, port, iface, inner, port)
-		line("COMMIT")
-	}
 	return b.String()
+}
+
+// changeRules are the iptables-restore lines that replace r's route chain
+// with its reach's in one commit: declaring the chain flushes it, so the
+// chain holds the old lines or the new ones and never neither.
+func changeRules(r *route, st static) string {
+	return "*filter\n:" + chainRoute + strconv.Itoa(r.slot) + " - [0:0]\n" + routeChain(r, st) + "COMMIT\n"
 }
 
 // installed is what the kernel lists of the route chains and jumps: each

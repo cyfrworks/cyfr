@@ -357,6 +357,9 @@ func (m rulesMaker) pair(*route) error      { return nil }
 func (m rulesMaker) unpair(*route) error    { return nil }
 func (m rulesMaker) rules(r *route) error   { return m.k.install(r) }
 func (m rulesMaker) unrules(r *route) error { return m.k.withdraw(r) }
+func (m rulesMaker) change(old, next *route) error {
+	return m.k.change(old, next)
+}
 
 // A route's change takes the guard's lock within its own bound, as the
 // script's flock ran inside its 30 s: while another process holds the lock
@@ -412,7 +415,7 @@ func TestARouteChangeWaitsForTheLockOnlyWithinItsBound(t *testing.T) {
 		}
 	})
 	admit := func(id string) []byte {
-		return []byte(fmt.Sprintf(`{"v":3,"type":"admit","spawn_id":%q,"reach":"island"}`, id))
+		return []byte(fmt.Sprintf(`{"v":4,"type":"admit","spawn_id":%q,"reach":"island"}`, id))
 	}
 	for _, id := range []string{"00000000000000000000000000000001", "00000000000000000000000000000002"} {
 		began := time.Now()
@@ -531,5 +534,121 @@ func TestALockWaitEndsOnlyWithItsContext(t *testing.T) {
 	err = flockBy(ctx, lock, unix.LOCK_EX)
 	if err == nil || ctx.Err() == nil || !errors.Is(err, ctx.Err()) {
 		t.Fatalf("the wait for the lock ended with %v while the context's error is %v", err, ctx.Err())
+	}
+}
+
+// A machine's change sends its new route chain alone, one commit, and
+// records it. One the kernel refused leaves the old chain and its record;
+// one taken but not recorded puts the old chain back; and one that cannot
+// put it back either is errRouteBroken, the route in no known state.
+func TestAMachinesChangeIsOneCommitOrTheOldChainStands(t *testing.T) {
+	standInTools(t)
+	tools := t.TempDir()
+	sent := filepath.Join(tools, "sent")
+	// Each restore's input is kept, one file each, and the restore fails
+	// while the file "refuse" holds the count of restores to refuse.
+	restore := "#!/bin/sh\nn=$(ls " + tools + " | grep -c '^sent')\ncat > " + sent + ".$n\n" +
+		"if [ -f " + tools + "/refuse ] && grep -qx \"$n\" " + tools + "/refuse; then exit 1; fi\nexit 0\n"
+	if err := os.WriteFile(filepath.Join(tools, "iptables-restore"), []byte(restore), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", tools+":"+os.Getenv("PATH"))
+	refuse := func(nths ...string) {
+		if err := os.WriteFile(filepath.Join(tools, "refuse"), []byte(strings.Join(nths, "\n")+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	read := func(n int) string {
+		b, err := os.ReadFile(fmt.Sprintf("%s.%d", sent, n))
+		if err != nil {
+			t.Fatalf("restore %d: %v", n, err)
+		}
+		return string(b)
+	}
+	p := aPlace(t, "1")
+	lock, err := os.OpenFile(p.lock(), os.O_RDWR|os.O_CREATE, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	log, _ := logged()
+	st := static{rng: "10.213.0.0/16"}
+	k := &rulesOf{log: log, at: p, st: st, lock: lock, bound: applyTimeout}
+	old := aRoute(ReachNone)
+	old.machine, old.uid = true, 30201
+	next := *old
+	next.reach, next.addresses = ReachHosts, []string{"1.2.3.4"}
+
+	if err := k.change(old, &next); err != nil {
+		t.Fatalf("the change: %v", err)
+	}
+	if got := read(0); got != changeRules(&next, st) {
+		t.Fatalf("the change sent:\n%s\nwant:\n%s", got, changeRules(&next, st))
+	}
+	if !exists(p.record("sp3")) {
+		t.Fatal("the change was not recorded")
+	}
+
+	refuse("1")
+	if err := k.change(&next, old); err == nil || errors.Is(err, errRouteBroken) {
+		t.Fatalf("a change the kernel refused answered %v", err)
+	}
+	if !exists(sent+".1") || exists(sent+".2") {
+		t.Fatal("a change the kernel refused was followed by another restore")
+	}
+
+	// A record that cannot be written: the old chain goes back.
+	if err := os.RemoveAll(p.routes()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p.routes(), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	refuse()
+	if err := k.change(&next, old); err == nil || errors.Is(err, errRouteBroken) {
+		t.Fatalf("a change not recorded answered %v", err)
+	}
+	if read(2) != changeRules(old, st) || read(3) != changeRules(&next, st) {
+		t.Fatalf("a change not recorded did not put the old chain back:\n%s\nthen\n%s", read(2), read(3))
+	}
+	if got, err := os.ReadFile(p.routes()); err != nil || len(got) != 0 {
+		t.Fatalf("a change not recorded touched the record: %q %v", got, err)
+	}
+	refuse("5")
+	if err := k.change(&next, old); !errors.Is(err, errRouteBroken) {
+		t.Fatalf("a change neither recorded nor put back answered %v", err)
+	}
+}
+
+// The resolver a guard asks its routes' names of is Docker's unless
+// CYFR_GUARD_RESOLVER names another, as a person's VM's guard names the
+// host's guard; a value that is not an IPv4 address and port refuses the
+// start before any rule goes in.
+func TestTheResolverIsDockersUnlessTheGuardIsGivenAnother(t *testing.T) {
+	for _, c := range []struct{ value, want string }{{"", islandResolver}, {"169.254.0.53:53", "169.254.0.53:53"}} {
+		if got, ok := resolverOf(c.value); !ok || got != c.want {
+			t.Errorf("%q: the routes' names are asked of %q (%t), want %s", c.value, got, ok, c.want)
+		}
+	}
+	standInTools(t)
+	for _, bad := range []string{"169.254.0.53", "[fd00::53]:53", "169.254.0.53:0", "resolver:53", "169.254.000.53:53"} {
+		if _, ok := resolverOf(bad); ok {
+			t.Errorf("%q was taken as a resolver", bad)
+		}
+		p := aPlace(t, "1")
+		g, out := aStart(p, filepath.Join(t.TempDir(), "guard.sock"))
+		env := g.env
+		g.env = func(k string) string {
+			if k == "CYFR_GUARD_RESOLVER" {
+				return bad
+			}
+			return env(k)
+		}
+		if listener, _, code := g.start(); listener != nil || code != ExitConfig {
+			t.Errorf("%q: the guard started (%d)\n%s", bad, code, out)
+		}
+		if !strings.Contains(out.String(), "refusing to start: CYFR_GUARD_RESOLVER is '"+bad+"'") || strings.Contains(out.String(), "routes take") {
+			t.Errorf("%q: the refusal is not named before any rule:\n%s", bad, out)
+		}
 	}
 }

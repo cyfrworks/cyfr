@@ -48,6 +48,20 @@ func (f *fakeMaker) rules(r *route) error   { return f.step("rules", r) }
 func (f *fakeMaker) unpair(r *route) error  { return f.step("unpair", r) }
 func (f *fakeMaker) unrules(r *route) error { return f.step("unrules", r) }
 
+// change records its new reach; a failing "broken" leaves the route in no
+// known state (errRouteBroken), a failing "change" leaves the old reach.
+func (f *fakeMaker) change(_, next *route) error {
+	err := f.step("change", next)
+	f.mu.Lock()
+	broken := f.fail["broken"]
+	f.steps[len(f.steps)-1] += " " + next.reach
+	f.mu.Unlock()
+	if broken {
+		return fmt.Errorf("forced: %w", errRouteBroken)
+	}
+	return err
+}
+
 // setFail sets which parts fail from now on.
 func (f *fakeMaker) setFail(parts ...string) {
 	f.mu.Lock()
@@ -193,13 +207,22 @@ func TestTheGuardAnswersTheVectors(t *testing.T) {
 		if got.Type == TypeRefused || got.SpawnID != testSpawn {
 			t.Fatalf("request %d %s answered %s", i, req.Message, out)
 		}
-		if got.Type == TypeAdmitted && i+1 < len(v.Requests) && !strings.Contains(string(v.Requests[i+1].Message), `"clear"`) {
+		next := ""
+		if i+1 < len(v.Requests) {
+			next = string(v.Requests[i+1].Message)
+		}
+		if got.Type == TypeAdmitted && next != "" && !strings.Contains(next, `"clear"`) && !strings.Contains(next, `"change"`) {
 			// The next admit of the vectors names the same spawn: this one
-			// is cleared so the next is answered as a new one.
-			if c := r.send(t, []byte(`{"v":3,"type":"clear","spawn_id":"`+testSpawn+`"}`)); c.Type != TypeCleared {
+			// is cleared so the next is answered as a new one. A change
+			// that follows a machine's admit changes that route.
+			if c := r.send(t, []byte(`{"v":4,"type":"clear","spawn_id":"`+testSpawn+`"}`)); c.Type != TypeCleared {
 				t.Fatalf("clear: %+v", c)
 			}
 		}
+	}
+	// The vectors end on a machine's changes: its route is cleared.
+	if c := r.send(t, []byte(`{"v":4,"type":"clear","spawn_id":"`+testSpawn+`"}`)); c.Type != TypeCleared {
+		t.Fatalf("clear: %+v", c)
 	}
 	for _, ref := range v.Refused {
 		before := len(ts.maker.taken())
@@ -213,21 +236,21 @@ func TestTheGuardAnswersTheVectors(t *testing.T) {
 	}
 	// A second admit of a held spawn, and a clear of a spawn this
 	// connection holds no route of, are the vectors' refusals.
-	admit := []byte(`{"v":3,"type":"admit","spawn_id":"` + testSpawn + `","reach":"island"}`)
+	admit := []byte(`{"v":4,"type":"admit","spawn_id":"` + testSpawn + `","reach":"island"}`)
 	if got := r.send(t, admit, three(t)...); got.Type != TypeAdmitted {
 		t.Fatalf("admit: %+v", got)
 	}
-	role := []byte(`{"v":3,"type":"admit","spawn_id":"11112233445566778899aabbccddeeff","reach":"role","port":4200,"private":true}`)
+	role := []byte(`{"v":4,"type":"admit","spawn_id":"11112233445566778899aabbccddeeff","reach":"role","port":4200,"private":true}`)
 	if got := r.send(t, role, three(t)...); got.Type != TypeAdmitted {
 		t.Fatalf("a role admit: %+v", got)
 	}
 	for _, c := range []struct {
 		packet []byte
 		files  []*os.File
-	}{{admit, three(t)}, {[]byte(`{"v":3,"type":"clear","spawn_id":"ffeeddccbbaa99887766554433221100"}`), nil},
+	}{{admit, three(t)}, {[]byte(`{"v":4,"type":"clear","spawn_id":"ffeeddccbbaa99887766554433221100"}`), nil},
 		// A role admit of a port another route holds, refused as the
 		// vectors' answer says.
-		{[]byte(`{"v":3,"type":"admit","spawn_id":"ffeeddccbbaa99887766554433221100","reach":"role","port":4200,"private":false}`), three(t)}} {
+		{[]byte(`{"v":4,"type":"admit","spawn_id":"ffeeddccbbaa99887766554433221100","reach":"role","port":4200,"private":false}`), three(t)}} {
 		got := r.send(t, c.packet, c.files...)
 		if got.SpawnID == "ffeeddccbbaa99887766554433221100" {
 			got.SpawnID = testSpawn
@@ -252,10 +275,10 @@ func TestARouteIsAdmittedWholeAndClearedWhole(t *testing.T) {
 	ts := startServer(t, "net:[1]")
 	r := dialRaw(t, ts.path)
 	admit := func(id string) Message {
-		return r.send(t, []byte(`{"v":3,"type":"admit","spawn_id":"`+id+`","reach":"island"}`), three(t)...)
+		return r.send(t, []byte(`{"v":4,"type":"admit","spawn_id":"`+id+`","reach":"island"}`), three(t)...)
 	}
 	clear := func(id string) Message {
-		return r.send(t, []byte(`{"v":3,"type":"clear","spawn_id":"`+id+`"}`))
+		return r.send(t, []byte(`{"v":4,"type":"clear","spawn_id":"`+id+`"}`))
 	}
 	a, b := testSpawn, "ffeeddccbbaa99887766554433221100"
 	if got := admit(a); got.Type != TypeAdmitted {
@@ -285,7 +308,7 @@ func TestARefusedRouteLeavesNothing(t *testing.T) {
 	ts := startServer(t, "net:[1]")
 	r := dialRaw(t, ts.path)
 	ts.maker.setFail("rules")
-	got := r.send(t, []byte(`{"v":3,"type":"admit","spawn_id":"`+testSpawn+`","reach":"island"}`), three(t)...)
+	got := r.send(t, []byte(`{"v":4,"type":"admit","spawn_id":"`+testSpawn+`","reach":"island"}`), three(t)...)
 	if got.Type != TypeRefused || got.SpawnID != testSpawn {
 		t.Fatalf("answered %+v", got)
 	}
@@ -293,13 +316,13 @@ func TestARefusedRouteLeavesNothing(t *testing.T) {
 		t.Fatalf("steps %v", steps)
 	}
 	ts.maker.setFail("unpair")
-	if got := r.send(t, []byte(`{"v":3,"type":"admit","spawn_id":"`+testSpawn+`","reach":"island"}`), three(t)...); got.Type != TypeAdmitted {
+	if got := r.send(t, []byte(`{"v":4,"type":"admit","spawn_id":"`+testSpawn+`","reach":"island"}`), three(t)...); got.Type != TypeAdmitted {
 		t.Fatalf("admit: %+v", got)
 	}
 	// A route whose pair cannot be removed is refused cleared, keeps its
 	// slot and is the guard's to try again; a clear asked again answers
 	// cleared once it is gone.
-	if got := r.send(t, []byte(`{"v":3,"type":"clear","spawn_id":"`+testSpawn+`"}`)); got.Type != TypeRefused {
+	if got := r.send(t, []byte(`{"v":4,"type":"clear","spawn_id":"`+testSpawn+`"}`)); got.Type != TypeRefused {
 		t.Fatalf("a clear whose removal failed answered %+v", got)
 	}
 	ts.s.mu.Lock()
@@ -316,7 +339,7 @@ func TestARefusedRouteLeavesNothing(t *testing.T) {
 		t.Fatal("a route whose pair still cannot be removed lost its slot")
 	}
 	ts.maker.setFail()
-	if got := r.send(t, []byte(`{"v":3,"type":"clear","spawn_id":"`+testSpawn+`"}`)); got.Type != TypeCleared {
+	if got := r.send(t, []byte(`{"v":4,"type":"clear","spawn_id":"`+testSpawn+`"}`)); got.Type != TypeCleared {
 		t.Fatalf("a clear asked again once the route can go answered %+v", got)
 	}
 	ts.s.mu.Lock()
@@ -341,7 +364,7 @@ func TestARouteThatCannotBeWithdrawnEndsTheGuardPastItsBound(t *testing.T) {
 		}
 	}
 	r := dialRaw(t, ts.path)
-	if got := r.send(t, []byte(`{"v":3,"type":"admit","spawn_id":"`+testSpawn+`","reach":"island"}`), three(t)...); got.Type != TypeAdmitted {
+	if got := r.send(t, []byte(`{"v":4,"type":"admit","spawn_id":"`+testSpawn+`","reach":"island"}`), three(t)...); got.Type != TypeAdmitted {
 		t.Fatalf("admit: %+v", got)
 	}
 	ts.maker.setFail("unpair")
@@ -374,9 +397,9 @@ func TestAClearOfARouteTheRetryWithdrewTouchesNothing(t *testing.T) {
 	ts := startServer(t, "net:[1]")
 	r := dialRaw(t, ts.path)
 	admit := func(id string) Message {
-		return r.send(t, []byte(`{"v":3,"type":"admit","spawn_id":"`+id+`","reach":"island"}`), three(t)...)
+		return r.send(t, []byte(`{"v":4,"type":"admit","spawn_id":"`+id+`","reach":"island"}`), three(t)...)
 	}
-	clear := func(id string) Message { return r.send(t, []byte(`{"v":3,"type":"clear","spawn_id":"`+id+`"}`)) }
+	clear := func(id string) Message { return r.send(t, []byte(`{"v":4,"type":"clear","spawn_id":"`+id+`"}`)) }
 	first, later := testSpawn, "ffeeddccbbaa99887766554433221100"
 	if got := admit(first); got.Type != TypeAdmitted {
 		t.Fatalf("admit: %+v", got)
@@ -450,11 +473,11 @@ func TestALostConnectionWithdrawsItsRoutesAlone(t *testing.T) {
 		r  *raw
 		id string
 	}{{mine, testSpawn}, {mine, "11112233445566778899aabbccddeeff"}, {theirs, "ffeeddccbbaa99887766554433221100"}} {
-		if got := c.r.send(t, []byte(`{"v":3,"type":"admit","spawn_id":"`+c.id+`","reach":"island"}`), three(t)...); got.Type != TypeAdmitted {
+		if got := c.r.send(t, []byte(`{"v":4,"type":"admit","spawn_id":"`+c.id+`","reach":"island"}`), three(t)...); got.Type != TypeAdmitted {
 			t.Fatalf("admit %s: %+v", c.id, got)
 		}
 	}
-	if got := mine.send(t, []byte(`{"v":3,"type":"clear","spawn_id":"11112233445566778899aabbccddeeff"}`)); got.Type != TypeCleared {
+	if got := mine.send(t, []byte(`{"v":4,"type":"clear","spawn_id":"11112233445566778899aabbccddeeff"}`)); got.Type != TypeCleared {
 		t.Fatalf("clear: %+v", got)
 	}
 	before := len(ts.maker.taken())
@@ -519,7 +542,7 @@ func TestARolesPortIsOneRoutesAtATime(t *testing.T) {
 	ts := startServer(t, "net:[1]")
 	mine, theirs := dialRaw(t, ts.path), dialRaw(t, ts.path)
 	role := func(id string, port int, private bool) []byte {
-		return []byte(fmt.Sprintf(`{"v":3,"type":"admit","spawn_id":%q,"reach":"role","port":%d,"private":%t}`, id, port, private))
+		return []byte(fmt.Sprintf(`{"v":4,"type":"admit","spawn_id":%q,"reach":"role","port":%d,"private":%t}`, id, port, private))
 	}
 	other := "ffeeddccbbaa99887766554433221100"
 	if got := mine.send(t, role(testSpawn, 4200, true), three(t)...); got.Type != TypeAdmitted {
@@ -540,14 +563,14 @@ func TestARolesPortIsOneRoutesAtATime(t *testing.T) {
 	}
 	// A route whose removal fails keeps its port as it keeps its slot.
 	ts.maker.setFail("unpair")
-	if got := mine.send(t, []byte(`{"v":3,"type":"clear","spawn_id":"`+testSpawn+`"}`)); got.Type != TypeRefused {
+	if got := mine.send(t, []byte(`{"v":4,"type":"clear","spawn_id":"`+testSpawn+`"}`)); got.Type != TypeRefused {
 		t.Fatalf("a clear whose removal failed answered %+v", got)
 	}
 	if got := theirs.send(t, role("22222233445566778899aabbccddeeff", 4200, false), three(t)...); got.Type != TypeRefused {
 		t.Fatalf("the port of a route not wholly withdrawn was given again: %+v", got)
 	}
 	ts.maker.setFail()
-	if got := mine.send(t, []byte(`{"v":3,"type":"clear","spawn_id":"`+testSpawn+`"}`)); got.Type != TypeCleared {
+	if got := mine.send(t, []byte(`{"v":4,"type":"clear","spawn_id":"`+testSpawn+`"}`)); got.Type != TypeCleared {
 		t.Fatalf("the clear asked again: %+v", got)
 	}
 	if got := theirs.send(t, role("22222233445566778899aabbccddeeff", 4200, false), three(t)...); got.Type != TypeAdmitted {
@@ -580,5 +603,64 @@ func TestADumpFindsTheConnectionsOfAnAddressEitherWay(t *testing.T) {
 	}, addr)
 	if err != nil || !end || len(found) != 2 {
 		t.Fatalf("found %d entries of %s (%t %v), want the two it is a party to", len(found), addr, end, err)
+	}
+}
+
+// A machine's route is admitted with its guest's two addresses, and its
+// reach changes while it stands: a change answered changed takes the new
+// reach, one the rules refused leaves the old reach standing, and one that
+// leaves the rules in no known state withdraws the route, which no later
+// change finds. A space's route never changes.
+func TestAMachinesReachChangesWhileItsRouteStands(t *testing.T) {
+	ts := startServer(t, "net:[1]")
+	r := dialRaw(t, ts.path)
+	got := r.send(t, []byte(`{"v":4,"type":"admit","spawn_id":"`+testSpawn+`","reach":"none","machine_uid":30201}`), three(t)...)
+	if got.Type != TypeAdmitted || got.Inner != "10.213.0.2" || got.Gateway != "10.213.0.1" {
+		t.Fatalf("the machine's admit answered %+v", got)
+	}
+	change := func(spawn, reach string) Message {
+		return r.send(t, []byte(`{"v":4,"type":"change","spawn_id":"`+spawn+`",`+reach+`}`))
+	}
+	held := func() (string, []string) {
+		ts.s.mu.Lock()
+		defer ts.s.mu.Unlock()
+		for _, routes := range ts.s.routes {
+			if rt := routes[testSpawn]; rt != nil {
+				return rt.reach, rt.addresses
+			}
+		}
+		return "", nil
+	}
+	if c := change(testSpawn, `"reach":"hosts","addresses":["1.2.3.4"]`); c.Type != TypeChanged {
+		t.Fatalf("the change to hosts answered %+v", c)
+	}
+	if reach, addrs := held(); reach != ReachHosts || len(addrs) != 1 || addrs[0] != "1.2.3.4" {
+		t.Fatalf("the route holds %s %v after its change", reach, addrs)
+	}
+	ts.maker.setFail("change")
+	if c := change(testSpawn, `"reach":"island"`); c.Type != TypeRefused || !strings.Contains(c.Reason, "stays as it was") {
+		t.Fatalf("a change the rules refused answered %+v", c)
+	}
+	if reach, _ := held(); reach != ReachHosts {
+		t.Fatalf("a refused change left the route at %s", reach)
+	}
+	ts.maker.setFail("broken")
+	before := len(ts.maker.taken())
+	if c := change(testSpawn, `"reach":"island"`); c.Type != TypeRefused || !strings.Contains(c.Reason, "withdrew it") {
+		t.Fatalf("a change in no known state answered %+v", c)
+	}
+	if steps := strings.Join(ts.maker.taken()[before:], ","); !strings.Contains(steps, "unpair sp0") || !strings.Contains(steps, "unrules sp0") {
+		t.Fatalf("a change in no known state withdrew nothing: %s", steps)
+	}
+	ts.maker.setFail()
+	if c := change(testSpawn, `"reach":"none"`); c.Type != TypeRefused || !strings.Contains(c.Reason, "holds no route") {
+		t.Fatalf("a change of a withdrawn route answered %+v", c)
+	}
+	space := "11112233445566778899aabbccddeeff"
+	if a := r.send(t, []byte(`{"v":4,"type":"admit","spawn_id":"`+space+`","reach":"island"}`), three(t)...); a.Type != TypeAdmitted || a.Inner != "" {
+		t.Fatalf("a space's admit answered %+v", a)
+	}
+	if c := change(space, `"reach":"none"`); c.Type != TypeRefused || !strings.Contains(c.Reason, "only a machine's route") {
+		t.Fatalf("a change of a space's route answered %+v", c)
 	}
 }

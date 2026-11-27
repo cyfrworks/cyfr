@@ -252,6 +252,46 @@ func (k *rulesOf) install(r *route) error {
 	if err := k.record(ctx, iface); err != nil {
 		return fail(fmt.Sprintf("route %s could not be recorded", iface), err)
 	}
+	k.log.Info("route %s for %s (%s) installed, mark %d", iface, r.inner, describeReach(r), r.mark)
+	return nil
+}
+
+// errRouteBroken is a change whose new rules went in but could not be
+// recorded, and whose old ones could not be put back: the route is in no
+// known state, and its server withdraws it.
+var errRouteBroken = errors.New("the route's rules are in no known state")
+
+// change replaces a machine's route chain, old's, with next's in one
+// commit and records it. A change the kernel refused leaves old's chain
+// standing; one it took but that cannot be recorded puts old's back, which
+// its record, written whole or not at all, still names; where that fails
+// too is errRouteBroken.
+func (k *rulesOf) change(old, next *route) error {
+	ctx, cancel := context.WithTimeout(context.Background(), k.bound)
+	defer cancel()
+	iface := outerName(next.slot)
+	unlock, err := k.exclusive(ctx)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	if _, err := tool(ctx, changeRules(next, k.st), false, "iptables-restore", "-w", "5", "--noflush"); err != nil {
+		return fmt.Errorf("route %s's new reach: %w", iface, err)
+	}
+	rerr := k.record(ctx, iface)
+	if rerr == nil {
+		k.log.Info("route %s for %s changed to %s", iface, next.inner, describeReach(next))
+		return nil
+	}
+	if _, err := tool(ctx, changeRules(old, k.st), false, "iptables-restore", "-w", "5", "--noflush"); err != nil {
+		return fmt.Errorf("route %s's change could not be recorded (%v) nor put back (%v): %w", iface, rerr, err, errRouteBroken)
+	}
+	return fmt.Errorf("route %s's change could not be recorded, and its old reach stands: %w", iface, rerr)
+}
+
+// describeReach is a route's reach as the log says it, with its IPv4
+// addresses.
+func describeReach(r *route) string {
 	what := r.reach
 	switch {
 	case r.reach == ReachRole && r.private:
@@ -264,8 +304,7 @@ func (k *rulesOf) install(r *route) error {
 			what += " " + a
 		}
 	}
-	k.log.Info("route %s for %s (%s) installed, mark %d", iface, r.inner, what, r.mark)
-	return nil
+	return what
 }
 
 // withdraw removes r's rules and record; a route already gone is removed.
