@@ -152,6 +152,10 @@ func readIsland(log *logx.Logger, p place, env func(string) string, resolve func
 	isl := island{controlPlane: env("CYFR_GUARD_CONTROL_PLANE"), hostAPI: env("CYFR_GUARD_HOST_API"),
 		routes: v4Routes(routes, false), subnets: v4Routes(routes, true),
 		v6Subnets: v6Subnets(read("net/ipv6_route")), local: localAddresses(read("net/fib_trie"))}
+	// A value the guard refuses is refused before any name is asked.
+	if controlPlaneRefusal(isl.controlPlane) != nil {
+		return isl
+	}
 	network := resolveNetwork(isl.local, read("net/if_inet6"))
 	for _, target := range splitTargets(env("CYFR_PRIVATE_EGRESS_TARGETS")) {
 		addresses := []string{target}
@@ -198,9 +202,12 @@ type rulesOf struct {
 	bound time.Duration
 }
 
-// exclusive takes the lock for one change and answers its release.
-func (k *rulesOf) exclusive() (func(), error) {
-	if err := unix.Flock(int(k.lock.Fd()), unix.LOCK_EX); err != nil {
+// exclusive takes the lock for one change within the change's bound, as
+// the script's flock ran inside its 30 s, and answers its release: a lock
+// another process holds past the bound ends the change, never the control.
+func (k *rulesOf) exclusive(ctx context.Context) (func(), error) {
+	deadline, _ := ctx.Deadline()
+	if err := flockBy(k.lock, unix.LOCK_EX, deadline); err != nil {
 		return nil, fmt.Errorf("taking the guard's lock: %w", err)
 	}
 	return func() { _ = unix.Flock(int(k.lock.Fd()), unix.LOCK_UN) }, nil
@@ -211,33 +218,40 @@ func (k *rulesOf) exclusive() (func(), error) {
 // removed whole. A change that outlives its bound removes nothing more: the
 // refused route's withdrawal, which follows on a bound of its own, does.
 func (k *rulesOf) install(r *route) error {
-	unlock, err := k.exclusive()
-	if err != nil {
-		return err
-	}
-	defer unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), k.bound)
 	defer cancel()
 	iface := outerName(r.slot)
+	timedOut := func() error {
+		k.log.Error("route %s's change did not finish within %s: its withdrawal removes what of it stands", iface, k.bound)
+		return fmt.Errorf("route %s's change did not finish within %s", iface, k.bound)
+	}
+	unlock, err := k.exclusive(ctx)
+	if err != nil {
+		if ctx.Err() != nil {
+			return timedOut()
+		}
+		k.log.Error("route %s: %v", iface, err)
+		return err
+	}
+	defer unlock()
 	fail := func(what string, err error) error {
 		if ctx.Err() != nil {
-			k.log.Error("route %s's change did not finish within %s: its withdrawal removes what of it stands", iface, k.bound)
-			return fmt.Errorf("route %s's change did not finish within %s", iface, k.bound)
+			return timedOut()
 		}
-		k.log.Error("route %s %s: %v", iface, what, err)
+		k.log.Error("%s: %v", what, err)
 		if rerr := k.remove(ctx, iface); rerr != nil {
 			k.log.Error("route %s could not be removed whole, and its withdrawal tries again: %v", iface, rerr)
 		}
-		return fmt.Errorf("route %s %s: %w", iface, what, err)
+		return fmt.Errorf("%s: %w", what, err)
 	}
 	if err := k.remove(ctx, iface); err != nil {
-		return fail("could not be cleared before it was made", err)
+		return fail(fmt.Sprintf("route %s could not be cleared before it was made", iface), err)
 	}
 	if _, err := tool(ctx, routeRules(r, k.st), false, "iptables-restore", "-w", "5", "--noflush"); err != nil {
-		return fail("rules failed", err)
+		return fail(fmt.Sprintf("route %s's rules failed", iface), err)
 	}
 	if err := k.record(ctx, iface); err != nil {
-		return fail("could not be recorded", err)
+		return fail(fmt.Sprintf("route %s could not be recorded", iface), err)
 	}
 	what := r.reach
 	switch {
@@ -257,14 +271,17 @@ func (k *rulesOf) install(r *route) error {
 
 // withdraw removes r's rules and record; a route already gone is removed.
 func (k *rulesOf) withdraw(r *route) error {
-	unlock, err := k.exclusive()
-	if err != nil {
-		return err
-	}
-	defer unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), k.bound)
 	defer cancel()
 	iface := outerName(r.slot)
+	unlock, err := k.exclusive(ctx)
+	if err != nil {
+		if ctx.Err() != nil {
+			return fmt.Errorf("route %s's removal did not finish within %s", iface, k.bound)
+		}
+		return err
+	}
+	defer unlock()
 	if err := k.remove(ctx, iface); err != nil {
 		if ctx.Err() != nil {
 			return fmt.Errorf("route %s's removal did not finish within %s", iface, k.bound)
@@ -407,18 +424,26 @@ func check(log *logx.Logger, p place) error {
 	return routesInstalled(ctx, log, p)
 }
 
-// shared takes lock shared within wait: flock takes no bound of its own.
+// shared takes lock shared within wait.
 func shared(lock *os.File, wait time.Duration) bool {
-	deadline := time.Now().Add(wait)
+	return flockBy(lock, unix.LOCK_SH, time.Now().Add(wait)) == nil
+}
+
+// flockBy takes lock as how (LOCK_SH or LOCK_EX) by deadline, which flock
+// takes no bound of: it tries without blocking until then.
+func flockBy(lock *os.File, how int, deadline time.Time) error {
 	for {
-		err := unix.Flock(int(lock.Fd()), unix.LOCK_SH|unix.LOCK_NB)
+		err := unix.Flock(int(lock.Fd()), how|unix.LOCK_NB)
 		if err == nil {
-			return true
+			return nil
 		}
-		if !errors.Is(err, unix.EWOULDBLOCK) || time.Now().After(deadline) {
-			return false
+		if !errors.Is(err, unix.EWOULDBLOCK) {
+			return err
 		}
-		time.Sleep(10 * time.Millisecond) // sleep-ok: flock has no timed wait; polled within the check's bound
+		if time.Now().After(deadline) {
+			return context.DeadlineExceeded
+		}
+		time.Sleep(10 * time.Millisecond) // sleep-ok: flock has no timed wait; polled within the change's or the check's bound
 	}
 }
 

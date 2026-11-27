@@ -193,11 +193,8 @@ func staticRules(log *logx.Logger, isl island) (static, error) {
 		return static{}, err
 	}
 	cp := isl.controlPlane
-	if cp == "" {
-		return refuse("CYFR_GUARD_CONTROL_PLANE is unset: it names the fixed address of cyfr on the default network")
-	}
-	if strings.Contains(cp, ":") {
-		return refuse("CYFR_GUARD_CONTROL_PLANE is '%s', not an IPv4 address", cp)
+	if err := controlPlaneRefusal(cp); err != nil {
+		return refuse("%v", err)
 	}
 	var v4targets []string
 	for _, t := range isl.targets {
@@ -312,6 +309,19 @@ func staticRules(log *logx.Logger, isl island) (static, error) {
 	}
 	v4("-t", "nat", "-A", "POSTROUTING", "-s", rng, "!", "-o", "sp+", "-j", "MASQUERADE")
 	return static{rules: rules, rng: rng, targets: isl.targets, hostAddress: hostAddress, hostPort: hostPort}, nil
+}
+
+// controlPlaneRefusal is the refusal of CYFR_GUARD_CONTROL_PLANE's value,
+// or nil where the guard takes it: checked before any private host's name
+// is resolved, as the script checked it first.
+func controlPlaneRefusal(cp string) error {
+	if cp == "" {
+		return errors.New("CYFR_GUARD_CONTROL_PLANE is unset: it names the fixed address of cyfr on the default network")
+	}
+	if strings.Contains(cp, ":") {
+		return fmt.Errorf("CYFR_GUARD_CONTROL_PLANE is '%s', not an IPv4 address", cp)
+	}
+	return nil
 }
 
 // masquerade is the routes' masquerade rule of the nat table, as the
@@ -543,8 +553,12 @@ func localAddresses(text string) []string {
 
 // resolveNetwork is the families a private host's name is resolved in, as
 // Go's resolver names them: those the island has an address of, its local
-// IPv4 addresses and /proc/net/if_inet6's text, loopback's apart, as a
-// resolver asked with AI_ADDRCONFIG takes them; "" with neither.
+// IPv4 addresses and /proc/net/if_inet6's text, loopback's apart, as glibc's
+// AI_ADDRCONFIG counts them; "" with neither, where nothing opens. On the
+// shipped islands, which have IPv4, that is what the script's getent gave.
+// It differs on two that no deployment reaches: with IPv6 alone getent
+// mapped an IPv4 host into IPv6 (::ffff:), and with loopback alone it
+// filtered nothing and passed every host in both families.
 func resolveNetwork(local []string, ifInet6 string) string {
 	v4 := false
 	for _, a := range local {

@@ -3,8 +3,10 @@
 
 // Package logx writes cyfr-locus's log lines to stderr: plain text, or one
 // JSON object per line when CYFR_LOG_FORMAT=json, in the shape
-// Prima.JsonFormatter writes. Lines never carry environment values or
-// backend output.
+// Prima.JsonFormatter writes. Lines carry no backend output, and no
+// environment value but the egress guard's own configuration, which its
+// lines name as its shell form's did (package guard): cyfr's fixed address,
+// core's host API and the private hosts.
 package logx
 
 import (

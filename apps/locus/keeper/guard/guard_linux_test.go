@@ -7,6 +7,8 @@ package guard
 
 import (
 	"fmt"
+	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -24,8 +26,8 @@ const (
 )
 
 // standInTools puts iptables tools first on PATH that take every rule and
-// list a namespace holding the static rules and no route, as a guard's own
-// namespace does once its rules are in.
+// list a namespace holding the static rules, as a guard's own namespace
+// does once its rules are in, and each route's chains when asked for them.
 func standInTools(t *testing.T) {
 	t.Helper()
 	dir := t.TempDir()
@@ -35,6 +37,7 @@ func standInTools(t *testing.T) {
 "-w 5 -S CYFR_GUARD_ROUTES") echo '-N CYFR_GUARD_ROUTES' ;;
 "-w 5 -S CYFR_GUARD_REPLIES") echo '-N CYFR_GUARD_REPLIES' ;;
 "-w 5 -t nat -S CYFR_GUARD_ROLES") echo '-N CYFR_GUARD_ROLES' ;;
+"-w 5 -S CYFR_GUARD_R"[0-9]*|"-w 5 -S CYFR_GUARD_P"[0-9]*) echo "-N $4" ;;
 esac`,
 		"ip6tables":        "",
 		"iptables-restore": "cat >/dev/null",
@@ -266,10 +269,28 @@ func TestAPrivateHostOpensOnlyTheFamiliesTheIslandHas(t *testing.T) {
 				"iptables -A CYFR_GUARD -d 10.9.9.10 -j RETURN", "ip6tables -A CYFR_GUARD -d fd00:aa::/64 -j RETURN"},
 			[]string{"private target both.test: fd00:99::5 passes\n", "private target v6only.test: fd00:99::6 passes\n",
 				"private target fd00:99::7: fd00:99::7 passes\n"}},
+		// Two islands nothing reaches, where the script's getent differed
+		// (resolveNetwork): with IPv6 alone, no IPv4 host opens; with
+		// loopback alone, no host opens. A range opens as written.
+		{"an island with IPv6 alone", "fd000077000000000000000000000002 02 40 00 80     eth0\n", "ip6",
+			[]string{"ip6tables -A CYFR_GUARD -d fd00:99::5 -j RETURN", "ip6tables -A CYFR_GUARD -d fd00:99::6 -j RETURN",
+				"ip6tables -A CYFR_GUARD -d fd00:99::7 -j RETURN", "ip6tables -A CYFR_GUARD -d fd00:aa::/64 -j RETURN"},
+			[]string{"private target both.test: fd00:99::5 passes\n", "private target 10.9.9.10 resolves to nothing here: it opens nothing\n"}},
+		{"an island with loopback alone", "00000000000000000000000000000001 01 80 10 80       lo\n", "",
+			[]string{"ip6tables -A CYFR_GUARD -d fd00:aa::/64 -j RETURN"},
+			[]string{"private target both.test resolves to nothing here: it opens nothing\n",
+				"private target 10.9.9.10 resolves to nothing here: it opens nothing\n"}},
 	} {
 		p := aPlace(t, "1")
 		if err := os.WriteFile(filepath.Join(p.proc, "net/if_inet6"), []byte(c.inet6), 0o644); err != nil {
 			t.Fatal(err)
+		}
+		if c.network != "ip" && c.network != "ip4" {
+			// No IPv4 address but loopback's.
+			trie := "Local:\n     |-- 127.0.0.1\n        /32 host LOCAL\n"
+			if err := os.WriteFile(filepath.Join(p.proc, "net/fib_trie"), []byte(trie), 0o644); err != nil {
+				t.Fatal(err)
+			}
 		}
 		asked = nil
 		log, out := logged()
@@ -285,7 +306,11 @@ func TestAPrivateHostOpensOnlyTheFamiliesTheIslandHas(t *testing.T) {
 				t.Errorf("%s: the log lacks %q:\n%s", c.name, line, out)
 			}
 		}
-		if want := []string{"both.test " + c.network, "v6only.test " + c.network}; !reflect.DeepEqual(asked, want) {
+		want := []string{"both.test " + c.network, "v6only.test " + c.network}
+		if c.network == "" {
+			want = nil
+		}
+		if !reflect.DeepEqual(asked, want) {
 			t.Errorf("%s: the resolver was asked %q, want %q", c.name, asked, want)
 		}
 	}
@@ -320,5 +345,126 @@ func TestARouteChangePastItsBoundNamesTheTimeout(t *testing.T) {
 	want := "[cyfr-guard] error: route sp3's change did not finish within 300ms: its withdrawal removes what of it stands\n"
 	if out.String() != want {
 		t.Fatalf("the change past its bound logged:\n%s\nwant:\n%s", out, want)
+	}
+}
+
+// rulesMaker makes a route's rules alone, as the guard does, and no pair.
+type rulesMaker struct{ k *rulesOf }
+
+func (m rulesMaker) pair(*route) error      { return nil }
+func (m rulesMaker) unpair(*route) error    { return nil }
+func (m rulesMaker) rules(r *route) error   { return m.k.install(r) }
+func (m rulesMaker) unrules(r *route) error { return m.k.withdraw(r) }
+
+// A route's change takes the guard's lock within its own bound, as the
+// script's flock ran inside its 30 s: while another process holds the lock
+// (a health check that never ends), each admit is refused once the bound
+// has passed and the control goes on answering; once the lock is free a
+// route is made again.
+func TestARouteChangeWaitsForTheLockOnlyWithinItsBound(t *testing.T) {
+	standInTools(t)
+	p := aPlace(t, "1")
+	lock, err := os.OpenFile(p.lock(), os.O_RDWR|os.O_CREATE, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	held, err := os.OpenFile(p.lock(), os.O_RDWR, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+	if err := unix.Flock(int(held.Fd()), unix.LOCK_SH); err != nil {
+		t.Fatal(err)
+	}
+	log, out := logged()
+	bound := 300 * time.Millisecond
+	k := &rulesOf{log: log, at: p, st: static{rng: "10.213.0.0/16"}, lock: lock, bound: bound}
+	s := newServer(log, "net:[1]", netip.MustParsePrefix("10.213.0.0/16"), rulesMaker{k})
+	path := filepath.Join(t.TempDir(), "guard.sock")
+	l, err := net.ListenUnix("unixpacket", &net.UnixAddr{Name: path, Net: "unixpacket"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { l.Close() })
+	go func() {
+		for {
+			conn, err := l.AcceptUnix()
+			if err != nil {
+				return
+			}
+			go s.serve(conn)
+		}
+	}()
+	c := dialRaw(t, path)
+	admit := func(id string) []byte {
+		return []byte(fmt.Sprintf(`{"v":3,"type":"admit","spawn_id":%q,"reach":"island"}`, id))
+	}
+	for _, id := range []string{"00000000000000000000000000000001", "00000000000000000000000000000002"} {
+		began := time.Now()
+		got := c.send(t, admit(id), three(t)...)
+		if got.Type != TypeRefused || !strings.Contains(got.Reason, "did not finish within 300ms") {
+			t.Fatalf("an admit under a held lock answered %+v\n%s", got, out)
+		}
+		// The admit's change and its withdrawal each wait their bound.
+		if waited := time.Since(began); waited < bound || waited > 2*bound+5*time.Second {
+			t.Fatalf("an admit under a held lock was answered after %s", waited)
+		}
+	}
+	if !strings.Contains(out.String(), "[cyfr-guard] error: route sp0's change did not finish within 300ms: its withdrawal removes what of it stands\n") {
+		t.Fatalf("the change does not name its timeout:\n%s", out)
+	}
+	if err := unix.Flock(int(held.Fd()), unix.LOCK_UN); err != nil {
+		t.Fatal(err)
+	}
+	if got := c.send(t, admit("00000000000000000000000000000003"), three(t)...); got.Type != TypeAdmitted {
+		t.Fatalf("an admit once the lock is free answered %+v\n%s", got, out)
+	}
+}
+
+// A private host in a loose IPv4 spelling (shorthand, octal, hex, one
+// integer), which the script's getent read as inet_aton does (010.9.9.9
+// as 8.9.9.9), is no address to the guard: it is asked as a name, and an
+// all-digit one the resolver refuses unasked, so it opens nothing, in the
+// script's sentence.
+func TestAPrivateHostInALooseIPv4SpellingOpensNothing(t *testing.T) {
+	p := aPlace(t, "1")
+	env := map[string]string{"CYFR_GUARD_CONTROL_PLANE": controlPlane,
+		"CYFR_PRIVATE_EGRESS_TARGETS": "10.1,010.9.9.9,0x0a090909,167314698"}
+	resolve := func(name, network string) []string {
+		if strings.ContainsAny(name, "abcdefghijklmnopqrstuvwxyz") {
+			// A name the island's resolver holds no record of, as Docker's
+			// answers 0x0a090909.
+			return nil
+		}
+		return resolveHost(name, network)
+	}
+	log, out := logged()
+	isl := readIsland(log, p, func(k string) string { return env[k] }, resolve)
+	if isl.targets != nil {
+		t.Fatalf("a loose spelling opened %q", isl.targets)
+	}
+	for _, target := range strings.Split(env["CYFR_PRIVATE_EGRESS_TARGETS"], ",") {
+		if line := "[cyfr-guard] info: private target " + target + " resolves to nothing here: it opens nothing\n"; !strings.Contains(out.String(), line) {
+			t.Errorf("the log lacks %q:\n%s", line, out)
+		}
+	}
+}
+
+// The control plane's value is refused before any private host's name is
+// asked, as the script checked it first: a wrong value is refused at once.
+func TestAControlPlaneIsRefusedBeforeAnyNameIsAsked(t *testing.T) {
+	for _, value := range []string{"", "fd00::2"} {
+		p := aPlace(t, "1")
+		env := map[string]string{"CYFR_GUARD_CONTROL_PLANE": value, "CYFR_PRIVATE_EGRESS_TARGETS": "both.test"}
+		asked := 0
+		log, out := logged()
+		isl := readIsland(log, p, func(k string) string { return env[k] }, func(string, string) []string { asked++; return nil })
+		if asked != 0 {
+			t.Fatalf("a control plane of %q: a name was asked first", value)
+		}
+		if _, err := staticRules(log, isl); err == nil || !strings.Contains(out.String(), "[cyfr-guard] error: CYFR_GUARD_CONTROL_PLANE is ") {
+			t.Fatalf("a control plane of %q was not refused:\n%s", value, out)
+		}
 	}
 }
