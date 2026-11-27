@@ -24,8 +24,10 @@ defmodule Aqua.ProgramTest do
   written one at a time, the answer first. A program lives for one turn:
   its session closes as its loop returns, dies or is stopped, and the next
   turn starts a process that resumes it, with that turn's instructions
-  and options; what moves by itself, the open requests and the time, goes
-  with each process's first post. A holder's end resumes the native session with the
+  and options; what moves by itself, the open requests, the turn's id and
+  the time, goes with each process's first post. A question is the
+  brain's reply: the turn ends at it, and the answer, the person's or the
+  one Aqua hands a member, is the next post of the same session. A holder's end resumes the native session with the
   posts whose delivery its transcript says: one it holds is continued by
   one notice, one it does not ends the turn, and an answer the resumed
   session no longer asks for comes as one notice that names its call,
@@ -368,7 +370,10 @@ defmodule Aqua.ProgramTest do
         "person granted runs when you call `execution.run`; one with no grant does " <>
         "not, and `request_setup` asks for it.\n- Never ask for a secret or a " <>
         "credential in a reply, and never keep one: a component that needs one is set " <>
-        "up through `request_setup`.\n- Never send, submit, buy or " <>
+        "up through `request_setup`.\n- When you need the person to decide, ask in your " <>
+        "reply: the question in one sentence and the choices as a short list. Finish or " <>
+        "stop what you started first, since your turn ends with that reply, and read the " <>
+        "next message as the answer.\n- Never send, submit, buy or " <>
         "publish anything on a site, accept terms or change an account without the " <>
         "person's word for that one act: nothing but this instruction stops you. Read " <>
         "the `cyfr:browser` scroll before you use the browser.\n" <>
@@ -597,6 +602,177 @@ defmodule Aqua.ProgramTest do
       assert {:ok, %{session: ^worker}} = Tape.brain(ctx, child.id)
       assert {:ok, _row} = Arca.McpServerStorage.get_by_id(actor, row.id)
       refute_received {:control, "home", _wire, _fields}
+    end
+  end
+
+  describe "a question asked in the reply" do
+    # A question is a brain's ordinary reply with its choices; the person
+    # answers Aqua, and Aqua hands a member's answer back to that member.
+    # Nothing waits mid-turn: the turn ends at the question, and the answer
+    # is the next message of the same session.
+    @ask "- When you need the person to decide, ask in your reply: the question in one " <>
+           "sentence and the choices as a short list."
+    @handling "A member's reply that asks the person waits on a decision: answer it " <>
+                "yourself with `crew.ask` to that member when you know the answer"
+    @question "Which database should the export target?\n\n- PostgreSQL\n- SQLite"
+
+    test "Aqua's question is its reply, and the person's answer resumes its session",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      :ok = claude_code!(ctx)
+      brain_row!(ctx, "claude")
+      turn = accept!(ctx, thread, row, "export the notes")
+      loop = run(ctx, turn)
+      %{start: start} = started!(fake, row)
+      assert start["system"] =~ @ask
+      assert start["system"] =~ @handling
+      post = sent()
+      [input] = inputs(ctx, turn)
+      assert post == with_facts(posted(input, turn, "export the notes"))
+      say(fake, row, accepted(input))
+      say(fake, row, said(turn, "msg_1", @question))
+      say(fake, row, idle(turn, [input.id]))
+      assert :completed = Task.await(loop, 30_000)
+
+      assert %{sent_by: "aqua", content: @question} =
+               List.last(Arca.ThreadStorage.messages(Sanctum.Context.actor(ctx), thread.id))
+
+      next = accept!(ctx, thread, row, "PostgreSQL")
+      loop = run(ctx, next)
+      opened!(fake, row, "boot-two")
+      %{start: resumed} = begun!(fake, row)
+      assert resumed["session"] == @session
+      post = sent()
+      [answer] = inputs(ctx, next)
+      assert post == with_facts(posted(answer, next, "PostgreSQL"))
+      say(fake, row, accepted(answer))
+      say(fake, row, idle(next, [answer.id]))
+      assert :completed = Task.await(loop, 30_000)
+    end
+
+    test "a member's question opens Aqua's turn, and the answer Aqua hands back resumes the " <>
+           "member's session in its same thread",
+         %{ctx: ctx, thread: room, fake: fake} do
+      ctx = %{ctx | origin: :interactive}
+      actor = Sanctum.Context.actor(ctx)
+      :ok = claude_code!(ctx)
+      row = brain_row!(ctx, "claude")
+
+      ask = fn id, task ->
+        asking([{id, "crew", %{"action" => "ask", "member" => "claude-code", "task" => task}}])
+      end
+
+      turn =
+        api_turn!(ctx, room, "export the notes", [
+          ask.("ask-1", "Export the notes."),
+          answer("Asked Claude Code."),
+          answer("Claude Code asks which database. I recommend PostgreSQL."),
+          ask.("ask-2", "PostgreSQL"),
+          answer("Handed it back.")
+        ])
+
+      assert :completed = Task.await(run(ctx, turn), 60_000)
+      request = Enum.find(Arca.ThreadStorage.messages(actor, room.id), &(&1.status == "pending"))
+      assert {:ok, %{"applied" => 1}} = Aqua.Crew.drain(ctx.athanor_id)
+      [child] = Arca.ThreadStorage.children(actor, room.id)
+      %{start: start} = started!(fake, row)
+      assert start["system"] =~ @ask
+      refute start["system"] =~ "A member's reply that asks the person"
+      opening = sent()
+      assert {:ok, [job]} = Tape.open_turns(ctx, child.id)
+      [first] = inputs(ctx, job)
+      assert opening == with_facts(posted(first, job, "[aqua]\nExport the notes."))
+      say(fake, row, accepted(first))
+      say(fake, row, said(job, "msg_1", @question))
+      say(fake, row, idle(job, [first.id]))
+      await_turn!(ctx, job.id, "completed")
+
+      # The reply lands in the room and opens Aqua's turn, which gives the
+      # person its recommendation.
+      assert {:ok, %{"applied" => 1}} = Aqua.Crew.drain(ctx.athanor_id)
+
+      assert %{content: @question, sent_by: "claude-code", turn_id: woken} =
+               Enum.find(
+                 Arca.ThreadStorage.messages(actor, room.id),
+                 &(&1.reply_to == request.id)
+               )
+
+      assert woken != turn.id
+      await_turn!(ctx, woken, "completed")
+
+      assert [system] =
+               for(
+                 %{input: %{"operation" => "chat", "params" => %{"system" => system}}} <-
+                   ScriptedWorker.calls(),
+                 system =~ "This turn's id is `#{woken}`.",
+                 uniq: true,
+                 do: system
+               )
+
+      assert system =~ @handling
+
+      # The person answers Aqua, and Aqua hands their words to the member.
+      {:ok, %{turn_id: answered}} = Aqua.Runner.send_message(ctx, room.id, "PostgreSQL")
+      await_turn!(ctx, answered, "completed")
+      assert {:ok, %{"applied" => 1}} = Aqua.Crew.drain(ctx.athanor_id)
+      assert [child.id] == Enum.map(Arca.ThreadStorage.children(actor, room.id), & &1.id)
+      opened!(fake, row, "boot-two")
+      %{start: resumed} = begun!(fake, row)
+      assert resumed["session"] == @session
+      post = sent()
+      assert {:ok, [again]} = Tape.open_turns(ctx, child.id)
+      [handed] = inputs(ctx, again)
+      assert post == with_facts(posted(handed, again, "[aqua]\nPostgreSQL"))
+      say(fake, row, accepted(handed))
+      say(fake, row, said(again, "msg_2", "Exported to PostgreSQL."))
+      say(fake, row, idle(again, [handed.id]))
+      await_turn!(ctx, again.id, "completed")
+
+      # The member's thread in order: its posts, without each start's tool rows.
+      assert for(
+               %{kind: "text"} = m <- Arca.ThreadStorage.messages(actor, child.id),
+               do: {m.sent_by, m.content}
+             ) ==
+               [
+                 {"aqua", "Export the notes."},
+                 {"claude-code", @question},
+                 {"aqua", "PostgreSQL"},
+                 {"claude-code", "Exported to PostgreSQL."}
+               ]
+    end
+
+    test "a job handed under a schedule's turn is told nobody is there to answer",
+         %{ctx: ctx, thread: room, fake: fake} do
+      :ok = claude_code!(%{ctx | origin: :interactive})
+      ctx = %{ctx | origin: :schedule}
+      row = brain_row!(ctx, "claude")
+
+      {:ok, _} =
+        Tape.accept(ctx, room.id, %{
+          message: %{
+            author: "aqua",
+            sent_by: "aqua",
+            addressee: "claude-code",
+            status: "pending",
+            content: "Tidy the notes."
+          },
+          request: %{
+            member: "claude-code",
+            task: "Tidy the notes.",
+            person_id: ctx.user_id,
+            origin: :schedule
+          }
+        })
+
+      assert {:ok, %{"applied" => 1}} = Aqua.Crew.drain(ctx.athanor_id)
+      [child] = Arca.ThreadStorage.children(Sanctum.Context.actor(ctx), room.id)
+      started!(fake, row)
+      opening = sent()
+      assert {:ok, [job]} = Tape.open_turns(ctx, child.id)
+      [first] = inputs(ctx, job)
+      assert opening == with_facts(posted(first, job, "[aqua]\nTidy the notes."), :schedule)
+      say(fake, row, accepted(first))
+      say(fake, row, idle(job, [first.id]))
+      await_turn!(ctx, job.id, "completed")
     end
   end
 
@@ -1226,7 +1402,7 @@ defmodule Aqua.ProgramTest do
       assert String.replace(moving, ~r/ \d+s ago: /, " <age> ago: ") ==
                "## Open requests\n\nAsked and not yet answered; each reply arrives here as a " <>
                  "message of its own.\n- #{own_ask.id} to builder, asked by aqua <age> ago: " <>
-                 "build it\n\n\n---\n\n" <> facts()["text"]
+                 "build it\n\n\n---\n\n" <> facts(turn.id)["text"]
 
       say(fake, row, accepted(input))
       say(fake, row, idle(turn, [input.id]))
@@ -1389,17 +1565,16 @@ defmodule Aqua.ProgramTest do
       end
 
       line = fn bytes, rest ->
-        posted(
-          %{id: Prima.UUID7.generate_id("stp")},
-          %{id: Prima.UUID7.generate_id("trn")},
-          "tiny files",
-          [image.(bytes) | rest]
-        )
-        # The longest the turn's time reads.
+        turn = %{id: Prima.UUID7.generate_id("trn")}
+
+        posted(%{id: Prima.UUID7.generate_id("stp")}, turn, "tiny files", [image.(bytes) | rest])
+        # The longest the turn's facts read.
         |> Map.put("context", [
           %{
             "type" => "text",
-            "text" => "## Now\n\nCurrent date: 2026-11-25, Wednesday, 02:14 UTC"
+            "text" =>
+              "## This turn\n\nThis turn's id is `#{turn.id}`.\n\n---\n\n" <>
+                "## Now\n\nCurrent date: 2026-11-25, Wednesday, 02:14 UTC"
           }
         ])
         |> Jason.encode!()
@@ -3117,7 +3292,7 @@ defmodule Aqua.ProgramTest do
       assert work["id"] == start_step(ctx, turn).id
       post = sent()
       [input] = inputs(ctx, turn)
-      assert post == with_facts(posted(input, turn, "hello"))
+      assert post == with_facts(posted(input, turn, "hello"), :schedule)
       say(fake, row, accepted(input))
       say(fake, row, idle(turn, [input.id]))
       assert :completed = Task.await(loop, 30_000)
@@ -4843,7 +5018,7 @@ defmodule Aqua.ProgramTest do
       assert opening =~ ~r/\A## Open requests\n\n/
 
       assert ages =~
-               ~r/\A\d+s ago: Price the flights\n\n\n---\n\n## Now\n\nCurrent date: <now>\z/
+               ~r/\A\d+s ago: Price the flights\n\n\n---\n\n## This turn\n\nThis turn's id is `#{next.id}`\.\n\n---\n\n## Now\n\nCurrent date: <now>\z/
 
       assert Map.delete(post, "context") == posted(input, next, "second")
       say(fake, row, accepted(input))
@@ -8921,6 +9096,15 @@ defmodule Aqua.ProgramTest do
 
   defp run(ctx, turn), do: Task.async(fn -> Aqua.Loop.run(ctx: ctx, turn_id: turn.id) end)
 
+  # The turn reaches `status`.
+  defp await_turn!(ctx, turn_id, status) do
+    Prima.Test.Wait.wait_until(
+      fn -> match?({:ok, %{status: ^status}}, Tape.turn(ctx, turn_id)) end,
+      30_000,
+      "the turn to be #{status}"
+    )
+  end
+
   # A turn whose loop is gone after its model was asked, `take` run before
   # another takes it over: answers the turn, its recovery planned as an
   # adoption.
@@ -9960,9 +10144,29 @@ defmodule Aqua.ProgramTest do
       "[The assistant's work here was interrupted before it finished; tools may have " <>
         "partially executed. #{reason}]"
 
-  defp facts, do: %{"type" => "text", "text" => "## Now\n\nCurrent date: <now>"}
+  # A turn a schedule or a webhook started is told nobody answers it.
+  @nobody "\n\nNobody is here to answer in this turn: decide yourself, and say in your " <>
+            "reply what you assumed."
 
-  defp with_facts(post), do: Map.update(post, "context", [facts()], &(&1 ++ [facts()]))
+  defp facts(turn_id, origin \\ :interactive),
+    do: %{
+      "type" => "text",
+      "text" =>
+        "## This turn\n\nThis turn's id is `#{turn_id}`." <>
+          if(origin in [:schedule, :webhook], do: @nobody, else: "") <>
+          "\n\n---\n\n## Now\n\nCurrent date: <now>"
+    }
+
+  # The post with its turn's facts after its context, of the turn its work
+  # names, started under `origin`.
+  defp with_facts(%{"work" => turn_id} = post, origin \\ :interactive),
+    do:
+      Map.update(
+        post,
+        "context",
+        [facts(turn_id, origin)],
+        &(&1 ++ [facts(turn_id, origin)])
+      )
 
   # The driver's session opens and says hello once it stands: the open is
   # told before its session does.

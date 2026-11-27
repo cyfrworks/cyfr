@@ -128,6 +128,35 @@ defmodule Aqua.PromptTest do
       assert crew_at < open_at and open_at < now_at
     end
 
+    # A member's question is its reply to the soul, which alone hands a job
+    # on: what to do with one is said in the crew index, which only the
+    # soul's prompt carries.
+    test "the crew index says how to answer a member's question, and only the soul's carries it",
+         %{ctx: ctx} do
+      handling =
+        "A member's reply that asks the person waits on a decision: answer it yourself with " <>
+          "`crew.ask` to that member when you know the answer, or else give the person your " <>
+          "recommendation in one line and end your turn, and when they answer, hand their " <>
+          "words to that member with `crew.ask`, as they are."
+
+      soul =
+        Prompt.compose(ctx,
+          agent: agent(%{"crew.ask" => "auto"}),
+          authority: nil,
+          crew: [%{"name" => "builder", "brain" => "claude", "description" => "", "avoid" => ""}]
+        ).instructions
+
+      assert [_, crew] = String.split(soul, "\n\n---\n\n## Crew\n\n", parts: 2)
+      assert crew =~ handling
+
+      member = %{"name" => "builder", "prompt" => nil}
+
+      for own_tools? <- [true, false] do
+        refute Prompt.compose(ctx, agent: member, own_tools?: own_tools?, authority: nil).text =~
+                 "A member's reply that asks the person"
+      end
+    end
+
     test "no crew and no open request is no section", %{ctx: ctx} do
       prompt = Prompt.compose(ctx, agent: agent(), authority: nil).text
       refute prompt =~ "## Crew"
@@ -170,6 +199,32 @@ defmodule Aqua.PromptTest do
       assert five.text == five.instructions <> "\n\n---\n\n" <> five.facts
     end
 
+    # The turn's own id is a fact of the turn, after the open requests and
+    # before the clock; a turn a schedule or a webhook started is told
+    # nobody is there to answer, and one a person or a client started is not.
+    test "the facts name the turn's id, and tell a schedule's or a webhook's turn nobody answers",
+         %{ctx: ctx} do
+      nobody =
+        "Nobody is here to answer in this turn: decide yourself, and say in your reply " <>
+          "what you assumed."
+
+      for {origin, said} <- [
+            interactive: "",
+            programmatic: "",
+            schedule: "\n\n" <> nobody,
+            webhook: "\n\n" <> nobody
+          ] do
+        facts = Prompt.compose(%{ctx | origin: origin}, agent: agent(), turn_id: "trn_7").facts
+
+        assert facts =~
+                 ~r/\A## This turn\n\nThis turn's id is `trn_7`\.#{Regex.escape(said)}\n\n---\n\n## Now\n\nCurrent date: [^\n]+ UTC\z/
+
+        prompt = Prompt.compose(%{ctx | origin: origin}, agent: agent(), turn_id: "trn_7")
+        refute prompt.instructions =~ "trn_7"
+        refute prompt.instructions =~ "Nobody is here"
+      end
+    end
+
     test "with no open request the turn's facts are the time alone", %{ctx: ctx} do
       prompt = Prompt.compose(ctx, agent: agent(), authority: nil)
 
@@ -198,6 +253,10 @@ defmodule Aqua.PromptTest do
                 "`execution.run`; one with no grant does not, and `request_setup` asks for " <>
                 "it.\n- Never ask for a secret or a credential in a reply, and never keep one: " <>
                 "a component that needs one is set up through `request_setup`.\n" <>
+                "- When you need the person to decide, ask in your reply: the question in one " <>
+                "sentence and the choices as a short list. Finish or stop what you started " <>
+                "first, since your turn ends with that reply, and read the next message as " <>
+                "the answer.\n" <>
                 "- Never send, submit, buy or publish anything on a site, accept terms " <>
                 "or change an account without the person's word for that one act: nothing but " <>
                 "this instruction stops you. Read the `cyfr:browser` scroll before you use the " <>

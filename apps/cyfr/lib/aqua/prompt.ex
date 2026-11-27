@@ -36,7 +36,11 @@ defmodule Aqua.Prompt do
       thread, or in a workspace thread, with its title, what the person
       asked, read from its first opening, and its notes
       (`Aqua.Notes.thread_notes/1`); none for a crew member's thread.
+    * `turn_id` — the turn's own id, which its facts name.
 
+  The context's origin (`Prima.Origin`), the one its turn stores, says
+  whether anyone is there to answer: a turn a schedule or a webhook
+  started is told nobody is, and to decide for itself.
 
   A row it shows, the first opening's ask and each open request, is in
   `Aqua.Reader`'s words. The rule on scrolls and outside text names the
@@ -51,7 +55,8 @@ defmodule Aqua.Prompt do
   part, granted capabilities, tool prelude, scroll index, the athanor's
   rules file, athanor notes, the crew index and where the turn is. The
   turn's facts move by themselves: the open requests, whose ages move,
-  then the time. The whole
+  the turn's own id with whether anyone is there to answer, then the
+  time. The whole
   prompt is the two in that order, which keeps its prefix reusable. A
   program is handed the instructions alone at its start, and the facts
   with the first post of its process (`Aqua.Harness.Program`): a program handed
@@ -84,7 +89,8 @@ defmodule Aqua.Prompt do
           authority: term() | nil,
           crew: [map()],
           requests: [map()],
-          where: where() | nil
+          where: where() | nil,
+          turn_id: String.t() | nil
         ]
 
   @typedoc "Where a turn is, for its prompt's \"Where you are\"."
@@ -140,7 +146,11 @@ defmodule Aqua.Prompt do
       ])
 
     facts =
-      [requests(Keyword.get(opts, :requests, [])), clock()]
+      [
+        requests(Keyword.get(opts, :requests, [])),
+        this_turn(Keyword.get(opts, :turn_id), ctx.origin),
+        clock()
+      ]
       |> IO.iodata_to_binary()
       |> String.replace_prefix(@section, "")
 
@@ -178,6 +188,10 @@ defmodule Aqua.Prompt do
               "`execution.run`; one with no grant does not, and `request_setup` asks for it.\n" <>
               "- Never ask for a secret or a credential in a reply, and never keep one: a " <>
               "component that needs one is set up through `request_setup`.\n" <>
+              "- When you need the person to decide, ask in your reply: the question in one " <>
+              "sentence and the choices as a short list. Finish or stop what you started " <>
+              "first, since your turn ends with that reply, and read the next message as the " <>
+              "answer.\n" <>
               "- Never send, submit, buy or publish anything on a site, accept terms or change " <>
               "an account without the person's word for that one act: nothing but this " <>
               "instruction stops you. Read the `cyfr:browser` scroll before you use the " <>
@@ -211,6 +225,12 @@ defmodule Aqua.Prompt do
                         "says so; carry on with what does not depend on it.\n" <>
                         "- What you leave running ends when you answer. Wait for it before you " <>
                         "answer, and never say you will report on it later."
+
+  # The origins under which nobody is there to answer a question, and what a
+  # turn of one is told.
+  @unattended [:schedule, :webhook]
+  @nobody "Nobody is here to answer in this turn: decide yourself, and say in your reply " <>
+            "what you assumed."
 
   @search_briefing "\n- You have native search: use it when a job needs the web searched."
 
@@ -254,10 +274,10 @@ defmodule Aqua.Prompt do
   kind of brain in the same thread, Aqua and each crew member alike: the
   standing facts of working here (tools before telling the person, look
   and check, what runs as it is called, components and their grants,
-  secrets through setup, the browser's limit, failed calls, scrolls kept
-  current), then the rule on scrolls and outside text, which names the
-  thread's mark by its stand-in (`Aqua.Reader.token/0`). A brain with
-  tools of its own (`own_tools?`) is
+  secrets through setup, a question asked in the reply, the browser's
+  limit, failed calls, scrolls kept current), then the rule on scrolls
+  and outside text, which names the thread's mark by its stand-in
+  (`Aqua.Reader.token/0`). A brain with tools of its own (`own_tools?`) is
   told besides that its own tools act in its own folder and that the
   athanor is reached through CYFR's tools, which CYFR decides, and that
   what it leaves running ends as it answers; a brain whose
@@ -371,7 +391,8 @@ defmodule Aqua.Prompt do
   defp thread_notes(%{content: content}),
     do: ["\n\n### This thread's notes\n\n", content]
 
-  # Who the soul may hand a job to: the crew index, one line a member.
+  # Who the soul may hand a job to, and what it does with a member's reply
+  # that asks the person: the crew index, one line a member.
   defp crew([]), do: []
 
   defp crew(members) do
@@ -379,7 +400,11 @@ defmodule Aqua.Prompt do
       "\n\n---\n\n## Crew\n\nHand a job to one of these with `crew.ask` when it is what the " <>
         "member is good at. Each works it in a thread of its own under this one, with every " <>
         "tool you hold, and replies here when it is done, failed or stopped, or when it " <>
-        "needs the person; nothing waits for the reply. A schedule's line that opens " <>
+        "needs the person; nothing waits for the reply. A member's reply that asks the " <>
+        "person waits on a decision: answer it yourself with `crew.ask` to that member when " <>
+        "you know the answer, or else give the person your recommendation in one line and " <>
+        "end your turn, and when they answer, hand their words to that member with " <>
+        "`crew.ask`, as they are. A schedule's line that opens " <>
         "with \"<member> set this schedule:\" is that member's wake: hand it to that member " <>
         "with `crew.ask`, its text as the task.\n",
       Enum.map(members, fn member ->
@@ -413,6 +438,17 @@ defmodule Aqua.Prompt do
         "message of its own.\n",
       Enum.map(rows, &["- ", Reader.open_request(&1, now), "\n"])
     ]
+  end
+
+  # The turn's own id, and, for a turn a schedule or a webhook started, that
+  # nobody is there to answer a question it asks (`Prima.Origin`).
+  defp this_turn(turn_id, origin) do
+    lines = [turn_id && "This turn's id is `#{turn_id}`.", origin in @unattended && @nobody]
+
+    case Enum.filter(lines, & &1) do
+      [] -> []
+      lines -> [@section, "## This turn\n\n", Enum.join(lines, "\n\n")]
+    end
   end
 
   # Describe only granted scopes, using the names from

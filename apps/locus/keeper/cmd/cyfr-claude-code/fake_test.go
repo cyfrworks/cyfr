@@ -53,6 +53,11 @@ import (
 //	       for it
 //	noise  writes a line that is no JSON, one of no type the driver
 //	       reads and an event that does not read, then replies
+//	question  asks its own AskUserQuestion, as 2.1.323 asks it (F3), and
+//	       its own Bash, keeps the driver's two whole answers in
+//	       `$HOME/question-answers.json`, gives the model the first as
+//	       2.1.323 does (the message of a deny as an error result), then
+//	       replies with a question and its choices as a list
 //
 // The person's own servers are those `$HOME/.claude.json` names under
 // `mcpServers`, held unless it was started with `--strict-mcp-config`, as
@@ -158,6 +163,9 @@ func fakeClaude() int {
 		}
 		if server != nil {
 			request["mcp_server"] = server
+		}
+		if tool == "AskUserQuestion" {
+			request["requires_user_interaction"] = true
 		}
 		write(map[string]any{"type": "control_request", "request_id": id, "request": request})
 		return <-ch
@@ -357,6 +365,31 @@ func fakeClaude() int {
 				map[string]any{"type": "tool_use", "id": "toolu_late", "name": tool, "input": input}}}})
 			askOf(tool, input, server, "toolu_late")
 			reply(uuids, "ended with the call unanswered")
+		case strings.Contains(words, "question"):
+			input := map[string]any{"questions": []any{map[string]any{"question": "Which database should the export target?", "header": "Database",
+				"multiSelect": false, "options": []any{map[string]any{"label": "PostgreSQL", "description": "the server"}, map[string]any{"label": "SQLite", "description": "a file"}}}}}
+			write(map[string]any{"type": "assistant", "parent_tool_use_id": nil, "message": map[string]any{"id": "msg_question", "content": []any{
+				map[string]any{"type": "tool_use", "id": "toolu_question", "name": "AskUserQuestion", "input": input}}}})
+			decision := askOf("AskUserQuestion", input, nil, "toolu_question")
+			ids := []string{fmt.Sprintf("ask-%d", asked)}
+			// As 2.1.323 gives the model each (F3): a deny's message as an
+			// error result, an allow's unanswered questions as a plain one.
+			result := map[string]any{"type": "tool_result", "tool_use_id": "toolu_question", "content": "The user did not answer the questions."}
+			if decision["behavior"] == "deny" {
+				result = map[string]any{"type": "tool_result", "tool_use_id": "toolu_question", "content": decision["message"], "is_error": true}
+			}
+			write(map[string]any{"type": "user", "parent_tool_use_id": nil, "message": map[string]any{"role": "user", "content": []any{result}}})
+			ask("Bash", map[string]any{"command": "touch export.sql"})
+			ids = append(ids, fmt.Sprintf("ask-%d", asked))
+			answersMu.Lock()
+			got := []any{}
+			for _, id := range ids {
+				got = append(got, wholes[id])
+			}
+			answersMu.Unlock()
+			line, _ := json.Marshal(got)
+			_ = os.WriteFile(filepath.Join(home, "question-answers.json"), line, 0o600)
+			reply(uuids, "Which database should the export target?\n\n- PostgreSQL\n- SQLite")
 		case strings.Contains(words, "handed"):
 			reply(uuids, string(initialized))
 		case strings.Contains(words, "noise"):
