@@ -440,7 +440,7 @@ def test_runner_bound(stack, plane):
     # children take their memory, then let complete.
     sibling = plane.mint(stack.boot, "reagent", ECHO_REF, wasm(ECHO), {"sibling": "alive"}, "ath_mem_sibling", 30_000)
     release_sibling = held(plane, "attach", sibling["execution_id"])
-    expect(stack.start(sibling)[1] == {"v": 2, "ok": True}, "a sibling subtree starts and is held at its attach")
+    expect(stack.start(sibling)[1] == {"v": 3, "ok": True}, "a sibling subtree starts and is held at its attach")
     sibling_runner = attached_runner(stack, plane, sibling)
 
     # The formula spawns its children, each admitted for its runner, and
@@ -464,7 +464,7 @@ def bound_case(stack, plane, bound, count, sibling, release_sibling, sibling_run
     # emit for seconds, not for a runner's boot.
     release_formula = held(plane, "fetch_artifact", formula["execution_id"])
     try:
-        expect(stack.start(formula)[1] == {"v": 2, "ok": True}, f"a formula that spawns {count} children and awaits them all starts")
+        expect(stack.start(formula)[1] == {"v": 3, "ok": True}, f"a formula that spawns {count} children and awaits them all starts")
         runner = attached_runner(stack, plane, formula)
         plane.wait_seen("fetch_artifact", formula["execution_id"], 30)
         expect(runner["uid"] != sibling_runner["uid"], "the formula and the sibling run under different uids",
@@ -564,13 +564,13 @@ def bound_case(stack, plane, bound, count, sibling, release_sibling, sibling_run
            f"detection: the group's own counters count the kill ({events})", sampler.samples[-5:])
 
     # Durable settlement: the service reported the runner's exit holding the
-    # formula's attempt and every child's.
+    # formula's attempt and every child's, ended at its own bound.
     expect(len(exits) == 1 and exits[0]["args"]["runner"] == runner["runner"] and exits[0]["report"]["service"] == SERVICE
            and exits[0]["answered"] == "ok" and set(exits[0]["attempts"]) == attempts
-           and len(exits[0]["attempts"]) == len(attempts),
+           and len(exits[0]["attempts"]) == len(attempts) and exits[0]["args"].get("memory") == "cap",
            f"settlement: the service reported runner {runner['runner']}'s exit once, {exits[0]['at'] - ending['let_at']:.2f} s "
-           f"after child {n_last} was let, holding the formula's attempt and its {count} children's",
-           {"exits": exits, "attempts": sorted(attempts)})
+           f"after child {n_last} was let, holding the formula's attempt and its {count} children's, ended at its own "
+           "memory bound", {"exits": exits, "attempts": sorted(attempts)})
     wait_until(lambda: stack.runners()["busy"] == 1 and stack.runners()["tainted"] == 0, 10,
                "the formula's runner to leave the pool, the sibling alone busy")
     expect(not attempts & set(stack.attempts()), "settlement: the service holds none of the formula's attempts", stack.attempts())
@@ -640,7 +640,7 @@ def reuse_uid(stack, plane, hostile, tries=12):
             if process["uid"] == hostile["uid"]:
                 return {**process, "group": wait_until(lambda: read_group(stack, process["uid"]), 10, "the new runner's group")}
         attempt = plane.mint(stack.boot, "reagent", ECHO_REF, wasm(ECHO), {"cycle": n}, f"ath_mem_cycle_{n}", 30_000)
-        expect(stack.start(attempt)[1] == {"v": 2, "ok": True}, f"a subtree of another athanor starts ({n + 1})")
+        expect(stack.start(attempt)[1] == {"v": 3, "ok": True}, f"a subtree of another athanor starts ({n + 1})")
         terminal(plane, attempt["execution_id"], BOOT_S)
         time.sleep(stack.idle_ttl_ms / 1000 + 0.5)
     sys.exit(f"FAIL: uid {hostile['uid']} was not given to a runner again within {tries} subtrees")
@@ -771,7 +771,7 @@ def run_workload(stack, plane, label, component, input_, children, athanor):
     if children:
         admit_children(plane, stack, attempt, children)
     code, answer = stack.start(attempt)
-    expect(code == 200 and answer == {"v": 2, "ok": True}, f"{label}: starts", answer)
+    expect(code == 200 and answer == {"v": 3, "ok": True}, f"{label}: starts", answer)
     runner = attached_runner(stack, plane, attempt)
     closed = terminal(plane, attempt["execution_id"], 180)
     measured = read_group(stack, runner["uid"])

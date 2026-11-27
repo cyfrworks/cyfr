@@ -73,8 +73,12 @@ defmodule Emissary.External.Server do
 
   A session whose process ended — idle past the owner's idle period, a
   crash, a restart of the service — reads `running: false`: every call
-  awaiting it fails, and the next call opens the session again,
-  initializing the program afresh. The tools listed stay listed meanwhile.
+  awaiting it fails, saying so (and, where memory ended it, which of its
+  three causes did, `Prima.Refusal`'s `{:memory, name, cause}`), and the
+  next call opens the session again, initializing the program afresh. A
+  session refused for room says that this CYFR has not enough memory free,
+  and names no program, size or sum: a component calling the tool is told
+  as much as anyone. The tools listed stay listed meanwhile.
 
   One member of the cell runs an owner; a member that does not hold its
   claim refuses the connection (`:claimed_elsewhere`). A call the service
@@ -675,14 +679,14 @@ defmodule Emissary.External.Server do
   # Lines the program's session wrote, from its reader, which waits to be
   # told whether to read on.
   def handle_info(
-        {:session_lines, session, lines, last, running, reader},
+        {:session_lines, session, lines, last, ended, reader},
         %State{session: %{session: session}} = state
       ) do
     {state, _awaited} = on_lines(state, lines, nil)
-    {:noreply, after_read(state, last, running, reader, false)}
+    {:noreply, after_read(state, last, ended, reader, false)}
   end
 
-  def handle_info({:session_lines, _session, _lines, _last, _running, reader}, state) do
+  def handle_info({:session_lines, _session, _lines, _last, _ended, reader}, state) do
     send(reader, :stop)
     {:noreply, state}
   end
@@ -1122,17 +1126,36 @@ defmodule Emissary.External.Server do
         program_connect(drop_session(%{state | grant: nil}, :refused), 1)
 
       {:error, reason, state} ->
-        fail_initialize(drop_session(%{state | grant: nil}, :failed), backends_reason(reason))
+        fail_initialize(
+          drop_session(%{state | grant: nil}, :failed),
+          backends_words(state, reason)
+        )
 
       {:error, reason} ->
-        fail_initialize(drop_session(%{state | grant: nil}, :failed), backends_reason(reason))
+        fail_initialize(
+          drop_session(%{state | grant: nil}, :failed),
+          backends_words(state, reason)
+        )
     end
   end
 
   # The program's session ended under a call: the call fails with that
   # sentence, and the session is dropped so the next call opens it again.
-  defp program_ended(state),
+  defp program_ended(state, {:ended_by, _cause} = ended),
+    do: {:error, ended_words(state, ended), session_ended(state, ended)}
+
+  defp program_ended(state, _ended),
     do: {:error, "#{state.name} ended", session_ended(state, :ended)}
+
+  # How a session's end reads to a call it ended: memory said by its
+  # cause, anything else as ending before it answered.
+  defp ended(nil), do: :ended
+  defp ended(cause), do: {:ended_by, cause}
+
+  defp ended_words(state, {:ended_by, cause}),
+    do: Prima.Refusal.message({:memory, state.name, cause})
+
+  defp ended_words(state, _ended), do: "#{state.name} ended before it answered"
 
   # ============================================================================
   # A program's session
@@ -1264,14 +1287,14 @@ defmodule Emissary.External.Server do
       {:ok, :running} ->
         await(start_reader(state), session, id, deadline)
 
-      {:ok, :ended} when not retried? ->
+      {:ok, ended} when ended != :running and not retried? ->
         reopen(state, &request(&1, method, params, true))
 
       {:error, {:refused, :unknown_session, _boot}} when not retried? ->
         reopen(state, &request(&1, method, params, true))
 
-      {:ok, :ended} ->
-        program_ended(state)
+      {:ok, ended} ->
+        program_ended(state, ended)
 
       {:error, reason} ->
         {:error, reason, session_ended(state, :refused)}
@@ -1289,9 +1312,9 @@ defmodule Emissary.External.Server do
     wait = max(deadline - System.monotonic_time(:millisecond), 0)
 
     receive do
-      {:session_lines, ^session, lines, last, running, reader} ->
+      {:session_lines, ^session, lines, last, ended, reader} ->
         {state, found} = on_lines(state, lines, id)
-        state = after_read(state, last, running, reader, found == nil)
+        state = after_read(state, last, ended, reader, found == nil)
 
         case found do
           {:ok, %Message{type: :response, result: result}} ->
@@ -1300,11 +1323,11 @@ defmodule Emissary.External.Server do
           {:ok, %Message{type: :error, error: error}} ->
             {:error, server_error(error), state}
 
-          nil when running ->
+          nil when ended == :running ->
             await(state, session, id, deadline)
 
           nil ->
-            {:error, "#{state.name} ended before it answered", state}
+            {:error, ended_words(state, ended), state}
         end
 
       {:session_lost, ^session, reason} ->
@@ -1320,7 +1343,7 @@ defmodule Emissary.External.Server do
 
     case Opus.Programs.Session.send(state.grant, session, [line]) do
       {:ok, :running} -> {:ok, state}
-      {:ok, :ended} -> program_ended(state)
+      {:ok, ended} -> program_ended(state, ended)
       {:error, reason} -> {:error, reason, session_ended(state, :refused)}
     end
   end
@@ -1399,15 +1422,15 @@ defmodule Emissary.External.Server do
   # idle period, so a reader polling an idle session would keep it running
   # for ever. Lines the program writes while no one reads wait in the
   # service's buffer and are read by the next reader, from `after`.
-  defp after_read(state, last, running, reader, awaiting?) do
+  defp after_read(state, last, ended, reader, awaiting?) do
     case state.session do
       %{reader: ^reader} = session ->
         session = %{session | after: max(session.after, last)}
 
         cond do
-          not running ->
+          ended != :running ->
             send(reader, :stop)
-            session_ended(%{state | session: session}, :ended)
+            session_ended(%{state | session: session}, ended)
 
           awaiting? or state.pending != %{} ->
             send(reader, {:continue, session.after})
@@ -1454,9 +1477,10 @@ defmodule Emissary.External.Server do
   # server, which says whether to read on.
   defp read(server, grant, session, after_seq) do
     case Opus.Programs.Session.recv(grant, session, after_seq, @recv_wait_ms) do
-      {:ok, %{lines: lines, running: running}} ->
+      {:ok, %{lines: lines, running: running, ended_by: ended_by}} ->
         last = if lines == [], do: after_seq, else: List.last(lines).seq
-        send(server, {:session_lines, session, Enum.map(lines, & &1.text), last, running, self()})
+        ended = if running, do: :running, else: ended(ended_by)
+        send(server, {:session_lines, session, Enum.map(lines, & &1.text), last, ended, self()})
 
         receive do
           {:continue, from} -> read(server, grant, session, from)
@@ -1480,8 +1504,8 @@ defmodule Emissary.External.Server do
           {:rpc_reply, ^id, message} ->
             {:ok, message}
 
-          {:rpc_failed, ^id, _reason} ->
-            {:error, "#{state.name} ended before it answered"}
+          {:rpc_failed, ^id, reason} ->
+            {:error, ended_words(state, reason)}
         after
           state.timeout_ms -> {:error, {:uncertain, "timeout: #{body["method"]}"}}
         end
@@ -1489,18 +1513,43 @@ defmodule Emissary.External.Server do
       {:ok, :ended} ->
         {:backends_refused, :session_ended, nil}
 
+      {:ok, {:ended_by, _cause}} ->
+        {:backends_refused, :session_ended, nil}
+
       {:error, {:refused, :unknown_session, _boot}} ->
         {:backends_refused, :session_ended, nil}
 
-      {:error, {:refused, code, boot}} ->
+      {:error, {:refused, code, boot}} when is_atom(code) ->
         {:backends_refused, code, boot}
 
       {:error, reason} ->
-        {:error, backends_reason(reason)}
+        {:error, said(backends_words(state, reason))}
     end
   end
 
   defp upstream(state, body), do: http_post(state, body)
+
+  # A start refused for room says so and no more: its words reach whoever
+  # called the tool, a component in a chain among them, which is untrusted
+  # code, so they name no program, size or sum (the person reads those on
+  # Aqua's turn, the terminal and the Aqua page). Tagged so that its log
+  # line says only that it was refused for room.
+  defp backends_words(state, {:refused, {:capacity, _held}, _boot}), do: no_room(state, :memory)
+  defp backends_words(state, {:refused, :capacity, _boot}), do: no_room(state, :places)
+  defp backends_words(state, :capacity), do: no_room(state, :places)
+  defp backends_words(_state, reason), do: backends_reason(reason)
+
+  defp no_room(state, :memory),
+    do:
+      {:no_room,
+       "#{state.name} could not start: this CYFR has not enough memory free. Stop one on " <>
+         "the Programs page, or wait."}
+
+  defp no_room(state, :places),
+    do: {:no_room, Prima.Refusal.message({:program_full, state.name, nil, %{}})}
+
+  defp said({:no_room, sentence}), do: sentence
+  defp said(words), do: words
 
   defp backends_reason({:refused, code, _boot}),
     do: "the backends service refused (#{code})"
@@ -1516,7 +1565,6 @@ defmodule Emissary.External.Server do
 
   defp backends_reason(:deadline), do: "the backends service did not answer in time"
   defp backends_reason(:control_plane_lost), do: "this server does not own its control plane"
-  defp backends_reason(:capacity), do: "the backends service has no room for another program"
 
   defp backends_reason(:claimed_elsewhere),
     do: "another server of the cluster holds this server's program"
@@ -1557,6 +1605,7 @@ defmodule Emissary.External.Server do
   end
 
   defp failure_sentence({:outside_error, words}), do: words
+  defp failure_sentence({:no_room, sentence}), do: sentence
   defp failure_sentence(reason) when is_binary(reason), do: reason
   defp failure_sentence(%{__exception__: true} = exception), do: Exception.message(exception)
   defp failure_sentence(reason), do: Refusals.render(reason)
@@ -2361,6 +2410,10 @@ defmodule Emissary.External.Server do
   # their arity and renders it in any form (escaped, or as bytes when a
   # binary is not printable), cut to its usual bounds; the printed line is
   # masked once more for a value the term held as a charlist.
+  # A refusal for room is logged as that alone: its sentence names the
+  # person's programs and their sizes, which no log line carries.
+  defp log_reason({:no_room, _sentence}, _state), do: "a start was refused for room"
+
   defp log_reason(reason, state) do
     values = sensitive_header_values(state)
 

@@ -407,7 +407,7 @@ def check_vectors():
     compare("owner_key", owner_key(key, owner["athanor"], owner["server"], owner["generation"],
                                    owner["epoch"]).hex(), WIRE["owner_key_hex"])
 
-    compare("version", VERSION, 7)
+    compare("version", VERSION, 8)
     compare("routes", sorted(ROUTES), ["close", "control", "health", "session"])
     for kind in ["hello", "reconcile", "sync", "renew", "release", "status", "home"]:
         vector = WIRE[kind]
@@ -427,7 +427,7 @@ def check_vectors():
         signing = owner_key(key, fields["athanor"], fields["server"], fields["generation"], fields["epoch"])
         message = json.loads(vector["body"])
         compare(f"{kind}.body", wire_json(message).decode(), vector["body"])
-        for answer in ["answer", "answer_ended", "answer_held"]:
+        for answer in ["answer", "answer_ended", "answer_held", "answer_memory"]:
             if answer in vector:
                 compare(f"{kind}.{answer}", wire_json(json.loads(vector[answer])).decode(), vector[answer])
         compare(f"{kind}.owner", [message["owner"], message["e"]],
@@ -872,8 +872,11 @@ class McpClient:
                     return 200, message
             if not answer["running"]:
                 self.session = None
-                return 200, {"jsonrpc": "2.0", "id": id, "ended": "before_answer",
-                             "error": {"code": -32000, "message": "the session ended before the program answered"}}
+                ended = {"jsonrpc": "2.0", "id": id, "ended": "before_answer",
+                         "error": {"code": -32000, "message": "the session ended before the program answered"}}
+                if "ended_by" in answer:
+                    ended["ended_by"] = answer["ended_by"]
+                return 200, ended
 
     def request(self, method, params):
         """One request answered: (status, the JSON-RPC answer)."""

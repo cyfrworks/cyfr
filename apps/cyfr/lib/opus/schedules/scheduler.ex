@@ -227,6 +227,9 @@ defmodule Opus.Schedules.Scheduler do
   @max_catch_up 24
   # What a schedule says of a run whose end is not known.
   @unknown_end "Last run did not report its end, so whether it had its effect is not known."
+  # The memory limit a lapsed attempt records (`ended_by`), by its value.
+  @memory_causes %{"cap" => :cap, "machine" => :machine, "either" => :either}
+  @memory_ends Map.keys(@memory_causes)
   # Two ticks: the grace a live member's lapsed run is given, and the age at
   # which a claim is any member's to recover (`abandoned_before/0`). The
   # standing pass comes a second later than this (`arm_standing/1`).
@@ -2000,10 +2003,19 @@ defmodule Opus.Schedules.Scheduler do
 
   # A failed row whose attempt lapsed was never closed by its run: only a
   # lapse leaves the current attempt `lapsed`; a run's own failure closes it.
+  # One whose runner a report says memory ended keeps that cause, recorded
+  # on the attempt (`ended_by`), and its effect is not known either.
   defp failed(actor, execution_id, row, reason) do
     case Arca.ExecutionAttempts.current(actor, execution_id) do
-      %{state: "lapsed"} -> @unknown_end
-      _closed_or_unread -> sentence("Last run failed", kept(row, reason))
+      %{state: "lapsed", ended_by: cause} when cause in @memory_ends ->
+        Prima.Refusal.message({:memory, "Last run", Map.fetch!(@memory_causes, cause)}) <>
+          " Whether it had its effect is not known."
+
+      %{state: "lapsed"} ->
+        @unknown_end
+
+      _closed_or_unread ->
+        sentence("Last run failed", kept(row, reason))
     end
   end
 

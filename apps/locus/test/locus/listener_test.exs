@@ -563,7 +563,7 @@ defmodule Locus.ListenerTest do
         Enum.reduce(
           [
             ~s({"op":"status","args":{}}),
-            ~s({"v":3,"op":"status","args":{}}),
+            ~s({"v":4,"op":"status","args":{}}),
             ~s({"v":"2","op":"status","args":{}})
           ],
           connect(ctx.port),
@@ -597,7 +597,7 @@ defmodule Locus.ListenerTest do
   defp kill_body,
     do: Jason.encode!(WorkerWire.request_body(:kill, %{"execution_id" => "exec_x"}))
 
-  defp wl(reason), do: ~s({"v":2,"error":"#{reason}"})
+  defp wl(reason), do: ~s({"v":3,"error":"#{reason}"})
 
   defp runtime_header(ctx, body, opts \\ []) do
     request = %{
@@ -620,7 +620,7 @@ defmodule Locus.ListenerTest do
 
     {answer, client} = answer(client)
     assert answer.status == 200
-    assert %{"v" => 2, "ok" => %{"service" => "wrk_local"}} = Jason.decode!(answer.body)
+    assert %{"v" => 3, "ok" => %{"service" => "wrk_local"}} = Jason.decode!(answer.body)
     client
   end
 
@@ -929,7 +929,7 @@ defmodule Locus.ListenerTest do
   defp close_route, do: LB.route(:close)
   defp backends_health_route, do: LB.route(:health)
 
-  defp lb(code), do: ~s({"error":"#{code}","version":7})
+  defp lb(code), do: ~s({"error":"#{code}","version":8})
 
   defp seq, do: System.unique_integer([:positive, :monotonic]) + 1_000
 
@@ -1452,7 +1452,7 @@ defmodule Locus.ListenerTest do
       for {body, status, code} <- [
             {~s({"version":2}), 409, :version},
             {~s({}), 409, :version},
-            {~s({"version":7,"x":1}), 400, :bad_request}
+            {~s({"version":8,"x":1}), 400, :bad_request}
           ] do
         client = ctx.port |> connect() |> send_request("POST", backends_health_route(), [], body)
         {_answer, client} = assert_refused(client, status, lb(code), :open)

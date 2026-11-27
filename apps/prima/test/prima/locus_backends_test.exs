@@ -125,7 +125,7 @@ defmodule Prima.LocusBackendsTest do
       assert :ok = LocusBackends.read_health(LocusBackends.health_body())
       assert {:error, {:version, 1}} = LocusBackends.read_health(~s({"version":1}))
       assert {:error, {:version, nil}} = LocusBackends.read_health("{}")
-      assert {:error, {:unknown_field, "x"}} = LocusBackends.read_health(~s({"version":7,"x":1}))
+      assert {:error, {:unknown_field, "x"}} = LocusBackends.read_health(~s({"version":8,"x":1}))
       assert {:error, :not_json} = LocusBackends.read_health("[]")
     end
 
@@ -360,6 +360,41 @@ defmodule Prima.LocusBackendsTest do
       {:ok, running} = LocusBackends.read_session_answer(:recv, @vectors["recv"]["answer"])
       assert running.exit_code == nil
       refute @vectors["recv"]["answer"] =~ "exit_code"
+    end
+
+    test "an answer that says a session ended carries what ended it for memory, and no other does" do
+      for %{"type" => type, "body" => body, "ended_by" => cause} <- @vectors["ended_by"]["valid"] do
+        type = String.to_existing_atom(type)
+        expected = if cause, do: String.to_existing_atom(cause)
+
+        assert {:ok, %{ended_by: ^expected} = answer} =
+                 LocusBackends.read_session_answer(type, body),
+               body
+
+        assert {:ok, ^body} = LocusBackends.encode_session_answer(type, answer)
+      end
+
+      for %{"name" => name, "type" => type, "body" => body} <- @vectors["ended_by"]["invalid"] do
+        assert {:error, {:invalid_field, "ended_by"}} =
+                 LocusBackends.read_session_answer(String.to_existing_atom(type), body),
+               name
+      end
+
+      assert {:ok, %{ended_by: :machine, running: false}} =
+               LocusBackends.read_session_answer(:recv, @vectors["recv"]["answer_memory"])
+
+      assert {:ok, %{ended_by: :cap, running: false}} =
+               LocusBackends.read_session_answer(:output, @vectors["output"]["answer_memory"])
+
+      assert {:ok, %{ended_by: :either, status: :ended}} =
+               LocusBackends.read_session_answer(:send, @vectors["send"]["answer_memory"])
+
+      # One that ended for no memory carries none, and a running one never does.
+      assert {:ok, %{ended_by: nil}} =
+               LocusBackends.read_session_answer(:recv, @vectors["recv"]["answer_ended"])
+
+      assert {:error, {:invalid_field, "ended_by"}} =
+               LocusBackends.encode_session_answer(:send, %{status: :running, ended_by: :cap})
     end
 
     test "a session body is bounded before it is parsed" do
@@ -787,11 +822,11 @@ defmodule Prima.LocusBackendsTest do
       assert {:error, {:version, 1}} = LocusBackends.read_control(~s({"version":1,"type":"nope"}))
       assert {:error, {:version, nil}} = LocusBackends.read_control(~s({"type":"hello"}))
       assert {:error, {:version, 1}} = LocusBackends.read_session(~s({"version":1,"type":"open"}))
-      assert {:protocol_mismatch, 7, 2} = LocusBackends.refusal_for({:version, 2})
-      assert {:protocol_mismatch, 7, nil} = LocusBackends.refusal_for({:version, "7"})
+      assert {:protocol_mismatch, 8, 2} = LocusBackends.refusal_for({:version, 2})
+      assert {:protocol_mismatch, 8, nil} = LocusBackends.refusal_for({:version, "8"})
 
-      assert LocusBackends.encode_refusal({:protocol_mismatch, 7, 2}) ==
-               ~s({"error":"version","version":7})
+      assert LocusBackends.encode_refusal({:protocol_mismatch, 8, 2}) ==
+               ~s({"error":"version","version":8})
 
       assert LocusBackends.status({:protocol_mismatch, 5, nil}) == 409
 

@@ -183,7 +183,8 @@ defmodule Locus.Runtime.KeeperMemoryTest do
   end
 
   describe "a runner ended at its bound" do
-    test "reaches its handle as the signal that ended it, logged as ended at its bound", ctx do
+    test "reaches its handle as the signal and the bound that ended it, logged as ended at its bound",
+         ctx do
       at_bound =
         Enum.find(@vectors["replies"], &(&1["type"] == "exited" and &1["memory"] == "cap"))
 
@@ -201,8 +202,10 @@ defmodule Locus.Runtime.KeeperMemoryTest do
           # follows the connection's.
           reply(keeper, at_bound)
           :gen_tcp.close(relay)
+          # The end is held for the stream's close, then told with its
+          # cause: the pool hears the cause at the end, whatever came first.
           assert_receive {RunnerProcess, ^handle, :closed}, 5_000
-          assert_receive {RunnerProcess, ^handle, {:exited, {:signal, "SIGKILL"}}}, 5_000
+          assert_receive {RunnerProcess, ^handle, {:exited, {:signal, "SIGKILL"}, :cap}}, 5_000
         end)
 
       # The bound its place answered, which the image suite reads back.
@@ -234,7 +237,10 @@ defmodule Locus.Runtime.KeeperMemoryTest do
               memory: unquote(memory)
             })
 
-            assert_receive {RunnerProcess, ^handle, {:exited, {:signal, "SIGKILL"}}}, 5_000
+            cause = unquote(memory && String.to_atom(memory))
+
+            assert_receive {RunnerProcess, ^handle, {:exited, {:signal, "SIGKILL"}, ^cause}},
+                           5_000
           end)
 
         refute log =~ "memory bound"
@@ -294,9 +300,10 @@ defmodule Locus.Runtime.KeeperMemoryTest do
         })
 
         # The memory killed every process, so the relay ends, and the end
-        # follows the connection's.
+        # follows the connection's: the runner is gone by its end, with
+        # the bound that ended it.
         :gen_tcp.close(relay)
-        assert_receive {RunnerPool, ^pid, {:gone, _reason}}, 5_000
+        assert_receive {RunnerPool, ^pid, {:gone, {:exited, {:signal, "SIGKILL"}, :cap}}}, 5_000
       end)
 
       # Tainted and released through the keeper at once, with no grace.

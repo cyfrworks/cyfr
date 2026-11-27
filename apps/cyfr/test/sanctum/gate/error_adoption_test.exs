@@ -65,7 +65,7 @@ defmodule Sanctum.Gate.ErrorAdoptionTest do
     # to keep, and a listing of more pages than the client reads. A connect
     # answers its caller the masked sentence it keeps as its status error,
     # so nothing branches on the reason.
-    "apps/cyfr/lib/emissary/external/server.ex" => 21,
+    "apps/cyfr/lib/emissary/external/server.ex" => 19,
     # What is wrong with the values offered (an empty field, a cron
     # expression, a reference that does not resolve) and the cap reached.
     "apps/cyfr/lib/opus/schedules/provider.ex" => 3,

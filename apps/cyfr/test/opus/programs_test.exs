@@ -1515,6 +1515,94 @@ defmodule Opus.ProgramsTest do
       assert_receive {:invoke, "initialize", _fields}, 2_000
     end
 
+    for {cause, words} <- [
+          cap: "it needed more memory than one piece of work may use on this machine.",
+          machine: "CYFR ran out of memory for what it runs.",
+          either:
+            "it ran out of memory, and CYFR could not tell whether its own cap or a limit " <>
+              "above it did it."
+        ] do
+      @cause cause
+      @words words
+      test "a session memory ends (#{cause}) fails the call awaiting it saying so, and the " <>
+             "next call opens it again",
+           %{ctx: ctx, fake: fake} do
+        start_controller(fake)
+        row = mcp_row(ctx, "hungry-#{@cause}", %{"NODE_ENV" => "production"})
+        pid = connect(ctx, row)
+        Scripted.set(fake, :silent, ["tools/call"])
+
+        call = Task.async(fn -> Emissary.External.Server.call_tool(pid, "search", %{}) end)
+        assert_receive {:invoke, "tools/call", _fields}, 2_000
+        Scripted.end_sessions_for_memory(fake, row.id, @cause)
+
+        assert {:error, sentence} = Task.await(call, 5_000)
+        assert sentence =~ "#{row.name} stopped: #{@words}"
+
+        Scripted.set(fake, :silent, [])
+        assert {:ok, _} = Emissary.External.Server.call_tool(pid, "search", %{})
+        assert_receive {:invoke, "initialize", _fields}, 2_000
+      end
+    end
+
+    test "a tool's start refused for room says so, naming no program, size or sum",
+         %{ctx: ctx, fake: fake} do
+      start_controller(fake)
+      other = mcp_row(ctx, "holder", %{"NODE_ENV" => "production"})
+      row = mcp_row(ctx, "refused", %{"NODE_ENV" => "production"})
+
+      held = %{
+        need: 402_653_184,
+        free: 0,
+        mine: [%{kind: "program", subject: other.id, bytes: 524_288_000}],
+        others_bytes: 104_857_600
+      }
+
+      Scripted.refuse_once(fake, "open", {"capacity", held})
+
+      assert {:error, sentence} = Servers.ensure_started(row, ctx)
+
+      assert sentence =~
+               "refused could not start: this CYFR has not enough memory free. Stop one on the " <>
+                 "Programs page, or wait."
+
+      refute sentence =~ "holder"
+
+      refute sentence =~ "backends"
+    end
+
+    # A component in a chain is untrusted code: what its call of a program's
+    # tool is told of a start refused for room names no program, size or sum.
+    test "a component's call of a program tool refused for room is told no name, size or sum",
+         %{ctx: ctx, fake: fake} do
+      start_controller(fake)
+      other = mcp_row(ctx, "holder", %{"NODE_ENV" => "production"})
+      row = mcp_row(ctx, "refused", %{"NODE_ENV" => "production"})
+
+      held = %{
+        need: 402_653_184,
+        free: 0,
+        mine: [%{kind: "program", subject: other.id, bytes: 524_288_000}],
+        others_bytes: 104_857_600
+      }
+
+      Scripted.refuse_once(fake, "open", {"capacity", held})
+
+      # As the proxy reaches it (`Emissary.External.Proxy.dispatch_external/5`).
+      assert {:ok, pid} =
+               Emissary.External.ServerSupervisor.ensure_started(Servers.server_config(row, ctx))
+
+      assert {:error, reason} = Emissary.External.Server.call_tool(pid, "search", %{})
+
+      # The proxy's `classified/1`, then `Opus.Host.Children.tool_refusal/2`'s message.
+      message = reason |> Sanctum.Refusals.classify() |> Sanctum.Refusals.render()
+
+      assert message =~ "not enough memory free"
+      refute message =~ "holder"
+      refute message =~ ~r/\d+(\.\d+)? ?[KMGT]?B\b/
+      refute message =~ ~r/others|of yours/i
+    end
+
     test "a driven program syncs its program with its settings and has no MCP process",
          %{ctx: ctx, fake: fake} do
       start_controller(fake)

@@ -493,10 +493,12 @@ defmodule Aqua.Harness.Program do
   defp refused_open(work, {:not_admitted, :generation_moved}), do: lost(work, :forgotten)
   defp refused_open(work, {:not_admitted, _reason}), do: refused(work, :not_admitted)
 
-  # The backends refused for want of room, at its owner's hold or at the
-  # session's open: the person reads why, not that the program is away.
-  defp refused_open(work, {:refused, :capacity, _boot}), do: refused_open(work, :capacity)
-  defp refused_open(work, :capacity), do: {:refused, {:program_full, work.title}}
+  # The backends refused for want of room, at the session's open with what
+  # holds the memory, or for want of a program's place at its owner's
+  # hold: the person reads why, their own holdings by the names the brain
+  # read for them (`Opus.Brain.open/1`), not that the program is away.
+  defp refused_open(work, {:no_room, held, names}),
+    do: {:refused, {:program_full, work.title, held, names}}
 
   # A program that loads the person's packs did not open for them: said
   # as the refusal says it (`Prima.Refusal`).
@@ -513,6 +515,7 @@ defmodule Aqua.Harness.Program do
 
   defp again(work), do: Aqua.Loop.Turn.again(work.turn)
   defp lost(work, kind), do: {:lost, {:harness, work.title, kind}}
+  defp memory(work, cause), do: {:lost, {:memory, work.title, cause}}
   defp signed_out(work), do: {:refused, {:crew_unready, work.title, :signed_out}}
 
   # The store did not answer for what the turn is owed or said.
@@ -621,6 +624,10 @@ defmodule Aqua.Harness.Program do
   # ends.
   defp write_failed(%{work: work} = state, :uncertain),
     do: fail(shut(state), refused(work, :start_failed))
+
+  # Memory ended the program under the write: lost, saying so.
+  defp write_failed(%{work: work} = state, {:ended_by, cause}),
+    do: fail(shut(state), memory(work, cause))
 
   defp write_failed(%{work: work} = state, {:not_admitted, :generation_moved}),
     do: fail(shut(state), lost(work, :forgotten))
@@ -1528,6 +1535,11 @@ defmodule Aqua.Harness.Program do
   # it with what the resumed transcript holds. One refused before it was
   # written is taken back. It is tried again only where an event will
   # follow, the holder's answer or its end; any other refusal ends the turn.
+  # Memory ended the program under the write: the turn ends lost, saying
+  # so, and is not opened again into the same kill.
+  defp not_written(%{work: work} = state, _step, {:ended_by, cause}),
+    do: fail(shut(state), memory(work, cause))
+
   defp not_written(state, _step, :uncertain) do
     state = shut(state)
     if state.phase == :over, do: state, else: open_session(%{state | recovering?: true})
@@ -1635,6 +1647,13 @@ defmodule Aqua.Harness.Program do
   end
 
   defp ended(%{phase: :over} = state, _reason), do: state
+
+  # Memory ended the program, starting or at work: the turn ends lost,
+  # saying so, and nothing opens it again into the same kill; the next
+  # turn resumes its session afresh.
+  defp ended(%{work: work} = state, {:ended_by, cause}),
+    do: fail(state, memory(work, cause))
+
   defp ended(%{work: work} = state, :forgotten), do: fail(state, lost(work, :forgotten))
   defp ended(%{work: work} = state, :replaced), do: fail(state, lost(work, :ended))
 

@@ -423,9 +423,30 @@ defmodule Prima.RefusalTest do
      "Your packs changed while this program was starting; start it again."},
     {{:crew_unready, "Aqua", :signed_out}, :setup_required,
      "Aqua's program is signed out. Sign it in, or choose another, on the Aqua page."},
-    {{:program_full, "Aqua"}, :rate_limited,
-     "Aqua could not start: this CYFR has no room for another running program. Stop work in " <>
-       "another thread or wait for it to end, then send your message again."},
+    {{:program_full, "Aqua", nil, %{}}, :rate_limited,
+     "Aqua could not start: no more programs, or no more of this program's sessions, " <>
+       "may run on this CYFR at once. Stop one on the Programs page, or wait."},
+    {{:program_full, "Aqua",
+      %{
+        need: 384 * 1_048_576,
+        free: 0,
+        mine: [
+          %{kind: "program", subject: "mcp_mine", bytes: 700 * 1_048_576},
+          %{kind: "terminal", subject: "mcp_mine", bytes: 100 * 1_048_576},
+          %{kind: "program", subject: "mcp_gone", bytes: 300 * 1_048_576}
+        ],
+        others_bytes: 1_073_741_824
+      }, %{"mcp_mine" => "claude-code"}}, :rate_limited,
+     "Aqua could not start: this CYFR has not enough memory free. Of yours, claude-code " <>
+       "uses 800.0 MB and a program uses 300.0 MB. Others use 1.0 GB. Stop one on the " <>
+       "Programs page, or wait."},
+    {{:memory, "Aqua", :cap}, :unavailable,
+     "Aqua stopped: it needed more memory than one piece of work may use on this machine."},
+    {{:memory, "Aqua", :machine}, :unavailable,
+     "Aqua stopped: CYFR ran out of memory for what it runs."},
+    {{:memory, "Aqua", :either}, :unavailable,
+     "Aqua stopped: it ran out of memory, and CYFR could not tell whether its own cap or a " <>
+       "limit above it did it."},
     {{:harness, "Aqua", :not_admitted}, :forbidden, "Aqua may not start for this work any more."},
     {{:harness, "Aqua", {:not_admitted, :working}}, :forbidden,
      "Aqua may not go on with this work any more."},

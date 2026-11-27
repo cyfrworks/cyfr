@@ -336,7 +336,15 @@ defmodule Locus.Runtime.Test.ScriptedHost do
   def default("take_rate", _args, _caller), do: {:ok, true}
   def default("record_denial", _args, _caller), do: {:ok, true}
   def default("release_child", _args, _caller), do: {:ok, true}
-  def default("runner_exited", _args, _caller), do: {:ok, true}
+  # A report naming a memory limit CYFR does not read is refused as CYFR
+  # refuses it (`Opus.Host`): lost.
+  def default("runner_exited", args, _caller) do
+    case Prima.HostAPI.read_memory_end(args) do
+      {:ok, _memory} -> {:ok, true}
+      :error -> {:error, :lost}
+    end
+  end
+
   def default("fetch_artifact", _args, _caller), do: {:error, :not_found}
   def default("egress_pin", _args, _caller), do: {:error, :resolution}
 

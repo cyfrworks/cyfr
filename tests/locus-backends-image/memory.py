@@ -14,7 +14,8 @@ least, and no setting names a bound:
   that bound, inside the pool's rest.
 - A process that holds less than its bound answers.
 - A process that reaches past its bound is ended there by the kernel: its
-  session ends before it answers, its status counts the crash and names
+  session ends before it answers, saying its own cap ended it
+  (`ended_by: cap`), its status counts the crash and names
   the kill, and the next call starts the program again under a new
   process, initialized afresh; nothing of its uid outlives the kill but
   what the new start started.
@@ -166,8 +167,8 @@ def bounds_each_program(stack):
 
     client = c.mcp(HOG, "probe")
     status, answer = c.call(HOG, "probe__hog", {"bytes": BOUND * 2})
-    expect(status == 200 and answer.get("ended") == "before_answer",
-           "a call past the bound ends the session before the program answers", answer)
+    expect(status == 200 and answer.get("ended") == "before_answer" and answer.get("ended_by") == "cap",
+           "a call past the bound ends the session before the program answers, ended by its own cap", answer)
     eventually(lambda: not any(p["pid"] == hogged["pid"] for p in stack.processes()),
                "the kernel to end the process at its bound")
 
