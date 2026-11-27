@@ -279,6 +279,55 @@ defmodule PrismWeb.AquaLiveTest do
 
   defp installed_step(_name, title), do: "#{title}: sign it in on its terminal."
 
+  # Aqua's setup rendered alone (`PrismWeb.AquaLive.setup/1`), with what
+  # the page holds for it.
+  defp setup_html(assigns) do
+    render_component(
+      &PrismWeb.AquaLive.setup/1,
+      Map.merge(
+        %{
+          open: true,
+          providers: {:ok, []},
+          programs: [],
+          known: %{},
+          runnable: [],
+          listings: %{},
+          terminal: nil,
+          ticked: MapSet.new(),
+          asking: %{},
+          model_errors: %{},
+          model_refused: %{},
+          models_loaded: true,
+          agents_read: nil,
+          models_by_provider: %{},
+          catalyst_refs: %{},
+          member_draft: PrismWeb.AquaLive.AgentsComponent.empty_draft(),
+          athanor: "home",
+          admin_next: false
+        },
+        assigns
+      )
+    )
+  end
+
+  # The row of the brain `keyed` there, and whether step 1 is done.
+  defp setup_row(assigns) do
+    tree = assigns |> setup_html() |> LazyHTML.from_fragment()
+
+    words = fn selector ->
+      tree
+      |> LazyHTML.query(selector)
+      |> Enum.map(&(&1 |> LazyHTML.text() |> String.replace(~r/\s+/, " ") |> String.trim()))
+    end
+
+    %{
+      standing: words.(~s(#aqua-setup-brain-keyed [data-test="setup-standing"])),
+      answer: words.(~s(#aqua-setup-brain-keyed [data-test="setup-answer"])),
+      replace: words.(~s(#aqua-setup-brain-keyed [data-test="setup-replace-key"])),
+      done: LazyHTML.attribute(LazyHTML.query(tree, "#aqua-setup-step-brains"), "data-done")
+    }
+  end
+
   # The words of the setup's row of a brain: how it stands, what its
   # provider answered, and its way to replace a refused key.
   defp standing(view, provider),
@@ -1417,16 +1466,11 @@ defmodule PrismWeb.AquaLiveTest do
       # The refused key offers none of the old models; nothing else moved.
       assert picker(view) == {%{"other" => ["other-1"]}, refs}
 
-      # A key the provider refused is not connected: the row says so with
-      # the way to replace it, and neither the first step nor the crew's
-      # counts it.
-      assert standing(view, "keyed") == ["not connected"]
-
-      assert has_element?(
-               view,
-               ~s(#aqua-setup-brain-keyed a[data-test="setup-replace-key"][href="#{athanor_path("/vault")}"]),
-               "Replace the key in the Vault"
-             )
+      # A provider that gave no list and did not refuse the key gave no
+      # answer: the row says so, offers no key to replace, and neither the
+      # first step nor the crew's counts it.
+      assert standing(view, "keyed") == ["no answer"]
+      refute has_element?(view, ~s(#aqua-setup-brain-keyed [data-test="setup-replace-key"]))
 
       assert has_element?(view, ~s(#aqua-setup-step-brains[data-done="false"]))
 
@@ -1445,16 +1489,16 @@ defmodule PrismWeb.AquaLiveTest do
       {view, _html} = mount_athanor(conn, "/aqua?setup=1")
 
       Prima.Test.Wait.wait_until(
-        fn -> standing(view, "keyed") == ["not connected"] end,
+        fn -> standing(view, "keyed") == ["no answer"] end,
         10_000,
-        "the refusal, read again"
+        "what the provider said, read again"
       )
 
       assert answer(view, "keyed") == [
                ~s(keyed answered: the catalyst answered something that is not the envelope: %{"ran" => true})
              ]
 
-      assert has_element?(view, ~s(#aqua-setup-brain-keyed a[data-test="setup-replace-key"]))
+      refute has_element?(view, ~s(#aqua-setup-brain-keyed [data-test="setup-replace-key"]))
       assert has_element?(view, ~s(#aqua-setup-step-brains[data-done="false"]))
 
       # The brain's models call runs beside the page; it ends before the test does.
@@ -1463,9 +1507,10 @@ defmodule PrismWeb.AquaLiveTest do
 
     # The row of a brain whose key is saved, in each state the page can
     # hold for it (`PrismWeb.AquaLive.setup/1`): only a provider that
-    # listed its models reads connected.
-    test "a saved key reads key saved until its provider answers, connected once it lists " <>
-           "its models, and not connected with its words once it refuses" do
+    # listed models reads connected, and only a refused key of the
+    # person's own is theirs to replace.
+    test "a saved key reads one state at a time: key saved while asked, connected, no models, " <>
+           "no answer, or not connected with the way to replace it" do
       brain = %{
         provider: "keyed",
         ref: "catalyst:local.keyed",
@@ -1474,52 +1519,12 @@ defmodule PrismWeb.AquaLiveTest do
         shared: nil
       }
 
-      row = fn assigns ->
-        html =
-          render_component(
-            &PrismWeb.AquaLive.setup/1,
-            Map.merge(
-              %{
-                open: true,
-                providers: {:ok, [brain]},
-                programs: [],
-                known: %{},
-                runnable: [],
-                listings: %{},
-                terminal: nil,
-                ticked: MapSet.new(),
-                asking: MapSet.new(),
-                model_errors: %{},
-                models_loaded: true,
-                agents_read: nil,
-                models_by_provider: %{},
-                catalyst_refs: %{},
-                member_draft: PrismWeb.AquaLive.AgentsComponent.empty_draft(),
-                athanor: "home",
-                admin_next: false
-              },
-              assigns
-            )
-          )
-
-        tree = LazyHTML.from_fragment(html)
-
-        words = fn selector ->
-          tree |> LazyHTML.query(selector) |> Enum.map(&(&1 |> LazyHTML.text() |> String.trim()))
-        end
-
-        %{
-          standing: words.(~s(#aqua-setup-brain-keyed [data-test="setup-standing"])),
-          answer: words.(~s(#aqua-setup-brain-keyed [data-test="setup-answer"])),
-          replace: words.(~s(#aqua-setup-brain-keyed [data-test="setup-replace-key"])),
-          done: LazyHTML.attribute(LazyHTML.query(tree, "#aqua-setup-step-brains"), "data-done")
-        }
-      end
+      row = &setup_row(Map.merge(%{providers: {:ok, [brain]}}, &1))
 
       # The page's first listing is still out, or a grant here is asking.
       asking = %{standing: ["key saved"], answer: ["Asking keyed…"], replace: [], done: ["true"]}
       assert row.(%{models_loaded: false}) == asking
-      assert row.(%{asking: MapSet.new(["catalyst:local.keyed"])}) == asking
+      assert row.(%{asking: %{"catalyst:local.keyed" => 1}}) == asking
 
       # The listing came back with nothing for it.
       assert row.(%{}) == %{standing: ["key saved"], answer: [], replace: [], done: ["true"]}
@@ -1532,25 +1537,172 @@ defmodule PrismWeb.AquaLiveTest do
                  done: ["true"]
                }
 
-      assert row.(%{model_errors: %{"keyed" => "invalid x-api-key"}}) ==
+      # The key was taken and there is nothing to choose.
+      assert row.(%{models_by_provider: %{"keyed" => []}}) ==
                %{
-                 standing: ["not connected"],
-                 answer: ["keyed answered: invalid x-api-key"],
-                 replace: ["Replace the key in the Vault"],
+                 standing: ["no models"],
+                 answer: ["keyed answered with no models."],
+                 replace: [],
                  done: ["false"]
                }
 
-      # A key someone shared is not the person's to replace.
+      # No answer is not a refused key: nothing to replace.
+      assert row.(%{model_errors: %{"keyed" => "the listing did not answer"}}) ==
+               %{
+                 standing: ["no answer"],
+                 answer: ["keyed answered: the listing did not answer"],
+                 replace: [],
+                 done: ["false"]
+               }
+
+      refused = %{model_refused: %{"keyed" => "invalid x-api-key"}}
+
+      assert row.(refused) ==
+               %{
+                 standing: ["not connected"],
+                 answer: ["keyed answered: invalid x-api-key"],
+                 replace: ["Replace the key in the Vault with its Rotate button."],
+                 done: ["false"]
+               }
+
+      # A key someone shared is not the person's to replace, and while it
+      # is asked the row says only that.
       shared = %{brain | shared: %{owner: "Mira", person_daily: nil}}
 
       assert %{standing: ["not connected"], replace: []} =
-               row.(%{
-                 providers: {:ok, [shared]},
-                 model_errors: %{"keyed" => "invalid x-api-key"}
-               })
+               row.(Map.put(refused, :providers, {:ok, [shared]}))
 
-      # A brain with no key to save does not say one was.
-      assert %{standing: ["granted"]} = row.(%{providers: {:ok, [%{brain | need: nil}]}})
+      assert %{standing: [], answer: ["Asking keyed…"]} =
+               row.(%{providers: {:ok, [shared]}, models_loaded: false})
+
+      assert %{standing: ["not asked yet"], answer: []} = row.(%{providers: {:ok, [shared]}})
+
+      # A brain that takes no key has none saved and none to replace.
+      keyless = %{brain | need: nil}
+      assert %{standing: ["granted"]} = row.(%{providers: {:ok, [keyless]}})
+
+      assert %{standing: ["not connected"], replace: []} =
+               row.(Map.put(refused, :providers, {:ok, [keyless]}))
+    end
+
+    # Steps 2 and 3 read a member's brain as step 1 reads it.
+    test "a crew member on a key whose provider is not connected is not ready, says why in " <>
+           "the row's words, and is not offered for Aqua" do
+      brain = %{
+        provider: "keyed",
+        ref: "catalyst:local.keyed",
+        need: %{qualifier: "keyed.test", reason: nil},
+        state: :ready,
+        shared: nil
+      }
+
+      agent = %{
+        "name" => "scout",
+        "title" => "Scout",
+        "catalyst_ref" => "catalyst:local.keyed:0.1.0"
+      }
+
+      read = %{
+        soul: "aqua",
+        soul_ready: true,
+        soul_state: :ready,
+        soul_program: nil,
+        member: "scout",
+        members: [%{name: "scout", title: "Scout", agent: agent, ready: true}],
+        unconnected: [],
+        listable: []
+      }
+
+      steps = fn assigns ->
+        tree =
+          Map.merge(%{providers: {:ok, [brain]}, agents_read: read}, assigns)
+          |> setup_html()
+          |> LazyHTML.from_fragment()
+
+        words = fn selector ->
+          tree
+          |> LazyHTML.query(selector)
+          |> Enum.map(&(&1 |> LazyHTML.text() |> String.replace(~r/\s+/, " ") |> String.trim()))
+        end
+
+        attr = fn selector, name ->
+          tree |> LazyHTML.query(selector) |> LazyHTML.attribute(name)
+        end
+
+        %{
+          made: words.("#aqua-setup-made-scout"),
+          crew_done: attr.("#aqua-setup-step-crew", "data-done"),
+          disabled: attr.(~s(#aqua-setup-member option[value="scout"]), "disabled") != [],
+          aqua_done: attr.("#aqua-setup-step-aqua", "data-done"),
+          runs_on: words.(~s([data-test="setup-aqua-done"]))
+        }
+      end
+
+      assert steps.(%{models_by_provider: %{"keyed" => ["m-1"]}}) == %{
+               made: ["Scout: ready."],
+               crew_done: ["true"],
+               disabled: false,
+               aqua_done: ["true"],
+               runs_on: ["Aqua runs on Scout."]
+             }
+
+      down = %{crew_done: ["false"], disabled: true, aqua_done: ["false"], runs_on: []}
+
+      assert steps.(%{model_refused: %{"keyed" => "invalid x-api-key"}}) ==
+               Map.put(down, :made, ["Scout: not ready — keyed is not connected."])
+
+      assert steps.(%{models_by_provider: %{"keyed" => []}}) ==
+               Map.put(down, :made, ["Scout: not ready — keyed answered with no models."])
+
+      assert steps.(%{model_errors: %{"keyed" => "the listing did not answer"}}) ==
+               Map.put(down, :made, ["Scout: not ready — keyed gave no answer."])
+    end
+
+    test "a provider that lists no models is not connected, and its row says no models",
+         %{conn: conn, ctx: ctx} do
+      ref = "catalyst:local.empty"
+      publish_brain!(ctx, "empty", %{})
+      grant!(ctx, ref, %{bindings: []})
+      remember_catalogue!(%{"empty" => []}, %{"empty" => ref})
+
+      {view, _html} = mount_athanor(conn, "/aqua?setup=1")
+      settled(fn -> standing(view, "empty") == ["no models"] end, "the empty list")
+      assert answer(view, "empty") == ["empty answered with no models."]
+      assert has_element?(view, ~s(#aqua-setup-step-brains[data-done="false"]))
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    test "a catalogue asked before a brain's latest answer does not replace it, and one asked " <>
+           "after does",
+         %{conn: conn, ctx: ctx} do
+      ref = "catalyst:local.ordering"
+      publish_brain!(ctx, "ordering", %{})
+      grant!(ctx, ref, %{bindings: []})
+      remember_catalogue!(%{"ordering" => ["previous-model"]}, %{"ordering" => ref})
+      {view, _html} = mount_athanor(conn, "/aqua?setup=1")
+      settled(fn -> standing(view, "ordering") == ["connected"] end, "the first catalogue")
+      socket = :sys.get_state(view.pid).socket
+      tag = CyfrWeb.ContextGuard.capture(socket.assigns.context)
+
+      send(view.pid, {:setup_answer, tag, ref, {:refused, "invalid x-api-key"}})
+      assert standing(view, "ordering") == ["not connected"]
+
+      old = %{"models" => %{"ordering" => ["previous-model"]}, "refs" => %{"ordering" => ref}}
+      send(view.pid, {:list_models_result, tag, {:ok, old}})
+      assert standing(view, "ordering") == ["not connected"]
+      assert elem(picker(view), 0) == %{}
+
+      # The page asks again, as a load does: that catalogue is newer.
+      send(view.pid, {:refresh, :setup})
+      send(view.pid, :load)
+
+      Prima.Test.Wait.wait_until(
+        fn -> standing(view, "ordering") == ["connected"] end,
+        10_000,
+        "the catalogue asked after the refusal"
+      )
+
+      Cyfr.Test.Sandbox.end_views()
     end
 
     test "reconnecting a third-party brain by its versioned reference fills its own picker " <>

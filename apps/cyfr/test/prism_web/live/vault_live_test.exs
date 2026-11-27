@@ -2051,6 +2051,39 @@ defmodule PrismWeb.VaultLiveTest do
       Cyfr.Test.Sandbox.end_views()
     end
 
+    # What a brain listed under the old value says nothing of the new
+    # one, so the pages that show the listing ask again.
+    test "a key rotated on the page forgets the athanor's kept model listing" do
+      %{terry: terry} = traders!()
+      market = key!(terry, "market key", @market)
+      athanor_id = terry.ctx.athanor_id
+      kept = {:model_catalog, athanor_id}
+      :ok = PrismWeb.ModelCatalog.remember(athanor_id, %{"models" => %{"m" => ["old"]}})
+      on_exit(fn -> PrismWeb.ModelCatalog.forget(athanor_id) end)
+
+      {view, _} = vault!(terry)
+      render_click(view, "show_rotate", %{"id" => market.id})
+      rotate = "vault-rotate-form-" <> market.id
+      typed = %{"fields" => "MARKET_KEY=mk-sentinel-rotated"}
+      view |> form("#" <> rotate, typed) |> render_submit()
+
+      assert {:ok, [%{ref: ref, operation: "vault.rotate"}]} =
+               Arca.PendingConfirmations.list_open(
+                 Sanctum.Context.actor(terry.ctx),
+                 terry.ctx.user_id
+               )
+
+      # Asked is not rotated: the listing is kept until the value changes.
+      assert {:ok, _listing} = Arca.Cache.get(kept)
+      Sanctum.TestContext.prove!(terry.ctx, ref)
+      assert_push_event(view, "system_layer:resubmit", %{form: ^rotate}, 2_000)
+      view |> form("#" <> rotate, typed) |> render_submit()
+
+      assert render(view) =~ "Material rotated"
+      assert Arca.Cache.get(kept) == :miss
+      Cyfr.Test.Sandbox.end_views()
+    end
+
     test "after a declared restore the share reads revoked, and Share is offered again once " <>
            "the entry is rotated" do
       %{terry: terry, traders: traders} = traders!()

@@ -2930,12 +2930,18 @@ defmodule PrismWeb.ConsentSheetComponent do
   defp warnings(plan), do: plan[:warnings] || []
 
   # Whether the warnings send the person to the vault first: not when
-  # every required need the vault cannot meet takes a key pasted on this
-  # sheet (`connectable?/1`), whose button is the way to meet it.
+  # every required need the sheet shows that nothing meets, the app's own
+  # and each dependency's, takes a key pasted on this sheet
+  # (`connectable?/1`), whose button is the way to meet it.
   defp vault_first?(plan) do
+    shown =
+      List.wrap(plan[:needs]) ++
+        Enum.flat_map(List.wrap(plan[:dependency_needs]), &List.wrap(field(&1, :needs)))
+
     unmet =
-      for need <- List.wrap(plan[:needs]),
+      for need <- shown,
           field(need, :required) == true,
+          field(need, :source) != "provided",
           candidates_of(need) == [],
           do: need
 

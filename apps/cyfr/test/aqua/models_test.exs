@@ -38,6 +38,38 @@ defmodule Aqua.ModelsTest do
     assert {:error, :forbidden} = Aqua.models(Context.enter_guest(local))
   end
 
+  test "a models run reads as its list, the provider's refusal of the key, or what else it said" do
+    envelope = &{:ok, %{result: &1}}
+
+    assert Aqua.Models.listed(
+             envelope.(%{
+               "status" => 200,
+               "data" => %{"models" => [%{"id" => "m-1"}, %{"id" => ""}]}
+             })
+           ) == {:ok, ["m-1"]}
+
+    assert Aqua.Models.listed(envelope.(%{"status" => 200, "data" => %{"models" => []}})) ==
+             {:ok, []}
+
+    # Only the contract's authentication refusal is a refused key.
+    assert Aqua.Models.listed(
+             envelope.(%{
+               "status" => 401,
+               "error" => %{"type" => "authentication", "message" => "invalid x-api-key"}
+             })
+           ) == {:refused, "invalid x-api-key"}
+
+    assert Aqua.Models.listed(
+             envelope.(%{
+               "status" => 529,
+               "error" => %{"type" => "overloaded", "message" => "try again later"}
+             })
+           ) == {:error, "try again later"}
+
+    assert Aqua.Models.listed(envelope.(%{"status" => 200, "data" => %{}})) ==
+             {:error, "the catalyst answered no model list"}
+  end
+
   test "an athanor whose component index is behind answers unavailable, not an empty listing" do
     n = System.unique_integer([:positive])
     user = "local|idp|models-#{n}"

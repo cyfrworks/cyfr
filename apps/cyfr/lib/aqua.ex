@@ -68,7 +68,8 @@ defmodule Aqua do
   defdelegate models(ctx), to: Models, as: :catalogue
 
   @doc "One brain asked for its models. See `Aqua.Models.models/2`."
-  @spec models(Context.t(), String.t()) :: {:ok, [String.t()]} | {:error, String.t()}
+  @spec models(Context.t(), String.t()) ::
+          {:ok, [String.t()]} | {:refused, String.t()} | {:error, String.t()}
   defdelegate models(ctx, ref), to: Models
 
   @doc "Every brain the athanor can connect. See `Aqua.Models.providers/1`."

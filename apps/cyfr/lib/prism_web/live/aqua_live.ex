@@ -103,16 +103,25 @@ defmodule PrismWeb.AquaLive do
       |> assign(:stale_consents, {:ok, []})
       |> assign(:models_by_provider, %{})
       |> assign(:catalyst_refs, %{})
-      # What a provider that listed no models said instead, by provider.
+      # What a provider that listed no models said instead, by provider:
+      # one that refused the key, and any other.
+      |> assign(:model_refused, %{})
       |> assign(:model_errors, %{})
+      # The page's asks, counted: the count the catalogue out was asked at
+      # (the earliest, while one is out), the count each brain a grant
+      # here asks was asked at, by its identity, and the count the answer
+      # held for a provider was asked at. An answer asked before the one
+      # held never replaces it.
+      |> assign(:asks, 0)
+      |> assign(:catalogue_asked, nil)
+      |> assign(:answered_at, %{})
       |> assign(:models_loaded, false)
       # The grant prompt this page asked its system layer for: its id and
       # the component it grants, and the count prompt ids are numbered by.
       |> assign(:grant_prompt, nil)
       |> assign(:prompt_seq, 0)
       # Aqua's setup: whether the address asked for it and for whom, the
-      # brains it offers, the ones ticked, the brains a grant here is asking
-      # for their models (each by its identity, version aside), how the
+      # brains it offers, the ones ticked, how the
       # roster's brains stand, the program brains, each one's listing once a press asked for it, the programs
       # waiting to be asked, the one task out, the Sign in waiting on its
       # terminal and why the last was refused, what the form that makes a
@@ -122,7 +131,7 @@ defmodule PrismWeb.AquaLive do
       |> assign(:setup_toggled, nil)
       |> assign(:providers, nil)
       |> assign(:ticked, MapSet.new())
-      |> assign(:asking, MapSet.new())
+      |> assign(:asking, %{})
       |> assign(:agents_read, nil)
       |> assign(:programs, nil)
       |> assign(:listings, %{})
@@ -360,7 +369,10 @@ defmodule PrismWeb.AquaLive do
 
     socket
     |> put_flash(:info, "Saved. Asking #{brain_name(ref)} whether it takes the key…")
-    |> update(:asking, &MapSet.put(&1, identity(ref)))
+    |> asked()
+    |> then(
+      &update(&1, :asking, fn asking -> Map.put(asking, identity(ref), &1.assigns.asks) end)
+    )
   end
 
   # The one answer stands for the brain it came from, found by its
@@ -370,36 +382,58 @@ defmodule PrismWeb.AquaLive do
   # since a key the provider refused offers none of them.
   defp answered(socket, ref, result) do
     provider = provider_of(socket, ref)
+    {at, asking} = Map.pop(socket.assigns.asking, identity(ref))
+    socket = assign(socket, :asking, asking)
+
+    # An answer no ask of this page is waiting on was asked now.
+    {at, socket} = if at, do: {at, socket}, else: {socket.assigns.asks + 1, asked(socket)}
 
     socket =
       case result do
         {:ok, ids} ->
-          socket
-          |> put_flash(:info, "#{brain_name(ref)} answered with #{count(ids)}.")
-          |> picked(provider, ids, ref)
+          put_flash(socket, :info, "#{brain_name(ref)} answered with #{count(ids)}.")
 
-        {:error, sentence} ->
-          socket
-          |> put_flash(:error, "#{brain_name(ref)} answered: #{sentence}")
-          |> picked(provider, {:error, sentence}, ref)
+        {_refused_or_error, sentence} ->
+          put_flash(socket, :error, "#{brain_name(ref)} answered: #{sentence}")
       end
 
-    {:noreply, update(socket, :asking, &MapSet.delete(&1, identity(ref)))}
+    {:noreply, picked(socket, provider, result, ref, at)}
   end
 
-  defp picked(socket, nil, _answer, _ref), do: socket
+  # One more ask of this page.
+  defp asked(socket), do: update(socket, :asks, &(&1 + 1))
 
-  defp picked(socket, provider, {:error, sentence}, _ref) do
-    socket
-    |> update(:models_by_provider, &Map.delete(&1, provider))
-    |> update(:model_errors, &Map.put(&1, provider, sentence))
-  end
+  defp picked(socket, nil, _answer, _ref, _at), do: socket
 
-  defp picked(socket, provider, ids, ref) do
-    socket
-    |> update(:models_by_provider, &Map.put(&1, provider, ids))
-    |> update(:model_errors, &Map.delete(&1, provider))
-    |> update(:catalyst_refs, &Map.put(&1, provider, identity(ref)))
+  defp picked(socket, provider, answer, ref, at) do
+    if at < Map.get(socket.assigns.answered_at, provider, 0) do
+      socket
+    else
+      {models, refused, errors} =
+        case answer do
+          {:ok, ids} ->
+            {&Map.put(&1, provider, ids), &Map.delete(&1, provider), &Map.delete(&1, provider)}
+
+          {:refused, sentence} ->
+            {&Map.delete(&1, provider), &Map.put(&1, provider, sentence),
+             &Map.delete(&1, provider)}
+
+          {:error, sentence} ->
+            {&Map.delete(&1, provider), &Map.delete(&1, provider),
+             &Map.put(&1, provider, sentence)}
+        end
+
+      socket
+      |> update(:models_by_provider, models)
+      |> update(:model_refused, refused)
+      |> update(:model_errors, errors)
+      |> update(:answered_at, &Map.put(&1, provider, at))
+      |> then(fn socket ->
+        if match?({:ok, _}, answer),
+          do: update(socket, :catalyst_refs, &Map.put(&1, provider, identity(ref))),
+          else: socket
+      end)
+    end
   end
 
   # The picker's name for the brain `ref`: the provider the setup lists, or
@@ -451,20 +485,35 @@ defmodule PrismWeb.AquaLive do
 
   defp admin_next?(_ctx), do: false
 
-  # Shape: %{"models" => %{provider => [ids]}, "refs" => %{...}}.
+  # Shape: %{"models" => %{provider => [ids]}, "refs" => %{...}}. A
+  # provider whose held answer was asked after this catalogue keeps it: a
+  # catalogue none of this page's asks is waiting on was asked before
+  # every one of them.
   defp models_loaded(socket, {:ok, result}) do
-    %{models: models, refs: refs, errors: errors} = PrismWeb.ModelCatalog.parse(result)
+    parsed = PrismWeb.ModelCatalog.parse(result)
+    asked = socket.assigns.catalogue_asked || 0
+    newer = for {provider, at} <- socket.assigns.answered_at, at > asked, do: provider
+
+    kept = fn socket, key, read ->
+      assign(
+        socket,
+        key,
+        read |> Map.drop(newer) |> Map.merge(Map.take(socket.assigns[key], newer))
+      )
+    end
 
     {:noreply,
      socket
-     |> assign(:models_by_provider, models)
-     |> assign(:catalyst_refs, refs)
-     |> assign(:model_errors, errors)
+     |> kept.(:models_by_provider, parsed.models)
+     |> kept.(:catalyst_refs, parsed.refs)
+     |> kept.(:model_errors, parsed.errors)
+     |> kept.(:model_refused, parsed.refused)
+     |> assign(:catalogue_asked, nil)
      |> assign(:models_loaded, true)}
   end
 
   defp models_loaded(socket, {:error, _reason}),
-    do: {:noreply, assign(socket, :models_loaded, true)}
+    do: {:noreply, socket |> assign(:catalogue_asked, nil) |> assign(:models_loaded, true)}
 
   defp installed(socket, ref, result) do
     socket =
@@ -798,10 +847,17 @@ defmodule PrismWeb.AquaLive do
     socket
   end
 
+  # The catalogue asked, at the count of its ask; one already out keeps
+  # its earlier count, since their answers arrive unnamed.
   defp load_models(socket) do
+    socket =
+      if socket.assigns.catalogue_asked,
+        do: socket,
+        else: socket |> asked() |> then(&assign(&1, :catalogue_asked, &1.assigns.asks))
+
     case PrismWeb.ModelCatalog.load(socket.assigns.context) do
       :ok -> socket
-      :unavailable -> assign(socket, :models_loaded, true)
+      :unavailable -> socket |> assign(:catalogue_asked, nil) |> assign(:models_loaded, true)
     end
   end
 
@@ -884,15 +940,17 @@ defmodule PrismWeb.AquaLive do
   first, then the program brains CYFR ships
   (`Opus.Programs.Definition.brains/0`), each with what it needs; one
   step for each one ticked; a brain whose key is saved as its provider
-  answered its `models` call (`answer/2`): connected once it listed its
-  models, not connected with what it said once it refused, and only
-  "key saved" until it answered; and a program as what is known of it
-  says: signed in,
+  answered its `models` call (`brain_state/1`): connected once it listed
+  models, no models when it listed none, not connected with what it said
+  once it refused the key, no answer when it listed nothing for another
+  reason, and only "key saved" until it answered; and a program as what
+  is known of it says: signed in,
   signed out, or installed while nothing is known, which completes the
   step and still offers its sign-in once ticked. The crew: the form that
   makes a crew member (`AgentsComponent.member_form/1`), and the members
   made, each ready or what it waits on, a member whose program is known
-  signed out not ready. Aqua: which crew member it runs on, done once
+  signed out, or whose key's provider is not connected, not ready, the
+  second in the row's words. Aqua: which crew member it runs on, done once
   Aqua reads ready, and until then the state of the crew's grant it waits
   on, with its Grant (`AgentsComponent.grant_line/1`). Then the crew
   members whose brain is not connected and, for an administrator who has
@@ -908,6 +966,7 @@ defmodule PrismWeb.AquaLive do
   attr :ticked, :any, required: true
   attr :asking, :any, required: true
   attr :model_errors, :map, required: true
+  attr :model_refused, :map, required: true
   attr :models_loaded, :boolean, required: true
   attr :agents_read, :any, required: true
   attr :models_by_provider, :map, required: true
@@ -927,17 +986,26 @@ defmodule PrismWeb.AquaLive do
     programs = assigns.programs || []
     known = assigns.known
 
+    providers = Enum.map(providers, &Map.put(&1, :answer, answer(&1, assigns)))
+
+    # A member on a key is as its brain's row reads: one whose provider is
+    # not connected is not ready, and says so in the row's words.
     members =
       for member <- read[:members] || [] do
         out? = AgentsComponent.signed_out?(known, member.agent["program"])
-        Map.merge(member, %{ready: member.ready and not out?, signed_out: out?})
+        down = down_line(member.agent, providers)
+
+        Map.merge(member, %{
+          ready: member.ready and not out? and is_nil(down),
+          signed_out: out?,
+          down: down
+        })
       end
 
     soul_ready? =
       read[:soul_ready] == true and
-        not AgentsComponent.signed_out?(known, read[:soul_program])
-
-    providers = Enum.map(providers, &Map.put(&1, :answer, answer(&1, assigns)))
+        not AgentsComponent.signed_out?(known, read[:soul_program]) and
+        not Enum.any?(members, &(&1.name == read[:member] and &1.down))
 
     assigns =
       assigns
@@ -947,7 +1015,7 @@ defmodule PrismWeb.AquaLive do
       |> assign(:program_steps, Enum.filter(programs, &program_step?(&1, assigns)))
       |> assign(
         :connected?,
-        Enum.any?(providers, &(&1.state == :ready and not match?({:error, _}, &1.answer))) or
+        Enum.any?(providers, &(&1.state == :ready and not down?(brain_state(&1)))) or
           Enum.any?(programs, &(program_state(&1, known) in ["signed_in", "installed"]))
       )
       |> assign(
@@ -1032,9 +1100,9 @@ defmodule PrismWeb.AquaLive do
                 </label>
               <% end %>
               <span
-                :if={brain.state == :ready}
+                :if={brain.state == :ready and standing_line(brain)}
                 data-test="setup-standing"
-                class={standing_class(brain.answer)}
+                class={standing_class(brain_state(brain))}
               >
                 {standing_line(brain)}
               </span>
@@ -1047,18 +1115,24 @@ defmodule PrismWeb.AquaLive do
               <span
                 :if={brain.state == :ready and brain.answer}
                 data-test="setup-answer"
-                class={answer_class(brain.answer)}
+                class={answer_class(brain_state(brain))}
               >
                 {answer_line(brain.provider, brain.answer)}
               </span>
-              <.link
-                :if={brain.state == :ready and match?({:error, _}, brain.answer) and !brain.shared}
-                navigate={PrismWeb.Focus.path(@athanor, "/vault")}
+              <%!-- Only a key the provider refused, and only the person's
+                    own, is theirs to replace. --%>
+              <span
+                :if={(brain_state(brain) == :not_connected and brain.need) && !brain.shared}
                 data-test="setup-replace-key"
-                class="text-blue-400 hover:underline"
               >
-                Replace the key in the Vault
-              </.link>
+                <.link
+                  navigate={PrismWeb.Focus.path(@athanor, "/vault")}
+                  class="text-blue-400 hover:underline"
+                >
+                  Replace the key in the Vault
+                </.link>
+                with its Rotate button.
+              </span>
             </li>
             <%!-- A program brain runs in the program row of its name,
                   signed in on its own terminal: signed in, or out, only as
@@ -1180,7 +1254,12 @@ defmodule PrismWeb.AquaLive do
               <%= if member.ready do %>
                 {member.title}: <span class="text-emerald-400">ready.</span>
               <% else %>
-                {member.title}: not ready yet — its card below says why.
+                <%= if member.down do %>
+                  {member.title}:
+                  <span data-test="setup-member-down" class="text-amber-300">not ready — {member.down}</span>
+                <% else %>
+                  {member.title}: not ready yet — its card below says why.
+                <% end %>
               <% end %>
             </li>
           </ul>
@@ -1213,8 +1292,8 @@ defmodule PrismWeb.AquaLive do
                 :for={member <- @members}
                 value={member.name}
                 selected={member.name == @member}
-                disabled={member.signed_out}
-                class={member.signed_out && "text-gray-500"}
+                disabled={member.signed_out or not is_nil(member.down)}
+                class={(member.signed_out or member.down) && "text-gray-500"}
               >
                 {AgentsComponent.runs_on_label(member.agent, @known)}
               </option>
@@ -1367,13 +1446,15 @@ defmodule PrismWeb.AquaLive do
   defp unready_line(:model_unavailable), do: "it cannot be read right now — try again"
 
   # What the provider of a brain whose key is saved answered its `models`
-  # call: its models, what it said instead, `:asking` while a grant here
-  # or the page's first listing is out, and nil when the listing came back
-  # with nothing for it.
+  # call: its models, what it said instead (refusing the key, or for any
+  # other reason), `:asking` while a grant here or the page's first
+  # listing is out, and nil when the listing came back with nothing for
+  # it.
   defp answer(%{state: :ready, ref: ref, provider: provider}, assigns) do
     cond do
-      MapSet.member?(assigns.asking, identity(ref)) -> :asking
+      Map.has_key?(assigns.asking, identity(ref)) -> :asking
       ids = assigns.models_by_provider[provider] -> {:ok, ids}
+      sentence = assigns.model_refused[provider] -> {:refused, sentence}
       sentence = assigns.model_errors[provider] -> {:error, sentence}
       not assigns.models_loaded -> :asking
       true -> nil
@@ -1382,25 +1463,65 @@ defmodule PrismWeb.AquaLive do
 
   defp answer(_brain, _assigns), do: nil
 
-  # A key bound is not a key the provider takes: only its models say
-  # connected, and its refusal says not connected.
-  defp standing_line(%{answer: {:ok, _ids}}), do: "connected"
-  defp standing_line(%{answer: {:error, _sentence}}), do: "not connected"
-  defp standing_line(%{shared: shared}) when not is_nil(shared), do: "not asked yet"
-  defp standing_line(%{need: nil}), do: "granted"
-  defp standing_line(_brain), do: "key saved"
+  # How a brain whose key is saved stands, the one reading every step of
+  # the setup takes: a key bound is not a key the provider takes, and
+  # only models to choose from say connected.
+  defp brain_state(%{answer: {:ok, [_ | _]}}), do: :connected
+  defp brain_state(%{answer: {:ok, []}}), do: :no_models
+  defp brain_state(%{answer: {:refused, _sentence}}), do: :not_connected
+  defp brain_state(%{answer: {:error, _sentence}}), do: :no_answer
+  defp brain_state(%{answer: :asking}), do: :asking
+  defp brain_state(_unasked), do: :unasked
 
-  defp standing_class({:ok, _ids}), do: "text-emerald-400"
-  defp standing_class({:error, _sentence}), do: "text-amber-300"
-  defp standing_class(_unanswered), do: "text-gray-400"
+  # The states no crew member can work on.
+  defp down?(state), do: state in [:no_models, :not_connected, :no_answer]
+
+  # One state at a time: while its provider is asked, only a key of the
+  # person's own says more than the asking.
+  defp standing_line(brain) do
+    case {brain_state(brain), brain} do
+      {:connected, _brain} -> "connected"
+      {:no_models, _brain} -> "no models"
+      {:not_connected, _brain} -> "not connected"
+      {:no_answer, _brain} -> "no answer"
+      {:asking, %{shared: nil, need: need}} when not is_nil(need) -> "key saved"
+      {:asking, _brain} -> nil
+      {:unasked, %{shared: shared}} when not is_nil(shared) -> "not asked yet"
+      {:unasked, %{need: nil}} -> "granted"
+      {:unasked, _brain} -> "key saved"
+    end
+  end
+
+  defp standing_class(:connected), do: "text-emerald-400"
+  defp standing_class(state), do: if(down?(state), do: "text-amber-300", else: "text-gray-400")
 
   defp answer_line(provider, :asking), do: "Asking #{provider}…"
+  defp answer_line(provider, {:ok, []}), do: "#{provider} answered with no models."
   defp answer_line(provider, {:ok, [_one]}), do: "#{provider} answered with one model."
   defp answer_line(provider, {:ok, ids}), do: "#{provider} answered with #{length(ids)} models."
-  defp answer_line(provider, {:error, sentence}), do: "#{provider} answered: #{sentence}"
+  defp answer_line(provider, {_said, sentence}), do: "#{provider} answered: #{sentence}"
 
-  defp answer_class({:error, _}), do: "text-red-300"
-  defp answer_class(_answer), do: "text-gray-400"
+  defp answer_class(:not_connected), do: "text-red-300"
+  defp answer_class(_state), do: "text-gray-400"
+
+  # Why a member on a key cannot work, in its brain's row's words; nil
+  # for a member on a program, or whose brain's row reads none of them.
+  defp down_line(%{"catalyst_ref" => ref}, providers) when is_binary(ref) do
+    with %{provider: provider} = brain <-
+           Enum.find(providers, &(identity(&1.ref) == identity(ref))),
+         true <- brain.state == :ready do
+      case brain_state(brain) do
+        :not_connected -> "#{provider} is not connected."
+        :no_models -> "#{provider} answered with no models."
+        :no_answer -> "#{provider} gave no answer."
+        _up -> nil
+      end
+    else
+      _none -> nil
+    end
+  end
+
+  defp down_line(_agent, _providers), do: nil
 
   defp short_ref("formula:local." <> name), do: name
   defp short_ref("agent:local." <> name), do: name
@@ -1460,6 +1581,7 @@ defmodule PrismWeb.AquaLive do
         ticked={@ticked}
         asking={@asking}
         model_errors={@model_errors}
+        model_refused={@model_refused}
         models_loaded={@models_loaded}
         agents_read={@agents_read}
         models_by_provider={@models_by_provider}

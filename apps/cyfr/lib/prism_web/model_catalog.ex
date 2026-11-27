@@ -92,26 +92,33 @@ defmodule PrismWeb.ModelCatalog do
   @doc """
   Decode a `{:list_models_result, tag, {:ok, result}}` payload into
   `%{models: %{provider => [model_id]}, refs: %{provider => ref}, errors:
-  %{provider => sentence}}` — every part, so a page cannot silently drop
-  one again. `errors` is what a provider that listed no models said
-  instead.
+  %{provider => sentence}, refused: %{provider => sentence}}` — every
+  part, so a page cannot silently drop one again. `refused` is what a
+  provider that refused the key said, and `errors` what any other that
+  listed no models said instead.
   """
-  @spec parse(term()) :: %{models: map(), refs: map(), errors: map()}
+  @spec parse(term()) :: %{models: map(), refs: map(), errors: map(), refused: map()}
   def parse(result) when is_map(result) do
     models =
       (result["models"] || %{})
       |> Enum.filter(fn {_provider, ids} -> is_list(ids) end)
       |> Map.new(fn {provider, ids} -> {provider, Enum.filter(ids, &is_binary/1)} end)
 
-    errors =
-      (result["errors"] || %{})
-      |> Enum.filter(fn {_provider, sentence} -> is_binary(sentence) end)
-      |> Map.new()
-
-    %{models: models, refs: result["refs"] || %{}, errors: errors}
+    %{
+      models: models,
+      refs: result["refs"] || %{},
+      errors: sentences(result["errors"]),
+      refused: sentences(result["refused"])
+    }
   end
 
-  def parse(_), do: %{models: %{}, refs: %{}, errors: %{}}
+  def parse(_), do: %{models: %{}, refs: %{}, errors: %{}, refused: %{}}
+
+  defp sentences(by_provider) do
+    (by_provider || %{})
+    |> Enum.filter(fn {_provider, sentence} -> is_binary(sentence) end)
+    |> Map.new()
+  end
 
   # Spelled here rather than in `Arca.Cache.Keys`: the entry is the
   # console's own read-through, nothing else reads or sweeps it by shape.

@@ -309,7 +309,9 @@ defmodule Aqua.Models do
   catalyst's to say.
 
   Returns `{:ok, %{"models" => %{provider => [id]}, "refs" => %{provider
-  => versionless ref}, "errors" => %{provider => message}}}`. A provider
+  => versionless ref}, "errors" => %{provider => message}, "refused" =>
+  %{provider => message}}}`: `refused` holds a provider that refused the
+  key (`models/2`), `errors` every other one that listed nothing. A provider
   is the catalyst's name, prefixed by its namespace when that is not the
   local one, so two catalysts never share a row. A caller that may not
   read the athanor's components is `{:error, :forbidden}`; a component
@@ -336,17 +338,26 @@ defmodule Aqua.Models do
         end)
 
       {:ok,
-       Enum.reduce(results, %{"models" => %{}, "refs" => %{}, "errors" => %{}}, fn
-         {provider, ref, {:ok, ids}}, acc ->
-           acc
-           |> put_in(["models", provider], ids)
-           |> put_in(["refs", provider], ref)
+       Enum.reduce(
+         results,
+         %{"models" => %{}, "refs" => %{}, "errors" => %{}, "refused" => %{}},
+         fn
+           {provider, ref, {:ok, ids}}, acc ->
+             acc
+             |> put_in(["models", provider], ids)
+             |> put_in(["refs", provider], ref)
 
-         {provider, ref, {:error, message}}, acc ->
-           acc
-           |> put_in(["refs", provider], ref)
-           |> put_in(["errors", provider], message)
-       end)}
+           {provider, ref, {:refused, message}}, acc ->
+             acc
+             |> put_in(["refs", provider], ref)
+             |> put_in(["refused", provider], message)
+
+           {provider, ref, {:error, message}}, acc ->
+             acc
+             |> put_in(["refs", provider], ref)
+             |> put_in(["errors", provider], message)
+         end
+       )}
     end
   end
 
@@ -400,9 +411,16 @@ defmodule Aqua.Models do
     end
   end
 
-  defp ask_models(ctx, ref) do
-    run = run_as_caller(ctx, ref, %{"operation" => "models", "params" => %{}})
+  defp ask_models(ctx, ref),
+    do: listed(run_as_caller(ctx, ref, %{"operation" => "models", "params" => %{}}))
 
+  @doc false
+  # What a `models` run answered, as `models/2` gives it: the ids listed,
+  # the provider's refusal of the key itself (the contract's
+  # `authentication`, `Prima.Model`), or what else was said instead.
+  @spec listed({:ok, term()} | {:error, term()}) ::
+          {:ok, [String.t()]} | {:refused, String.t()} | {:error, String.t()}
+  def listed(run) do
     with {:ok, result} <- run,
          {:ok, %{"models" => models}} when is_list(models) <- Prima.Model.decode_envelope(result) do
       {:ok,
@@ -410,9 +428,17 @@ defmodule Aqua.Models do
        |> Enum.map(&(is_map(&1) && &1["id"]))
        |> Enum.filter(&(is_binary(&1) and &1 != ""))}
     else
-      {:ok, _other} -> {:error, "the catalyst answered no model list"}
-      {:error, %{"message" => message}} when is_binary(message) -> {:error, message}
-      {:error, reason} -> {:error, refusal_text(reason)}
+      {:ok, _other} ->
+        {:error, "the catalyst answered no model list"}
+
+      {:error, %{"type" => "authentication", "message" => message}} when is_binary(message) ->
+        {:refused, message}
+
+      {:error, %{"message" => message}} when is_binary(message) ->
+        {:error, message}
+
+      {:error, reason} ->
+        {:error, refusal_text(reason)}
     end
   end
 
@@ -421,11 +447,14 @@ defmodule Aqua.Models do
   @doc """
   The brain `ref` (an installed catalyst release that speaks
   `model/chat@1`) asked for its models once, through the catalog as the
-  caller, whatever its setup reads: `{:ok, ids}`, or `{:error, sentence}`
-  with the provider's own words when it refused (a key it does not take
-  reads as the provider says so). What connecting a brain shows.
+  caller, whatever its setup reads: `{:ok, ids}`; `{:refused, sentence}`
+  with the provider's own words when it refused the key (the contract's
+  `authentication` refusal); or `{:error, sentence}` when it listed
+  nothing for any other reason, a provider that did not answer among
+  them. What connecting a brain shows.
   """
-  @spec models(Context.t(), String.t()) :: {:ok, [String.t()]} | {:error, String.t()}
+  @spec models(Context.t(), String.t()) ::
+          {:ok, [String.t()]} | {:refused, String.t()} | {:error, String.t()}
   def models(%Context{} = ctx, ref) when is_binary(ref), do: ask_models(ctx, ref)
 
   @typedoc """

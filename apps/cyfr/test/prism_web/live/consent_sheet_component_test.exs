@@ -478,6 +478,21 @@ defmodule PrismWeb.ConsentSheetComponentTest do
     assert texts(sheet(pasted, athanor_route: "home"), vault_first) == []
     assert sheet(pasted, athanor_route: "home") =~ "The key credential needs an API key."
 
+    # A dependency's need the vault alone can meet still sends them there.
+    mixed =
+      Map.put(pasted, :dependency_needs, [
+        %{
+          from: "catalyst:local.sheet-model",
+          dep: "catalyst:local.sheet-mail",
+          needs: [key_need("mail", "to read mail", [], kind: "oauth", provider: "google")],
+          candidates: []
+        }
+      ])
+
+    assert texts(sheet(mixed, athanor_route: "home"), vault_first) == [
+             "Add a vault entry first, then come back here."
+           ]
+
     key = need_html(html, "key")
     assert key =~ "Paste your keyed.example API key"
     refute key =~ ~s(data-test="grant-why")
