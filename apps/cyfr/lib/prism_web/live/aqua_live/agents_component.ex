@@ -17,8 +17,9 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   its card.
   An editor is what a press opens: New crew member, or Edit on a card for
   what the member runs on, its model, effort and access. A closed card
-  shows the stored values, a model and an access by the name last known
-  and by its id while none is known, so reading the page asks nothing.
+  shows the stored values, a model by the name last known for it and by
+  its id while none is known, and an access by its name while it is a
+  choice, so reading the page asks nothing.
   A crew member is made in the one form (`member_form/1`), shown in the
   setup's step for the crew and above the cards alike: the name the
   person gives it, the program or key it runs on (`brains/4`), a model
@@ -33,7 +34,10 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   editor and for the model picked in the form; a program's editor offers
   what its program lists when asked (`Aqua.program_listing/2`): its
   models, the efforts of the one chosen, and its access choices in the
-  driver's words, closed while the driver offers one.
+  driver's words. Access, in the form, the editor and on a closed card,
+  shows only while the driver lists two or more choices: one tells a
+  person nothing, and a form that shows none sends none, so the driver
+  runs its first. A member's stored access is kept.
 
   A write is decided on the member as it is stored then, read at the
   write, and on a list asked in this opening of its editor. The model and
@@ -1116,7 +1120,8 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   end
 
   # A closed card's values, each as the file holds it, a model and an
-  # access by the name last known for it.
+  # access by the name last known for it, and an access only while it is
+  # a choice.
   defp stored(agent, known) do
     {harness, title} = harness(agent)
     listing = get_in(known, [program_of(agent), :listing]) || %{models: [], access: []}
@@ -1128,14 +1133,22 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         true -> "none chosen yet"
       end
 
+    choices = access_choices(listing)
+
     options =
-      for {option, value} <- Enum.sort(agent["options"] || %{}) do
-        {option, if(option == "access", do: named_choice(listing.access, value), else: value)}
+      for {option, value} <- Enum.sort(agent["options"] || %{}),
+          option != "access" or choices != [] do
+        {option, if(option == "access", do: named_choice(choices, value), else: value)}
       end
 
     runs_on = [{"Program or key", title || "none chosen yet"}]
     if harness, do: runs_on ++ [{"Model", model} | options], else: runs_on
   end
+
+  # A program's access choices as a person is offered them: its driver's,
+  # while it lists two or more, else none.
+  defp access_choices(%{access: [_, _ | _] = access}), do: access
+  defp access_choices(_listing), do: []
 
   defp named_choice(choices, id),
     do: Enum.find_value(choices, id, fn choice -> if choice.id == id, do: choice.name end)
@@ -3039,7 +3052,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
       asked_listing: if(mine?, do: assigns.listings[program]),
       program_models: listing && listing.models,
       options_here: options,
-      access: if(here? and listing, do: listing.access, else: [])
+      access: if(here?, do: access_choices(listing), else: [])
     ]
   end
 
@@ -3295,7 +3308,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
       |> assign(:program, program)
       |> assign(:models, models)
       |> assign(:options, options)
-      |> assign(:access, if(brain && listing, do: listing.access, else: []))
+      |> assign(:access, if(brain, do: access_choices(listing), else: []))
       |> assign(:chosen, params["options"] || %{})
 
     ~H"""
@@ -3388,10 +3401,9 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
 
   @doc """
   A program brain's Access selection: the choices its driver listed
-  (`Aqua.program_listing/2`), each in the driver's own words, the
-  member's stored one chosen, else the first, the driver's own default.
-  While the driver offers one choice the selection is closed and names
-  it, and a hidden field carries it, so a form sends what it shows.
+  (`Aqua.program_listing/2`), two or more, each in the driver's own words,
+  the member's stored one chosen, else the first, the driver's own
+  default.
   """
   attr :access, :list, required: true
   attr :value, :string, default: nil
@@ -3399,23 +3411,19 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   attr :label, :string, required: true
 
   def access_select(assigns) do
-    assigns = assign(assigns, :closed?, match?([_one], assigns.access))
-
     ~H"""
     <label class="flex items-center gap-2 text-[11px] text-gray-400">
       <span class="text-[10px] uppercase tracking-wider text-gray-500">Access</span>
       <select
         name={@name}
         aria-label={@label}
-        disabled={@closed?}
         data-test="access"
-        class="rounded bg-gray-950 border border-gray-700 px-2 py-1 text-xs text-gray-200 focus:border-blue-500 focus:outline-none disabled:cursor-not-allowed disabled:opacity-70"
+        class="rounded bg-gray-950 border border-gray-700 px-2 py-1 text-xs text-gray-200 focus:border-blue-500 focus:outline-none"
       >
         <option :for={choice <- @access} value={choice.id} selected={choice.id == @value}>
           {choice.name}
         </option>
       </select>
-      <input :if={@closed?} type="hidden" name={@name} value={hd(@access).id} />
     </label>
     """
   end
