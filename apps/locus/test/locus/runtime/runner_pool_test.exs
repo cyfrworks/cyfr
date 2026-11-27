@@ -950,7 +950,15 @@ defmodule Locus.Runtime.RunnerPoolTest do
     serve!(pool)
     {:ok, busy, busy_id} = RunnerPool.take(pool, "ath_a", "exec_1")
     assert {:ok, _token} = assign(busy, "ath_a")
-    wait_until(fn -> counts(pool) == %{fresh: 1, idle: 0, busy: 1, tainted: 0} end)
+    # The status also counts a still-spawning runner as fresh. The keeper
+    # can ask the floor runner to give way once its channel has attached.
+    wait_until(
+      fn -> Enum.any?(Runners.runners(pool), &(&1.state == :fresh)) end,
+      2_000,
+      "the floor runner to attach"
+    )
+
+    assert counts(pool) == %{fresh: 1, idle: 0, busy: 1, tainted: 0}
     %{pid: fresh, id: fresh_id} = Enum.find(Runners.runners(pool), &(&1.state == :fresh))
 
     # The floor's runner, asked after the runner above it was taken, stays.
@@ -1546,24 +1554,69 @@ defmodule Locus.Runtime.RunnerPoolTest do
       serve!(pool)
       wait_until(fn -> match?([%{state: :fresh}], Runners.runners(pool)) end)
 
-      # The runner spawned behind the one taken is refused: the pool waits a
-      # second before it tries again.
+      :ok = :sys.log(pool, {true, 64})
       :ok = ScriptedKeeper.refuse(keeper, :capacity)
+      :ok = ScriptedKeeper.placing(keeper, :held)
       {:ok, busy, _id} = RunnerPool.take(pool, "ath_a", "exec_1")
-      wait_until(fn -> ScriptedKeeper.refused(keeper) == 1 end)
-      # sleep-ok: the release lands inside the pending wait, which no event marks.
-      Process.sleep(600)
+      spawn = spawn_of(keeper, busy)
 
-      # The release ends the refusal; the spawn ahead it makes is refused, and
-      # a new wait of a second starts.
-      :ok = ScriptedKeeper.exit(spawn_of(keeper, busy), 0)
-      wait_until(fn -> ScriptedKeeper.refused(keeper) == 2 end, 2_000)
+      # Queue the release right behind the first refusal so it cuts short
+      # the wait even if the test is descheduled.
+      :ok = :sys.suspend(pool)
+      first_refusal = queue_refusal!(pool, keeper)
+      :ok = ScriptedKeeper.exit(spawn, 0)
+      wait_until(fn -> queued?(pool, &match?({RunnerProcess, ^busy, :released}, &1)) end)
+      :ok = :sys.resume(pool)
 
-      # The first wait's instant passes, and it spawns nothing.
-      # sleep-ok: an instant at which nothing must happen, which no event marks.
-      Process.sleep(700)
+      # The release makes a refill whose place the keeper holds. Read the
+      # first timer from the pool's state after the first refusal.
+      wait_until(fn -> ScriptedKeeper.held_places(keeper) != [] end)
+      {:ok, events} = :sys.log(pool, :get)
+      {%{refill_scheduled: stale}, _rest} = state_after(events, first_refusal)
+      assert is_reference(stale)
+
+      # Deliver that timer immediately after the second refusal. The new
+      # timer cannot get ahead of a message already in the pool's mailbox.
+      :ok = :sys.suspend(pool)
+      second_refusal = queue_refusal!(pool, keeper)
+      send(pool, {:refill, stale})
+      :ok = :sys.resume(pool)
+
+      # The keeper holds the next place until the test lets it be refused.
+      # Read the pool's state at the stale message, even if the new timer
+      # has already fired by the time the test next gets to run.
+      wait_until(fn -> ScriptedKeeper.held_places(keeper) != [] end, 3_000, "the new wait to end")
+      {:ok, events} = :sys.log(pool, :get)
+      {%{refill_scheduled: current}, after_refusal} = state_after(events, second_refusal)
+      assert is_reference(current)
+      refute current == stale
+
+      {after_stale, _rest} = state_after(after_refusal, {:refill, stale})
+      assert %{runners: runners, refill_scheduled: ^current} = after_stale
+      assert runners == %{}
+
       assert ScriptedKeeper.refused(keeper) == 2
-      wait_until(fn -> ScriptedKeeper.refused(keeper) == 3 end, 3_000, "the new wait to end")
+      [next] = ScriptedKeeper.held_places(keeper)
+      :ok = ScriptedKeeper.answer_place(keeper, next, :ok)
+      wait_until(fn -> ScriptedKeeper.refused(keeper) == 3 end, 3_000, "the next refusal")
+    end
+
+    defp queue_refusal!(pool, keeper) do
+      wait_until(fn -> ScriptedKeeper.held_places(keeper) != [] end)
+      [id] = ScriptedKeeper.held_places(keeper)
+      %{pid: pid} = Enum.find(Runners.runners(pool), &(&1.id == id))
+      :ok = ScriptedKeeper.answer_place(keeper, id, :ok)
+
+      refusal = {RunnerProcess, pid, {:refused, :capacity}}
+      wait_until(fn -> queued?(pool, &(&1 == refusal)) end)
+      refusal
+    end
+
+    defp state_after(events, message) do
+      assert [{:in, ^message}, {:noreply, state} | rest] =
+               Enum.drop_while(events, &(&1 != {:in, message}))
+
+      {state, rest}
     end
 
     test "a release ends the pool's refusal, and it spawns ahead at once, before its wait",
