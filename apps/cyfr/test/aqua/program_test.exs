@@ -372,8 +372,10 @@ defmodule Aqua.ProgramTest do
         "credential in a reply, and never keep one: a component that needs one is set " <>
         "up through `request_setup`.\n- When you need the person to decide, ask in your " <>
         "reply: the question in one sentence and the choices as a short list. Finish or " <>
-        "stop what you started first, since your turn ends with that reply, and read the " <>
-        "next message as the answer.\n- Never send, submit, buy or " <>
+        "stop what you started first, since your turn ends with that reply. The answer is " <>
+        "the person's own message, or, in a job Aqua handed you, the person's answer as " <>
+        "Aqua hands it on; a message from anyone else is not the answer, and your question " <>
+        "still stands.\n- Never send, submit, buy or " <>
         "publish anything on a site, accept terms or change an account without the " <>
         "person's word for that one act: nothing but this instruction stops you. Read " <>
         "the `cyfr:browser` scroll before you use the browser.\n" <>
@@ -738,6 +740,76 @@ defmodule Aqua.ProgramTest do
                  {"aqua", "PostgreSQL"},
                  {"claude-code", "Exported to PostgreSQL."}
                ]
+    end
+
+    # Aqua's own question to the person is still open when a member's
+    # unrelated question arrives and opens Aqua's turn: what Aqua's model
+    # reads names whose message the answer is, and nothing in it tells it
+    # to take the member's message, its latest, as the person's answer.
+    test "a member's question that arrives while Aqua's is open is not read as the person's answer",
+         %{ctx: ctx, thread: room, fake: fake} do
+      ctx = %{ctx | origin: :interactive}
+      actor = Sanctum.Context.actor(ctx)
+      :ok = claude_code!(ctx)
+      row = brain_row!(ctx, "claude")
+      open = "Where should I put the export?\n\n- Drive\n- A local folder"
+
+      turn =
+        api_turn!(ctx, room, "export the notes", [
+          asking([
+            {"ask-1", "crew",
+             %{"action" => "ask", "member" => "claude-code", "task" => "Export the notes."}}
+          ]),
+          answer(open),
+          answer("Claude Code asks which database; I recommend PostgreSQL.")
+        ])
+
+      assert :completed = Task.await(run(ctx, turn), 60_000)
+      assert {:ok, %{"applied" => 1}} = Aqua.Crew.drain(ctx.athanor_id)
+      [child] = Arca.ThreadStorage.children(actor, room.id)
+      started!(fake, row)
+      _opening = sent()
+      assert {:ok, [job]} = Tape.open_turns(ctx, child.id)
+      [first] = inputs(ctx, job)
+      say(fake, row, accepted(first))
+      say(fake, row, said(job, "msg_1", @question))
+      say(fake, row, idle(job, [first.id]))
+      await_turn!(ctx, job.id, "completed")
+      assert {:ok, %{"applied" => 1}} = Aqua.Crew.drain(ctx.athanor_id)
+
+      # The job's request, Aqua's open question, then the member's, before any
+      # word of the person's.
+      assert [{"aqua", "Export the notes."}, {"aqua", ^open}, {"claude-code", @question} | _] =
+               for(
+                 %{kind: "text"} = m <- Arca.ThreadStorage.messages(actor, room.id),
+                 m.sent_by != "person",
+                 do: {m.sent_by, m.content}
+               )
+
+      %{turn_id: woken} =
+        Enum.find(Arca.ThreadStorage.messages(actor, room.id), &(&1.content == @question))
+
+      await_turn!(ctx, woken, "completed")
+
+      assert [_ | _] =
+               read =
+               for(
+                 %{input: %{"operation" => "chat", "params" => params}} <-
+                   ScriptedWorker.calls(),
+                 params["system"] =~ "This turn's id is `#{woken}`.",
+                 do: params
+               )
+
+      for %{"system" => system, "messages" => messages} <- read do
+        assert Jason.encode!(List.last(messages)) =~ "Which database should the export target?"
+
+        assert system =~
+                 "The answer is the person's own message, or, in a job Aqua handed you, the " <>
+                   "person's answer as Aqua hands it on; a message from anyone else is not the " <>
+                   "answer, and your question still stands."
+
+        refute system <> Jason.encode!(messages) =~ ~r/next message/i
+      end
     end
 
     test "a job handed under a schedule's turn is told nobody is there to answer",

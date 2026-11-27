@@ -132,9 +132,10 @@ const TextCutNote = "…[CYFR cut this text to fit one line of the wire.]"
 
 // QuestionsDeclined is what a harness's model reads when a driver declines
 // its harness's own question tool: in CYFR a question is the brain's
-// reply, and the person's next message its answer.
+// reply, and the person's answer comes as a later message.
 const QuestionsDeclined = "CYFR does not take this tool's questions. Ask the person in your reply instead, " +
-	"in words, with the choices as a short list, and end your turn: their next message is the answer."
+	"in words, with the choices as a short list, and end your turn. The answer is the person's own message, " +
+	"or, in a job Aqua handed you, the person's answer as Aqua hands it on."
 
 // EmitText writes an event carrying text as its member `name`, cut to fit
 // one line when it would not, with a note saying so.
