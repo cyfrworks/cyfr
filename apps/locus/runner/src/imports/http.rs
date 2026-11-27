@@ -1221,8 +1221,8 @@ fn take(
     if size > max {
         return Err(Collected::TooLarge(size));
     }
-    // Reserved ahead, so the body moves as rarely as a doubling allows,
-    // and what a move leaves is the guest's own answer.
+    // A move as the body grows leaves its old bytes behind unwiped: they
+    // are the upstream's answer to the guest, which the guest holds too.
     body.extend_from_slice(piece);
     sent.fetch.grant(piece.len());
     Ok(())

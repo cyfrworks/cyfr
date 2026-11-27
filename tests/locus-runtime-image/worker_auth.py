@@ -1133,8 +1133,10 @@ def check_host_api(path, primitives):
             assert (pin["scheme"], pin["host"], pin["port"]) == (scheme, host, port), f"{what}: the pin names the URL's origin"
         else:
             assert answer[1] in PIN_REFUSALS and answer[1] == case["name"], f"{what}: refused by its name"
+    # The pin cases run under an edge allowing every host, so a host
+    # outside the domains is an egress policy case's (`domain`, below).
     names = {case["name"] for case in v["egress_pin_cases"]}
-    assert {"fetch", "stream", "redirect"} | set(PIN_REFUSALS) - {"malformed"} <= names, "host_api: every pin case"
+    assert {"fetch", "stream", "redirect"} | set(PIN_REFUSALS) - {"malformed", "domain"} <= names, "host_api: every pin case"
 
     # The egress policy's cases, in the order one attempt makes them: each
     # call reproduced as a pin case is, and each answer derived from its
