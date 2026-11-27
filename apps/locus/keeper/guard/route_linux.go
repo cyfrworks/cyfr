@@ -9,10 +9,12 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"net"
 	"net/netip"
 	"os"
 	"runtime"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 	"unsafe"
@@ -83,6 +85,13 @@ func netlinkDo(kind uint16, flags uint16, body []byte) error {
 		return err
 	}
 	defer unix.Close(fd)
+	return netlinkOn(fd, kind, flags, body)
+}
+
+// netlinkOn sends one request on the route netlink socket fd, of the
+// guard's namespace or of the one a machine's stage opened it in, and
+// reads its acknowledgement.
+func netlinkOn(fd int, kind uint16, flags uint16, body []byte) error {
 	msg := make([]byte, unix.SizeofNlMsghdr, unix.SizeofNlMsghdr+len(body))
 	msg = append(msg, body...)
 	binary.NativeEndian.PutUint32(msg[0:4], uint32(len(msg)))
@@ -201,6 +210,31 @@ func nsInode(fd int) (uint64, error) {
 		return 0, err
 	}
 	return st.Ino, nil
+}
+
+// checkNetlink holds a machine's admit's fourth descriptor to what it must
+// be: a route netlink socket of the space's network namespace, netns.
+func checkNetlink(nl, netns *os.File) error {
+	fd := int(nl.Fd())
+	domain, derr := unix.GetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_DOMAIN)
+	proto, perr := unix.GetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_PROTOCOL)
+	if derr != nil || perr != nil || domain != unix.AF_NETLINK || proto != unix.NETLINK_ROUTE {
+		return errors.New("the fourth descriptor is not a route netlink socket")
+	}
+	space, err := nsInode(int(netns.Fd()))
+	if err != nil {
+		return err
+	}
+	nsfd, err := unix.IoctlRetInt(fd, unix.SIOCGSKNS)
+	if err != nil {
+		return fmt.Errorf("the route netlink socket's namespace: %w", err)
+	}
+	ino, err := nsInode(nsfd)
+	_ = unix.Close(nsfd)
+	if err != nil || ino != space {
+		return errors.New("the route netlink socket is not of the space's namespace")
+	}
+	return nil
 }
 
 // spaceNames is where a space's two name sockets are bound: its own
@@ -513,13 +547,78 @@ const tunFlags = unix.IFF_TAP | unix.IFF_NO_PI | unix.IFF_VNET_HDR
 // moved into its VMM's as MachineTap.
 func tapName(slot int) string { return "tp" + strconv.Itoa(slot) }
 
+// The hardware addresses of a machine's route's three ends: the guard's
+// end, the bridge that answers its names, and the guest's card, which its
+// VMM gives it (package vm). A route's ends are alone on their link, so
+// every machine's are the same. Each end answers no ARP and knows the
+// others by a permanent neighbour: a guest that writes any frame it likes
+// to its tap neither grows the host's one neighbour table nor learns more
+// than these.
+var (
+	GatewayMAC = net.HardwareAddr{0x06, 0, 0x0a, 0, 0, 0x01}
+	NamesMAC   = net.HardwareAddr{0x06, 0, 0xa9, 0xfe, 0, 0x35}
+	GuestMAC   = net.HardwareAddr{0x06, 0, 0x0a, 0, 0, 0x02}
+)
+
+const (
+	// addrGenModeNone is IN6_ADDR_GEN_MODE_NONE: the kernel makes no IPv6
+	// address on a link.
+	addrGenModeNone = 1
+	// devconfRPFilter is IPV4_DEVCONF_RP_FILTER, a link's rp_filter in
+	// IFLA_INET_CONF.
+	devconfRPFilter = 8
+)
+
+// machineEnd readies a machine's route's guard's end, slot's, before it
+// comes up: no IPv6 address, GatewayMAC, no ARP and strict reverse-path
+// filtering, which is read back. The kernel filters by the larger of the
+// link's rp_filter and the namespace's `all`, so where `all` is loose the
+// raw table's line (routeRules) is what drops a forged source.
+func machineEnd(slot int) error {
+	name := outerName(slot)
+	index, err := linkIndex(name)
+	if err != nil {
+		return err
+	}
+	if err := netlinkDo(unix.RTM_SETLINK, 0, v6Off(index)); err != nil {
+		return fmt.Errorf("no IPv6 on %s: %w", name, err)
+	}
+	if err := netlinkDo(unix.RTM_SETLINK, 0, inetConf(index, devconfRPFilter, 1)); err != nil {
+		return fmt.Errorf("strict reverse-path filtering on %s: %w", name, err)
+	}
+	if v, err := os.ReadFile("/proc/sys/net/ipv4/conf/" + name + "/rp_filter"); err != nil || strings.TrimSpace(string(v)) != "1" {
+		return fmt.Errorf("%s's rp_filter reads %q, not 1 (%v)", name, strings.TrimSpace(string(v)), err)
+	}
+	s, err := unix.Socket(unix.AF_INET, unix.SOCK_DGRAM|unix.SOCK_CLOEXEC, 0)
+	if err != nil {
+		return err
+	}
+	defer unix.Close(s)
+	if err := setHardware(s, name, GatewayMAC); err != nil {
+		return err
+	}
+	return noARP(s, name)
+}
+
+// machineNeighbour makes the guard's end know the guest by a permanent
+// neighbour, once the end has its address.
+func machineNeighbour(r *route) error {
+	index, err := linkIndex(outerName(r.slot))
+	if err != nil {
+		return err
+	}
+	return netlinkDo(unix.RTM_NEWNEIGH, unix.NLM_F_CREATE|unix.NLM_F_REPLACE, neighbour(index, r.inner, GuestMAC))
+}
+
 // machineLinks makes what a machine's route holds in its VMM's namespace
 // beside the pair: a tap made here, persistent and owned by the VMM's uid,
 // moved in as MachineTap; a bridge joining it and the pair's inner end,
-// which holds MachineNames and a host route to the guest's address; all
-// of it up. space is the namespace's UDP name socket, by which every
-// change in it is made. A tap not yet moved is removed on a failure; what
-// stands in the VMM's namespace ends with it.
+// learning no address on either, which holds MachineNames with NamesMAC, a
+// permanent neighbour to the guest and a host route to its address; no
+// IPv6 on any of the three, and no ARP on the bridge; all of it up. The
+// space's UDP name socket makes what an ioctl makes there, and its route
+// netlink socket the rest. A tap not yet moved is removed on a failure;
+// what stands in the VMM's namespace ends with it.
 func machineLinks(r *route) error {
 	if err := makeTap(tapName(r.slot), r.uid); err != nil {
 		return err
@@ -538,14 +637,136 @@ func machineLinks(r *route) error {
 		return err
 	}
 	moved = true
-	space := int(r.udp.Fd())
-	if err := bridgeOf(space, MachineBridge, innerName, MachineTap); err != nil {
+	space, nl := int(r.udp.Fd()), int(r.nl.Fd())
+	br := cstring(MachineBridge)
+	if _, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(space), unix.SIOCBRADDBR, uintptr(unsafe.Pointer(&br[0]))); errno != 0 {
+		return fmt.Errorf("making the bridge %s: %w", MachineBridge, errno)
+	}
+	indexes := map[string]int32{}
+	for _, name := range []string{innerName, MachineTap, MachineBridge} {
+		ifr, err := unix.NewIfreq(name)
+		if err != nil {
+			return err
+		}
+		if err := unix.IoctlIfreq(space, unix.SIOCGIFINDEX, ifr); err != nil {
+			return fmt.Errorf("the index of %s: %w", name, err)
+		}
+		indexes[name] = int32(ifr.Uint32())
+		if err := netlinkOn(nl, unix.RTM_SETLINK, 0, v6Off(indexes[name])); err != nil {
+			return fmt.Errorf("no IPv6 on %s: %w", name, err)
+		}
+	}
+	if err := setHardware(space, MachineBridge, NamesMAC); err != nil {
 		return err
+	}
+	if err := noARP(space, MachineBridge); err != nil {
+		return err
+	}
+	for _, port := range []string{innerName, MachineTap} {
+		join, err := unix.NewIfreq(MachineBridge)
+		if err != nil {
+			return err
+		}
+		join.SetUint32(uint32(indexes[port]))
+		if err := unix.IoctlIfreq(space, unix.SIOCBRADDIF, join); err != nil {
+			return fmt.Errorf("joining %s to %s: %w", port, MachineBridge, err)
+		}
+		if err := netlinkOn(nl, unix.RTM_SETLINK, 0, noLearning(indexes[port])); err != nil {
+			return fmt.Errorf("no learning on %s: %w", port, err)
+		}
+		if err := linkUp(space, port); err != nil {
+			return err
+		}
 	}
 	if err := setAddress(space, MachineBridge, MachineNames, netip.AddrFrom4([4]byte{255, 255, 255, 255})); err != nil {
 		return err
 	}
+	if err := netlinkOn(nl, unix.RTM_NEWNEIGH, unix.NLM_F_CREATE|unix.NLM_F_REPLACE, neighbour(indexes[MachineBridge], r.inner, GuestMAC)); err != nil {
+		return fmt.Errorf("the guest's neighbour on %s: %w", MachineBridge, err)
+	}
 	return hostRoute(space, r.inner, MachineBridge)
+}
+
+// ifinfo is an ifinfomsg of family and index.
+func ifinfo(family uint8, index int32) []byte {
+	b := ifinfomsg()
+	b[0] = family
+	binary.NativeEndian.PutUint32(b[4:8], uint32(index))
+	return b
+}
+
+// nested is attribute kind holding the attributes inner, marked nested.
+func nested(b []byte, kind uint16, inner []byte) []byte {
+	return rtattr(b, kind|unix.NLA_F_NESTED, inner)
+}
+
+// v6Off is the RTM_SETLINK that makes the kernel give link index no IPv6
+// address.
+func v6Off(index int32) []byte {
+	inet6 := rtattr(nil, unix.IFLA_INET6_ADDR_GEN_MODE, []byte{addrGenModeNone})
+	return nested(ifinfo(unix.AF_UNSPEC, index), unix.IFLA_AF_SPEC, nested(nil, unix.AF_INET6, inet6))
+}
+
+// inetConf is the RTM_SETLINK that sets link index's IPv4 devconf entry
+// to value.
+func inetConf(index int32, entry uint16, value uint32) []byte {
+	var v [4]byte
+	binary.NativeEndian.PutUint32(v[:], value)
+	conf := nested(nil, unix.IFLA_INET_CONF, rtattr(nil, entry, v[:]))
+	return nested(ifinfo(unix.AF_UNSPEC, index), unix.IFLA_AF_SPEC, nested(nil, unix.AF_INET, conf))
+}
+
+// noLearning is the RTM_SETLINK that makes the bridge port index learn no
+// address it sees.
+func noLearning(index int32) []byte {
+	return nested(ifinfo(unix.AF_BRIDGE, index), unix.IFLA_PROTINFO, rtattr(nil, unix.IFLA_BRPORT_LEARNING, []byte{0}))
+}
+
+// neighbour is the RTM_NEWNEIGH that makes addr a permanent neighbour of
+// link index at mac.
+func neighbour(index int32, addr netip.Addr, mac net.HardwareAddr) []byte {
+	b := make([]byte, unix.SizeofNdMsg)
+	b[0] = unix.AF_INET
+	binary.NativeEndian.PutUint32(b[4:8], uint32(index))
+	binary.NativeEndian.PutUint16(b[8:10], unix.NUD_PERMANENT)
+	a4 := addr.As4()
+	b = rtattr(b, unix.NDA_DST, a4[:])
+	return rtattr(b, unix.NDA_LLADDR, mac)
+}
+
+// setHardware gives the link name, in the namespace the socket fd belongs
+// to, the hardware address mac.
+func setHardware(fd int, name string, mac net.HardwareAddr) error {
+	var r struct {
+		name   [unix.IFNAMSIZ]byte
+		family uint16
+		data   [14]byte
+		_      [8]byte
+	}
+	copy(r.name[:], name)
+	r.family = unix.ARPHRD_ETHER
+	copy(r.data[:], mac)
+	if _, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(fd), unix.SIOCSIFHWADDR, uintptr(unsafe.Pointer(&r))); errno != 0 {
+		return fmt.Errorf("the hardware address of %s: %w", name, errno)
+	}
+	return nil
+}
+
+// noARP makes the link name, in the namespace the socket fd belongs to,
+// answer and learn by no ARP.
+func noARP(fd int, name string) error {
+	ifr, err := unix.NewIfreq(name)
+	if err != nil {
+		return err
+	}
+	if err := unix.IoctlIfreq(fd, unix.SIOCGIFFLAGS, ifr); err != nil {
+		return fmt.Errorf("the flags of %s: %w", name, err)
+	}
+	ifr.SetUint16(ifr.Uint16() | unix.IFF_NOARP)
+	if err := unix.IoctlIfreq(fd, unix.SIOCSIFFLAGS, ifr); err != nil {
+		return fmt.Errorf("no ARP on %s: %w", name, err)
+	}
+	return nil
 }
 
 // makeTap makes a persistent tap named name in the guard's namespace,
@@ -614,36 +835,6 @@ func removeLink(name string) error {
 	return err
 }
 
-// bridgeOf makes the bridge name in the namespace the socket fd belongs
-// to, joins ports to it and brings each up.
-func bridgeOf(fd int, name string, ports ...string) error {
-	br := cstring(name)
-	if _, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(fd), unix.SIOCBRADDBR, uintptr(unsafe.Pointer(&br[0]))); errno != 0 {
-		return fmt.Errorf("making the bridge %s: %w", name, errno)
-	}
-	for _, p := range ports {
-		idx, err := unix.NewIfreq(p)
-		if err != nil {
-			return err
-		}
-		if err := unix.IoctlIfreq(fd, unix.SIOCGIFINDEX, idx); err != nil {
-			return fmt.Errorf("the index of %s: %w", p, err)
-		}
-		join, err := unix.NewIfreq(name)
-		if err != nil {
-			return err
-		}
-		join.SetUint32(idx.Uint32())
-		if err := unix.IoctlIfreq(fd, unix.SIOCBRADDIF, join); err != nil {
-			return fmt.Errorf("joining %s to %s: %w", p, name, err)
-		}
-		if err := linkUp(fd, p); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 // setAddress gives the link name, in the namespace fd's socket belongs to,
 // address a under mask, and brings it up.
 func setAddress(fd int, name string, a, mask netip.Addr) error {
@@ -707,9 +898,11 @@ func hostRoute(fd int, a netip.Addr, dev string) error {
 
 // GuestLink sets a person's VM's own link up, in the guest, as the host's
 // guard made the machine's route for it (machineLinks): the guest's one
-// card, pool.RouteLink, at inner in a /30 and up, a host route to
-// MachineNames on it, where the host's guard answers its names, and the
-// default route through gateway, the guard's end; the loopback up too.
+// card, pool.RouteLink, with no IPv6, at inner in a /30 and up, knowing the
+// gateway, the guard's end, and MachineNames, where the host's guard
+// answers its names, by permanent neighbours, since neither answers ARP; a
+// host route to MachineNames on it, and the default route through gateway;
+// the loopback up too.
 func GuestLink(inner, gateway netip.Addr) error {
 	s, err := unix.Socket(unix.AF_INET, unix.SOCK_DGRAM|unix.SOCK_CLOEXEC, 0)
 	if err != nil {
@@ -719,8 +912,23 @@ func GuestLink(inner, gateway netip.Addr) error {
 	if err := linkUp(s, "lo"); err != nil {
 		return err
 	}
+	card, err := linkIndex(innerName)
+	if err != nil {
+		return err
+	}
+	if err := netlinkDo(unix.RTM_SETLINK, 0, v6Off(card)); err != nil {
+		return fmt.Errorf("no IPv6 on %s: %w", innerName, err)
+	}
 	if err := setLink(s, innerName, inner); err != nil {
 		return err
+	}
+	for _, n := range []struct {
+		addr netip.Addr
+		mac  net.HardwareAddr
+	}{{gateway, GatewayMAC}, {MachineNames, NamesMAC}} {
+		if err := netlinkDo(unix.RTM_NEWNEIGH, unix.NLM_F_CREATE|unix.NLM_F_REPLACE, neighbour(card, n.addr, n.mac)); err != nil {
+			return fmt.Errorf("the neighbour %s on %s: %w", n.addr, innerName, err)
+		}
 	}
 	if err := hostRoute(s, MachineNames, innerName); err != nil {
 		return err

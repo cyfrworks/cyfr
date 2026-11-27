@@ -57,7 +57,8 @@
 //
 // A machine's admit, one naming `machine_uid`, is the route of a person's
 // VM (package vm): its namespace is the VMM's space's, its two name
-// sockets are bound to MachineNames:53 there, and its reach is `none`,
+// sockets are bound to MachineNames:53 there, a fourth descriptor is a
+// route netlink socket the space's stage opened there, and its reach is `none`,
 // `island` or `hosts`, the union of what that person's live sessions are
 // allowed, which a `change` replaces while the route stands; `none` and a
 // `change` are a machine's alone. The guard makes the pair, gives its own
@@ -154,8 +155,11 @@ const (
 	// of MaxAddresses IPv6 addresses fits.
 	MaxMessageBytes = 64 << 10
 	// AdmitDescriptors is how many descriptors an admit carries: the
-	// space's network namespace, its UDP and its TCP name socket.
-	AdmitDescriptors = 3
+	// space's network namespace, its UDP and its TCP name socket; and
+	// MachineDescriptors a machine's, which carries a route netlink socket
+	// of that namespace beside them.
+	AdmitDescriptors   = 3
+	MachineDescriptors = 4
 )
 
 // spawnIDPattern is the keeper's spawn id: 32 lowercase hexadecimal digits.
@@ -229,8 +233,12 @@ func ParseRequest(packet []byte, descriptors int) (Message, error) {
 	}
 	switch m.Type {
 	case TypeAdmit:
-		if descriptors != AdmitDescriptors {
-			return Message{}, fmt.Errorf("an admit carries %d descriptors, not %d", AdmitDescriptors, descriptors)
+		want := AdmitDescriptors
+		if m.MachineUID != nil {
+			want = MachineDescriptors
+		}
+		if descriptors != want {
+			return Message{}, fmt.Errorf("an admit carries %d descriptors, not %d", want, descriptors)
 		}
 		if m.Reach != ReachRole && (m.Port != nil || m.Private != nil) {
 			return Message{}, errors.New("only a role admit names a port and private")

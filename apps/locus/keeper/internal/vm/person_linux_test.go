@@ -32,12 +32,12 @@ func stageEnd(t *testing.T) (*os.File, *os.File) {
 	return s, k
 }
 
-// handUp sends three descriptors as a routed space's stage does, and
+// handUp sends four descriptors as a person's machine's stage does, and
 // answers what the keeper then writes, or the end of the socket.
 func handUp(t *testing.T, s *os.File) <-chan string {
 	t.Helper()
 	var held []int
-	for i := 0; i < 3; i++ {
+	for i := 0; i < 4; i++ {
 		fd, err := unix.Open("/dev/null", unix.O_RDONLY|unix.O_CLOEXEC, 0)
 		if err != nil {
 			t.Fatal(err)
@@ -72,9 +72,9 @@ func TestAPersonsVMIsToldToGoOnOnceItsRouteIsMade(t *testing.T) {
 	m := &Machine{uid: 30201}
 	want := Network{Inner: netip.MustParseAddr("10.213.0.2"), Gateway: netip.MustParseAddr("10.213.0.1")}
 	var asked int
-	err := m.route(k, func(uid int, netns, udp, tcp *os.File) (Network, error) {
+	err := m.route(k, func(uid int, netns, udp, tcp, nl *os.File) (Network, error) {
 		asked = uid
-		for _, f := range []*os.File{netns, udp, tcp} {
+		for _, f := range []*os.File{netns, udp, tcp, nl} {
 			if f == nil {
 				t.Error("a descriptor is missing")
 			}
@@ -98,7 +98,7 @@ func TestAPersonsVMWhoseRouteIsRefusedIsNeverToldToGoOn(t *testing.T) {
 	s, k := stageEnd(t)
 	word := handUp(t, s)
 	m := &Machine{uid: 30201}
-	err := m.route(k, func(int, *os.File, *os.File, *os.File) (Network, error) {
+	err := m.route(k, func(int, *os.File, *os.File, *os.File, *os.File) (Network, error) {
 		return Network{}, os.ErrPermission
 	})
 	if err == nil || !strings.Contains(err.Error(), "the machine's route") {
@@ -120,7 +120,7 @@ func TestAPersonsVMThatHandsNoRouteUpIsRefusedAtItsBound(t *testing.T) {
 	t.Cleanup(func() { stageWait = saved })
 	_, k := stageEnd(t)
 	m := &Machine{uid: 30201}
-	err := (m.route(k, func(int, *os.File, *os.File, *os.File) (Network, error) {
+	err := (m.route(k, func(int, *os.File, *os.File, *os.File, *os.File) (Network, error) {
 		t.Error("a route was made with nothing handed up")
 		return Network{}, nil
 	}))
@@ -158,7 +158,7 @@ func TestAPersonsVMHasItsDiskCardAndAddress(t *testing.T) {
 	if disk := got["/drives/disk"].(map[string]any); disk["path_on_host"] != person.Disk || disk["is_read_only"] != false || disk["is_root_device"] != false {
 		t.Fatalf("the disk: %v", disk)
 	}
-	if card := got["/network-interfaces/eth0"].(map[string]any); card["host_dev_name"] != "tap0" || card["guest_mac"] != GuestMAC {
+	if card := got["/network-interfaces/eth0"].(map[string]any); card["host_dev_name"] != "tap0" || card["guest_mac"] != "06:00:0a:00:00:02" {
 		t.Fatalf("the card: %v", card)
 	}
 	if args := got["/boot-source"].(map[string]any)["boot_args"]; args != "quiet cyfr.net=10.213.0.6,10.213.0.5" {
@@ -187,7 +187,7 @@ func TestARouteHandedUpPastTheBoundLeavesNothingOpen(t *testing.T) {
 			defer close(late)
 			time.Sleep(stageWait + 10*time.Millisecond) // sleep-ok: the hand-up comes just past the bound, as the review's did
 			var held []int
-			for j := 0; j < 3; j++ {
+			for j := 0; j < 4; j++ {
 				fd, err := unix.Open("/dev/null", unix.O_RDONLY|unix.O_CLOEXEC, 0)
 				if err == nil {
 					held = append(held, fd)
@@ -199,7 +199,7 @@ func TestARouteHandedUpPastTheBoundLeavesNothingOpen(t *testing.T) {
 			}
 		}()
 		m := &Machine{uid: 30201}
-		if err := m.route(k, func(int, *os.File, *os.File, *os.File) (Network, error) { return Network{}, nil }); err == nil {
+		if err := m.route(k, func(int, *os.File, *os.File, *os.File, *os.File) (Network, error) { return Network{}, nil }); err == nil {
 			t.Fatal("a route handed up past the bound was taken")
 		}
 		<-late

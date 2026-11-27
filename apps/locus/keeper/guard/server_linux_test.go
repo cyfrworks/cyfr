@@ -196,7 +196,7 @@ func TestTheGuardAnswersTheVectors(t *testing.T) {
 	v := loadVectors(t)
 	ts := startServer(t, "net:[1]")
 	r := dialRaw(t, ts.path)
-	files := func(n int) []*os.File { return three(t)[:n] }
+	files := func(n int) []*os.File { return four(t)[:n] }
 	answers := map[string]bool{}
 	for _, a := range v.Answers {
 		answers[string(a.Message)] = true
@@ -535,6 +535,25 @@ func three(t *testing.T) []*os.File {
 	return []*os.File{netns, udp, tcp}
 }
 
+// four are a machine's admit's descriptors: three's and a route netlink
+// socket.
+func four(t *testing.T) []*os.File {
+	t.Helper()
+	return append(three(t), netlinkSocket(t))
+}
+
+// netlinkSocket is a route netlink socket of the test's namespace.
+func netlinkSocket(t *testing.T) *os.File {
+	t.Helper()
+	fd, err := unix.Socket(unix.AF_NETLINK, unix.SOCK_RAW|unix.SOCK_CLOEXEC, unix.NETLINK_ROUTE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := os.NewFile(uintptr(fd), "netlink")
+	t.Cleanup(func() { f.Close() })
+	return f
+}
+
 // One role per port: a role admit naming a port a route holds is refused,
 // from any connection, and makes nothing; the port is free again once that
 // route is wholly withdrawn, and not before.
@@ -614,7 +633,7 @@ func TestADumpFindsTheConnectionsOfAnAddressEitherWay(t *testing.T) {
 func TestAMachinesReachChangesWhileItsRouteStands(t *testing.T) {
 	ts := startServer(t, "net:[1]")
 	r := dialRaw(t, ts.path)
-	got := r.send(t, []byte(`{"v":4,"type":"admit","spawn_id":"`+testSpawn+`","reach":"none","machine_uid":30201}`), three(t)...)
+	got := r.send(t, []byte(`{"v":4,"type":"admit","spawn_id":"`+testSpawn+`","reach":"none","machine_uid":30201}`), four(t)...)
 	if got.Type != TypeAdmitted || got.Inner != "10.213.0.2" || got.Gateway != "10.213.0.1" {
 		t.Fatalf("the machine's admit answered %+v", got)
 	}
@@ -671,7 +690,7 @@ func TestAMachinesReachChangesWhileItsRouteStands(t *testing.T) {
 func TestAChangeWhoseWithdrawalIsLeftToTheRetrySaysWithdrawn(t *testing.T) {
 	ts := startServer(t, "net:[1]")
 	r := dialRaw(t, ts.path)
-	if got := r.send(t, []byte(`{"v":4,"type":"admit","spawn_id":"`+testSpawn+`","reach":"none","machine_uid":30201}`), three(t)...); got.Type != TypeAdmitted {
+	if got := r.send(t, []byte(`{"v":4,"type":"admit","spawn_id":"`+testSpawn+`","reach":"none","machine_uid":30201}`), four(t)...); got.Type != TypeAdmitted {
 		t.Fatalf("the machine's admit answered %+v", got)
 	}
 	ts.maker.setFail("broken", "unpair")

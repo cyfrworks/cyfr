@@ -119,15 +119,16 @@ type Machine struct {
 // AdmitMachine asks the guard for a person's VM's route (control.go): the
 // VMM's uid, which will own its tap, the reach of the person's live
 // sessions together (ReachNone, ReachIsland, or ReachHosts with exactly
-// addrs), and the VMM's space's namespace and two name sockets, bound to
-// MachineNames:53. It answers as Admit does, with the guest's two
-// addresses.
-func (c *Client) AdmitMachine(spawnID string, uid int, reach string, addrs []netip.Addr, netns, udp, tcp *os.File) (Machine, error) {
+// addrs), and the VMM's space's namespace, two name sockets, bound to
+// MachineNames:53, and route netlink socket. It answers as Admit does,
+// with the guest's two addresses.
+func (c *Client) AdmitMachine(spawnID string, uid int, reach string, addrs []netip.Addr, netns, udp, tcp, nl *os.File) (Machine, error) {
 	m := Message{Type: TypeAdmit, SpawnID: spawnID, Reach: reach, MachineUID: &uid}
 	if err := withAddresses(&m, addrs); err != nil {
 		return Machine{}, err
 	}
-	r, reply, err := c.admit(m, netns, udp, tcp)
+	number, reply, err := c.request(m, unix.UnixRights(int(netns.Fd()), int(udp.Fd()), int(tcp.Fd()), int(nl.Fd())))
+	r := Route{Conn: number}
 	if err != nil {
 		return Machine{Route: r}, err
 	}
@@ -375,7 +376,7 @@ func (c *Client) read(l *link) {
 // refused, its descriptors closed.
 func readPacket(conn *net.UnixConn, rights *[]int) ([]byte, error) {
 	buf := make([]byte, MaxMessageBytes+1)
-	oob := make([]byte, unix.CmsgSpace(4*AdmitDescriptors))
+	oob := make([]byte, unix.CmsgSpace(4*MachineDescriptors))
 	n, oobn, flags, _, err := conn.ReadMsgUnix(buf, oob)
 	if err != nil {
 		return nil, err

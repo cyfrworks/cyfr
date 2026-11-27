@@ -139,6 +139,7 @@ func TestTheStaticRulesAreTheTableAndTheIslandsRowsInOrder(t *testing.T) {
 			"ip6tables -A FORWARD -i sp+ -j REJECT --reject-with icmp6-adm-prohibited",
 			"ip6tables -A FORWARD -o sp+ -j REJECT --reject-with icmp6-adm-prohibited",
 			"ip6tables -A INPUT -i sp+ -j REJECT --reject-with icmp6-adm-prohibited",
+			"ip6tables -t raw -A PREROUTING -i sp+ -j DROP",
 			"iptables -t nat -N CYFR_GUARD_ROLES",
 			// The island's own addresses are its local addresses on its
 			// subnets: neither the loopback's nor one outside them.
@@ -388,7 +389,10 @@ func TestEachReachsRouteIsItsChainsAndJumps(t *testing.T) {
 	none := aRoute(ReachNone)
 	none.machine, none.uid = true, 30201
 	refuseAll := "-A CYFR_GUARD_R3 -j CYFR_GUARD_REFUSE\n-A CYFR_GUARD_R3 -j REJECT --reject-with icmp-admin-prohibited\n"
-	if got, want := routeRules(none, st), head+other+refuseAll+jumps+"COMMIT\n"; got != want {
+	// A machine's route drops, before routing, what its guest sends from
+	// any address but its own.
+	sources := "*raw\n-A PREROUTING -i sp3 ! -s 10.213.0.14/32 -j DROP\nCOMMIT\n"
+	if got, want := routeRules(none, st), head+other+refuseAll+jumps+"COMMIT\n"+sources; got != want {
 		t.Errorf("a machine's route with no session:\n%s\nwant:\n%s", got, want)
 	}
 	if got, want := changeRules(none, st), "*filter\n:CYFR_GUARD_R3 - [0:0]\n-A CYFR_GUARD_R3 ! -s 10.213.0.14/32 -j DROP\n"+other+refuseAll+"COMMIT\n"; got != want {
@@ -396,8 +400,8 @@ func TestEachReachsRouteIsItsChainsAndJumps(t *testing.T) {
 	}
 	machineHosts := *hosts
 	machineHosts.machine, machineHosts.uid = true, 30201
-	if got, want := routeRules(&machineHosts, st), routeRules(hosts, st); got != want {
-		t.Errorf("a machine's hosts route is not a space's:\n%s\nwant:\n%s", got, want)
+	if got, want := routeRules(&machineHosts, st), routeRules(hosts, st)+sources; got != want {
+		t.Errorf("a machine's hosts route is not a space's and its sources' line:\n%s\nwant:\n%s", got, want)
 	}
 	if got, want := changeRules(&machineHosts, st), "*filter\n:CYFR_GUARD_R3 - [0:0]\n-A CYFR_GUARD_R3 ! -s 10.213.0.14/32 -j DROP\n"+other+held+
 		"-A CYFR_GUARD_R3 -d 1.2.3.4/32 -j CYFR_GUARD_P3\n-A CYFR_GUARD_R3 -d 5.6.7.8/32 -j CYFR_GUARD_P3\n"+
@@ -442,6 +446,19 @@ func TestARoutesRecordAndRemovalAreItsOwnLinesAlone(t *testing.T) {
 	chains, jumps := routesListed(k.r+k.out+k.in, k.roles)
 	if !reflect.DeepEqual(chains, []string{"sp3"}) || !reflect.DeepEqual(jumps, []string{"sp3", "sp31"}) {
 		t.Errorf("the routes listed %q, jumped to %q", chains, jumps)
+	}
+
+	// A machine's route's line in the raw table is its own as well: in its
+	// record, and removed first, and another machine's stays.
+	machine := installed{r: "-N CYFR_GUARD_R3\n", p: "-N CYFR_GUARD_P3\n", out: "-N CYFR_GUARD_ROUTES\n", in: "-N CYFR_GUARD_REPLIES\n",
+		roles: "-N CYFR_GUARD_ROLES\n",
+		raw:   "-P PREROUTING ACCEPT\n-A PREROUTING -i sp3 ! -s 10.213.0.14/32 -j DROP\n-A PREROUTING -i sp31 ! -s 10.213.0.126/32 -j DROP\n"}
+	if got, want := routeText("sp3", machine), machine.r+machine.p+"-A PREROUTING -i sp3 ! -s 10.213.0.14/32 -j DROP\n"; got != want {
+		t.Errorf("a machine's record:\n%s\nwant:\n%s", got, want)
+	}
+	if got, want := removal("sp3", machine), "*raw\n-D PREROUTING -i sp3 ! -s 10.213.0.14/32 -j DROP\nCOMMIT\n*nat\nCOMMIT\n*filter\n"+
+		"-F CYFR_GUARD_R3\n-F CYFR_GUARD_P3\n-X CYFR_GUARD_R3\n-X CYFR_GUARD_P3\nCOMMIT\n"; got != want {
+		t.Errorf("a machine's removal:\n%s\nwant:\n%s", got, want)
 	}
 }
 

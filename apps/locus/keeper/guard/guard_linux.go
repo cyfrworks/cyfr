@@ -96,15 +96,17 @@ func bounded() (context.Context, context.CancelFunc) {
 // digest, so nothing is ever recorded or compared of a table that could
 // not be read.
 func saves(ctx context.Context, log *logx.Logger) (string, error) {
-	v4, err := tool(ctx, "", false, "iptables-save", "-t", "filter")
-	if err != nil {
-		log.Error("iptables-save failed")
-		return "", err
-	}
-	v6, err := tool(ctx, "", false, "ip6tables-save", "-t", "filter")
-	if err != nil {
-		log.Error("ip6tables-save failed")
-		return "", err
+	var v4, v6 string
+	for _, s := range []struct {
+		tool, table string
+		into        *string
+	}{{"iptables-save", "filter", &v4}, {"iptables-save", "raw", &v4}, {"ip6tables-save", "filter", &v6}, {"ip6tables-save", "raw", &v6}} {
+		text, err := tool(ctx, "", false, s.tool, "-t", s.table)
+		if err != nil {
+			log.Error("%s of the %s table failed", s.tool, s.table)
+			return "", err
+		}
+		*s.into += strings.TrimRight(text, "\n") + "\n"
 	}
 	nat, err := tool(ctx, "", false, "iptables-save", "-t", "nat")
 	if err != nil {
@@ -354,7 +356,10 @@ func listed(ctx context.Context, iface string) (installed, error) {
 	if k.in, err = iptables(ctx, false, "-S", chainIn); err != nil {
 		return k, err
 	}
-	k.roles, err = iptables(ctx, false, "-t", "nat", "-S", chainRoles)
+	if k.roles, err = iptables(ctx, false, "-t", "nat", "-S", chainRoles); err != nil {
+		return k, err
+	}
+	k.raw, err = iptables(ctx, false, "-t", "raw", "-S", "PREROUTING")
 	return k, err
 }
 

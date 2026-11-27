@@ -263,6 +263,11 @@ type route struct {
 	// reach changes while it stands (change).
 	machine bool
 	uid     int
+	// nl is a machine's route netlink socket of its VMM's namespace, which
+	// its stage opened there and handed up with the rest: the guard's way
+	// to settle what only netlink settles in that namespace. Closed once
+	// the route is made.
+	nl *os.File
 	// sockets are the inodes of its two name sockets, which no other
 	// route may hold.
 	sockets [2]uint64
@@ -314,8 +319,18 @@ func (k kernelRoutes) pair(r *route) error {
 	if err := checkDescriptors(r.netns, r.udp, r.tcp, names); err != nil {
 		return err
 	}
+	if r.machine {
+		if err := checkNetlink(r.nl, r.netns); err != nil {
+			return err
+		}
+	}
 	if err := makePair(r.slot, r.netns); err != nil {
 		return err
+	}
+	if r.machine {
+		if err := machineEnd(r.slot); err != nil {
+			return err
+		}
 	}
 	own, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_DGRAM|syscall.SOCK_CLOEXEC, 0)
 	if err != nil {
@@ -328,6 +343,9 @@ func (k kernelRoutes) pair(r *route) error {
 	// A machine's guest takes the inner address itself, behind the
 	// bridge: the inner end stays bare.
 	if r.machine {
+		if err := machineNeighbour(r); err != nil {
+			return err
+		}
 		return machineLinks(r)
 	}
 	space := int(r.udp.Fd())
@@ -579,7 +597,7 @@ func (s *server) admit(id uint64, req Message, files []*os.File) (*route, error)
 		}
 	}
 	var sockets [2]uint64
-	for i, f := range files[1:] {
+	for i, f := range files[1:3] {
 		ino, err := nsInode(int(f.Fd()))
 		if err != nil {
 			return nil, err
@@ -594,7 +612,7 @@ func (s *server) admit(id uint64, req Message, files []*os.File) (*route, error)
 	r := &route{spawnID: req.SpawnID, slot: slot, gateway: gateway, inner: inner, mark: s.marks, conn: id,
 		reach: req.Reach, addresses: req.Addresses, port: port, private: private, netns: files[0], udp: files[1], tcp: files[2], sockets: sockets}
 	if req.MachineUID != nil {
-		r.machine, r.uid = true, *req.MachineUID
+		r.machine, r.uid, r.nl = true, *req.MachineUID, files[3]
 	}
 	s.taken[slot] = true
 	s.sockets[sockets[0]], s.sockets[sockets[1]] = true, true
@@ -630,6 +648,10 @@ func (s *server) admit(id uint64, req Message, files []*os.File) (*route, error)
 	// The namespace is the pair's to hold now; the sockets are the names'.
 	_ = r.netns.Close()
 	r.netns = nil
+	if r.nl != nil {
+		_ = r.nl.Close()
+		r.nl = nil
+	}
 	return r, nil
 }
 

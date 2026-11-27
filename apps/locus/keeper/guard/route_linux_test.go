@@ -8,12 +8,14 @@ package guard
 import (
 	"bufio"
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"net"
 	"net/netip"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -42,6 +44,8 @@ const (
 	machineGuardMode = "CYFR_GUARD_TEST_MACHINE"
 	machineMode      = "CYFR_GUARD_TEST_VMM"
 	guestLinkMode    = "CYFR_GUARD_TEST_GUEST_LINK"
+	forgedGuardMode  = "CYFR_GUARD_TEST_FORGED"
+	forgerMode       = "CYFR_GUARD_TEST_FORGER"
 )
 
 func TestMain(m *testing.M) {
@@ -56,6 +60,10 @@ func TestMain(m *testing.M) {
 		os.Exit(standInVMM())
 	case os.Getenv(guestLinkMode) != "":
 		os.Exit(standInGuest())
+	case os.Getenv(forgedGuardMode) != "":
+		os.Exit(standInForgedGuard(os.Getenv(forgedGuardMode)))
+	case os.Getenv(forgerMode) != "":
+		os.Exit(standInForger())
 	}
 	os.Exit(m.Run())
 }
@@ -373,14 +381,19 @@ func (noRules) change(_, _ *route) error {
 const vmmUID = 30201
 
 // The real-kernel proof of a machine's route: as the space's, with a
-// stand-in VMM in place of the space. The guard makes the pair, the tap it
-// moves into the VMM's namespace and the bridge there; the stand-in VMM,
-// the tap's owner, attaches to it by name and, as a guest would, asks for
-// the gateway's hardware address in an ARP request written to the tap,
-// which the guard's end answers through the bridge and the pair. A name
-// asked on MachineNames:53 is answered by the guard. When the keeper's
-// connection ends, the pair and the tap's name in the guard's namespace
-// are gone.
+// stand-in VMM in place of the space, which hands up its namespace, its two
+// name sockets and a route netlink socket. The guard makes the pair, the
+// tap it moves into the VMM's namespace and the bridge there. The stand-in
+// VMM, the tap's owner, attaches to it by name with no capability and, as a
+// guest would, with no ARP: its echo to the gateway is answered through the
+// bridge and the pair, and its name question to MachineNames:53 through
+// the tap by the guard. A guest that writes what frames it likes grows no
+// table of the host's: 20,000 source addresses leave the bridge learning
+// none, and 64 spoofed ARP senders, for the gateway and for the names,
+// leave the guard's end and the bridge knowing the guest's address alone.
+// No end of the route holds an IPv6 address, and the guard's end filters
+// by its reverse path strictly. When the keeper's connection ends, the
+// pair and the tap's name in the guard's namespace are gone.
 func TestAMachinesRouteJoinsItsTapToTheGuardsEnd(t *testing.T) {
 	if _, err := os.Stat("/dev/net/tun"); err != nil {
 		t.Skipf("this host has no /dev/net/tun: %v", err)
@@ -399,11 +412,112 @@ func TestAMachinesRouteJoinsItsTapToTheGuardsEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the stand-in guard: %v\n%s", err, out)
 	}
-	for _, want := range []string{"guard: admitted 10.213.0.2 behind 10.213.0.1", "vmm: attached to tap0 as its owner",
-		"vmm: the gateway answered the guest's ARP request through the bridge", "vmm: name: answer",
-		"guard: the pair and the tap are gone"} {
+	for _, want := range []string{"guard: admitted 10.213.0.2 behind 10.213.0.1",
+		"guard: sp0 is 06:00:0a:00:00:01, answers no ARP, holds no IPv6 address, filters its reverse path strictly",
+		"guard: sp0 knows the guest alone", "vmm: attached to tap0 as its owner",
+		"vmm: the gateway answered the guest's echo through the bridge, with no ARP",
+		"vmm: name: answer, through the tap", "vmm: the bridge learned none of 20000 addresses",
+		"vmm: br0 knows the guest alone", "vmm: br0 is " + NamesMAC.String() + " and answers no ARP", "vmm: no end of the route holds an IPv6 address",
+		"guard: sp0 still knows the guest alone after 64 spoofed senders", "guard: the pair and the tap are gone"} {
 		if !strings.Contains(string(out), want) {
 			t.Errorf("lacks %q:\n%s", want, out)
+		}
+	}
+}
+
+// neighbours are the IPv4 unicast neighbours of link index the route
+// netlink socket fd's namespace holds, by address, with their state: the
+// kernel's own multicast entries (IGMP's 224.0.0.22, of no ARP) apart, a
+// fixed few that no frame of a guest's adds to.
+func neighbours(fd int, index int32) (map[netip.Addr]uint16, error) {
+	got := map[netip.Addr]uint16{}
+	b := make([]byte, unix.SizeofNdMsg)
+	b[0] = unix.AF_INET
+	err := dump(fd, unix.RTM_GETNEIGH, b, func(m syscall.NetlinkMessage) {
+		if m.Header.Type != unix.RTM_NEWNEIGH || len(m.Data) < unix.SizeofNdMsg {
+			return
+		}
+		if int32(binary.NativeEndian.Uint32(m.Data[4:8])) != index {
+			return
+		}
+		state := binary.NativeEndian.Uint16(m.Data[8:10])
+		for _, a := range attrs(m.Data[unix.SizeofNdMsg:]) {
+			if attrType(a) == unix.NDA_DST && len(a[2]) == 4 {
+				if addr := netip.AddrFrom4([4]byte(a[2])); !addr.IsMulticast() {
+					got[addr] = state
+				}
+			}
+		}
+	})
+	return got, err
+}
+
+// fdbCount is how many forwarding entries the bridge ports of the route
+// netlink socket fd's namespace hold.
+func fdbCount(fd int) (int, error) {
+	n := 0
+	b := make([]byte, unix.SizeofNdMsg)
+	b[0] = unix.AF_BRIDGE
+	err := dump(fd, unix.RTM_GETNEIGH, b, func(m syscall.NetlinkMessage) {
+		if m.Header.Type == unix.RTM_NEWNEIGH {
+			n++
+		}
+	})
+	return n, err
+}
+
+// v6Addresses is how many IPv6 addresses links of the namespace hold, of
+// the indexes given.
+func v6Addresses(fd int, indexes ...int32) (int, error) {
+	n := 0
+	b := make([]byte, unix.SizeofIfAddrmsg)
+	b[0] = unix.AF_INET6
+	err := dump(fd, unix.RTM_GETADDR, b, func(m syscall.NetlinkMessage) {
+		if m.Header.Type != unix.RTM_NEWADDR || len(m.Data) < unix.SizeofIfAddrmsg {
+			return
+		}
+		for _, i := range indexes {
+			if int32(binary.NativeEndian.Uint32(m.Data[4:8])) == i {
+				n++
+			}
+		}
+	})
+	return n, err
+}
+
+// dump sends a dump request of kind on fd and calls each for every message
+// of its answer.
+func dump(fd int, kind uint16, body []byte, each func(syscall.NetlinkMessage)) error {
+	msg := make([]byte, unix.SizeofNlMsghdr)
+	msg = append(msg, body...)
+	binary.NativeEndian.PutUint32(msg[0:4], uint32(len(msg)))
+	binary.NativeEndian.PutUint16(msg[4:6], kind)
+	binary.NativeEndian.PutUint16(msg[6:8], unix.NLM_F_REQUEST|unix.NLM_F_DUMP)
+	binary.NativeEndian.PutUint32(msg[8:12], 7)
+	if err := unix.Sendto(fd, msg, 0, &unix.SockaddrNetlink{Family: unix.AF_NETLINK}); err != nil {
+		return err
+	}
+	buf := make([]byte, 1<<16)
+	for {
+		n, _, err := unix.Recvfrom(fd, buf, 0)
+		if err != nil {
+			return err
+		}
+		msgs, err := syscall.ParseNetlinkMessage(buf[:n])
+		if err != nil {
+			return err
+		}
+		for _, m := range msgs {
+			switch m.Header.Type {
+			case syscall.NLMSG_DONE:
+				return nil
+			case syscall.NLMSG_ERROR:
+				if code := int32(binary.NativeEndian.Uint32(m.Data[0:4])); code != 0 {
+					return unix.Errno(-code)
+				}
+				return nil
+			}
+			each(m)
 		}
 	}
 }
@@ -417,10 +531,7 @@ func standInMachineGuard() int {
 	if err != nil {
 		return fail("%v", err)
 	}
-	ifr, _ := unix.NewIfreq("lo")
-	_ = unix.IoctlIfreq(ctl, unix.SIOCGIFFLAGS, ifr)
-	ifr.SetUint16(ifr.Uint16() | unix.IFF_UP)
-	if err := unix.IoctlIfreq(ctl, unix.SIOCSIFFLAGS, ifr); err != nil {
+	if err := linkUp(ctl, "lo"); err != nil {
 		fmt.Printf("skip: the loopback: %v\n", err)
 		return 1
 	}
@@ -458,17 +569,17 @@ func standInMachineGuard() int {
 		return fail("the VMM: %v", err)
 	}
 	theirs.Close()
-	buf, oob := make([]byte, 1), make([]byte, unix.CmsgSpace(12))
+	buf, oob := make([]byte, 1), make([]byte, unix.CmsgSpace(16))
 	_, oobn, _, _, err := unix.Recvmsg(int(mine.Fd()), buf, oob, 0)
 	if err != nil {
 		return fail("the VMM's descriptors: %v", err)
 	}
 	msgs, _ := unix.ParseSocketControlMessage(oob[:oobn])
 	fds, err := unix.ParseUnixRights(&msgs[0])
-	if err != nil || len(fds) != 3 {
+	if err != nil || len(fds) != 4 {
 		return fail("descriptors %v %v", fds, err)
 	}
-	netns, udp, tcp := os.NewFile(uintptr(fds[0]), "netns"), os.NewFile(uintptr(fds[1]), "udp"), os.NewFile(uintptr(fds[2]), "tcp")
+	files := []*os.File{os.NewFile(uintptr(fds[0]), "netns"), os.NewFile(uintptr(fds[1]), "udp"), os.NewFile(uintptr(fds[2]), "tcp"), os.NewFile(uintptr(fds[3]), "netlink")}
 	rng, _ := ParseRange("10.213.0.0/16")
 	srv := newServer(logx.New("cyfr-guard-test"), "net:[test]", rng, kernelRoutes{set: noRules{}})
 	srv.upstream = upstream.LocalAddr().String()
@@ -494,17 +605,42 @@ func standInMachineGuard() int {
 		}
 	}()
 	client := NewClient(sock, "net:[test]", nil)
-	m, err := client.AdmitMachine(testSpawn, vmmUID, ReachIsland, nil, netns, udp, tcp)
+	m, err := client.AdmitMachine(testSpawn, vmmUID, ReachIsland, nil, files[0], files[1], files[2], files[3])
 	if err != nil {
 		return fail("the admit: %v", err)
 	}
 	fmt.Printf("guard: admitted %s behind %s\n", m.Inner, m.Gateway)
-	netns.Close()
-	udp.Close()
-	tcp.Close()
+	for _, f := range files {
+		f.Close()
+	}
 	if _, err := net.InterfaceByName(tapName(0)); err == nil {
 		return fail("the tap's name stays in the guard's namespace")
 	}
+	end, err := net.InterfaceByName(outerName(0))
+	if err != nil {
+		return fail("%v", err)
+	}
+	nl, err := nlSocket(unix.NETLINK_ROUTE)
+	if err != nil {
+		return fail("%v", err)
+	}
+	v6, _ := v6Addresses(nl, int32(end.Index))
+	rp, _ := os.ReadFile("/proc/sys/net/ipv4/conf/" + outerName(0) + "/rp_filter")
+	if end.HardwareAddr.String() == GatewayMAC.String() && end.Flags&net.FlagUp != 0 && v6 == 0 && strings.TrimSpace(string(rp)) == "1" {
+		ifr, _ := unix.NewIfreq(outerName(0))
+		if unix.IoctlIfreq(ctl, unix.SIOCGIFFLAGS, ifr) == nil && ifr.Uint16()&unix.IFF_NOARP != 0 {
+			fmt.Printf("guard: sp0 is %s, answers no ARP, holds no IPv6 address, filters its reverse path strictly\n", GatewayMAC)
+		}
+	}
+	alone := func(word string) {
+		known, err := neighbours(nl, int32(end.Index))
+		if err == nil && len(known) == 1 && known[m.Inner] == unix.NUD_PERMANENT {
+			fmt.Printf("guard: sp0 %sknows the guest alone%s\n", map[bool]string{true: "still "}[word != ""], word)
+		} else {
+			fmt.Printf("guard: sp0 knows %v (%v)\n", known, err)
+		}
+	}
+	alone("")
 	if _, err := mine.Write([]byte{'g'}); err != nil {
 		return fail("%v", err)
 	}
@@ -513,6 +649,7 @@ func standInMachineGuard() int {
 		fmt.Print(vmmOut.String())
 		return fail("the VMM's word: %v", err)
 	}
+	alone(" after 64 spoofed senders")
 	client.mu.Lock()
 	if client.link != nil {
 		client.end(client.link)
@@ -535,9 +672,50 @@ func standInMachineGuard() int {
 	return 0
 }
 
-// standInVMM hands up its namespace and two name sockets bound to
-// MachineNames:53, then, once the route is made, attaches to the tap as
-// its owner and speaks for a guest at the route's inner address.
+// csum is the Internet checksum of b.
+func csum(b []byte) uint16 {
+	var s uint32
+	for i := 0; i+1 < len(b); i += 2 {
+		s += uint32(binary.BigEndian.Uint16(b[i:]))
+	}
+	if len(b)%2 == 1 {
+		s += uint32(b[len(b)-1]) << 8
+	}
+	for s>>16 != 0 {
+		s = s&0xffff + s>>16
+	}
+	return ^uint16(s)
+}
+
+// ipv4Frame is an Ethernet frame of one IPv4 packet of proto and payload,
+// its header's checksum set.
+func ipv4Frame(dst, src net.HardwareAddr, from, to netip.Addr, proto byte, payload []byte) []byte {
+	ip := make([]byte, 20)
+	ip[0], ip[8], ip[9] = 0x45, 64, proto
+	binary.BigEndian.PutUint16(ip[2:], uint16(20+len(payload)))
+	f4, t4 := from.As4(), to.As4()
+	copy(ip[12:], f4[:])
+	copy(ip[16:], t4[:])
+	binary.BigEndian.PutUint16(ip[10:], csum(ip))
+	f := append(append(append([]byte{}, dst...), src...), 0x08, 0)
+	return append(append(f, ip...), payload...)
+}
+
+// arpRequest is who-has target, from sender at mac.
+func arpRequest(mac net.HardwareAddr, sender, target netip.Addr) []byte {
+	s4, t4 := sender.As4(), target.As4()
+	f := append([]byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff}, mac...)
+	f = append(f, 0x08, 0x06, 0, 1, 0x08, 0, 6, 4, 0, 1)
+	f = append(f, mac...)
+	f = append(f, s4[:]...)
+	f = append(f, 0, 0, 0, 0, 0, 0)
+	return append(f, t4[:]...)
+}
+
+// standInVMM hands up its namespace, two name sockets bound to
+// MachineNames:53 and a route netlink socket, then, once the route is made,
+// attaches to the tap as its owner and speaks for a guest at the route's
+// inner address, as GuestLink sets one: by permanent neighbours, no ARP.
 func standInVMM() int {
 	fail := func(format string, args ...any) int {
 		fmt.Printf("vmm: "+format+"\n", args...)
@@ -549,10 +727,7 @@ func standInVMM() int {
 		return fail("%v", err)
 	}
 	ctl, _ := unix.Socket(unix.AF_INET, unix.SOCK_DGRAM|unix.SOCK_CLOEXEC, 0)
-	ifr, _ := unix.NewIfreq("lo")
-	_ = unix.IoctlIfreq(ctl, unix.SIOCGIFFLAGS, ifr)
-	ifr.SetUint16(ifr.Uint16() | unix.IFF_UP)
-	if err := unix.IoctlIfreq(ctl, unix.SIOCSIFFLAGS, ifr); err != nil {
+	if err := linkUp(ctl, "lo"); err != nil {
 		return fail("the loopback: %v", err)
 	}
 	at := &unix.SockaddrInet4{Port: 53, Addr: MachineNames.As4()}
@@ -567,12 +742,16 @@ func standInVMM() int {
 		}
 	}
 	_ = unix.Listen(tcp, 4)
-	if err := unix.Sendmsg(int(guard.Fd()), []byte{'r'}, unix.UnixRights(netns, udp, tcp), nil, 0); err != nil {
+	nl, err := unix.Socket(unix.AF_NETLINK, unix.SOCK_RAW|unix.SOCK_CLOEXEC, unix.NETLINK_ROUTE)
+	if err != nil {
 		return fail("%v", err)
 	}
-	unix.Close(udp)
-	unix.Close(tcp)
-	unix.Close(netns)
+	if err := unix.Sendmsg(int(guard.Fd()), []byte{'r'}, unix.UnixRights(netns, udp, tcp, nl), nil, 0); err != nil {
+		return fail("%v", err)
+	}
+	for _, fd := range []int{udp, tcp, netns} {
+		unix.Close(fd)
+	}
 	word := make([]byte, 1)
 	if _, err := guard.Read(word); err != nil || word[0] != 'g' {
 		return fail("no word: %v", err)
@@ -597,54 +776,101 @@ func standInVMM() int {
 		return fail("attaching to %s: %v", MachineTap, err)
 	}
 	fmt.Printf("vmm: attached to %s as its owner\n", MachineTap)
-	rng, _ := ParseRange("10.213.0.0/16")
-	gateway, inner := slotAddresses(rng, 0)
-	guest := []byte{0x02, 0, 0, 0, 0, 0x02}
-	g4, i4 := gateway.As4(), inner.As4()
-	arp := append([]byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff}, guest...)
-	arp = append(arp, 0x08, 0x06, 0, 1, 0x08, 0, 6, 4, 0, 1)
-	arp = append(arp, guest...)
-	arp = append(arp, i4[:]...)
-	arp = append(arp, 0, 0, 0, 0, 0, 0)
-	arp = append(arp, g4[:]...)
 	if err := unix.SetNonblock(tap, true); err != nil {
 		return fail("%v", err)
 	}
+	rng, _ := ParseRange("10.213.0.0/16")
+	gateway, inner := slotAddresses(rng, 0)
 	frame := make([]byte, 2048)
-	answered := false
-	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline) && !answered; {
-		if _, err := unix.Write(tap, arp); err != nil {
-			return fail("writing the ARP request: %v", err)
-		}
-		for end := time.Now().Add(200 * time.Millisecond); time.Now().Before(end); {
-			n, err := unix.Read(tap, frame)
-			if err != nil {
-				time.Sleep(5 * time.Millisecond) // sleep-ok: a nonblocking tap's next frame
-				continue
+	// await writes f until a frame comes back that match says is its answer.
+	await := func(f []byte, match func([]byte) bool) bool {
+		for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); {
+			if _, err := unix.Write(tap, f); err != nil {
+				return false
 			}
-			f := frame[:n]
-			if n >= 42 && f[12] == 0x08 && f[13] == 0x06 && f[21] == 2 && bytes.Equal(f[28:32], g4[:]) && bytes.Equal(f[32:38], guest) {
-				answered = true
-				break
+			for end := time.Now().Add(200 * time.Millisecond); time.Now().Before(end); {
+				n, err := unix.Read(tap, frame)
+				if err != nil {
+					time.Sleep(5 * time.Millisecond) // sleep-ok: a nonblocking tap's next frame
+					continue
+				}
+				if n > 34 && bytes.Equal(frame[0:6], GuestMAC) && frame[12] == 0x08 && frame[13] == 0 && match(frame[14:n]) {
+					return true
+				}
 			}
 		}
+		return false
 	}
-	if !answered {
-		return fail("the gateway did not answer the guest's ARP request")
+	echo := []byte{8, 0, 0, 0, 0x12, 0x34, 0, 1, 'g', 'u', 'e', 's', 't'}
+	binary.BigEndian.PutUint16(echo[2:], csum(echo))
+	g4 := gateway.As4()
+	if await(ipv4Frame(GatewayMAC, GuestMAC, inner, gateway, 1, echo), func(p []byte) bool {
+		return p[9] == 1 && bytes.Equal(p[12:16], g4[:]) && p[20] == 0 && binary.BigEndian.Uint16(p[24:26]) == 0x1234
+	}) {
+		fmt.Println("vmm: the gateway answered the guest's echo through the bridge, with no ARP")
 	}
-	fmt.Println("vmm: the gateway answered the guest's ARP request through the bridge")
-	q, err := net.Dial("udp", netip.AddrPortFrom(MachineNames, 53).String())
+	question := []byte{0x9c, 0x41, 0, 53, 0, 9, 0, 0, 'q'}
+	n4 := MachineNames.As4()
+	answered := ""
+	if await(ipv4Frame(NamesMAC, GuestMAC, inner, MachineNames, 17, question), func(p []byte) bool {
+		if p[9] == 17 && bytes.Equal(p[12:16], n4[:]) && binary.BigEndian.Uint16(p[20:22]) == 53 {
+			answered = string(p[28:])
+			return true
+		}
+		return false
+	}) {
+		fmt.Printf("vmm: name: %s, through the tap\n", answered)
+	}
+	before, err := fdbCount(nl)
 	if err != nil {
+		return fail("the bridge's entries: %v", err)
+	}
+	for i := 0; i < 20000; i++ {
+		src := net.HardwareAddr{0x02, 0x11, byte(i >> 16), byte(i >> 8), byte(i), 0x01}
+		f := append(append([]byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff}, src...), 0x88, 0xb5, 'x')
+		_, _ = unix.Write(tap, f)
+	}
+	after, err := fdbCount(nl)
+	if err == nil && after == before {
+		fmt.Println("vmm: the bridge learned none of 20000 addresses")
+	} else {
+		fmt.Printf("vmm: the bridge holds %d entries after the flood, %d before (%v)\n", after, before, err)
+	}
+	for i := 0; i < 64; i++ {
+		mac := net.HardwareAddr{0x02, 0x22, 0, 0, 0, byte(i)}
+		sender := netip.AddrFrom4([4]byte{10, 99, 0, byte(i)})
+		_, _ = unix.Write(tap, arpRequest(mac, sender, gateway))
+		_, _ = unix.Write(tap, arpRequest(mac, sender, MachineNames))
+	}
+	time.Sleep(200 * time.Millisecond) // sleep-ok: the spoofed requests reach both ends before their tables are read
+	ifr, _ := unix.NewIfreq(MachineBridge)
+	if err := unix.IoctlIfreq(ctl, unix.SIOCGIFINDEX, ifr); err != nil {
 		return fail("%v", err)
 	}
-	_ = q.SetDeadline(time.Now().Add(3 * time.Second))
-	_, _ = q.Write([]byte("q"))
-	got := make([]byte, 16)
-	k, err := q.Read(got)
-	if err != nil {
-		return fail("the name: %v", err)
+	known, err := neighbours(nl, int32(ifr.Uint32()))
+	if err == nil && len(known) == 1 && known[inner] == unix.NUD_PERMANENT {
+		fmt.Println("vmm: br0 knows the guest alone")
+	} else {
+		fmt.Printf("vmm: br0 knows %v (%v)\n", known, err)
 	}
-	fmt.Printf("vmm: name: %s\n", got[:k])
+	// The namespace holds no route back to a spoofed sender, which keeps
+	// it from br0's table here; where the host filters no reverse path,
+	// only br0's own NOARP does.
+	br, err := net.InterfaceByName(MachineBridge)
+	flags, _ := unix.NewIfreq(MachineBridge)
+	if err == nil && br.HardwareAddr.String() == NamesMAC.String() && unix.IoctlIfreq(ctl, unix.SIOCGIFFLAGS, flags) == nil && flags.Uint16()&unix.IFF_NOARP != 0 {
+		fmt.Printf("vmm: br0 is %s and answers no ARP\n", NamesMAC)
+	}
+	var indexes []int32
+	for _, name := range []string{innerName, MachineTap, MachineBridge} {
+		ifr, _ := unix.NewIfreq(name)
+		if err := unix.IoctlIfreq(ctl, unix.SIOCGIFINDEX, ifr); err == nil {
+			indexes = append(indexes, int32(ifr.Uint32()))
+		}
+	}
+	if v6, err := v6Addresses(nl, indexes...); err == nil && v6 == 0 && len(indexes) == 3 {
+		fmt.Println("vmm: no end of the route holds an IPv6 address")
+	}
 	if _, err := guard.Write([]byte{'d'}); err != nil {
 		return fail("%v", err)
 	}
@@ -652,9 +878,11 @@ func standInVMM() int {
 }
 
 // A person's VM sets its one card as its host's machine route expects it:
-// the inner address in a /30 and up, a host route to MachineNames on it,
-// and the default route through the gateway. Here the card is one end of a
-// pair in a namespace of the test's own.
+// the inner address in a /30 and up, no IPv6 address, the gateway and
+// MachineNames known by permanent neighbours at their fixed addresses,
+// since neither answers ARP, a host route to MachineNames on it, and the
+// default route through the gateway. Here the card is one end of a pair
+// in a namespace of the test's own.
 func TestAGuestsCardIsSetAsItsMachineRouteExpects(t *testing.T) {
 	cmd := exec.Command(os.Args[0], "-test.run=^$")
 	cmd.Env = append(os.Environ(), guestLinkMode+"=1")
@@ -666,7 +894,8 @@ func TestAGuestsCardIsSetAsItsMachineRouteExpects(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the stand-in guest: %v\n%s", err, out)
 	}
-	for _, want := range []string{"guest: eth0 10.213.0.6/30 up", "guest: route 169.254.0.53/32 dev eth0", "guest: default via 10.213.0.5 dev eth0"} {
+	for _, want := range []string{"guest: eth0 10.213.0.6/30 up", "guest: route 169.254.0.53/32 dev eth0", "guest: default via 10.213.0.5 dev eth0",
+		"guest: eth0 holds no IPv6 address", "guest: eth0 knows 10.213.0.5 at " + GatewayMAC.String() + " and 169.254.0.53 at " + NamesMAC.String() + ", for good"} {
 		if !strings.Contains(string(out), want) {
 			t.Errorf("lacks %q:\n%s", want, out)
 		}
@@ -687,6 +916,15 @@ func standInGuest() int {
 	if err := netlinkDo(unix.RTM_NEWLINK, unix.NLM_F_CREATE|unix.NLM_F_EXCL, body); err != nil {
 		fmt.Printf("skip: the card: %v\n", err)
 		return 1
+	}
+	// The pair's other end up, so the card has its carrier once up, as a
+	// guest's has, and the kernel would give it a link-local address.
+	ctl, err := unix.Socket(unix.AF_INET, unix.SOCK_DGRAM|unix.SOCK_CLOEXEC, 0)
+	if err != nil {
+		return fail("%v", err)
+	}
+	if err := linkUp(ctl, "peer0"); err != nil {
+		return fail("%v", err)
 	}
 	inner, gateway := netip.MustParseAddr("10.213.0.6"), netip.MustParseAddr("10.213.0.5")
 	if err := GuestLink(inner, gateway); err != nil {
@@ -717,6 +955,29 @@ func standInGuest() int {
 			fmt.Println("guest: default via 10.213.0.5 dev eth0")
 		}
 	}
+	nl, err := nlSocket(unix.NETLINK_ROUTE)
+	if err != nil {
+		return fail("%v", err)
+	}
+	if v6, err := v6Addresses(nl, int32(card.Index)); err == nil && v6 == 0 {
+		fmt.Println("guest: eth0 holds no IPv6 address")
+	}
+	// /proc/net/arp's flags 0x6 are a complete, permanent entry.
+	arp, err := os.ReadFile("/proc/net/arp")
+	if err != nil {
+		return fail("%v", err)
+	}
+	known := map[string]string{}
+	for _, line := range strings.Split(string(arp), "\n")[1:] {
+		if f := strings.Fields(line); len(f) >= 6 && f[5] == innerName && f[2] == "0x6" {
+			known[f[0]] = f[3]
+		}
+	}
+	if len(known) == 2 && known["10.213.0.5"] == GatewayMAC.String() && known["169.254.0.53"] == NamesMAC.String() {
+		fmt.Printf("guest: eth0 knows 10.213.0.5 at %s and 169.254.0.53 at %s, for good\n", GatewayMAC, NamesMAC)
+	} else {
+		fmt.Printf("guest: eth0 knows %v\n", known)
+	}
 	return 0
 }
 
@@ -727,4 +988,400 @@ func hexIPv4(h string) string {
 		return ""
 	}
 	return netip.AddrFrom4([4]byte{byte(v), byte(v >> 8), byte(v >> 16), byte(v >> 24)}).String()
+}
+
+// A guest's forged source carries nothing out, on the real rules and the
+// real kernel: a stand-in guest writes frames from four addresses not its
+// own (an outside host, the control plane, an island host, the metadata
+// address) and from a second address on its card, another route's guest's,
+// to the guard itself, to an outside host with a TTL of 1, so the kernel
+// would answer it, and to an outside host plainly; and IPv6 from an
+// outside and an island address, to the guard's own IPv6 address on the
+// island and past it, which no route carries. Under reach none and
+// under a reach of that host, nothing leaves by the island's link but, under
+// the reach, the guest's own packet from its own address, and nothing comes
+// back to the guest. The namespace's own rp_filter is as the host's: loose
+// on this host, so the raw table's line alone is what drops them.
+func TestAGuestsForgedSourcesCarryNothingOut(t *testing.T) {
+	if os.Getuid() != 0 {
+		t.Skip("the VMM's own uid is mapped beside the guard's by root alone")
+	}
+	for _, tool := range []string{"iptables-restore", "ip6tables", "/dev/net/tun"} {
+		if _, err := exec.LookPath(tool); err != nil && !strings.HasPrefix(tool, "/") {
+			t.Skipf("this host has no %s: %v", tool, err)
+		}
+		if _, err := os.Stat(tool); err != nil && strings.HasPrefix(tool, "/") {
+			t.Skipf("this host has no %s: %v", tool, err)
+		}
+	}
+	for _, reach := range []string{ReachNone, ReachHosts} {
+		cmd := exec.Command(os.Args[0], "-test.run=^$")
+		cmd.Env = append(os.Environ(), forgedGuardMode+"="+reach)
+		cmd.SysProcAttr = userNetAttr()
+		cmd.SysProcAttr.UidMappings = append(cmd.SysProcAttr.UidMappings, syscall.SysProcIDMap{ContainerID: vmmUID, HostID: vmmUID, Size: 1})
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("reach %s: the stand-in guard: %v\n%s", reach, err, out)
+		}
+		left := "guard: nothing left the island's link"
+		if reach == ReachHosts {
+			left = "guard: the guest's own packet alone left the island's link"
+		}
+		for _, want := range []string{"guard: the real rules stand", left, "forger: nothing came back to the guest"} {
+			if !strings.Contains(string(out), want) {
+				t.Errorf("reach %s lacks %q:\n%s", reach, want, out)
+			}
+		}
+	}
+}
+
+// forgedTarget is the outside host the forger writes to, which a reach of
+// hosts allows.
+var forgedTarget = netip.AddrFrom4([4]byte{203, 0, 113, 50})
+
+func standInForgedGuard(reach string) int {
+	fail := func(format string, args ...any) int {
+		fmt.Printf("guard: "+format+"\n", args...)
+		return 1
+	}
+	ctl, err := unix.Socket(unix.AF_INET, unix.SOCK_DGRAM|unix.SOCK_CLOEXEC, 0)
+	if err != nil {
+		return fail("%v", err)
+	}
+	if err := linkUp(ctl, "lo"); err != nil {
+		return fail("the loopback: %v", err)
+	}
+	// ext0 is the island's way out: an L3 tun the test reads, holding the
+	// island's address, the default route through it.
+	ext, err := unix.Open("/dev/net/tun", unix.O_RDWR|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return fail("%v", err)
+	}
+	ifr, _ := unix.NewIfreq("ext0")
+	ifr.SetUint16(unix.IFF_TUN | unix.IFF_NO_PI)
+	if err := unix.IoctlIfreq(ext, unix.TUNSETIFF, ifr); err != nil {
+		return fail("ext0: %v", err)
+	}
+	if err := setAddress(ctl, "ext0", netip.MustParseAddr("198.51.100.1"), netip.MustParseAddr("255.255.255.0")); err != nil {
+		return fail("%v", err)
+	}
+	if err := linkUp(ctl, "ext0"); err != nil {
+		return fail("%v", err)
+	}
+	if err := defaultRoute(ctl, netip.MustParseAddr("198.51.100.254")); err != nil {
+		return fail("%v", err)
+	}
+	// The island holds IPv6 too, so a refusal of the guard's own would have
+	// a way back to a forged IPv6 source.
+	if err := v6Island("ext0", forgedGuardV6); err != nil {
+		return fail("%v", err)
+	}
+	log := logx.New("cyfr-guard-test")
+	isl := island{controlPlane: "192.0.2.1", routes: []string{"198.51.100.0/24"}, subnets: []string{"198.51.100.0/24"}, local: []string{"198.51.100.1"}}
+	st, err := staticRules(log, isl)
+	if err != nil {
+		return fail("%v", err)
+	}
+	for _, r := range st.rules {
+		ctx, cancel := bounded()
+		_, err := tool(ctx, "", false, r.tool(), append([]string{"-w", "5"}, r.args...)...)
+		cancel()
+		if err != nil {
+			return fail("%s: %v", r, err)
+		}
+	}
+	dir, err := os.MkdirTemp("", "cyfr-guard-forged-")
+	if err != nil {
+		return fail("%v", err)
+	}
+	defer os.RemoveAll(dir)
+	at := place{dir: dir, proc: "/proc"}
+	if err := os.MkdirAll(at.routes(), 0o755); err != nil {
+		return fail("%v", err)
+	}
+	lock, err := os.OpenFile(at.lock(), os.O_RDWR|os.O_CREATE, 0o644)
+	if err != nil {
+		return fail("%v", err)
+	}
+	rng, _ := ParseRange(st.rng)
+	srv := newServer(log, "net:[test]", rng, kernelRoutes{set: &rulesOf{log: log, at: at, st: st, lock: lock, bound: applyTimeout}})
+	fmt.Println("guard: the real rules stand")
+	pair, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, 0)
+	if err != nil {
+		return fail("%v", err)
+	}
+	mine, theirs := os.NewFile(uintptr(pair[0]), "guard"), os.NewFile(uintptr(pair[1]), "forger")
+	forger := exec.Command(os.Args[0], "-test.run=^$")
+	forger.Env = []string{forgerMode + "=1"}
+	forger.ExtraFiles = []*os.File{theirs}
+	forger.SysProcAttr = &syscall.SysProcAttr{
+		Cloneflags:  syscall.CLONE_NEWUSER | syscall.CLONE_NEWNET,
+		UidMappings: []syscall.SysProcIDMap{{ContainerID: 0, HostID: 0, Size: 1}, {ContainerID: vmmUID, HostID: vmmUID, Size: 1}},
+		GidMappings: []syscall.SysProcIDMap{{ContainerID: 0, HostID: 0, Size: 1}},
+		Pdeathsig:   syscall.SIGKILL,
+	}
+	var forgerOut bytes.Buffer
+	forger.Stdout, forger.Stderr = &forgerOut, &forgerOut
+	if err := forger.Start(); err != nil {
+		return fail("%v", err)
+	}
+	defer func() { _ = forger.Process.Kill(); _ = forger.Wait(); fmt.Print(forgerOut.String()) }()
+	theirs.Close()
+	buf, oob := make([]byte, 1), make([]byte, unix.CmsgSpace(16))
+	_, oobn, _, _, err := unix.Recvmsg(int(mine.Fd()), buf, oob, 0)
+	if err != nil {
+		return fail("%v", err)
+	}
+	msgs, _ := unix.ParseSocketControlMessage(oob[:oobn])
+	fds, err := unix.ParseUnixRights(&msgs[0])
+	if err != nil || len(fds) != 4 {
+		return fail("descriptors %v %v", fds, err)
+	}
+	f := func(i int) *os.File { return os.NewFile(uintptr(fds[i]), "handed") }
+	sock := filepath.Join(dir, "guard.sock")
+	l, err := net.ListenUnix("unixpacket", &net.UnixAddr{Name: sock, Net: "unixpacket"})
+	if err != nil {
+		return fail("%v", err)
+	}
+	go func() {
+		for {
+			conn, err := l.AcceptUnix()
+			if err != nil {
+				return
+			}
+			go srv.serve(conn)
+		}
+	}()
+	var addrs []netip.Addr
+	if reach == ReachHosts {
+		addrs = []netip.Addr{forgedTarget}
+	}
+	client := NewClient(sock, "net:[test]", nil)
+	if _, err := client.AdmitMachine(testSpawn, vmmUID, reach, addrs, f(0), f(1), f(2), f(3)); err != nil {
+		return fail("the admit: %v", err)
+	}
+	// The route forwards, as the guard's island does: by its own link's
+	// forwarding, which the namespace's ip_forward would otherwise set.
+	for _, name := range []string{outerName(0), "ext0"} {
+		index, err := linkIndex(name)
+		if err == nil {
+			err = netlinkDo(unix.RTM_SETLINK, 0, inetConf(index, 1, 1))
+		}
+		if err != nil {
+			return fail("forwarding on %s: %v", name, err)
+		}
+	}
+	if err := unix.SetNonblock(ext, true); err != nil {
+		return fail("%v", err)
+	}
+	if _, err := mine.Write([]byte{'g'}); err != nil {
+		return fail("%v", err)
+	}
+	var leaving []string
+	p := make([]byte, 4096)
+	for end := time.Now().Add(3 * time.Second); time.Now().Before(end); {
+		n, err := unix.Read(ext, p)
+		if err != nil {
+			time.Sleep(5 * time.Millisecond) // sleep-ok: a nonblocking tun's next packet
+			continue
+		}
+		switch {
+		case n >= 20 && p[0]>>4 == 4:
+			leaving = append(leaving, fmt.Sprintf("proto %d %s -> %s %q", p[9], netip.AddrFrom4([4]byte(p[12:16])), netip.AddrFrom4([4]byte(p[16:20])), tagOf(p[:n])))
+		case n >= 40 && p[0]>>4 == 6:
+			from, to := netip.AddrFrom16([16]byte(p[8:24])), netip.AddrFrom16([16]byte(p[24:40]))
+			// The kernel's own on the island's link (its solicitations
+			// and reports) name no address of the guest's.
+			if !from.IsLinkLocalUnicast() && !from.IsUnspecified() {
+				leaving = append(leaving, fmt.Sprintf("next %d %s -> %s %q", p[6], from, to, tagOf(p[:n])))
+			}
+		}
+	}
+	switch {
+	case len(leaving) == 0:
+		fmt.Println("guard: nothing left the island's link")
+	case len(leaving) == 1 && strings.Contains(leaving[0], "own-to-outside"):
+		fmt.Println("guard: the guest's own packet alone left the island's link")
+	default:
+		fmt.Printf("guard: left the island's link: %v\n", leaving)
+	}
+	return 0
+}
+
+// forgedGuardV6 is the guard's IPv6 address on the island, and
+// forgedTargetV6 an outside IPv6 host.
+var (
+	forgedGuardV6  = netip.MustParseAddr("2001:db8:100::1")
+	forgedTargetV6 = netip.MustParseAddr("2001:db8:200::50")
+)
+
+// v6Island gives link name address a in a /64, at once (no duplicate
+// detection), and the IPv6 default route through it.
+func v6Island(name string, a netip.Addr) error {
+	index, err := linkIndex(name)
+	if err != nil {
+		return err
+	}
+	b := make([]byte, unix.SizeofIfAddrmsg)
+	b[0], b[1], b[2] = unix.AF_INET6, 64, unix.IFA_F_NODAD
+	binary.NativeEndian.PutUint32(b[4:8], uint32(index))
+	a16 := a.As16()
+	b = rtattr(b, unix.IFA_LOCAL, a16[:])
+	b = rtattr(b, unix.IFA_ADDRESS, a16[:])
+	if err := netlinkDo(unix.RTM_NEWADDR, unix.NLM_F_CREATE|unix.NLM_F_EXCL, b); err != nil {
+		return fmt.Errorf("%s's IPv6 address: %w", name, err)
+	}
+	rt := make([]byte, unix.SizeofRtMsg)
+	rt[0], rt[4], rt[5], rt[6], rt[7] = unix.AF_INET6, unix.RT_TABLE_MAIN, unix.RTPROT_BOOT, unix.RT_SCOPE_UNIVERSE, unix.RTN_UNICAST
+	var oif [4]byte
+	binary.NativeEndian.PutUint32(oif[:], uint32(index))
+	rt = rtattr(rt, unix.RTA_OIF, oif[:])
+	if err := netlinkDo(unix.RTM_NEWROUTE, unix.NLM_F_CREATE|unix.NLM_F_EXCL, rt); err != nil {
+		return fmt.Errorf("the IPv6 default route: %w", err)
+	}
+	return nil
+}
+
+// ipv6Frame is an Ethernet frame of one IPv6 UDP datagram of payload,
+// from and to, its hop limit hop and its checksum set.
+func ipv6Frame(dst, src net.HardwareAddr, from, to netip.Addr, hop byte, payload []byte) []byte {
+	u := make([]byte, 8, 8+len(payload))
+	binary.BigEndian.PutUint16(u[0:], 4444)
+	binary.BigEndian.PutUint16(u[2:], 9)
+	binary.BigEndian.PutUint16(u[4:], uint16(8+len(payload)))
+	u = append(u, payload...)
+	f16, t16 := from.As16(), to.As16()
+	pseudo := append(append(append([]byte{}, f16[:]...), t16[:]...), 0, 0, byte(len(u)>>8), byte(len(u)), 0, 0, 0, 17)
+	binary.BigEndian.PutUint16(u[6:], csum(append(pseudo, u...)))
+	ip := make([]byte, 40)
+	ip[0], ip[6], ip[7] = 0x60, 17, hop
+	binary.BigEndian.PutUint16(ip[4:], uint16(len(u)))
+	copy(ip[8:], f16[:])
+	copy(ip[24:], t16[:])
+	f := append(append(append([]byte{}, dst...), src...), 0x86, 0xdd)
+	return append(append(f, ip...), u...)
+}
+
+// tagOf is the forger's tag a packet carries or quotes, "" for none.
+func tagOf(p []byte) string {
+	if i := bytes.Index(p, []byte("forged:")); i >= 0 {
+		rest := p[i+len("forged:"):]
+		if j := bytes.IndexByte(rest, ':'); j >= 0 {
+			return string(rest[:j])
+		}
+	}
+	return ""
+}
+
+// standInForger is a guest with a broken kernel at its tap: it hands up as
+// a VMM does and, once routed, writes frames with sources of its choosing.
+func standInForger() int {
+	fail := func(format string, args ...any) int {
+		fmt.Printf("forger: "+format+"\n", args...)
+		return 1
+	}
+	guard := os.NewFile(3, "guard")
+	netns, _ := unix.Open("/proc/thread-self/ns/net", unix.O_RDONLY|unix.O_CLOEXEC, 0)
+	ctl, _ := unix.Socket(unix.AF_INET, unix.SOCK_DGRAM|unix.SOCK_CLOEXEC, 0)
+	if err := linkUp(ctl, "lo"); err != nil {
+		return fail("%v", err)
+	}
+	at := &unix.SockaddrInet4{Port: 53, Addr: MachineNames.As4()}
+	udp, _ := unix.Socket(unix.AF_INET, unix.SOCK_DGRAM|unix.SOCK_CLOEXEC, 0)
+	tcp, _ := unix.Socket(unix.AF_INET, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, 0)
+	for _, fd := range []int{udp, tcp} {
+		_ = unix.SetsockoptInt(fd, unix.IPPROTO_IP, unix.IP_FREEBIND, 1)
+		if err := unix.Bind(fd, at); err != nil {
+			return fail("%v", err)
+		}
+	}
+	_ = unix.Listen(tcp, 4)
+	nl, _ := unix.Socket(unix.AF_NETLINK, unix.SOCK_RAW|unix.SOCK_CLOEXEC, unix.NETLINK_ROUTE)
+	if err := unix.Sendmsg(int(guard.Fd()), []byte{'r'}, unix.UnixRights(netns, udp, tcp, nl), nil, 0); err != nil {
+		return fail("%v", err)
+	}
+	word := make([]byte, 1)
+	if _, err := guard.Read(word); err != nil || word[0] != 'g' {
+		return fail("no word: %v", err)
+	}
+	if err := syscall.Setresuid(vmmUID, vmmUID, vmmUID); err != nil {
+		return fail("%v", err)
+	}
+	tap, err := unix.Open("/dev/net/tun", unix.O_RDWR|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return fail("%v", err)
+	}
+	attach, _ := unix.NewIfreq(MachineTap)
+	attach.SetUint16(unix.IFF_TAP | unix.IFF_NO_PI)
+	if err := unix.IoctlIfreq(tap, unix.TUNSETIFF, attach); err != nil {
+		return fail("%v", err)
+	}
+	_ = unix.SetNonblock(tap, true)
+	rng, _ := ParseRange("10.213.0.0/16")
+	gateway, inner := slotAddresses(rng, 0)
+	_, another := slotAddresses(rng, 1)
+	udpFrame := func(from, to netip.Addr, ttl byte, tag string) []byte {
+		payload := []byte("forged:" + tag + ":")
+		payload = append(payload, bytes.Repeat([]byte("x"), 200)...)
+		u := make([]byte, 8)
+		binary.BigEndian.PutUint16(u[0:], 4444)
+		binary.BigEndian.PutUint16(u[2:], 9)
+		binary.BigEndian.PutUint16(u[4:], uint16(8+len(payload)))
+		f := ipv4Frame(GatewayMAC, GuestMAC, from, to, 17, append(u, payload...))
+		f[14+8] = ttl
+		binary.BigEndian.PutUint16(f[14+10:], 0)
+		binary.BigEndian.PutUint16(f[14+10:], csum(f[14:34]))
+		return f
+	}
+	for _, from := range []netip.Addr{netip.MustParseAddr("203.0.113.9"), netip.MustParseAddr("192.0.2.1"),
+		netip.MustParseAddr("198.51.100.77"), netip.MustParseAddr("169.254.169.254"), another} {
+		for _, w := range []struct {
+			to  netip.Addr
+			ttl byte
+			how string
+		}{{gateway, 64, "to-guard"}, {forgedTarget, 1, "ttl-1"}, {forgedTarget, 64, "forwarded"}} {
+			if _, err := unix.Write(tap, udpFrame(from, w.to, w.ttl, from.String()+"-"+w.how)); err != nil {
+				return fail("%v", err)
+			}
+		}
+	}
+	v6payload := func(tag string) []byte {
+		return append([]byte("forged:"+tag+":"), bytes.Repeat([]byte("x"), 200)...)
+	}
+	for _, from := range []netip.Addr{netip.MustParseAddr("2001:db8:999::9"), netip.MustParseAddr("2001:db8:100::77")} {
+		for _, w := range []struct {
+			to  netip.Addr
+			hop byte
+			how string
+		}{{forgedGuardV6, 64, "to-guard"}, {forgedTargetV6, 1, "hop-1"}, {forgedTargetV6, 64, "forwarded"}} {
+			if _, err := unix.Write(tap, ipv6Frame(GatewayMAC, GuestMAC, from, w.to, w.hop, v6payload(from.String()+"-"+w.how))); err != nil {
+				return fail("%v", err)
+			}
+		}
+	}
+	if _, err := unix.Write(tap, udpFrame(inner, forgedTarget, 64, "own-to-outside")); err != nil {
+		return fail("%v", err)
+	}
+	var back []string
+	frame := make([]byte, 4096)
+	for end := time.Now().Add(1500 * time.Millisecond); time.Now().Before(end); {
+		n, err := unix.Read(tap, frame)
+		if err != nil {
+			time.Sleep(5 * time.Millisecond) // sleep-ok: a nonblocking tap's next frame
+			continue
+		}
+		if n > 34 && (frame[12] == 0x08 && frame[13] == 0 || frame[12] == 0x86 && frame[13] == 0xdd) {
+			// The refusal of the guest's own packet under reach none is its
+			// own to have; a forged one's answer is not.
+			if tag := tagOf(frame[14:n]); tag != "" && tag != "own-to-outside" {
+				back = append(back, tag)
+			}
+		}
+	}
+	if len(back) == 0 {
+		fmt.Println("forger: nothing came back to the guest")
+	} else {
+		fmt.Printf("forger: came back to the guest: %v\n", back)
+	}
+	select {}
 }

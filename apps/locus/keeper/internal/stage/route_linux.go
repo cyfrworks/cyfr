@@ -113,10 +113,24 @@ func handRouteUp(fd int, names [4]byte) error {
 		_ = unix.Close(netns)
 		return err
 	}
-	err = unix.Sendmsg(fd, []byte{'r'}, unix.UnixRights(netns, udp, tcp), nil, 0)
-	_ = unix.Close(netns)
-	_ = unix.Close(udp)
-	_ = unix.Close(tcp)
+	handed := []int{netns, udp, tcp}
+	// A person's machine's route is settled by netlink in its namespace
+	// too: the stage opens the socket here, holding NET_ADMIN in it, and
+	// the guard alone uses it (package guard).
+	if names != spaceNames {
+		nl, err := unix.Socket(unix.AF_NETLINK, unix.SOCK_RAW|unix.SOCK_CLOEXEC, unix.NETLINK_ROUTE)
+		if err != nil {
+			for _, f := range handed {
+				_ = unix.Close(f)
+			}
+			return fmt.Errorf("the machine's route netlink socket: %w", err)
+		}
+		handed = append(handed, nl)
+	}
+	err = unix.Sendmsg(fd, []byte{'r'}, unix.UnixRights(handed...), nil, 0)
+	for _, f := range handed {
+		_ = unix.Close(f)
+	}
 	if err != nil {
 		return fmt.Errorf("handing the route's descriptors up: %w", err)
 	}

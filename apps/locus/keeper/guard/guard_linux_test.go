@@ -43,8 +43,8 @@ func standInTools(t *testing.T) {
 esac`,
 		"ip6tables":        "",
 		"iptables-restore": "cat >/dev/null",
-		"iptables-save":    `if [ "$2" = nat ]; then printf '` + strings.ReplaceAll(standInNat, "\n", `\n`) + `'; else printf '` + strings.ReplaceAll(standInFilter, "\n", `\n`) + `'; fi`,
-		"ip6tables-save":   `printf '` + strings.ReplaceAll(standInFilter, "\n", `\n`) + `'`,
+		"iptables-save":    `case "$2" in nat) printf '` + strings.ReplaceAll(standInNat, "\n", `\n`) + `' ;; raw) ;; *) printf '` + strings.ReplaceAll(standInFilter, "\n", `\n`) + `' ;; esac`,
+		"ip6tables-save":   `case "$2" in raw) ;; *) printf '` + strings.ReplaceAll(standInFilter, "\n", `\n`) + `' ;; esac`,
 	}
 	for name, body := range tools {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte("#!/bin/sh\n"+body+"\nexit 0\n"), 0o755); err != nil {

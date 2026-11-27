@@ -105,12 +105,13 @@ type Config struct {
 	// guest-check's machines are given.
 	UID int
 	// Route makes a person's VM's route from its VMM's space's network
-	// namespace and two name sockets, which the space hands up before the
-	// VMM is executed (package stage): the guard's machine route (package
-	// guard), owned by the VMM's uid. The machine boots with a card on its
-	// tap, the guest at the route's inner address. nil for a machine with
-	// no network, whose space is a relay space whose relay leads nowhere.
-	Route func(uid int, netns, udp, tcp *os.File) (Network, error)
+	// namespace, two name sockets and route netlink socket, which the
+	// space hands up before the VMM is executed (package stage): the
+	// guard's machine route (package guard), owned by the VMM's uid. The
+	// machine boots with a card on its tap, the guest at the route's inner
+	// address. nil for a machine with no network, whose space is a relay
+	// space whose relay leads nowhere.
+	Route func(uid int, netns, udp, tcp, nl *os.File) (Network, error)
 }
 
 // Network is a person's VM's route: the guest's address and its gateway,
@@ -422,14 +423,14 @@ func (m *Machine) startStage(self string, spec stage.Spec, cfg Config) error {
 	return nil
 }
 
-// route takes the namespace and two name sockets a person's VM's space
-// hands up on its route socket, conn, by a read deadline stageWait away,
-// has fn make the route as the VMM's uid's, and tells the stage to go on. A
-// space that hands nothing up by then is Start's to kill; what it hands up
-// after is the socket's, closed with it.
-func (m *Machine) route(conn *os.File, fn func(uid int, netns, udp, tcp *os.File) (Network, error)) error {
+// route takes the namespace, two name sockets and route netlink socket a
+// person's VM's space hands up on its route socket, conn, by a read
+// deadline stageWait away, has fn make the route as the VMM's uid's, and
+// tells the stage to go on. A space that hands nothing up by then is
+// Start's to kill; what it hands up after is the socket's, closed with it.
+func (m *Machine) route(conn *os.File, fn func(uid int, netns, udp, tcp, nl *os.File) (Network, error)) error {
 	_ = conn.SetReadDeadline(time.Now().Add(stageWait))
-	fds, err := stage.ReceiveDescriptors(conn, 3)
+	fds, err := stage.ReceiveDescriptors(conn, 4)
 	if errors.Is(err, os.ErrDeadlineExceeded) {
 		return fmt.Errorf("vm: the VMM's space handed up no route within %s", stageWait)
 	}
@@ -437,10 +438,11 @@ func (m *Machine) route(conn *os.File, fn func(uid int, netns, udp, tcp *os.File
 		return fmt.Errorf("vm: the VMM's space's route: %w", err)
 	}
 	netns, udp, tcp := os.NewFile(uintptr(fds[0]), "netns"), os.NewFile(uintptr(fds[1]), "names-udp"), os.NewFile(uintptr(fds[2]), "names-tcp")
-	n, err := fn(m.uid, netns, udp, tcp)
-	_ = netns.Close()
-	_ = udp.Close()
-	_ = tcp.Close()
+	nl := os.NewFile(uintptr(fds[3]), "netlink")
+	n, err := fn(m.uid, netns, udp, tcp, nl)
+	for _, f := range []*os.File{netns, udp, tcp, nl} {
+		_ = f.Close()
+	}
 	if err != nil {
 		return fmt.Errorf("vm: the machine's route: %w", err)
 	}
@@ -661,7 +663,7 @@ func (m *Machine) puts(cfg Config) []put {
 		ps = append(ps, put{"/drives/disk", map[string]any{"drive_id": "disk", "path_on_host": cfg.Disk, "is_root_device": false, "is_read_only": false}})
 	}
 	if m.network.Inner.IsValid() {
-		ps = append(ps, put{"/network-interfaces/eth0", map[string]any{"iface_id": "eth0", "host_dev_name": guard.MachineTap, "guest_mac": GuestMAC}})
+		ps = append(ps, put{"/network-interfaces/eth0", map[string]any{"iface_id": "eth0", "host_dev_name": guard.MachineTap, "guest_mac": guard.GuestMAC.String()}})
 	}
 	return append(ps,
 		put{"/vsock", map[string]any{"guest_cid": GuestCID, "uds_path": m.vsock()}},

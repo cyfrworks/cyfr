@@ -142,10 +142,14 @@ func TestTheKeeperSendsTheVectors(t *testing.T) {
 		func() error { _, err := c.AdmitRole(testSpawn, 4200, true, netns, udp, tcp); return err },
 		func() error { _, err := c.AdmitRole(testSpawn, 4101, false, netns, udp, tcp); return err },
 		func() error { return c.Clear(testSpawn, Route{Conn: 1}) },
-		func() error { return machine(c.AdmitMachine(testSpawn, 30201, ReachNone, nil, netns, udp, tcp)) },
-		func() error { return machine(c.AdmitMachine(testSpawn, 30201, ReachIsland, nil, netns, udp, tcp)) },
 		func() error {
-			return machine(c.AdmitMachine(testSpawn, 30456, ReachHosts, []netip.Addr{netip.MustParseAddr("1.2.3.4")}, netns, udp, tcp))
+			return machine(c.AdmitMachine(testSpawn, 30201, ReachNone, nil, netns, udp, tcp, netlinkSocket(t)))
+		},
+		func() error {
+			return machine(c.AdmitMachine(testSpawn, 30201, ReachIsland, nil, netns, udp, tcp, netlinkSocket(t)))
+		},
+		func() error {
+			return machine(c.AdmitMachine(testSpawn, 30456, ReachHosts, []netip.Addr{netip.MustParseAddr("1.2.3.4")}, netns, udp, tcp, netlinkSocket(t)))
 		},
 		func() error {
 			return c.Change(testSpawn, Route{Conn: 1}, ReachHosts, []netip.Addr{netip.MustParseAddr("1.2.3.4"), netip.MustParseAddr("2606:4700::1111")})
@@ -203,7 +207,10 @@ func TestAnAdmitAnsweredWithTheWrongAddressesIsRefused(t *testing.T) {
 	c := NewClient(g.path, "net:[7]", nil)
 	netns, udp, tcp := descriptors(t)
 	done := make(chan error, 1)
-	go func() { _, err := c.AdmitMachine(testSpawn, 30201, ReachIsland, nil, netns, udp, tcp); done <- err }()
+	go func() {
+		_, err := c.AdmitMachine(testSpawn, 30201, ReachIsland, nil, netns, udp, tcp, netlinkSocket(t))
+		done <- err
+	}()
 	conn := g.accept(t)
 	request(t, conn)
 	answer(t, conn, Message{Type: TypeAdmitted, SpawnID: testSpawn})
@@ -407,7 +414,7 @@ func TestAChangeRefusedWithItsRouteWithdrawnIsToldApart(t *testing.T) {
 	netns, udp, tcp := descriptors(t)
 	admitted := make(chan Machine, 1)
 	go func() {
-		m, _ := c.AdmitMachine(testSpawn, 30201, ReachNone, nil, netns, udp, tcp)
+		m, _ := c.AdmitMachine(testSpawn, 30201, ReachNone, nil, netns, udp, tcp, netlinkSocket(t))
 		admitted <- m
 	}()
 	conn := g.accept(t)

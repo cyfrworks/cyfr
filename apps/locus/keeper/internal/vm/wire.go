@@ -114,9 +114,6 @@ const (
 	// command line, NetArg=<inner>,<gateway>, which its first process sets
 	// its card to (guard.GuestLink).
 	NetArg = "cyfr.net"
-	// GuestMAC is every guest's card's address: each is alone on its own
-	// bridge, behind its own pair (package guard).
-	GuestMAC = "06:00:0a:00:00:02"
 	// GuestRunDir is the role's run folder, its uid's own, 0700, where the
 	// keeper's relays reach the attach socket it listens on.
 	GuestRunDir = "/run/locus/" + GuestRole
