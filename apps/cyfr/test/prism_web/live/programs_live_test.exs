@@ -2330,7 +2330,7 @@ defmodule PrismWeb.ProgramsLiveTest do
 
       assert view |> element(~s([data-test="memory-terminals"])) |> render() =~
                "Its terminals use 233.0 MB of that. CYFR does not measure each one. " <>
-                 "The rest is the tool itself, which Close does not end."
+                 "The rest is the mcp program itself, which Close does not end."
 
       # The terminals' size is the program's in the athanor, never this
       # session's: its line is its start and its controls.
