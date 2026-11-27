@@ -505,16 +505,20 @@ defmodule PrismWeb.ProgramsLiveTest do
 
   # The programs controller on a scripted backends service, put back
   # however the test ends.
-  defp controller! do
+  defp controller!, do: elem(box!(), 0)
+
+  # The scripted service and the controller, which checks its rows again
+  # when a test sends it `:tick`.
+  defp box! do
     on_exit(fn ->
       :persistent_term.erase({Arca.ControlPlane, :generation})
       Arca.ControlPlane.record(:unclaimed)
     end)
 
     fake = Scripted.start(self(), @root)
-    Scripted.supervise_controller(url: fake.url, root: @root, tick_ms: 3_600_000)
+    controller = Scripted.supervise_controller(url: fake.url, root: @root, tick_ms: 3_600_000)
     assert_receive {:control, "reconcile", _reconcile, _fields}, 2_000
-    fake
+    {fake, controller}
   end
 
   defp person(user, athanor),
@@ -1704,8 +1708,72 @@ defmodule PrismWeb.ProgramsLiveTest do
 
     refute has_element?(view, ~s([data-test="program-status"]))
     refute render(view) =~ "Discovered Tools"
-    assert has_element?(view, ~s(tr[data-name="github"] span), "stopped")
+    assert has_element?(view, ~s(tr[data-name="github"] [data-test="status"]), "disabled")
+    refute has_element?(view, ~s(tr[data-name="github"] [data-test="status"]), "stopped")
     assert has_element?(view, "button", "Enable")
+  end
+
+  test "the list says a connected program starts when used, never that it runs",
+       %{conn: conn, athanor: athanor} do
+    controller!()
+
+    {:ok, row} =
+      Arca.McpServerStorage.insert(ctx(athanor), %{
+        cap: 0,
+        name: "github",
+        transport: "program",
+        mark: "mcp",
+        url: nil,
+        config_json: Jason.encode!(%{"command" => "npx -y github", "env" => %{}})
+      })
+
+    on_exit(fn -> Emissary.External.ServerSupervisor.stop("github", athanor.id) end)
+
+    internal = Sanctum.Context.internal(athanor_id: athanor.id, scope: :athanor)
+    assert {:ok, [_tool]} = Emissary.External.Servers.ensure_started(row, internal)
+    assert %{status: :ready} = Emissary.External.Server.status("github", athanor.id)
+
+    {view, _html} = mount_athanor(conn, "/programs", athanor)
+    status = view |> element(~s(tr[data-name="github"] [data-test="status"])) |> render()
+
+    assert status =~ "starts when used"
+    refute status =~ "ready"
+  end
+
+  test "a disabled program a person runs reads as disabled and offers no Open; its terminal says why it ended",
+       %{conn: conn, athanor: athanor, user: user} do
+    {_fake, controller} = box!()
+    row = driven_row!(athanor)
+
+    {:ok, session} =
+      Opus.Programs.start(person(user, athanor), row.id, %{rows: 24, cols: 80, args: []})
+
+    {view, _html} = mount_athanor(conn, "/programs?terminal=#{session}", athanor)
+    ready!(view, session)
+    view |> element("tr[phx-value-name=claude]") |> render_click()
+
+    assert has_element?(view, ~s([data-test="open-terminal"]))
+    refute has_element?(view, ~s(tr[data-name="claude"] [data-test="status"]), "disabled")
+
+    view |> element(~s([data-test="toggle-enabled"])) |> render_click()
+    answered(view)
+
+    assert has_element?(view, ~s(tr[data-name="claude"] [data-test="status"]), "disabled")
+    refute has_element?(view, ~s([data-test="open-terminal"]))
+
+    assert view |> element(~s([data-test="open-disabled"])) |> render() =~
+             "This program is disabled. Enable it to open a terminal."
+
+    # The controller's next check of its rows ends what the row ran.
+    assert eventually(fn ->
+             send(controller, :tick)
+
+             has_element?(
+               view,
+               ~s([data-test="terminal-ended"]),
+               "The program ended: it was disabled, changed or removed."
+             )
+           end)
   end
 
   # A kept mcp program carrying every field a definition holds, among them
@@ -2129,6 +2197,149 @@ defmodule PrismWeb.ProgramsLiveTest do
       |> render_click()
 
       assert_receive {:session, "close", _message, _fields}, 2_000
+    end
+
+    test "three terminals of one program are a line each, told apart by their start, sized together",
+         %{conn: conn, athanor: athanor, user: user} do
+      _fake = controller!()
+      row = driven_row!(athanor)
+      me = person(user, athanor)
+
+      for _n <- 1..3,
+          do: {:ok, _session} = Opus.Programs.start(me, row.id, %{rows: 24, cols: 80, args: []})
+
+      {:ok, [first, second, third] = running} = Opus.Programs.running(me)
+
+      recorded!([held(1, athanor, "terminal", row.id, 213)], %{
+        {athanor.id, row.id} => %{name: "claude", shown: "program"}
+      })
+
+      {view, _html} = mount_athanor(conn, "/programs", athanor)
+      panel = view |> element(~s([data-test="memory"])) |> render()
+
+      assert panel =~ "claude uses 213.0 MB"
+      assert panel =~ "3 terminals use 213.0 MB together. CYFR does not measure each one."
+      refute panel =~ "of that"
+      refute panel =~ "Running since"
+
+      # A line each, oldest first, none with a size of its own.
+      lines =
+        panel
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query(~s([data-test="memory-session"]))
+        |> Enum.map(&(&1 |> LazyHTML.text() |> String.split() |> Enum.join(" ")))
+
+      assert lines ==
+               for(
+                 s <- running,
+                 do:
+                   "Terminal opened at #{Calendar.strftime(s.started_at, "%H:%M:%S UTC")} Show Close"
+               )
+
+      for s <- running do
+        assert has_element?(
+                 view,
+                 ~s([data-test="memory-close"][phx-value-session="#{s.session}"])
+               )
+      end
+
+      # Show brings one into the frame, and its line then says which it is.
+      view
+      |> element(~s([data-test="memory-show"][phx-value-session="#{second.session}"]))
+      |> render_click()
+
+      assert has_element?(view, ~s([data-test="terminal"]))
+
+      shown =
+        view
+        |> element(~s([data-test="memory-session"]), "shown above")
+        |> render()
+
+      assert shown =~ ~s(phx-value-session="#{second.session}")
+
+      refute has_element?(
+               view,
+               ~s([data-test="memory-show"][phx-value-session="#{second.session}"])
+             )
+
+      assert has_element?(
+               view,
+               ~s([data-test="memory-show"][phx-value-session="#{first.session}"])
+             )
+
+      assert has_element?(
+               view,
+               ~s([data-test="memory-show"][phx-value-session="#{third.session}"])
+             )
+
+      # Disable would end all three, so it asks first, and says how many.
+      assert view |> element(~s([data-test="memory-disable"])) |> render() =~
+               "Disable claude? Its 3 open terminals end now, and anything running in them is lost."
+    end
+
+    test "a tool with one terminal says which part Close frees and which only Disable does",
+         %{conn: conn, athanor: athanor, user: user} do
+      _fake = controller!()
+
+      {:ok, row} =
+        Arca.McpServerStorage.insert(ctx(athanor), %{
+          cap: 0,
+          name: "everything",
+          transport: "program",
+          mark: "mcp",
+          url: nil,
+          config_json: Jason.encode!(%{"command" => "npx -y everything", "env" => %{}})
+        })
+
+      {:ok, session} =
+        Opus.Programs.start(person(user, athanor), row.id, %{rows: 24, cols: 80, args: []})
+
+      {:ok, [%{started_at: started_at}]} = Opus.Programs.running(person(user, athanor))
+
+      recorded!(
+        [
+          held(1, athanor, "program", row.id, 247),
+          held(2, athanor, "terminal", row.id, 233)
+        ],
+        %{{athanor.id, row.id} => %{name: "everything", shown: "tool"}}
+      )
+
+      {view, _html} = mount_athanor(conn, "/programs", athanor)
+      panel = view |> element(~s([data-test="memory"])) |> render()
+
+      assert panel =~ "everything uses 480.0 MB"
+
+      assert view |> element(~s([data-test="memory-terminals"])) |> render() =~
+               "Its terminal uses 233.0 MB of that; Close ends it. The rest is the tool itself, " <>
+                 "which only Disable ends."
+
+      assert view |> element(~s([data-test="memory-session"])) |> render() =~
+               "Terminal opened at #{Calendar.strftime(started_at, "%H:%M:%S UTC")}, uses 233.0 MB"
+
+      assert has_element?(view, ~s([data-test="memory-close"][phx-value-session="#{session}"]))
+      refute panel =~ "together"
+
+      assert view |> element(~s([data-test="memory-disable"])) |> render() =~
+               "Disable everything? Its open terminal ends now, and anything running in it is lost."
+    end
+
+    test "Disable asks nothing of a program with no terminal open",
+         %{conn: conn, athanor: athanor} do
+      _fake = controller!()
+      row = driven_row!(athanor)
+
+      recorded!([held(1, athanor, "program", row.id, 300)], %{
+        {athanor.id, row.id} => %{name: "claude", shown: "program"}
+      })
+
+      {view, _html} = mount_athanor(conn, "/programs", athanor)
+
+      refute view |> element(~s([data-test="memory-disable"])) |> render() =~ "data-confirm"
+      refute has_element?(view, ~s([data-test="memory-session"]))
+      refute has_element?(view, ~s([data-test="memory-terminals"]))
+
+      view |> element("tr[phx-value-name=claude]") |> render_click()
+      refute view |> element(~s([data-test="toggle-enabled"])) |> render() =~ "data-confirm"
     end
 
     test "a person with nothing of theirs held reads only that, and the others' sum",
