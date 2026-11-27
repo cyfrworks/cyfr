@@ -42,8 +42,11 @@ its declared needs in CYFR: on Components, open it and choose Grant access.`,
 			output.KeyValue(result)
 			printRegisterDependencyInfo(result)
 		}
+		// A scan that refused a component found it: its refusal is printed
+		// above, and the hint is for a scan that found nothing at all.
 		total, _ := result["total"].(float64)
-		if total == 0 {
+		refused, _ := result["errors"].(float64)
+		if total == 0 && refused == 0 {
 			fmt.Fprintln(os.Stderr)
 			fmt.Fprintln(os.Stderr, "No components found. Check that:")
 			fmt.Fprintln(os.Stderr, "  - the server can reach your athanor's component storage (under data/)")
