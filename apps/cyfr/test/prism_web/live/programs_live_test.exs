@@ -507,6 +507,16 @@ defmodule PrismWeb.ProgramsLiveTest do
   # however the test ends.
   defp controller!, do: elem(box!(), 0)
 
+  # What a button asks in the browser before its press is sent; nil for none.
+  defp question(view, selector) do
+    view
+    |> element(selector)
+    |> render()
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.attribute("data-confirm")
+    |> List.first()
+  end
+
   # The scripted service and the controller, which checks its rows again
   # when a test sends it `:tick`.
   defp box! do
@@ -1755,6 +1765,11 @@ defmodule PrismWeb.ProgramsLiveTest do
     assert has_element?(view, ~s([data-test="open-terminal"]))
     refute has_element?(view, ~s(tr[data-name="claude"] [data-test="status"]), "disabled")
 
+    # A terminal of it is listed, so the row's Disable asks first, though
+    # no read names the program yet.
+    assert question(view, ~s([data-test="toggle-enabled"])) ==
+             "Disable claude? Everything running in it ends now, and work in its terminals is lost."
+
     view |> element(~s([data-test="toggle-enabled"])) |> render_click()
     answered(view)
 
@@ -1771,7 +1786,7 @@ defmodule PrismWeb.ProgramsLiveTest do
              has_element?(
                view,
                ~s([data-test="terminal-ended"]),
-               "The program ended: it was disabled, changed or removed."
+               "CYFR ended the program. The Programs page shows whether it can be opened again."
              )
            end)
   end
@@ -2199,7 +2214,7 @@ defmodule PrismWeb.ProgramsLiveTest do
       assert_receive {:session, "close", _message, _fields}, 2_000
     end
 
-    test "three terminals of one program are a line each, told apart by their start, sized together",
+    test "three terminals of one program are a line each, told apart by their start, with no size of their own",
          %{conn: conn, athanor: athanor, user: user} do
       _fake = controller!()
       row = driven_row!(athanor)
@@ -2218,8 +2233,12 @@ defmodule PrismWeb.ProgramsLiveTest do
       panel = view |> element(~s([data-test="memory"])) |> render()
 
       assert panel =~ "claude uses 213.0 MB"
-      assert panel =~ "3 terminals use 213.0 MB together. CYFR does not measure each one."
-      refute panel =~ "of that"
+
+      assert view |> element(~s([data-test="memory-terminals"])) |> render() =~
+               "All of that is its terminals. CYFR does not measure each one."
+
+      refute panel =~ "terminals use"
+      refute panel =~ "The rest is"
       refute panel =~ "Running since"
 
       # A line each, oldest first, none with a size of its own.
@@ -2272,12 +2291,12 @@ defmodule PrismWeb.ProgramsLiveTest do
                ~s([data-test="memory-show"][phx-value-session="#{third.session}"])
              )
 
-      # Disable would end all three, so it asks first, and says how many.
-      assert view |> element(~s([data-test="memory-disable"])) |> render() =~
-               "Disable claude? Its 3 open terminals end now, and anything running in them is lost."
+      # Disable asks first, of the whole program, and counts nothing.
+      assert question(view, ~s([data-test="memory-disable"])) ==
+               "Disable claude? Everything running in it ends now, and work in its terminals is lost."
     end
 
-    test "a tool with one terminal says which part Close frees and which only Disable does",
+    test "a tool with a terminal says which part its terminals are, and no session carries a size",
          %{conn: conn, athanor: athanor, user: user} do
       _fake = controller!()
 
@@ -2310,26 +2329,45 @@ defmodule PrismWeb.ProgramsLiveTest do
       assert panel =~ "everything uses 480.0 MB"
 
       assert view |> element(~s([data-test="memory-terminals"])) |> render() =~
-               "Its terminal uses 233.0 MB of that; Close ends it. The rest is the tool itself, " <>
-                 "which only Disable ends."
+               "Its terminals use 233.0 MB of that. CYFR does not measure each one. " <>
+                 "The rest is the tool itself, which Close does not end."
 
-      assert view |> element(~s([data-test="memory-session"])) |> render() =~
-               "Terminal opened at #{Calendar.strftime(started_at, "%H:%M:%S UTC")}, uses 233.0 MB"
+      # The terminals' size is the program's in the athanor, never this
+      # session's: its line is its start and its controls.
+      line =
+        view
+        |> element(~s([data-test="memory-session"]))
+        |> render()
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.text()
+        |> String.split()
+        |> Enum.join(" ")
+
+      assert line ==
+               "Terminal opened at #{Calendar.strftime(started_at, "%H:%M:%S UTC")} Show Close"
 
       assert has_element?(view, ~s([data-test="memory-close"][phx-value-session="#{session}"]))
-      refute panel =~ "together"
+      refute panel =~ "only Disable"
 
-      assert view |> element(~s([data-test="memory-disable"])) |> render() =~
-               "Disable everything? Its open terminal ends now, and anything running in it is lost."
+      assert question(view, ~s([data-test="memory-disable"])) ==
+               "Disable everything? Everything running in it ends now, and work in its terminals is lost."
     end
 
-    test "Disable asks nothing of a program with no terminal open",
+    test "Disable asks on both buttons whenever the read names the program, and nothing when nothing of it runs",
          %{conn: conn, athanor: athanor} do
       _fake = controller!()
       row = driven_row!(athanor)
 
-      # A terminal's size still counted after it closed is no terminal to
-      # close: the page says nothing of terminals it lists none of.
+      {view, _html} = mount_athanor(conn, "/programs", athanor)
+      view |> element("tr[phx-value-name=claude]") |> render_click()
+
+      # Nothing of it runs: no line in the panel, and the row's Disable asks nothing.
+      refute has_element?(view, ~s([data-test="memory-disable"]))
+      assert question(view, ~s([data-test="toggle-enabled"])) == nil
+
+      # The read names it, with a terminal of someone else's in the athanor
+      # and none of this person's listed: both buttons ask, of the whole
+      # program, and the terminals' size stays at the program's level.
       recorded!(
         [
           held(1, athanor, "program", row.id, 300),
@@ -2338,15 +2376,21 @@ defmodule PrismWeb.ProgramsLiveTest do
         %{{athanor.id, row.id} => %{name: "claude", shown: "program"}}
       )
 
-      {view, _html} = mount_athanor(conn, "/programs", athanor)
+      send(view.pid, :memory)
 
       assert view |> element(~s([data-test="memory"])) |> render() =~ "claude uses 350.0 MB"
-      refute view |> element(~s([data-test="memory-disable"])) |> render() =~ "data-confirm"
-      refute has_element?(view, ~s([data-test="memory-session"]))
-      refute has_element?(view, ~s([data-test="memory-terminals"]))
 
-      view |> element("tr[phx-value-name=claude]") |> render_click()
-      refute view |> element(~s([data-test="toggle-enabled"])) |> render() =~ "data-confirm"
+      assert view |> element(~s([data-test="memory-terminals"])) |> render() =~
+               "Its terminals use 50.0 MB of that. CYFR does not measure each one. " <>
+                 "The rest is the program itself, which Close does not end."
+
+      refute has_element?(view, ~s([data-test="memory-session"]))
+
+      asked =
+        "Disable claude? Everything running in it ends now, and work in its terminals is lost."
+
+      assert question(view, ~s([data-test="memory-disable"])) == asked
+      assert question(view, ~s([data-test="toggle-enabled"])) == asked
     end
 
     # A connected mcp program named github: CYFR is ready to call it.

@@ -327,8 +327,10 @@ defmodule PrismWeb.TerminalComponent do
   def ended_text(:closed), do: "The program was closed."
   def ended_text(:idle), do: "The program ended after a day with no one watching it."
 
+  # Its row was changed, disabled or removed, or another member of this
+  # CYFR took the program over: the terminal is told none of which.
   def ended_text(:row_changed),
-    do: "The program ended: it was disabled, changed or removed."
+    do: "CYFR ended the program. The Programs page shows whether it can be opened again."
 
   def ended_text(:standing), do: "The program ended: you no longer have access to this athanor."
   def ended_text(:unanswered), do: "The close was not confirmed yet; CYFR ends the program."

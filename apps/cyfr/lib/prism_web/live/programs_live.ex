@@ -30,13 +30,14 @@ defmodule PrismWeb.ProgramsLive do
   kind with no control, everyone else's use as one sum, and how fresh the
   count is (`PrismWeb.MemoryWords`); programs by name, then the kinds, so
   a line never moves when a size changes. CYFR counts a program's
-  terminals as one, never each session: one terminal's line carries that
-  size, several say it once for all of them, and a program that also runs
-  by itself says which part its terminals are, since Close ends a
-  terminal and only Disable ends the rest. Disable asks first, in the
-  browser, when it would end open terminals, and says how many. Until the
-  first read answers
-  it says nothing of them; a read that fails says the memory cannot be
+  terminals in the athanor as one size, never each session, and the
+  sessions listed are this person's own: so no session's line carries a
+  size, and the program's line says which part of it its terminals are,
+  and that Close does not end the rest. Disable asks first, in the
+  browser, whenever anything of the program runs as far as the page
+  knows: the read names it as holding memory, or a session of it is
+  listed. Its question covers the whole program and counts nothing. Until
+  the first read answers it says nothing of them; a read that fails says the memory cannot be
   read, never that nothing of theirs uses it.
 
   Forms add an http server (its config as JSON) and a program, its mark
@@ -1384,7 +1385,8 @@ defmodule PrismWeb.ProgramsLive do
                           phx-value-name={server[:name]}
                           phx-value-enabled={to_string(server[:enabled])}
                           data-confirm={
-                            server[:enabled] == true && disable_question(@running, server[:name])
+                            server[:enabled] == true &&
+                              disable_question(@memory, @running, server[:name])
                           }
                           data-test="toggle-enabled"
                         >
@@ -1572,20 +1574,19 @@ defmodule PrismWeb.ProgramsLive do
 
   attr :session, :map, required: true
   attr :shown, :string, default: nil
-  attr :size, :string, default: nil
   attr :test, :string, required: true
 
   # One running session on a line of its own: the second it started, which
-  # tells it from another of its program, who started it, its size where
-  # CYFR knows it, and its Show and Close. The one in the frame says so and
-  # offers no Show; one Aqua started is never shown.
+  # tells it from another of its program, who started it, and its Show and
+  # Close. It carries no size: CYFR measures none for a session. The one in
+  # the frame says so and offers no Show; one Aqua started is never shown.
   defp session_line(assigns) do
     ~H"""
     <div
       class="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-400"
       data-test={@test <> "-session"}
     >
-      <span class="tabular-nums">{session_words(@session, @size, @shown)}</span>
+      <span class="tabular-nums">{session_words(@session, @shown)}</span>
       <span class="flex items-center gap-1">
         <.button
           :if={@session.by == :person and @session.session != @shown}
@@ -1665,16 +1666,14 @@ defmodule PrismWeb.ProgramsLive do
                 phx-click="toggle_enabled"
                 phx-value-name={server[:name]}
                 phx-value-enabled="true"
-                data-confirm={disable_question(@running, server[:name])}
+                data-confirm={disable_question(@memory, @running, server[:name])}
                 data-test="memory-disable"
               >
                 Disable
               </.button>
             </div>
             <p
-              :for={
-                words <- terminal_words(machine.holders, sessions(@running, line.name), line.name)
-              }
+              :for={words <- terminal_words(machine.holders, line.name)}
               class="text-xs text-gray-400"
               data-test="memory-terminals"
             >
@@ -1684,7 +1683,6 @@ defmodule PrismWeb.ProgramsLive do
               :for={session <- sessions(@running, line.name)}
               session={session}
               shown={@shown}
-              size={one_terminal_size(machine.holders, sessions(@running, line.name), line.name)}
               test="memory"
             />
           </div>
@@ -1714,12 +1712,11 @@ defmodule PrismWeb.ProgramsLive do
   defp disabling(servers, name),
     do: Enum.filter(servers, &(&1[:name] == name and &1[:enabled] == true))
 
-  defp session_words(session, size, shown) do
+  defp session_words(session, shown) do
     [
       "Terminal opened at " <> Calendar.strftime(session.started_at, "%H:%M:%S UTC"),
       starter(session.by),
       if(session.kept, do: ", kept"),
-      if(size, do: ", uses #{size}"),
       if(session.session == shown, do: ", shown above")
     ]
     |> Enum.join()
@@ -1734,72 +1731,39 @@ defmodule PrismWeb.ProgramsLive do
   defp shown_session(%{session: session, ended: nil}), do: session
   defp shown_session(_none_or_ended), do: nil
 
-  # What Disable asks, in the browser, when it would end the person's open
-  # terminals of the program; nil, and so no question, when it ends none.
-  defp disable_question(running, name) do
-    case length(sessions(running, name)) do
-      0 ->
-        nil
+  # What Disable asks, in the browser, whenever anything of the program
+  # runs as far as the page knows: the read names it as holding memory, or
+  # a session of it is listed. It covers the whole program and counts
+  # nothing, so what starts while it is up is inside what it says. Nil,
+  # and so no question, when nothing runs.
+  defp disable_question(memory, running, name) do
+    if holds_memory?(memory, name) or sessions(running, name) != [],
+      do: "Disable #{name}? Everything running in it ends now, and work in its terminals is lost."
+  end
 
-      1 ->
-        "Disable #{name}? Its open terminal ends now, and anything running in it is lost."
+  # What a person reads of a program's terminals, from the read alone: it
+  # counts them in the athanor as one size, apart from what the program
+  # holds by itself (the holders of one name, kind `:terminal` and the
+  # row's own). No size is said of anything the read gives none for: not
+  # of a session, nor of the sessions this page lists.
+  defp terminal_words(holders, name) do
+    terminals = for %{name: ^name, kind: :terminal, bytes: bytes} <- holders, do: bytes
+    rest = Enum.find(holders, &(&1.name == name and &1.kind != :terminal))
 
-      n ->
-        "Disable #{name}? Its #{n} open terminals end now, and anything running in them is lost."
+    case {terminals, rest} do
+      {[], _rest} ->
+        []
+
+      {_terminals, nil} ->
+        ["All of that is its terminals. CYFR does not measure each one."]
+
+      {sizes, rest} ->
+        [
+          "Its terminals use #{MemoryWords.size(Enum.sum(sizes))} of that. CYFR does not " <>
+            "measure each one. The rest is the #{MemoryWords.kind(rest.kind)} itself, which " <>
+            "Close does not end."
+        ]
     end
-  end
-
-  # CYFR counts a program's terminals on a machine as one size, apart from
-  # what the program holds by itself (`Opus.Memory`'s holders of one name,
-  # kind `:terminal` and the row's own): what the terminals use, or nil
-  # when none is counted, and the holder that is the rest.
-  defp terminal_bytes(holders, name) do
-    case for(%{name: ^name, kind: :terminal, bytes: bytes} <- holders, do: bytes) do
-      [] -> nil
-      sizes -> Enum.sum(sizes)
-    end
-  end
-
-  defp rest(holders, name),
-    do: Enum.find(holders, &(&1.name == name and &1.kind != :terminal))
-
-  # One terminal's size is its program's terminals' size.
-  defp one_terminal_size(holders, [_one], name) do
-    bytes = terminal_bytes(holders, name)
-    bytes && MemoryWords.size(bytes)
-  end
-
-  defp one_terminal_size(_holders, _none_or_several, _name), do: nil
-
-  # What a person reads of a program's terminals as a whole: which part of
-  # its line they are when the program also runs by itself, and that
-  # several are counted together. Nothing of terminals the page lists
-  # none of: a size counted for one that just closed is not one to close.
-  defp terminal_words(_holders, [], _name), do: []
-
-  defp terminal_words(holders, sessions, name) do
-    bytes = terminal_bytes(holders, name)
-    rest = rest(holders, name)
-    several? = match?([_, _ | _], sessions)
-
-    part =
-      if bytes && rest do
-        {terminals, close} =
-          if several?,
-            do: {"Its terminals use", "Close ends one"},
-            else: {"Its terminal uses", "Close ends it"}
-
-        "#{terminals} #{MemoryWords.size(bytes)} of that; #{close}. The rest is the " <>
-          "#{MemoryWords.kind(rest.kind)} itself, which only Disable ends."
-      end
-
-    together =
-      if bytes && several?,
-        do:
-          "#{length(sessions)} terminals use #{MemoryWords.size(bytes)} together. " <>
-            "CYFR does not measure each one."
-
-    Enum.reject([part, together], &is_nil/1)
   end
 
   attr :server, :map, required: true
