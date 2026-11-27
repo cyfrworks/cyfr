@@ -1376,10 +1376,16 @@ defmodule PrismWeb.SettingsLive do
             >
               {MemoryWords.silent(@memory.unanswered)}
             </p>
-            <div :if={is_map(@memory) and @memory.days != []} id="memory-days">
-              <%!-- Four columns from the width they fit at. Below it a row
-                   stacks: its day and person on a line, then what, then
-                   what it used, so nothing scrolls sideways. --%>
+            <div
+              :if={is_map(@memory) and @memory.days != []}
+              id="memory-days"
+              class="sm:overflow-x-auto"
+            >
+              <%!-- Four columns from the width they fit at, where only a
+                   name too long for them scrolls the table in its frame.
+                   Below it a row stacks: its day and person on a line,
+                   then what, then what it used, so nothing scrolls
+                   sideways. --%>
               <table id="memory-day-rows" class="block w-full sm:table">
                 <thead class="hidden sm:table-header-group">
                   <tr>
@@ -1402,7 +1408,7 @@ defmodule PrismWeb.SettingsLive do
                     <td class="inline-block sm:table-cell sm:px-4 sm:py-3 sm:whitespace-nowrap">
                       {person_name(d.person)}
                     </td>
-                    <td class="block break-words sm:table-cell sm:min-w-[11rem] sm:px-4 sm:py-3">
+                    <td class="block break-words sm:table-cell sm:px-4 sm:py-3 sm:whitespace-nowrap">
                       <span :if={d.name} class="block">{d.name}</span>
                       <span class={["block", d.name && "text-xs text-gray-500"]}>
                         {MemoryWords.kind(d.kind)}
@@ -1411,7 +1417,10 @@ defmodule PrismWeb.SettingsLive do
                     <td class="block sm:table-cell sm:px-4 sm:py-3">
                       <span
                         :for={{line, at} <- Enum.with_index(MemoryWords.used(d))}
-                        class={["block", at > 0 && "text-xs text-gray-500"]}
+                        class={[
+                          "block",
+                          if(at > 0, do: "text-xs text-gray-500", else: "sm:whitespace-nowrap")
+                        ]}
                         data-test="memory-day-used"
                       >
                         {line}

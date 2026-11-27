@@ -1340,8 +1340,6 @@ defmodule PrismWeb.SettingsLiveTest do
         assert class =~ wide
         refute class =~ "sticky"
       end
-
-      refute table |> LazyHTML.to_html() =~ "overflow-x-auto"
     end
 
     # Each row's cells, their words with runs of space, no-break ones
