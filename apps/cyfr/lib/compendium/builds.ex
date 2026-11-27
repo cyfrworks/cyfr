@@ -575,7 +575,11 @@ defmodule Compendium.Builds do
   # chain asked.
   defp room(%Context{plane: :external} = ctx, held) do
     {held, names} =
-      case Arca.MemoryRecord.holders_now(Context.actor(ctx), Prima.LocusPool.builds_endpoint()) do
+      case Arca.MemoryRecord.holders_now(
+             Context.actor(ctx),
+             Prima.LocusPool.builds_endpoint(),
+             Prima.LocusPool.fresh_ms()
+           ) do
         {:ok, holders} -> Prima.LocusPool.named_held(held, holders)
         {:error, _unnamed} -> {held, %{}}
       end

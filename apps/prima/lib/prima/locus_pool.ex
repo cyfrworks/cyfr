@@ -727,7 +727,7 @@ defmodule Prima.LocusPool do
   @doc """
   What a start refused for room says of the person's own holders, from
   `holders`, the record's current holders of the person's athanor on the
-  refusing endpoint's machine (`Arca.MemoryRecord.holders_now/2`): `held`
+  refusing endpoint's machine (`Arca.MemoryRecord.holders_now/3`): `held`
   with its `mine` taken from them and the names of their rows, for
   `refusal_sentence/2`.
 

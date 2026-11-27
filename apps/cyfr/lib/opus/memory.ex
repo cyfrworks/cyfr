@@ -153,7 +153,7 @@ defmodule Opus.Memory do
       when is_binary(athanor_id) and athanor_id != "" do
     actor = Prima.Actor.in_athanor(athanor_id)
 
-    with {:ok, endpoints} <- MemoryRecord.endpoints(actor),
+    with {:ok, endpoints} <- MemoryRecord.endpoints(actor, Prima.LocusPool.fresh_ms()),
          {:ok, counters} <- MemoryRecord.counters(actor),
          {:ok, others} <- MemoryRecord.others_bytes(actor) do
       {:ok, shape(endpoints, counters, others)}
@@ -168,7 +168,7 @@ defmodule Opus.Memory do
          {:ok, %Sanctum.Context{platform_admin: true}} <- Sanctum.Tenancy.revalidate(ctx) do
       system = Prima.Actor.system()
 
-      with {:ok, endpoints} <- MemoryRecord.endpoints(system),
+      with {:ok, endpoints} <- MemoryRecord.endpoints(system, Prima.LocusPool.fresh_ms()),
            {:ok, counters} <- MemoryRecord.counters(system) do
         {:ok, shape(endpoints, counters, %{})}
       end
@@ -183,7 +183,7 @@ defmodule Opus.Memory do
   @doc """
   What a start refused for room at `endpoint` says of `actor`'s own
   holders: the record's current holders of the actor's athanor on that
-  endpoint's machine (`Arca.MemoryRecord.holders_now/2`), put to `held`
+  endpoint's machine (`Arca.MemoryRecord.holders_now/3`), put to `held`
   by `Prima.LocusPool.named_held/2`, for
   `Prima.LocusPool.refusal_sentence/2`. An endpoint that has not
   answered within `Prima.LocusPool.fresh_ms/0`, or a record that cannot be
@@ -193,7 +193,7 @@ defmodule Opus.Memory do
   @spec held_for(Prima.Actor.t(), String.t(), Prima.LocusPool.held()) ::
           {Prima.LocusPool.held(), %{String.t() => String.t()}}
   def held_for(%Prima.Actor{} = actor, endpoint, %{} = held) when is_binary(endpoint) do
-    case MemoryRecord.holders_now(actor, endpoint) do
+    case MemoryRecord.holders_now(actor, endpoint, Prima.LocusPool.fresh_ms()) do
       {:ok, holders} -> Prima.LocusPool.named_held(held, holders)
       {:error, _unnamed} -> {held, %{}}
     end
@@ -205,13 +205,8 @@ defmodule Opus.Memory do
 
   defp shape(endpoints, counters, others) do
     people = people(counters)
-    now = DateTime.utc_now()
-
-    {answering, silent} =
-      Enum.split_with(
-        endpoints,
-        &(DateTime.diff(now, &1.heard_at, :millisecond) <= Prima.LocusPool.fresh_ms())
-      )
+    # Whether each answered is the store's judgement, on its own clock.
+    {answering, silent} = Enum.split_with(endpoints, & &1.answering)
 
     %{
       machines: machines(answering, counters, others, people),
@@ -511,7 +506,7 @@ defmodule Opus.Memory do
   end
 
   defp stored_after(name) do
-    with {:ok, rows} <- MemoryRecord.endpoints(Prima.Actor.system()),
+    with {:ok, rows} <- MemoryRecord.endpoints(Prima.Actor.system(), Prima.LocusPool.fresh_ms()),
          %{after: after_rev} <- Enum.find(rows, &(&1.endpoint == name)) do
       after_rev
     else

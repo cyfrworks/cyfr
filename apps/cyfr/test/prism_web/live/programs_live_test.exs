@@ -2046,7 +2046,7 @@ defmodule PrismWeb.ProgramsLiveTest do
       }
 
       after_rev =
-        case Arca.MemoryRecord.endpoints(Prima.Actor.system()) do
+        case Arca.MemoryRecord.endpoints(Prima.Actor.system(), Prima.LocusPool.fresh_ms()) do
           {:ok, [%{after: after_rev}]} -> after_rev
           {:ok, []} -> 0
         end
