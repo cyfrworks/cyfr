@@ -87,7 +87,8 @@ pub const REFUSALS: [&str; 7] = [
 
 /// The refusals by name only an `egress_pin` answer may be
 /// (`Prima.PinnedTarget.refusals/0`).
-pub const PIN_REFUSALS: [&str; 5] = [
+pub const PIN_REFUSALS: [&str; 6] = [
+    "domain",
     "denied",
     "metadata",
     "resolution",

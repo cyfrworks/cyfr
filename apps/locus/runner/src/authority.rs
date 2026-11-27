@@ -42,6 +42,13 @@ pub struct RateLimit {
 }
 
 impl Limits {
+    /// The node's `timeout` in milliseconds, as `Prima.Limits.timeout_ms/1`
+    /// reads it: the read limits hold it to a duration, and a negative one
+    /// is none.
+    pub fn timeout_ms(&self) -> u64 {
+        duration_ms(&self.timeout).unwrap_or(0)
+    }
+
     /// The limits of an unbound authority (`Prima.Authority`'s zero
     /// limits).
     pub fn zero() -> Limits {
@@ -161,6 +168,25 @@ fn limits(limits: &Value) -> Result<Limits, Refused> {
 }
 
 /// Which side of zero a duration falls.
+// A duration's milliseconds, read as `duration` reads it: none for no
+// duration, and none for a negative one.
+fn duration_ms(text: &str) -> Option<u64> {
+    let (number, unit) = [("ms", 1), ("s", 1_000), ("m", 60_000), ("h", 3_600_000)]
+        .iter()
+        .find_map(|(suffix, unit)| text.strip_suffix(suffix).map(|number| (number, *unit)))
+        .unwrap_or((text, 1_000));
+    let digits = number.strip_prefix('+').unwrap_or(number);
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    digits
+        .trim_start_matches('0')
+        .parse::<u64>()
+        .ok()
+        .or(digits.bytes().all(|b| b == b'0').then_some(0))
+        .map(|value| value.saturating_mul(unit))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Sign {
     Negative,

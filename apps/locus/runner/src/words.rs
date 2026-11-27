@@ -75,3 +75,148 @@ pub fn answer_too_deep(op: &str) -> String {
 pub fn request_too_deep() -> String {
     format!("Request is nested deeper than {MAX_DEPTH} levels")
 }
+
+// ============================================================================
+// A guest's requests (`cyfr:http/fetch`, `cyfr:http/streaming`)
+// ============================================================================
+//
+// A sentence names the host the guest asked for, never its URL, whose path
+// and query can carry a credential; nor a header's value.
+
+/// A request past its envelope bound, or past the consented size when the
+/// worker service's check refused it.
+pub const REQUEST_TOO_LARGE: &str =
+    "Request exceeds the consented max_request_size for this component.";
+
+/// A request that is no JSON.
+pub const REQUEST_NOT_JSON: &str = "Invalid JSON request";
+
+/// A request that does not read as one.
+pub const MALFORMED_REQUEST: &str = "Malformed HTTP request.";
+pub const NO_METHOD_OR_URL: &str = "Invalid request: must include 'method' and 'url'";
+pub const NO_HOSTNAME: &str = "Invalid URL: missing hostname";
+pub const URL_CREDENTIALS: &str = "Invalid URL: URL credentials are refused";
+pub const BAD_URL: &str = "Invalid URL";
+pub const BODY_AND_MULTIPART: &str = "Request cannot have both 'body' and 'multipart'";
+pub const BAD_HEADERS: &str =
+    "Invalid headers: an object of names to values, or an array of [name, value] pairs";
+pub const BAD_CONNECTION: &str = "Invalid connection: the name of a need, as a string";
+pub const BAD_BODY_BASE64: &str = "Invalid base64 in request body";
+pub const MULTIPART_PART: &str = "Multipart part must include 'name' and either 'data' or 'value'";
+pub const STREAM_MULTIPART: &str = "Streaming requests do not support 'multipart'";
+pub const UNSENDABLE: &str = "The request cannot be sent: its path or headers are malformed";
+
+/// A multipart part whose data is no base64, by the part's name.
+pub fn bad_part_base64(name: &str) -> String {
+    format!("Invalid base64 in multipart part '{name}'")
+}
+
+/// An attached request carrying a credential header of its own
+/// (`Prima.Refusal`'s `credential_header_refused`).
+pub const CREDENTIAL_HEADER: &str =
+    "A request that names a connection carries no credential header.";
+
+/// An attached request setting a header only the client making it sets.
+pub fn attached_header(name: &str) -> String {
+    format!("An attached request cannot set the {name} header.")
+}
+
+/// An attached request that does not read as CYFR reads one.
+pub const ATTACHED_UNREAD: &str = "The attached request does not read.";
+
+/// A request the runner holds back: its execution has as many requests in
+/// flight as its relay carries.
+pub fn requests_in_flight(most: usize) -> String {
+    format!(
+        "The request was not sent: the execution has {most} requests in flight, the most its \
+         relay carries"
+    )
+}
+
+/// A stream past the three an execution holds open.
+pub const STREAM_LIMIT: &str = "Maximum concurrent streams (3) exceeded";
+
+/// A pin CYFR refused, and why, for a request to `host`.
+pub fn pin_domain(host: &str) -> String {
+    format!("HTTP egress refused: {host} is not in the egress domains")
+}
+pub fn pin_denied(host: &str) -> String {
+    format!("Address of {host} blocked: the egress policy refuses it")
+}
+pub fn pin_metadata(host: &str) -> String {
+    format!("metadata IP blocked (resolved from {host})")
+}
+pub fn pin_resolution(host: &str) -> String {
+    format!("DNS resolution failed for {host}")
+}
+pub fn redirect_refused(host: &str) -> String {
+    format!("Redirect to {host} refused: the request's credentials may not follow it")
+}
+
+/// A pin the runner itself could not take, and why, for a request to
+/// `host`.
+pub fn pin_elsewhere(host: &str) -> String {
+    format!("HTTP egress refused: {host} was pinned elsewhere")
+}
+pub fn pin_expired(host: &str) -> String {
+    format!("HTTP egress refused: the pin for {host} expired before its request was sent")
+}
+pub fn pin_unavailable(host: &str) -> String {
+    format!("HTTP egress refused: the address of {host} could not be pinned")
+}
+pub const PIN_NOT_CURRENT: &str = "HTTP egress refused: the execution attempt is not current";
+
+/// The worker service's check of a request, as its code says which rule
+/// refused it.
+pub const SERVICE_METHOD: &str =
+    "HTTP egress refused by the worker service's check: the method is not in the egress methods";
+pub const SERVICE_SCHEME: &str =
+    "HTTP egress refused by the worker service's check: the scheme is not in the egress schemes";
+pub const SERVICE_DOMAIN: &str =
+    "HTTP egress refused by the worker service's check: the host is not in the egress domains";
+pub const SERVICE_HEADER: &str = "HTTP egress refused by the worker service's check: the request \
+                                  sets a header only the client making it sets";
+pub const SERVICE_SIZE: &str = "HTTP egress refused by the worker service's check: the request's \
+                                body, URL and headers exceed the consented max_request_size";
+pub const SERVICE_METADATA: &str = "metadata IP blocked";
+pub const RATE_LIMITED: &str = "HTTP egress refused: the consented rate limit is exhausted";
+
+/// A request that timed out, or whose connection did, after `ms`.
+pub fn request_timeout(ms: u64) -> String {
+    format!("HTTP request timed out after {ms}ms")
+}
+pub fn connect_timeout(ms: u64) -> String {
+    format!("HTTP request could not connect within {ms}ms")
+}
+
+/// An answer past the node's `max_response_size`, `size` bytes when they
+/// were counted.
+pub fn response_too_large(max: u64) -> String {
+    format!("Response body exceeds limit ({max} bytes)")
+}
+pub fn response_counted(size: u64, max: u64) -> String {
+    format!("Response body ({size} bytes) exceeds limit ({max} bytes)")
+}
+
+/// A request that failed after it was sent: its transport's code, or none.
+pub const HTTP_FAILED: &str = "HTTP request failed";
+pub fn http_failed(code: &str) -> String {
+    format!("HTTP request failed: {code}")
+}
+
+/// A stream's ends.
+pub fn unknown_handle(handle: &str) -> String {
+    format!("Unknown stream handle: {handle}")
+}
+pub fn stream_timed_out(seconds: u64) -> String {
+    format!("Stream timed out after {seconds}s")
+}
+pub fn stream_idle(seconds: u64) -> String {
+    format!("No stream data for {seconds}s")
+}
+pub fn stream_too_large(max: u64) -> String {
+    format!("Stream response exceeds limit ({max} bytes)")
+}
+pub fn stream_counted(size: u64, max: u64) -> String {
+    format!("Stream response ({size} bytes) exceeds limit ({max} bytes)")
+}

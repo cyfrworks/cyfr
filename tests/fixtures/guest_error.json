@@ -1,10 +1,37 @@
 {
-  "comment": "The vectors pinning the error envelope a host function answers a guest across the WIT boundary, and the sentence a runner hands its guest for a refusal. An error is the JSON object {\"error\": {\"type\": <type>, \"message\": <message>}}, its two members strings, and a setup_required error carries one more member, `setup_member`: the machine-readable fix Prima.Remediation.analyze/1 builds from a setup or consent refusal, which CYFR answers a formula's call with beside its sentence and Locus.Runtime.FormulaHandler hands on in the envelope. No error carries any other member; a type is one of component-guide.md's error types. `setup_required` cases are a refusal (`reason`) in and `remediation` out, and the envelope a formula's call answers when CYFR refuses it with that remediation and `message`. `encode_error` cases are Prima.WitResponse.encode_error/2's: `type` and `message` in, the decoded `answer` out, the type given as a string or as the atom of that name, and a message that is not a string normalized to one. `safe_encode` cases are Prima.WitResponse.safe_encode/1's: `data` in, the decoded `answer` out. A value that cannot be encoded answers `fallback`, exactly its `json` text, never a raised error. `render` cases are a named sample of Prima.GuestError.render/1's, not a copy of Prima.Refusal's table: a wire answer passed through, a bare sentence, one refusal of each `class` but confirmation_required, whose sentence is tests/fixtures/confirmation.json's `signal.message`, and terms the vocabulary does not know, which render as null; `reason` in, `sentence` out. A term is written as JSON: a string, number, boolean or null as itself, an array as a list, {\"atom\": name} as an atom, {\"tuple\": [...]} as a tuple, {\"map\": {...}} as a map with string keys, and {\"bytes_base64\": ...} as the bytes it decodes to. The host side reads them now: Prima's test (apps/prima/test/prima/wit_response_vectors_test.exs) plays every case, and Cyfr.DocsDriftTest checks the envelope component-guide.md documents (its Host Functions' Error lines and its Invoke Error Types), its setup_required row's remediation member and its encoding_error row against them; the runtime's test (apps/locus/test/locus/runtime/formula_handler_vectors_test.exs) plays every `setup_required` case through a formula's tool call, and every `encode_error` case of a `storage_` type whose message is a string through a storage call; the guide's error types are held to their producers by that test's fetch error check. The guest side is a seed guest's Rust parser in a shipped, immutable version, and reads them from the next version of a guest that parses the envelope.",
+  "comment": "The vectors pinning the error envelope a host function answers a guest across the WIT boundary, and the sentence a runner hands its guest for a refusal. An error is the JSON object {\"error\": {\"type\": <type>, \"message\": <message>}}, its two members strings, and a setup_required error carries one more member, `setup_member`: the machine-readable fix Prima.Remediation.analyze/1 builds from a setup or consent refusal, which CYFR answers a formula's call with beside its sentence and Locus.Runtime.FormulaHandler hands on in the envelope. No error carries any other member; a type is one of component-guide.md's error types. `setup_required` cases are a refusal (`reason`) in and `remediation` out, and the envelope a formula's call answers when CYFR refuses it with that remediation and `message`. `encode_error` cases are Prima.WitResponse.encode_error/2's: `type` and `message` in, the decoded `answer` out, the type given as a string or as the atom of that name, and a message that is not a string normalized to one. `safe_encode` cases are Prima.WitResponse.safe_encode/1's: `data` in, the decoded `answer` out. A value that cannot be encoded answers `fallback`, exactly its `json` text, never a raised error. `render` cases are a named sample of Prima.GuestError.render/1's, not a copy of Prima.Refusal's table: a wire answer passed through, a bare sentence, one refusal of each `class` but confirmation_required, whose sentence is tests/fixtures/confirmation.json's `signal.message`, and terms the vocabulary does not know, which render as null; `reason` in, `sentence` out. A term is written as JSON: a string, number, boolean or null as itself, an array as a list, {\"atom\": name} as an atom, {\"tuple\": [...]} as a tuple, {\"map\": {...}} as a map with string keys, and {\"bytes_base64\": ...} as the bytes it decodes to. The host side reads them now: Prima's test (apps/prima/test/prima/wit_response_vectors_test.exs) plays every case, and Cyfr.DocsDriftTest checks the envelope component-guide.md documents (its Host Functions' Error lines and its Invoke Error Types), its setup_required row's remediation member and its encoding_error row against them; the runtime's test (apps/locus/test/locus/runtime/formula_handler_vectors_test.exs) plays every `setup_required` case through a formula's tool call, and every `encode_error` case of a `storage_` type whose message is a string through a storage call; the guide's error types are held to their producers by that test's fetch error check. The guest side is a seed guest's Rust parser in a shipped, immutable version, and reads them from the next version of a guest that parses the envelope. fetch_types are the error types a runner answers each HTTP interface's call with, the interface's own refusals: `cyfr:http/fetch` a request's, and `cyfr:http/streaming` a stream's beyond them, since a stream's request is refused as a fetch's is; an attached request CYFR refuses answers CYFR's own type and sentence besides. Cyfr.DocsDriftTest holds component-guide.md's fetch error line and streaming error table to them, and the Rust runner's crate (apps/locus/runner/tests/requests.rs) holds every type its HTTP imports answer to them.",
   "version": 1,
   "envelope": {"member": "error", "fields": ["type", "message"], "setup_member": "remediation"},
   "fallback": {
     "json": "{\"error\":{\"type\":\"encoding_error\",\"message\":\"Failed to encode response\"}}",
     "answer": {"error": {"type": "encoding_error", "message": "Failed to encode response"}}
+  },
+  "fetch_types": {
+    "cyfr:http/fetch": [
+      "invalid_json",
+      "invalid_request",
+      "credential_header_refused",
+      "domain_blocked",
+      "method_blocked",
+      "scheme_blocked",
+      "rate_limited",
+      "timeout",
+      "private_ip_blocked",
+      "dns_error",
+      "redirect_credentials",
+      "request_too_large",
+      "response_too_large",
+      "request_failed",
+      "http_error"
+    ],
+    "cyfr:http/streaming": [
+      "stream_limit",
+      "timeout",
+      "request_failed",
+      "stream_error",
+      "invalid_handle",
+      "response_too_large"
+    ]
   },
   "encode_error": [
     {

@@ -18,7 +18,7 @@ in this suite,
 `Locus.Runtime.AttachedFetchTest`, `Cyfr.FormulaHostCallsTest`,
 `Opus.Schedules.SchedulerTest`, `CyfrWeb.WebhookFlowIntegrationTest`,
 `Aqua.LaunchTest` and `Compendium.ComponentFeaturesAdmissionTest` in
-CYFR's, the runner crate's (`apps/locus/runner/tests/`), and the worker image's `tests/locus-runtime-image/runners.py` and
+CYFR's, the runner crate's (`apps/locus/runner/tests/`, `stream_once`, `stream_flood` and `fetch_twice` among them), and the worker image's `tests/locus-runtime-image/runners.py` and
 `tests/locus-runtime-image/canary.py`.
 
 | Guest | World | Does |
@@ -46,6 +46,9 @@ CYFR's, the runner crate's (`apps/locus/runner/tests/`), and the worker image's 
 | `storage_flood` | catalyst | calls its storage forever with a request that is no JSON: each call is refused before any host call and is one `storage.call` event |
 | `vault_log_flood` | catalyst | asks its vault forever for a name carrying a control byte: each read is refused unreported, and is one line the runner would log |
 | `slow_validate` | none | imports an instance of 1,500 functions and instantiates a component of it 3,000 times: slow to validate, for a run whose budget ends while the compile thread works |
+| `stream_once` | catalyst | opens one stream with its input as the request, reads it once, closes it and answers that read: a guest that closes a stream early and completes |
+| `stream_flood` | catalyst | opens, reads once and closes streams with its input as the request until one is refused, and answers the refusal |
+| `fetch_twice` | catalyst | sends its input as its request twice in one run and answers the second answer: a guest that follows a redirect back to the URL it asked |
 
 ## Rebuilding
 
@@ -114,4 +117,10 @@ vault_log_flood.wat        sha256:1c223ece263e5549e7ee246da17a98dc9494eeb125d85c
 vault_log_flood.wasm       sha256:971e8407c7934f41c2495b85f87fb34c9048975b91b52cdbf4952e117d9c8e6d
 slow_validate.wat          sha256:0cfefb7c8520d6da2f62c6c8fc3a7d2e81352d7cee84d409d94917d72bc5cdb8
 slow_validate.wasm         sha256:157de6295fc6e0dd345cfd777edc98464bb5fd932d99e97a09fbfe1564648ff6
+stream_once.wat            sha256:3f414255276c3799bd582762344092a8e51c1bf0232005aff2ebb17483e3defc
+stream_once.wasm           sha256:30630a47b9d054326a6f4d481ad512e9de0f4e9cd58c48e970d86db0bd9f5872
+stream_flood.wat           sha256:5ffaf203420f11fd8b144f6deac1d04b2c5f70b04ef9c9d5bad017bf5a9275fd
+stream_flood.wasm          sha256:e396f2cb1c6a2043b364bf98619ab5799b7bf129bb4707e981e8e7210dc2bd4d
+fetch_twice.wat            sha256:d876111b0ea9e5696bc0ca273445adbccd729ea5242b22cc2a046d2f8164bc41
+fetch_twice.wasm           sha256:50b507f2cd70b3b98f1e08c2084a3c91c43db56c91b69edfec95dee0929bab73
 ```

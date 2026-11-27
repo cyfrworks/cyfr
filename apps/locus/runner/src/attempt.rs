@@ -173,6 +173,22 @@ impl Host {
         }
     }
 
+    /// The runner is not reused after this attempt: what one of its
+    /// operations did is unknown.
+    pub fn unclean(&self) {
+        self.lost.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// The relay the attempt's calls and fetches go through.
+    pub fn relay(&self) -> &Relay {
+        &self.relay
+    }
+
+    /// The attempt's keys, which open its attached answers' frames.
+    pub fn keys(&self) -> &AttemptKeys {
+        &self.caller.keys
+    }
+
     pub fn attempt(&self) -> &str {
         &self.caller.keys.attempt.attempt
     }
