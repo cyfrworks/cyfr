@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -25,6 +26,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/cyfr/locus/keeper/internal/logx"
+	"github.com/cyfr/locus/keeper/internal/stage"
 )
 
 // The real-kernel proof of a route: the test binary re-runs itself as a
@@ -46,6 +48,7 @@ const (
 	guestLinkMode    = "CYFR_GUARD_TEST_GUEST_LINK"
 	forgedGuardMode  = "CYFR_GUARD_TEST_FORGED"
 	forgerMode       = "CYFR_GUARD_TEST_FORGER"
+	timersMode       = "CYFR_GUARD_TEST_TIMERS"
 )
 
 func TestMain(m *testing.M) {
@@ -64,6 +67,8 @@ func TestMain(m *testing.M) {
 		os.Exit(standInForgedGuard(os.Getenv(forgedGuardMode)))
 	case os.Getenv(forgerMode) != "":
 		os.Exit(standInForger())
+	case os.Getenv(timersMode) != "":
+		os.Exit(shortTimers())
 	}
 	os.Exit(m.Run())
 }
@@ -418,6 +423,7 @@ func TestAMachinesRouteJoinsItsTapToTheGuardsEnd(t *testing.T) {
 		"vmm: the gateway answered the guest's echo through the bridge, with no ARP",
 		"vmm: name: answer, through the tap", "vmm: the bridge learned none of 20000 addresses",
 		"vmm: br0 knows the guest alone", "vmm: br0 is " + NamesMAC.String() + " and answers no ARP", "vmm: no end of the route holds an IPv6 address",
+		"vmm: 64 router advertisements left no IPv6 address, route or neighbour",
 		"guard: sp0 still knows the guest alone after 64 spoofed senders", "guard: the pair and the tap are gone"} {
 		if !strings.Contains(string(out), want) {
 			t.Errorf("lacks %q:\n%s", want, out)
@@ -450,6 +456,109 @@ func neighbours(fd int, index int32) (map[netip.Addr]uint16, error) {
 		}
 	})
 	return got, err
+}
+
+// A netlink answer the guard takes is its own request's, whatever else
+// the socket holds, and comes within its bound or not at all: on the real
+// kernel an earlier request's refusal left unread is passed over for this
+// request's acknowledgement, and a socket that answers nothing is given
+// up at the deadline. A machine's stage hands the guard such a socket.
+func TestANetlinkAnswerIsItsOwnRequestsWithinItsBound(t *testing.T) {
+	fd, err := nlSocket(unix.NETLINK_ROUTE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unix.Close(fd)
+	stale := append(make([]byte, unix.SizeofNlMsghdr), ifinfo(unix.AF_UNSPEC, 0x7fffffff)...)
+	binary.NativeEndian.PutUint32(stale[0:4], uint32(len(stale)))
+	binary.NativeEndian.PutUint16(stale[4:6], unix.RTM_GETLINK)
+	binary.NativeEndian.PutUint16(stale[6:8], unix.NLM_F_REQUEST|unix.NLM_F_ACK)
+	binary.NativeEndian.PutUint32(stale[8:12], 0xfffffff0)
+	if err := unix.Sendto(fd, stale, 0, &unix.SockaddrNetlink{Family: unix.AF_NETLINK}); err != nil {
+		t.Fatal(err)
+	}
+	if err := netlinkOn(fd, time.Now().Add(netlinkTimeout), unix.RTM_GETLINK, 0, ifinfo(unix.AF_UNSPEC, 1)); err != nil {
+		t.Fatalf("the loopback's request answered %v: an earlier request's refusal was taken for its own", err)
+	}
+	pair, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_DGRAM|unix.SOCK_CLOEXEC, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unix.Close(pair[0])
+	defer unix.Close(pair[1])
+	began := time.Now()
+	if err := netlinkAnswer(pair[0], 7, began.Add(200*time.Millisecond)); err == nil || time.Since(began) > 2*time.Second {
+		t.Fatalf("a socket that answers nothing answered %v after %s", err, time.Since(began))
+	}
+}
+
+// spaceProcOf mounts a proc of the calling process's namespaces where a
+// stage mounts its space's, the one place the Locus profile lets a proc be
+// mounted, over a tmpfs of its own mount namespace, and answers it.
+func spaceProcOf() (string, error) {
+	if err := unix.Mount("", "/", "", unix.MS_REC|unix.MS_PRIVATE, ""); err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(stage.Root, 0o755); err != nil {
+		return "", err
+	}
+	if err := unix.Mount("space", stage.Root, "tmpfs", unix.MS_NOSUID|unix.MS_NODEV, "mode=0755,size=64k"); err != nil {
+		return "", err
+	}
+	proc := stage.Root + "/proc"
+	if err := os.Mkdir(proc, 0o755); err != nil {
+		return "", err
+	}
+	return proc, unix.Mount("proc", proc, "proc", unix.MS_NOSUID|unix.MS_NODEV|unix.MS_NOEXEC, "")
+}
+
+// routerAdvert is a router advertisement to all nodes from fe80::2:<i> at
+// mac, with a prefix of 2001:db8:<i>::/64 to take addresses from.
+func routerAdvert(mac net.HardwareAddr, i byte) []byte {
+	from := []byte{0xfe, 0x80, 0, 0, 0, 0, 0, 0, 0x02, 0, 0, 0, 0, 0, 0x02, i}
+	allNodes := []byte{0xff, 0x02, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1}
+	ra := []byte{134, 0, 0, 0, 64, 0, 0x07, 0x08, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1}
+	ra = append(ra, mac...)
+	ra = append(ra, 3, 4, 64, 0xc0, 0, 1, 0x51, 0x80, 0, 0, 0x38, 0x40, 0, 0, 0, 0,
+		0x20, 0x01, 0x0d, 0xb8, 0, i, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+	pseudo := append(append(append([]byte{}, from...), allNodes...), 0, 0, byte(len(ra)>>8), byte(len(ra)), 0, 0, 0, 58)
+	binary.BigEndian.PutUint16(ra[2:], csum(append(pseudo, ra...)))
+	ip := []byte{0x60, 0, 0, 0, byte(len(ra) >> 8), byte(len(ra)), 58, 255}
+	ip = append(append(ip, from...), allNodes...)
+	f := append([]byte{0x33, 0x33, 0, 0, 0, 1}, mac...)
+	f = append(f, 0x86, 0xdd)
+	return append(append(f, ip...), ra...)
+}
+
+// v6Neighbours is how many IPv6 neighbours the route netlink socket fd's
+// namespace holds.
+func v6Neighbours(fd int) (int, error) {
+	n := 0
+	b := make([]byte, unix.SizeofNdMsg)
+	b[0] = unix.AF_INET6
+	err := dump(fd, unix.RTM_GETNEIGH, b, func(m syscall.NetlinkMessage) {
+		if m.Header.Type == unix.RTM_NEWNEIGH {
+			n++
+		}
+	})
+	return n, err
+}
+
+// v6Routes is how many IPv6 routes of the calling process's namespace go
+// by the links named.
+func v6Routes(names ...string) (int, error) {
+	b, err := os.ReadFile("/proc/self/net/ipv6_route")
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, line := range strings.Split(string(b), "\n") {
+		f := strings.Fields(line)
+		if len(f) == 10 && slices.Contains(names, f[9]) {
+			n++
+		}
+	}
+	return n, nil
 }
 
 // fdbCount is how many forwarding entries the bridge ports of the route
@@ -558,7 +667,7 @@ func standInMachineGuard() int {
 	vmm.Env = []string{machineMode + "=1"}
 	vmm.ExtraFiles = []*os.File{theirs}
 	vmm.SysProcAttr = &syscall.SysProcAttr{
-		Cloneflags:  syscall.CLONE_NEWUSER | syscall.CLONE_NEWNET,
+		Cloneflags:  syscall.CLONE_NEWUSER | syscall.CLONE_NEWNET | syscall.CLONE_NEWNS | syscall.CLONE_NEWPID,
 		UidMappings: []syscall.SysProcIDMap{{ContainerID: 0, HostID: 0, Size: 1}, {ContainerID: vmmUID, HostID: vmmUID, Size: 1}},
 		GidMappings: []syscall.SysProcIDMap{{ContainerID: 0, HostID: 0, Size: 1}},
 		Pdeathsig:   syscall.SIGKILL,
@@ -756,6 +865,15 @@ func standInVMM() int {
 	if _, err := guard.Read(word); err != nil || word[0] != 'g' {
 		return fail("no word: %v", err)
 	}
+	// The route made, the stage builds the space and its own proc, which
+	// turns IPv6 off in the namespace (stage.NoIPv6), before the VMM runs.
+	proc, err := spaceProcOf()
+	if err != nil {
+		return fail("the space's proc: %v", err)
+	}
+	if err := stage.NoIPv6(proc); err != nil {
+		return fail("%v", err)
+	}
 	// As the VMM does, it attaches as the tap's owner holding no
 	// capability: its stage made the sockets, then became the VMM's uid.
 	if err := syscall.Setresuid(vmmUID, vmmUID, vmmUID); err != nil {
@@ -870,6 +988,20 @@ func standInVMM() int {
 	}
 	if v6, err := v6Addresses(nl, indexes...); err == nil && v6 == 0 && len(indexes) == 3 {
 		fmt.Println("vmm: no end of the route holds an IPv6 address")
+	}
+	// A guest's router advertisements, from senders of its choosing, each
+	// with a prefix to take addresses and a route from.
+	for i := 0; i < 64; i++ {
+		_, _ = unix.Write(tap, routerAdvert(net.HardwareAddr{0x02, 0x33, 0, 0, 0, byte(i)}, byte(i)))
+	}
+	time.Sleep(300 * time.Millisecond) // sleep-ok: the advertisements reach the bridge's stack before its tables are read
+	v6, aerr := v6Addresses(nl, indexes...)
+	n6, nerr := v6Neighbours(nl)
+	r6, rerr := v6Routes(innerName, MachineTap, MachineBridge)
+	if aerr == nil && nerr == nil && rerr == nil && v6 == 0 && n6 == 0 && r6 == 0 {
+		fmt.Println("vmm: 64 router advertisements left no IPv6 address, route or neighbour")
+	} else {
+		fmt.Printf("vmm: after 64 router advertisements: %d IPv6 addresses (%v), %d neighbours (%v), %d routes (%v)\n", v6, aerr, n6, nerr, r6, rerr)
 	}
 	if _, err := guard.Write([]byte{'d'}); err != nil {
 		return fail("%v", err)
@@ -997,11 +1129,15 @@ func hexIPv4(h string) string {
 // to the guard itself, to an outside host with a TTL of 1, so the kernel
 // would answer it, and to an outside host plainly; and IPv6 from an
 // outside and an island address, to the guard's own IPv6 address on the
-// island and past it, which no route carries. Under reach none and
-// under a reach of that host, nothing leaves by the island's link but, under
-// the reach, the guest's own packet from its own address, and nothing comes
-// back to the guest. The namespace's own rp_filter is as the host's: loose
-// on this host, so the raw table's line alone is what drops them.
+// island and past it, which no route carries; and a first fragment of
+// each family from a forged source, to the guard and past it, never
+// completed, which the kernel holds before the raw table sees it and
+// whose reassembly ends, its timers shortened here to a second, in the
+// kernel's own error to that source. Under reach none and under a reach
+// of that host, nothing leaves by the island's link but, under the reach,
+// the guest's own packet from its own address, and nothing comes back to
+// the guest. The namespace's own rp_filter is as the host's: loose on
+// this host, so the raw table's lines alone are what drop them.
 func TestAGuestsForgedSourcesCarryNothingOut(t *testing.T) {
 	if os.Getuid() != 0 {
 		t.Skip("the VMM's own uid is mapped beside the guard's by root alone")
@@ -1050,6 +1186,15 @@ func standInForgedGuard(reach string) int {
 	}
 	if err := linkUp(ctl, "lo"); err != nil {
 		return fail("the loopback: %v", err)
+	}
+	// The reassembly timers, shortened to a second by a child in this
+	// network namespace with a mount and process namespace of its own, for
+	// the proc it writes them through.
+	timers := exec.Command(os.Args[0], "-test.run=^$")
+	timers.Env = []string{timersMode + "=1"}
+	timers.SysProcAttr = &syscall.SysProcAttr{Cloneflags: syscall.CLONE_NEWNS | syscall.CLONE_NEWPID, Pdeathsig: syscall.SIGKILL}
+	if out, err := timers.CombinedOutput(); err != nil {
+		return fail("shortening the reassembly timers: %v %s", err, out)
 	}
 	// ext0 is the island's way out: an L3 tun the test reads, holding the
 	// island's address, the default route through it.
@@ -1179,7 +1324,8 @@ func standInForgedGuard(reach string) int {
 	}
 	var leaving []string
 	p := make([]byte, 4096)
-	for end := time.Now().Add(3 * time.Second); time.Now().Before(end); {
+	// Past the fragments' shortened reassembly, a second, and what follows.
+	for end := time.Now().Add(4 * time.Second); time.Now().Before(end); {
 		n, err := unix.Read(ext, p)
 		if err != nil {
 			time.Sleep(5 * time.Millisecond) // sleep-ok: a nonblocking tun's next packet
@@ -1260,6 +1406,62 @@ func ipv6Frame(dst, src net.HardwareAddr, from, to netip.Addr, hop byte, payload
 	copy(ip[24:], t16[:])
 	f := append(append(append([]byte{}, dst...), src...), 0x86, 0xdd)
 	return append(append(f, ip...), u...)
+}
+
+// shortTimers shortens the reassembly timers of its network namespace,
+// IPv4's, IPv6's and connection tracking's, to a second.
+func shortTimers() int {
+	proc, err := spaceProcOf()
+	if err != nil {
+		fmt.Println(err)
+		return 1
+	}
+	for _, timer := range []string{"net/ipv4/ipfrag_time", "net/ipv6/ip6frag_time", "net/netfilter/nf_conntrack_frag6_timeout"} {
+		if err := os.WriteFile(proc+"/sys/"+timer, []byte("1\n"), 0); err != nil {
+			fmt.Println(err)
+			return 1
+		}
+	}
+	return 0
+}
+
+// fragmentData is a UDP datagram's first 400 bytes, the forger's tag
+// first, whose header claims 2,000: what a first fragment carries.
+func fragmentData(tag string) []byte {
+	d := make([]byte, 400)
+	binary.BigEndian.PutUint16(d[0:], 4444)
+	binary.BigEndian.PutUint16(d[2:], 9)
+	binary.BigEndian.PutUint16(d[4:], 2000)
+	copy(d[8:], "forged:"+tag+":")
+	return d
+}
+
+// firstFragment4 is an Ethernet frame of the first fragment of IPv4
+// datagram id, from and to, more fragments to follow.
+func firstFragment4(from, to netip.Addr, id uint16, tag string) []byte {
+	f := ipv4Frame(GatewayMAC, GuestMAC, from, to, 17, fragmentData(tag))
+	ip := f[14:34]
+	binary.BigEndian.PutUint16(ip[4:], id)
+	binary.BigEndian.PutUint16(ip[6:], 0x2000)
+	binary.BigEndian.PutUint16(ip[10:], 0)
+	binary.BigEndian.PutUint16(ip[10:], csum(ip))
+	return f
+}
+
+// firstFragment6 is an Ethernet frame of the first fragment of IPv6
+// datagram id, from and to, more fragments to follow.
+func firstFragment6(from, to netip.Addr, id uint32, tag string) []byte {
+	frag := []byte{17, 0, 0, 1, 0, 0, 0, 0}
+	binary.BigEndian.PutUint32(frag[4:], id)
+	payload := append(frag, fragmentData(tag)...)
+	f16, t16 := from.As16(), to.As16()
+	ip := make([]byte, 40)
+	ip[0], ip[6], ip[7] = 0x60, 44, 64
+	binary.BigEndian.PutUint16(ip[4:], uint16(len(payload)))
+	copy(ip[8:], f16[:])
+	copy(ip[24:], t16[:])
+	f := append(append(append([]byte{}, GatewayMAC...), GuestMAC...), 0x86, 0xdd)
+	return append(append(f, ip...), payload...)
 }
 
 // tagOf is the forger's tag a packet carries or quotes, "" for none.
@@ -1357,6 +1559,18 @@ func standInForger() int {
 			if _, err := unix.Write(tap, ipv6Frame(GatewayMAC, GuestMAC, from, w.to, w.hop, v6payload(from.String()+"-"+w.how))); err != nil {
 				return fail("%v", err)
 			}
+		}
+	}
+	// First fragments, never completed, from forged sources of each family.
+	fragments := [][]byte{
+		firstFragment4(netip.MustParseAddr("203.0.113.9"), gateway, 1, "frag4-to-guard"),
+		firstFragment4(netip.MustParseAddr("203.0.113.9"), forgedTarget, 2, "frag4-forwarded"),
+		firstFragment6(netip.MustParseAddr("2001:db8:999::9"), forgedGuardV6, 3, "frag6-to-guard"),
+		firstFragment6(netip.MustParseAddr("2001:db8:999::9"), forgedTargetV6, 4, "frag6-forwarded"),
+	}
+	for _, f := range fragments {
+		if _, err := unix.Write(tap, f); err != nil {
+			return fail("%v", err)
 		}
 	}
 	if _, err := unix.Write(tap, udpFrame(inner, forgedTarget, 64, "own-to-outside")); err != nil {

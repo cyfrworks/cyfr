@@ -457,9 +457,7 @@ func buildFiles(spec Spec) error {
 			}
 			return nil
 		},
-		func() error {
-			return mount("proc", Root+"/proc", "proc", unix.MS_NOSUID|unix.MS_NODEV|unix.MS_NOEXEC, "")
-		},
+		func() error { return spaceProc(machine != "") },
 		func() error {
 			if err := mount("sysfs", Root+"/sys", "sysfs", unix.MS_NOSUID|unix.MS_NODEV|unix.MS_NOEXEC|unix.MS_RDONLY, ""); err != nil {
 				return err
@@ -547,6 +545,43 @@ func buildFiles(spec Spec) error {
 // bindContainerRoot gives the space the container's root: each directory
 // but those in keptOut bound read-only at its path, each symbolic link
 // made again. Its other entries are left out.
+// spaceProc mounts the space's own proc at Root/proc and, in a person's
+// machine's space, turns IPv6 off there (NoIPv6) before the space's
+// command, the VMM, starts.
+func spaceProc(machine bool) error {
+	if err := mount("proc", Root+"/proc", "proc", unix.MS_NOSUID|unix.MS_NODEV|unix.MS_NOEXEC, ""); err != nil {
+		return err
+	}
+	if !machine {
+		return nil
+	}
+	return NoIPv6(Root + "/proc")
+}
+
+// NoIPv6 turns IPv6 off on every link of the calling process's network
+// namespace and on every link it gets later, through proc, a proc mounted
+// for it: a person's machine's namespace holds the route's bridge, which
+// a guest's router advertisements would give addresses, routes and
+// neighbours, and needs no IPv6 at all. The guard has moved the route's
+// two ends in and made the bridge before the space is built, so "all"
+// reaches them. Netlink sets no disable_ipv6, and the Locus profile
+// refuses writes under /proc/sys by that path, so the stage writes through
+// the space's own proc before it pivots, while it still holds its
+// capabilities in its own user namespace; nothing of the space can after.
+// Each value is read back.
+func NoIPv6(proc string) error {
+	for _, conf := range []string{"all", "default"} {
+		path := proc + "/sys/net/ipv6/conf/" + conf + "/disable_ipv6"
+		if err := os.WriteFile(path, []byte("1\n"), 0); err != nil {
+			return fmt.Errorf("turning IPv6 off in the machine's namespace: %w", err)
+		}
+		if v, err := os.ReadFile(path); err != nil || strings.TrimSpace(string(v)) != "1" {
+			return fmt.Errorf("%s reads %q, not 1 (%v)", path, strings.TrimSpace(string(v)), err)
+		}
+	}
+	return nil
+}
+
 func bindContainerRoot() error {
 	entries, err := os.ReadDir("/")
 	if err != nil {

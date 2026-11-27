@@ -140,6 +140,8 @@ func TestTheStaticRulesAreTheTableAndTheIslandsRowsInOrder(t *testing.T) {
 			"ip6tables -A FORWARD -o sp+ -j REJECT --reject-with icmp6-adm-prohibited",
 			"ip6tables -A INPUT -i sp+ -j REJECT --reject-with icmp6-adm-prohibited",
 			"ip6tables -t raw -A PREROUTING -i sp+ -j DROP",
+			"iptables -t raw -A OUTPUT -p icmp --icmp-type 11/1 -j DROP",
+			"ip6tables -t raw -A OUTPUT -p ipv6-icmp --icmpv6-type 3/1 -j DROP",
 			"iptables -t nat -N CYFR_GUARD_ROLES",
 			// The island's own addresses are its local addresses on its
 			// subnets: neither the loopback's nor one outside them.
