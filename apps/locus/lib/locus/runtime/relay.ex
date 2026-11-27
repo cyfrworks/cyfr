@@ -266,6 +266,15 @@ defmodule Locus.Runtime.Relay do
       when is_integer(bytes) and bytes > 0 and is_integer(frames) and frames > 0,
       do: bytes + 4 * div(bytes + 2, 3) + frames * @envelope_bytes
 
+  @doc """
+  The room a fetch's read-ahead leaves free in the runtime's count: the
+  largest one ask the relay makes of it, CYFR's refusal of an attached
+  fetch at the host answer bound (`Prima.HostAPI.max_answer_bytes/0`) in
+  its frame with its signed header. Every other ask is at most this.
+  """
+  @spec answer_room() :: pos_integer()
+  def answer_room, do: refusal_held(HostAPI.max_answer_bytes())
+
   # ---------------------------------------------------------------------------
   # Server
   # ---------------------------------------------------------------------------
@@ -1072,11 +1081,16 @@ defmodule Locus.Runtime.Relay do
   # largest body a fetch may receive, 50 MiB, takes about 350 s over a
   # 300 ms round trip, past a catalyst's three minutes, and through the
   # larger one about 120 (`Prima.LocusRoles`, `fetch_read_ahead_bytes`).
-  # Without room it reads 64 KiB at a time.
+  # The room is held while the upstream thinks and for the whole of a
+  # long stream, so it is granted only while the count keeps
+  # `answer_room/0` free beside it: held fetches never take the room the
+  # answers and pieces behind them need. Without room it reads 64 KiB at
+  # a time.
   defp read_ahead do
     ahead = Prima.LocusRoles.role!(:runtime).memory.fetch_read_ahead_bytes
+    now = System.monotonic_time(:millisecond)
 
-    case reserve(2 * ahead, System.monotonic_time(:millisecond)) do
+    case Locus.Output.reserve(@count, 2 * ahead, now, leave: answer_room()) do
       {:ok, grant} -> {ahead, grant}
       :full -> {Prima.LocusRoles.role!(:runtime).memory.fetch_read_bytes, nil}
     end

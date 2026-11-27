@@ -40,10 +40,13 @@ defmodule Locus.Output do
   piece, a host call's answer, a build's reads and lines) are asked for
   before they are made (`ask/3`, `reserve/3`): granted in arrival order
   when the role's answering bound has room, or answered `:full` at the
-  asker's deadline, a monotonic instant in milliseconds. A request larger
-  than the bound is `:full` at once. The grant is the asker's; `give/2`
-  moves it to the process the bytes are handed to, and `return/1` is its
-  holder's word that they are gone.
+  asker's deadline, a monotonic instant in milliseconds. An ask may name
+  room to leave (`leave:`): it is granted only while the count keeps that
+  much free beside it, so what it holds never takes the room the asks
+  behind it need. A request larger than the bound, with what it leaves,
+  is `:full` at once. The grant is the asker's; `give/2` moves it to the
+  process the bytes are handed to, and `return/1` is its holder's word
+  that they are gone.
 
   ## What each role holds
 
@@ -71,8 +74,15 @@ defmodule Locus.Output do
       `egress_pin`, `runner_exited`) at twice what they declare until they
       are decoded, and a pinned fetch's larger read where it had room for
       it, asked without waiting: the read and the receive queue behind it,
-      twice `fetch_read_ahead_bytes`, 524,288 bytes, to the fetch's end
-      (`Locus.Runtime.Relay`, `Locus.Runtime.HostClient`).
+      twice `fetch_read_ahead_bytes`, 524,288 bytes, to the fetch's end,
+      and only while the count keeps free beside it the room of the
+      largest answer the role asks for at once (CYFR's refusal of an
+      attached fetch at the answer bound, 12,239,056 bytes): a fetch holds
+      its read-ahead while its upstream thinks and for the whole of a long
+      stream, so read-ahead takes at most the count less that answer,
+      eight fetches at once, and every other ask, granted in arrival order
+      and freed once written, gets its room as those ahead of it are
+      written (`Locus.Runtime.Relay`, `Locus.Runtime.HostClient`).
 
   Not counted, each capped in size and in number, but for kept backends
   sessions, whose number has no cap of its own (the first row):
@@ -287,20 +297,28 @@ defmodule Locus.Output do
   @doc """
   Ask for `bytes` of the answering count, for the calling process, by
   `deadline` (monotonic milliseconds): the answer comes as
-  `{Locus.Output, ref, {:ok, grant} | :full}`.
+  `{Locus.Output, ref, {:ok, grant} | :full}`. With `leave: room`, it is
+  granted only while `room` bytes of the count stay free beside it.
   """
-  @spec ask(GenServer.server(), pos_integer(), integer()) :: reference()
-  def ask(server, bytes, deadline)
-      when is_integer(bytes) and bytes > 0 and is_integer(deadline) do
+  @spec ask(GenServer.server(), pos_integer(), integer(), [{:leave, non_neg_integer()}]) ::
+          reference()
+  def ask(server, bytes, deadline, opts \\ [])
+
+  def ask(server, bytes, deadline, []), do: ask(server, bytes, deadline, leave: 0)
+
+  def ask(server, bytes, deadline, leave: leave)
+      when is_integer(bytes) and bytes > 0 and is_integer(deadline) and is_integer(leave) and
+             leave >= 0 do
     ref = make_ref()
-    GenServer.cast(server, {:ask, ref, self(), bytes, deadline})
+    GenServer.cast(server, {:ask, ref, self(), bytes, leave, deadline})
     ref
   end
 
-  @doc "`ask/3`, waiting for its answer: `{:ok, grant}` or `:full`."
-  @spec reserve(GenServer.server(), pos_integer(), integer()) :: {:ok, grant()} | :full
-  def reserve(server, bytes, deadline) do
-    ref = ask(server, bytes, deadline)
+  @doc "`ask/4`, waiting for its answer: `{:ok, grant}` or `:full`."
+  @spec reserve(GenServer.server(), pos_integer(), integer(), [{:leave, non_neg_integer()}]) ::
+          {:ok, grant()} | :full
+  def reserve(server, bytes, deadline, opts \\ []) do
+    ref = ask(server, bytes, deadline, opts)
     wait = max(deadline - now(), 0) + @answer_margin_ms
 
     receive do
@@ -404,15 +422,15 @@ defmodule Locus.Output do
   end
 
   @impl GenServer
-  def handle_cast({:ask, ref, pid, bytes, deadline}, state) do
+  def handle_cast({:ask, ref, pid, bytes, leave, deadline}, state) do
     state = watch(state, pid)
 
     cond do
-      bytes > state.bounds.answering ->
+      bytes + leave > state.bounds.answering ->
         send(pid, {__MODULE__, ref, :full})
         {:noreply, forget_if_idle(state, pid)}
 
-      :queue.is_empty(state.queue) and fits?(state, bytes) ->
+      :queue.is_empty(state.queue) and fits?(state, bytes + leave) ->
         {:noreply, state |> grant(ref, pid, bytes) |> peak()}
 
       deadline <= now() ->
@@ -421,7 +439,7 @@ defmodule Locus.Output do
 
       true ->
         timer = Process.send_after(self(), {:deadline, ref}, deadline, abs: true)
-        waiter = %{pid: pid, bytes: bytes, timer: timer}
+        waiter = %{pid: pid, bytes: bytes, leave: leave, timer: timer}
 
         {:noreply,
          %{
@@ -575,8 +593,8 @@ defmodule Locus.Output do
   # holds every one behind it.
   defp pump(state) do
     with {:value, ref} <- :queue.peek(state.queue),
-         %{bytes: bytes, pid: pid, timer: timer} <- state.waiters[ref],
-         true <- fits?(state, bytes) do
+         %{bytes: bytes, leave: leave, pid: pid, timer: timer} <- state.waiters[ref],
+         true <- fits?(state, bytes + leave) do
       Process.cancel_timer(timer)
 
       %{state | queue: :queue.drop(state.queue), waiters: Map.delete(state.waiters, ref)}

@@ -1513,12 +1513,13 @@ defmodule Locus.Runtime.RelayCountTest do
     # A fetch's largest body, 50 MiB, comes within a catalyst's 3 minutes
     # over a 300 ms round trip only through a receive window past one
     # 64 KiB read's (`Prima.LocusRoles`, `fetch_read_ahead_bytes`).
-    test "reads ahead with room for its read and the queue behind it, asked without waiting and given back at its end, and 64 KiB at a time without",
+    test "reads ahead with room for its read and the queue behind it and the answer room beside them, asked without waiting and given back at its end, and 64 KiB at a time without",
          %{host: host} do
       size = 3 * 262_144
       ahead = Prima.LocusRoles.role!(:runtime).memory.fetch_read_ahead_bytes
+      ahead_room = 2 * ahead + Relay.answer_room()
 
-      for {room, buffer} <- [{nil, ahead}, {2 * ahead - 1, 65_536}] do
+      for {room, buffer} <- [{nil, ahead}, {ahead_room, ahead}, {ahead_room - 1, 65_536}] do
         {port, _server} = big_upstream!(size)
 
         attempt =
@@ -1532,7 +1533,7 @@ defmodule Locus.Runtime.RelayCountTest do
         assert_receive {:writing, relay, _base64}, 10_000
         assert [worker] = holders(relay)
         assert read_buffer(worker) == buffer
-        if room == nil, do: assert(answering() - baseline >= 2 * ahead)
+        if buffer == ahead, do: assert(answering() - baseline >= 2 * ahead)
 
         send(relay, :go)
         assert read_granting(attempt.endpoint, ref, 0) == size
@@ -1561,6 +1562,116 @@ defmodule Locus.Runtime.RelayCountTest do
       send(relay, :go)
       assert {_events, "fetch_failed"} = events(attempt.endpoint, ref)
     end
+  end
+
+  # A fetch holds its read-ahead while its upstream thinks before it
+  # answers, a model's or a feed's call, and for the whole of an answer
+  # it streams: 32 of either at the read-ahead's 512 KiB once filled the
+  # count, and every host call's answer then waited for room until its
+  # window lost it.
+  describe "fetches held open" do
+    for shape <- [:held_call, :long_stream] do
+      test "leave the largest host call answer its room, however many (#{shape})", %{host: host} do
+        answer = String.duplicate("a", 3_300_000)
+        ScriptedHost.script(host, "tool_call", {:ok, answer})
+        {port, handlers} = holding_upstream!(32, unquote(shape))
+
+        # Two runners at the relay's 16 fetches each, every fetch held
+        # past the call's window; each runner's fetches are read by a
+        # process of their own, since a fetch's ref is its runner's.
+        test = self()
+
+        runners =
+          for _runner <- 1..2 do
+            attempt =
+              attempt!(host, timeout_ms: 120_000, limits: EdgeFixtures.limits(timeout: "90s"))
+              |> ScriptedKeeper.relayed!()
+
+            reader =
+              Task.async(fn ->
+                refs = for _n <- 1..16, do: pinned_fetch!(attempt, port, "/held")
+
+                if unquote(shape) == :long_stream,
+                  do:
+                    for(
+                      ref <- refs,
+                      do: assert_receive({Endpoint, ^ref, {:head, 200, _, _}}, 10_000)
+                    )
+
+                send(test, {:fetching, self()})
+
+                receive do
+                  :read -> for ref <- refs, do: events(attempt.endpoint, ref)
+                end
+              end)
+
+            {attempt, reader}
+          end
+
+        for handler <- handlers, do: assert_receive({:holding, ^handler}, 10_000)
+        for {_attempt, %{pid: pid}} <- runners, do: assert_receive({:fetching, ^pid}, 10_000)
+
+        [{attempt, _reader} | _] = runners
+        call = Task.async(fn -> HostClient.tool_call(attempt.client, "t", %{}, :call) end)
+
+        assert {:ok, ^answer} =
+                 Task.await(call, Prima.HostAPI.request_timeout_ms(:tool_call) + 10_000)
+
+        for handler <- handlers, do: send(handler, :close)
+
+        for {_attempt, reader} <- runners do
+          send(reader.pid, :read)
+          assert length(Task.await(reader, 30_000)) == 16
+        end
+
+        wait_until(fn ->
+          Locus.Output.held(@count) |> Map.take([:answering, :waiting]) == %{
+            answering: 0,
+            waiting: 0
+          }
+        end)
+      end
+    end
+  end
+
+  # An upstream holding each of `n` requests open, with no answer yet
+  # (`:held_call`) or with an answer begun (`:long_stream`, a head and
+  # its first kilobyte of a megabyte): each connection tells the test
+  # `{:holding, handler}` once it holds, and closes on `:close` or when
+  # the test ends.
+  defp holding_upstream!(n, shape) do
+    {:ok, listen} = :gen_tcp.listen(0, [:binary, active: false, reuseaddr: true, backlog: n])
+    {:ok, port} = :inet.port(listen)
+    test = self()
+
+    handlers =
+      for _n <- 1..n do
+        spawn(fn ->
+          {:ok, sock} = :gen_tcp.accept(listen, 10_000)
+          {:ok, _request} = :gen_tcp.recv(sock, 0, 10_000)
+
+          if shape == :long_stream,
+            do:
+              :ok =
+                :gen_tcp.send(sock, [
+                  "HTTP/1.1 200 OK\r\ncontent-length: 1048576\r\n\r\n",
+                  :binary.copy("s", 1024)
+                ])
+
+          send(test, {:holding, self()})
+
+          receive do
+            :close -> :gen_tcp.close(sock)
+          end
+        end)
+      end
+
+    on_exit(fn ->
+      Enum.each(handlers, &Process.exit(&1, :kill))
+      :gen_tcp.close(listen)
+    end)
+
+    {port, handlers}
   end
 
   describe "a pinned fetch's head" do

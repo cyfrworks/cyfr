@@ -37,6 +37,10 @@ defmodule Locus.OutputTest do
         send(test, {self(), :reserved, Output.reserve(output, bytes, deadline)})
         holder_loop(output, test)
 
+      {:reserve, bytes, deadline, opts} ->
+        send(test, {self(), :reserved, Output.reserve(output, bytes, deadline, opts)})
+        holder_loop(output, test)
+
       {:return, grant} ->
         Output.return(grant)
         send(test, {self(), :returned})
@@ -301,6 +305,39 @@ defmodule Locus.OutputTest do
       send(a, {:return, grant})
       assert_receive {^c, :reserved, {:ok, _grant}}
       assert_held(output, answering: 10 * @kib, waiting: 0)
+    end
+
+    test "an ask that leaves room is granted only while that much stays free beside it, " <>
+           "in arrival order, and one past the bound with what it leaves is :full at once" do
+      output = start(%{answering: 100 * @kib})
+      [a, b, c] = [holder(output), holder(output), holder(output)]
+
+      # On an empty count: it could never be granted, so it is not waited for.
+      assert Output.reserve(output, 60 * @kib + 1, later(60_000), leave: 40 * @kib) == :full
+
+      send(a, {:reserve, 50 * @kib, later(5_000)})
+      assert_receive {^a, :reserved, {:ok, grant_a}}
+
+      # 30 fits beside 50, but not with 40 left free beside it.
+      send(b, {:reserve, 30 * @kib, later(300), [leave: 40 * @kib]})
+      assert_receive {^b, :reserved, :full}, 2_000
+
+      # Waiting, it is granted once what it leaves is free, and what is
+      # asked after it waits behind it.
+      send(b, {:reserve, 30 * @kib, later(5_000), [leave: 40 * @kib]})
+      wait_until(fn -> Output.held(output).waiting == 1 end, 5_000, "the ask queued")
+      send(c, {:reserve, 10 * @kib, later(5_000)})
+      wait_until(fn -> Output.held(output).waiting == 2 end, 5_000, "the second ask queued")
+      refute_received {_, :reserved, _}
+
+      send(a, {:return, grant_a})
+      assert_receive {^b, :reserved, {:ok, _grant_b}}
+      assert_receive {^c, :reserved, {:ok, _grant_c}}
+      assert_held(output, answering: 40 * @kib, waiting: 0)
+
+      # What it leaves is free, not granted: an ask without it fills it.
+      assert {:ok, _grant} = Output.reserve(output, 60 * @kib, later(5_000))
+      assert_held(output, answering: 100 * @kib)
     end
   end
 end
