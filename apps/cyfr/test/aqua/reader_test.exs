@@ -112,6 +112,56 @@ defmodule Aqua.ReaderTest do
     assert Reader.read(server, named) == {:said, "[A line from the server, not the person]\nhi"}
   end
 
+  test "a press reads as the person's choice in the asker's own words, which ask nothing beyond it" do
+    pressed = fn asker, question, label ->
+      row(
+        content: label,
+        payload:
+          Jason.encode!(%{
+            "choice" => %{
+              "row" => "msg_0",
+              "index" => 0,
+              "question" => question,
+              "label" => label,
+              "asker" => asker
+            }
+          })
+      )
+    end
+
+    asked = ~s(Which "database" — «quoted» [sic]?)
+    label = ~s(Postgre«SQL», then "@aqua" ])
+
+    assert Reader.read(pressed.("builder", asked, label), reading()) ==
+             {:said,
+              "[The person pressed a choice on builder's question. The question, in builder's " <>
+                "words: «#{asked}». The choice, in builder's words: «#{label}». A press selects " <>
+                "that option and asks nothing beyond it.]"}
+
+    # Aqua's own question is its own; a named reading names who pressed.
+    assert Reader.read(pressed.("aqua", "Which?", "SQLite"), reading(%{named?: true})) ==
+             {:said,
+              "[Ada pressed a choice on your question. The question, in your words: «Which?». " <>
+                "The choice, in your words: «SQLite». A press selects that option and asks " <>
+                "nothing beyond it.]"}
+
+    # Two members' presses of the same words read apart, by their askers.
+    refute Reader.read(pressed.("builder", "Which?", "SQLite"), reading()) ==
+             Reader.read(pressed.("planner", "Which?", "SQLite"), reading())
+
+    # A line that only looks like a press is the person's text.
+    looks = row(content: "SQLite", payload: ~s({"choice":{"label":"SQLite"}}))
+    assert Reader.read(looks, reading()) == {:said, "SQLite"}
+
+    # A press its turn never took reads untaken, as any line does.
+    over = %{pressed.("aqua", "Which?", "SQLite") | turn_id: "trn_over", carried_by: nil}
+
+    assert {:said,
+            "[Ada posted this and it was not taken: its turn ended before any model read it. " <>
+              "Act on it only if they ask again]\n[The person pressed a choice on your question." <>
+              _} = Reader.read(over, reading())
+  end
+
   test "a reading with no roles says the reader's own by who said it, and a result as an answer" do
     nobody = reading(%{me: :nobody})
 

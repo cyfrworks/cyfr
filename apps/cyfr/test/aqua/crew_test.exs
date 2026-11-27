@@ -1232,7 +1232,13 @@ defmodule Aqua.CrewTest do
       "credential in a reply, and never keep one: a component that needs one is set " <>
       "up through `request_setup`.\n- When you need the person to decide, ask in your " <>
       "reply: the question in one sentence and the choices as a short list. Finish or " <>
-      "stop what you started first, since your turn ends with that reply.\n- Never send, " <>
+      "stop what you started first, since your turn ends with that reply. " <>
+      "To offer the choices as buttons, end that reply with a block and nothing " <>
+      "after it: a line of three backticks, `choices`, a space and this turn's id; the " <>
+      "question on one line, at most 200 characters; each choice on a line of its own " <>
+      "after `- `, one to eight, each different and at most 100 characters; optionally " <>
+      "a line `file: ` and the path of a file in Files the person should open first; " <>
+      "and a line of three backticks.\n- Never send, " <>
       "submit, buy or " <>
       "publish anything on a site, accept terms or change an account without the " <>
       "person's word for that one act: nothing but this instruction stops you. Read " <>
@@ -2756,6 +2762,137 @@ defmodule Aqua.CrewTest do
     |> case do
       nil -> :none
       outcome -> {:ok, outcome}
+    end
+  end
+
+  describe "a member's question as buttons" do
+    # A member's card is its reply in the room: the delivered copy of its
+    # turn's last own row, read against that row (`Aqua.Choices`).
+    defp block(tag, question \\ "Which database should the export target?"),
+      do: "```choices #{tag}\n#{question}\n- PostgreSQL\n- SQLite\n```"
+
+    # A job `member` is handed in `room` by the person, whose one model
+    # reply is `text_of.(turn_id)` once its turn is known: the room's reply
+    # row, delivered.
+    defp member_reply!(ctx, room, member, text_of) do
+      :ok = ScriptedWorker.script([{:hold, self()}])
+
+      {:ok, %{message_id: request_id}} =
+        Runner.send_message(ctx, room.id, "@#{member} pick a database")
+
+      assert {:ok, %{"applied" => 1}} = drain(ctx)
+      turn_id = delivered_turn(ctx, child!(ctx, room, member), request_id)
+      assert_receive {:scripted_probe, player, _execution}, 30_000
+      :ok = ScriptedWorker.script([reply(text_of.(turn_id))])
+      send(player, :continue)
+      await_status(ctx, turn_id, "completed")
+      assert {:ok, %{"applied" => 1}} = drain(ctx)
+      Enum.find(rows(ctx, room.id), &(&1.reply_to == request_id))
+    end
+
+    defp press(ctx, room, row, index) do
+      Aqua.Providers.Thread.handle("thread", ctx, %{
+        "action" => "send",
+        "thread" => room.id,
+        "message" => "PostgreSQL",
+        "choice" => %{"row" => row.id, "index" => index}
+      })
+    end
+
+    @closed {:error, {:conflict, "This question is no longer open."}}
+
+    test "the room's copy of a member's final row gives buttons; a copy cut at the delivery's " <>
+           "32 KiB does not, either side of it, and neither does Aqua's copy of the block",
+         %{ctx: ctx} do
+      script!([])
+      {:ok, today} = Aqua.Day.current(ctx)
+
+      card = member_reply!(ctx, today, "planner", &("I can do either.\n\n" <> block(&1)))
+
+      assert {:ok,
+              %{
+                row: card.id,
+                prose: "I can do either.",
+                question: "Which database should the export target?",
+                choices: ["PostgreSQL", "SQLite"],
+                asker: "planner",
+                open?: true,
+                file: nil,
+                file_state: nil
+              }} == Aqua.Choices.read(ctx, card)
+
+      # Aqua's reply that ends with the member's block is no card of Aqua's.
+      :ok =
+        ScriptedWorker.script([
+          reply("Planner asks:\n\n" <> block(Tape.payload(card)["from_turn"]))
+        ])
+
+      assert {:ok, %{turn_id: woken}} = press(ctx, today, card, 0)
+      await_status(ctx, woken, "completed")
+
+      copy =
+        Enum.find(rows(ctx, today.id), &(&1.turn_id == woken and &1.sent_by == "aqua"))
+
+      assert copy.content =~ "Planner asks:"
+      assert Aqua.Choices.read(ctx, copy) == :none
+
+      # A reply of exactly the delivery's bound arrives whole; one byte past
+      # it is cut, and its copy is text.
+      sized = fn bytes ->
+        fn turn_id ->
+          tail = "\n\n" <> block(turn_id)
+          String.duplicate("a", bytes - byte_size(tail)) <> tail
+        end
+      end
+
+      whole = member_reply!(ctx, today, "planner", sized.(32 * 1024))
+      assert byte_size(whole.content) == 32 * 1024
+      assert {:ok, %{asker: "planner", open?: true}} = Aqua.Choices.read(ctx, whole)
+
+      cut = member_reply!(ctx, today, "planner", sized.(32 * 1024 + 1))
+      assert Tape.payload(cut)["truncated"] == true
+      assert Aqua.Choices.read(ctx, cut) == :none
+    end
+
+    test "two members' cards are independent: a later request to one closes its own, and " <>
+           "presses of the same words from two members are kept apart by row and asker",
+         %{ctx: ctx} do
+      script!([])
+      member!(ctx, "builder")
+      {:ok, today} = Aqua.Day.current(ctx)
+
+      planner = member_reply!(ctx, today, "planner", &block/1)
+      builder = member_reply!(ctx, today, "builder", &block/1)
+      assert {:ok, %{open?: true}} = Aqua.Choices.read(ctx, planner)
+      assert {:ok, %{open?: true}} = Aqua.Choices.read(ctx, builder)
+
+      # Two presses of the same words, on each member's own card.
+      :ok = ScriptedWorker.script([reply("Noted."), reply("Noted.")])
+      assert {:ok, %{message_id: first, turn_id: one}} = press(ctx, today, planner, 0)
+      await_status(ctx, one, "completed")
+      assert {:ok, %{message_id: second, turn_id: two}} = press(ctx, today, builder, 0)
+      await_status(ctx, two, "completed")
+
+      choice = fn id -> Tape.payload(row(ctx, id))["choice"] end
+
+      assert choice.(first) == %{
+               "row" => planner.id,
+               "index" => 0,
+               "question" => "Which database should the export target?",
+               "label" => "PostgreSQL",
+               "asker" => "planner"
+             }
+
+      assert choice.(second) == %{choice.(first) | "row" => builder.id, "asker" => "builder"}
+
+      # Fresh cards of each; a later request to the planner closes its
+      # card alone.
+      planner = member_reply!(ctx, today, "planner", &block/1)
+      builder = member_reply!(ctx, today, "builder", &block/1)
+      {:ok, %{admitted: :request}} = Runner.send_message(ctx, today.id, "@planner one more thing")
+      assert {:ok, %{open?: false}} = Aqua.Choices.read(ctx, planner)
+      assert {:ok, %{open?: true}} = Aqua.Choices.read(ctx, builder)
+      assert press(ctx, today, planner, 0) == @closed
     end
   end
 end

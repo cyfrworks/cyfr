@@ -4863,6 +4863,8 @@ type ThreadSendArgs struct {
 	Id Field[string] `json:"id,omitzero"`
 	// send: a model override for this turn
 	Model Field[string] `json:"model,omitzero"`
+	// send: a press of a question's choice (row, index): the message row the question is in and the choice's place, from 0; the send says that choice's label, read on the server, to Aqua, and is refused once the question is no longer open
+	Choice Field[ThreadSendArgsChoice] `json:"choice,omitzero"`
 	// send: the shared thread the sender has open beside this thread (shared_thread_id, title); its newest lines are read under the sender's seat for this one turn, never stored
 	Room Field[ThreadSendArgsRoom] `json:"room,omitzero"`
 }
@@ -4891,6 +4893,22 @@ func (args *ThreadSendArgsAttachmentsItem) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	*args = ThreadSendArgsAttachmentsItem(value)
+	return nil
+}
+
+type ThreadSendArgsChoice struct {
+	Row   string `json:"row"`
+	Index int    `json:"index"`
+}
+
+// UnmarshalJSON refuses unknown fields and preserves required presence.
+func (args *ThreadSendArgsChoice) UnmarshalJSON(data []byte) error {
+	type fields ThreadSendArgsChoice
+	var value fields
+	if err := decodeRecord(data, &value); err != nil {
+		return err
+	}
+	*args = ThreadSendArgsChoice(value)
 	return nil
 }
 

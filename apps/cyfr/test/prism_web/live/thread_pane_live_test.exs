@@ -3732,4 +3732,204 @@ defmodule PrismWeb.ThreadPaneLiveTest do
                "Save the scroll `mine:tulip` first: this file belongs to it"
     end
   end
+
+  describe "a question's choices as buttons" do
+    defp choices_block(tag, lines \\ ["- PostgreSQL", "- SQLite"]),
+      do: "```choices #{tag}\nWhich database?\n" <> Enum.join(lines, "\n") <> "\n```"
+
+    # A soul turn of `thread` the person's line opened, at `status`.
+    defp soul_turn!(here, thread, status) do
+      {:ok, %{turn: turn}} =
+        Arca.TurnStorage.accept_message(Sanctum.Context.actor(here), thread.id, %{
+          message: %{author: here.user_id, sent_by: "person", content: "export"},
+          turn: %{agent: "aqua", requested_by: here.user_id, origin: :interactive}
+        })
+
+      turn_status!(turn, status)
+    end
+
+    defp turn_status!(turn, status) do
+      {1, _} =
+        Arca.Repo.update_all(from(t in Arca.Schemas.Turn, where: t.id == ^turn.id),
+          set: [status: status]
+        )
+
+      turn
+    end
+
+    # A row the turn's brain says, through the tape, which tells the pane.
+    defp brain_said!(here, thread, turn, content, payload \\ %{"step_id" => "stp_said"}) do
+      {:ok, row} =
+        Aqua.Tape.append(here, thread.id, %{
+          author: Prima.Author.agent(),
+          sent_by: "aqua",
+          kind: "text",
+          content: content,
+          payload: payload,
+          turn_id: turn.id
+        })
+
+      row
+    end
+
+    defp choices(row), do: ~s([id$="-choices-#{row.id}"])
+    defp choice(row, at), do: ~s([id$="-choices-#{row.id}-#{at}"])
+
+    test "a final reply's block is drawn as buttons once its turn is over, live and opened " <>
+           "again; a press answers Aqua with the choice and greys the card, and a stale " <>
+           "second tab is refused",
+         %{conn: conn, athanor: athanor, here: here} do
+      Sanctum.TestContext.ready!(athanor.id)
+      Cyfr.Test.Sandbox.stop_work_on_exit()
+      {:ok, today} = Aqua.Day.current(here)
+      # The pane's runner is up before the turn is, so it recovers none.
+      pane = open_pane(conn, athanor, today)
+      turn = soul_turn!(here, today, "running")
+      row = brain_said!(here, today, turn, "Pick one.\n\n" <> choices_block(turn.id))
+
+      # While its turn runs it may not be the final reply: text, no buttons.
+      Prima.Test.Wait.wait_until(fn -> render(pane) =~ "Pick one." end)
+      refute has_element?(pane, choices(row))
+
+      turn_status!(turn, "completed")
+
+      send(pane.pid, %Cyfr.Bus.ThreadEvent{
+        athanor_id: athanor.id,
+        thread_id: today.id,
+        kind: :turn_finished,
+        data: %{}
+      })
+
+      Prima.Test.Wait.wait_until(fn -> has_element?(pane, choice(row, 1), "SQLite") end)
+      assert has_element?(pane, choice(row, 0) <> ":not([disabled])", "PostgreSQL")
+      second = open_pane(conn, athanor, today)
+      assert has_element?(second, choice(row, 1) <> ":not([disabled])", "SQLite")
+
+      pane |> element(choice(row, 1)) |> render_click()
+
+      [pressed] =
+        for m <- Threads.messages(Sanctum.Context.actor(here), today.id),
+            Threads.payload(m)["choice"] != nil,
+            do: m
+
+      assert %{content: "SQLite", sent_by: "person", author: author} = pressed
+      assert author == here.user_id
+
+      assert Threads.payload(pressed)["choice"] == %{
+               "row" => row.id,
+               "index" => 1,
+               "question" => "Which database?",
+               "label" => "SQLite",
+               "asker" => "aqua"
+             }
+
+      Prima.Test.Wait.wait_until(fn ->
+        has_element?(pane, ~s([id$="-m-#{pressed.id}"]), "You chose «SQLite»") and
+          has_element?(pane, choice(row, 0) <> "[disabled]")
+      end)
+
+      # The second tab's press, made before it read the card again.
+      render_click(second, "choose", %{"row" => row.id, "index" => "0"})
+      assert render(second) =~ "This question is no longer open."
+
+      assert [_one] =
+               for(
+                 m <- Threads.messages(Sanctum.Context.actor(here), today.id),
+                 Threads.payload(m)["choice"] != nil,
+                 do: m
+               )
+
+      third = open_pane(conn, athanor, today)
+      assert has_element?(third, choice(row, 0) <> "[disabled]")
+      assert has_element?(third, ~s([id$="-m-#{pressed.id}"]), "You chose «SQLite»")
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    test "a card in a past day's daily thread is drawn greyed", %{
+      conn: conn,
+      athanor: athanor,
+      here: here,
+      thread: past
+    } do
+      turn = soul_turn!(here, past, "completed")
+      row = brain_said!(here, past, turn, choices_block(turn.id))
+      pane = open_pane(conn, athanor, past)
+      assert has_element?(pane, choice(row, 0) <> "[disabled]", "PostgreSQL")
+      assert has_element?(pane, choices(row) <> ~s([data-open="false"]))
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    test "a file line shows Open while Files has the file, and says so when it does not, " <>
+           "the choices kept",
+         %{conn: conn, athanor: athanor, here: here} do
+      {:ok, today} = Aqua.Day.current(here)
+      path = "data/aqua/plans/plan-1-export.md"
+      :ok = Arca.put(Sanctum.Context.actor(here), String.split(path, "/"), "# Export\n")
+      kept = soul_turn!(here, today, "completed")
+
+      held =
+        brain_said!(here, today, kept, choices_block(kept.id, ["- Proceed", "file: " <> path]))
+
+      gone = soul_turn!(here, today, "completed")
+
+      missing =
+        brain_said!(
+          here,
+          today,
+          gone,
+          choices_block(gone.id, ["- Proceed", "file: data/gone.md"])
+        )
+
+      pane = open_pane(conn, athanor, today)
+      assert has_element?(pane, ~s([id$="-choices-#{held.id}-open"]), "Open")
+      assert has_element?(pane, choice(missing, 0), "Proceed")
+
+      assert has_element?(
+               pane,
+               ~s([id$="-choices-#{missing.id}-missing"]),
+               "This file is not in Files"
+             )
+
+      refute has_element?(pane, ~s([id$="-choices-#{missing.id}-open"]))
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    test "a person's line, a post a tool wrote and an intermediate reply carrying the turn's " <>
+           "block are text, live and opened again",
+         %{conn: conn, athanor: athanor, here: here} do
+      {:ok, today} = Aqua.Day.current(here)
+      pane = open_pane(conn, athanor, today)
+      turn = soul_turn!(here, today, "running")
+
+      {:ok, person} =
+        Aqua.Tape.append(here, today.id, %{
+          author: here.user_id,
+          sent_by: "person",
+          kind: "text",
+          content: choices_block(turn.id),
+          turn_id: turn.id
+        })
+
+      early = brain_said!(here, today, turn, choices_block(turn.id))
+      posted = brain_said!(here, today, turn, choices_block(turn.id), %{"post" => true})
+      _final = brain_said!(here, today, turn, "Done.")
+      turn_status!(turn, "completed")
+
+      send(pane.pid, %Cyfr.Bus.ThreadEvent{
+        athanor_id: athanor.id,
+        thread_id: today.id,
+        kind: :turn_finished,
+        data: %{}
+      })
+
+      Prima.Test.Wait.wait_until(fn -> render(pane) =~ "Done." end)
+      again = open_pane(conn, athanor, today)
+
+      for view <- [pane, again], row <- [person, early, posted] do
+        refute has_element?(view, choices(row))
+      end
+
+      Cyfr.Test.Sandbox.end_views()
+    end
+  end
 end

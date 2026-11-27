@@ -1841,14 +1841,14 @@ defmodule Cyfr.BoundariesTest do
                ["Compendium", "Compendium.OCI", "Compendium.Providers", "Compendium.Registry"]
     end
 
-    test "the console names the assistant's root, nothing more" do
+    test "the console names the assistant's root and its question cards, nothing more" do
       row =
         Enum.find(
           Boundaries.surfaces(),
           &(&1.into == "Aqua" and "apps/cyfr/lib/prism_web/**/*.ex" in &1.from)
         ) || flunk("no surface row fences the console into the assistant's root")
 
-      assert row.allow == ["Aqua"]
+      assert row.allow == ["Aqua", "Aqua.Choices"]
       assert "apps/cyfr/lib/prism/**/*.ex" in row.from
 
       planted = [
@@ -1862,6 +1862,7 @@ defmodule Cyfr.BoundariesTest do
            def follow(id, athanor_id), do: Runner.subscribe(id, athanor_id)
            def partials, do: Aqua.Loop.Stream.new()
            def kind(tool, action), do: Aqua.Kinds.kind_for(tool, action)
+           def card(ctx, row), do: Aqua.Choices.read(ctx, row)
          end
          ''')}
       ]

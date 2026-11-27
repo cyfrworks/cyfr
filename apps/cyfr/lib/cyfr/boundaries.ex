@@ -903,13 +903,16 @@ defmodule Cyfr.Boundaries do
         "apps/cyfr/lib/prism_web.ex"
       ],
       into: "Aqua",
-      allow: ~w(Aqua),
+      allow: ~w(Aqua Aqua.Choices),
       reason:
         "the console reads threads, attachments, notes, the virtual-tool " <>
           "catalogue and the reply stream through the assistant's root facade, and " <>
-          "follows a thread on `Cyfr.Bus`. " <>
-          "Boundary's exports are global, and `Aqua` exports `Supervisor` and `Text` beside " <>
-          "its root to every boundary that lists it, so no declaration can say it."
+          "follows a thread on `Cyfr.Bus`; the thread pane reads a reply's question card " <>
+          "through `Aqua.Choices.read/2`, whose grammar and rules of which rows give " <>
+          "buttons are that module's alone, and presses one through `thread.send`. " <>
+          "Boundary's exports are global, and `Aqua` exports `Supervisor`, `Text` and " <>
+          "`Choices` beside its root to every boundary that lists it, so no declaration " <>
+          "can say it."
     },
     %{
       from: [

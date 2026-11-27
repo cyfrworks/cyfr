@@ -288,7 +288,9 @@ defmodule Aqua.Runner do
   message id), `:client_id`, `:attachments` (refs), `:model`,
   `:agent` (a pick; an `@name` in the text wins), `:room` (the
   room the sender had open, `%{"athanor_id", "thread_id", ...}`),
-  `:agents` (the roster, read here when absent).
+  `:agents` (the roster, read here when absent), `:choice` (a press of a
+  question's choice, `%{"row", "index"}`: a turn of Aqua's whatever the
+  text names, its line the label as `Aqua.Choices.press/3` reads it).
 
   The crew's delivery consumer (`Aqua.Crew`) sends with `:sent_by` (the
   sender's name; `"person"` when absent), `:request` (the request row a
@@ -574,7 +576,9 @@ defmodule Aqua.Runner do
   defp handle_owned_call({:send, ctx, text, opts}, _from, state) do
     opts = Keyword.put(opts, :last, state.agent)
 
-    with {:ok, decision, text} <- Admission.check(ctx, state.athanor_id, state.thread, text, opts),
+    with {:ok, text, opts} <- chosen(ctx, state, text, opts),
+         {:ok, decision, text} <- Admission.check(ctx, state.athanor_id, state.thread, text, opts),
+         decision = if(Keyword.has_key?(opts, :choice), do: {:turn, @aqua}, else: decision),
          :ok <- crew_ready(ctx, decision, opts) do
       case decision do
         {:turn, name} -> admit_turn(state, ctx, name, text, opts)
@@ -686,6 +690,36 @@ defmodule Aqua.Runner do
   # ---------------------------------------------------------------------------
   # Admitting a turn
   # ---------------------------------------------------------------------------
+
+  # A press (`thread.send`'s `choice`) is the person's answer to Aqua,
+  # whatever its label says: the row it names is read again here, where
+  # the thread's sends are taken one at a time, so of two presses of one
+  # card the second finds the first. Its line is the label as the server
+  # reads it, and its payload the press (`Aqua.Choices.press/3`). A retry
+  # of an accepted press by its `client_id` answers that press again.
+  defp chosen(ctx, state, text, opts) do
+    case Keyword.get(opts, :choice) do
+      nil ->
+        {:ok, text, opts}
+
+      choice ->
+        with {:ok, pressed} <- pressed_again(ctx, state, choice, opts) do
+          payload = Map.put(Keyword.get(opts, :payload, %{}), "choice", pressed)
+          {:ok, pressed["label"], Keyword.put(opts, :payload, payload)}
+        end
+    end
+  end
+
+  defp pressed_again(ctx, state, choice, opts) do
+    with client_id when is_binary(client_id) <- Keyword.get(opts, :client_id),
+         {:ok, %{message: row}} <- Tape.accepted(ctx, state.id, client_id),
+         %{"row" => row_id, "index" => index} = pressed <- Aqua.Choices.pressed(row),
+         true <- row_id == choice["row"] and index == choice["index"] do
+      {:ok, pressed}
+    else
+      _ -> Aqua.Choices.press(ctx, state.id, choice)
+    end
+  end
 
   defp admit_turn(state, ctx, name, text, opts) do
     cond do

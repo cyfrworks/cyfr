@@ -372,7 +372,13 @@ defmodule Aqua.ProgramTest do
         "credential in a reply, and never keep one: a component that needs one is set " <>
         "up through `request_setup`.\n- When you need the person to decide, ask in your " <>
         "reply: the question in one sentence and the choices as a short list. Finish or " <>
-        "stop what you started first, since your turn ends with that reply.\n- Never send, " <>
+        "stop what you started first, since your turn ends with that reply. " <>
+        "To offer the choices as buttons, end that reply with a block and nothing " <>
+        "after it: a line of three backticks, `choices`, a space and this turn's id; the " <>
+        "question on one line, at most 200 characters; each choice on a line of its own " <>
+        "after `- `, one to eight, each different and at most 100 characters; optionally " <>
+        "a line `file: ` and the path of a file in Files the person should open first; " <>
+        "and a line of three backticks.\n- Never send, " <>
         "submit, buy or " <>
         "publish anything on a site, accept terms or change an account without the " <>
         "person's word for that one act: nothing but this instruction stops you. Read " <>
@@ -872,6 +878,62 @@ defmodule Aqua.ProgramTest do
       say(fake, row, accepted(handed))
       say(fake, row, idle(again, [handed.id]))
       await_turn!(ctx, again.id, "completed")
+    end
+
+    test "the soul's final row on a program gives buttons, and its earlier row does not",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      :ok = claude_code!(ctx)
+      brain_row!(ctx, "claude")
+      turn = accept!(ctx, thread, row, "export the notes")
+      loop = run(ctx, turn)
+      started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+      say(fake, row, said(turn, "msg_1", "Let me check.\n\n" <> choices_block(turn.id)))
+      say(fake, row, said(turn, "msg_2", "Pick one.\n\n" <> choices_block(turn.id)))
+      say(fake, row, idle(turn, [input.id]))
+      assert :completed = Task.await(loop, 30_000)
+
+      assert [early, final] =
+               for(
+                 %{kind: "text", sent_by: "aqua"} = m <-
+                   Arca.ThreadStorage.messages(Sanctum.Context.actor(ctx), thread.id),
+                 do: m
+               )
+
+      assert Aqua.Choices.read(ctx, early) == :none
+
+      # Its thread is a past day's, so the card is drawn closed.
+      assert {:ok,
+              %{
+                row: final.id,
+                prose: "Pick one.",
+                question: "Which database should the export target?",
+                choices: ["PostgreSQL", "SQLite"],
+                asker: "aqua",
+                open?: false,
+                file: nil,
+                file_state: nil
+              }} == Aqua.Choices.read(ctx, final)
+    end
+
+    test "a handed member's final row on a program gives buttons on its room copy at the " <>
+           "delivery's 32 KiB",
+         %{ctx: ctx, thread: room, fake: fake} do
+      reply = program_member_reply!(ctx, room, fake, 32 * 1024)
+      assert byte_size(reply.content) == 32 * 1024
+
+      assert {:ok, %{asker: "claude-code", choices: ["PostgreSQL", "SQLite"]}} =
+               Aqua.Choices.read(ctx, reply)
+    end
+
+    test "a handed member's final row on a program one byte past the delivery's 32 KiB is cut, " <>
+           "and its copy is text",
+         %{ctx: ctx, thread: room, fake: fake} do
+      reply = program_member_reply!(ctx, room, fake, 32 * 1024 + 1)
+      assert Tape.payload(reply)["truncated"] == true
+      assert Aqua.Choices.read(ctx, reply) == :none
     end
 
     test "a job handed under a schedule's turn is told nobody is there to answer",
@@ -9229,6 +9291,48 @@ defmodule Aqua.ProgramTest do
     }
 
   defp run(ctx, turn), do: Task.async(fn -> Aqua.Loop.run(ctx: ctx, turn_id: turn.id) end)
+
+  defp choices_block(tag),
+    do: "```choices #{tag}\nWhich database should the export target?\n- PostgreSQL\n- SQLite\n```"
+
+  # A job Aqua's model hands the Claude Code member in `room`, whose one
+  # reply is `bytes` long and ends with its choices block: the room's
+  # reply row, delivered.
+  defp program_member_reply!(ctx, room, fake, bytes) do
+    ctx = %{ctx | origin: :interactive}
+    :ok = claude_code!(ctx)
+    row = brain_row!(ctx, "claude")
+
+    turn =
+      api_turn!(ctx, room, "export the notes", [
+        asking([
+          {"ask-1", "crew",
+           %{"action" => "ask", "member" => "claude-code", "task" => "Export the notes."}}
+        ]),
+        answer("Asked Claude Code."),
+        # The turn the member's reply opens.
+        answer("Noted.")
+      ])
+
+    assert :completed = Task.await(run(ctx, turn), 60_000)
+    assert {:ok, %{"applied" => 1}} = Aqua.Crew.drain(ctx.athanor_id)
+    [child] = Arca.ThreadStorage.children(Sanctum.Context.actor(ctx), room.id)
+    started!(fake, row)
+    _opening = sent()
+    assert {:ok, [job]} = Tape.open_turns(ctx, child.id)
+    [first] = inputs(ctx, job)
+    tail = "\n\n" <> choices_block(job.id)
+    say(fake, row, accepted(first))
+    say(fake, row, said(job, "msg_1", String.duplicate("a", bytes - byte_size(tail)) <> tail))
+    say(fake, row, idle(job, [first.id]))
+    await_turn!(ctx, job.id, "completed")
+    assert {:ok, %{"applied" => 1}} = Aqua.Crew.drain(ctx.athanor_id)
+
+    Enum.find(
+      Arca.ThreadStorage.messages(Sanctum.Context.actor(ctx), room.id),
+      &(&1.sent_by == "claude-code" and is_binary(&1.reply_to))
+    )
+  end
 
   # The turn reaches `status`.
   defp await_turn!(ctx, turn_id, status) do

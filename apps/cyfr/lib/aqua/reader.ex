@@ -496,13 +496,36 @@ defmodule Aqua.Reader do
 
   defp untaken_text(row, reading) do
     "[#{reading.display.(row.author)} posted this and it was not taken: its turn ended " <>
-      "before any model read it. Act on it only if they ask again]\n#{row.content}"
+      "before any model read it. Act on it only if they ask again]\n" <> spoken(row, reading)
   end
 
-  defp person_text(row, %{named?: true} = reading),
-    do: "#{reading.display.(row.author)}: #{row.content}"
+  defp person_text(row, reading) do
+    case Aqua.Choices.pressed(row) do
+      %{} = pressed -> pressed_text(pressed, row, reading)
+      nil when reading.named? == true -> "#{reading.display.(row.author)}: #{row.content}"
+      nil -> row.content || ""
+    end
+  end
 
-  defp person_text(row, _reading), do: row.content || ""
+  defp spoken(row, reading) do
+    case Aqua.Choices.pressed(row) do
+      %{} = pressed -> pressed_text(pressed, row, reading)
+      nil -> row.content || ""
+    end
+  end
+
+  # A press of a question's choice (`Aqua.Choices.press/3`), in the
+  # asker's own words as its row carried them when it was pressed: the
+  # question and the label are data the asker wrote, never the presser's.
+  defp pressed_text(%{"question" => question, "label" => label, "asker" => asker}, row, reading) do
+    who = if reading.named?, do: reading.display.(row.author), else: "The person"
+
+    whose = if asker == reading.me, do: "your", else: "#{asker}'s"
+
+    "[#{who} pressed a choice on #{whose} question. The question, in #{whose} words: " <>
+      "«#{question}». The choice, in #{whose} words: «#{label}». A press selects that " <>
+      "option and asks nothing beyond it.]"
+  end
 
   defp age(%DateTime{} = at, now) do
     seconds = max(DateTime.diff(now, at, :second), 0)
