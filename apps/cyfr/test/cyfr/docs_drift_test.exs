@@ -1336,8 +1336,8 @@ defmodule Cyfr.DocsDriftTest do
     "RUNTIME_CONTROL_FD" => :keeper,
     "RUNTIME_RELAY_SOCKET" => :keeper,
     # Compose hands the egress guard cyfr's fixed address, core's host API
-    # and its control's socket (docker-compose.yml's locus-guard), as the
-    # guest's first process hands its own guard them.
+    # and its control's socket (docker-compose.yml's locus-guard); the
+    # guest's first process hands its own guard the first and the last.
     "CYFR_GUARD_CONTROL_PLANE" => :compose,
     "CYFR_GUARD_HOST_API" => :compose,
     "CYFR_GUARD_CONTROL" => :compose

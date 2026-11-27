@@ -90,7 +90,7 @@ type starting struct {
 	log       *logx.Logger
 	at        place
 	env       func(string) string
-	resolve   func(string) []string
+	resolve   func(name, network string) []string
 	conntrack func() error
 }
 
@@ -173,7 +173,7 @@ func (g starting) start() (*net.UnixListener, *server, int) {
 		log.Error("refusing to start: %v", err)
 		return nil, nil, ExitConfig
 	}
-	s := newServer(log, netns, rng, kernelRoutes{set: &rulesOf{log: log, at: p, st: st, lock: lock}})
+	s := newServer(log, netns, rng, kernelRoutes{set: &rulesOf{log: log, at: p, st: st, lock: lock, bound: applyTimeout}})
 	if err := writeFile(p.ready(), recorded+"\n"); err != nil {
 		log.Error("refusing to start: writing %s: %v", p.ready(), err)
 		listener.Close()

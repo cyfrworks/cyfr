@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -88,7 +89,7 @@ func aStart(p place, socket string) (starting, fmt.Stringer) {
 	log, out := logged()
 	env := map[string]string{"CYFR_GUARD_CONTROL_PLANE": controlPlane, "CYFR_GUARD_CONTROL": socket}
 	return starting{log: log, at: p, env: func(k string) string { return env[k] },
-		resolve: func(string) []string { return nil }, conntrack: func() error { return nil }}, out
+		resolve: func(string, string) []string { return nil }, conntrack: func() error { return nil }}, out
 }
 
 func exists(path string) bool {
@@ -212,5 +213,112 @@ func TestTheCheckWaitsForARouteChangeAndComparesTheRecords(t *testing.T) {
 	log, out = logged()
 	if check(log, p) == nil || !strings.Contains(out.String(), "not ready: the routes' chains are not the routes the guard recorded") {
 		t.Fatalf("the check passed a record of a route the kernel does not hold:\n%s", out)
+	}
+}
+
+// A private host's name is resolved in the families the island has an
+// address of, loopback's apart, and an address of a family it lacks opens
+// nothing: on an island with no IPv6, as the shipped one, no IPv6 rule goes
+// in for a private host, and the log says what opens nothing. On an island
+// with both families, both go in.
+func TestAPrivateHostOpensOnlyTheFamiliesTheIslandHas(t *testing.T) {
+	names := map[string]map[string][]string{
+		"both.test":   {"ip4": {"10.9.9.9"}, "ip6": {"fd00:99::5"}},
+		"v6only.test": {"ip6": {"fd00:99::6"}},
+	}
+	var asked []string
+	resolve := func(name, network string) []string {
+		asked = append(asked, name+" "+network)
+		var out []string
+		for _, family := range []string{"ip4", "ip6"} {
+			if network == family || network == "ip" {
+				out = append(out, names[name][family]...)
+			}
+		}
+		return out
+	}
+	env := map[string]string{"CYFR_GUARD_CONTROL_PLANE": controlPlane,
+		"CYFR_PRIVATE_EGRESS_TARGETS": "both.test,v6only.test,fd00:99::7,10.9.9.10,fd00:aa::/64"}
+	returns := func(st static) []string {
+		var out []string
+		for _, r := range st.rules {
+			if len(r.args) == 6 && r.args[0] == "-A" && r.args[1] == chainOwn && r.args[2] == "-d" && r.args[5] == "RETURN" {
+				out = append(out, r.String())
+			}
+		}
+		return out
+	}
+	for _, c := range []struct {
+		name    string
+		inet6   string
+		network string
+		want    []string
+		logs    []string
+	}{
+		{"an island with no IPv6", "00000000000000000000000000000001 01 80 10 80       lo\n", "ip4",
+			[]string{"iptables -A CYFR_GUARD -d 10.9.9.9 -j RETURN", "iptables -A CYFR_GUARD -d 10.9.9.10 -j RETURN",
+				"ip6tables -A CYFR_GUARD -d fd00:aa::/64 -j RETURN"},
+			[]string{"private target both.test: 10.9.9.9 passes\n", "private target v6only.test resolves to nothing here: it opens nothing\n",
+				"private target fd00:99::7 resolves to nothing here: it opens nothing\n"}},
+		{"an island with IPv6", "00000000000000000000000000000001 01 80 10 80       lo\nfd000077000000000000000000000002 02 40 00 80     eth0\n", "ip",
+			[]string{"iptables -A CYFR_GUARD -d 10.9.9.9 -j RETURN", "ip6tables -A CYFR_GUARD -d fd00:99::5 -j RETURN",
+				"ip6tables -A CYFR_GUARD -d fd00:99::6 -j RETURN", "ip6tables -A CYFR_GUARD -d fd00:99::7 -j RETURN",
+				"iptables -A CYFR_GUARD -d 10.9.9.10 -j RETURN", "ip6tables -A CYFR_GUARD -d fd00:aa::/64 -j RETURN"},
+			[]string{"private target both.test: fd00:99::5 passes\n", "private target v6only.test: fd00:99::6 passes\n",
+				"private target fd00:99::7: fd00:99::7 passes\n"}},
+	} {
+		p := aPlace(t, "1")
+		if err := os.WriteFile(filepath.Join(p.proc, "net/if_inet6"), []byte(c.inet6), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		asked = nil
+		log, out := logged()
+		st, err := staticRules(log, readIsland(log, p, func(k string) string { return env[k] }, resolve))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := returns(st); !reflect.DeepEqual(got, c.want) {
+			t.Errorf("%s: the private hosts' rules\n%s\nwant\n%s\n%s", c.name, strings.Join(got, "\n"), strings.Join(c.want, "\n"), out)
+		}
+		for _, line := range c.logs {
+			if !strings.Contains(out.String(), "[cyfr-guard] info: "+line) {
+				t.Errorf("%s: the log lacks %q:\n%s", c.name, line, out)
+			}
+		}
+		if want := []string{"both.test " + c.network, "v6only.test " + c.network}; !reflect.DeepEqual(asked, want) {
+			t.Errorf("%s: the resolver was asked %q, want %q", c.name, asked, want)
+		}
+	}
+}
+
+// A route's change that outlives its bound says so, and leaves the route's
+// removal to the withdrawal that follows on a bound of its own, rather than
+// trying it on the bound already spent.
+func TestARouteChangePastItsBoundNamesTheTimeout(t *testing.T) {
+	standInTools(t)
+	slow := t.TempDir()
+	// The route's own rules outlive the bound; its clearing before them
+	// does not. sleep-ok: the stand-in outlives the change's shortened
+	// bound, which ends it.
+	restore := "#!/bin/sh\nif grep -q '^:CYFR_GUARD_R3 '; then exec sleep 30; fi\n"
+	if err := os.WriteFile(filepath.Join(slow, "iptables-restore"), []byte(restore), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", slow+":"+os.Getenv("PATH"))
+	p := aPlace(t, "1")
+	lock, err := os.OpenFile(p.lock(), os.O_RDWR|os.O_CREATE, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	log, out := logged()
+	k := &rulesOf{log: log, at: p, st: static{rng: "10.213.0.0/16"}, lock: lock, bound: 300 * time.Millisecond}
+	err = k.install(aRoute(ReachIsland))
+	if err == nil || !strings.Contains(err.Error(), "route sp3's change did not finish within 300ms") {
+		t.Fatalf("the change past its bound answered %v", err)
+	}
+	want := "[cyfr-guard] error: route sp3's change did not finish within 300ms: its withdrawal removes what of it stands\n"
+	if out.String() != want {
+		t.Fatalf("the change past its bound logged:\n%s\nwant:\n%s", out, want)
 	}
 }

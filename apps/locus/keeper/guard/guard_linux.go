@@ -138,8 +138,12 @@ func sysctls(log *logx.Logger, p place) error {
 // readIsland reads the guard's namespace and environment: its routes,
 // subnets and addresses from the kernel's tables under p.proc, and each
 // private host CYFR_PRIVATE_EGRESS_TARGETS names, a name resolved now and
-// logged.
-func readIsland(log *logx.Logger, p place, env func(string) string, resolve func(string) []string) island {
+// logged. A name is asked for the addresses of the families the island has
+// an address of, loopback's apart (resolveNetwork), and an address of a
+// family it lacks opens nothing, as a resolver that answers only those
+// families gives the address back for none other; a CIDR is taken as it is
+// written.
+func readIsland(log *logx.Logger, p place, env func(string) string, resolve func(name, network string) []string) island {
 	read := func(name string) string {
 		b, _ := os.ReadFile(filepath.Join(p.proc, name))
 		return string(b)
@@ -148,10 +152,11 @@ func readIsland(log *logx.Logger, p place, env func(string) string, resolve func
 	isl := island{controlPlane: env("CYFR_GUARD_CONTROL_PLANE"), hostAPI: env("CYFR_GUARD_HOST_API"),
 		routes: v4Routes(routes, false), subnets: v4Routes(routes, true),
 		v6Subnets: v6Subnets(read("net/ipv6_route")), local: localAddresses(read("net/fib_trie"))}
+	network := resolveNetwork(isl.local, read("net/if_inet6"))
 	for _, target := range splitTargets(env("CYFR_PRIVATE_EGRESS_TARGETS")) {
 		addresses := []string{target}
 		if !strings.Contains(target, "/") {
-			addresses = resolve(target)
+			addresses = resolveTarget(target, network, resolve)
 		}
 		if len(addresses) == 0 {
 			log.Info("private target %s resolves to nothing here: it opens nothing", target)
@@ -165,14 +170,19 @@ func readIsland(log *logx.Logger, p place, env func(string) string, resolve func
 	return isl
 }
 
-// resolveHost is a name's addresses of both families, sorted, each once;
-// none where it does not resolve.
-func resolveHost(name string) []string {
+// resolveHost is a name's addresses of network's families ("ip4", "ip6"
+// or "ip"), the resolver asked for those alone, sorted, each once; none
+// where it does not resolve.
+func resolveHost(name, network string) []string {
 	ctx, cancel := context.WithTimeout(context.Background(), resolveTimeout)
 	defer cancel()
-	addrs, err := net.DefaultResolver.LookupHost(ctx, name)
+	ips, err := net.DefaultResolver.LookupIP(ctx, network, name)
 	if err != nil {
 		return nil
+	}
+	addrs := make([]string, len(ips))
+	for i, ip := range ips {
+		addrs[i] = ip.String()
 	}
 	return sortedOnce(addrs)
 }
@@ -184,6 +194,8 @@ type rulesOf struct {
 	at   place
 	st   static
 	lock *os.File
+	// bound is applyTimeout, which tests shorten.
+	bound time.Duration
 }
 
 // exclusive takes the lock for one change and answers its release.
@@ -196,28 +208,36 @@ func (k *rulesOf) exclusive() (func(), error) {
 
 // install installs r's rules and records them; a route of r's guard's end
 // that stands is removed first, and a route that fails at any step is
-// removed whole.
+// removed whole. A change that outlives its bound removes nothing more: the
+// refused route's withdrawal, which follows on a bound of its own, does.
 func (k *rulesOf) install(r *route) error {
 	unlock, err := k.exclusive()
 	if err != nil {
 		return err
 	}
 	defer unlock()
-	ctx, cancel := bounded()
+	ctx, cancel := context.WithTimeout(context.Background(), k.bound)
 	defer cancel()
 	iface := outerName(r.slot)
+	fail := func(what string, err error) error {
+		if ctx.Err() != nil {
+			k.log.Error("route %s's change did not finish within %s: its withdrawal removes what of it stands", iface, k.bound)
+			return fmt.Errorf("route %s's change did not finish within %s", iface, k.bound)
+		}
+		k.log.Error("route %s %s: %v", iface, what, err)
+		if rerr := k.remove(ctx, iface); rerr != nil {
+			k.log.Error("route %s could not be removed whole, and its withdrawal tries again: %v", iface, rerr)
+		}
+		return fmt.Errorf("route %s %s: %w", iface, what, err)
+	}
 	if err := k.remove(ctx, iface); err != nil {
-		return err
+		return fail("could not be cleared before it was made", err)
 	}
 	if _, err := tool(ctx, routeRules(r, k.st), false, "iptables-restore", "-w", "5", "--noflush"); err != nil {
-		k.log.Error("route %s's rules failed: %v", iface, err)
-		_ = k.remove(ctx, iface)
-		return fmt.Errorf("route %s's rules failed: %w", iface, err)
+		return fail("rules failed", err)
 	}
 	if err := k.record(ctx, iface); err != nil {
-		k.log.Error("route %s could not be recorded: %v", iface, err)
-		_ = k.remove(ctx, iface)
-		return fmt.Errorf("route %s could not be recorded: %w", iface, err)
+		return fail("could not be recorded", err)
 	}
 	what := r.reach
 	switch {
@@ -242,10 +262,13 @@ func (k *rulesOf) withdraw(r *route) error {
 		return err
 	}
 	defer unlock()
-	ctx, cancel := bounded()
+	ctx, cancel := context.WithTimeout(context.Background(), k.bound)
 	defer cancel()
 	iface := outerName(r.slot)
 	if err := k.remove(ctx, iface); err != nil {
+		if ctx.Err() != nil {
+			return fmt.Errorf("route %s's removal did not finish within %s", iface, k.bound)
+		}
 		return err
 	}
 	k.log.Info("route %s removed", iface)
@@ -284,19 +307,17 @@ func text(ctx context.Context, iface string) (string, error) {
 }
 
 // remove removes every chain and jump of iface's route and a role's
-// forwarding, then its record. The lock is held.
+// forwarding, then its record. The lock is held; its caller logs what
+// failed.
 func (k *rulesOf) remove(ctx context.Context, iface string) error {
 	l, err := listed(ctx, iface)
 	if err != nil {
-		k.log.Error("the routes' jumps could not be read")
 		return fmt.Errorf("the routes' jumps could not be read: %w", err)
 	}
 	if _, err := tool(ctx, removal(iface, l), false, "iptables-restore", "-w", "5", "--noflush"); err != nil {
-		k.log.Error("route %s's rules could not be removed", iface)
 		return fmt.Errorf("route %s's rules could not be removed: %w", iface, err)
 	}
 	if err := os.Remove(k.at.record(iface)); err != nil && !errors.Is(err, os.ErrNotExist) {
-		k.log.Error("route %s's record could not be dropped", iface)
 		return fmt.Errorf("route %s's record could not be dropped: %w", iface, err)
 	}
 	return nil

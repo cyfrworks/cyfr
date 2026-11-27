@@ -105,6 +105,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net/netip"
 	"regexp"
 	"slices"
 	"strconv"
@@ -538,6 +539,50 @@ func localAddresses(text string) []string {
 		}
 	}
 	return sortedOnce(out)
+}
+
+// resolveNetwork is the families a private host's name is resolved in, as
+// Go's resolver names them: those the island has an address of, its local
+// IPv4 addresses and /proc/net/if_inet6's text, loopback's apart, as a
+// resolver asked with AI_ADDRCONFIG takes them; "" with neither.
+func resolveNetwork(local []string, ifInet6 string) string {
+	v4 := false
+	for _, a := range local {
+		if a != "127.0.0.1" {
+			v4 = true
+		}
+	}
+	v6 := false
+	for _, line := range strings.Split(ifInet6, "\n") {
+		if f := strings.Fields(line); len(f) >= 1 && f[0] != "00000000000000000000000000000001" {
+			v6 = true
+		}
+	}
+	switch {
+	case v4 && v6:
+		return "ip"
+	case v4:
+		return "ip4"
+	case v6:
+		return "ip6"
+	}
+	return ""
+}
+
+// resolveTarget is a private host's addresses in network's families: an
+// address itself where it is of one of them, a name's as resolve answers
+// it, and none in a family network lacks.
+func resolveTarget(target, network string, resolve func(name, network string) []string) []string {
+	if network == "" {
+		return nil
+	}
+	if a, err := netip.ParseAddr(target); err == nil {
+		if (a.Is4() && network != "ip6") || (!a.Is4() && network != "ip4") {
+			return []string{a.String()}
+		}
+		return nil
+	}
+	return resolve(target, network)
 }
 
 // routeLink is a route's guard's end.
