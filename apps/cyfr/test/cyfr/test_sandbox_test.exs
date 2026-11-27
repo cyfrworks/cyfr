@@ -921,10 +921,22 @@ defmodule Cyfr.Test.SandboxTest do
       refute Process.alive?(Process.get(:child)), "end_views/0 returned with the child at work"
     end
 
+    test "an idle test beside others' processes starting and ending as it looks returns at once" do
+      # Work that names no test starts workers that end at once, so every
+      # look lists processes that are gone when it reads them.
+      test = self()
+      churn = spawn(fn -> churning(test) end)
+      on_exit(fn -> Process.exit(churn, :kill) end)
+      assert_receive :churning, 5_000
+
+      assert :ok = Sandbox.end_views(1_000)
+      Process.exit(churn, :kill)
+    end
+
     @tag timeout: 20_000
     test "work that keeps handing itself on past the deadline fails it there, though each is gone when waited for" do
       stop = :atomics.new(1, [])
-      handing_on(stop)
+      handing_on(stop, self())
       started = System.monotonic_time(:millisecond)
 
       error = assert_raise ExUnit.AssertionError, fn -> Sandbox.end_views(300) end
@@ -961,12 +973,37 @@ defmodule Cyfr.Test.SandboxTest do
     )
   end
 
-  # Work that starts the next generation and ends at once, until `stop`
-  # is set: each generation is gone as soon as it has started the next.
-  defp handing_on(stop) do
+  # Starts workers that end at once, without end, telling `test` once it
+  # has started the first.
+  defp churning(test) do
+    spawn(fn -> :ok end)
+    send(test, :churning)
+    churning()
+  end
+
+  defp churning do
+    spawn(fn -> :ok end)
+    churning()
+  end
+
+  # Work that, once the test watches it, starts the next generation and
+  # ends at once, until `stop` is set: each generation is found by a look
+  # and is gone as soon as it is waited for. One that started the next and
+  # ended between a look's list and its reading, every generation, is the
+  # window `end_views/0` leaves open.
+  defp handing_on(stop, test) do
     {:ok, _pid} =
       Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
-        if :atomics.get(stop, 1) == 0, do: handing_on(stop)
+        Prima.Test.Wait.wait_until(
+          fn ->
+            :atomics.get(stop, 1) == 1 or
+              test in elem(Process.info(self(), :monitored_by), 1)
+          end,
+          30_000,
+          "the test watching this work"
+        )
+
+        if :atomics.get(stop, 1) == 0, do: handing_on(stop, test)
       end)
   end
 
