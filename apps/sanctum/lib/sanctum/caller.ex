@@ -45,7 +45,7 @@ defmodule Sanctum.Caller do
   `establish/2`: its one caller is `Sanctum.DeviceCerts`, which verified
   the device's proof of possession and certificate on its channel and
   read the rows the context is built from. The branch trusts that caller
-  and reads nothing from the store but the person's company sign-in.
+  and reads nothing from the store.
   Host's export roster (`Cyfr.Boundaries`) does not name it, so no
   surface can hand it rows of its own.
 
@@ -85,15 +85,6 @@ defmodule Sanctum.Caller do
     * `:identity_gone` — a session of a person whose account its
       directory answered gone: the mark retired every session of theirs,
       and nothing of theirs stands again.
-    * `:company_login_required` — a person who stands in every other way
-      at a CYFR that requires a company sign-in they have not given, or
-      given too long ago or under another company configuration
-      (`Sanctum.CompanyLogin.standing/1`). It is checked last on every
-      path that reads a person's standing: a session's, an API key's
-      creator's and a paired device's person's, at establishment and at
-      every revalidation, and a derived credential's person's. So it is
-      the refusal only when nothing else refuses, and the session stands
-      for the company sign-in alone (`Sanctum.CompanyLogin.held/1`).
 
   ## An account's session
 
@@ -137,7 +128,6 @@ defmodule Sanctum.Caller do
           | :unavailable
           | :identity_stale
           | :identity_gone
-          | :company_login_required
 
   @typedoc """
   A paired device as `Sanctum.DeviceCerts` verified it: the certificate
@@ -218,9 +208,7 @@ defmodule Sanctum.Caller do
       {:ok, metadata} ->
         ctx = Sanctum.ApiKey.context_from_metadata(metadata)
 
-        with :ok <- tenant_ok(ctx),
-             :ok <- company(ctx.user_id),
-             do: {:ok, validated(ctx)}
+        with :ok <- tenant_ok(ctx), do: {:ok, validated(ctx)}
 
       {:error, reason} ->
         {:error, api_key_refusal(reason)}
@@ -306,10 +294,8 @@ defmodule Sanctum.Caller do
   for the connection): its one caller. It trusts that caller, which
   verified the device's proof of possession on its channel and its
   certificate, and read the paired client and its person and athanor
-  from the store. It reads nothing else from the store itself but
-  the person's company sign-in, last, when this CYFR requires one
-  (`Sanctum.CompanyLogin.standing/1`), and checks that the rows it is
-  handed agree with each other: one active device client of that person
+  from the store. It reads nothing from the store itself, and checks
+  that the rows it is handed agree with each other: one active device client of that person
   in that athanor, the client a key of the account, the person and the
   athanor active and theirs, and the certificate, when there is one,
   naming that client, athanor, key and account. Rows that do not agree
@@ -356,9 +342,7 @@ defmodule Sanctum.Caller do
           authenticated: true
         )
 
-      with :ok <- tenant_ok(ctx),
-           :ok <- company(client.user_id),
-           do: {:ok, validated(ctx)}
+      with :ok <- tenant_ok(ctx), do: {:ok, validated(ctx)}
     else
       {:error, :unauthenticated}
     end
@@ -487,13 +471,9 @@ defmodule Sanctum.Caller do
   fresh pauses the credential as `:identity_stale`; an account gone is
   refused as a retired source is, `:not_standing`.
 
-  The person is held, last, to the company sign-in this CYFR may require
-  (`Sanctum.CompanyLogin.standing/1`), as their session or key is, so no
-  credential derived from either outlives a lapse.
-
   `{:ok, %{now: now, source_expires_at: expiry | nil}}`, or a refusal:
   `:not_standing`, `:not_member` (the athanor is not the person's),
-  `:ip_not_allowed`, `:identity_stale`, `:company_login_required`, or
+  `:ip_not_allowed`, `:identity_stale`, or
   `:unavailable` when the store cannot answer — never read as either
   verdict.
   """
@@ -504,7 +484,6 @@ defmodule Sanctum.Caller do
              | :not_member
              | :ip_not_allowed
              | :identity_stale
-             | :company_login_required
              | :unavailable}
   def derived_standing(claims, opts \\ []) do
     binding = %{
@@ -517,9 +496,7 @@ defmodule Sanctum.Caller do
            verify: &derived_policy(&1, claims, Keyword.get(opts, :client_ip))
          ) do
       {:ok, standing} ->
-        with {:ok, standing} <- derived_identity(claims, standing),
-             :ok <- company(claims.user_id),
-             do: {:ok, standing}
+        derived_identity(claims, standing)
 
       {:error, :database_error} ->
         {:error, :unavailable}
@@ -626,8 +603,7 @@ defmodule Sanctum.Caller do
     case Session.load_sliding(token) do
       {:ok, %Context{} = ctx, due} ->
         with {:ok, established} <- establish_context(ctx, opts),
-             :ok <- identity_current(established.user_id, established.session_token_hash),
-             :ok <- company(established.user_id) do
+             :ok <- identity_current(established.user_id, established.session_token_hash) do
           upkeep(token, due, opts)
           {:ok, validated(established)}
         end
@@ -688,7 +664,6 @@ defmodule Sanctum.Caller do
           | :unavailable
           | :identity_stale
           | :identity_gone
-          | :company_login_required
 
   @doc """
   Revalidate a context a holder has kept since it was established: the
@@ -722,9 +697,6 @@ defmodule Sanctum.Caller do
       confirmed fresh (the module doc): the work pauses, and the session
       stands.
     * `:identity_gone` — the person's account is gone at its directory.
-    * `:company_login_required` — the person stands but for the company
-      sign-in this CYFR requires (the module doc), checked last. A key's
-      creator and a device's person are held to it the same way.
 
   A remote person's session is held to their account's fresh head as
   well, as the module doc says: an account gone is refused
@@ -800,12 +772,9 @@ defmodule Sanctum.Caller do
 
   @doc """
   Whether the person `user_id` stands on this CYFR now, read from the
-  store and from no context: their row is `active`, and then the company
-  sign-in this CYFR may require holds (`Sanctum.CompanyLogin.standing/1`),
-  checked last as on every path here. A person with no row, denied, or
-  whose company sign-in lapsed does not stand, and stands again when it
-  holds; a store that cannot answer is `{:error, :unavailable}`, never a
-  standing.
+  store and from no context: their row is `active`. A person with no row
+  or denied does not stand; a store that cannot answer is
+  `{:error, :unavailable}`, never a standing.
 
   It is the one read of a person's standing beside a context of their
   own: `Sanctum.Shares` asks it of a share's recipient and its owner when
@@ -814,7 +783,7 @@ defmodule Sanctum.Caller do
   @spec stands?(String.t()) :: {:ok, boolean()} | {:error, :unavailable}
   def stands?(user_id) when is_binary(user_id) and user_id != "" do
     case Sanctum.Tenancy.Users.get(user_id) do
-      {:ok, %{status: "active"}} -> company_stands(user_id)
+      {:ok, %{status: "active"}} -> {:ok, true}
       {:ok, _not_active} -> {:ok, false}
       {:error, :not_found} -> {:ok, false}
       {:error, _unanswered} -> {:error, :unavailable}
@@ -822,14 +791,6 @@ defmodule Sanctum.Caller do
   end
 
   def stands?(_no_person), do: {:ok, false}
-
-  defp company_stands(user_id) do
-    case company(user_id) do
-      :ok -> {:ok, true}
-      {:error, :company_login_required} -> {:ok, false}
-      {:error, _unanswered} -> {:error, :unavailable}
-    end
-  end
 
   # Which credential the context holds, as far as revalidation goes. A
   # frame credential is a derived credential held to its own rows at every
@@ -888,8 +849,7 @@ defmodule Sanctum.Caller do
          {:ok, rebuilt} <- reload(hash),
          :ok <- same_person(rebuilt, ctx),
          :ok <- identity_current(rebuilt.user_id, hash),
-         {:ok, focused} <- refocus(rebuilt, ctx),
-         :ok <- company(rebuilt.user_id) do
+         {:ok, focused} <- refocus(rebuilt, ctx) do
       {:ok, carried(focused, ctx)}
     end
   end
@@ -1011,8 +971,7 @@ defmodule Sanctum.Caller do
       {:error, :unauthenticated}
     else
       with :ok <- device_identity(ctx.user_id),
-           :ok <- client_stands(ctx),
-           :ok <- company(ctx.user_id) do
+           :ok <- client_stands(ctx) do
         {:ok, validated(ctx)}
       end
     end
@@ -1054,7 +1013,7 @@ defmodule Sanctum.Caller do
            verify: &key_standing(&1, ctx)
          ) do
       :ok ->
-        with :ok <- company(ctx.user_id), do: {:ok, validated(ctx)}
+        {:ok, validated(ctx)}
 
       {:error, reason} when reason in [:unauthenticated, :not_standing] ->
         {:error, reason}
@@ -1063,11 +1022,6 @@ defmodule Sanctum.Caller do
         {:error, :unavailable}
     end
   end
-
-  # The company sign-in this CYFR may require of every person, checked
-  # after every other standing condition on its path, so it is the refusal
-  # only when nothing else refuses. With the mode off it reads nothing.
-  defp company(user_id), do: Sanctum.CompanyLogin.standing(user_id)
 
   defp key_standing(rows, ctx) do
     with :ok <- stored_key(rows.source, ctx),

@@ -9,7 +9,6 @@ apps/arca/test/arca/adapters/tree_delete_cas_test.exs	1	pending
 apps/arca/test/arca/append_parity_test.exs	5	pending
 apps/arca/test/arca/cache_eviction_test.exs	1	pending
 apps/arca/test/arca/canvas_versions_test.exs	1	pending
-apps/arca/test/arca/company_authorizations_test.exs	1	pending
 apps/arca/test/arca/control_plane_test.exs	5	pending
 apps/arca/test/arca/copy_tree_test.exs	4	pending
 apps/arca/test/arca/credential_issuance_test.exs	1	pending

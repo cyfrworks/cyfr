@@ -202,28 +202,21 @@ async function connectPhase() {
   // navigation: each request below is one Prism's page and the frame's
   // own rules let through, so main's decision, read on its event, is what
   // refuses it: the top frame sent elsewhere, a window opened elsewhere,
-  // the frame sent to the CYFR's company sign-in, and the frame sending
-  // the top frame on, asked from inside the frame (the engine's initiator
-  // is the frame).
+  // and the frame sending the top frame on, asked from inside the frame
+  // (the engine's initiator is the frame).
   const opened = await js(w.webContents, `window.open(${literal(DIRECTORY + "/")}) === null`)
   const windowAnswer = (await waitFor(() => decisions.find((d) => d.window === w.webContents.id && d.name === "window-open" &&
     d.url === DIRECTORY + "/"), "main's decision on the window asked for elsewhere")).action
   const away = DIRECTORY + "/account/devices"
   await js(w.webContents, `location.href = ${literal(away)}; "asked"`)
   const awayPrevented = await decided(w.webContents, away, false, "main's decision on the top frame sent elsewhere")
-  const xBefore = (await seen("x.test")).length
   const frame = (name) => w.webContents.mainFrame.frames.find((f) => f.name === name)
-  const companyAsked = await frame("proof-frame").executeJavaScript(`location.href = ${literal(HOME + "/company-login")}; "asked"`, true)
-  const companyPrevented = await decided(w.webContents, HOME + "/company-login", true, "main's decision on the frame sent to the company sign-in")
   const fromFrame = HOME + "/?from=frame"
   const topAsked = await frame("proof-frame").executeJavaScript(`top.location.href = ${literal(fromFrame)}; "asked"`, true)
   const topPrevented = await decided(w.webContents, fromFrame, false, "main's decision on the frame sending the top frame on")
-  const company = (await reachedSince("x.test", xBefore)).filter((r) => r.path === "/company-login").length
-  const nav = {opened, windowAnswer, awayPrevented, companyAsked, companyPrevented, company,
-    topAsked, topPrevented, showing: bare(w.webContents.getURL())}
-  row("navigation", opened && windowAnswer === "deny" && awayPrevented && companyAsked === "asked" && companyPrevented && company === 0 &&
-    topAsked === "asked" && topPrevented && atHome(w.webContents.getURL()),
-    "main refuses the top frame elsewhere, a window elsewhere, a frame at the company sign-in and a frame moving the top frame", nav)
+  const nav = {opened, windowAnswer, awayPrevented, topAsked, topPrevented, showing: bare(w.webContents.getURL())}
+  row("navigation", opened && windowAnswer === "deny" && awayPrevented && topAsked === "asked" && topPrevented && atHome(w.webContents.getURL()),
+    "main refuses the top frame elsewhere, a window elsewhere and a frame moving the top frame", nav)
 
   // confirm: an API key asked for in Prism waits on a confirmation on this
   // device, in a window of the device's own, with the passphrase again.

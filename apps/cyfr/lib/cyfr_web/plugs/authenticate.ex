@@ -21,10 +21,7 @@ defmodule CyfrWeb.Plugs.Authenticate do
   does a session of a remote person whose identity could not be confirmed
   fresh
   (`:identity_stale`): it answers 503 with that refusal's class and
-  sentence, and the session stands. A person who stands but for the
-  company sign-in this CYFR requires (`:company_login_required`), by a
-  session or by an API key they made, is answered 403 with that
-  refusal's sentence: they sign in with their company in a browser.
+  sentence, and the session stands.
 
   Every context this plug assigns carries the origin `programmatic`
   (`Prima.Origin`): the HTTP API and MCP are programmatic surfaces,
@@ -188,9 +185,6 @@ defmodule CyfrWeb.Plugs.Authenticate do
         # good, in its own sentence, never an expired session.
         {:error, :identity_gone}
 
-      {:error, :company_login_required} ->
-        {:error, :company_login_required}
-
       {:error, :unauthenticated} ->
         # Not a session this server issued, or one no longer standing.
         # Serving the public surface here would be a fail-open: the caller
@@ -207,7 +201,7 @@ defmodule CyfrWeb.Plugs.Authenticate do
           {:ok, fresh}
 
         {:error, reason}
-        when reason in [:unavailable, :identity_stale, :identity_gone, :company_login_required] ->
+        when reason in [:unavailable, :identity_stale, :identity_gone] ->
           {:error, reason}
 
         # The memo named an athanor the session no longer reaches: this
@@ -242,7 +236,6 @@ defmodule CyfrWeb.Plugs.Authenticate do
       {:error, :revoked} -> {:error, :api_key_revoked}
       {:error, :ip_not_allowed} -> {:error, :ip_not_allowed}
       {:error, :unavailable} -> {:error, :auth_provider_error}
-      {:error, :company_login_required} -> {:error, :company_login_required}
     end
   end
 
@@ -263,9 +256,6 @@ defmodule CyfrWeb.Plugs.Authenticate do
   # retryable, never a 401 that reads as a dead credential.
   defp error_response(conn, :identity_stale, errors),
     do: errors.halt(conn, 503, :identity_stale, nil)
-
-  defp error_response(conn, :company_login_required, errors),
-    do: errors.halt(conn, 403, :company_login_required, nil)
 
   # An account gone: the refusal's class (`forbidden`) and sentence.
   defp error_response(conn, :identity_gone, errors),

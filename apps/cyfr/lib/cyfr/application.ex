@@ -132,11 +132,6 @@ defmodule Cyfr.Application do
     # callers it admits: no wildcard CORS allowlist.
     enforce_cors_not_wildcard()
 
-    # OIDC issuer reserved-host check — only when the OIDC issuer is
-    # configured. A misconfigured generic-OIDC issuer would otherwise only
-    # surface as a 500 at the user's login callback.
-    validate_oidc_issuer_config!()
-
     # A webhook's body cap above a host call's body would read more than
     # an unauthenticated caller may send; refused here, not clamped.
     validate_webhook_max_body_bytes!()
@@ -1172,29 +1167,6 @@ defmodule Cyfr.Application do
       {:error, message} -> raise "[Cyfr] FATAL: #{message}"
     end
   end
-
-  # The company sign-in's issuer, when one is configured, is named: a
-  # blank one refuses the boot rather than every company sign-in.
-  defp validate_oidc_issuer_config! do
-    case Sanctum.Auth.OIDC.issuer() do
-      nil ->
-        :ok
-
-      issuer ->
-        case check_oidc_issuer(issuer) do
-          :ok -> :ok
-          {:error, message} -> raise "[Cyfr] FATAL: #{message}"
-        end
-    end
-  end
-
-  defp check_oidc_issuer(issuer) when is_binary(issuer) and issuer != "", do: :ok
-
-  defp check_oidc_issuer(_),
-    do:
-      {:error,
-       ":sanctum, :oidc_issuer is blank. Set CYFR_OIDC_ISSUER to your identity provider's " <>
-         "issuer URL, or leave all three CYFR_OIDC_* settings unset."}
 
   # Resolve and pin :sanctum, :crypto_keyring — the key the identity
   # domain seals rows with, resolved here from the deployment's own

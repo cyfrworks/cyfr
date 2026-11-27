@@ -323,8 +323,7 @@ same worktree refuses, naming the run that holds it.
   and arm64 (`tests/desktop-proof/home.sh`, its README): this tree's DEB
   installed in a client container with no Docker, and each tracked
   `tests/desktop-proof/*/run.sh` against a CYFR of the shape its folder
-  names (its own or another account service, or one requiring a company
-  sign-in) from the run's app image of the same architecture. Run here, it needs
+  names (its own or another account service) from the run's app image of the same architecture. Run here, it needs
   127.0.0.1:7340 free on this machine for its whole run, so not beside
   another such proof or the native smoke, which binds that port on purpose. Its
   last step, the box's screen with two CYFRs (`tests/desktop-proof/box/box.sh`),

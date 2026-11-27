@@ -31,11 +31,10 @@
 //
 // A lock is the device's, never the computer's: the app does not lock
 // when the computer locks or sleeps, when a page is lost (it is shown
-// again) or as it quits. There are three:
+// again) or as it quits. There are two:
 //   cyfr's locked, unasked   the device's session ended (its Lock, or its
 //                            connection lost): the content's storage is
 //                            forgotten with it
-//   the company page         the app offers no company sign-in
 //   sent to sign in          on the passkey road, the CYFR sent the
 //                            content to its sign-in page: nobody is signed
 //                            in, so the chooser shows both ways on
@@ -106,7 +105,7 @@
 // other pick than the one outstanding is dropped.
 //
 // `notices` is what main has to tell and the person has not yet gone on
-// from: every lock adds to it and carries it, and the chooser shows it and
+// from: every lock carries it, and the chooser shows it and
 // stays. Only a way on taken from the chooser, its top frame leaving it,
 // clears it.
 //
@@ -372,10 +371,10 @@ function sentToSignIn(s, e) {
 // a CYFR is proposed holds on to that proposal, its route included: cyfr
 // may have committed it as the lock began, its opened crossing the lock,
 // and its locked then names it, which main keeps to (settle) as cyfr does.
-function lock(s, why, notice, heard = null) {
+function lock(s, why, heard = null) {
   const [t, answer] = unpicked(s)
   const before = s.name === "proposed" ? {home: s.home, account: s.account, proxy: s.proxy ?? "", accountRoad: s.accountRoad} : kept(s)
-  const next = {...t, name: "locking", before, notices: adding(s.notices, notice), barrier: heard !== null,
+  const next = {...t, name: "locking", before, barrier: heard !== null,
     keep: heard, forgotten: heard === null, returning: null}
   return {state: next, do: [{say: `locked: ${why}`}, ...answer, {close: true}, ...(s.screen ? [{unupdate: true}] : []),
     heard ? {forget: true} : {send: {type: "lock"}}]}
@@ -495,7 +494,7 @@ function advance(s, e) {
       // The lock a leave makes says it too: the departure waits for left.
       if (s.name === "locking" && s.departing) return same(s)
       if (s.name === "locking") return settle({...s, barrier: true, keep: m})
-      return lock(s, "the device locked", "", m)
+      return lock(s, "the device locked", m)
     }
     case "left":
       if (s.name !== "locking" || !s.departing || s.departed || e.message.id !== s.departing) return same(s)
@@ -540,7 +539,7 @@ function advance(s, e) {
     case "lost":
       if (!s.screen) return same(s, e.window === "child" ? [] : [{reload: true}])
       return ["starting", "locking"].includes(s.name) ? same(s)
-        : lock(s, e.window === "child" ? "a confirmation's page was lost" : "the page was lost", "")
+        : lock(s, e.window === "child" ? "a confirmation's page was lost" : "the page was lost")
     case "quit":
       return ending(s, {quit: true})
     case "second-instance":
@@ -576,7 +575,7 @@ function advance(s, e) {
         [{say: `unrouted: the route of ${e.home} could not be set`}, {back: adding(s.notices, "unrouted"), retry: e.home}])
     case "load-failed":
       if (s.screen && e.code !== ABORTED && parse(e.url)?.origin === LOOPBACK && !["starting", "locking"].includes(s.name)) {
-        return lock(s, `the device's own page did not load (${e.code})`, "")
+        return lock(s, `the device's own page did not load (${e.code})`)
       }
       if (e.code === ABORTED || s.name !== "open" || parse(e.url)?.origin !== s.home) return withdrawn(s)
       if (e.code === UNROUTED) return withdrawn(s, [{say: "unrouted: the CYFR's route could not be set"}, {back: adding(s.notices, "unrouted")}])
@@ -585,8 +584,8 @@ function advance(s, e) {
       return e.url === s.returning?.url ? withdrawn(s) : same(s)
 
     // A load in a window of the content's own (the content window or a
-    // confirmation window): a hop, the company page or being sent to
-    // sign in acts, from the content window alone. Nothing loads before
+    // confirmation window): a hop or being sent to sign in acts, from the
+    // content window alone. Nothing loads before
     // ready or while locking.
     case "navigate": {
       if (["starting", "locking"].includes(s.name)) return {state: s, allow: false, do: []}
@@ -597,11 +596,8 @@ function advance(s, e) {
       if (e.window === "rail" || e.window === "update") return {state: s, allow: false, do: []}
       const where = contentNavigation(e, kept(s))
       if (where === "allow") {
-        if (sentToSignIn(s, e)) return {...lock(s, "the CYFR asks for a sign-in", ""), allow: false}
+        if (sentToSignIn(s, e)) return {...lock(s, "the CYFR asks for a sign-in"), allow: false}
         return {state: s, allow: true, do: []}
-      }
-      if (where === "company" && e.window === "content") {
-        return {...lock(s, "the CYFR asks for a company sign-in", "company"), allow: false}
       }
       return {state: s, allow: false, do: []}
     }

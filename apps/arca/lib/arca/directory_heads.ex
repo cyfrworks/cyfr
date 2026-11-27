@@ -22,9 +22,9 @@ defmodule Arca.DirectoryHeads do
   An advance is handed the walk of the entries after the cached head, in
   log order, as their retiring steps (`t:step/0`): `{:remove_key, kid}`
   retires the bindings to that key, and `:recover` every binding of the
-  account and every session of its people, bound to a key or not (a
-  company login's included; API keys and webhooks are no sessions and
-  stand); an `add_key` or `add_recovery` retires nothing and is not a
+  account and every session of its people, bound to a key or not (API
+  keys and webhooks are no sessions and stand); an `add_key` or
+  `add_recovery` retires nothing and is not a
   step. A binding is a row an account's key signed for, naming that key's
   `kid` and the head it was verified under: a session
   (`Arca.SessionStorage`), a device certificate

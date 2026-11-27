@@ -8,10 +8,7 @@ defmodule CyfrWeb.Router do
 
   It declares no route and no pipeline of its own. Each adapter's route
   provider hands its pipelines and routes in by macro, so the table stays
-  one table and each adapter's routes stay in its own file. Both
-  providers hold `/auth` paths, so their order here is part of matching:
-  Emissary's static `/auth` paths expand before Prism's `/auth/:provider`
-  wildcards.
+  one table and each adapter's routes stay in its own file.
   """
 
   use Boundary,
@@ -36,15 +33,14 @@ defmodule CyfrWeb.Router do
 
   use CyfrWeb, :router
 
-  # The shared pipelines both providers declare expand from these macros.
+  # The browser pipelines Prism declares expand from `CyfrWeb.Pipelines.browser/2`.
   require CyfrWeb.Pipelines
   require Emissary.Router
   require Prism.Router
 
   # Emissary: MCP, the HTTP API's sign-out and session read, the OAuth
   # grant callback, tincture serving, health, the execution-events stream
-  # and webhooks. Before the console, so its static `/auth` paths precede
-  # the browser's `/auth/:provider` wildcards.
+  # and webhooks.
   Emissary.Router.routes()
 
   # The console: browser sign-in and sign-out, the claim and legal pages,

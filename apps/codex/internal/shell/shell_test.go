@@ -1352,13 +1352,11 @@ func TestPasskey_ALostSendIsSettledOnlyByAnAnswerThatShowsTheLog(t *testing.T) {
 	}
 }
 
-// A CYFR that requires a company sign-in closes the channel 1013 with the
-// class forbidden, one whose bound is spent with when to try again; any
-// other try-again close is a CYFR not reachable now. The page says which,
-// in the app's own words for the first two.
-func TestChannel_ACompanySignInIsToldApartFromAnUnreachableCYFR(t *testing.T) {
+// A CYFR whose bound is spent closes the channel 1013 with when to try
+// again; any other try-again close is a CYFR not reachable now. The page
+// says which.
+func TestChannel_ASpentBoundIsToldApartFromAnUnreachableCYFR(t *testing.T) {
 	for _, tc := range []struct{ reason, want string }{
-		{"forbidden", CompanySignIn},
 		{"unavailable", "CYFR could not be reached"},
 		{"rate_limited; retry_after_s=37", "CYFR is refusing attempts for the moment. Try again in 37 seconds."},
 		{"rate_limited; retry_after_s=1", "CYFR is refusing attempts for the moment. Try again in 1 second."},

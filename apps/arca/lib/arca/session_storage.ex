@@ -572,8 +572,8 @@ defmodule Arca.SessionStorage do
 
   @doc false
   # End every session of the people `user_ids` bound to the key `kid`, or
-  # with `:all` every session of theirs, bound to a key or not (a company
-  # login's included): a refresh read the key's removal, and a session
+  # with `:all` every session of theirs, bound to a key or not: a refresh
+  # read the key's removal, and a session
   # that key signed for must not outlive it; or a recovery or a gone
   # account, which replaces every way the person stood. Answers the token
   # hashes it ended, for the caller to invalidate after commit. Run in the

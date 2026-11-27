@@ -96,7 +96,6 @@ defmodule Cyfr.Admission do
     "Emissary.Web.DirectoryController",
     "Emissary.Web.HandleController",
     "Emissary.Web.OAuthCallbackController",
-    "PrismWeb.AuthController",
     "PrismWeb.PasskeyController",
     "PrismWeb.DeviceUnlockController",
     "CyfrWeb.Plugs.AuthRateLimit",

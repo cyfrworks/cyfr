@@ -667,46 +667,6 @@ CYFR_PROMETHEUS_METRICS=true
 Without a token the endpoint is unauthenticated when enabled: allowlist the
 path at your reverse proxy.
 
-### Requiring a company sign-in
-
-A CYFR can require every person there to sign in with their company's
-account, as a condition of being there. The company's issuer is WorkOS:
-
-```bash
-CYFR_COMPANY_LOGIN=renew          # off (the default), join or renew
-CYFR_COMPANY_LOGIN_DAYS=30        # with renew alone
-CYFR_WORKOS_CLIENT_ID=client_...
-CYFR_WORKOS_API_KEY=sk_...
-CYFR_WORKOS_ORGANIZATION=org_...
-```
-
-or, where WorkOS is not configured, your OpenID Connect issuer (Okta,
-Auth0, Keycloak, Azure AD, …):
-
-```bash
-CYFR_OIDC_ISSUER=https://auth.example.com
-CYFR_OIDC_CLIENT_ID=...
-CYFR_OIDC_CLIENT_SECRET=...
-```
-
-`join` asks for the company sign-in once, and `renew` asks again every
-`CYFR_COMPANY_LOGIN_DAYS` days. An OIDC issuer is set with all three of
-its settings or none, and beside WorkOS it goes unused. Register
-`<CYFR address>/auth/company/callback` as a redirect URI at the company's
-issuer. The boot refuses `join` or `renew` with no issuer, an OIDC issuer
-set in part, and WorkOS set in part or set while the mode is `off`.
-
-The company sign-in never signs anyone in and never makes a person: a
-person still signs in with their account. Until their company sign-in
-stands, every page sends them to the company page (`/company-login`), and
-the API keys they made and the devices they connected are refused.
-[integration-guide.md](integration-guide.md#when-a-cyfr-requires-a-company-sign-in)
-shows what an API client sees. CYFR binds a company account to one person
-by the subject the issuer names, never by email. Moving to another OIDC issuer,
-OIDC client ID or WorkOS organization, or between OIDC and WorkOS, makes
-everyone sign in with their company again. Setting the mode back to `off`
-requires nothing more and keeps the bindings.
-
 ### Signing in, and what a first sign-in needs
 
 A person signs in at a CYFR with their account, the same one at every
@@ -1284,7 +1244,6 @@ Each part of CYFR has one name, and the name is its directory, its binary or ima
 | device key | the key a device makes and never exports, under its chip's PIN or a passphrase, one per machine for every CYFR, listed in its account's log | — | — | — | — | — | — | — |
 | device certificate | a CYFR's own short-lived statement, signed with its installation key and read by no other CYFR, that a device key of an account is admitted there, naming the key, its client, the account, the head it was issued under and the athanor | — | — | — | — | — | — | — |
 | paired client | a device or a passkey of an account as one CYFR knows it, by its key, from its first sign-in there; revoked there on its own, and ended at every CYFR by removing its key from the account | — | — | — | — | — | — | — |
-| sign-in method | a company's sign-in, which a CYFR may require of every person there (`CYFR_COMPANY_LOGIN`) as a condition of being there; it never signs anyone in, since a person signs in with their account | — | — | — | — | — | — | — |
 | fresh confirmation | a key of the person's account signing one pending confirmation, a passkey at the account pages or a device after its unlock; each sensitive change needs one | — | — | — | — | — | — | — |
 | pending confirmation | one sensitive change waiting for its fresh confirmation, with the preview CYFR stores and shows on every device of the person's | — | — | — | — | — | — | — |
 | origin | how a run started, `interactive`, `programmatic`, `schedule` or `webhook`, set by the path that admitted it, for the record; a run stands on its person's grant whatever started it | — | — | — | — | — | — | — |

@@ -507,40 +507,6 @@ defmodule Emissary.Web.DeviceChannelTest do
   # 4408: the certificate to renew
   # ==========================================================================
 
-  describe "a CYFR that requires a company sign-in" do
-    setup [:seated]
-
-    # The CYFR app tells a company refusal from a CYFR it cannot reach by
-    # this close alone: 1013 with the class forbidden, which no other
-    # refusal closes with (Go's shell.ErrCompanySignIn).
-    test "a person who stands but for it is closed 1013 forbidden at the connect, the pairing standing",
-         %{session_ctx: session_ctx} do
-      device = pair!(session_ctx)
-
-      Prima.Test.Env.put_app_env(:sanctum, :company_login, %{
-        mode: :join,
-        days: nil,
-        issuer: :oidc
-      })
-
-      {state, challenge} = connected(device)
-
-      assert_refused(
-        send_frame(state, proof_message(challenge, device)),
-        1013,
-        "forbidden"
-      )
-
-      assert {:ok, clients} =
-               Arca.PairedClients.list(Prima.Actor.system(),
-                 user_id: session_ctx.user_id,
-                 standing: :all
-               )
-
-      assert [%{standing: "active"}] = Enum.filter(clients, &(&1.id == device.client_id))
-    end
-  end
-
   describe "4408" do
     setup [:seated]
 

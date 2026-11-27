@@ -220,13 +220,13 @@ defmodule CyfrWeb.IngressTest do
     end
 
     test "on the proxy listener names itself by the home's https address", %{ports: ports} do
-      assert {_, body} = answer(ports.proxy, "/auth/oidcc/callback?code=1", [])
-      assert Jason.decode!(body)["url"] == "https://cyfr.tail.ts.net/auth/oidcc/callback?code=1"
+      assert {_, body} = answer(ports.proxy, "/auth/oauth/callback?code=1", [])
+      assert Jason.decode!(body)["url"] == "https://cyfr.tail.ts.net/auth/oauth/callback?code=1"
 
       # The loopback listener's request is the plain HTTP its client
       # spoke, at the address its `Host` names.
-      assert {_, body} = answer(ports.loopback, "/auth/oidcc/callback", [])
-      assert Jason.decode!(body)["url"] == "http://cyfr.tail.ts.net/auth/oidcc/callback"
+      assert {_, body} = answer(ports.loopback, "/auth/oauth/callback", [])
+      assert Jason.decode!(body)["url"] == "http://cyfr.tail.ts.net/auth/oauth/callback"
     end
   end
 

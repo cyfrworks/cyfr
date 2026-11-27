@@ -45,10 +45,7 @@ defmodule CyfrWeb.ContextGuard do
   could not be confirmed fresh (`:identity_stale`) is paused the same
   way: the action halts with the refusal's own sentence and the person
   stays signed in on the page. A mount, which has no page to stay on,
-  shows the sentence where it lands, and the session stands. A person
-  who stands but for the company sign-in this CYFR requires
-  (`:company_login_required`) is sent to the company page, which is the
-  one page that session opens; the session stands.
+  shows the sentence where it lands, and the session stands.
 
   A context this module establishes — a mounted console's, and a
   per-request read's (`authenticate/2`) — is a person acting on an
@@ -564,7 +561,6 @@ defmodule CyfrWeb.ContextGuard do
   defp subscribe(%Context{}), do: Cyfr.Bus.subscribe_standing()
 
   defp refusal_path(:not_member), do: "/"
-  defp refusal_path(:company_login_required), do: "/company-login"
   defp refusal_path(_session_refused), do: "/login"
 
   # A mount that cannot establish: back through the door, told why when
@@ -572,7 +568,6 @@ defmodule CyfrWeb.ContextGuard do
   # the focus lost.
   defp mount_refusal(:unavailable), do: "/login?error=unavailable"
   defp mount_refusal(:identity_stale), do: "/login"
-  defp mount_refusal(:company_login_required), do: "/company-login"
   defp mount_refusal(:no_athanor), do: "/login?error=no_athanor"
   defp mount_refusal(reason) when reason in [:not_member, :archived, :not_found], do: "/"
   defp mount_refusal(_refused), do: "/login"

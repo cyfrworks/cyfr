@@ -13,8 +13,7 @@ defmodule Sanctum.SharesTest do
   unchanged write announces nothing.
   """
 
-  # The company sign-in's settings are the application's environment, and
-  # the cases attach to the shares' own announcements.
+  # The cases attach to the shares' own announcements.
   use ExUnit.Case, async: false
 
   import Ecto.Query, only: [from: 2]
@@ -31,8 +30,6 @@ defmodule Sanctum.SharesTest do
   @inside "https://api.example.com/v1/quotes"
   @take {:field, "MARKET_KEY", "KEY"}
   @source "catalyst:local.stock-watcher"
-  @issuer "https://idp.example.com"
-  @oidc ~s(["oidc","https://idp.example.com","cid"])
   @everyone %{audience: "everyone", thread_id: nil}
 
   setup tags do
@@ -252,39 +249,6 @@ defmodule Sanctum.SharesTest do
   defp confirmation!(ctx, id) do
     {:ok, row} = Arca.PendingConfirmations.get(Context.actor(ctx), Prima.Confirmation.ref(id))
     row
-  end
-
-  # The company sign-in this CYFR requires under `mode`, through the
-  # issuer and client a binding names; every setting's restore is
-  # registered before it changes.
-  defp require_company_login!(mode, days) do
-    Prima.Test.Env.put_app_env(:sanctum, :oidc_issuer, @issuer)
-
-    Prima.Test.Env.put_app_env(:sanctum, :oidc_client, %{client_id: "cid", client_secret: "csec"})
-
-    Prima.Test.Env.put_app_env(:sanctum, :company_login, %{mode: mode, days: days, issuer: :oidc})
-  end
-
-  # The person's company sign-in given now: a first one, or a renewal.
-  defp company_sign_in!(ctx) do
-    {:ok, _bound_or_refreshed} =
-      Arca.Test.CompanyLogin.bind(ctx.user_id, @oidc, "sub-" <> ctx.user_id)
-
-    :ok
-  end
-
-  # The person's company sign-in given `seconds` ago.
-  defp lapse!(ctx, seconds) do
-    at = DateTime.add(DateTime.utc_now(), -seconds, :second)
-    user_id = ctx.user_id
-
-    {1, _} =
-      Arca.Repo.update_all(
-        from(c in Arca.Schemas.CompanyAuthorization, where: c.user_id == ^user_id),
-        set: [authorized_at: at]
-      )
-
-    :ok
   end
 
   # ---------------------------------------------------------------------------
@@ -537,46 +501,6 @@ defmodule Sanctum.SharesTest do
   # ---------------------------------------------------------------------------
 
   describe "the owner's standing" do
-    test "while the owner's company sign-in has lapsed their share is refused and offered to " <>
-           "no one, with nothing written, and it resumes when they sign in again",
-         %{terry: terry, alice: alice} do
-      entry = key!(terry)
-      share = share!(terry, entry)
-      id = share.id
-      digest = digest!(entry)
-
-      require_company_login!(:renew, 30)
-      :ok = company_sign_in!(terry)
-      :ok = company_sign_in!(alice)
-
-      assert {:ok, @secret} = resolve(alice, share, digest)
-      assert {:ok, [%{id: ^id}]} = Shares.offered(alice)
-      before = stored_share(terry, share)
-      :ok = forget_use!(entry)
-
-      :ok = lapse!(terry, 31 * 86_400)
-
-      assert {:error, :owner_not_standing} = Shares.binding(alice, share.id)
-      assert {:error, :owner_not_standing} = resolve(alice, share, digest)
-      assert {:ok, []} = Shares.offered(alice)
-      assert counts(terry, share) == %{people: %{alice.user_id => 1}, total: 1}
-      assert last_used(terry, entry) == nil
-      assert stored_share(terry, share) == before
-      refute_received {:share, _, _}
-
-      :ok = company_sign_in!(terry)
-
-      assert {:ok, %{id: ^id, owner: "Terry"}} = Shares.binding(alice, share.id)
-      assert {:ok, @secret} = resolve(alice, share, digest)
-      assert counts(terry, share) == %{people: %{alice.user_id => 2}, total: 2}
-
-      # The recipient's own lapse refuses them, before the share is read.
-      :ok = lapse!(alice, 31 * 86_400)
-      assert {:error, :denied} = resolve(alice, share, digest)
-      assert {:error, :denied} = Shares.binding(alice, share.id)
-      assert counts(terry, share) == %{people: %{alice.user_id => 2}, total: 2}
-    end
-
     test "a denied owner's shares are revoked with them, so none is offered any more",
          %{terry: terry, alice: alice} do
       entry = key!(terry)

@@ -351,8 +351,6 @@
           "CyfrWeb.Plugs.BrowserCSP"
         ],
         "device_unlock_throttle" => ["CyfrWeb.Plugs.AuthRateLimit"],
-        "oauth_callback_throttle" => ["CyfrWeb.Plugs.AuthRateLimit"],
-        "oauth_start_throttle" => ["CyfrWeb.Plugs.AuthRateLimit"],
         "passkey_complete_throttle" => ["CyfrWeb.Plugs.AuthRateLimit"],
         "sign_in_identity" => ["CyfrWeb.Plugs.CallIdentity"]
       },
@@ -583,24 +581,6 @@
           pipe_through: ["browser"]
         },
         %{
-          verb: "POST",
-          path: "/auth/company",
-          plug: "PrismWeb.AuthController",
-          plug_opts: ":company_start",
-          auth: "browser_company_login",
-          live_view: nil,
-          pipe_through: ["sign_in_identity", "auth_browser", "oauth_start_throttle"]
-        },
-        %{
-          verb: "GET",
-          path: "/auth/company/callback",
-          plug: "PrismWeb.AuthController",
-          plug_opts: ":company_callback",
-          auth: "browser_oauth_callback",
-          live_view: nil,
-          pipe_through: ["sign_in_identity", "auth_browser", "oauth_callback_throttle"]
-        },
-        %{
           verb: "GET",
           path: "/auth/device/complete",
           plug: "PrismWeb.DeviceUnlockController",
@@ -643,15 +623,6 @@
           plug_opts: ":index",
           auth: "browser_authenticated",
           live_view: "PrismWeb.ChatRedirectLive",
-          pipe_through: ["browser"]
-        },
-        %{
-          verb: "GET",
-          path: "/company-login",
-          plug: "Phoenix.LiveView.Plug",
-          plug_opts: ":index",
-          auth: "browser_company_login",
-          live_view: "PrismWeb.CompanyLoginLive",
           pipe_through: ["browser"]
         },
         %{

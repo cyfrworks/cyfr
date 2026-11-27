@@ -551,17 +551,17 @@ test("a lock closes the content and the ceremony before anything is awaited, and
   const request = {...signIn["requests"]["another_sign_in"]["request"], return: HOME + "/login", expires_at: Date.now() + 60_000}
   const hop = `${ACCOUNT}/account/sign#${fragment(request)}`
   const page = content()
-  page.webContents.url = HOME + "/login"
+  page.webContents.url = HOME + "/threads"
   navigate(page, hop)
   const account = live().find((w) => w.webContents.url === hop)
   assert.ok(account, "the hop opened the account window")
-  assert.ok(navigate(page, HOME + "/company-login").prevented)
+  assert.ok(redirected(page, HOME + "/login?error=signed_out").prevented)
   assert.ok(page.destroyed && account.destroyed, "both closed at once")
   assert.deepEqual(child.heard.at(-1), {version: VERSION, type: "lock"}, "and cyfr told, before anything is awaited")
   await settled()
   assert.equal(content(), undefined, "no chooser before cyfr's locked")
   await saysLocked()
-  assert.match(content().webContents.url, /^http:\/\/127\.0\.0\.1:7340\/bootstrap\/.*notice=company$/)
+  assert.match(content().webContents.url, /^http:\/\/127\.0\.0\.1:7340\/bootstrap\//)
   signedNobodyOut()
 })
 
@@ -1724,8 +1724,7 @@ test("opened and cyfr's locked read in one go leave cyfr running and the chooser
   await started(false)
   child.proposes(HOME)
   await settled()
-  assert.ok(navigate(content(), HOME + "/company-login").prevented, "nothing of it before it is open")
-  assert.ok(!child.heard.some((m) => m.type === "lock"), "and so no lock of it")
+  assert.ok(navigate(content(), HOME + "/threads").prevented, "nothing of it before it is open")
   child.say({type: "opened", home: HOME, attempt: child.attempts})
   await saysLocked()
   assert.equal(child.killed, false)
@@ -1734,6 +1733,18 @@ test("opened and cyfr's locked read in one go leave cyfr running and the chooser
   await content().webContents.loadURL("http://127.0.0.1:7340/")
   const next = navigate(content(), HOME + "/threads")
   assert.equal(next.prevented, false, "main keeps to the CYFR cyfr committed")
+})
+
+// On the passkey road being sent to sign in is main's own lock, once its
+// CYFR is open; before, nothing of that CYFR loads, and so nothing locks.
+test("before its CYFR is open, being sent to sign in is refused and tells cyfr no lock", async () => {
+  await started(true)
+  child.proposes(HOME)
+  await settled()
+  const page = content()
+  page.webContents.url = HOME + "/threads"
+  assert.ok(redirected(page, HOME + "/login?error=signed_out").prevented, "nothing of it before it is open")
+  assert.ok(!child.heard.some((m) => m.type === "lock"), "and so no lock of it")
 })
 
 test("a frame asking the top frame to go to the sign-in route is refused and opens nothing", async () => {
@@ -1977,13 +1988,13 @@ test("a route set after its CYFR was left loads nothing into the view the depart
   child.say({type: "opened", home: HOME, attempt: second})
   await turns()
   const page = content()
-  page.webContents.url = HOME + "/login"
+  page.webContents.url = HOME + "/threads"
   const request = {...signIn["requests"]["another_sign_in"]["request"], return: HOME + "/login", expires_at: Date.now() + 60_000}
   assert.ok(navigate(page, `${ACCOUNT}/account/sign#${fragment(request)}`).prevented)
   await turns()
   const account = live().find((w) => w.webContents.session.partition === accountStore(HOME, ACCOUNT))
   assert.ok(account && accountRouted)
-  assert.ok(navigate(page, HOME + "/company-login").prevented, "a lock")
+  assert.ok(redirected(page, HOME + "/login?error=signed_out").prevented, "a lock")
   assert.ok(account.destroyed)
   let lateAccount = 0
   account.webContents.loadURL = () => { lateAccount++; return Promise.resolve() }
@@ -2287,11 +2298,12 @@ test("a sign-in's answer whose load call rejects reloads nothing as it lands, or
 
 test("a lock over a chooser that is keeping a notice leaves the notice there, until a way on is taken from it", async () => {
   await signedIn()
-  navigate(content(), HOME + "/company-login")
+  world.clearing = () => Promise.reject(new Error("not cleared"))
   await saysLocked()
-  assert.match(content().webContents.url, /notice=company$/)
+  assert.match(content().webContents.url, /notice=unforgotten$/)
+  world.clearing = () => Promise.resolve()
   await saysLocked() // the device's own
-  assert.match(content().webContents.url, /notice=company$/, "kept through the lock over it")
+  assert.match(content().webContents.url, /notice=unforgotten$/, "kept through the lock over it")
   const chooser = content()
   assert.ok(!navigate(chooser, "http://127.0.0.1:7340/").prevented)
   chooser.webContents.loadURL("http://127.0.0.1:7340/")
