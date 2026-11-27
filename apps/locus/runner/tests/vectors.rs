@@ -64,8 +64,8 @@ fn n(value: &Value) -> u64 {
         .unwrap_or_else(|| panic!("not a count: {value}"))
 }
 
-fn key(hex: &Value) -> Zeroizing<[u8; 32]> {
-    Zeroizing::new(wire::hex_key(s(hex)).expect("a 64-digit key"))
+fn key(hex: &Value) -> cyfr_runner::auth::Key {
+    wire::hex_key(s(hex)).expect("a 64-digit key")
 }
 
 /// The bytes of a vector's hex text.
@@ -160,8 +160,57 @@ fn message_json(message: &Message) -> Value {
                 open.iter().map(|a| Value::from(a.as_str())).collect(),
             );
         }
+        Message::Event(event) => {
+            put("type", "event".into());
+            put("name", event.name.into());
+            let measurements: Map<String, Value> = event
+                .measurements
+                .iter()
+                .map(|(name, value)| ((*name).to_owned(), Value::from(*value)))
+                .collect();
+            put("measurements", Value::Object(measurements));
+            let metadata: Map<String, Value> = event
+                .metadata
+                .iter()
+                .map(|(name, value)| {
+                    let value = match value {
+                        control::Meta::Text(text) => Value::from(text.as_str()),
+                        control::Meta::Integer(integer) => Value::from(*integer),
+                        control::Meta::Null => Value::Null,
+                    };
+                    ((*name).to_owned(), value)
+                })
+                .collect();
+            put("metadata", Value::Object(metadata));
+        }
     }
     Value::Object(object)
+}
+
+/// An event as the vectors write one, its members in the roster's order.
+fn event_from(json: &Value) -> control::Event {
+    let (name, measured, described) = control::EVENTS
+        .iter()
+        .find(|(name, _, _)| *name == s(&json["name"]))
+        .unwrap_or_else(|| panic!("no event {}", json["name"]));
+    control::Event {
+        name,
+        measurements: measured
+            .iter()
+            .map(|field| (*field, n(&json["measurements"][field])))
+            .collect(),
+        metadata: described
+            .iter()
+            .map(|(field, _)| {
+                let value = match &json["metadata"][field] {
+                    Value::String(text) => control::Meta::Text(text.clone()),
+                    Value::Null => control::Meta::Null,
+                    number => control::Meta::Integer(n(number)),
+                };
+                (*field, value)
+            })
+            .collect(),
+    }
 }
 
 fn message_from(json: &Value) -> Message {
@@ -195,6 +244,7 @@ fn message_from(json: &Value) -> Message {
                 .map(|a| s(a).to_owned())
                 .collect(),
         },
+        "event" => Message::Event(event_from(json)),
         other => panic!("no message type {other}"),
     }
 }
@@ -295,6 +345,93 @@ fn control_every_decode_only_line_decodes_to_its_message() {
             line[..],
             "{why}: the encoder writes it so"
         );
+    }
+}
+
+/// A roster member's type as the vectors write it.
+fn field_json(field: control::Field) -> Value {
+    let words = |words: &[&str]| {
+        words
+            .iter()
+            .map(|word| Value::from(*word))
+            .collect::<Value>()
+    };
+    match field {
+        control::Field::Text => serde_json::json!({"type": "string"}),
+        control::Field::TextOrNull => serde_json::json!({"type": "string_or_null"}),
+        control::Field::Integer => serde_json::json!({"type": "integer"}),
+        control::Field::Words(set) => serde_json::json!({"one_of": words(set)}),
+        control::Field::StatusOrWords(set) => {
+            serde_json::json!({"one_of": words(set), "or": "http_status"})
+        }
+    }
+}
+
+#[test]
+fn control_events_roster_and_bounds_are_the_vectors() {
+    let v = fixture("runner_control.json");
+    let events = &v["events"];
+    assert_eq!(
+        control::MAX_EVENT_LINE_BYTES as u64,
+        n(&events["max_line_bytes"])
+    );
+    assert_eq!(
+        control::MAX_EVENT_STRING_BYTES as u64,
+        n(&events["max_string_bytes"])
+    );
+    let roster: Vec<Value> = control::EVENTS
+        .iter()
+        .map(|(name, measured, described)| {
+            let measurements: Map<String, Value> = measured
+                .iter()
+                .map(|field| ((*field).to_owned(), serde_json::json!({"type": "integer"})))
+                .collect();
+            let metadata: Map<String, Value> = described
+                .iter()
+                .map(|(field, kind)| ((*field).to_owned(), field_json(*kind)))
+                .collect();
+            serde_json::json!({"name": name, "measurements": measurements, "metadata": metadata})
+        })
+        .collect();
+    assert_eq!(&roster, cases(&events["roster"], "roster"));
+    // The members' order is the lines': each valid event encodes to its line.
+}
+
+#[test]
+fn control_every_valid_event_encodes_to_its_line_and_decodes_back() {
+    let v = fixture("runner_control.json");
+    for case in cases(&v["events"]["valid"], "events.valid") {
+        let why = s(&case["why"]);
+        let line = s(&case["line"]);
+        let message = message_from(&case["message"]);
+        let encoded = control::encode(&message).expect(why);
+        assert_eq!(String::from_utf8_lossy(&encoded), line, "{why}");
+        let decoded =
+            control::decode(line.as_bytes()).unwrap_or_else(|refusal| panic!("{why}: {refusal:?}"));
+        assert_eq!(message_json(&decoded), case["message"], "{why}");
+    }
+}
+
+#[test]
+fn control_every_invalid_event_line_is_refused_with_its_reason() {
+    let v = fixture("runner_control.json");
+    for case in cases(&v["events"]["invalid"], "events.invalid") {
+        let why = s(&case["why"]);
+        assert_eq!(
+            control::decode(&control_line(case)).err(),
+            Some(control_refusal(&case["refusal"])),
+            "{why}"
+        );
+    }
+}
+
+#[test]
+fn control_an_events_long_strings_are_cut_on_a_character_boundary() {
+    let v = fixture("runner_control.json");
+    for case in cases(&v["events"]["cut"], "events.cut") {
+        let why = s(&case["why"]);
+        let encoded = control::encode(&message_from(&case["message"])).expect(why);
+        assert_eq!(String::from_utf8_lossy(&encoded), s(&case["line"]), "{why}");
     }
 }
 
@@ -1064,6 +1201,7 @@ fn host_every_call_a_runner_makes_crosses_as_the_vectors_write_it() {
                     assert_eq!(refused["error"], "unknown_version")
                 }
                 Err(host::Unanswered::Lost) => panic!("{callback}: {text} read as no answer"),
+                Err(host::Unanswered::TooDeep) => panic!("{callback}: {text} read as too deep"),
             }
         }
     }
@@ -1075,7 +1213,7 @@ fn host_every_call_a_runner_makes_crosses_as_the_vectors_write_it() {
 /// of the case, its answer sealed to the try's own header.
 struct Scripted {
     answers: Vec<Value>,
-    seal: Zeroizing<[u8; 32]>,
+    seal: cyfr_runner::auth::Key,
     iv: [u8; 12],
     posted: Vec<(String, Vec<u8>)>,
 }
@@ -1192,6 +1330,7 @@ async fn every_answer_outcome() {
             Outcome::Lost => ("lost", Value::Null),
             Outcome::Uncertain => ("uncertain", Value::Null),
             Outcome::TooLarge => ("too_large", Value::Null),
+            Outcome::TooDeep => ("too_deep", Value::Null),
         };
         // A value nested past what this file's reader takes is its JSON
         // text, read as the crate reads it.

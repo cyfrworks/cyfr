@@ -217,6 +217,15 @@ pub enum Unsent {
     Invalid(Invalid),
 }
 
+/// Why a channel is not bound to the next subtree's attempt.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Rebind {
+    /// A call or fetch of the last subtree is still outstanding.
+    Busy,
+    /// An attempt no frame carries.
+    Invalid(Invalid),
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Mode {
     Pinned,
@@ -275,6 +284,20 @@ impl Channel {
             return Err(Invalid("attempt"));
         }
         self.attempts.insert(attempt.to_owned());
+        Ok(())
+    }
+
+    /// The channel carrying `attempt` alone, for the next subtree its
+    /// runner is assigned: its numbering goes on, and it is refused while
+    /// anything of the last subtree is outstanding.
+    pub fn rebind(&mut self, attempt: &str) -> Result<(), Rebind> {
+        if !is_id(attempt) {
+            return Err(Rebind::Invalid(Invalid("attempt")));
+        }
+        if !self.idle() {
+            return Err(Rebind::Busy);
+        }
+        self.attempts = BTreeSet::from([attempt.to_owned()]);
         Ok(())
     }
 
@@ -850,5 +873,281 @@ impl Reader<'_> {
                 _ => Err(invalid()),
             })
             .collect()
+    }
+}
+
+// ============================================================================
+// The runner's end
+// ============================================================================
+
+/// The runner's end of its relay, over the stream its keeper (descriptor 4)
+/// or the test build's direct launcher (a unix socket) gives it: one task
+/// that owns the `Channel` and reads, one that writes, and a handle every
+/// host call of the runner's subtree goes through.
+///
+/// The relay has no cancel for a call (section 5.5 of the plan): a call
+/// whose caller stopped waiting stays outstanding on the channel until its
+/// answer arrives, which is then discarded, and the channel is not idle
+/// meanwhile. A frame the codec refuses is answered with a `close` naming
+/// its code; that, the service's own `close`, the stream's end or a failed
+/// write closes the relay: every call still waiting is answered as lost,
+/// and `closed` says so, which ends the runner.
+#[derive(Clone)]
+pub struct Relay {
+    commands: tokio::sync::mpsc::UnboundedSender<Command>,
+    closed: tokio::sync::watch::Receiver<bool>,
+}
+
+enum Command {
+    Bind {
+        attempt: String,
+        reply: tokio::sync::oneshot::Sender<Result<(), Rebind>>,
+    },
+    Call {
+        attempt: String,
+        op: Op,
+        header: String,
+        body: Vec<u8>,
+        reply: tokio::sync::oneshot::Sender<Option<crate::host::Reached>>,
+    },
+    Idle {
+        reply: tokio::sync::oneshot::Sender<bool>,
+    },
+}
+
+/// The most bytes one read takes from the stream.
+const READ_BYTES: usize = 64 * 1024;
+
+impl Relay {
+    /// Start the runner's end on `reader` and `writer`, the stream's two
+    /// halves, on the current Tokio runtime.
+    pub fn start<R, W>(reader: R, writer: W) -> Relay
+    where
+        R: tokio::io::AsyncRead + Unpin + Send + 'static,
+        W: tokio::io::AsyncWrite + Unpin + Send + 'static,
+    {
+        let (commands, inbox) = tokio::sync::mpsc::unbounded_channel();
+        let (closed_tx, closed) = tokio::sync::watch::channel(false);
+        let (bytes, outbox) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
+        let (write_failed_tx, write_failed) = tokio::sync::oneshot::channel::<()>();
+        tokio::spawn(write_frames(writer, outbox, write_failed_tx));
+        tokio::spawn(serve(reader, inbox, bytes, write_failed, closed_tx));
+        Relay { commands, closed }
+    }
+
+    /// Carry `attempt` alone, for the subtree it roots; refused while the
+    /// last subtree's work is outstanding.
+    pub async fn bind(&self, attempt: &str) -> Result<(), Rebind> {
+        let (reply, answer) = tokio::sync::oneshot::channel();
+        let command = Command::Bind {
+            attempt: attempt.to_owned(),
+            reply,
+        };
+        if self.commands.send(command).is_err() {
+            return Err(Rebind::Busy);
+        }
+        answer.await.unwrap_or(Err(Rebind::Busy))
+    }
+
+    /// Whether nothing is outstanding on the channel.
+    pub async fn idle(&self) -> bool {
+        let (reply, answer) = tokio::sync::oneshot::channel();
+        if self.commands.send(Command::Idle { reply }).is_err() {
+            return false;
+        }
+        answer.await.unwrap_or(false)
+    }
+
+    /// Wait until the relay is closed.
+    pub async fn closed(&self) {
+        let mut closed = self.closed.clone();
+        let _ = closed.wait_for(|closed| *closed).await;
+    }
+
+    /// The poster of `attempt`'s host calls through this relay.
+    pub fn poster(&self, attempt: &str) -> Poster {
+        Poster {
+            relay: self.clone(),
+            attempt: attempt.to_owned(),
+        }
+    }
+}
+
+/// One attempt's host calls, posted through the relay (`crate::host::Post`).
+pub struct Poster {
+    relay: Relay,
+    attempt: String,
+}
+
+impl crate::host::Post for Poster {
+    fn post(
+        &mut self,
+        op: Op,
+        header: String,
+        body: Vec<u8>,
+    ) -> impl std::future::Future<Output = Option<crate::host::Reached>> {
+        let (reply, answer) = tokio::sync::oneshot::channel();
+        let sent = self
+            .relay
+            .commands
+            .send(Command::Call {
+                attempt: self.attempt.clone(),
+                op,
+                header,
+                body,
+                reply,
+            })
+            .is_ok();
+        async move {
+            if sent {
+                answer.await.ok().flatten()
+            } else {
+                None
+            }
+        }
+    }
+}
+
+async fn write_frames<W>(
+    mut writer: W,
+    mut outbox: tokio::sync::mpsc::UnboundedReceiver<Vec<u8>>,
+    failed: tokio::sync::oneshot::Sender<()>,
+) where
+    W: tokio::io::AsyncWrite + Unpin,
+{
+    use tokio::io::AsyncWriteExt as _;
+    while let Some(bytes) = outbox.recv().await {
+        if writer.write_all(&bytes).await.is_err() || writer.flush().await.is_err() {
+            let _ = failed.send(());
+            return;
+        }
+    }
+}
+
+async fn serve<R>(
+    mut reader: R,
+    mut inbox: tokio::sync::mpsc::UnboundedReceiver<Command>,
+    outbox: tokio::sync::mpsc::UnboundedSender<Vec<u8>>,
+    mut write_failed: tokio::sync::oneshot::Receiver<()>,
+    closed: tokio::sync::watch::Sender<bool>,
+) where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    use tokio::io::AsyncReadExt as _;
+    let mut channel: Option<Channel> = None;
+    let mut root = String::new();
+    let mut waiting: BTreeMap<u64, tokio::sync::oneshot::Sender<Option<crate::host::Reached>>> =
+        BTreeMap::new();
+    let mut buffer: Vec<u8> = Vec::new();
+    let mut chunk = vec![0u8; READ_BYTES];
+    loop {
+        tokio::select! {
+            command = inbox.recv() => {
+                let Some(command) = command else { break };
+                match command {
+                    Command::Bind { attempt, reply } => {
+                        let bound = match channel.as_mut() {
+                            None => Channel::new(&attempt)
+                                .map(|opened| channel = Some(opened))
+                                .map_err(Rebind::Invalid),
+                            Some(open) => open.rebind(&attempt),
+                        };
+                        if bound.is_ok() {
+                            root = attempt;
+                        }
+                        let _ = reply.send(bound);
+                    }
+                    Command::Idle { reply } => {
+                        let _ = reply.send(channel.as_ref().is_none_or(Channel::idle));
+                    }
+                    Command::Call { attempt, op, header, body, reply } => {
+                        let frame = Outgoing::HostCall { attempt, op, header, body };
+                        let Some(open) = channel.as_mut() else {
+                            let _ = reply.send(None);
+                            continue;
+                        };
+                        let seq = open.sent;
+                        match open.encode(&frame) {
+                            Ok(bytes) => {
+                                waiting.insert(seq, reply);
+                                if outbox.send(bytes).is_err() {
+                                    break;
+                                }
+                            }
+                            Err(_unsent) => {
+                                let _ = reply.send(None);
+                            }
+                        }
+                    }
+                }
+            }
+            read = reader.read(&mut chunk) => {
+                let read = match read {
+                    Ok(0) | Err(_) => break,
+                    Ok(read) => read,
+                };
+                buffer.extend_from_slice(&chunk[..read]);
+                let Some(open) = channel.as_mut() else {
+                    // Nothing is sent to a runner before its first
+                    // assignment binds the channel.
+                    break;
+                };
+                match open.decode(&buffer) {
+                    Ok((frames, used)) => {
+                        buffer.drain(..used);
+                        let mut ended = false;
+                        for frame in frames {
+                            match frame {
+                                Incoming::HostAnswer { re, status, body, .. } => {
+                                    if let Some(reply) = waiting.remove(&re) {
+                                        let _ = reply.send(
+                                            status.map(|status| crate::host::Reached { status, body }),
+                                        );
+                                    }
+                                }
+                                Incoming::Close { .. } => ended = true,
+                                // A fetch's frames: no fetch is sent before
+                                // a guest's requests are built.
+                                _ => {}
+                            }
+                        }
+                        if ended {
+                            break;
+                        }
+                    }
+                    Err(refusal) => {
+                        let close = Outgoing::Close {
+                            attempt: root.clone(),
+                            reason: refusal.close_code().to_owned(),
+                        };
+                        if let Ok(bytes) = open.encode(&close) {
+                            let _ = outbox.send(bytes);
+                        }
+                        break;
+                    }
+                }
+            }
+            _ = &mut write_failed => break,
+        }
+    }
+    // Every call still waiting hears that no answer will come.
+    for (_seq, reply) in std::mem::take(&mut waiting) {
+        let _ = reply.send(None);
+    }
+    let _ = closed.send(true);
+    // Commands sent after the close are answered as the closed relay's.
+    inbox.close();
+    while let Some(command) = inbox.recv().await {
+        match command {
+            Command::Bind { reply, .. } => {
+                let _ = reply.send(Err(Rebind::Busy));
+            }
+            Command::Idle { reply } => {
+                let _ = reply.send(false);
+            }
+            Command::Call { reply, .. } => {
+                let _ = reply.send(None);
+            }
+        }
     }
 }

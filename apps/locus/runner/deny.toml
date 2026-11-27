@@ -15,12 +15,30 @@ yanked = "deny"
 
 [licenses]
 version = 2
-allow = ["Apache-2.0", "MIT", "Unicode-3.0"]
+# Wasmtime and Cranelift are Apache-2.0 with the LLVM exception; encoding_rs
+# carries BSD-3-Clause beside its own, and foldhash (Cranelift's hasher) is
+# Zlib.
+allow = ["Apache-2.0", "Apache-2.0 WITH LLVM-exception", "BSD-3-Clause", "MIT", "Unicode-3.0", "Zlib"]
 confidence-threshold = 0.9
 
 [bans]
 multiple-versions = "deny"
 wildcards = "deny"
+# Five of the skips are one pair of RustCrypto generations: Cranelift pins
+# sha2 0.10, whose block-buffer, cpufeatures, crypto-common and digest sit
+# beside the 0.11 generation the crate's own aes-gcm, hmac and sha2 take.
+# gimli, under Cranelift, takes hashbrown 0.16 beside the 0.17 of the rest;
+# and tracing-attributes, a proc macro of wasmtime-wasi's tracing, takes
+# syn 2 beside the syn 3 every other proc macro takes.
+skip = [
+    { crate = "block-buffer@0.10.4", reason = "Cranelift's sha2 0.10, beside the crate's 0.11 generation" },
+    { crate = "cpufeatures@0.2.17", reason = "Cranelift's sha2 0.10" },
+    { crate = "crypto-common@0.1.7", reason = "Cranelift's sha2 0.10" },
+    { crate = "digest@0.10.7", reason = "Cranelift's sha2 0.10" },
+    { crate = "sha2@0.10.9", reason = "Cranelift pins it" },
+    { crate = "hashbrown@0.16.1", reason = "gimli's, under Cranelift" },
+    { crate = "syn@2.0.119", reason = "tracing-attributes', beside the other proc macros' syn 3" },
+]
 
 [sources]
 unknown-registry = "deny"

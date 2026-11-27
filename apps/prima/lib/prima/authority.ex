@@ -316,6 +316,31 @@ defmodule Prima.Authority do
 
   def node_limits(%__MODULE__{}, _node_ref), do: {:error, :unknown_node}
 
+  @doc """
+  The fields CYFR attaches to this execution's requests and never hands
+  its component: those its edge projects from the entries it binds, by
+  the names the component reads them under (each projection's field map's
+  keys), the default binding's and each named account's. A vault selected
+  from another profile (`via`) or a publisher's provided configuration
+  projects none, and an authority without resources has none. A read of
+  one of them from the component's vault is refused as undisclosed rather
+  than as outside the projection.
+
+  The runtime holds a node's edge beside its authority, so the edge, or
+  its absence (nil), is read the same way.
+  """
+  @spec attached_fields(t() | Blob.Edge.t() | nil) :: MapSet.t(String.t())
+  def attached_fields(%__MODULE__{resources: %Blob.Edge{} = edge}), do: attached_fields(edge)
+  def attached_fields(%__MODULE__{resources: :none}), do: MapSet.new()
+
+  def attached_fields(%Blob.Edge{vault: %{entry_id: _entry} = vault}) do
+    named = vault |> Map.get(:named, %{}) |> Map.values()
+    MapSet.new(Enum.flat_map([vault | named], &Map.keys(&1.projection.fields)))
+  end
+
+  def attached_fields(%Blob.Edge{}), do: MapSet.new()
+  def attached_fields(nil), do: MapSet.new()
+
   # ============================================================================
   # Wire
   # ============================================================================

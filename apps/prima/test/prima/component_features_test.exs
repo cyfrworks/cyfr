@@ -13,6 +13,13 @@ defmodule Prima.ComponentFeaturesTest do
   feature refuses is `Locus.Runtime.ComponentFeaturesTest`'s, beside the
   hostile guests.
 
+  The shared vectors (`tests/fixtures/component_features.json`) hold the
+  refused features and their families to the module's, each refusal's
+  sentence to `Prima.Refusal.message/1`'s, and every case to what
+  `check/1` answers with the pinned validator; each feature's guest is
+  valid with its feature on and every other refused one off, and invalid
+  with its feature off.
+
   Each test that installs another validator puts the configured one back.
   """
 
@@ -26,6 +33,22 @@ defmodule Prima.ComponentFeaturesTest do
               "../../../../seed/components/catalysts/local/http/1.1.5/catalyst.wasm",
               __DIR__
             )
+
+  @root Path.expand("../../../..", __DIR__)
+
+  @vectors Path.join(@root, "tests/fixtures/component_features.json")
+           |> File.read!()
+           |> Jason.decode!()
+
+  # The features a refused feature's guest needs beside its own, which
+  # the validator admits it only with: the stackful ABI and the more async
+  # builtins are forms of component-model async, and GC's structs are GC
+  # types.
+  @builds_on %{
+    "cm-async-stackful" => ["cm-async"],
+    "cm-more-async-builtins" => ["cm-async"],
+    "gc" => ["gc-types"]
+  }
 
   setup do
     configured = Application.fetch_env!(:prima, :wasm_tools)
@@ -174,6 +197,79 @@ defmodule Prima.ComponentFeaturesTest do
     # files beside the validator executable.
     assert Enum.sort(File.ls!(dir)) == ["env", "received", "wasm-tools"]
   end
+
+  describe "the shared vectors" do
+    defp case_bytes(%{"path" => path}), do: File.read!(Path.join(@root, path))
+    defp case_bytes(%{"hex" => hex}), do: Base.decode16!(hex, case: :lower)
+
+    defp outcome(:ok), do: "admitted"
+    defp outcome({:error, {refusal, _digest}}), do: Atom.to_string(refusal)
+
+    test "the refused features and their families are the module's" do
+      assert @vectors["refused"] == ComponentFeatures.refused()
+
+      assert Enum.map(ComponentFeatures.families(), fn {family, flags} ->
+               {Atom.to_string(family), flags}
+             end) == Enum.sort_by(@vectors["families"], &family_order/1)
+
+      assert Enum.flat_map(ComponentFeatures.families(), &elem(&1, 1)) ==
+               ComponentFeatures.refused()
+    end
+
+    test "each refusal's sentence is Prima.Refusal's, its digest in its place" do
+      digest = Prima.Digest.sha256("a component")
+
+      for {refusal, sentence} <- @vectors["sentences"] do
+        assert Prima.Refusal.message({String.to_existing_atom(refusal), digest}) ==
+                 String.replace(sentence, "{digest}", digest)
+      end
+
+      assert Enum.sort(Map.keys(@vectors["sentences"])) ==
+               ["component_feature_refused", "component_invalid"]
+    end
+
+    test "every case is what check/1 answers with the pinned validator" do
+      cases = @vectors["cases"]
+
+      capture_log(fn ->
+        for vector <- cases do
+          assert outcome(ComponentFeatures.check(case_bytes(vector))) == vector["outcome"],
+                 vector["why"]
+        end
+      end)
+
+      features = for %{"feature" => feature} <- cases, do: feature
+      assert Enum.sort(features) == Enum.sort(ComponentFeatures.refused())
+      assert Enum.any?(cases, &Map.has_key?(&1, "hex"))
+      assert Enum.count(cases, &(&1["outcome"] == "admitted")) >= 3
+    end
+
+    test "each feature's guest uses its feature and no other refused one", %{validator: validator} do
+      for %{"feature" => feature, "path" => path} = vector <- @vectors["cases"] do
+        on = [feature | Map.get(@builds_on, feature, [])]
+        off = ComponentFeatures.refused() -- on
+        file = Path.join(@root, path)
+
+        assert validate(validator, [
+                 "--features=" <> Enum.join(on ++ Enum.map(off, &("-" <> &1)), ","),
+                 file
+               ]) == 0,
+               vector["why"]
+
+        assert validate(validator, ["--features=-" <> feature, file]) == 1, vector["why"]
+      end
+    end
+  end
+
+  defp validate(validator, args) do
+    {_output, status} =
+      System.cmd(validator, ["validate" | args], env: no_env(), stderr_to_stdout: true)
+
+    status
+  end
+
+  defp family_order({family, _flags}),
+    do: Enum.find_index(ComponentFeatures.families(), &(Atom.to_string(elem(&1, 0)) == family))
 
   # Whether the process `pid` names still runs: gone, or a zombie its
   # killed parent left for init to reap.

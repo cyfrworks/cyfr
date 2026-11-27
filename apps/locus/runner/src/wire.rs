@@ -20,9 +20,11 @@
 //! each number. A refused document's parts are freed as the parser leaves
 //! them.
 //!
-//! Two limits. Any depth of nesting is read, as Prima reads it, so a
-//! document nested deep enough to exhaust the stack it is parsed on aborts
-//! the process. And one document Prima reads is refused here: one with a
+//! Two kinds of document Prima reads are refused here. One nested deeper
+//! than `MAX_DEPTH` arrays and objects: the parser recurses once a level,
+//! so the depth is counted before it reads anything (`read` answers
+//! `Unread::TooDeep`), and every thread that parses has the stack for that
+//! depth (`STACK_BYTES`), the guest's fiber among them. And one with a
 //! member named `$serde_json::private::Number`, the name under which the
 //! parser hands this reader a number, which is never read as one.
 //!
@@ -142,12 +144,14 @@ pub fn hex(bytes: &[u8]) -> String {
     text
 }
 
-/// The bytes 64 lowercase hexadecimal digits spell, or none.
-pub fn hex_key(text: &str) -> Option<[u8; 32]> {
+/// The key 64 lowercase hexadecimal digits spell, or none, written in place
+/// in the one allocation that holds it (`crate::auth::Key`).
+pub fn hex_key(text: &str) -> Option<crate::auth::Key> {
     if text.len() != 64 || !text.bytes().all(is_lower_hex) {
         return None;
     }
-    let mut key = [0u8; 32];
+    let mut key = crate::auth::Key::zeroed();
+    let bytes = key.bytes_mut();
     for (index, pair) in text.as_bytes().chunks(2).enumerate() {
         let digit = |b: u8| {
             if b.is_ascii_digit() {
@@ -156,7 +160,7 @@ pub fn hex_key(text: &str) -> Option<[u8; 32]> {
                 b - b'a' + 10
             }
         };
-        key[index] = (digit(pair[0]) << 4) | digit(pair[1]);
+        bytes[index] = (digit(pair[0]) << 4) | digit(pair[1]);
     }
     Some(key)
 }
@@ -183,6 +187,12 @@ impl Json {
     /// The value of member `name` of an object, taken out of it, or none.
     pub fn take_member(&mut self, name: &str) -> Option<Json> {
         self.0.as_object_mut()?.remove(name).map(Json)
+    }
+
+    /// The value, taken out to be sent on: what is taken is no longer
+    /// cleared when this is dropped.
+    pub fn take_value(&mut self) -> Value {
+        std::mem::take(&mut self.0)
     }
 
     /// A value made here, held as one a peer sent.
@@ -222,9 +232,77 @@ fn wipe(value: Value) {
     }
 }
 
+/// The deepest nesting of arrays and objects a document is read to. Prima
+/// reads any depth, and no document of the protocol comes near this one;
+/// a deeper one is refused before the parser, which recurses once a level,
+/// reads it.
+pub const MAX_DEPTH: usize = 4096;
+
+/// The deepest a guest's output is read to: one level under `MAX_DEPTH`,
+/// so CYFR's answer recording it (`{"v": 3, "ok": output}`) reads too.
+pub const MAX_OUTPUT_DEPTH: usize = MAX_DEPTH - 1;
+
+/// The stack every thread that parses runs on: the runner's runtime and a
+/// guest's fiber. The parser takes about 0.55 KiB a level built for
+/// release and 1.7 KiB built for its tests (measured at Rust 1.100), so
+/// `MAX_DEPTH` levels take at most 7 MiB of it.
+pub const STACK_BYTES: usize = 16 * 1024 * 1024;
+
+/// Why a document is not read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unread {
+    /// Nested deeper than `MAX_DEPTH`.
+    TooDeep,
+    /// Not one JSON value as Prima reads one.
+    Malformed,
+}
+
 /// The one JSON value `bytes` spell, read as Prima's reader reads it, or
-/// none.
+/// none: a document nested past `MAX_DEPTH` among them.
 pub fn parse(bytes: &[u8]) -> Option<Json> {
+    read(bytes).ok()
+}
+
+/// The one JSON value `bytes` spell, or why it is not read.
+pub fn read(bytes: &[u8]) -> Result<Json, Unread> {
+    if depth(bytes) > MAX_DEPTH {
+        return Err(Unread::TooDeep);
+    }
+    read_within(bytes).ok_or(Unread::Malformed)
+}
+
+/// The deepest nesting of arrays and objects in `bytes` outside strings,
+/// counted without recursion. A string runs from an unescaped quote to the
+/// next, as the parser reads one, so every level the parser enters is
+/// counted; bytes that are no JSON are refused by the parser after.
+pub fn depth(bytes: &[u8]) -> usize {
+    let (mut level, mut deepest) = (0usize, 0usize);
+    let (mut string, mut escaped) = (false, false);
+    for &byte in bytes {
+        if string {
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == b'"' {
+                string = false;
+            }
+            continue;
+        }
+        match byte {
+            b'"' => string = true,
+            b'[' | b'{' => {
+                level += 1;
+                deepest = deepest.max(level);
+            }
+            b']' | b'}' => level = level.saturating_sub(1),
+            _ => {}
+        }
+    }
+    deepest
+}
+
+fn read_within(bytes: &[u8]) -> Option<Json> {
     let mut reader = serde_json::Deserializer::from_slice(bytes);
     reader.disable_recursion_limit();
     let FirstMember(value) = FirstMember::deserialize(&mut reader).ok()?;

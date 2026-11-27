@@ -1,0 +1,3464 @@
+{
+  "comment": "The vectors pinning the authority a runner reads from its assignment: Prima.Authority.from_wire/1 of `authority`, the map an assignment carries (Prima.Authority.to_wire/1 with every nil member omitted), and what a reader takes from it, the limits governing the execution (Prima.Limits.to_map/1 of Prima.Authority.limits/1: its bound node's, or the zero limits unbound) and the fields CYFR attaches and never hands the component (Prima.Authority.attached_fields/1: the field-map keys of the projection of every entry the vault binds, the default's and each named account's; a selection (via) or provided configuration projects none), a sorted list. Each `refused` authority is one from_wire/1 refuses in a part a runner reads: the cursor, the bound node's limits, or the projection of the resources' vault or of one of its named accounts. Generated with Prima's constructors (Prima.Authority.root/3 and its child constructors over a parsed Prima.Authority.Blob). Read by apps/prima/test/prima/authority_test.exs and by the Rust runner's crate.",
+  "version": 1,
+  "read": [
+    {
+      "why": "an unbound authority: no policy, no resources, the zero limits",
+      "authority": {
+        "activation": {},
+        "budget": {
+          "id": "bgt_AAAAAAAAAAHKmY6r"
+        },
+        "chain": [],
+        "cursor": "unbound",
+        "depth": 0,
+        "invoke_mode": "open_inert"
+      },
+      "limits": {
+        "batch_timeout": "30s",
+        "max_concurrent_tasks": 1,
+        "max_memory_bytes": 67108864,
+        "max_request_size": 1048576,
+        "max_response_size": 5242880,
+        "rate_limit": {
+          "requests": 100,
+          "window": "1m"
+        },
+        "timeout": "30s"
+      },
+      "attached_fields": []
+    },
+    {
+      "why": "an unbound child of a bound root: its chain and depth, the zero limits",
+      "authority": {
+        "activation": {},
+        "budget": {
+          "id": "bgt_AAAAAAAAAAHKmY6r"
+        },
+        "chain": [
+          "formula:local.daily-report",
+          "formula:evil.corp.tool"
+        ],
+        "cursor": "unbound",
+        "depth": 1,
+        "invoke_mode": "open_inert"
+      },
+      "limits": {
+        "batch_timeout": "30s",
+        "max_concurrent_tasks": 1,
+        "max_memory_bytes": 67108864,
+        "max_request_size": 1048576,
+        "max_response_size": 5242880,
+        "rate_limit": {
+          "requests": 100,
+          "window": "1m"
+        },
+        "timeout": "30s"
+      },
+      "attached_fields": []
+    },
+    {
+      "why": "a bound root whose node's limits differ from the defaults in every field, its ingress granting nothing: resources an empty edge",
+      "authority": {
+        "activation": {
+          "catalyst:supabase.com.database": "sha256:act-catalyst",
+          "formula:local.daily-report": "sha256:act-formula"
+        },
+        "budget": {
+          "id": "bgt_AAAAAAAAAAHKmY6r"
+        },
+        "chain": [
+          "formula:local.daily-report"
+        ],
+        "consent_id": "cns_01a09fee-0000-7000-8000-000000000002",
+        "cursor": {
+          "bound": "formula:local.daily-report"
+        },
+        "depth": 0,
+        "invoke_mode": "open_inert",
+        "policy": {
+          "canonical": "jcs-1",
+          "nodes": {
+            "catalyst:supabase.com.database": {
+              "edges": {},
+              "limits": {
+                "batch_timeout": "2m",
+                "max_concurrent_tasks": 4,
+                "max_memory_bytes": 33554432,
+                "max_request_size": 524288,
+                "max_response_size": 2097152,
+                "rate_limit": {
+                  "requests": 20,
+                  "window": "10s"
+                },
+                "timeout": "45s"
+              }
+            },
+            "formula:local.daily-report": {
+              "edges": {
+                "@ingress": {}
+              },
+              "limits": {
+                "batch_timeout": "2m",
+                "max_concurrent_tasks": 4,
+                "max_memory_bytes": 33554432,
+                "max_request_size": 524288,
+                "max_response_size": 2097152,
+                "rate_limit": {
+                  "requests": 20,
+                  "window": "10s"
+                },
+                "timeout": "45s"
+              }
+            }
+          }
+        },
+        "profile_id": "prof_01a09fee-0000-7000-8000-000000000001",
+        "profile_kind": "owner",
+        "resources": {},
+        "source_ref": "formula:local.daily-report"
+      },
+      "limits": {
+        "batch_timeout": "2m",
+        "max_concurrent_tasks": 4,
+        "max_memory_bytes": 33554432,
+        "max_request_size": 524288,
+        "max_response_size": 2097152,
+        "rate_limit": {
+          "requests": 20,
+          "window": "10s"
+        },
+        "timeout": "45s"
+      },
+      "attached_fields": []
+    },
+    {
+      "why": "a bound authority whose resources are absent: read as none, its node's limits still its own",
+      "authority": {
+        "activation": {
+          "catalyst:supabase.com.database": "sha256:act-catalyst",
+          "formula:local.daily-report": "sha256:act-formula"
+        },
+        "budget": {
+          "id": "bgt_AAAAAAAAAAHKmY6r"
+        },
+        "chain": [
+          "formula:local.daily-report"
+        ],
+        "consent_id": "cns_01a09fee-0000-7000-8000-000000000002",
+        "cursor": {
+          "bound": "formula:local.daily-report"
+        },
+        "depth": 0,
+        "invoke_mode": "open_inert",
+        "policy": {
+          "canonical": "jcs-1",
+          "nodes": {
+            "catalyst:supabase.com.database": {
+              "edges": {},
+              "limits": {
+                "batch_timeout": "2m",
+                "max_concurrent_tasks": 4,
+                "max_memory_bytes": 33554432,
+                "max_request_size": 524288,
+                "max_response_size": 2097152,
+                "rate_limit": {
+                  "requests": 20,
+                  "window": "10s"
+                },
+                "timeout": "45s"
+              }
+            },
+            "formula:local.daily-report": {
+              "edges": {
+                "@ingress": {}
+              },
+              "limits": {
+                "batch_timeout": "2m",
+                "max_concurrent_tasks": 4,
+                "max_memory_bytes": 33554432,
+                "max_request_size": 524288,
+                "max_response_size": 2097152,
+                "rate_limit": {
+                  "requests": 20,
+                  "window": "10s"
+                },
+                "timeout": "45s"
+              }
+            }
+          }
+        },
+        "profile_id": "prof_01a09fee-0000-7000-8000-000000000001",
+        "profile_kind": "owner",
+        "source_ref": "formula:local.daily-report"
+      },
+      "limits": {
+        "batch_timeout": "2m",
+        "max_concurrent_tasks": 4,
+        "max_memory_bytes": 33554432,
+        "max_request_size": 524288,
+        "max_response_size": 2097152,
+        "rate_limit": {
+          "requests": 20,
+          "window": "10s"
+        },
+        "timeout": "45s"
+      },
+      "attached_fields": []
+    },
+    {
+      "why": "a vault entry whose projection names two fields, which CYFR attaches by the names the component reads",
+      "authority": {
+        "activation": {
+          "catalyst:supabase.com.database": "sha256:act-catalyst",
+          "formula:local.daily-report": "sha256:act-formula"
+        },
+        "budget": {
+          "id": "bgt_AAAAAAAAAAHKmY6r"
+        },
+        "chain": [
+          "formula:local.daily-report"
+        ],
+        "consent_id": "cns_01a09fee-0000-7000-8000-000000000002",
+        "cursor": {
+          "bound": "formula:local.daily-report"
+        },
+        "depth": 0,
+        "invoke_mode": "open_inert",
+        "policy": {
+          "canonical": "jcs-1",
+          "nodes": {
+            "catalyst:supabase.com.database": {
+              "edges": {},
+              "limits": {
+                "batch_timeout": "2m",
+                "max_concurrent_tasks": 4,
+                "max_memory_bytes": 33554432,
+                "max_request_size": 524288,
+                "max_response_size": 2097152,
+                "rate_limit": {
+                  "requests": 20,
+                  "window": "10s"
+                },
+                "timeout": "45s"
+              }
+            },
+            "formula:local.daily-report": {
+              "edges": {
+                "@ingress": {
+                  "egress": {
+                    "domains": [
+                      "prod.supabase.co"
+                    ],
+                    "methods": [],
+                    "private_ips": [],
+                    "schemes": [
+                      "https"
+                    ]
+                  },
+                  "vault": {
+                    "attach": {
+                      "in": "header",
+                      "name": "Authorization",
+                      "template": "Bearer {value}"
+                    },
+                    "binding_digest": "sha256:bind-source",
+                    "binding_key": "formula:local.daily-report|@ingress|default",
+                    "destination": {
+                      "hosts": [
+                        "prod.supabase.co"
+                      ],
+                      "scheme": "https"
+                    },
+                    "entry_id": "ent_source",
+                    "projection": {
+                      "fields": {
+                        "anon_key": "anon key",
+                        "url": "url"
+                      },
+                      "scopes": []
+                    },
+                    "scope": "athanor"
+                  }
+                }
+              },
+              "limits": {
+                "batch_timeout": "5m",
+                "max_concurrent_tasks": 30,
+                "max_memory_bytes": 67108864,
+                "max_request_size": 1048576,
+                "max_response_size": 5242880,
+                "rate_limit": {
+                  "requests": 100,
+                  "window": "1m"
+                },
+                "timeout": "15m"
+              }
+            }
+          }
+        },
+        "profile_id": "prof_01a09fee-0000-7000-8000-000000000001",
+        "profile_kind": "owner",
+        "resources": {
+          "egress": {
+            "domains": [
+              "prod.supabase.co"
+            ],
+            "methods": [],
+            "private_ips": [],
+            "schemes": [
+              "https"
+            ]
+          },
+          "vault": {
+            "attach": {
+              "in": "header",
+              "name": "Authorization",
+              "template": "Bearer {value}"
+            },
+            "binding_digest": "sha256:bind-source",
+            "binding_key": "formula:local.daily-report|@ingress|default",
+            "destination": {
+              "hosts": [
+                "prod.supabase.co"
+              ],
+              "scheme": "https"
+            },
+            "entry_id": "ent_source",
+            "projection": {
+              "fields": {
+                "anon_key": "anon key",
+                "url": "url"
+              },
+              "scopes": []
+            },
+            "scope": "athanor"
+          }
+        },
+        "source_ref": "formula:local.daily-report"
+      },
+      "limits": {
+        "batch_timeout": "5m",
+        "max_concurrent_tasks": 30,
+        "max_memory_bytes": 67108864,
+        "max_request_size": 1048576,
+        "max_response_size": 5242880,
+        "rate_limit": {
+          "requests": 100,
+          "window": "1m"
+        },
+        "timeout": "15m"
+      },
+      "attached_fields": [
+        "anon_key",
+        "url"
+      ]
+    },
+    {
+      "why": "named accounts beside the default, each with its own projected fields, and one (Third) projecting none",
+      "authority": {
+        "activation": {
+          "catalyst:supabase.com.database": "sha256:act-catalyst",
+          "formula:local.daily-report": "sha256:act-formula"
+        },
+        "budget": {
+          "id": "bgt_AAAAAAAAAAHKmY6r"
+        },
+        "chain": [
+          "formula:local.daily-report"
+        ],
+        "consent_id": "cns_01a09fee-0000-7000-8000-000000000002",
+        "cursor": {
+          "bound": "formula:local.daily-report"
+        },
+        "depth": 0,
+        "invoke_mode": "open_inert",
+        "policy": {
+          "canonical": "jcs-1",
+          "nodes": {
+            "catalyst:supabase.com.database": {
+              "edges": {},
+              "limits": {
+                "batch_timeout": "2m",
+                "max_concurrent_tasks": 4,
+                "max_memory_bytes": 33554432,
+                "max_request_size": 524288,
+                "max_response_size": 2097152,
+                "rate_limit": {
+                  "requests": 20,
+                  "window": "10s"
+                },
+                "timeout": "45s"
+              }
+            },
+            "formula:local.daily-report": {
+              "edges": {
+                "@ingress": {
+                  "vault": {
+                    "attach": {
+                      "in": "header",
+                      "name": "Authorization",
+                      "template": "Bearer {value}"
+                    },
+                    "binding_digest": "sha256:bind-default",
+                    "binding_key": "formula:local.daily-report|@ingress|default",
+                    "destination": {
+                      "hosts": [
+                        "prod.supabase.co"
+                      ],
+                      "scheme": "https"
+                    },
+                    "entry_id": "ent_default",
+                    "named": {
+                      "Second": {
+                        "attach": {
+                          "in": "header",
+                          "name": "Authorization",
+                          "template": "Bearer {value}"
+                        },
+                        "binding_digest": "sha256:bind-second",
+                        "binding_key": "formula:local.daily-report|@ingress|name:Second",
+                        "destination": {
+                          "hosts": [
+                            "prod.supabase.co"
+                          ],
+                          "scheme": "https"
+                        },
+                        "entry_id": "ent_second",
+                        "projection": {
+                          "fields": {
+                            "service_key": "service_key",
+                            "url": "url"
+                          },
+                          "scopes": []
+                        },
+                        "scope": "athanor"
+                      },
+                      "Third": {
+                        "binding_digest": "sha256:bind-third",
+                        "binding_key": "formula:local.daily-report|@ingress|name:Third",
+                        "destination": {
+                          "hosts": [
+                            "prod.supabase.co"
+                          ],
+                          "scheme": "https"
+                        },
+                        "entry_id": "ent_third",
+                        "projection": {
+                          "fields": {},
+                          "scopes": []
+                        },
+                        "scope": "athanor"
+                      }
+                    },
+                    "projection": {
+                      "fields": {
+                        "url": "url"
+                      },
+                      "scopes": []
+                    },
+                    "scope": "athanor"
+                  }
+                }
+              },
+              "limits": {
+                "batch_timeout": "5m",
+                "max_concurrent_tasks": 30,
+                "max_memory_bytes": 67108864,
+                "max_request_size": 1048576,
+                "max_response_size": 5242880,
+                "rate_limit": {
+                  "requests": 100,
+                  "window": "1m"
+                },
+                "timeout": "15m"
+              }
+            }
+          }
+        },
+        "profile_id": "prof_01a09fee-0000-7000-8000-000000000001",
+        "profile_kind": "owner",
+        "resources": {
+          "vault": {
+            "attach": {
+              "in": "header",
+              "name": "Authorization",
+              "template": "Bearer {value}"
+            },
+            "binding_digest": "sha256:bind-default",
+            "binding_key": "formula:local.daily-report|@ingress|default",
+            "destination": {
+              "hosts": [
+                "prod.supabase.co"
+              ],
+              "scheme": "https"
+            },
+            "entry_id": "ent_default",
+            "named": {
+              "Second": {
+                "attach": {
+                  "in": "header",
+                  "name": "Authorization",
+                  "template": "Bearer {value}"
+                },
+                "binding_digest": "sha256:bind-second",
+                "binding_key": "formula:local.daily-report|@ingress|name:Second",
+                "destination": {
+                  "hosts": [
+                    "prod.supabase.co"
+                  ],
+                  "scheme": "https"
+                },
+                "entry_id": "ent_second",
+                "projection": {
+                  "fields": {
+                    "service_key": "service_key",
+                    "url": "url"
+                  },
+                  "scopes": []
+                },
+                "scope": "athanor"
+              },
+              "Third": {
+                "binding_digest": "sha256:bind-third",
+                "binding_key": "formula:local.daily-report|@ingress|name:Third",
+                "destination": {
+                  "hosts": [
+                    "prod.supabase.co"
+                  ],
+                  "scheme": "https"
+                },
+                "entry_id": "ent_third",
+                "projection": {
+                  "fields": {},
+                  "scopes": []
+                },
+                "scope": "athanor"
+              }
+            },
+            "projection": {
+              "fields": {
+                "url": "url"
+              },
+              "scopes": []
+            },
+            "scope": "athanor"
+          }
+        },
+        "source_ref": "formula:local.daily-report"
+      },
+      "limits": {
+        "batch_timeout": "5m",
+        "max_concurrent_tasks": 30,
+        "max_memory_bytes": 67108864,
+        "max_request_size": 1048576,
+        "max_response_size": 5242880,
+        "rate_limit": {
+          "requests": 100,
+          "window": "1m"
+        },
+        "timeout": "15m"
+      },
+      "attached_fields": [
+        "service_key",
+        "url"
+      ]
+    },
+    {
+      "why": "a bound child through an edge with named accounts: it holds the default binding alone, and its node's limits",
+      "authority": {
+        "activation": {
+          "catalyst:supabase.com.database": "sha256:act-catalyst",
+          "formula:local.daily-report": "sha256:act-formula"
+        },
+        "budget": {
+          "id": "bgt_AAAAAAAAAAHKmY6r"
+        },
+        "chain": [
+          "formula:local.daily-report",
+          "catalyst:supabase.com.database"
+        ],
+        "consent_id": "cns_01a09fee-0000-7000-8000-000000000002",
+        "cursor": {
+          "bound": "catalyst:supabase.com.database"
+        },
+        "depth": 1,
+        "invoke_mode": "open_inert",
+        "policy": {
+          "canonical": "jcs-1",
+          "nodes": {
+            "catalyst:supabase.com.database": {
+              "edges": {},
+              "limits": {
+                "batch_timeout": "2m",
+                "max_concurrent_tasks": 4,
+                "max_memory_bytes": 33554432,
+                "max_request_size": 524288,
+                "max_response_size": 2097152,
+                "rate_limit": {
+                  "requests": 20,
+                  "window": "10s"
+                },
+                "timeout": "45s"
+              }
+            },
+            "formula:local.daily-report": {
+              "edges": {
+                "@ingress": {},
+                "catalyst:supabase.com.database|source": {
+                  "vault": {
+                    "attach": {
+                      "in": "header",
+                      "name": "Authorization",
+                      "template": "Bearer {value}"
+                    },
+                    "binding_digest": "sha256:bind-default",
+                    "binding_key": "formula:local.daily-report|catalyst:supabase.com.database|source|default",
+                    "destination": {
+                      "hosts": [
+                        "prod.supabase.co"
+                      ],
+                      "scheme": "https"
+                    },
+                    "entry_id": "ent_default",
+                    "named": {
+                      "Second": {
+                        "attach": {
+                          "in": "header",
+                          "name": "Authorization",
+                          "template": "Bearer {value}"
+                        },
+                        "binding_digest": "sha256:bind-second",
+                        "binding_key": "formula:local.daily-report|catalyst:supabase.com.database|source|name:Second",
+                        "destination": {
+                          "hosts": [
+                            "prod.supabase.co"
+                          ],
+                          "scheme": "https"
+                        },
+                        "entry_id": "ent_second",
+                        "projection": {
+                          "fields": {
+                            "service_key": "service_key",
+                            "url": "url"
+                          },
+                          "scopes": []
+                        },
+                        "scope": "athanor"
+                      },
+                      "Third": {
+                        "binding_digest": "sha256:bind-third",
+                        "binding_key": "formula:local.daily-report|catalyst:supabase.com.database|source|name:Third",
+                        "destination": {
+                          "hosts": [
+                            "prod.supabase.co"
+                          ],
+                          "scheme": "https"
+                        },
+                        "entry_id": "ent_third",
+                        "projection": {
+                          "fields": {},
+                          "scopes": []
+                        },
+                        "scope": "athanor"
+                      }
+                    },
+                    "projection": {
+                      "fields": {
+                        "url": "url"
+                      },
+                      "scopes": []
+                    },
+                    "scope": "athanor"
+                  }
+                }
+              },
+              "limits": {
+                "batch_timeout": "5m",
+                "max_concurrent_tasks": 30,
+                "max_memory_bytes": 67108864,
+                "max_request_size": 1048576,
+                "max_response_size": 5242880,
+                "rate_limit": {
+                  "requests": 100,
+                  "window": "1m"
+                },
+                "timeout": "15m"
+              }
+            }
+          }
+        },
+        "profile_id": "prof_01a09fee-0000-7000-8000-000000000001",
+        "profile_kind": "owner",
+        "resources": {
+          "vault": {
+            "attach": {
+              "in": "header",
+              "name": "Authorization",
+              "template": "Bearer {value}"
+            },
+            "binding_digest": "sha256:bind-default",
+            "binding_key": "formula:local.daily-report|catalyst:supabase.com.database|source|default",
+            "destination": {
+              "hosts": [
+                "prod.supabase.co"
+              ],
+              "scheme": "https"
+            },
+            "entry_id": "ent_default",
+            "projection": {
+              "fields": {
+                "url": "url"
+              },
+              "scopes": []
+            },
+            "scope": "athanor"
+          }
+        },
+        "source_ref": "formula:local.daily-report"
+      },
+      "limits": {
+        "batch_timeout": "2m",
+        "max_concurrent_tasks": 4,
+        "max_memory_bytes": 33554432,
+        "max_request_size": 524288,
+        "max_response_size": 2097152,
+        "rate_limit": {
+          "requests": 20,
+          "window": "10s"
+        },
+        "timeout": "45s"
+      },
+      "attached_fields": [
+        "url"
+      ]
+    },
+    {
+      "why": "a bound child whose call picked the named account Second: that binding alone",
+      "authority": {
+        "activation": {
+          "catalyst:supabase.com.database": "sha256:act-catalyst",
+          "formula:local.daily-report": "sha256:act-formula"
+        },
+        "budget": {
+          "id": "bgt_AAAAAAAAAAHKmY6r"
+        },
+        "chain": [
+          "formula:local.daily-report",
+          "catalyst:supabase.com.database"
+        ],
+        "consent_id": "cns_01a09fee-0000-7000-8000-000000000002",
+        "cursor": {
+          "bound": "catalyst:supabase.com.database"
+        },
+        "depth": 1,
+        "invoke_mode": "open_inert",
+        "policy": {
+          "canonical": "jcs-1",
+          "nodes": {
+            "catalyst:supabase.com.database": {
+              "edges": {},
+              "limits": {
+                "batch_timeout": "2m",
+                "max_concurrent_tasks": 4,
+                "max_memory_bytes": 33554432,
+                "max_request_size": 524288,
+                "max_response_size": 2097152,
+                "rate_limit": {
+                  "requests": 20,
+                  "window": "10s"
+                },
+                "timeout": "45s"
+              }
+            },
+            "formula:local.daily-report": {
+              "edges": {
+                "@ingress": {},
+                "catalyst:supabase.com.database|source": {
+                  "vault": {
+                    "attach": {
+                      "in": "header",
+                      "name": "Authorization",
+                      "template": "Bearer {value}"
+                    },
+                    "binding_digest": "sha256:bind-default",
+                    "binding_key": "formula:local.daily-report|catalyst:supabase.com.database|source|default",
+                    "destination": {
+                      "hosts": [
+                        "prod.supabase.co"
+                      ],
+                      "scheme": "https"
+                    },
+                    "entry_id": "ent_default",
+                    "named": {
+                      "Second": {
+                        "attach": {
+                          "in": "header",
+                          "name": "Authorization",
+                          "template": "Bearer {value}"
+                        },
+                        "binding_digest": "sha256:bind-second",
+                        "binding_key": "formula:local.daily-report|catalyst:supabase.com.database|source|name:Second",
+                        "destination": {
+                          "hosts": [
+                            "prod.supabase.co"
+                          ],
+                          "scheme": "https"
+                        },
+                        "entry_id": "ent_second",
+                        "projection": {
+                          "fields": {
+                            "service_key": "service_key",
+                            "url": "url"
+                          },
+                          "scopes": []
+                        },
+                        "scope": "athanor"
+                      },
+                      "Third": {
+                        "binding_digest": "sha256:bind-third",
+                        "binding_key": "formula:local.daily-report|catalyst:supabase.com.database|source|name:Third",
+                        "destination": {
+                          "hosts": [
+                            "prod.supabase.co"
+                          ],
+                          "scheme": "https"
+                        },
+                        "entry_id": "ent_third",
+                        "projection": {
+                          "fields": {},
+                          "scopes": []
+                        },
+                        "scope": "athanor"
+                      }
+                    },
+                    "projection": {
+                      "fields": {
+                        "url": "url"
+                      },
+                      "scopes": []
+                    },
+                    "scope": "athanor"
+                  }
+                }
+              },
+              "limits": {
+                "batch_timeout": "5m",
+                "max_concurrent_tasks": 30,
+                "max_memory_bytes": 67108864,
+                "max_request_size": 1048576,
+                "max_response_size": 5242880,
+                "rate_limit": {
+                  "requests": 100,
+                  "window": "1m"
+                },
+                "timeout": "15m"
+              }
+            }
+          }
+        },
+        "profile_id": "prof_01a09fee-0000-7000-8000-000000000001",
+        "profile_kind": "owner",
+        "resources": {
+          "vault": {
+            "attach": {
+              "in": "header",
+              "name": "Authorization",
+              "template": "Bearer {value}"
+            },
+            "binding_digest": "sha256:bind-second",
+            "binding_key": "formula:local.daily-report|catalyst:supabase.com.database|source|name:Second",
+            "destination": {
+              "hosts": [
+                "prod.supabase.co"
+              ],
+              "scheme": "https"
+            },
+            "entry_id": "ent_second",
+            "projection": {
+              "fields": {
+                "service_key": "service_key",
+                "url": "url"
+              },
+              "scopes": []
+            },
+            "scope": "athanor"
+          }
+        },
+        "source_ref": "formula:local.daily-report"
+      },
+      "limits": {
+        "batch_timeout": "2m",
+        "max_concurrent_tasks": 4,
+        "max_memory_bytes": 33554432,
+        "max_request_size": 524288,
+        "max_response_size": 2097152,
+        "rate_limit": {
+          "requests": 20,
+          "window": "10s"
+        },
+        "timeout": "45s"
+      },
+      "attached_fields": [
+        "service_key",
+        "url"
+      ]
+    },
+    {
+      "why": "a vault selected from another profile (via) projects none",
+      "authority": {
+        "activation": {
+          "catalyst:supabase.com.database": "sha256:act-catalyst",
+          "formula:local.daily-report": "sha256:act-formula"
+        },
+        "budget": {
+          "id": "bgt_AAAAAAAAAAHKmY6r"
+        },
+        "chain": [
+          "formula:local.daily-report"
+        ],
+        "consent_id": "cns_01a09fee-0000-7000-8000-000000000002",
+        "cursor": {
+          "bound": "formula:local.daily-report"
+        },
+        "depth": 0,
+        "invoke_mode": "open_inert",
+        "policy": {
+          "canonical": "jcs-1",
+          "nodes": {
+            "catalyst:supabase.com.database": {
+              "edges": {},
+              "limits": {
+                "batch_timeout": "2m",
+                "max_concurrent_tasks": 4,
+                "max_memory_bytes": 33554432,
+                "max_request_size": 524288,
+                "max_response_size": 2097152,
+                "rate_limit": {
+                  "requests": 20,
+                  "window": "10s"
+                },
+                "timeout": "45s"
+              }
+            },
+            "formula:local.daily-report": {
+              "edges": {
+                "@ingress": {
+                  "vault": {
+                    "via": {
+                      "binding_digest": "sha256:bind-lent",
+                      "label": "work"
+                    }
+                  }
+                }
+              },
+              "limits": {
+                "batch_timeout": "5m",
+                "max_concurrent_tasks": 30,
+                "max_memory_bytes": 67108864,
+                "max_request_size": 1048576,
+                "max_response_size": 5242880,
+                "rate_limit": {
+                  "requests": 100,
+                  "window": "1m"
+                },
+                "timeout": "15m"
+              }
+            }
+          }
+        },
+        "profile_id": "prof_01a09fee-0000-7000-8000-000000000001",
+        "profile_kind": "owner",
+        "resources": {
+          "vault": {
+            "via": {
+              "binding_digest": "sha256:bind-lent",
+              "label": "work"
+            }
+          }
+        },
+        "source_ref": "formula:local.daily-report"
+      },
+      "limits": {
+        "batch_timeout": "5m",
+        "max_concurrent_tasks": 30,
+        "max_memory_bytes": 67108864,
+        "max_request_size": 1048576,
+        "max_response_size": 5242880,
+        "rate_limit": {
+          "requests": 100,
+          "window": "1m"
+        },
+        "timeout": "15m"
+      },
+      "attached_fields": []
+    },
+    {
+      "why": "a publisher's provided configuration projects none",
+      "authority": {
+        "activation": {
+          "catalyst:supabase.com.database": "sha256:act-catalyst",
+          "formula:local.daily-report": "sha256:act-formula"
+        },
+        "budget": {
+          "id": "bgt_AAAAAAAAAAHKmY6r"
+        },
+        "chain": [
+          "formula:local.daily-report"
+        ],
+        "consent_id": "cns_01a09fee-0000-7000-8000-000000000002",
+        "cursor": {
+          "bound": "formula:local.daily-report"
+        },
+        "depth": 0,
+        "invoke_mode": "open_inert",
+        "policy": {
+          "canonical": "jcs-1",
+          "nodes": {
+            "catalyst:supabase.com.database": {
+              "edges": {},
+              "limits": {
+                "batch_timeout": "2m",
+                "max_concurrent_tasks": 4,
+                "max_memory_bytes": 33554432,
+                "max_request_size": 524288,
+                "max_response_size": 2097152,
+                "rate_limit": {
+                  "requests": 20,
+                  "window": "10s"
+                },
+                "timeout": "45s"
+              }
+            },
+            "formula:local.daily-report": {
+              "edges": {
+                "@ingress": {
+                  "vault": {
+                    "provided": {
+                      "attach": {
+                        "in": "header",
+                        "name": "Authorization",
+                        "template": "Bearer {value}"
+                      },
+                      "destination": {
+                        "hosts": [
+                          "prod.supabase.co"
+                        ],
+                        "scheme": "https"
+                      },
+                      "values": {
+                        "project_url": "https://prod.supabase.co"
+                      }
+                    }
+                  }
+                }
+              },
+              "limits": {
+                "batch_timeout": "5m",
+                "max_concurrent_tasks": 30,
+                "max_memory_bytes": 67108864,
+                "max_request_size": 1048576,
+                "max_response_size": 5242880,
+                "rate_limit": {
+                  "requests": 100,
+                  "window": "1m"
+                },
+                "timeout": "15m"
+              }
+            }
+          }
+        },
+        "profile_id": "prof_01a09fee-0000-7000-8000-000000000001",
+        "profile_kind": "owner",
+        "resources": {
+          "vault": {
+            "provided": {
+              "attach": {
+                "in": "header",
+                "name": "Authorization",
+                "template": "Bearer {value}"
+              },
+              "destination": {
+                "hosts": [
+                  "prod.supabase.co"
+                ],
+                "scheme": "https"
+              },
+              "values": {
+                "project_url": "https://prod.supabase.co"
+              }
+            }
+          }
+        },
+        "source_ref": "formula:local.daily-report"
+      },
+      "limits": {
+        "batch_timeout": "5m",
+        "max_concurrent_tasks": 30,
+        "max_memory_bytes": 67108864,
+        "max_request_size": 1048576,
+        "max_response_size": 5242880,
+        "rate_limit": {
+          "requests": 100,
+          "window": "1m"
+        },
+        "timeout": "15m"
+      },
+      "attached_fields": []
+    },
+    {
+      "why": "a node consenting no memory at all: read as zero, which the runner refuses to run before it fetches the component",
+      "authority": {
+        "activation": {
+          "catalyst:supabase.com.database": "sha256:act-catalyst",
+          "formula:local.daily-report": "sha256:act-formula"
+        },
+        "budget": {
+          "id": "bgt_AAAAAAAAAAHKmY6r"
+        },
+        "chain": [
+          "formula:local.daily-report"
+        ],
+        "consent_id": "cns_01a09fee-0000-7000-8000-000000000002",
+        "cursor": {
+          "bound": "formula:local.daily-report"
+        },
+        "depth": 0,
+        "invoke_mode": "open_inert",
+        "policy": {
+          "canonical": "jcs-1",
+          "nodes": {
+            "catalyst:supabase.com.database": {
+              "edges": {},
+              "limits": {
+                "batch_timeout": "2m",
+                "max_concurrent_tasks": 4,
+                "max_memory_bytes": 33554432,
+                "max_request_size": 524288,
+                "max_response_size": 2097152,
+                "rate_limit": {
+                  "requests": 20,
+                  "window": "10s"
+                },
+                "timeout": "45s"
+              }
+            },
+            "formula:local.daily-report": {
+              "edges": {
+                "@ingress": {}
+              },
+              "limits": {
+                "batch_timeout": "2m",
+                "max_concurrent_tasks": 4,
+                "max_memory_bytes": 0,
+                "max_request_size": 524288,
+                "max_response_size": 2097152,
+                "rate_limit": {
+                  "requests": 20,
+                  "window": "10s"
+                },
+                "timeout": "45s"
+              }
+            }
+          }
+        },
+        "profile_id": "prof_01a09fee-0000-7000-8000-000000000001",
+        "profile_kind": "owner",
+        "source_ref": "formula:local.daily-report"
+      },
+      "limits": {
+        "batch_timeout": "2m",
+        "max_concurrent_tasks": 4,
+        "max_memory_bytes": 0,
+        "max_request_size": 524288,
+        "max_response_size": 2097152,
+        "rate_limit": {
+          "requests": 20,
+          "window": "10s"
+        },
+        "timeout": "45s"
+      },
+      "attached_fields": []
+    },
+    {
+      "why": "durations in each spelling Prima's parser reads: whole seconds with no unit, milliseconds, and a leading plus",
+      "authority": {
+        "activation": {
+          "catalyst:supabase.com.database": "sha256:act-catalyst",
+          "formula:local.daily-report": "sha256:act-formula"
+        },
+        "budget": {
+          "id": "bgt_AAAAAAAAAAHKmY6r"
+        },
+        "chain": [
+          "formula:local.daily-report"
+        ],
+        "consent_id": "cns_01a09fee-0000-7000-8000-000000000002",
+        "cursor": {
+          "bound": "formula:local.daily-report"
+        },
+        "depth": 0,
+        "invoke_mode": "open_inert",
+        "policy": {
+          "canonical": "jcs-1",
+          "nodes": {
+            "catalyst:supabase.com.database": {
+              "edges": {},
+              "limits": {
+                "batch_timeout": "2m",
+                "max_concurrent_tasks": 4,
+                "max_memory_bytes": 33554432,
+                "max_request_size": 524288,
+                "max_response_size": 2097152,
+                "rate_limit": {
+                  "requests": 20,
+                  "window": "10s"
+                },
+                "timeout": "45s"
+              }
+            },
+            "formula:local.daily-report": {
+              "edges": {
+                "@ingress": {}
+              },
+              "limits": {
+                "batch_timeout": "+2m",
+                "max_concurrent_tasks": 4,
+                "max_memory_bytes": 33554432,
+                "max_request_size": 524288,
+                "max_response_size": 2097152,
+                "rate_limit": {
+                  "requests": 20,
+                  "window": "500ms"
+                },
+                "timeout": "90"
+              }
+            }
+          }
+        },
+        "profile_id": "prof_01a09fee-0000-7000-8000-000000000001",
+        "profile_kind": "owner",
+        "source_ref": "formula:local.daily-report"
+      },
+      "limits": {
+        "batch_timeout": "+2m",
+        "max_concurrent_tasks": 4,
+        "max_memory_bytes": 33554432,
+        "max_request_size": 524288,
+        "max_response_size": 2097152,
+        "rate_limit": {
+          "requests": 20,
+          "window": "500ms"
+        },
+        "timeout": "90"
+      },
+      "attached_fields": []
+    }
+  ],
+  "refused": [
+    {
+      "why": "a bound cursor naming no node of the policy",
+      "authority": {
+        "activation": {
+          "catalyst:supabase.com.database": "sha256:act-catalyst",
+          "formula:local.daily-report": "sha256:act-formula"
+        },
+        "budget": {
+          "id": "bgt_AAAAAAAAAAHKmY6r"
+        },
+        "chain": [
+          "formula:local.daily-report"
+        ],
+        "consent_id": "cns_01a09fee-0000-7000-8000-000000000002",
+        "cursor": {
+          "bound": "formula:local.ghost"
+        },
+        "depth": 0,
+        "invoke_mode": "open_inert",
+        "policy": {
+          "canonical": "jcs-1",
+          "nodes": {
+            "catalyst:supabase.com.database": {
+              "edges": {},
+              "limits": {
+                "batch_timeout": "2m",
+                "max_concurrent_tasks": 4,
+                "max_memory_bytes": 33554432,
+                "max_request_size": 524288,
+                "max_response_size": 2097152,
+                "rate_limit": {
+                  "requests": 20,
+                  "window": "10s"
+                },
+                "timeout": "45s"
+              }
+            },
+            "formula:local.daily-report": {
+              "edges": {
+                "@ingress": {
+                  "egress": {
+                    "domains": [
+                      "prod.supabase.co"
+                    ],
+                    "methods": [],
+                    "private_ips": [],
+                    "schemes": [
+                      "https"
+                    ]
+                  },
+                  "vault": {
+                    "attach": {
+                      "in": "header",
+                      "name": "Authorization",
+                      "template": "Bearer {value}"
+                    },
+                    "binding_digest": "sha256:bind-source",
+                    "binding_key": "formula:local.daily-report|@ingress|default",
+                    "destination": {
+                      "hosts": [
+                        "prod.supabase.co"
+                      ],
+                      "scheme": "https"
+                    },
+                    "entry_id": "ent_source",
+                    "projection": {
+                      "fields": {
+                        "anon_key": "anon key",
+                        "url": "url"
+                      },
+                      "scopes": []
+                    },
+                    "scope": "athanor"
+                  }
+                }
+              },
+              "limits": {
+                "batch_timeout": "5m",
+                "max_concurrent_tasks": 30,
+                "max_memory_bytes": 67108864,
+                "max_request_size": 1048576,
+                "max_response_size": 5242880,
+                "rate_limit": {
+                  "requests": 100,
+                  "window": "1m"
+                },
+                "timeout": "15m"
+              }
+            }
+          }
+        },
+        "profile_id": "prof_01a09fee-0000-7000-8000-000000000001",
+        "profile_kind": "owner",
+        "resources": {
+          "egress": {
+            "domains": [
+              "prod.supabase.co"
+            ],
+            "methods": [],
+            "private_ips": [],
+            "schemes": [
+              "https"
+            ]
+          },
+          "vault": {
+            "attach": {
+              "in": "header",
+              "name": "Authorization",
+              "template": "Bearer {value}"
+            },
+            "binding_digest": "sha256:bind-source",
+            "binding_key": "formula:local.daily-report|@ingress|default",
+            "destination": {
+              "hosts": [
+                "prod.supabase.co"
+              ],
+              "scheme": "https"
+            },
+            "entry_id": "ent_source",
+            "projection": {
+              "fields": {
+                "anon_key": "anon key",
+                "url": "url"
+              },
+              "scopes": []
+            },
+            "scope": "athanor"
+          }
+        },
+        "source_ref": "formula:local.daily-report"
+      }
+    },
+    {
+      "why": "a bound cursor with no policy",
+      "authority": {
+        "activation": {},
+        "budget": {
+          "id": "bgt_AAAAAAAAAAHKmY6r"
+        },
+        "chain": [],
+        "cursor": {
+          "bound": "formula:local.daily-report"
+        },
+        "depth": 0,
+        "invoke_mode": "open_inert"
+      }
+    },
+    {
+      "why": "a cursor of another shape: the word bound alone",
+      "authority": {
+        "activation": {
+          "catalyst:supabase.com.database": "sha256:act-catalyst",
+          "formula:local.daily-report": "sha256:act-formula"
+        },
+        "budget": {
+          "id": "bgt_AAAAAAAAAAHKmY6r"
+        },
+        "chain": [
+          "formula:local.daily-report"
+        ],
+        "consent_id": "cns_01a09fee-0000-7000-8000-000000000002",
+        "cursor": "bound",
+        "depth": 0,
+        "invoke_mode": "open_inert",
+        "policy": {
+          "canonical": "jcs-1",
+          "nodes": {
+            "catalyst:supabase.com.database": {
+              "edges": {},
+              "limits": {
+                "batch_timeout": "2m",
+                "max_concurrent_tasks": 4,
+                "max_memory_bytes": 33554432,
+                "max_request_size": 524288,
+                "max_response_size": 2097152,
+                "rate_limit": {
+                  "requests": 20,
+                  "window": "10s"
+                },
+                "timeout": "45s"
+              }
+            },
+            "formula:local.daily-report": {
+              "edges": {
+                "@ingress": {
+                  "egress": {
+                    "domains": [
+                      "prod.supabase.co"
+                    ],
+                    "methods": [],
+                    "private_ips": [],
+                    "schemes": [
+                      "https"
+                    ]
+                  },
+                  "vault": {
+                    "attach": {
+                      "in": "header",
+                      "name": "Authorization",
+                      "template": "Bearer {value}"
+                    },
+                    "binding_digest": "sha256:bind-source",
+                    "binding_key": "formula:local.daily-report|@ingress|default",
+                    "destination": {
+                      "hosts": [
+                        "prod.supabase.co"
+                      ],
+                      "scheme": "https"
+                    },
+                    "entry_id": "ent_source",
+                    "projection": {
+                      "fields": {
+                        "anon_key": "anon key",
+                        "url": "url"
+                      },
+                      "scopes": []
+                    },
+                    "scope": "athanor"
+                  }
+                }
+              },
+              "limits": {
+                "batch_timeout": "5m",
+                "max_concurrent_tasks": 30,
+                "max_memory_bytes": 67108864,
+                "max_request_size": 1048576,
+                "max_response_size": 5242880,
+                "rate_limit": {
+                  "requests": 100,
+                  "window": "1m"
+                },
+                "timeout": "15m"
+              }
+            }
+          }
+        },
+        "profile_id": "prof_01a09fee-0000-7000-8000-000000000001",
+        "profile_kind": "owner",
+        "resources": {
+          "egress": {
+            "domains": [
+              "prod.supabase.co"
+            ],
+            "methods": [],
+            "private_ips": [],
+            "schemes": [
+              "https"
+            ]
+          },
+          "vault": {
+            "attach": {
+              "in": "header",
+              "name": "Authorization",
+              "template": "Bearer {value}"
+            },
+            "binding_digest": "sha256:bind-source",
+            "binding_key": "formula:local.daily-report|@ingress|default",
+            "destination": {
+              "hosts": [
+                "prod.supabase.co"
+              ],
+              "scheme": "https"
+            },
+            "entry_id": "ent_source",
+            "projection": {
+              "fields": {
+                "anon_key": "anon key",
+                "url": "url"
+              },
+              "scopes": []
+            },
+            "scope": "athanor"
+          }
+        },
+        "source_ref": "formula:local.daily-report"
+      }
+    },
+    {
+      "why": "a cursor of another shape: a bound naming the empty ref",
+      "authority": {
+        "activation": {
+          "catalyst:supabase.com.database": "sha256:act-catalyst",
+          "formula:local.daily-report": "sha256:act-formula"
+        },
+        "budget": {
+          "id": "bgt_AAAAAAAAAAHKmY6r"
+        },
+        "chain": [
+          "formula:local.daily-report"
+        ],
+        "consent_id": "cns_01a09fee-0000-7000-8000-000000000002",
+        "cursor": {
+          "bound": ""
+        },
+        "depth": 0,
+        "invoke_mode": "open_inert",
+        "policy": {
+          "canonical": "jcs-1",
+          "nodes": {
+            "catalyst:supabase.com.database": {
+              "edges": {},
+              "limits": {
+                "batch_timeout": "2m",
+                "max_concurrent_tasks": 4,
+                "max_memory_bytes": 33554432,
+                "max_request_size": 524288,
+                "max_response_size": 2097152,
+                "rate_limit": {
+                  "requests": 20,
+                  "window": "10s"
+                },
+                "timeout": "45s"
+              }
+            },
+            "formula:local.daily-report": {
+              "edges": {
+                "@ingress": {
+                  "egress": {
+                    "domains": [
+                      "prod.supabase.co"
+                    ],
+                    "methods": [],
+                    "private_ips": [],
+                    "schemes": [
+                      "https"
+                    ]
+                  },
+                  "vault": {
+                    "attach": {
+                      "in": "header",
+                      "name": "Authorization",
+                      "template": "Bearer {value}"
+                    },
+                    "binding_digest": "sha256:bind-source",
+                    "binding_key": "formula:local.daily-report|@ingress|default",
+                    "destination": {
+                      "hosts": [
+                        "prod.supabase.co"
+                      ],
+                      "scheme": "https"
+                    },
+                    "entry_id": "ent_source",
+                    "projection": {
+                      "fields": {
+                        "anon_key": "anon key",
+                        "url": "url"
+                      },
+                      "scopes": []
+                    },
+                    "scope": "athanor"
+                  }
+                }
+              },
+              "limits": {
+                "batch_timeout": "5m",
+                "max_concurrent_tasks": 30,
+                "max_memory_bytes": 67108864,
+                "max_request_size": 1048576,
+                "max_response_size": 5242880,
+                "rate_limit": {
+                  "requests": 100,
+                  "window": "1m"
+                },
+                "timeout": "15m"
+              }
+            }
+          }
+        },
+        "profile_id": "prof_01a09fee-0000-7000-8000-000000000001",
+        "profile_kind": "owner",
+        "resources": {
+          "egress": {
+            "domains": [
+              "prod.supabase.co"
+            ],
+            "methods": [],
+            "private_ips": [],
+            "schemes": [
+              "https"
+            ]
+          },
+          "vault": {
+            "attach": {
+              "in": "header",
+              "name": "Authorization",
+              "template": "Bearer {value}"
+            },
+            "binding_digest": "sha256:bind-source",
+            "binding_key": "formula:local.daily-report|@ingress|default",
+            "destination": {
+              "hosts": [
+                "prod.supabase.co"
+              ],
+              "scheme": "https"
+            },
+            "entry_id": "ent_source",
+            "projection": {
+              "fields": {
+                "anon_key": "anon key",
+                "url": "url"
+              },
+              "scopes": []
+            },
+            "scope": "athanor"
+          }
+        },
+        "source_ref": "formula:local.daily-report"
+      }
+    },
+    {
+      "why": "a cursor of another shape: a bound naming a number",
+      "authority": {
+        "activation": {
+          "catalyst:supabase.com.database": "sha256:act-catalyst",
+          "formula:local.daily-report": "sha256:act-formula"
+        },
+        "budget": {
+          "id": "bgt_AAAAAAAAAAHKmY6r"
+        },
+        "chain": [
+          "formula:local.daily-report"
+        ],
+        "consent_id": "cns_01a09fee-0000-7000-8000-000000000002",
+        "cursor": {
+          "bound": 7
+        },
+        "depth": 0,
+        "invoke_mode": "open_inert",
+        "policy": {
+          "canonical": "jcs-1",
+          "nodes": {
+            "catalyst:supabase.com.database": {
+              "edges": {},
+              "limits": {
+                "batch_timeout": "2m",
+                "max_concurrent_tasks": 4,
+                "max_memory_bytes": 33554432,
+                "max_request_size": 524288,
+                "max_response_size": 2097152,
+                "rate_limit": {
+                  "requests": 20,
+                  "window": "10s"
+                },
+                "timeout": "45s"
+              }
+            },
+            "formula:local.daily-report": {
+              "edges": {
+                "@ingress": {
+                  "egress": {
+                    "domains": [
+                      "prod.supabase.co"
+                    ],
+                    "methods": [],
+                    "private_ips": [],
+                    "schemes": [
+                      "https"
+                    ]
+                  },
+                  "vault": {
+                    "attach": {
+                      "in": "header",
+                      "name": "Authorization",
+                      "template": "Bearer {value}"
+                    },
+                    "binding_digest": "sha256:bind-source",
+                    "binding_key": "formula:local.daily-report|@ingress|default",
+                    "destination": {
+                      "hosts": [
+                        "prod.supabase.co"
+                      ],
+                      "scheme": "https"
+                    },
+                    "entry_id": "ent_source",
+                    "projection": {
+                      "fields": {
+                        "anon_key": "anon key",
+                        "url": "url"
+                      },
+                      "scopes": []
+                    },
+                    "scope": "athanor"
+                  }
+                }
+              },
+              "limits": {
+                "batch_timeout": "5m",
+                "max_concurrent_tasks": 30,
+                "max_memory_bytes": 67108864,
+                "max_request_size": 1048576,
+                "max_response_size": 5242880,
+                "rate_limit": {
+                  "requests": 100,
+                  "window": "1m"
+                },
+                "timeout": "15m"
+              }
+            }
+          }
+        },
+        "profile_id": "prof_01a09fee-0000-7000-8000-000000000001",
+        "profile_kind": "owner",
+        "resources": {
+          "egress": {
+            "domains": [
+              "prod.supabase.co"
+            ],
+            "methods": [],
+            "private_ips": [],
+            "schemes": [
+              "https"
+            ]
+          },
+          "vault": {
+            "attach": {
+              "in": "header",
+              "name": "Authorization",
+              "template": "Bearer {value}"
+            },
+            "binding_digest": "sha256:bind-source",
+            "binding_key": "formula:local.daily-report|@ingress|default",
+            "destination": {
+              "hosts": [
+                "prod.supabase.co"
+              ],
+              "scheme": "https"
+            },
+            "entry_id": "ent_source",
+            "projection": {
+              "fields": {
+                "anon_key": "anon key",
+                "url": "url"
+              },
+              "scopes": []
+            },
+            "scope": "athanor"
+          }
+        },
+        "source_ref": "formula:local.daily-report"
+      }
+    },
+    {
+      "why": "a cursor of another shape: a list",
+      "authority": {
+        "activation": {
+          "catalyst:supabase.com.database": "sha256:act-catalyst",
+          "formula:local.daily-report": "sha256:act-formula"
+        },
+        "budget": {
+          "id": "bgt_AAAAAAAAAAHKmY6r"
+        },
+        "chain": [
+          "formula:local.daily-report"
+        ],
+        "consent_id": "cns_01a09fee-0000-7000-8000-000000000002",
+        "cursor": [
+          "bound",
+          "formula:local.daily-report"
+        ],
+        "depth": 0,
+        "invoke_mode": "open_inert",
+        "policy": {
+          "canonical": "jcs-1",
+          "nodes": {
+            "catalyst:supabase.com.database": {
+              "edges": {},
+              "limits": {
+                "batch_timeout": "2m",
+                "max_concurrent_tasks": 4,
+                "max_memory_bytes": 33554432,
+                "max_request_size": 524288,
+                "max_response_size": 2097152,
+                "rate_limit": {
+                  "requests": 20,
+                  "window": "10s"
+                },
+                "timeout": "45s"
+              }
+            },
+            "formula:local.daily-report": {
+              "edges": {
+                "@ingress": {
+                  "egress": {
+                    "domains": [
+                      "prod.supabase.co"
+                    ],
+                    "methods": [],
+                    "private_ips": [],
+                    "schemes": [
+                      "https"
+                    ]
+                  },
+                  "vault": {
+                    "attach": {
+                      "in": "header",
+                      "name": "Authorization",
+                      "template": "Bearer {value}"
+                    },
+                    "binding_digest": "sha256:bind-source",
+                    "binding_key": "formula:local.daily-report|@ingress|default",
+                    "destination": {
+                      "hosts": [
+                        "prod.supabase.co"
+                      ],
+                      "scheme": "https"
+                    },
+                    "entry_id": "ent_source",
+                    "projection": {
+                      "fields": {
+                        "anon_key": "anon key",
+                        "url": "url"
+                      },
+                      "scopes": []
+                    },
+                    "scope": "athanor"
+                  }
+                }
+              },
+              "limits": {
+                "batch_timeout": "5m",
+                "max_concurrent_tasks": 30,
+                "max_memory_bytes": 67108864,
+                "max_request_size": 1048576,
+                "max_response_size": 5242880,
+                "rate_limit": {
+                  "requests": 100,
+                  "window": "1m"
+                },
+                "timeout": "15m"
+              }
+            }
+          }
+        },
+        "profile_id": "prof_01a09fee-0000-7000-8000-000000000001",
+        "profile_kind": "owner",
+        "resources": {
+          "egress": {
+            "domains": [
+              "prod.supabase.co"
+            ],
+            "methods": [],
+            "private_ips": [],
+            "schemes": [
+              "https"
+            ]
+          },
+          "vault": {
+            "attach": {
+              "in": "header",
+              "name": "Authorization",
+              "template": "Bearer {value}"
+            },
+            "binding_digest": "sha256:bind-source",
+            "binding_key": "formula:local.daily-report|@ingress|default",
+            "destination": {
+              "hosts": [
+                "prod.supabase.co"
+              ],
+              "scheme": "https"
+            },
+            "entry_id": "ent_source",
+            "projection": {
+              "fields": {
+                "anon_key": "anon key",
+                "url": "url"
+              },
+              "scopes": []
+            },
+            "scope": "athanor"
+          }
+        },
+        "source_ref": "formula:local.daily-report"
+      }
+    },
+    {
+      "why": "a cursor of another shape: absent",
+      "authority": {
+        "activation": {
+          "catalyst:supabase.com.database": "sha256:act-catalyst",
+          "formula:local.daily-report": "sha256:act-formula"
+        },
+        "budget": {
+          "id": "bgt_AAAAAAAAAAHKmY6r"
+        },
+        "chain": [
+          "formula:local.daily-report"
+        ],
+        "consent_id": "cns_01a09fee-0000-7000-8000-000000000002",
+        "depth": 0,
+        "invoke_mode": "open_inert",
+        "policy": {
+          "canonical": "jcs-1",
+          "nodes": {
+            "catalyst:supabase.com.database": {
+              "edges": {},
+              "limits": {
+                "batch_timeout": "2m",
+                "max_concurrent_tasks": 4,
+                "max_memory_bytes": 33554432,
+                "max_request_size": 524288,
+                "max_response_size": 2097152,
+                "rate_limit": {
+                  "requests": 20,
+                  "window": "10s"
+                },
+                "timeout": "45s"
+              }
+            },
+            "formula:local.daily-report": {
+              "edges": {
+                "@ingress": {
+                  "egress": {
+                    "domains": [
+                      "prod.supabase.co"
+                    ],
+                    "methods": [],
+                    "private_ips": [],
+                    "schemes": [
+                      "https"
+                    ]
+                  },
+                  "vault": {
+                    "attach": {
+                      "in": "header",
+                      "name": "Authorization",
+                      "template": "Bearer {value}"
+                    },
+                    "binding_digest": "sha256:bind-source",
+                    "binding_key": "formula:local.daily-report|@ingress|default",
+                    "destination": {
+                      "hosts": [
+                        "prod.supabase.co"
+                      ],
+                      "scheme": "https"
+                    },
+                    "entry_id": "ent_source",
+                    "projection": {
+                      "fields": {
+                        "anon_key": "anon key",
+                        "url": "url"
+                      },
+                      "scopes": []
+                    },
+                    "scope": "athanor"
+                  }
+                }
+              },
+              "limits": {
+                "batch_timeout": "5m",
+                "max_concurrent_tasks": 30,
+                "max_memory_bytes": 67108864,
+                "max_request_size": 1048576,
+                "max_response_size": 5242880,
+                "rate_limit": {
+                  "requests": 100,
+                  "window": "1m"
+                },
+                "timeout": "15m"
+              }
+            }
+          }
+        },
+        "profile_id": "prof_01a09fee-0000-7000-8000-000000000001",
+        "profile_kind": "owner",
+        "resources": {
+          "egress": {
+            "domains": [
+              "prod.supabase.co"
+            ],
+            "methods": [],
+            "private_ips": [],
+            "schemes": [
+              "https"
+            ]
+          },
+          "vault": {
+            "attach": {
+              "in": "header",
+              "name": "Authorization",
+              "template": "Bearer {value}"
+            },
+            "binding_digest": "sha256:bind-source",
+            "binding_key": "formula:local.daily-report|@ingress|default",
+            "destination": {
+              "hosts": [
+                "prod.supabase.co"
+              ],
+              "scheme": "https"
+            },
+            "entry_id": "ent_source",
+            "projection": {
+              "fields": {
+                "anon_key": "anon key",
+                "url": "url"
+              },
+              "scopes": []
+            },
+            "scope": "athanor"
+          }
+        },
+        "source_ref": "formula:local.daily-report"
+      }
+    },
+    {
+      "why": "a node's limits missing a field",
+      "authority": {
+        "activation": {
+          "catalyst:supabase.com.database": "sha256:act-catalyst",
+          "formula:local.daily-report": "sha256:act-formula"
+        },
+        "budget": {
+          "id": "bgt_AAAAAAAAAAHKmY6r"
+        },
+        "chain": [
+          "formula:local.daily-report"
+        ],
+        "consent_id": "cns_01a09fee-0000-7000-8000-000000000002",
+        "cursor": {
+          "bound": "formula:local.daily-report"
+        },
+        "depth": 0,
+        "invoke_mode": "open_inert",
+        "policy": {
+          "canonical": "jcs-1",
+          "nodes": {
+            "catalyst:supabase.com.database": {
+              "edges": {},
+              "limits": {
+                "batch_timeout": "2m",
+                "max_concurrent_tasks": 4,
+                "max_memory_bytes": 33554432,
+                "max_request_size": 524288,
+                "max_response_size": 2097152,
+                "rate_limit": {
+                  "requests": 20,
+                  "window": "10s"
+                },
+                "timeout": "45s"
+              }
+            },
+            "formula:local.daily-report": {
+              "edges": {
+                "@ingress": {
+                  "egress": {
+                    "domains": [
+                      "prod.supabase.co"
+                    ],
+                    "methods": [],
+                    "private_ips": [],
+                    "schemes": [
+                      "https"
+                    ]
+                  },
+                  "vault": {
+                    "attach": {
+                      "in": "header",
+                      "name": "Authorization",
+                      "template": "Bearer {value}"
+                    },
+                    "binding_digest": "sha256:bind-source",
+                    "binding_key": "formula:local.daily-report|@ingress|default",
+                    "destination": {
+                      "hosts": [
+                        "prod.supabase.co"
+                      ],
+                      "scheme": "https"
+                    },
+                    "entry_id": "ent_source",
+                    "projection": {
+                      "fields": {
+                        "anon_key": "anon key",
+                        "url": "url"
+                      },
+                      "scopes": []
+                    },
+                    "scope": "athanor"
+                  }
+                }
+              },
+              "limits": {
+                "max_concurrent_tasks": 30,
+                "max_memory_bytes": 67108864,
+                "max_request_size": 1048576,
+                "max_response_size": 5242880,
+                "rate_limit": {
+                  "requests": 100,
+                  "window": "1m"
+                },
+                "timeout": "15m"
+              }
+            }
+          }
+        },
+        "profile_id": "prof_01a09fee-0000-7000-8000-000000000001",
+        "profile_kind": "owner",
+        "resources": {
+          "egress": {
+            "domains": [
+              "prod.supabase.co"
+            ],
+            "methods": [],
+            "private_ips": [],
+            "schemes": [
+              "https"
+            ]
+          },
+          "vault": {
+            "attach": {
+              "in": "header",
+              "name": "Authorization",
+              "template": "Bearer {value}"
+            },
+            "binding_digest": "sha256:bind-source",
+            "binding_key": "formula:local.daily-report|@ingress|default",
+            "destination": {
+              "hosts": [
+                "prod.supabase.co"
+              ],
+              "scheme": "https"
+            },
+            "entry_id": "ent_source",
+            "projection": {
+              "fields": {
+                "anon_key": "anon key",
+                "url": "url"
+              },
+              "scopes": []
+            },
+            "scope": "athanor"
+          }
+        },
+        "source_ref": "formula:local.daily-report"
+      }
+    },
+    {
+      "why": "a limit of the wrong JSON type: a byte count as text",
+      "authority": {
+        "activation": {
+          "catalyst:supabase.com.database": "sha256:act-catalyst",
+          "formula:local.daily-report": "sha256:act-formula"
+        },
+        "budget": {
+          "id": "bgt_AAAAAAAAAAHKmY6r"
+        },
+        "chain": [
+          "formula:local.daily-report"
+        ],
+        "consent_id": "cns_01a09fee-0000-7000-8000-000000000002",
+        "cursor": {
+          "bound": "formula:local.daily-report"
+        },
+        "depth": 0,
+        "invoke_mode": "open_inert",
+        "policy": {
+          "canonical": "jcs-1",
+          "nodes": {
+            "catalyst:supabase.com.database": {
+              "edges": {},
+              "limits": {
+                "batch_timeout": "2m",
+                "max_concurrent_tasks": 4,
+                "max_memory_bytes": 33554432,
+                "max_request_size": 524288,
+                "max_response_size": 2097152,
+                "rate_limit": {
+                  "requests": 20,
+                  "window": "10s"
+                },
+                "timeout": "45s"
+              }
+            },
+            "formula:local.daily-report": {
+              "edges": {
+                "@ingress": {
+                  "egress": {
+                    "domains": [
+                      "prod.supabase.co"
+                    ],
+                    "methods": [],
+                    "private_ips": [],
+                    "schemes": [
+                      "https"
+                    ]
+                  },
+                  "vault": {
+                    "attach": {
+                      "in": "header",
+                      "name": "Authorization",
+                      "template": "Bearer {value}"
+                    },
+                    "binding_digest": "sha256:bind-source",
+                    "binding_key": "formula:local.daily-report|@ingress|default",
+                    "destination": {
+                      "hosts": [
+                        "prod.supabase.co"
+                      ],
+                      "scheme": "https"
+                    },
+                    "entry_id": "ent_source",
+                    "projection": {
+                      "fields": {
+                        "anon_key": "anon key",
+                        "url": "url"
+                      },
+                      "scopes": []
+                    },
+                    "scope": "athanor"
+                  }
+                }
+              },
+              "limits": {
+                "batch_timeout": "5m",
+                "max_concurrent_tasks": 30,
+                "max_memory_bytes": "64MiB",
+                "max_request_size": 1048576,
+                "max_response_size": 5242880,
+                "rate_limit": {
+                  "requests": 100,
+                  "window": "1m"
+                },
+                "timeout": "15m"
+              }
+            }
+          }
+        },
+        "profile_id": "prof_01a09fee-0000-7000-8000-000000000001",
+        "profile_kind": "owner",
+        "resources": {
+          "egress": {
+            "domains": [
+              "prod.supabase.co"
+            ],
+            "methods": [],
+            "private_ips": [],
+            "schemes": [
+              "https"
+            ]
+          },
+          "vault": {
+            "attach": {
+              "in": "header",
+              "name": "Authorization",
+              "template": "Bearer {value}"
+            },
+            "binding_digest": "sha256:bind-source",
+            "binding_key": "formula:local.daily-report|@ingress|default",
+            "destination": {
+              "hosts": [
+                "prod.supabase.co"
+              ],
+              "scheme": "https"
+            },
+            "entry_id": "ent_source",
+            "projection": {
+              "fields": {
+                "anon_key": "anon key",
+                "url": "url"
+              },
+              "scopes": []
+            },
+            "scope": "athanor"
+          }
+        },
+        "source_ref": "formula:local.daily-report"
+      }
+    },
+    {
+      "why": "a limit of the wrong JSON type: a timeout as a number",
+      "authority": {
+        "activation": {
+          "catalyst:supabase.com.database": "sha256:act-catalyst",
+          "formula:local.daily-report": "sha256:act-formula"
+        },
+        "budget": {
+          "id": "bgt_AAAAAAAAAAHKmY6r"
+        },
+        "chain": [
+          "formula:local.daily-report"
+        ],
+        "consent_id": "cns_01a09fee-0000-7000-8000-000000000002",
+        "cursor": {
+          "bound": "formula:local.daily-report"
+        },
+        "depth": 0,
+        "invoke_mode": "open_inert",
+        "policy": {
+          "canonical": "jcs-1",
+          "nodes": {
+            "catalyst:supabase.com.database": {
+              "edges": {},
+              "limits": {
+                "batch_timeout": "2m",
+                "max_concurrent_tasks": 4,
+                "max_memory_bytes": 33554432,
+                "max_request_size": 524288,
+                "max_response_size": 2097152,
+                "rate_limit": {
+                  "requests": 20,
+                  "window": "10s"
+                },
+                "timeout": "45s"
+              }
+            },
+            "formula:local.daily-report": {
+              "edges": {
+                "@ingress": {
+                  "egress": {
+                    "domains": [
+                      "prod.supabase.co"
+                    ],
+                    "methods": [],
+                    "private_ips": [],
+                    "schemes": [
+                      "https"
+                    ]
+                  },
+                  "vault": {
+                    "attach": {
+                      "in": "header",
+                      "name": "Authorization",
+                      "template": "Bearer {value}"
+                    },
+                    "binding_digest": "sha256:bind-source",
+                    "binding_key": "formula:local.daily-report|@ingress|default",
+                    "destination": {
+                      "hosts": [
+                        "prod.supabase.co"
+                      ],
+                      "scheme": "https"
+                    },
+                    "entry_id": "ent_source",
+                    "projection": {
+                      "fields": {
+                        "anon_key": "anon key",
+                        "url": "url"
+                      },
+                      "scopes": []
+                    },
+                    "scope": "athanor"
+                  }
+                }
+              },
+              "limits": {
+                "batch_timeout": "5m",
+                "max_concurrent_tasks": 30,
+                "max_memory_bytes": 67108864,
+                "max_request_size": 1048576,
+                "max_response_size": 5242880,
+                "rate_limit": {
+                  "requests": 100,
+                  "window": "1m"
+                },
+                "timeout": 30
+              }
+            }
+          }
+        },
+        "profile_id": "prof_01a09fee-0000-7000-8000-000000000001",
+        "profile_kind": "owner",
+        "resources": {
+          "egress": {
+            "domains": [
+              "prod.supabase.co"
+            ],
+            "methods": [],
+            "private_ips": [],
+            "schemes": [
+              "https"
+            ]
+          },
+          "vault": {
+            "attach": {
+              "in": "header",
+              "name": "Authorization",
+              "template": "Bearer {value}"
+            },
+            "binding_digest": "sha256:bind-source",
+            "binding_key": "formula:local.daily-report|@ingress|default",
+            "destination": {
+              "hosts": [
+                "prod.supabase.co"
+              ],
+              "scheme": "https"
+            },
+            "entry_id": "ent_source",
+            "projection": {
+              "fields": {
+                "anon_key": "anon key",
+                "url": "url"
+              },
+              "scopes": []
+            },
+            "scope": "athanor"
+          }
+        },
+        "source_ref": "formula:local.daily-report"
+      }
+    },
+    {
+      "why": "a limit of the wrong JSON type: a rate limit's requests as a fraction",
+      "authority": {
+        "activation": {
+          "catalyst:supabase.com.database": "sha256:act-catalyst",
+          "formula:local.daily-report": "sha256:act-formula"
+        },
+        "budget": {
+          "id": "bgt_AAAAAAAAAAHKmY6r"
+        },
+        "chain": [
+          "formula:local.daily-report"
+        ],
+        "consent_id": "cns_01a09fee-0000-7000-8000-000000000002",
+        "cursor": {
+          "bound": "formula:local.daily-report"
+        },
+        "depth": 0,
+        "invoke_mode": "open_inert",
+        "policy": {
+          "canonical": "jcs-1",
+          "nodes": {
+            "catalyst:supabase.com.database": {
+              "edges": {},
+              "limits": {
+                "batch_timeout": "2m",
+                "max_concurrent_tasks": 4,
+                "max_memory_bytes": 33554432,
+                "max_request_size": 524288,
+                "max_response_size": 2097152,
+                "rate_limit": {
+                  "requests": 20,
+                  "window": "10s"
+                },
+                "timeout": "45s"
+              }
+            },
+            "formula:local.daily-report": {
+              "edges": {
+                "@ingress": {
+                  "egress": {
+                    "domains": [
+                      "prod.supabase.co"
+                    ],
+                    "methods": [],
+                    "private_ips": [],
+                    "schemes": [
+                      "https"
+                    ]
+                  },
+                  "vault": {
+                    "attach": {
+                      "in": "header",
+                      "name": "Authorization",
+                      "template": "Bearer {value}"
+                    },
+                    "binding_digest": "sha256:bind-source",
+                    "binding_key": "formula:local.daily-report|@ingress|default",
+                    "destination": {
+                      "hosts": [
+                        "prod.supabase.co"
+                      ],
+                      "scheme": "https"
+                    },
+                    "entry_id": "ent_source",
+                    "projection": {
+                      "fields": {
+                        "anon_key": "anon key",
+                        "url": "url"
+                      },
+                      "scopes": []
+                    },
+                    "scope": "athanor"
+                  }
+                }
+              },
+              "limits": {
+                "batch_timeout": "5m",
+                "max_concurrent_tasks": 30,
+                "max_memory_bytes": 67108864,
+                "max_request_size": 1048576,
+                "max_response_size": 5242880,
+                "rate_limit": {
+                  "requests": 1.5,
+                  "window": "1m"
+                },
+                "timeout": "15m"
+              }
+            }
+          }
+        },
+        "profile_id": "prof_01a09fee-0000-7000-8000-000000000001",
+        "profile_kind": "owner",
+        "resources": {
+          "egress": {
+            "domains": [
+              "prod.supabase.co"
+            ],
+            "methods": [],
+            "private_ips": [],
+            "schemes": [
+              "https"
+            ]
+          },
+          "vault": {
+            "attach": {
+              "in": "header",
+              "name": "Authorization",
+              "template": "Bearer {value}"
+            },
+            "binding_digest": "sha256:bind-source",
+            "binding_key": "formula:local.daily-report|@ingress|default",
+            "destination": {
+              "hosts": [
+                "prod.supabase.co"
+              ],
+              "scheme": "https"
+            },
+            "entry_id": "ent_source",
+            "projection": {
+              "fields": {
+                "anon_key": "anon key",
+                "url": "url"
+              },
+              "scopes": []
+            },
+            "scope": "athanor"
+          }
+        },
+        "source_ref": "formula:local.daily-report"
+      }
+    },
+    {
+      "why": "a timeout that is no duration",
+      "authority": {
+        "activation": {
+          "catalyst:supabase.com.database": "sha256:act-catalyst",
+          "formula:local.daily-report": "sha256:act-formula"
+        },
+        "budget": {
+          "id": "bgt_AAAAAAAAAAHKmY6r"
+        },
+        "chain": [
+          "formula:local.daily-report"
+        ],
+        "consent_id": "cns_01a09fee-0000-7000-8000-000000000002",
+        "cursor": {
+          "bound": "formula:local.daily-report"
+        },
+        "depth": 0,
+        "invoke_mode": "open_inert",
+        "policy": {
+          "canonical": "jcs-1",
+          "nodes": {
+            "catalyst:supabase.com.database": {
+              "edges": {},
+              "limits": {
+                "batch_timeout": "2m",
+                "max_concurrent_tasks": 4,
+                "max_memory_bytes": 33554432,
+                "max_request_size": 524288,
+                "max_response_size": 2097152,
+                "rate_limit": {
+                  "requests": 20,
+                  "window": "10s"
+                },
+                "timeout": "45s"
+              }
+            },
+            "formula:local.daily-report": {
+              "edges": {
+                "@ingress": {}
+              },
+              "limits": {
+                "batch_timeout": "2m",
+                "max_concurrent_tasks": 4,
+                "max_memory_bytes": 33554432,
+                "max_request_size": 524288,
+                "max_response_size": 2097152,
+                "rate_limit": {
+                  "requests": 20,
+                  "window": "10s"
+                },
+                "timeout": "soon"
+              }
+            }
+          }
+        },
+        "profile_id": "prof_01a09fee-0000-7000-8000-000000000001",
+        "profile_kind": "owner",
+        "source_ref": "formula:local.daily-report"
+      }
+    },
+    {
+      "why": "a negative timeout",
+      "authority": {
+        "activation": {
+          "catalyst:supabase.com.database": "sha256:act-catalyst",
+          "formula:local.daily-report": "sha256:act-formula"
+        },
+        "budget": {
+          "id": "bgt_AAAAAAAAAAHKmY6r"
+        },
+        "chain": [
+          "formula:local.daily-report"
+        ],
+        "consent_id": "cns_01a09fee-0000-7000-8000-000000000002",
+        "cursor": {
+          "bound": "formula:local.daily-report"
+        },
+        "depth": 0,
+        "invoke_mode": "open_inert",
+        "policy": {
+          "canonical": "jcs-1",
+          "nodes": {
+            "catalyst:supabase.com.database": {
+              "edges": {},
+              "limits": {
+                "batch_timeout": "2m",
+                "max_concurrent_tasks": 4,
+                "max_memory_bytes": 33554432,
+                "max_request_size": 524288,
+                "max_response_size": 2097152,
+                "rate_limit": {
+                  "requests": 20,
+                  "window": "10s"
+                },
+                "timeout": "45s"
+              }
+            },
+            "formula:local.daily-report": {
+              "edges": {
+                "@ingress": {}
+              },
+              "limits": {
+                "batch_timeout": "2m",
+                "max_concurrent_tasks": 4,
+                "max_memory_bytes": 33554432,
+                "max_request_size": 524288,
+                "max_response_size": 2097152,
+                "rate_limit": {
+                  "requests": 20,
+                  "window": "10s"
+                },
+                "timeout": "-1s"
+              }
+            }
+          }
+        },
+        "profile_id": "prof_01a09fee-0000-7000-8000-000000000001",
+        "profile_kind": "owner",
+        "source_ref": "formula:local.daily-report"
+      }
+    },
+    {
+      "why": "a duration with two units",
+      "authority": {
+        "activation": {
+          "catalyst:supabase.com.database": "sha256:act-catalyst",
+          "formula:local.daily-report": "sha256:act-formula"
+        },
+        "budget": {
+          "id": "bgt_AAAAAAAAAAHKmY6r"
+        },
+        "chain": [
+          "formula:local.daily-report"
+        ],
+        "consent_id": "cns_01a09fee-0000-7000-8000-000000000002",
+        "cursor": {
+          "bound": "formula:local.daily-report"
+        },
+        "depth": 0,
+        "invoke_mode": "open_inert",
+        "policy": {
+          "canonical": "jcs-1",
+          "nodes": {
+            "catalyst:supabase.com.database": {
+              "edges": {},
+              "limits": {
+                "batch_timeout": "2m",
+                "max_concurrent_tasks": 4,
+                "max_memory_bytes": 33554432,
+                "max_request_size": 524288,
+                "max_response_size": 2097152,
+                "rate_limit": {
+                  "requests": 20,
+                  "window": "10s"
+                },
+                "timeout": "45s"
+              }
+            },
+            "formula:local.daily-report": {
+              "edges": {
+                "@ingress": {}
+              },
+              "limits": {
+                "batch_timeout": "5mm",
+                "max_concurrent_tasks": 4,
+                "max_memory_bytes": 33554432,
+                "max_request_size": 524288,
+                "max_response_size": 2097152,
+                "rate_limit": {
+                  "requests": 20,
+                  "window": "10s"
+                },
+                "timeout": "45s"
+              }
+            }
+          }
+        },
+        "profile_id": "prof_01a09fee-0000-7000-8000-000000000001",
+        "profile_kind": "owner",
+        "source_ref": "formula:local.daily-report"
+      }
+    },
+    {
+      "why": "a rate limit's window of zero: no window to count in",
+      "authority": {
+        "activation": {
+          "catalyst:supabase.com.database": "sha256:act-catalyst",
+          "formula:local.daily-report": "sha256:act-formula"
+        },
+        "budget": {
+          "id": "bgt_AAAAAAAAAAHKmY6r"
+        },
+        "chain": [
+          "formula:local.daily-report"
+        ],
+        "consent_id": "cns_01a09fee-0000-7000-8000-000000000002",
+        "cursor": {
+          "bound": "formula:local.daily-report"
+        },
+        "depth": 0,
+        "invoke_mode": "open_inert",
+        "policy": {
+          "canonical": "jcs-1",
+          "nodes": {
+            "catalyst:supabase.com.database": {
+              "edges": {},
+              "limits": {
+                "batch_timeout": "2m",
+                "max_concurrent_tasks": 4,
+                "max_memory_bytes": 33554432,
+                "max_request_size": 524288,
+                "max_response_size": 2097152,
+                "rate_limit": {
+                  "requests": 20,
+                  "window": "10s"
+                },
+                "timeout": "45s"
+              }
+            },
+            "formula:local.daily-report": {
+              "edges": {
+                "@ingress": {}
+              },
+              "limits": {
+                "batch_timeout": "2m",
+                "max_concurrent_tasks": 4,
+                "max_memory_bytes": 33554432,
+                "max_request_size": 524288,
+                "max_response_size": 2097152,
+                "rate_limit": {
+                  "requests": 20,
+                  "window": "0s"
+                },
+                "timeout": "45s"
+              }
+            }
+          }
+        },
+        "profile_id": "prof_01a09fee-0000-7000-8000-000000000001",
+        "profile_kind": "owner",
+        "source_ref": "formula:local.daily-report"
+      }
+    },
+    {
+      "why": "a node's limits carrying a member Prima does not know",
+      "authority": {
+        "activation": {
+          "catalyst:supabase.com.database": "sha256:act-catalyst",
+          "formula:local.daily-report": "sha256:act-formula"
+        },
+        "budget": {
+          "id": "bgt_AAAAAAAAAAHKmY6r"
+        },
+        "chain": [
+          "formula:local.daily-report"
+        ],
+        "consent_id": "cns_01a09fee-0000-7000-8000-000000000002",
+        "cursor": {
+          "bound": "formula:local.daily-report"
+        },
+        "depth": 0,
+        "invoke_mode": "open_inert",
+        "policy": {
+          "canonical": "jcs-1",
+          "nodes": {
+            "catalyst:supabase.com.database": {
+              "edges": {},
+              "limits": {
+                "batch_timeout": "2m",
+                "max_concurrent_tasks": 4,
+                "max_memory_bytes": 33554432,
+                "max_request_size": 524288,
+                "max_response_size": 2097152,
+                "rate_limit": {
+                  "requests": 20,
+                  "window": "10s"
+                },
+                "timeout": "45s"
+              }
+            },
+            "formula:local.daily-report": {
+              "edges": {
+                "@ingress": {}
+              },
+              "limits": {
+                "batch_timeout": "2m",
+                "max_concurrent_tasks": 4,
+                "max_memory_bytes": 33554432,
+                "max_request_size": 524288,
+                "max_response_size": 2097152,
+                "rate_limit": {
+                  "requests": 20,
+                  "window": "10s"
+                },
+                "timeout": "45s",
+                "spare_bytes": 1
+              }
+            }
+          }
+        },
+        "profile_id": "prof_01a09fee-0000-7000-8000-000000000001",
+        "profile_kind": "owner",
+        "source_ref": "formula:local.daily-report"
+      }
+    },
+    {
+      "why": "a rate limit carrying a member Prima does not know",
+      "authority": {
+        "activation": {
+          "catalyst:supabase.com.database": "sha256:act-catalyst",
+          "formula:local.daily-report": "sha256:act-formula"
+        },
+        "budget": {
+          "id": "bgt_AAAAAAAAAAHKmY6r"
+        },
+        "chain": [
+          "formula:local.daily-report"
+        ],
+        "consent_id": "cns_01a09fee-0000-7000-8000-000000000002",
+        "cursor": {
+          "bound": "formula:local.daily-report"
+        },
+        "depth": 0,
+        "invoke_mode": "open_inert",
+        "policy": {
+          "canonical": "jcs-1",
+          "nodes": {
+            "catalyst:supabase.com.database": {
+              "edges": {},
+              "limits": {
+                "batch_timeout": "2m",
+                "max_concurrent_tasks": 4,
+                "max_memory_bytes": 33554432,
+                "max_request_size": 524288,
+                "max_response_size": 2097152,
+                "rate_limit": {
+                  "requests": 20,
+                  "window": "10s"
+                },
+                "timeout": "45s"
+              }
+            },
+            "formula:local.daily-report": {
+              "edges": {
+                "@ingress": {}
+              },
+              "limits": {
+                "batch_timeout": "2m",
+                "max_concurrent_tasks": 4,
+                "max_memory_bytes": 33554432,
+                "max_request_size": 524288,
+                "max_response_size": 2097152,
+                "rate_limit": {
+                  "requests": 20,
+                  "window": "10s",
+                  "burst": 5
+                },
+                "timeout": "45s"
+              }
+            }
+          }
+        },
+        "profile_id": "prof_01a09fee-0000-7000-8000-000000000001",
+        "profile_kind": "owner",
+        "source_ref": "formula:local.daily-report"
+      }
+    },
+    {
+      "why": "a negative byte count",
+      "authority": {
+        "activation": {
+          "catalyst:supabase.com.database": "sha256:act-catalyst",
+          "formula:local.daily-report": "sha256:act-formula"
+        },
+        "budget": {
+          "id": "bgt_AAAAAAAAAAHKmY6r"
+        },
+        "chain": [
+          "formula:local.daily-report"
+        ],
+        "consent_id": "cns_01a09fee-0000-7000-8000-000000000002",
+        "cursor": {
+          "bound": "formula:local.daily-report"
+        },
+        "depth": 0,
+        "invoke_mode": "open_inert",
+        "policy": {
+          "canonical": "jcs-1",
+          "nodes": {
+            "catalyst:supabase.com.database": {
+              "edges": {},
+              "limits": {
+                "batch_timeout": "2m",
+                "max_concurrent_tasks": 4,
+                "max_memory_bytes": 33554432,
+                "max_request_size": 524288,
+                "max_response_size": 2097152,
+                "rate_limit": {
+                  "requests": 20,
+                  "window": "10s"
+                },
+                "timeout": "45s"
+              }
+            },
+            "formula:local.daily-report": {
+              "edges": {
+                "@ingress": {}
+              },
+              "limits": {
+                "batch_timeout": "2m",
+                "max_concurrent_tasks": 4,
+                "max_memory_bytes": 33554432,
+                "max_request_size": -1,
+                "max_response_size": 2097152,
+                "rate_limit": {
+                  "requests": 20,
+                  "window": "10s"
+                },
+                "timeout": "45s"
+              }
+            }
+          }
+        },
+        "profile_id": "prof_01a09fee-0000-7000-8000-000000000001",
+        "profile_kind": "owner",
+        "source_ref": "formula:local.daily-report"
+      }
+    },
+    {
+      "why": "a byte count one past 2^53 - 1, the bound of every integer a canonical blob holds",
+      "authority": {
+        "activation": {
+          "catalyst:supabase.com.database": "sha256:act-catalyst",
+          "formula:local.daily-report": "sha256:act-formula"
+        },
+        "budget": {
+          "id": "bgt_AAAAAAAAAAHKmY6r"
+        },
+        "chain": [
+          "formula:local.daily-report"
+        ],
+        "consent_id": "cns_01a09fee-0000-7000-8000-000000000002",
+        "cursor": {
+          "bound": "formula:local.daily-report"
+        },
+        "depth": 0,
+        "invoke_mode": "open_inert",
+        "policy": {
+          "canonical": "jcs-1",
+          "nodes": {
+            "catalyst:supabase.com.database": {
+              "edges": {},
+              "limits": {
+                "batch_timeout": "2m",
+                "max_concurrent_tasks": 4,
+                "max_memory_bytes": 33554432,
+                "max_request_size": 524288,
+                "max_response_size": 2097152,
+                "rate_limit": {
+                  "requests": 20,
+                  "window": "10s"
+                },
+                "timeout": "45s"
+              }
+            },
+            "formula:local.daily-report": {
+              "edges": {
+                "@ingress": {}
+              },
+              "limits": {
+                "batch_timeout": "2m",
+                "max_concurrent_tasks": 4,
+                "max_memory_bytes": 33554432,
+                "max_request_size": 9007199254740992,
+                "max_response_size": 2097152,
+                "rate_limit": {
+                  "requests": 20,
+                  "window": "10s"
+                },
+                "timeout": "45s"
+              }
+            }
+          }
+        },
+        "profile_id": "prof_01a09fee-0000-7000-8000-000000000001",
+        "profile_kind": "owner",
+        "source_ref": "formula:local.daily-report"
+      }
+    },
+    {
+      "why": "a rate limit's requests one past 2^53 - 1",
+      "authority": {
+        "activation": {
+          "catalyst:supabase.com.database": "sha256:act-catalyst",
+          "formula:local.daily-report": "sha256:act-formula"
+        },
+        "budget": {
+          "id": "bgt_AAAAAAAAAAHKmY6r"
+        },
+        "chain": [
+          "formula:local.daily-report"
+        ],
+        "consent_id": "cns_01a09fee-0000-7000-8000-000000000002",
+        "cursor": {
+          "bound": "formula:local.daily-report"
+        },
+        "depth": 0,
+        "invoke_mode": "open_inert",
+        "policy": {
+          "canonical": "jcs-1",
+          "nodes": {
+            "catalyst:supabase.com.database": {
+              "edges": {},
+              "limits": {
+                "batch_timeout": "2m",
+                "max_concurrent_tasks": 4,
+                "max_memory_bytes": 33554432,
+                "max_request_size": 524288,
+                "max_response_size": 2097152,
+                "rate_limit": {
+                  "requests": 20,
+                  "window": "10s"
+                },
+                "timeout": "45s"
+              }
+            },
+            "formula:local.daily-report": {
+              "edges": {
+                "@ingress": {}
+              },
+              "limits": {
+                "batch_timeout": "2m",
+                "max_concurrent_tasks": 4,
+                "max_memory_bytes": 33554432,
+                "max_request_size": 524288,
+                "max_response_size": 2097152,
+                "rate_limit": {
+                  "requests": 9007199254740992,
+                  "window": "10s"
+                },
+                "timeout": "45s"
+              }
+            }
+          }
+        },
+        "profile_id": "prof_01a09fee-0000-7000-8000-000000000001",
+        "profile_kind": "owner",
+        "source_ref": "formula:local.daily-report"
+      }
+    },
+    {
+      "why": "the resources' vault whose projection's fields are not an object",
+      "authority": {
+        "activation": {
+          "catalyst:supabase.com.database": "sha256:act-catalyst",
+          "formula:local.daily-report": "sha256:act-formula"
+        },
+        "budget": {
+          "id": "bgt_AAAAAAAAAAHKmY6r"
+        },
+        "chain": [
+          "formula:local.daily-report"
+        ],
+        "consent_id": "cns_01a09fee-0000-7000-8000-000000000002",
+        "cursor": {
+          "bound": "formula:local.daily-report"
+        },
+        "depth": 0,
+        "invoke_mode": "open_inert",
+        "policy": {
+          "canonical": "jcs-1",
+          "nodes": {
+            "catalyst:supabase.com.database": {
+              "edges": {},
+              "limits": {
+                "batch_timeout": "2m",
+                "max_concurrent_tasks": 4,
+                "max_memory_bytes": 33554432,
+                "max_request_size": 524288,
+                "max_response_size": 2097152,
+                "rate_limit": {
+                  "requests": 20,
+                  "window": "10s"
+                },
+                "timeout": "45s"
+              }
+            },
+            "formula:local.daily-report": {
+              "edges": {
+                "@ingress": {
+                  "egress": {
+                    "domains": [
+                      "prod.supabase.co"
+                    ],
+                    "methods": [],
+                    "private_ips": [],
+                    "schemes": [
+                      "https"
+                    ]
+                  },
+                  "vault": {
+                    "attach": {
+                      "in": "header",
+                      "name": "Authorization",
+                      "template": "Bearer {value}"
+                    },
+                    "binding_digest": "sha256:bind-source",
+                    "binding_key": "formula:local.daily-report|@ingress|default",
+                    "destination": {
+                      "hosts": [
+                        "prod.supabase.co"
+                      ],
+                      "scheme": "https"
+                    },
+                    "entry_id": "ent_source",
+                    "projection": {
+                      "fields": {
+                        "anon_key": "anon key",
+                        "url": "url"
+                      },
+                      "scopes": []
+                    },
+                    "scope": "athanor"
+                  }
+                }
+              },
+              "limits": {
+                "batch_timeout": "5m",
+                "max_concurrent_tasks": 30,
+                "max_memory_bytes": 67108864,
+                "max_request_size": 1048576,
+                "max_response_size": 5242880,
+                "rate_limit": {
+                  "requests": 100,
+                  "window": "1m"
+                },
+                "timeout": "15m"
+              }
+            }
+          }
+        },
+        "profile_id": "prof_01a09fee-0000-7000-8000-000000000001",
+        "profile_kind": "owner",
+        "resources": {
+          "egress": {
+            "domains": [
+              "prod.supabase.co"
+            ],
+            "methods": [],
+            "private_ips": [],
+            "schemes": [
+              "https"
+            ]
+          },
+          "vault": {
+            "attach": {
+              "in": "header",
+              "name": "Authorization",
+              "template": "Bearer {value}"
+            },
+            "binding_digest": "sha256:bind-source",
+            "binding_key": "formula:local.daily-report|@ingress|default",
+            "destination": {
+              "hosts": [
+                "prod.supabase.co"
+              ],
+              "scheme": "https"
+            },
+            "entry_id": "ent_source",
+            "projection": {
+              "fields": [
+                "url",
+                "anon_key"
+              ],
+              "scopes": []
+            },
+            "scope": "athanor"
+          }
+        },
+        "source_ref": "formula:local.daily-report"
+      }
+    },
+    {
+      "why": "a named account whose projection's fields are not an object",
+      "authority": {
+        "activation": {
+          "catalyst:supabase.com.database": "sha256:act-catalyst",
+          "formula:local.daily-report": "sha256:act-formula"
+        },
+        "budget": {
+          "id": "bgt_AAAAAAAAAAHKmY6r"
+        },
+        "chain": [
+          "formula:local.daily-report"
+        ],
+        "consent_id": "cns_01a09fee-0000-7000-8000-000000000002",
+        "cursor": {
+          "bound": "formula:local.daily-report"
+        },
+        "depth": 0,
+        "invoke_mode": "open_inert",
+        "policy": {
+          "canonical": "jcs-1",
+          "nodes": {
+            "catalyst:supabase.com.database": {
+              "edges": {},
+              "limits": {
+                "batch_timeout": "2m",
+                "max_concurrent_tasks": 4,
+                "max_memory_bytes": 33554432,
+                "max_request_size": 524288,
+                "max_response_size": 2097152,
+                "rate_limit": {
+                  "requests": 20,
+                  "window": "10s"
+                },
+                "timeout": "45s"
+              }
+            },
+            "formula:local.daily-report": {
+              "edges": {
+                "@ingress": {
+                  "vault": {
+                    "attach": {
+                      "in": "header",
+                      "name": "Authorization",
+                      "template": "Bearer {value}"
+                    },
+                    "binding_digest": "sha256:bind-default",
+                    "binding_key": "formula:local.daily-report|@ingress|default",
+                    "destination": {
+                      "hosts": [
+                        "prod.supabase.co"
+                      ],
+                      "scheme": "https"
+                    },
+                    "entry_id": "ent_default",
+                    "named": {
+                      "Second": {
+                        "attach": {
+                          "in": "header",
+                          "name": "Authorization",
+                          "template": "Bearer {value}"
+                        },
+                        "binding_digest": "sha256:bind-second",
+                        "binding_key": "formula:local.daily-report|@ingress|name:Second",
+                        "destination": {
+                          "hosts": [
+                            "prod.supabase.co"
+                          ],
+                          "scheme": "https"
+                        },
+                        "entry_id": "ent_second",
+                        "projection": {
+                          "fields": {
+                            "service_key": "service_key",
+                            "url": "url"
+                          },
+                          "scopes": []
+                        },
+                        "scope": "athanor"
+                      },
+                      "Third": {
+                        "binding_digest": "sha256:bind-third",
+                        "binding_key": "formula:local.daily-report|@ingress|name:Third",
+                        "destination": {
+                          "hosts": [
+                            "prod.supabase.co"
+                          ],
+                          "scheme": "https"
+                        },
+                        "entry_id": "ent_third",
+                        "projection": {
+                          "fields": {},
+                          "scopes": []
+                        },
+                        "scope": "athanor"
+                      }
+                    },
+                    "projection": {
+                      "fields": {
+                        "url": "url"
+                      },
+                      "scopes": []
+                    },
+                    "scope": "athanor"
+                  }
+                }
+              },
+              "limits": {
+                "batch_timeout": "5m",
+                "max_concurrent_tasks": 30,
+                "max_memory_bytes": 67108864,
+                "max_request_size": 1048576,
+                "max_response_size": 5242880,
+                "rate_limit": {
+                  "requests": 100,
+                  "window": "1m"
+                },
+                "timeout": "15m"
+              }
+            }
+          }
+        },
+        "profile_id": "prof_01a09fee-0000-7000-8000-000000000001",
+        "profile_kind": "owner",
+        "resources": {
+          "vault": {
+            "attach": {
+              "in": "header",
+              "name": "Authorization",
+              "template": "Bearer {value}"
+            },
+            "binding_digest": "sha256:bind-default",
+            "binding_key": "formula:local.daily-report|@ingress|default",
+            "destination": {
+              "hosts": [
+                "prod.supabase.co"
+              ],
+              "scheme": "https"
+            },
+            "entry_id": "ent_default",
+            "named": {
+              "Second": {
+                "attach": {
+                  "in": "header",
+                  "name": "Authorization",
+                  "template": "Bearer {value}"
+                },
+                "binding_digest": "sha256:bind-second",
+                "binding_key": "formula:local.daily-report|@ingress|name:Second",
+                "destination": {
+                  "hosts": [
+                    "prod.supabase.co"
+                  ],
+                  "scheme": "https"
+                },
+                "entry_id": "ent_second",
+                "projection": {
+                  "fields": null,
+                  "scopes": []
+                },
+                "scope": "athanor"
+              },
+              "Third": {
+                "binding_digest": "sha256:bind-third",
+                "binding_key": "formula:local.daily-report|@ingress|name:Third",
+                "destination": {
+                  "hosts": [
+                    "prod.supabase.co"
+                  ],
+                  "scheme": "https"
+                },
+                "entry_id": "ent_third",
+                "projection": {
+                  "fields": {},
+                  "scopes": []
+                },
+                "scope": "athanor"
+              }
+            },
+            "projection": {
+              "fields": {
+                "url": "url"
+              },
+              "scopes": []
+            },
+            "scope": "athanor"
+          }
+        },
+        "source_ref": "formula:local.daily-report"
+      }
+    }
+  ]
+}
