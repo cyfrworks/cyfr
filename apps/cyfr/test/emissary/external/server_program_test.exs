@@ -180,6 +180,52 @@ defmodule Emissary.External.ServerProgramTest do
     assert Enum.map(tools, & &1["name"]) == @tools
   end
 
+  test "the first answer gets the configured wait within the remaining connect time" do
+    assert Emissary.External.Server.program_initialize_wait(20_000, 36_000) == 20_000
+    assert Emissary.External.Server.program_initialize_wait(50_000, 36_000) == 36_000
+    assert Emissary.External.Server.program_initialize_wait(0, 36_000) == 0
+    assert Emissary.External.Server.program_initialize_wait(20_000, 0) == 0
+    assert Emissary.External.Server.program_initialize_wait(20_000, -1) == 0
+  end
+
+  test "testing a program again after initialize times out discovers its tools",
+       %{ctx: ctx, fake: fake, row: row} do
+    Scripted.set(fake, :silent, ["initialize"])
+
+    assert {:error, "timeout: gh did not answer"} = Servers.ensure_started(row, ctx)
+    assert %{status: :error} = Emissary.External.Server.status(row.name, ctx.athanor_id)
+    assert_receive {:invoke, "initialize", _fields}
+    refute_received {:invoke, "tools/list", _fields}
+
+    Scripted.set(fake, :silent, [])
+
+    assert {:ok, :ready} = Emissary.External.Server.reinitialize(row.name, ctx.athanor_id)
+    assert {:ok, tools} = Emissary.External.Server.get_tools(row.name, ctx.athanor_id)
+    assert Enum.map(tools, & &1["name"]) == @tools
+  end
+
+  test "a rejected handshake ends the program and Test opens a new session",
+       %{ctx: ctx, fake: fake, row: row} do
+    Scripted.set(fake, :refuse_initialize, %{row.id => "cannot initialize"})
+
+    assert {:error, "cannot initialize"} = Servers.ensure_started(row, ctx)
+    assert [{ended, %{running: false}}] = Map.to_list(Scripted.sessions(fake, row.id))
+
+    assert %{status: :error, tool_count: 0} =
+             Emissary.External.Server.status(row.name, ctx.athanor_id)
+
+    assert {:ok, %{"programs" => [%{"status" => "idle", "sessions" => 0}]}} =
+             Opus.Programs.status(ctx.athanor_id, row.id)
+
+    Scripted.set(fake, :refuse_initialize, %{})
+
+    assert {:ok, :ready} = Emissary.External.Server.reinitialize(row.name, ctx.athanor_id)
+    assert {:ok, tools} = Emissary.External.Server.get_tools(row.name, ctx.athanor_id)
+    assert Enum.map(tools, & &1["name"]) == @tools
+    assert [fresh] = for({id, %{running: true}} <- Scripted.sessions(fake, row.id), do: id)
+    refute fresh == ended
+  end
+
   # A server's words are its own wherever they make an error: a program's
   # replacement that answers its `initialize` with a JSON-RPC error answers
   # the call that started it in those words, tagged as the server's.
