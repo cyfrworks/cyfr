@@ -112,8 +112,8 @@ defmodule PrismWeb.AquaLive do
       |> assign(:prompt_seq, 0)
       # Aqua's setup: whether the address asked for it and for whom, the
       # brains it offers, the ones ticked, the brains a grant here is asking
-      # for their models, how the roster's brains stand, the program
-      # brains, each one's listing once a press asked for it, the programs
+      # for their models (each by its identity, version aside), how the
+      # roster's brains stand, the program brains, each one's listing once a press asked for it, the programs
       # waiting to be asked, the one task out, the Sign in waiting on its
       # terminal and why the last was refused, what the form that makes a
       # crew member holds, and whether its last step leads to the
@@ -360,7 +360,7 @@ defmodule PrismWeb.AquaLive do
 
     socket
     |> put_flash(:info, "Saved. Asking #{brain_name(ref)} whether it takes the key…")
-    |> update(:asking, &MapSet.put(&1, ref))
+    |> update(:asking, &MapSet.put(&1, identity(ref)))
   end
 
   # The one answer stands for the brain it came from, found by its
@@ -384,7 +384,7 @@ defmodule PrismWeb.AquaLive do
           |> picked(provider, {:error, sentence}, ref)
       end
 
-    {:noreply, update(socket, :asking, &MapSet.delete(&1, ref))}
+    {:noreply, update(socket, :asking, &MapSet.delete(&1, identity(ref)))}
   end
 
   defp picked(socket, nil, _answer, _ref), do: socket
@@ -1002,7 +1002,8 @@ defmodule PrismWeb.AquaLive do
             data-test="setup-needs"
             class="text-amber-300"
           >
-            Tick what you have: a key from a model provider, or {program_titles(@programs, :required) || "a coding program"} on your own plan.{free_line(@programs)}
+            Tick what you have: a key from a model provider, or {program_titles(@programs, :required) ||
+              "a coding program"} on your own plan.{free_line(@programs)}
           </p>
 
           <ul id="aqua-setup-brains" class="space-y-1.5">
@@ -1368,7 +1369,7 @@ defmodule PrismWeb.AquaLive do
   # with nothing for it.
   defp answer(%{state: :ready, ref: ref, provider: provider}, assigns) do
     cond do
-      MapSet.member?(assigns.asking, ref) -> :asking
+      MapSet.member?(assigns.asking, identity(ref)) -> :asking
       ids = assigns.models_by_provider[provider] -> {:ok, ids}
       sentence = assigns.model_errors[provider] -> {:error, sentence}
       not assigns.models_loaded -> :asking

@@ -1500,6 +1500,7 @@ defmodule PrismWeb.AquaLiveTest do
           )
 
         tree = LazyHTML.from_fragment(html)
+
         words = fn selector ->
           tree |> LazyHTML.query(selector) |> Enum.map(&(&1 |> LazyHTML.text() |> String.trim()))
         end
@@ -1515,7 +1516,7 @@ defmodule PrismWeb.AquaLiveTest do
       # The page's first listing is still out, or a grant here is asking.
       asking = %{standing: ["key saved"], answer: ["Asking keyed…"], replace: [], done: ["true"]}
       assert row.(%{models_loaded: false}) == asking
-      assert row.(%{asking: MapSet.new([brain.ref])}) == asking
+      assert row.(%{asking: MapSet.new(["catalyst:local.keyed"])}) == asking
 
       # The listing came back with nothing for it.
       assert row.(%{}) == %{standing: ["key saved"], answer: [], replace: [], done: ["true"]}
@@ -1580,11 +1581,15 @@ defmodule PrismWeb.AquaLiveTest do
       :erlang.trace_pattern({Aqua.Models, :ask_models, 2}, true, [:local])
       view |> element(~s(#system-layer-dialog button[phx-click="confirm"])) |> render_click()
 
+      # The row reads the old list as one model too, so the answer is
+      # awaited where only it shows: the picker's entry.
       Prima.Test.Wait.wait_until(
-        fn -> render(view) =~ "brain answered with one model." end,
+        fn -> elem(picker(view), 0)["acme.brain"] == ["chat-fixture"] end,
         10_000,
         "acme's brain's answer"
       )
+
+      assert render(view) =~ "brain answered with one model."
 
       _ = :sys.get_state(view.pid)
       :erlang.trace(:all, false, [:call])
