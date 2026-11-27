@@ -127,20 +127,33 @@ defmodule PrismWeb.MemoryWords do
   @doc """
   What a day's row used on average over the time it was measured, its
   MiB-milliseconds over its milliseconds; a dash where nothing was
-  measured.
+  measured. It reads a day (`t:Opus.Memory.day/0`) or any map carrying
+  these two.
   """
-  @spec average(%{mib_ms: non_neg_integer(), measured_ms: non_neg_integer()}) :: String.t()
+  @spec average(%{
+          :mib_ms => non_neg_integer(),
+          :measured_ms => non_neg_integer(),
+          optional(atom()) => term()
+        }) :: String.t()
   def average(%{measured_ms: 0}), do: "—"
 
   def average(%{mib_ms: mib_ms, measured_ms: ms}),
     do: "#{size(div(mib_ms * 1_048_576, ms))} on average"
 
   @doc """
-  The most a day's row held at once, and for how long it was measured, as
-  one line whose two halves each keep their words together (no-break
-  spaces), so a narrow page breaks it between them and nowhere else.
+  The most a day's row held at once, and for how long it was measured,
+  as one line whose two halves each keep their words together (no-break
+  spaces), so a narrow page breaks it between them and nowhere else. A
+  peak with nothing measured (the keeper's first reading of a place adds
+  no time) is said alone.
   """
-  @spec at_most(%{peak_bytes: non_neg_integer(), measured_ms: non_neg_integer()}) :: String.t()
+  @spec at_most(%{
+          :peak_bytes => non_neg_integer(),
+          :measured_ms => non_neg_integer(),
+          optional(atom()) => term()
+        }) :: String.t()
+  def at_most(%{peak_bytes: peak, measured_ms: 0}), do: together("at most #{size(peak)}")
+
   def at_most(%{peak_bytes: peak, measured_ms: ms}),
     do: together("at most #{size(peak)},") <> " " <> together("for #{duration(ms)}")
 

@@ -37,4 +37,14 @@ defmodule PrismWeb.MemoryWordsTest do
     assert MemoryWords.at_most(day) ==
              "at\u00a0most\u00a0246.0\u00a0MB, for\u00a01\u00a0hour\u00a01\u00a0minute"
   end
+
+  test "a peak with nothing measured is said alone, a time under a second is said" do
+    peak = 100 * 1_048_576
+
+    assert MemoryWords.at_most(%{peak_bytes: peak, measured_ms: 0}) ==
+             "at\u00a0most\u00a0100.0\u00a0MB"
+
+    assert MemoryWords.at_most(%{peak_bytes: peak, measured_ms: 500}) ==
+             "at\u00a0most\u00a0100.0\u00a0MB, for\u00a0under\u00a0a\u00a0second"
+  end
 end

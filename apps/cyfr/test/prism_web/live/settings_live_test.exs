@@ -1141,8 +1141,8 @@ defmodule PrismWeb.SettingsLiveTest do
       assert section =~ "Memory use"
 
       assert section =~
-               "In use: 1000.0 MB of 4.7 GB, 336.0 MB of it set aside for work that is " <>
-                 "starting or stopping; 164.0 MB more is kept ready for the next run."
+               "In use: 1000.0 MB of 4.7 GB, of which the work listed below uses 664.0 MB now; " <>
+                 "164.0 MB more is kept ready for the next run."
 
       assert section =~ "claude"
       assert section =~ "500.0 MB"
@@ -1162,10 +1162,11 @@ defmodule PrismWeb.SettingsLiveTest do
       end
     end
 
-    # "In use" is the machine's charges, which hold a start at its
-    # allowance while its row shows what it really uses: the page says
-    # the part no row shows, and says nothing when the rows are the more.
-    test "the total says the part of it no holder's row shows" do
+    # "In use" is the machine's charges, which can exceed what the rows
+    # read for reasons the record does not carry: the page says how much
+    # of it the rows account for, never why, and nothing when they
+    # account for all of it or more.
+    test "the total says how much of it the work listed below uses" do
       ops = test_user()
       {:ok, _} = Sanctum.TestContext.ensure_platform(ops.user_id)
       o = own_athanor_id(ops)
@@ -1190,8 +1191,8 @@ defmodule PrismWeb.SettingsLiveTest do
       end
 
       assert use_line.() ==
-               "In use: 1000.0 MB of 4.7 GB, 336.0 MB of it set aside for work that is " <>
-                 "starting or stopping; 164.0 MB more is kept ready for the next run."
+               "In use: 1000.0 MB of 4.7 GB, of which the work listed below uses 664.0 MB now; " <>
+                 "164.0 MB more is kept ready for the next run."
 
       set_endpoint = fn fields ->
         Arca.Repo.update_all(
@@ -1205,8 +1206,7 @@ defmodule PrismWeb.SettingsLiveTest do
       set_endpoint.(floor: 0)
 
       assert use_line.() ==
-               "In use: 1000.0 MB of 4.7 GB, 336.0 MB of it set aside for work that is " <>
-                 "starting or stopping."
+               "In use: 1000.0 MB of 4.7 GB, of which the work listed below uses 664.0 MB now."
 
       set_endpoint.(used: 664 * @mib)
       assert use_line.() == "In use: 664.0 MB of 4.7 GB."
@@ -1290,7 +1290,7 @@ defmodule PrismWeb.SettingsLiveTest do
                  ["162.0 MB on average", "at most 318.0 MB, for 20 seconds"],
                  ["—"]
                ],
-               [today, me, ["run"], ["—", "at most 28.0 MB, for under a second"], ["—"]],
+               [today, me, ["run"], ["—", "at most 28.0 MB"], ["—"]],
                [
                  today,
                  me,
@@ -1315,6 +1315,14 @@ defmodule PrismWeb.SettingsLiveTest do
         [day | _] = LazyHTML.query(row, "td") |> Enum.to_list()
         assert day |> LazyHTML.attribute("class") |> hd() =~ "sticky"
       end
+
+      # The dash where nothing was measured is muted, an average is not:
+      # each row's Used cell is its average, then its most at once.
+      [built, _at_most, ran | _] =
+        LazyHTML.query(table, "tbody tr td:nth-child(4) span") |> Enum.to_list()
+
+      refute built |> LazyHTML.attribute("class") |> hd() =~ "text-gray-500"
+      assert ran |> LazyHTML.attribute("class") |> hd() =~ "text-gray-500"
     end
 
     # Each row's cells, their words with runs of space, no-break ones
@@ -1484,6 +1492,10 @@ defmodule PrismWeb.SettingsLiveTest do
       assert section =~ "No person&#39;s work uses memory now."
       refute section =~ "on it now"
       refute section =~ "Machine"
+
+      # The line under the total says the rows account for none of it.
+      assert section =~
+               "In use: 1000.0 MB of 4.7 GB; 164.0 MB more is kept ready for the next run."
     end
 
     test "a row keeps its place when its size passes another's" do

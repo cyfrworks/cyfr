@@ -41,9 +41,9 @@ defmodule PrismWeb.SettingsLive do
       control, and with a sentence when it opens only on this computer
       (`local_only`).
     * **Memory use** — for the platform administrator, who used what memory
-      (`Opus.memory/2`, `:everyone`): each machine's numbers, with the part
-      of its use that no holder's row shows said as set aside for work that
-      is starting or stopping, and what holds it now, in order of person,
+      (`Opus.memory/2`, `:everyone`): each machine's numbers, with how much
+      of its use the holders' rows account for where they account for
+      less, and what holds it now, in order of person,
       kind and name, then each UTC day's use by person, kind and name, as
       its average over the time measured, its most at once and that time,
       the newest seven days first and seven more at a time,
@@ -511,20 +511,21 @@ defmodule PrismWeb.SettingsLive do
     end
   end
 
-  # A machine's numbers: what is in use of what work may use, the part of
-  # it no row shows, and what is kept ready for the next run beside it.
-  # "In use" is what the machine charges its work, and a start is charged
-  # its allowance for its first seconds while its row shows what it
-  # really uses (`Prima.LocusPool`), so the total can exceed the rows'
-  # sum; the rows exceeding it, as the services are asked a moment apart,
-  # is said as nothing.
+  # A machine's numbers: what is in use of what work may use, how much of
+  # it the rows below account for, and what is kept ready for the next
+  # run beside it. "In use" is what the machine charges its work, which
+  # can exceed what the rows read for reasons the record does not carry
+  # (a start's allowance, a reading gone stale, a spare runner of no
+  # person's), so the page says how much the rows account for and never
+  # why. Rows that account for all of it, or none (the line below says
+  # so), or more (the services are asked a moment apart) add nothing.
   defp machine_use(%{used: used, work: work, floor: floor, holders: holders}) do
-    aside = used - Enum.sum_by(holders, & &1.bytes)
+    listed = Enum.sum_by(holders, & &1.bytes)
 
     IO.iodata_to_binary([
       "In use: #{MemoryWords.size(used)} of #{MemoryWords.size(work)}",
-      if(aside > 0,
-        do: ", #{MemoryWords.size(aside)} of it set aside for work that is starting or stopping",
+      if(holders != [] and used > listed,
+        do: ", of which the work listed below uses #{MemoryWords.size(listed)} now",
         else: []
       ),
       if(floor > 0,
@@ -1387,7 +1388,9 @@ defmodule PrismWeb.SettingsLive do
                   </span>
                 </:col>
                 <:col :let={d} label="Used">
-                  <span class="block">{MemoryWords.average(d)}</span>
+                  <span class={["block", d.measured_ms == 0 && "text-gray-500"]}>
+                    {MemoryWords.average(d)}
+                  </span>
                   <span class="block whitespace-normal text-xs text-gray-500">
                     {MemoryWords.at_most(d)}
                   </span>
