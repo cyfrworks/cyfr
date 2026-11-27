@@ -1544,6 +1544,33 @@ defmodule Locus.Runtime.RelayCountTest do
       end
     end
 
+    # Read-ahead leaves a larger read's piece room beside the answers': a
+    # fetch holding it can always hand its next piece on, and so seven
+    # fetches at once hold it, not the eight the answers' room alone
+    # would leave, which could each wait on a piece room no read-ahead
+    # leaves.
+    test "is read ahead for seven fetches at once, and the eighth reads 64 KiB at a time",
+         %{host: host} do
+      ahead = Prima.LocusRoles.role!(:runtime).memory.fetch_read_ahead_bytes
+      {port, handlers} = holding_upstream!(8, :held_call)
+      attempt = attempt!(host) |> ScriptedKeeper.relayed!()
+      refs = for _n <- 1..8, do: pinned_fetch!(attempt, port, "/held")
+      for handler <- handlers, do: assert_receive({:holding, ^handler}, 10_000)
+
+      buffers = attempt.relay |> holders() |> Enum.map(&read_buffer/1) |> Enum.frequencies()
+      assert buffers == %{ahead => 7, 65_536 => 1}
+
+      for handler <- handlers, do: send(handler, :close)
+      for ref <- refs, do: assert({_events, _error} = events(attempt.endpoint, ref))
+
+      wait_until(fn ->
+        Locus.Output.held(@count) |> Map.take([:answering, :waiting]) == %{
+          answering: 0,
+          waiting: 0
+        }
+      end)
+    end
+
     test "held by a worker killed while it waits is freed", %{host: host} do
       size = 3 * 262_144
       {port, _server} = big_upstream!(size)
@@ -1655,20 +1682,20 @@ defmodule Locus.Runtime.RelayCountTest do
       )
 
       limits = EdgeFixtures.limits(timeout: "90s", max_response_size: 4 * size)
-      ports = for _n <- 1..8, do: elem(big_upstream!(size), 0)
       test = self()
 
-      # One runner's eight pinned fetches, past the seven the read-ahead
-      # may hold, and another's sixteen attached ones; each stops reading
-      # once its credit window is sent, as far as the relay sends one: a
-      # pinned fetch to the byte, an attached one to the last whole frame.
+      # Two runners of eight pinned fetches and three of sixteen attached
+      # ones: more held past their windows than a fetch's asks may hold,
+      # so some fetches wait for room. A pinned fetch's window is sent to
+      # the byte, an attached one's to its last whole frame.
       runners =
-        for {kind, count, sent} <- [
-              {:pinned, 8, credit},
-              {:attached, 16, credit - 2 * byte_size(piece) - 4_096}
-            ] do
+        for {kind, count, window} <-
+              List.duplicate({:pinned, 8, credit}, 2) ++
+                List.duplicate({:attached, 16, credit - 2 * byte_size(piece) - 4_096}, 3) do
           attempt =
             attempt!(host, timeout_ms: 120_000, limits: limits) |> ScriptedKeeper.relayed!()
+
+          ports = if kind == :pinned, do: for(_n <- 1..count, do: elem(big_upstream!(size), 0))
 
           reader =
             Task.async(fn ->
@@ -1684,22 +1711,22 @@ defmodule Locus.Runtime.RelayCountTest do
                     end
                 end
 
-              read = for ref <- refs, do: {ref, unread_to(ref, sent)}
-              send(test, {:stopped, self()})
-
-              receive do
-                :read ->
-                  for {ref, bytes} <- read, do: Endpoint.credit(attempt.endpoint, ref, bytes)
-                  for {ref, _bytes} <- read, do: events(attempt.endpoint, ref)
-              end
+              unread(test, attempt.endpoint, Map.new(refs, &{&1, 0}), window)
             end)
 
-          {attempt, reader}
+          {attempt, reader, count}
         end
 
-      for {_attempt, %{pid: pid}} <- runners, do: assert_receive({:stopped, ^pid}, 60_000)
+      # Every fetch has read its window, or waits for room, or both.
+      fetches = runners |> Enum.map(&elem(&1, 2)) |> Enum.sum()
 
-      [{attempt, _reader} | _] = runners
+      wait_until(
+        fn -> windows_read(runners) + Locus.Output.held(@count).waiting >= fetches end,
+        60_000,
+        "every fetch past its window or waiting for room"
+      )
+
+      [{attempt, _reader, _count} | _] = runners
       answer = largest_answer(attempt)
       ScriptedHost.script(host, "tool_call", {:ok, answer})
       call = Task.async(fn -> HostClient.tool_call(attempt.client, "t", %{}, :call) end)
@@ -1707,11 +1734,11 @@ defmodule Locus.Runtime.RelayCountTest do
       assert {:ok, ^answer} =
                Task.await(call, Prima.HostAPI.request_timeout_ms(:tool_call) + 10_000)
 
-      # Both runners read again at once: one runner's guests that stop
-      # reading hold back the other's fetches until they read or end.
-      for {_attempt, reader} <- runners, do: send(reader.pid, :read)
+      # Every runner reads again at once: one runner's guests that stop
+      # reading hold back the others' fetches until they read or end.
+      for {_attempt, reader, _count} <- runners, do: send(reader.pid, :read)
 
-      for {_attempt, reader} <- runners,
+      for {_attempt, reader, _count} <- runners,
           do: assert(reader |> Task.await(60_000) |> Enum.all?(&match?({_events, nil}, &1)))
 
       wait_until(fn ->
@@ -1723,24 +1750,37 @@ defmodule Locus.Runtime.RelayCountTest do
     end
   end
 
-  # A fetch's body bytes as the runner reads them, granting nothing back,
-  # until at least `bytes` have come: what was read.
-  defp unread_to(ref, bytes, read \\ 0) do
-    if read >= bytes do
-      read
-    else
-      receive do
-        {Endpoint, ^ref, {:head, _status, _headers, body}} ->
-          unread_to(ref, bytes, read + byte_size(body))
+  # A runner's guests reading their fetches' bodies, granting nothing
+  # back, and telling `test` on its word how many have read their window;
+  # on `:read`, they grant back what they read and read each fetch to its
+  # end, granting as they go: each fetch's events and end.
+  defp unread(test, endpoint, read, window) do
+    receive do
+      {Endpoint, ref, {:head, _status, _headers, body}} when is_map_key(read, ref) ->
+        unread(test, endpoint, Map.update!(read, ref, &(&1 + byte_size(body))), window)
 
-        {Endpoint, ^ref, {:chunk, body}} ->
-          unread_to(ref, bytes, read + byte_size(body))
+      {Endpoint, ref, {:chunk, body}} when is_map_key(read, ref) ->
+        unread(test, endpoint, Map.update!(read, ref, &(&1 + byte_size(body))), window)
 
-        {Endpoint, ^ref, {:end, error}} ->
-          flunk("the fetch ended at #{read} bytes: #{inspect(error)}")
-      after
-        30_000 -> flunk("the fetch stalled at #{read} of #{bytes} bytes")
-      end
+      {Endpoint, ref, {:end, error}} when is_map_key(read, ref) ->
+        flunk("a fetch ended at #{read[ref]} bytes: #{inspect(error)}")
+
+      {:windows, ^test} ->
+        send(test, {:windows, self(), Enum.count(read, fn {_ref, bytes} -> bytes >= window end)})
+        unread(test, endpoint, read, window)
+
+      :read ->
+        for {ref, bytes} <- read, do: Endpoint.credit(endpoint, ref, bytes)
+        for {ref, _bytes} <- read, do: events(endpoint, ref)
+    end
+  end
+
+  defp windows_read(runners) do
+    for {_attempt, %{pid: pid}, _count} <- runners, reduce: 0 do
+      sum ->
+        send(pid, {:windows, self()})
+        assert_receive {:windows, ^pid, read}, 5_000
+        sum + read
     end
   end
 
