@@ -704,3 +704,26 @@ func hostRoute(fd int, a netip.Addr, dev string) error {
 	}
 	return nil
 }
+
+// GuestLink sets a person's VM's own link up, in the guest, as the host's
+// guard made the machine's route for it (machineLinks): the guest's one
+// card, pool.RouteLink, at inner in a /30 and up, a host route to
+// MachineNames on it, where the host's guard answers its names, and the
+// default route through gateway, the guard's end; the loopback up too.
+func GuestLink(inner, gateway netip.Addr) error {
+	s, err := unix.Socket(unix.AF_INET, unix.SOCK_DGRAM|unix.SOCK_CLOEXEC, 0)
+	if err != nil {
+		return err
+	}
+	defer unix.Close(s)
+	if err := linkUp(s, "lo"); err != nil {
+		return err
+	}
+	if err := setLink(s, innerName, inner); err != nil {
+		return err
+	}
+	if err := hostRoute(s, MachineNames, innerName); err != nil {
+		return err
+	}
+	return defaultRoute(s, gateway)
+}

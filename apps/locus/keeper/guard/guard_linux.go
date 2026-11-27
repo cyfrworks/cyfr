@@ -149,7 +149,7 @@ func readIsland(log *logx.Logger, p place, env func(string) string, resolve func
 		return string(b)
 	}
 	routes := read("net/route")
-	isl := island{controlPlane: env("CYFR_GUARD_CONTROL_PLANE"), hostAPI: env("CYFR_GUARD_HOST_API"),
+	isl := island{controlPlane: env("CYFR_GUARD_CONTROL_PLANE"), hostAPI: env("CYFR_GUARD_HOST_API"), resolver: env("CYFR_GUARD_RESOLVER"),
 		routes: v4Routes(routes, false), subnets: v4Routes(routes, true),
 		v6Subnets: v6Subnets(read("net/ipv6_route")), local: localAddresses(read("net/fib_trie"))}
 	// A value the guard refuses is refused before any name is asked.

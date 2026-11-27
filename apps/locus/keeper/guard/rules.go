@@ -168,6 +168,9 @@ type island struct {
 	local []string
 	// hostAPI is CYFR_GUARD_HOST_API's value.
 	hostAPI string
+	// resolver is CYFR_GUARD_RESOLVER's value, "" where it is unset and the
+	// resolver is Docker's on the namespace's loopback.
+	resolver string
 }
 
 // static is what the guard installs as it starts, and what each route's
@@ -246,6 +249,17 @@ func staticRules(log *logx.Logger, isl island) (static, error) {
 	v6("-A", chainOwn, "-o", "sp+", "-j", "REJECT", "--reject-with", reject6)
 	v4("-A", chainOwn, "-m", "conntrack", "!", "--ctstate", "NEW", "-j", "ACCEPT")
 	v6("-A", chainOwn, "-m", "conntrack", "!", "--ctstate", "NEW", "-j", "ACCEPT")
+	// A resolver the guard was given, a person's VM's guard's the host's
+	// guard on a link-local address, is the one address and port of what
+	// follows its own processes reach, the guard asking its routes' names
+	// among them.
+	if isl.resolver != "" {
+		ap := netip.MustParseAddrPort(isl.resolver)
+		log.Info("resolver %s passes this namespace's own processes", isl.resolver)
+		for _, proto := range []string{"udp", "tcp"} {
+			v4("-A", chainOwn, "-d", ap.Addr().String()+"/32", "-p", proto, "--dport", strconv.Itoa(int(ap.Port())), "-j", "ACCEPT")
+		}
+	}
 	for _, cidr := range metadataV4 {
 		reject(chainOwn, cidr)
 	}

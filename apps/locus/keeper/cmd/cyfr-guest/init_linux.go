@@ -56,6 +56,17 @@ func initMain() int {
 		logf("refusing to start: %v", err)
 		return 1
 	}
+	network, person, err := personOf()
+	if err != nil {
+		logf("refusing to start: %v", err)
+		return 1
+	}
+	if person {
+		if err := startPerson(network); err != nil {
+			logf("refusing to start: %v", err)
+			return 1
+		}
+	}
 	control, err := listenVsock(vm.ControlPort)
 	if err != nil {
 		logf("refusing to start: the control port: %v", err)
@@ -87,7 +98,7 @@ func initMain() int {
 		logf("refusing to start: %v", err)
 		return 1
 	}
-	if err := startGuard(self); err != nil {
+	if err := startGuard(self, person); err != nil {
 		logf("refusing to start: the guard: %v", err)
 		return 1
 	}
@@ -98,6 +109,9 @@ func initMain() int {
 	}
 	cmd := exec.Command(self, "keeper")
 	cmd.Env = []string{path, vm.GuestRoleKey + "=" + key}
+	if person {
+		cmd.Env = append(cmd.Env, vm.GuestPersonEnv+"=1")
+	}
 	cmd.Stdout, cmd.Stderr = os.Stderr, os.Stderr
 	// Born in the keeper's group, then a cgroup namespace rooted there and a
 	// mount namespace of its own, where the keeper step mounts that
@@ -284,7 +298,7 @@ func handOff(l *net.UnixListener, roleUID, control, attach int) {
 // the guard's routes lead nowhere: a space it routes reaches only what the
 // guard's own namespace does, which is nothing past the guest. Its control
 // plane is a documentation address (RFC 5737), refused as cyfr's would be.
-func startGuard(self string) error {
+func startGuard(self string, person bool) error {
 	for file, value := range map[string]string{
 		"/proc/sys/net/ipv4/ip_forward":     "1",
 		"/proc/sys/net/ipv4/icmp_ratelimit": "0",
@@ -294,8 +308,7 @@ func startGuard(self string) error {
 		}
 	}
 	cmd := exec.Command(self, "guard")
-	cmd.Env = []string{path, "CYFR_GUARD_CONTROL=" + vm.GuestGuardControl, "CYFR_GUARD_CONTROL_PLANE=192.0.2.1",
-		"CYFR_PRIVATE_EGRESS_TARGETS="}
+	cmd.Env = guardEnv(person)
 	cmd.Stdout, cmd.Stderr = os.Stderr, os.Stderr
 	if err := cmd.Start(); err != nil {
 		return err

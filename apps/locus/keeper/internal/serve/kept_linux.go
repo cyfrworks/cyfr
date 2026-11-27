@@ -1058,7 +1058,7 @@ func receiveTerminal(from *os.File, rows, cols uint16) (*os.File, error) {
 	if err := from.SetReadDeadline(time.Now().Add(stageTimeout)); err != nil {
 		return nil, fmt.Errorf("its socket: %w", err)
 	}
-	fds, err := receiveDescriptors(from, 1)
+	fds, err := stage.ReceiveDescriptors(from, 1)
 	if err != nil {
 		return nil, err
 	}

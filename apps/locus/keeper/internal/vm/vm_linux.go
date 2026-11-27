@@ -12,6 +12,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -23,6 +24,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/cyfr/locus/keeper/guard"
 	"github.com/cyfr/locus/keeper/internal/cgroup"
 	"github.com/cyfr/locus/keeper/internal/home"
 	"github.com/cyfr/locus/keeper/internal/pool"
@@ -39,10 +41,13 @@ const KVM = "/dev/kvm"
 // ErrNoKVM reports a container that was not given KVM: no machine runs.
 var ErrNoKVM = errors.New("this container was given no " + KVM)
 
+// stageWait bounds the VMM's stage from its start to the VMM's exec, and
+// a person's VM's space's handing its route up: a variable its tests
+// shorten.
+var stageWait = 10 * time.Second
+
 // Bounds of a machine's start and end.
 const (
-	// stageWait bounds the VMM's stage from its start to the VMM's exec.
-	stageWait = 10 * time.Second
 	// apiWait bounds the VMM's API socket's appearing.
 	apiWait = 2 * time.Second
 	// ReadyWait bounds a cold boot to the relay's Hello: P12's boots took
@@ -89,6 +94,24 @@ type Config struct {
 	// given. A machine that serves has none: its VMM's output goes to
 	// /dev/null and its guest is booted with no console.
 	Console io.Writer
+	// Disk is a person's disk image (home.FormImage), their VM's one
+	// writable drive, directly under KeptRoot, the kept homes' root, which
+	// the VMM's space is given covered but for it. "" for guest-check's
+	// machine, which has neither.
+	Disk, KeptRoot string
+	// Route makes a person's VM's route from its VMM's space's network
+	// namespace and two name sockets, which the space hands up before the
+	// VMM is executed (package stage): the guard's machine route (package
+	// guard), owned by the VMM's uid. The machine boots with a card on its
+	// tap, the guest at the route's inner address. nil for a machine with
+	// no network, whose space is a relay space whose relay leads nowhere.
+	Route func(uid int, netns, udp, tcp *os.File) (Network, error)
+}
+
+// Network is a person's VM's route: the guest's address and its gateway,
+// the guard's end, a /30's two hosts.
+type Network struct {
+	Inner, Gateway netip.Addr
 }
 
 // Machine is a running VMM and its guest.
@@ -107,6 +130,8 @@ type Machine struct {
 	done chan struct{}
 	// started is when the VMM was told to boot the guest.
 	started time.Time
+	// network is a person's VM's route, its zero for none.
+	network Network
 	device  *Device
 	// console closes when the console's copier has read its last byte.
 	console chan struct{}
@@ -231,11 +256,15 @@ func start(cfg Config) (*Machine, error) {
 	m.clear = func() error { return runRetire(m.uid, m.gid, m.dir) }
 	spec := stage.Spec{UID: m.uid, GID: m.gid, User: MachineUser, HomeRoot: Root, Home: m.dir,
 		Argv:   []string{Firecracker, "--api-sock", m.api(), "--id", m.id, "--level", "Warning"},
-		Limits: machineLimits, Reach: pool.ReachRelay, Cgroup: m.group.Path(), Machine: cfg.Device.Path}
+		Limits: machineLimits, Reach: pool.ReachRelay, Cgroup: m.group.Path(), Machine: cfg.Device.Path,
+		Disk: cfg.Disk, KeptRoot: cfg.KeptRoot}
+	if cfg.Route != nil {
+		spec.Reach = pool.ReachRouted
+	}
 	if err := spec.Validate(); err != nil {
 		return m, fmt.Errorf("vm: the VMM's space: %w", err)
 	}
-	if err := m.startStage(self, spec, cfg.Console); err != nil {
+	if err := m.startStage(self, spec, cfg); err != nil {
 		return m, err
 	}
 	if err := m.configure(cfg); err != nil {
@@ -258,10 +287,12 @@ func machinesRoot() error {
 }
 
 // startStage starts the VMM's stage, maps its ids, places it in its group
-// and hands it its spec, in that order, as the keeper does a spawn's, and
-// waits for the VMM's exec. A stage it started is Start's to kill on an
-// error.
-func (m *Machine) startStage(self string, spec stage.Spec, console io.Writer) error {
+// and hands it its spec, in that order, as the keeper does a spawn's; a
+// person's VM's stage then hands its space's namespace and name sockets up,
+// and only once cfg.Route has made the route is it told to go on. It waits
+// for the VMM's exec. A stage it started is Start's to kill on an error.
+func (m *Machine) startStage(self string, spec stage.Spec, cfg Config) error {
+	console := cfg.Console
 	data, err := json.Marshal(spec)
 	if err != nil {
 		return err
@@ -287,7 +318,9 @@ func (m *Machine) startStage(self string, spec stage.Spec, console io.Writer) er
 	if err != nil {
 		return err
 	}
-	// The space's relay: the keeper keeps no end of it.
+	// A relay space's relay leads nowhere: the keeper keeps no end of it.
+	// A routed space's route socket is the stage's at the same descriptor,
+	// and the keeper's end takes its namespace and name sockets.
 	relay, nowhere := os.NewFile(uintptr(fds[0]), "relay"), os.NewFile(uintptr(fds[1]), "nowhere")
 	closers = append(closers, relay, nowhere)
 	null, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
@@ -339,6 +372,11 @@ func (m *Machine) startStage(self string, spec stage.Spec, console io.Writer) er
 	}
 	_ = specW.Close()
 	_ = statusW.Close()
+	if cfg.Route != nil {
+		if err := m.route(nowhere, cfg.Route); err != nil {
+			return err
+		}
+	}
 	_ = statusR.SetReadDeadline(time.Now().Add(stageWait))
 	reason, err := io.ReadAll(io.LimitReader(statusR, 4096))
 	if err != nil {
@@ -346,6 +384,53 @@ func (m *Machine) startStage(self string, spec stage.Spec, console io.Writer) er
 	}
 	if len(reason) > 0 {
 		return fmt.Errorf("vm: the VMM's stage: %s", reason)
+	}
+	return nil
+}
+
+// route takes the namespace and two name sockets a person's VM's space
+// hands up on its route socket within stageWait, has fn make the route as
+// the VMM's uid's, and tells the stage to go on. A space that hands nothing
+// up is Start's to kill, which ends the receive; what a receive that
+// answers after the bound took is closed.
+func (m *Machine) route(conn *os.File, fn func(uid int, netns, udp, tcp *os.File) (Network, error)) error {
+	type received struct {
+		fds []int
+		err error
+	}
+	got := make(chan received, 1)
+	abandoned := make(chan struct{})
+	go func() {
+		fds, err := stage.ReceiveDescriptors(conn, 3)
+		select {
+		case got <- received{fds, err}:
+		case <-abandoned:
+			for _, fd := range fds {
+				_ = unix.Close(fd)
+			}
+		}
+	}()
+	var r received
+	select {
+	case r = <-got:
+	case <-time.After(stageWait):
+		close(abandoned)
+		return fmt.Errorf("vm: the VMM's space handed up no route within %s", stageWait)
+	}
+	if r.err != nil {
+		return fmt.Errorf("vm: the VMM's space's route: %w", r.err)
+	}
+	netns, udp, tcp := os.NewFile(uintptr(r.fds[0]), "netns"), os.NewFile(uintptr(r.fds[1]), "names-udp"), os.NewFile(uintptr(r.fds[2]), "names-tcp")
+	n, err := fn(m.uid, netns, udp, tcp)
+	_ = netns.Close()
+	_ = udp.Close()
+	_ = tcp.Close()
+	if err != nil {
+		return fmt.Errorf("vm: the machine's route: %w", err)
+	}
+	m.network = n
+	if _, err := conn.Write([]byte{stage.RouteGo}); err != nil {
+		return fmt.Errorf("vm: telling the VMM's space its route is made: %w", err)
 	}
 	return nil
 }
@@ -538,6 +623,43 @@ func (m *Machine) dialAs(path string, timeout time.Duration) (net.Conn, error) {
 	return conn, err
 }
 
+// Network is a person's VM's route, its zero for a machine with none.
+func (m *Machine) Network() Network { return m.network }
+
+// puts are the VMM's configuration, in its order: the guest's size, its
+// kernel and command line, its drives, the image's programs first and a
+// person's disk second (GuestDisk), a person's card on its tap, its vsock
+// and the balloon.
+func (m *Machine) puts(cfg Config) []put {
+	args := cfg.BootArgs
+	if m.network.Inner.IsValid() {
+		args += " " + NetArg + "=" + m.network.Inner.String() + "," + m.network.Gateway.String()
+	}
+	ps := []put{
+		{"/machine-config", map[string]any{"vcpu_count": cfg.VCPUs, "mem_size_mib": cfg.MemoryMiB}},
+		{"/boot-source", map[string]any{"kernel_image_path": Kernel, "boot_args": args}},
+		{"/drives/programs", map[string]any{"drive_id": "programs", "path_on_host": cfg.Device.Path, "is_root_device": true, "is_read_only": true}},
+	}
+	if cfg.Disk != "" {
+		ps = append(ps, put{"/drives/disk", map[string]any{"drive_id": "disk", "path_on_host": cfg.Disk, "is_root_device": false, "is_read_only": false}})
+	}
+	if m.network.Inner.IsValid() {
+		ps = append(ps, put{"/network-interfaces/eth0", map[string]any{"iface_id": "eth0", "host_dev_name": guard.MachineTap, "guest_mac": GuestMAC}})
+	}
+	return append(ps,
+		put{"/vsock", map[string]any{"guest_cid": GuestCID, "uds_path": m.vsock()}},
+		// The balloon is there for free-page reporting alone: it is never
+		// inflated.
+		put{"/balloon", map[string]any{"amount_mib": 0, "deflate_on_oom": true, "free_page_reporting": true}},
+		put{"/actions", map[string]any{"action_type": "InstanceStart"}})
+}
+
+// put is one request of the VMM's API.
+type put struct {
+	path string
+	body any
+}
+
 // configure gives the VMM its guest over its API and boots it.
 func (m *Machine) configure(cfg Config) error {
 	deadline := time.Now().Add(apiWait)
@@ -569,19 +691,7 @@ func (m *Machine) configure(cfg Config) error {
 		time.Sleep(dialAgain)
 	}
 	deadline = time.Now().Add(apiWait)
-	for _, put := range []struct {
-		path string
-		body any
-	}{
-		{"/machine-config", map[string]any{"vcpu_count": cfg.VCPUs, "mem_size_mib": cfg.MemoryMiB}},
-		{"/boot-source", map[string]any{"kernel_image_path": Kernel, "boot_args": cfg.BootArgs}},
-		{"/drives/programs", map[string]any{"drive_id": "programs", "path_on_host": cfg.Device.Path, "is_root_device": true, "is_read_only": true}},
-		{"/vsock", map[string]any{"guest_cid": GuestCID, "uds_path": m.vsock()}},
-		// The balloon is there for free-page reporting alone: it is never
-		// inflated.
-		{"/balloon", map[string]any{"amount_mib": 0, "deflate_on_oom": true, "free_page_reporting": true}},
-		{"/actions", map[string]any{"action_type": "InstanceStart"}},
-	} {
+	for _, put := range m.puts(cfg) {
 		body, _ := json.Marshal(put.body)
 		req, _ := http.NewRequest(http.MethodPut, "http://vmm"+put.path, bytes.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")

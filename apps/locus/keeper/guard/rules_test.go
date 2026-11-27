@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"net/netip"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -477,6 +478,48 @@ func TestTheDigestIsOfTheStaticRulesAlone(t *testing.T) {
 	for name, s := range moved {
 		if digest(s[0], s[1], s[2]) == base {
 			t.Errorf("%s leaves the digest", name)
+		}
+	}
+}
+
+// A guard given a resolver, a person's VM's guard given the host's guard
+// at a link-local address, lets its own processes reach that one address
+// and port, before the metadata and private refusals would refuse it; a
+// guard given none, as every host's, holds no such rule.
+func TestAGivenResolverIsTheOneOwnDestinationPastTheRefusals(t *testing.T) {
+	log, _ := logged()
+	plain, err := staticRules(log, anIsland())
+	if err != nil {
+		t.Fatal(err)
+	}
+	isl := anIsland()
+	isl.resolver = "169.254.0.53:53"
+	given, err := staticRules(log, isl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := commands(given.rules)
+	at := func(want string) int {
+		for i, l := range lines {
+			if l == want {
+				return i
+			}
+		}
+		return -1
+	}
+	udp := at("iptables -A CYFR_GUARD -d 169.254.0.53/32 -p udp --dport 53 -j ACCEPT")
+	tcp := at("iptables -A CYFR_GUARD -d 169.254.0.53/32 -p tcp --dport 53 -j ACCEPT")
+	refused := at("iptables -A CYFR_GUARD -d 169.254.0.0/16 -j REJECT --reject-with icmp-admin-prohibited")
+	if udp < 0 || tcp < 0 || refused < 0 || udp > refused || tcp > refused {
+		t.Fatalf("the resolver's rules at %d and %d, the metadata's refusal at %d:\n%s", udp, tcp, refused, strings.Join(lines, "\n"))
+	}
+	without := slices.DeleteFunc(slices.Clone(lines), func(l string) bool { return strings.Contains(l, "169.254.0.53") })
+	if !slices.Equal(without, commands(plain.rules)) {
+		t.Fatalf("a given resolver changed more than its two rules:\n%s", strings.Join(lines, "\n"))
+	}
+	for _, l := range commands(plain.rules) {
+		if strings.Contains(l, "169.254.0.53") {
+			t.Fatalf("a guard given no resolver holds %q", l)
 		}
 	}
 }

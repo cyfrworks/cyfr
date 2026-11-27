@@ -14,6 +14,7 @@ import (
 	"net/netip"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -40,6 +41,7 @@ const (
 	routeSpaceMode   = "CYFR_GUARD_TEST_SPACE"
 	machineGuardMode = "CYFR_GUARD_TEST_MACHINE"
 	machineMode      = "CYFR_GUARD_TEST_VMM"
+	guestLinkMode    = "CYFR_GUARD_TEST_GUEST_LINK"
 )
 
 func TestMain(m *testing.M) {
@@ -52,6 +54,8 @@ func TestMain(m *testing.M) {
 		os.Exit(standInMachineGuard())
 	case os.Getenv(machineMode) != "":
 		os.Exit(standInVMM())
+	case os.Getenv(guestLinkMode) != "":
+		os.Exit(standInGuest())
 	}
 	os.Exit(m.Run())
 }
@@ -645,4 +649,82 @@ func standInVMM() int {
 		return fail("%v", err)
 	}
 	select {}
+}
+
+// A person's VM sets its one card as its host's machine route expects it:
+// the inner address in a /30 and up, a host route to MachineNames on it,
+// and the default route through the gateway. Here the card is one end of a
+// pair in a namespace of the test's own.
+func TestAGuestsCardIsSetAsItsMachineRouteExpects(t *testing.T) {
+	cmd := exec.Command(os.Args[0], "-test.run=^$")
+	cmd.Env = append(os.Environ(), guestLinkMode+"=1")
+	cmd.SysProcAttr = userNetAttr()
+	out, err := cmd.CombinedOutput()
+	if err != nil && (bytes.Contains(out, []byte("skip:")) || errors.Is(err, syscall.EPERM) || errors.Is(err, syscall.EINVAL)) {
+		t.Skipf("this host gives the test no namespaces of its own: %v %s", err, out)
+	}
+	if err != nil {
+		t.Fatalf("the stand-in guest: %v\n%s", err, out)
+	}
+	for _, want := range []string{"guest: eth0 10.213.0.6/30 up", "guest: route 169.254.0.53/32 dev eth0", "guest: default via 10.213.0.5 dev eth0"} {
+		if !strings.Contains(string(out), want) {
+			t.Errorf("lacks %q:\n%s", want, out)
+		}
+	}
+}
+
+func standInGuest() int {
+	fail := func(format string, args ...any) int {
+		fmt.Printf("guest: "+format+"\n", args...)
+		return 1
+	}
+	peer := ifinfomsg()
+	peer = rtattr(peer, unix.IFLA_IFNAME, cstring("peer0"))
+	info := rtattr(nil, unix.IFLA_INFO_KIND, cstring("veth"))
+	info = rtattr(info, unix.IFLA_INFO_DATA, rtattr(nil, vethInfoPeer, peer))
+	body := rtattr(ifinfomsg(), unix.IFLA_IFNAME, cstring(innerName))
+	body = rtattr(body, unix.IFLA_LINKINFO, info)
+	if err := netlinkDo(unix.RTM_NEWLINK, unix.NLM_F_CREATE|unix.NLM_F_EXCL, body); err != nil {
+		fmt.Printf("skip: the card: %v\n", err)
+		return 1
+	}
+	inner, gateway := netip.MustParseAddr("10.213.0.6"), netip.MustParseAddr("10.213.0.5")
+	if err := GuestLink(inner, gateway); err != nil {
+		return fail("%v", err)
+	}
+	card, err := net.InterfaceByName(innerName)
+	if err != nil {
+		return fail("%v", err)
+	}
+	addrs, _ := card.Addrs()
+	if len(addrs) == 1 && addrs[0].String() == "10.213.0.6/30" && card.Flags&net.FlagUp != 0 {
+		fmt.Println("guest: eth0 10.213.0.6/30 up")
+	}
+	routes, err := os.ReadFile("/proc/net/route")
+	if err != nil {
+		return fail("%v", err)
+	}
+	for _, line := range strings.Split(string(routes), "\n")[1:] {
+		f := strings.Fields(line)
+		if len(f) < 8 {
+			continue
+		}
+		dst, gw, mask := hexIPv4(f[1]), hexIPv4(f[2]), hexIPv4(f[7])
+		switch {
+		case f[0] == innerName && dst == "169.254.0.53" && mask == "255.255.255.255":
+			fmt.Println("guest: route 169.254.0.53/32 dev eth0")
+		case f[0] == innerName && dst == "0.0.0.0" && gw == "10.213.0.5":
+			fmt.Println("guest: default via 10.213.0.5 dev eth0")
+		}
+	}
+	return 0
+}
+
+// hexIPv4 is /proc/net/route's little-endian hex IPv4 address, dotted.
+func hexIPv4(h string) string {
+	v, err := strconv.ParseUint(h, 16, 32)
+	if err != nil {
+		return ""
+	}
+	return netip.AddrFrom4([4]byte{byte(v), byte(v >> 8), byte(v >> 16), byte(v >> 24)}).String()
 }

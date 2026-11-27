@@ -9,6 +9,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"os"
 	"syscall"
 
 	"golang.org/x/sys/unix"
@@ -259,4 +260,47 @@ func request(kind uint16, body []byte) error {
 			}
 		}
 	}
+}
+
+// ReceiveDescriptors reads one message of one byte from a stage or a
+// space's first process carrying exactly want descriptors, received
+// close-on-exec; any other message is refused and its descriptors closed.
+func ReceiveDescriptors(from *os.File, want int) ([]int, error) {
+	conn, err := from.SyscallConn()
+	if err != nil {
+		return nil, err
+	}
+	buf := make([]byte, 1)
+	oob := make([]byte, unix.CmsgSpace(4*want))
+	var n, oobn int
+	var rerr error
+	err = conn.Read(func(fd uintptr) bool {
+		n, oobn, _, _, rerr = unix.Recvmsg(int(fd), buf, oob, unix.MSG_CMSG_CLOEXEC)
+		return !errors.Is(rerr, unix.EAGAIN)
+	})
+	if err == nil {
+		err = rerr
+	}
+	if err != nil {
+		return nil, err
+	}
+	var fds []int
+	if oobn > 0 {
+		msgs, perr := unix.ParseSocketControlMessage(oob[:oobn])
+		if perr != nil {
+			return nil, perr
+		}
+		for i := range msgs {
+			if got, perr := unix.ParseUnixRights(&msgs[i]); perr == nil {
+				fds = append(fds, got...)
+			}
+		}
+	}
+	if n != 1 || len(fds) != want {
+		for _, fd := range fds {
+			_ = unix.Close(fd)
+		}
+		return nil, fmt.Errorf("a message of %d bytes and %d descriptors, not 1 and %d", n, len(fds), want)
+	}
+	return fds, nil
 }
