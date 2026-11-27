@@ -635,3 +635,29 @@ fn storage_lists_and_checks_the_scope_for_a_null_path_as_for_an_omitted_one() {
         );
     });
 }
+
+#[test]
+fn storage_bounds_a_request_under_any_limit_without_overflow() {
+    // The envelope bound is twice the limit and its slack, which saturates:
+    // under the largest limit every request is within it.
+    run(|| async {
+        let mut limits = Limits::zero();
+        limits.max_request_size = u64::MAX;
+        let mut under = under(
+            answering(|_call| Reply::Ok(json!({"files": []}))),
+            limits,
+            &[],
+            &[],
+        )
+        .await;
+        let answer = under
+            .guest
+            .call(r#"{"action":"list"}"#.to_owned())
+            .await
+            .expect("an answer");
+        assert_eq!(
+            serde_json::from_str::<Value>(&answer).expect("JSON"),
+            json!({"files": [], "status": "ok"})
+        );
+    });
+}

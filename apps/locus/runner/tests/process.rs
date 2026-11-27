@@ -589,7 +589,12 @@ async fn a_renewal_cyfr_refuses_lapses_the_watch_at_once_inside_the_lease_last_h
         renew(&mut post, &caller, &attempt, 10_000, 500).await,
         Renewal::Lapsed
     );
-    let mut post = scripted(Box::new(|_call, _job| Reply::Error("lost", json!({}))));
+    // The same job's keys, answered with CYFR's own refusal.
+    let mut post = Scripted {
+        job: post.job.clone(),
+        script: Box::new(|_call, _job| Reply::Error("lost", json!({}))),
+        calls: Vec::new(),
+    };
     assert_eq!(
         renew(&mut post, &caller, &attempt, 10_000, 500).await,
         Renewal::Lapsed
@@ -896,15 +901,15 @@ fn nothing_of_the_token_or_the_keys_is_left_in_the_runners_memory_after_its_clos
         }),
     );
     assert_eq!(service.frame(SOON)["clean"], true);
-    let call_hex = cyfr_runner::wire::hex(&support::CALL_KEY);
-    let seal_hex = cyfr_runner::wire::hex(&support::SEAL_KEY);
+    let call_hex = cyfr_runner::wire::hex(&job.call_key);
+    let seal_hex = cyfr_runner::wire::hex(&job.seal_key);
     let needles: [&[u8]; 6] = [
         support::RUNNER.as_bytes(),
         &token.as_bytes()[..64],
         call_hex.as_bytes(),
         seal_hex.as_bytes(),
-        &support::CALL_KEY,
-        &support::SEAL_KEY,
+        &job.call_key,
+        &job.seal_key,
     ];
     let found = support::scan(service.pid(), &needles);
     // The scan finds what is there: the runner's own id.

@@ -190,11 +190,17 @@ async fn a_kept_compile_leaves_when_its_time_passes_with_no_lookup() {
     let digest = engine::digest(&bytes);
     engine.compile(&digest, bytes).await.expect("a compile");
     assert!(engine.kept(&digest).is_some());
+    // What the engine holds is read without a lookup, which could evict.
     tokio::time::advance(engine::KEPT_FOR - std::time::Duration::from_secs(1)).await;
     tokio::task::yield_now().await;
-    assert!(engine.kept(&digest).is_some(), "kept for its 15 minutes");
+    assert_eq!(engine.kept_count(), 1, "kept for its 15 minutes");
     // Nothing looks it up in between: its own timer removes it.
     tokio::time::advance(std::time::Duration::from_secs(2)).await;
     tokio::task::yield_now().await;
-    assert!(engine.kept(&digest).is_none(), "gone once they pass");
+    assert_eq!(
+        engine.kept_count(),
+        0,
+        "gone once they pass, with no lookup"
+    );
+    assert!(engine.kept(&digest).is_none());
 }

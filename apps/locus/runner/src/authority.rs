@@ -20,7 +20,7 @@ use std::collections::BTreeSet;
 
 use serde_json::{Map, Value};
 
-use crate::wire::{Integer, Json, integer};
+use crate::wire::{Integer, Json, MAX_INTEGER, integer};
 
 /// A node's limits, as `Prima.Limits.to_map/1` writes them.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -104,7 +104,8 @@ pub fn read(authority: &Json) -> Result<Authority, Refused> {
 }
 
 // A node's limits as `Prima.Limits.new/1` reads them: exactly the seven
-// members; each count a whole number, zero or more; each duration one
+// members; each count a whole number from zero to 2^53 - 1, the bound of
+// every integer a canonical blob holds; each duration one
 // Prima's parser reads, not negative; and a rate limit of exactly its
 // requests, a count, and its window, a duration above zero.
 fn limits(limits: &Value) -> Result<Limits, Refused> {
@@ -124,7 +125,7 @@ fn limits(limits: &Value) -> Result<Limits, Refused> {
         return Err(Refused("limits"));
     }
     let count = |name: &'static str| match limits.get(name).and_then(integer) {
-        Some(Integer::Whole(n)) => Ok(n),
+        Some(Integer::Whole(n)) if n <= MAX_INTEGER => Ok(n),
         _ => Err(Refused(name)),
     };
     let timed = |name: &'static str| match limits.get(name) {
@@ -136,7 +137,7 @@ fn limits(limits: &Value) -> Result<Limits, Refused> {
     let rate_limit = match limits.get("rate_limit") {
         Some(Value::Object(rate)) if rate.len() == 2 => RateLimit {
             requests: match rate.get("requests").and_then(integer) {
-                Some(Integer::Whole(n)) => n,
+                Some(Integer::Whole(n)) if n <= MAX_INTEGER => n,
                 _ => return Err(Refused("rate_limit")),
             },
             window: match rate.get("window") {

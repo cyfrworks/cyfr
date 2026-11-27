@@ -3016,6 +3016,128 @@
       }
     },
     {
+      "why": "a byte count one past 2^53 - 1, the bound of every integer a canonical blob holds",
+      "authority": {
+        "activation": {
+          "catalyst:supabase.com.database": "sha256:act-catalyst",
+          "formula:local.daily-report": "sha256:act-formula"
+        },
+        "budget": {
+          "id": "bgt_AAAAAAAAAAHKmY6r"
+        },
+        "chain": [
+          "formula:local.daily-report"
+        ],
+        "consent_id": "cns_01a09fee-0000-7000-8000-000000000002",
+        "cursor": {
+          "bound": "formula:local.daily-report"
+        },
+        "depth": 0,
+        "invoke_mode": "open_inert",
+        "policy": {
+          "canonical": "jcs-1",
+          "nodes": {
+            "catalyst:supabase.com.database": {
+              "edges": {},
+              "limits": {
+                "batch_timeout": "2m",
+                "max_concurrent_tasks": 4,
+                "max_memory_bytes": 33554432,
+                "max_request_size": 524288,
+                "max_response_size": 2097152,
+                "rate_limit": {
+                  "requests": 20,
+                  "window": "10s"
+                },
+                "timeout": "45s"
+              }
+            },
+            "formula:local.daily-report": {
+              "edges": {
+                "@ingress": {}
+              },
+              "limits": {
+                "batch_timeout": "2m",
+                "max_concurrent_tasks": 4,
+                "max_memory_bytes": 33554432,
+                "max_request_size": 9007199254740992,
+                "max_response_size": 2097152,
+                "rate_limit": {
+                  "requests": 20,
+                  "window": "10s"
+                },
+                "timeout": "45s"
+              }
+            }
+          }
+        },
+        "profile_id": "prof_01a09fee-0000-7000-8000-000000000001",
+        "profile_kind": "owner",
+        "source_ref": "formula:local.daily-report"
+      }
+    },
+    {
+      "why": "a rate limit's requests one past 2^53 - 1",
+      "authority": {
+        "activation": {
+          "catalyst:supabase.com.database": "sha256:act-catalyst",
+          "formula:local.daily-report": "sha256:act-formula"
+        },
+        "budget": {
+          "id": "bgt_AAAAAAAAAAHKmY6r"
+        },
+        "chain": [
+          "formula:local.daily-report"
+        ],
+        "consent_id": "cns_01a09fee-0000-7000-8000-000000000002",
+        "cursor": {
+          "bound": "formula:local.daily-report"
+        },
+        "depth": 0,
+        "invoke_mode": "open_inert",
+        "policy": {
+          "canonical": "jcs-1",
+          "nodes": {
+            "catalyst:supabase.com.database": {
+              "edges": {},
+              "limits": {
+                "batch_timeout": "2m",
+                "max_concurrent_tasks": 4,
+                "max_memory_bytes": 33554432,
+                "max_request_size": 524288,
+                "max_response_size": 2097152,
+                "rate_limit": {
+                  "requests": 20,
+                  "window": "10s"
+                },
+                "timeout": "45s"
+              }
+            },
+            "formula:local.daily-report": {
+              "edges": {
+                "@ingress": {}
+              },
+              "limits": {
+                "batch_timeout": "2m",
+                "max_concurrent_tasks": 4,
+                "max_memory_bytes": 33554432,
+                "max_request_size": 524288,
+                "max_response_size": 2097152,
+                "rate_limit": {
+                  "requests": 9007199254740992,
+                  "window": "10s"
+                },
+                "timeout": "45s"
+              }
+            }
+          }
+        },
+        "profile_id": "prof_01a09fee-0000-7000-8000-000000000001",
+        "profile_kind": "owner",
+        "source_ref": "formula:local.daily-report"
+      }
+    },
+    {
       "why": "the resources' vault whose projection's fields are not an object",
       "authority": {
         "activation": {

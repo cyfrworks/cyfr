@@ -202,6 +202,11 @@ impl Engine {
         }))
     }
 
+    /// How many compiles the engine holds.
+    pub fn kept_count(&self) -> usize {
+        self.kept.lock().expect("the kept compiles").len()
+    }
+
     /// The compile kept for `digest`, if one is.
     pub fn kept(&self, digest: &str) -> Option<Component> {
         let kept = self.kept.lock().expect("the kept compiles");

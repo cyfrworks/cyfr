@@ -31,10 +31,14 @@ pub const BOOT: &str = "boot_test-boot";
 pub const MEMBER: &str = "cyfr@127.0.0.1#boot_test-member";
 pub const ATHANOR: &str = "ath_test-athanor";
 
-/// The attempt keys every test job's assign carries: patterns a scan of the
-/// runner's memory finds only where a key was left.
-pub const CALL_KEY: [u8; 32] = *b"call-key:test-job:0123456789abcd";
-pub const SEAL_KEY: [u8; 32] = *b"seal-key:test-job:0123456789abcd";
+/// 32 bytes from the system's random source: no key or IV of the tests is
+/// a literal.
+pub fn random_key() -> [u8; 32] {
+    std::array::from_fn(|_| {
+        let byte = getrandom::u32().expect("the operating system's random source answers");
+        byte.to_le_bytes()[0]
+    })
+}
 
 /// The repository's root.
 pub fn root() -> PathBuf {
@@ -78,6 +82,10 @@ pub struct Job {
     pub input: Vec<u8>,
     pub timeout_ms: u64,
     pub authority: Value,
+    /// The attempt's keys, drawn for the job, which a scan of the runner's
+    /// memory looks for.
+    pub call_key: [u8; 32],
+    pub seal_key: [u8; 32],
 }
 
 impl Job {
@@ -95,6 +103,8 @@ impl Job {
             timeout_ms: 30_000,
             authority: json!({"cursor": "unbound", "depth": 0, "invoke_mode": "open_inert",
                               "activation": {}, "budget": {"id": "bgt_test"}, "chain": []}),
+            call_key: random_key(),
+            seal_key: random_key(),
         }
     }
 
@@ -116,8 +126,8 @@ impl Job {
     pub fn keys(&self) -> AttemptKeys {
         AttemptKeys {
             attempt: self.attempt(),
-            call: CALL_KEY.into(),
-            seal: SEAL_KEY.into(),
+            call: self.call_key.into(),
+            seal: self.seal_key.into(),
         }
     }
 

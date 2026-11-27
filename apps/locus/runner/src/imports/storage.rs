@@ -87,7 +87,10 @@ fn requested(
     request: &str,
     max_request_size: u64,
 ) -> Result<(String, Map<String, Value>), Refusal> {
-    if request.len() as u64 > max_request_size.saturating_mul(2) + ENVELOPE_OVERHEAD {
+    let envelope = max_request_size
+        .saturating_mul(2)
+        .saturating_add(ENVELOPE_OVERHEAD);
+    if request.len() as u64 > envelope {
         return Err(refusal(
             "request_too_large",
             "Request exceeds the consented max_request_size for this component.",

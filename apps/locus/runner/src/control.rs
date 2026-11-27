@@ -922,17 +922,27 @@ const READ_BYTES: usize = 64 * 1024;
 /// it never moves, has the room a taken line leaves cleared.
 pub struct Lines<R> {
     reader: R,
-    buffer: Zeroizing<Vec<u8>>,
-    chunk: Zeroizing<Vec<u8>>,
+    buffer: Vec<u8>,
+    chunk: Vec<u8>,
     closed: bool,
+}
+
+impl<R> Drop for Lines<R> {
+    // What is still written is cleared: the buffer's unread bytes (the
+    // room a taken line left is cleared already) and the chunk. Clearing
+    // the whole reservation would write every page of it.
+    fn drop(&mut self) {
+        self.buffer.as_mut_slice().zeroize();
+        self.chunk.as_mut_slice().zeroize();
+    }
 }
 
 impl<R: tokio::io::AsyncRead + Unpin> Lines<R> {
     pub fn new(reader: R) -> Self {
         Lines {
             reader,
-            buffer: Zeroizing::new(Vec::with_capacity(MAX_LINE_BYTES + 1 + READ_BYTES)),
-            chunk: Zeroizing::new(vec![0u8; READ_BYTES]),
+            buffer: Vec::with_capacity(MAX_LINE_BYTES + 1 + READ_BYTES),
+            chunk: vec![0u8; READ_BYTES],
             closed: false,
         }
     }
