@@ -87,12 +87,17 @@ type testServer struct {
 	ended chan struct{}
 }
 
-func startServer(t *testing.T, netns string) *testServer {
+func startServer(t *testing.T, netns string, set ...func(*server)) *testServer {
 	t.Helper()
 	rng, _ := ParseRange("10.213.0.0/16")
 	ts := &testServer{path: filepath.Join(t.TempDir(), "guard.sock"), maker: &fakeMaker{fail: map[string]bool{}}, ended: make(chan struct{}, 16)}
 	ts.s = newServer(logx.New("cyfr-guard-test"), netns, rng, ts.maker)
 	ts.s.onEnd = func() { ts.ended <- struct{}{} }
+	// What a test sets of the server is set before it serves, as the
+	// guard's start sets it.
+	for _, f := range set {
+		f(ts.s)
+	}
 	l, err := net.ListenUnix("unixpacket", &net.UnixAddr{Name: ts.path, Net: "unixpacket"})
 	if err != nil {
 		t.Fatal(err)
@@ -711,8 +716,7 @@ func TestAGuardRoutingNoMachineSaysSoAndRefusesEachMachine(t *testing.T) {
 	if err := json.Unmarshal(v.HelloRoutingNoMachine, &hello); err != nil {
 		t.Fatal(err)
 	}
-	ts := startServer(t, "net:[1]")
-	ts.s.machines = hello.Machines
+	ts := startServer(t, "net:[1]", func(s *server) { s.machines = hello.Machines })
 	c := NewClient(ts.path, "net:[1]", nil)
 	netns, udp, tcp := descriptors(t)
 	if _, err := c.Admit(testSpawn, ReachIsland, nil, netns, udp, tcp); err != nil {
