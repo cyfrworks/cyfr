@@ -99,12 +99,11 @@ export function parse(address) {
  * by a frame for itself or a frame inside it, by a frame for any other,
  * or by no frame (`asker`: "top", "frame-inside", "frame-outside",
  * "none", as the engine reports the initiator), while its top frame shows
- * `showing`. "allow", "block",
+ * `showing`. "allow", "block" or
  * "hop" (a ceremony: the top frame, showing the selected CYFR's page,
  * sends itself to the account service's sign-in route or the page that
  * makes an account, which open in the account window, also where the CYFR
- * serves that route itself) or
- * "company" (the CYFR's company sign-in, which the app does not offer).
+ * serves that route itself).
  * The chooser is main's alone to show (chooserPath): no navigation, no
  * redirect and no frame loads it, in any window.
  * What a frame may ask, once: it may navigate itself or a frame inside it
@@ -130,19 +129,17 @@ export function contentNavigation({url, target, asker, showing}, state) {
     return Object.hasOwn(HOPS, u.pathname) && state.accountRoad && asker === "top" &&
       parse(showing)?.origin === state.home ? "hop" : "block"
   }
-  if (u.origin === state.home) return u.pathname === "/company-login" ? "company" : "allow"
-  return "block"
+  return u.origin === state.home ? "allow" : "block"
 }
 
 // A frame of a content page: the device's pages and the selected CYFR's,
-// none of its ceremony or company sign-in routes, and documents of no
-// origin.
+// none of its ceremony routes, and documents of no origin.
 function frameLoad(u, state) {
   if (["about:", "blob:", "data:"].includes(u.protocol)) return "allow"
   if (chooserPath(u) || railPath(u) || updatePath(u)) return "block"
   if (u.origin === LOOPBACK) return "allow"
   if (!state.home || ceremony(u, state)) return "block"
-  return u.origin === state.home && u.pathname !== "/company-login" ? "allow" : "block"
+  return u.origin === state.home ? "allow" : "block"
 }
 
 // Whether u is one of the chooser's addresses, the rail's or Update

@@ -338,6 +338,9 @@
 .canvas-shelf-scroll > #canvas-shelf-programs { flex-shrink: 0; }
 #canvas-shelf-programs { display: flex; align-items: center; gap: 6px; }
 .canvas-shelf-program { display: flex; align-items: center; flex-shrink: 0; }
+/* The second a program started, on chips of one name: it tells them apart,
+ * so it stays at every width, the phone's too. */
+.canvas-shelf-program-time { flex-shrink: 0; font-variant-numeric: tabular-nums; }
 .canvas-shelf-program[data-canvas-watched="false"] .canvas-shelf-app { opacity: 0.6; }
 .canvas-shelf-program-close {
   height: 34px;
@@ -360,6 +363,7 @@
   .canvas-shelf-chips { width: 5.25rem; }
   .canvas-shelf-app { gap: 0; padding: 0 8px; }
   .canvas-shelf-app-name { display: none; }
+  .canvas-shelf-program-time { margin-left: 6px; }
 }
 
 /* The shell's own chips stand on the shelf's left end, centred in it and

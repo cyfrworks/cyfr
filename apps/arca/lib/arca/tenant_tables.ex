@@ -140,10 +140,6 @@ defmodule Arca.TenantTables do
   # directory serves beside it: an account's name and the requests it
   # spent, which no athanor holds.
   #
-  # `company_authorizations` and `company_login_attempts` are a person's
-  # company sign-in and the sign-ins they have in flight: the person's,
-  # deleted with their `users` row, never with an athanor.
-  #
   # `request_rate_windows` are the node's pre-authentication limits: no
   # session, and so no athanor, stands behind them.
   #
@@ -169,8 +165,6 @@ defmodule Arca.TenantTables do
     "directory_heads",
     "directory_handles",
     "directory_nonces",
-    "company_authorizations",
-    "company_login_attempts",
     "request_rate_windows",
     "shared_threads",
     "shared_thread_members",

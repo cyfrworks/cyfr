@@ -669,7 +669,7 @@ defmodule Cyfr.Test.ScriptedBackends do
             %{
               "name" => p["name"],
               "status" => if(running > 0, do: "running", else: "idle"),
-              "restarts" => 0,
+              "restarts" => Map.get(st, :restarts, 0),
               "home" => p["home"] || "scratch",
               "over_cap" => false,
               "sessions" => running
@@ -979,6 +979,9 @@ defmodule Cyfr.Test.ScriptedBackends do
     st = Agent.get(agent, & &1)
 
     case st.sessions[id] do
+      _any when st.boot != fields.boot ->
+        refuse(conn, st, :stale_boot)
+
       nil ->
         refuse(conn, st, :unknown_session)
 

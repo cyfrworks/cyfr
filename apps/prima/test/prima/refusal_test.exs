@@ -334,8 +334,6 @@ defmodule Prima.RefusalTest do
     {:no_person, :not_found},
     {:invitation_invalid, :not_found},
     {:handle_not_found, :not_found},
-    {:company_login_required, :forbidden},
-    {:company_subject_bound, :conflict},
     {:execution_failed, :internal},
     {:invalid_session, :unauthenticated},
     {:missing_generation, :unauthenticated},
@@ -1017,19 +1015,6 @@ defmodule Prima.RefusalTest do
       assert %Refusal{class: :not_found} = Refusal.classify(:handle_not_found)
 
       for reason <- [:invitation_invalid, :handle_not_found],
-          do: assert(Refusal.reason?(reason))
-    end
-
-    test "a company sign-in a CYFR requires, and a company account bound to another, each say so" do
-      assert %Refusal{class: :forbidden, message: required} =
-               Refusal.classify(:company_login_required)
-
-      assert required =~ "sign in with your company's account"
-
-      assert %Refusal{class: :conflict, message: bound} = Refusal.classify(:company_subject_bound)
-      assert bound =~ "bound to someone else here"
-
-      for reason <- [:company_login_required, :company_subject_bound],
           do: assert(Refusal.reason?(reason))
     end
 

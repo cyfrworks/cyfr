@@ -28,7 +28,6 @@ test("a content window loads the device's pages, then the selected CYFR, and not
   assert.equal(top(LOOPBACK + "/", before, ""), "allow", "the device's pages")
   assert.equal(top(home + "/", before), "block", "the CYFR before main keeps to it")
   assert.equal(top(home + "/threads?x=1", ready), "allow")
-  assert.equal(top(home + "/company-login", ready), "company")
   assert.equal(top(account + "/account/new#x", ready), "hop", "the page that makes an account, a hop")
   assert.equal(top(account + "/account/new#x", linux), "block", "no account road on Linux")
   for (const chooser of [LOOPBACK + "/bootstrap/", LOOPBACK + "/bootstrap/#token=t&road=passkey"]) {
@@ -88,7 +87,7 @@ test("a CYFR that serves its own account pages hops to them, never loads them as
 })
 
 test("a frame navigates itself or a frame inside it to what a frame may load, and never the top frame or another frame", () => {
-  for (const url of [account + "/account/sign#x", home + "/threads", home + "/company-login", LOOPBACK + "/lock"]) {
+  for (const url of [account + "/account/sign#x", home + "/threads", LOOPBACK + "/lock"]) {
     for (const asker of ["frame-inside", "frame-outside"]) {
       assert.equal(top(url, ready, home + "/", asker), "block", `${asker}: the top frame to ${url}`)
     }
@@ -106,7 +105,6 @@ test("a frame never hops and never loads a ceremony's route, by navigation or by
       assert.equal(frame(state.account + route, state), "block", `${state.account}${route}`)
     }
   }
-  assert.equal(frame(home + "/company-login", ready), "block")
   assert.equal(frame(home + "/threads", ready), "allow")
   assert.equal(frame("about:blank", ready), "allow")
   assert.equal(frame("https://evil.example/", ready), "block")

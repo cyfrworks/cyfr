@@ -439,7 +439,7 @@ defmodule Sanctum.SessionTest do
       assert {:error, :invalid_request} = Session.create(ctx, kid: kid)
       assert {:error, :invalid_request} = Session.create(ctx, head: head)
 
-      # A session no key signed, as the company sign-in mints one.
+      # A session no key signed.
       assert {:ok, unsigned} = Session.create(ctx)
       assert bound(unsigned) == {nil, nil}
 

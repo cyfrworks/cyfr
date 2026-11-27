@@ -11,7 +11,7 @@ defmodule Prima.RunnerControl do
   every encoder and decoder of it must reproduce.
 
   The service sends `assign` and `cancel_child`; the runner sends
-  `child`, `complete` and `exit`. Guest data never travels on it: deltas,
+  `child`, `complete`, `exit` and `event`. Guest data never travels on it: deltas,
   results, host-call bodies and vault fields go between the runner and
   CYFR over the host API (`Prima.HostAPI`), under the attempt's keys. What crosses
   here is what `c:Prima.WorkerAPI.start/3` was given, its sealed keys
@@ -76,6 +76,17 @@ defmodule Prima.RunnerControl do
       `c:Prima.HostAPI.runner_exited/5`, so the list has that report's
       shape. A runner that ends without one left the service to report
       what it knows the runner held.
+    * `event` — one operator event the runner observed, for the service
+      to forward to CYFR, which emits it as
+      `[:cyfr, :locus, :runtime | name]`: its `name`, the event's suffix
+      joined with dots (`http.request`), and its `measurements` and
+      `metadata`, each an object of exactly the members `event_roster/0`
+      gives that name, in its order. A measurement is an integer, 0 to
+      2^53 − 1; a metadata string is UTF-8 of at most
+      `max_event_string_bytes/0` bytes; a status word is a string. An
+      `event` line spans at most `max_event_line_bytes/0` bytes before its
+      newline. The runner is untrusted, so an event off the roster is not
+      a frame.
 
   ## Decoding
 
@@ -84,7 +95,9 @@ defmodule Prima.RunnerControl do
     1. `:oversize_line` — the line is longer than `max_line_bytes/0`;
     2. `:malformed` — the line is not exactly one JSON object;
     3. `:bad_version` — `v` is absent or is not `1`;
-    4. `:unknown_type` — `type` is absent or is not one of the five;
+    4. `:unknown_type` — `type` is absent or is not one of the six;
+       then, for an `event`, `:oversize_line` when the line is longer
+       than `max_event_line_bytes/0`;
     5. `{:unknown_field, name}` — a member the message type does not
        carry (the first, by name);
     6. per field, in the order listed above: `{:missing_field, name}`;
@@ -93,12 +106,17 @@ defmodule Prima.RunnerControl do
        shape (a string with a byte outside printable ASCII, an id longer
        than 256 bytes, text that is not base64, a key that is not 64
        lowercase hex digits, an integer outside 0 to 2^53 − 1, a list
-       holding a non-id); `{:oversize, name}` for `input` above
-       `max_input_bytes/0` or `open` longer than `max_open/0`.
+       holding a non-id, an event `name` off the roster, a status word
+       outside its set, an HTTP status outside 100 to 599);
+       `{:oversize, name}` for `input` above `max_input_bytes/0`, `open`
+       longer than `max_open/0` or a metadata string longer than
+       `max_event_string_bytes/0`.
 
   An object member is checked the same way, once its object is reached:
   its unknown members first, then each of its members in order. It is
-  named by its path, `keys.call` or `keys.attempt.fence`.
+  named by its path, `keys.call`, `keys.attempt.fence` or
+  `metadata.status`. An event's `measurements` and `metadata` are read
+  by the roster's entry for the `name` read before them.
 
   Identifiers (`execution_id`, `attempt`, `runner`, each of `open`, the
   strings of `keys.attempt`) are 1 to 256 bytes of printable ASCII
@@ -106,6 +124,18 @@ defmodule Prima.RunnerControl do
   (`Prima.Assignment`, `Prima.MacEnvelope`), and the integers of `keys.attempt` are 0 to
   2^53 − 1, as `Prima.MacEnvelope` reads an integer field. The assignment
   token is printable ASCII without spaces of any length the line allows.
+
+  ## Writing an event
+
+  `encode/1` cuts each metadata string longer than
+  `max_event_string_bytes/0` to its first that many bytes, backed off to
+  a character boundary so no UTF-8 sequence is split, so an event with a
+  long tool or action name still goes. Cutting bounds the bytes a string
+  holds, not the bytes JSON escapes it to: an event whose line is still
+  longer than `max_event_line_bytes/0` after cutting (strings full of
+  characters JSON escapes) is not a frame, and `encode/1` raises
+  `ArgumentError` for it as for any other message `decode/1` would
+  refuse, so the sender drops that event.
   """
 
   @version 1
@@ -126,6 +156,48 @@ defmodule Prima.RunnerControl do
 
   # 2^53 − 1: `Prima.MacEnvelope`'s integer field domain.
   @max_integer 9_007_199_254_740_991
+
+  # An event is one small frame: its strings are cut to a bound and its
+  # line is held to a page, so a runner's events never crowd its other
+  # frames.
+  @max_event_line_bytes 4096
+  @max_event_string_bytes 256
+
+  # The operator events a runner sends, by name: each one's measurements
+  # and metadata, every member with its type, in wire order. The
+  # measurements are integers. `system_time` is microseconds since the
+  # epoch on the wire, since nanoseconds since the epoch pass 2^53 − 1,
+  # the channel's integer domain; the core emits it in its own unit,
+  # nanoseconds, multiplying it by 1,000.
+  # A status word is a string here and the core's atom there; an HTTP
+  # status stays an integer.
+  @events [
+    {"engine.authority_entered", [], [execution_id: :string, reference: :string]},
+    {"http.request", [duration_ms: :integer, system_time: :integer],
+     [
+       component_ref: :string,
+       method: :string,
+       hostname: :string,
+       status: {:one_of, ~w(response_too_large timeout error), :http_status}
+     ]},
+    {"storage.call", [duration_ms: :integer],
+     [component_ref: :string, action: :string, status: {:one_of, ~w(ok error)}]},
+    {"mcp_tool.call", [duration_ms: :integer],
+     [execution_id: :string, tool_action: :string, status: {:one_of, ~w(ok error)}]},
+    {"formula.spawn", [system_time: :integer],
+     [parent_execution_id: :string, task_id: :string, component_ref: :string]},
+    {"formula.await", [duration_ms: :integer],
+     [task_id: :string, status: {:one_of, ~w(completed timeout error)}]},
+    {"formula.await_all", [duration_ms: :integer],
+     [parent_execution_id: :string, count: :integer, timed_out: :integer]},
+    {"formula.cancel", [system_time: :integer], [parent_execution_id: :string, task_id: :string]},
+    {"formula.await_any", [duration_ms: :integer],
+     [parent_execution_id: :string, winner_task_id: :string_or_null]}
+  ]
+
+  @events_by_name Map.new(@events, fn {name, measurements, metadata} ->
+                    {name, %{measurements: measurements, metadata: metadata}}
+                  end)
 
   @id ~r/\A[\x21-\x7E]{1,256}\z/
   @text ~r/\A[\x21-\x7E]+\z/
@@ -151,7 +223,9 @@ defmodule Prima.RunnerControl do
     {:cancel_child, "cancel_child", :service, [execution_id: :id]},
     {:child, "child", :runner, [execution_id: :id, attempt: :id]},
     {:complete, "complete", :runner, [execution_id: :id, clean: :boolean]},
-    {:exit, "exit", :runner, [runner: :id, open: :ids]}
+    {:exit, "exit", :runner, [runner: :id, open: :ids]},
+    {:event, "event", :runner,
+     [name: :event_name, measurements: {:event, :measurements}, metadata: {:event, :metadata}]}
   ]
 
   @by_type Map.new(@messages, fn {type, name, sender, fields} ->
@@ -189,10 +263,41 @@ defmodule Prima.RunnerControl do
   @typedoc "The runner ends, still holding the attempts in `open`."
   @type exit :: %{type: :exit, runner: runner_id(), open: [String.t()]}
 
-  @type message :: assign() | cancel_child() | child() | complete() | exit()
+  @typedoc """
+  One operator event: its `name` on the roster (`event_roster/0`), and
+  its `measurements` and `metadata` with exactly that entry's members.
+  """
+  @type event :: %{
+          type: :event,
+          name: String.t(),
+          measurements: %{optional(atom()) => non_neg_integer()},
+          metadata: %{optional(atom()) => String.t() | non_neg_integer() | nil}
+        }
+
+  @type message :: assign() | cancel_child() | child() | complete() | exit() | event()
 
   @typedoc "A message type."
-  @type type :: :assign | :cancel_child | :child | :complete | :exit
+  @type type :: :assign | :cancel_child | :child | :complete | :exit | :event
+
+  @typedoc """
+  The type of one member of an event's measurements or metadata: an
+  integer, 0 to 2^53 − 1; a string; a string or null; a status word of a
+  set; or, for an HTTP request's status, one of a set or an HTTP status
+  (100 to 599).
+  """
+  @type event_member ::
+          :integer
+          | :string
+          | :string_or_null
+          | {:one_of, [String.t()]}
+          | {:one_of, [String.t()], :http_status}
+
+  @typedoc "One roster entry: an event's name and its members in wire order."
+  @type event_entry :: %{
+          name: String.t(),
+          measurements: [{atom(), event_member()}],
+          metadata: [{atom(), event_member()}]
+        }
 
   @typedoc "Which side sends a message."
   @type sender :: :service | :runner
@@ -232,6 +337,26 @@ defmodule Prima.RunnerControl do
   @spec max_open() :: pos_integer()
   def max_open, do: @max_open
 
+  @doc "The most bytes an `event` frame's line may span, its newline excluded."
+  @spec max_event_line_bytes() :: pos_integer()
+  def max_event_line_bytes, do: @max_event_line_bytes
+
+  @doc "The most bytes a metadata string of an `event` may hold."
+  @spec max_event_string_bytes() :: pos_integer()
+  def max_event_string_bytes, do: @max_event_string_bytes
+
+  @doc """
+  The operator events a runner may send, in the order the catalog lists
+  them: each one's name and its measurements' and metadata's members,
+  each with its type (`t:event_member/0`), in wire order.
+  """
+  @spec event_roster() :: [event_entry()]
+  def event_roster do
+    Enum.map(@events, fn {name, measurements, metadata} ->
+      %{name: name, measurements: measurements, metadata: metadata}
+    end)
+  end
+
   @doc """
   The grammar of an athanor's id on every Locus wire: this channel's
   `keys.attempt.athanor_id`, a build request's `athanor_id`
@@ -252,16 +377,22 @@ defmodule Prima.RunnerControl do
 
   @doc """
   The line for `message`, as iodata ending in a newline. A message that is
-  not one of the five, carries a member its type does not, lacks one, or
+  not one of the six, carries a member its type does not, lacks one, or
   holds a value `decode/1` would refuse raises `ArgumentError`, since it
-  is the caller's own data.
+  is the caller's own data. An event's metadata strings are cut first
+  (see the module's writing an event).
   """
   @spec encode(message()) :: iolist()
   def encode(%{type: type} = message) when is_map_key(@by_type, type) do
     {name, _sender, fields} = Map.fetch!(@by_type, type)
     %Jason.OrderedObject{values: members} = write_object(fields, Map.delete(message, :type), "")
     object = Jason.OrderedObject.new([v: @version, type: name] ++ members)
-    [Jason.encode_to_iodata!(object), ?\n]
+    line = Jason.encode_to_iodata!(object)
+
+    if type == :event and IO.iodata_length(line) > @max_event_line_bytes,
+      do: raise(ArgumentError, "the event's line is past #{@max_event_line_bytes} bytes")
+
+    [line, ?\n]
   end
 
   def encode(message),
@@ -279,6 +410,7 @@ defmodule Prima.RunnerControl do
          {:ok, object} <- json_object(line),
          :ok <- known_version(object),
          {:ok, type, fields} <- known_type(object),
+         :ok <- within_type_line(type, line),
          {:ok, message} <- read_object(fields, Map.drop(object, ["v", "type"]), "") do
       {:ok, Map.put(message, :type, type)}
     end
@@ -299,6 +431,11 @@ defmodule Prima.RunnerControl do
   defp within_line(line) when byte_size(line) <= @max_line_bytes, do: :ok
   defp within_line(_line), do: {:error, :oversize_line}
 
+  defp within_type_line(:event, line) when byte_size(line) > @max_event_line_bytes,
+    do: {:error, :oversize_line}
+
+  defp within_type_line(_type, _line), do: :ok
+
   defp json_object(line) do
     case Jason.decode(line) do
       {:ok, %{} = object} -> {:ok, object}
@@ -318,14 +455,15 @@ defmodule Prima.RunnerControl do
 
   # An object's members as `fields` declares them: no other member, and
   # each present and of its type, in order. `path` prefixes each member's
-  # name in a refusal.
+  # name in a refusal. A member whose type is the roster's is read by the
+  # entry of the event name read before it.
   defp read_object(fields, object, path) do
     with :ok <- no_unknown_field(fields, object, path) do
       Enum.reduce_while(fields, {:ok, %{}}, fn {field, field_type}, {:ok, read} ->
         name = path <> Atom.to_string(field)
 
         with {:ok, value} <- member(object, field, name),
-             {:ok, value} <- read(field_type, name, value) do
+             {:ok, value} <- read(roster_type(field_type, read), name, value) do
           {:cont, {:ok, Map.put(read, field, value)}}
         else
           {:error, reason} -> {:halt, {:error, reason}}
@@ -342,6 +480,13 @@ defmodule Prima.RunnerControl do
       [unknown | _rest] -> {:error, {:unknown_field, path <> unknown}}
     end
   end
+
+  # The object an event's `measurements` or `metadata` is, by the roster's
+  # entry for its `name`, which is read first and is on the roster.
+  defp roster_type({:event, part}, %{name: name}),
+    do: {:object, @events_by_name |> Map.fetch!(name) |> Map.fetch!(part)}
+
+  defp roster_type(field_type, _read), do: field_type
 
   defp member(object, field, name) do
     case Map.fetch(object, Atom.to_string(field)) do
@@ -381,6 +526,33 @@ defmodule Prima.RunnerControl do
 
   defp read(:boolean, _name, value) when is_boolean(value), do: {:ok, value}
 
+  defp read(:event_name, _name, value) when is_map_key(@events_by_name, value), do: {:ok, value}
+  defp read(:event_name, name, value) when is_binary(value), do: {:error, {:invalid_field, name}}
+
+  defp read(type, name, value)
+       when type in [:string, :string_or_null] and is_binary(value) and
+              byte_size(value) > @max_event_string_bytes,
+       do: {:error, {:oversize, name}}
+
+  defp read(type, _name, value) when type in [:string, :string_or_null] and is_binary(value),
+    do: {:ok, value}
+
+  defp read(:string_or_null, _name, nil), do: {:ok, nil}
+
+  defp read({:one_of, _words, :http_status}, _name, value)
+       when is_integer(value) and value in 100..599,
+       do: {:ok, value}
+
+  defp read({:one_of, _words, :http_status}, name, value) when is_integer(value),
+    do: {:error, {:invalid_field, name}}
+
+  defp read({:one_of, words, _http_status}, name, value) when is_binary(value),
+    do: read({:one_of, words}, name, value)
+
+  defp read({:one_of, words}, name, value) when is_binary(value) do
+    if value in words, do: {:ok, value}, else: {:error, {:invalid_field, name}}
+  end
+
   defp read(:ids, name, value) when is_list(value) and length(value) > @max_open,
     do: {:error, {:oversize, name}}
 
@@ -402,6 +574,8 @@ defmodule Prima.RunnerControl do
 
   # An object's members in `fields`' order, each checked as `read/3`
   # checks it back; a member the object lacks or does not declare raises.
+  # An event's name is written, and so checked, before the members the
+  # roster gives it.
   defp write_object(fields, map, path) when is_map(map) and not is_struct(map) do
     case Map.keys(map) -- Keyword.keys(fields) do
       [] -> :ok
@@ -413,7 +587,7 @@ defmodule Prima.RunnerControl do
       name = path <> Atom.to_string(field)
 
       case Map.fetch(map, field) do
-        {:ok, value} -> {field, write(field_type, name, value)}
+        {:ok, value} -> {field, write(roster_type(field_type, map), name, value)}
         :error -> raise ArgumentError, "#{name} is missing"
       end
     end)
@@ -445,6 +619,25 @@ defmodule Prima.RunnerControl do
 
   defp write(:boolean, _name, value) when is_boolean(value), do: value
 
+  defp write(:event_name, _name, value) when is_map_key(@events_by_name, value), do: value
+
+  defp write(type, name, value) when type in [:string, :string_or_null] and is_binary(value) do
+    if String.valid?(value), do: cut(value), else: invalid(name)
+  end
+
+  defp write(:string_or_null, _name, nil), do: nil
+
+  defp write({:one_of, _words, :http_status}, _name, value)
+       when is_integer(value) and value in 100..599,
+       do: value
+
+  defp write({:one_of, words, _http_status}, name, value) when is_binary(value),
+    do: write({:one_of, words}, name, value)
+
+  defp write({:one_of, words}, name, value) when is_binary(value) do
+    if value in words, do: value, else: invalid(name)
+  end
+
   defp write(:ids, name, value) when is_list(value) do
     if length(value) <= @max_open and Enum.all?(value, &(is_binary(&1) and Regex.match?(@id, &1))),
       do: value,
@@ -452,6 +645,18 @@ defmodule Prima.RunnerControl do
   end
 
   defp write(_type, name, _value), do: invalid(name)
+
+  # A metadata string cut to the bound: its first bytes up to it, then
+  # back to the last character boundary, so the cut never splits a UTF-8
+  # sequence of the valid string it was taken from.
+  defp cut(value) when byte_size(value) <= @max_event_string_bytes, do: value
+  defp cut(value), do: boundary(binary_part(value, 0, @max_event_string_bytes))
+
+  defp boundary(prefix) do
+    if String.valid?(prefix),
+      do: prefix,
+      else: boundary(binary_part(prefix, 0, byte_size(prefix) - 1))
+  end
 
   @spec invalid(String.t()) :: no_return()
   defp invalid(name), do: raise(ArgumentError, "#{name} is not of its type or bound")

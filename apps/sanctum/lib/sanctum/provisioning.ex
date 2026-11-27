@@ -1007,9 +1007,9 @@ defmodule Sanctum.Provisioning do
   (the seed scan, registration rows, registry pulls into `components/`);
   it never executes a component, and the consent bootstrap mints via
   `granted_via: "bootstrap"`, not through the consent surface gates.
-  `auth_method: :oidc` records provenance honestly — this context exists
-  because of the person's OIDC sign-in; no gate on this path requires
-  the interactive class.
+  `auth_method: :oidc`, the label of a person's browser sign-in, records
+  provenance honestly — this context exists because the person signed
+  in; no gate on this path requires the interactive class.
   """
   @spec person_ctx(String.t(), String.t()) :: Context.t()
   def person_ctx(user_id, athanor_id) do

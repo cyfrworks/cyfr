@@ -206,7 +206,7 @@ defmodule PrismWeb.AuthenticatedMountTest do
 
       for path <- [
             "/login",
-            "/auth/company/callback",
+            "/auth/passkey/complete/tkt_not_issued",
             athanor_path("/attachments/msg_1/file.png")
           ] do
         framed = conn |> put_req_header("sec-fetch-dest", "embed") |> get(path)

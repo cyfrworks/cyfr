@@ -93,9 +93,6 @@ apps/codex/codex
 __pycache__/
 *.pyc
 
-# The runner crate's build output (scripts/runner.sh)
-apps/locus/runner/target/
-
 # goreleaser output (a seed tincture's dist/ is its shipped build, tracked)
 /apps/codex/dist/
 cyfr-scaffold.tar.gz

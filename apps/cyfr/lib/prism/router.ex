@@ -6,8 +6,7 @@ defmodule Prism.Router do
   The console's routes: the browser pipeline under the console's root
   layout, the browser sign-in pipelines and their throttles, the claim,
   legal-acceptance and attachment pipelines, browser sign-out, a sign-in's
-  ticket completion, the company sign-in's page, start and callback, the
-  claim and legal pages, the attachment and file downloads and the
+  ticket completion, the claim and legal pages, the attachment and file downloads and the
   `:athanor` LiveView session.
 
   The composition router invokes `routes/0` where these routes stand, so
@@ -40,19 +39,6 @@ defmodule Prism.Router do
       pipeline :sign_in_identity do
         plug CyfrWeb.Plugs.CallIdentity, tool: "sign_in"
       end
-
-      # OAuth kickoff gets a conservative per-IP throttle; callbacks get the
-      # generous :oauth_callback_throttle below.
-      pipeline :oauth_start_throttle do
-        plug CyfrWeb.Plugs.AuthRateLimit,
-          bucket: :oauth_start,
-          max_requests: 30,
-          window_ms: 60_000
-      end
-
-      # The sign-in callbacks' throttle, which the vault's OAuth grant
-      # callback shares: one definition in the host's shared pipelines.
-      CyfrWeb.Pipelines.oauth_callback_throttle()
 
       # A protected device's unlock ticket: redeeming one consumes it, so
       # attempts need their own request budget.
@@ -96,10 +82,9 @@ defmodule Prism.Router do
           window_ms: 60_000
       end
 
-      # Sign-out, a sign-in's ticket, a protected device's unlock ticket and
-      # the company sign-in. A person signs in with their account at
-      # `/login`; the OAuth grant callback is expanded before this scope by
-      # the composition router.
+      # Sign-out, a sign-in's ticket and a protected device's unlock ticket.
+      # A person signs in with their account at `/login`; the OAuth grant
+      # callback is expanded before this scope by the composition router.
       scope "/auth", PrismWeb do
         pipe_through [:sign_in_identity, :auth_browser]
 
@@ -128,26 +113,6 @@ defmodule Prism.Router do
           get "/passkey/complete/:ticket", PasskeyController, :complete,
             metadata: %{auth: :browser_oauth_flow}
         end
-
-        # A company sign-in, the standing condition a CYFR may require of
-        # every person (`Sanctum.CompanyLogin`): its start, a POST the
-        # browser pipeline's CSRF token guards from the company page,
-        # under the browser's own session refused for that condition
-        # alone, and the issuer's callback, which both company issuers
-        # share.
-        scope "/" do
-          pipe_through :oauth_start_throttle
-
-          post "/company", AuthController, :company_start,
-            metadata: %{auth: :browser_company_login}
-        end
-
-        scope "/" do
-          pipe_through :oauth_callback_throttle
-
-          get "/company/callback", AuthController, :company_callback,
-            metadata: %{auth: :browser_oauth_callback}
-        end
       end
 
       # ==========================================================================
@@ -162,17 +127,13 @@ defmodule Prism.Router do
       # browser to the account pages with (`PrismWeb.SetupLive`).
       # `/invite` is the page an invitation link opens: sessionless, the
       # code in its fragment, whose hash the sign-in request holds
-      # (`PrismWeb.InviteLive`). `/company-login` is the one page a
-      # session refused for the company sign-in alone opens
-      # (`PrismWeb.CompanyLoginLive`).
+      # (`PrismWeb.InviteLive`).
       scope "/", PrismWeb do
         pipe_through :browser
 
         live "/login", LoginLive, :login, metadata: %{auth: :browser_public_login}
         live "/setup", SetupLive, :setup, metadata: %{auth: :browser_public_login}
         live "/invite", InviteLive, :invite, metadata: %{auth: :browser_public_login}
-
-        live "/company-login", CompanyLoginLive, :index, metadata: %{auth: :browser_company_login}
       end
 
       scope "/a/:athanor", PrismWeb do

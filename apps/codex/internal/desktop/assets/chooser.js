@@ -3,7 +3,7 @@ const was=history.state||{},reloaded=(performance.getEntriesByType("navigation")
 const main=f.has("road")?{road:f.get("road"),box:f.get("box")==="1",told:(f.get("notice")||"").split(","),connect:f.get("connect")||"",way:f.get("way")||"",retry:f.get("retry")||""}:{road:was.road,box:was.box,told:reloaded&&was.told||[]},passkey=main.road==="passkey";
 if(main.box)$("here").hidden=true;
 history.replaceState(main,"",location.pathname);
-const notices={company:"This CYFR requires company sign-in. Open its address in a browser to continue. The CYFR app does not support company sign-in yet.",unanswered:"The CYFR at {CYFR} did not answer.",unrouted:"The app could not reach the CYFR at {CYFR} through this computer's tailnet, so it loaded nothing of it.",unforgotten:"The app locked, and could not clear the sign-in it kept on this computer. To clear it, forget this CYFR on this computer from its menu on the left.",unleft:"The CYFR you left did not let go in time, so the app started again and opened nothing. Choose a CYFR on the left to open it."};
+const notices={unanswered:"The CYFR at {CYFR} did not answer.",unrouted:"The app could not reach the CYFR at {CYFR} through this computer's tailnet, so it loaded nothing of it.",unforgotten:"The app locked, and could not clear the sign-in it kept on this computer. To clear it, forget this CYFR on this computer from its menu on the left.",unleft:"The CYFR you left did not let go in time, so the app started again and opened nothing. Choose a CYFR on the left to open it."};
 let asked=null,picks=0,started=false,epoch=0,run=0,found=false,busy=false;
 const steps={files:"Getting CYFR's files",settings:"Writing its settings",images:"Downloading CYFR",start:"Starting CYFR"};
 function say(t){$("notice").textContent=t||""}

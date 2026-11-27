@@ -3676,9 +3676,14 @@ defmodule Aqua.ProgramTest do
       loop = run(ctx, turn)
       opened!(fake, row, "boot-one")
       assert %{"t" => "start"} = sent()
+      assert_receive {:session, "recv", %{"after" => 1}, _fields}, 10_000
+      # Hold the read after this line once it passes admission under the old boot.
+      Scripted.hold(fake, "recv", 15_000)
       say(fake, row, text(turn, "msg_0", "starting", :none))
       committed!(ctx, thread, 2)
+      assert_receive {:held, "recv", receiver}, 10_000
       Scripted.restart(fake, "bb_again")
+      send(receiver, :go)
 
       line =
         "#{@title} could not start because CYFR restarted the part that runs programs. " <>

@@ -399,6 +399,11 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"apps/cyfr/assets/test/account/identity.test.mjs", ~w(addresses)},
       {"apps/prima/test/prima/identity_test.exs", ~w(addresses)}
     ],
+    "authority_wire.json" => [
+      {"apps/locus/runner/tests/engine.rs", ~w(read refused)},
+      {"apps/locus/runner/tests/process.rs", ~w(read)},
+      {"apps/prima/test/prima/authority_test.exs", ~w(version read refused)}
+    ],
     "brain_wire.json" => [
       {"apps/cyfr/test/opus/brain/wire_test.exs",
        ~w(version max_line_bytes max_id_bytes max_list config counts accountings stops phases accounts error_types media_types native commands events read refuse)},
@@ -426,6 +431,11 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"apps/prima/test/prima/canvas/shape_test.exs",
        ~w(types max_depth reasons shapes canonical spellings times values results)},
       {"apps/prima/test/prima/manifest/results_test.exs", ~w(values results)}
+    ],
+    "component_features.json" => [
+      {"apps/locus/runner/tests/engine.rs", ~w(refused families sentences cases)},
+      {"apps/locus/runner/tests/process.rs", ~w(sentences)},
+      {"apps/prima/test/prima/component_features_test.exs", ~w(refused families sentences cases)}
     ],
     "component_refs.json" => [
       {"apps/codex/internal/ref/ref_fixture_test.go", ~w(cases version_ordering)},
@@ -672,11 +682,11 @@ defmodule Cyfr.CrossLanguageDriftTest do
     ],
     "runner_control.json" => [
       {"apps/locus/runner/tests/vectors.rs",
-       ~w(version max_line_bytes max_input_bytes max_open valid invalid decode_only environment)},
+       ~w(version max_line_bytes max_input_bytes max_open valid invalid decode_only environment events)},
       {"apps/locus/test/locus/runtime/runner_control_vectors_test.exs",
        ~w(max_line_bytes valid invalid)},
       {"apps/prima/test/prima/runner_control_test.exs",
-       ~w(version max_line_bytes max_input_bytes max_open valid invalid decode_only)},
+       ~w(version max_line_bytes max_input_bytes max_open valid invalid decode_only events)},
       {"apps/locus/test/locus/runtime/settings_test.exs", ~w(environment)},
       {"tests/locus-runtime-image/namespace_test.py", ~w(valid)}
     ],

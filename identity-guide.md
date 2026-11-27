@@ -120,16 +120,6 @@ A link that has expired, been used or been revoked, whose issuer has since left 
 - **Leaving a shared thread**, or being removed from it, ends that seat and nothing else. Your athanor there and its sessions and devices are untouched.
 - **A new browser or device** starts with no saved addresses: you open each CYFR by its address or an invitation, and sign in there with the same account.
 
-### When a CYFR Requires Your Company's Sign-in
-
-A CYFR run for a company may require each person there to sign in with their company's account as well: once, or again every set number of days. That sign-in is a condition of being there. It is not a way to sign in, and it is not your account: you still sign in with your account.
-
-While your company sign-in is missing or past its days, every page of that CYFR sends you to its company page. **Sign in with your company** takes you to your company's sign-in and back, and **Sign out** ends your session. Nothing else there opens until your company sign-in stands, and the API keys you made and the devices you connected there are refused. Your session, API keys, devices and thread seats all stay, and work again once you sign in with your company.
-
-The CYFR app does not offer a company sign-in: at such a CYFR it says "This CYFR requires company sign-in. Open its address in a browser to continue.", and you open the CYFR's address in a browser instead.
-
-The CYFR binds your company account to you by the subject your company's sign-in names for it, never by an email address. A company account already bound to someone else there is refused, and once one is bound to you, another is refused too. When the CYFR moves to another company configuration (another issuer, client or organization), everyone there signs in with their company again, and the new sign-in replaces the old binding.
-
 ---
 
 ## When the Account Service Cannot Be Reached

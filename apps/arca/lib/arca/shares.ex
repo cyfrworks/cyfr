@@ -168,8 +168,8 @@ defmodule Arca.Shares do
   creation back and is answered. A confirmation is spent there, so the
   proof and the share commit together. The rows carry no standing: a
   person and their own athanor read active after a leave that retires
-  them, and a lapsed company sign-in writes nothing, so `verify:` is also
-  where the caller establishes that the creator stands.
+  them, so `verify:` is also where the caller establishes that the
+  creator stands.
   """
   @spec create(Prima.Actor.t(), map(), keyword()) ::
           {:ok, share()}

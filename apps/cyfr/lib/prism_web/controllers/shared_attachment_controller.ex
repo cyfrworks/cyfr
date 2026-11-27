@@ -38,7 +38,6 @@ defmodule PrismWeb.SharedAttachmentController do
 
       {:error, refusal} ->
         case PrismWeb.AuthHelpers.disposition(refusal) do
-          :company_login -> redirect(conn, to: "/company-login")
           :unavailable -> send_resp(conn, 503, "Try again shortly")
           _sign_in -> redirect(conn, to: PrismWeb.AuthHelpers.sign_in_path())
         end

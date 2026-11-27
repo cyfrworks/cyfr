@@ -211,9 +211,7 @@ defmodule Emissary.Web.DeviceChannel do
       hello again), or a verification bound
       is spent (reason `rate_limited; retry_after_s=N`, the seconds until
       the bound opens again; the recorded sentence says whether it was
-      the address's and the installation's or this device's own), or the
-      person stands but for their company's sign-in, which they give in a
-      browser (reason `forbidden`; the pairing stands).
+      the address's and the installation's or this device's own).
       The glass retries later, as it does after any close it does not read.
 
   A renewal the gate refused was recorded by the gate; the close records
@@ -1098,10 +1096,6 @@ defmodule Emissary.Web.DeviceChannel do
        when reason in [:expired, :certificate_expired, :bad_signature, :stale_head],
        do: @renew
 
-  # A person who stands but for the company sign-in keeps their pairing:
-  # the device tries again once they gave it in a browser.
-  defp close_code(%Prima.Refusal{reason: :company_login_required}), do: @try_again
-
   defp close_code(%Prima.Refusal{class: :forbidden}), do: @standing_ended
 
   defp close_code(%Prima.Refusal{class: class})
@@ -1153,7 +1147,7 @@ defmodule Emissary.Web.DeviceChannel do
   end
 
   defp class(reason)
-       when reason in [:revoked, :not_standing, :company_login_required, :identity_gone],
+       when reason in [:revoked, :not_standing, :identity_gone],
        do: :forbidden
 
   defp class({:door, :unavailable}), do: :unavailable
@@ -1199,8 +1193,6 @@ defmodule Emissary.Web.DeviceChannel do
 
   defp sentence(:not_standing),
     do: "The person behind this device no longer stands in this athanor"
-
-  defp sentence(:company_login_required), do: Prima.Refusal.message(:company_login_required)
 
   defp sentence(:unavailable), do: "This CYFR could not check the device now; retry shortly"
 

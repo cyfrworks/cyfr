@@ -65,9 +65,17 @@ defmodule Emissary.Router do
         plug CyfrWeb.Plugs.Authenticate
       end
 
-      # The OAuth grant callback's throttle, which the browser's sign-in
-      # callbacks share: one definition in the host's shared pipelines.
-      CyfrWeb.Pipelines.oauth_callback_throttle()
+      # The OAuth grant callback's throttle. Callbacks arrive from identity
+      # providers on real people's behalf, often through shared-NAT
+      # corporate addresses, so the budget is generous: high enough that a
+      # floor of real people never trips it, low enough that one address
+      # cannot spin the token exchange unboundedly.
+      pipeline :oauth_callback_throttle do
+        plug CyfrWeb.Plugs.AuthRateLimit,
+          bucket: :oauth_callback,
+          max_requests: 60,
+          window_ms: 60_000
+      end
 
       # The OAuth grant callback serves a BROWSER page (CyfrWeb.MinimalPage,
       # no session), so it accepts `text/html`, which is what a browser
@@ -187,8 +195,7 @@ defmodule Emissary.Router do
         delete "/", MCPController, :method_not_allowed, metadata: %{auth: :authenticate_plug}
       end
 
-      # OAuth callback for catalyst OAuth providers (not user auth). Expanded
-      # before the browser's `/auth/:provider/callback` wildcard, as above.
+      # OAuth callback for catalyst OAuth providers (not user auth).
       scope "/auth/oauth", Emissary.Web do
         pipe_through [:oauth_callback, :oauth_callback_throttle]
 

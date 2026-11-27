@@ -1,6 +1,15 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 defmodule Prima.AuthorityTest do
+  @moduledoc """
+  The runtime authority as data: built from a profile and a consent's
+  blob, carried to children, read back from the wire. The authority a
+  runner reads (`tests/fixtures/authority_wire.json`) is what Prima
+  reads: each `read` case's map is `to_wire/1`'s without its nil
+  members, its limits are `limits/1`'s and its attached fields
+  `attached_fields/1`'s; each `refused` one is refused.
+  """
+
   use ExUnit.Case, async: true
 
   alias Prima.Authority
@@ -11,6 +20,10 @@ defmodule Prima.AuthorityTest do
   @catalyst "catalyst:supabase.com.database"
   @ceiling Prima.Limits.Ceiling.lowered(%{})
   @projection %{"fields" => %{"url" => "url"}, "scopes" => []}
+
+  @wire Path.expand("../../../../tests/fixtures/authority_wire.json", __DIR__)
+        |> File.read!()
+        |> Jason.decode!()
 
   defp limits_map(overrides \\ %{}) do
     Map.merge(
@@ -424,4 +437,66 @@ defmodule Prima.AuthorityTest do
       assert {:ok, _} = Authority.from_wire(%{wire | "depth" => Authority.depth_cap()})
     end
   end
+
+  # ============================================================================
+  # The authority a runner reads
+  # ============================================================================
+
+  describe "the authority wire vectors" do
+    test "every read case reads back as Prima writes it, with its limits and attached fields" do
+      cases = @wire["read"]
+      assert @wire["version"] == 1
+      assert cases != []
+
+      for vector <- cases do
+        assert {:ok, auth} = Authority.from_wire(vector["authority"]), vector["why"]
+
+        assert auth |> Authority.to_wire() |> Map.reject(fn {_k, v} -> is_nil(v) end) ==
+                 vector["authority"],
+               vector["why"]
+
+        assert Prima.Limits.to_map(Authority.limits(auth)) == vector["limits"], vector["why"]
+
+        assert vector["attached_fields"] == Enum.sort(Enum.uniq(vector["attached_fields"])),
+               vector["why"]
+
+        assert Authority.attached_fields(auth) == MapSet.new(vector["attached_fields"]),
+               vector["why"]
+
+        assert Authority.attached_fields(edge_of(auth)) == Authority.attached_fields(auth)
+      end
+
+      # The cases reach every limit field and every kind of vault.
+      defaults = Prima.Limits.to_map(Authority.zero_limits())
+      assert Enum.any?(cases, &(&1["limits"] == defaults))
+
+      assert Enum.any?(cases, fn %{"limits" => limits} ->
+               Enum.all?(limits, fn {field, value} ->
+                 value != defaults[field] and
+                   Enum.all?(
+                     ~w(catalyst formula reagent tincture agent)a,
+                     &(value != Prima.Limits.to_map(Prima.Limits.defaults(&1))[field])
+                   )
+               end)
+             end)
+
+      vaults = for %{"authority" => %{"resources" => %{"vault" => vault}}} <- cases, do: vault
+      assert Enum.any?(vaults, &Map.has_key?(&1, "via"))
+      assert Enum.any?(vaults, &Map.has_key?(&1, "provided"))
+      assert Enum.any?(vaults, &Map.has_key?(&1, "named"))
+      assert Enum.any?(cases, &(not Map.has_key?(&1["authority"], "resources")))
+    end
+
+    test "every refused case is refused" do
+      cases = @wire["refused"]
+      assert cases != []
+
+      for vector <- cases do
+        assert {:error, _reason} = Authority.from_wire(vector["authority"]), vector["why"]
+      end
+    end
+  end
+
+  defp edge_of(%Authority{resources: :none}), do: nil
+  defp edge_of(%Authority{resources: edge}), do: edge
 end

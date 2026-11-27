@@ -15,6 +15,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 	"unsafe"
@@ -85,26 +86,54 @@ func netlinkDo(kind uint16, flags uint16, body []byte) error {
 		return err
 	}
 	defer unix.Close(fd)
-	return netlinkOn(fd, kind, flags, body)
+	return netlinkOn(fd, time.Now().Add(netlinkTimeout), kind, flags, body)
 }
+
+// netlinkSeq numbers the guard's netlink requests, so each takes its own
+// acknowledgement and no other.
+var netlinkSeq atomic.Uint32
 
 // netlinkOn sends one request on the route netlink socket fd, of the
 // guard's namespace or of the one a machine's stage opened it in, and
-// reads its acknowledgement.
-func netlinkOn(fd int, kind uint16, flags uint16, body []byte) error {
+// reads its acknowledgement by deadline (netlinkAnswer).
+func netlinkOn(fd int, deadline time.Time, kind uint16, flags uint16, body []byte) error {
+	seq := netlinkSeq.Add(1)
 	msg := make([]byte, unix.SizeofNlMsghdr, unix.SizeofNlMsghdr+len(body))
 	msg = append(msg, body...)
 	binary.NativeEndian.PutUint32(msg[0:4], uint32(len(msg)))
 	binary.NativeEndian.PutUint16(msg[4:6], kind)
 	binary.NativeEndian.PutUint16(msg[6:8], unix.NLM_F_REQUEST|unix.NLM_F_ACK|flags)
-	binary.NativeEndian.PutUint32(msg[8:12], 1)
+	binary.NativeEndian.PutUint32(msg[8:12], seq)
 	if err := unix.Sendto(fd, msg, 0, &unix.SockaddrNetlink{Family: unix.AF_NETLINK}); err != nil {
 		return err
 	}
+	return netlinkAnswer(fd, seq, deadline)
+}
+
+// netlinkAnswer reads fd until the acknowledgement of request seq, the
+// answers to any other left unread before it skipped, and gives up at
+// deadline: a socket handed up by a machine's stage answers what the
+// guard asks, within the admit's bound, or the admit ends, whatever else
+// it may hold.
+func netlinkAnswer(fd int, seq uint32, deadline time.Time) error {
 	buf := make([]byte, 8192)
 	for {
-		n, _, err := unix.Recvfrom(fd, buf, 0)
-		if errors.Is(err, unix.EINTR) {
+		left := time.Until(deadline)
+		if left <= 0 {
+			return fmt.Errorf("no netlink answer within its bound")
+		}
+		ready := []unix.PollFd{{Fd: int32(fd), Events: unix.POLLIN}}
+		if _, err := unix.Poll(ready, int(left/time.Millisecond)+1); err != nil {
+			if errors.Is(err, unix.EINTR) {
+				continue
+			}
+			return err
+		}
+		if ready[0].Revents == 0 {
+			continue
+		}
+		n, _, err := unix.Recvfrom(fd, buf, unix.MSG_DONTWAIT)
+		if errors.Is(err, unix.EINTR) || errors.Is(err, unix.EAGAIN) {
 			continue
 		}
 		if err != nil {
@@ -115,7 +144,7 @@ func netlinkOn(fd int, kind uint16, flags uint16, body []byte) error {
 			return err
 		}
 		for _, m := range msgs {
-			if m.Header.Type != syscall.NLMSG_ERROR || len(m.Data) < 4 {
+			if m.Header.Seq != seq || m.Header.Type != syscall.NLMSG_ERROR || len(m.Data) < 4 {
 				continue
 			}
 			if code := int32(binary.NativeEndian.Uint32(m.Data[0:4])); code != 0 {
@@ -334,8 +363,9 @@ func attrs(b []byte) [][3][]byte {
 
 func attrType(a [3][]byte) uint16 { return binary.NativeEndian.Uint16(a[0]) }
 
-// netlinkTimeout bounds every read of a netlink answer: a step the guard
-// takes under its lock never waits longer for the kernel.
+// netlinkTimeout bounds every netlink answer the guard waits for, one
+// request's or, on a machine's handed socket, all of them together: a step
+// the guard takes under its lock never waits longer for the kernel.
 var netlinkTimeout = 5 * time.Second
 
 // nlSocket opens a netlink socket of protocol proto in the guard's
@@ -637,7 +667,9 @@ func machineLinks(r *route) error {
 		return err
 	}
 	moved = true
-	space, nl := int(r.udp.Fd()), int(r.nl.Fd())
+	// Every request on the handed socket is answered by one deadline,
+	// well within the admit's bound.
+	space, nl, deadline := int(r.udp.Fd()), int(r.nl.Fd()), time.Now().Add(netlinkTimeout)
 	br := cstring(MachineBridge)
 	if _, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(space), unix.SIOCBRADDBR, uintptr(unsafe.Pointer(&br[0]))); errno != 0 {
 		return fmt.Errorf("making the bridge %s: %w", MachineBridge, errno)
@@ -652,7 +684,7 @@ func machineLinks(r *route) error {
 			return fmt.Errorf("the index of %s: %w", name, err)
 		}
 		indexes[name] = int32(ifr.Uint32())
-		if err := netlinkOn(nl, unix.RTM_SETLINK, 0, v6Off(indexes[name])); err != nil {
+		if err := netlinkOn(nl, deadline, unix.RTM_SETLINK, 0, v6Off(indexes[name])); err != nil {
 			return fmt.Errorf("no IPv6 on %s: %w", name, err)
 		}
 	}
@@ -671,7 +703,7 @@ func machineLinks(r *route) error {
 		if err := unix.IoctlIfreq(space, unix.SIOCBRADDIF, join); err != nil {
 			return fmt.Errorf("joining %s to %s: %w", port, MachineBridge, err)
 		}
-		if err := netlinkOn(nl, unix.RTM_SETLINK, 0, noLearning(indexes[port])); err != nil {
+		if err := netlinkOn(nl, deadline, unix.RTM_SETLINK, 0, noLearning(indexes[port])); err != nil {
 			return fmt.Errorf("no learning on %s: %w", port, err)
 		}
 		if err := linkUp(space, port); err != nil {
@@ -681,7 +713,7 @@ func machineLinks(r *route) error {
 	if err := setAddress(space, MachineBridge, MachineNames, netip.AddrFrom4([4]byte{255, 255, 255, 255})); err != nil {
 		return err
 	}
-	if err := netlinkOn(nl, unix.RTM_NEWNEIGH, unix.NLM_F_CREATE|unix.NLM_F_REPLACE, neighbour(indexes[MachineBridge], r.inner, GuestMAC)); err != nil {
+	if err := netlinkOn(nl, deadline, unix.RTM_NEWNEIGH, unix.NLM_F_CREATE|unix.NLM_F_REPLACE, neighbour(indexes[MachineBridge], r.inner, GuestMAC)); err != nil {
 		return fmt.Errorf("the guest's neighbour on %s: %w", MachineBridge, err)
 	}
 	return hostRoute(space, r.inner, MachineBridge)

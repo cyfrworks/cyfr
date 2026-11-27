@@ -1764,10 +1764,10 @@ defmodule PrismWeb.AquaLiveTest do
         assert {:error, _} = get_agent(ctx, member)
 
         # A member is its harness, its model, its effort and its access: the
-        # form offers the efforts of the model picked and the access choices its
-        # driver lists, in the driver's words, closed while it offers one and
-        # carried as a hidden value; what it is good at and should avoid are
-        # the person's to write, or to leave empty.
+        # form offers the efforts of the model picked, and no Access while
+        # the driver lists one choice, so the form sends none; what it is
+        # good at and should avoid are the person's to write, or to leave
+        # empty.
         view
         |> form(new, %{"name" => member, "brain" => harness, "model" => "opus"})
         |> render_change()
@@ -1775,14 +1775,7 @@ defmodule PrismWeb.AquaLiveTest do
         assert texts(view, new <> ~s( select[name="options[effort]"] option)) ==
                  ["default", "low", "high", "max"]
 
-        assert choices(view, new <> ~s( select[name="options[access]"][disabled] option)) == [
-                 {"default", "Default mode"}
-               ]
-
-        assert has_element?(
-                 view,
-                 new <> ~s( input[type="hidden"][name="options[access]"][value="default"])
-               )
+        refute has_element?(view, new <> ~s( [name="options[access]"]))
 
         # An access the driver does not list writes nothing, and the form
         # shows the driver's own choices again.
@@ -1820,7 +1813,7 @@ defmodule PrismWeb.AquaLiveTest do
                   "model" => "opus",
                   "description" => "Builds things",
                   "avoid" => "",
-                  "options" => %{"effort" => "high", "access" => "default"}
+                  "options" => %{"effort" => "high"}
                 }} = get_agent(ctx, member)
 
         assert {:error, _} = get_agent(ctx, name)
@@ -1830,8 +1823,7 @@ defmodule PrismWeb.AquaLiveTest do
         # Made, the form holds nothing, and its card names its harness.
         refute has_element?(view, new <> ~s( input[name="name"][value]))
 
-        assert texts(view, "#aqua-card-#{member}-runs dd") ==
-                 [title, "Opus", "Default mode", "high"]
+        assert texts(view, "#aqua-card-#{member}-runs dd") == [title, "Opus", "high"]
 
         # Aqua's Runs on names the member with its harness and its model,
         # the model by the name the listing gives it ("Opus" for the id
@@ -1980,6 +1972,29 @@ defmodule PrismWeb.AquaLiveTest do
                 "options" => %{"effort" => "high", "budget" => 9}
               }} = get_agent(ctx, "Opus")
 
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    # Access as a choice shown only for two or more is a harness's: a key
+    # that declares an option of that name has it shown on the closed card
+    # as any other option it declares.
+    test "a key's own option named access shows on the closed card", %{conn: conn, ctx: ctx} do
+      described_open!(ctx, %{
+        "open-1" => [%{"name" => "access", "kind" => "enum", "values" => ["local-only", "wide"]}]
+      })
+
+      {:ok, _} =
+        Cyfr.Test.AquaTool.call(ctx, %{
+          "action" => "create",
+          "name" => "mine",
+          "catalyst_ref" => "catalyst:local.open",
+          "model" => "open-1",
+          "options" => %{"access" => "local-only"}
+        })
+
+      {view, _html} = mount_athanor(conn, "/aqua?setup=1")
+      settled(fn -> has_element?(view, "#aqua-card-mine-runs") end, "the closed card")
+      assert texts(view, "#aqua-card-mine-runs dd") == ["open", "open-1", "local-only"]
       Cyfr.Test.Sandbox.end_views()
     end
 
@@ -2205,9 +2220,11 @@ defmodule PrismWeb.AquaLiveTest do
       assert options == %{"effort" => "high"}
 
       settled(
-        fn -> has_element?(view, ~s(#aqua-card-Opus-access [data-test="access"])) end,
+        fn -> has_element?(view, ~s(#aqua-card-Opus-option-effort option[value="low"])) end,
         "the card on the program"
       )
+
+      refute has_element?(view, "#aqua-card-Opus-access")
 
       assert model_choices(view, "Opus") == [
                {"", "The program's default"},
@@ -2581,15 +2598,20 @@ defmodule PrismWeb.AquaLiveTest do
         _ = render(view)
         refute has_element?(view, ~s(#system-layer-dialog [data-kind="grant"]))
 
-        # Its card shows the access its program's driver lists, in the
-        # driver's words, closed while the driver offers one choice.
-        access = "#aqua-card-mine-access select[disabled]"
-        settled(fn -> has_element?(view, access) end, "the card's access")
-        [choice] = driver_access(command)
-        assert choices(view, access <> " option") == [{choice["id"], choice["name"]}]
+        # Its driver lists one access choice, which tells a person nothing:
+        # the card shows none.
+        refute has_element?(view, "#aqua-card-mine-access")
 
-        # Saved on the card, the access is the member's own.
-        view |> form("#aqua-card-mine-access") |> render_change()
+        # Saved elsewhere, the access is the member's own.
+        [choice] = driver_access(command)
+
+        {:ok, _} =
+          Cyfr.Test.AquaTool.call(ctx, %{
+            "action" => "update",
+            "name" => "mine",
+            "options_patch" => %{"access" => choice["id"]}
+          })
+
         saved = %{"access" => choice["id"]}
 
         assert get_agent(ctx, "mine") ==
@@ -2646,7 +2668,7 @@ defmodule PrismWeb.AquaLiveTest do
 
       lists_each!(fake, [claude, codex], fn ->
         has_element?(view, ~s(#aqua-card-mine-harness option[value="program:openai-codex"])) and
-          has_element?(view, "#aqua-card-mine-access select[disabled]")
+          has_element?(view, ~s(#aqua-card-mine-option-effort option[value="low"]))
       end)
 
       {:ok, _} =
@@ -2899,6 +2921,115 @@ defmodule PrismWeb.AquaLiveTest do
       end
     end
 
+    # Access is a choice only where a program's driver lists two or more:
+    # with fewer, one tells a person nothing, so the form, the editor and
+    # the closed card show none, a form that shows none sends none and the
+    # member stores none, and the driver runs its first. A member's stored
+    # access is kept through a write of another option.
+    for {count, access} <- [
+          {0, []},
+          {1, [%{"id" => "default", "name" => "Default mode"}]},
+          {2,
+           [
+             %{"id" => "default", "name" => "Default mode"},
+             %{"id" => "plan", "name" => "Plan mode"}
+           ]}
+        ] do
+      @tag access: access
+      test "with #{count} access choices, Access shows only for two or more, and a stored " <>
+             "access is kept",
+           %{conn: conn, ctx: ctx, access: access} do
+        fake = backends!()
+        row = brain_row!(ctx, "claude-code")
+        %{title: title} = Opus.Programs.Definition.brain("claude-code")
+        listing = {:access, access}
+        shown? = match?([_, _ | _], access)
+
+        {:ok, _} =
+          Cyfr.Test.AquaTool.call(ctx, %{
+            "action" => "create",
+            "name" => "Kept",
+            "program" => "claude-code",
+            "model" => "opus",
+            "options" => %{"access" => "default"}
+          })
+
+        {view, _html} = mount_athanor(conn, "/aqua?setup=1")
+        new = "#aqua-setup-new-member"
+        choose!(view, new, "Made", "program:claude-code")
+
+        lists!(
+          fake,
+          row,
+          fn -> has_element?(view, new <> ~s( select[name="model"] option[value="opus"])) end,
+          listing
+        )
+
+        view |> form(new, %{"model" => "opus"}) |> render_change()
+        picker = new <> ~s( select[name="options[access]"])
+        assert has_element?(view, new <> ~s( [name="options[access]"])) == shown?
+
+        if shown? do
+          refute has_element?(view, picker <> "[disabled]")
+
+          assert choices(view, picker <> " option") == [
+                   {"default", "Default mode"},
+                   {"plan", "Plan mode"}
+                 ]
+
+          view |> form(new, %{"options" => %{"access" => "plan"}}) |> render_submit()
+        else
+          view |> form(new) |> render_submit()
+        end
+
+        assert {:ok, %{"program" => "claude-code", "model" => "opus", "options" => made}} =
+                 get_agent(ctx, "Made")
+
+        assert made == if(shown?, do: %{"access" => "plan"}, else: %{})
+
+        # The closed cards: an access shows by its name only where it is a
+        # choice.
+        settled(fn -> has_element?(view, "#aqua-card-Made-runs") end, "Made's card")
+
+        assert texts(view, "#aqua-card-Made-runs dd") ==
+                 if(shown?, do: [title, "Opus", "Plan mode"], else: [title, "Opus"])
+
+        assert texts(view, "#aqua-card-Kept-runs dd") ==
+                 if(shown?, do: [title, "Opus", "Default mode"], else: [title, "Opus"])
+
+        # The editor offers it alike and saves the one picked, and a write
+        # of another option keeps the access stored.
+        edit!(view, "Kept")
+
+        lists!(
+          fake,
+          row,
+          fn -> has_element?(view, ~s(#aqua-card-Kept-option-effort option[value="low"])) end,
+          listing
+        )
+
+        assert has_element?(view, "#aqua-card-Kept-access") == shown?
+
+        # Where it is a choice, the one picked in the editor is saved.
+        if shown? do
+          assert choices(view, "#aqua-card-Kept-access select:not([disabled]) option") == [
+                   {"default", "Default mode"},
+                   {"plan", "Plan mode"}
+                 ]
+
+          view |> form("#aqua-card-Kept-access", %{"value" => "plan"}) |> render_change()
+          assert {:ok, %{"options" => picked}} = get_agent(ctx, "Kept")
+          assert picked == %{"access" => "plan"}
+        end
+
+        view |> form("#aqua-card-Kept-option-effort", %{"value" => "low"}) |> render_change()
+
+        assert {:ok, %{"options" => kept}} = get_agent(ctx, "Kept")
+        assert kept == %{"access" => if(shown?, do: "plan", else: "default"), "effort" => "low"}
+        Cyfr.Test.Sandbox.end_views()
+      end
+    end
+
     # A member moved from one program brain to the other keeps each option
     # whose value the new program lists, and drops any other: the access
     # the first driver listed is none of the second's, so it goes, and the
@@ -2925,7 +3056,6 @@ defmodule PrismWeb.AquaLiveTest do
         from_row = brain_row!(ctx, from)
         to_row = brain_row!(ctx, to)
         [from_access] = driver_access(Arca.McpServerStorage.driver(from_row))
-        [to_access] = driver_access(Arca.McpServerStorage.driver(to_row))
 
         {:ok, _} =
           Cyfr.Test.AquaTool.call(ctx, %{
@@ -2938,15 +3068,15 @@ defmodule PrismWeb.AquaLiveTest do
           })
 
         {view, _html} = mount_athanor(conn, "/aqua?setup=1")
-        access = "#aqua-card-mine-access select[disabled]"
         edit!(view, "mine")
 
         lists_each!(fake, [from_row, to_row], fn ->
           has_element?(view, ~s(#aqua-card-mine-harness option[value="program:#{to}"])) and
-            has_element?(view, access)
+            has_element?(view, ~s(#aqua-card-mine-option-effort option[value="low"]))
         end)
 
-        assert choices(view, access <> " option") == [{from_access["id"], from_access["name"]}]
+        # Each driver lists one access choice, so neither card shows one.
+        refute has_element?(view, "#aqua-card-mine-access")
 
         unmoved = get_agent(ctx, "mine")
         harness!(view, "mine", "program:#{to}")
@@ -2969,10 +3099,7 @@ defmodule PrismWeb.AquaLiveTest do
 
         assert options == %{"effort" => "high"}
 
-        settled(
-          fn -> choices(view, access <> " option") == [{to_access["id"], to_access["name"]}] end,
-          "the new program's access"
-        )
+        refute has_element?(view, "#aqua-card-mine-access")
 
         Cyfr.Test.Sandbox.end_views()
 
@@ -5102,6 +5229,17 @@ defmodule PrismWeb.AquaLiveTest do
 
   defp listed(id, {:signed_out, sentence}, _row),
     do: %{"t" => "refused", "id" => id, "reason" => sentence, "account" => "signed_out"}
+
+  # The models `@listing` names, with the access choices `access` in place
+  # of the ones the row's driver lists.
+  defp listed(id, {:access, access}, _row),
+    do: %{
+      "t" => "models",
+      "id" => id,
+      "models" => @listing,
+      "access" => access,
+      "account" => "signed_in"
+    }
 
   defp listed(id, models, row),
     do: %{

@@ -881,11 +881,6 @@ func (s *Shell) tell(ctx context.Context, sentence string) {
 // the shell's Config does.
 func (s *Shell) sentence(err error) string { return sentence(err) }
 
-// CompanySignIn is what a person reads at a CYFR that requires a company
-// sign-in, which the CYFR app does not offer.
-const CompanySignIn = "This CYFR requires company sign-in. Open its address in a browser to continue. " +
-	"The CYFR app does not support company sign-in yet."
-
 // Unbound is a Config.Client's refusal to connect where what it is bound
 // to no longer holds: nothing was sent, and the person reads Sentence.
 // Moved is the CYFR now named at another address or account service than
@@ -931,8 +926,6 @@ func sentence(err error) string {
 		return "Too many wrong PINs: this device's chip takes one more try every ten minutes."
 	case errors.Is(err, ErrRevoked):
 		return "CYFR does not take this device now: it was removed, CYFR does not admit your account, or CYFR was restored from a backup, which suspends every device. Unlocking it again asks CYFR again."
-	case errors.Is(err, ErrCompanySignIn):
-		return CompanySignIn
 	case errors.Is(err, ErrUnavailable):
 		return "CYFR could not be reached. Check that it is running, then try again."
 	case errors.Is(err, ErrRefused), errors.Is(err, ErrRefusedChallenge):

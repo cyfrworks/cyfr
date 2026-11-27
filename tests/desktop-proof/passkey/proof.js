@@ -27,7 +27,7 @@ import {accountAndDevice, accountAt, accountWindow, answerWith, armWindow, bothW
 import {DIRECTORY, HOME, LOOPBACK, NAME, OUT, appWindows, arm, childOfFrame, rail, atBootstrap, atHome, bare, childOfThis, content, contentAt, decided,
   decisions, fault, frontLength, harvest, history, inputs, js, judged, literal, load, lockDetail, opens, pageKilled, passkeys,
   reachedSince, refused, row, run, section, seen, sessionCookie, sessionMark, shownAgain, signOutsSince, signedOutToWays,
-  submit, throughComputerLock, toldUnanswered, unansweredLoad, undisturbed, waitFor} from "../lib.js"
+  noticeShown, submit, throughComputerLock, toldUnanswered, UNANSWERED, unansweredLoad, undisturbed, waitFor} from "../lib.js"
 
 const OTHER = "desk-b"
 // The session the first launch left, as its mark alone (sessionMark).
@@ -483,6 +483,19 @@ async function keptPhase() {
       const {cookie: kept, ...detail} = await unansweredLoad(w)
       cookie = kept
       return [toldUnanswered({cookie, ...detail}, true), detail]
+    })
+  // notice_kept: a reload over the chooser keeping that notice, as Ctrl+R
+  // does, leaves the same words and the same Try again in the same view.
+  await judged("notice_kept", "a reload over the chooser that is keeping a notice leaves the same words and its Try again there",
+    async () => {
+      const chooser = content()
+      const loaded = new Promise((resolve) => chooser.webContents.once("did-finish-load", resolve))
+      chooser.webContents.reload()
+      await loaded
+      const kept = await waitFor(() => chooser.webContents.isLoading() ? null : noticeShown(chooser.webContents),
+        "the chooser's notice after its reload")
+      const same = content() === chooser
+      return [same && kept.words === UNANSWERED && kept.again && kept.onward, {...kept, same}]
     })
   // On the passkey road the chooser is in a view of its own, in memory;
   // Try again there opens the CYFR's root in a view of the CYFR's own

@@ -119,8 +119,6 @@ defmodule Sanctum.DeviceCerts do
       gone.
     * `:identity_stale` — the account's head could not be read fresh: the
       request pauses.
-    * `:company_login_required` — the person stands but for the company
-      sign-in this CYFR requires (`Sanctum.CompanyLogin`).
     * `{:rate_limited, retry_after_ms}`, `{:device_rate_limited,
       retry_after_ms}` — a verification bound is spent.
     * `:unavailable` — the store or a setting could not answer; never a
@@ -163,7 +161,6 @@ defmodule Sanctum.DeviceCerts do
           | :revoked
           | :not_standing
           | :identity_stale
-          | :company_login_required
           | {:rate_limited, non_neg_integer()}
           | {:device_rate_limited, non_neg_integer()}
           | :unavailable
@@ -804,11 +801,9 @@ defmodule Sanctum.DeviceCerts do
     }
 
     # The rows were read as standing just now; establish refusing them is
-    # a standing that no longer reads as one, but for the company sign-in,
-    # which the person gives and the pairing outlives.
+    # a standing that no longer reads as one.
     case Sanctum.Caller.establish_device(device, carried) do
       {:ok, ctx} -> {:ok, ctx}
-      {:error, :company_login_required} -> {:error, :company_login_required}
       {:error, _refused} -> {:error, :not_standing}
     end
   end

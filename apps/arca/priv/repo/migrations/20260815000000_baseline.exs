@@ -26,7 +26,7 @@ defmodule Arca.Repo.Migrations.Baseline do
   `platform_settings` and `settings_pins` are not athanor-scoped: the
   first two are the server's own facts and the rest the cell's, and a
   cell has no athanor.
-  A person's identity, company sign-in and company sign-in attempts, the
+  A person's identity, the
   directory's log and the handles and spent nonces of the registry beside
   it, the cached heads of other people's logs and the pre-authentication
   rate windows are not an athanor's either (`people/0`), and neither is a
@@ -659,45 +659,6 @@ defmodule Arca.Repo.Migrations.Baseline do
 
       timestamps(type: :utc_datetime_usec)
     end
-
-    # A person's company sign-in (`Arca.CompanyAuthorizations`): the
-    # company configuration it was given under (the OpenID Connect issuer
-    # and client id, or the WorkOS organization and connection), the
-    # subject that company's issuer names them by, and when they last
-    # signed in with it. One per person, and one person per subject under
-    # a configuration: the unique index decides two bindings of one
-    # subject at once. It goes with the person's `users` row.
-    create table(:company_authorizations, primary_key: false) do
-      add :user_id, references(:users, type: :string, on_delete: :delete_all),
-        primary_key: true,
-        null: false
-
-      add :configuration, :text, null: false
-      add :subject, :text, null: false
-      add :authorized_at, :utc_datetime_usec, null: false
-    end
-
-    create unique_index(:company_authorizations, [:configuration, :subject])
-
-    # One company sign-in in flight (`Arca.CompanyLoginAttempts`): its
-    # person and the session that opened it, the hash of its state (never
-    # the state), the OpenID Connect nonce and PKCE verifier, and its
-    # expiry. Its callback consumes it once, by a conditional write on an
-    # unconsumed, unexpired row.
-    create table(:company_login_attempts, primary_key: false) do
-      add :id, :string, primary_key: true, null: false
-      add :user_id, references(:users, type: :string, on_delete: :delete_all), null: false
-      add :session_hash, :binary, null: false
-      add :state_hash, :binary, null: false
-      add :nonce, :string
-      add :pkce_verifier, :string
-      add :expires_at, :utc_datetime_usec, null: false
-      add :consumed_at, :utc_datetime_usec
-    end
-
-    create unique_index(:company_login_attempts, [:state_hash])
-    create index(:company_login_attempts, [:user_id])
-    create index(:company_login_attempts, [:expires_at])
 
     # Pre-authentication request limits, one fixed window per bucket and
     # hashed key, counted on the database's clock and shared by every

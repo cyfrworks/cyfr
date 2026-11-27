@@ -24,10 +24,6 @@ defmodule Sanctum do
     person (`Sanctum.Door`) or admits a new one;
   - a protected device's unlock (`Sanctum.DeviceUnlock`), redeemed by its
     browser.
-
-  A CYFR may also require a company sign-in of every person here
-  (`Sanctum.CompanyLogin`): a standing condition, never a sign-in method,
-  which `Sanctum.Caller` checks last wherever a person's standing is read.
   """
 
   use Boundary,
@@ -36,7 +32,6 @@ defmodule Sanctum do
       Annotations,
       ApiKey,
       Attach,
-      Auth.OIDC,
       Authority,
       Authority.BudgetCounter,
       BearerToken,
@@ -46,7 +41,6 @@ defmodule Sanctum do
       Cipher,
       Cipher.Rotation,
       ClientIp,
-      CompanyLogin,
       Consent,
       Consent.Accounts,
       Consent.Components,
