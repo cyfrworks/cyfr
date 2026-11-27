@@ -758,6 +758,8 @@ func (s *server) handleHome(c *client, req *protocol.Request) {
 		s.send(c, protocol.NewError(req.ID, "", code))
 	case at.image && s.wall && req.Type == protocol.TypeHomeMeasure:
 		s.measureInMachine(c, req, at)
+	case at.image && s.wall:
+		s.homeInMachine(c, req, at)
 	case at.image:
 		// An image's homes are inside it, which the host never walks: only
 		// its person's VM measures, resets or retires one.
@@ -914,6 +916,12 @@ func (s *server) retireHome(c *client, req *protocol.Request, at keptAt) {
 		s.send(c, protocol.NewHomeMade(req.ID, at.uid))
 		return
 	}
+	s.homeRetired(c, req, at)
+}
+
+// homeRetired takes a retired home out of its disk's record and answers
+// req: the disk, its work folder and its uid stay.
+func (s *server) homeRetired(c *client, req *protocol.Request, at keptAt) {
 	defer s.lockDisk(at.athanor)()
 	s.mu.Lock()
 	recorded := s.disks[at.athanor]
@@ -940,7 +948,10 @@ func (s *server) retireHome(c *client, req *protocol.Request, at keptAt) {
 // a release with homeRetireGrace does, and waits for each one's group to
 // end, by its kill's own bound: its relay drains, and its `released`
 // follows, on its reader's time, which the home's lock never waits for. It
-// answers whether every one's group was found empty.
+// answers whether every one's group was found empty. A session in a VM has
+// its group in the guest, whose keeper ends what is left of the home's
+// sessions there before it resets or retires the home: here it is ended
+// once it is retired.
 func (s *server) endHomeSessions(id string) bool {
 	s.mu.Lock()
 	var sessions []*spawn
@@ -961,7 +972,7 @@ func (s *server) endHomeSessions(id string) bool {
 			<-sp.retired
 		}
 		s.mu.Lock()
-		ended = ended && sp.ended
+		ended = ended && (sp.machine != nil || sp.ended)
 		s.mu.Unlock()
 	}
 	return ended

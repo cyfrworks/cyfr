@@ -253,3 +253,43 @@ func TestABootingStartNeedsTheVMsOwnRoomBesideItsAllowance(t *testing.T) {
 		t.Fatalf("a booting start of an 8 GiB guest needs %d, want %d", got, want)
 	}
 }
+
+// A VM placed alone, booted for a folder's reset or retirement, needs its
+// own allowance alone: it is refused at once where no pool of W holds it,
+// waits where W is full, and once admitted its sessions join it on their
+// allowances alone. Its charge counts toward its person's ceiling as any
+// VM's does.
+func TestAVMPlacedAloneNeedsItsOwnAndCountsToItsPersonsCeiling(t *testing.T) {
+	own := MachineBytes(testGuest)
+	if ev := New(own-mib, false).Place(NewMachine("backends", "ath_a", testGuest, nil), at(0)); len(ev.Refused) != 1 {
+		t.Fatalf("a VM no pool of W holds was not refused at once: %+v", ev)
+	}
+	l := New(own+383*mib, false)
+	held := session("ath_b", "q1")
+	spawned(t, l, held, 0, 384*mib)
+	m := NewMachine("backends", "ath_a", testGuest, nil)
+	if ev := l.Place(m, at(1)); len(ev.Admitted) != 0 {
+		t.Fatalf("a VM was admitted with %d free beside its own %d: %+v", free(l, 1), own, ev)
+	}
+	l.Drop(held, at(2))
+	if !m.Admitted() {
+		t.Fatal("a VM placed alone was not admitted once its room came")
+	}
+	if got := used(l, 2); got != own {
+		t.Fatalf("the pool holds %d with the VM alone, want its own %d", got, own)
+	}
+	join := inVM(m, "p1")
+	if got := join.startNeed(); got != 384*mib {
+		t.Fatalf("a session joining the VM needs %d, want its allowance alone", got)
+	}
+	// Its person's ceiling: a session of theirs on the host that would fit
+	// beside nothing is refused beside the VM.
+	l2 := New(8192*mib, false)
+	m2 := NewMachine("backends", "ath_c", testGuest, nil)
+	admitted(t, l2.Place(m2, at(0)), m2)
+	capped := session("ath_c", "r1")
+	capped.AthanorMax = own + 100*mib
+	if ev := l2.Place(capped, at(0)); len(ev.Admitted) != 0 {
+		t.Fatalf("a session past its person's ceiling beside their VM was admitted: %+v", ev)
+	}
+}

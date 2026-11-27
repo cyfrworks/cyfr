@@ -68,7 +68,9 @@ func (e *Entry) Admitted() bool { return e.admitted }
 
 // NewMachine is the place of athanor's VM, which role's sessions of that
 // athanor run in: each such session's place names it as its Machine before
-// it is placed. It is no role's kind and is in no counter: the host is
+// it is placed. It may be placed alone, for a folder's reset or
+// retirement: then it waits for its own allowance's room as any start
+// waits, and its sessions join it after. It is no role's kind and is in no counter: the host is
 // charged once for the VM, by its reading, and its sessions' readings are
 // subjects under it, never added to it. It is admitted with the first of
 // its sessions that is, its own allowance, MachineBytes of guest, its
@@ -86,8 +88,12 @@ func (e *Entry) class() Class { return Kinds[e.Kind] }
 
 // startNeed is the room e's start needs: its class's allowance, and the
 // VM's own beside it for a session whose VM is not yet admitted, the start
-// that boots it.
+// that boots it; a VM placed alone, booted for a folder's reset or
+// retirement, its own alone.
 func (e *Entry) startNeed() uint64 {
+	if e.vm {
+		return e.own
+	}
 	need := Allowance(e.class())
 	if e.Machine != nil && !e.Machine.admitted {
 		need += e.Machine.own
@@ -381,6 +387,15 @@ func (l *Ledger) Detach(e *Entry, now time.Time) Events {
 // Sessions is how many places are admitted in the VM m: none is a VM at
 // rest.
 func (l *Ledger) Sessions(m *Entry) int { return l.sessionsIn(m) }
+
+// AtRest says the VM m is at rest from now, as when its last session left:
+// it may be asked to give way again. A VM held for a folder's operation is
+// at rest once the operation ends.
+func (l *Ledger) AtRest(m *Entry, now time.Time) {
+	if m.vm && l.sessionsIn(m) == 0 {
+		m.assignedAt, m.asked = now, false
+	}
+}
 
 // Spawned starts e's allowance's time.
 func (l *Ledger) Spawned(e *Entry, now time.Time) { e.spawnedAt = now }

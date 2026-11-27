@@ -186,9 +186,13 @@ type machine struct {
 	// entry is its own place in the ledger (admission.NewMachine), admitted
 	// with the first of its sessions' places to be.
 	entry *admission.Entry
-	// places counts the session places that name it, admitted or waiting:
-	// a VM never booted goes with the last of them.
+	// places counts the session places that name it, admitted or waiting,
+	// and the folder operations that hold it (holdMachine): a VM never
+	// booted goes with the last of them, and one that holds any is not idle.
 	places int
+	// alone is set while it waits for room placed alone, for a folder's
+	// operation: its admission or refusal is sent there (admit).
+	alone chan bool
 	// prev is the VM of the person this one follows while that one ends:
 	// this one boots only once it is released.
 	prev *machine
@@ -261,11 +265,12 @@ func (s *server) unplaced(m *machine) {
 	}
 }
 
-// bootMachine boots m unless it runs, within machineBootWait, and answers
-// the code its session is refused with: the device not made, the VMM not
-// started, its route not made or its relay unheard (CodeUnavailable, or
-// CodeGuardUnavailable for the route).
-func (s *server) bootMachine(m *machine, at keptAt, r *role) string {
+// bootMachine boots m unless it runs, within machineBootWait, for what
+// needs it (a session, or a folder's reset or retirement, which its log
+// line names), and answers the code that is refused with: the device not
+// made, the VMM not started, its route not made or its relay unheard
+// (CodeUnavailable, or CodeGuardUnavailable for the route).
+func (s *server) bootMachine(m *machine, at keptAt, r *role, what string) string {
 	m.bootMu.Lock()
 	defer m.bootMu.Unlock()
 	s.mu.Lock()
@@ -345,7 +350,7 @@ func (s *server) bootMachine(m *machine, at keptAt, r *role) string {
 		s.loseMachine(m, "its relay did not greet it")
 		return code
 	}
-	s.log.Info("the VM of a person's disk of uid %d booted, its VMM pid %d", at.uid, g.PID())
+	s.log.Info("the VM of a person's disk of uid %d booted for %s, its VMM pid %d", at.uid, what, g.PID())
 	return ""
 }
 
@@ -742,7 +747,7 @@ func (s *server) startInMachine(c *client, req *protocol.Request, at keptAt, rea
 		s.log.Warn("spawn %s refused: its place is no place in its person's VM", req.ID)
 		return nil, protocol.CodeBadRequest
 	}
-	if code := s.bootMachine(m, at, c.role); code != "" {
+	if code := s.bootMachine(m, at, c.role, "a session"); code != "" {
 		return nil, code
 	}
 	sp := &spawn{id: randomHex(16), client: c, kept: true, machine: m, account: KeptAccount(at.uid), keptHome: req.Home,
@@ -920,7 +925,7 @@ func (s *server) measureInMachine(c *client, req *protocol.Request, at keptAt) {
 		s.send(c, protocol.NewError(req.ID, "", protocol.CodeUnavailable))
 		return
 	}
-	if code := s.bootMachine(m, at, c.role); code != "" {
+	if code := s.bootMachine(m, at, c.role, "a session"); code != "" {
 		s.send(c, protocol.NewError(req.ID, "", code))
 		return
 	}
@@ -943,6 +948,105 @@ func (s *server) measureInMachine(c *client, req *protocol.Request, at keptAt) {
 	default:
 		s.log.Warn("home_measure %s refused: its VM's keeper refused it: %s", req.ID, answer.Code)
 		s.send(c, protocol.NewError(req.ID, "", guestCode(answer.Code)))
+	}
+}
+
+// homeInMachine resets or retires a home on an image through its person's
+// VM (plan V2): the one standing, or one booted for it, held for the
+// operation (holdMachine) and an ordinary idle VM after it. The home's
+// sessions end first, as on the host (endHomeSessions); then the guest's
+// keeper is asked, over the link of the boot it greeted, so an answer of a
+// replaced guest settles nothing (machineLink). A retired home leaves its
+// disk's record (homeRetired).
+func (s *server) homeInMachine(c *client, req *protocol.Request, at keptAt) {
+	what := "a folder's reset"
+	if req.Type == protocol.TypeHomeRetire {
+		what = "a folder's retirement"
+	}
+	m, code := s.holdMachine(c.role, at, req)
+	if code != "" {
+		s.send(c, protocol.NewError(req.ID, "", code))
+		return
+	}
+	defer s.releaseMachine(m)
+	if code := s.bootMachine(m, at, c.role, what); code != "" {
+		s.send(c, protocol.NewError(req.ID, "", code))
+		return
+	}
+	l, code := s.machineLink(m)
+	if code != "" {
+		s.send(c, protocol.NewError(req.ID, "", code))
+		return
+	}
+	if !s.endHomeSessions(req.Home) {
+		s.log.Warn("%s %s: a session of kept home %s outlived its end", req.Type, req.ID, req.Home)
+		s.send(c, protocol.NewError(req.ID, "", protocol.CodeInternal))
+		return
+	}
+	answer, err := l.ask(protocol.Request{V: protocol.Version, Type: req.Type, ID: randomHex(16), Home: req.Home}, l.guestWait)
+	switch {
+	case err != nil:
+		s.loseMachine(m, fmt.Sprintf("its guest did not answer %s %s: %v", req.Type, req.ID, err))
+		s.send(c, protocol.NewError(req.ID, "", protocol.CodeUnavailable))
+	case answer.Type == "home_made" && req.Type == protocol.TypeHomeReset:
+		s.log.Info("kept home %s of uid %d reset in its person's VM", req.Home, at.uid)
+		s.send(c, protocol.NewHomeMade(req.ID, at.uid))
+	case answer.Type == "home_retired":
+		s.homeRetired(c, req, at)
+	default:
+		s.log.Warn("%s %s refused: its VM's keeper refused it: %s", req.Type, req.ID, answer.Code)
+		s.send(c, protocol.NewError(req.ID, "", guestCode(answer.Code)))
+	}
+}
+
+// holdMachine holds the VM of at's person for a folder's operation, req's:
+// a place on it, so it neither ends idle nor gives way while the operation
+// runs, and, where it is not admitted, its admission on its own allowance
+// alone, waited for as a start waits. Its person's ceiling is a session's
+// place's, which a folder's operation names none of: their VM counts
+// toward it at their every session, as any VM does. A VM whose session's
+// place waits for its room refuses the operation as no room. It answers
+// the code the operation is refused with.
+func (s *server) holdMachine(r *role, at keptAt, req *protocol.Request) (*machine, string) {
+	s.mu.Lock()
+	m := s.machineFor(r, at.athanor)
+	m.places++
+	if m.entry.Admitted() {
+		s.mu.Unlock()
+		return m, ""
+	}
+	if m.places > 1 || m.alone != nil {
+		s.unplaced(m)
+		s.mu.Unlock()
+		s.log.Warn("%s %s refused: its person's VM waits for room for another start", req.Type, req.ID)
+		return nil, protocol.CodeCapacity
+	}
+	alone := make(chan bool, 1)
+	m.alone = alone
+	s.admit(s.ledger.Place(m.entry, now()))
+	s.mu.Unlock()
+	admitted := <-alone
+	s.mu.Lock()
+	m.alone = nil
+	if !admitted {
+		s.unplaced(m)
+	}
+	s.mu.Unlock()
+	if !admitted {
+		return nil, protocol.CodeCapacity
+	}
+	return m, ""
+}
+
+// releaseMachine lets go of a folder operation's hold on m: a VM that then
+// holds no session is idle from now, and may be asked to give way.
+func (s *server) releaseMachine(m *machine) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.unplaced(m)
+	if m.places == 0 && len(m.sessions) == 0 {
+		m.idleSince = now()
+		s.ledger.AtRest(m.entry, now())
 	}
 }
 
