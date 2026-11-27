@@ -42,12 +42,13 @@ defmodule PrismWeb.SettingsLive do
       (`local_only`).
     * **Memory use** — for the platform administrator, who used what memory
       (`Opus.memory/2`, `:everyone`): each machine's numbers and what holds
-      it now by person, kind and name, then each UTC day's use by person,
+      it now, in order of person, kind and name, then each UTC day's use by person,
       kind and name, the newest seven days first and seven more at a time,
       never a thread or content. It is read again every poll
       (`Prima.LocusPool.poll_ms/0`) and before more days are shown, so a
       mark taken away shows nothing more. An endpoint that has not
-      answered is named under the machines, never as one; a read that
+      answered is said under the machines as the service it is, never as
+      a machine; a read that
       fails says memory use cannot be read, never that nothing reported.
     * **Administrators** — in the allowlist, for a platform administrator:
       the people carrying the mark, another person made an administrator
@@ -1335,12 +1336,14 @@ defmodule PrismWeb.SettingsLive do
               </h4>
               <p class="text-sm text-gray-300">{machine_use(machine)}</p>
               <p :if={machine.holders == []} class="text-sm text-gray-300">
-                Nothing uses memory on it now.
+                {if MemoryWords.heading(@memory, machine.machine),
+                  do: "Nothing uses memory on it now.",
+                  else: "Nothing uses memory now."}
               </p>
               <.table
                 :if={machine.holders != []}
                 id={"memory-holders-" <> machine.machine}
-                rows={machine.holders}
+                rows={MemoryWords.rows(machine.holders)}
               >
                 <:col :let={h} label="Person">{person_name(h.person)}</:col>
                 <:col :let={h} label="What">{MemoryWords.kind(h.kind)}</:col>

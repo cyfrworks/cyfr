@@ -273,8 +273,8 @@ defmodule Prima.LocusPool do
 
   @doc """
   How long after its last answer an endpoint counts as answering: three
-  polls. One that has not answered within it holds nothing now, joins no
-  machine, and a refusal names no holder from it.
+  polls. One that has not answered within it holds nothing now and joins no
+  machine.
   """
   @spec fresh_ms() :: pos_integer()
   def fresh_ms, do: 3 * @poll_ms
@@ -630,15 +630,17 @@ defmodule Prima.LocusPool do
   defp bytes?(value),
     do: is_integer(value) and value >= 0 and value <= Prima.KeeperProtocol.max_measured_bytes()
 
-  # What a person calls each kind of holder, one and several.
-  @holder_words %{
-    "run" => {"run", "runs"},
-    "build" => {"build", "builds"},
-    "program" => {"program", "programs"},
-    "terminal" => {"terminal", "terminals"},
-    "browser" => {"browser", "browsers"},
-    "tool" => {"tool", "tools"}
-  }
+  # What a person calls each kind of holder, one and several, in the order
+  # a page lists the kinds.
+  @holder_words [
+    {"run", {"run", "runs"}},
+    {"build", {"build", "builds"}},
+    {"program", {"program", "programs"}},
+    {"terminal", {"terminal", "terminals"}},
+    {"browser", {"browser", "browsers"}},
+    {"tool", {"tool", "tools"}}
+  ]
+  @holder_kinds Enum.map(@holder_words, &elem(&1, 0))
 
   # The kinds of place a refusal's sentence names, in its order, by the
   # word a person reads each as. A runner's two kinds are one word: a run.
@@ -752,7 +754,12 @@ defmodule Prima.LocusPool do
   this one table.
   """
   @spec holder_words(String.t()) :: {String.t(), String.t()}
-  def holder_words(kind) when is_map_key(@holder_words, kind), do: Map.fetch!(@holder_words, kind)
+  def holder_words(kind) when kind in @holder_kinds,
+    do: @holder_words |> List.keyfind!(kind, 0) |> elem(1)
+
+  @doc "The kinds of holder `holder_words/1` knows, in the order a page lists them."
+  @spec holder_kinds() :: [String.t()]
+  def holder_kinds, do: @holder_kinds
 
   defp joined([one]), do: one
   defp joined(items), do: Enum.join(Enum.drop(items, -1), ", ") <> " and " <> List.last(items)
