@@ -531,9 +531,13 @@ defmodule Cyfr.ChainTest do
       host = fork!(ctx, auth)
       parent_id = host.execution_id
 
+      # Guest-forged lineage keys ride the args; CYFR takes the child's
+      # lineage from the attempt the call is signed for, never from them.
       assert {:ok, admitted} =
                FormulaHost.admit_child(host, "#{@target_node}:0.1.0", "call", %{
-                 "input" => %{"a" => 1}
+                 "input" => %{"a" => 1},
+                 "parent_execution_id" => "exec_forged",
+                 "root_execution_id" => "exec_forged_root"
                })
 
       assert [child_id] = admitted(parent_id)
@@ -547,11 +551,15 @@ defmodule Cyfr.ChainTest do
 
       rows =
         Arca.Repo.all(
-          from(e in Arca.Schemas.Execution, where: e.parent_execution_id == ^parent_id)
+          from(e in Arca.Schemas.Execution,
+            where: e.parent_execution_id in [^parent_id, "exec_forged"]
+          )
         )
 
       assert [row] = rows
       assert row.id == child_id
+      assert row.parent_execution_id == parent_id
+      assert row.root_execution_id != "exec_forged_root"
       assert row.status == "failed"
       assert row.activation_digest == @root_act
     end
