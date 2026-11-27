@@ -56,7 +56,10 @@ defmodule Prima.Assignment do
       `host: :intercepted`, which a formula's host runs rather than the
       catalog: at most 256, each at most 256 bytes.
 
-  Times are Unix milliseconds. Identifiers and component references are 1
+  Times are Unix milliseconds. Every integer is at most 2^53 − 1, the
+  greatest every JSON reader holds exactly and the bound the runner's
+  control and relay wires hold theirs to (`Prima.RunnerControl`,
+  `Prima.RunnerRelay`); one past it is refused. Identifiers and component references are 1
   to 256 bytes of printable ASCII without spaces, and digests are `sha256:`
   followed by 64 lowercase hex digits.
 
@@ -190,6 +193,9 @@ defmodule Prima.Assignment do
   @tool_action ~r/\A(?=.{3,256}\z)[a-z0-9_-]+\.[a-z0-9_-]+\z/
   @need ~r/\A[a-z][a-z0-9_-]{0,31}\z/
   @max_list 256
+
+  # 2^53 − 1: every integer up to it is exact in an IEEE 754 double.
+  @max_integer 9_007_199_254_740_991
 
   @claim_window_ms 30_000
 
@@ -345,8 +351,13 @@ defmodule Prima.Assignment do
   defp read_member(type, {:ok, value}), do: read(type, value)
 
   defp read(:version, 1), do: {:ok, 1}
-  defp read(:pos_integer, value) when is_integer(value) and value > 0, do: {:ok, value}
-  defp read(:time, value) when is_integer(value) and value >= 0, do: {:ok, value}
+
+  defp read(:pos_integer, value) when is_integer(value) and value in 1..@max_integer//1,
+    do: {:ok, value}
+
+  defp read(:time, value) when is_integer(value) and value in 0..@max_integer//1,
+    do: {:ok, value}
+
   defp read(:id, value) when is_binary(value), do: matching(@id, value)
 
   # The address is carried exactly as a route is appended to it, so the
@@ -359,7 +370,7 @@ defmodule Prima.Assignment do
   defp read(:digest, value) when is_binary(value), do: matching(@digest, value)
 
   defp read(:step, %{"id" => id, "generation" => generation} = step)
-       when map_size(step) == 2 and is_integer(generation) and generation >= 0 do
+       when map_size(step) == 2 and is_integer(generation) and generation in 0..@max_integer//1 do
     with {:ok, id} <- read(:id, id), do: {:ok, %{id: id, generation: generation}}
   end
 

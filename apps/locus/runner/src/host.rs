@@ -340,7 +340,7 @@ pub fn answered(op: Op, plain: &[u8]) -> Result<Reading, Unanswered> {
             } else {
                 [].iter()
             })
-            .find(|refusal| **refusal == name)
+            .find(|refusal| **refusal == name.as_str())
             .map(|refusal| Reading::Refused(refusal))
             .ok_or(Unanswered::Lost),
     }

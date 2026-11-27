@@ -25,6 +25,15 @@
 //! the process. And one document Prima reads is refused here: one with a
 //! member named `$serde_json::private::Number`, the name under which the
 //! parser hands this reader a number, which is never read as one.
+//!
+//! Two stated differences from the Elixir runner, whose readers go with it
+//! (R5). A number in a host answer's data is carried in the spelling CYFR
+//! wrote and handed on as that text: a decimal is not re-read as a double,
+//! and an integer of any length is taken, where Jason rounds
+//! `1.00000000000000001` to `1.0`, reads `1e-400` as `0.0` and refuses an
+//! integer past 1,024 digits. And `crate::control::encode` of an `assign`,
+//! the service's direction, which a runner never encodes, writes plain
+//! copies of the token and of the keys' hex.
 
 use std::io::Write as _;
 
@@ -433,13 +442,26 @@ pub fn request_body(op: &str, args: &Map<String, Value>) -> Zeroizing<String> {
     Zeroizing::new(String::from_utf8(std::mem::take(&mut *bytes)).expect("JSON is UTF-8"))
 }
 
-/// What an answer at this wire's version says.
-#[derive(Debug, PartialEq)]
+/// What an answer at this wire's version says. Its `Debug` prints nothing
+/// the answer carries, the refusal's name included.
+#[derive(PartialEq)]
 pub enum Answer {
     /// `{"v": 3, "ok": value}`.
     Ok(Json),
     /// `{"v": 3, "error": name, ...}`: the refusal and its other members.
-    Error { name: String, fields: Json },
+    Error {
+        name: Zeroizing<String>,
+        fields: Json,
+    },
+}
+
+impl std::fmt::Debug for Answer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Answer::Ok(_) => f.write_str("Ok(..)"),
+            Answer::Error { .. } => f.write_str("Error(..)"),
+        }
+    }
 }
 
 /// What a decoded answer says, or none when it is no answer at this
@@ -455,7 +477,7 @@ pub fn read_answer(mut answer: Json) -> Option<Answer> {
         }
         return answer.take_member("ok").map(Answer::Ok);
     }
-    let name = object.get("error")?.as_str()?.to_owned();
+    let name = Zeroizing::new(object.get("error")?.as_str()?.to_owned());
     drop(answer.take_member("v"));
     drop(answer.take_member("error"));
     Some(Answer::Error {

@@ -397,11 +397,14 @@ impl Reader<'_> {
         if value.len() > MAX_INPUT_BYTES.div_ceil(3) * 4 {
             return Err(Refusal::Oversize(self.name(field)));
         }
-        let bytes = decode_base64(value).ok_or_else(|| Refusal::InvalidField(self.name(field)))?;
+        // Held for wiping from the moment it is decoded, refused or not.
+        let bytes = Zeroizing::new(
+            decode_base64(value).ok_or_else(|| Refusal::InvalidField(self.name(field)))?,
+        );
         if bytes.len() > MAX_INPUT_BYTES {
             return Err(Refusal::Oversize(self.name(field)));
         }
-        Ok(Zeroizing::new(bytes))
+        Ok(bytes)
     }
 
     fn ids(&self, field: &str) -> Result<Vec<String>, Refusal> {

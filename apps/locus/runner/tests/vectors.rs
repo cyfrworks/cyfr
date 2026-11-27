@@ -244,7 +244,9 @@ fn control_bounds_are_the_vectors() {
 #[test]
 fn control_every_valid_frame_encodes_to_its_line_and_decodes_back() {
     let v = fixture("runner_control.json");
-    for case in cases(&v["valid"], "valid") {
+    let valid = cases(&v["valid"], "valid");
+    assert!(valid.len() >= 6, "{} valid frames", valid.len());
+    for case in valid {
         let why = s(&case["why"]);
         let line = s(&case["line"]);
         let message = message_from(&case["message"]);
@@ -267,7 +269,9 @@ fn control_every_valid_frame_encodes_to_its_line_and_decodes_back() {
 #[test]
 fn control_every_invalid_line_is_refused_with_its_reason() {
     let v = fixture("runner_control.json");
-    for case in cases(&v["invalid"], "invalid") {
+    let invalid = cases(&v["invalid"], "invalid");
+    assert!(invalid.len() >= 64, "{} invalid frames", invalid.len());
+    for case in invalid {
         let why = s(&case["why"]);
         assert_eq!(
             control::decode(&control_line(case)).err(),
@@ -345,7 +349,13 @@ fn control_every_environment_reads_as_its_runner_or_is_refused_naming_its_variab
         assert_eq!(runner_json(&read), case["runner"], "{why}");
     }
 
-    for case in cases(&env["invalid"], "invalid") {
+    let invalid = cases(&env["invalid"], "invalid");
+    assert!(
+        invalid.len() >= 22,
+        "{} invalid environments",
+        invalid.len()
+    );
+    for case in invalid {
         let why = s(&case["why"]);
         let name = s(&case["name"]);
         assert!(
@@ -691,7 +701,11 @@ fn relay_every_refusal_the_runner_receives_closes_with_its_reason() {
         .iter()
         .filter(|case| case["receiver"] == "runner")
         .collect();
-    assert!(!runner.is_empty());
+    assert!(
+        runner.len() >= 44,
+        "{} refusals the runner receives",
+        runner.len()
+    );
     for case in runner {
         let why = s(&case["why"]);
         let mut channel = play(&v, n(&case["after"]) as usize);
@@ -803,18 +817,6 @@ fn auth_a_sealed_body_and_answer_reproduce_and_open_only_as_themselves() {
     );
 }
 
-/// A payload as the crate holds it: a top-level integer past 2^64 − 1, a
-/// time past any clock, as 2^64 − 1 (the assignment module's description).
-fn held(payload: &Value) -> Value {
-    let mut held = payload.clone();
-    for member in held.as_object_mut().expect("an object").values_mut() {
-        if let Some(wire::Integer::Whole(n)) = wire::integer(member) {
-            *member = n.into();
-        }
-    }
-    held
-}
-
 /// A read assignment as its payload spells it: every member it carries,
 /// none for an absent optional one.
 fn assignment_json(read: &Assignment) -> Value {
@@ -869,7 +871,7 @@ fn auth_every_assignment_read_reads_as_its_payload_or_is_refused_with_its_reason
     for case in cases(&reads["valid"], "valid") {
         let why = s(&case["why"]);
         let read = assignment::read(s(&case["token"])).unwrap_or_else(|r| panic!("{why}: {r:?}"));
-        assert_eq!(assignment_json(&read), held(&case["payload"]), "{why}");
+        assert_eq!(assignment_json(&read), case["payload"], "{why}");
     }
     // Each list is taken at its bound, and refused one past it.
     let at_bound = cases(&reads["valid"], "valid").iter().any(|case| {
@@ -880,7 +882,9 @@ fn auth_every_assignment_read_reads_as_its_payload_or_is_refused_with_its_reason
                 == Some(assignment::MAX_LIST)
     });
     assert!(at_bound, "no valid assignment holds lists at MAX_LIST");
-    for case in cases(&reads["invalid"], "invalid") {
+    let invalid = cases(&reads["invalid"], "invalid");
+    assert!(invalid.len() >= 50, "{} invalid assignments", invalid.len());
+    for case in invalid {
         let why = s(&case["why"]);
         let reason = match s(&case["reason"]) {
             "malformed" => assignment::Refusal::Malformed,
@@ -1175,7 +1179,9 @@ fn host_every_answer_outcome_is_the_calls() {
 async fn every_answer_outcome() {
     let v = fixture("host_api.json");
     let caller = caller(&v);
-    for case in cases(&v["answer_outcomes"], "answer_outcomes") {
+    let outcomes = cases(&v["answer_outcomes"], "answer_outcomes");
+    assert!(outcomes.len() >= 45, "{} answer outcomes", outcomes.len());
+    for case in outcomes {
         let why = s(&case["why"]);
         let op = Op::named(s(&case["callback"])).expect("a runner's callback");
         let mut post = Scripted::new(&v, &caller, cases(&case["answers"], "answers").clone());
@@ -1337,6 +1343,16 @@ fn holding_no_debug_or_error_form_prints_a_token_an_input_a_key_or_a_disclosed_f
         "a parsed value",
         format!("{:?}", wire::parse(format!("\"{MARKER}\"").as_bytes())),
     );
+    // An answer read before its refusal is checked: its name and fields.
+    for answer in [
+        format!(r#"{{"v":3,"error":"{MARKER}"}}"#),
+        format!(r#"{{"v":3,"error":"lost","detail":"{MARKER}"}}"#),
+        format!(r#"{{"v":3,"ok":"{MARKER}"}}"#),
+    ] {
+        let read = wire::parse(answer.as_bytes()).and_then(wire::read_answer);
+        assert!(read.is_some(), "{answer} reads as an answer");
+        no_marker(&answer, format!("{read:?}"));
+    }
 
     // An assignment read: its authority and actor.
     let auth_v = fixture("worker_auth.json");
@@ -1377,4 +1393,19 @@ fn wire_a_member_named_as_the_parser_names_a_number_is_refused_and_an_integer_is
         wire::parse(br#"{"n":18446744073709551617,"m":-18446744073709551617}"#).expect("JSON");
     assert_eq!(whole.value()["n"].to_string(), "18446744073709551617");
     assert_eq!(whole.value()["m"].to_string(), "-18446744073709551617");
+}
+
+#[test]
+fn wire_a_host_answers_numbers_are_carried_in_the_spelling_cyfr_wrote() {
+    // The crate hands a number on as its text: it does not re-read a
+    // decimal as a double, and it takes an integer of any length. Jason,
+    // the Elixir runner's reader, rounds the first to 1.0, reads the
+    // second as 0.0 and refuses the third; it goes with that runner (R5).
+    let long = "9".repeat(1_025);
+    for number in ["1.00000000000000001", "1e-400", long.as_str()] {
+        let answer = format!(r#"{{"v":3,"ok":{number}}}"#);
+        let op = Op::named("tool_call").expect("a callback");
+        let reading = host::answered(op, answer.as_bytes()).expect("an answer");
+        assert_eq!(reading_json(&reading)["ok"].to_string(), number, "{number}");
+    }
 }

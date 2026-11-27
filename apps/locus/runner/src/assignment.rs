@@ -18,17 +18,17 @@
 //! component reference grammar. `tests/fixtures/worker_auth.json`'s
 //! `assignment_reads` holds the tokens both sides read alike.
 //!
-//! An integer member is read as Prima reads one, of any size: a time past
-//! 2^64 − 1 ms is held as 2^64 − 1, later than any clock. The payload, its
-//! `actor` and its `authority` are cleared when they are dropped, and an
-//! assignment's `Debug` names its attempt alone.
+//! Every integer member is at most 2^53 − 1, the greatest integer the
+//! control and relay wires hold theirs to; one past it is refused. The
+//! payload, its `actor` and its `authority` are cleared when they are
+//! dropped, and an assignment's `Debug` names its attempt alone.
 
 use serde_json::{Map, Value};
 use zeroize::Zeroizing;
 
 use crate::wire::{
-    Integer, Json, decode_base64url, encode_base64url_into, integer, is_base_url, is_digest, is_id,
-    parse,
+    Integer, Json, MAX_INTEGER, bounded, decode_base64url, encode_base64url_into, integer,
+    is_base_url, is_digest, is_id, parse,
 };
 
 /// The version an assignment carries as `v`.
@@ -155,7 +155,7 @@ pub fn read(token: &str) -> Result<Assignment, Refusal> {
 fn split(token: &str) -> Option<Zeroizing<Vec<u8>>> {
     let (payload64, mac64) = token.split_once('.')?;
     let payload = Zeroizing::new(decode_base64url(payload64)?);
-    let mac = decode_base64url(mac64)?;
+    let mac = Zeroizing::new(decode_base64url(mac64)?);
     let mut canonical = Zeroizing::new(String::with_capacity(token.len()));
     encode_base64url_into(&payload, &mut canonical);
     canonical.push('.');
@@ -221,10 +221,7 @@ fn digest(value: &Value) -> Option<String> {
 }
 
 fn time(value: &Value) -> Option<u64> {
-    match integer(value)? {
-        Integer::Whole(n) => Some(n),
-        Integer::Negative => None,
-    }
+    bounded(value, 0..=MAX_INTEGER).ok()
 }
 
 fn positive(value: &Value) -> Option<u64> {
