@@ -889,8 +889,9 @@ defmodule Locus.KeeperTest do
     # The process writing to `handle`'s connection: its writer.
     defp writer!(c, %{ref: ref}), do: :sys.get_state(c.client).requests[ref].writer
 
-    defp queued_at_least(pid, n) do
-      wait_until(fn -> elem(Process.info(pid, :message_queue_len), 1) >= n end, 5_000)
+    # Until `pid`'s mailbox holds a message `match?` holds for.
+    defp in_mailbox(pid, match?) do
+      wait_until(fn -> pid |> Process.info(:messages) |> elem(1) |> Enum.any?(match?) end, 5_000)
     end
 
     # A process waiting for a write to a connection that does not take it:
@@ -929,27 +930,53 @@ defmodule Locus.KeeperTest do
       :gen_tcp.close(relay)
     end
 
-    # A failed write closes the connection, but never before what it
-    # already carried reaches the owner.
-    test "a runner's last control frame reaches its owner before the close a failed write finds" do
+    # A failed write closes the connection, but never before what the
+    # connection had already handed to the client reaches the owner.
+    test "a runner's last control frame already handed to the client reaches its owner before the close a failed write finds" do
       c = plain_client!()
       {handle, relay} = attached_runner!(c)
 
       # The service writes to the runner while the runner, having written
-      # its last control line, closes its end; the client hears the line
-      # only after the write, and the close once the line is taken, since
-      # it reads a held connection one read at a time.
+      # its last control line, closes its end; the client, handed the line
+      # already, hears it only after the write, and the close once the line
+      # is taken, since it reads a held connection one read at a time.
       :ok = :sys.suspend(c.client)
       writer = Task.async(fn -> Keeper.send_control(handle, ~s({"type":"cancel_child"}\n)) end)
-      queued_at_least(c.client, 1)
+      writing = writer.pid
+      in_mailbox(c.client, &match?({:"$gen_call", {^writing, _tag}, _request}, &1))
       last = ~s({"type":"complete"}\n)
-      :ok = :gen_tcp.send(relay, KeeperProtocol.frames(:control, last))
+      frame = IO.iodata_to_binary(KeeperProtocol.frames(:control, last))
+      :ok = :gen_tcp.send(relay, frame)
       :ok = :gen_tcp.close(relay)
-      queued_at_least(c.client, 2)
+      in_mailbox(c.client, &match?({:tcp, _conn, ^frame}, &1))
       :ok = :sys.resume(c.client)
 
       assert {:error, _reason} = Task.await(writer)
       assert heard(handle) == [{:control, last}, :control_closed, :relay_closed]
+    end
+
+    # The socket's behaviour, not a promise: a write that fails drops what
+    # the socket still held unread, so a line the runner sent that was not
+    # yet handed to the client never reaches the owner, which hears the
+    # close alone. Nothing may depend on a runner's last line: one that
+    # dies before writing it is the same case, and its attempts are closed
+    # by the worker service's report of its end, the rest by their leases
+    # (the module doc's "Back-pressure").
+    test "a runner's line still in the socket when a write fails is lost with the connection, and its owner hears the close alone" do
+      c = plain_client!()
+      {%{ref: ref} = handle, relay} = attached_runner!(c)
+
+      # The owner leaves the first line untaken, so the client reads no
+      # further: the runner's last line waits in the socket as the runner
+      # closes its end, and the service's write then fails.
+      :ok = :gen_tcp.send(relay, KeeperProtocol.frames(:control, "first"))
+      assert_receive {Keeper, ^ref, {:control, "first"}}, 5_000
+      :ok = :gen_tcp.send(relay, KeeperProtocol.frames(:control, ~s({"type":"complete"}\n)))
+      :ok = :gen_tcp.close(relay)
+      assert {:error, _reason} = Keeper.send_control(handle, ~s({"type":"cancel_child"}\n))
+
+      :ok = Keeper.taken(handle)
+      assert heard(handle) == [:control_closed, :relay_closed]
     end
 
     @tag timeout: 60_000

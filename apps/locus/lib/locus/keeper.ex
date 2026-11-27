@@ -224,9 +224,15 @@ defmodule Locus.Keeper do
   does not finish within it. Stdin of a long-lived spawn that stops
   reading answers `{:error, :stdin_closed}`; a control or relay write
   answers the socket's error, and the owner hears the control channel and
-  the relay closed. A failed write never drops what the connection
-  already carried: the frames received for it before the failure reach
-  the owner first.
+  the relay closed. What the connection had already handed to this
+  server before a write failed reaches the owner first. A frame the
+  spawn sent that was still in the socket when the write failed is lost
+  with the connection, since the socket drops what it holds unread when
+  a write to it fails, as it is when the spawn dies before writing it:
+  the owner hears the close alone. A runner's attempts are then closed
+  by the worker service's report of its end
+  (`Locus.Runtime.WorkerService`), and any it held no record of by their
+  leases (`Opus.Sweeper`).
 
   ## The memory bound
 
@@ -2249,8 +2255,9 @@ defmodule Locus.Keeper do
   # (`@read_bytes`), and read again only once its owner has taken every
   # frame of the last (`read_on/2`), so what its relay writes past that
   # waits in the socket and the relay behind it; it is written under the
-  # bound. A failed write leaves the connection to be read to its end, so
-  # what it carried reaches the owner before its close (`write_failed/2`).
+  # bound. On a failed write, what the connection had handed this server
+  # reaches the owner before its close (`write_failed/2`); what was still
+  # in its socket is lost with it, as the module doc says.
   defp hold(conn) do
     :inet.setopts(conn,
       active: :once,
@@ -2477,8 +2484,9 @@ defmodule Locus.Keeper do
   # ————— reads —————
 
   # A write that failed, its bound among the ways: a connection the
-  # failure closed is gone once what it delivered is read, and one still
-  # open is read to its end, where it is gone.
+  # failure closed is gone once what it had delivered is read, and one
+  # still open is read on until it ends, where it is gone. What the socket
+  # held unread when the write failed is not among either.
   defp write_failed(state, conn) do
     case :inet.getopts(conn, [:active]) do
       {:ok, _open} -> state
