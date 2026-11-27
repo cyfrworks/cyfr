@@ -48,9 +48,14 @@ type place struct {
 	// the spawn started or was refused.
 	spawn *spawn
 	// reading is the last reading of its spawn's group, taken at readAt; a
-	// zero readAt is no reading yet.
+	// zero readAt is no reading yet. A session's in a person's VM is the
+	// guest's reading of it.
 	reading protocol.Reading
 	readAt  time.Time
+	// machine is the person's VM a session place of a keeper that gives
+	// the wall is in (machineFor), whose one charge holds it; nil for a
+	// place on the host.
+	machine *machine
 }
 
 // removal is what a retirement whose group could not be removed leaves to
@@ -100,7 +105,15 @@ func (s *server) handlePlace(c *client, req *protocol.Request) {
 		if req.AthanorMax != nil {
 			e.AthanorMax = *req.AthanorMax
 		}
-		c.places[req.ID] = &place{whose: whoseOf(req), entry: e}
+		p := &place{whose: whoseOf(req), entry: e}
+		// On a keeper that gives the wall a person's kept sessions run in
+		// their VM, charged once by it.
+		if s.wall && c.role.spec.Kept && admission.Kinds[req.Kind] == admission.Session && req.Athanor != "" {
+			p.machine = s.machineFor(c.role, req.Athanor)
+			p.machine.places++
+			e.Machine = p.machine.entry
+		}
+		c.places[req.ID] = p
 		s.admit(s.ledger.Place(e, now()))
 	}
 	s.mu.Unlock()
@@ -129,6 +142,22 @@ func (s *server) freePlace(c *client, id string) {
 	if p := c.places[id]; p != nil {
 		delete(c.places, id)
 		s.admit(s.ledger.Drop(p.entry, now()))
+		if p.machine != nil {
+			s.unplaced(p.machine)
+		}
+	}
+}
+
+// detachPlace takes c's place id out of its person's VM, its spawn running
+// on the host after all: from here it is charged by itself; s.mu is not
+// held.
+func (s *server) detachPlace(c *client, id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if p := c.places[id]; p != nil && p.machine != nil {
+		s.admit(s.ledger.Detach(p.entry, now()))
+		s.unplaced(p.machine)
+		p.machine = nil
 	}
 }
 
@@ -154,12 +183,19 @@ func (s *server) admit(ev admission.Events) {
 	}
 	for _, r := range ev.Refused {
 		ref := r.Entry.Ref.(placeRef)
+		p := ref.c.places[ref.id]
 		delete(ref.c.places, ref.id)
+		if p != nil && p.machine != nil {
+			s.unplaced(p.machine)
+		}
 		s.log.Warn("place %s of role %s refused: no room in the pool for a %s (needs %s, %s free)", ref.id,
 			ref.c.role.spec.Name, r.Entry.Kind, describeBytes(r.Held.Need), describeBytes(r.Held.Free))
 		ref.c.queue(protocol.NewNoMemory(ref.id, heldOf(r.Held)))
 	}
 	for _, e := range ev.GiveWay {
+		if _, ok := e.Ref.(machineRef); ok {
+			continue
+		}
 		ref := e.Ref.(placeRef)
 		ref.c.queue(protocol.NewGiveWay(ref.id))
 	}
@@ -346,13 +382,49 @@ func (s *server) read() (wait func()) {
 	for sp := range s.unremoved {
 		due = append(due, sp)
 	}
+	var machines []*machine
+	for _, m := range s.vms {
+		if m.vm != nil && !m.ending {
+			machines = append(machines, m)
+		}
+	}
 	s.mu.Unlock()
 	var reads sync.WaitGroup
+	// A person's VM is read by its VMM's group: the host's one charge for
+	// it, in no counter.
+	for _, m := range machines {
+		if !m.reading.CompareAndSwap(false, true) {
+			continue
+		}
+		reads.Add(1)
+		go func() {
+			defer reads.Done()
+			defer m.reading.Store(false)
+			got, err := m.vm.Used()
+			if err != nil {
+				return
+			}
+			at := clock()
+			s.mu.Lock()
+			defer s.mu.Unlock()
+			if !m.ending {
+				s.ledger.Read(m.entry, got.Bytes, got.Lesser, at)
+			}
+		}()
+	}
 	for _, sp := range due {
 		if !sp.reading.CompareAndSwap(false, true) {
 			continue
 		}
 		reads.Add(1)
+		if sp.machine != nil {
+			go func() {
+				defer reads.Done()
+				defer sp.reading.Store(false)
+				s.readGuest(sp, clock)
+			}()
+			continue
+		}
 		go func() {
 			defer reads.Done()
 			defer sp.reading.Store(false)

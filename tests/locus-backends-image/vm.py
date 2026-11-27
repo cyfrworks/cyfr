@@ -111,7 +111,7 @@ def guest_check(stack, image, kept, guest, kvm=True, extra=()):
             "--mount", f"type=volume,source={guest},target={GUEST_ROOT}"]
     if kvm:
         args += ["--device", KVM]
-    args += ["--entrypoint", "cyfr-locus", image, "guest-check", *extra]
+    args += ["--entrypoint", "cyfr-locus", image, "guest-check", "--kept-root", KEPT_ROOT, *extra]
     result = run(*args, check=False, timeout=600)
     lines = [line for line in result.stdout.splitlines() if line.startswith("{")]
     report = json.loads(lines[-1]) if lines else {}
@@ -239,7 +239,7 @@ def keeper_killed(stack, image, kept, guest, project):
     try:
         errors = RELEASE["run_dir"] + "/keeper-killed.err"
         run("docker", "exec", "-d", container, "sh", "-c",
-            f"exec cyfr-locus guest-check -- /bin/sh -c 'sleep 600' 2>{errors}")
+            f"exec cyfr-locus guest-check --kept-root {KEPT_ROOT} -- /bin/sh -c 'sleep 600' 2>{errors}")
         deadline = time.monotonic() + 60
         while not any(comm == "firecracker" for _, _, comm, _ in processes(container)) and time.monotonic() < deadline:
             time.sleep(0.2)  # sleep-ok: polls the container's processes until the VMM is up, bounded above

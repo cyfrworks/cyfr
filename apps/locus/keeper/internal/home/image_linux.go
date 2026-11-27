@@ -86,6 +86,26 @@ func (k Kept) EnsureImage(athanor string, uid int) error {
 	return nil
 }
 
+// ErrNotImage is something at a disk image's path that is not its image:
+// no regular file, or one another uid owns, or open to any other uid.
+var ErrNotImage = errors.New("not the disk's image: a regular file of its uid's alone, mode 0600")
+
+// CheckImage reports whether path is a disk's image as its VM is given it
+// at each start: a regular file, read without following a link, of uid and
+// its group, mode ImageMode. An absent one is fs.ErrNotExist; anything else
+// there is ErrNotImage.
+func CheckImage(path string, uid int) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || info.Mode() != ImageMode || int(st.Uid) != uid || int(st.Gid) != uid {
+		return fmt.Errorf("%s: %w", path, ErrNotImage)
+	}
+	return nil
+}
+
 // makeFilesystem runs mke2fs as uid on the file at path, uid's, in a
 // process group of its own killed whole past MakeImageWait: ext4, no blocks
 // reserved, its inode tables and journal left to the guest's first mount to

@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -293,6 +294,7 @@ func Main(args []string) int {
 		floor = floor || r.spec.Floor
 	}
 	s.begin(sizes, floor)
+	s.giveWall()
 	if err := makeRunDirs(s.runRoot, s.roles); err != nil {
 		log.Error("refusing to start: %v", err)
 		return ExitConfig
@@ -306,6 +308,7 @@ func Main(args []string) int {
 func (s *server) begin(sizes admission.Sizes, floor bool) {
 	s.boot = randomHex(16)
 	s.budget = sizes.Budget
+	s.rest = sizes.Rest
 	s.ledger = admission.New(sizes.Work, floor)
 }
 
@@ -580,6 +583,7 @@ func makePool(log *logx.Logger, tree poolTree, roles []*role, cpus []uint64, con
 		}
 		floor = floor || r.spec.Floor
 		service := cgroup.ServiceCPU(cpus[i])
+		r.workCPU = cpus[i] - service
 		log.Info("role %s: processors %s for its service and %s for its work, its spawns' groups in %s", r.spec.Name,
 			describeQuota(service), describeQuota(cpus[i]-service), r.groups.Path())
 	}
@@ -723,6 +727,35 @@ type spawn struct {
 	// packs is the generation its space binds (packview.Store.Acquire),
 	// whose release its final release calls (forget); nil for none.
 	packs func()
+
+	// machine is the person's VM a kept spawn of an image disk runs in
+	// (machine_linux.go): such a spawn has no leader, group, relay or route
+	// of its own on the host. egress is what it may reach, its VM's route
+	// holding it among its person's live sessions'; link the VM's control
+	// connection it was made over, guest and guestPlace its spawn and place
+	// there, guestPID its leader's pid there; s.mu guards the four.
+	machine    *machine
+	egress     egress
+	link       *guestLink
+	guest      string
+	guestPlace string
+	guestPID   int
+	// announced closes once its start has settled, its `spawned` sent or
+	// its refusal's exit settled as none; guestEvents carries its guest's
+	// exit and release to its follower (followGuest); guestEnded closes
+	// once its guest released it, or is lost to it (gone), lost saying
+	// which and lostMemory why.
+	announced   chan struct{}
+	guestEvents chan []byte
+	guestEnded  chan struct{}
+	goneOnce    sync.Once
+	lost        bool
+	lostMemory  *string
+	// spliceMu guards ends and spliced, its standard streams' two halves
+	// and the channel that closes once they are joined no more.
+	spliceMu sync.Mutex
+	ends     []net.Conn
+	spliced  chan struct{}
 }
 
 // releasePacks lets go of the generation the spawn's space binds.
@@ -741,10 +774,13 @@ type role struct {
 	runDir   string
 	homeRoot string
 	// groups makes the role's spawns' groups, inside the role's group in
-	// work; nil where none can be made, and every spawn is refused. leaf is
-	// the role's leaf in service, which holds its process and its relays.
-	groups *cgroup.Manager
-	leaf   *cgroup.Group
+	// work, its people's VMs' among them; nil where none can be made, and
+	// every spawn is refused. leaf is the role's leaf in service, which
+	// holds its process and its relays. workCPU is its work's processors,
+	// in microseconds of every period, 0 for no bound.
+	groups  *cgroup.Manager
+	leaf    *cgroup.Group
+	workCPU uint64
 	// client is the role's process standing, nil from its end until it is
 	// started again; starting is its start in progress, from its channel's
 	// making until it is published as client (publishRole) or fails, so the
@@ -871,6 +907,15 @@ type server struct {
 	// imageDisks says a disk made now takes the image form, a person's VM's
 	// drive (home.FormImage).
 	imageDisks bool
+	// wall says this keeper gives the VM wall (plan D18): it was given KVM
+	// and the image's guest, and a first session in a VM fits rest; then
+	// imageDisks too, and every kept session of a person runs in their VM.
+	// vms is each person's VM by their athanor (machine_linux.go), and
+	// bootVM starts one, startVM in production.
+	wall      bool
+	vms       map[string]*machine
+	vmsEnding map[*machine]bool
+	bootVM    func(vmBoot) (guestVM, error)
 
 	// boot is this start's id, 16 random bytes in hex, minted at the start
 	// and of nothing else: every report carries it, its counters' revs
@@ -879,6 +924,7 @@ type server struct {
 	// it.
 	boot      string
 	budget    uint64
+	rest      uint64
 	uncounted uint64
 
 	stopping atomic.Bool
@@ -1284,6 +1330,11 @@ func (s *server) handleSignal(c *client, req *protocol.Request) {
 	sig := signalNumbers[req.Sig]
 	s.mu.Lock()
 	sp := s.heldSpawn(c, req.SpawnID)
+	if sp != nil && sp.machine != nil {
+		s.mu.Unlock()
+		s.guestSignal(sp, req)
+		return
+	}
 	running := sp != nil && sp.leader != nil && !sp.leader.reaped()
 	if running {
 		_ = unix.Kill(-sp.leader.pid, sig)
@@ -1302,6 +1353,11 @@ func (s *server) handleSignal(c *client, req *protocol.Request) {
 func (s *server) handleResize(c *client, req *protocol.Request) {
 	s.mu.Lock()
 	sp := s.heldSpawn(c, req.SpawnID)
+	if sp != nil && sp.machine != nil {
+		s.mu.Unlock()
+		s.guestResize(sp, req)
+		return
+	}
 	hasPty := sp != nil && sp.pty != nil
 	var err error
 	if hasPty {
@@ -1428,6 +1484,9 @@ func (s *server) startSpawn(c *client, req *protocol.Request, limits admission.L
 	if req.HomeMode == protocol.HomeKept {
 		return s.startKeptSpawn(c, req, spec.Reach, reach, known, limits)
 	}
+	// A place in a person's VM whose spawn runs on the host is charged by
+	// itself from here.
+	s.detachPlace(c, req.Place)
 	s.mu.Lock()
 	var p *pool.Pool
 	if known {
@@ -1957,6 +2016,10 @@ func (s *server) memoryEnd(sp *spawn) *string {
 // `released` follows, once the spawn's relay has ended and its group is
 // removed.
 func (s *server) retire(sp *spawn, grace time.Duration, notify bool) {
+	if sp.machine != nil {
+		s.retireGuest(sp, grace, notify)
+		return
+	}
 	if sp.kept {
 		s.retireKept(sp, grace, notify)
 		return
@@ -2181,6 +2244,8 @@ func (s *server) sweep() {
 	s.sweepKept()
 	if s.guard != nil {
 		s.retryClears()
+		s.retryNarrowing()
+		s.finishMachines()
 	}
 	for _, e := range todo {
 		if !s.scrub(s.accounts[e.uid], 0, nil, "") {

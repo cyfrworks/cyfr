@@ -26,7 +26,7 @@ import (
 )
 
 // CheckUsage is `cyfr-locus guest-check`'s command line.
-const CheckUsage = "cyfr-locus guest-check [--kernel-reporting] [--beside] [-- <command> [args…]]"
+const CheckUsage = "cyfr-locus guest-check --kept-root <dir> [--kernel-reporting] [--beside] [-- <command> [args…]]"
 
 // Exit statuses of the check: it ran and the report says what it found,
 // or the command line, or the machine could not run.
@@ -162,7 +162,8 @@ func CheckMain(args []string) int {
 	fs := flag.NewFlagSet("guest-check", flag.ContinueOnError)
 	kernelReporting := fs.Bool("kernel-reporting", false, "report free pages from the kernel's own order, not 0 (a measurement's)")
 	beside := fs.Bool("beside", false, "boot a second machine beside the first and end it before the first's space")
-	if err := fs.Parse(args); err != nil {
+	keptRoot := fs.String("kept-root", "", "the kept homes' root, which every machine's space covers (the keeper's --kept-homes)")
+	if err := fs.Parse(args); err != nil || *keptRoot == "" {
 		fmt.Fprintln(os.Stderr, "usage: "+CheckUsage)
 		return CheckUsageE
 	}
@@ -173,7 +174,7 @@ func CheckMain(args []string) int {
 	report := Report{ReportFromOrder0: !*kernelReporting}
 	console := &tail{max: consoleTail}
 	maker := &tail{max: consoleTail}
-	err := check(argv, *beside, &report, console, maker)
+	err := check(argv, *keptRoot, *beside, &report, console, maker)
 	if err != nil {
 		report.Error = err.Error()
 	}
@@ -187,7 +188,7 @@ func CheckMain(args []string) int {
 	return CheckPassed
 }
 
-func check(argv []string, beside bool, report *Report, console, maker io.Writer) error {
+func check(argv []string, keptRoot string, beside bool, report *Report, console, maker io.Writer) error {
 	raw, err := os.ReadFile("/proc/self/status")
 	if err != nil {
 		return err
@@ -233,7 +234,7 @@ func check(argv []string, beside bool, report *Report, console, maker io.Writer)
 	args := bootArgs(report.ReportFromOrder0, true)
 	held = nil
 	m, err := Start(Config{Device: device, VCPUs: checkVCPUs, MemoryMiB: checkMemoryMiB, Groups: groups,
-		BootArgs: args, Console: console})
+		BootArgs: args, Console: console, KeptRoot: keptRoot})
 	if err != nil {
 		return err
 	}
@@ -252,7 +253,7 @@ func check(argv []string, beside bool, report *Report, console, maker io.Writer)
 	report.ReadyMs = time.Since(m.Started()).Milliseconds()
 	report.VMM = vmmView(m.Group())
 	if beside {
-		if report.Beside, err = besideMachine(groups, maker, report.ReportFromOrder0); err != nil {
+		if report.Beside, err = besideMachine(groups, maker, keptRoot, report.ReportFromOrder0); err != nil {
 			return err
 		}
 	}
@@ -288,13 +289,13 @@ func check(argv []string, beside bool, report *Report, console, maker io.Writer)
 // besideMachine boots a second machine in the same keeper, with a hold of
 // its own on the device and no console, says hello to it and ends it, and
 // refuses an end that was not the acknowledged one or left anything.
-func besideMachine(groups *cgroup.Manager, maker io.Writer, order0 bool) (*Beside, error) {
+func besideMachine(groups *cgroup.Manager, maker io.Writer, keptRoot string, order0 bool) (*Beside, error) {
 	device, _, err := Programs(maker).Device()
 	if err != nil {
 		return nil, err
 	}
 	m, err := Start(Config{Device: device, VCPUs: checkVCPUs, MemoryMiB: checkMemoryMiB, Groups: groups,
-		BootArgs: bootArgs(order0, false)})
+		BootArgs: bootArgs(order0, false), KeptRoot: keptRoot})
 	if err != nil {
 		return nil, fmt.Errorf("the machine beside: %w", err)
 	}

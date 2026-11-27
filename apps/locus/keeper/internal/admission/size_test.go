@@ -23,6 +23,7 @@ func TestThePoolsNumbersArePrimasLocusPools(t *testing.T) {
 		Comment        string            `json:"comment"`
 		FloorBytes     uint64            `json:"floor_bytes"`
 		FloorRunners   int               `json:"floor_runners"`
+		MachineBytes   uint64            `json:"machine_bytes"`
 		RoomWaitMs     int64             `json:"room_wait_ms"`
 		AllowanceMs    int64             `json:"allowance_ms"`
 		StaleMs        int64             `json:"stale_ms"`
@@ -47,7 +48,7 @@ func TestThePoolsNumbersArePrimasLocusPools(t *testing.T) {
 	}
 	names := map[string]Class{"runner": Runner, "build": Build, "session": Session}
 	ms := func(d time.Duration) int64 { return d.Milliseconds() }
-	if v.FloorBytes != FloorBytes || v.FloorRunners != FloorRunners || v.RoomWaitMs != ms(RoomWait) ||
+	if v.FloorBytes != FloorBytes || v.FloorRunners != FloorRunners || v.MachineBytes != MachineBytes || v.RoomWaitMs != ms(RoomWait) ||
 		v.AllowanceMs != ms(AllowanceFor) || v.StaleMs != ms(StaleAfter) {
 		t.Fatalf("the vector's numbers %+v differ from the keeper's", v)
 	}

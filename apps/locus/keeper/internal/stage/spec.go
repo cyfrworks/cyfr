@@ -147,6 +147,11 @@ func (s Spec) Validate() error {
 		if s.Kept || s.Control || s.Terminal {
 			return errors.New("a machine's space has no kept home, control channel or terminal")
 		}
+		// Every machine's space covers the kept root, whoever starts it: a
+		// VMM holds KVM's group, and reads no person's disk but its own.
+		if s.KeptRoot == "" {
+			return errors.New("a machine's space covers the kept root, and names none")
+		}
 	}
 	if s.Disk != "" {
 		name := strings.TrimSuffix(filepath.Base(s.Disk), home.ImageSuffix)

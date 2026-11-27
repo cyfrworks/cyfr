@@ -65,6 +65,11 @@ func resolveHosts(hosts []string) ([]netip.Addr, string, error) {
 type routeGuard interface {
 	Admit(spawnID, reach string, addrs []netip.Addr, netns, udp, tcp *os.File) (guard.Route, error)
 	AdmitRole(spawnID string, port uint16, private bool, netns, udp, tcp *os.File) (guard.Route, error)
+	// AdmitMachine and Change are a person's VM's route's
+	// (machine_linux.go): its admit, from its VMM's space's four
+	// descriptors, and a change of what it allows.
+	AdmitMachine(spawnID string, uid int, reach string, addrs []netip.Addr, netns, udp, tcp, nl *os.File) (guard.Machine, error)
+	Change(spawnID string, r guard.Route, reach string, addrs []netip.Addr) error
 	Clear(spawnID string, r guard.Route) error
 	// Live reports whether r's connection is the live one at this instant,
 	// with no end waiting unread on it.
@@ -251,12 +256,26 @@ func (s *server) guardLost(conn uint64) {
 			}
 		}
 	}
+	// A person's VM routed over conn ends at once: the VMM's group is
+	// killed, every session in it with it, before the client dials again.
+	machines := s.machineRoutes(conn)
 	// No role starts again from here, nor any spawn: the end is marked in
 	// the critical section every start's last check takes (owns).
 	if len(roles) > 0 {
 		s.closing.Store(true)
 	}
 	s.mu.Unlock()
+	for _, m := range machines {
+		if !killMachineGroup(m) {
+			s.log.Error("a person's VM's group outlived its kill after the guard's connection ended; the keeper ends")
+			s.exitKeeper(ExitLost)
+			return
+		}
+		go m.vm.Kill()
+	}
+	if len(machines) > 0 {
+		s.log.Warn("egress: the guard's connection %d ended; %d people's VMs are killed", conn, len(machines))
+	}
 	if len(roles) > 0 {
 		for _, r := range roles {
 			if !r.leaf.KillBy(time.Now()) {

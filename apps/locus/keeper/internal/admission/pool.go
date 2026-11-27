@@ -89,3 +89,9 @@ func LimitsOf(kind string, work uint64) Limits {
 	}
 	return Limits{MemoryBytes: memory, Processors: Processors[c]}
 }
+
+// MachineBytes is a person's VM's own allowance beside its first
+// session's (Prima.LocusPool's machine_bytes): what a VM holds above a
+// session's, the larger of the two figures V1 measured on the image's
+// programs' device (325.6 MiB against today's steady state).
+const MachineBytes uint64 = 326 << 20

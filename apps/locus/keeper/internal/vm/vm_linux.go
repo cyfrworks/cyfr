@@ -48,6 +48,8 @@ var stageWait = 10 * time.Second
 
 // Bounds of a machine's start and end.
 const (
+	// sendWait bounds one line's write on a control connection.
+	sendWait = 10 * time.Second
 	// apiWait bounds the VMM's API socket's appearing.
 	apiWait = 2 * time.Second
 	// ReadyWait bounds a cold boot to the relay's Hello: P12's boots took
@@ -96,8 +98,9 @@ type Config struct {
 	Console io.Writer
 	// Disk is a person's disk image (home.FormImage), their VM's one
 	// writable drive, directly under KeptRoot, the kept homes' root, which
-	// the VMM's space is given covered but for it. "" for guest-check's
-	// machine, which has neither.
+	// every VMM's space is given covered, but for its own person's image.
+	// Disk is "" for guest-check's machine, which has none; KeptRoot is
+	// every machine's.
 	Disk, KeptRoot string
 	// UID is the uid a person's VM runs under: their disk's (home.Disk),
 	// whose alone the image is, so it is the VMM's two walls, its mount
@@ -158,6 +161,8 @@ type Machine struct {
 	leftOver  error
 	leftProcs []int
 	cpuUsec   uint64
+	killedFor cgroup.Cause
+	killedErr error
 }
 
 // machineUIDs is MachineUIDs' allotment in this keeper, and given the uids
@@ -511,6 +516,14 @@ func (m *Machine) LeftProcs() []int { return m.leftProcs }
 // once the machine has ended.
 func (m *Machine) CPUUsec() uint64 { return m.cpuUsec }
 
+// KilledFor is what the kernel killed processes of the machine's group for,
+// as its counters said at its end (cgroup.KilledFor), once the machine has
+// ended.
+func (m *Machine) KilledFor() (cgroup.Cause, error) { return m.killedFor, m.killedErr }
+
+// PID is the VMM's process.
+func (m *Machine) PID() int { return m.cmd.Process.Pid }
+
 // HowEnded is how the machine ended, once Done has closed.
 func (m *Machine) HowEnded() Ended {
 	m.mu.Lock()
@@ -551,6 +564,8 @@ func (m *Machine) remove() {
 	}
 	if m.group != nil {
 		m.cpuUsec = groupCPUUsec(m.group)
+		// Read while its counters stand: what the kernel killed for.
+		m.killedFor, m.killedErr = m.group.KilledFor()
 		procs, err := m.group.Procs()
 		switch {
 		case err != nil:
@@ -843,6 +858,8 @@ type Control struct {
 	Hello Hello
 	conn  net.Conn
 	lines *protocol.LineReader
+	// sendMu keeps each line whole when several senders share it.
+	sendMu sync.Mutex
 }
 
 // ErrLineTooLong is a line from the guest past protocol.MaxLineBytes.
@@ -851,7 +868,13 @@ var ErrLineTooLong = fmt.Errorf("vm: the guest sent a line longer than %d bytes"
 // Connect opens the control connection within ReadyWait of the boot and
 // reads the relay's Hello.
 func (m *Machine) Connect() (*Control, error) {
-	left := ReadyWait - time.Since(m.started)
+	return m.ConnectWithin(ReadyWait - time.Since(m.started))
+}
+
+// ConnectWithin opens a control connection and reads the relay's Hello,
+// all within left: a running machine's next connection once the relay that
+// served its last has ended and its keeper has started it again.
+func (m *Machine) ConnectWithin(left time.Duration) (*Control, error) {
 	conn, err := m.Dial(ControlPort, left)
 	if err != nil {
 		return nil, err
@@ -871,12 +894,16 @@ func (m *Machine) Connect() (*Control, error) {
 	return c, nil
 }
 
-// Send writes one keeper protocol line.
+// Send writes one keeper protocol line, within sendWait: a guest that stops
+// reading holds no sender past it.
 func (c *Control) Send(v any) error {
 	b, err := json.Marshal(v)
 	if err != nil {
 		return err
 	}
+	c.sendMu.Lock()
+	defer c.sendMu.Unlock()
+	_ = c.conn.SetWriteDeadline(time.Now().Add(sendWait))
 	_, err = c.conn.Write(append(b, '\n'))
 	return err
 }

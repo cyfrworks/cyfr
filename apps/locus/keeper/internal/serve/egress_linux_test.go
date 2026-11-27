@@ -87,6 +87,11 @@ type fakeRouteGuard struct {
 	// check would; beforeClear runs as a clear arrives, before it answers.
 	afterLive   func()
 	beforeClear func(spawnID string)
+	// changes answers each change in turn, nil to accept it, an error to
+	// refuse it (a guard.ErrRouteWithdrawn among them); past its end every
+	// change is accepted. A machine's admit makes no route of the fake's
+	// names: its VM is a stand-in too.
+	changes []error
 }
 
 type routeCall struct {
@@ -97,6 +102,7 @@ type routeCall struct {
 	port    uint16
 	private bool
 	conn    uint64
+	uid     int
 }
 
 func (g *fakeRouteGuard) Admit(spawnID, reach string, addrs []netip.Addr, netns, udp, tcp *os.File) (guard.Route, error) {
@@ -137,6 +143,32 @@ func (g *fakeRouteGuard) admit(call routeCall, netns, udp, tcp *os.File) (guard.
 	g.routes[spawnID] = a
 	g.mu.Unlock()
 	return guard.Route{Conn: conn}, nil
+}
+
+func (g *fakeRouteGuard) AdmitMachine(spawnID string, uid int, reach string, addrs []netip.Addr, netns, udp, tcp, nl *os.File) (guard.Machine, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.calls = append(g.calls, routeCall{op: guard.TypeAdmit, spawnID: spawnID, reach: reach, addrs: addrs, conn: g.conn, uid: uid})
+	if g.refuse {
+		return guard.Machine{}, errors.New("refused")
+	}
+	return guard.Machine{Route: guard.Route{Conn: g.conn}, Inner: netip.MustParseAddr("10.213.0.2"),
+		Gateway: netip.MustParseAddr("10.213.0.1")}, nil
+}
+
+func (g *fakeRouteGuard) Change(spawnID string, r guard.Route, reach string, addrs []netip.Addr) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.calls = append(g.calls, routeCall{op: guard.TypeChange, spawnID: spawnID, reach: reach, addrs: addrs, conn: r.Conn})
+	if g.dead || r.Conn != g.conn {
+		return guard.ErrConnectionGone
+	}
+	if len(g.changes) > 0 {
+		err := g.changes[0]
+		g.changes = g.changes[1:]
+		return err
+	}
+	return nil
 }
 
 func (g *fakeRouteGuard) Live(r guard.Route) bool {

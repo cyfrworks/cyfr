@@ -656,3 +656,32 @@ func TestLimitReadsTheContainersOwn(t *testing.T) {
 		t.Error("a memory.max of no number was read")
 	}
 }
+
+// A role's groups an earlier keeper left, with the group of a spawn or of a
+// person's VM still inside, are ended and removed before the role's are
+// made again: here plain folders stand in for groups the kernel emptied.
+func TestARolesGroupsAnEarlierKeeperLeftAreEndedAndRemoved(t *testing.T) {
+	root := t.TempDir()
+	tree, err := (&Manager{root: root}).NewTree()
+	if err != nil {
+		t.Fatal(err)
+	}
+	left := filepath.Join(root, "work", "rest", "backends", "keeper-40001", boundLeaf)
+	if err := os.MkdirAll(left, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(filepath.Dir(left), "cgroup.events"), []byte("populated 0\nfrozen 0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// A cgroup's own files go with it; a test folder's file would keep it.
+	if err := os.Remove(filepath.Join(filepath.Dir(left), "cgroup.events")); err != nil {
+		t.Fatal(err)
+	}
+	m, _, err := tree.Role("backends", 0, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(m.Dir(), "keeper-40001")); !os.IsNotExist(err) {
+		t.Fatalf("the group an earlier keeper left is still there: %v", err)
+	}
+}

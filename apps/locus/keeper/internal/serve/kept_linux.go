@@ -341,10 +341,20 @@ func (s *server) startKeptSpawn(c *client, req *protocol.Request, reach string, 
 	if !known {
 		return nil, protocol.CodeUnknownPool
 	}
-	// An image is mounted by its person's VM alone: here, with no VM to
-	// run its session, it is refused by name, and nothing of it is touched.
-	if at.image {
+	// An image is mounted by its person's VM alone: on a keeper that gives
+	// the wall its sessions run there, and here, with no VM to run its
+	// session, it is refused by name, and nothing of it is touched. A
+	// directory disk left on a keeper that gives the wall, whose
+	// retirement at the start did not finish, runs nowhere: no session of
+	// any person runs outside a VM there.
+	switch {
+	case at.image && s.wall:
+		return s.startMachineSpawn(c, req, at, reach, e, limits)
+	case at.image:
 		s.log.Warn("spawn %s refused: kept home %s is on a disk image, which runs only in its person's VM, and this machine runs none: give the container /dev/kvm again", req.ID, req.Home)
+		return nil, protocol.CodeUnavailable
+	case s.wall:
+		s.log.Warn("spawn %s refused: kept home %s is on a disk of the directory form, which this machine retires at its start, and its retirement has not finished", req.ID, req.Home)
 		return nil, protocol.CodeUnavailable
 	}
 	s.mu.Lock()

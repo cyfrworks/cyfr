@@ -5,6 +5,7 @@ package home
 
 import (
 	"encoding/binary"
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -237,5 +238,51 @@ func TestTheRecordsTakeAnImageAndRemoveADeadMakingsTemporary(t *testing.T) {
 	}
 	if _, err := k.LoadDisks(); err == nil || !strings.Contains(err.Error(), `has form "volume"`) {
 		t.Fatalf("a record of an unknown form answered %v", err)
+	}
+}
+
+// An image is given its VM only as its disk's uid's alone: a regular file,
+// not a link, of that uid and its group, mode 0600. Here the disk's uid is
+// the test's own, whose group is its own uid's number only where they
+// agree; a test run otherwise checks the refusals alone.
+func TestAnImageIsCheckedAsItsUIDsAloneAtEachStart(t *testing.T) {
+	k := keptOfMine(t, 1)
+	uid := os.Getuid()
+	path := k.ImagePath("ath_1")
+	if err := CheckImage(path, uid); !os.IsNotExist(err) {
+		t.Fatalf("an absent image answered %v", err)
+	}
+	if err := os.WriteFile(path, nil, ImageMode); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, ImageMode); err != nil {
+		t.Fatal(err)
+	}
+	if uid == os.Getgid() {
+		if err := CheckImage(path, uid); err != nil {
+			t.Fatalf("the uid's own image answered %v", err)
+		}
+	}
+	if err := CheckImage(path, uid+1); !errors.Is(err, ErrNotImage) {
+		t.Fatalf("an image of another uid answered %v", err)
+	}
+	if err := os.Chmod(path, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckImage(path, uid); !errors.Is(err, ErrNotImage) {
+		t.Fatalf("an image its group reads answered %v", err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(t.TempDir(), "elsewhere")
+	if err := os.WriteFile(target, nil, ImageMode); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, path); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckImage(path, uid); !errors.Is(err, ErrNotImage) {
+		t.Fatalf("a link at the image's path answered %v", err)
 	}
 }

@@ -100,6 +100,15 @@ func TestADisksRecordIsWrittenWholeAndReadBack(t *testing.T) {
 	if disks, err = k.LoadDisks(); err != nil || !reflect.DeepEqual(disks["family@example/a"].Homes, []string{"vlt_b"}) {
 		t.Fatalf("after a removal: %+v %v", disks, err)
 	}
+	// A disk retired whole leaves no record, and its removal twice is none.
+	for range 2 {
+		if err := k.RemoveDisk("family@example/a"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if disks, err = k.LoadDisks(); err != nil || disks["family@example/a"] != nil || disks["ath_2"] == nil {
+		t.Fatalf("after a disk's removal: %+v %v", disks, err)
+	}
 }
 
 // The keeper does not start over a record it cannot trust, and says which

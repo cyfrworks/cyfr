@@ -28,6 +28,11 @@ defmodule Prima.LocusPool do
   W, never under `least_cap_bytes/1`, and each class's processors are
   `processors/1`.
 
+  Where a machine runs each person's sessions in a VM of their own, the
+  keeper charges that VM once, by its reading: its sessions are charged
+  nothing of their own, and the start that boots it holds the VM's own
+  allowance (`machine_bytes/0`) beside its session's.
+
   A runner's least is its allowance and the components' hard ceiling
   together (`Prima.Limits.Ceiling`'s compiled `max_memory_bytes`), so one
   component at any cap an administrator may allow fits beside its runner on
@@ -113,6 +118,7 @@ defmodule Prima.LocusPool do
 
   @mib 1024 * 1024
   @floor_bytes 164 * @mib
+  @machine_bytes 326 * @mib
   @kinds %{
     "warm" => :runner,
     "run" => :runner,
@@ -198,6 +204,19 @@ defmodule Prima.LocusPool do
   @doc "F, the memory the warm floor keeps from builds and programs: its one runner's allowance, 164 MiB."
   @spec floor_bytes() :: pos_integer()
   def floor_bytes, do: @floor_bytes
+
+  @doc """
+  A person's VM's own allowance, 326 MiB: what a VM holds above a session,
+  the larger of the two figures measured on the image's programs' device.
+  Where a person's sessions run in their own VM, the start that boots it is
+  admitted when its session's allowance and this one fit together, and the
+  VM holds this one until `allowance_ms/0` after its VMM's start. The keeper
+  charges a VM once, by its reading, never under what its starts hold; its
+  sessions are charged nothing of their own, and their readings, the
+  guest's, are counted under their subjects alone, never added to it.
+  """
+  @spec machine_bytes() :: pos_integer()
+  def machine_bytes, do: @machine_bytes
 
   @doc "How many fresh runners the warm floor keeps: one."
   @spec floor_runners() :: pos_integer()

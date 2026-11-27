@@ -27,7 +27,7 @@ defmodule Prima.LocusPoolTest do
 
   test "the vector file holds the module's numbers and nothing else" do
     assert Map.keys(@vectors) |> Enum.sort() ==
-             ~w(allowance_bytes allowance_ms cap_bytes comment counters floor_bytes floor_runners kinds least_cap_bytes processors room_wait_ms stale_ms wire)
+             ~w(allowance_bytes allowance_ms cap_bytes comment counters floor_bytes floor_runners kinds least_cap_bytes machine_bytes processors room_wait_ms stale_ms wire)
 
     assert @vectors["counters"] == %{
              "max_counters" => LocusPool.max_counters(),
@@ -38,6 +38,7 @@ defmodule Prima.LocusPoolTest do
 
     assert @vectors["floor_bytes"] == LocusPool.floor_bytes()
     assert @vectors["floor_runners"] == LocusPool.floor_runners()
+    assert @vectors["machine_bytes"] == LocusPool.machine_bytes()
     assert @vectors["room_wait_ms"] == LocusPool.room_wait_ms()
     assert @vectors["allowance_ms"] == LocusPool.allowance_ms()
     assert @vectors["stale_ms"] == LocusPool.stale_ms()
@@ -60,6 +61,7 @@ defmodule Prima.LocusPoolTest do
   test "the pool's numbers are the plan's" do
     mib = 1024 * 1024
     assert LocusPool.floor_bytes() == 164 * mib
+    assert LocusPool.machine_bytes() == 326 * mib
     assert LocusPool.allowance_bytes(:runner) == LocusPool.floor_bytes()
 
     assert {LocusPool.allowance_bytes(:build), LocusPool.allowance_bytes(:session)} ==
