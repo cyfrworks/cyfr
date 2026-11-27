@@ -491,7 +491,8 @@ defmodule PrismWeb.ComponentsLive do
      |> assign(:register_id, nil)
      |> assign(:register_log, [])
      |> fetch_components()
-     |> put_flash(:info, "Registered #{registered}/#{total} components")}
+     |> put_flash(:info, "Registered #{registered}/#{total} components")
+     |> put_refused(result[:components] || [])}
   end
 
   def handle_info({:register_complete, {:error, reason}}, socket) do
@@ -640,6 +641,22 @@ defmodule PrismWeb.ComponentsLive do
   end
 
   # --- Private helpers ---
+
+  # Each component the scan refused, in its refusal's sentence: the scan's
+  # log is cleared when it completes, so the error flash is what says it.
+  defp put_refused(socket, components) do
+    case for(%{status: "error"} = refused <- components, do: refused) do
+      [] ->
+        socket
+
+      refused ->
+        put_flash(
+          socket,
+          :error,
+          Enum.map_join(refused, " ", &"#{&1.name} #{&1.version} was not registered: #{&1.error}")
+        )
+    end
+  end
 
   defp register_phase_color(:scanning), do: "bg-yellow-400"
   defp register_phase_color(:registered), do: "bg-blue-400"

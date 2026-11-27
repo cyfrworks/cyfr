@@ -67,6 +67,28 @@ defmodule PrismWeb.ComponentsLiveTest do
     {:ok, conn: conn, ctx: ctx, seed: seed}
   end
 
+  test "a component the scan refuses is said in its refusal's sentence", %{conn: conn, ctx: ctx} do
+    max = Prima.HostAPI.max_artifact_bytes()
+
+    Arca.Test.UnitFixtures.lay_unit!(
+      ctx,
+      ["components", "reagents", "local", "big-tool", "1.0.0"],
+      [
+        {"cyfr-manifest.json", Jason.encode!(%{"type" => "reagent", "version" => "1.0.0"})},
+        {"reagent.wasm", Prima.Test.PaddedComponent.pad(@valid_wasm, max + 1)}
+      ]
+    )
+
+    {view, _html} = mount_athanor(conn, "/components")
+    view |> element("button[phx-click=register]") |> render_click()
+
+    sentence =
+      "big-tool 1.0.0 was not registered: The component is #{max + 1} bytes, and a " <>
+        "component runs only up to #{max} bytes; make it smaller to register it."
+
+    Prima.Test.Wait.wait_until(fn -> render(view) =~ sentence end)
+  end
+
   # The store made unable to read `table` for the rest of the test: the
   # table renamed inside the test's sandbox transaction, which the sandbox
   # rolls back on every exit of the test, the table's name with it. No
