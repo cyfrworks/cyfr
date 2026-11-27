@@ -31,11 +31,11 @@ var (
 // filesystem by mke2fs within MakeImageWait, synced and then renamed into
 // place. A failure leaves no temporary, and a temporary
 // a dead keeper left is removed at the next LoadDisks. The disk's lock is
-// held, so no two makings of one image run at once. A uid outside 1 to
-// 2^31-1, which no disk has, is refused before anything is made.
+// held, so no two makings of one image run at once. A number outside 0 to
+// 2^31-1 is no uid, and is refused before anything is made.
 func (k Kept) EnsureImage(athanor string, uid int) error {
-	if uid < 1 || uid >= 1<<31 {
-		return fmt.Errorf("the disk's uid %d is not one a disk has", uid)
+	if uid < 0 || uid >= 1<<31 {
+		return fmt.Errorf("the disk's uid %d is not a uid", uid)
 	}
 	path := k.ImagePath(athanor)
 	if st, err := os.Lstat(path); err == nil {
