@@ -1167,28 +1167,16 @@ pub fn ended_with(code: &str, host: &str, limits: &Limits) -> Refusal {
 }
 
 /// How a fetch's `end` answers a guest's request to `host`, a fetch whole
-/// answering nothing; and whether what CYFR did is unknown, an attached
-/// answer lost or never reaching its service, which leaves the runner
-/// unclean.
-pub fn ended_as(
-    end: &Ended,
-    attached: bool,
-    host: &str,
-    limits: &Limits,
-) -> (Option<Refusal>, bool) {
+/// answering nothing. An attached answer lost or never reaching its
+/// service leaves the relay in doubt, which is what keeps its runner from
+/// reuse (`crate::relay::Relay::idle`), whoever reads it.
+pub fn ended_as(end: &Ended, host: &str, limits: &Limits) -> Option<Refusal> {
     match end {
-        Ended::Whole => (None, false),
-        Ended::Code(code) => (
-            Some(ended_with(code, host, limits)),
-            attached && matches!(code.as_str(), "lost" | "uncertain"),
-        ),
-        Ended::Cyfr { kind, message } => (Some(cyfr(kind, message.as_str())), false),
-        Ended::Lost => (Some(refusal(Kind::HttpError, words::HTTP_FAILED)), true),
-        Ended::Unread => (Some(refusal(Kind::HttpError, words::HTTP_FAILED)), false),
-        Ended::Closed => (
-            Some(refusal(Kind::HttpError, words::http_failed("relay_closed"))),
-            false,
-        ),
+        Ended::Whole => None,
+        Ended::Code(code) => Some(ended_with(code, host, limits)),
+        Ended::Cyfr { kind, message } => Some(cyfr(kind, message.as_str())),
+        Ended::Lost | Ended::Unread => Some(refusal(Kind::HttpError, words::HTTP_FAILED)),
+        Ended::Closed => Some(refusal(Kind::HttpError, words::http_failed("relay_closed"))),
     }
 }
 
@@ -1285,12 +1273,7 @@ async fn collect(
                 body.extend_from_slice(&piece);
             }
             Taken::End(end) => {
-                let attached = sent.pin.is_none();
-                let (refused, unknown) = ended_as(&end, attached, &asked.host, &run.limits);
-                if unknown {
-                    run.host.unclean();
-                }
-                return match (refused, head) {
+                return match (ended_as(&end, &asked.host, &run.limits), head) {
                     (Some(refused), _) if refused.is(Kind::ResponseTooLarge) => {
                         Err(Collected::TooLarge(body.len() as u64))
                     }

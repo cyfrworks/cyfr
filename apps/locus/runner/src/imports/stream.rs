@@ -28,9 +28,10 @@
 //! What a stream's answer means for its attempt is recorded when it
 //! arrives, whether or not its guest reads it (`Watcher`): its
 //! `http.request` event when its head arrives (or with `error` when it
-//! ends with none), the relay's refusal reported to CYFR, and an attached
-//! answer lost or uncertain marking the runner unclean. A read answers the
-//! guest and records nothing of that again.
+//! ends with none), and the relay's refusal reported to CYFR; an attached
+//! answer lost or uncertain leaves the relay in doubt, so its runner is not
+//! reused (`crate::relay`). A read answers the guest and records nothing of
+//! that again.
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -196,8 +197,7 @@ async fn next_piece(stream: &mut Stream, limits: &Limits) -> Piece {
                 return Piece::None;
             }
             Taken::End(end) => {
-                let attached = stream.sent.pin.is_none();
-                let (refused, _unknown) = stream_end(&end, attached, &stream.host, limits);
+                let refused = stream_end(&end, &stream.host, limits);
                 return Piece::Failed(refused.expect("an end other than whole refuses"));
             }
         }
@@ -209,14 +209,8 @@ async fn next_piece(stream: &mut Stream, limits: &Limits) -> Piece {
 /// answers the idle timeout, one past its size the stream's sentence, and a
 /// failure after its request was sent `request_failed`; CYFR's own type,
 /// `http_error` for an attached answer's upstream among them, as given.
-pub fn stream_end(
-    end: &Ended,
-    attached: bool,
-    host: &str,
-    limits: &Limits,
-) -> (Option<Refusal>, bool) {
-    let (refused, unknown) = http::ended_as(end, attached, host, limits);
-    let refused = refused.map(|refused| match end {
+pub fn stream_end(end: &Ended, host: &str, limits: &Limits) -> Option<Refusal> {
+    http::ended_as(end, host, limits).map(|refused| match end {
         Ended::Code(code) if code == "timeout" => refusal(
             Kind::Timeout,
             words::stream_idle(limits.timeout_ms() / 1000),
@@ -230,19 +224,16 @@ pub fn stream_end(
             ..refused
         },
         _ => refused,
-    });
-    (refused, unknown)
+    })
 }
 
 /// What a stream's answer means for its attempt, recorded once each as it
-/// arrives: the attempt's event, report and uncertainty (the module's
-/// description). The watcher holds its attempt's host weakly: once the
+/// arrives: the attempt's event and report (the module's description). The watcher holds its attempt's host weakly: once the
 /// attempt is gone there is nothing to record for it.
 pub struct Watcher {
     evented: AtomicBool,
     settled: AtomicBool,
     fields: EventFields,
-    attached: bool,
     host: String,
     limits: Limits,
     watch: Watch,
@@ -256,7 +247,6 @@ impl Watcher {
             evented: AtomicBool::new(false),
             settled: AtomicBool::new(false),
             fields,
-            attached: sent.pin.is_none(),
             host: host.to_owned(),
             limits: run.limits.clone(),
             watch: sent.fetch.watch(),
@@ -295,12 +285,9 @@ impl Watcher {
         if self.settled.swap(true, Ordering::SeqCst) {
             return true;
         }
-        let (refused, unknown) = stream_end(&end, self.attached, &self.host, &self.limits);
+        let refused = stream_end(&end, &self.host, &self.limits);
         if !self.evented.swap(true, Ordering::SeqCst) {
             self.fields.send(host, Meta::text("error")).await;
-        }
-        if unknown {
-            host.unclean();
         }
         if let Some(refused) = refused {
             // A report whose answer is too deep ends nothing here: the
