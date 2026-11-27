@@ -42,9 +42,10 @@ const (
 	WorkDir = "work"
 	// WorkPath is where a session sees its person's work folder.
 	WorkPath = "/work"
-	// FormDirectory is a disk that is a folder of the kept volume, the one
-	// form there is until a person's machine gives the image form.
+	// FormDirectory is a disk that is a folder of the kept volume, where the
+	// machine gives no VM wall; FormImage is the other (image_linux.go).
 	FormDirectory = "directory"
+	FormImage     = "image"
 	// maxRecordBytes bounds one record: its athanor and up to MaxDiskHomes
 	// ids.
 	maxRecordBytes = 1 << 20
@@ -64,6 +65,29 @@ var keeperUID uint32
 func Person(athanor string) string {
 	sum := sha256.Sum256([]byte(athanor))
 	return hex.EncodeToString(sum[:])
+}
+
+// A disk of FormImage is one ext4 image file, <root>/<a>.img, the one
+// writable drive of its person's VM, which only the guest mounts: the host
+// never mounts it or walks inside it. Its homes are its record's, as a
+// directory's are. It is made once, after its record, where the machine
+// gives each person a VM of their own; nothing turns one form into the
+// other.
+const (
+	// ImageSuffix ends a disk image's name.
+	ImageSuffix = ".img"
+	// ImageBytes is an image's apparent size. The file is sparse: the
+	// volume holds what the guest has written.
+	ImageBytes = 64 << 30
+	// ImageMode makes an image its VMM's to read and write by its group,
+	// /dev/kvm's, which every VMM holds: each VMM's space is given its own
+	// person's image alone (package stage), so the group reaches no other.
+	ImageMode = 0o660
+)
+
+// ImagePath is the image of athanor's disk, <root>/<a>.img.
+func (k Kept) ImagePath(athanor string) string {
+	return filepath.Join(k.Root, Person(athanor)+ImageSuffix)
 }
 
 // Disk is a person's disk as its record says: whose, its form, its uid and
@@ -133,17 +157,20 @@ var ErrBadRecord = errors.New("not a disk's record")
 // LoadDisks makes the records' folder if it is absent and reads every
 // record in it, by athanor. A folder or a record that is not the keeper's
 // (owner uid 0, its mode, no link), a record that does not read, names
-// another athanor than its file, a form other than FormDirectory, a uid
+// another athanor than its file, a form other than FormDirectory or FormImage, a uid
 // outside the range or a home id twice, or two records holding one home or
 // one uid, is an error: the keeper does not start over a record it cannot
 // trust. What a write left half done (a `.<a>.json.*` temporary) is
-// removed.
+// removed, and what an image's making left (a `.<a>.img.*` beside it).
 func (k Kept) LoadDisks() (map[string]*Disk, error) {
 	dir := filepath.Join(k.Root, DisksDir)
 	if err := os.Mkdir(dir, DisksDirMode.Perm()); err != nil && !errors.Is(err, fs.ErrExist) {
 		return nil, err
 	}
 	if err := checkKeepers(dir, DisksDirMode); err != nil {
+		return nil, err
+	}
+	if err := k.removeImageTemps(); err != nil {
 		return nil, err
 	}
 	entries, err := os.ReadDir(dir)
@@ -215,7 +242,7 @@ func (k Kept) readRecord(a string) (*Disk, error) {
 	switch {
 	case Person(d.Athanor) != a:
 		return nil, fmt.Errorf("%s names another athanor: %w", path, ErrBadRecord)
-	case d.Form != FormDirectory:
+	case d.Form != FormDirectory && d.Form != FormImage:
 		return nil, fmt.Errorf("%s has form %q: %w", path, d.Form, ErrBadRecord)
 	case !k.Contains(d.UID):
 		return nil, fmt.Errorf("%s records uid %d, outside %d-%d: %w", path, d.UID, k.First, k.Last, ErrBadRecord)
@@ -281,6 +308,26 @@ func checkKeepers(path string, mode fs.FileMode) error {
 	st, ok := info.Sys().(*syscall.Stat_t)
 	if !ok || info.Mode() != mode || st.Uid != keeperUID {
 		return fmt.Errorf("%s is not uid 0's with mode %s: %w", path, mode, ErrBadRecord)
+	}
+	return nil
+}
+
+// removeImageTemps removes what a dead keeper's making left in the root:
+// every `.<a>.img.*` temporary.
+func (k Kept) removeImageTemps() error {
+	matches, err := filepath.Glob(filepath.Join(k.Root, ".*"+ImageSuffix+".*"))
+	if err != nil {
+		return err
+	}
+	for _, m := range matches {
+		name := strings.TrimPrefix(filepath.Base(m), ".")
+		a, _, ok := strings.Cut(name, ".")
+		if !ok || !personPattern.MatchString(a) {
+			continue
+		}
+		if err := os.Remove(m); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
 	}
 	return nil
 }

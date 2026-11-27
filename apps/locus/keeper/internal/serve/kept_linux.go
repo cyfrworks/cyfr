@@ -38,6 +38,14 @@ const (
 	keptRetireWait = 30 * time.Second
 )
 
+// diskForm is the form a disk made now takes.
+func (s *server) diskForm() string {
+	if s.imageDisks {
+		return home.FormImage
+	}
+	return home.FormDirectory
+}
+
 // keptLock is the lock of a disk's uid.
 func (s *server) keptLock(uid int) *sync.Mutex {
 	s.mu.Lock()
@@ -202,6 +210,9 @@ func (s *server) indexDisk(athanor string, d *home.Disk) {
 type keptAt struct {
 	athanor, disk, path, work string
 	uid                       int
+	// image says the disk is a person's VM's drive, whose homes run in that
+	// VM alone (home.FormImage).
+	image bool
 }
 
 // keptState is why a disk's uid cannot take a spawn now, with s.mu held:
@@ -258,7 +269,8 @@ func (s *server) keptHome(c *client, id string) (keptAt, string) {
 		return keptAt{}, protocol.CodeHomeAbsent
 	}
 	k := s.cfg.Kept
-	return keptAt{athanor: a, disk: k.DiskPath(a), path: k.HomePath(a, id), work: k.WorkOf(a), uid: s.disks[a].UID}, ""
+	d := s.disks[a]
+	return keptAt{athanor: a, disk: k.DiskPath(a), path: k.HomePath(a, id), work: k.WorkOf(a), uid: d.UID, image: d.Form == home.FormImage}, ""
 }
 
 // drawKept reads which uids of the range are taken (taken, home.Kept.Taken
@@ -328,6 +340,12 @@ func (s *server) startKeptSpawn(c *client, req *protocol.Request, reach string, 
 	}
 	if !known {
 		return nil, protocol.CodeUnknownPool
+	}
+	// An image is mounted by its person's VM alone: here, with no VM to
+	// run its session, it is refused by name, and nothing of it is touched.
+	if at.image {
+		s.log.Warn("spawn %s refused: kept home %s is on a disk image, which runs only in its person's VM, and this machine runs none: give the container /dev/kvm again, or reset the disk", req.ID, req.Home)
+		return nil, protocol.CodeUnavailable
 	}
 	s.mu.Lock()
 	p := c.places[req.Place]
@@ -728,6 +746,11 @@ func (s *server) handleHome(c *client, req *protocol.Request) {
 		s.send(c, protocol.NewHomeRetired(req.ID))
 	case code != "":
 		s.send(c, protocol.NewError(req.ID, "", code))
+	case at.image:
+		// An image's homes are inside it, which the host never walks: only
+		// its person's VM measures, resets or retires one.
+		s.log.Warn("%s %s refused: kept home %s is on a disk image, which only its person's VM reaches, and this machine runs none", req.Type, req.ID, req.Home)
+		s.send(c, protocol.NewError(req.ID, "", protocol.CodeUnavailable))
 	case req.Type == protocol.TypeHomeMeasure:
 		uidLock := s.keptLock(at.uid)
 		uidLock.Lock()
@@ -803,7 +826,7 @@ func (s *server) makeHome(c *client, req *protocol.Request) {
 			return
 		}
 		defer s.unmakeKept(uid)
-		d = home.Disk{Athanor: req.Athanor, Form: home.FormDirectory, UID: uid, Homes: []string{}}
+		d = home.Disk{Athanor: req.Athanor, Form: s.diskForm(), UID: uid, Homes: []string{}}
 	}
 	if recorded && !d.Holds(req.Home) && len(d.Homes) >= home.MaxDiskHomes {
 		unlockDisk()
@@ -818,6 +841,20 @@ func (s *server) makeHome(c *client, req *protocol.Request) {
 			s.send(c, protocol.NewError(req.ID, "", protocol.CodeInternal))
 			return
 		}
+	}
+	// An image's homes are made inside it, by its person's VM's keeper at
+	// their first session: the host makes the image, after its record, and
+	// again where a keeper that died between the two left none.
+	if d.Form == home.FormImage {
+		err := s.cfg.Kept.EnsureImage(req.Athanor, os.Getuid(), s.machineGID)
+		unlockDisk()
+		if err != nil {
+			s.log.Error("home_make %s: %v", req.ID, err)
+			s.send(c, protocol.NewError(req.ID, "", protocol.CodeInternal))
+			return
+		}
+		s.send(c, protocol.NewHomeMade(req.ID, d.UID))
+		return
 	}
 	unlockDisk()
 	lock := s.keptLock(d.UID)

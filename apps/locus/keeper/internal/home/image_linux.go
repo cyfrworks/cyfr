@@ -1,0 +1,135 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 CYFR Works Inc.
+
+package home
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"io/fs"
+	"os"
+	"os/exec"
+	"strings"
+	"syscall"
+	"time"
+
+	"golang.org/x/sys/unix"
+)
+
+// Mke2fs makes an image's filesystem; MakeImageWait bounds it. Variables
+// so a test points them elsewhere.
+var (
+	Mke2fs        = "/usr/sbin/mke2fs"
+	MakeImageWait = 2 * time.Minute
+)
+
+// EnsureImage makes the image of athanor's disk unless it stands: a
+// temporary beside it, uid's and of group gid (the keeper's own uid and
+// the VMMs' group), ImageMode, ImageBytes long, made an ext4 filesystem by
+// mke2fs within MakeImageWait, synced and then renamed into place. A failure leaves no temporary, and a temporary
+// a dead keeper left is removed at the next LoadDisks. The disk's lock is
+// held, so no two makings of one image run at once.
+func (k Kept) EnsureImage(athanor string, uid, gid int) error {
+	path := k.ImagePath(athanor)
+	if st, err := os.Lstat(path); err == nil {
+		if !st.Mode().IsRegular() {
+			return fmt.Errorf("%s is not a regular file", path)
+		}
+		return nil
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	var tmp string
+	err := AsFileIDs(uid, gid, func() error {
+		f, err := os.CreateTemp(k.Root, "."+Person(athanor)+ImageSuffix+".*")
+		if err != nil {
+			return err
+		}
+		tmp = f.Name()
+		if err := f.Chmod(ImageMode); err != nil {
+			_ = f.Close()
+			return err
+		}
+		if err := f.Truncate(ImageBytes); err != nil {
+			_ = f.Close()
+			return err
+		}
+		return f.Close()
+	})
+	if err == nil {
+		err = makeFilesystem(tmp)
+	}
+	if err == nil {
+		err = syncFile(tmp)
+	}
+	if err == nil {
+		err = os.Rename(tmp, path)
+	}
+	if err == nil {
+		err = syncDir(k.Root)
+	}
+	if err != nil {
+		if tmp != "" {
+			_ = os.Remove(tmp)
+		}
+		return fmt.Errorf("making the disk image %s: %w", path, err)
+	}
+	return nil
+}
+
+// makeFilesystem runs mke2fs on the file at path, in a process group of its
+// own killed whole past MakeImageWait: ext4, no blocks reserved, its inode
+// tables and journal left to the guest's first mount to initialize, and the
+// file not discarded, so it stays sparse.
+func makeFilesystem(path string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), MakeImageWait)
+	defer cancel()
+	cmd := exec.Command(Mke2fs, "-q", "-F", "-t", "ext4", "-m", "0",
+		"-E", "lazy_itable_init=1,lazy_journal_init=1,nodiscard", path)
+	cmd.Env = []string{}
+	var out bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &out
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true, Pdeathsig: syscall.SIGKILL}
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case err := <-done:
+		if err != nil {
+			return fmt.Errorf("mke2fs: %w: %s", err, strings.TrimSpace(out.String()))
+		}
+		return nil
+	case <-ctx.Done():
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		<-done
+		return fmt.Errorf("mke2fs did not finish within %s", MakeImageWait)
+	}
+}
+
+func syncFile(path string) error {
+	f, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		return err
+	}
+	err = f.Sync()
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	return err
+}
+
+func syncDir(dir string) error {
+	f, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	err = unix.Fsync(int(f.Fd()))
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	return err
+}

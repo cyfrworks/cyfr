@@ -31,9 +31,14 @@ const RouteGo = 'g'
 // address on the link.
 const addrGenModeNone = 1
 
+// spaceNames is where a space's name sockets are bound: its own 127.0.0.11.
+var spaceNames = [4]byte{127, 0, 0, 11}
+
 // nameSockets brings the namespace's loopback up and binds a UDP and a
-// listening TCP socket at 127.0.0.11:53.
-func nameSockets() (udp, tcp int, err error) {
+// listening TCP socket at names:53: a space's at its own 127.0.0.11, a
+// person's machine's at pool.MachineNames, which no link of the space
+// holds until the guard's bridge does, so bound free of it.
+func nameSockets(names [4]byte) (udp, tcp int, err error) {
 	ctl, err := unix.Socket(unix.AF_INET, unix.SOCK_DGRAM|unix.SOCK_CLOEXEC, 0)
 	if err != nil {
 		return -1, -1, err
@@ -50,8 +55,17 @@ func nameSockets() (udp, tcp int, err error) {
 	if err := unix.IoctlIfreq(ctl, unix.SIOCSIFFLAGS, ifr); err != nil {
 		return -1, -1, fmt.Errorf("bringing the loopback up: %w", err)
 	}
-	at := &unix.SockaddrInet4{Port: 53, Addr: [4]byte{127, 0, 0, 11}}
+	at := &unix.SockaddrInet4{Port: 53, Addr: names}
+	free := func(fd int) error {
+		if names == spaceNames {
+			return nil
+		}
+		return unix.SetsockoptInt(fd, unix.IPPROTO_IP, unix.IP_FREEBIND, 1)
+	}
 	udp, err = unix.Socket(unix.AF_INET, unix.SOCK_DGRAM|unix.SOCK_CLOEXEC, 0)
+	if err == nil {
+		err = free(udp)
+	}
 	if err == nil {
 		err = unix.Bind(udp, at)
 	}
@@ -62,6 +76,9 @@ func nameSockets() (udp, tcp int, err error) {
 		return -1, -1, fmt.Errorf("the UDP name socket: %w", err)
 	}
 	tcp, err = unix.Socket(unix.AF_INET, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, 0)
+	if err == nil {
+		err = free(tcp)
+	}
 	if err == nil {
 		err = unix.Bind(tcp, at)
 	}
@@ -82,7 +99,7 @@ func nameSockets() (udp, tcp int, err error) {
 // network namespace, to the keeper over fd, closing its own copies, then
 // waits for the keeper's RouteGo; anything else, or the socket's end,
 // refuses the spawn.
-func handRouteUp(fd int) error {
+func handRouteUp(fd int, names [4]byte) error {
 	if err := checkSocket(fd); err != nil {
 		return err
 	}
@@ -90,7 +107,7 @@ func handRouteUp(fd int) error {
 	if err != nil {
 		return fmt.Errorf("the space's network namespace: %w", err)
 	}
-	udp, tcp, err := nameSockets()
+	udp, tcp, err := nameSockets(names)
 	if err != nil {
 		_ = unix.Close(netns)
 		return err

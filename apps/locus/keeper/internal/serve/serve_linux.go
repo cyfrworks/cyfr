@@ -868,6 +868,11 @@ type server struct {
 	// packs is every person's packs (package packview) under the kept
 	// homes' root; nil for a keeper that keeps no homes.
 	packs *packview.Store
+	// imageDisks says a disk made now takes the image form, a person's VM's
+	// drive (home.FormImage), and machineGID is /dev/kvm's group, every
+	// VMM's, which an image is made of.
+	imageDisks bool
+	machineGID int
 
 	// boot is this start's id, 16 random bytes in hex, minted at the start
 	// and of nothing else: every report carries it, its counters' revs

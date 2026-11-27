@@ -321,14 +321,46 @@ func TestMachineSpecValidation(t *testing.T) {
 		"a relative device":        func(s *Spec) { s.Machine = "guest/a.sqfs" },
 		"an unclean device":        func(s *Spec) { s.Machine = "/var/lib/locus/guest/../kept/a.sqfs" },
 		"a device of another kind": func(s *Spec) { s.Machine = "/var/lib/locus/kept/a" },
-		"a routed space":           func(s *Spec) { s.Reach = pool.ReachRouted },
 		"a control channel":        func(s *Spec) { s.Control = true },
 		"a terminal":               func(s *Spec) { s.Terminal = true },
 		"a kept home":              func(s *Spec) { s.Kept = true },
 		"root's group":             func(s *Spec) { s.GID = 0 },
 		"another uid's folder":     func(s *Spec) { s.UID, s.Cgroup = 30202, "/keeper-30202" },
+		"a disk with no route": func(s *Spec) {
+			s.Disk, s.KeptRoot = "/var/lib/locus/kept/"+strings.Repeat("b", 64)+".img", "/var/lib/locus/kept"
+		},
 	} {
 		s := machine
+		mutate(&s)
+		if err := s.Validate(); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+
+	// A person's machine is routed, and given their disk image directly
+	// under the kept root.
+	person := machine
+	person.Reach, person.KeptRoot = pool.ReachRouted, "/var/lib/locus/kept"
+	person.Disk = "/var/lib/locus/kept/" + strings.Repeat("b", 64) + ".img"
+	if err := person.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	routedNoDisk := person
+	routedNoDisk.Disk = ""
+	if err := routedNoDisk.Validate(); err != nil {
+		t.Fatalf("a routed machine with no disk: %v", err)
+	}
+	for name, mutate := range map[string]func(*Spec){
+		"no machine":             func(s *Spec) { s.Machine = "" },
+		"no kept root":           func(s *Spec) { s.KeptRoot = "" },
+		"a disk below the root":  func(s *Spec) { s.Disk = "/var/lib/locus/kept/x/" + strings.Repeat("b", 64) + ".img" },
+		"a disk of another root": func(s *Spec) { s.Disk = "/var/lib/locus/guest/" + strings.Repeat("b", 64) + ".img" },
+		"a disk not an image":    func(s *Spec) { s.Disk = "/var/lib/locus/kept/" + strings.Repeat("b", 64) },
+		"a disk of no person":    func(s *Spec) { s.Disk = "/var/lib/locus/kept/vlt_a.img" },
+		"an unclean disk":        func(s *Spec) { s.Disk = "/var/lib/locus/kept/../kept/" + strings.Repeat("b", 64) + ".img" },
+		"a kept home":            func(s *Spec) { s.Kept = true },
+	} {
+		s := person
 		mutate(&s)
 		if err := s.Validate(); err == nil {
 			t.Errorf("%s: accepted", name)

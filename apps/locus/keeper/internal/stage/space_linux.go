@@ -83,6 +83,13 @@ var keptOut = map[string]bool{"proc": true, "sys": true, "dev": true, "tmp": tru
 // devices are the nodes bound from the container's /dev into a space's.
 var devices = []string{"null", "zero", "full", "random", "urandom", "tty"}
 
+// tunDevice is the node a person's machine's space, a routed one, is given
+// beside machineDevice, which its VMM attaches to its tap through: the
+// container holds it at /dev/tun (docker-compose.yml), so its bind is one
+// of /dev's nodes the profile allows (apps/codex/internal/apparmor), and
+// the space links /dev/net/tun, where the VMM opens it, to it.
+const tunDevice = "tun"
+
 // machineDevice is the node a machine's space is given beside devices,
 // for its VMM alone (Spec.Machine).
 const machineDevice = "kvm"
@@ -477,7 +484,7 @@ func buildFiles(spec Spec) error {
 			}
 			return nil
 		},
-		func() error { return buildDev(machine != "") },
+		func() error { return buildDev(machine != "", machine != "" && spec.Reach == pool.ReachRouted) },
 		func() error {
 			if own == "" {
 				return nil
@@ -500,7 +507,13 @@ func buildFiles(spec Spec) error {
 			if machine == "" {
 				return nil
 			}
-			return bindFile(machine)
+			return bindFile(machine, false)
+		},
+		func() error {
+			if spec.Disk == "" {
+				return nil
+			}
+			return bindFile(spec.Disk, true)
 		},
 		func() error {
 			if !covered {
@@ -565,9 +578,9 @@ func bindContainerRoot() error {
 	return nil
 }
 
-// bindFile binds the file source at the same path under Root, read only,
-// without setuid or devices.
-func bindFile(source string) error {
+// bindFile binds the file source at the same path under Root, read only
+// unless writable, without setuid or devices.
+func bindFile(source string, writable bool) error {
 	target := filepath.Join(Root, source)
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 		return err
@@ -580,17 +593,24 @@ func bindFile(source string) error {
 	if err := mount(source, target, "", unix.MS_BIND|unix.MS_REC, ""); err != nil {
 		return err
 	}
-	return setAttr(target, unix.MOUNT_ATTR_RDONLY|unix.MOUNT_ATTR_NOSUID|unix.MOUNT_ATTR_NODEV, false)
+	set := uint64(unix.MOUNT_ATTR_NOSUID | unix.MOUNT_ATTR_NODEV)
+	if !writable {
+		set |= unix.MOUNT_ATTR_RDONLY
+	}
+	return setAttr(target, set, false)
 }
 
 // buildDev fills the space's /dev: the container's null, zero, full,
-// random, urandom and tty nodes, and a machine's kvm, a terminal instance
-// of its own with its ptmx, its own /dev/shm, and the usual links into
-// /proc.
-func buildDev(machine bool) error {
+// random, urandom and tty nodes, a machine's kvm and a person's machine's
+// net/tun, a terminal instance of its own with its ptmx, its own /dev/shm,
+// and the usual links into /proc.
+func buildDev(machine, tun bool) error {
 	nodes := devices
 	if machine {
 		nodes = append(append([]string{}, devices...), machineDevice)
+	}
+	if tun {
+		nodes = append(nodes, tunDevice)
 	}
 	for _, node := range nodes {
 		target := Root + "/dev/" + node
@@ -605,6 +625,14 @@ func buildDev(machine bool) error {
 	}
 	for _, dir := range []string{"pts", "shm"} {
 		if err := os.Mkdir(Root+"/dev/"+dir, 0o755); err != nil {
+			return err
+		}
+	}
+	if tun {
+		if err := os.Mkdir(Root+"/dev/net", 0o755); err != nil {
+			return err
+		}
+		if err := os.Symlink("../"+tunDevice, Root+"/dev/net/tun"); err != nil {
 			return err
 		}
 	}
