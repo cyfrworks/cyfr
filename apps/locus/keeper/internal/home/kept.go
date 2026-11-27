@@ -111,10 +111,20 @@ func (k Kept) Taken(procRoot string) (map[int]bool, error) {
 	return taken, nil
 }
 
-// CheckKeptRoot verifies that root is a directory owned by uid 0 with
-// KeptRootMode whose group no process the keeper starts holds (held): the
-// group's bits give it a list of every kept home.
+// CheckKeptRoot verifies that root is its own path, through no symbolic
+// link, and a directory owned by uid 0 with KeptRootMode whose group no
+// process the keeper starts holds (held): the group's bits give it a list
+// of every disk.
 func CheckKeptRoot(root string, held func(gid int) bool) error {
+	// A root through a symbolic link would be covered in a space at its
+	// link's path, not the folder the link leads to (package stage).
+	resolved, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return err
+	}
+	if resolved != root {
+		return fmt.Errorf("kept-homes root %s resolves to %s: give the folder's own path, through no symbolic link", root, resolved)
+	}
 	info, err := os.Lstat(root)
 	if err != nil {
 		return err

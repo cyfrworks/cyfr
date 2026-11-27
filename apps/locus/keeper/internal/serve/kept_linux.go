@@ -265,10 +265,11 @@ func (s *server) keptHome(c *client, id string) (keptAt, string) {
 // in production) and holds the lowest that the reading does not hold, no
 // disk's record holds and the keeper holds for nothing (no make holds it,
 // no record that failed to read back withholds it, and it is not retiring,
-// quarantined or live) as making until unmakeKept; with none left it answers false. The reading and the draw are
-// one step under keptDraw, which unmakeKept takes too: a make that ends,
-// its disk now recorded, cannot free that uid between another draw's
-// reading and that draw, so two disks never get one uid.
+// quarantined or live) as making until unmakeKept; with none left it
+// answers false. The reading and the draw are one step under keptDraw,
+// which unmakeKept takes too: a make that ends, its disk now recorded,
+// cannot free that uid between another draw's reading and that draw, so
+// two disks never get one uid.
 func (s *server) drawKept(taken func() (map[int]bool, error)) (int, bool, error) {
 	s.keptDraw.Lock()
 	defer s.keptDraw.Unlock()
@@ -866,9 +867,18 @@ func (s *server) retireHome(c *client, req *protocol.Request, at keptAt) {
 	}
 	defer s.lockDisk(at.athanor)()
 	s.mu.Lock()
-	d := *s.disks[at.athanor]
+	recorded := s.disks[at.athanor]
 	s.mu.Unlock()
-	if err := s.putDisk(d.Without(req.Home)); err != nil {
+	// The disk's record may have gone from the index meanwhile, removed by
+	// hand while a write for that disk failed (putDisk): then no record
+	// holds the home, as for a home no disk holds, and nothing is left to
+	// change.
+	if recorded == nil {
+		s.log.Warn("home_retire %s: kept home %s's disk has no record any more; its folder is removed", req.ID, req.Home)
+		s.send(c, protocol.NewHomeRetired(req.ID))
+		return
+	}
+	if err := s.putDisk(recorded.Without(req.Home)); err != nil {
 		s.log.Error("home_retire %s: removing kept home %s from its disk's record: %v", req.ID, req.Home, err)
 		s.send(c, protocol.NewError(req.ID, "", protocol.CodeInternal))
 		return

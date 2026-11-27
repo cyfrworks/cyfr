@@ -526,6 +526,61 @@ func TestARecordInPlaceAfterAFailedWriteKeepsItsUID(t *testing.T) {
 	}
 }
 
+// A retirement in flight whose disk's record is gone from the index
+// meanwhile, removed by hand while a write for that disk failed, answers
+// the home retired, as a home no disk holds, and never fails.
+func TestARetirementWhoseDiskLostItsRecordAnswersRetired(t *testing.T) {
+	k := keptKeeper(t)
+	uid := testKeptFirst
+	k.share("ath_lost", "vlt_old", "vlt_new")
+	old := k.keptPath("vlt_old")
+	if made := k.homeRequest(t, protocol.TypeHomeMake, "m1", old, uid); made["type"] != protocol.TypeHomeMade {
+		t.Fatalf("home_make: %v", made)
+	}
+	// Its session ignores TERM, so the retirement waits out its grace.
+	s, rc := k.spawnKept(t, "s", `trap "" TERM; echo ready; while :; do sleep 1; done`, old, uid)
+	rc.readUntil(t, func() bool { return strings.Contains(string(rc.got[frame.StreamStdout]), "ready\n") })
+	go func() {
+		k.s.handle(k.c, &protocol.Request{V: protocol.Version, Type: protocol.TypeHomeRetire, ID: "r", Home: "vlt_old"})
+	}()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		k.s.mu.Lock()
+		ending := k.s.keptEnding[uid]
+		k.s.mu.Unlock()
+		if ending > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the retirement never began to end its session")
+		}
+		time.Sleep(10 * time.Millisecond) // sleep-ok: a bounded poll of the keeper's own state
+	}
+	record := filepath.Join(k.s.cfg.Kept.Root, home.DisksDir, home.Person("ath_lost")+".json")
+	k.s.writeDisk = func(home.Disk) error {
+		if err := os.Remove(record); err != nil {
+			return err
+		}
+		return errors.New("the records' folder did not take the write")
+	}
+	k.s.handle(k.c, &protocol.Request{V: protocol.Version, Type: protocol.TypeHomeMake, ID: "m2", Home: "vlt_new", Athanor: "ath_lost"})
+	answers := map[string]map[string]any{}
+	for len(answers) < 2 {
+		m := k.reply(t)
+		if id, _ := m["id"].(string); id == "r" || id == "m2" {
+			answers[id] = m
+		} else if m["spawn_id"] != s {
+			t.Fatalf("waiting for the retirement and the make: %v", m)
+		}
+	}
+	if answers["m2"]["code"] != protocol.CodeInternal || answers["r"]["type"] != protocol.TypeHomeRetired {
+		t.Fatalf("the failed make and the retirement answered %v", answers)
+	}
+	if _, err := os.Lstat(old); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("the retired home: %v", err)
+	}
+}
+
 // A keeper killed between a make's record and its folder leaves a home its
 // record lists and no folder: the next keeper lists it, and its next make
 // makes the folder under the recorded uid. One killed between a

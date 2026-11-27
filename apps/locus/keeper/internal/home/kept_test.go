@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -64,5 +65,34 @@ func TestAKeptUIDIsTakenByAFolderOrAProcess(t *testing.T) {
 	}
 	if _, err := (Kept{Root: filepath.Join(k.Root, "absent"), First: k.First, Last: k.Last}).Taken(proc); err == nil {
 		t.Fatal("a root that cannot be read took nothing")
+	}
+}
+
+// A kept root whose path crosses a symbolic link is refused, naming the path
+// and the folder it resolves to: a space's cover would land at the link's
+// path, not the folder's. The folder itself, by its own path, is taken.
+func TestAKeptRootThroughALinkIsRefused(t *testing.T) {
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	real := filepath.Join(base, "data", "kept")
+	if err := os.MkdirAll(real, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(real, KeptRootMode.Perm()|os.ModeSticky); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(base, "data"), filepath.Join(base, "opt")); err != nil {
+		t.Fatal(err)
+	}
+	linked := filepath.Join(base, "opt", "kept")
+	none := func(int) bool { return false }
+	err = CheckKeptRoot(linked, none)
+	if err == nil || !strings.Contains(err.Error(), linked+" resolves to "+real) {
+		t.Fatalf("a kept root through a link: %v", err)
+	}
+	if err := CheckKeptRoot(real, none); os.Getuid() == 0 && err != nil {
+		t.Fatalf("the root by its own path: %v", err)
 	}
 }
