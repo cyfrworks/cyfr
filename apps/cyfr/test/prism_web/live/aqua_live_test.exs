@@ -271,6 +271,9 @@ defmodule PrismWeb.AquaLiveTest do
 
   defp program_need(_name), do: "runs in its own folder, signed in to your own plan"
 
+  defp install_step("opencode", _title), do: "OpenCode: install its program."
+  defp install_step(_name, title), do: "#{title}: install its program, then sign it in."
+
   defp installed_step("opencode", _title),
     do: "OpenCode: ready on its free models. Sign in only to use a provider of yours."
 
@@ -2714,7 +2717,10 @@ defmodule PrismWeb.AquaLiveTest do
 
         view |> element(brain <> " input") |> render_click()
         step = "#aqua-setup-step-program-" <> name
-        assert has_element?(view, step, "#{title}: install its program, then sign it in.")
+
+        assert Enum.map(texts(view, step), &String.replace(&1, ~r/\s+/, " ")) == [
+                 install_step(name, title) <> " install #{name}"
+               ]
 
         assert has_element?(
                  view,

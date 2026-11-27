@@ -1125,7 +1125,7 @@ defmodule PrismWeb.AquaLive do
             </li>
             <li :for={program <- @program_steps} id={"aqua-setup-step-program-" <> program.name}>
               <%= if program.state == :program_missing do %>
-                {program.title}: install its program, then sign it in.
+                {install_line(program)}
                 <.link
                   navigate={install_path(@athanor, program)}
                   data-test="install-program"
@@ -1312,6 +1312,9 @@ defmodule PrismWeb.AquaLive do
         "sign in only to use a provider of yours"
 
   defp program_need_line(_program), do: "runs in its own folder, signed in to your own plan"
+
+  defp install_line(%{sign_in: :optional, title: title}), do: "#{title}: install its program."
+  defp install_line(%{title: title}), do: "#{title}: install its program, then sign it in."
 
   # A program that answers unsigned is no step to take while nothing says
   # it is signed out: its sign-in is offered, not asked.
