@@ -13,26 +13,33 @@ defmodule Prima.Test.PaddedComponent do
 
   # Section id 0 is a custom section; its content is a name, then bytes.
   @custom 0
-  @name "pad"
+  @name <<3, "pad">>
 
-  @doc "`component` padded to `size` bytes, at least 8 more than it has."
+  # The section's length is written in the five bytes a u32's LEB128 may
+  # take, whatever its value, so every size has one padding: the id, the
+  # length and the name are 10 bytes.
+  @least 1 + 5 + byte_size(@name)
+
+  @doc "`component` padded to `size` bytes, at least #{@least} more than it has."
   @spec pad(binary(), pos_integer()) :: binary()
-  def pad(component, size) when is_binary(component) and size >= byte_size(component) + 8 do
+  def pad(component, size) when is_binary(component) and is_integer(size) do
     extra = size - byte_size(component)
-    name = leb(byte_size(@name)) <> @name
 
-    content =
-      Enum.find_value(1..5, fn width ->
-        content = extra - 1 - width
-        if byte_size(leb(content)) == width, do: content
-      end)
+    if extra < @least,
+      do:
+        raise(
+          ArgumentError,
+          "a component of #{byte_size(component)} bytes pads to #{byte_size(component) + @least} " <>
+            "bytes or more, not #{size}"
+        )
 
-    padding = :binary.copy(<<0>>, content - byte_size(name))
-    padded = component <> <<@custom>> <> leb(content) <> name <> padding
-    ^size = byte_size(padded)
-    padded
+    content = extra - 1 - 5
+    padding = :binary.copy(<<0>>, content - byte_size(@name))
+    component <> <<@custom>> <> leb5(content) <> @name <> padding
   end
 
-  defp leb(value) when value < 0x80, do: <<value>>
-  defp leb(value), do: <<0x80 ||| (value &&& 0x7F)>> <> leb(value >>> 7)
+  defp leb5(value) when value < 1 <<< 32 do
+    <<0x80 ||| (value &&& 0x7F), 0x80 ||| (value >>> 7 &&& 0x7F),
+      0x80 ||| (value >>> 14 &&& 0x7F), 0x80 ||| (value >>> 21 &&& 0x7F), value >>> 28>>
+  end
 end

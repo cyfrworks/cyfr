@@ -42,6 +42,23 @@ defmodule Prima.WasmTest do
                              <<0x07, 0x07, 0x01, 0x03, "run", 0x00, 0x00>> <>
                              <<0x0A, 0x04, 0x01, 0x02, 0x00, 0x0B>>
 
+  describe "a padded component" do
+    test "is valid at exactly every size, across the widths its length's encoding takes" do
+      seed = File.read!(@seed_catalyst)
+
+      for extra <- [10, 11, 129, 130, 131, 132, 16_386, 16_387, 16_388] do
+        padded = Prima.Test.PaddedComponent.pad(seed, byte_size(seed) + extra)
+        assert byte_size(padded) == byte_size(seed) + extra
+        assert {:ok, %{exports: exports}} = Wasm.validate(padded), "#{extra} bytes more"
+        assert {:ok, %{exports: ^exports}} = Wasm.validate(seed)
+      end
+
+      assert_raise ArgumentError, ~r/pads to #{byte_size(seed) + 10} bytes or more/, fn ->
+        Prima.Test.PaddedComponent.pad(seed, byte_size(seed) + 9)
+      end
+    end
+  end
+
   describe "validate/1" do
     test "admits a component as large as a runner can fetch, and refuses one byte more" do
       max = Prima.HostAPI.max_artifact_bytes()
