@@ -48,9 +48,10 @@ defmodule Aqua.Prompt do
 
   The instructions are what stays the same from turn to turn until
   someone changes it: the soul's prompt or a crew member's opening, CYFR's
-  part, granted capabilities, tool prelude, scroll index, athanor notes,
-  the crew index and where the turn is. The turn's facts move by
-  themselves: the open requests, whose ages move, then the time. The whole
+  part, granted capabilities, tool prelude, scroll index, the athanor's
+  rules file, athanor notes, the crew index and where the turn is. The
+  turn's facts move by themselves: the open requests, whose ages move,
+  then the time. The whole
   prompt is the two in that order, which keeps its prefix reusable. A
   program is handed the instructions alone at its start, and the facts
   with the first post of its process (`Aqua.Harness.Program`): a program handed
@@ -132,6 +133,7 @@ defmodule Aqua.Prompt do
         file_paths(authority),
         Aqua.Prelude.system_prelude(),
         if(loader?, do: [], else: scrolls(ctx)),
+        rules(ctx),
         notes(ctx),
         crew(Keyword.get(opts, :crew, [])),
         where(where)
@@ -498,6 +500,67 @@ defmodule Aqua.Prompt do
   # The notes actions are interactive: only a session's chain reaches
   # them. A turn started any other way is not told to read what it cannot.
   @read_rule " Read a filed note with `notes.read` before answering from your memory of it."
+
+  # The athanor's rules file (`Compendium.aqua_rules_file/0`), which the
+  # person keeps in Files, carried whole up to its bound in every brain's
+  # instructions: a missing or empty file adds nothing. The bound counts
+  # code points, never graphemes, which can be any size: the section is at
+  # most 80,000 bytes of rules, so a program's start stays on the wire. A
+  # cut may split a combining sequence at its own edge.
+  @rules_bound 20_000
+
+  defp rules(ctx) do
+    case Arca.get(Context.actor(ctx), Compendium.aqua_rules_file()) do
+      {:ok, bytes} ->
+        rules_section(bytes)
+
+      {:error, :not_found} ->
+        []
+
+      {:error, reason} ->
+        Logger.warning("[Aqua.Prompt] the rules file could not be read: #{inspect(reason)}")
+        []
+    end
+  end
+
+  defp rules_section(bytes) do
+    cond do
+      not String.valid?(bytes) or String.contains?(bytes, <<0>>) ->
+        ["\n\n---\n\n## Rules\n\nThe athanor's rules file could not be read as text."]
+
+      String.trim(bytes) == "" ->
+        []
+
+      true ->
+        text = String.trim_trailing(bytes)
+
+        cut =
+          case prefix_bytes(text, @rules_bound, 0) do
+            size when size == byte_size(text) ->
+              text
+
+            size ->
+              [
+                binary_part(text, 0, size),
+                "\n\n(The rules file goes on past 20,000 characters; the rest is not read.)"
+              ]
+          end
+
+        [
+          "\n\n---\n\n## Rules\n\n",
+          "The athanor's rules, as the person keeps them in `aqua/rules.md`:\n\n",
+          cut
+        ]
+    end
+  end
+
+  # The bytes of `text`'s first `left` code points (the whole of a shorter
+  # text), read one code point at a time and never past the bound.
+  defp prefix_bytes(_rest, 0, size), do: size
+  defp prefix_bytes(<<>>, _left, size), do: size
+
+  defp prefix_bytes(<<point::utf8, rest::binary>>, left, size),
+    do: prefix_bytes(rest, left - 1, size + byte_size(<<point::utf8>>))
 
   defp notes(ctx) do
     interactive? = ctx.auth_method == :oidc

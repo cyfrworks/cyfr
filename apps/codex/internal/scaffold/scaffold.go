@@ -293,21 +293,26 @@ func replaceFile(root *os.Root, name string, data []byte, mode os.FileMode) erro
 }
 
 // The Aqua files the scaffold ships and owns, so `cyfr update` refreshes
-// them with each release: the soul at aqua/aqua.md, and every file of
-// CYFR's own pack of scrolls, aqua/scrolls/cyfr/. Every other pack under
+// them with each release: the soul at aqua/aqua.md, the rules default at
+// aqua/rules.md, and every file of CYFR's own pack of scrolls,
+// aqua/scrolls/cyfr/. They are the install's defaults: an athanor copies
+// them once, and an edited copy is its own. Every other pack under
 // aqua/scrolls/ is a member's own, brought in or made, and is preserved on
 // update; so is every crew member, aqua/crew/<name>.md, since none ships.
 // TestBundledPromptsMatchSeed binds the set to the seed tree the tarball
 // is packed from.
 const aquaSoul = "aqua/aqua.md"
 
+// aquaRules is the rules file a new athanor is given, beside the soul.
+const aquaRules = "aqua/rules.md"
+
 // cyfrPack is CYFR's own pack of scrolls, which ships whole.
 const cyfrPack = "aqua/scrolls/cyfr"
 
 // isManagedAqua reports whether path is one of the Aqua files the scaffold
-// ships: the soul, or a file inside CYFR's own pack.
+// ships: the soul, the rules default, or a file inside CYFR's own pack.
 func isManagedAqua(path string) bool {
-	return path == aquaSoul || strings.HasPrefix(path, cyfrPack+"/")
+	return path == aquaSoul || path == aquaRules || strings.HasPrefix(path, cyfrPack+"/")
 }
 
 // HoldsManaged reports whether dir is a directory above managed files
