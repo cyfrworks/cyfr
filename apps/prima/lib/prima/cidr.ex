@@ -28,7 +28,7 @@ defmodule Prima.Cidr do
   # an IPv4 address that falls in one, and a private address likewise with
   # the private rows. The island egress guards hold the same table:
   # `address_table/0` expands it, and `mix cyfr.gen.guard_table` writes it
-  # into apps/locus/keeper/guard/cyfr-guard.sh.
+  # into apps/locus/keeper/guard/table_gen.go.
   @metadata_rows [
     # link-local, where the clouds' IPv4 metadata services sit
     "169.254.0.0/16",

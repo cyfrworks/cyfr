@@ -114,10 +114,9 @@ const (
 	// GuestAgent is the guest agent's path in the image's programs, which
 	// the kernel runs as the guest's first process.
 	GuestAgent = "/usr/local/bin/cyfr-guest"
-	// GuestKeeper and GuestGuard are the keeper's and the guard's paths in
-	// the image's programs.
+	// GuestKeeper is the keeper's path in the image's programs, which
+	// runs the guest's guard as well (`cyfr-locus guard-control`).
 	GuestKeeper = "/usr/local/bin/cyfr-locus"
-	GuestGuard  = "/usr/local/bin/cyfr-guard"
 )
 
 // The guest's files in the Locus image.

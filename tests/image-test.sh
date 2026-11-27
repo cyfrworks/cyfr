@@ -42,11 +42,11 @@ repo="$S/repo"
 
 begin "the plan's two vectors hash to the plan's digests, from their bytes"
 vector() {
-  printf '.dockerignore\n100644 1111111111111111111111111111111111111111\nDockerfile.locus\n100644 2222222222222222222222222222222222222222\napps/locus/keeper/guard/cyfr-guard.sh\n100755 3333333333333333333333333333333333333333\nlinux/amd64\nAPT_REFRESH=%s\n' "$1"
+  printf '.dockerignore\n100644 1111111111111111111111111111111111111111\nDockerfile.locus\n100644 2222222222222222222222222222222222222222\napps/locus/health.sh\n100755 3333333333333333333333333333333333333333\nlinux/amd64\nAPT_REFRESH=%s\n' "$1"
 }
-[ "$(vector 2026-10-28 | wc -c)" = 248 ] || fail "vector 1 is $(vector 2026-10-28 | wc -c) bytes, not 248"
-[ "$(vector 2026-10-28 | sha256)" = 6e204da700dfea8b5cfda80664f9f59d1a9e3461ef4a883dd9042ff623b28908 ] || fail 'vector 1 hashes otherwise'
-[ "$(vector 0 | sha256)" = 71d9e76b2af4cf0ce0737f36892937c99ebd4c48794a6b5cf5e435ad57d220ba ] || fail 'vector 2 hashes otherwise'
+[ "$(vector 2026-10-28 | wc -c)" = 231 ] || fail "vector 1 is $(vector 2026-10-28 | wc -c) bytes, not 231"
+[ "$(vector 2026-10-28 | sha256)" = f94de9ffb28cb07f29608bc56d5f67acc17acc6e38d82fe1fb810328aa6eebe2 ] || fail 'vector 1 hashes otherwise'
+[ "$(vector 0 | sha256)" = eec6e6f71db1e975f7d3ac41c5dea3492c654cc16987a3cfe787bf969c409717 ] || fail 'vector 2 hashes otherwise'
 
 begin "a tree shaped like the vectors gets the tag their layout gives, dated and undated"
 vec="$S/vec"
@@ -55,9 +55,9 @@ mkdir -p "$vec/scripts"
 cp "$ROOT/scripts/image.sh" "$vec/scripts/"
 put "$vec/.dockerignore" '**/_build/'
 put "$vec/Dockerfile.locus" 'FROM scratch
-COPY --chmod=0755 apps/locus/keeper/guard/cyfr-guard.sh /usr/local/bin/cyfr-guard'
-put "$vec/apps/locus/keeper/guard/cyfr-guard.sh" '#!/bin/sh'
-chmod 755 "$vec/apps/locus/keeper/guard/cyfr-guard.sh"
+COPY --chmod=0755 apps/locus/health.sh /usr/local/bin/locus-health'
+put "$vec/apps/locus/health.sh" '#!/bin/sh'
+chmod 755 "$vec/apps/locus/health.sh"
 git -C "$vec" add -A
 git -C "$vec" -c user.name=test -c user.email=test@invalid commit -q -m init
 mkdir -p "$S/date-bin"
@@ -68,8 +68,8 @@ EOF
 chmod +x "$S/date-bin/date"
 blob() { git -C "$vec" rev-parse "HEAD:$1"; }
 layout() {
-  printf '.dockerignore\n100644 %s\nDockerfile.locus\n100644 %s\napps/locus/keeper/guard/cyfr-guard.sh\n100755 %s\nlinux/amd64\nAPT_REFRESH=%s\n' \
-    "$(blob .dockerignore)" "$(blob Dockerfile.locus)" "$(blob apps/locus/keeper/guard/cyfr-guard.sh)" "$1"
+  printf '.dockerignore\n100644 %s\nDockerfile.locus\n100644 %s\napps/locus/health.sh\n100755 %s\nlinux/amd64\nAPT_REFRESH=%s\n' \
+    "$(blob .dockerignore)" "$(blob Dockerfile.locus)" "$(blob apps/locus/health.sh)" "$1"
 }
 want=$(layout 2026-10-28 | sha256)
 got=$(PATH="$S/date-bin:$PATH" tag_of "$vec" locus)
@@ -115,7 +115,7 @@ put "$repo/config/debug.log" 'noise'
 out=$(cd "$repo" && scripts/image.sh locus 2>/dev/null)
 [ "$out" = "$base_locus" ] || fail "the build printed $out"
 context_paths "$(last_context)" >"$S/got"
-printf '%s\n' .dockerignore Dockerfile.locus apps/locus/keeper/go.mod apps/locus/keeper/guard/cyfr-guard.sh \
+printf '%s\n' .dockerignore Dockerfile.locus apps/locus/keeper/go.mod apps/locus/health.sh \
   apps/locus/keeper/main.go config/config.exs mix.exs mix.lock | LC_ALL=C sort >"$S/want"
 diff "$S/want" "$S/got" >/dev/null || fail "the locus context is not the source list: $(diff "$S/want" "$S/got" | tr '\n' ' ')"
 rm "$repo/config/debug.log"

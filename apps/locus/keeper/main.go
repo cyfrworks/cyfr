@@ -8,12 +8,15 @@
 // its own (a user, pid, IPC, mount, cgroup and network namespace each).
 //
 //	cyfr-locus serve --role <name>:<uid>:<port>:<pool>[:private][:kept] [--role …] --pool <name>:<first>-<last>:<relay|routed> [--pool …] --home-root <dir> [--kept-homes <dir>:<first>-<last>] --guard <socket> -- <command> [args…]
-//	cyfr-locus guard-control <socket> <range>
+//	cyfr-locus guard-control
+//	cyfr-locus guard-check
 //	cyfr-locus guest-check [--kernel-reporting] [--beside] [-- <command> [args…]]
 //	cyfr-locus image-digest
 //
-// `serve` is the only subcommand an operator runs; `guard-control` is the
-// one an island's egress guard runs once its rules are in (package guard). It needs exactly the
+// `serve` is the only subcommand an operator runs; `guard-control` is an
+// island's egress guard, which installs its rules and serves the keeper its
+// control, and `guard-check` that guard's health probe (package guard).
+// `serve` needs exactly the
 // capabilities SETUID, SETGID and KILL and refuses to start with any other,
 // as does `guest-check`, which boots one person's machine as the keeper
 // does, has the machine's keeper make and end one space, and reports
@@ -64,6 +67,8 @@ func main() {
 		os.Exit(home.HelperMain())
 	case "guard-control":
 		os.Exit(guard.Main(os.Args[2:]))
+	case "guard-check":
+		os.Exit(guard.CheckMain(os.Args[2:]))
 	case "guest-check":
 		os.Exit(vm.CheckMain(os.Args[2:]))
 	case "image-digest":

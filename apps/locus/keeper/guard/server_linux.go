@@ -11,31 +11,30 @@ import (
 	"net"
 	"net/netip"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
 
+	"golang.org/x/sys/unix"
+
 	"github.com/cyfr/locus/keeper/internal/logx"
 )
 
-// Exit statuses of `cyfr-locus guard-control`.
+// Exit statuses of `cyfr-locus guard-control` and `cyfr-locus guard-check`.
 const (
-	ExitUsage  = 64
-	ExitConfig = 78
-	ExitServe  = 70
+	// ExitRefused is a start the guard refused on its island: a rule it
+	// could not install, a value it does not take, a namespace a route
+	// cannot be made in. A health check that finds the guard not ready
+	// exits with it too.
+	ExitRefused = 1
+	ExitUsage   = 64
+	ExitConfig  = 78
+	ExitServe   = 70
 )
 
-// Script is the guard that installs and removes a route's rules, run once
-// per change (cyfr-guard.sh, installed under this name on PATH).
-const Script = "cyfr-guard"
-
 const (
-	// applyTimeout bounds one run of the guard script.
-	applyTimeout = 30 * time.Second
 	// withdrawBound bounds how long a route the guard could not withdraw is
 	// tried again: past it the guard ends, and its namespace goes with every
 	// pair, rule and connection of every route, the one state from which all
@@ -45,39 +44,36 @@ const (
 	retryInterval = time.Second
 )
 
-// Main runs `cyfr-locus guard-control <socket> <range>`, which the guard
-// execs once its rules are installed: it serves the control on socket
-// until it is stopped, making each route in the IPv4 /16 range the
-// guard's rules chose for routes.
+// Main runs `cyfr-locus guard-control`, the island's egress guard: it
+// installs the rules (rules.go), then serves the island's keeper its
+// control on the socket CYFR_GUARD_CONTROL names until it is stopped,
+// making each route in the IPv4 /16 the rules chose for routes.
+//
+// Environment:
+//
+//	CYFR_GUARD_CONTROL_PLANE     cyfr's fixed address on the default network
+//	CYFR_PRIVATE_EGRESS_TARGETS  the private hosts, addresses or CIDRs the
+//	                             deployment's own outbound calls may reach,
+//	                             comma-separated (configuration-guide.md)
+//	CYFR_GUARD_CONTROL           the control's socket, on a volume the
+//	                             island's service mounts read-only
+//	CYFR_GUARD_HOST_API          optional: core's host API as
+//	                             <IPv4 address>:<port>, the address on one
+//	                             of the island's subnets, which a private
+//	                             role reaches; a value of any other form
+//	                             refuses the guard's start
 func Main(args []string) int {
 	log := logx.New("cyfr-guard")
-	if len(args) != 2 || !filepath.IsAbs(args[0]) || filepath.Clean(args[0]) != args[0] {
-		log.Error("usage: cyfr-locus guard-control <socket> <range>, the socket a clean absolute path")
+	if len(args) != 0 {
+		log.Error("usage: cyfr-locus guard-control, configured by its environment")
 		return ExitUsage
 	}
-	rng, err := ParseRange(args[1])
-	if err != nil {
-		log.Error("refusing to serve: the route range: %v", err)
-		return ExitConfig
+	g := starting{log: log, at: at, env: os.Getenv, resolve: resolveHost,
+		conntrack: func() error { _, err := conntrackOf(netip.IPv4Unspecified()); return err }}
+	listener, s, code := g.start()
+	if listener == nil {
+		return code
 	}
-	netns, err := os.Readlink("/proc/self/ns/net")
-	if err != nil {
-		log.Error("refusing to serve: reading this network namespace: %v", err)
-		return ExitConfig
-	}
-	// A route's withdrawal removes its connections from the kernel's
-	// table: a guard that cannot read the table makes no route.
-	if _, err := conntrackOf(netip.IPv4Unspecified()); err != nil {
-		log.Error("refusing to serve: the kernel's connection table cannot be read through ctnetlink: %v", err)
-		return ExitConfig
-	}
-	listener, err := listen(args[0])
-	if err != nil {
-		log.Error("refusing to serve: %v", err)
-		return ExitConfig
-	}
-	log.Info("control: serving %s in %s, routes in %s", args[0], netns, rng)
-	s := newServer(log, netns, rng, kernelRoutes{apply: runScript})
 	go s.retryLoop(nil)
 	for {
 		conn, err := listener.AcceptUnix()
@@ -87,6 +83,105 @@ func Main(args []string) int {
 		}
 		go s.serve(conn)
 	}
+}
+
+// starting is what a guard's start reads and makes.
+type starting struct {
+	log       *logx.Logger
+	at        place
+	env       func(string) string
+	resolve   func(string) []string
+	conntrack func() error
+}
+
+// start brings the guard up, in this order: what an earlier guard left is
+// removed (the ready file and the routes' records), the guard's namespace
+// and configuration are checked, the rules are installed, the control
+// listens, and the ready file is written last. Until it is, nothing is
+// served and the guard is not healthy, so a guard that cannot bring its
+// control up never reports so. It answers the listener and its server, or
+// none and the guard's exit status.
+func (g starting) start() (*net.UnixListener, *server, int) {
+	log, p := g.log, g.at
+	if err := os.Remove(p.ready()); err != nil && !errors.Is(err, os.ErrNotExist) {
+		log.Error("refusing to start: removing %s: %v", p.ready(), err)
+		return nil, nil, ExitConfig
+	}
+	if err := os.RemoveAll(p.routes()); err != nil {
+		log.Error("refusing to start: removing %s: %v", p.routes(), err)
+		return nil, nil, ExitConfig
+	}
+	if err := os.MkdirAll(p.routes(), 0o755); err != nil {
+		log.Error("refusing to start: %v", err)
+		return nil, nil, ExitConfig
+	}
+	socket := g.env("CYFR_GUARD_CONTROL")
+	if !filepath.IsAbs(socket) || filepath.Clean(socket) != socket {
+		log.Error("refusing to start: CYFR_GUARD_CONTROL is '%s', not a clean absolute path: it names the control socket the keeper of the island reaches the guard on", socket)
+		return nil, nil, ExitConfig
+	}
+	if sysctls(log, p) != nil {
+		return nil, nil, ExitRefused
+	}
+	netns, err := os.Readlink(filepath.Join(p.proc, "self/ns/net"))
+	if err != nil {
+		log.Error("refusing to start: reading this network namespace: %v", err)
+		return nil, nil, ExitConfig
+	}
+	// A route's withdrawal removes its connections from the kernel's
+	// table: a guard that cannot read the table makes no route.
+	if err := g.conntrack(); err != nil {
+		log.Error("refusing to start: the kernel's connection table cannot be read through ctnetlink: %v", err)
+		return nil, nil, ExitConfig
+	}
+	st, err := staticRules(log, readIsland(log, p, g.env, g.resolve))
+	if err != nil {
+		return nil, nil, ExitRefused
+	}
+	for _, r := range st.rules {
+		ctx, cancel := bounded()
+		_, err := tool(ctx, "", false, r.tool(), append([]string{"-w", "5"}, r.args...)...)
+		cancel()
+		if err != nil {
+			log.Error("%s failed", r)
+			return nil, nil, ExitRefused
+		}
+	}
+	rng, err := ParseRange(st.rng)
+	if err != nil {
+		log.Error("refusing to start: the route range: %v", err)
+		return nil, nil, ExitConfig
+	}
+	if err := writeFile(p.rangeFile(), st.rng+"\n"); err != nil {
+		log.Error("refusing to start: %v", err)
+		return nil, nil, ExitConfig
+	}
+	ctx, cancel := bounded()
+	defer cancel()
+	recorded, err := saves(ctx, log)
+	if err != nil {
+		log.Error("a rule table could not be read, so the guard is not ready")
+		return nil, nil, ExitRefused
+	}
+	lock, err := os.OpenFile(p.lock(), os.O_RDWR|os.O_CREATE|unix.O_CLOEXEC, 0o644)
+	if err != nil {
+		log.Error("refusing to start: the lock: %v", err)
+		return nil, nil, ExitConfig
+	}
+	listener, err := listen(socket)
+	if err != nil {
+		log.Error("refusing to start: %v", err)
+		return nil, nil, ExitConfig
+	}
+	s := newServer(log, netns, rng, kernelRoutes{set: &rulesOf{log: log, at: p, st: st, lock: lock}})
+	if err := writeFile(p.ready(), recorded+"\n"); err != nil {
+		log.Error("refusing to start: writing %s: %v", p.ready(), err)
+		listener.Close()
+		return nil, nil, ExitConfig
+	}
+	log.Info("ready: every rule installed, routes in %s", st.rng)
+	log.Info("control: serving %s in %s, routes in %s", socket, netns, rng)
+	return listener, s, 0
 }
 
 // listen makes the control's socket: its directory is root's own and is
@@ -117,25 +212,6 @@ func listen(path string) (*net.UnixListener, error) {
 	mask := syscall.Umask(0o177)
 	defer syscall.Umask(mask)
 	return net.ListenUnix("unixpacket", &net.UnixAddr{Name: path, Net: "unixpacket"})
-}
-
-func runScript(args ...string) error {
-	cmd := exec.Command(Script, args...)
-	cmd.Stdout = os.Stderr
-	cmd.Stderr = os.Stderr
-	if err := cmd.Start(); err != nil {
-		return err
-	}
-	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
-	select {
-	case err := <-done:
-		return err
-	case <-time.After(applyTimeout):
-		_ = cmd.Process.Kill()
-		<-done
-		return errors.New("the guard did not finish")
-	}
 }
 
 // route is one space's route.
@@ -189,9 +265,14 @@ type routeMaker interface {
 	unrules(r *route) error
 }
 
-// kernelRoutes makes routes in the kernel, the rules through the guard
-// script.
-type kernelRoutes struct{ apply func(args ...string) error }
+// ruleSet installs and withdraws a route's rules: rulesOf in production.
+type ruleSet interface {
+	install(r *route) error
+	withdraw(r *route) error
+}
+
+// kernelRoutes makes routes in the kernel, the rules through set.
+type kernelRoutes struct{ set ruleSet }
 
 func (k kernelRoutes) pair(r *route) error {
 	if err := checkDescriptors(r.netns, r.udp, r.tcp); err != nil {
@@ -215,16 +296,7 @@ func (k kernelRoutes) pair(r *route) error {
 	return defaultRoute(space, r.gateway)
 }
 
-func (k kernelRoutes) rules(r *route) error {
-	args := []string{"route", outerName(r.slot), r.inner.String(), strconv.FormatUint(uint64(r.mark), 10), r.reach}
-	if r.reach == ReachRole {
-		args = append(args, strconv.Itoa(r.port))
-		if r.private {
-			args = append(args, "private")
-		}
-	}
-	return k.apply(append(args, r.addresses...)...)
-}
+func (k kernelRoutes) rules(r *route) error { return k.set.install(r) }
 
 // unpair removes the pair, then every entry the kernel's connection table
 // holds of the route's address: a later route that takes the address takes
@@ -236,7 +308,7 @@ func (k kernelRoutes) unpair(r *route) error {
 	return forgetConnections(r.inner)
 }
 
-func (k kernelRoutes) unrules(r *route) error { return k.apply("unroute", outerName(r.slot)) }
+func (k kernelRoutes) unrules(r *route) error { return k.set.withdraw(r) }
 
 // server answers every connection's requests one at a time: mu is held
 // across each request's changes, whichever connection asked.

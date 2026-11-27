@@ -21,7 +21,7 @@ else beyond its role's own confinement, on a kept-homes volume and a
   volume the device alone, beside its own folder, the one the check names,
   and /dev/kvm; each mount it may write is the filesystem its place holds,
   and nothing else is writable.
-- The guest's own guard, the image's cyfr-guard with NET_ADMIN alone, is
+- The guest's own guard, the image's `cyfr-locus guard-control` with NET_ADMIN alone, is
   ready before the guest's keeper says anything, and the keeper proves it at its
   boot. The machine answers the hello with its boot identity; the guest's
   keeper makes one space under a pool uid, with no route, IPv4 or IPv6, a
@@ -193,7 +193,7 @@ def booted(code, report, stderr, what):
     expect(len(out) > 3 and out[3] == "outer vsock -1 1 io_uring -1 1",
            f"{what}: the space is refused socket(AF_VSOCK) and io_uring_setup with EPERM", out[3:4])
     console = guest_lines(stderr)
-    ready = [i for i, line in enumerate(console) if line.startswith("[cyfr-guard] ready: every rule installed")]
+    ready = [i for i, line in enumerate(console) if line.startswith("[cyfr-guard] info: ready: every rule installed")]
     keeper = [i for i, line in enumerate(console) if line.startswith("[cyfr-locus]")]
     expect(ready and keeper and ready[0] < keeper[0],
            f"{what}: the guest's guard was ready before its keeper said anything", "\n".join(console[-40:]))
