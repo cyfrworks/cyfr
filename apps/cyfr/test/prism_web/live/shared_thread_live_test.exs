@@ -417,7 +417,7 @@ defmodule PrismWeb.SharedThreadLiveTest do
       athanor_id: Sanctum.Test.People.athanor!(alice.user_id).id,
       permissions: [:*],
       scope: :athanor,
-      auth_method: :oidc,
+      auth_method: :session,
       authenticated: true
     )
   end

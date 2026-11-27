@@ -121,7 +121,7 @@ defmodule PrismWeb.OpsTest do
           athanor_id: home.id,
           permissions: [:*],
           scope: :athanor,
-          auth_method: :oidc,
+          auth_method: :session,
           authenticated: true
         )
 

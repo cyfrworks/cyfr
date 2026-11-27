@@ -10,14 +10,14 @@ defmodule Prima.LoggerContextTest do
 
   describe "set_from_context/1" do
     test "sets correct Logger metadata" do
-      ctx = %{user_id: "user_123", athanor_id: "ath_abc", auth_method: :oidc}
+      ctx = %{user_id: "user_123", athanor_id: "ath_abc", auth_method: :session}
 
       LoggerContext.set_from_context(ctx)
 
       metadata = Logger.metadata()
       assert metadata[:user_id] == "user_123"
       assert metadata[:athanor_id] == "ath_abc"
-      assert metadata[:auth_method] == :oidc
+      assert metadata[:auth_method] == :session
     end
   end
 
@@ -34,7 +34,7 @@ defmodule Prima.LoggerContextTest do
       LoggerContext.set_from_context(%{
         user_id: "parent_user",
         athanor_id: nil,
-        auth_method: :oidc
+        auth_method: :session
       })
 
       LoggerContext.set_request_id("req_parent")

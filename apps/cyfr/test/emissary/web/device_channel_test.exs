@@ -2283,7 +2283,7 @@ defmodule Emissary.Web.DeviceChannelTest do
         provider: "passkey",
         athanor_id: athanor_id,
         permissions: [:*],
-        auth_method: :oidc,
+        auth_method: :session,
         authenticated: true
       )
 
@@ -2409,7 +2409,7 @@ defmodule Emissary.Web.DeviceChannelTest do
         provider: "github",
         athanor_id: athanor.id,
         permissions: [:*],
-        auth_method: :oidc,
+        auth_method: :session,
         authenticated: true
       )
 

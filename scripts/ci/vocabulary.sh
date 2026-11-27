@@ -15,7 +15,10 @@
 # the apps, images, environment variables and paths the umbrella's
 # applications replaced: Porta and the separate Prism endpoint, spawn
 # and its spawner, the standalone Opus app and its worker image, the
-# keeper's retired home and the worker settings. Other retired module
+# keeper's retired home and the worker settings; and the sign-in label
+# a person's session carried before it was `:session`, as the atom and
+# as the words (cosign's keyless OIDC issuer is another thing, and
+# neither pattern reads it). Other retired module
 # and function names are not listed: a call to one fails to compile.
 # Each name is matched as a word or inside an identifier, never inside
 # an English word that merely contains its letters; the free words
@@ -114,6 +117,8 @@ for p in \
   'CYFR_MAX_CONCURRENT_EXECUTIONS' \
   'CYFR_WORKER_WATCH_' \
   '(^|[^A-Za-z])([Ee]states?([^a-z]|$)|ESTATES?([^A-Z]|$))|[a-z]Estate' \
+  ':oidc([^a-z_]|$)' \
+  '\b[Oo][Ii][Dd][Cc] sessions?\b' \
   ; do
   status=0
   hits="$(git grep -In "$regex" "$p" -- $paths $excl)" || status=$?

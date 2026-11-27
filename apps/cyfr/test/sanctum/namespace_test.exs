@@ -59,7 +59,7 @@ defmodule Sanctum.NamespaceTest do
       # users row, tokens are for pushing.
       registry = Compendium.RegistryHost.canonical_host()
 
-      person = Sanctum.Context.build(user_id: user_id, authenticated: true, auth_method: :oidc)
+      person = Sanctum.Context.build(user_id: user_id, authenticated: true, auth_method: :session)
 
       :ok =
         CredentialStore.put_push_token(person, registry, "stripe.com", "cyfr_pt_pub", "member")

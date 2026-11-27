@@ -370,7 +370,7 @@ defmodule Prima.Provider do
     `Sanctum.Context.require_permission/3`. Absent means any
     authenticated caller.
   - `:consent` — the consent surface class (`Sanctum.Consent.Authz`):
-    `:interactive` admits interactive OIDC sessions only, `:staging` also
+    `:interactive` admits a person's signed-in session only, `:staging` also
     admits API keys. The domain keeps its own finer Authz checks (the
     digest-pinned commit arm, conditional registration bindings) — dispatch
     applies the coarse class, the domain the exact one.

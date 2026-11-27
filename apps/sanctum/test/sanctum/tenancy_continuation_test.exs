@@ -40,7 +40,7 @@ defmodule Sanctum.TenancyContinuationTest do
   } do
     assert {:ok, ctx} = Tenancy.continuation(user.id, athanor.id, "interactive")
     assert ctx.user_id == user.id and ctx.athanor_id == athanor.id
-    assert ctx.auth_method == :oidc and ctx.authenticated
+    assert ctx.auth_method == :session and ctx.authenticated
     assert ctx.scope == :athanor
     assert ctx.origin == :interactive
     assert MapSet.equal?(ctx.permissions, MapSet.new(Sanctum.Atoms.person_permissions()))

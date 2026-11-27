@@ -80,7 +80,7 @@ defmodule Sanctum.SignInTest do
       user_id: user.id,
       athanor_id: athanor_id,
       provider: "passkey",
-      auth_method: :oidc,
+      auth_method: :session,
       authenticated: true,
       session_token_hash: session.token_hash,
       permissions: Sanctum.Context.person_permissions()

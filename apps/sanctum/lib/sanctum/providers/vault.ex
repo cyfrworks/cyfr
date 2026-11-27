@@ -35,7 +35,7 @@ defmodule Sanctum.Providers.Vault do
   # handler they gate; Sanctum.Provider assembles its roster from these.
   def definition do
     alias Prima.{Arg, Operation}
-    # Mutations are interactive-consent surfaces (OIDC sessions only,
+    # Mutations are interactive-consent surfaces (signed-in sessions only,
     # by owner decision — no permission conjunct); list admits the
     # staging class so keys can enumerate entries.
     destination = fn opts ->
@@ -564,7 +564,7 @@ defmodule Sanctum.Providers.Vault do
   defp iso8601(_absent), do: nil
 
   defp fmt({:surface_not_permitted, method}) do
-    "consent_class_required: vault mutations need an interactive (:oidc) session, got #{method}"
+    "consent_class_required: vault mutations need a person's signed-in session or a paired device, got #{method}"
   end
 
   defp fmt(:guest_plane),

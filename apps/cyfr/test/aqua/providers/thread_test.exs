@@ -149,7 +149,7 @@ defmodule Aqua.Providers.ThreadTest do
       ctx: ctx,
       thread: thread
     } do
-      # `authorize_interactive/1` admits `:oidc` and nothing else. The
+      # `authorize_interactive/1` admits `:session` and nothing else. The
       # plane gate says nothing about this axis: a `*` key is on the
       # external plane and would sail through it.
       star = %{ctx | auth_method: :api_key, permissions: MapSet.new([:*])}
@@ -186,8 +186,8 @@ defmodule Aqua.Providers.ThreadTest do
       shown = Visibility.filter_for_context(Sanctum.Catalog.list_tools(), star)
       refute Enum.any?(shown, &(&1["name"] == "thread"))
 
-      shown_oidc = Visibility.filter_for_context(Sanctum.Catalog.list_tools(), ctx)
-      assert Enum.any?(shown_oidc, &(&1["name"] == "thread"))
+      shown_session = Visibility.filter_for_context(Sanctum.Catalog.list_tools(), ctx)
+      assert Enum.any?(shown_session, &(&1["name"] == "thread"))
     end
 
     test "a running agent cannot reach it, whatever its allowlist says", %{

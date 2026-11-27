@@ -38,7 +38,7 @@ defmodule Arca.RetentionTest do
         athanor_id: athanor,
         permissions: [:*],
         scope: :athanor,
-        auth_method: :oidc,
+        auth_method: :session,
         authenticated: true
       )
 

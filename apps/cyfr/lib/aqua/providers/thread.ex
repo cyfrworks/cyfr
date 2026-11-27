@@ -86,7 +86,7 @@ defmodule Aqua.Providers.Thread do
       workspace threads — never other people's.
     * **Surface.** Every action declares `consent: :interactive`, which the
       registry's dispatch gate holds to
-      `Sanctum.Consent.Authz.authorize_interactive/1` — `:oidc` and nothing
+      `Sanctum.Consent.Authz.authorize_interactive/1` — `:session` and nothing
       else, so **no API key can drive somebody's chat, a `*` key included**.
       A standing credential is exactly the thing that should not be able to
       speak as a person; the plane gate says nothing about this axis.

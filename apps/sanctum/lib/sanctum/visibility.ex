@@ -18,7 +18,7 @@ defmodule Sanctum.Visibility do
   - `scope: :platform` serves a platform administrator alone.
   - `permission:` requires the named permission.
   - `consent:` requires a surface `Sanctum.Consent.Authz` admits:
-    `:interactive` an OIDC session or a paired device, and inside a
+    `:interactive` a person's signed-in session or a paired device, and inside a
     running chain the session alone; `:staging` those or an API key, and
     never inside a chain.
 
