@@ -54,6 +54,23 @@ joined, or HTTPS off; the message says what to do);
 	// cobra so a prompt abort (prompt.ErrAborted) can exit 130 silently.
 	SilenceUsage:  true,
 	SilenceErrors: true,
+	// A command that reaches Docker, in a terminal older than the
+	// account's docker group, runs again through it (withDockerGroup);
+	// that run printed its own outcome, and its status is this one's.
+	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+		if !needsDocker(cmd) {
+			return nil
+		}
+		ctx := cmd.Context()
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		continued, err := withDockerGroup(ctx, cmd, args, cmd.OutOrStdout(), cmd.ErrOrStderr())
+		if err == nil && continued {
+			return handedOver{0}
+		}
+		return err
+	},
 }
 
 func init() {

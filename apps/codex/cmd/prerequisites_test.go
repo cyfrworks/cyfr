@@ -18,6 +18,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 )
 
 // sgStandIn records the sg cyfr init continues through and answers status:
@@ -556,54 +559,123 @@ func TestInitAnswersTheContinuationsStatus(t *testing.T) {
 	}
 }
 
-// cyfr up, in a terminal older than the account's docker group, runs
-// itself again through sg with the flags given, before anything else;
-// that run's status is its.
+// dockerCommands are the command lines of every command that reaches
+// Docker, each as a person may give it: its words, and what sg must run
+// again.
+var dockerCommands = []struct {
+	path        string
+	args, again []string
+}{
+	{"up", []string{"up"}, []string{"up"}},
+	{"down", []string{"down"}, []string{"down"}},
+	{"backup", []string{"backup"}, []string{"backup"}},
+	{"restore snapshot.tar.gz", []string{"restore", "snapshot.tar.gz"}, []string{"restore", "--", "snapshot.tar.gz"}},
+	{"update", []string{"update", "--yes"}, []string{"update", "--yes=true"}},
+	{"uninstall", []string{"uninstall"}, []string{"uninstall"}},
+	{"access local", []string{"access", "local", "--yes"}, []string{"access", "--yes=true", "--", "local"}},
+	{"access", []string{"access", "--resume"}, []string{"access", "--resume=true"}},
+	{"access status", []string{"access", "status"}, []string{"access", "status"}},
+}
+
+// runCommandLine runs the cyfr command line with args as a process of
+// its own would, under t's context, and answers its error.
+func runCommandLine(t *testing.T, args ...string) error {
+	t.Helper()
+	var forget func(c *cobra.Command)
+	forget = func(c *cobra.Command) {
+		c.SetContext(nil)
+		c.Flags().Visit(func(f *pflag.Flag) { _ = f.Value.Set(f.DefValue); f.Changed = false })
+		for _, sub := range c.Commands() {
+			forget(sub)
+		}
+	}
+	forget(rootCmd)
+	t.Cleanup(func() { forget(rootCmd); rootCmd.SetArgs(nil) })
+	rootCmd.SetArgs(args)
+	return Execute(t.Context())
+}
+
+// Every command that reaches Docker, in a terminal older than the
+// account's docker group, runs itself again through sg, as it was given,
+// before anything else; that run's status is its.
 func TestContinuesInATerminalOlderThanTheGroup(t *testing.T) {
-	for _, status := range []string{"0", "3"} {
-		t.Run("status "+status, func(t *testing.T) {
+	self, _ := os.Executable()
+	for _, c := range dockerCommands {
+		for _, status := range []string{"0", "3"} {
+			t.Run(strings.Join(c.args, " ")+", status "+status, func(t *testing.T) {
+				s := standInMachine(t)
+				s.member = []string{"docker"}
+				record := sgStandIn(t, status)
+				t.Chdir(t.TempDir())
+				err := runCommandLine(t, c.args...)
+				if got := strconv.Itoa(ExitStatus(err)); err != nil && got != status || err == nil && status != "0" {
+					t.Fatalf("err %v, want the status %s", err, status)
+				}
+				sg, err := os.ReadFile(record)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got, want := string(sg), "docker\n-c\n"+shellQuote(append([]string{self}, c.again...))+"\n"; got != want {
+					t.Errorf("sg ran %q, want %q", got, want)
+				}
+				nothingWritten(t)
+			})
+		}
+	}
+}
+
+// Where there is no sg, every command that reaches Docker says, when
+// Docker's socket refused this process, that a new login gives the
+// account the group, and runs nothing.
+func TestSaysLogInAgainForEachCommandWhereThereIsNoSg(t *testing.T) {
+	for _, c := range dockerCommands {
+		t.Run(strings.Join(c.args, " "), func(t *testing.T) {
 			s := standInMachine(t)
-			s.member = []string{"docker"}
-			record := sgStandIn(t, status)
+			s.member, s.refused = []string{"docker"}, socketDenied
+			sgProgram = filepath.Join(t.TempDir(), "sg")
 			t.Chdir(t.TempDir())
-			continued, err := withDockerGroup(t.Context(), []string{"--no-pull=true"}, &bytes.Buffer{}, &bytes.Buffer{})
-			answered := "0"
-			if err != nil {
-				answered = strconv.Itoa(ExitStatus(err))
-			}
-			if !continued || answered != status {
-				t.Fatalf("continued %t, err %v, want the status %s", continued, err, status)
-			}
-			self, _ := os.Executable()
-			sg, err := os.ReadFile(record)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got, want := string(sg), "docker\n-c\n"+shellQuote([]string{self, "up", "--no-pull=true"})+"\n"; got != want {
-				t.Errorf("sg ran %q, want %q", got, want)
+			want := "Docker does not answer this account until you log out and in again. Then run `cyfr " + c.path + "` again"
+			if err := runCommandLine(t, c.args...); err == nil || err.Error() != want {
+				t.Fatalf("err %v, want %q", err, want)
 			}
 			nothingWritten(t)
 		})
 	}
 }
 
-// cyfr up carries on as it is when Docker already answers this account, a
-// rootless Docker or a group the account holds already among them, and
-// when sg has nothing to give it or there is no sg.
+// A command that does not reach Docker is not run again through sg.
+func TestCommandsWithoutDockerAreNotContinued(t *testing.T) {
+	for _, words := range [][]string{{"init"}, {"log"}, {"status"}, {"internal", "docker-run"}} {
+		c, _, err := rootCmd.Find(words)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if needsDocker(c) {
+			t.Errorf("cyfr %s passes through the docker group step", strings.Join(words, " "))
+		}
+	}
+}
+
+// A command that reaches Docker carries on as it is when Docker already
+// answers this account, a rootless Docker or a group the account holds
+// already among them, and when sg has nothing to give it.
 func TestNeedsNoContinuation(t *testing.T) {
+	up, _, err := rootCmd.Find([]string{"up"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	for name, set := range map[string]func(*testing.T, *standIn){
 		"Docker answers":     func(_ *testing.T, s *standIn) { s.reachable = true },
 		"another system":     func(_ *testing.T, s *standIn) { s.supported = false },
 		"not in the group":   func(_ *testing.T, s *standIn) { s.member = nil },
 		"the process has it": func(_ *testing.T, s *standIn) { s.process = []string{"docker"} },
-		"no sg":              func(t *testing.T, _ *standIn) { sgProgram = filepath.Join(t.TempDir(), "sg") },
 	} {
 		t.Run(name, func(t *testing.T) {
 			s := standInMachine(t)
 			s.member = []string{"docker"}
 			record := sgStandIn(t, "0")
 			set(t, s)
-			if continued, err := withDockerGroup(t.Context(), nil, &bytes.Buffer{}, &bytes.Buffer{}); continued || err != nil {
+			if continued, err := withDockerGroup(t.Context(), up, nil, &bytes.Buffer{}, &bytes.Buffer{}); continued || err != nil {
 				t.Fatalf("continued %t, err %v", continued, err)
 			}
 			if _, err := os.Stat(record); err == nil {

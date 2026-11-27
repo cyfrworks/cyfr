@@ -424,7 +424,7 @@ func prepareMachine(ctx context.Context, args []string, out, errOut io.Writer) (
 			return false, nil
 		}
 	}
-	return continueWithGroup(ctx, "init", args, account.Username, out, errOut)
+	return continueWithGroup(ctx, "init", append([]string{"init"}, args...), account.Username, out, errOut)
 }
 
 // dockerDesktopPage is where Docker offers Docker Desktop's installer for
@@ -497,23 +497,42 @@ func awaitDockerDesktop(ctx context.Context, system string, out io.Writer) (bool
 	return false, nil
 }
 
-// withDockerGroup is cyfr up's first step, in a terminal older than the
-// account's docker group: cyfr up again, through sg, so no person has to
-// refresh the terminal and every step of its run reaches Docker. It runs nothing when Docker already answers this account,
-// a rootless Docker included, or when there is no sg to run it with, and
-// answers true when that run did the work.
-func withDockerGroup(ctx context.Context, args []string, out, errOut io.Writer) (bool, error) {
-	if !machine.supported() || machine.reachable(ctx) {
-		return false, nil
+// dockerAnnotation marks a command that reaches Docker, and with it each
+// command under it: the root's one step (withDockerGroup) runs before it.
+const dockerAnnotation = "cyfr.docker"
+
+// needsDocker is whether c or a command above it carries dockerAnnotation.
+func needsDocker(c *cobra.Command) bool {
+	for ; c != nil; c = c.Parent() {
+		if c.Annotations[dockerAnnotation] != "" {
+			return true
+		}
 	}
-	if _, err := os.Stat(sgProgram); err != nil {
+	return false
+}
+
+// withDockerGroup is the first step of every command that reaches Docker
+// (needsDocker), in a terminal older than the account's docker group: the
+// command again, as it was given, through sg, so no person has to refresh
+// the terminal and every step of its run reaches Docker. It runs nothing
+// when Docker already answers this account, a rootless Docker included,
+// and answers true when that run did the work; with no sg to run it with
+// it says to log in again (continueWithGroup).
+func withDockerGroup(ctx context.Context, c *cobra.Command, args []string, out, errOut io.Writer) (bool, error) {
+	if !machine.supported() || machine.reachable(ctx) {
 		return false, nil
 	}
 	account, err := user.Current()
 	if err != nil {
 		return false, err
 	}
-	return continueWithGroup(ctx, "up", args, account.Username, out, errOut)
+	path := strings.TrimPrefix(c.CommandPath(), c.Root().Name()+" ")
+	again := strings.Join(append([]string{path}, args...), " ")
+	argv := append(strings.Fields(path), continuationArgs(c)...)
+	if len(args) > 0 {
+		argv = append(append(argv, "--"), args...)
+	}
+	return continueWithGroup(ctx, again, argv, account.Username, out, errOut)
 }
 
 // loginAgain is said where only a new login gives this account the docker
@@ -618,14 +637,15 @@ func staleGroup(ctx context.Context, account string) bool {
 	return slices.Contains(machine.groups(ctx, account), dockerGroup) && !slices.Contains(machine.groups(ctx, ""), dockerGroup)
 }
 
-// continueWithGroup runs cyfr subcommand again, with the flags the person
-// gave, through sg with the docker group, keeping this process's terminal,
-// environment and directory. It answers false, having run nothing, when
-// /etc/group does not list the account in the group, and when this process
-// already has it: sg would give it nothing, and its child would land here
-// again. With no sg it runs nothing and says why Docker does not answer:
+// continueWithGroup runs cyfr again with argv, the command's words and
+// the flags and arguments the person gave, through sg with the docker
+// group, keeping this process's terminal, environment and directory;
+// subcommand names it in what it says, such as "access status". It
+// answers false, having run nothing, when /etc/group does not list the
+// account in the group, and when this process already has it: sg would
+// give it nothing, and its child would land here again. With no sg it runs nothing and says why Docker does not answer:
 // to log in again (loginAgain) only where its socket refused this process.
-func continueWithGroup(ctx context.Context, subcommand string, args []string, account string, out, errOut io.Writer) (bool, error) {
+func continueWithGroup(ctx context.Context, subcommand string, argv []string, account string, out, errOut io.Writer) (bool, error) {
 	if !staleGroup(ctx, account) {
 		return false, nil
 	}
@@ -640,7 +660,7 @@ func continueWithGroup(ctx context.Context, subcommand string, args []string, ac
 	if err != nil {
 		return true, fmt.Errorf("cyfr %s could not find its own program to go on with the docker group (%v). Run `newgrp docker`, or log out and in again, then run `cyfr %s` again", subcommand, err, subcommand)
 	}
-	cmd := exec.Command(sgProgram, dockerGroup, "-c", shellQuote(append([]string{self, subcommand}, args...)))
+	cmd := exec.Command(sgProgram, dockerGroup, "-c", shellQuote(append([]string{self}, argv...)))
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, out, errOut
 	err = cmd.Run()
 	var exit *exec.ExitError
@@ -668,8 +688,10 @@ func shellQuote(argv []string) string {
 // each flag the person gave, as --name=value.
 func continuationArgs(c *cobra.Command) []string {
 	var args []string
-	c.Flags().Visit(func(f *pflag.Flag) {
-		args = append(args, "--"+f.Name+"="+f.Value.String())
+	c.Flags().VisitAll(func(f *pflag.Flag) {
+		if f.Changed {
+			args = append(args, "--"+f.Name+"="+f.Value.String())
+		}
 	})
 	return args
 }
