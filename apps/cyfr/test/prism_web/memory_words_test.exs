@@ -46,31 +46,49 @@ defmodule PrismWeb.MemoryWordsTest do
   end
 
   describe "the services that have not answered" do
-    @at ~U[2026-11-27 10:38:20Z]
-    @later ~U[2026-11-27 10:41:00Z]
+    # Today's 10:38:20 and 10:41:00, in UTC.
+    defp at, do: DateTime.new!(Date.utc_today(), ~T[10:38:20], "Etc/UTC")
+    defp later, do: DateTime.new!(Date.utc_today(), ~T[10:41:00], "Etc/UTC")
+
+    defp silent(runs, programs, builds) do
+      MemoryWords.silent([
+        %{endpoint: "wrk_local", heard_at: runs},
+        %{endpoint: Opus.Programs.local(), heard_at: programs},
+        %{endpoint: Prima.LocusPool.builds_endpoint(), heard_at: builds}
+      ])
+    end
 
     test "are one sentence, in the order builds, programs, runs" do
-      silent = fn runs, programs, builds ->
-        MemoryWords.silent([
-          %{endpoint: "wrk_local", heard_at: runs},
-          %{endpoint: Opus.Programs.local(), heard_at: programs},
-          %{endpoint: Prima.LocusPool.builds_endpoint(), heard_at: builds}
-        ])
-      end
-
-      # All at one time on the clock: that time is every one's.
-      assert silent.(@at, @at, ~U[2026-11-27 10:38:55Z]) ==
+      # All in one minute of today: that time is every one's.
+      assert silent(at(), at(), DateTime.add(at(), 35, :second)) ==
                "The services for builds, programs and runs have not answered since 10:38 UTC, " <>
                  "so what they run is not counted."
 
       # At different times: the time is the earliest, and is said to be.
-      assert silent.(@later, @at, @later) ==
+      assert silent(later(), at(), later()) ==
                "The services for builds, programs and runs have not answered, the first of " <>
                  "them since 10:38 UTC, so what they run is not counted."
     end
 
+    test "the same time on different days is not one time, and an earlier day's carries its date" do
+      yesterday = DateTime.add(at(), -1, :day)
+      day = Date.to_iso8601(DateTime.to_date(yesterday))
+
+      assert silent(at(), yesterday, at()) ==
+               "The services for builds, programs and runs have not answered, the first of " <>
+                 "them since 10:38 UTC on #{day}, so what they run is not counted."
+
+      # All yesterday in one minute: one time, with its date.
+      assert silent(yesterday, yesterday, yesterday) ==
+               "The services for builds, programs and runs have not answered since " <>
+                 "10:38 UTC on #{day}, so what they run is not counted."
+
+      assert MemoryWords.clock(at()) == "10:38 UTC"
+      assert MemoryWords.clock(yesterday) == "10:38 UTC on #{day}"
+    end
+
     test "one alone is said alone, the one service for runs without its id" do
-      assert MemoryWords.silent([%{endpoint: "wrk_local", heard_at: @at}]) ==
+      assert MemoryWords.silent([%{endpoint: "wrk_local", heard_at: at()}]) ==
                "The service for runs has not answered since 10:38 UTC, " <>
                  "so what it runs is not counted."
 
@@ -79,13 +97,13 @@ defmodule PrismWeb.MemoryWordsTest do
 
     test "a service for runs carries its id where CYFR knows several" do
       # One configured (`wrk_local`, config/test.exs) and another silent.
-      assert MemoryWords.silent([%{endpoint: "wrk_gone", heard_at: @at}]) ==
+      assert MemoryWords.silent([%{endpoint: "wrk_gone", heard_at: at()}]) ==
                "The service for runs (wrk_gone) has not answered since 10:38 UTC, " <>
                  "so what it runs is not counted."
 
       assert MemoryWords.silent([
-               %{endpoint: "wrk_b", heard_at: @at},
-               %{endpoint: "wrk_a", heard_at: @at}
+               %{endpoint: "wrk_b", heard_at: at()},
+               %{endpoint: "wrk_a", heard_at: at()}
              ]) ==
                "The services for runs (wrk_a) and runs (wrk_b) have not answered since " <>
                  "10:38 UTC, so what they run is not counted."

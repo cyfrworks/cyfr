@@ -2669,7 +2669,7 @@ defmodule PrismWeb.ProgramsLiveTest do
 
       assert panel =~
                "What uses memory cannot be counted right now. " <>
-                 "It was last counted at #{Calendar.strftime(an_hour_ago, "%H:%M UTC")}."
+                 "It was last counted at #{PrismWeb.MemoryWords.clock(an_hour_ago)}."
 
       refute panel =~ "a few seconds ago"
     end
@@ -2695,7 +2695,7 @@ defmodule PrismWeb.ProgramsLiveTest do
 
       assert panel =~
                "Some of it cannot be counted right now; that part was last counted at " <>
-                 "#{Calendar.strftime(an_hour_ago, "%H:%M UTC")}."
+                 "#{PrismWeb.MemoryWords.clock(an_hour_ago)}."
     end
 
     test "a line keeps its place when its size passes another's",

@@ -1508,7 +1508,7 @@ defmodule PrismWeb.SettingsLiveTest do
       silent = [Opus.Programs.local(), Prima.LocusPool.builds_endpoint(), "wrk_gone"]
       for endpoint <- silent, do: record!([], %{}, endpoint)
       an_hour_ago = DateTime.add(DateTime.utc_now(), -3_600, :second)
-      since = Calendar.strftime(an_hour_ago, "%H:%M UTC")
+      since = MemoryWords.clock(an_hour_ago)
 
       Arca.Repo.update_all(from(e in Arca.Schemas.MemoryEndpoint, where: e.endpoint in ^silent),
         set: [heard_at: an_hour_ago]

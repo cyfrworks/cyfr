@@ -100,7 +100,7 @@ defmodule PrismWeb.MemoryWords do
   (`Prima.LocusPool.builds_endpoint/0`), the programs'
   (`Opus.Programs.local/0`) or one for runs, in that order, since the
   earliest of their last answers, which the sentence calls the first of
-  them where they read differently on the clock. A service for runs
+  them unless all last answered in one minute of one day. A service for runs
   carries its id only where this CYFR knows several, configured
   (`Opus.run_services/0`) or silent. Nil when every endpoint answered.
   """
@@ -109,7 +109,7 @@ defmodule PrismWeb.MemoryWords do
 
   def silent(silent) do
     at = silent |> Enum.map(& &1.heard_at) |> Enum.min(DateTime) |> clock()
-    together = silent |> Enum.map(&clock(&1.heard_at)) |> Enum.uniq() |> length() == 1
+    together = silent |> Enum.map(&minute(&1.heard_at)) |> Enum.uniq() |> length() == 1
     names = Enum.map(silent, & &1.endpoint)
     several = length(Enum.uniq(Opus.run_services() ++ Enum.filter(names, &runs?/1))) > 1
 
@@ -148,7 +148,19 @@ defmodule PrismWeb.MemoryWords do
   defp joined([one]), do: one
   defp joined(items), do: Enum.join(Enum.drop(items, -1), ", ") <> " and " <> List.last(items)
 
-  defp clock(at), do: Calendar.strftime(at, "%H:%M UTC")
+  @doc """
+  When an endpoint last answered, as both pages say it: a time of today's,
+  in UTC, by the clock alone; an earlier day's with its date as the day
+  table writes one, so no time stands for yesterday's.
+  """
+  @spec clock(DateTime.t()) :: String.t()
+  def clock(at) do
+    if DateTime.to_date(at) == Date.utc_today(),
+      do: Calendar.strftime(at, "%H:%M UTC"),
+      else: Calendar.strftime(at, "%H:%M UTC on ") <> Date.to_iso8601(DateTime.to_date(at))
+  end
+
+  defp minute(at), do: %{DateTime.truncate(at, :second) | second: 0}
 
   @doc "What a person calls a kind of holder (`Prima.LocusPool.holder_words/1`)."
   @spec kind(atom()) :: String.t()
