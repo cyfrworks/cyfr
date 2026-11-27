@@ -50,9 +50,11 @@ else beyond its role's own confinement, on a kept-homes volume and a
 
 Then a person's sessions run in their own VM (plan V2), each case on a
 stack of its own: docker-compose.yml's locus service, as harness.py runs
-it, with compose.kvm.yml layered last, which gives the locus container
-/dev/kvm and /dev/net/tun and the guard /dev/net/tun, and a pool whose work
-is sized as memory.py sizes it. Every session runs the probe program from
+it, given the two devices as cyfr writes them to .env on a machine that
+has them (CYFR_LOCUS_KVM, CYFR_LOCUS_TUN): /dev/kvm and /dev/net/tun for
+the locus container and /dev/net/tun for the guard; without them the same
+file gives /dev/null at those paths, as on a machine with none. Its pool's
+work is sized as memory.py sizes it. Every session runs the probe program from
 its environment (`vm_probe`): a VM's root is the image's programs alone,
 which hold nothing of the container's /probe mount.
 
@@ -351,7 +353,6 @@ def keeper_killed(stack, image, kept, guest, project):
 
 # ————— a person's sessions in their VM (plan V2) —————
 
-KVM_LAYER = os.path.join(HERE, "compose.kvm.yml")
 SESSION_ALLOWANCE = imagesuite.ALLOWANCE_BYTES["session"]
 MIB = 1 << 20
 
@@ -404,8 +405,8 @@ def vm_probe(name="probe", **program):
 
 
 def wall_stack(name, image):
-    """A stack of its own that gives the wall: compose.kvm.yml layered last."""
-    return Stack(f"locus-backends-vm-{name}", image, layers=[KVM_LAYER])
+    """A stack of its own that gives the wall: given the two devices, as cyfr writes them where the machine has them."""
+    return Stack(f"locus-backends-vm-{name}", image, devices=True)
 
 
 def up_wall(stack, work=WORK):
@@ -586,7 +587,7 @@ def disk_and_boot(image):
 
         stack.compose("stop", SERVICE)
         before = volume_image_stat(stack, image, owner)
-        stack.layers = []
+        stack.devices = False
         stack.up(work_bytes=WORK)
         eventually(lambda: SPACES_SAID in stack.logs(), "the keeper without the devices to say it gives spaces",
                    timeout_s=30)

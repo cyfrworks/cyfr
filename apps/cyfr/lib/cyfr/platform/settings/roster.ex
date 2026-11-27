@@ -252,13 +252,18 @@ defmodule Cyfr.Platform.Settings.Roster do
 
   # The `${…}` names docker-compose.yml interpolates that no release reads:
   # cyfr's CPU limit, the Locus pool's numbers and each role's processors,
-  # which cyfr-locus writes into its groups, and Locus's AppArmor profile,
+  # which cyfr-locus writes into its groups, Locus's AppArmor profile, and
+  # the two devices a person's VM needs, where the machine has them,
   # each with the sentence `configuration-guide.md` gives it.
   @compose_only [
     {"CYFR_CPU_LIMIT",
      "The cyfr container's CPU limit (default 4): the control plane's own share of the host, since components run in Locus's runtime role under `LOCUS_RUNTIME_CPU_LIMIT`."},
     {"CYFR_LOCUS_APPARMOR",
      "The AppArmor profile the Locus container runs under on a host with AppArmor, by its name, `cyfr-locus-` and 12 hex digits of its content's hash: `cyfr init` and `cyfr update` write the profile built into `cyfr` here and load it, and a host without AppArmor ignores it."},
+    {"CYFR_LOCUS_KVM",
+     "The KVM device a person's VM runs on, `/dev/kvm`, or empty where this machine has none: no setting, `cyfr init` and each `cyfr update` write it from what the machine has and refuse any other value. Empty, the Locus container is given `/dev/null` at `/dev/kvm`, and each person's work runs in its own space."},
+    {"CYFR_LOCUS_TUN",
+     "The tun device of a person's VM's card, `/dev/net/tun`, or empty where this machine has none, written and checked as `CYFR_LOCUS_KVM` is. Empty, the Locus and guard containers are given `/dev/null` at `/dev/net/tun`, and each person's work runs in its own space."},
     {"LOCUS_BUILDS_CPU_LIMIT",
      "The processor bound of Locus's builds role (default 2), split between its service, which takes the lesser of half a processor and half the bound, and its builds, which take the rest; neither lends to the other."},
     {"LOCUS_CORE_RESERVE_BYTES",

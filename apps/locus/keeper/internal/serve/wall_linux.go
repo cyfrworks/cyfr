@@ -10,6 +10,8 @@ import (
 	"sort"
 	"syscall"
 
+	"golang.org/x/sys/unix"
+
 	"github.com/cyfr/locus/keeper/internal/admission"
 	"github.com/cyfr/locus/keeper/internal/home"
 	"github.com/cyfr/locus/keeper/internal/retire"
@@ -17,8 +19,11 @@ import (
 )
 
 // The wall (plan D18). A keeper gives each person a VM of their own where
-// it keeps homes, its kept role runs, it was given KVM (vm.KVM, a device
-// whose group is not root's, as every VMM holds it) and the image carries
+// it keeps homes, its kept role runs, it was given KVM (vm.KVM, the KVM
+// device, whose group is not root's, as every VMM holds it) and the tun
+// device a VM's card needs (tunPath), each read by its numbers, as
+// docker-compose.yml gives /dev/null at their paths where the machine has
+// none, and the image carries
 // the guest (vm.Firecracker, vm.Kernel), its guard routes a person's VM
 // (the hello's machines member, guard.Client.Machines), and a first
 // session in a VM fits
@@ -30,7 +35,19 @@ import (
 // Seams of the wall's decision: the devices and files it reads.
 var (
 	kvmPath    = vm.KVM
+	tunPath    = tunDevice
 	guestFiles = []string{vm.Firecracker, vm.Kernel}
+)
+
+// tunDevice is the tun device's path, where the stage binds it from into
+// a VM's space (package stage).
+const tunDevice = "/dev/net/tun"
+
+// The two devices' numbers (linux/miscdevice.h): each a misc device.
+const (
+	miscMajor = 10
+	kvmMinor  = 232
+	tunMinor  = 200
 )
 
 // wallOf is the decision and, where it is no, why not.
@@ -44,6 +61,8 @@ func (s *server) wallOf() (bool, string) {
 		return false, "no role of it keeps homes"
 	case !kvmGiven(kvmPath):
 		return false, "the container was given no " + vm.KVM
+	case !deviceIs(tunPath, tunMinor):
+		return false, "the container was given no " + tunDevice
 	}
 	for _, f := range guestFiles {
 		if _, err := os.Stat(f); err != nil {
@@ -63,14 +82,27 @@ func (s *server) wallOf() (bool, string) {
 	return true, ""
 }
 
-// kvmGiven says path is a character device whose group is not root's.
+// kvmGiven says path is the KVM device and its group is not root's.
 func kvmGiven(path string) bool {
+	if !deviceIs(path, kvmMinor) {
+		return false
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	return ok && st.Gid != 0
+}
+
+// deviceIs says path is the misc character device of minor.
+func deviceIs(path string, minor uint32) bool {
 	info, err := os.Stat(path)
 	if err != nil || info.Mode()&os.ModeCharDevice == 0 {
 		return false
 	}
 	st, ok := info.Sys().(*syscall.Stat_t)
-	return ok && st.Gid != 0
+	return ok && unix.Major(st.Rdev) == miscMajor && unix.Minor(st.Rdev) == minor
 }
 
 // giveWall applies the decision at the keeper's start, before any role

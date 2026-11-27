@@ -567,10 +567,11 @@ func TestTheWallIsGivenOnlyWhereAFirstSessionInAVMFits(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	savedKVM, savedFiles := kvmPath, guestFiles
-	t.Cleanup(func() { kvmPath, guestFiles = savedKVM, savedFiles })
+	savedKVM, savedTun, savedFiles := kvmPath, tunPath, guestFiles
+	t.Cleanup(func() { kvmPath, tunPath, guestFiles = savedKVM, savedTun, savedFiles })
 	// /dev/full is a character device whose group is root's, as no VMM may
-	// hold; a test host without a usable /dev/kvm stands it in for none.
+	// hold; /dev/null, which docker-compose.yml gives at a device's path
+	// where the machine has none, is a character device but no KVM nor tun.
 	guestFiles = files
 	// The least rest, by whole MiB, that holds a first session and its VM's
 	// own allowance, which follows the guest's size, that same rest.
@@ -583,6 +584,12 @@ func TestTheWallIsGivenOnlyWhereAFirstSessionInAVMFits(t *testing.T) {
 		s.roles = []*role{{spec: RoleSpec{Name: "backends", Kept: true}}}
 		return s
 	}
+	for _, absent := range []string{"/dev/full", "/dev/null"} {
+		kvmPath = absent
+		if wall, why := base().wallOf(); wall || why != "the container was given no /dev/kvm" {
+			t.Fatalf("%s at the KVM device's path gave the wall %t (%s)", absent, wall, why)
+		}
+	}
 	kvmPath = "/dev/full"
 	if wall, why := base().wallOf(); wall || !strings.Contains(why, "/dev/kvm") {
 		t.Fatalf("a device of root's group gave the wall %t (%s)", wall, why)
@@ -591,6 +598,14 @@ func TestTheWallIsGivenOnlyWhereAFirstSessionInAVMFits(t *testing.T) {
 		t.Skip("this host gives no /dev/kvm whose group is not root's")
 	}
 	kvmPath = "/dev/kvm"
+	if _, err := os.Stat("/dev/net/tun"); err != nil || !deviceIs("/dev/net/tun", tunMinor) {
+		t.Skip("this host gives no /dev/net/tun")
+	}
+	tunPath = "/dev/null"
+	if wall, why := base().wallOf(); wall || why != "the container was given no /dev/net/tun" {
+		t.Fatalf("/dev/null at the tun device's path gave the wall %t (%s)", wall, why)
+	}
+	tunPath = "/dev/net/tun"
 	if wall, why := base().wallOf(); !wall {
 		t.Fatalf("a keeper with everything a VM needs gave no wall: %s", why)
 	}

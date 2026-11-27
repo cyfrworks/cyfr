@@ -61,11 +61,18 @@ defmodule Cyfr.StackShapeTest do
   # default with its comparisons corrected, shipped beside the compose file.
   @container_seccomp "seccomp=./container.seccomp.json"
 
-  # Keys that would hand Locus the host's privileges, namespaces, devices,
-  # a network of its own or a compose limit: the pool's bounds are the
-  # keeper's to write into its groups, from `@bounds`.
-  @forbidden_keys ~w(privileged pid userns_mode cgroup devices networks ports expose deploy
+  # Keys that would hand Locus the host's privileges, namespaces, a network
+  # of its own or a compose limit: the pool's bounds are the keeper's to
+  # write into its groups, from `@bounds`.
+  @forbidden_keys ~w(privileged pid userns_mode cgroup networks ports expose deploy
                      entrypoint healthcheck mem_limit cpus)
+
+  # The devices of a person's VM, at the paths .env names where the
+  # machine has them, /dev/null where it has none (`cyfr init` and
+  # `cyfr update` write them): Locus is given these two and no other device,
+  # and the guard the tun device alone.
+  @kvm "${CYFR_LOCUS_KVM:-/dev/null}:/dev/kvm"
+  @tun "${CYFR_LOCUS_TUN:-/dev/null}:/dev/net/tun"
 
   # The pool's numbers and each role's processors, and their defaults,
   # compose's one definition of them: the reserve kept for core and the
@@ -170,6 +177,7 @@ defmodule Cyfr.StackShapeTest do
       "image" => "ghcr.io/cyfrworks/cyfr-locus:latest",
       "build" => %{"context" => ".", "dockerfile" => "Dockerfile.locus"},
       "security_opt" => @security_opt,
+      "devices" => [@kvm, @tun],
       "env_file" => [%{"path" => ".env.locus", "required" => false}],
       "environment" => locus_environment(),
       "network_mode" => "service:" <> release.guard,
@@ -217,6 +225,7 @@ defmodule Cyfr.StackShapeTest do
       "init" => true,
       "cap_drop" => ["ALL"],
       "cap_add" => ["NET_ADMIN"],
+      "devices" => [@tun],
       "security_opt" => ["no-new-privileges:true", @container_seccomp],
       "read_only" => true,
       "ipc" => "none",
