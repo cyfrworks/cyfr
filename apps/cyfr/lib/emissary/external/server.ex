@@ -62,8 +62,10 @@ defmodule Emissary.External.Server do
   program started
   afresh (`resumed: false`) is initialized at the legacy protocol revision
   (`Prima.MCP.Protocol.legacy_version/0`) and told
-  `notifications/initialized`, its answer stating what it offers; then,
-  when it declares tools, it is asked `tools/list`, every page
+  `notifications/initialized`, its answer stating what it offers. The answer
+  has the program's configured timeout within the connect deadline. A
+  failed handshake closes the lifetime, so only a greeted process resumes.
+  When it declares tools, it is asked `tools/list`, every page
   of it as an HTTP listing is, and its tools are this server's by the names
   it lists, which the proxy offers as `<row name>:<tool>`. Every request is
   one JSON-RPC line `send` writes; a reader process waits on `recv` and
@@ -120,6 +122,9 @@ defmodule Emissary.External.Server do
   # How long a caller waits for a connect, which for a program includes
   # the service starting its program.
   @connect_call_timeout_ms 60_000
+  # The box's open reply can trail its deadline by 1 s. Leave time for it
+  # and for this server's reply to the caller.
+  @connect_reply_margin_ms 2_000
   @retried_refusals [:stale_boot, :epoch_ahead, :unknown_owner, :lapsed]
   # A reader's wait on one recv; the service answers sooner on a line.
   @recv_wait_ms 25_000
@@ -1023,8 +1028,10 @@ defmodule Emissary.External.Server do
 
     state = %{state | last_init_attempt: System.monotonic_time(:millisecond), era: :legacy}
 
+    deadline = program_deadline()
+
     case record_revisions(state) do
-      {:ok, state} -> program_connect(state, 0)
+      {:ok, state} -> program_connect(state, deadline, 0)
       {:error, reason, state} -> fail_initialize(state, reason)
     end
   end
@@ -1113,9 +1120,9 @@ defmodule Emissary.External.Server do
     end
   end
 
-  defp program_connect(state, attempt) do
-    with {:ok, grant} <- Opus.Programs.hold(owner(state)),
-         {:ok, tools, listed} <- list_program_tools(%{state | grant: grant}) do
+  defp program_connect(state, deadline, attempt) do
+    with {:ok, grant} <- Opus.Programs.hold(owner(state), remaining(deadline)),
+         {:ok, tools, listed} <- list_program_tools(%{state | grant: grant}, deadline) do
       Logger.info(
         "[Emissary.External.Server] Connected to #{listed.name}: #{length(tools)} tools discovered"
       )
@@ -1123,13 +1130,10 @@ defmodule Emissary.External.Server do
       {:ok, %{listed | status: :ready, tools: tools, error: nil}}
     else
       {:error, {:refused, code, _boot}, state} when code in @retried_refusals and attempt == 0 ->
-        program_connect(drop_session(%{state | grant: nil}, :refused), 1)
+        program_connect(drop_session(%{state | grant: nil}, :refused), deadline, 1)
 
       {:error, reason, state} ->
-        fail_initialize(
-          drop_session(%{state | grant: nil}, :failed),
-          backends_words(state, reason)
-        )
+        fail_initialize(close_program(state, deadline), backends_words(state, reason))
 
       {:error, reason} ->
         fail_initialize(
@@ -1164,35 +1168,54 @@ defmodule Emissary.External.Server do
   # The program's session, asked for when it has none: of the process this
   # server already has, while that runs, or of a new one, which is
   # initialized before anything else is sent to it.
-  defp ensure_session(%State{session: %{}} = state), do: {:ok, state}
+  defp program_deadline do
+    System.monotonic_time(:millisecond) + @connect_call_timeout_ms -
+      Opus.Programs.box_close_timeout_ms() - @connect_reply_margin_ms
+  end
 
-  defp ensure_session(%State{grant: nil} = state) do
-    case Opus.Programs.hold(owner(state)) do
-      {:ok, grant} -> ensure_session(%{state | grant: grant})
+  defp remaining(deadline), do: max(deadline - System.monotonic_time(:millisecond), 0)
+
+  defp ensure_session(state, deadline \\ program_deadline())
+
+  defp ensure_session(%State{session: %{}} = state, _deadline), do: {:ok, state}
+
+  defp ensure_session(%State{grant: nil} = state, deadline) do
+    case Opus.Programs.hold(owner(state), remaining(deadline)) do
+      {:ok, grant} -> ensure_session(%{state | grant: grant}, deadline)
       {:error, reason} -> {:error, reason, state}
     end
   end
 
-  defp ensure_session(%State{lifetime: nil} = state),
-    do: open_program(with_lifetime(state))
+  defp ensure_session(%State{lifetime: nil} = state, deadline) do
+    if remaining(deadline) > 0,
+      do: open_program(with_lifetime(state), deadline),
+      else: {:error, :deadline, state}
+  end
 
   # Its process ended, or was closed: that place is asked back, and the
   # program starts afresh as another lifetime.
-  defp ensure_session(state) do
-    case open_program(state) do
+  defp ensure_session(state, deadline) do
+    case open_program(state, deadline) do
       {:error, {:refused, :lifetime_over, _boot}, state} ->
-        _ = Opus.Programs.box_close(state.lifetime)
-        open_program(with_lifetime(state))
+        ensure_session(close_program(state, deadline), deadline)
 
       # The service runs another boot than the lifetime's: holding again
       # answers a grant of that one, and the next is minted under it.
       {:error, {:refused, :stale_boot, _boot}, state} ->
-        _ = Opus.Programs.box_close(state.lifetime)
-        ensure_session(%{state | grant: nil, lifetime: nil})
+        ensure_session(%{close_program(state, deadline) | grant: nil}, deadline)
 
       answer ->
         answer
     end
+  end
+
+  defp close_program(%State{lifetime: nil} = state, _deadline), do: state
+
+  defp close_program(state, deadline) do
+    state = drop_session(state, :failed)
+    close_by = deadline + Opus.Programs.box_close_timeout_ms()
+    _ = Opus.Programs.box_close(state.lifetime, remaining(close_by))
+    %{state | lifetime: nil}
   end
 
   defp with_lifetime(state) do
@@ -1206,19 +1229,19 @@ defmodule Emissary.External.Server do
     %{state | lifetime: Opus.Programs.lifetime(state.grant, named)}
   end
 
-  defp open_deadline, do: System.system_time(:millisecond) + @connect_call_timeout_ms
-
   # A box that does not count this process a holder (one started in
   # another's place) is asked to once.
-  defp open_program(state, held_again? \\ false) do
-    case Opus.Programs.box_open(state.lifetime, self(), %{}, open_deadline()) do
+  defp open_program(state, deadline, held_again? \\ false) do
+    open_deadline = System.system_time(:millisecond) + remaining(deadline)
+
+    case Opus.Programs.box_open(state.lifetime, self(), %{}, open_deadline) do
       {:ok, %{session: session, resumed: resumed}} ->
         state = %{state | session: %{session: session, reader: nil, after: 0}}
-        if resumed, do: {:ok, state}, else: initialize_program(state)
+        if resumed, do: {:ok, state}, else: initialize_program(state, deadline)
 
       {:error, :not_held} when not held_again? ->
-        case Opus.Programs.hold(owner(state)) do
-          {:ok, grant} -> open_program(%{state | grant: grant}, true)
+        case Opus.Programs.hold(owner(state), remaining(deadline)) do
+          {:ok, grant} -> open_program(%{state | grant: grant}, deadline, true)
           {:error, reason} -> {:error, reason, state}
         end
 
@@ -1231,16 +1254,25 @@ defmodule Emissary.External.Server do
     end
   end
 
-  defp initialize_program(state) do
+  defp initialize_program(state, deadline) do
     params = %{
       "protocolVersion" => Protocol.legacy_version(),
       "capabilities" => %{},
       "clientInfo" => %{"name" => "cyfr", "version" => Prima.Version.current()}
     }
 
-    with {:ok, result, state} <- request(state, "initialize", params),
-         {:ok, state} <- notify(state, "notifications/initialized") do
+    answer_by = min(deadline, System.monotonic_time(:millisecond) + state.timeout_ms)
+
+    with {:ok, result, %State{session: %{}} = state} <-
+           request(state, "initialize", params, answer_by, false),
+         {:ok, state} <- notify(state, "notifications/initialized", deadline) do
       {:ok, declared_anew(state, declared(result))}
+    else
+      {:ok, _result, state} ->
+        {:error, ended_words(state, :ended), close_program(state, deadline)}
+
+      {:error, reason, state} ->
+        {:error, reason, close_program(state, deadline)}
     end
   end
 
@@ -1258,16 +1290,22 @@ defmodule Emissary.External.Server do
   end
 
   # The program's tools, asked only of one whose `initialize` declared them.
-  defp list_program_tools(state) do
-    with {:ok, state} <- ensure_session(state) do
+  defp list_program_tools(state, deadline \\ program_deadline()) do
+    with {:ok, state} <- ensure_session(state, deadline) do
       listing = {state.name, "tools/list", "tools"}
+      fetch = &program_tools_page(&1, &2, deadline)
 
-      case :tools in state.offers && list_pages(state, listing, &request(&1, "tools/list", &2)) do
+      case :tools in state.offers && list_pages(state, listing, fetch) do
         false -> {:ok, [], state}
         {:ok, tools, state} -> {:ok, mask_credentials(tools, state), state}
         {:error, reason, state} -> {:error, reason, state}
       end
     end
+  end
+
+  defp program_tools_page(state, params, deadline) do
+    answer_by = min(deadline, System.monotonic_time(:millisecond) + state.timeout_ms)
+    request(state, "tools/list", params, answer_by, true)
   end
 
   # One request to the program, made from this process: its line sent, its
@@ -1277,21 +1315,20 @@ defmodule Emissary.External.Server do
   # meanwhile is handled as it would be outside. A session the service ended
   # meanwhile (idle, a crash) is opened again once, its program initialized
   # afresh.
-  defp request(state, method, params, retried? \\ false) do
+  defp request(state, method, params, deadline, reopen?) do
     {id, state} = next_request_id(state)
     %{session: session} = state.session
     line = Jason.encode!(Message.encode_request(id, method, params))
-    deadline = System.monotonic_time(:millisecond) + min(state.timeout_ms, @initialize_timeout_ms)
 
-    case Opus.Programs.Session.send(state.grant, session, [line]) do
+    case send_program(state, line, deadline) do
       {:ok, :running} ->
         await(start_reader(state), session, id, deadline)
 
-      {:ok, ended} when ended != :running and not retried? ->
-        reopen(state, &request(&1, method, params, true))
+      {:ok, ended} when ended != :running and reopen? ->
+        reopen(state, deadline, &request(&1, method, params, deadline, false))
 
-      {:error, {:refused, :unknown_session, _boot}} when not retried? ->
-        reopen(state, &request(&1, method, params, true))
+      {:error, {:refused, :unknown_session, _boot}} when reopen? ->
+        reopen(state, deadline, &request(&1, method, params, deadline, false))
 
       {:ok, ended} ->
         program_ended(state, ended)
@@ -1301,8 +1338,8 @@ defmodule Emissary.External.Server do
     end
   end
 
-  defp reopen(state, again) do
-    case ensure_session(session_ended(state, :ended)) do
+  defp reopen(state, deadline, again) do
+    case ensure_session(session_ended(state, :ended), deadline) do
       {:ok, state} -> again.(state)
       {:error, reason, state} -> {:error, reason, state}
     end
@@ -1333,15 +1370,25 @@ defmodule Emissary.External.Server do
       {:session_lost, ^session, reason} ->
         {:error, reason, session_ended(state, reason)}
     after
-      wait -> {:error, "timeout: #{state.name} did not answer", stop_reader(state)}
+      wait ->
+        {:error, reason} = program_timeout(state)
+        {:error, reason, stop_reader(state)}
     end
   end
 
-  defp notify(state, method) do
-    %{session: session} = state.session
+  defp program_timeout(state), do: {:error, "timeout: #{state.name} did not answer"}
+
+  defp send_program(state, line, deadline) do
+    case remaining(deadline) do
+      0 -> program_timeout(state)
+      wait -> Opus.Programs.Session.send(state.grant, state.session.session, [line], wait)
+    end
+  end
+
+  defp notify(state, method, deadline) do
     line = Jason.encode!(Message.encode_notification(method))
 
-    case Opus.Programs.Session.send(state.grant, session, [line]) do
+    case send_program(state, line, deadline) do
       {:ok, :running} -> {:ok, state}
       {:ok, ended} -> program_ended(state, ended)
       {:error, reason} -> {:error, reason, session_ended(state, :refused)}

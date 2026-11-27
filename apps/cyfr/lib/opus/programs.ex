@@ -1194,13 +1194,22 @@ defmodule Opus.Programs do
   of the lifetime is held, and so its place is back, whether or not this
   box knew of it, and `{:error, :unanswered}` when it did not, the close
   window passed or the box could send nothing; either way only then, so
-  the holder's release of the owner after it never outruns it.
+  the holder's release of the owner after it never outruns it. A holder
+  with an earlier deadline may bound its own wait. The box still owes
+  the close.
   """
   @spec box_close(Box.lifetime()) :: :ok | {:error, :unanswered}
-  def box_close(lifetime) do
-    case call(box_of(lifetime.athanor), {:session_close, lifetime}, Box.close_timeout_ms()) do
+  @spec box_close(Box.lifetime(), non_neg_integer()) :: :ok | {:error, :unanswered}
+  def box_close(lifetime, timeout_ms \\ box_close_timeout_ms()) do
+    wait = min(timeout_ms, box_close_timeout_ms())
+
+    case call(box_of(lifetime.athanor), {:session_close, lifetime}, wait) do
       :ok -> :ok
       {:error, _unanswered} -> {:error, :unanswered}
     end
   end
+
+  @doc "The most time a holder waits for the box to confirm a lifetime's close."
+  @spec box_close_timeout_ms() :: pos_integer()
+  defdelegate box_close_timeout_ms(), to: Box, as: :close_timeout_ms
 end
