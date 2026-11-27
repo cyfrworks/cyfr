@@ -1684,47 +1684,29 @@ defmodule Locus.Runtime.RelayCountTest do
       limits = EdgeFixtures.limits(timeout: "90s", max_response_size: 4 * size)
       test = self()
 
-      # Two runners of eight pinned fetches and three of sixteen attached
-      # ones: more held past their windows than a fetch's asks may hold,
-      # so some fetches wait for room. A pinned fetch's window is sent to
-      # the byte, an attached one's to its last whole frame.
+      # Three runners of sixteen attached fetches, then, once they hold
+      # what a fetch's asks may, two of eight pinned ones: more held past
+      # their windows than that, so some fetches wait for room. A pinned
+      # fetch's window is sent to the byte, an attached one's to its last
+      # whole frame.
+      attached = List.duplicate({:attached, 16, credit - 2 * byte_size(piece) - 4_096}, 3)
+      pinned = List.duplicate({:pinned, 8, credit}, 2)
+
       runners =
-        for {kind, count, window} <-
-              List.duplicate({:pinned, 8, credit}, 2) ++
-                List.duplicate({:attached, 16, credit - 2 * byte_size(piece) - 4_096}, 3) do
-          attempt =
-            attempt!(host, timeout_ms: 120_000, limits: limits) |> ScriptedKeeper.relayed!()
+        for phase <- [attached, pinned], reduce: [] do
+          started ->
+            runners = started ++ Enum.map(phase, &stop_reading!(host, test, limits, size, &1))
+            fetches = runners |> Enum.map(&elem(&1, 2)) |> Enum.sum()
 
-          ports = if kind == :pinned, do: for(_n <- 1..count, do: elem(big_upstream!(size), 0))
+            # Every fetch has read its window, or waits for room, or both.
+            wait_until(
+              fn -> windows_read(runners) + Locus.Output.held(@count).waiting >= fetches end,
+              60_000,
+              "every fetch past its window or waiting for room"
+            )
 
-          reader =
-            Task.async(fn ->
-              refs =
-                case kind do
-                  :pinned ->
-                    for port <- ports, do: pinned_fetch!(attempt, port, "/big")
-
-                  :attached ->
-                    for _n <- 1..count do
-                      assert {:ok, ref} = attached_fetch(attempt, attached())
-                      ref
-                    end
-                end
-
-              unread(test, attempt.endpoint, Map.new(refs, &{&1, 0}), window)
-            end)
-
-          {attempt, reader, count}
+            runners
         end
-
-      # Every fetch has read its window, or waits for room, or both.
-      fetches = runners |> Enum.map(&elem(&1, 2)) |> Enum.sum()
-
-      wait_until(
-        fn -> windows_read(runners) + Locus.Output.held(@count).waiting >= fetches end,
-        60_000,
-        "every fetch past its window or waiting for room"
-      )
 
       [{attempt, _reader, _count} | _] = runners
       answer = largest_answer(attempt)
@@ -1748,6 +1730,33 @@ defmodule Locus.Runtime.RelayCountTest do
         }
       end)
     end
+  end
+
+  # A runner whose `count` fetches of `kind` are read by guests that stop
+  # reading once they have `window` bytes: its attempt, the reader and
+  # the count.
+  defp stop_reading!(host, test, limits, size, {kind, count, window}) do
+    attempt = attempt!(host, timeout_ms: 120_000, limits: limits) |> ScriptedKeeper.relayed!()
+    ports = if kind == :pinned, do: for(_n <- 1..count, do: elem(big_upstream!(size), 0))
+
+    reader =
+      Task.async(fn ->
+        refs =
+          case kind do
+            :pinned ->
+              for port <- ports, do: pinned_fetch!(attempt, port, "/big")
+
+            :attached ->
+              for _n <- 1..count do
+                assert {:ok, ref} = attached_fetch(attempt, attached())
+                ref
+              end
+          end
+
+        unread(test, attempt.endpoint, Map.new(refs, &{&1, 0}), window)
+      end)
+
+    {attempt, reader, count}
   end
 
   # A runner's guests reading their fetches' bodies, granting nothing
