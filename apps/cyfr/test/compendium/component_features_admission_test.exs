@@ -9,8 +9,9 @@ defmodule Compendium.ComponentFeaturesAdmissionTest do
   for a publish, no bytes, in a sentence naming its digest; the twin that
   uses none is admitted. Every component committed to this tree passes
   the same check, except the hostile guests that use a refused feature on
-  purpose. That the runtime refuses one again before compiling it is
-  `Locus.Runtime.ComponentFeaturesTest`'s.
+  purpose: refused for its feature, or, for a feature the validator's own
+  defaults leave off, as invalid WebAssembly. That the runtime refuses one
+  again before compiling it is `Locus.Runtime.ComponentFeaturesTest`'s.
   """
 
   use ExUnit.Case, async: false
@@ -22,6 +23,10 @@ defmodule Compendium.ComponentFeaturesAdmissionTest do
   @root Path.expand("../../../..", __DIR__)
   @hostile Path.join(@root, "apps/locus/test/support/runtime/test_wasm/hostile")
   @refused ~w(async_lift gc_alloc exception_throw externref_table)
+
+  # The guests whose feature the validator's defaults leave off, which the
+  # check answers as invalid WebAssembly.
+  @invalid ~w(stackful_lift async_cancel error_context thread_index legacy_try)
 
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
@@ -123,15 +128,25 @@ defmodule Compendium.ComponentFeaturesAdmissionTest do
     refused =
       for path <- found, Path.basename(path, ".wasm") in @refused, do: path
 
-    assert length(refused) == length(@refused)
+    invalid =
+      for path <- found, Path.basename(path, ".wasm") in @invalid, do: path
 
-    for path <- found, path not in refused do
+    assert length(refused) == length(@refused)
+    assert length(invalid) == length(@invalid)
+
+    for path <- found, path not in refused and path not in invalid do
       assert Prima.ComponentFeatures.check(File.read!(Path.join(@root, path))) == :ok, path
     end
 
     capture_log(fn ->
       for path <- refused do
         assert {:error, {:component_feature_refused, _digest}} =
+                 Prima.ComponentFeatures.check(File.read!(Path.join(@root, path))),
+               path
+      end
+
+      for path <- invalid do
+        assert {:error, {:component_invalid, _digest}} =
                  Prima.ComponentFeatures.check(File.read!(Path.join(@root, path))),
                path
       end

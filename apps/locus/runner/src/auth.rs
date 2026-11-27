@@ -28,12 +28,57 @@ use aes_gcm::aead::{Aead, KeyInit, Payload};
 use aes_gcm::{Aes256Gcm, Nonce};
 use hmac::{Hmac, Mac};
 use sha2::{Digest, Sha256};
-use zeroize::Zeroizing;
+use zeroize::{Zeroize as _, Zeroizing};
 
 use crate::wire::{MAX_INTEGER, decode_base64url, encode_base64url, hex, is_id};
 
-/// A 32-byte key, cleared when it is dropped.
-pub type Key = Zeroizing<[u8; 32]>;
+/// A 32-byte key, cleared when it is dropped. It is held behind one
+/// allocation, so moving a key moves a pointer and leaves no copy of its
+/// bytes behind; a clone is a second allocation, cleared as it drops.
+pub struct Key(Box<[u8; 32]>);
+
+impl Key {
+    /// A key of zeroes, to be written in place (`bytes_mut`).
+    pub fn zeroed() -> Key {
+        Key(Box::new([0u8; 32]))
+    }
+
+    /// The key's bytes, to write in place.
+    pub fn bytes_mut(&mut self) -> &mut [u8; 32] {
+        &mut self.0
+    }
+}
+
+impl std::ops::Deref for Key {
+    type Target = [u8; 32];
+
+    fn deref(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+impl Clone for Key {
+    fn clone(&self) -> Key {
+        let mut key = Key::zeroed();
+        key.bytes_mut().copy_from_slice(&self.0[..]);
+        key
+    }
+}
+
+impl Drop for Key {
+    fn drop(&mut self) {
+        self.0.zeroize();
+    }
+}
+
+impl From<[u8; 32]> for Key {
+    /// A key of `bytes`, which the caller's own copy still holds.
+    fn from(bytes: [u8; 32]) -> Key {
+        let mut key = Key::zeroed();
+        *key.bytes_mut() = bytes;
+        key
+    }
+}
 
 /// The label a runtime key or signature is under: the island's domain and
 /// the runtime's name.

@@ -12,8 +12,8 @@
 //! for another integer `v` and `malformed` for anything else it refuses.
 //!
 //! What this read leaves to CYFR, which refuses each at attach: `actor`
-//! and `authority` are held as JSON objects and read no further (the
-//! engine reads the authority from R2's vector on), and a component's
+//! and `authority` are held as JSON objects and read no further here (an
+//! attempt reads what it needs of the authority, `crate::authority`), and a component's
 //! `type` and the canonical form of its `ref` are not checked against the
 //! component reference grammar. `tests/fixtures/worker_auth.json`'s
 //! `assignment_reads` holds the tokens both sides read alike.

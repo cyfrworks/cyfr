@@ -997,10 +997,11 @@ jobs:
       # The shared contracts depend on no other application: a checkout
       # holding only the lock, Prima, the fetched deps, the WIT tree
       # (`Prima.WIT` embeds it), the protocol vectors, the shipped
-      # components the Wasm validator's suite reads and the pinned
-      # wasm-tools the component validator runs compiles it with
-      # warnings as errors and runs its suite. Standalone, the application
-      # loads only its own empty configuration.
+      # components the Wasm validator's suite reads, the guests
+      # component_features.json names and the pinned wasm-tools the
+      # component validator runs compiles it with warnings as errors and
+      # runs its suite. Standalone, the application loads only its own
+      # empty configuration.
       - name: Compile and test Prima alone
         run: |
           set -euo pipefail
@@ -1011,6 +1012,11 @@ jobs:
           cp -R deps wit _tools "$island/"
           cp -R tests/fixtures "$island/tests/"
           cp -R seed/components "$island/seed/"
+          jq -r '.cases[] | .path // empty' tests/fixtures/component_features.json |
+            while read -r guest; do
+              mkdir -p "$island/$(dirname "$guest")"
+              cp "$guest" "$island/$guest"
+            done
           cd "$island/apps/prima"
           mix compile --warnings-as-errors
           mix test
@@ -1122,7 +1128,7 @@ jobs:
           path: |
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
-            apps/locus/runner/target
+            _build/runner
           key: ${{ runner.os }}-${{ matrix.arch }}-runner-${{ hashFiles('rust-toolchain.toml', 'apps/locus/runner/Cargo.lock') }}
       - name: Check the crate
         run: scripts/runner.sh check

@@ -7,15 +7,18 @@ Components written in WebAssembly text that push against what the engine
 lets one run hold (`Locus.Runtime.Engine.store_limits/1`), what its vault
 hands it, what a request naming a connection may carry or what reaches a
 guest of the credential CYFR attaches for it, that trap, or that use a feature the runtime refuses
-(`Prima.ComponentFeatures`). Each `.wat` says what it does; the tests that
-run them are `Locus.Runtime.StoreLimitsTest`, `Locus.Runtime.TrapTest`,
+(`Prima.ComponentFeatures`). Each `.wat` says what it does. The validator's
+own defaults leave the last five guests' features off, so the check answers
+each of them as invalid WebAssembly rather than as a refused feature's
+(`tests/fixtures/component_features.json`, which `Prima.ComponentFeaturesTest`
+plays). The tests that run them are `Locus.Runtime.StoreLimitsTest`, `Locus.Runtime.TrapTest`,
 `Locus.Runtime.ComponentFeaturesTest`, `Locus.Runtime.WasiCapabilitiesTest` and `Locus.Runtime.VaultDenialTest`
 in this suite,
 `Locus.Runtime.MemoryBoundTest`, `Locus.Runtime.SecretAuditTest`,
 `Locus.Runtime.AttachedFetchTest`, `Cyfr.FormulaHostCallsTest`,
 `Opus.Schedules.SchedulerTest`, `CyfrWeb.WebhookFlowIntegrationTest`,
 `Aqua.LaunchTest` and `Compendium.ComponentFeaturesAdmissionTest` in
-CYFR's, and the worker image's `tests/locus-runtime-image/runners.py` and
+CYFR's, the runner crate's (`apps/locus/runner/tests/`), and the worker image's `tests/locus-runtime-image/runners.py` and
 `tests/locus-runtime-image/canary.py`.
 
 | Guest | World | Does |
@@ -34,6 +37,15 @@ CYFR's, and the worker image's `tests/locus-runtime-image/runners.py` and
 | `externref_table` | reagent | declares a table of `externref`; refused for GC's reference types |
 | `wide_arithmetic` | reagent | adds two 128-bit integers with `i64.add128` and answers `{"carried":true}`; admitted |
 | `socket_probe` | reagent, catalyst, formula | opens a TCP and a UDP socket through WASI and answers what the host said to each |
+| `stackful_lift` | reagent | lifts `compute` async without a callback; refused for the component-model async stackful ABI |
+| `async_cancel` | reagent | `sync_lift` beside a `subtask.cancel` builtin marked `async`; refused for the more async builtins feature |
+| `error_context` | reagent | `sync_lift` beside an `error-context.drop` builtin; refused for the component-model error-context feature |
+| `thread_index` | reagent | `sync_lift` beside a `thread.index` builtin; refused for the component-model threading feature |
+| `legacy_try` | reagent | runs a legacy `try` block with a `catch_all`; refused for the legacy exception-handling feature |
+| `nested_output` | reagent | answers its input's length in nested arrays, a JSON value that deep, for the runner's depth bound on a guest's output |
+| `storage_flood` | catalyst | calls its storage forever with a request that is no JSON: each call is refused before any host call and is one `storage.call` event |
+| `vault_log_flood` | catalyst | asks its vault forever for a name carrying a control byte: each read is refused unreported, and is one line the runner would log |
+| `slow_validate` | none | imports an instance of 1,500 functions and instantiates a component of it 3,000 times: slow to validate, for a run whose budget ends while the compile thread works |
 
 ## Rebuilding
 
@@ -84,4 +96,22 @@ wide_arithmetic.wat        sha256:24d8a77f677b3b1bfb332edcb5cced1e056bdadee724b7
 wide_arithmetic.wasm       sha256:0d77f0ef7217f2449c83a0d08d7bb0ad2f1de42fecc334b657f1ba927e6a677b
 socket_probe.wat           sha256:e113d384df5ea66d0c6ff53282665d641f33644f375187794ca8ede37368bcfb
 socket_probe.wasm          sha256:d3e535bfe8f5a0b94c1f3414729139a734e76dd4c45de6da0d828f0db80dc31d
+stackful_lift.wat          sha256:684a82ff8ceb5b2eb829b4c3dbfb13362a4b6737e7b797cb995eeec11e6257f1
+stackful_lift.wasm         sha256:49a875f253c1c30e489ce59f0fe73bb2b42f0403de132c3264e7ee535c02ba21
+async_cancel.wat           sha256:aa89b5fb002d71bf91e3399b1c2ca7c39a73df6d8a96077c2c23b57cf12133eb
+async_cancel.wasm          sha256:4c9498900a51a4673b8adfd3baa3cb258c1afe431aa8e43177b7dccccaf3c973
+error_context.wat          sha256:9449fdf13fdd7f3d5ea3122951586f82614e1903b41b835af90fd7c47bd23fa8
+error_context.wasm         sha256:9a08c0c7e1b04bd8674d5f2b76778e50ff71bb0b9f6ee475b2b3ad05233daf8b
+thread_index.wat           sha256:04f120ad4c7f342e5d1b039dd955e0ea5942d45570f8388ec93c5ed46fa6a965
+thread_index.wasm          sha256:43d05d009f61e8b9dd152adcbd1ed5392c99973285a3b4f61d1b377e5c8d48cd
+legacy_try.wat             sha256:2adc44fa64ff904bf6a019c2bbdfb9d6f44d4628d7e616bc3e72c5e79d52ab4a
+legacy_try.wasm            sha256:244f4dbd5d1a29ff8c0b37fc84d21f3630f88b0b7451de28108610c7ea1dd454
+nested_output.wat          sha256:3ce720e5c66fb39198f2ec614efc5e28b01b4c436fc9ab23c00d3203758f55f6
+nested_output.wasm         sha256:dd21f5cce9f42efea0dd574d0a49293f81b73bf83bd98ade4cbda2d6a6169961
+storage_flood.wat          sha256:7e78a283bc928b0f6dc732b7c42a9a518f3bede2de981c5823c45bda33deb67b
+storage_flood.wasm         sha256:6ac5b830ad0faedf0cf223927120972ef1843aa62437db6bd9ed4d0708990622
+vault_log_flood.wat        sha256:1c223ece263e5549e7ee246da17a98dc9494eeb125d85cb9d3a712f94ce6dcf2
+vault_log_flood.wasm       sha256:971e8407c7934f41c2495b85f87fb34c9048975b91b52cdbf4952e117d9c8e6d
+slow_validate.wat          sha256:0cfefb7c8520d6da2f62c6c8fc3a7d2e81352d7cee84d409d94917d72bc5cdb8
+slow_validate.wasm         sha256:157de6295fc6e0dd345cfd777edc98464bb5fd932d99e97a09fbfe1564648ff6
 ```

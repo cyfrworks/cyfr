@@ -167,10 +167,11 @@ defmodule Prima.Limits do
   Build a `%Prima.Limits{}` from an atom- or string-keyed map.
 
   Fail-closed allowlist parsing: every one of the seven fields is required,
-  unknown keys are rejected, numerics must be non-negative integers (no
-  floats — the canonical digest domain has none), durations must parse via
+  unknown keys are rejected, numerics must be integers from 0 to
+  `Prima.JCS.max_safe_integer/0` (no floats — the canonical digest domain
+  has none, nor a larger integer), durations must parse via
   `parse_duration/1`, and `rate_limit` must be a map of `requests`
-  (non-negative integer) and `window` (duration). A blob that omits a limit
+  (such an integer) and `window` (duration). A blob that omits a limit
   gets an error, not a default — a fallback here would be a silent widening.
   """
   @spec new(map()) :: {:ok, t()} | {:error, {:invalid_limit, atom(), String.t()}}
@@ -327,11 +328,13 @@ defmodule Prima.Limits do
     end)
   end
 
+  # Every integer of a limit is within the canonical encoding's bound
+  # (`Prima.JCS.max_safe_integer/0`), as the blob that carries it must be.
   defp validate_field(field, value) when field in @numeric_fields do
-    if is_integer(value) and value >= 0 do
+    if count?(value) do
       {:ok, value}
     else
-      {:error, "must be a non-negative integer, got: #{inspect(value)}"}
+      {:error, "must be an integer from 0 to 2^53 - 1, got: #{inspect(value)}"}
     end
   end
 
@@ -355,8 +358,8 @@ defmodule Prima.Limits do
       map_size(value) != 2 ->
         {:error, "must have exactly requests and window"}
 
-      not (is_integer(requests) and requests >= 0) ->
-        {:error, "requests must be a non-negative integer, got: #{inspect(requests)}"}
+      not count?(requests) ->
+        {:error, "requests must be an integer from 0 to 2^53 - 1, got: #{inspect(requests)}"}
 
       # Strictly positive, not merely parseable. `Opus.Rates`
       # weighs a claim against a window of `window_ms`: at zero there is no
@@ -376,4 +379,7 @@ defmodule Prima.Limits do
   defp validate_field(:rate_limit, value) do
     {:error, "must be a map of requests and window, got: #{inspect(value)}"}
   end
+
+  defp count?(value),
+    do: is_integer(value) and value >= 0 and value <= Prima.JCS.max_safe_integer()
 end
