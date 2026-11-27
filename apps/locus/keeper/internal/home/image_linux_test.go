@@ -132,12 +132,53 @@ func TestAFailedMakingLeavesNoImage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Killed, it is gone once whoever adopted it has reaped it.
-	for deadline := time.Now().Add(5 * time.Second); syscall.Kill(pid, 0) == nil; {
+	// The child has ended once it is gone or a zombie: where nothing reaps
+	// orphans (go test as a container's first process) it stays one.
+	for deadline := time.Now().Add(5 * time.Second); !ended(pid); {
 		if time.Now().After(deadline) {
 			t.Fatalf("the maker's child %d outlived the making's bound", pid)
 		}
-		time.Sleep(10 * time.Millisecond) // sleep-ok: a bounded wait for the killed child's reaping
+		time.Sleep(10 * time.Millisecond) // sleep-ok: a bounded wait for the killed child's end
+	}
+}
+
+// ended says the process pid has ended: it is gone, or a zombie, its state
+// in /proc/<pid>/stat Z (the field after its command's closing parenthesis).
+func ended(pid int) bool {
+	stat, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
+	if err != nil {
+		return true
+	}
+	i := strings.LastIndexByte(string(stat), ')')
+	return i < 0 || strings.HasPrefix(strings.TrimLeft(string(stat[i+1:]), " "), "Z")
+}
+
+// What stands at an image's path and is not a regular file, a link above
+// all, is refused and left as it is: the making never follows it.
+func TestAnImagesPathThatIsNoRegularFileIsRefused(t *testing.T) {
+	k := keptOfMine(t, 1)
+	target := filepath.Join(t.TempDir(), "elsewhere")
+	if err := os.WriteFile(target, []byte("not an image"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, k.ImagePath("ath_1")); err != nil {
+		t.Fatal(err)
+	}
+	err := k.EnsureImage("ath_1", os.Getuid(), os.Getgid())
+	if err == nil || !strings.Contains(err.Error(), "is not a regular file") {
+		t.Fatalf("a link at the image's path answered %v", err)
+	}
+	if got, err := os.ReadFile(target); err != nil || string(got) != "not an image" {
+		t.Fatalf("the link's target was touched: %q %v", got, err)
+	}
+	if err := os.Remove(k.ImagePath("ath_1")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(k.ImagePath("ath_1"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := k.EnsureImage("ath_1", os.Getuid(), os.Getgid()); err == nil || !strings.Contains(err.Error(), "is not a regular file") {
+		t.Fatalf("a folder at the image's path answered %v", err)
 	}
 }
 

@@ -131,18 +131,22 @@ jobs:
             exit 1
           fi
           go_version="$(sed -n 's/^go //p' go.mod)"
+          # The container first installs the tools the tests drive on the
+          # real kernel: mke2fs, which makes a person's disk image, and
+          # iptables, which holds a machine's route to its rules.
           docker run --rm --security-opt writable-cgroups=true --security-opt seccomp="$GITHUB_WORKSPACE/apps/locus/keeper/seccomp/keeper.json" \
             --security-opt "apparmor=$(cat "$GITHUB_WORKSPACE/apps/codex/internal/apparmor/name")" --security-opt systempaths=unconfined \
             --device /dev/net/tun \
             -v "$GITHUB_WORKSPACE:/src:ro" -w /src/apps/locus/keeper \
-            -e GOFLAGS=-buildvcs=false \
+            -e GOFLAGS=-buildvcs=false -e DEBIAN_FRONTEND=noninteractive \
             "golang:$go_version" \
-            go test ./... -race -count=1 -v 2>&1 | tee "$RUNNER_TEMP/keeper-kernel.log"
+            sh -c '/src/scripts/ci/retry.sh apt-get update -qq && /src/scripts/ci/retry.sh apt-get install -y -qq --no-install-recommends e2fsprogs iptables >/dev/null && exec go test ./... -race -count=1 -v' \
+            2>&1 | tee "$RUNNER_TEMP/keeper-kernel.log"
           if grep -E 'needs root|no memory bound can be enforced here' "$RUNNER_TEMP/keeper-kernel.log"; then
             echo "::error::a real-kernel test skipped for want of root or of a memory bound"
             exit 1
           fi
-          for t in TestTheProbeProvesTheSpaceWhereTheHostAllowsIt TestARelaySpaceHasItsOwnNamespacesAndNoCapability TestARelaySpacesRelayIsCarriedOnceOpened TestARelaySpacesRelayIsSilentUnopened TestASpaceRunsInItsBoundedGroup TestTwoSessionsOfOneFolderSeeAndSignalOnlyTheirOwn TestASpacesProcessesEndWithItsCommand TestASignalReachesTheCommandInsideItsSpace TestNoThreadOfASpaceHoldsACapability TestTheProbeRefusesAHostThatCannotBuildASpacesFiles TestTheProfileDeniesWhatDockerMasks TestTheWaiterNeverSignalsAPidItReaped TestARoleRunsInItsOwnSpace TestARoleNamesOnlyItsOwn TestEachRolesGroupReadsItsLimits TestAPoolOfNoWorkStartsItsRolesAndRefusesEachSpawn TestARoleThatEndsStartsAgainAloneWhileTheOtherRunsOn TestARoleKilledStartsAgain TestTheGuardsLossUnderARoleEndsTheKeeper TestEachRolesRunFolderIsItsOwn TestAMachinesRouteJoinsItsTapToTheGuardsEnd TestAGuestsCardIsSetAsItsMachineRouteExpects; do grep -q -- "--- PASS: $t " "$RUNNER_TEMP/keeper-kernel.log" || { echo "::error::the isolation test $t did not run and pass"; exit 1; }; done
+          for t in TestTheProbeProvesTheSpaceWhereTheHostAllowsIt TestARelaySpaceHasItsOwnNamespacesAndNoCapability TestARelaySpacesRelayIsCarriedOnceOpened TestARelaySpacesRelayIsSilentUnopened TestASpaceRunsInItsBoundedGroup TestTwoSessionsOfOneFolderSeeAndSignalOnlyTheirOwn TestASpacesProcessesEndWithItsCommand TestASignalReachesTheCommandInsideItsSpace TestNoThreadOfASpaceHoldsACapability TestTheProbeRefusesAHostThatCannotBuildASpacesFiles TestTheProfileDeniesWhatDockerMasks TestTheWaiterNeverSignalsAPidItReaped TestARoleRunsInItsOwnSpace TestARoleNamesOnlyItsOwn TestEachRolesGroupReadsItsLimits TestAPoolOfNoWorkStartsItsRolesAndRefusesEachSpawn TestARoleThatEndsStartsAgainAloneWhileTheOtherRunsOn TestARoleKilledStartsAgain TestTheGuardsLossUnderARoleEndsTheKeeper TestEachRolesRunFolderIsItsOwn TestAMachinesRouteJoinsItsTapToTheGuardsEnd TestAGuestsCardIsSetAsItsMachineRouteExpects TestADisksImageIsASparseExt4FileMadeOnce TestAFailedMakingLeavesNoImage TestAnImageDiskIsRecordedAndMadeWithNoFolder; do grep -q -- "--- PASS: $t " "$RUNNER_TEMP/keeper-kernel.log" || { echo "::error::the isolation test $t did not run and pass"; exit 1; }; done
 
       - name: Static build
         run: CGO_ENABLED=0 go build -o "$RUNNER_TEMP/cyfr-locus" .

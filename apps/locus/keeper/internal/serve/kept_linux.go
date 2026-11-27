@@ -344,7 +344,7 @@ func (s *server) startKeptSpawn(c *client, req *protocol.Request, reach string, 
 	// An image is mounted by its person's VM alone: here, with no VM to
 	// run its session, it is refused by name, and nothing of it is touched.
 	if at.image {
-		s.log.Warn("spawn %s refused: kept home %s is on a disk image, which runs only in its person's VM, and this machine runs none: give the container /dev/kvm again, or reset the disk", req.ID, req.Home)
+		s.log.Warn("spawn %s refused: kept home %s is on a disk image, which runs only in its person's VM, and this machine runs none: give the container /dev/kvm again", req.ID, req.Home)
 		return nil, protocol.CodeUnavailable
 	}
 	s.mu.Lock()
