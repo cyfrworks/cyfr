@@ -27,9 +27,11 @@
 //! parser hands this reader a number, which is never read as one.
 //!
 //! Two stated differences from the Elixir runner, whose readers go with it
-//! (R5). A number in a host answer's data is carried in the spelling CYFR
-//! wrote and handed on as that text: a decimal is not re-read as a double,
-//! and an integer of any length is taken, where Jason rounds
+//! (R5). A number in a host answer's data is carried as the text CYFR
+//! wrote, its digits kept exactly: an integer of any length whole, a
+//! decimal never re-read as a double. Only an exponent may be respelled,
+//! its letter lowercased and a positive exponent given its `+` (`1.0E20` is
+//! handed on as `1.0e+20`), which changes no value. Jason rounds
 //! `1.00000000000000001` to `1.0`, reads `1e-400` as `0.0` and refuses an
 //! integer past 1,024 digits. And `crate::control::encode` of an `assign`,
 //! the service's direction, which a runner never encodes, writes plain

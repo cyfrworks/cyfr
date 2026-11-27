@@ -1396,16 +1396,62 @@ fn wire_a_member_named_as_the_parser_names_a_number_is_refused_and_an_integer_is
 }
 
 #[test]
-fn wire_a_host_answers_numbers_are_carried_in_the_spelling_cyfr_wrote() {
-    // The crate hands a number on as its text: it does not re-read a
-    // decimal as a double, and it takes an integer of any length. Jason,
-    // the Elixir runner's reader, rounds the first to 1.0, reads the
-    // second as 0.0 and refuses the third; it goes with that runner (R5).
+fn wire_a_host_answers_numbers_keep_their_digits_and_only_an_exponent_is_respelled() {
+    // The crate hands a number on as its text, its digits kept exactly: it
+    // does not re-read a decimal as a double, and it takes an integer of
+    // any length. Jason, the Elixir runner's reader, rounds
+    // 1.00000000000000001 to 1.0, reads 1e-400 as 0.0 and refuses an
+    // integer past 1,024 digits; it goes with that runner (R5). Only an
+    // exponent is respelled, and the value read back is the value written.
     let long = "9".repeat(1_025);
-    for number in ["1.00000000000000001", "1e-400", long.as_str()] {
-        let answer = format!(r#"{{"v":3,"ok":{number}}}"#);
-        let op = Op::named("tool_call").expect("a callback");
+    let op = Op::named("tool_call").expect("a callback");
+    for (written, handed_on) in [
+        ("1.00000000000000001", "1.00000000000000001"),
+        ("1e-400", "1e-400"),
+        (long.as_str(), long.as_str()),
+        ("-12345678901234567890123", "-12345678901234567890123"),
+        ("1.50", "1.50"),
+        ("-0.0", "-0.0"),
+        // CYFR's host encoder writes this one (Opus.Host).
+        ("1.0e20", "1.0e+20"),
+        ("1.0E20", "1.0e+20"),
+        ("1E+20", "1e+20"),
+        ("2.5E-3", "2.5e-3"),
+        ("1.0e020", "1.0e+020"),
+        ("0e0", "0e+0"),
+    ] {
+        let answer = format!(r#"{{"v":3,"ok":{written}}}"#);
         let reading = host::answered(op, answer.as_bytes()).expect("an answer");
-        assert_eq!(reading_json(&reading)["ok"].to_string(), number, "{number}");
+        let out = reading_json(&reading)["ok"].to_string();
+        assert_eq!(out, handed_on, "{written}");
+        assert_eq!(exact(&out), exact(written), "{written}: the value changed");
     }
+}
+
+/// A JSON number's exact value: its sign, its digits without leading or
+/// trailing zeros, and the power of ten they are scaled by; zero is one.
+fn exact(number: &str) -> (bool, String, i64) {
+    let (negative, unsigned) = match number.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, number),
+    };
+    let (mantissa, exponent) = match unsigned.split_once(['e', 'E']) {
+        Some((mantissa, exponent)) => (
+            mantissa,
+            exponent
+                .trim_start_matches('+')
+                .parse::<i64>()
+                .expect("an exponent"),
+        ),
+        None => (unsigned, 0),
+    };
+    let (whole, fraction) = mantissa.split_once('.').unwrap_or((mantissa, ""));
+    let digits = format!("{whole}{fraction}");
+    let significant = digits.trim_start_matches('0');
+    if significant.is_empty() {
+        return (false, "0".to_owned(), 0);
+    }
+    let trimmed = significant.trim_end_matches('0');
+    let scale = exponent - fraction.len() as i64 + (significant.len() - trimmed.len()) as i64;
+    (negative, trimmed.to_owned(), scale)
 }
