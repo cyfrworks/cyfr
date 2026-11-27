@@ -1267,6 +1267,15 @@ defmodule Locus.KeeperTest do
       end
     end
 
+    # The piece the keeper tells on the owner's last word, which comes
+    # whenever anything is still to come: one read, and no word after it.
+    defp on_the_last_word(_ref, 0), do: 0
+
+    defp on_the_last_word(ref, _to_come) do
+      assert_receive {Keeper, ^ref, {:stdout, piece}}, 5_000
+      byte_size(piece)
+    end
+
     @tag timeout: 60_000
     test "from the release on, the connection is read on the owner's word until the relay ends, and what it left at once" do
       c = plain_client!()
@@ -1283,8 +1292,11 @@ defmodule Locus.KeeperTest do
       assert Task.yield(sending, 0) == nil
 
       # Taking each piece it is told, the owner lets the relay write the
-      # rest; the relay ends and the keeper reports its end.
+      # rest; the relay ends and the keeper reports its end. Its last word
+      # lets the keeper read once more: what is still to come begins with
+      # that read's piece, told on the word, and it is taken with the rest.
       taken = take_while_sending(handle, sending, relay, byte_size(first))
+      taken = taken + on_the_last_word(ref, total - taken)
       :ok = :gen_tcp.close(relay)
 
       channel_reply(c, %{
@@ -1306,6 +1318,54 @@ defmodule Locus.KeeperTest do
       memory = Prima.LocusRoles.release().memory
       assert taken + left == total
       assert left <= memory.relay_queue_bytes + memory.keeper_read_bytes
+      assert Enum.take(told, -2) == [{:exited, nil, "SIGKILL", nil}, :released]
+    end
+
+    # One frame of the most a frame carries, and the bytes it carries.
+    defp tail_frame do
+      payload = :binary.copy("z", KeeperProtocol.max_frame_bytes())
+      {KeeperProtocol.frames(:stdout, payload), byte_size(payload)}
+    end
+
+    test "from the release on, what the relay wrote past the owner's last word is handed over whole at its end" do
+      c = plain_client!()
+      {%{ref: ref, spawn_id: id} = handle, relay} = attached_program!(c)
+      :ok = :gen_tcp.send(relay, KeeperProtocol.frames(:stdout, "one"))
+      assert_receive {Keeper, ^ref, {:stdout, "one"}}, 5_000
+
+      :ok = Keeper.release(c.name, handle, 0)
+      assert %{"type" => "release", "spawn_id" => ^id} = request(c.peer)
+
+      # The owner gives no word for its piece, and the relay writes a tail
+      # of three frames, which its socket holds whole: the keeper reads none
+      # of it, and the relay ends with all of it on the connection.
+      {tail_frame, tail_bytes} = tail_frame()
+      for _ <- 1..3, do: :ok = :gen_tcp.send(relay, tail_frame)
+
+      wait_until(
+        fn -> :erlang.port_info(relay, :queue_size) == {:queue_size, 0} end,
+        5_000,
+        "the tail in the relay's socket"
+      )
+
+      refute_received {Keeper, ^ref, {:stdout, _piece}}
+      :ok = :gen_tcp.close(relay)
+
+      channel_reply(c, %{
+        v: 8,
+        type: "exited",
+        spawn_id: id,
+        code: nil,
+        signal: "SIGKILL",
+        memory: nil
+      })
+
+      channel_reply(c, %{v: 8, type: "released", spawn_id: id})
+
+      # The tail is handed over at once, without the owner's word, before
+      # the end is told.
+      told = until_released(ref)
+      assert IO.iodata_length(for {:stdout, piece} <- told, do: piece) == 3 * tail_bytes
       assert Enum.take(told, -2) == [{:exited, nil, "SIGKILL", nil}, :released]
     end
 
