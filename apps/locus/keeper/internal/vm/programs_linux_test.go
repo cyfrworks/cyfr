@@ -20,6 +20,8 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/cyfr/locus/keeper/internal/proc"
 )
 
 const digest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
@@ -64,7 +66,7 @@ printf '%s\n' "$@" > "$2"
 		t.Fatal(err)
 	}
 	return Maker{Dir: volume, Digest: id, Tool: tool, Root: "/", Mounts: mounts,
-		Wait: 5 * time.Second, Deadline: 30 * time.Second, Log: io.Discard}, dir
+		Wait: 5 * time.Second, Deadline: 30 * time.Second, Log: io.Discard, Start: proc.Own}, dir
 }
 
 // device is mk's device, failing the test otherwise, closed at its end.
@@ -430,7 +432,7 @@ func bindsChild(raw string) int {
 			return childRefused
 		}
 	}
-	job.Maker.Log = os.Stderr
+	job.Maker.Log, job.Maker.Start = os.Stderr, proc.Own
 	dev, _, err := job.Maker.Device()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -567,5 +569,17 @@ func TestTheDeviceIsReadableByAnyUIDAndWritableByNone(t *testing.T) {
 	}
 	if info.Mode().Perm() != 0o644 {
 		t.Fatalf("the device's mode is %s, not -rw-r--r--", info.Mode().Perm())
+	}
+}
+
+// The machines' device's maker is started by the maker's start, the
+// keeper's own, whose reaper hands it the maker's end.
+func TestTheDevicesMakerIsStartedByItsStart(t *testing.T) {
+	mk, _ := testMaker(t)
+	start, _, calls := reapingStart(t, "")
+	mk.Start = start
+	device(t, mk)
+	if got := calls(); len(got) != 1 || got[0][0] != filepath.Base(mk.Tool) {
+		t.Fatalf("the maker's start was asked to start %v, not the maker", got)
 	}
 }

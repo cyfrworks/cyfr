@@ -21,12 +21,15 @@ import (
 	"sync/atomic"
 	"time"
 
+	"golang.org/x/sys/unix"
+
 	"github.com/cyfr/locus/keeper/guard"
 	"github.com/cyfr/locus/keeper/internal/admission"
 	"github.com/cyfr/locus/keeper/internal/cgroup"
 	"github.com/cyfr/locus/keeper/internal/frame"
 	"github.com/cyfr/locus/keeper/internal/home"
 	"github.com/cyfr/locus/keeper/internal/packview"
+	"github.com/cyfr/locus/keeper/internal/proc"
 	"github.com/cyfr/locus/keeper/internal/protocol"
 	"github.com/cyfr/locus/keeper/internal/vm"
 )
@@ -103,6 +106,8 @@ type guestVM interface {
 	Done() <-chan struct{}
 	HowEnded() vm.Ended
 	KilledFor() (cgroup.Cause, error)
+	// Status is how the VMM ended, once Done has closed.
+	Status() (unix.WaitStatus, error)
 	// Group is the VMM's group while it runs, which the guard's loss kills;
 	// Used is its reading, the host's one charge for the VM.
 	Group() *cgroup.Group
@@ -129,6 +134,10 @@ type vmBoot struct {
 	// Route makes the VM's route, as the VMM's uid's, from its space's
 	// four descriptors (vm.Config.Route).
 	Route func(uid int, netns, udp, tcp, nl *os.File) (vm.Network, error)
+	// Start is the keeper's own (startTool): the device's maker, the VMM's
+	// stage and its uid's retirement are its children, which its reaper
+	// reaps.
+	Start proc.Start
 }
 
 // machineOf is the production *vm.Machine as a guestVM.
@@ -152,12 +161,12 @@ func (c controlOf) BootID() string { return c.Hello.BootID }
 // startVM starts a person's VM (vm.Start), with the image's programs'
 // device, which it holds from here to its end.
 func startVM(b vmBoot) (guestVM, error) {
-	device, _, err := vm.Programs(io.Discard).Device()
+	device, _, err := vm.Programs(io.Discard, b.Start).Device()
 	if err != nil {
 		return nil, err
 	}
 	m, err := vm.Start(vm.Config{Device: device, VCPUs: b.VCPUs, MemoryMiB: b.MemoryMiB, Groups: b.Groups,
-		Disk: b.Disk, KeptRoot: b.KeptRoot, UID: b.UID, Route: b.Route})
+		Disk: b.Disk, KeptRoot: b.KeptRoot, UID: b.UID, Route: b.Route, Start: b.Start})
 	if err != nil {
 		return nil, err
 	}
@@ -298,7 +307,7 @@ func (s *server) bootMachine(m *machine, at keptAt, r *role) string {
 	}
 	routeCode := ""
 	g, err := boot(vmBoot{Disk: image, KeptRoot: s.keptRoot(), UID: at.uid, MemoryMiB: s.machineMiB(), VCPUs: s.machineVCPUs(r),
-		Groups: r.groups, Route: func(uid int, netns, udp, tcp, nl *os.File) (vm.Network, error) {
+		Groups: r.groups, Start: s.startTool, Route: func(uid int, netns, udp, tcp, nl *os.File) (vm.Network, error) {
 			mr, err := s.guard.AdmitMachine(m.id, uid, guard.ReachNone, nil, netns, udp, tcp, nl)
 			if err != nil {
 				routeCode = protocol.CodeGuardUnavailable
@@ -441,7 +450,7 @@ func (s *server) machineEnded(m *machine) {
 	}
 	s.mu.Unlock()
 	memory := memoryOf(m.vm.KilledFor())
-	s.log.Warn("a person's VM ended (%s): its %d sessions end with it", m.vm.HowEnded(), len(sessions))
+	s.log.Warn("a person's VM ended (%s; its VMM %s): its %d sessions end with it", m.vm.HowEnded(), vmmEnd(m.vm), len(sessions))
 	if l != nil {
 		l.end(memory)
 	}
@@ -450,6 +459,15 @@ func (s *server) machineEnded(m *machine) {
 	}
 	s.withdrawRoute(m.id, &m.route)
 	s.finishMachine(m)
+}
+
+// vmmEnd says how an ended VM's VMM ended: its exit status or its signal.
+func vmmEnd(g guestVM) string {
+	ws, err := g.Status()
+	if err != nil {
+		return "ended, how unknown: " + err.Error()
+	}
+	return "ended " + describeStatus(ws)
 }
 
 // memoryOf is what an ended VMM's group's counters say the kernel killed

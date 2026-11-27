@@ -21,6 +21,7 @@ import (
 
 	"github.com/cyfr/locus/keeper/internal/cgroup"
 	"github.com/cyfr/locus/keeper/internal/frame"
+	"github.com/cyfr/locus/keeper/internal/proc"
 	"github.com/cyfr/locus/keeper/internal/procfs"
 	"github.com/cyfr/locus/keeper/internal/protocol"
 )
@@ -209,7 +210,7 @@ func check(argv []string, keptRoot string, beside bool, report *Report, console,
 		return ErrNoKVM
 	}
 	began := time.Now()
-	device, made, err := Programs(maker).Device()
+	device, made, err := Programs(maker, proc.Own).Device()
 	report.DeviceMs = time.Since(began).Milliseconds()
 	if err != nil {
 		return err
@@ -233,7 +234,7 @@ func check(argv []string, keptRoot string, beside bool, report *Report, console,
 	}
 	args := bootArgs(report.ReportFromOrder0, true)
 	held = nil
-	m, err := Start(Config{Device: device, VCPUs: checkVCPUs, MemoryMiB: checkMemoryMiB, Groups: groups,
+	m, err := Start(Config{Device: device, VCPUs: checkVCPUs, MemoryMiB: checkMemoryMiB, Groups: groups, Start: proc.Own,
 		BootArgs: args, Console: console, KeptRoot: keptRoot})
 	if err != nil {
 		return err
@@ -290,11 +291,11 @@ func check(argv []string, keptRoot string, beside bool, report *Report, console,
 // its own on the device and no console, says hello to it and ends it, and
 // refuses an end that was not the acknowledged one or left anything.
 func besideMachine(groups *cgroup.Manager, maker io.Writer, keptRoot string, order0 bool) (*Beside, error) {
-	device, _, err := Programs(maker).Device()
+	device, _, err := Programs(maker, proc.Own).Device()
 	if err != nil {
 		return nil, err
 	}
-	m, err := Start(Config{Device: device, VCPUs: checkVCPUs, MemoryMiB: checkMemoryMiB, Groups: groups,
+	m, err := Start(Config{Device: device, VCPUs: checkVCPUs, MemoryMiB: checkMemoryMiB, Groups: groups, Start: proc.Own,
 		BootArgs: bootArgs(order0, false), KeptRoot: keptRoot})
 	if err != nil {
 		return nil, fmt.Errorf("the machine beside: %w", err)

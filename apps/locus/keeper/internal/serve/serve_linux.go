@@ -32,6 +32,7 @@ import (
 	"github.com/cyfr/locus/keeper/internal/logx"
 	"github.com/cyfr/locus/keeper/internal/packview"
 	"github.com/cyfr/locus/keeper/internal/pool"
+	"github.com/cyfr/locus/keeper/internal/proc"
 	"github.com/cyfr/locus/keeper/internal/procfs"
 	"github.com/cyfr/locus/keeper/internal/protocol"
 	"github.com/cyfr/locus/keeper/internal/relay"
@@ -1144,6 +1145,43 @@ func (s *server) startWith(argv0 string, argv, env []string, files []uintptr, di
 	c := &child{pid: pid, done: make(chan struct{})}
 	s.waiters[pid] = c
 	return c, nil
+}
+
+// startTool is the start the keeper hands a package that waits for a
+// process of its own (proc.Start): the keeper's own start, so the reaper
+// that takes every exited child gives the package its child's end, and no
+// child of the keeper is waited for but by it.
+func (s *server) startTool(argv0 string, argv, env []string, files []uintptr, dir string, sys *syscall.SysProcAttr) (proc.Process, error) {
+	c, err := s.startWith(argv0, argv, env, files, dir, sys)
+	if err != nil {
+		return nil, err
+	}
+	return tool{s: s, c: c}, nil
+}
+
+// tool is a child started by startTool, as a proc.Process.
+type tool struct {
+	s *server
+	c *child
+}
+
+func (t tool) Pid() int                         { return t.c.pid }
+func (t tool) Done() <-chan struct{}            { return t.c.done }
+func (t tool) Status() (unix.WaitStatus, error) { return t.c.status, nil }
+
+// Kill signals under the reaper's lock, as signalChild does, so no kill
+// reaches a pid or a group's id once the child is reaped.
+func (t tool) Kill(group bool) {
+	t.s.mu.Lock()
+	defer t.s.mu.Unlock()
+	if t.c.reaped() {
+		return
+	}
+	pid := t.c.pid
+	if group {
+		pid = -pid
+	}
+	_ = unix.Kill(pid, unix.SIGKILL)
 }
 
 // signalChild signals one child unless it has been reaped.

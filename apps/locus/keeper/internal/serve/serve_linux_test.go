@@ -202,7 +202,6 @@ type keeper struct {
 	ln      net.Listener
 	attach  string
 	homes   string
-	stop    chan struct{}
 	// guard is a routed keeper's stand-in guard, nil for a relay keeper.
 	guard *fakeRouteGuard
 	// helper is the test binary, executable by every uid: the commands
@@ -388,7 +387,7 @@ func newKeeperOf(t *testing.T, reach string) *keeper {
 	}
 	c := testClient(os.NewFile(uintptr(fds[0]), "channel"), spec, Account{UID: 65534, GID: 65534, Name: "nobody"})
 	c.role.homeRoot = homes
-	k := &keeper{s: s, c: c, channel: protocol.NewLineReader(theirs), ln: ln, attach: attach, homes: homes, stop: make(chan struct{}), helper: helper}
+	k := &keeper{s: s, c: c, channel: protocol.NewLineReader(theirs), ln: ln, attach: attach, homes: homes, helper: helper}
 	// The keeper's own end would end the test binary: a test that expects
 	// it sets its own.
 	s.exit = func(code int) { t.Errorf("the keeper ended %d", code) }
@@ -409,21 +408,7 @@ func newKeeperOf(t *testing.T, reach string) *keeper {
 		t.Skipf("this host does not give a spawn its space: %v", err)
 	}
 
-	sigchld := make(chan os.Signal, 1)
-	signal.Notify(sigchld, unix.SIGCHLD)
-	go func() {
-		tick := time.NewTicker(100 * time.Millisecond)
-		defer tick.Stop()
-		for {
-			select {
-			case <-sigchld:
-			case <-tick.C:
-			case <-k.stop:
-				return
-			}
-			s.reap()
-		}
-	}()
+	reaping(t, s)
 	t.Cleanup(func() {
 		s.mu.Lock()
 		live := make([]*spawn, 0, len(s.spawns))
@@ -446,10 +431,37 @@ func newKeeperOf(t *testing.T, reach string) *keeper {
 			_ = os.Remove(r.groups.Dir())
 		}
 		c.channel.Close()
-		signal.Stop(sigchld)
-		close(k.stop)
 	})
 	return k
+}
+
+// reaping runs s's reaper as the keeper's run does, on each SIGCHLD and a
+// tick, until the test's end: what the keeper starts, its own start among
+// them (startTool), is reaped by it alone.
+func reaping(t *testing.T, s *server) {
+	t.Helper()
+	sigchld := make(chan os.Signal, 1)
+	signal.Notify(sigchld, unix.SIGCHLD)
+	stop, stopped := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(stopped)
+		tick := time.NewTicker(100 * time.Millisecond)
+		defer tick.Stop()
+		for {
+			select {
+			case <-sigchld:
+			case <-tick.C:
+			case <-stop:
+				return
+			}
+			s.reap()
+		}
+	}()
+	t.Cleanup(func() {
+		signal.Stop(sigchld)
+		close(stop)
+		<-stopped
+	})
 }
 
 // reply reads the next line the keeper sent on the channel.

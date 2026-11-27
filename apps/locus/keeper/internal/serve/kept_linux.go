@@ -858,7 +858,7 @@ func (s *server) makeHome(c *client, req *protocol.Request) {
 	// their first session: the host makes the image, after its record, and
 	// again where a keeper that died between the two left none.
 	if d.Form == home.FormImage {
-		err := s.cfg.Kept.EnsureImage(req.Athanor, d.UID)
+		err := s.cfg.Kept.EnsureImage(req.Athanor, d.UID, s.startTool)
 		unlockDisk()
 		if err != nil {
 			s.log.Error("home_make %s: %v", req.ID, err)

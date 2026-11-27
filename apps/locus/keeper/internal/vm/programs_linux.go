@@ -9,7 +9,6 @@ import (
 	"io"
 	"io/fs"
 	"os"
-	"os/exec"
 	"path"
 	"path/filepath"
 	"regexp"
@@ -19,6 +18,8 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/cyfr/locus/keeper/internal/proc"
 )
 
 // The image's programs' device: one squashfs for every machine, made by the
@@ -74,12 +75,16 @@ type Maker struct {
 	Deadline time.Duration
 	// Log takes the maker's own output as it is written.
 	Log io.Writer
+	// Start starts the maker: the keeper's own, whose reaper reaps it. It
+	// is no data, so a maker written as JSON leaves it out.
+	Start proc.Start `json:"-"`
 }
 
-// Programs is the keeper's maker: the container's root into ProgramsDir.
-func Programs(log io.Writer) Maker {
+// Programs is the keeper's maker: the container's root into ProgramsDir,
+// the maker started by start.
+func Programs(log io.Writer, start proc.Start) Maker {
 	return Maker{Dir: ProgramsDir, Digest: DigestFile, Tool: Mksquashfs, Root: "/", Mounts: MountTable,
-		Wait: MakeWait, Deadline: MakeDeadline, Log: log}
+		Wait: MakeWait, Deadline: MakeDeadline, Log: log, Start: start}
 }
 
 // MakeArgs are the maker's flags, leave being leftOut's patterns. They are
@@ -316,40 +321,19 @@ func (mk Maker) make(path string) error {
 	return nil
 }
 
-// run runs the maker within Deadline. It leads a process group of its own,
-// which a passed deadline kills whole before the leader is reaped, while
-// the group's id can still be no other's.
+// run runs the maker within Deadline, started by mk.Start. It leads a
+// process group of its own, which a passed deadline kills whole before the
+// leader is reaped, while the group's id can still be no other's.
 func (mk Maker) run(args []string) error {
-	cmd := exec.Command(mk.Tool, args...)
-	cmd.Env = []string{"PATH=/usr/bin:/bin"}
-	cmd.Stdout, cmd.Stderr = mk.Log, mk.Log
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true, Pdeathsig: syscall.SIGKILL}
-	cmd.WaitDelay = makerOutputWait
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("making the machines' device: %w", err)
+	if mk.Start == nil {
+		return errors.New("making the machines' device: the maker has no start")
 	}
-	ended := make(chan struct{})
-	go func() {
-		defer close(ended)
-		var info unix.Siginfo
-		for unix.Waitid(unix.P_PID, cmd.Process.Pid, &info, unix.WEXITED|unix.WNOWAIT, nil) == unix.EINTR {
-		}
-	}()
-	deadline := time.NewTimer(mk.Deadline)
-	defer deadline.Stop()
-	passed := false
-	select {
-	case <-ended:
-	case <-deadline.C:
-		_ = unix.Kill(-cmd.Process.Pid, unix.SIGKILL)
-		passed = true
-		<-ended
-	}
-	err := cmd.Wait()
-	if passed {
+	err := proc.Run(mk.Start, mk.Tool, append([]string{filepath.Base(mk.Tool)}, args...), []string{"PATH=/usr/bin:/bin"},
+		&syscall.SysProcAttr{Setpgid: true, Pdeathsig: syscall.SIGKILL}, mk.Log, mk.Deadline, makerOutputWait)
+	switch {
+	case errors.Is(err, proc.ErrDeadline):
 		return fmt.Errorf("%w (%s)", ErrMakeDeadline, mk.Deadline)
-	}
-	if err != nil {
+	case err != nil:
 		return fmt.Errorf("making the machines' device: %w", err)
 	}
 	return nil

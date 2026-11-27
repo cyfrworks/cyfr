@@ -120,6 +120,7 @@ func (f *fakeVM) HowEnded() vm.Ended {
 	defer f.mu.Unlock()
 	return f.how
 }
+func (f *fakeVM) Status() (unix.WaitStatus, error) { return 0, nil }
 func (f *fakeVM) KilledFor() (cgroup.Cause, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -406,6 +407,7 @@ func newVMKeeper(t *testing.T) *vmKeeper {
 		spawns: map[string]*spawn{}, unremoved: map[*spawn]*removal{}, guard: fg, wall: true, imageDisks: true,
 		bootVM: g.boot, rest: testWork, packs: packview.New(filepath.Join(kept.Root, packview.DirName)),
 		exit: func(code int) { t.Errorf("the keeper ended %d", code) }}
+	reaping(t, s)
 	c := testClient(ours, pool.Spec{Name: "backends", Reach: pool.ReachRouted}, Account{UID: me, GID: gid})
 	c.role.spec.Kept = true
 	c.role.spec.Name = "backends"
