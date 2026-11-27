@@ -354,7 +354,6 @@ defmodule Arca.MemoryRecord do
   """
   @spec endpoints(Prima.Actor.t(), pos_integer()) ::
           {:ok, [endpoint()]} | {:error, :no_athanor | term()}
-  # arca:unscoped-ok the host's own rows of its endpoints, which no athanor holds.
   def endpoints(%Prima.Actor{} = actor, bound_ms)
       when (platform(actor) or resolved(actor.athanor_id)) and is_integer(bound_ms) and
              bound_ms > 0 do
