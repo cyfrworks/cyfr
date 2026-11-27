@@ -38,6 +38,7 @@ defmodule Cyfr.ApplicationTest do
     Opus.ArchiveWatch => 5_000,
     Opus.Sweeper => 5_000,
     Opus.WorkerWatch => 5_000,
+    Opus.Memory => 5_000,
     Opus.Host.Egress.Pins => 5_000,
     Opus.Brain.Cleanup => 5_000,
     Aqua.ScheduleNotes => 5_000,
@@ -284,7 +285,8 @@ defmodule Cyfr.ApplicationTest do
                Opus.Programs,
                Opus.Browser.Tree,
                Opus.Brain.Tree,
-               Opus.Brain.Cleanup
+               Opus.Brain.Cleanup,
+               Opus.Memory
              ]},
             {Aqua.Supervisor,
              [
@@ -446,6 +448,7 @@ defmodule Cyfr.ApplicationTest do
       for {path, id} <- [
             {[], Cyfr.RetentionScheduler},
             {[Opus.Supervisor], Opus.WorkerWatch},
+            {[Opus.Supervisor], Opus.Memory},
             {[Opus.Supervisor, Opus.Programs], {Opus.Programs.Box, "local"}}
           ] do
         supervisor = child_pid(Cyfr.InfraSupervisor, path)

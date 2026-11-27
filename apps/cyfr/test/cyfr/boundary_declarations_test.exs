@@ -114,7 +114,8 @@ defmodule Cyfr.BoundaryDeclarationsTest do
       {~w(AgentRevisions AgentStorage BudgetReservations BuildRecords Cache Cache.Keys
           CipherRotation ComponentStorage ConsumerReceipts ControlPlane CredentialBindings
           CronSchedule Execution ExecutionAttempts ExecutionEvents ExecutionPayloads
-          ExecutionStanding Health JobClaims McpServerStorage Outbox Overlay PolicyLog
+          ExecutionStanding Health JobClaims McpServerStorage MemoryRecord Outbox Overlay
+          PolicyLog
           ProvisioningClaims RateWindows RecordSink ScheduleOccurrences SecurityTransitions
           ServerMetaStorage Storage StorageProjectionChanges StorageProjectionRoots TenantTables
           ThreadStorage TurnStorage Usage VaultDefaults

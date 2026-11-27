@@ -125,6 +125,65 @@ defmodule Opus.WorkerClient do
     end
   end
 
+  @doc """
+  The worker service's report of who used what after `after_rev`
+  (`Prima.LocusPool`, the pool wire): a `POST` to its pool route signed
+  with the service's pool key (`Prima.LocusPool.pool_key/2` of its worker
+  key), read strictly (`Prima.LocusPool.read_answer/1`). Read only, so it
+  is never retried here: the next poll asks again. `{:error,
+  :unavailable}` for a service no connection was made to or no key
+  derives for, `{:error, :lost}` for anything else in an answer's place.
+  """
+  @spec pool(WorkerAPI.endpoint(), non_neg_integer()) ::
+          {:ok, Prima.LocusPool.report()} | {:error, transport_refusal()}
+  def pool(%{id: id, url: url}, after_rev)
+      when is_binary(id) and is_binary(url) and is_integer(after_rev) and after_rev >= 0 do
+    case Keys.locus_runtime_key(id) do
+      {:ok, worker_key} ->
+        body = Prima.LocusPool.request_body(after_rev)
+        pool_key = Prima.LocusPool.pool_key(:runtime, worker_key)
+
+        header =
+          Prima.LocusPool.header(:runtime, pool_key, System.system_time(:millisecond), body)
+
+        pool_post(url <> Prima.LocusPool.route(), header, body)
+
+      {:error, _invalid} ->
+        {:error, :unavailable}
+    end
+  end
+
+  defp pool_post(url, header, body) do
+    max_bytes = HostAPI.max_answer_bytes()
+
+    response =
+      Req.request(
+        method: :post,
+        url: url,
+        headers: [{WorkerWire.auth_header(), header}, {"content-type", "application/json"}],
+        body: body,
+        receive_timeout: Prima.LocusPool.ask_ms(),
+        connect_options: [timeout: @connect_timeout_ms],
+        retry: false,
+        redirect: false,
+        compressed: false,
+        decode_body: false,
+        into: Prima.BoundedBody.collector(max_bytes)
+      )
+
+    with {:ok, %Req.Response{status: 200} = resp} <- response,
+         {:ok, raw} <- Prima.BoundedBody.read(resp, max_bytes),
+         {:ok, report} <- Prima.LocusPool.read_answer(raw) do
+      {:ok, report}
+    else
+      {:error, %Req.TransportError{reason: reason}} when reason not in [:timeout, :closed] ->
+        {:error, :unavailable}
+
+      _lost ->
+        {:error, :lost}
+    end
+  end
+
   # ---------------------------------------------------------------------------
   # One request
   # ---------------------------------------------------------------------------

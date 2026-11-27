@@ -60,7 +60,9 @@ defmodule Cyfr.EgressInventoryTest do
     "apps/cyfr/lib/opus/host/attached_fetch.ex" => :attached_fetch,
     # The worker wire, CYFR's side: `Prima.WorkerAPI` requests to the
     # operator-configured worker services (CYFR_LOCUS_RUNTIME_WORKERS), signed with each
-    # service's dispatch key, bounded answers (`Prima.WorkerWire`).
+    # service's dispatch key, bounded answers (`Prima.WorkerWire`); and the
+    # pool wire to the same services, signed with each one's pool key, its
+    # answer bounded and read strictly (`Prima.LocusPool`).
     "apps/cyfr/lib/opus/worker_client.ex" => :worker_client,
     # The worker wire, the runtime's side: the service posts its runners' host
     # calls, sealed and signed with the attempt's keys and verified by the
@@ -71,7 +73,9 @@ defmodule Cyfr.EgressInventoryTest do
     # operator-configured Locus builds role (CYFR_LOCUS_BUILDS_KEY, beside
     # CYFR_LOCUS_BACKENDS_URL),
     # signed with the key derived from the service's, the answer bounded
-    # while it streams (`Prima.BoundedBody`) and read strictly.
+    # while it streams (`Prima.BoundedBody`) and read strictly; and the pool
+    # wire to the same role, signed with its pool key, the answer bounded
+    # and read strictly (`Prima.LocusPool`).
     "apps/cyfr/lib/compendium/builds/client.ex" => :builds_client
   }
 
@@ -118,7 +122,9 @@ defmodule Cyfr.EgressInventoryTest do
   # The programs controller lives in the execution domain but decides no
   # guest's target: it is the control plane's own caller of its backends
   # service, which the operator's private targets name (compose's
-  # `locus`). Exactly these files, and only for that call.
+  # `locus`): the backends wire's control calls and the pool wire's ask
+  # (`Opus.Programs.Box.pool/3`). Exactly these files, and only for those
+  # calls.
   @control_plane_callers ~w(apps/cyfr/lib/opus/programs/box.ex apps/cyfr/lib/opus/programs/session.ex)
 
   defp root, do: Path.expand("../../../..", __DIR__)
