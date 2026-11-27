@@ -370,7 +370,9 @@ func TestARouteChangeWaitsForTheLockOnlyWithinItsBound(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer lock.Close()
+	// The guard's lock stays open until the server has withdrawn what the
+	// connection made, at the connection's end (below).
+	t.Cleanup(func() { lock.Close() })
 	held, err := os.OpenFile(p.lock(), os.O_RDWR, 0o644)
 	if err != nil {
 		t.Fatal(err)
@@ -398,7 +400,17 @@ func TestARouteChangeWaitsForTheLockOnlyWithinItsBound(t *testing.T) {
 			go s.serve(conn)
 		}
 	}()
+	ended := make(chan struct{}, 1)
+	s.onEnd = func() { ended <- struct{}{} }
 	c := dialRaw(t, path)
+	t.Cleanup(func() {
+		c.conn.Close()
+		select {
+		case <-ended:
+		case <-time.After(4 * applyTimeout):
+			t.Error("the connection's end was not handled")
+		}
+	})
 	admit := func(id string) []byte {
 		return []byte(fmt.Sprintf(`{"v":3,"type":"admit","spawn_id":%q,"reach":"island"}`, id))
 	}
