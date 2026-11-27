@@ -162,7 +162,10 @@ func TestARecordTheKeeperCannotTrustIsRefused(t *testing.T) {
 	}
 	// A records' folder that is not the keeper's own is refused too.
 	k := recordsOfMine(t, 1)
-	if err := os.Mkdir(filepath.Join(k.Root, DisksDir), 0o755); err != nil {
+	if err := os.Mkdir(filepath.Join(k.Root, DisksDir), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(filepath.Join(k.Root, DisksDir), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := k.LoadDisks(); !errors.Is(err, ErrBadRecord) {
