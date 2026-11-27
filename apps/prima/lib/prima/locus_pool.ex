@@ -610,6 +610,7 @@ defmodule Prima.LocusPool do
     {"run", ["run", "warm"]}
   ]
   @stoppable ~w(program terminal)
+  @withheld "This CYFR has not enough memory free. Stop one on the Programs page, or wait."
 
   @doc """
   The one sentence a person reads of a start refused for room, from what
@@ -630,12 +631,18 @@ defmodule Prima.LocusPool do
   than everything held and free together, nothing anyone stops makes
   room: it says only that this CYFR has not enough memory for it, what
   it needs and what all its work can have, and gives no advice.
+
+  `:withheld` in place of `held` is the sentence told to a caller that
+  is told nothing of what holds the memory, a component in a chain among
+  them: that this CYFR has not enough memory free, with no name, size or
+  sum.
   """
-  @spec refusal_sentence(held(), %{String.t() => String.t()}) :: String.t()
-  def refusal_sentence(
-        %{need: need, free: free, mine: mine, others_bytes: others} = held,
-        names \\ %{}
-      )
+  @spec refusal_sentence(held() | :withheld, %{String.t() => String.t()}) :: String.t()
+  def refusal_sentence(held, names \\ %{})
+
+  def refusal_sentence(:withheld, _names), do: @withheld
+
+  def refusal_sentence(%{need: need, free: free, mine: mine, others_bytes: others} = held, names)
       when is_map(names) do
     case free + others + Enum.sum_by(mine, & &1.bytes) do
       0 ->

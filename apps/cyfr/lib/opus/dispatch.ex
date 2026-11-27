@@ -36,7 +36,10 @@ defmodule Opus.Dispatch do
        keeper starts no runner) is closed failed with the service's
        sentence, "the execution worker refused the start: …", and one
        refused for room (`{:no_memory, held}`) with the one sentence of
-       what holds the memory alone (`Prima.LocusPool.refusal_sentence/1`). A start
+       what holds the memory alone (`Prima.LocusPool.refusal_sentence/2`):
+       the person's own holders by name from the record
+       (`Opus.Memory.held_for/3`), or nothing of them for a run a
+       component, a tincture or a webhook asked for. A start
        whose answer was lost after the worker service may have acted is
        reconciled against the attempt, never dispatched again: a runner
        that attached keeps the run, and a run no runner attached to is
@@ -349,7 +352,7 @@ defmodule Opus.Dispatch do
         case Attempt.take_slot(admitted.attempt, class(opts), slot_wait) do
           :ok ->
             mark_dispatched(admitted.execution_id, endpoint)
-            start(admitted, endpoint, input)
+            start(admitted, endpoint, input, opts)
             true
 
           :closed ->
@@ -376,7 +379,7 @@ defmodule Opus.Dispatch do
   # failed by its attempt; one whose start's answer was lost is closed only
   # if no runner attached (`Opus.Attempt.refuse/2`), since the
   # worker service may have started it.
-  defp start(admitted, endpoint, input) do
+  defp start(admitted, endpoint, input, opts) do
     with {:signed, {:ok, issued}} <- {:signed, Assignments.issue(admitted.assignment)},
          {:ok, worker_key} <- Keys.locus_runtime_key(admitted.assignment.service),
          {:ok, sealed} <-
@@ -397,7 +400,7 @@ defmodule Opus.Dispatch do
 
       # Refused for room: what holds the memory, in its one sentence alone.
       {:error, {:no_memory, held}} ->
-        refuse(admitted, Prima.LocusPool.refusal_sentence(held), :no_memory)
+        refuse(admitted, room_sentence(admitted, endpoint, held, opts), :no_memory)
 
       {:error, :lost} ->
         case Attempt.refuse(admitted.attempt, "the execution worker did not answer the start") do
@@ -464,6 +467,39 @@ defmodule Opus.Dispatch do
          ) do
       :ok -> :ok
       {:error, reason} -> refuse(admitted, "the execution could not be claimed", reason)
+    end
+  end
+
+  # The sentence of a start refused for room. A run a component asked for
+  # in its chain (its parent's attempt runs on a worker service), and one a
+  # tincture or webhook started, are told no name, size or sum: that caller
+  # is untrusted code. The person's own run, a root or a turn's, names their
+  # own holders from the record (`Opus.Memory.held_for/3`). A parent whose
+  # attempt cannot be read is taken for a component's.
+  defp room_sentence(admitted, endpoint, held, opts) do
+    actor = Sanctum.Context.actor(admitted.close.ctx)
+
+    if withheld?(actor, opts) do
+      Prima.LocusPool.refusal_sentence(:withheld)
+    else
+      {held, names} = Opus.Memory.held_for(actor, endpoint.id, held)
+      Prima.LocusPool.refusal_sentence(held, names)
+    end
+  end
+
+  defp withheld?(actor, opts) do
+    cond do
+      opts[:caller] != nil ->
+        true
+
+      is_nil(opts[:parent_execution_id]) ->
+        false
+
+      true ->
+        not match?(
+          %{service_id: nil},
+          Arca.ExecutionAttempts.current(actor, opts[:parent_execution_id])
+        )
     end
   end
 

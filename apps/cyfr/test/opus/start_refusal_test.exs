@@ -159,14 +159,15 @@ defmodule Opus.StartRefusalTest do
     authority
   end
 
-  defp run(ctx) do
+  defp run(ctx, opts \\ []) do
     id = Prima.UUID7.execution_id()
 
     result =
-      Opus.Dispatch.run(ctx, @ref, %{"a" => 1, "b" => 2},
-        type: "reagent",
-        authority: authority(),
-        execution_id: id
+      Opus.Dispatch.run(
+        ctx,
+        @ref,
+        %{"a" => 1, "b" => 2},
+        [type: "reagent", authority: authority(), execution_id: id] ++ opts
       )
 
     {result, Arca.Repo.get!(Arca.Schemas.Execution, id), id}
@@ -222,6 +223,78 @@ defmodule Opus.StartRefusalTest do
     assert_received {:request, "/worker/v1/start"}
     refute_received {:request, "/worker/v1/start"}
     assert %{claimed_by: nil} = Arca.ExecutionAttempts.current(Sanctum.Context.actor(ctx), id)
+  end
+
+  # The person's record of who uses what on the refusing worker's
+  # machine: a program of theirs named `claude`, 600 MiB.
+  defp recorded!(ctx) do
+    {:ok, claim} = Arca.JobClaims.claim("memory", Arca.JobClaims.cell_key(), "boot_test", 60_000)
+
+    report = %{
+      boot: String.duplicate("c", 32),
+      budget: 8 * 1024 * 1_048_576,
+      work: 4 * 1024 * 1_048_576,
+      floor: 164 * 1_048_576,
+      used: 2048 * 1_048_576,
+      counters: [
+        %{
+          rev: 1,
+          day: Date.utc_today(),
+          athanor: ctx.athanor_id,
+          kind: "program",
+          subject: "srv_claude",
+          bytes: 600 * 1_048_576,
+          mib_ms: 0,
+          measured_ms: 0,
+          peak_bytes: 0,
+          cap: 0,
+          machine: 0,
+          either: 0
+        }
+      ],
+      next: nil
+    }
+
+    names = %{{ctx.athanor_id, "srv_claude"} => %{name: "claude", shown: "program"}}
+    {:ok, _} = Arca.MemoryRecord.store(claim, :none, @service, 0, report, names, 90)
+    :ok
+  end
+
+  @room %{
+    "need" => 171_966_464,
+    "free" => 8_388_608,
+    "mine" => [],
+    "others_bytes" => 2_147_483_648
+  }
+
+  @tag :capture_log
+  test "a person's run refused for room names their own holders from the record",
+       %{ctx: ctx, refusal: refusal} do
+    recorded!(ctx)
+    serve!({503, WorkerWire.error(:no_memory, %{"held" => @room})}, refusal)
+
+    {result, row, _id} = run(ctx)
+
+    sentence =
+      "This CYFR has not enough memory free. Of yours, claude uses 600.0 MB. Others use " <>
+        "1.4 GB. Stop one on the Programs page, or wait."
+
+    assert result == {:error, sentence}
+    assert row.error_message == sentence
+  end
+
+  @tag :capture_log
+  test "a run a tincture asked for is told no name, size or sum", %{ctx: ctx, refusal: refusal} do
+    recorded!(ctx)
+    serve!({503, WorkerWire.error(:no_memory, %{"held" => @room})}, refusal)
+
+    {result, row, _id} = run(ctx, caller: {:tincture, %{publisher: "local", name: "page"}})
+
+    sentence = "This CYFR has not enough memory free. Stop one on the Programs page, or wait."
+    assert result == {:error, sentence}
+    assert row.error_message == sentence
+    refute row.error_message =~ "claude"
+    refute row.error_message =~ "MB"
   end
 
   @tag :capture_log

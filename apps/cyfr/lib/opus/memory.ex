@@ -195,6 +195,67 @@ defmodule Opus.Memory do
 
   def read(%Sanctum.Context{}, :everyone), do: {:error, :forbidden}
 
+  @doc """
+  What a start refused for room at `endpoint` says of the person's own
+  holders, from the record: `held` (the refusal's, charges) with its
+  `mine` taken from the record's latest holders of `actor`'s athanor on
+  that endpoint's machine, and the names of their rows, for
+  `Prima.LocusPool.refusal_sentence/2`.
+
+  The record is used only when the endpoint answered within `fresh_ms/0`
+  and the person's holders it names (`R`) fit within what `held` says is
+  held: `ΣR ≤ others_bytes + Σmine`. Then `mine` is `R` and
+  `others_bytes` is `others_bytes + Σmine − ΣR`, never below 0, so what
+  is held and free together is the refusal's own and the sentence's
+  branches decide as they would on `held`. Otherwise, with nothing of the
+  person's in the record, an endpoint that has not answered, or a
+  record larger than `held` (a holder ended since the poll), `held` is
+  answered as it came with no names. The record is at most a poll old.
+  """
+  @spec held_for(Prima.Actor.t(), String.t(), Prima.LocusPool.held()) ::
+          {Prima.LocusPool.held(), %{String.t() => String.t()}}
+  def held_for(%Prima.Actor{athanor_id: athanor_id}, endpoint, %{} = held)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(endpoint) do
+    actor = Prima.Actor.in_athanor(athanor_id)
+
+    with {:ok, endpoints} <- MemoryRecord.endpoints(actor),
+         %{boot: boot} = asked <- Enum.find(endpoints, &(&1.endpoint == endpoint)),
+         true <- answering?(asked),
+         machine = for(e <- endpoints, e.boot == boot, answering?(e), do: e.endpoint),
+         {:ok, counters} <- MemoryRecord.counters(actor),
+         [_ | _] = mine <- own_holders(counters, machine, boot),
+         held_bytes = held.others_bytes + Enum.sum_by(held.mine, & &1.bytes),
+         true <- Enum.sum_by(mine, & &1.bytes) <= held_bytes do
+      names =
+        for %{subject: subject, name: name} <- counters_named(counters, machine, boot),
+            into: %{},
+            do: {subject, name}
+
+      {%{held | mine: mine, others_bytes: held_bytes - Enum.sum_by(mine, & &1.bytes)}, names}
+    else
+      _use_held -> {held, %{}}
+    end
+  end
+
+  def held_for(%Prima.Actor{}, _endpoint, %{} = held), do: {held, %{}}
+
+  defp answering?(%{heard_at: heard_at}),
+    do: DateTime.diff(DateTime.utc_now(), heard_at, :millisecond) <= @fresh_ms
+
+  defp now_held(counters, machine, boot),
+    do: for(c <- counters, c.endpoint in machine, c.boot == boot, c.bytes > 0, do: c)
+
+  defp own_holders(counters, machine, boot) do
+    for c <- now_held(counters, machine, boot),
+        do: %{kind: c.kind, subject: c.subject, bytes: c.bytes}
+  end
+
+  defp counters_named(counters, machine, boot) do
+    for c <- now_held(counters, machine, boot),
+        is_binary(c.subject) and is_binary(c.name),
+        do: c
+  end
+
   # ---------------------------------------------------------------------------
   # The read's shape
   # ---------------------------------------------------------------------------
