@@ -17,9 +17,12 @@ import (
 // the keeper's side (client_linux_test.go) and the guard's side
 // (server_linux_test.go) both read.
 type vectors struct {
-	Comment  string          `json:"comment"`
-	Hello    json.RawMessage `json:"hello"`
-	Requests []struct {
+	Comment string          `json:"comment"`
+	Hello   json.RawMessage `json:"hello"`
+	// HelloRoutingNoMachine is the hello of a guard whose kernel
+	// cannot hold a machine's route to whole IPv4 packets.
+	HelloRoutingNoMachine json.RawMessage `json:"hello_routing_no_machine"`
+	Requests              []struct {
 		Descriptors int             `json:"descriptors"`
 		Message     json.RawMessage `json:"message"`
 	} `json:"requests"`
@@ -116,8 +119,12 @@ func TestTheKeeperTakesEveryAnswerOfTheVectorsAndNoOther(t *testing.T) {
 		}
 	}
 	hello, err := Decode(v.Hello)
-	if err != nil || hello.Type != TypeHello || hello.Netns == "" {
+	if err != nil || hello.Type != TypeHello || hello.Netns == "" || hello.Machines != "" {
 		t.Errorf("the hello %s: %+v %v", v.Hello, hello, err)
+	}
+	hello, err = Decode(v.HelloRoutingNoMachine)
+	if err != nil || hello.Type != TypeHello || hello.Netns == "" || hello.Machines == "" {
+		t.Errorf("the hello of a guard routing no machine %s: %+v %v", v.HelloRoutingNoMachine, hello, err)
 	}
 }
 

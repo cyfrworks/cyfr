@@ -6,6 +6,7 @@
 package guard
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -86,12 +87,17 @@ type testServer struct {
 	ended chan struct{}
 }
 
-func startServer(t *testing.T, netns string) *testServer {
+func startServer(t *testing.T, netns string, set ...func(*server)) *testServer {
 	t.Helper()
 	rng, _ := ParseRange("10.213.0.0/16")
 	ts := &testServer{path: filepath.Join(t.TempDir(), "guard.sock"), maker: &fakeMaker{fail: map[string]bool{}}, ended: make(chan struct{}, 16)}
 	ts.s = newServer(logx.New("cyfr-guard-test"), netns, rng, ts.maker)
 	ts.s.onEnd = func() { ts.ended <- struct{}{} }
+	// What a test sets of the server is set before it serves, as the
+	// guard's start sets it.
+	for _, f := range set {
+		f(ts.s)
+	}
 	l, err := net.ListenUnix("unixpacket", &net.UnixAddr{Name: ts.path, Net: "unixpacket"})
 	if err != nil {
 		t.Fatal(err)
@@ -697,5 +703,42 @@ func TestAChangeWhoseWithdrawalIsLeftToTheRetrySaysWithdrawn(t *testing.T) {
 	c := r.send(t, []byte(`{"v":4,"type":"change","spawn_id":"`+testSpawn+`","reach":"island"}`))
 	if c.Type != TypeRefused || !c.Withdrawn || !strings.Contains(c.Reason, "is withdrawing it") || strings.Contains(c.Reason, "withdrew it") {
 		t.Fatalf("a change whose withdrawal failed answered %+v", c)
+	}
+}
+
+// A guard whose kernel cannot hold a machine's route to whole IPv4
+// packets says why in its hello, which the keeper's client reads, and
+// refuses each machine's admit with it, making nothing; every other route
+// it serves as before.
+func TestAGuardRoutingNoMachineSaysSoAndRefusesEachMachine(t *testing.T) {
+	v := loadVectors(t)
+	var hello Message
+	if err := json.Unmarshal(v.HelloRoutingNoMachine, &hello); err != nil {
+		t.Fatal(err)
+	}
+	ts := startServer(t, "net:[1]", func(s *server) { s.machines = hello.Machines })
+	c := NewClient(ts.path, "net:[1]", nil)
+	netns, udp, tcp := descriptors(t)
+	if _, err := c.Admit(testSpawn, ReachIsland, nil, netns, udp, tcp); err != nil {
+		t.Fatalf("an ordinary admit: %v", err)
+	}
+	if got := c.Machines(); got != hello.Machines {
+		t.Fatalf("the client read machines %q from the hello, want %q", got, hello.Machines)
+	}
+	made := len(ts.maker.taken())
+	netns, udp, tcp = descriptors(t)
+	_, err := c.AdmitMachine("ffeeddccbbaa99887766554433221100", 30201, ReachNone, nil, netns, udp, tcp, netlinkSocket(t))
+	if err == nil || !strings.Contains(err.Error(), hello.Machines) {
+		t.Fatalf("a machine's admit answered %v, want refused naming why", err)
+	}
+	if got := ts.maker.taken(); len(got) != made {
+		t.Fatalf("a refused machine's admit made %v", got[made:])
+	}
+	// A guard that routes machines says nothing of them.
+	ok := startServer(t, "net:[1]")
+	c2 := NewClient(ok.path, "net:[1]", nil)
+	netns, udp, tcp = descriptors(t)
+	if _, err := c2.Admit(testSpawn, ReachIsland, nil, netns, udp, tcp); err != nil || c2.Machines() != "" {
+		t.Fatalf("a guard that routes machines: %v, machines %q", err, c2.Machines())
 	}
 }
