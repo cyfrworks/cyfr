@@ -267,22 +267,23 @@ var antigravity = &profile{
 }
 
 // agyToolBudget is Antigravity's list budget. Measured on Antigravity
-// 1.5.16 with tools of ASCII text, the API-key path and the account path
-// alike: it counts the sum of each of CYFR's tools as its compact {name,
-// description, parameters}, `<`, `>` and `&` a byte each (four tools of
-// 57,000 such bytes, 500 of them `<`, all reached its model, on the
-// API-key path), never the person's own servers, and past about 57,200
-// bytes and 39 more a tool it drops whole tools, largest first, saying
-// nothing (signed in, one tool of 57,600 bytes was dropped and one of
-// 56,000 kept). How it counts text outside ASCII, and the line and
-// paragraph separators Go escapes, was not measured.
+// 1.5.16 with tools of ASCII text, on the API-key path: it counts the sum
+// of each of CYFR's tools as its compact {name, description, parameters},
+// `<`, `>` and `&` a byte each (four tools of 57,000 such bytes, 500 of
+// them `<`, all reached its model), never the person's own servers, and
+// past about 57,200 bytes and 39 more a tool it drops whole tools, largest
+// first, saying nothing. On the account path, signed in, one tool of
+// 56,000 bytes reached its model and one of 57,600 was dropped. How it
+// counts text outside ASCII, and the line and paragraph separators Go
+// escapes, was not measured.
 const agyToolBudget = 57000
 
 // agyFailureForm is the whole of the chunk Antigravity 1.5.16 writes for a
 // turn whose model request failed, seen on the API-key path (429, 503, 401
 // and 500), before it ends the prompt end_turn: its executor's error, the
-// request's code, message and status.
-var agyFailureForm = regexp.MustCompile(`^\n⚠ agent executor error: generating and executing: Error \d+, Message: .*, Status: ([A-Z_]+), Details: \[.*\]\n$`)
+// request's code, message and status, and the empty details it was always
+// seen with, closing the chunk. Anything more on it is the member's reply.
+var agyFailureForm = regexp.MustCompile(`^\n⚠ agent executor error: generating and executing: Error \d+, Message: .*, Status: ([A-Z_]+), Details: \[\]\n$`)
 
 // agyFailure is a failed turn's error type and CYFR's sentence for it, by
 // its status: an exhausted resource a limit's, an unavailable service an

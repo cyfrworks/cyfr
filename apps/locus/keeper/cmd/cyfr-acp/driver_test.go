@@ -709,7 +709,13 @@ func TestAntigravitysFailedTurnIsAnErrorOnlyWhenItIsAllTheTurnSaid(t *testing.T)
 	if strings.Contains(s.output(), "HARNESS-WORDS") {
 		t.Fatal("no error carries the program's words")
 	}
-	postText(s, "stp_then", "trn_2", "agyfailthen")
+	postText(s, "stp_quoted", "trn_2", "agyquoted")
+	quoted := s.until("idle")
+	if len(ofType(quoted, "error")) != 0 || quoted[len(quoted)-1]["stop"] != "end_turn" ||
+		saidOf(quoted) != strings.Replace(agyRecorded503, "[]\n", "[] [quoted for context]\n", 1) {
+		t.Fatalf("the line with more on it is the member's reply: %v", quoted)
+	}
+	postText(s, "stp_then", "trn_3", "agyfailthen")
 	got := s.until("idle")
 	if len(ofType(got, "error")) != 0 || got[len(got)-1]["stop"] != "end_turn" || saidOf(got) != agyFailureText("UNAVAILABLE")+" and more" {
 		t.Fatalf("a turn that said more ends as it ended, its words its answer: %v", got)
@@ -724,11 +730,20 @@ func TestAntigravitysFailureFormIsExact(t *testing.T) {
 		agyFailureText("UNAUTHENTICATED"):    "authentication",
 		agyFailureText("PERMISSION_DENIED"):  "authentication",
 		agyFailureText("INTERNAL"):           "provider_error",
-		"\n⚠ agent executor error: generating and executing: Error 429, Message: a, b, Status: RESOURCE_EXHAUSTED, Details: [x]\n": "rate_limited",
-		strings.TrimSpace(agyFailureText("UNAVAILABLE")):                                                              "",
-		agyFailureText("UNAVAILABLE") + "more":                                                                        "",
-		"\n⚠ agent executor error: something else\n":                                                                  "",
-		"\nagent executor error: generating and executing: Error 503, Message: x, Status: UNAVAILABLE, Details: []\n": "",
+		agyRecorded503:                       "overloaded",
+		// Anything more on it is the member's reply: the recorded chunk
+		// with words quoted before its close, words after its close on the
+		// same line, a second line, words before it, or details it was
+		// never seen with.
+		strings.Replace(agyRecorded503, "[]\n", "[] [quoted for context]\n", 1):                                                    "",
+		strings.Replace(agyRecorded503, "[]\n", "[]. That was the error.\n", 1):                                                    "",
+		agyRecorded503 + "Shall I try again?\n":                                                                                    "",
+		"Here is what it said:" + agyRecorded503:                                                                                   "",
+		"\n⚠ agent executor error: generating and executing: Error 429, Message: a, b, Status: RESOURCE_EXHAUSTED, Details: [x]\n": "",
+		strings.TrimSpace(agyFailureText("UNAVAILABLE")):                                                                           "",
+		agyFailureText("UNAVAILABLE") + "more":                                                                                     "",
+		"\n⚠ agent executor error: something else\n":                                                                               "",
+		"\nagent executor error: generating and executing: Error 503, Message: x, Status: UNAVAILABLE, Details: []\n":              "",
 	} {
 		if got, _ := antigravity.failure(text); got != kind {
 			t.Fatalf("%q reads %q, not %q", text, got, kind)

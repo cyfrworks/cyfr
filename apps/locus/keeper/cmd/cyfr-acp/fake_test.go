@@ -55,6 +55,7 @@ import (
 //	callsteer opens a call of CYFR's, takes a steer while it is open, then calls the socket
 //	agyfail:S writes the one chunk agy writes when its model service failed with status S, then end_turn
 //	agyfailthen writes that chunk for UNAVAILABLE, then a word more
+//	agyquoted writes the 503 chunk the probe recorded with words quoted before its close, then end_turn
 //
 // It writes a canary to its standard error and its tier, which the driver
 // must never pass on. FAKE_SIGNED_OUT answers every session and prompt
@@ -322,6 +323,9 @@ func fakeACP() int {
 			// As agy 1.5.16 ends a turn its model service failed, on the
 			// API-key path: one chunk, then end_turn with no usage.
 			chunk(agyFailureText(strings.TrimPrefix(words, "agyfail:")))
+			finish(map[string]any{"stopReason": "end_turn"})
+		case words == "agyquoted":
+			chunk(strings.Replace(agyRecorded503, "[]\n", "[] [quoted for context]\n", 1))
 			finish(map[string]any{"stopReason": "end_turn"})
 		case words == "agyfailthen":
 			chunk(agyFailureText("UNAVAILABLE"))
@@ -855,3 +859,7 @@ func fakeServers(openCode bool) int {
 func agyFailureText(status string) string {
 	return "\n⚠ agent executor error: generating and executing: Error 503, Message: HARNESS-WORDS The model is overloaded. Please try again later., Status: " + status + ", Details: []\n"
 }
+
+// agyRecorded503 is the chunk agy 1.5.16 wrote for a 503, as the probe
+// recorded it (antigravity/f6/).
+const agyRecorded503 = "\n⚠ agent executor error: generating and executing: Error 503, Message: The model is overloaded. Please try again later., Status: UNAVAILABLE, Details: []\n"
