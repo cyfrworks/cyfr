@@ -121,7 +121,8 @@ defmodule Aqua.Prompt do
     loader? = Keyword.get(opts, :loader?, false)
     agent = Keyword.fetch!(opts, :agent)
     authority = Keyword.get(opts, :authority)
-    writes? = writes?(agent)
+    offered = offered(agent)
+    writes? = Aqua.Offered.offered?(offered, "files.write")
 
     # The soul's own prompt, then CYFR's part, which a crew member's prompt
     # carries too; a crew member has no prompt of its own.
@@ -144,7 +145,7 @@ defmodule Aqua.Prompt do
       IO.iodata_to_binary([
         opening,
         "\n\n---\n\n## Runtime Context\n\n",
-        file_paths(authority),
+        file_paths(authority, files?(offered)),
         Aqua.Prelude.system_prelude(),
         if(loader?, do: [], else: scrolls(ctx)),
         rules(ctx),
@@ -243,8 +244,8 @@ defmodule Aqua.Prompt do
   # The origins under which nobody is there to answer a question, and what a
   # turn of one is told.
   @unattended [:schedule, :webhook]
-  @nobody "Nobody is here to answer in this turn: decide yourself, and say in your reply " <>
-            "what you assumed."
+  @nobody "Nobody is here to answer in this turn: where your instructions tell you to ask " <>
+            "and wait, decide yourself and go on, and say in your reply what you assumed."
 
   @search_briefing "\n- You have native search: use it when a job needs the web searched."
 
@@ -472,14 +473,22 @@ defmodule Aqua.Prompt do
     end
   end
 
-  # Whether the agent is offered `files.write`, the one way a brain writes a
-  # file the person sees: the files catalyst holds its own grant of
-  # `data/`, so the agent's offered set, a crew member's the soul's, says
-  # it (`Aqua.Offered`), never the agent's own grant.
-  defp writes?(%{"tools" => tools}) when is_list(tools),
-    do: tools |> Aqua.Offered.resolve(:off) |> Aqua.Offered.offered?("files.write")
+  # The agent's offered set, a crew member's the soul's (`Aqua.Offered`),
+  # which says whether it reaches files: the files catalyst holds its own
+  # grant of `data/`, so the agent's own grant does not say it. The browser
+  # setting has no bearing on files, so it is read as offering nothing of
+  # the browser.
+  defp offered(%{"tools" => tools}) when is_list(tools),
+    do: Aqua.Offered.resolve(tools, {:ok, false})
 
-  defp writes?(_agent), do: false
+  defp offered(_agent), do: %{}
+
+  # Whether any files action is offered: the files tool reaches `data/`.
+  defp files?(offered),
+    do:
+      Enum.any?(offered, fn {key, state} ->
+        state == "offered" and String.starts_with?(key, "files.")
+      end)
 
   # How a brain plans: asked for a plan, or judging the work large enough to
   # owe one, it writes the plan to a file of its own under the turn's id,
@@ -502,9 +511,14 @@ defmodule Aqua.Prompt do
   end
 
   # Describe only granted scopes, using the names from
-  # Arca.Storage.guest_scopes/0. An unresolved authority grants none.
-  defp file_paths(authority) do
+  # Arca.Storage.guest_scopes/0. An unresolved authority grants none. With
+  # none of its own, a turn offered a files action still reaches `data/`
+  # through the files tool, whose catalyst holds that grant.
+  defp file_paths(authority, files?) do
     case granted_paths(authority) do
+      [] when files? ->
+        "File paths: data/ for user storage, reached through CYFR's files tool."
+
       [] ->
         "File paths: none — this turn has no file access."
 

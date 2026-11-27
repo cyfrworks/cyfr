@@ -10279,8 +10279,8 @@ defmodule Aqua.ProgramTest do
         "partially executed. #{reason}]"
 
   # A turn a schedule or a webhook started is told nobody answers it.
-  @nobody "\n\nNobody is here to answer in this turn: decide yourself, and say in your " <>
-            "reply what you assumed."
+  @nobody "\n\nNobody is here to answer in this turn: where your instructions tell you to " <>
+            "ask and wait, decide yourself and go on, and say in your reply what you assumed."
 
   defp facts(turn_id, origin \\ :interactive),
     do: %{

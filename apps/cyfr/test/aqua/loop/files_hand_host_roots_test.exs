@@ -116,6 +116,7 @@ defmodule Aqua.Loop.FilesHandHostRootsTest do
                    "`data/aqua/plans/<turn id>-<n>-<short-name>.md`"
 
         refute system =~ "workbench"
+        refute system =~ "no file access"
       end
     end
 

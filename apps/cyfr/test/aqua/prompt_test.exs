@@ -37,6 +37,26 @@ defmodule Aqua.PromptTest do
       end
     end
 
+    # The files catalyst holds its own grant of `data/`: a turn whose own
+    # grant names no path, offered a files action, is told it reaches
+    # `data/` through the files tool, never that it has no file access.
+    test "a turn granted no storage but offered a files action is told the files tool reaches data/",
+         %{ctx: ctx} do
+      reached = "File paths: data/ for user storage, reached through CYFR's files tool."
+
+      for tools <- [["files.write"], ["files.read"]] do
+        prompt = Prompt.compose(ctx, agent: Map.put(agent(), "tools", tools), authority: nil).text
+        assert prompt =~ reached
+        refute prompt =~ "no file access"
+      end
+
+      for tools <- [["http.get"], nil] do
+        prompt = Prompt.compose(ctx, agent: Map.put(agent(), "tools", tools), authority: nil).text
+        assert prompt =~ "File paths: none — this turn has no file access."
+        refute prompt =~ reached
+      end
+    end
+
     test "a granted scope is named, an ungranted one is not", %{ctx: ctx} do
       prompt =
         Prompt.compose(ctx,
@@ -205,8 +225,8 @@ defmodule Aqua.PromptTest do
     test "the facts name the turn's id, and tell a schedule's or a webhook's turn nobody answers",
          %{ctx: ctx} do
       nobody =
-        "Nobody is here to answer in this turn: decide yourself, and say in your reply " <>
-          "what you assumed."
+        "Nobody is here to answer in this turn: where your instructions tell you to ask and " <>
+          "wait, decide yourself and go on, and say in your reply what you assumed."
 
       for {origin, said} <- [
             interactive: "",
@@ -437,7 +457,7 @@ defmodule Aqua.PromptTest do
         for tools <- [writes, reads] do
           text = Prompt.compose(ctx, agent: Map.put(agent, "tools", tools), authority: nil).text
           refute text =~ "workbench"
-          refute text =~ "files tool"
+          refute text =~ write
         end
       end
     end
