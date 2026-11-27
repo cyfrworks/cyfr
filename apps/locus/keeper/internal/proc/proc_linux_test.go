@@ -66,3 +66,14 @@ func TestOwnSaysAnEndAndOneAnotherWaitTook(t *testing.T) {
 		t.Fatal("an end another wait took was read as the process's own")
 	}
 }
+
+// A kill reaches a process Own started while it runs: Own's wait holds its
+// lock only to reap, once the process has ended.
+func TestOwnKillsARunningProcess(t *testing.T) {
+	p, _ := started(t, "read x")
+	go p.Kill(false)
+	ended(t, p)
+	if ws, err := p.Status(); err != nil || !ws.Signaled() || ws.Signal() != unix.SIGKILL {
+		t.Fatalf("a killed process ended %v, %v", ws, err)
+	}
+}
