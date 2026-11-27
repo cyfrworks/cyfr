@@ -1713,7 +1713,7 @@ defmodule PrismWeb.ProgramsLiveTest do
     assert has_element?(view, "button", "Enable")
   end
 
-  test "the list says a connected program starts when used, never that it runs",
+  test "the list says a connected program starts when used while nothing of it holds memory",
        %{conn: conn, athanor: athanor} do
     controller!()
 
@@ -2347,6 +2347,75 @@ defmodule PrismWeb.ProgramsLiveTest do
 
       view |> element("tr[phx-value-name=claude]") |> render_click()
       refute view |> element(~s([data-test="toggle-enabled"])) |> render() =~ "data-confirm"
+    end
+
+    # A connected mcp program named github: CYFR is ready to call it.
+    defp ready_tool!(athanor) do
+      {:ok, row} =
+        Arca.McpServerStorage.insert(ctx(athanor), %{
+          cap: 0,
+          name: "github",
+          transport: "program",
+          mark: "mcp",
+          url: nil,
+          config_json: Jason.encode!(%{"command" => "npx -y github", "env" => %{}})
+        })
+
+      on_exit(fn -> Emissary.External.ServerSupervisor.stop("github", athanor.id) end)
+
+      internal = Sanctum.Context.internal(athanor_id: athanor.id, scope: :athanor)
+      assert {:ok, [_tool]} = Emissary.External.Servers.ensure_started(row, internal)
+      row
+    end
+
+    defp list_status(view),
+      do:
+        view
+        |> element(~s(tr[data-name="github"] [data-test="status"]))
+        |> render()
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.text()
+        |> String.trim()
+
+    test "the list says a program runs while the panel names it, and starts when used once it does not",
+         %{conn: conn, athanor: athanor} do
+      controller!()
+      row = ready_tool!(athanor)
+      names = %{{athanor.id, row.id} => %{name: "github", shown: "tool"}}
+
+      recorded!([held(1, athanor, "program", row.id, 247)], names)
+
+      {view, _html} = mount_athanor(conn, "/programs", athanor)
+
+      assert view |> element(~s([data-test="memory"])) |> render() =~ "github uses 247.0 MB"
+      assert list_status(view) == "running"
+
+      # The program holds nothing any more: the next read names it no longer.
+      recorded!([held(2, athanor, "program", row.id, 0)], names)
+      send(view.pid, :memory)
+
+      refute view |> element(~s([data-test="memory"])) |> render() =~ "github uses"
+      assert list_status(view) == "starts when used"
+    end
+
+    test "the list says a program starts when used while the service that runs it has not answered",
+         %{conn: conn, athanor: athanor} do
+      controller!()
+      row = ready_tool!(athanor)
+
+      recorded!([held(1, athanor, "program", row.id, 247)], %{
+        {athanor.id, row.id} => %{name: "github", shown: "tool"}
+      })
+
+      an_hour_ago = DateTime.add(DateTime.utc_now(), -3_600, :second)
+      Arca.Repo.update_all(Arca.Schemas.MemoryEndpoint, set: [heard_at: an_hour_ago])
+
+      {view, _html} = mount_athanor(conn, "/programs", athanor)
+      panel = view |> element(~s([data-test="memory"])) |> render()
+
+      assert panel =~ "What uses memory cannot be counted right now."
+      refute panel =~ "github uses"
+      assert list_status(view) == "starts when used"
     end
 
     test "a person with nothing of theirs held reads only that, and the others' sum",

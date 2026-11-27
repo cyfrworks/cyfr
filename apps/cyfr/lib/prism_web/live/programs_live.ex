@@ -74,9 +74,11 @@ defmodule PrismWeb.ProgramsLive do
   An expanded row's details are read again after it is enabled or
   disabled, and when the list says it is disabled, so a disabled program
   reads as stopped there. The list's own status says `disabled` for a
-  disabled row, which offers no Open, and `starts when used` for a
-  program CYFR is ready to call: the list never says a program runs, and
-  Memory in use now says what does.
+  disabled row, which offers no Open; for a program CYFR is ready to call
+  it says `running` while Memory in use now names that program on a
+  machine, and `starts when used` otherwise, so the list and the panel say
+  one thing from one read. Before the read answers, when it fails, and
+  for what a service that has not answered runs, it is `starts when used`.
 
   `?add=<name>` opens the program form, driven, for a program brain of
   that name: its command as the brain's definition holds it
@@ -1266,7 +1268,7 @@ defmodule PrismWeb.ProgramsLive do
                       :if={server[:enabled] != false and not driven?(server)}
                       color={status_color(server[:status])}
                     >
-                      {status_word(server)}
+                      {status_word(server, @memory)}
                     </.badge>
                     <span
                       :if={server[:enabled] != false and driven?(server)}
@@ -1848,10 +1850,20 @@ defmodule PrismWeb.ProgramsLive do
   defp kind(%{transport: "program", mark: mark}), do: "#{mark} program"
   defp kind(_server), do: "http"
 
-  # A program CYFR is ready to call starts at its next call: the list says
-  # that, never that it runs.
-  defp status_word(%{transport: "program", status: "ready"}), do: "starts when used"
-  defp status_word(server), do: server[:status] || "unknown"
+  # A program CYFR is ready to call starts at its next call. The list says
+  # it runs only while the panel's own read names it as holding memory, so
+  # the two never disagree; a read not in, failed or silent of it names
+  # nothing.
+  defp status_word(%{transport: "program", status: "ready", name: name}, memory) do
+    if holds_memory?(memory, name), do: "running", else: "starts when used"
+  end
+
+  defp status_word(server, _memory), do: server[:status] || "unknown"
+
+  defp holds_memory?(%{machines: machines}, name),
+    do: Enum.any?(machines, fn machine -> Enum.any?(machine.holders, &(&1.name == name)) end)
+
+  defp holds_memory?(_unread_or_unreadable, _name), do: false
 
   defp status_color(status) when status in ["ready", "connected", "running"], do: "green"
   defp status_color(status) when status in ["error", "crashed", "failed"], do: "red"
