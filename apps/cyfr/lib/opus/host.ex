@@ -190,20 +190,20 @@ defmodule Opus.Host do
   alias Opus.Host.{AttachedFetch, Children, Egress, Question}
 
   @assignment_fields [:athanor_id, :execution_id, :attempt, :fence, :generation, :member]
-  @refusals [
-    :lost,
-    :unavailable,
-    :replayed,
-    :malformed,
-    :bad_mac,
-    :unknown_version,
-    :claim_expired,
-    :not_found,
-    :denied,
-    :metadata,
-    :resolution,
-    :redirect_credentials
-  ]
+  # The plain refusals an answer names: the host API's own, and a pin's,
+  # which `Prima.PinnedTarget` defines.
+  @refusals Enum.uniq(
+              [
+                :lost,
+                :unavailable,
+                :replayed,
+                :malformed,
+                :bad_mac,
+                :unknown_version,
+                :claim_expired,
+                :not_found
+              ] ++ PinnedTarget.refusals()
+            )
 
   @doc """
   Answer one host call: `header` and the JSON `body` it signs, answered as

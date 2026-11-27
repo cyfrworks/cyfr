@@ -87,7 +87,8 @@ pub const REFUSALS: [&str; 7] = [
 
 /// The refusals by name only an `egress_pin` answer may be
 /// (`Prima.PinnedTarget.refusals/0`).
-pub const PIN_REFUSALS: [&str; 5] = [
+pub const PIN_REFUSALS: [&str; 6] = [
+    "domain",
     "denied",
     "metadata",
     "resolution",
@@ -136,14 +137,39 @@ pub struct Reached {
     pub body: Vec<u8>,
 }
 
-/// The relay's half of a host call: post the header and sealed body, and
+/// A place among the host calls the relay carries, which a call holds from
+/// before it is signed until its answer.
+pub struct Place {
+    // Held, never read: dropped, it frees the place.
+    _permit: Option<tokio::sync::OwnedSemaphorePermit>,
+}
+
+impl Place {
+    /// A place of the relay's.
+    pub fn held(permit: tokio::sync::OwnedSemaphorePermit) -> Place {
+        Place {
+            _permit: Some(permit),
+        }
+    }
+
+    /// A place of a poster that counts none.
+    pub fn free() -> Place {
+        Place { _permit: None }
+    }
+}
+
+/// The relay's half of a host call: wait for a place to post it in, none
+/// when no call is posted again; then post the header and sealed body, and
 /// answer what reached the service, or none when nothing did.
 pub trait Post {
+    fn place(&mut self) -> impl Future<Output = Option<Place>>;
+
     fn post(
         &mut self,
         op: Op,
         header: String,
         body: Vec<u8>,
+        place: Place,
     ) -> impl Future<Output = Option<Reached>>;
 }
 
@@ -232,7 +258,31 @@ pub async fn call(
     }
 }
 
+// One try: it waits for its place, is signed and sealed once it has one,
+// so its header is fresh when it is sent, and is posted; the wait and the
+// answer together within the callback's timeout. A try that gives up
+// before its place leaves nothing behind to be sent.
 async fn attempt(post: &mut impl Post, caller: &Caller, op: Op, body: &str) -> Try {
+    match tokio::time::timeout(op.timeout(), placed(post, caller, op, body)).await {
+        Ok(Some(Ok(reached))) => {
+            let (fields, reached) = reached;
+            read(caller, op, &fields, reached)
+        }
+        Ok(Some(Err(outcome))) => Try::Final(outcome),
+        Ok(None) | Err(_) => Try::Lost,
+    }
+}
+
+// The try once placed: what reached the service and the fields it was
+// signed with, a final outcome before it was posted, or none when nothing
+// reached it.
+async fn placed(
+    post: &mut impl Post,
+    caller: &Caller,
+    op: Op,
+    body: &str,
+) -> Option<Result<(CallFields, Reached), Outcome>> {
+    let place = post.place().await?;
     let fields = CallFields {
         attempt: caller.keys.attempt.clone(),
         boot: caller.boot.clone(),
@@ -241,25 +291,20 @@ async fn attempt(post: &mut impl Post, caller: &Caller, op: Op, body: &str) -> T
         ts: now_ms(),
         nonce: nonce(),
     };
-    let Ok(sealed) = seal_call(
+    let sealed = seal_call(
         &caller.keys.seal,
         Direction::Body,
         &fields,
         body.as_bytes(),
         &random(),
-    ) else {
-        return Try::Lost;
-    };
+    )
+    .ok()?;
     if sealed.len() > MAX_BODY_BYTES {
-        return Try::Final(Outcome::TooLarge);
+        return Some(Err(Outcome::TooLarge));
     }
-    let Ok(header) = host_call_header(&caller.keys.call, &fields, sealed.as_bytes()) else {
-        return Try::Lost;
-    };
-    match tokio::time::timeout(op.timeout(), post.post(op, header, sealed.into_bytes())).await {
-        Ok(Some(reached)) => read(caller, op, &fields, reached),
-        Ok(None) | Err(_) => Try::Lost,
-    }
+    let header = host_call_header(&caller.keys.call, &fields, sealed.as_bytes()).ok()?;
+    let reached = post.post(op, header, sealed.into_bytes(), place).await?;
+    Some(Ok((fields, reached)))
 }
 
 fn read(caller: &Caller, op: Op, fields: &CallFields, reached: Reached) -> Try {
