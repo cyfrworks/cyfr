@@ -601,6 +601,42 @@ defmodule Opus.MemoryTest do
       end)
     end
 
+    # A listener that takes the connection and never answers.
+    defp silent_listener do
+      {:ok, listen} = :gen_tcp.listen(0, [:binary, active: false])
+      on_exit(fn -> :gen_tcp.close(listen) end)
+      {:ok, port} = :inet.port(listen)
+      port
+    end
+
+    test "a builds service that connects and never answers is told apart within one ask" do
+      port = silent_listener()
+
+      Prima.Test.Env.with_app_env(:cyfr, :locus_builds_url, "http://127.0.0.1:#{port}", fn ->
+        Prima.Test.Env.with_app_env(:cyfr, :locus_builds_key, :crypto.strong_rand_bytes(32), fn ->
+          started = System.monotonic_time(:millisecond)
+          assert {:error, :deadline} = Compendium.builds_pool(0)
+          elapsed = System.monotonic_time(:millisecond) - started
+          assert elapsed >= Prima.LocusPool.ask_ms() and elapsed < 9_000
+        end)
+      end)
+    end
+
+    test "a backends service that connects and never answers is unreachable within one ask" do
+      port = silent_listener()
+      started = System.monotonic_time(:millisecond)
+
+      assert {:error, :unreachable} =
+               Opus.Programs.Box.pool(
+                 "http://127.0.0.1:#{port}",
+                 :crypto.strong_rand_bytes(32),
+                 0
+               )
+
+      elapsed = System.monotonic_time(:millisecond) - started
+      assert elapsed >= Prima.LocusPool.ask_ms() and elapsed < 9_000
+    end
+
     test "the backends service is asked under its pool key", %{alice: alice} do
       root = :crypto.strong_rand_bytes(32)
       stub = Cyfr.Test.HTTPStub.open()

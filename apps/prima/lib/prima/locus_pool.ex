@@ -133,6 +133,7 @@ defmodule Prima.LocusPool do
   @reading_gap_ms 2_000
 
   @version 1
+  @poll_ms 5_000
   @route "/locus/v1/pool"
   @services [:runtime, :builds, :backends]
   @max_request_bytes 1_024
@@ -262,6 +263,34 @@ defmodule Prima.LocusPool do
   @doc "The longest gap between a place's readings that is counted."
   @spec reading_gap_ms() :: pos_integer()
   def reading_gap_ms, do: @reading_gap_ms
+
+  @doc """
+  How often CYFR asks each service for its report (`Opus.Memory`), and
+  how often a page showing the record reads it again: 5 seconds.
+  """
+  @spec poll_ms() :: pos_integer()
+  def poll_ms, do: @poll_ms
+
+  @doc """
+  How long after its last answer an endpoint counts as answering: three
+  polls. One that has not answered within it holds nothing now, joins no
+  machine, and a refusal names no holder from it.
+  """
+  @spec fresh_ms() :: pos_integer()
+  def fresh_ms, do: 3 * @poll_ms
+
+  @doc """
+  How long CYFR waits for one ask's answer, on every service: one poll
+  interval. The endpoints are asked one after another, so one that
+  connects and never answers stretches a cycle to two polls, inside the
+  three-poll bound of `fresh_ms/0`, and the others still read as answering.
+  """
+  @spec ask_ms() :: pos_integer()
+  def ask_ms, do: @poll_ms
+
+  @doc "The name CYFR stamps the builds service's report with in its record."
+  @spec builds_endpoint() :: String.t()
+  def builds_endpoint, do: "builds"
 
   @doc "The pool wire's version, carried in every body and answer as `v`."
   @spec version() :: pos_integer()

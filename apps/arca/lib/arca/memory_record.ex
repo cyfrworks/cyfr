@@ -54,7 +54,7 @@ defmodule Arca.MemoryRecord do
 
   ## Reading
 
-  `endpoints/1` answers every endpoint's row, to any caller: a machine's
+  `endpoints/2` answers every endpoint's row, to any caller: a machine's
   numbers are the same a refusal's `held` already shows. `counters/1`
   answers an athanor actor's own counters, and every athanor's only to a
   platform actor. `others_bytes/1` answers, for each endpoint, what every
@@ -109,7 +109,7 @@ defmodule Arca.MemoryRecord do
           either: non_neg_integer()
         }
 
-  @typedoc "An endpoint's row, as `endpoints/1` answers it."
+  @typedoc "An endpoint's row, as `endpoints/2` answers it."
   @type endpoint :: %{
           endpoint: String.t(),
           boot: String.t(),
@@ -118,7 +118,8 @@ defmodule Arca.MemoryRecord do
           work: non_neg_integer(),
           floor: non_neg_integer(),
           used: non_neg_integer(),
-          heard_at: DateTime.t()
+          heard_at: DateTime.t(),
+          answering: boolean()
         }
 
   @doc "What a person may read a counter as: a run, a build, a program, a terminal, the browser or a tool."
@@ -345,20 +346,37 @@ defmodule Arca.MemoryRecord do
 
   @doc """
   Every endpoint's row: the machine's numbers its last answer carried,
-  the boot it was of and when it was heard. A machine's numbers are the
-  whole machine's, as a refusal's `held` shows them to anyone, so any
-  resolved actor reads them.
+  the boot it was of, when it was heard, and whether it answered within
+  `bound_ms` (`answering`), judged on the database's clock, the one that
+  stamped `heard_at`, never a member's. A machine's numbers are the whole
+  machine's, as a refusal's `held` shows them to anyone, so any resolved
+  actor reads them.
   """
-  @spec endpoints(Prima.Actor.t()) :: {:ok, [endpoint()]} | {:error, :no_athanor | term()}
+  @spec endpoints(Prima.Actor.t(), pos_integer()) ::
+          {:ok, [endpoint()]} | {:error, :no_athanor | term()}
   # arca:unscoped-ok the host's own rows of its endpoints, which no athanor holds.
-  def endpoints(%Prima.Actor{} = actor) when platform(actor) or resolved(actor.athanor_id) do
+  def endpoints(%Prima.Actor{} = actor, bound_ms)
+      when (platform(actor) or resolved(actor.athanor_id)) and is_integer(bound_ms) and
+             bound_ms > 0 do
     Errors.with_db_rescue("Arca.MemoryRecord.endpoints", fn ->
-      rows = from(e in MemoryEndpoint, order_by: e.endpoint) |> Arca.Repo.all()
-      {:ok, Enum.map(rows, &endpoint_map/1)}
+      {:ok, judged_endpoints(bound_ms)}
     end)
   end
 
-  def endpoints(%Prima.Actor{}), do: {:error, :no_athanor}
+  def endpoints(%Prima.Actor{}, _bound_ms), do: {:error, :no_athanor}
+
+  # Every endpoint's row with whether it answered within `bound_ms`: the
+  # one comparison of an answer's age, on the database's clock.
+  # arca:unscoped-ok the host's own rows of its endpoints, which no athanor holds.
+  defp judged_endpoints(bound_ms) do
+    since = DateTime.add(Arca.ServerMetaStorage.now!(), -bound_ms, :millisecond)
+
+    from(e in MemoryEndpoint, order_by: e.endpoint)
+    |> Arca.Repo.all()
+    |> Enum.map(fn row ->
+      row |> endpoint_map() |> Map.put(:answering, DateTime.compare(row.heard_at, since) != :lt)
+    end)
+  end
 
   @doc """
   The counters an actor may read: an athanor actor's own, every

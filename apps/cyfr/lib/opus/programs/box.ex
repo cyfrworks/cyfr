@@ -364,7 +364,7 @@ defmodule Opus.Programs.Box do
     headers = [{"content-type", "application/json"}, {LocusBackends.auth_header(), header}]
 
     opts = [
-      receive_timeout: @control_timeout_ms,
+      receive_timeout: Prima.LocusPool.ask_ms(),
       private_policy: :operator,
       max_response_bytes: Prima.Limits.default_max_response_size()
     ]

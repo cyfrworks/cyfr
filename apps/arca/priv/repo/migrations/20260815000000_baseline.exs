@@ -3077,7 +3077,7 @@ defmodule Arca.Repo.Migrations.Baseline do
   # Who used what
   # ==========================================================================
 
-  # The host's record of the memory each person's work used on each
+  # The record of the memory each person's work used on each
   # machine (`Arca.MemoryRecord`), from the counters each Locus service
   # reports. A counter is its athanor's row, keyed by the athanor first,
   # then the endpoint that reported it, the keeper's boot, the UTC day, the

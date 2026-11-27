@@ -100,8 +100,8 @@ defmodule Compendium.FacadeTest do
     agent_type_of: 1,
     agents: 1,
     bring_in_pack: 4,
-    # The builds service's report of who used what, which the host's record
-    # of it asks (`Opus.Memory`) through the component domain's root rather
+    # The builds service's report of who used what, which the record of it
+    # asks (`Opus.Memory`) through the component domain's root rather
     # than a widened export of its builds client.
     builds_pool: 1,
     canvas_versions: 2,
