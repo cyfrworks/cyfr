@@ -11,7 +11,7 @@
 //	                     guard, the keeper's group, the keeper, and the
 //	                     machine's end
 //	cyfr-guest guard     the guard's start: NET_ADMIN alone, then the
-//	                     image's cyfr-guard
+//	                     image's `cyfr-locus guard-control`
 //	cyfr-guest keeper    the keeper's start, in the group and namespaces the
 //	                     first process gave it: execs `cyfr-locus serve`
 //	cyfr-guest relay     the guest keeper's one role, run by that keeper:

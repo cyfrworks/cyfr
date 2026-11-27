@@ -258,6 +258,9 @@ func TestAnAnswerNotAskedForEndsTheConnection(t *testing.T) {
 	if n := lost.wait(t); n != 1 {
 		t.Fatalf("connection %d reported", n)
 	}
+	// The end is reported before it is seen (Client.read): a clear is
+	// asked once it is.
+	settled(t, c)
 
 	if err := c.Clear(testSpawn, Route{Conn: 1}); !errors.Is(err, ErrConnectionGone) {
 		t.Fatalf("a clear of an ended connection's route: %v", err)
@@ -321,4 +324,23 @@ func TestAnAdmittedJustBeforeTheEndIsNotLive(t *testing.T) {
 		t.Fatal("an admitted whose connection ended, its reader held before the end, is live")
 	}
 	close(hold)
+}
+
+// settled waits until c holds no connection: the one it held has ended and
+// its end has been handled.
+func settled(t *testing.T, c *Client) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		c.mu.Lock()
+		l := c.settle()
+		c.mu.Unlock()
+		if l == nil {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the connection's end was never seen")
+		}
+		time.Sleep(time.Millisecond) // sleep-ok: polls the end the reader marks, within a bound
+	}
 }

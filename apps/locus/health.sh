@@ -6,7 +6,7 @@
 # every role whose key this environment holds answers at its port, and
 # with no key held, never. A role process listens in a space of its own,
 # which its guard forwards the role's port to from the guard's island
-# addresses alone (cyfr-guard, reach `role`), so each probe asks the first
+# addresses alone (the guard's, reach `role`), so each probe asks the first
 # of those addresses, the way cyfr reaches the role:
 #
 #   runtime   LOCUS_RUNTIME_KEY   the worker listener refuses an unsigned

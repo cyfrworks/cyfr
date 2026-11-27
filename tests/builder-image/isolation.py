@@ -669,7 +669,7 @@ def test_role_reach(stack):
                and any(r.startswith(f"-A CYFR_GUARD_REPLIES -o {iface} -p tcp -m tcp --dport {ROLE_PORT} ") and r.endswith("-j ACCEPT") for r in rules)
                and f"-A {chain} -j CYFR_GUARD_PRIVATE" in rules,
                "the role's route forwards its port to its space alone and holds it to the island's rule out", rules)
-        expect(stack.guard_exec("cyfr-guard check").returncode == 0, "the guard is healthy with a role's route in")
+        expect(stack.guard_exec("cyfr-locus guard-check").returncode == 0, "the guard is healthy with a role's route in")
 
         # ————— in: its port, from the island and from the island's own processes —————
         got = read_from(stack, f"{own}:{ROLE_PORT}")
@@ -758,7 +758,7 @@ def test_role_reach(stack):
                 break
             time.sleep(0.1)  # sleep-ok: the guard withdraws a lost connection's routes as it sees the end
         expect(eventually_gone, "the private role's route is withdrawn with its control connection", guard_routes(stack))
-        expect(stack.guard_exec("cyfr-guard check").returncode == 0, "the guard is healthy once the roles are gone")
+        expect(stack.guard_exec("cyfr-locus guard-check").returncode == 0, "the guard is healthy once the roles are gone")
     finally:
         for space in (role, private, third):
             if space:
@@ -848,15 +848,15 @@ def test_guard_unreadable(image, canary):
         for table, save in FAMILIES:
             marker = f"/run/cyfr-guard/fail-{save}"
             stack.guard_exec(f"touch {marker}")
-            probe = stack.guard_exec("cyfr-guard check")
+            probe = stack.guard_exec("cyfr-locus guard-check")
             expect(probe.returncode != 0 and "could not be read" in probe.stderr,
                    f"the probe refuses while {save} fails, the rules standing", probe.stdout + probe.stderr)
             stack.guard_exec(f"{table} -F CYFR_GUARD")
-            probe = stack.guard_exec("cyfr-guard check")
+            probe = stack.guard_exec("cyfr-locus guard-check")
             expect(probe.returncode != 0, f"the probe refuses while {save} fails and the {table} chain is cleared",
                    probe.stdout + probe.stderr)
             stack.guard_exec(f"rm -f {marker}")
-            probe = stack.guard_exec("cyfr-guard check")
+            probe = stack.guard_exec("cyfr-locus guard-check")
             expect(probe.returncode != 0 and "not the ones recorded" in probe.stderr,
                    f"once {save} reads again, the probe refuses the cleared {table} chain", probe.stdout + probe.stderr)
         # Docker's own probe reaches the same verdict.

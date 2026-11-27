@@ -561,33 +561,6 @@ func TestARolesPortIsOneRoutesAtATime(t *testing.T) {
 	}
 }
 
-// Each reach reaches the guard's script as the route's arguments: a role's
-// port, and `private` for a private one alone.
-func TestARoutesRulesNameItsReach(t *testing.T) {
-	var got [][]string
-	k := kernelRoutes{apply: func(args ...string) error { got = append(got, args); return nil }}
-	gateway, inner := slotAddresses(netip.MustParsePrefix("10.213.0.0/16"), 3)
-	for _, r := range []*route{
-		{slot: 3, gateway: gateway, inner: inner, mark: 7, reach: ReachIsland},
-		{slot: 3, gateway: gateway, inner: inner, mark: 7, reach: ReachHosts, addresses: []string{"1.2.3.4", "2606:4700::1111"}},
-		{slot: 3, gateway: gateway, inner: inner, mark: 7, reach: ReachRole, port: 4200, private: true},
-		{slot: 3, gateway: gateway, inner: inner, mark: 7, reach: ReachRole, port: 4101},
-	} {
-		if err := k.rules(r); err != nil {
-			t.Fatal(err)
-		}
-	}
-	want := [][]string{
-		{"route", "sp3", "10.213.0.14", "7", "island"},
-		{"route", "sp3", "10.213.0.14", "7", "hosts", "1.2.3.4", "2606:4700::1111"},
-		{"route", "sp3", "10.213.0.14", "7", "role", "4200", "private"},
-		{"route", "sp3", "10.213.0.14", "7", "role", "4101"},
-	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("the script's arguments %q, want %q", got, want)
-	}
-}
-
 // A withdrawn route forgets every connection of its address: one its space
 // opened (the address the original source) and one made into it (the
 // address the reply's source, a role's forwarded connection).

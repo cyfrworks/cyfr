@@ -22,8 +22,8 @@
 #                            `homes` volume, which no backup holds.
 #                 No role holds tenant state, and none sees another's key,
 #                 processes, files, port or spawns.
-#   locus-guard — Locus's egress guard: the same image running cyfr-guard
-#                 with NET_ADMIN alone, whose network namespace `locus`
+#   locus-guard — Locus's egress guard: the same image running
+#                 `cyfr-locus guard-control` with NET_ADMIN alone, whose network namespace `locus`
 #                 shares. It makes each role process's, each build's and
 #                 each program session's one route out of its space, so a
 #                 build or a backend reaches public hosts and the private
@@ -293,7 +293,7 @@ services:
     # the network alone. The network is not `internal`: cargo and npm need
     # crates.io and the registry, and a program its upstream API. What a
     # role process, a build or a session reaches out to is its route's
-    # rules (cyfr-guard): public hosts, or the hosts a program's row named
+    # rules (the guard's): public hosts, or the hosts a program's row named
     # at its start, and the private hosts CYFR_PRIVATE_EGRESS_TARGETS
     # names; the runtime's role process cyfr's host API and every private
     # address besides, and its runners nothing but their relays; nothing
@@ -350,12 +350,12 @@ services:
     # apps/locus/health.sh), which probes each role whose key is set at its
     # port, each at its wire's version.
 
-  # Locus's egress guard: the Locus image running cyfr-guard
-  # (apps/locus/keeper/guard/cyfr-guard.sh) in the network namespace locus
+  # Locus's egress guard: the Locus image running `cyfr-locus
+  # guard-control` (apps/locus/keeper/guard) in the network namespace locus
   # shares, holding NET_ADMIN and no other capability. It carries Locus's
   # service name as an alias, so cyfr's URLs for each role resolve to the
-  # namespace the roles listen in. Its health is the ready file cyfr-guard
-  # writes only once every rule is installed, re-checked against the rules
+  # namespace the roles listen in. Its health is the ready file the guard
+  # writes only once every rule is installed and its control listens, re-checked against the rules
   # in place; a guard whose rules failed never turns healthy, so Locus
   # never starts. It runs no release and holds no key.
   locus-guard:
@@ -370,7 +370,7 @@ services:
       - "4100"
       - "4101"
       - "4200"
-    entrypoint: ["cyfr-guard"]
+    entrypoint: ["cyfr-locus", "guard-control"]
     init: true
     cap_drop:
       - ALL
@@ -382,7 +382,7 @@ services:
     read_only: true
     ipc: none
     # A route forwards a space's packets, and every refusal is answered at
-    # once: cyfr-guard refuses to start in a namespace without these.
+    # once: the guard refuses to start in a namespace without these.
     sysctls:
       net.ipv4.ip_forward: "1"
       net.ipv4.icmp_ratelimit: "0"
@@ -408,7 +408,7 @@ services:
         aliases:
           - locus
     healthcheck:
-      test: ["CMD", "cyfr-guard", "check"]
+      test: ["CMD", "cyfr-locus", "guard-check"]
       interval: 10s
       timeout: 3s
       start_period: 5s

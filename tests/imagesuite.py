@@ -541,8 +541,8 @@ class Guard:
             "-e", f"CYFR_GUARD_CONTROL_PLANE={gateway}", "-e", "CYFR_PRIVATE_EGRESS_TARGETS=",
             "-e", f"CYFR_GUARD_CONTROL={self.CONTROL}", *[arg for pair in env for arg in ("-e", pair)],
             "-v", f"{self.volume}:{self.CONTROL_DIR}", "--network", self.network,
-            "--health-cmd", "cyfr-guard check", "--health-interval", "1s", "--health-timeout", "3s",
-            "--health-retries", "3", *extra, "--entrypoint", "cyfr-guard", image).stdout.strip()
+            "--health-cmd", "cyfr-locus guard-check", "--health-interval", "1s", "--health-timeout", "3s",
+            "--health-retries", "3", *extra, "--entrypoint", "cyfr-locus", image, "guard-control").stdout.strip()
         deadline = time.monotonic() + 60
         while time.monotonic() < deadline:
             health = self.run("docker", "inspect", "--format", "{{.State.Health.Status}}", self.id, check=False)

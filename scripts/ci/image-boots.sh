@@ -24,7 +24,7 @@
 #               the kept homes' volume) with a fresh builds key alone, so
 #               the keeper starts the builds role, behind its egress guard
 #               as compose starts it (locus-guard: the same image as
-#               cyfr-guard, NET_ADMIN alone, on a network of the script's
+#               `cyfr-locus guard-control`, NET_ADMIN alone, on a network of the script's
 #               own, its control on a volume the service reads), healthy by
 #               the image's own HEALTHCHECK (apps/locus/health.sh: the
 #               builds wire's health operation at the guard's address) once
@@ -68,8 +68,8 @@ case "$kind" in
       -e "CYFR_GUARD_CONTROL_PLANE=$gateway" -e CYFR_PRIVATE_EGRESS_TARGETS= \
       -e CYFR_GUARD_CONTROL=/run/cyfr-guard-control/guard.sock \
       -v "$name-control:/run/cyfr-guard-control" --network "$name-net" \
-      --health-cmd "cyfr-guard check" --health-interval 2s --health-timeout 3s --health-retries 3 \
-      --entrypoint cyfr-guard "$image" >/dev/null
+      --health-cmd "cyfr-locus guard-check" --health-interval 2s --health-timeout 3s --health-retries 3 \
+      --entrypoint cyfr-locus "$image" guard-control >/dev/null
     closes=$((SECONDS + 60))
     until [ "$(docker inspect --format '{{.State.Health.Status}}' "$name-guard")" = healthy ]; do
       [ "$(docker inspect --format '{{.State.Status}}' "$name-guard")" = running ] && [ "$SECONDS" -lt "$closes" ] || {

@@ -199,7 +199,7 @@ defmodule Cyfr.StackShapeTest do
   end
 
   # The guard as compose runs it, whole: the Locus image running
-  # cyfr-guard, NET_ADMIN alone, under the stack's container seccomp
+  # `cyfr-locus guard-control`, NET_ADMIN alone, under the stack's container seccomp
   # profile, forwarding with no ICMP rate limit (its
   # sysctls), the ready file's tmpfs and its control's volume, whose socket
   # its environment names, its only writable surfaces, cyfr's fixed
@@ -213,7 +213,7 @@ defmodule Cyfr.StackShapeTest do
       "image" => "ghcr.io/cyfrworks/cyfr-locus:latest",
       "build" => %{"context" => ".", "dockerfile" => "Dockerfile.locus"},
       "expose" => roles |> Enum.map(&"#{&1.port}") |> Enum.sort(),
-      "entrypoint" => ["cyfr-guard"],
+      "entrypoint" => ["cyfr-locus", "guard-control"],
       "init" => true,
       "cap_drop" => ["ALL"],
       "cap_add" => ["NET_ADMIN"],
@@ -231,7 +231,7 @@ defmodule Cyfr.StackShapeTest do
       "volumes" => ["#{@control_volume}:#{@guard_control_dir}"],
       "networks" => %{release.network => %{"aliases" => [release.service]}},
       "healthcheck" => %{
-        "test" => ["CMD", "cyfr-guard", "check"],
+        "test" => ["CMD", "cyfr-locus", "guard-check"],
         "interval" => "10s",
         "timeout" => "3s",
         "start_period" => "5s",
@@ -1181,7 +1181,7 @@ defmodule Cyfr.StackShapeTest do
     assert outcomes == for({plant, _, _, expected} <- plants, do: {plant, Enum.sort(expected)})
   end
 
-  # Locus starts behind an egress guard: the Locus image running cyfr-guard
+  # Locus starts behind an egress guard: the Locus image running the guard
   # with NET_ADMIN and no other capability, in the network namespace Locus
   # shares, carrying Locus's name as its alias there, healthy only with
   # every rule installed, and holding no key or release. Locus waits for

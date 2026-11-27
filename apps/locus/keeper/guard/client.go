@@ -20,8 +20,8 @@ import (
 
 const (
 	dialTimeout = 2 * time.Second
-	// replyTimeout bounds one request's answer: the guard script's own bound
-	// and a margin.
+	// replyTimeout bounds one request's answer: the guard's bound on one
+	// change of a route's rules and a margin.
 	replyTimeout = applyTimeout + 5*time.Second
 )
 

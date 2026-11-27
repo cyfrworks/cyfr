@@ -168,7 +168,7 @@ func standInGuard() int {
 		netns: os.NewFile(uintptr(fds[0]), "netns"), udp: os.NewFile(uintptr(fds[1]), "udp"), tcp: os.NewFile(uintptr(fds[2]), "tcp")}
 	_ = r
 	rng16, _ := ParseRange("10.213.0.0/16")
-	srv := newServer(logx.New("cyfr-guard-test"), "net:[test]", rng16, kernelRoutes{apply: func(...string) error { return nil }})
+	srv := newServer(logx.New("cyfr-guard-test"), "net:[test]", rng16, kernelRoutes{set: noRules{}})
 	srv.upstream = upstream.LocalAddr().String()
 	ended := make(chan struct{}, 1)
 	srv.onEnd = func() { ended <- struct{}{} }
@@ -348,3 +348,10 @@ func standInSpace() int {
 	fmt.Println("space: a new connection has no route")
 	return 0
 }
+
+// noRules stands for the guard's rules where a test makes a route's pair
+// alone.
+type noRules struct{}
+
+func (noRules) install(*route) error  { return nil }
+func (noRules) withdraw(*route) error { return nil }
