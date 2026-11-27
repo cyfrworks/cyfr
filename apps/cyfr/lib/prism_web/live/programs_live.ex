@@ -25,11 +25,19 @@ defmodule PrismWeb.ProgramsLive do
   **Memory in use now**, above the list, is what of the person's holds
   memory on each machine (`Opus.memory/2`, `:mine`), read at mount and
   again every poll (`Prima.LocusPool.poll_ms/0`): each program by its name with
-  the Disable its row has and the Close of each of its sessions, a run and
-  a build by kind with no control, everyone else's use as one sum, and how
-  fresh the count is (`PrismWeb.MemoryWords`); programs by name, then the
-  kinds, so a line never moves when a size changes. Until the first read answers
-  it says nothing of them; a read that fails says the memory cannot be
+  the Disable its row has and a line for each of its sessions, oldest
+  first, with the second it started, Show and Close; a run and a build by
+  kind with no control, everyone else's use as one sum, and how fresh the
+  count is (`PrismWeb.MemoryWords`); programs by name, then the kinds, so
+  a line never moves when a size changes. CYFR counts a program's
+  terminals in the athanor as one size, never each session, and the
+  sessions listed are this person's own: so no session's line carries a
+  size, and the program's line says which part of it its terminals are,
+  and that Close does not end the rest. Disable asks first, in the
+  browser, whenever anything of the program runs as far as the page
+  knows: the read names it as holding memory, or a session of it is
+  listed. Its question covers the whole program and counts nothing. Until
+  the first read answers it says nothing of them; a read that fails says the memory cannot be
   read, never that nothing of theirs uses it.
 
   Forms add an http server (its config as JSON) and a program, its mark
@@ -66,7 +74,12 @@ defmodule PrismWeb.ProgramsLive do
 
   An expanded row's details are read again after it is enabled or
   disabled, and when the list says it is disabled, so a disabled program
-  reads as stopped.
+  reads as stopped there. The list's own status says `disabled` for a
+  disabled row, which offers no Open; for a program CYFR is ready to call
+  it says `running` while Memory in use now names that program on a
+  machine, and `starts when used` otherwise, so the list and the panel say
+  one thing from one read. Before the read answers, when it fails, and
+  for what a service that has not answered runs, it is `starts when used`.
 
   `?add=<name>` opens the program form, driven, for a program brain of
   that name: its command as the brain's definition holds it
@@ -1191,7 +1204,12 @@ defmodule PrismWeb.ProgramsLive do
         </form>
       </.card>
 
-      <.memory_panel memory={@memory} servers={@servers} running={@running} />
+      <.memory_panel
+        memory={@memory}
+        servers={@servers}
+        running={@running}
+        shown={shown_session(@terminal)}
+      />
 
       <.card>
         <div :if={@loading} class="py-8 text-center text-gray-500">Loading...</div>
@@ -1244,12 +1262,21 @@ defmodule PrismWeb.ProgramsLive do
                   </td>
                   <%!-- A driven program has no MCP client, so it has no
                         connection to show and no tools: both cells are
-                        empty for it. --%>
+                        empty for it, unless it is disabled. --%>
                   <td class="px-4 py-3 text-sm text-gray-300 whitespace-nowrap" data-test="status">
-                    <.badge :if={not driven?(server)} color={status_color(server[:status])}>
-                      {server[:status] || "unknown"}
+                    <.badge :if={server[:enabled] == false} color="gray">disabled</.badge>
+                    <.badge
+                      :if={server[:enabled] != false and not driven?(server)}
+                      color={status_color(server[:status])}
+                    >
+                      {status_word(server, @memory)}
                     </.badge>
-                    <span :if={driven?(server)} class="text-xs text-gray-400">—</span>
+                    <span
+                      :if={server[:enabled] != false and driven?(server)}
+                      class="text-xs text-gray-400"
+                    >
+                      —
+                    </span>
                   </td>
                   <td class="px-4 py-3 text-sm text-gray-300 whitespace-nowrap" data-test="tools">
                     {if driven?(server), do: "—", else: server[:tool_count] || 0}
@@ -1347,7 +1374,8 @@ defmodule PrismWeb.ProgramsLive do
                       <.terminal_actions
                         :if={server[:transport] == "program"}
                         server={server}
-                        running={Enum.filter(@running, &(&1.name == server[:name]))}
+                        running={sessions(@running, server[:name])}
+                        shown={shown_session(@terminal)}
                       />
                       <.home_actions server={server} />
                       <div class="flex flex-wrap gap-2 pt-2 border-t border-gray-800">
@@ -1356,6 +1384,11 @@ defmodule PrismWeb.ProgramsLive do
                           phx-click="toggle_enabled"
                           phx-value-name={server[:name]}
                           phx-value-enabled={to_string(server[:enabled])}
+                          data-confirm={
+                            server[:enabled] == true &&
+                              disable_question(@memory, @running, server[:name])
+                          }
+                          data-test="toggle-enabled"
                         >
                           {if server[:enabled] == true, do: "Disable", else: "Enable"}
                         </.button>
@@ -1497,15 +1530,20 @@ defmodule PrismWeb.ProgramsLive do
 
   attr :server, :map, required: true
   attr :running, :list, required: true
+  attr :shown, :string, default: nil
 
   # A program's terminal: Open with the words to follow its command, and
   # each of the person's running sessions of it, to show again or close.
   # One Aqua started is listed and closed here, never shown: its screen is
-  # its turn's alone.
+  # its turn's alone. A disabled program opens nothing, and says so.
   defp terminal_actions(assigns) do
     ~H"""
     <div class="space-y-2 pt-2 border-t border-gray-800" data-test="terminal-actions">
+      <p :if={@server[:enabled] == false} class="text-sm text-gray-300" data-test="open-disabled">
+        This program is disabled. Enable it to open a terminal.
+      </p>
       <form
+        :if={@server[:enabled] != false}
         id={"open-" <> @server[:name]}
         phx-submit="open"
         class="flex flex-wrap items-end gap-2"
@@ -1524,33 +1562,52 @@ defmodule PrismWeb.ProgramsLive do
         </div>
         <.button type="submit" variant="ghost" data-test="open-terminal">Open</.button>
       </form>
-      <div
+      <.session_line
         :for={session <- @running}
-        class="flex flex-wrap items-center gap-3 text-xs text-gray-400"
-        data-test="running-session"
-      >
-        <span>
-          Running since {Calendar.strftime(session.started_at, "%H:%M UTC")}{starter(session.by)}{if session.kept,
-            do: ", kept"}
-        </span>
-        <button
-          :if={session.by == :person}
-          type="button"
+        session={session}
+        shown={@shown}
+        test="running"
+      />
+    </div>
+    """
+  end
+
+  attr :session, :map, required: true
+  attr :shown, :string, default: nil
+  attr :test, :string, required: true
+
+  # One running session on a line of its own: the second it started, which
+  # tells it from another of its program, who started it, and its Show and
+  # Close. It carries no size: CYFR measures none for a session. The one in
+  # the frame says so and offers no Show; one Aqua started is never shown.
+  defp session_line(assigns) do
+    ~H"""
+    <div
+      class="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-400"
+      data-test={@test <> "-session"}
+    >
+      <span class="tabular-nums">{session_words(@session, @shown)}</span>
+      <span class="flex items-center gap-1">
+        <.button
+          :if={@session.by == :person and @session.session != @shown}
+          variant="ghost"
+          size="sm"
           phx-click="show_terminal"
-          phx-value-session={session.session}
-          class="text-blue-400 hover:underline"
+          phx-value-session={@session.session}
+          data-test={@test <> "-show"}
         >
           Show
-        </button>
-        <button
-          type="button"
+        </.button>
+        <.button
+          variant="ghost"
+          size="sm"
           phx-click="terminal_close"
-          phx-value-session={session.session}
-          class="text-gray-300 hover:underline"
+          phx-value-session={@session.session}
+          data-test={@test <> "-close"}
         >
           Close
-        </button>
-      </div>
+        </.button>
+      </span>
     </div>
     """
   end
@@ -1560,9 +1617,10 @@ defmodule PrismWeb.ProgramsLive do
   attr :memory, :any, required: true
   attr :servers, :list, required: true
   attr :running, :list, required: true
+  attr :shown, :string, default: nil
 
   # What of the person's holds memory now, on each machine, each named
-  # holder with the Disable its row has and the Close of each of its
+  # holder with the Disable its row has and a line for each of its
   # sessions; a run and a build have no control here. Everyone else's use
   # is one sum.
   defp memory_panel(assigns) do
@@ -1595,35 +1653,38 @@ defmodule PrismWeb.ProgramsLive do
           </h4>
           <div
             :for={line <- MemoryWords.holders(machine.holders)}
-            class="flex flex-wrap items-center gap-3 text-sm text-gray-300"
-            data-test="memory-holder"
+            class="space-y-1"
           >
-            <span>{line.text}</span>
-            <.button
-              :for={server <- disabling(@servers, line.name)}
-              variant="ghost"
-              phx-click="toggle_enabled"
-              phx-value-name={server[:name]}
-              phx-value-enabled="true"
-              data-test="memory-disable"
+            <div
+              class="flex flex-wrap items-center gap-3 text-sm text-gray-300"
+              data-test="memory-holder"
             >
-              Disable
-            </.button>
-            <span
-              :for={session <- sessions(@running, line.name)}
-              class="flex items-center gap-2 text-xs text-gray-400"
-            >
-              Running since {Calendar.strftime(session.started_at, "%H:%M UTC")}
-              <button
-                type="button"
-                phx-click="terminal_close"
-                phx-value-session={session.session}
-                class="text-gray-300 hover:underline"
-                data-test="memory-close"
+              <span>{line.text}</span>
+              <.button
+                :for={server <- disabling(@servers, line.name)}
+                variant="ghost"
+                phx-click="toggle_enabled"
+                phx-value-name={server[:name]}
+                phx-value-enabled="true"
+                data-confirm={disable_question(@memory, @running, server[:name])}
+                data-test="memory-disable"
               >
-                Close
-              </button>
-            </span>
+                Disable
+              </.button>
+            </div>
+            <p
+              :for={words <- terminal_words(machine.holders, line.name)}
+              class="text-xs text-gray-400"
+              data-test="memory-terminals"
+            >
+              {words}
+            </p>
+            <.session_line
+              :for={session <- sessions(@running, line.name)}
+              session={session}
+              shown={@shown}
+              test="memory"
+            />
           </div>
           <p :if={MemoryWords.others(machine)} class="text-sm text-gray-300">
             {MemoryWords.others(machine)}
@@ -1651,8 +1712,59 @@ defmodule PrismWeb.ProgramsLive do
   defp disabling(servers, name),
     do: Enum.filter(servers, &(&1[:name] == name and &1[:enabled] == true))
 
+  defp session_words(session, shown) do
+    [
+      "Terminal opened at " <> Calendar.strftime(session.started_at, "%H:%M:%S UTC"),
+      starter(session.by),
+      if(session.kept, do: ", kept"),
+      if(session.session == shown, do: ", shown above")
+    ]
+    |> Enum.join()
+  end
+
+  # A program's running sessions, oldest first (`Opus.Programs.running/1`'s
+  # order), so a session's line keeps its place.
   defp sessions(_running, nil), do: []
   defp sessions(running, name), do: Enum.filter(running, &(&1.name == name))
+
+  # The session the frame shows, while it runs.
+  defp shown_session(%{session: session, ended: nil}), do: session
+  defp shown_session(_none_or_ended), do: nil
+
+  # What Disable asks, in the browser, whenever anything of the program
+  # runs as far as the page knows: the read names it as holding memory, or
+  # a session of it is listed. It covers the whole program and counts
+  # nothing, so what starts while it is up is inside what it says. Nil,
+  # and so no question, when nothing runs.
+  defp disable_question(memory, running, name) do
+    if holds_memory?(memory, name) or sessions(running, name) != [],
+      do: "Disable #{name}? Everything running in it ends now, and work in its terminals is lost."
+  end
+
+  # What a person reads of a program's terminals, from the read alone: it
+  # counts them in the athanor as one size, apart from what the program
+  # holds by itself (the holders of one name, kind `:terminal` and the
+  # row's own). No size is said of anything the read gives none for: not
+  # of a session, nor of the sessions this page lists.
+  defp terminal_words(holders, name) do
+    terminals = for %{name: ^name, kind: :terminal, bytes: bytes} <- holders, do: bytes
+    rest = Enum.find(holders, &(&1.name == name and &1.kind != :terminal))
+
+    case {terminals, rest} do
+      {[], _rest} ->
+        []
+
+      {_terminals, nil} ->
+        ["All of that is its terminals. CYFR does not measure each one."]
+
+      {sizes, rest} ->
+        [
+          "Its terminals use #{MemoryWords.size(Enum.sum(sizes))} of that. CYFR does not " <>
+            "measure each one. The rest is the #{MemoryWords.kind(rest.kind)} itself, which " <>
+            "Close does not end."
+        ]
+    end
+  end
 
   attr :server, :map, required: true
 
@@ -1701,6 +1813,21 @@ defmodule PrismWeb.ProgramsLive do
 
   defp kind(%{transport: "program", mark: mark}), do: "#{mark} program"
   defp kind(_server), do: "http"
+
+  # A program CYFR is ready to call starts at its next call. The list says
+  # it runs only while the panel's own read names it as holding memory, so
+  # the two never disagree; a read not in, failed or silent of it names
+  # nothing.
+  defp status_word(%{transport: "program", status: "ready", name: name}, memory) do
+    if holds_memory?(memory, name), do: "running", else: "starts when used"
+  end
+
+  defp status_word(server, _memory), do: server[:status] || "unknown"
+
+  defp holds_memory?(%{machines: machines}, name),
+    do: Enum.any?(machines, fn machine -> Enum.any?(machine.holders, &(&1.name == name)) end)
+
+  defp holds_memory?(_unread_or_unreadable, _name), do: false
 
   defp status_color(status) when status in ["ready", "connected", "running"], do: "green"
   defp status_color(status) when status in ["error", "crashed", "failed"], do: "red"
