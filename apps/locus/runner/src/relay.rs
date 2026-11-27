@@ -22,7 +22,10 @@
 //! name; each member in order (`attempt`, `seq`, then the kind's), missing,
 //! of another JSON type, outside its grammar or past its bound; `seq` out
 //! of order; then what the channel's state takes. Nothing after a refusal
-//! is read. `tests/fixtures/runner_relay.json` holds every frame and
+//! is read. `encode` refuses a frame the same way before it numbers it or
+//! records anything: its attempt, then each member in the kind's order,
+//! then what the channel's state takes. JSON is read as `crate::wire::parse`
+//! reads it. `tests/fixtures/runner_relay.json` holds every frame and
 //! refusal.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -30,7 +33,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde_json::{Map, Value};
 
 use crate::auth::MAX_CALL_HEADER_BYTES;
-use crate::wire::{MAX_INTEGER, decode_base64, encode_base64, is_id, json_string};
+use crate::host::Op;
+use crate::wire::{
+    Integer, MAX_INTEGER, bounded, decode_base64, decode_base64url, encode_base64,
+    encode_base64url, integer, is_id, is_url, json_string, parse,
+};
 
 /// The protocol version every frame carries as `v`.
 pub const VERSION: u64 = 1;
@@ -56,26 +63,15 @@ pub const MAX_SIGNED_HEADER_BYTES: usize = MAX_CALL_HEADER_BYTES;
 /// sealed value.
 pub const MAX_ATTACHED_FRAME_BYTES: usize = 65_536;
 
-/// The host API callbacks a `host_call` names: every one but the two a
-/// worker service makes itself.
-pub const OPS: [&str; 16] = [
-    "attach",
-    "renew",
-    "complete",
-    "fail",
-    "push_deltas",
-    "oauth_token",
-    "take_rate",
-    "fetch_artifact",
-    "storage",
-    "admit_child",
-    "tool_call",
-    "record_denial",
-    "release_child",
-    "egress_pin",
-    "question_ask",
-    "question_wait",
-];
+/// The methods a fetch names (`Prima.Destination.methods/0`).
+pub const METHODS: [&str; 7] = ["DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT"];
+
+/// The purposes an attached fetch names.
+pub const PURPOSES: [&str; 2] = ["fetch", "stream"];
+
+/// The most bytes a pinned fetch's path and an attached fetch's URL span.
+pub const MAX_PATH_BYTES: usize = 8192;
+pub const MAX_URL_BYTES: usize = 8192;
 
 /// An answer or request header: its name and value.
 pub type Header = (String, String);
@@ -85,7 +81,7 @@ pub type Header = (String, String);
 pub enum Outgoing {
     HostCall {
         attempt: String,
-        op: &'static str,
+        op: Op,
         header: String,
         body: Vec<u8>,
     },
@@ -294,10 +290,15 @@ impl Channel {
     /// The bytes of `frame` as the next frame the runner sends, its length
     /// first; the channel takes it only when it is sent.
     pub fn encode(&mut self, frame: &Outgoing) -> Result<Vec<u8>, Unsent> {
+        // Every member is checked, then what the channel's state takes,
+        // before anything changes.
         let seq = self.sent;
         let (attempt, kind, members) = written(frame).map_err(Unsent::Invalid)?;
         if !self.attempts.contains(attempt) {
             return Err(Unsent::Refused(Refusal::UnknownAttempt));
+        }
+        if let Outgoing::Credit { re, .. } = frame {
+            self.open_fetch(*re, attempt).map_err(Unsent::Refused)?;
         }
         let json = format!(
             "{{\"v\":{VERSION},\"attempt\":{},\"seq\":{seq},\"kind\":\"{kind}\"{}}}",
@@ -308,7 +309,7 @@ impl Channel {
                 .collect::<String>()
         );
         if json.len() > MAX_FRAME_BYTES {
-            return Err(Unsent::Invalid(Invalid("body")));
+            return Err(Unsent::Invalid(Invalid("frame")));
         }
         match frame {
             Outgoing::HostCall { .. } => {
@@ -370,10 +371,11 @@ impl Channel {
     }
 
     fn read_frame(&self, json: &[u8]) -> Result<Incoming, Refusal> {
-        let Ok(Value::Object(object)) = serde_json::from_slice::<Value>(json) else {
+        let json = parse(json).ok_or(Refusal::Malformed)?;
+        let Value::Object(object) = json.value() else {
             return Err(Refusal::Malformed);
         };
-        if !matches!(object.get("v"), Some(Value::Number(n)) if n.as_u64() == Some(VERSION)) {
+        if object.get("v").and_then(integer) != Some(Integer::Whole(VERSION)) {
             return Err(Refusal::BadVersion);
         }
         let kind = object
@@ -387,7 +389,7 @@ impl Channel {
                 Refusal::UnknownKind
             });
         };
-        let read = Reader(&object);
+        let read = Reader(object);
         if let Some(unknown) = object.keys().find(|key| {
             !matches!(key.as_str(), "v" | "kind" | "attempt" | "seq")
                 && !members.contains(&key.as_str())
@@ -541,49 +543,53 @@ type Members = Vec<(&'static str, String)>;
 
 /// A frame's attempt, kind and members as written, in wire order.
 fn written(frame: &Outgoing) -> Result<(&str, &'static str, Members), Invalid> {
+    let attempt = match frame {
+        Outgoing::HostCall { attempt, .. }
+        | Outgoing::PinnedFetch { attempt, .. }
+        | Outgoing::AttachedFetch { attempt, .. }
+        | Outgoing::Credit { attempt, .. }
+        | Outgoing::Close { attempt, .. } => attempt,
+    };
+    check(is_id(attempt), "attempt")?;
     Ok(match frame {
         Outgoing::HostCall {
-            attempt,
-            op,
-            header,
-            body,
+            op, header, body, ..
         } => {
-            if !OPS.contains(op) {
-                return Err(Invalid("op"));
-            }
-            if header.len() > MAX_SIGNED_HEADER_BYTES || !is_signed_header(header) {
-                return Err(Invalid("header"));
-            }
+            let header = signed_header(header).then(|| json_string(header));
             (
                 attempt,
                 "host_call",
                 vec![
-                    ("op", json_string(op)),
-                    ("header", json_string(header)),
+                    ("op", json_string(op.name())),
+                    ("header", header.ok_or(Invalid("header"))?),
                     ("body", body_text(body)?),
                 ],
             )
         }
         Outgoing::PinnedFetch {
-            attempt,
             pin,
             method,
             path,
             headers,
             body,
-        } => (
-            attempt,
-            "fetch",
-            vec![
-                ("pin", json_string(pin)),
-                ("method", json_string(method)),
-                ("path", json_string(path)),
-                ("headers", headers_text(headers)),
-                ("body", body_text(body)?),
-            ],
-        ),
+            ..
+        } => {
+            check(is_pin(pin), "pin")?;
+            check(METHODS.contains(&method.as_str()), "method")?;
+            check(is_path(path), "path")?;
+            (
+                attempt,
+                "fetch",
+                vec![
+                    ("pin", json_string(pin)),
+                    ("method", json_string(method)),
+                    ("path", json_string(path)),
+                    ("headers", headers_text(headers)?),
+                    ("body", body_text(body)?),
+                ],
+            )
+        }
         Outgoing::AttachedFetch {
-            attempt,
             call_id,
             connection,
             purpose,
@@ -591,39 +597,90 @@ fn written(frame: &Outgoing) -> Result<(&str, &'static str, Members), Invalid> {
             url,
             headers,
             body,
-        } => (
-            attempt,
-            "fetch",
-            vec![
-                ("call_id", json_string(call_id)),
-                ("connection", json_string(connection)),
-                ("purpose", json_string(purpose)),
-                ("method", json_string(method)),
-                ("url", json_string(url)),
-                ("headers", headers_text(headers)),
-                ("body", body_text(body)?),
-            ],
-        ),
-        Outgoing::Credit { attempt, re, bytes } => {
-            if *re > MAX_INTEGER {
-                return Err(Invalid("re"));
-            }
-            if *bytes == 0 || *bytes > MAX_BODY_BYTES as u64 {
-                return Err(Invalid("bytes"));
-            }
+            ..
+        } => {
+            check(is_call_id(call_id), "call_id")?;
+            check(is_connection(connection), "connection")?;
+            check(PURPOSES.contains(&purpose.as_str()), "purpose")?;
+            check(METHODS.contains(&method.as_str()), "method")?;
+            check(
+                url.len() <= MAX_URL_BYTES && crate::wire::is_text(url) && is_url(url),
+                "url",
+            )?;
+            (
+                attempt,
+                "fetch",
+                vec![
+                    ("call_id", json_string(call_id)),
+                    ("connection", json_string(connection)),
+                    ("purpose", json_string(purpose)),
+                    ("method", json_string(method)),
+                    ("url", json_string(url)),
+                    ("headers", headers_text(headers)?),
+                    ("body", body_text(body)?),
+                ],
+            )
+        }
+        Outgoing::Credit { re, bytes, .. } => {
+            check(*re <= MAX_INTEGER, "re")?;
+            check((1..=MAX_BODY_BYTES as u64).contains(bytes), "bytes")?;
             (
                 attempt,
                 "credit",
                 vec![("re", re.to_string()), ("bytes", bytes.to_string())],
             )
         }
-        Outgoing::Close { attempt, reason } => {
-            if !is_code(reason) {
-                return Err(Invalid("reason"));
-            }
+        Outgoing::Close { reason, .. } => {
+            check(is_code(reason), "reason")?;
             (attempt, "close", vec![("reason", json_string(reason))])
         }
     })
+}
+
+fn check(valid: bool, member: &'static str) -> Result<(), Invalid> {
+    if valid { Ok(()) } else { Err(Invalid(member)) }
+}
+
+/// A pin's id: 1 to 128 letters, digits, `_` or `-`.
+fn is_pin(text: &str) -> bool {
+    (1..=128).contains(&text.len())
+        && text
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+
+/// A path and query, from `/`, of printable ASCII without spaces.
+fn is_path(text: &str) -> bool {
+    text.len() <= MAX_PATH_BYTES
+        && text
+            .strip_prefix('/')
+            .is_some_and(|rest| rest.bytes().all(|b| (0x21..=0x7e).contains(&b)))
+}
+
+/// A call id: 16 bytes as unpadded base64url, spelled as encoding them
+/// spells them.
+fn is_call_id(text: &str) -> bool {
+    text.len() == 22
+        && text
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+        && decode_base64url(text)
+            .is_some_and(|bytes| bytes.len() == 16 && encode_base64url(&bytes) == text)
+}
+
+/// The need an attached fetch is made on: a lowercase letter, then up to
+/// 31 lowercase letters, digits, `_` or `-`.
+fn is_connection(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    (1..=32).contains(&bytes.len())
+        && bytes[0].is_ascii_lowercase()
+        && bytes[1..]
+            .iter()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || *b == b'_' || *b == b'-')
+}
+
+fn signed_header(text: &str) -> bool {
+    text.len() <= MAX_SIGNED_HEADER_BYTES && is_signed_header(text)
 }
 
 fn body_text(body: &[u8]) -> Result<String, Invalid> {
@@ -633,12 +690,19 @@ fn body_text(body: &[u8]) -> Result<String, Invalid> {
     Ok(json_string(&encode_base64(body)))
 }
 
-fn headers_text(headers: &[Header]) -> String {
+fn headers_text(headers: &[Header]) -> Result<String, Invalid> {
+    check(
+        headers.len() <= MAX_HEADERS
+            && headers
+                .iter()
+                .all(|(name, value)| is_header_name(name) && is_header_value(value)),
+        "headers",
+    )?;
     let pairs: Vec<String> = headers
         .iter()
         .map(|(name, value)| format!("[{},{}]", json_string(name), json_string(value)))
         .collect();
-    format!("[{}]", pairs.join(","))
+    Ok(format!("[{}]", pairs.join(",")))
 }
 
 /// A code: a lowercase letter, then up to 63 lowercase letters, digits or `_`.
@@ -722,13 +786,13 @@ impl Reader<'_> {
     }
 
     fn integer(&self, name: &str, range: std::ops::RangeInclusive<u64>) -> Result<u64, Refusal> {
-        match self.member(name)? {
-            Value::Number(n) if n.is_u64() || n.is_i64() => match n.as_u64() {
-                Some(value) if range.contains(&value) => Ok(value),
-                _ => Err(Refusal::InvalidField(name.to_owned())),
-            },
-            _ => Err(Refusal::WrongType(name.to_owned())),
-        }
+        bounded(self.member(name)?, range).map_err(|integer| {
+            if integer {
+                Refusal::InvalidField(name.to_owned())
+            } else {
+                Refusal::WrongType(name.to_owned())
+            }
+        })
     }
 
     fn seq(&self, name: &str) -> Result<u64, Refusal> {

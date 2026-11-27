@@ -13,7 +13,9 @@
 //! line's length, one JSON object, the version, the type, an unknown
 //! member (the first by name), then each field in order, missing, of
 //! another JSON type, outside its shape or over its bound. A member of an
-//! object is named by its path (`keys.attempt.fence`).
+//! object is named by its path (`keys.attempt.fence`). JSON is read as
+//! `crate::wire::parse` reads it, and the line's strings, the token and the
+//! keys' hex among them, are cleared once it is read.
 //! `tests/fixtures/runner_control.json` holds every frame and refusal.
 
 use std::collections::BTreeMap;
@@ -24,7 +26,8 @@ use zeroize::Zeroizing;
 
 use crate::auth::{Attempt, AttemptKeys, Key};
 use crate::wire::{
-    MAX_INTEGER, decode_base64, encode_base64, hex, hex_key, is_id, is_text, json_string,
+    Integer, MAX_INTEGER, bounded, decode_base64, encode_base64, hex, hex_key, integer, is_id,
+    is_text, json_string, parse,
 };
 
 /// The protocol version every frame carries as `v`.
@@ -40,13 +43,14 @@ pub const MAX_INPUT_BYTES: usize = 10_485_760;
 /// The most attempts an `exit` lists as open.
 pub const MAX_OPEN: usize = 1024;
 
-/// A message on the channel.
-#[derive(Debug, Clone)]
+/// A message on the channel. An `assign`'s token, input and keys are
+/// cleared when it is dropped, and its `Debug` prints none of them.
+#[derive(Clone)]
 pub enum Message {
     /// Run this subtree: its signed assignment, its input and the attempt's
     /// opened keys.
     Assign {
-        assignment: String,
+        assignment: Zeroizing<String>,
         input: Zeroizing<Vec<u8>>,
         keys: AttemptKeys,
     },
@@ -62,6 +66,42 @@ pub enum Message {
     Complete { execution_id: String, clean: bool },
     /// The runner ends, still holding the attempts in `open`.
     Exit { runner: String, open: Vec<String> },
+}
+
+impl std::fmt::Debug for Message {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Message::Assign { keys, .. } => f
+                .debug_struct("Assign")
+                .field("keys", keys)
+                .finish_non_exhaustive(),
+            Message::CancelChild { execution_id } => f
+                .debug_struct("CancelChild")
+                .field("execution_id", execution_id)
+                .finish(),
+            Message::Child {
+                execution_id,
+                attempt,
+            } => f
+                .debug_struct("Child")
+                .field("execution_id", execution_id)
+                .field("attempt", attempt)
+                .finish(),
+            Message::Complete {
+                execution_id,
+                clean,
+            } => f
+                .debug_struct("Complete")
+                .field("execution_id", execution_id)
+                .field("clean", clean)
+                .finish(),
+            Message::Exit { runner, open } => f
+                .debug_struct("Exit")
+                .field("runner", runner)
+                .field("open", open)
+                .finish(),
+        }
+    }
 }
 
 /// Why a line is not a frame.
@@ -139,8 +179,8 @@ pub fn encode(message: &Message) -> Result<Vec<u8>, Invalid> {
             ] {
                 id(value, name)?;
             }
-            integer(a.fence, "keys.attempt.fence")?;
-            integer(a.generation, "keys.attempt.generation")?;
+            within_integer(a.fence, "keys.attempt.fence")?;
+            within_integer(a.generation, "keys.attempt.generation")?;
             members.push(format!("\"assignment\":{}", json_string(assignment)));
             members.push(format!("\"input\":{}", json_string(&encode_base64(input))));
             members.push(format!(
@@ -207,7 +247,7 @@ fn text(value: &str, name: &'static str) -> Result<(), Invalid> {
     }
 }
 
-fn integer(value: u64, name: &'static str) -> Result<(), Invalid> {
+fn within_integer(value: u64, name: &'static str) -> Result<(), Invalid> {
     if value <= MAX_INTEGER {
         Ok(())
     } else {
@@ -222,10 +262,13 @@ pub fn decode(line: &[u8]) -> Result<Message, Refusal> {
     if line.len() > MAX_LINE_BYTES {
         return Err(Refusal::OversizeLine);
     }
-    let Ok(Value::Object(object)) = serde_json::from_slice::<Value>(line) else {
+    // The parsed line's strings, the token and the keys' hex among them,
+    // are cleared when it is dropped.
+    let json = parse(line).ok_or(Refusal::Malformed)?;
+    let Value::Object(object) = json.value() else {
         return Err(Refusal::Malformed);
     };
-    if !matches!(object.get("v"), Some(Value::Number(n)) if n.as_u64() == Some(VERSION)) {
+    if object.get("v").and_then(integer) != Some(Integer::Whole(VERSION)) {
         return Err(Refusal::BadVersion);
     }
     let Some((name, fields)) = object
@@ -235,17 +278,14 @@ pub fn decode(line: &[u8]) -> Result<Message, Refusal> {
     else {
         return Err(Refusal::UnknownType);
     };
-    let mut members = object.clone();
-    members.remove("v");
-    members.remove("type");
     let reader = Reader {
-        object: &members,
+        object,
         path: String::new(),
     };
-    reader.no_unknown(fields)?;
+    reader.no_unknown(&[&["v", "type"], *fields].concat())?;
     match *name {
         "assign" => {
-            let assignment = reader.text("assignment")?;
+            let assignment = Zeroizing::new(reader.text("assignment")?);
             let input = reader.input("input")?;
             let keys = reader.keys("keys")?;
             Ok(Message::Assign {
@@ -334,13 +374,13 @@ impl Reader<'_> {
     }
 
     fn integer(&self, field: &str) -> Result<u64, Refusal> {
-        match self.member(field)? {
-            Value::Number(n) if n.is_u64() || n.is_i64() => match n.as_u64() {
-                Some(value) if value <= MAX_INTEGER => Ok(value),
-                _ => Err(Refusal::InvalidField(self.name(field))),
-            },
-            _ => Err(Refusal::WrongType(self.name(field))),
-        }
+        bounded(self.member(field)?, 0..=MAX_INTEGER).map_err(|integer| {
+            if integer {
+                Refusal::InvalidField(self.name(field))
+            } else {
+                Refusal::WrongType(self.name(field))
+            }
+        })
     }
 
     fn key(&self, field: &str) -> Result<Key, Refusal> {
@@ -513,9 +553,13 @@ impl Environment {
         let boot = identifier(BOOT_ID)?;
         let control_fd = match get(CONTROL_FD)? {
             None => DEFAULT_CONTROL_FD,
+            // A decimal with its sign, `-0` among them, that is no
+            // descriptor below zero.
             Some(value) => value
-                .parse()
-                .map_err(|_| EnvironmentRefusal::Malformed(CONTROL_FD))?,
+                .parse::<i64>()
+                .ok()
+                .and_then(|fd| u32::try_from(fd).ok())
+                .ok_or(EnvironmentRefusal::Malformed(CONTROL_FD))?,
         };
         let relay = match get(RELAY_SOCKET)? {
             None => Relay::Fd(RELAY_FD),

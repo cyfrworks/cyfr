@@ -235,6 +235,22 @@ defmodule Locus.Runtime.HostClientTest do
 
   defp outcome_call("take_rate", client), do: HostClient.take_rate(client, "http:x")
 
+  defp outcome_call("egress_pin", client),
+    do: HostClient.egress_pin(client, "https://api.example.test/x")
+
+  # What the client answers for a vector's reading of an answer.
+  defp reading(%{"ok" => value}), do: {:ok, value}
+  defp reading(%{"refused" => name}), do: {:error, String.to_existing_atom(name)}
+
+  defp reading(%{"guest_error" => %{"remediation" => remediation} = error}),
+    do: {:error, {:guest_error, error["type"], error["message"], remediation}}
+
+  defp reading(%{"guest_error" => error}),
+    do: {:error, {:guest_error, error["type"], error["message"]}}
+
+  defp reading(%{"setup_required" => payload}), do: {:error, {:setup_required, payload}}
+  defp reading(%{"failed" => message}), do: {:error, {:failed, message}}
+
   defp scripted(%{"status" => nil}), do: :drop
   defp scripted(%{"status" => 200, "answer" => json}), do: {:answer, json}
   defp scripted(%{"status" => status, "plain" => body}), do: {:raw, status, body}
@@ -244,7 +260,7 @@ defmodule Locus.Runtime.HostClientTest do
     client: client
   } do
     cases = @host_api["answer_outcomes"]
-    assert length(cases) >= 20
+    assert length(cases) >= 40
 
     # One case for every class the callbacks' retries name.
     classes =
@@ -271,17 +287,10 @@ defmodule Locus.Runtime.HostClientTest do
           assert result == {:error, :too_large}, why
 
         "answer" ->
-          # Only renew is answered in the vectors; it reads its answer's
-          # value, or CYFR's refusal by name.
-          assert callback == "renew", why
-
-          expected =
-            case Jason.decode!(List.last(answers)["answer"]) do
-              %{"ok" => value} -> {:ok, value}
-              %{"error" => name} -> {:error, String.to_existing_atom(name)}
-            end
-
-          assert result == expected, why
+          # A value answers only renew in the vectors, which reads it as
+          # it came; every other reading is the client's own.
+          assert result == reading(vector["reading"]), why
+          if Map.has_key?(vector["reading"], "ok"), do: assert(callback == "renew", why)
       end
     end
   end

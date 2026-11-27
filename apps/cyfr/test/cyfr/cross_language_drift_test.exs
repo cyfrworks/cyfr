@@ -671,21 +671,21 @@ defmodule Cyfr.CrossLanguageDriftTest do
     ],
     "runner_control.json" => [
       {"apps/locus/runner/tests/vectors.rs",
-       ~w(version max_line_bytes max_input_bytes max_open valid invalid environment)},
+       ~w(version max_line_bytes max_input_bytes max_open valid invalid decode_only environment)},
       {"apps/locus/test/locus/runtime/runner_control_vectors_test.exs",
        ~w(max_line_bytes valid invalid)},
       {"apps/prima/test/prima/runner_control_test.exs",
-       ~w(version max_line_bytes max_input_bytes max_open valid invalid)},
+       ~w(version max_line_bytes max_input_bytes max_open valid invalid decode_only)},
       {"apps/locus/test/locus/runtime/settings_test.exs", ~w(environment)},
       {"tests/locus-runtime-image/namespace_test.py", ~w(valid)}
     ],
     "runner_relay.json" => [
       {"apps/locus/runner/tests/vectors.rs",
-       ~w(version attempt max_body_bytes max_frame_bytes initial_credit max_headers max_header_name_bytes max_header_value_bytes max_signed_header_bytes max_attached_frame_bytes ops exchange refusals)},
+       ~w(version attempt max_body_bytes max_frame_bytes initial_credit max_headers max_header_name_bytes max_header_value_bytes max_signed_header_bytes max_attached_frame_bytes ops methods purposes max_path_bytes max_url_bytes exchange refusals encode_refusals)},
       {"apps/locus/test/locus/runtime/relay_vectors_test.exs",
        ~w(attempt initial_credit exchange refusals)},
       {"apps/prima/test/prima/runner_relay_test.exs",
-       ~w(version attempt max_body_bytes max_frame_bytes initial_credit max_headers max_header_name_bytes max_header_value_bytes max_signed_header_bytes max_attached_frame_bytes ops exchange refusals)},
+       ~w(version attempt max_body_bytes max_frame_bytes initial_credit max_headers max_header_name_bytes max_header_value_bytes max_signed_header_bytes max_attached_frame_bytes ops methods purposes max_path_bytes max_url_bytes exchange refusals encode_refusals)},
       {"tests/locus-runtime-image/namespace_test.py", ~w(exchange)}
     ],
     "setup-folders.json" => [

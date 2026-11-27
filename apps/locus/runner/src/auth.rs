@@ -26,12 +26,11 @@
 
 use aes_gcm::aead::{Aead, KeyInit, Payload};
 use aes_gcm::{Aes256Gcm, Nonce};
-use base64::Engine as _;
 use hmac::{Hmac, Mac};
 use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
-use crate::wire::{BASE64URL, MAX_INTEGER, hex, is_id};
+use crate::wire::{MAX_INTEGER, decode_base64url, encode_base64url, hex, is_id};
 
 /// A 32-byte key, cleared when it is dropped.
 pub type Key = Zeroizing<[u8; 32]>;
@@ -217,7 +216,7 @@ pub fn host_call_header(
     tokens.push(format!("body={}", sha256_hex(body)));
     tokens.push(format!(
         "mac={}",
-        BASE64URL.encode(hmac_sha256(call_key, canonical.as_bytes()))
+        encode_base64url(&hmac_sha256(call_key, canonical.as_bytes()))
     ));
     Ok(tokens.join(" "))
 }
@@ -249,7 +248,7 @@ pub fn seal_call(
     bytes.extend_from_slice(iv);
     bytes.extend_from_slice(tag);
     bytes.extend_from_slice(ciphertext);
-    Ok(BASE64URL.encode(bytes))
+    Ok(encode_base64url(&bytes))
 }
 
 /// The plaintext `sealed` holds as `direction` of the call `fields` names,
@@ -261,7 +260,7 @@ pub fn open_call(
     sealed: &[u8],
 ) -> Result<Zeroizing<Vec<u8>>, Unsealable> {
     let aad = additional_data(direction, fields).map_err(|_| Unsealable)?;
-    let bytes = BASE64URL.decode(sealed).map_err(|_| Unsealable)?;
+    let bytes = decode_base64url(sealed).ok_or(Unsealable)?;
     if bytes.len() < IV_BYTES + TAG_BYTES {
         return Err(Unsealable);
     }

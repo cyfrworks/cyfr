@@ -29,9 +29,9 @@ use zeroize::Zeroizing;
 use cyfr_runner::assignment::{self, Assignment};
 use cyfr_runner::auth::{self, Attempt, AttemptKeys, CallFields, Direction};
 use cyfr_runner::control::{self, Environment, EnvironmentRefusal, Message, Relay};
-use cyfr_runner::host::{self, Caller, Op, Outcome, Post, Reached, Retry};
+use cyfr_runner::host::{self, Caller, Op, Outcome, Post, Reached, Reading, Retry};
 use cyfr_runner::relay::{self, Channel, Incoming, Outgoing};
-use cyfr_runner::wire::{self, Answer};
+use cyfr_runner::wire;
 
 fn fixture(name: &str) -> Value {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -40,6 +40,16 @@ fn fixture(name: &str) -> Value {
     let text = std::fs::read_to_string(&path)
         .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
     serde_json::from_str(&text).unwrap_or_else(|error| panic!("{}: {error}", path.display()))
+}
+
+/// The cases of the section `name`, which a renamed or emptied section
+/// fails.
+fn cases<'a>(section: &'a Value, name: &str) -> &'a Vec<Value> {
+    let cases = section
+        .as_array()
+        .unwrap_or_else(|| panic!("the vectors have no section {name}"));
+    assert!(!cases.is_empty(), "the vectors' section {name} is empty");
+    cases
 }
 
 fn s(value: &Value) -> &str {
@@ -58,13 +68,18 @@ fn key(hex: &Value) -> Zeroizing<[u8; 32]> {
     Zeroizing::new(wire::hex_key(s(hex)).expect("a 64-digit key"))
 }
 
+/// The bytes of a vector's hex text.
+fn unhex(hex: &Value) -> Vec<u8> {
+    let text = s(hex);
+    (0..text.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&text[i..i + 2], 16).expect("hex"))
+        .collect()
+}
+
+/// A vector's IV, as its hex text spells it.
 fn iv(hex: &Value) -> [u8; 12] {
-    let key = s(hex);
-    let mut bytes = [0u8; 12];
-    for (index, byte) in bytes.iter_mut().enumerate() {
-        *byte = u8::from_str_radix(&key[index * 2..index * 2 + 2], 16).expect("hex");
-    }
-    bytes
+    unhex(hex).try_into().expect("a 12-byte IV")
 }
 
 fn attempt(value: &Value) -> Attempt {
@@ -152,7 +167,7 @@ fn message_json(message: &Message) -> Value {
 fn message_from(json: &Value) -> Message {
     match s(&json["type"]) {
         "assign" => Message::Assign {
-            assignment: s(&json["assignment"]).to_owned(),
+            assignment: Zeroizing::new(s(&json["assignment"]).to_owned()),
             input: Zeroizing::new(s(&json["input"]).as_bytes().to_vec()),
             keys: AttemptKeys {
                 attempt: attempt(&json["keys"]["attempt"]),
@@ -229,9 +244,7 @@ fn control_bounds_are_the_vectors() {
 #[test]
 fn control_every_valid_frame_encodes_to_its_line_and_decodes_back() {
     let v = fixture("runner_control.json");
-    let cases = v["valid"].as_array().expect("valid");
-    assert!(cases.len() >= 6);
-    for case in cases {
+    for case in cases(&v["valid"], "valid") {
         let why = s(&case["why"]);
         let line = s(&case["line"]);
         let message = message_from(&case["message"]);
@@ -254,14 +267,29 @@ fn control_every_valid_frame_encodes_to_its_line_and_decodes_back() {
 #[test]
 fn control_every_invalid_line_is_refused_with_its_reason() {
     let v = fixture("runner_control.json");
-    let cases = v["invalid"].as_array().expect("invalid");
-    assert!(cases.len() >= 60);
-    for case in cases {
+    for case in cases(&v["invalid"], "invalid") {
         let why = s(&case["why"]);
         assert_eq!(
             control::decode(&control_line(case)).err(),
             Some(control_refusal(case)),
             "{why}"
+        );
+    }
+}
+
+#[test]
+fn control_every_decode_only_line_decodes_to_its_message() {
+    let v = fixture("runner_control.json");
+    for case in cases(&v["decode_only"], "decode_only") {
+        let why = s(&case["why"]);
+        let line = control_line(case);
+        let decoded = control::decode(&line).unwrap_or_else(|refusal| panic!("{why}: {refusal:?}"));
+        assert_eq!(message_json(&decoded), case["message"], "{why}");
+        let encoded = control::encode(&message_from(&case["message"])).expect(why);
+        assert_ne!(
+            encoded[..encoded.len() - 1],
+            line[..],
+            "{why}: the encoder writes it so"
         );
     }
 }
@@ -310,16 +338,14 @@ fn control_every_environment_reads_as_its_runner_or_is_refused_naming_its_variab
         (control::DEFAULT_CONTROL_FD, &Relay::Fd(control::RELAY_FD))
     );
 
-    for case in env["valid"].as_array().expect("valid") {
+    for case in cases(&env["valid"], "valid") {
         let why = s(&case["why"]);
         let read = Environment::read(environment(&case["environment"]))
             .unwrap_or_else(|r| panic!("{why}: {r}"));
         assert_eq!(runner_json(&read), case["runner"], "{why}");
     }
 
-    let invalid = env["invalid"].as_array().expect("invalid");
-    assert!(invalid.len() >= 20);
-    for case in invalid {
+    for case in cases(&env["invalid"], "invalid") {
         let why = s(&case["why"]);
         let name = s(&case["name"]);
         assert!(
@@ -392,10 +418,7 @@ fn outgoing(frame: &Value) -> Outgoing {
     match s(&frame["kind"]) {
         "host_call" => Outgoing::HostCall {
             attempt,
-            op: relay::OPS
-                .iter()
-                .find(|op| **op == s(&frame["op"]))
-                .expect("a runner's op"),
+            op: Op::named(s(&frame["op"])).expect("a runner's op"),
             header: s(&frame["header"]).to_owned(),
             body: body(&frame["body"]),
         },
@@ -505,12 +528,7 @@ fn relay_refusal(case: &Value) -> relay::Refusal {
 /// to the vector's frame.
 fn play(v: &Value, count: usize) -> Channel {
     let mut channel = Channel::new(s(&v["attempt"])).expect("the vectors' attempt");
-    for case in v["exchange"]
-        .as_array()
-        .expect("exchange")
-        .iter()
-        .take(count)
-    {
+    for case in cases(&v["exchange"], "exchange").iter().take(count) {
         let why = s(&case["why"]);
         let bytes = relay_bytes(case);
         if let Some(digest) = case.get("encoded_sha256") {
@@ -568,8 +586,77 @@ fn relay_bounds_are_the_vectors() {
         relay::MAX_ATTACHED_FRAME_BYTES as u64,
         n(&v["max_attached_frame_bytes"])
     );
-    let ops: Vec<&str> = v["ops"].as_array().expect("ops").iter().map(s).collect();
-    assert_eq!(relay::OPS.to_vec(), ops);
+    let names = |section: &Value, name: &str| -> Vec<String> {
+        cases(section, name)
+            .iter()
+            .map(|n| s(n).to_owned())
+            .collect()
+    };
+    let ops = names(&v["ops"], "ops");
+    assert_eq!(Op::all().map(Op::name).collect::<Vec<_>>(), ops);
+    assert_eq!(relay::METHODS.to_vec(), names(&v["methods"], "methods"));
+    assert_eq!(relay::PURPOSES.to_vec(), names(&v["purposes"], "purposes"));
+    assert_eq!(relay::MAX_PATH_BYTES as u64, n(&v["max_path_bytes"]));
+    assert_eq!(relay::MAX_URL_BYTES as u64, n(&v["max_url_bytes"]));
+}
+
+#[test]
+fn relay_every_frame_the_encoder_refuses_is_not_sent_and_changes_nothing() {
+    let v = fixture("runner_relay.json");
+    let exchange = cases(&v["exchange"], "exchange");
+    for case in cases(&v["encode_refusals"], "encode_refusals") {
+        let why = s(&case["why"]);
+        let after = n(&case["after"]) as usize;
+        let mut channel = play(&v, after);
+        // A call a runner does not make is no `Op`: the type refuses it.
+        if let Some(op) = case["frame"].get("op")
+            && Op::named(s(op)).is_none()
+        {
+            assert_eq!(case.get("member").map(s), Some("op"), "{why}");
+            continue;
+        }
+        let refused = channel.encode(&outgoing(&case["frame"])).err();
+        let expected = match (case.get("member"), case.get("reason")) {
+            (Some(member), None) => relay::Unsent::Invalid(relay::Invalid(leak(s(member)))),
+            (None, Some(_)) => relay::Unsent::Refused(relay_refusal(case)),
+            _ => panic!("{why}: a refusal names a member or a reason"),
+        };
+        assert_eq!(refused, Some(expected), "{why}");
+        // The channel numbers the exchange's next runner frame as the
+        // vector does: the refused frame took no seq and opened nothing.
+        let next = exchange[after..]
+            .iter()
+            .find(|frame| frame["from"] == "runner")
+            .expect(why);
+        let frame: Value = serde_json::from_str(&relay_json(next)).expect("JSON");
+        let state_free = channel.encode(&outgoing(&frame)).expect(why);
+        assert_eq!(state_free, relay_bytes(next), "{why}");
+    }
+}
+
+/// A member's name as the crate spells it, `'static`.
+fn leak(name: &str) -> &'static str {
+    Box::leak(name.to_owned().into_boxed_str())
+}
+
+#[test]
+fn relay_a_pinned_fetchs_path_and_an_attached_fetchs_url_are_taken_at_their_bounds() {
+    let v = fixture("runner_relay.json");
+    let exchange = cases(&v["exchange"], "exchange");
+    let frame = |index: usize| -> Value {
+        serde_json::from_str(&relay_json(&exchange[index])).expect("JSON")
+    };
+    let mut pinned = frame(2);
+    pinned["path"] = format!("/{}", "a".repeat(n(&v["max_path_bytes"]) as usize - 1)).into();
+    assert!(play(&v, 2).encode(&outgoing(&pinned)).is_ok());
+    let mut attached = frame(8);
+    let url = "https://api.example.com/";
+    attached["url"] = format!(
+        "{url}{}",
+        "a".repeat(n(&v["max_url_bytes"]) as usize - url.len())
+    )
+    .into();
+    assert!(play(&v, 8).encode(&outgoing(&attached)).is_ok());
 }
 
 #[test]
@@ -600,14 +687,12 @@ fn relay_service_frames_decode_split_anywhere() {
 #[test]
 fn relay_every_refusal_the_runner_receives_closes_with_its_reason() {
     let v = fixture("runner_relay.json");
-    let cases: Vec<&Value> = v["refusals"]
-        .as_array()
-        .expect("refusals")
+    let runner: Vec<&Value> = cases(&v["refusals"], "refusals")
         .iter()
         .filter(|case| case["receiver"] == "runner")
         .collect();
-    assert!(cases.len() >= 40);
-    for case in cases {
+    assert!(!runner.is_empty());
+    for case in runner {
         let why = s(&case["why"]);
         let mut channel = play(&v, n(&case["after"]) as usize);
         let refusal = relay_refusal(case);
@@ -718,6 +803,18 @@ fn auth_a_sealed_body_and_answer_reproduce_and_open_only_as_themselves() {
     );
 }
 
+/// A payload as the crate holds it: a top-level integer past 2^64 − 1, a
+/// time past any clock, as 2^64 − 1 (the assignment module's description).
+fn held(payload: &Value) -> Value {
+    let mut held = payload.clone();
+    for member in held.as_object_mut().expect("an object").values_mut() {
+        if let Some(wire::Integer::Whole(n)) = wire::integer(member) {
+            *member = n.into();
+        }
+    }
+    held
+}
+
 /// A read assignment as its payload spells it: every member it carries,
 /// none for an absent optional one.
 fn assignment_json(read: &Assignment) -> Value {
@@ -726,7 +823,7 @@ fn assignment_json(read: &Assignment) -> Value {
         "generation": read.generation, "service": read.service, "boot": read.boot, "member": read.member,
         "issued_at": read.issued_at, "claim_by": read.claim_by, "execution_id": read.execution_id,
         "attempt": read.attempt, "fence": read.fence, "root_execution_id": read.root_execution_id,
-        "athanor_id": read.athanor_id, "actor": read.actor, "authority": read.authority,
+        "athanor_id": read.athanor_id, "actor": read.actor.value(), "authority": read.authority.value(),
         "input_digest": read.input_digest, "timeout_ms": read.timeout_ms, "deadline": read.deadline,
         "lease_until": read.lease_until, "intercepted": read.intercepted,
         "component": {
@@ -769,14 +866,21 @@ fn auth_every_assignment_read_reads_as_its_payload_or_is_refused_with_its_reason
     assert_eq!(read.member, s(&v["member"]));
 
     let reads = &v["assignment_reads"];
-    for case in reads["valid"].as_array().expect("valid") {
+    for case in cases(&reads["valid"], "valid") {
         let why = s(&case["why"]);
         let read = assignment::read(s(&case["token"])).unwrap_or_else(|r| panic!("{why}: {r:?}"));
-        assert_eq!(assignment_json(&read), case["payload"], "{why}");
+        assert_eq!(assignment_json(&read), held(&case["payload"]), "{why}");
     }
-    let invalid = reads["invalid"].as_array().expect("invalid");
-    assert!(invalid.len() >= 30);
-    for case in invalid {
+    // Each list is taken at its bound, and refused one past it.
+    let at_bound = cases(&reads["valid"], "valid").iter().any(|case| {
+        case["payload"]["intercepted"].as_array().map(Vec::len) == Some(assignment::MAX_LIST)
+            && case["payload"]["component"]["declared_needs"]
+                .as_array()
+                .map(Vec::len)
+                == Some(assignment::MAX_LIST)
+    });
+    assert!(at_bound, "no valid assignment holds lists at MAX_LIST");
+    for case in cases(&reads["invalid"], "invalid") {
         let why = s(&case["why"]);
         let reason = match s(&case["reason"]) {
             "malformed" => assignment::Refusal::Malformed,
@@ -800,8 +904,6 @@ fn host_each_callbacks_class_and_timeout_are_the_vectors() {
     let v = fixture("host_api.json");
     assert_eq!(wire::VERSION, n(&v["version"]));
     assert_eq!(host::MAX_BODY_BYTES as u64, n(&v["max_body_bytes"]));
-    let names: Vec<&str> = Op::all().map(Op::name).collect();
-    assert_eq!(names, relay::OPS.to_vec());
     for op in Op::all() {
         let class = match op.retry() {
             Retry::Idempotent => "idempotent",
@@ -839,27 +941,77 @@ fn host_fields(fields: &Value) -> CallFields {
     }
 }
 
+/// A reading as the vectors write one.
+fn reading_json(reading: &Reading) -> Value {
+    match reading {
+        Reading::Ok(value) => serde_json::json!({ "ok": value.value() }),
+        Reading::Refused(name) => serde_json::json!({ "refused": name }),
+        Reading::GuestError {
+            kind,
+            message,
+            remediation,
+        } => {
+            let mut error =
+                serde_json::json!({ "type": kind.as_str(), "message": message.as_str() });
+            if let Some(remediation) = remediation {
+                error["remediation"] = remediation.value().clone();
+            }
+            serde_json::json!({ "guest_error": error })
+        }
+        Reading::SetupRequired(payload) => serde_json::json!({ "setup_required": payload.value() }),
+        Reading::Failed(message) => serde_json::json!({ "failed": message.as_str() }),
+    }
+}
+
+/// An answer's wire form, as the reading of it says it: what a whole
+/// refusal carries, and nothing else.
+fn answer_of(reading: &Value) -> Value {
+    let (kind, value) = reading
+        .as_object()
+        .and_then(|o| o.iter().next())
+        .expect("a reading");
+    let mut answer = serde_json::json!({ "v": wire::VERSION });
+    match kind.as_str() {
+        "ok" => answer["ok"] = value.clone(),
+        "refused" => answer["error"] = value.clone(),
+        "guest_error" => {
+            answer["error"] = "guest_error".into();
+            for (member, field) in value.as_object().expect("an error") {
+                answer[member.as_str()] = field.clone();
+            }
+        }
+        "setup_required" => {
+            answer["error"] = "setup_required".into();
+            answer["payload"] = value.clone();
+        }
+        "failed" => {
+            answer["error"] = "failed".into();
+            answer["message"] = value.clone();
+        }
+        other => panic!("no reading {other}"),
+    }
+    answer
+}
+
 #[test]
 fn host_every_call_a_runner_makes_crosses_as_the_vectors_write_it() {
     let v = fixture("host_api.json");
     let call_key = key(&v["keys"]["attempt_call_hex"]);
     let seal_key = key(&v["keys"]["attempt_seal_hex"]);
-    let calls = v["calls"].as_array().expect("calls");
-    let mut made = 0;
-    for case in calls {
+    let mut made = Vec::new();
+    for case in cases(&v["calls"], "calls") {
         let callback = s(&case["callback"]);
         let Some(op) = Op::named(callback) else {
+            // Only the service makes attached_fetch: its answer is frames.
+            assert_eq!(callback, "attached_fetch");
             continue;
         };
-        made += 1;
+        made.push(callback);
         let fields = host_fields(&case["fields"]);
         let body = s(&case["body"]);
         let parsed: Value = serde_json::from_str(body).expect("JSON");
-        assert_eq!(
-            wire::request_body(op.name(), parsed["args"].as_object().expect("args")),
-            body,
-            "{callback}"
-        );
+        let written = wire::request_body(op.name(), parsed["args"].as_object().expect("args"));
+        assert_eq!(written.as_str(), body, "{callback}");
 
         let sealed = auth::seal_call(
             &seal_key,
@@ -882,26 +1034,37 @@ fn host_every_call_a_runner_makes_crosses_as_the_vectors_write_it() {
             &fields,
             s(&case["answer_sealed"]).as_bytes(),
         );
-        assert_eq!(
-            opened.expect("opened").to_vec(),
-            s(&case["answer"]).as_bytes(),
-            "{callback}"
-        );
+        let opened = opened.expect("opened");
+        assert_eq!(&opened[..], s(&case["answer"]).as_bytes(), "{callback}");
         let answer: Value = serde_json::from_str(s(&case["answer"])).expect("JSON");
+        let reading =
+            host::answered(op, &opened).unwrap_or_else(|why| panic!("{callback}: {why:?}"));
         assert_eq!(
-            wire::read_answer(&answer),
-            Some(Answer::Ok(answer["ok"].clone())),
+            reading_json(&reading),
+            serde_json::json!({ "ok": answer["ok"] }),
             "{callback}"
         );
-        for refusal in case["refusals"].as_array().expect("refusals") {
-            let refused: Value = serde_json::from_str(s(&refusal["answer"])).expect("JSON");
-            assert!(
-                matches!(wire::read_answer(&refused), Some(Answer::Error { .. })),
-                "{callback}"
-            );
+
+        // Each refusal reads as exactly what it carries; another version's
+        // is no answer at all.
+        for refusal in cases(&case["refusals"], "refusals") {
+            let text = s(&refusal["answer"]);
+            let refused: Value = serde_json::from_str(text).expect("JSON");
+            match host::answered(op, text.as_bytes()) {
+                Ok(reading) => assert_eq!(
+                    answer_of(&reading_json(&reading)),
+                    refused,
+                    "{callback}: {text}"
+                ),
+                Err(host::Unanswered::OtherVersion) => {
+                    assert_eq!(refused["error"], "unknown_version")
+                }
+                Err(host::Unanswered::Lost) => panic!("{callback}: {text} read as no answer"),
+            }
         }
     }
-    assert!(made >= 15, "{made} calls a runner makes");
+    let all: Vec<&str> = Op::all().map(Op::name).collect();
+    assert_eq!(made, all, "every callback a runner makes has its call");
 }
 
 /// A host reached through a scripted relay: each try meets the next answer
@@ -909,7 +1072,20 @@ fn host_every_call_a_runner_makes_crosses_as_the_vectors_write_it() {
 struct Scripted {
     answers: Vec<Value>,
     seal: Zeroizing<[u8; 32]>,
+    iv: [u8; 12],
     posted: Vec<(String, Vec<u8>)>,
+}
+
+impl Scripted {
+    fn new(v: &Value, caller: &Caller, answers: Vec<Value>) -> Self {
+        let iv = iv(&v["calls"][0]["answer_iv_hex"]);
+        Scripted {
+            answers,
+            seal: caller.keys.seal.clone(),
+            iv,
+            posted: Vec::new(),
+        }
+    }
 }
 
 /// The call fields a header names.
@@ -951,7 +1127,7 @@ impl Post for Scripted {
                 Direction::Answer,
                 &fields,
                 s(json).as_bytes(),
-                &[7; 12],
+                &self.iv,
             )
             .expect("sealed")
             .into_bytes(),
@@ -980,33 +1156,20 @@ fn caller(v: &Value) -> Caller {
 async fn host_every_answer_outcome_is_the_calls() {
     let v = fixture("host_api.json");
     let caller = caller(&v);
-    let cases = v["answer_outcomes"].as_array().expect("answer_outcomes");
-    assert!(cases.len() >= 20);
-    for case in cases {
+    for case in cases(&v["answer_outcomes"], "answer_outcomes") {
         let why = s(&case["why"]);
         let op = Op::named(s(&case["callback"])).expect("a runner's callback");
-        let mut post = Scripted {
-            answers: case["answers"].as_array().expect("answers").clone(),
-            seal: caller.keys.seal.clone(),
-            posted: Vec::new(),
-        };
+        let mut post = Scripted::new(&v, &caller, cases(&case["answers"], "answers").clone());
         let outcome = host::call(&mut post, &caller, op, &Map::new()).await;
-        let expected = match s(&case["outcome"]) {
-            "lost" => Outcome::Lost,
-            "uncertain" => Outcome::Uncertain,
-            "too_large" => Outcome::TooLarge,
-            "answer" => {
-                let last = case["answers"]
-                    .as_array()
-                    .expect("answers")
-                    .last()
-                    .expect("an answer");
-                let answer: Value = serde_json::from_str(s(&last["answer"])).expect("JSON");
-                Outcome::Answered(wire::read_answer(&answer).expect("an answer at this version"))
-            }
-            other => panic!("no outcome {other}"),
+        // The outcome, and an answer's reading, as the vectors write them.
+        let (name, reading) = match &outcome {
+            Outcome::Answered(reading) => ("answer", reading_json(reading)),
+            Outcome::Lost => ("lost", Value::Null),
+            Outcome::Uncertain => ("uncertain", Value::Null),
+            Outcome::TooLarge => ("too_large", Value::Null),
         };
-        assert_eq!(outcome, expected, "{why}");
+        let expected = case.get("reading").cloned().unwrap_or(Value::Null);
+        assert_eq!((name, reading), (s(&case["outcome"]), expected), "{why}");
         assert_eq!(post.posted.len() as u64, n(&case["posted"]), "{why}");
 
         // A try asked again is the same body under a fresh header.
@@ -1073,15 +1236,95 @@ async fn host_a_body_past_the_hosts_bound_is_too_large_and_never_posted() {
     let bound = n(&v["max_body_bytes"]) as usize;
     let mut args = Map::new();
     args.insert("deltas".to_owned(), "x".repeat(bound).into());
-    let mut post = Scripted {
-        answers: Vec::new(),
-        seal: caller.keys.seal.clone(),
-        posted: Vec::new(),
-    };
+    let mut post = Scripted::new(&v, &caller, Vec::new());
     let op = Op::named("push_deltas").expect("a callback");
     assert_eq!(
         host::call(&mut post, &caller, op, &args).await,
         Outcome::TooLarge
     );
     assert!(post.posted.is_empty());
+}
+
+// ============================================================================
+// What a runner holds (the plan's §5.7)
+// ============================================================================
+
+/// A marker for a secret, which no public `Debug` or error may print.
+const MARKER: &str = "MARKERq7v2";
+
+fn no_marker(why: &str, printed: String) {
+    assert!(
+        !printed.contains(MARKER),
+        "{why} prints the secret: {printed}"
+    );
+}
+
+#[test]
+fn holding_no_debug_or_error_form_prints_a_token_an_input_a_key_or_a_disclosed_field() {
+    let control_v = fixture("runner_control.json");
+    let assign = &cases(&control_v["valid"], "valid")[0];
+    let line = s(&assign["line"]);
+    let key_hex = s(&assign["message"]["keys"]["call"]);
+    let marked = line
+        .replacen(
+            "\"assignment\":\"",
+            &format!("\"assignment\":\"{MARKER}"),
+            1,
+        )
+        .replacen(
+            "\"input\":\"eyJxdWVyeSI6InNlbGVjdCAxIn0=\"",
+            &format!("\"input\":\"{}\"", wire::encode_base64(MARKER.as_bytes())),
+            1,
+        );
+    assert!(
+        marked.contains(&wire::encode_base64(MARKER.as_bytes())),
+        "the input carries the marker"
+    );
+    // An assign, decoded: its token, its input and its keys.
+    let message = control::decode(marked.as_bytes()).expect("the marked assign");
+    no_marker("an assign", format!("{message:?}"));
+    assert!(
+        !format!("{message:?}").contains(key_hex),
+        "an assign prints its key"
+    );
+    // An assign refused: the reason names a member, never a value.
+    let refused = control::decode(marked.replacen("\"keys\":", "\"keyz\":", 1).as_bytes());
+    no_marker("a refused assign", format!("{refused:?}"));
+
+    // A disclosed field in each reading of an answer.
+    let op = Op::named("oauth_token").expect("a callback");
+    for answer in [
+        format!(r#"{{"v":3,"ok":{{"access_token":"{MARKER}"}}}}"#),
+        format!(
+            r#"{{"v":3,"error":"guest_error","type":"{MARKER}","message":"{MARKER}","remediation":{{"m":"{MARKER}"}}}}"#
+        ),
+        format!(r#"{{"v":3,"error":"setup_required","payload":{{"m":"{MARKER}"}}}}"#),
+        format!(r#"{{"v":3,"error":"failed","message":"{MARKER}"}}"#),
+    ] {
+        let reading = host::answered(op, answer.as_bytes()).expect("an answer");
+        no_marker(&answer, format!("{:?}", Outcome::Answered(reading)));
+    }
+    no_marker(
+        "a parsed value",
+        format!("{:?}", wire::parse(format!("\"{MARKER}\"").as_bytes())),
+    );
+
+    // An assignment read: its authority and actor.
+    let auth_v = fixture("worker_auth.json");
+    let mut payload: Value =
+        serde_json::from_str(s(&auth_v["assignment"]["payload"])).expect("JSON");
+    payload["authority"]["marker"] = MARKER.into();
+    payload["actor"]["request_id"] = MARKER.into();
+    let mac = wire::encode_base64url(&unhex(&auth_v["keys"]["assign_hex"]));
+    let token = format!(
+        "{}.{mac}",
+        wire::encode_base64url(payload.to_string().as_bytes())
+    );
+    let read = assignment::read(&token).expect("the marked assignment");
+    assert_eq!(
+        read.authority.value()["marker"],
+        MARKER,
+        "the read holds the field it hides"
+    );
+    no_marker("an assignment", format!("{read:?}"));
 }

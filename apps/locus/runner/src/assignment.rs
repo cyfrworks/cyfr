@@ -17,11 +17,19 @@
 //! `type` and the canonical form of its `ref` are not checked against the
 //! component reference grammar. `tests/fixtures/worker_auth.json`'s
 //! `assignment_reads` holds the tokens both sides read alike.
+//!
+//! An integer member is read as Prima reads one, of any size: a time past
+//! 2^64 − 1 ms is held as 2^64 − 1, later than any clock. The payload, its
+//! `actor` and its `authority` are cleared when they are dropped, and an
+//! assignment's `Debug` names its attempt alone.
 
-use base64::Engine as _;
 use serde_json::{Map, Value};
+use zeroize::Zeroizing;
 
-use crate::wire::{BASE64URL, is_base_url, is_digest, is_id};
+use crate::wire::{
+    Integer, Json, decode_base64url, encode_base64url_into, integer, is_base_url, is_digest, is_id,
+    parse,
+};
 
 /// The version an assignment carries as `v`.
 pub const VERSION: u64 = 1;
@@ -82,7 +90,7 @@ pub struct Component {
 }
 
 /// An assignment, as its token carries it. Times are Unix milliseconds.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(PartialEq)]
 pub struct Assignment {
     pub generation: u64,
     pub service: String,
@@ -98,14 +106,23 @@ pub struct Assignment {
     pub root_execution_id: String,
     pub step: Option<Step>,
     pub athanor_id: String,
-    pub actor: Map<String, Value>,
-    pub authority: Map<String, Value>,
+    pub actor: Json,
+    pub authority: Json,
     pub component: Component,
     pub input_digest: String,
     pub timeout_ms: u64,
     pub deadline: u64,
     pub lease_until: u64,
     pub intercepted: Vec<String>,
+}
+
+impl std::fmt::Debug for Assignment {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Assignment")
+            .field("execution_id", &self.execution_id)
+            .field("attempt", &self.attempt)
+            .finish_non_exhaustive()
+    }
 }
 
 /// Why a token is no assignment.
@@ -118,25 +135,32 @@ pub enum Refusal {
 /// The assignment `token` carries, its MAC unchecked.
 pub fn read(token: &str) -> Result<Assignment, Refusal> {
     let payload = split(token).ok_or(Refusal::Malformed)?;
-    let Ok(Value::Object(wire)) = serde_json::from_slice::<Value>(&payload) else {
+    let mut json = parse(&payload).ok_or(Refusal::Malformed)?;
+    let Value::Object(wire) = json.value() else {
         return Err(Refusal::Malformed);
     };
-    match wire.get("v") {
-        Some(Value::Number(v)) if v.as_u64() == Some(VERSION) && v.is_u64() => {}
-        Some(Value::Number(v)) if v.is_u64() || v.is_i64() => return Err(Refusal::UnknownVersion),
-        _ => return Err(Refusal::Malformed),
+    match wire.get("v").and_then(integer) {
+        Some(Integer::Whole(VERSION)) => {}
+        Some(_) => return Err(Refusal::UnknownVersion),
+        None => return Err(Refusal::Malformed),
     }
-    decode(&wire).ok_or(Refusal::Malformed)
+    let mut assignment = decode(wire).ok_or(Refusal::Malformed)?;
+    assignment.actor = json.take_member("actor").ok_or(Refusal::Malformed)?;
+    assignment.authority = json.take_member("authority").ok_or(Refusal::Malformed)?;
+    Ok(assignment)
 }
 
 /// The payload of a token of two unpadded base64url parts, the second a
 /// 32-byte MAC, that spells its parts one way only.
-fn split(token: &str) -> Option<Vec<u8>> {
+fn split(token: &str) -> Option<Zeroizing<Vec<u8>>> {
     let (payload64, mac64) = token.split_once('.')?;
-    let payload = BASE64URL.decode(payload64).ok()?;
-    let mac = BASE64URL.decode(mac64).ok()?;
-    let canonical = format!("{}.{}", BASE64URL.encode(&payload), BASE64URL.encode(&mac));
-    (mac.len() == 32 && canonical == token).then_some(payload)
+    let payload = Zeroizing::new(decode_base64url(payload64)?);
+    let mac = decode_base64url(mac64)?;
+    let mut canonical = Zeroizing::new(String::with_capacity(token.len()));
+    encode_base64url_into(&payload, &mut canonical);
+    canonical.push('.');
+    encode_base64url_into(&mac, &mut canonical);
+    (mac.len() == 32 && canonical.as_str() == token).then_some(payload)
 }
 
 fn decode(wire: &Map<String, Value>) -> Option<Assignment> {
@@ -164,8 +188,9 @@ fn decode(wire: &Map<String, Value>) -> Option<Assignment> {
         root_execution_id: id(get("root_execution_id")?)?,
         step: optional(get("step"), step)?,
         athanor_id: id(get("athanor_id")?)?,
-        actor: get("actor")?.as_object()?.clone(),
-        authority: get("authority")?.as_object()?.clone(),
+        // Each an object, taken out of the payload once it reads.
+        actor: get("actor")?.as_object().map(|_| Json::default())?,
+        authority: get("authority")?.as_object().map(|_| Json::default())?,
         component: component(get("component")?)?,
         input_digest: digest(get("input_digest")?)?,
         timeout_ms: positive(get("timeout_ms")?)?,
@@ -196,7 +221,10 @@ fn digest(value: &Value) -> Option<String> {
 }
 
 fn time(value: &Value) -> Option<u64> {
-    value.as_u64().filter(|_| value.is_u64())
+    match integer(value)? {
+        Integer::Whole(n) => Some(n),
+        Integer::Negative => None,
+    }
 }
 
 fn positive(value: &Value) -> Option<u64> {
