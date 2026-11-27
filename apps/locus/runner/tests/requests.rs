@@ -1044,11 +1044,14 @@ fn the_largest_request_and_answer_the_limits_allow_hold_the_thread_within_a_boun
         "request read {read_ms} ms, text answer {text_ms} ms, base64 answer {base64_ms} ms, \
          dots {dots_ms} ms"
     );
-    // The figures are printed; the body gives the release binary's. The
-    // one bound held here is the dots', which the quadratic removal misses
-    // many times over: a hosted runner's test build is some 2.4 times
-    // slower than this host's, so it stands about eight times its figure.
-    let _ = (read_ms, text_ms, base64_ms);
+    // Each bound stands at least five times its figure on a hosted
+    // runner, whose test build is some 2.4 times slower than this host's
+    // (here: about 0.9 s, 1.3 s, 0.2 s and 28 ms), and far under what a
+    // quadratic reading or writing takes (the quadratic dot removal took
+    // 1,957 ms). The body gives the release binary's figures.
+    assert!(read_ms < 15_000, "request read: {read_ms} ms");
+    assert!(text_ms < 20_000, "text answer: {text_ms} ms");
+    assert!(base64_ms < 3_000, "base64 answer: {base64_ms} ms");
     assert!(dots_ms < 500, "dots: {dots_ms} ms");
 }
 
