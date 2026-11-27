@@ -240,6 +240,7 @@ defmodule Locus.Runtime.HostClientTest do
 
   # What the client answers for a vector's reading of an answer.
   defp reading(%{"ok" => value}), do: {:ok, value}
+  defp reading(%{"ok_json" => text}), do: {:ok, Jason.decode!(text)}
   defp reading(%{"refused" => name}), do: {:error, String.to_existing_atom(name)}
 
   defp reading(%{"guest_error" => %{"remediation" => remediation} = error}),
@@ -290,7 +291,9 @@ defmodule Locus.Runtime.HostClientTest do
           # A value answers only renew in the vectors, which reads it as
           # it came; every other reading is the client's own.
           assert result == reading(vector["reading"]), why
-          if Map.has_key?(vector["reading"], "ok"), do: assert(callback == "renew", why)
+
+          if Map.has_key?(vector["reading"], "ok") or Map.has_key?(vector["reading"], "ok_json"),
+            do: assert(callback == "renew", why)
       end
     end
   end

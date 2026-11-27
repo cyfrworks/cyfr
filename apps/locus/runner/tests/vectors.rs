@@ -1152,8 +1152,27 @@ fn caller(v: &Value) -> Caller {
     }
 }
 
-#[tokio::test]
-async fn host_every_answer_outcome_is_the_calls() {
+// The cases nest an answer 2,000 arrays deep: read whole, as Prima reads
+// it, on a stack deep enough for it (the crate's `wire` description says
+// what a shallower one meets).
+#[test]
+fn host_every_answer_outcome_is_the_calls() {
+    let outcomes = std::thread::Builder::new()
+        .stack_size(64 * 1024 * 1024)
+        .spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_time()
+                .build()
+                .expect("a runtime")
+                .block_on(every_answer_outcome())
+        })
+        .expect("a thread");
+    if let Err(panic) = outcomes.join() {
+        std::panic::resume_unwind(panic);
+    }
+}
+
+async fn every_answer_outcome() {
     let v = fixture("host_api.json");
     let caller = caller(&v);
     for case in cases(&v["answer_outcomes"], "answer_outcomes") {
@@ -1168,7 +1187,17 @@ async fn host_every_answer_outcome_is_the_calls() {
             Outcome::Uncertain => ("uncertain", Value::Null),
             Outcome::TooLarge => ("too_large", Value::Null),
         };
-        let expected = case.get("reading").cloned().unwrap_or(Value::Null);
+        // A value nested past what this file's reader takes is its JSON
+        // text, read as the crate reads it.
+        let expected = match case.get("reading") {
+            Some(reading) if reading.get("ok_json").is_some() => {
+                let mut reader = serde_json::Deserializer::from_str(s(&reading["ok_json"]));
+                reader.disable_recursion_limit();
+                let ok: Value = serde::Deserialize::deserialize(&mut reader).expect("JSON");
+                serde_json::json!({ "ok": ok })
+            }
+            reading => reading.cloned().unwrap_or(Value::Null),
+        };
         assert_eq!((name, reading), (s(&case["outcome"]), expected), "{why}");
         assert_eq!(post.posted.len() as u64, n(&case["posted"]), "{why}");
 
@@ -1327,4 +1356,25 @@ fn holding_no_debug_or_error_form_prints_a_token_an_input_a_key_or_a_disclosed_f
         "the read holds the field it hides"
     );
     no_marker("an assignment", format!("{read:?}"));
+}
+
+#[test]
+fn wire_a_member_named_as_the_parser_names_a_number_is_refused_and_an_integer_is_kept() {
+    let private = "$serde_json::private::Number";
+    for document in [
+        format!(r#"{{"{private}":"5"}}"#),
+        format!(r#"{{"v":3,"ok":{{"{private}":"18446744073709551617"}}}}"#),
+        format!(r#"[{{"a":1,"{private}":"5"}}]"#),
+        // Escaped, the name is the same name.
+        r#"{"\u0024serde_json::private::Number":"5"}"#.to_owned(),
+    ] {
+        assert!(
+            wire::parse(document.as_bytes()).is_none(),
+            "{document} is read"
+        );
+    }
+    let whole =
+        wire::parse(br#"{"n":18446744073709551617,"m":-18446744073709551617}"#).expect("JSON");
+    assert_eq!(whole.value()["n"].to_string(), "18446744073709551617");
+    assert_eq!(whole.value()["m"].to_string(), "-18446744073709551617");
 }

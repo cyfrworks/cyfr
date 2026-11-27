@@ -19,6 +19,12 @@
 //! parser's own scratch buffers, which it frees itself, and the text of
 //! each number. A refused document's parts are freed as the parser leaves
 //! them.
+//!
+//! Two limits. Any depth of nesting is read, as Prima reads it, so a
+//! document nested deep enough to exhaust the stack it is parsed on aborts
+//! the process. And one document Prima reads is refused here: one with a
+//! member named `$serde_json::private::Number`, the name under which the
+//! parser hands this reader a number, which is never read as one.
 
 use std::io::Write as _;
 
@@ -209,6 +215,7 @@ fn wipe(value: Value) {
 /// none.
 pub fn parse(bytes: &[u8]) -> Option<Json> {
     let mut reader = serde_json::Deserializer::from_slice(bytes);
+    reader.disable_recursion_limit();
     let FirstMember(value) = FirstMember::deserialize(&mut reader).ok()?;
     let json = Json(value);
     reader.end().ok()?;
@@ -279,15 +286,16 @@ impl<'de> Visitor<'de> for FirstMemberVisitor {
 
     fn visit_map<A: MapAccess<'de>>(self, mut members: A) -> Result<FirstMember, A::Error> {
         let mut object = Json(Value::Object(Map::new()));
-        let mut first = true;
-        while let Some(mut key) = members.next_key::<String>()? {
-            if first && key == NUMBER {
-                return members
-                    .next_value::<String>()
-                    .and_then(|text| number(&text))
-                    .map(FirstMember);
-            }
-            first = false;
+        while let Some(key) = members.next_key_seed(KeySeed)? {
+            let mut key = match key {
+                Key::Number => {
+                    return members
+                        .next_value::<String>()
+                        .and_then(|text| number(&text))
+                        .map(FirstMember);
+                }
+                Key::Name(name) => name,
+            };
             let FirstMember(member) = members.next_value()?;
             let Value::Object(map) = &mut object.0 else {
                 unreachable!("an object")
@@ -300,6 +308,49 @@ impl<'de> Visitor<'de> for FirstMemberVisitor {
             }
         }
         Ok(FirstMember(std::mem::take(&mut object.0)))
+    }
+}
+
+/// A member's name, or the parser's own name for a number it hands over.
+enum Key {
+    Number,
+    Name(String),
+}
+
+/// A member's name, read as bytes: the parser spells a real member's name
+/// so, and the name it hands a number under as text, which tells the two
+/// apart. A real member of that name is refused.
+struct KeySeed;
+
+impl<'de> de::DeserializeSeed<'de> for KeySeed {
+    type Value = Key;
+
+    fn deserialize<D: Deserializer<'de>>(self, reader: D) -> Result<Key, D::Error> {
+        reader.deserialize_bytes(KeySeed)
+    }
+}
+
+impl<'de> Visitor<'de> for KeySeed {
+    type Value = Key;
+
+    fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("a member's name")
+    }
+
+    fn visit_str<E: de::Error>(self, name: &str) -> Result<Key, E> {
+        if name == NUMBER {
+            Ok(Key::Number)
+        } else {
+            Err(E::custom("a member's name the parser did not spell"))
+        }
+    }
+
+    fn visit_bytes<E: de::Error>(self, name: &[u8]) -> Result<Key, E> {
+        match std::str::from_utf8(name) {
+            Ok(NUMBER) => Err(E::custom("a member named as the parser names a number")),
+            Ok(name) => Ok(Key::Name(name.to_owned())),
+            Err(_) => Err(E::custom("a member's name that is no text")),
+        }
     }
 }
 
