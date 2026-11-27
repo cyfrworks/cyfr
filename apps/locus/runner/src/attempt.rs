@@ -371,14 +371,23 @@ async fn attempt(
         host.attempt(),
         assignment.lease_until,
     );
+    let mut finished = false;
     let outcome = tokio::select! {
-        outcome = work.ended() => outcome,
+        outcome = work.ended() => {
+            finished = true;
+            outcome
+        }
         () = tokio::time::sleep(Duration::from_millis(budget_ms)) => {
             Run_::Stopped(words::timeout(budget_ms))
         }
         () = renewing => Run_::Stopped(words::LEASE_LOST.to_owned()),
         () = stop.stopped() => Run_::Stopped(words::CANCELLED.to_owned()),
     };
+    // A stopped call's store is gone before its attempt closes: nothing of
+    // the guest runs on past its close.
+    if !finished {
+        work.stop().await;
+    }
     close(host, outcome).await
 }
 
@@ -394,6 +403,16 @@ impl Work {
             // aborted, which only its attempt does.
             Err(_) => Run_::Stopped(words::CANCELLED.to_owned()),
         }
+    }
+}
+
+impl Work {
+    /// Abort the work and wait until it is dropped, its store with it: at
+    /// once when it is not running, else at its guest's next yield (an
+    /// epoch tick) or its next host call.
+    async fn stop(&mut self) {
+        self.0.abort();
+        let _ = (&mut self.0).await;
     }
 }
 
