@@ -14,8 +14,8 @@
 # or backend; this one carries no endpoint of the product's, no database
 # and no tenant state, and the release holds only the shared contracts and
 # Locus (`mix release locus`). Compose runs it once as locus, behind its
-# egress guard, and once more as that guard (cyfr-guard,
-# apps/locus/keeper/guard/cyfr-guard.sh): the guard holds NET_ADMIN alone,
+# egress guard, and once more as that guard (`cyfr-locus guard-control`,
+# apps/locus/keeper/guard): the guard holds NET_ADMIN alone,
 # installs the egress rules in a network namespace of its own, which locus
 # then shares, makes each role process's and each spawn's one route, and
 # runs no release.
@@ -412,9 +412,6 @@ COPY apps/locus/keeper/seccomp/keeper.json /etc/cyfr/keeper.json
 # The name of the AppArmor profile this release runs under, which the
 # keeper proves at its boot (its stage.ProfileNameFile).
 COPY apps/codex/internal/apparmor/name /etc/cyfr/apparmor-profile
-# Locus's egress guard (docker-compose.yml's locus-guard); iptables,
-# installed above, is its one tool.
-COPY --chmod=0755 apps/locus/keeper/guard/cyfr-guard.sh /usr/local/bin/cyfr-guard
 # The container's health probe, each role whose key it holds (HEALTHCHECK).
 COPY --chmod=0755 apps/locus/health.sh /usr/local/bin/locus-health
 COPY --from=relbuilder /app/_build/prod/rel/locus ./

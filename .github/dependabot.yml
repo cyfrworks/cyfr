@@ -3,11 +3,11 @@
 
 # Weekly proposals for every pinned dependency: the Dockerfiles' base
 # images and compose's caddy (by digest), the workflows' and the composite
-# action's actions (by commit), the Mix and Go modules, and the Rust
-# release rust-toolchain.toml names. Minor and patch updates of one
-# ecosystem arrive as one pull request; a major update arrives as a pull
-# request of its own. Nothing here merges anything: every proposal is
-# reviewed and merged by hand.
+# action's actions (by commit), the Mix and Go modules, the runner's
+# crates, and the Rust release rust-toolchain.toml names. Minor and patch
+# updates of one ecosystem arrive as one pull request; a major update
+# arrives as a pull request of its own. Nothing here merges anything:
+# every proposal is reviewed and merged by hand.
 version: 2
 updates:
   - package-ecosystem: docker
@@ -58,6 +58,16 @@ updates:
       interval: weekly
     groups:
       gomod:
+        update-types: [minor, patch]
+
+  # The WASM runner's crate: its Cargo.lock pins every crate it builds
+  # with, and cargo deny (security.yml) refuses one under an advisory.
+  - package-ecosystem: cargo
+    directory: /apps/locus/runner
+    schedule:
+      interval: weekly
+    groups:
+      cargo:
         update-types: [minor, patch]
 
   - package-ecosystem: rust-toolchain

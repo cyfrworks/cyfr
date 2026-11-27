@@ -13,10 +13,11 @@ defmodule Cyfr.TwoWorkersTest do
   refused by the other. What the wire may lose is answered by its class:
   a worker request's lost answer is retried once for `kill` and `status`
   and never for `start`, whose reconciliation keeps a run its runner
-  attached to; a host call's lost answer is retried as the same batch
-  (`push_deltas`), for the outcome already recorded (`complete`), under
-  the same child key (`admit_child`), as it was (`renew`), or not at all
-  (`record_denial`, which ends uncertain) — and a run whose stream and
+  attached to; a runner's host call whose answer was lost is retried as
+  the same batch (`push_deltas`) and for the outcome already recorded
+  (`complete`); a host call posted again is answered by what CYFR holds,
+  a renewal renewed again and a child asked for again under the same key
+  one child, and a denial posted once is recorded once — and a run whose stream and
   completion crossed a lossy wire keeps every delta once, in order, before
   its terminal event. Cancelling a formula ends its children with it and
   the runner they ran in, whose end the service reports naming every
@@ -46,7 +47,16 @@ defmodule Cyfr.TwoWorkersTest do
 
   alias Opus.{Attempt, Keys, WorkerClient}
   alias Prima.Slots
-  alias Cyfr.Test.{AttemptFixtures, RuntimeService, ScriptedWorker, TwoServices}
+
+  alias Cyfr.Test.{
+    AttemptFixtures,
+    FormulaHost,
+    HostCaller,
+    RuntimeService,
+    ScriptedWorker,
+    TwoServices
+  }
+
   alias Cyfr.Test.TwoServices.Wire
   alias Prima.{WorkerAuth, WorkerWire}
   alias Locus.Runtime.Test.NestedExecution, as: Probe
@@ -235,7 +245,7 @@ defmodule Cyfr.TwoWorkersTest do
                Arca.ExecutionAttempts.current(Sanctum.Context.actor(ctx), id)
     end
 
-    test "a host call's lost answer is retried by its class, and a lossy stream stays whole and ordered",
+    test "a host call's lost answer is answered by what CYFR holds, and a lossy stream stays whole and ordered",
          %{ctx: ctx} do
       secrets = arm!(ctx, key: "k-#{System.unique_integer([:positive])}", token: "t-unused")
       # The runners reach the host listener through the suite's wire.
@@ -273,73 +283,64 @@ defmodule Cyfr.TwoWorkersTest do
       assert List.last(replayed).type == "execution.completed"
       assert %{status: "completed"} = row(id)
 
-      # A renewal is asked again as it was; a denial's record is not, and ends
-      # uncertain; a child is asked for again under the same key, and is one child.
+      # What CYFR answers a host call posted again after its answer was lost:
+      # a renewal is renewed again; a denial posted once is one record; a
+      # child asked for again under the same key is one child.
       fixture = attached!(ctx)
-
-      client =
-        Locus.Runtime.HostClient.new(fixture.keys, fixture.runner, fixture.boot, %{
-          member: fixture.member,
-          host_url: wire.url
-        })
-
       attempt = fixture.attempt
+      renew = %{"attempts" => [attempt]}
 
       Wire.plan(wire, WorkerWire.host_route(:renew), [:forward_then_drop])
+      assert {:refused, 502, ""} = HostCaller.call(fixture, wire.url, :renew, renew)
 
-      assert {:ok, %{^attempt => {:ok, _until}}} =
-               Locus.Runtime.HostClient.renew(client, [attempt])
+      assert {:ok, %{^attempt => %{"lease_until" => until}}} =
+               HostCaller.call(fixture, wire.url, :renew, renew)
 
+      assert is_integer(until)
       assert Wire.seen(wire, WorkerWire.host_route(:renew)) == [:forward_then_drop, :forward]
 
       Wire.plan(wire, WorkerWire.host_route(:record_denial), [:forward_then_drop])
 
-      assert {:error, {:uncertain, _sentence}} =
-               Locus.Runtime.HostClient.record_denial(
-                 client,
-                 "egress_denied",
-                 "refused by the test"
-               )
+      assert {:refused, 502, ""} =
+               HostCaller.call(fixture, wire.url, :record_denial, %{
+                 "type" => "domain_blocked",
+                 "message" => "refused by the test"
+               })
 
       assert Wire.seen(wire, WorkerWire.host_route(:record_denial)) == [:forward_then_drop]
+
+      assert [%{event_type: "domain_blocked", decision_reason: "refused by the test"}] =
+               denials(fixture)
 
       # The parent runs under the stub brain's own grant, as a turn's model
       # call does, so its child is the stub invoking itself with its key.
       {:ok, authority} = Opus.authority_for(ctx, :default, @stub)
 
       parent =
-        Locus.Runtime.Test.FormulaHost.attached!(
+        FormulaHost.attached!(
           ctx: ctx,
           authority: authority,
           component_ref: "formula:local.two-workers-parent:0.1.0"
         )
 
-      parent_client =
-        Locus.Runtime.HostClient.new(parent.keys, parent.runner, parent.boot, %{
-          member: parent.member,
-          host_url: wire.url
-        })
-
       Wire.plan(wire, WorkerWire.host_route(:admit_child), [:forward_then_drop])
+      admit = %{"input" => chat(), "child_key" => "two-workers-child"}
+      reference = "#{@stub}:#{@version}"
 
-      assert {:ok, child} =
-               Locus.Runtime.HostClient.admit_child(
-                 parent_client,
-                 "#{@stub}:#{@version}",
-                 nil,
-                 chat(),
-                 :spawn,
-                 nil
-               )
+      assert {:refused, 502, ""} = FormulaHost.admit_child(parent, reference, "spawn", admit)
+      assert {:ok, admitted} = FormulaHost.admit_child(parent, reference, "spawn", admit)
 
       assert Wire.seen(wire, WorkerWire.host_route(:admit_child)) == [
                :forward_then_drop,
                :forward
              ]
 
-      child_id = child.assignment.execution_id
+      child_id = HostCaller.child(parent, admitted).execution_id
       assert [%{id: ^child_id}] = Arca.Repo.all(children_of(parent.execution_id))
-      assert :ok = Locus.Runtime.HostClient.release_child(parent_client, child_id)
+
+      assert {:ok, true} =
+               FormulaHost.call(parent, :release_child, %{"execution_id" => child_id})
+
       assert %{status: "failed"} = row(child_id)
     end
 
@@ -542,6 +543,14 @@ defmodule Cyfr.TwoWorkersTest do
 
   # An attempt attached on the runtime's boot, as a runner of its
   # would hold it.
+  # The denials CYFR recorded for `fixture`'s attempt's component.
+  defp denials(fixture) do
+    {:ok, rows} =
+      Arca.PolicyLog.list(Prima.Actor.in_athanor(fixture.athanor_id), limit: 50)
+
+    Enum.filter(rows, &(&1.component_ref == fixture.component_ref))
+  end
+
   defp attached!(ctx) do
     AttemptFixtures.attached!(
       ctx: ctx,

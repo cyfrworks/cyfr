@@ -70,7 +70,7 @@ defmodule Locus.Runtime.RelayVectorsTest do
   # how many it receives.
   defp refusals(receiver, count) do
     refusals = @vectors["refusals"]
-    assert length(refusals) == 13
+    assert length(refusals) == 54
 
     for refusal <- refusals do
       assert %{"why" => _, "receiver" => side, "after" => after_frames, "reason" => _} = refusal
@@ -334,7 +334,7 @@ defmodule Locus.Runtime.RelayVectorsTest do
     end
 
     test "closes the channel for every refusal the runner receives, after the exchange's frames before it" do
-      for refusal <- refusals("runner", 5) do
+      for refusal <- refusals("runner", 46) do
         %{"why" => why, "after" => after_frames} = refusal
         endpoint = runner_end!()
         played = play(endpoint, 0, after_frames)

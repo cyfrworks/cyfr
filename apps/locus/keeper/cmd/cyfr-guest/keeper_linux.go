@@ -76,7 +76,7 @@ func keeperMain() int {
 
 // guardMain is the guard's start: every capability but NET_ADMIN dropped
 // from the bounding set, as compose's guard holds NET_ADMIN alone, then the
-// image's cyfr-guard.
+// image's guard, `cyfr-locus guard-control`.
 func guardMain() int {
 	runtime.LockOSThread()
 	if err := dropBounding(map[int]bool{unix.CAP_NET_ADMIN: true}); err != nil {
@@ -87,7 +87,7 @@ func guardMain() int {
 		logf("refusing to start the guard: clearing the ambient set: %v", err)
 		return 1
 	}
-	err := syscall.Exec(vm.GuestGuard, []string{vm.GuestGuard}, os.Environ())
+	err := syscall.Exec(vm.GuestKeeper, []string{vm.GuestKeeper, "guard-control"}, os.Environ())
 	logf("refusing to start the guard: %v", err)
 	return 1
 }

@@ -92,6 +92,9 @@ handoff	go-keeper	1	600	-	apps/locus/keeper/**,tests/fixtures/keeper_protocol.js
 # MIX_ENV=test (build-fixture.sh), so that row runs in the test folder; it
 # runs for every .wasm, seed/'s too, which the check passes over.
 handoff	catalysts	1	900	-	seed/components/catalysts/*/*/*/src/**,scripts/test-catalysts.sh,rust-toolchain.toml	env PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH" TMPDIR="$STAGE_LOGDIR" scripts/test-catalysts.sh
+# The WASM runner's crate: its format, lints and tests, which read the
+# vector files it holds its wires to, each named here.
+handoff	runner	1	900	-	apps/locus/runner/**,rust-toolchain.toml,wit/**,scripts/runner.sh,tests/fixtures/runner_control.json,tests/fixtures/runner_relay.json,tests/fixtures/worker_auth.json,tests/fixtures/host_api.json	env PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH" scripts/runner.sh check
 handoff	test-wasm	1	900	test	apps/locus/test/support/runtime/test_wasm/**,apps/cyfr/test/support/test_wasm/**,apps/cyfr/test/integration/runtime/support/test_wasm/**,tests/locus-runtime-image/hog.wat,tests/locus-runtime-image/build.sh,**/*.wasm,wit/**,apps/prima/lib/prima/cargo_toml.ex,scripts/check-test-wasm.sh,scripts/wasm-tools.sh	scripts/wasm-tools.sh install _tools && env PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH" CYFR_DATABASE=sqlite RUSTUP_TOOLCHAIN="$(sed -n 's/^rustc_version=//p' apps/cyfr/test/support/test_wasm/build-fixture.sh)" scripts/check-test-wasm.sh
 # Locus compiled and tested from its declared apps alone, as the pull
 # request's island job does.

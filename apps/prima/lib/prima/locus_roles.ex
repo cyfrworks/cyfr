@@ -10,7 +10,7 @@ defmodule Prima.LocusRoles do
   The release (`release/0`) is one compose service, `service`, in the
   container `container`, holding no network of its own: it shares the
   network namespace of its egress guard, the service `guard` in the
-  container `guard_container` (cyfr-guard), and starts behind the guard's
+  container `guard_container` (`cyfr-locus guard-control`), and starts behind the guard's
   health. The guard sits on the one network `network`, which only it and
   CYFR join, under the alias `service`, so CYFR reaches every role at
   `http://<service>:<port>`. That network's subnet is `subnet` and its

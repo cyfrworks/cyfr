@@ -127,6 +127,41 @@ jobs:
         # clean coverage.
         run: bash "$GITHUB_WORKSPACE/scripts/security-scan.sh" govulncheck ./...
 
+  cargo-deny:
+    name: Cargo Deny (the runner's crate)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: apps/locus/runner
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install the Rust release rust-toolchain.toml names
+        run: |
+          set -euo pipefail
+          channel="$(sed -n 's/^channel = "\(.*\)"$/\1/p' "$GITHUB_WORKSPACE/rust-toolchain.toml")"
+          [ -n "$channel" ] || { echo "::error::rust-toolchain.toml names no channel" >&2; exit 1; }
+          rustup toolchain install "$channel" --profile minimal
+
+      - name: Cache cargo-deny
+        id: cargo-deny-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cargo/bin/cargo-deny
+          key: ${{ runner.os }}-cargo-deny-0.22.1
+
+      - name: Install cargo-deny
+        # Pinned like every other tool in CI.
+        if: steps.cargo-deny-cache.outputs.cache-hit != 'true'
+        run: cargo install cargo-deny --version 0.22.1 --locked
+
+      - name: Run cargo deny
+        # Every crate Cargo.lock pins against the advisory database and
+        # deny.toml: an advisory, a yanked crate, a license not listed, a
+        # source other than crates.io or a crate at two versions fails.
+        run: cargo deny --locked check
+
   security-scan-harness:
     name: Security Scan Wrapper Tests
     runs-on: ubuntu-latest

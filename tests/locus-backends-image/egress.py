@@ -288,20 +288,20 @@ def main():
         expect(c.program(NOWHERE)["sessions"] == 0, "and nothing of it runs")
 
         # ————— the guard's check proves what it recorded —————
-        expect(stack.guard_exec("cyfr-guard check").returncode == 0, "the guard is healthy with the routes in")
+        expect(stack.guard_exec("cyfr-locus guard-check").returncode == 0, "the guard is healthy with the routes in")
         chain = f"CYFR_GUARD_R{kept_slot}"
-        removed = stack.guard_exec(f"iptables -D {chain} -j REJECT --reject-with icmp-admin-prohibited && cyfr-guard check")
+        removed = stack.guard_exec(f"iptables -D {chain} -j REJECT --reject-with icmp-admin-prohibited && cyfr-locus guard-check")
         expect(removed.returncode != 0 and f"route {kept_iface} is not installed as the guard recorded it" in removed.stderr,
                "a route's rule changed behind the guard's back fails its health check", removed.stdout + removed.stderr)
-        restored = stack.guard_exec(f"iptables -A {chain} -j REJECT --reject-with icmp-admin-prohibited && cyfr-guard check")
+        restored = stack.guard_exec(f"iptables -A {chain} -j REJECT --reject-with icmp-admin-prohibited && cyfr-locus guard-check")
         expect(restored.returncode == 0, "the rule restored where it stood, the check passes again",
                restored.stdout + restored.stderr)
-        unjumped = stack.guard_exec(f"iptables -D CYFR_GUARD_ROUTES -i {kept_iface} -j {chain} && cyfr-guard check")
+        unjumped = stack.guard_exec(f"iptables -D CYFR_GUARD_ROUTES -i {kept_iface} -j {chain} && cyfr-locus guard-check")
         # The route's reply jump still names its interface, so the check
         # finds the change in the route's own record.
         expect(unjumped.returncode != 0 and f"route {kept_iface} is not installed as the guard recorded it" in unjumped.stderr,
                "a route's jump removed behind the guard's back fails its health check", unjumped.stdout + unjumped.stderr)
-        rejumped = stack.guard_exec(f"iptables -A CYFR_GUARD_ROUTES -i {kept_iface} -j {chain} && cyfr-guard check")
+        rejumped = stack.guard_exec(f"iptables -A CYFR_GUARD_ROUTES -i {kept_iface} -j {chain} && cyfr-locus guard-check")
         expect(rejumped.returncode == 0, "the jump restored, the check passes again", rejumped.stdout + rejumped.stderr)
 
         # ————— a route the guard cannot record refuses its session alone —————
@@ -316,7 +316,7 @@ def main():
                "a session whose route the guard cannot record is refused guard_unavailable", [status, answer])
         expect(routes(stack) == before, "every other route stands as it was", [before, routes(stack)])
         held_to_list(stack, c, KEPT, offline, home_id=KEPT_ENTRY)
-        restored = stack.guard_exec(f"rmdir /run/cyfr-guard/routes/sp{free}.tmp && cyfr-guard check")
+        restored = stack.guard_exec(f"rmdir /run/cyfr-guard/routes/sp{free}.tmp && cyfr-locus guard-check")
         expect(restored.returncode == 0, "the record writable again, the guard is healthy", restored.stdout + restored.stderr)
 
         # ————— retirement withdraws; the keeper's loss withdraws every route —————
@@ -333,7 +333,7 @@ def main():
                    "every route made over the lost keeper's connection, its pair, chain and record, to be withdrawn")
         expect(re.search(r"connection \d+ ended; its \d+ routes are withdrawn", stack.guard_logs()),
                "the guard says it withdrew the lost connection's routes", stack.guard_logs()[-2000:])
-        expect(stack.guard_exec("cyfr-guard check").returncode == 0, "the guard stays healthy through the keeper's loss")
+        expect(stack.guard_exec("cyfr-locus guard-check").returncode == 0, "the guard stays healthy through the keeper's loss")
     finally:
         stack.down()
 

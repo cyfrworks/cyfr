@@ -148,7 +148,7 @@ COPY apps/locus/keeper/go.mod ./
 COPY apps/locus/keeper/ ./
 FROM scratch
 COPY --from=keeper /out /out
-COPY --chmod=0755 apps/locus/keeper/guard/cyfr-guard.sh /usr/local/bin/cyfr-guard
+COPY --chmod=0755 apps/locus/health.sh /usr/local/bin/locus-health
 COPY config/ config/
 COPY mix.exs mix.lock ./'
   put "$repo/Dockerfile" '# syntax=docker/dockerfile:1.7-labs
@@ -163,8 +163,8 @@ COPY --link LICENSE \
   put "$repo/.gitignore" '*.log'
   put "$repo/apps/locus/keeper/go.mod" 'module keeper'
   put "$repo/apps/locus/keeper/main.go" 'package main'
-  put "$repo/apps/locus/keeper/guard/cyfr-guard.sh" '#!/bin/sh'
-  chmod 755 "$repo/apps/locus/keeper/guard/cyfr-guard.sh"
+  put "$repo/apps/locus/health.sh" '#!/bin/sh'
+  chmod 755 "$repo/apps/locus/health.sh"
   put "$repo/apps/locus/mix.exs" 'locus'
   put "$repo/apps/locus/lib/locus.ex" 'defmodule Locus do end'
   put "$repo/apps/locus/test/fixture/mix.exs" 'fixture'

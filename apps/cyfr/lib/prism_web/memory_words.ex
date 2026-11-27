@@ -124,27 +124,56 @@ defmodule PrismWeb.MemoryWords do
   @spec size(non_neg_integer()) :: String.t()
   def size(bytes), do: Prima.Bytes.format(bytes)
 
-  @doc "Memory over a day's time, in MB-hours."
-  @spec over_time(non_neg_integer()) :: String.t()
-  def over_time(mib_ms) do
-    hours = mib_ms / 3_600_000
+  @doc """
+  What a day's row used on average over the time it was measured, its
+  MiB-milliseconds over its milliseconds; a dash where nothing was
+  measured. It reads a day (`t:Opus.Memory.day/0`) or any map carrying
+  these two.
+  """
+  @spec average(%{
+          :mib_ms => non_neg_integer(),
+          :measured_ms => non_neg_integer(),
+          optional(atom()) => term()
+        }) :: String.t()
+  def average(%{measured_ms: 0}), do: "—"
 
-    if hours >= 10,
-      do: "#{round(hours)} MB-hours",
-      else: "#{Float.round(hours, 1)} MB-hours"
-  end
+  def average(%{mib_ms: mib_ms, measured_ms: ms}),
+    do: "#{size(div(mib_ms * 1_048_576, ms))} on average"
 
-  @doc "How long a day's use was measured."
-  @spec measured(non_neg_integer()) :: String.t()
-  def measured(ms) when ms < 60_000, do: "#{div(ms, 1_000)} s"
-  def measured(ms) when ms < 3_600_000, do: "#{div(ms, 60_000)} min"
+  @doc """
+  The most a day's row held at once, and for how long it was measured,
+  as one line whose two halves each keep their words together (no-break
+  spaces), so a narrow page breaks it between them and nowhere else. A
+  peak with nothing measured (the keeper's first reading of a place adds
+  no time) is said alone.
+  """
+  @spec at_most(%{
+          :peak_bytes => non_neg_integer(),
+          :measured_ms => non_neg_integer(),
+          optional(atom()) => term()
+        }) :: String.t()
+  def at_most(%{peak_bytes: peak, measured_ms: 0}), do: together("at most #{size(peak)}")
 
-  def measured(ms) do
+  def at_most(%{peak_bytes: peak, measured_ms: ms}),
+    do: together("at most #{size(peak)},") <> " " <> together("for #{duration(ms)}")
+
+  defp together(words), do: String.replace(words, " ", "\u00a0")
+
+  @doc "A length of time in words: under a second, seconds, minutes, or hours and minutes."
+  @spec duration(non_neg_integer()) :: String.t()
+  def duration(ms) when ms < 1_000, do: "under a second"
+  def duration(ms) when ms < 60_000, do: count(div(ms, 1_000), "second")
+  def duration(ms) when ms < 3_600_000, do: count(div(ms, 60_000), "minute")
+
+  def duration(ms) do
     case rem(div(ms, 60_000), 60) do
-      0 -> "#{div(ms, 3_600_000)} h"
-      minutes -> "#{div(ms, 3_600_000)} h #{minutes} min"
+      0 -> count(div(ms, 3_600_000), "hour")
+      minutes -> count(div(ms, 3_600_000), "hour") <> " " <> count(minutes, "minute")
     end
   end
+
+  defp count(1, unit), do: "1 " <> unit
+  defp count(n, unit), do: "#{n} #{unit}s"
 
   @doc """
   How often a day's work was ended for memory, by cause, in the words a

@@ -14,7 +14,7 @@ defmodule Locus.Runtime.FormulaHandlerRunnerTest do
   whole test.
 
   What CYFR decides of these host calls, and a formula's tasks run for
-  real in a runner of the runtime's service, are `Locus.Runtime.FormulaHandlerTest`'s,
+  real in a runner of the runtime's service, are `Cyfr.FormulaHostCallsTest`'s,
   in CYFR's suite.
   """
 

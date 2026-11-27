@@ -277,7 +277,7 @@ func handOff(l *net.UnixListener, roleUID, control, attach int) {
 	}
 }
 
-// startGuard starts the guest's guard, the image's cyfr-guard, as the
+// startGuard starts the guest's guard, `cyfr-locus guard-control`, as the
 // Locus container's guard runs: forwarding on, ICMP unlimited, NET_ADMIN
 // alone, its control on GuestGuardControl. It waits guardWait for the ready
 // file, written once every rule is in. The guest has no network card, so

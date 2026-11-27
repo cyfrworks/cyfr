@@ -112,6 +112,19 @@ defmodule Prima.RunnerControlTest do
       end
     end
 
+    test "every decode-only line decodes to its message, which encodes otherwise" do
+      cases = @vectors["decode_only"]
+      assert cases != []
+
+      for vector <- cases do
+        line = line(vector)
+        message = message(vector["message"])
+
+        assert RunnerControl.decode(line) == {:ok, message}, vector["why"]
+        refute encoded(message) == line <> "\n", vector["why"]
+      end
+    end
+
     test "every invalid line is refused with its reason" do
       for vector <- @vectors["invalid"] do
         line = line(vector)

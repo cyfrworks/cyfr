@@ -2,7 +2,7 @@
 // Copyright 2026 CYFR Works Inc.
 
 // Package guard is the control between an island's keeper and its egress
-// guard (cyfr-guard.sh beside this file, whose header is the rule list).
+// guard, `cyfr-locus guard-control`, whose rules rules.go lists.
 // Every build, every program's session and every role's service process
 // runs in a space of its own (a user, network and IPC namespace the keeper
 // made for it), and the guard gives each such routed space its one route:
@@ -10,13 +10,12 @@
 // the rules that hold what passes through it, and the answers to the
 // space's names.
 //
-// The guard serves it as `cyfr-locus guard-control <socket> <range>` once
-// its rules are in, on a Unix socket of the seqpacket kind in a directory
-// of root's own, mode 0700, on a volume the island's service mounts
-// read-only: only root reaches it, and in the service that is the keeper
-// alone. <range> is the IPv4 /16 the guard's static rules chose for routes
-// (cyfr-guard.sh). Each message is one packet holding one JSON object,
-// carrying `"v": 3` and a `type`:
+// The guard serves it once its rules are in, on a Unix socket of the
+// seqpacket kind in a directory of root's own, mode 0700, on a volume the
+// island's service mounts read-only: only root reaches it, and in the
+// service that is the keeper alone. Each route is made in the IPv4 /16 the
+// guard's static rules chose for routes. Each message is one packet
+// holding one JSON object, carrying `"v": 3` and a `type`:
 //
 //	{"v":3,"type":"hello","netns":"net:[…]"}                                    guard, on connect
 //	{"v":3,"type":"admit","spawn_id":…,"reach":"island"}                        keeper, with three descriptors
