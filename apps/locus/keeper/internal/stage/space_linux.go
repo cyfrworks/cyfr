@@ -318,7 +318,7 @@ func First(probe bool) int {
 	if err != nil {
 		return fail("the stage's binary: %v", err)
 	}
-	if err := buildFiles(spec.Home, spec.Work, spec.Packs, spec.Machine); err != nil {
+	if err := buildFiles(spec); err != nil {
 		return fail("the space's files: %v", err)
 	}
 	if spec.Terminal {
@@ -424,12 +424,25 @@ func bindAt(source, target string, writable bool) error {
 // no other disk and no record; given packs, its person's pack generation
 // read only at scrolls.Path in its own /run; and a machine's space also its
 // device, read only at its path, and /dev/kvm. The root itself is
-// read-only once pivoted.
-func buildFiles(own, work, packs, machine string) error {
+// read-only once pivoted. The kept homes' root is a folder of the
+// container's wherever its operator put it: where the container's
+// directories would bind it (outside keptOut), an empty read-only tmpfs
+// covers it before the home and /work are bound, so whatever its location
+// the space holds of it only the path to its own home.
+func buildFiles(spec Spec) error {
+	own, work, packs, machine := spec.Home, spec.Work, spec.Packs, spec.Machine
+	covered := spec.KeptRoot != "" && !keptOut[strings.SplitN(strings.TrimPrefix(spec.KeptRoot, "/"), "/", 2)[0]]
 	steps := []func() error{
 		func() error { return mount("", "/", "", unix.MS_REC|unix.MS_PRIVATE, "") },
 		func() error { return mount("space", Root, "tmpfs", unix.MS_NOSUID|unix.MS_NODEV, "mode=0755,size=4m") },
 		bindContainerRoot,
+		func() error {
+			if !covered {
+				return nil
+			}
+			return mount("space-kept", filepath.Join(Root, spec.KeptRoot), "tmpfs",
+				unix.MS_NOSUID|unix.MS_NODEV|unix.MS_NOEXEC, "mode=0755,size=64k")
+		},
 		func() error {
 			for _, dir := range []string{"proc", "sys", "dev", "tmp", "run", "var/tmp", ".old"} {
 				if err := os.MkdirAll(filepath.Join(Root, dir), 0o755); err != nil {
@@ -488,6 +501,12 @@ func buildFiles(own, work, packs, machine string) error {
 				return nil
 			}
 			return bindFile(machine)
+		},
+		func() error {
+			if !covered {
+				return nil
+			}
+			return setAttr(filepath.Join(Root, spec.KeptRoot), unix.MOUNT_ATTR_RDONLY, false)
 		},
 		func() error {
 			if err := unix.PivotRoot(Root, Root+"/.old"); err != nil {

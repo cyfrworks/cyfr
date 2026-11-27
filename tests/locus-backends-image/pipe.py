@@ -9,7 +9,7 @@ row's kept home:
 
 - An open in mode `run` starts the row's command with the opener's argv
   appended (`cat -`), in the row's kept home as its HOME, under the
-  home's own uid (the kept range, never a pool uid), and answers
+  uid of its person's disk (the kept range, never a pool uid), and answers
   `resumed: false`; a second open of the same lifetime answers the same
   session, `resumed: true`, and once its process ended is refused
   `lifetime_over`.
@@ -51,7 +51,7 @@ KEY = "chat-1"
 ARGV = ["-"]
 IDLE_MS = 5_000
 # The row's command: `cat`, after a first line naming its HOME, which a
-# process of the home's own uid keeps from every other reader. The service
+# process of its disk's uid keeps from every other reader. The service
 # appends the opener's argv (`"$@"`), so `cat -` is what runs.
 COMMAND = 'echo "home=$HOME"; exec cat'
 PROGRAM = {"name": "cat", "command": COMMAND, "env": {}, "home": "kept"}

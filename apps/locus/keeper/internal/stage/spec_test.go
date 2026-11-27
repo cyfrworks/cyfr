@@ -165,7 +165,7 @@ func TestLookPathUsesTheSpawnsPath(t *testing.T) {
 func TestKeptSpecValidation(t *testing.T) {
 	kept := validSpec()
 	kept.UID, kept.GID, kept.User = 40001, 40001, "40001"
-	kept.HomeRoot, kept.Home, kept.Work, kept.Kept = keptRoot, keptHome, keptWork, true
+	kept.HomeRoot, kept.Home, kept.Work, kept.Kept, kept.KeptRoot = keptRoot, keptHome, keptWork, true, keptRoot
 	kept.Cgroup = "/keeper-s-0123456789abcdef0123456789abcdef"
 	if err := kept.Validate(); err != nil {
 		t.Fatal(err)
@@ -182,6 +182,9 @@ func TestKeptSpecValidation(t *testing.T) {
 			s.Work = keptRoot + "/fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210/work"
 		},
 		"no work folder":              func(s *Spec) { s.Work = "" },
+		"no kept root to cover":       func(s *Spec) { s.KeptRoot = "" },
+		"another kept root":           func(s *Spec) { s.KeptRoot = "/opt/kept" },
+		"a kept root not clean":       func(s *Spec) { s.KeptRoot, s.HomeRoot = keptRoot+"/", keptRoot+"/" },
 		"the disk as its home":        func(s *Spec) { s.Home = keptDisk },
 		"the work folder as its home": func(s *Spec) { s.Home = keptWork },
 		"another uid's group":         func(s *Spec) { s.Cgroup = "/keeper-40002" },

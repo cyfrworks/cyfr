@@ -14,6 +14,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -90,6 +91,157 @@ func TestAHomeOnOneDiskIsRefusedToAnother(t *testing.T) {
 	if err != nil || len(disks) != 1 || !reflect.DeepEqual(disks[made.Athanor].Homes, []string{made.Home}) {
 		t.Fatalf("the records: %+v %v", disks, err)
 	}
+}
+
+// A kept spawn is live from the step that finds its uid not retiring,
+// before its home's measure: held at that measure, under the uid's lock,
+// it keeps the uid from retiring when the person's last other session
+// ends, so no scrub of the person runs to end it as it starts; let go, it
+// runs on.
+func TestASpawnHeldAtItsMeasureHoldsThePersonsScrubOff(t *testing.T) {
+	k := keptKeeper(t)
+	uid := testKeptFirst
+	k.share("ath_held", "vlt_a", "vlt_b")
+	a, b := k.keptPath("vlt_a"), k.keptPath("vlt_b")
+	for i, path := range []string{a, b} {
+		if made := k.homeRequest(t, protocol.TypeHomeMake, "m"+string(rune('a'+i)), path, uid); made["type"] != protocol.TypeHomeMade {
+			t.Fatalf("home_make: %v", made)
+		}
+	}
+	other, rc := k.spawnKept(t, "b1", `echo ready; sleep 600`, b, uid)
+	rc.readUntil(t, func() bool { return strings.Contains(string(rc.got[frame.StreamStdout]), "ready\n") })
+
+	at, gate := make(chan struct{}), make(chan struct{})
+	var reached, opened sync.Once
+	open := func() { opened.Do(func() { close(gate) }) }
+	t.Cleanup(open)
+	k.s.measuring = func(path string) {
+		if path == a {
+			reached.Do(func() { close(at) })
+			<-gate
+		}
+	}
+	if placed := k.placeOf(t, "a1", k.kind(), "ath_held"); placed["type"] != protocol.TypePlaced {
+		t.Fatalf("place: %v", placed)
+	}
+	bound := uint64(1 << 40)
+	go k.s.handleSpawn(k.c, keptRequest(t, k.attach, "a1", `echo after; sleep 600`, a, &bound))
+	select {
+	case <-at:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the spawn never reached its home's measure")
+	}
+	// The person's last other session ends while the spawn is held.
+	k.release(t, other)
+	k.s.mu.Lock()
+	retiring, live := k.s.keptRetiring[uid], k.s.keptLive[uid]
+	k.s.mu.Unlock()
+	open()
+	if retiring != nil || live != 1 {
+		t.Fatalf("with a session of the person starting, its uid is retiring %t with %d live: a scrub would end it", retiring != nil, live)
+	}
+	var spawned string
+	released := false
+	for spawned == "" || !released {
+		m := k.reply(t)
+		switch {
+		case m["id"] == "a1" && m["type"] == protocol.TypeSpawned:
+			spawned = m["spawn_id"].(string)
+		case m["spawn_id"] == other && m["type"] == protocol.TypeReleased:
+			released = true
+		case m["spawn_id"] == other && m["type"] == protocol.TypeExited:
+		default:
+			t.Fatalf("waiting for the held spawn and the other's end: %v", m)
+		}
+	}
+	rcA := k.accept(t)
+	rcA.readUntil(t, func() bool { return strings.Contains(string(rcA.got[frame.StreamStdout]), "after\n") })
+	if got := pidsOf(t, uid, "sleep"); len(got) != 1 {
+		t.Fatalf("the held spawn's sleep after the other's end: %v", got)
+	}
+	k.release(t, spawned)
+	k.releasedPair(t, spawned)
+}
+
+// A kept-homes root wherever its operator puts it, here under /opt, which
+// the container's directories bind into every space, shows a space nothing
+// of the volume but the path to its own home: the stage covers the root.
+// The person's other program finds its sibling's sign-in absent, the root
+// holds its own disk alone and no record, and a pooled spawn finds the root
+// empty.
+func TestAKeptRootAnywhereShowsASpaceItsOwnHomeAlone(t *testing.T) {
+	k := routedKeeper(t)
+	if err := os.MkdirAll("/opt", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	base, err := os.MkdirTemp("/opt", "cyfr-kept-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(base) })
+	if err := os.Chmod(base, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	k.keepHomesAt(t, filepath.Join(base, "kept"))
+	root := k.s.cfg.Kept.Root
+	uid := testKeptFirst
+	k.share("ath_opt", "vlt_one", "vlt_two")
+	one, two := k.keptPath("vlt_one"), k.keptPath("vlt_two")
+	disk := filepath.Base(filepath.Dir(filepath.Dir(one)))
+	for i, path := range []string{one, two} {
+		if made := k.homeRequest(t, protocol.TypeHomeMake, "m"+string(rune('a'+i)), path, uid); made["type"] != protocol.TypeHomeMade {
+			t.Fatalf("home_make %s: %v", path, made)
+		}
+	}
+	_, rcA := k.spawnKept(t, "a", `echo one-secret > "$HOME/signin" && echo written; sleep 600`, one, uid)
+	rcA.readUntil(t, func() bool { return strings.Contains(string(rcA.got[frame.StreamStdout]), "written\n") })
+	look := `cat "` + one + `/signin" 2>/dev/null || echo unread; echo "root:$(ls -A ` + root + ` | tr '\n' ' ')"; ` +
+		`echo "disk:$(ls -A ` + root + `/` + disk + ` 2>/dev/null | tr '\n' ' ')"; echo "records:$(ls -A ` + root + `/.disks 2>&1 | grep -c 'No such')"; echo done; sleep 600`
+	_, rcB := k.spawnKept(t, "b", look, two, uid)
+	rcB.readUntil(t, func() bool { return strings.Contains(string(rcB.got[frame.StreamStdout]), "done\n") })
+	if out, want := string(rcB.got[frame.StreamStdout]), "unread\nroot:"+disk+" \ndisk:programs \nrecords:1\ndone\n"; out != want {
+		t.Fatalf("the person's other program, with the root under /opt, saw\n%q\nwant\n%q", out, want)
+	}
+	_, _, rcP := k.spawn(t, "p", `echo "root:$(ls -A `+root+` | wc -l)"; cat "`+one+`/signin" 2>/dev/null || echo unread; echo done`, map[string]string{}, false)
+	rcP.readUntil(t, func() bool { return strings.Contains(string(rcP.got[frame.StreamStdout]), "done\n") })
+	if out, want := string(rcP.got[frame.StreamStdout]), "root:0\nunread\ndone\n"; out != want {
+		t.Fatalf("a pooled spawn, with the root under /opt, saw\n%q\nwant\n%q", out, want)
+	}
+}
+
+// A kept spawn runs only in a place of its disk's own person: one whose
+// place names another athanor, or none, is refused before anything of it
+// is made, with no packs that the place's claim would refuse first, and its
+// place is freed. The home's own person then spawns in it.
+func TestAKeptSpawnInAnotherPersonsPlaceIsRefused(t *testing.T) {
+	k := keptKeeper(t)
+	path := k.keptPath("vlt_theirs")
+	if made := k.homeRequest(t, protocol.TypeHomeMake, "m", path, testKeptFirst); made["type"] != protocol.TypeHomeMade {
+		t.Fatalf("home_make: %v", made)
+	}
+	for name, place := range map[string]func(id string) map[string]any{
+		"another person's": func(id string) map[string]any { return k.placeOf(t, id, k.kind(), "ath_someone-else") },
+		"nobody's":         func(id string) map[string]any { return k.place(t, id, k.kind()) },
+	} {
+		id := "x-" + strings.ReplaceAll(strings.Split(name, " ")[0], "'", "")
+		if placed := place(id); placed["type"] != protocol.TypePlaced {
+			t.Fatalf("%s place: %v", name, placed)
+		}
+		k.s.handleSpawn(k.c, keptRequest(t, k.attach, id, "echo ran", path, nil))
+		if refused := k.reply(t); refused["type"] != protocol.TypeError || refused["code"] != protocol.CodeBadRequest || refused["spawn_id"] != nil {
+			t.Fatalf("a kept spawn in %s place: %v", name, refused)
+		}
+		k.s.mu.Lock()
+		_, held := k.c.places[id]
+		live := k.s.keptLive[testKeptFirst]
+		k.s.mu.Unlock()
+		if held || live != 0 {
+			t.Fatalf("a refused spawn in %s place left its place held %t and %d live", name, held, live)
+		}
+	}
+	spawned, _ := k.spawnKept(t, "own", "echo ran; sleep 600", path, testKeptFirst)
+	k.release(t, spawned)
+	k.releasedPair(t, spawned)
 }
 
 // One person's programs share their disk's uid and its work folder: a
@@ -335,6 +487,43 @@ func TestThePersonsScrubNeverEndsALiveSession(t *testing.T) {
 	}
 	k.release(t, spawned["spawn_id"].(string))
 	k.releasedPair(t, spawned["spawn_id"].(string))
+}
+
+// A record write that fails after its rename, its record in place and its
+// folder unsynced, leaves the keeper's index saying what the record on disk
+// says: the make is refused, the uid the record names is drawn for no other
+// person, the records read back with no two disks of one uid, and the
+// person's next make makes their home under it.
+func TestARecordInPlaceAfterAFailedWriteKeepsItsUID(t *testing.T) {
+	k := keptKeeper(t)
+	kept := k.s.cfg.Kept
+	failed := false
+	k.s.writeDisk = func(d home.Disk) error {
+		if err := kept.WriteDisk(d); err != nil {
+			return err
+		}
+		if !failed {
+			failed = true
+			return errors.New("the records' folder did not sync")
+		}
+		return nil
+	}
+	if made := k.homeRequest(t, protocol.TypeHomeMake, "m1", k.keptPath("vlt_first"), 0); made["code"] != protocol.CodeInternal {
+		t.Fatalf("a make whose record's write failed: %v", made)
+	}
+	if made := k.homeRequest(t, protocol.TypeHomeMake, "m2", k.keptPath("vlt_second"), testKeptFirst+1); made["type"] != protocol.TypeHomeMade {
+		t.Fatalf("another person's make: %v", made)
+	}
+	disks, err := kept.LoadDisks()
+	if err != nil || disks[k.athanorOf("vlt_first")].UID != testKeptFirst || disks[k.athanorOf("vlt_second")].UID != testKeptFirst+1 {
+		t.Fatalf("the records: %+v %v", disks, err)
+	}
+	if made := k.homeRequest(t, protocol.TypeHomeMake, "m3", k.keptPath("vlt_first"), testKeptFirst); made["type"] != protocol.TypeHomeMade {
+		t.Fatalf("the person's next make: %v", made)
+	}
+	if err := home.CheckKeptHome(k.keptPath("vlt_first"), testKeptFirst); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // A keeper killed between a make's record and its folder leaves a home its

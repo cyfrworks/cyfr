@@ -233,7 +233,7 @@ defmodule Locus.Backends.Owners do
   # launcher that never answers at all.
   @pool_timeout_ms 6_000
   # A home's making, measuring, reset or retirement is the launcher's work
-  # as the home's own uid, which may take it up to 120 s.
+  # as its disk's uid, which may take it up to 120 s.
   @home_timeout_ms 130_000
   @status_timeout_ms 5_000
   # The wire's one bound of a close, less what of it is the release's.

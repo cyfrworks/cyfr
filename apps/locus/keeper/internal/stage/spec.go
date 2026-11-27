@@ -90,6 +90,11 @@ type Spec struct {
 	// it is given this device, read only at its path, and /dev/kvm in its
 	// /dev, which no other space is.
 	Machine string `json:"machine,omitempty"`
+	// KeptRoot is the keeper's kept-homes root, "" for a keeper that keeps
+	// none: every space is given it covered, as an empty folder of its own,
+	// wherever the container's directories would otherwise bind it, so no
+	// space sees a disk, a record or a home but its own (buildFiles).
+	KeptRoot string `json:"kept_root,omitempty"`
 }
 
 var generationName = regexp.MustCompile(`^[0-9a-f]{64}$`)
@@ -117,6 +122,12 @@ func (s Spec) Validate() error {
 	}
 	if s.Role != "" {
 		return s.validateRole()
+	}
+	if s.KeptRoot != "" && (!filepath.IsAbs(s.KeptRoot) || filepath.Clean(s.KeptRoot) != s.KeptRoot || s.KeptRoot == "/") {
+		return fmt.Errorf("kept root %q is not a clean absolute path other than /", s.KeptRoot)
+	}
+	if s.Kept && s.KeptRoot != s.HomeRoot {
+		return fmt.Errorf("a kept spawn's kept root %q is not its home root %q", s.KeptRoot, s.HomeRoot)
 	}
 	if s.Packs != "" && !validPacks(s.Packs) {
 		return fmt.Errorf("packs %q is not a pack generation", s.Packs)

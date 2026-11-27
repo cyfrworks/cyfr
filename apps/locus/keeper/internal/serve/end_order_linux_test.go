@@ -290,11 +290,11 @@ func TestTwoSessionsOfOneHomeEachEndInTheirOwnTime(t *testing.T) {
 	}
 }
 
-// The release of a home's only session marks its uid retiring at once: while
-// that session is still ending, a home_make of the home answers its uid and
-// a spawn of it waits for the uid's retirement, as for any retiring uid,
-// and another home is made under another uid. A newcomer is never admitted beside a uid
-// whose last session is ending.
+// The release of a person's only session marks their disk's uid retiring at
+// once: while that session is still ending, a home_make of the home answers
+// its uid and a spawn of it waits for the uid's retirement, as for any
+// retiring uid, and another person's home is made under another uid. A
+// newcomer is never admitted beside a uid whose last session is ending.
 func TestANewcomerWaitsForTheLastSessionsEnd(t *testing.T) {
 	k := keptKeeper(t)
 	uid := testKeptFirst

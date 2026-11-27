@@ -80,6 +80,7 @@ func (s *server) startRole(r *role) (*client, error) {
 		Control:  true,
 		Reach:    pool.ReachRouted,
 		Cgroup:   r.leaf.Path(),
+		KeptRoot: s.keptRoot(),
 	})
 	if err != nil {
 		_ = c.channel.Close()

@@ -648,6 +648,15 @@ func (c *child) reaped() bool {
 	}
 }
 
+// keptRoot is the kept-homes root every space is given covered
+// (stage.Spec.KeptRoot), "" for a keeper that keeps none.
+func (s *server) keptRoot() string {
+	if s.cfg.Kept == nil {
+		return ""
+	}
+	return s.cfg.Kept.Root
+}
+
 // spawn is one allocation: a uid, its home, its leader and its relay. A
 // kept spawn runs under its disk's uid in its home on that disk, and has no
 // pool: every kept spawn of a person shares the disk's uid, and the uid is
@@ -821,7 +830,10 @@ type server struct {
 	groupKilled  func(sp *spawn) bool
 	readerStarts func(r *role)
 	roleStarted  func(r *role)
-	waiters      map[int]*child
+	// measuring is called at a kept home's measure, under its uid's lock:
+	// tests hold a kept spawn's start there.
+	measuring func(path string)
+	waiters   map[int]*child
 	// keptLive counts the live spawns of each disk's uid; keptOps holds
 	// each such uid's lock, which a spawn's start, the uid's full
 	// retirement and a home request's helper take, so none of them
@@ -847,8 +859,12 @@ type server struct {
 	keptDraw        sync.Mutex
 	disks           map[string]*home.Disk
 	homeDisk        map[string]string
+	keptWithheld    map[int]bool // a uid whose disk's record did not read back after a failed write (putDisk)
 	diskOps         map[string]*homeLock
-	homeOps         map[string]*homeLock
+	// writeDisk writes a disk's record, home.Kept.WriteDisk when nil: tests
+	// fail it.
+	writeDisk func(home.Disk) error
+	homeOps   map[string]*homeLock
 	// packs is every person's packs (package packview) under the kept
 	// homes' root; nil for a keeper that keeps no homes.
 	packs *packview.Store
@@ -1623,6 +1639,7 @@ func (s *server) launch(sp *spawn, req *protocol.Request, e egress) (string, err
 		Reach:    sp.reach,
 		Cgroup:   group.Path(),
 		Packs:    packs,
+		KeptRoot: s.keptRoot(),
 	})
 	if err != nil {
 		return protocol.CodeInternal, err

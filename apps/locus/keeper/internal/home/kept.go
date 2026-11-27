@@ -22,8 +22,9 @@ import (
 // disks in it, each as its own uid (Make); its owner (uid 0, the keeper,
 // which lists it to draw a new disk's uid and keeps the disks' records in
 // it) and its group, which no process the keeper starts holds, list it. No
-// session reaches it: a space sees its own home and its disk's work folder
-// alone (package stage).
+// session reaches it, wherever it is: every space is given it covered, and
+// holds of it only the path to a kept session's own home, with that disk's
+// work folder at /work (package stage, Spec.KeptRoot).
 const KeptRootMode = fs.ModeDir | fs.ModeSticky | 0o773
 
 // KeptHomeMode is the mode every kept home has: its own uid's alone.

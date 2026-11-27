@@ -169,19 +169,26 @@ func (k Kept) LoadDisks() (map[string]*Disk, error) {
 		if err != nil {
 			return nil, err
 		}
+		file := k.recordPath(a)
 		if other, taken := uids[d.UID]; taken {
-			return nil, fmt.Errorf("the disks of %q and %q both record uid %d: %w", other, d.Athanor, d.UID, ErrBadRecord)
+			return nil, fmt.Errorf("%s and %s both record uid %d: %w", other, file, d.UID, ErrBadRecord)
 		}
-		uids[d.UID] = d.Athanor
+		uids[d.UID] = file
 		for _, id := range d.Homes {
 			if other, taken := homes[id]; taken {
-				return nil, fmt.Errorf("the disks of %q and %q both record home %s: %w", other, d.Athanor, id, ErrBadRecord)
+				return nil, fmt.Errorf("%s and %s both record home %s: %w", other, file, id, ErrBadRecord)
 			}
-			homes[id] = d.Athanor
+			homes[id] = file
 		}
 		disks[d.Athanor] = d
 	}
 	return disks, nil
+}
+
+// ReadDisk reads the record of athanor's disk as LoadDisks reads it, an
+// absent one as fs.ErrNotExist.
+func (k Kept) ReadDisk(athanor string) (*Disk, error) {
+	return k.readRecord(Person(athanor))
 }
 
 // readRecord reads the record of the disk named a.
@@ -225,7 +232,9 @@ func (k Kept) readRecord(a string) (*Disk, error) {
 
 // WriteDisk writes d's record whole or not at all: a temporary of the
 // keeper's own, synced, renamed over the record and the folder synced, so
-// a keeper killed at any moment leaves the record before or after.
+// a keeper killed at any moment leaves the record before or after. An error
+// after the rename leaves the new record in place: what is on disk is then
+// read again (ReadDisk).
 func (k Kept) WriteDisk(d Disk) error {
 	if d.Homes == nil {
 		d.Homes = []string{}

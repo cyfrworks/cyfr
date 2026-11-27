@@ -585,7 +585,7 @@ def home_uid(stack, home):
 
 
 def as_home(stack, home, script, what):
-    """`script` run as the home's own uid, which alone enters it."""
+    """`script` run as the home's disk's uid, which alone enters it."""
     return imagesuite.read_output(stack.exec(script, user=str(home_uid(stack, home))), what)
 
 
@@ -597,7 +597,7 @@ def memory(stack, uid, driver):
     """Chrome's summed PSS, the session cgroup's memory.current, in MiB, and the uid's threads and the most
     descriptors one of its processes holds, which its nproc and nofile limits bound.
 
-    Read as the kept home's uid and gid, which are one number: a process's memory maps are readable only to
+    Read as the disk's uid and gid, which are one number: a process's memory maps are readable only to
     a reader whose ids all match its own.
     """
     ids = f"{uid}:{uid}"

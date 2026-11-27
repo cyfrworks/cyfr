@@ -45,7 +45,13 @@ const (
 func keptKeeper(t *testing.T) *keeper {
 	t.Helper()
 	k := routedKeeper(t)
-	root := filepath.Join(filepath.Dir(k.homes), "kept")
+	return k.keepHomesAt(t, filepath.Join(filepath.Dir(k.homes), "kept"))
+}
+
+// keepHomesAt makes the kept root at root, whose parent must exist, and
+// makes k's role the kept one over it.
+func (k *keeper) keepHomesAt(t *testing.T, root string) *keeper {
+	t.Helper()
 	if err := os.Mkdir(root, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -152,10 +158,10 @@ func (k *keeper) releasedPair(t *testing.T, spawnID string) {
 	}
 }
 
-// A kept home is made by its own uid, 0700; two spawns of it share its uid
-// and its files; releasing one leaves the other running; the home outlives
-// both, is measured and refuses a spawn at its bound; home_retire ends the
-// uid and removes it.
+// A kept home is made by its disk's uid, 0700; two spawns of it share the
+// uid and its files; releasing one leaves the other running; the home
+// outlives both, is measured and refuses a spawn at its bound; home_retire
+// removes it.
 func TestAKeptHomeLivesUnderItsOwnUID(t *testing.T) {
 	k := keptKeeper(t)
 	uid := testKeptFirst
@@ -415,9 +421,8 @@ func TestAHomeNeverMadeLeavesNoLock(t *testing.T) {
 	}
 }
 
-// A reset ends every process of the home's uid and leaves the home empty
-// under that same uid, which no draw takes meanwhile; a reset of a home not
-// made leaves it absent.
+// A reset ends the home's sessions and leaves the home empty under its
+// disk's uid; a reset of a home not made leaves it absent.
 func TestAKeptHomeResetEmptiesItUnderItsUID(t *testing.T) {
 	k := keptKeeper(t)
 	uid := testKeptFirst
@@ -682,10 +687,10 @@ func TestAKeptUIDWhoseRetirementCannotFinishIsQuarantined(t *testing.T) {
 	}
 }
 
-// A new home's uid is the lowest that nothing takes: no folder or process
-// (home.Kept.Taken), no make or reset in flight, and no state of the
-// keeper's own, retiring, quarantined or live; the uid drawn is held until
-// its make ends, and a reading after that sees its home. None needs root.
+// A new disk's uid is the lowest that nothing takes: no folder or process
+// (home.Kept.Taken), no make in flight, and no state of the keeper's own,
+// retiring, quarantined or live; the uid drawn is held until its make ends,
+// and a reading after that sees its disk. None needs root.
 func TestANewHomesUIDIsTheLowestNothingHolds(t *testing.T) {
 	s := &server{cfg: Config{Kept: &home.Kept{Root: "/k", First: 10, Last: 16}}}
 	s.keptMaps()
@@ -786,7 +791,8 @@ func channelServer(t *testing.T, kept *home.Kept) (*server, *client, *protocol.L
 	}
 	ours, theirs := os.NewFile(uintptr(fds[0]), "channel"), os.NewFile(uintptr(fds[1]), "client-channel")
 	t.Cleanup(func() { ours.Close(); theirs.Close() })
-	s := &server{cfg: Config{Kept: kept}, log: logx.NewWriter(io.Discard, "cyfr-locus", false), ledger: admission.New(testWork, false)}
+	s := &server{cfg: Config{Kept: kept}, log: logx.NewWriter(io.Discard, "cyfr-locus", false), ledger: admission.New(testWork, false),
+		keptOps: map[int]*sync.Mutex{}, waiters: map[int]*child{}}
 	c := testClient(ours, pool.Spec{Name: "backends", Reach: pool.ReachRouted}, Account{})
 	c.role.spec.Kept = true
 	return s, c, protocol.NewLineReader(theirs)

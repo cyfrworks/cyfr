@@ -59,8 +59,8 @@ defmodule Prima.LocusRoles do
   A role whose programs keep their folders, the backends role, names the
   kept folders' root `kept_root`, the compose volume `kept_volume` mounted
   there (never under `data/`, never in a backup), the uid range
-  `kept_uids` the keeper's `--kept-homes` flag draws each folder's uid
-  from, outside every pool and every user of the image, and the group the
+  `kept_uids` the keeper's `--kept-homes` flag draws each person's disk's
+  uid from, outside every pool and every user of the image, and the group the
   root is shared with, `kept_group` with gid `kept_gid`, of which no user
   is a member; every other role has none (`nil`). The root is root's and
   that group's, mode 1773.

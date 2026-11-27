@@ -291,8 +291,8 @@ defmodule Locus.Keeper do
   @channel_fd 3
   @channel_env "KEEPER_CHANNEL"
   @run_dir_env "KEEPER_RUN_DIR"
-  # A home request runs a helper as the home's uid; a retirement ends every
-  # process of the uid with a grace and scrubs it, which takes passes.
+  # A home request runs a helper as its disk's uid; a reset or a retirement
+  # first ends the home's sessions, each by its group within its grace.
   @home_timeout_ms 120_000
   @pool "build"
   @attach_dir "/run/locus"

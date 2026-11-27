@@ -227,7 +227,7 @@ class ClientOutput(unittest.TestCase):
                                                        "memory_bytes": memory.BOUND}).encode() + b"\n")
                             request = json.loads(lines.readline())
                         self.assertEqual(place, {"v": 9, "type": "place", "id": "p1", "kind": "build"})
-                        self.assertEqual((request["v"], request["type"], request["place"]), (8, "spawn", "p1"))
+                        self.assertEqual((request["v"], request["type"], request["place"]), (memory.V, "spawn", "p1"))
                         self.assertFalse({"memory_bytes", "cpu_quota"} & request.keys(), request)
                         os.kill(process.pid, signal.SIGSTOP)
                         _, status = os.waitpid(process.pid, os.WUNTRACED)

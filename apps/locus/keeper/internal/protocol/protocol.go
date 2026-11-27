@@ -227,7 +227,7 @@
 // `home_made` with the disk's uid once the home is made on the disk of its
 // athanor: the disk is made first if it is not, under the lowest uid of the
 // range that no entry under the root owns, no disk's record holds, no
-// process holds (the keeper's own read of /proc), no make or reset holds
+// process holds (the keeper's own read of /proc), no make holds
 // and the keeper does not hold as retiring, quarantined or live; with every
 // uid taken it is refused as CodeCapacity, and with a root or a /proc that
 // cannot be read as CodeUnavailable. One naming a home another athanor's
@@ -423,8 +423,8 @@ const (
 	// home no disk holds.
 	CodeHomeAbsent = "home_absent"
 	// CodeUnavailable refuses every home request and kept spawn of a keeper
-	// that keeps no homes (no --kept-homes), and a home_make or home_list
-	// whose root or /proc cannot be read.
+	// that keeps no homes (no --kept-homes), and a home_make whose root or
+	// /proc cannot be read.
 	CodeUnavailable = "unavailable"
 	// CodeHostsUnresolved refuses a spawn one of whose hosts resolves to no
 	// address.

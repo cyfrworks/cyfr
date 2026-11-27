@@ -102,7 +102,8 @@ func TestADisksRecordIsWrittenWholeAndReadBack(t *testing.T) {
 	}
 }
 
-// The keeper does not start over a record it cannot trust: one of another
+// The keeper does not start over a record it cannot trust, and says which
+// file it is: one of another
 // mode, a link, one naming another athanor than its name, of another form,
 // of a uid outside the range, with its homes out of order, or two records
 // sharing a home or a uid.
@@ -155,8 +156,13 @@ func TestARecordTheKeeperCannotTrustIsRefused(t *testing.T) {
 			if err := spoil(k, filepath.Join(k.Root, DisksDir)); err != nil {
 				t.Fatal(err)
 			}
-			if disks, err := k.LoadDisks(); err == nil {
+			disks, err := k.LoadDisks()
+			if err == nil {
 				t.Fatalf("read %+v", disks)
+			}
+			// The refusal names the record's file, which its operator removes.
+			if !strings.Contains(err.Error(), filepath.Join(k.Root, DisksDir)+"/") {
+				t.Fatalf("the refusal names no record's file: %v", err)
 			}
 		})
 	}

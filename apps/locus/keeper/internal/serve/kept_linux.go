@@ -7,8 +7,10 @@ package serve
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"sort"
 	"strconv"
@@ -36,7 +38,7 @@ const (
 	keptRetireWait = 30 * time.Second
 )
 
-// keptLock is the lock of a kept home's uid.
+// keptLock is the lock of a disk's uid.
 func (s *server) keptLock(uid int) *sync.Mutex {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -117,6 +119,9 @@ func (s *server) keptMaps() {
 	if s.homeDisk == nil {
 		s.homeDisk = map[string]string{}
 	}
+	if s.keptWithheld == nil {
+		s.keptWithheld = map[int]bool{}
+	}
 }
 
 // loadDisks reads every disk's record (home.Kept.LoadDisks) into the
@@ -140,24 +145,56 @@ func (s *server) loadDisks() error {
 }
 
 // putDisk records d on its disk (home.Kept.WriteDisk) and then in the
-// index; the disk's lock is held. A record not written changes nothing.
+// index; the disk's lock is held. A write that failed may still have put
+// its record in place, its rename done and its folder's sync not: the
+// index then takes what the record on disk says, so the two never disagree
+// about a uid, and a record that cannot be read back keeps d's uid
+// withheld from every draw for the keeper's life. Its error is answered
+// all the same.
 func (s *server) putDisk(d home.Disk) error {
-	if err := s.cfg.Kept.WriteDisk(d); err != nil {
-		return err
+	write := s.cfg.Kept.WriteDisk
+	if s.writeDisk != nil {
+		write = s.writeDisk
 	}
+	err := write(d)
+	if err == nil {
+		s.indexDisk(d.Athanor, &d)
+		return nil
+	}
+	got, rerr := s.cfg.Kept.ReadDisk(d.Athanor)
+	switch {
+	case rerr == nil:
+		s.indexDisk(d.Athanor, got)
+	case errors.Is(rerr, fs.ErrNotExist):
+		s.indexDisk(d.Athanor, nil)
+	default:
+		s.mu.Lock()
+		s.keptMaps()
+		s.keptWithheld[d.UID] = true
+		s.mu.Unlock()
+		s.log.Error("the record of a disk of uid %d does not read back after its write failed: the uid is withheld: %v", d.UID, rerr)
+	}
+	return err
+}
+
+// indexDisk makes d the index's disk of athanor, or none for nil.
+func (s *server) indexDisk(athanor string, d *home.Disk) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.keptMaps()
-	if old := s.disks[d.Athanor]; old != nil {
+	if old := s.disks[athanor]; old != nil {
 		for _, id := range old.Homes {
 			delete(s.homeDisk, id)
 		}
 	}
-	s.disks[d.Athanor] = &d
-	for _, id := range d.Homes {
-		s.homeDisk[id] = d.Athanor
+	delete(s.disks, athanor)
+	if d == nil {
+		return
 	}
-	return nil
+	s.disks[athanor] = d
+	for _, id := range d.Homes {
+		s.homeDisk[id] = athanor
+	}
 }
 
 // keptAt is where a kept home is: whose disk holds it, the disk, the home
@@ -226,9 +263,9 @@ func (s *server) keptHome(c *client, id string) (keptAt, string) {
 
 // drawKept reads which uids of the range are taken (taken, home.Kept.Taken
 // in production) and holds the lowest that the reading does not hold, no
-// disk's record holds and the keeper holds for nothing (no make or reset
-// holds it, and it is not retiring, quarantined or live) as making until
-// unmakeKept; with none left it answers false. The reading and the draw are
+// disk's record holds and the keeper holds for nothing (no make holds it,
+// no record that failed to read back withholds it, and it is not retiring,
+// quarantined or live) as making until unmakeKept; with none left it answers false. The reading and the draw are
 // one step under keptDraw, which unmakeKept takes too: a make that ends,
 // its disk now recorded, cannot free that uid between another draw's
 // reading and that draw, so two disks never get one uid.
@@ -248,7 +285,7 @@ func (s *server) drawKept(taken func() (map[int]bool, error)) (int, bool, error)
 	}
 	for uid := s.cfg.Kept.First; uid <= s.cfg.Kept.Last; uid++ {
 		_, quarantined := s.keptQuarantined[uid]
-		if held[uid] || recorded[uid] || s.keptMaking[uid] || quarantined || s.keptRetiring[uid] != nil || s.keptLive[uid] > 0 {
+		if held[uid] || recorded[uid] || s.keptWithheld[uid] || s.keptMaking[uid] || quarantined || s.keptRetiring[uid] != nil || s.keptLive[uid] > 0 {
 			continue
 		}
 		s.keptMaking[uid] = true
@@ -903,6 +940,9 @@ func (s *server) handleHomeList(c *client, req *protocol.Request) {
 // measureHome answers the bytes allocated under a kept home, measured as
 // its disk's uid; a home not made holds none.
 func (s *server) measureHome(acct Account, path string) (uint64, error) {
+	if s.measuring != nil {
+		s.measuring(path)
+	}
 	out, err := s.runHomeHelper(acct, home.HelperSpec{Op: home.OpMeasure, Path: path, UID: acct.UID})
 	if err != nil {
 		return 0, err
