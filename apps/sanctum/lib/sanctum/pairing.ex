@@ -87,7 +87,7 @@ defmodule Sanctum.Pairing do
   ## Who can confirm
 
   `can_confirm?/1` answers whether the context has a person behind it who
-  can give a proof: a signed-in browser session (`:oidc`), or a paired
+  can give a proof: a signed-in browser session (`:session`), or a paired
   device (`:device`) whose paired client stands, read here
   (`Sanctum.DeviceCerts.client_standing/1`). A key, a guest body, a
   tincture, a webhook, a schedule, the system and an anonymous caller
@@ -490,7 +490,7 @@ defmodule Sanctum.Pairing do
   @doc """
   Whether the client behind `ctx` has a person behind it who can give a
   proof, on the external plane, authenticated and not anonymous: a
-  browser session (`:oidc`) that names its person and no paired client,
+  browser session (`:session`) that names its person and no paired client,
   or a paired device (`:device`) that names its person and a paired
   client that stands (`Sanctum.DeviceCerts.client_standing/1`, read from
   the store). Every other context — a key, a guest body, a tincture, a
@@ -499,7 +499,7 @@ defmodule Sanctum.Pairing do
   @spec can_confirm?(Context.t()) :: boolean()
   def can_confirm?(%Context{plane: :external, authenticated: true, anonymous: false} = ctx) do
     case ctx do
-      %Context{auth_method: :oidc, client_id: nil} ->
+      %Context{auth_method: :session, client_id: nil} ->
         person?(ctx.user_id)
 
       %Context{auth_method: :device, client_id: client_id} when is_binary(client_id) ->

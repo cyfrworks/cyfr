@@ -75,7 +75,7 @@ defmodule Sanctum.Gate.VisibilityTest do
     Context.build(
       user_id: "test_user",
       permissions: [],
-      auth_method: :oidc,
+      auth_method: :session,
       authenticated: false
     )
   end
@@ -202,8 +202,8 @@ defmodule Sanctum.Gate.VisibilityTest do
   # ============================================================================
 
   describe "consent-class actions" do
-    test "an OIDC session sees the whole vault and profile surface" do
-      ctx = ctx_with([], :oidc)
+    test "a signed-in session sees the whole vault and profile surface" do
+      ctx = ctx_with([], :session)
       assert length(visible_actions("vault", ctx)) == 10
       assert length(visible_actions("profile", ctx)) == 8
 
@@ -236,8 +236,11 @@ defmodule Sanctum.Gate.VisibilityTest do
     test "a paired device sees what its person's session sees: the whole surface" do
       device = paired_device_ctx([])
 
-      assert visible_actions("vault", device) == visible_actions("vault", ctx_with([], :oidc))
-      assert visible_actions("profile", device) == visible_actions("profile", ctx_with([], :oidc))
+      assert visible_actions("vault", device) == visible_actions("vault", ctx_with([], :session))
+
+      assert visible_actions("profile", device) ==
+               visible_actions("profile", ctx_with([], :session))
+
       assert length(visible_actions("vault", device)) == 10
       assert "commit" in visible_actions("profile", device)
       assert "revoke" in visible_actions("pairing", device)
@@ -248,7 +251,7 @@ defmodule Sanctum.Gate.VisibilityTest do
       unconsenting = visible_actions("vault", ctx_with([], :scheduled))
       refute "create" in unconsenting
 
-      for ctx <- [ctx_with([], :device), %{ctx_with([], :oidc) | client_id: "pcl_probe"}] do
+      for ctx <- [ctx_with([], :device), %{ctx_with([], :session) | client_id: "pcl_probe"}] do
         assert visible_actions("vault", ctx) == unconsenting, inspect(ctx.auth_method)
         refute "commit" in visible_actions("profile", ctx)
         refute "plan" in visible_actions("profile", ctx)
@@ -260,7 +263,7 @@ defmodule Sanctum.Gate.VisibilityTest do
       guest = Context.enter_guest(paired_device_ctx([]))
       refute "revoke" in visible_actions("vault", guest)
 
-      session_chain = Context.enter_guest(ctx_with([], :oidc))
+      session_chain = Context.enter_guest(ctx_with([], :session))
       assert visible_actions("vault", session_chain) != []
     end
   end
@@ -323,10 +326,10 @@ defmodule Sanctum.Gate.VisibilityTest do
     kinds = [
       anonymous_ctx(),
       unclaimed_ctx(),
-      ctx_with([], :oidc),
+      ctx_with([], :session),
       paired_device_ctx([]),
       ctx_with([], :device),
-      %{ctx_with([], :oidc) | client_id: "pcl_probe"},
+      %{ctx_with([], :session) | client_id: "pcl_probe"},
       ctx_with([], :api_key),
       ctx_with([], :scheduled),
       ctx_with([], :webhook),
@@ -434,7 +437,7 @@ defmodule Sanctum.Gate.VisibilityTest do
         {authenticated, user_id} <- [{true, "test_user"}, {false, "test_user"}, {false, nil}],
         anonymous <- [false, true],
         auth_method <- [
-          :oidc,
+          :session,
           :device,
           :api_key,
           :scheduled,
@@ -524,7 +527,7 @@ defmodule Sanctum.Gate.VisibilityTest do
   defp consent_refusal(:staging, %Context{plane: :guest}, _in_chain?), do: :guest_plane
   defp consent_refusal(_class, %Context{authenticated: false}, _in_chain?), do: :not_authenticated
   defp consent_refusal(_class, %Context{anonymous: true}, _in_chain?), do: :anonymous
-  defp consent_refusal(:interactive, %Context{auth_method: :oidc}, true), do: nil
+  defp consent_refusal(:interactive, %Context{auth_method: :session}, true), do: nil
 
   defp consent_refusal(:interactive, %Context{auth_method: method}, true),
     do: {:surface_not_permitted, method}
@@ -537,7 +540,9 @@ defmodule Sanctum.Gate.VisibilityTest do
         true -> nil
       end
 
-    admitted = if class == :interactive, do: [:oidc, :device], else: [:oidc, :device, :api_key]
+    admitted =
+      if class == :interactive, do: [:session, :device], else: [:session, :device, :api_key]
+
     if surface != nil and surface in admitted, do: nil, else: {:surface_not_permitted, method}
   end
 

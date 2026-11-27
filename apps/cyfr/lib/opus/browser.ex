@@ -424,7 +424,7 @@ defmodule Opus.Browser do
   Watch `window` of the person's browser as `ctx`, a person on a page of
   their own, from the calling process, which is that page's view and the
   viewer: the context a browser's session has on the console's admission
-  path (`auth_method: :oidc`, origin `interactive`, no frame; it is
+  path (`auth_method: :session`, origin `interactive`, no frame; it is
   `CyfrWeb.ContextGuard`'s), whose person the session owner proves. The
   browser starts when none runs, after `start` (as `act/4`'s) says it
   may, and the window's images are scaled to fit `size`. Answers the
@@ -442,7 +442,7 @@ defmodule Opus.Browser do
         ) ::
           {:ok, watch()} | {:error, term()}
   def watch(
-        %Sanctum.Context{auth_method: :oidc, origin: :interactive, frame: nil} = ctx,
+        %Sanctum.Context{auth_method: :session, origin: :interactive, frame: nil} = ctx,
         window,
         %{width: width, height: height},
         start

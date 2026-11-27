@@ -59,7 +59,7 @@ defmodule Sanctum.CredentialRetirementTest do
         email: user.email,
         provider: "github",
         permissions: Context.person_permissions(),
-        auth_method: :oidc,
+        auth_method: :session,
         authenticated: true
       )
       |> Sanctum.Tenancy.resolve_status(force: true)
@@ -111,7 +111,7 @@ defmodule Sanctum.CredentialRetirementTest do
           provider: "github",
           permissions: [:*],
           athanor_id: Sanctum.TestContext.athanor_id(),
-          auth_method: :oidc,
+          auth_method: :session,
           authenticated: true
         )
 
@@ -160,7 +160,7 @@ defmodule Sanctum.CredentialRetirementTest do
           user_id: "system",
           athanor_id: own.id,
           permissions: [:*],
-          auth_method: :oidc,
+          auth_method: :session,
           authenticated: true
         )
 
@@ -410,7 +410,7 @@ defmodule Sanctum.CredentialRetirementLockTest do
             email: user.email,
             provider: "github",
             permissions: Context.person_permissions(),
-            auth_method: :oidc,
+            auth_method: :session,
             authenticated: true
           )
           |> Sanctum.Tenancy.resolve_status(force: true)

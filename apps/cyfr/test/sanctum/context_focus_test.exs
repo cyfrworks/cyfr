@@ -42,7 +42,7 @@ defmodule Sanctum.ContextFocusTest do
         provider: "github",
         permissions: [:*],
         scope: :athanor,
-        auth_method: :oidc,
+        auth_method: :session,
         authenticated: true,
         platform_admin: admin?
       )
@@ -206,7 +206,7 @@ defmodule Sanctum.ContextFocusTest do
       Sanctum.TestContext.platform(
         user_id: ops,
         permissions: [:*],
-        auth_method: :oidc,
+        auth_method: :session,
         platform_admin: true
       )
 

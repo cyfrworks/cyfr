@@ -94,7 +94,7 @@ defmodule Sanctum.TelemetryTest do
         nil
       )
 
-      providers = [:github, :google, :oidc, :session, :api_key]
+      providers = [:github, :google, :passkey, :session, :api_key]
 
       for provider <- providers do
         Telemetry.auth_event(provider, :success)

@@ -777,7 +777,7 @@ defmodule PrismWeb.ComponentDetailLiveTest do
           athanor_id: seated_athanor().id,
           permissions: Sanctum.Context.person_permissions(),
           scope: :athanor,
-          auth_method: :oidc,
+          auth_method: :session,
           authenticated: true
         )
 

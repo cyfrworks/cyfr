@@ -57,7 +57,7 @@ defmodule Sanctum.Context do
   # stored athanor row read it too.
   @type scope :: Prima.TenancyScope.t()
   @type auth_method ::
-          :oidc
+          :session
           | :device
           | :api_key
           | :scheduled
@@ -321,8 +321,8 @@ defmodule Sanctum.Context do
 
   ## Examples
 
-      iex> Sanctum.Context.build(user_id: "user_1", permissions: [:execute], auth_method: :oidc, authenticated: true)
-      %Sanctum.Context{user_id: "user_1", permissions: MapSet.new([:execute]), auth_method: :oidc, authenticated: true}
+      iex> Sanctum.Context.build(user_id: "user_1", permissions: [:execute], auth_method: :session, authenticated: true)
+      %Sanctum.Context{user_id: "user_1", permissions: MapSet.new([:execute]), auth_method: :session, authenticated: true}
   """
   @spec build(keyword() | map()) :: t()
   def build(attrs) when is_list(attrs) do
@@ -333,7 +333,7 @@ defmodule Sanctum.Context do
 
   # Validate auth_method against its declared vocabulary at context construction.
   @valid_auth_methods [
-    :oidc,
+    :session,
     :device,
     :api_key,
     :scheduled,

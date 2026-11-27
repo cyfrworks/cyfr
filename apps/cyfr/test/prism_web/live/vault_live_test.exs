@@ -142,7 +142,7 @@ defmodule PrismWeb.VaultLiveTest do
         athanor_id: own.id,
         permissions: [:*],
         scope: :athanor,
-        auth_method: :oidc,
+        auth_method: :session,
         authenticated: true
       )
 
@@ -728,7 +728,7 @@ defmodule PrismWeb.VaultLiveTest do
         athanor_id: seated_athanor().id,
         permissions: [:*],
         scope: :athanor,
-        auth_method: :oidc,
+        auth_method: :session,
         authenticated: true
       )
 
@@ -1030,7 +1030,7 @@ defmodule PrismWeb.VaultLiveTest do
           athanor_id: own.id,
           permissions: [:*],
           scope: :athanor,
-          auth_method: :oidc,
+          auth_method: :session,
           authenticated: true
         )
 
@@ -2095,7 +2095,7 @@ defmodule PrismWeb.VaultLiveTest do
         athanor_id: seated_athanor().id,
         permissions: [:*],
         scope: :athanor,
-        auth_method: :oidc,
+        auth_method: :session,
         authenticated: true
       )
     end

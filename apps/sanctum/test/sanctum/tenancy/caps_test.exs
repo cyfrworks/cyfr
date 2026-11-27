@@ -158,7 +158,7 @@ defmodule Sanctum.Tenancy.CapsTest do
         athanor_id: "ath_caps_#{System.unique_integer([:positive])}",
         permissions: [:*],
         scope: :athanor,
-        auth_method: :oidc,
+        auth_method: :session,
         authenticated: true
       )
 

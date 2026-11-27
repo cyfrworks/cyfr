@@ -152,7 +152,7 @@ defmodule Sanctum.Tenancy.UsersTest do
     ctx =
       Context.build(
         user_id: u.id,
-        auth_method: :oidc,
+        auth_method: :session,
         authenticated: true,
         scope: :athanor,
         permissions: Context.person_permissions()
@@ -183,7 +183,7 @@ defmodule Sanctum.Tenancy.UsersTest do
         provider: "github",
         permissions: [:*],
         scope: :athanor,
-        auth_method: :oidc,
+        auth_method: :session,
         authenticated: true
       )
 
@@ -243,7 +243,7 @@ defmodule Sanctum.Tenancy.UsersTest do
         athanor_id: Sanctum.TestContext.athanor_id(),
         permissions: [:*],
         scope: :athanor,
-        auth_method: :oidc,
+        auth_method: :session,
         authenticated: true
       )
 

@@ -297,7 +297,7 @@ defmodule PrismWeb.LoginLiveTest do
             athanor_id: athanor_id,
             provider: "passkey",
             permissions: Sanctum.Context.person_permissions(),
-            auth_method: :oidc,
+            auth_method: :session,
             authenticated: true
           )
         )
@@ -1186,7 +1186,7 @@ defmodule PrismWeb.LoginLiveTest do
         user_id: user.id,
         athanor_id: athanor_id,
         provider: "passkey",
-        auth_method: :oidc,
+        auth_method: :session,
         authenticated: true,
         session_token_hash: hash,
         permissions: Sanctum.Context.person_permissions()

@@ -1057,7 +1057,7 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
           provider: "github",
           permissions: [:*],
           scope: :athanor,
-          auth_method: :oidc,
+          auth_method: :session,
           authenticated: true
         )
       )

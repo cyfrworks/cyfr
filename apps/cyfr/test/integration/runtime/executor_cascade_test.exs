@@ -74,7 +74,7 @@ defmodule Locus.Runtime.ExecutorCascadeTest do
         Sanctum.TestContext.platform(
           user_id: "user_cascade_test",
           permissions: [:execution_read],
-          auth_method: :oidc,
+          auth_method: :session,
           namespace: "testns"
         )
 
@@ -112,7 +112,7 @@ defmodule Locus.Runtime.ExecutorCascadeTest do
           athanor_id: Sanctum.TestContext.athanor_id(),
           permissions: [],
           scope: :athanor,
-          auth_method: :oidc,
+          auth_method: :session,
           namespace: "testns",
           authenticated: true
         )
@@ -149,7 +149,7 @@ defmodule Locus.Runtime.ExecutorCascadeTest do
         Sanctum.TestContext.platform(
           user_id: "user_cascade_test",
           permissions: [:execution_read],
-          auth_method: :oidc,
+          auth_method: :session,
           namespace: "testns"
         )
 
@@ -317,7 +317,7 @@ defmodule Locus.Runtime.ExecutorCascadeTest do
         Sanctum.TestContext.platform(
           user_id: "user_b",
           permissions: [:storage_read],
-          auth_method: :oidc,
+          auth_method: :session,
           namespace: "ns_b"
         )
 
@@ -364,7 +364,7 @@ defmodule Locus.Runtime.ExecutorCascadeTest do
         Sanctum.TestContext.platform(
           user_id: "user_b",
           permissions: [:storage_read],
-          auth_method: :oidc,
+          auth_method: :session,
           namespace: "ns_b"
         )
 
