@@ -88,6 +88,7 @@ no expiry step.
 | `declined` | the recipient declines `beta.txt`'s offer, its snapshot holding its original just before: its row ends `declined`, the recipient's Inbox is empty and the count gone, the snapshot is released and the sender's usage returns by it; `data/inbox/<sender slug>/` holds the accepted offer's folder alone, so nothing landed for the declined or the withdrawn one; the sender's page, never reloaded, shows each offer's end |
 | `outsider` | the outsider's Files page, open from the start and never reloaded, shows no offer, no receipt and no count at any step; no row names them and their usage never moves; the recipient's picker lists the sender alone; a picker edited in the sender's browser to name the outsider is refused, and no offer, row or snapshot is written |
 | `storage` | step by step, each person's usage moved as above and by nothing else, ending with the sender's moved by the edit alone, the recipient's by the accepted file once and the outsider's not at all, and no snapshot or custody copy left |
+| `thread_scroll` | both people see the newest post in their shared thread after reopening Chat, a Send from earlier history, and reloading and opening the thread. The newest post stays visible when the recipient narrows the window and the file rows wrap |
 
 ## Shown elsewhere
 
