@@ -240,7 +240,8 @@ pub struct Service {
     child: Child,
     stdin: Option<Box<dyn std::io::Write + Send>>,
     lines: mpsc::Receiver<String>,
-    pub stderr: Arc<Mutex<String>>,
+    stderr: Arc<Mutex<Vec<u8>>>,
+    stderr_reader: Option<std::thread::JoinHandle<()>>,
     dir: PathBuf,
     listener: Option<UnixListener>,
     pub calls: Arc<Mutex<Vec<Call>>>,
@@ -337,19 +338,20 @@ impl Service {
                 }
             }
         });
-        let stderr = Arc::new(Mutex::new(String::new()));
+        let stderr = Arc::new(Mutex::new(Vec::new()));
         let collected = stderr.clone();
         let mut errors = child.stderr.take().expect("its errors");
-        std::thread::spawn(move || {
-            let mut text = String::new();
-            let _ = errors.read_to_string(&mut text);
-            collected.lock().expect("stderr").push_str(&text);
+        let stderr_reader = std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            errors.read_to_end(&mut bytes).expect("read runner stderr");
+            *collected.lock().expect("stderr") = bytes;
         });
         Service {
             stdin: Some(stdin),
             child,
             lines,
             stderr,
+            stderr_reader: Some(stderr_reader),
             dir,
             listener: Some(listener),
             calls: Arc::new(Mutex::new(Vec::new())),
@@ -469,11 +471,12 @@ impl Service {
         lines
     }
 
-    /// The runner's exit status, within `within`.
+    /// Wait up to `within` for the runner to exit, then collect its stderr.
     pub fn exit(&mut self, within: Duration) -> ExitStatus {
         let until = Instant::now() + within;
         loop {
             if let Some(status) = self.child.try_wait().expect("the runner's status") {
+                self.finish_stderr().expect("collect runner stderr");
                 return status;
             }
             assert!(
@@ -485,8 +488,14 @@ impl Service {
         }
     }
 
+    fn finish_stderr(&mut self) -> std::thread::Result<()> {
+        self.stderr_reader
+            .take()
+            .map_or(Ok(()), std::thread::JoinHandle::join)
+    }
+
     pub fn errors(&self) -> String {
-        self.stderr.lock().expect("stderr").clone()
+        String::from_utf8_lossy(&self.stderr.lock().expect("stderr")).into_owned()
     }
 
     /// The ops of the calls sent so far, in order.
@@ -514,6 +523,7 @@ impl Drop for Service {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
+        let _ = self.finish_stderr();
         let _ = std::fs::remove_dir_all(&self.dir);
     }
 }
