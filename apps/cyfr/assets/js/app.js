@@ -71,7 +71,27 @@ Hooks.ScrollBottom = {
       this._following = this._nearBottom()
     }
     this.el.addEventListener("scroll", this._onScroll, { passive: true })
-    this.observer = new MutationObserver(() => this._follow())
+    this.handleEvent("scroll:bottom", ({id}) => {
+      if (this.el.id !== id) return
+      this._following = true
+      this._follow()
+    })
+    this.resizeObserver = new ResizeObserver(() => this._follow())
+    this.resizeObserver.observe(this.el)
+    for (const row of this.el.children) this.resizeObserver.observe(row)
+
+    this.observer = new MutationObserver((records) => {
+      for (const record of records) {
+        if (record.target !== this.el) continue
+        for (const row of record.removedNodes) {
+          if (row.nodeType === Node.ELEMENT_NODE) this.resizeObserver.unobserve(row)
+        }
+        for (const row of record.addedNodes) {
+          if (row.nodeType === Node.ELEMENT_NODE) this.resizeObserver.observe(row)
+        }
+      }
+      this._follow()
+    })
     this.observer.observe(this.el, { childList: true, subtree: true })
     this._follow()
   },
@@ -80,6 +100,7 @@ Hooks.ScrollBottom = {
   },
   destroyed() {
     if (this.observer) this.observer.disconnect()
+    if (this.resizeObserver) this.resizeObserver.disconnect()
     if (this._onScroll) this.el.removeEventListener("scroll", this._onScroll)
   }
 }

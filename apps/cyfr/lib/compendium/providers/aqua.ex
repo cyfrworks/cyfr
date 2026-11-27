@@ -86,7 +86,7 @@ defmodule Compendium.Providers.Aqua do
     # as it would be stored and what it was made against, which the
     # thread shows for the person to save from their own session. In-chain
     # the interactive class keeps its surface half, so even the proposal
-    # needs an `:oidc`-rooted turn: a schedule- or key-started turn
+    # needs a `:session`-rooted turn: a schedule- or key-started turn
     # proposes nothing. Deleting stays a member's act alone.
     # Reset restores shipped units — one agent by name, else every
     # edited copy. With all=true it also deletes the crew members and

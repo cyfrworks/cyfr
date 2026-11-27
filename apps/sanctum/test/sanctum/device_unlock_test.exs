@@ -148,7 +148,7 @@ defmodule Sanctum.DeviceUnlockTest do
       assert DateTime.compare(expires_at, DateTime.add(DateTime.utc_now(), 61, :second)) == :lt
 
       assert {:ok, %Context{} = session_ctx} = Sanctum.Session.load(token)
-      assert session_ctx.auth_method == :oidc
+      assert session_ctx.auth_method == :session
       assert session_ctx.client_id == nil
       assert session_ctx.credential_deadline == row.expires_at
     end

@@ -154,7 +154,7 @@ defmodule PrismWeb.TopbarLiveTest do
         athanor_id: seated_athanor().id,
         permissions: [:*],
         scope: :athanor,
-        auth_method: :oidc,
+        auth_method: :session,
         authenticated: true,
         platform_admin: true
       )
@@ -514,7 +514,7 @@ defmodule PrismWeb.TopbarLiveTest do
       athanor_id: athanor_id,
       permissions: Sanctum.Context.person_permissions(),
       scope: :athanor,
-      auth_method: :oidc,
+      auth_method: :session,
       authenticated: true
     )
   end

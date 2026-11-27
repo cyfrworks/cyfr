@@ -109,7 +109,7 @@ defmodule Cyfr.StandingWatchTest do
       athanor_id: athanor_id,
       permissions: [:*],
       scope: :athanor,
-      auth_method: :oidc,
+      auth_method: :session,
       authenticated: true
     )
   end

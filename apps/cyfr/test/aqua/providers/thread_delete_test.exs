@@ -46,11 +46,11 @@ defmodule Aqua.Providers.ThreadDeleteTest do
     ctx =
       Sanctum.Context.build(
         user_id: actor.user_id,
-        provider: "oidc",
+        provider: "passkey",
         athanor_id: athanor_id,
         permissions: [:*],
         scope: :athanor,
-        auth_method: :oidc,
+        auth_method: :session,
         authenticated: true
       )
 

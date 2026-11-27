@@ -326,6 +326,11 @@ defmodule Opus.Host.AttachedFetch do
       {:ok, %PinnedTarget{} = pin} ->
         {:ok, pin}
 
+      # The edge's domains were checked before the pin, as the pin checks
+      # them again.
+      {:error, :domain} ->
+        {:recorded, "domain_blocked", "HTTP egress refused: #{host} is not in the egress domains"}
+
       {:error, :denied} ->
         {:recorded, "private_ip_blocked",
          "Address of #{host} blocked: the egress policy refuses it"}

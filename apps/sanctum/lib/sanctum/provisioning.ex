@@ -1007,7 +1007,7 @@ defmodule Sanctum.Provisioning do
   (the seed scan, registration rows, registry pulls into `components/`);
   it never executes a component, and the consent bootstrap mints via
   `granted_via: "bootstrap"`, not through the consent surface gates.
-  `auth_method: :oidc`, the label of a person's browser sign-in, records
+  `auth_method: :session`, the label of a person's browser sign-in, records
   provenance honestly — this context exists because the person signed
   in; no gate on this path requires the interactive class.
   """
@@ -1018,7 +1018,7 @@ defmodule Sanctum.Provisioning do
       athanor_id: athanor_id,
       permissions: [:storage_read, :storage_write],
       scope: :athanor,
-      auth_method: :oidc,
+      auth_method: :session,
       authenticated: true
     )
   end

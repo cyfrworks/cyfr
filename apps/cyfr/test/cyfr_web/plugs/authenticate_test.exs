@@ -44,7 +44,7 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
           athanor_id: athanor.id,
           provider: "passkey",
           permissions: Sanctum.Context.person_permissions(),
-          auth_method: :oidc,
+          auth_method: :session,
           authenticated: true
         )
       )
@@ -91,7 +91,7 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
 
       refute conn.halted
       assert conn.assigns[:context].user_id == user.id
-      assert conn.assigns[:context].auth_method == :oidc
+      assert conn.assigns[:context].auth_method == :session
 
       Sanctum.Session.destroy(session.token)
     end
@@ -242,7 +242,7 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
       ctx = conn.assigns.context
       assert ctx.user_id == Arca.Test.Actor.owner_id()
       assert ctx.athanor_id == Sanctum.TestContext.athanor_id()
-      assert ctx.auth_method == :oidc
+      assert ctx.auth_method == :session
       assert is_binary(ctx.session_token_hash)
       assert Enum.sort(ctx.permissions) == Enum.sort(Sanctum.Context.person_permissions())
     end
@@ -385,7 +385,7 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
         |> authenticate()
 
       refute conn.halted
-      assert conn.assigns[:context].auth_method == :oidc
+      assert conn.assigns[:context].auth_method == :session
       assert conn.assigns[:context].user_id == ctx.user_id
       assert conn.assigns[:context].authenticated
     end
@@ -448,7 +448,7 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
             provider: "github",
             athanor_id: athanor.id,
             permissions: Sanctum.Context.person_permissions(),
-            auth_method: :oidc
+            auth_method: :session
           )
         )
 

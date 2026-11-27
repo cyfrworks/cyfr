@@ -495,7 +495,8 @@ defmodule Cyfr.CrossLanguageDriftTest do
        ~w(intervals args_max_bytes result_max_bytes reasons bindings binding_ids inputs crons results envelopes bounds)}
     ],
     "guest_error.json" => [
-      {"apps/cyfr/test/cyfr/docs_drift_test.exs", ~w(envelope fallback)},
+      {"apps/cyfr/test/cyfr/docs_drift_test.exs", ~w(envelope fallback fetch_types)},
+      {"apps/locus/runner/tests/vectors.rs", ~w(fetch_types)},
       {"apps/locus/test/locus/runtime/formula_handler_vectors_test.exs",
        ~w(encode_error setup_required)},
       {"apps/prima/test/prima/wit_response_vectors_test.exs", ~w(envelope fallback)}
@@ -507,7 +508,7 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"apps/cyfr/test/opus/host_listener_test.exs", ~w(calls pre_body_refusals body_refusals)},
       {"apps/cyfr/test/opus/host_test.exs", ~w(version calls report connection_cases)},
       {"apps/locus/runner/tests/vectors.rs",
-       ~w(version max_body_bytes retries timeouts_ms keys calls answer_outcomes)},
+       ~w(version max_body_bytes retries timeouts_ms keys calls answer_outcomes frame_cases framing_headers override_headers override_prefixes credential_headers pin_answer_refusals)},
       {"apps/locus/test/locus/runtime/formula_handler_runner_test.exs", ~w(connection_cases)},
       {"apps/locus/test/locus/runtime/host_client_test.exs",
        ~w(connection_cases egress_pin_cases egress_policy_cases retries answer_outcomes)},
@@ -516,6 +517,7 @@ defmodule Cyfr.CrossLanguageDriftTest do
        ~w(routes retries timeouts_ms max_body_bytes max_answer_bytes window_ms standing keys calls pre_body_refusals report retry_identity connection_cases question_cases egress_pin_cases egress_policy_cases egress_pin_internal_purposes frame_cases)},
       {"apps/prima/test/prima/network_test.exs",
        ~w(framing_headers override_headers override_prefixes credential_headers)},
+      {"apps/prima/test/prima/pinned_target_test.exs", ~w(pin_answer_refusals)},
       {"apps/prima/test/prima/runner_relay_test.exs", ~w(version max_body_bytes keys calls)},
       {"apps/prima/test/prima/worker_auth_test.exs", ~w(keys report)},
       {"apps/prima/test/prima/worker_protocol_test.exs",
@@ -692,11 +694,11 @@ defmodule Cyfr.CrossLanguageDriftTest do
     ],
     "runner_relay.json" => [
       {"apps/locus/runner/tests/vectors.rs",
-       ~w(version attempt max_body_bytes max_frame_bytes initial_credit max_headers max_header_name_bytes max_header_value_bytes max_signed_header_bytes max_attached_frame_bytes ops methods purposes max_path_bytes max_url_bytes exchange refusals encode_refusals)},
+       ~w(version attempt max_body_bytes max_frame_bytes initial_credit max_headers max_header_name_bytes max_header_value_bytes max_signed_header_bytes max_attached_frame_bytes ops methods purposes max_path_bytes max_url_bytes max_calls max_fetches codes exchange refusals encode_refusals)},
       {"apps/locus/test/locus/runtime/relay_vectors_test.exs",
-       ~w(attempt initial_credit exchange refusals)},
+       ~w(attempt initial_credit max_calls max_fetches codes exchange refusals)},
       {"apps/prima/test/prima/runner_relay_test.exs",
-       ~w(version attempt max_body_bytes max_frame_bytes initial_credit max_headers max_header_name_bytes max_header_value_bytes max_signed_header_bytes max_attached_frame_bytes ops methods purposes max_path_bytes max_url_bytes exchange refusals encode_refusals)},
+       ~w(version attempt max_body_bytes max_frame_bytes initial_credit max_headers max_header_name_bytes max_header_value_bytes max_signed_header_bytes max_attached_frame_bytes ops methods purposes max_path_bytes max_url_bytes max_calls max_fetches codes exchange refusals encode_refusals)},
       {"tests/locus-runtime-image/namespace_test.py", ~w(exchange)}
     ],
     "setup-folders.json" => [

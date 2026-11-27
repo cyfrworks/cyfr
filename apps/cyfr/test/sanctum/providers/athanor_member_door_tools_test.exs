@@ -45,7 +45,7 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
         provider: "github",
         permissions: [:*],
         scope: :athanor,
-        auth_method: Keyword.get(opts, :auth_method, :oidc),
+        auth_method: Keyword.get(opts, :auth_method, :session),
         authenticated: true,
         platform_admin: Keyword.get(opts, :platform_admin, false)
       )
@@ -633,7 +633,7 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
         Sanctum.TestContext.platform(
           user_id: ops,
           permissions: [:*],
-          auth_method: :oidc,
+          auth_method: :session,
           platform_admin: true
         )
 

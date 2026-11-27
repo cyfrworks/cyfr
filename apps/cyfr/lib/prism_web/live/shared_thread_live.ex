@@ -23,7 +23,10 @@ defmodule PrismWeb.SharedThreadLive do
   message posted reads the messages after the last one shown; any other
   change reads the thread and its people again, and a thread the person
   no longer sits in, or that was archived, says so — the chat around the
-  pane moves on (`PrismWeb.ChatOverlayLive`). A file opens through
+  pane moves on (`PrismWeb.ChatOverlayLive`). The message list opens at
+  its newest post and follows new posts while the person is reading the
+  end. Sending a post brings its sender back to the end.
+  A file opens through
   `/shared/:thread/attachments/:message_id/:filename`
   (`PrismWeb.SharedAttachmentController`), which checks the seat again.
   """
@@ -329,7 +332,12 @@ defmodule PrismWeb.SharedThreadLive do
     end
   end
 
-  defp sent(socket, _message), do: socket |> assign(:input, "") |> load_messages()
+  defp sent(socket, _message) do
+    socket
+    |> assign(:input, "")
+    |> load_messages()
+    |> push_event("scroll:bottom", %{id: "shared-messages"})
+  end
 
   defp files(socket) do
     files =
@@ -554,6 +562,7 @@ defmodule PrismWeb.SharedThreadLive do
 
       <div
         id="shared-messages"
+        phx-hook="ScrollBottom"
         phx-update="stream"
         class="flex-1 space-y-3 overflow-y-auto px-4 py-3"
         aria-live="polite"

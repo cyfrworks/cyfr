@@ -32,7 +32,9 @@
 // `models` lists (accessChoices: Default mode, the harness's default
 // permission mode), or in the first when it names none; a start naming
 // another ends the driver before anything runs. The harness's own tools
-// run in its box: their asks are allowed and they are shown by name.
+// run in its box: their asks are allowed and they are shown by name, all
+// but its own question (`AskUserQuestion`), which is declined with
+// `brainwire.QuestionsDeclined`, so the model asks in its reply.
 // The driver keeps no account of calls: which post a result answers is
 // the result's own naming of the posts' uuids, which `idle` passes on.
 // A turn's error is said at its result, typed by what the result says

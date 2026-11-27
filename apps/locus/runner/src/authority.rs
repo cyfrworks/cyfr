@@ -42,6 +42,13 @@ pub struct RateLimit {
 }
 
 impl Limits {
+    /// The node's `timeout` in milliseconds, as `Prima.Limits.timeout_ms/1`
+    /// reads it, held to the runner's horizon (`duration_ms`): the read
+    /// limits hold it to a duration, and a negative one is none.
+    pub fn timeout_ms(&self) -> u64 {
+        duration_ms(&self.timeout).map_or(0, |ms| u64::try_from(ms).unwrap_or(0))
+    }
+
     /// The limits of an unbound authority (`Prima.Authority`'s zero
     /// limits).
     pub fn zero() -> Limits {
@@ -160,23 +167,18 @@ fn limits(limits: &Value) -> Result<Limits, Refused> {
     })
 }
 
-/// Which side of zero a duration falls.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Sign {
-    Negative,
-    Zero,
-    Positive,
-}
-
-// A duration as `Prima.Limits.parse_duration/1` reads one: an integer with
-// one of the units `ms`, `s`, `m` or `h`, tried in that order, or a bare
-// integer of seconds; an integer is an optional sign and decimal digits.
-// Its sign alone decides what the limits take of it.
-fn duration(text: &str) -> Option<Sign> {
-    let number = ["ms", "s", "m", "h"]
+/// A duration as `Prima.Limits.parse_duration/1` reads one: an integer with
+/// one of the units `ms`, `s`, `m` or `h`, tried in that order, or a bare
+/// integer of seconds; an integer is an optional sign and decimal digits.
+/// Its milliseconds, signed, each side held to the runner's horizon, the
+/// largest integer every JSON reader holds exactly (`crate::wire::MAX_INTEGER`):
+/// a positive duration of any size is positive. None for no duration. The
+/// one reading of a duration the runner makes.
+pub fn duration_ms(text: &str) -> Option<i64> {
+    let (number, unit) = [("ms", 1u64), ("s", 1_000), ("m", 60_000), ("h", 3_600_000)]
         .iter()
-        .find_map(|unit| text.strip_suffix(unit))
-        .unwrap_or(text);
+        .find_map(|(suffix, unit)| text.strip_suffix(suffix).map(|number| (number, *unit)))
+        .unwrap_or((text, 1_000));
     let (negative, digits) = match number.as_bytes().first() {
         Some(b'-') => (true, &number[1..]),
         Some(b'+') => (false, &number[1..]),
@@ -185,12 +187,35 @@ fn duration(text: &str) -> Option<Sign> {
     if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
         return None;
     }
-    Some(if digits.bytes().all(|b| b == b'0') {
-        Sign::Zero
-    } else if negative {
-        Sign::Negative
+    let horizon = crate::wire::MAX_INTEGER;
+    let significant = digits.trim_start_matches('0');
+    // Past 16 digits a magnitude is past the horizon whatever its unit.
+    let magnitude = if significant.len() > 16 {
+        horizon
     } else {
-        Sign::Positive
+        significant
+            .parse::<u64>()
+            .unwrap_or(0)
+            .saturating_mul(unit)
+            .min(horizon)
+    };
+    let magnitude = i64::try_from(magnitude).expect("the horizon is under 2^63");
+    Some(if negative { -magnitude } else { magnitude })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Sign {
+    Negative,
+    Zero,
+    Positive,
+}
+
+// Which side of zero a duration falls, as `duration_ms` reads it.
+fn duration(text: &str) -> Option<Sign> {
+    duration_ms(text).map(|ms| match ms.signum() {
+        -1 => Sign::Negative,
+        0 => Sign::Zero,
+        _ => Sign::Positive,
     })
 }
 

@@ -27,7 +27,7 @@ defmodule Aqua.Providers.Notes do
   was superseded or is not found writes nothing. Only the person's own
   call at the door, and a `keep` from a component's chain, which names no
   thread, write with no turn. The consent class keeps its surface half
-  there — only an `:oidc` session's chain gets through — so the same
+  there — only a `:session` chain gets through — so the same
   formula started by a key or a schedule is refused exactly as at the
   door.
 

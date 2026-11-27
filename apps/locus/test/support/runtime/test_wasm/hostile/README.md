@@ -18,7 +18,7 @@ in this suite,
 `Locus.Runtime.AttachedFetchTest`, `Cyfr.FormulaHostCallsTest`,
 `Opus.Schedules.SchedulerTest`, `CyfrWeb.WebhookFlowIntegrationTest`,
 `Aqua.LaunchTest` and `Compendium.ComponentFeaturesAdmissionTest` in
-CYFR's, the runner crate's (`apps/locus/runner/tests/`), and the worker image's `tests/locus-runtime-image/runners.py` and
+CYFR's, the runner crate's (`apps/locus/runner/tests/`, `stream_*`, `fetch_twice` and `fetch_garbage` among them), and the worker image's `tests/locus-runtime-image/runners.py` and
 `tests/locus-runtime-image/canary.py`.
 
 | Guest | World | Does |
@@ -46,6 +46,17 @@ CYFR's, the runner crate's (`apps/locus/runner/tests/`), and the worker image's 
 | `storage_flood` | catalyst | calls its storage forever with a request that is no JSON: each call is refused before any host call and is one `storage.call` event |
 | `vault_log_flood` | catalyst | asks its vault forever for a name carrying a control byte: each read is refused unreported, and is one line the runner would log |
 | `slow_validate` | none | imports an instance of 1,500 functions and instantiates a component of it 3,000 times: slow to validate, for a run whose budget ends while the compile thread works |
+| `stream_once` | catalyst | opens one stream with its input as the request, reads it once, closes it and answers that read: a guest that closes a stream early and completes |
+| `stream_flood` | catalyst | opens, reads once and closes streams with its input as the request until one is refused, and answers the refusal |
+| `fetch_twice` | catalyst | sends its input as its request twice in one run and answers the second answer: a guest that follows a redirect back to the URL it asked |
+| `stream_hold` | catalyst | opens a stream and holds it unread while it reads a second sixty times, and answers the last read: an answer arriving whole that its guest never reads |
+| `stream_aside` | catalyst | opens a stream and leaves it open and unread, reads a second once and closes it, and answers that read: a stream dropped with its run's store |
+| `stream_closed` | catalyst | opens a stream and closes it unread, reads a second once and closes it, and answers that read: an answer arriving after its guest closed it |
+| `stream_late` | catalyst | opens a stream, reads a second sixty times, then reads the first once and answers that read: an answer read some six seconds after it arrived |
+| `stream_pile` | catalyst | opens streams with its input as the request, closing none, until one is refused, and answers the refusal |
+| `fetch_garbage` | catalyst | hands its fetch the text `{"method":`, which is no JSON, and answers the fetch's answer |
+| `stream_twice` | catalyst | opens a stream, reads it twice and answers the second read |
+| `stream_until` | catalyst | opens a stream and reads it until a read hands data, an error or the end, and answers that read |
 
 ## Rebuilding
 
@@ -114,4 +125,26 @@ vault_log_flood.wat        sha256:1c223ece263e5549e7ee246da17a98dc9494eeb125d85c
 vault_log_flood.wasm       sha256:971e8407c7934f41c2495b85f87fb34c9048975b91b52cdbf4952e117d9c8e6d
 slow_validate.wat          sha256:0cfefb7c8520d6da2f62c6c8fc3a7d2e81352d7cee84d409d94917d72bc5cdb8
 slow_validate.wasm         sha256:157de6295fc6e0dd345cfd777edc98464bb5fd932d99e97a09fbfe1564648ff6
+stream_once.wat            sha256:3f414255276c3799bd582762344092a8e51c1bf0232005aff2ebb17483e3defc
+stream_once.wasm           sha256:30630a47b9d054326a6f4d481ad512e9de0f4e9cd58c48e970d86db0bd9f5872
+stream_flood.wat           sha256:5ffaf203420f11fd8b144f6deac1d04b2c5f70b04ef9c9d5bad017bf5a9275fd
+stream_flood.wasm          sha256:e396f2cb1c6a2043b364bf98619ab5799b7bf129bb4707e981e8e7210dc2bd4d
+fetch_twice.wat            sha256:d876111b0ea9e5696bc0ca273445adbccd729ea5242b22cc2a046d2f8164bc41
+fetch_twice.wasm           sha256:50b507f2cd70b3b98f1e08c2084a3c91c43db56c91b69edfec95dee0929bab73
+stream_hold.wat            sha256:acd3e32c4f4e1849a1e38b781fc96f75218b37b7cddb92d78d9ee5063a44f367
+stream_hold.wasm           sha256:b0e9cedd8f83162e9f9b1f6ae5cb61005883f9bc5c4e9ca1df818235d6bedbb4
+stream_aside.wat           sha256:907ee7f4691e71f9bf363f9692a6cef1021ff0c0296d8a8d1851acd0fef20b36
+stream_aside.wasm          sha256:e99551468d57d4298f5bece99b8ba89e8e024b0bd90e3b94591e13c818b979d8
+stream_closed.wat          sha256:b2496e4f75d266251c537661f53d29014b768b7b4dcfde658ecef88f96915210
+stream_closed.wasm         sha256:cbfc083ed020aeeb4b69b7d0496a7d3d30883b668a211672e998c021dcda2613
+stream_late.wat            sha256:f9a002a03c34aad30010bd074069640a965feb8b078d14528041a9812cad9875
+stream_late.wasm           sha256:81c0a156f931529586589029d644a51f0ac412d002a86ca21938f9fb13fbbece
+stream_pile.wat            sha256:b1fa1792dc0a720ad805397dc9c9e48d71d0e17545e667b944efb4240583fc88
+stream_pile.wasm           sha256:5428547d54d0acf3a0ecef919ccb0de38ec97a6f4249bf4fa005474e24a77447
+fetch_garbage.wat          sha256:1aeaed4fa0a5799495f17bff41ca5151cb129be24e0c7d75e5aa3aa354d560e8
+fetch_garbage.wasm         sha256:1e746c7f664de67f0e5efd1b20e649ddbf67bd857323aa760688697023ada74a
+stream_twice.wat           sha256:79fb683d2a1670350c5f80fddd874b63eb7e45e056c8a41d6b68795f29b0523a
+stream_twice.wasm          sha256:451be323de707ba2a913d320a2b99103b623e1699acbe460d5fd3122abc6428f
+stream_until.wat           sha256:2c3d7e80e5b4ea81b67d75c1e2fd68d7770851359b95c489c619fd14705b5a3d
+stream_until.wasm          sha256:5c6d6471e2f48e7eee3a5a3f54be528d023084ad16ae7565b11fa6969bc261fc
 ```

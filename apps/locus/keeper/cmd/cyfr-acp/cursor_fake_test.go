@@ -60,6 +60,11 @@ import (
 //	theirs      calls a person's server `notes`, its tool `echo`
 //	slow        says a word and waits for a second prompt, which cancels it
 //	servers     replies with the servers' names it was handed
+//	question    asks the person in its reply (fakeQuestion), after its own
+//	            tool's permission, and takes the session's next prompt as
+//	            the answer, replying "A1: " and its words; it keeps the
+//	            capabilities initialize named and the driver's whole answer
+//	            to the permission in `$HOME/fake-question.json`
 //
 // FAKE_SIGNED_OUT answers sessions -32000; FAKE_NO_LIST never lists;
 // FAKE_NO_LOAD offers no load; FAKE_LOAD_STILL answers a load of a session
@@ -189,6 +194,8 @@ func fakeCursor() int {
 			selectOf("effort", "Effort", "thought_level", "high", "low", "medium", "high"), selectOf("context", "Context", "model_config", "300k", "300k", "1m")}},
 	}
 	var picker bool
+	// The capabilities initialize named, for `question`.
+	var capabilities map[string]any
 	current := "default"
 	ownOptions := func() []any {
 		for _, m := range models {
@@ -279,7 +286,31 @@ func fakeCursor() int {
 			update(map[string]any{"sessionUpdate": "tool_call", "toolCallId": id, "title": "Read File", "kind": kind, "status": "pending", "rawInput": map[string]any{}})
 			update(map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": id, "status": "completed"})
 		}
+		// A prompt after the session's question is its answer.
+		asked := filepath.Join(home, "fake-asked-"+state.session)
+		if _, err := os.Stat(asked); err == nil {
+			_ = os.Remove(asked)
+			chunk("A1: " + words)
+			finish("end_turn")
+			return
+		}
 		switch {
+		case words == "question":
+			// As Cursor asks with CYFR's initialize, which offers its model no
+			// question tool (S1 F2): in its reply, after its own tool's
+			// permission.
+			id := "call-q\nfc_q"
+			update(map[string]any{"sessionUpdate": "tool_call", "toolCallId": id, "title": "Edit File", "kind": "edit", "status": "pending", "rawInput": map[string]any{}})
+			permission := ask("q2", "session/request_permission", map[string]any{"sessionId": state.session, "toolCall": map[string]any{"toolCallId": id,
+				"title": "Edit export.sql", "kind": "edit", "status": "pending"},
+				"options": []any{map[string]any{"optionId": "allow-once", "name": "Allow once", "kind": "allow_once"},
+					map[string]any{"optionId": "allow-always", "name": "Allow always", "kind": "allow_always"},
+					map[string]any{"optionId": "reject-once", "name": "Reject", "kind": "reject_once"}}})
+			update(map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": id, "status": "completed"})
+			line, _ := json.Marshal(map[string]any{"capabilities": capabilities, "permission": permission})
+			_ = os.WriteFile(filepath.Join(home, "fake-question.json"), line, 0o600)
+			_ = os.WriteFile(asked, nil, 0o600)
+			chunk(fakeQuestion)
 		case words == "fail":
 			chunk(failure)
 		case words == "unauth":
@@ -407,7 +438,7 @@ func fakeCursor() int {
 					ch <- json.RawMessage(line)
 				}
 			case m.Method == "initialize":
-				capabilities, _ := m.Params["clientCapabilities"].(map[string]any)
+				capabilities, _ = m.Params["clientCapabilities"].(map[string]any)
 				meta, _ := capabilities["_meta"].(map[string]any)
 				picker = meta["parameterizedModelPicker"] == true
 				answer(m.ID, map[string]any{"protocolVersion": 1, "agentCapabilities": map[string]any{"loadSession": os.Getenv("FAKE_NO_LOAD") == "",

@@ -38,7 +38,7 @@ defmodule Cyfr.Providers.SettingsTest do
         provider: "github",
         permissions: [:*],
         scope: :athanor,
-        auth_method: :oidc,
+        auth_method: :session,
         authenticated: true,
         platform_admin: admin?
       )
