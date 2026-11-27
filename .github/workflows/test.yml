@@ -1734,7 +1734,7 @@ jobs:
       # makes one space with no route whose root is the image's programs,
       # ends it, and the machine ends with nothing left in its group; the
       # device holds no canary of the kept homes and none of Docker's bound
-      # files; a second start makes none; of two first starts at once one
+      # files, its resolver and hosts the guest's own; a second start makes none; of two first starts at once one
       # makes and one waits; and a session's churn prints the processor time
       # with and without free-page reporting from order 0.
       - name: A person's machine
