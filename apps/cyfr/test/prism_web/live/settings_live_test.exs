@@ -1236,7 +1236,11 @@ defmodule PrismWeb.SettingsLiveTest do
       ops = test_user()
       {:ok, _} = Sanctum.TestContext.ensure_platform(ops.user_id)
       o = own_athanor_id(ops)
-      names = %{{o, "srv_a"} => %{name: "claude", shown: "program"}, {o, "srv_b"} => %{name: "codex", shown: "program"}}
+
+      names = %{
+        {o, "srv_a"} => %{name: "claude", shown: "program"},
+        {o, "srv_b"} => %{name: "codex", shown: "program"}
+      }
 
       use_line = fn view ->
         view
@@ -1271,7 +1275,13 @@ defmodule PrismWeb.SettingsLiveTest do
 
       # A second session joins: the charge is the VM's reading, 520 MiB,
       # and the two sessions' readings sum to less, never on top of it.
-      record!([used(2, o, subject: "srv_a", mib: 140), used(3, o, subject: "srv_b", mib: 60)], names, "wrk_page", 1)
+      record!(
+        [used(2, o, subject: "srv_a", mib: 140), used(3, o, subject: "srv_b", mib: 60)],
+        names,
+        "wrk_page",
+        1
+      )
+
       charged.(520)
       send(view.pid, :memory)
 
@@ -1279,7 +1289,13 @@ defmodule PrismWeb.SettingsLiveTest do
                "In use: 520.0 MB of 4.7 GB, of which the work listed below uses 200.0 MB now."
 
       # The VM's release: nothing is in use, as before its boot.
-      record!([used(4, o, subject: "srv_a", mib: 0), used(5, o, subject: "srv_b", mib: 0)], names, "wrk_page", 3)
+      record!(
+        [used(4, o, subject: "srv_a", mib: 0), used(5, o, subject: "srv_b", mib: 0)],
+        names,
+        "wrk_page",
+        3
+      )
+
       charged.(0)
       send(view.pid, :memory)
       assert use_line.(view) == "In use: 0 B of 4.7 GB."

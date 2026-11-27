@@ -40,10 +40,13 @@ defmodule Prima.LocusPoolTest do
     assert @vectors["floor_runners"] == LocusPool.floor_runners()
     machine = @vectors["machine_bytes"]
     assert machine["base"] == LocusPool.machine_bytes(0)
-    assert machine["per_gib"] == LocusPool.machine_bytes(1024 * 1024 * 1024) - LocusPool.machine_bytes(0)
+
+    assert machine["per_gib"] ==
+             LocusPool.machine_bytes(1024 * 1024 * 1024) - LocusPool.machine_bytes(0)
 
     for [guest, bytes] <- machine["cases"],
         do: assert(LocusPool.machine_bytes(guest) == bytes, "a guest of #{guest} bytes")
+
     assert @vectors["room_wait_ms"] == LocusPool.room_wait_ms()
     assert @vectors["allowance_ms"] == LocusPool.allowance_ms()
     assert @vectors["stale_ms"] == LocusPool.stale_ms()
