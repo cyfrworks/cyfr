@@ -359,7 +359,7 @@ func folderGroup(t *testing.T) *cgroup.Group {
 	if err != nil {
 		t.Fatal(err)
 	}
-	g, err := groups.Create("stage", 256<<20, cgroup.CPUPeriod)
+	g, err := groups.Create(cgroup.Name(59996), 256<<20, cgroup.CPUPeriod)
 	if err != nil {
 		t.Fatal(err)
 	}
