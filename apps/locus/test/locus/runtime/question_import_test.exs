@@ -88,10 +88,10 @@ defmodule Locus.Runtime.QuestionImportTest do
 
   test "an answer of no shape the wire knows is lost", %{host: host, client: client} do
     for wire <- [
-          ~s({"v":2,"ok":{"answer":"maybe"}}),
-          ~s({"v":2,"ok":{"answer":{"none":"bored"}}}),
-          ~s({"v":2,"ok":{"pending":true,"answer":"allowed"}}),
-          ~s({"v":2,"ok":{"retry_after_ms":0}})
+          ~s({"v":3,"ok":{"answer":"maybe"}}),
+          ~s({"v":3,"ok":{"answer":{"none":"bored"}}}),
+          ~s({"v":3,"ok":{"pending":true,"answer":"allowed"}}),
+          ~s({"v":3,"ok":{"retry_after_ms":0}})
         ] do
       ScriptedHost.script(host, "question_ask", {:answer, wire})
       assert {:error, :lost} = HostClient.question_ask(client, 1, "a", "s", "o"), wire
@@ -130,7 +130,7 @@ defmodule Locus.Runtime.QuestionImportTest do
 
   test "a paced ask sleeps as long as CYFR says and is sent again, the same ask signed afresh",
        %{host: host, client: client} do
-    paced = ~s({"v":2,"ok":{"retry_after_ms":150}})
+    paced = ~s({"v":3,"ok":{"retry_after_ms":150}})
     ScriptedHost.script(host, "question_ask", [{:answer, paced}, answer("paced_admitted")])
 
     started = System.monotonic_time(:millisecond)

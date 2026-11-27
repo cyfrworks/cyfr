@@ -15,9 +15,10 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
   with its spec and its runner process. `write/2` makes a runner write bytes on
   its channel (the test encodes frames with `Prima.RunnerControl`),
   `read/2` answers what the service wrote it so far, `close/1` closes its
-  channel and `exit/2` ends its process with a status, which the keeper
-  reports as `exited` and then `released`. A release from the service
-  ends the runner as `exit/2` does, after its grace, and is listed by
+  channel and `exit/3` ends its process with a status and the memory
+  limit that ended it, if any, which the keeper reports, after the
+  channel's close, as `exited` and then `released`. A release from the
+  service ends the runner as `exit/3` does, after its grace, and is listed by
   `releases/1`. `kill!/1` ends the keeper as a lost channel would: every
   runner's owner hears `{:error, :channel_lost}`. `refuse/2` makes it
   refuse every spawn after the request, as `cyfr-locus` refuses one it
@@ -421,13 +422,24 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
     end
   end
 
+  @doc """
+  Make runner `spawn`'s process outlive the releases asked of it, as one
+  the keeper is still reaping: it ends only when `exit/3` ends it.
+  """
+  @spec outlive_release(map()) :: :ok
+  def outlive_release(%{runner: runner}), do: GenServer.call(runner, :outlive_release)
+
   @doc "Close runner `spawn`'s end of its channel."
   @spec close(map()) :: :ok
   def close(%{runner: runner}), do: GenServer.call(runner, :close)
 
-  @doc "End runner `spawn`'s process with `status`."
-  @spec exit(map(), integer()) :: :ok
-  def exit(%{runner: runner}, status), do: GenServer.call(runner, {:exit, status})
+  @doc """
+  End runner `spawn`'s process with `status`, at the memory limit `memory`
+  names (`t:Locus.Runtime.Keeper.ended_for_memory/0`, none by default).
+  """
+  @spec exit(map(), integer(), Locus.Runtime.Keeper.ended_for_memory()) :: :ok
+  def exit(%{runner: runner}, status, memory \\ nil),
+    do: GenServer.call(runner, {:exit, status, memory})
 
   @doc "Answer every write to runner `spawn`'s channel `{:error, reason}` from now on, writing nothing."
   @spec refuse_write(map(), term()) :: :ok
@@ -769,6 +781,9 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
            relay_inbox: "",
            relay_closed: false,
            ended: false,
+           # A release its process outlives, as one whose reaping the
+           # keeper still waits for (`outlive_release/1`).
+           outlives_release: false,
            write_refusal: nil,
            takings: 0
          })}
@@ -809,24 +824,31 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
       {:reply, :ok, state}
     end
 
+    def handle_call(:outlive_release, _from, state),
+      do: {:reply, :ok, %{state | outlives_release: true}}
+
     def handle_call(:close, _from, state) do
       notify(state, :control_closed)
       {:reply, :ok, state}
     end
 
-    def handle_call({:exit, status}, _from, state), do: {:reply, :ok, ended(state, status)}
+    def handle_call({:exit, status, memory}, _from, state),
+      do: {:reply, :ok, ended(state, status, memory)}
 
     @impl true
     def handle_cast(:taken, state), do: {:noreply, %{state | takings: state.takings + 1}}
 
     @impl true
-    def handle_info({:released, _grace_ms}, state), do: {:noreply, ended(state, 137)}
+    def handle_info({:released, _grace_ms}, %{outlives_release: true} = state),
+      do: {:noreply, state}
 
-    defp ended(%{ended: true} = state, _status), do: state
+    def handle_info({:released, _grace_ms}, state), do: {:noreply, ended(state, 137, nil)}
 
-    defp ended(state, status) do
+    defp ended(%{ended: true} = state, _status, _memory), do: state
+
+    defp ended(state, status, memory) do
       notify(state, :control_closed)
-      notify(state, {:exited, {:status, status}})
+      notify(state, {:exited, {:status, status}, memory})
       freed(state)
       notify(state, :released)
       Locus.Runtime.Test.ScriptedKeeper.tell_heir(state)

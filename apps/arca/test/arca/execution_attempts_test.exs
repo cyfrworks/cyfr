@@ -143,6 +143,38 @@ defmodule Arca.ExecutionAttemptsTest do
              ExecutionAttempts.get(actor, attempt.attempt)
   end
 
+  test "a lapse records what ended its runner for memory on the attempt it lapses, and nothing else does",
+       %{actor: actor} do
+    for {cause, stored} <- [cap: "cap", machine: "machine", either: "either", none: nil] do
+      {execution, attempt} = admit!(actor)
+      ended_by = if cause == :none, do: [], else: [ended_by: cause]
+
+      {1, _, _} =
+        Arca.Execution.mark_failed_if_running(
+          execution.id,
+          %{completed_at: DateTime.utc_now(), duration_ms: 0, error_message: "ended"},
+          [
+            attempt: attempt.attempt,
+            lease_until: attempt.lease_until,
+            grant: :stored,
+            verify: &Arca.Test.Actor.admits/1
+          ] ++ ended_by
+        )
+
+      assert %{state: "lapsed", outcome: "uncertain", ended_by: ^stored} =
+               ExecutionAttempts.current(actor, execution.id)
+    end
+
+    # A close records none: only a lapse writes the cause. The column's
+    # check (`Arca.SchemaVocabularyTest`) refuses any value but the three.
+    {execution, attempt} = admit!(actor)
+
+    {:ok, _} =
+      ExecutionAttempts.close(actor, attempt.attempt, "failed", "error", Arca.Test.Actor.stored())
+
+    assert %{state: "failed", ended_by: nil} = ExecutionAttempts.current(actor, execution.id)
+  end
+
   test "the sweeper retires an attempt on the lease it observed, and a takeover opens the successor",
        %{actor: actor} do
     {execution, attempt} = admit!(actor)

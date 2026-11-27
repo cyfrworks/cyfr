@@ -26,7 +26,8 @@ defmodule Locus.Runtime.RunnerPool do
   `{Locus.Runtime.RunnerPool, pid, event}`: `{:child, execution_id, attempt}` for
   each child it starts, `{:complete, execution_id, clean}`,
   `{:exit, runner_id, open}` or `{:gone, reason}` (its channel closed, its
-  process exited or its keeper failed with the subtree still assigned).
+  process exited, `{:exited, how, memory}` with the memory limit that
+  ended it, or its keeper failed with the subtree still assigned).
   The pool moves the runner itself: a clean completion to idle, anything
   else to tainted, released through the keeper at once, a clean
   completion whose place its keeper did not make warm again among them,
@@ -682,8 +683,24 @@ defmodule Locus.Runtime.RunnerPool do
     gone(state, pid, entry, {:protocol, message.type})
   end
 
-  defp on_event(:closed, pid, entry, state), do: gone(state, pid, entry, :closed)
-  defp on_event({:exited, how}, pid, entry, state), do: gone(state, pid, entry, {:exited, how})
+  # A runner whose channel closed is retired at once, its process ending
+  # with it, but its assignee hears its end only when that end comes: the
+  # keeper tells the process's exit, with the memory limit that ended it,
+  # before the runner's release, after a reaping its own bound waits for,
+  # and the retirement bound this pool keeps (`retire_due`) says it gone
+  # if neither comes.
+  defp on_event(:closed, pid, entry, state) do
+    state = put_runner(state, pid, %{entry | closed: true})
+    entry = state.runners[pid]
+
+    case entry.state do
+      ending when ending in [:retiring, :tainted, :refused] -> state
+      _ -> taint_runner(state, pid, entry, 0)
+    end
+  end
+
+  defp on_event({:exited, how, memory}, pid, entry, state),
+    do: gone(state, pid, entry, {:exited, how, memory})
 
   defp on_event({:error, reason}, pid, entry, state) do
     Logger.warning("[Locus.Runtime.RunnerPool] runner #{entry.id}: #{inspect(reason)}")
@@ -692,7 +709,8 @@ defmodule Locus.Runtime.RunnerPool do
 
   defp on_event(:released, pid, entry, state) do
     _ = DynamicSupervisor.terminate_child(state.supervisor, pid)
-    released(state, pid, entry)
+    state = if entry.closed, do: told(state, pid, entry, {:gone, :closed}), else: state
+    released(state, pid, state.runners[pid])
   end
 
   defp handle_down(state, pid, %{released: true} = entry, _reason),
@@ -1012,6 +1030,10 @@ defmodule Locus.Runtime.RunnerPool do
            down: false,
            # The keeper's release reached the pool as the runner's heir.
            released: false,
+           # Its channel closed: its retirement is asked at once, and its
+           # assignee hears its end at the process's exit, or at its
+           # release when no exit comes.
+           closed: false,
            # The start that waits on this runner: on its spawn while it
            # spawns (the pool remembers a refusal), for its uid while it goes.
            waiter: nil,

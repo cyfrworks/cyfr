@@ -11,7 +11,7 @@ defmodule Opus.Host do
 
   `call/3` is the one entry point. It takes a host call's header
   (`Prima.WorkerAuth.host_call_header/3`), its JSON body,
-  `{"v": 2, "op": name, "args": {...}}` (`Prima.WorkerWire.request_body/2`),
+  `{"v": 3, "op": name, "args": {...}}` (`Prima.WorkerWire.request_body/2`),
   and the `emit` an admitted `attached_fetch` writes its sealed frames
   with, and answers JSON. The operation is named inside the body, so the
   header's MAC covers it; the body's version is read before its operation
@@ -26,7 +26,7 @@ defmodule Opus.Host do
 
   This module implements `Prima.HostAPI`: each callback is the operation
   of its name for a caller that has already passed checks 0 and 1 below,
-  and `call/2` is how a call reaches one. `runner_exited/4` is the report's
+  and `call/2` is how a call reaches one. `runner_exited/5` is the report's
   operation, which `runner_exited/2` reaches the same way.
 
   ## Checks, in order
@@ -77,8 +77,8 @@ defmodule Opus.Host do
   ## Answers
 
   Every answer carries the wire's version first
-  (`Prima.WorkerWire.ok/1` and `error/2`): `{"v": 2, "ok": value}` on
-  success, and a refusal is `{"v": 2, "error": name}`:
+  (`Prima.WorkerWire.ok/1` and `error/2`): `{"v": 3, "ok": value}` on
+  success, and a refusal is `{"v": 3, "error": name}`:
 
     * `lost` — this boot does not hold the control plane, the header does
       not verify, the header names another member, the body is not an
@@ -138,10 +138,12 @@ defmodule Opus.Host do
   ## A worker service's report
 
   `runner_exited/2` takes a report's header (`Prima.WorkerAuth.report_header/3`)
-  and its JSON body, `{"v": 2, "op": "runner_exited", "args": {"member":
-  boot, "runner": id, "attempts": [ids], "refusal"?: code}}`, and
-  answers JSON; `refusal`, when present, is a code
-  (`Prima.WorkerAPI.refusal_code?/1`), or the report is lost. The header must
+  and its JSON body, `{"v": 3, "op": "runner_exited", "args": {"member":
+  boot, "runner": id, "attempts": [ids], "refusal"?: code, "memory"?:
+  limit}}`, and answers JSON; `refusal`, when present, is a code
+  (`Prima.WorkerAPI.refusal_code?/1`), and `memory`, when present, one of
+  `"cap"`, `"machine"` and `"either"` (`Prima.HostAPI.read_memory_end/1`),
+  or the report is lost. The header must
   verify under the dispatch key of the worker service it names
   (`Prima.WorkerAuth.verify_report/4`), which only that worker service
   holds, and its `member` must be this member's boot, since every attempt
@@ -157,11 +159,13 @@ defmodule Opus.Host do
   service's own word that the runner was given that run: if no attach of
   it was answered, nothing of it ran and it is closed failed at once. An
   attempt named beside others can be the runner's word and is never
-  closed so. A report from another boot of the same service lapses
+  closed so. A report whose `memory` names the limit its runner was ended
+  at hands it to each attempt it stops, so a run that runner held says
+  so. A report from another boot of the same service lapses
   nothing.
-  It answers `{"v": 2, "ok": true}`, `{"v": 2, "error": "lost"}` for a
+  It answers `{"v": 3, "ok": true}`, `{"v": 3, "error": "lost"}` for a
   report that does not verify, is not a report at this version or names
-  another member, and `{"v": 2, "error": "unavailable"}` when this boot
+  another member, and `{"v": 3, "error": "unavailable"}` when this boot
   does not hold the control plane (nothing is lapsed) or the store cannot
   list the attempts.
   """
@@ -247,7 +251,7 @@ defmodule Opus.Host do
            {:ok, report} <- verify_report(header, body, now),
            {:ok, reporter, attempts} <- reported_attempts(body),
            :ok <- reported_here(reporter) do
-        runner_exited(report, reporter.runner, attempts, reporter.refusal)
+        runner_exited(report, reporter.runner, attempts, reporter.refusal, reporter.memory)
       end
 
     encode(answer)
@@ -289,8 +293,10 @@ defmodule Opus.Host do
          true <- is_binary(runner) and runner != "" and is_list(attempts),
          true <- Enum.all?(attempts, &(is_binary(&1) and &1 != "")),
          refusal = args["refusal"],
-         true <- refusal == nil or WorkerAPI.refusal_code?(refusal) do
-      {:ok, %{member: member, runner: runner, refusal: refusal}, Enum.uniq(attempts)}
+         true <- refusal == nil or WorkerAPI.refusal_code?(refusal),
+         {:ok, memory} <- HostAPI.read_memory_end(args) do
+      {:ok, %{member: member, runner: runner, refusal: refusal, memory: memory},
+       Enum.uniq(attempts)}
     else
       _ -> {:error, :lost}
     end
@@ -507,14 +513,15 @@ defmodule Opus.Host do
   # Reached from `runner_exited/2` once the report has verified and names
   # this member: `report` is the verified report header.
   @impl HostAPI
-  def runner_exited(report, runner, attempts, refusal) do
-    with :ok <- Lapse.dispatched(report.service, report.boot, runner, attempts) do
+  def runner_exited(report, runner, attempts, refusal, memory) do
+    with :ok <- Lapse.dispatched(report.service, report.boot, runner, attempts, memory) do
       holder = %{
         service_id: report.service,
         boot_id: report.boot,
         runner: runner,
         assigned?: match?([_], attempts),
-        refusal: refusal
+        refusal: refusal,
+        memory: memory
       }
 
       Enum.each(attempts, &Attempt.stop_unclosed(&1, holder))

@@ -1063,7 +1063,9 @@ defmodule Arca.Execution do
   observed, and the attempt lapses only if that exact lease still stands,
   so a renewal that landed after the scan matches nothing, and the row's
   event is `execution.lapsed` — without one the attempt closes failed and
-  the event is `execution.failed`; `grant:`
+  the event is `execution.failed`; `ended_by:`, with `lease_until:`, what
+  ended the attempt's runner for memory (`:cap`, `:machine`, `:either`),
+  recorded on the attempt it lapses; `grant:`
   (`:stored` for the current attempt's stamp) and `verify:`
   (`Arca.ExecutionStanding`, required) — a failure retires work, so its
   check need not find the grant standing, but the attempt must carry its
@@ -1136,7 +1138,7 @@ defmodule Arca.Execution do
               attempt != execution.current_attempt -> false
               is_nil(attempt) -> true
               is_nil(grant) -> false
-              true -> retire_attempt(execution, attempt, Keyword.get(fence, :lease_until), grant)
+              true -> retire_attempt(execution, attempt, fence, grant)
             end
 
           if retired? do
@@ -1402,11 +1404,18 @@ defmodule Arca.Execution do
   # sweeper observed when one is given (a renewal since matches nothing),
   # else as failed.
   # arca:db-raise-ok inside the caller's transaction
-  defp retire_attempt(_execution, attempt, %DateTime{} = seen, grant) do
-    is_integer(Arca.ExecutionAttempts.lapse!(attempt, seen, grant))
+  defp retire_attempt(execution, attempt, fence, grant) do
+    case Keyword.get(fence, :lease_until) do
+      %DateTime{} = seen ->
+        ended_by = Keyword.get(fence, :ended_by)
+        is_integer(Arca.ExecutionAttempts.lapse!(attempt, seen, grant, ended_by))
+
+      nil ->
+        close_failed(execution, attempt, grant)
+    end
   end
 
-  defp retire_attempt(execution, attempt, nil, grant) do
+  defp close_failed(execution, attempt, grant) do
     not is_nil(
       Arca.ExecutionAttempts.close!(
         Prima.Actor.in_athanor(execution.athanor_id),

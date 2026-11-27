@@ -48,8 +48,10 @@ defmodule Locus.Runtime.Keeper.Channel do
   loses every process at once; the leader's `exited` then says
   `memory: "cap"`, read by `cyfr-locus` from the group's own counters,
   and the runner's end at its bound is logged before its owner hears the
-  exit and the retirement that follow, as for any other runner's end: the
-  pool taints it, the service reports it with the subtree it held, and
+  exit, with that cause (a limit above the bound's is `machine` or
+  `either`), and the retirement that follow, as for any other runner's
+  end: the pool taints it, the service reports it with the subtree it
+  held and the cause, and
   its uid is retired and scrubbed before another runner gets it. Where
   `cyfr-locus` cannot give a runner such a group it refuses the spawn as
   `memory_unavailable`, which the owner hears as

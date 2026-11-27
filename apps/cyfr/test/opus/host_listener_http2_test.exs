@@ -76,7 +76,7 @@ defmodule Opus.HostListenerHTTP2Test do
 
     # The listener is the host listener and answers HTTP/1.1.
     assert {"HTTP/1.1 404 Not Found", body} = http1_answer(address, @not_a_route)
-    assert Jason.decode!(body) == %{"v" => 2, "error" => "not_found"}
+    assert Jason.decode!(body) == %{"v" => 3, "error" => "not_found"}
 
     answer = h2c_answer(address)
 

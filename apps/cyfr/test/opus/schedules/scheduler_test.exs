@@ -1926,6 +1926,57 @@ defmodule Opus.Schedules.SchedulerTest do
             }} = CronSchedule.get_for_daemon(schedule.id)
   end
 
+  # A worker service's report that memory ended a runner lapses its run and
+  # records the cause on the attempt it lapses: the schedule keeps the
+  # run's memory sentence and says its effect is not known, whether the
+  # scheduler reads the row as the report's answer reaches it or only once
+  # the lapse is written.
+  for held? <- [false, true] do
+    @held held?
+    test "a run whose runner memory ended says so and that its effect is not known " <>
+           "(#{if held?, do: "the lapse first", else: "the scheduler running"})",
+         %{ctx: ctx} do
+      script!([:hang])
+      schedule = due!(create_schedule(ctx, %{cron_expression: hourly_away()}))
+      pid = scheduler!()
+
+      wait_until(fn -> map_size(:sys.get_state(pid).tasks) == 1 end)
+      wait_until(fn -> match?([_], ScriptedWorker.calls()) end, 5_000)
+      assert [%{state: "started", execution_id: run}] = occurrences(ctx, schedule)
+      actor = Sanctum.Context.actor(ctx)
+
+      %{attempt: attempt, service_id: service, boot_id: boot, claimed_by: runner} =
+        Arca.ExecutionAttempts.current(actor, run)
+
+      assert is_binary(runner)
+      if @held, do: :ok = :sys.suspend(pid)
+
+      :ok =
+        Opus.Host.runner_exited(%{service: service, boot: boot}, runner, [attempt], nil, :machine)
+
+      wait_until(fn ->
+        match?(%{status: "failed"}, Arca.Execution.get_tenant(actor, run))
+      end)
+
+      assert %{state: "lapsed", ended_by: "machine"} = Arca.ExecutionAttempts.current(actor, run)
+      if @held, do: :ok = :sys.resume(pid)
+
+      wait_until(fn ->
+        match?({:ok, %{error_count: 1}}, CronSchedule.get_for_daemon(schedule.id))
+      end)
+
+      assert {:ok,
+              %{
+                run_count: 0,
+                error_count: 1,
+                last_error:
+                  "Last run stopped: CYFR ran out of memory for what it runs. " <>
+                    "Whether it had its effect is not known.",
+                last_execution_id: ^run
+              }} = CronSchedule.get_for_daemon(schedule.id)
+    end
+  end
+
   # A lapse is told by its attempt, never by its words: a run that fails
   # itself in the very words a lapse keeps closed its attempt, and failed.
   test "a run that fails in a lapse's words still failed", %{ctx: ctx} do

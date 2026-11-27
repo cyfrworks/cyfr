@@ -1042,7 +1042,7 @@ defmodule Locus.Runtime.RunnerPoolTest do
     spawn = spawn_of(keeper, pid)
 
     never_retired(spawn, fn ->
-      send(pid, {ScriptedKeeper, spawn.ref, {:exited, {:status, 137}}})
+      send(pid, {ScriptedKeeper, spawn.ref, {:exited, {:status, 137}, nil}})
       frame = RunnerControl.encode(%{type: :exit, runner: id, open: ["att_1", "att_child"]})
       send(pid, {ScriptedKeeper, spawn.ref, {:control, IO.iodata_to_binary(frame)}})
       send(pid, {ScriptedKeeper, spawn.ref, :control_closed})
@@ -1062,8 +1062,8 @@ defmodule Locus.Runtime.RunnerPoolTest do
     spawn = spawn_of(keeper, pid)
 
     never_retired(spawn, fn ->
-      send(pid, {ScriptedKeeper, spawn.ref, {:exited, {:status, 137}}})
-      assert_receive {RunnerPool, ^pid, {:gone, {:exited, {:status, 137}}}}, 5_000
+      send(pid, {ScriptedKeeper, spawn.ref, {:exited, {:status, 137}, nil}})
+      assert_receive {RunnerPool, ^pid, {:gone, {:exited, {:status, 137}, nil}}}, 5_000
     end)
   end
 
@@ -1097,18 +1097,66 @@ defmodule Locus.Runtime.RunnerPoolTest do
     pool = start_pool!(keeper, [])
     serve!(pool)
 
+    # A close asks the runner's release at once, and the runner is gone by
+    # the end that release brings.
     {:ok, closed, _id} = RunnerPool.take(pool, "ath_a", "exec_1")
     ScriptedKeeper.close(spawn_of(keeper, closed))
-    assert_receive {RunnerPool, ^closed, {:gone, :closed}}
+    assert_receive {RunnerPool, ^closed, {:gone, {:exited, {:status, 137}, nil}}}, 5_000
 
+    # A process ended otherwise than for memory names no memory limit.
     {:ok, exited, _id} = RunnerPool.take(pool, "ath_a", "exec_2")
     ScriptedKeeper.exit(spawn_of(keeper, exited), 1)
-    assert_receive {RunnerPool, ^exited, {:gone, _}}
+    assert_receive {RunnerPool, ^exited, {:gone, {:exited, {:status, 1}, nil}}}
     left!(pool, exited)
     left!(pool, closed)
 
     # Reported once: the exit that follows the close is not a second event.
     refute_receive {RunnerPool, ^closed, _}, 100
+  end
+
+  # The keeper hears the channel's close before the process's end, and the
+  # end names the memory limit that ended the runner: the runner is gone
+  # by its end, so its assignee hears the limit, whichever came first.
+  for memory <- [:cap, :machine, :either] do
+    test "a runner ended for memory (#{memory}) is gone with the limit that ended it", %{
+      keeper: keeper
+    } do
+      pool = start_pool!(keeper, [])
+      serve!(pool)
+
+      {:ok, pid, _id} = RunnerPool.take(pool, "ath_a", "exec_1")
+      ScriptedKeeper.exit(spawn_of(keeper, pid), 137, unquote(memory))
+
+      assert_receive {RunnerPool, ^pid, {:gone, {:exited, {:status, 137}, unquote(memory)}}}
+      left!(pool, pid)
+      refute_receive {RunnerPool, ^pid, _}, 100
+    end
+  end
+
+  # The keeper's cleanup waits up to its own bound for the reaping before
+  # it tells the exit, so the end of a runner whose channel closed may come
+  # well after the close: its assignee hears the limit that ended it all
+  # the same, and nothing of it before.
+  test "a runner whose channel closed and whose process memory ends later is gone with the limit",
+       %{keeper: keeper} do
+    pool = start_pool!(keeper, [])
+    serve!(pool)
+
+    {:ok, pid, _id} = RunnerPool.take(pool, "ath_a", "exec_1")
+    spawn = spawn_of(keeper, pid)
+    :ok = ScriptedKeeper.outlive_release(spawn)
+    ScriptedKeeper.close(spawn)
+
+    wait_until(fn ->
+      Enum.any?(ScriptedKeeper.releases(keeper), &(elem(&1, 0) == spawn.spec.runner))
+    end)
+
+    refute_receive {RunnerPool, ^pid, _}, 1_500
+
+    ScriptedKeeper.exit(spawn, 137, :cap)
+    assert_receive {RunnerPool, ^pid, {:gone, {:exited, {:status, 137}, :cap}}}, 5_000
+    left!(pool, pid)
+    refute_receive {RunnerPool, ^pid, _}, 100
   end
 
   test "a killed runner that still completes is heard once and never returns to the pool", %{

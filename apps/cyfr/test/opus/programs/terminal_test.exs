@@ -697,6 +697,23 @@ defmodule Opus.Programs.TerminalTest do
       assert_receive %Cyfr.Bus.Program{kind: :ended, session: ^id, reason: :exited}, 2_000
     end
 
+    for cause <- [:cap, :machine, :either] do
+      @cause cause
+      test "when memory ends its program (#{cause}), telling whoever is attached why",
+           %{ctx: ctx, row: row, fake: fake} do
+        {id, _session} = start!(ctx, row)
+        {:ok, _} = Programs.attach(ctx, id)
+        Scripted.end_sessions_for_memory(fake, row.id, @cause)
+        assert_receive {Opus.Programs, ^id, {:ended, {:ended_by, @cause}}}, 3_000
+
+        assert_receive %Cyfr.Bus.Program{kind: :ended, session: ^id, reason: {:ended_by, @cause}},
+                       2_000
+
+        assert PrismWeb.TerminalComponent.ended_text({:ended_by, @cause}) ==
+                 Prima.Refusal.message({:memory, "The program", @cause})
+      end
+    end
+
     test "when the service it ran on started again, telling whoever is attached so",
          %{ctx: ctx, row: row, fake: fake} do
       {id, _session} = start!(ctx, row)
@@ -905,7 +922,7 @@ defmodule Opus.Programs.TerminalTest do
       end
 
       {:messages, messages} = Process.info(pid, :messages)
-      assert Enum.count(messages, &match?({:read, _output, _running}, &1)) == 1
+      assert Enum.count(messages, &match?({:read, _output, _running, _ended_by}, &1)) == 1
       assert {:message_queue_len, 0} = Process.info(reader, :message_queue_len)
 
       :sys.resume(pid)
@@ -1187,7 +1204,10 @@ defmodule Opus.Programs.TerminalTest do
         try do
           # A state missing what the callback reads, so it raises holding
           # the output; called through `apply/3`, as a process would.
-          apply(Opus.Programs.Terminal, :handle_info, [{:read, output, true}, %{tail: output}])
+          apply(Opus.Programs.Terminal, :handle_info, [
+            {:read, output, true, nil},
+            %{tail: output}
+          ])
         catch
           kind, reason -> {kind, reason, __STACKTRACE__}
         end

@@ -15,7 +15,7 @@ than imported, so the suite runs wherever `python3` does.
 The wire (`Prima.WorkerWire`) is versioned: a header's first token is the
 version token `v1`, and one spelling another version (`v` and a decimal
 number) is `unknown_version` before the body is read; every body and answer
-carries `"v": 2` as its first member, and a body without it, or at another
+carries `"v": 3` as its first member, and a body without it, or at another
 version, is `unknown_version` once opened and before its `op` is read. A
 guest's outbound target is an `egress_pin` host call answered with a
 `Prima.PinnedTarget` or refused by name (`read_pin_request`, `read_pin`),
@@ -46,7 +46,7 @@ import time
 import urllib.parse
 
 PREFIX = "cyfr-locus/v1/runtime"
-VERSION = 2
+VERSION = 3
 VERSION_TOKEN = "v1"
 ANY_VERSION_TOKEN = re.compile(r"v(0|[1-9][0-9]*)")
 ATTEMPT_FIELDS = ("athanor_id", "execution_id", "attempt", "fence", "generation", "service")
@@ -1205,6 +1205,17 @@ def check_host_api(path, primitives):
     assert report_header(dispatch_key(wkey), cross["fields"], cross["body"].encode()) == cross["header"], "host_api cross-member report: the header"
     args, refusal = read_body("runner_exited", cross["body"])
     assert refusal is None and args["member"] != member and cross["error"] == "lost", "host_api cross-member report: another member's is lost"
+    # A runner ended for memory: the limit is one of three words, absent for
+    # none, and a report naming anything else is lost.
+    for case in [report["memory"]] + report["memory_refusals"]:
+        what = f"host_api report memory {case.get('name', 'cap')}"
+        assert report_header(dispatch_key(wkey), case["fields"], case["body"].encode()) == case["header"], f"{what}: the header"
+        args, refusal = read_body("runner_exited", case["body"])
+        assert refusal is None and args["member"] == member, f"{what}: names the member"
+        known = args["memory"] in ("cap", "machine", "either")
+        assert known == (case is report["memory"]), f"{what}: read as {'a limit' if known else 'none of the three'}"
+    _check_answer(report["memory"]["answer"], "host_api report memory")
+    assert [r["error"] for r in report["memory_refusals"]] == ["lost", "lost"], "host_api report memory refusals: lost"
 
     first, second = v["retry_identity"]["first"], v["retry_identity"]["second"]
     reproduce(first, "host_api retry first", "admit_child")

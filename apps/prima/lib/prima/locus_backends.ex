@@ -24,7 +24,7 @@ defmodule Prima.LocusBackends do
 
   | Operation | Route | Body | Answer |
   |---|---|---|---|
-  | `:health` | `/locus/v1/backends/health` | `{"version": 7}` | unauthenticated |
+  | `:health` | `/locus/v1/backends/health` | `{"version": 8}` | unauthenticated |
   | `:control` | `/locus/v1/backends/control` | a control message | its answer, or a refusal |
   | `:session` | `/locus/v1/backends/session` | a session message | its answer, or a refusal |
   | `:close` | `/locus/v1/backends/close` | a close | `status` `closed`, or a refusal |
@@ -136,11 +136,11 @@ defmodule Prima.LocusBackends do
   | Type | Members | Answer (`encode_session_answer/2`, `read_session_answer/2`) |
   |---|---|---|
   | `open` | `owner`, `e`, `program`, `home_id?`, `key`, `mode`, `lifetime`, `argv[]`, `rows?`, `cols?`, `packs?` | `status`, `session`, `resumed` |
-  | `send` | `owner`, `e`, `session`, `lines[]` | `status` |
-  | `recv` | `owner`, `e`, `session`, `after`, `max_wait_ms` | `lines[{seq, text}]`, `dropped`, `running`, `exit_code?` |
-  | `input` | `owner`, `e`, `session`, `bytes` | `status` |
-  | `output` | `owner`, `e`, `session`, `after`, `max_wait_ms` | `chunks[{seq, bytes}]`, `dropped`, `running`, `exit_code?` |
-  | `resize` | `owner`, `e`, `session`, `rows`, `cols` | `status` |
+  | `send` | `owner`, `e`, `session`, `lines[]` | `status`, `ended_by?` |
+  | `recv` | `owner`, `e`, `session`, `after`, `max_wait_ms` | `lines[{seq, text}]`, `dropped`, `running`, `exit_code?`, `ended_by?` |
+  | `input` | `owner`, `e`, `session`, `bytes` | `status`, `ended_by?` |
+  | `output` | `owner`, `e`, `session`, `after`, `max_wait_ms` | `chunks[{seq, bytes}]`, `dropped`, `running`, `exit_code?`, `ended_by?` |
+  | `resize` | `owner`, `e`, `session`, `rows`, `cols` | `status`, `ended_by?` |
   | `packs_hold` | `owner`, `e`, `program`, `home_id?`, `key`, `mode`, `lifetime`, `digest` | `state`, `digest?` |
   | `packs_put` | the hold's members, `seq`, `last`, `part` | `state`, `digest?` |
 
@@ -220,7 +220,14 @@ defmodule Prima.LocusBackends do
   by its owners), and its lifetime is over: the key's next process is
   another lifetime's, which an owner that speaks a protocol over a session
   starts afresh. A `send`, `input` or `resize` to an ended session answers `status`
-  `ended`, and one to a running session `running`. A session's idle period
+  `ended`, and one to a running session `running`. Every answer that says
+  a session ended (`running: false`, `status: ended`) carries `ended_by`
+  when memory ended its process, by the cause the keeper read from the
+  kernel's counts: `cap` its own bound, `machine` a limit above it,
+  `either` one of the two where the counts cannot say which. The service
+  keeps the cause for every later answer of that session, its process
+  gone or not; a session a close, idle or its owners ended before any
+  kill was known carries none. A session's idle period
   is the owner's `idle_ms`: a session that no message reached within it is
   ended.
 
@@ -267,7 +274,7 @@ defmodule Prima.LocusBackends do
   ## Refusals
 
   A refusal is answered at its code's HTTP status (`status/1`) as
-  `{"version": 7, "error": <code>}` (`encode_refusal/1`), and a session's
+  `{"version": 8, "error": <code>}` (`encode_refusal/1`), and a session's
   `capacity` for room with `held` beside them.
 
   ## Authentication
@@ -313,7 +320,7 @@ defmodule Prima.LocusBackends do
 
   alias Prima.{KeeperProtocol, MacEnvelope, VaultRef}
 
-  @version 7
+  @version 8
   @domain MacEnvelope.domain()
   @service MacEnvelope.service(:backends)
   @label MacEnvelope.label(:backends)
@@ -487,8 +494,11 @@ defmodule Prima.LocusBackends do
     packs_put: ~w(home_id)
   }
   @session_answer_optional %{
-    recv: ~w(exit_code),
-    output: ~w(exit_code),
+    send: ~w(ended_by),
+    recv: ~w(exit_code ended_by),
+    input: ~w(ended_by),
+    output: ~w(exit_code ended_by),
+    resize: ~w(ended_by),
     packs_hold: ~w(digest),
     packs_put: ~w(digest)
   }
@@ -543,6 +553,9 @@ defmodule Prima.LocusBackends do
   @type mode :: :run | :terminal
   @type home_op :: :reset | :retire
   @type session_status :: :running | :ended
+
+  @typedoc "What ended a session's process for memory (moduledoc, \"Session messages\")."
+  @type ended_by :: :cap | :machine | :either
   @type home_state :: :empty | :absent
 
   @typedoc "The owner a key or a sealed environment is bound to."
@@ -753,18 +766,20 @@ defmodule Prima.LocusBackends do
   @typedoc "A session answer, by the type of the message it answers."
   @type session_answer ::
           %{status: :running, session: String.t(), resumed: boolean()}
-          | %{status: session_status()}
+          | %{status: session_status(), ended_by: ended_by() | nil}
           | %{
               lines: [line()],
               dropped: non_neg_integer(),
               running: boolean(),
-              exit_code: 0..255 | nil
+              exit_code: 0..255 | nil,
+              ended_by: ended_by() | nil
             }
           | %{
               chunks: [chunk()],
               dropped: non_neg_integer(),
               running: boolean(),
-              exit_code: 0..255 | nil
+              exit_code: 0..255 | nil,
+              ended_by: ended_by() | nil
             }
           | %{state: :held, digest: String.t()}
           | %{state: :missing | :taken}
@@ -2072,15 +2087,24 @@ defmodule Prima.LocusBackends do
 
   defp read_session_answer_typed(type, wire) when type in [:send, :input, :resize] do
     with {:ok, status} <- roster(wire, "status", [:running, :ended], ""),
-         do: {:ok, %{status: status}}
+         {:ok, ended_by} <- optional(wire, "ended_by", &ended_by(&1, status == :running)),
+         do: {:ok, %{status: status, ended_by: ended_by}}
   end
 
   defp read_session_answer_typed(:recv, wire) do
     with {:ok, lines} <- seq_lines(wire["lines"]),
          {:ok, dropped} <- count(wire, "dropped", ""),
          {:ok, running} <- boolean(wire, "running", ""),
-         {:ok, exit_code} <- optional(wire, "exit_code", &exit_code(&1, running)) do
-      {:ok, %{lines: lines, dropped: dropped, running: running, exit_code: exit_code}}
+         {:ok, exit_code} <- optional(wire, "exit_code", &exit_code(&1, running)),
+         {:ok, ended_by} <- optional(wire, "ended_by", &ended_by(&1, running)) do
+      {:ok,
+       %{
+         lines: lines,
+         dropped: dropped,
+         running: running,
+         exit_code: exit_code,
+         ended_by: ended_by
+       }}
     end
   end
 
@@ -2088,8 +2112,16 @@ defmodule Prima.LocusBackends do
     with {:ok, chunks} <- seq_chunks(wire["chunks"]),
          {:ok, dropped} <- count(wire, "dropped", ""),
          {:ok, running} <- boolean(wire, "running", ""),
-         {:ok, exit_code} <- optional(wire, "exit_code", &exit_code(&1, running)) do
-      {:ok, %{chunks: chunks, dropped: dropped, running: running, exit_code: exit_code}}
+         {:ok, exit_code} <- optional(wire, "exit_code", &exit_code(&1, running)),
+         {:ok, ended_by} <- optional(wire, "ended_by", &ended_by(&1, running)) do
+      {:ok,
+       %{
+         chunks: chunks,
+         dropped: dropped,
+         running: running,
+         exit_code: exit_code,
+         ended_by: ended_by
+       }}
     end
   end
 
@@ -2109,6 +2141,13 @@ defmodule Prima.LocusBackends do
   # An exit status, only of a session that is no longer running.
   defp exit_code(code, false) when is_integer(code) and code in 0..255, do: {:ok, code}
   defp exit_code(_code, _running), do: {:error, {:invalid_field, "exit_code"}}
+
+  # What ended a session for memory, only of a session that ended.
+  defp ended_by("cap", false), do: {:ok, :cap}
+  defp ended_by("machine", false), do: {:ok, :machine}
+  defp ended_by("either", false), do: {:ok, :either}
+
+  defp ended_by(_cause, _running), do: {:error, {:invalid_field, "ended_by"}}
 
   # Lines in rising sequence, each at most a line's bound.
   defp seq_lines(list) when is_list(list) do
