@@ -258,6 +258,29 @@ fn the_relays_end_ends_the_runner_with_an_exit_naming_what_it_held() {
 }
 
 #[test]
+fn the_relays_end_while_a_guest_runs_ends_the_runner_at_once() {
+    // The guest spins and makes no call: only the relay's end tells the
+    // runner it can reach nothing, well before the run's budget.
+    let mut service = Service::start();
+    let job = Job::new("reagent", &format!("{TEST_WASM}/spin.wasm"), "{}");
+    service.assign(
+        &job,
+        Box::new(|call, job| match call.op.as_str() {
+            "fetch_artifact" => Reply::OkThenEnd(Value::String(cyfr_runner::wire::encode_base64(
+                &job.component,
+            ))),
+            _ => standard(call, job),
+        }),
+    );
+    let exit = service.frame(Duration::from_secs(10));
+    assert_eq!(
+        exit,
+        json!({"v": 1, "type": "exit", "runner": support::RUNNER, "open": [job.attempt]})
+    );
+    assert_eq!(service.exit(SOON).code(), Some(1));
+}
+
+#[test]
 fn an_assignment_for_another_service_ends_the_runner_unread() {
     let mut service = Service::start_with(&[("RUNTIME_SERVICE_ID", "wrk_another")]);
     let job = Job::new("reagent", &format!("{TEST_WASM}/echo.wasm"), "{}");

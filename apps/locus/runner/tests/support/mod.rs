@@ -175,6 +175,8 @@ pub enum Reply {
     Close,
     /// This frame's JSON, as given, in place of an answer.
     Frame(Vec<u8>),
+    /// `{"v": 3, "ok": value}`, then the service's end of the stream closed.
+    OkThenEnd(Value),
 }
 
 pub type Script = Box<dyn FnMut(&Call, &Job) -> Reply + Send>;
@@ -438,6 +440,17 @@ pub fn relay(mut stream: UnixStream, job: Job, mut script: Script, calls: Arc<Mu
                 continue;
             }
             Reply::Dropped => (Value::Null, Vec::new()),
+            Reply::OkThenEnd(value) => {
+                let body = seal(
+                    &keys,
+                    &fields,
+                    json!({"v": 3, "ok": value}).to_string().into_bytes(),
+                );
+                let answer = json!({"v": 1, "attempt": call.attempt, "seq": seq, "kind": "host_answer",
+                                    "re": re, "status": 200, "body": wire::encode_base64(&body)});
+                let _ = write_frame(&mut stream, &answer);
+                return;
+            }
             Reply::Ok(value) => (
                 json!(200),
                 seal(
