@@ -431,7 +431,9 @@ defmodule PrismWeb.CanvasLive do
                 class="canvas-shelf-app"
               >
                 <span class="canvas-app-icon" aria-hidden="true">{program_icon(program)}</span>
-                <span class="canvas-shelf-app-name truncate">{program.name}</span>
+                <span class="canvas-shelf-app-name truncate">
+                  {program_name(program, @programs)}
+                </span>
               </.link>
               <button
                 type="button"
@@ -782,6 +784,15 @@ defmodule PrismWeb.CanvasLive do
       starter(program.by) <>
       if(program.kept, do: ", kept", else: "") <>
       if(program.attached, do: "", else: ", not open on any screen")
+  end
+
+  # A chip's words: the program's name, and where another chip carries
+  # the same name, the second it started, which tells the two apart as the
+  # Programs page's lines do.
+  defp program_name(%{name: name, started_at: at}, programs) do
+    if Enum.count(programs, &(&1.name == name)) > 1,
+      do: name <> " " <> Calendar.strftime(at, "%H:%M:%S"),
+      else: name
   end
 
   # Who started a running program, in the shelf's words; a person's own

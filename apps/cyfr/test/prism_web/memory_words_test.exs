@@ -23,28 +23,75 @@ defmodule PrismWeb.MemoryWordsTest do
            ]
   end
 
-  test "a day's average is its use over the time measured, and a dash with nothing measured" do
-    assert MemoryWords.average(%{mib_ms: 32 * 3_600_000, measured_ms: 600_000}) ==
-             "192.0 MB on average"
+  test "a day's use is its average, then its most at once and the time measured in all" do
+    day = %{mib_ms: 32 * 3_600_000, measured_ms: 3_660_000, peak_bytes: 246 * 1_048_576}
 
-    assert MemoryWords.average(%{mib_ms: 0, measured_ms: 45_000}) == "0 B on average"
-    assert MemoryWords.average(%{mib_ms: 0, measured_ms: 0}) == "—"
+    # The second line breaks only between its two halves.
+    assert MemoryWords.used(day) == [
+             "31.5 MB on average",
+             "at\u00a0most\u00a0246.0\u00a0MB, for\u00a01\u00a0hour\u00a01\u00a0minute\u00a0in\u00a0all"
+           ]
+
+    assert MemoryWords.used(%{mib_ms: 0, measured_ms: 500, peak_bytes: 100 * 1_048_576}) == [
+             "0 B on average",
+             "at\u00a0most\u00a0100.0\u00a0MB, for\u00a0under\u00a0a\u00a0second\u00a0in\u00a0all"
+           ]
   end
 
-  test "a day's most at once and its time measured break only between the two" do
-    day = %{peak_bytes: 246 * 1_048_576, measured_ms: 3_660_000}
+  test "with no time measured a day's use is one line: its peak alone, or nothing measured" do
+    assert MemoryWords.used(%{mib_ms: 0, measured_ms: 0, peak_bytes: 40 * 1_048_576}) ==
+             ["at\u00a0most\u00a040.0\u00a0MB"]
 
-    assert MemoryWords.at_most(day) ==
-             "at\u00a0most\u00a0246.0\u00a0MB, for\u00a01\u00a0hour\u00a01\u00a0minute"
+    assert MemoryWords.used(%{mib_ms: 0, measured_ms: 0, peak_bytes: 0}) == ["nothing measured"]
   end
 
-  test "a peak with nothing measured is said alone, a time under a second is said" do
-    peak = 100 * 1_048_576
+  describe "the services that have not answered" do
+    @at ~U[2026-11-27 10:38:20Z]
+    @later ~U[2026-11-27 10:41:00Z]
 
-    assert MemoryWords.at_most(%{peak_bytes: peak, measured_ms: 0}) ==
-             "at\u00a0most\u00a0100.0\u00a0MB"
+    test "are one sentence, in the order builds, programs, runs, since the earliest" do
+      silent = [
+        %{endpoint: "wrk_local", heard_at: @later},
+        %{endpoint: Opus.Programs.local(), heard_at: @at},
+        %{endpoint: Prima.LocusPool.builds_endpoint(), heard_at: @later}
+      ]
 
-    assert MemoryWords.at_most(%{peak_bytes: peak, measured_ms: 500}) ==
-             "at\u00a0most\u00a0100.0\u00a0MB, for\u00a0under\u00a0a\u00a0second"
+      assert MemoryWords.silent(silent) ==
+               "The services for builds, programs and runs have not answered since 10:38 UTC, " <>
+                 "so what they run is not counted."
+    end
+
+    test "one alone is said alone, the one service for runs without its id" do
+      assert MemoryWords.silent([%{endpoint: "wrk_local", heard_at: @at}]) ==
+               "The service for runs has not answered since 10:38 UTC, " <>
+                 "so what it runs is not counted."
+
+      assert MemoryWords.silent([]) == nil
+    end
+
+    test "a service for runs carries its id where CYFR knows several" do
+      # One configured (`wrk_local`, config/test.exs) and another silent.
+      assert MemoryWords.silent([%{endpoint: "wrk_gone", heard_at: @at}]) ==
+               "The service for runs (wrk_gone) has not answered since 10:38 UTC, " <>
+                 "so what it runs is not counted."
+
+      assert MemoryWords.silent([
+               %{endpoint: "wrk_b", heard_at: @at},
+               %{endpoint: "wrk_a", heard_at: @at}
+             ]) ==
+               "The services for runs (wrk_a) and runs (wrk_b) have not answered since " <>
+                 "10:38 UTC, so what they run is not counted."
+    end
+  end
+
+  test "a count no newer than a terminal's close says so, and a newer one is fresh again" do
+    machine = %{heard_at: ~U[2026-11-27 10:38:20Z]}
+
+    assert MemoryWords.counted(machine) == "Counted a few seconds ago."
+
+    assert MemoryWords.counted(machine, ~U[2026-11-27 10:38:21Z]) ==
+             "A terminal closed since this was counted."
+
+    assert MemoryWords.counted(machine, ~U[2026-11-27 10:38:19Z]) == "Counted a few seconds ago."
   end
 end

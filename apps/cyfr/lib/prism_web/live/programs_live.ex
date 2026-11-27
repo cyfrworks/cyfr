@@ -173,6 +173,9 @@ defmodule PrismWeb.ProgramsLive do
       # endpoints that have not answered (`Opus.memory/2`); `:unread`
       # until the first read answers, `:unreadable` when the last failed.
       |> assign(:memory, :unread)
+      # When a terminal of the person's last left the running ones: a
+      # count no newer than it is from before that close.
+      |> assign(:closed_at, nil)
       # Whether a terminal this page opens adds the way back to Aqua.
       |> assign(:from_aqua, false)
       # What the page is doing until a call's answer comes; nil when idle.
@@ -343,7 +346,7 @@ defmodule PrismWeb.ProgramsLive do
   end
 
   def handle_event("show_terminal", %{"session" => session}, socket),
-    do: {:noreply, push_patch(socket, to: terminal_path(socket, session))}
+    do: {:noreply, push_patch(socket, to: terminal_path(socket, session) <> "#terminal")}
 
   def handle_event("reset_home", %{"name" => name}, socket) do
     {:noreply,
@@ -946,13 +949,18 @@ defmodule PrismWeb.ProgramsLive do
       if socket.assigns.from_aqua,
         do: PrismWeb.Focus.path(socket.assigns.athanor_route, "/aqua?setup=1")
 
-    name =
-      Enum.find_value(running(socket), "program", fn
-        %{session: ^session, name: name} -> name
+    {name, opened_at} =
+      Enum.find_value(running(socket), {"program", nil}, fn
+        %{session: ^session, name: name, started_at: at} -> {name, at}
         _other -> nil
       end)
 
-    TerminalComponent.show(socket, %{session: session, name: name, back: back})
+    TerminalComponent.show(socket, %{
+      session: session,
+      name: name,
+      opened_at: opened_at,
+      back: back
+    })
   end
 
   # An ending, the shown session's or another's, moves what runs.
@@ -963,8 +971,22 @@ defmodule PrismWeb.ProgramsLive do
   def terminal_dismissed(socket),
     do: push_patch(socket, to: PrismWeb.Focus.path(socket.assigns.athanor_route, "/programs"))
 
+  # A session that was running and is no longer has closed: the sizes
+  # shown were counted before it did.
   defp load_running(socket) do
-    if connected?(socket), do: assign(socket, :running, running(socket)), else: socket
+    if connected?(socket) do
+      now = running(socket)
+      gone = Enum.map(socket.assigns.running, & &1.session) -- Enum.map(now, & &1.session)
+
+      socket
+      |> assign(:running, now)
+      |> assign(
+        :closed_at,
+        if(gone == [], do: socket.assigns.closed_at, else: DateTime.utc_now())
+      )
+    else
+      socket
+    end
   end
 
   defp running(socket) do
@@ -1051,7 +1073,11 @@ defmodule PrismWeb.ProgramsLive do
 
       <.live_component module={SystemLayer} id={SystemLayer.layer_id()} context={@context} />
 
-      <TerminalComponent.frame :if={@terminal} terminal={@terminal} />
+      <%!-- Show's address ends in this id, so the browser moves to the
+           terminal it shows. --%>
+      <div :if={@terminal} id="terminal" class="scroll-mt-4">
+        <TerminalComponent.frame terminal={@terminal} />
+      </div>
 
       <.card :if={@show_add == "program"}>
         <form id="add-program" phx-submit="add_program" class="space-y-4">
@@ -1209,6 +1235,7 @@ defmodule PrismWeb.ProgramsLive do
         servers={@servers}
         running={@running}
         shown={shown_session(@terminal)}
+        closed_at={@closed_at}
       />
 
       <.card>
@@ -1223,16 +1250,16 @@ defmodule PrismWeb.ProgramsLive do
                 <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
                   Name
                 </th>
-                <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                <th class="hidden px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 md:table-cell">
                   Runs
                 </th>
-                <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                <th class="hidden px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 md:table-cell">
                   Folder
                 </th>
                 <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
                   Status
                 </th>
-                <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                <th class="hidden px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 md:table-cell">
                   Tools
                 </th>
               </tr>
@@ -1246,39 +1273,46 @@ defmodule PrismWeb.ProgramsLive do
                   data-test="program-row"
                   data-name={server[:name]}
                 >
-                  <td class="px-4 py-3 text-sm whitespace-nowrap">
-                    <span class="font-mono text-blue-400">{server[:name]}</span>
-                    <span class="ml-2 text-xs text-gray-500" data-test="transport">
+                  <td class="px-4 py-3 text-sm md:whitespace-nowrap">
+                    <span class="font-mono text-blue-400 break-all">{server[:name]}</span>
+                    <span class="block text-xs text-gray-500 md:ml-2 md:inline" data-test="transport">
                       {kind(server)}
                     </span>
                   </td>
-                  <td class="px-4 py-3 text-sm text-gray-300 whitespace-nowrap">
+                  <td class="hidden px-4 py-3 text-sm text-gray-300 whitespace-nowrap md:table-cell">
                     <span class="text-gray-400 text-xs font-mono truncate max-w-xs inline-block">
                       {endpoint(server)}
                     </span>
                   </td>
-                  <td class="px-4 py-3 text-xs text-gray-400 whitespace-nowrap" data-test="home">
+                  <td
+                    class="hidden px-4 py-3 text-xs text-gray-400 whitespace-nowrap md:table-cell"
+                    data-test="home"
+                  >
                     {home_line(server)}
                   </td>
                   <%!-- A driven program has no MCP client, so it has no
-                        connection to show and no tools: both cells are
-                        empty for it, unless it is disabled. --%>
+                        connection to show and no tools: its status says
+                        only that it runs, while it does, or that it is
+                        disabled, and its tools are empty. --%>
                   <td class="px-4 py-3 text-sm text-gray-300 whitespace-nowrap" data-test="status">
                     <.badge :if={server[:enabled] == false} color="gray">disabled</.badge>
                     <.badge
-                      :if={server[:enabled] != false and not driven?(server)}
-                      color={status_color(server[:status])}
+                      :if={server[:enabled] != false and status_word(server, @memory)}
+                      color={status_color(status_word(server, @memory))}
                     >
                       {status_word(server, @memory)}
                     </.badge>
                     <span
-                      :if={server[:enabled] != false and driven?(server)}
+                      :if={server[:enabled] != false and !status_word(server, @memory)}
                       class="text-xs text-gray-400"
                     >
                       —
                     </span>
                   </td>
-                  <td class="px-4 py-3 text-sm text-gray-300 whitespace-nowrap" data-test="tools">
+                  <td
+                    class="hidden px-4 py-3 text-sm text-gray-300 whitespace-nowrap md:table-cell"
+                    data-test="tools"
+                  >
                     {if driven?(server), do: "—", else: server[:tool_count] || 0}
                   </td>
                 </tr>
@@ -1340,11 +1374,17 @@ defmodule PrismWeb.ProgramsLive do
                           data-test="program-status"
                         >
                           <span class="font-mono text-blue-400">{program["name"]}</span>
-                          <.badge color={status_color(program["status"])}>
-                            {program["status"] || "unknown"}
+                          <%!-- The list's own word, from the list's read: what
+                               the row's details said of it when they were
+                               read may no longer hold. --%>
+                          <.badge
+                            :if={server[:enabled] != false and status_word(server, @memory)}
+                            color={status_color(status_word(server, @memory))}
+                          >
+                            {status_word(server, @memory)}
                           </.badge>
                           <span class="text-gray-500 text-xs">
-                            {program["sessions"] || 0} sessions · {program["restarts"] || 0} crashes
+                            {crashes(program["restarts"] || 0)}
                           </span>
                           <span :if={program["home_bytes"]} class="text-gray-500 text-xs">
                             · folder {bytes(program["home_bytes"], "")}
@@ -1618,6 +1658,8 @@ defmodule PrismWeb.ProgramsLive do
   attr :servers, :list, required: true
   attr :running, :list, required: true
   attr :shown, :string, default: nil
+  # When a terminal of the person's last ended, or nil.
+  attr :closed_at, :any, default: nil
 
   # What of the person's holds memory now, on each machine, each named
   # holder with the Disable its row has and a line for each of its
@@ -1690,7 +1732,7 @@ defmodule PrismWeb.ProgramsLive do
             {MemoryWords.others(machine)}
           </p>
           <p class="text-xs text-gray-500" data-test="memory-counted">
-            {MemoryWords.counted(machine)}
+            {MemoryWords.counted(machine, @closed_at)}
           </p>
         </div>
         <p
@@ -1714,7 +1756,7 @@ defmodule PrismWeb.ProgramsLive do
 
   defp session_words(session, shown) do
     [
-      "Terminal opened at " <> Calendar.strftime(session.started_at, "%H:%M:%S UTC"),
+      "Terminal " <> TerminalComponent.opened_words(session.started_at),
       starter(session.by),
       if(session.kept, do: ", kept"),
       if(session.session == shown, do: ", shown above")
@@ -1734,12 +1776,29 @@ defmodule PrismWeb.ProgramsLive do
   # What Disable asks, in the browser, whenever anything of the program
   # runs as far as the page knows: the read names it as holding memory, or
   # a session of it is listed. It covers the whole program and counts
-  # nothing, so what starts while it is up is inside what it says. Nil,
-  # and so no question, when nothing runs.
+  # nothing, so what starts while it is up is inside what it says; it
+  # speaks of terminals only where one of the program is listed or
+  # counted. Nil, and so no question, when nothing runs.
   defp disable_question(memory, running, name) do
-    if holds_memory?(memory, name) or sessions(running, name) != [],
-      do: "Disable #{name}? Everything running in it ends now, and work in its terminals is lost."
+    cond do
+      sessions(running, name) != [] or counts_terminal?(memory, name) ->
+        "Disable #{name}? Everything running in it ends now, and work in its terminals is lost."
+
+      holds_memory?(memory, name) ->
+        "Disable #{name}? Everything running in it ends now."
+
+      true ->
+        nil
+    end
   end
+
+  defp counts_terminal?(%{machines: machines}, name),
+    do:
+      Enum.any?(machines, fn m ->
+        Enum.any?(m.holders, &match?(%{name: ^name, kind: :terminal}, &1))
+      end)
+
+  defp counts_terminal?(_unread_or_unreadable, _name), do: false
 
   # What a person reads of a program's terminals, from the read alone: it
   # counts them in the athanor as one size, apart from what the program
@@ -1791,6 +1850,9 @@ defmodule PrismWeb.ProgramsLive do
 
   defp programs(detail), do: detail[:programs] || []
 
+  defp crashes(1), do: "1 crash"
+  defp crashes(n), do: "#{n} crashes"
+
   # The expanded row's settings, as `mcp_servers.get` answers them.
   defp config(%{config: %{} = config}), do: config
   defp config(_detail), do: %{}
@@ -1817,7 +1879,12 @@ defmodule PrismWeb.ProgramsLive do
   # A program CYFR is ready to call starts at its next call. The list says
   # it runs only while the panel's own read names it as holding memory, so
   # the two never disagree; a read not in, failed or silent of it names
-  # nothing.
+  # nothing. A program a person drives has no other status: it says that
+  # it runs by the same rule, and nothing (nil) otherwise.
+  defp status_word(%{transport: "program", mark: "driven", name: name}, memory) do
+    if holds_memory?(memory, name), do: "running"
+  end
+
   defp status_word(%{transport: "program", status: "ready", name: name}, memory) do
     if holds_memory?(memory, name), do: "running", else: "starts when used"
   end
@@ -1835,6 +1902,8 @@ defmodule PrismWeb.ProgramsLive do
   defp status_color(status)
        when status in ["disconnected", "connecting", "starting", "idle", "stopped"],
        do: "yellow"
+
+  defp status_color("starts when used"), do: "green"
 
   defp status_color(_), do: "gray"
 end

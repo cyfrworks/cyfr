@@ -46,12 +46,14 @@ defmodule PrismWeb.SettingsLive do
       less, and what holds it now, in order of person,
       kind and name, then each UTC day's use by person, kind and name, as
       its average over the time measured, its most at once and that time,
-      the newest seven days first and seven more at a time,
-      never a thread or content. It is read again every poll
+      and how often it was ended for memory (`PrismWeb.MemoryWords.used/1`,
+      `ended/1`), the newest seven days first and seven more at a time,
+      never a thread or content; a narrow window stacks each day's row.
+      It is read again every poll
       (`Prima.LocusPool.poll_ms/0`) and before more days are shown, so a
-      mark taken away shows nothing more. An endpoint that has not
-      answered is said under the machines as the service it is, never as
-      a machine; a read that
+      mark taken away shows nothing more. The endpoints that have not
+      answered are said under the machines in one sentence, each as the
+      service it is, never as a machine; a read that
       fails says memory use cannot be read, never that nothing reported.
     * **Administrators** — in the allowlist, for a platform administrator:
       the people carrying the mark, another person made an administrator
@@ -1368,40 +1370,63 @@ defmodule PrismWeb.SettingsLive do
               <p class="text-xs text-gray-500">{MemoryWords.counted(machine)}</p>
             </div>
             <p
-              :for={silent <- if(is_map(@memory), do: @memory.unanswered, else: [])}
+              :if={is_map(@memory) and MemoryWords.silent(@memory.unanswered)}
               class="text-xs text-gray-500 mb-4"
               data-test="memory-unanswered"
             >
-              {MemoryWords.silent(silent)}
+              {MemoryWords.silent(@memory.unanswered)}
             </p>
             <div :if={is_map(@memory) and @memory.days != []} id="memory-days">
-              <%!-- Two measures stack in a cell, its second line and the
-                   causes wrap, so the table fits a narrow window; where it
-                   still scrolls, each row keeps its day in view. --%>
-              <.table id="memory-day-rows" rows={shown_days(@memory.days, @memory_shown)}>
-                <:col :let={d} label="Day (UTC)" sticky>{Date.to_iso8601(d.day)}</:col>
-                <:col :let={d} label="Person">{person_name(d.person)}</:col>
-                <:col :let={d} label="What">
-                  <span :if={d.name} class="block">{d.name}</span>
-                  <span class={["block", d.name && "text-xs text-gray-500"]}>
-                    {MemoryWords.kind(d.kind)}
-                  </span>
-                </:col>
-                <:col :let={d} label="Used">
-                  <span class={["block", d.measured_ms == 0 && "text-gray-500"]}>
-                    {MemoryWords.average(d)}
-                  </span>
-                  <span class="block whitespace-normal text-xs text-gray-500">
-                    {MemoryWords.at_most(d)}
-                  </span>
-                </:col>
-                <:col :let={d} label="Ended for memory">
-                  <span :for={cause <- MemoryWords.ended(d.ended)} class="block whitespace-normal">
-                    {cause}
-                  </span>
-                  <span :if={MemoryWords.ended(d.ended) == []} class="block">—</span>
-                </:col>
-              </.table>
+              <%!-- Four columns from the width they fit at. Below it a row
+                   stacks: its day and person on a line, then what, then
+                   what it used, so nothing scrolls sideways. --%>
+              <table id="memory-day-rows" class="block w-full sm:table">
+                <thead class="hidden sm:table-header-group">
+                  <tr>
+                    <th
+                      :for={label <- ["Day (UTC)", "Person", "What", "Used"]}
+                      class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500"
+                    >
+                      {label}
+                    </th>
+                  </tr>
+                </thead>
+                <tbody class="block divide-y divide-gray-800 border-t border-gray-800 sm:table-row-group">
+                  <tr
+                    :for={d <- shown_days(@memory.days, @memory_shown)}
+                    class="block space-y-1 py-3 text-sm text-gray-300 sm:table-row sm:space-y-0 sm:py-0"
+                  >
+                    <td class="inline-block pr-3 text-gray-500 sm:table-cell sm:px-4 sm:py-3 sm:text-gray-300 sm:whitespace-nowrap">
+                      {Date.to_iso8601(d.day)}
+                    </td>
+                    <td class="inline-block sm:table-cell sm:px-4 sm:py-3 sm:whitespace-nowrap">
+                      {person_name(d.person)}
+                    </td>
+                    <td class="block break-words sm:table-cell sm:px-4 sm:py-3">
+                      <span :if={d.name} class="block">{d.name}</span>
+                      <span class={["block", d.name && "text-xs text-gray-500"]}>
+                        {MemoryWords.kind(d.kind)}
+                      </span>
+                    </td>
+                    <td class="block sm:table-cell sm:px-4 sm:py-3">
+                      <span
+                        :for={{line, at} <- Enum.with_index(MemoryWords.used(d))}
+                        class={["block", at > 0 && "text-xs text-gray-500"]}
+                        data-test="memory-day-used"
+                      >
+                        {line}
+                      </span>
+                      <span
+                        :if={MemoryWords.ended(d.ended) != []}
+                        class="block text-xs text-amber-400"
+                        data-test="memory-day-ended"
+                      >
+                        Ended for memory: {Enum.join(MemoryWords.ended(d.ended), "; ")}
+                      </span>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
             </div>
             <.button
               :if={is_map(@memory) and more_days?(@memory.days, @memory_shown)}

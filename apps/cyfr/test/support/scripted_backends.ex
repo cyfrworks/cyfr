@@ -669,7 +669,7 @@ defmodule Cyfr.Test.ScriptedBackends do
             %{
               "name" => p["name"],
               "status" => if(running > 0, do: "running", else: "idle"),
-              "restarts" => 0,
+              "restarts" => Map.get(st, :restarts, 0),
               "home" => p["home"] || "scratch",
               "over_cap" => false,
               "sessions" => running

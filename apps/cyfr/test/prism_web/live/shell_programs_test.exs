@@ -214,6 +214,34 @@ defmodule PrismWeb.ShellProgramsTest do
     assert flash(desktop, "error") == nil
   end
 
+  test "two chips of one name each carry the second they started, one alone only its name",
+       %{conn: conn, user: user, athanor: athanor, row: row} do
+    first = start!(user, athanor, row)
+    {desktop, _html} = mount_desktop(conn)
+
+    name = fn session ->
+      desktop
+      |> element(chip(session) <> " .canvas-shelf-app-name")
+      |> render()
+      |> LazyHTML.from_fragment()
+      |> LazyHTML.text()
+      |> String.trim()
+    end
+
+    assert name.(first) == "claude"
+
+    second = start!(user, athanor, row)
+    assert eventually(fn -> has_element?(desktop, chip(second)) end)
+
+    {:ok, running} = Opus.Programs.running(person(user, athanor))
+
+    for %{session: session, started_at: at} <- running do
+      assert name.(session) == "claude " <> Calendar.strftime(at, "%H:%M:%S")
+    end
+
+    assert Enum.sort(Enum.map(running, & &1.session)) == Enum.sort([first, second])
+  end
+
   test "the shelf follows the person's topic: a start shows, a change is shown, an end leaves",
        %{conn: conn, user: user, athanor: athanor, row: row} do
     {desktop, _html} = mount_desktop(conn)
