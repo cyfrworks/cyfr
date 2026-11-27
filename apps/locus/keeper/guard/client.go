@@ -53,6 +53,9 @@ type Client struct {
 	mu   sync.Mutex
 	link *link
 	next uint64
+	// machines is why the guard of the last hello routes no person's
+	// machine, "" where it routes them (Machines).
+	machines string
 	// live is the connection standing, read without mu by Live.
 	live atomic.Pointer[link]
 	// answered, when set, is called by the reader after it hands an
@@ -70,6 +73,14 @@ type link struct {
 	// reader reads while it is not set ends the connection.
 	mu      sync.Mutex
 	waiting bool
+}
+
+// Machines is why the guard routes no person's machine, as its last hello
+// said: "" where it routes them, or before any hello.
+func (c *Client) Machines() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.machines
 }
 
 // NewClient is a client of the guard serving path, for a keeper in the
@@ -330,6 +341,7 @@ func (c *Client) connect() (*link, error) {
 		return nil, fmt.Errorf("the guard judges %s, not this keeper's %s: the service must be recreated behind its guard", hello.Netns, c.netns)
 	}
 	_ = uc.SetReadDeadline(time.Time{})
+	c.machines = hello.Machines
 	c.next++
 	l := &link{conn: uc, number: c.next, answers: make(chan []byte, 1), ended: make(chan struct{})}
 	c.link = l

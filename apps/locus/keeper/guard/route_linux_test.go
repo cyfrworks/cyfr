@@ -49,6 +49,7 @@ const (
 	forgedGuardMode  = "CYFR_GUARD_TEST_FORGED"
 	forgerMode       = "CYFR_GUARD_TEST_FORGER"
 	timersMode       = "CYFR_GUARD_TEST_TIMERS"
+	probeMode        = "CYFR_GUARD_TEST_PROBE"
 )
 
 func TestMain(m *testing.M) {
@@ -69,6 +70,8 @@ func TestMain(m *testing.M) {
 		os.Exit(standInForger())
 	case os.Getenv(timersMode) != "":
 		os.Exit(shortTimers())
+	case os.Getenv(probeMode) != "":
+		os.Exit(standInProbe())
 	}
 	os.Exit(m.Run())
 }
@@ -1175,11 +1178,18 @@ func TestAGuestsForgedSourcesCarryNothingOut(t *testing.T) {
 // hosts allows.
 var forgedTarget = netip.AddrFrom4([4]byte{203, 0, 113, 50})
 
-func standInForgedGuard(reach string) int {
+func standInForgedGuard(mode string) int {
 	fail := func(format string, args ...any) int {
 		fmt.Printf("guard: "+format+"\n", args...)
 		return 1
 	}
+	// With "+ingress" the forger writes, beside its forged frames, unfinished
+	// fragments of its own, an ARP flood and router advertisements, and the
+	// guard reads what of them reached its IP layer, the reassembly's memory
+	// and its ingress filter's counts (TestAMachinesRouteLetsOnlyAWholeIPv4PacketIn);
+	// the reassembly timers keep their length then, so a fragment held is
+	// still held when it is read.
+	reach, ingress := strings.CutSuffix(mode, "+ingress")
 	ctl, err := unix.Socket(unix.AF_INET, unix.SOCK_DGRAM|unix.SOCK_CLOEXEC, 0)
 	if err != nil {
 		return fail("%v", err)
@@ -1190,11 +1200,13 @@ func standInForgedGuard(reach string) int {
 	// The reassembly timers, shortened to a second by a child in this
 	// network namespace with a mount and process namespace of its own, for
 	// the proc it writes them through.
-	timers := exec.Command(os.Args[0], "-test.run=^$")
-	timers.Env = []string{timersMode + "=1"}
-	timers.SysProcAttr = &syscall.SysProcAttr{Cloneflags: syscall.CLONE_NEWNS | syscall.CLONE_NEWPID, Pdeathsig: syscall.SIGKILL}
-	if out, err := timers.CombinedOutput(); err != nil {
-		return fail("shortening the reassembly timers: %v %s", err, out)
+	if !ingress {
+		timers := exec.Command(os.Args[0], "-test.run=^$")
+		timers.Env = []string{timersMode + "=1"}
+		timers.SysProcAttr = &syscall.SysProcAttr{Cloneflags: syscall.CLONE_NEWNS | syscall.CLONE_NEWPID, Pdeathsig: syscall.SIGKILL}
+		if out, err := timers.CombinedOutput(); err != nil {
+			return fail("shortening the reassembly timers: %v %s", err, out)
+		}
 	}
 	// ext0 is the island's way out: an L3 tun the test reads, holding the
 	// island's address, the default route through it.
@@ -1258,6 +1270,9 @@ func standInForgedGuard(reach string) int {
 	mine, theirs := os.NewFile(uintptr(pair[0]), "guard"), os.NewFile(uintptr(pair[1]), "forger")
 	forger := exec.Command(os.Args[0], "-test.run=^$")
 	forger.Env = []string{forgerMode + "=1"}
+	if ingress {
+		forger.Env = []string{forgerMode + "=ingress"}
+	}
 	forger.ExtraFiles = []*os.File{theirs}
 	forger.SysProcAttr = &syscall.SysProcAttr{
 		Cloneflags:  syscall.CLONE_NEWUSER | syscall.CLONE_NEWNET,
@@ -1324,6 +1339,10 @@ func standInForgedGuard(reach string) int {
 	if err := unix.SetNonblock(ext, true); err != nil {
 		return fail("%v", err)
 	}
+	before, err := netCounters()
+	if err != nil {
+		return fail("%v", err)
+	}
 	if _, err := mine.Write([]byte{'g'}); err != nil {
 		return fail("%v", err)
 	}
@@ -1355,6 +1374,9 @@ func standInForgedGuard(reach string) int {
 		fmt.Println("guard: the guest's own packet alone left the island's link")
 	default:
 		fmt.Printf("guard: left the island's link: %v\n", leaving)
+	}
+	if ingress {
+		return reportIngress(before)
 	}
 	return 0
 }
@@ -1572,6 +1594,22 @@ func standInForger() int {
 		firstFragment4(netip.MustParseAddr("203.0.113.9"), forgedTarget, 2, "frag4-forwarded"),
 		firstFragment6(netip.MustParseAddr("2001:db8:999::9"), forgedGuardV6, 3, "frag6-to-guard"),
 		firstFragment6(netip.MustParseAddr("2001:db8:999::9"), forgedTargetV6, 4, "frag6-forwarded"),
+	}
+	if os.Getenv(forgerMode) == "ingress" {
+		// Unfinished first fragments from the guest's own addresses, an
+		// ARP flood of senders of its choosing, and router advertisements.
+		fragments = append(fragments,
+			firstFragment4(inner, gateway, 5, "own-frag4-to-guard"),
+			firstFragment4(inner, forgedTarget, 6, "own-frag4-forwarded"),
+			firstFragment6(guestLinkLocal, forgedGuardV6, 7, "own-frag6-to-guard"),
+			firstFragment6(guestLinkLocal, forgedTargetV6, 8, "own-frag6-forwarded"))
+		for i := range ingressARP {
+			fragments = append(fragments, arpRequest(net.HardwareAddr{0x06, 0x66, 0, 0, 0, byte(i)},
+				netip.AddrFrom4([4]byte{10, 213, 9, byte(i)}), gateway))
+		}
+		for i := range ingressAdverts {
+			fragments = append(fragments, routerAdvert(net.HardwareAddr{0x06, 0x77, 0, 0, 0, byte(i)}, byte(i)))
+		}
 	}
 	for _, f := range fragments {
 		if _, err := unix.Write(tap, f); err != nil {

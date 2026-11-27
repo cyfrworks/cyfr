@@ -18,6 +18,7 @@
 // holding one JSON object, carrying `"v": 4` and a `type`:
 //
 //	{"v":4,"type":"hello","netns":"net:[…]"}                                    guard, on connect
+//	{"v":4,"type":"hello","netns":"net:[…]","machines":…}                       guard, on connect, routing no machine
 //	{"v":4,"type":"admit","spawn_id":…,"reach":"island"}                        keeper, with three descriptors
 //	{"v":4,"type":"admit","spawn_id":…,"reach":"hosts","addresses":[…]}         keeper, with three descriptors
 //	{"v":4,"type":"admit","spawn_id":…,"reach":"role","port":…,"private":…}     keeper, with three descriptors
@@ -34,7 +35,10 @@
 // The hello names the network namespace the guard's rules judge, as
 // /proc/self/ns/net links to it; a keeper whose own differs is not behind
 // that guard (a guard that restarted took a new namespace, and the
-// service still runs in the old one) and takes none of its answers.
+// service still runs in the old one) and takes none of its answers. A
+// guard whose host's kernel cannot hold a machine's route to whole IPv4
+// packets at its ingress says why in the hello's `machines`, and refuses
+// every machine's admit; it serves every other route.
 //
 // An `admit` names the spawn by the keeper's `spawn_id` and carries, as
 // SCM_RIGHTS in this order, the space's network namespace and its two name
@@ -187,6 +191,9 @@ type Message struct {
 	// Withdrawn is a refused change's: the route is withdrawn, its rules in
 	// no known state, where without it the old reach stands.
 	Withdrawn bool `json:"withdrawn,omitempty"`
+	// Machines is a hello's alone: why the guard routes no person's
+	// machine, absent where it routes them.
+	Machines string `json:"machines,omitempty"`
 }
 
 // Encode renders a message as one packet.
@@ -228,7 +235,7 @@ func ParseRequest(packet []byte, descriptors int) (Message, error) {
 	if !spawnIDPattern.MatchString(m.SpawnID) {
 		return Message{}, errors.New("spawn_id must be 32 lowercase hexadecimal digits")
 	}
-	if m.Netns != "" || m.Reason != "" || m.Inner != "" || m.Gateway != "" || m.Withdrawn {
+	if m.Netns != "" || m.Reason != "" || m.Inner != "" || m.Gateway != "" || m.Withdrawn || m.Machines != "" {
 		return Message{}, errors.New("a request carries only spawn_id and, for an admit, its reach and what the reach names")
 	}
 	switch m.Type {
@@ -332,7 +339,7 @@ func ParseAnswer(packet []byte, asked, spawnID string) (Message, error) {
 	if err != nil {
 		return Message{}, err
 	}
-	if m.SpawnID != spawnID || m.Netns != "" || m.Reach != "" || m.Addresses != nil || m.Port != nil || m.Private != nil || m.MachineUID != nil {
+	if m.SpawnID != spawnID || m.Netns != "" || m.Reach != "" || m.Addresses != nil || m.Port != nil || m.Private != nil || m.MachineUID != nil || m.Machines != "" {
 		return Message{}, fmt.Errorf("an answer naming spawn %q, not %q, or carrying more than it may", m.SpawnID, spawnID)
 	}
 	if (m.Inner != "") != (m.Gateway != "") || (m.Inner != "" && m.Type != TypeAdmitted) {
