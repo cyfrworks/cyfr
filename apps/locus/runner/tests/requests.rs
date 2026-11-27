@@ -1013,8 +1013,8 @@ fn the_largest_request_and_answer_the_limits_allow_hold_the_thread_within_a_boun
             .and_then(cyfr_runner::wire::decode_base64),
         Some(body.clone())
     );
-    // A redirect's path of 40,000 segments, half of them dots: one pass.
-    let path = "/a/..".repeat(20_000);
+    // A redirect's path of 400,000 segments, half of them dots: one pass.
+    let path = "/a/..".repeat(200_000);
     let started = Instant::now();
     assert_eq!(remove_dot_segments(&path), "/");
     let dots_ms = started.elapsed().as_millis();
