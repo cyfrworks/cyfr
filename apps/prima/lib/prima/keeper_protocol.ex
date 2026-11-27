@@ -13,7 +13,7 @@ defmodule Prima.KeeperProtocol do
   ## Lines
 
   A request or a reply is one JSON object on one line, ending in `\\n`,
-  carrying `"v": 8` and a `type`, at most `max_line_bytes/0` bytes before
+  carrying `"v": 9` and a `type`, at most `max_line_bytes/0` bytes before
   its newline. A client sends `place`, `drop`, `assign`, `spawn`,
   `signal`, `resize`, `release`, `measure`, `pool`, `home_make`,
   `home_measure`, `home_reset`, `home_retire`, `home_list`, `packs_hold`,
@@ -144,28 +144,36 @@ defmodule Prima.KeeperProtocol do
   processes (`SIGWINCH`); like `signal` it is answered only by an `error`,
   `bad_request` for a spawn with no terminal.
 
-  The keeper alone knows its kept homes: a home is the folder of its id
-  under its `--kept-homes` root, owned by a uid of the range that is its
-  own for its life, and no request names a path or a uid. `home_make`,
-  `home_measure`, `home_reset` and `home_retire` carry exactly `id` and
-  `home`. `home_make` is answered `home_made` with the home's `uid`, a
-  made home's, or one the keeper draws for a new home and makes it under
-  (refused `capacity` with every uid of the range taken); `home_measure`
-  `home_measured` with the home's `bytes`, zero for an empty home, or
-  refused `home_absent` for a home not made; `home_reset`, which ends every
-  process of the home's uid and makes it again empty under that uid,
-  `home_made`; and `home_retire`, which ends them and removes the home,
-  `home_retired`, as each of the two answers a home not made. `home_list`
+  The keeper alone knows its kept homes: each person, an athanor, has one
+  disk under its `--kept-homes` root, owned by a uid of the range that is
+  the disk's for its life, holding a home of each of the person's program
+  rows and a work folder every program of the person shares at `/work`;
+  no request names a path or a uid. `home_make` carries exactly `id`,
+  `home` and `athanor`, whose disk the home is on; `home_measure`,
+  `home_reset` and `home_retire` carry exactly `id` and `home`, which the
+  keeper finds on its disk by its id. `home_make` is answered `home_made`
+  with the disk's `uid` once the home is made on the disk, which is made
+  first under a uid the keeper draws if it is not (refused `capacity` with
+  every uid of the range taken, and `bad_request` for a home another
+  athanor's disk holds); `home_measure` `home_measured` with the home's
+  `bytes`, zero for an empty home, or refused `home_absent` for a home no
+  disk holds; `home_reset`, which ends every session of the home and makes
+  it again empty, `home_made` with the disk's uid; and `home_retire`, which
+  ends them and removes the home from its disk, `home_retired`, as each of
+  the two answers a home no disk holds, neither touching the disk's other
+  homes, its work folder or its uid. `home_list`
   carries `id` and an optional `after`, a home's id, and is answered
-  `homes`: the `ids` of the homes after it in byte order, one page, with
-  `next`, its last id, when more follow, for the next `home_list` to name
-  as its `after`. A keeper with no kept homes refuses every home request
-  and kept spawn `unavailable`. The keeper runs a kept spawn under its
-  home's uid in its home, refuses one naming a home not made `home_absent`
-  and one whose home already holds `home_max_bytes` `home_over_cap`; a
-  `pty` spawn's stdin, stdout and stderr are a pseudo-terminal, which its
-  stdout frames carry. Each home request acts as a helper running as the
-  home's uid.
+  `homes`: the `ids` of the homes the disks hold after it in byte order,
+  one page, with `next`, its last id, when more follow, for the next
+  `home_list` to name as its `after`. A keeper with no kept homes refuses
+  every home request and kept spawn `unavailable`. The keeper runs a kept
+  spawn under its disk's uid in its home, with the disk's work folder at
+  `/work` and no other home in sight, refuses one naming a home no disk
+  holds `home_absent`, one whose place is another athanor's than its
+  disk's `bad_request`, and one whose home already holds `home_max_bytes`
+  `home_over_cap`; a `pty` spawn's stdin, stdout and stderr are a
+  pseudo-terminal, which its stdout frames carry. Each home request acts as
+  a helper running as the disk's uid.
 
   ## Hosts
 
@@ -220,7 +228,7 @@ defmodule Prima.KeeperProtocol do
 
   alias Prima.RunnerControl
 
-  @version 8
+  @version 9
   # The keeper spells these as frame.MaxPayload and protocol.MaxLineBytes;
   # the vectors' `bounds` pin both sides to the same numbers.
   @max_frame_bytes 65_536
@@ -319,7 +327,7 @@ defmodule Prima.KeeperProtocol do
     release: {"release", [spawn_id: :required, grace_ms: :required]},
     pool: {"pool", [id: :required, pool: :required]},
     measure: {"measure", [id: :required, place: :required]},
-    home_make: {"home_make", [id: :required, home: :required]},
+    home_make: {"home_make", [id: :required, home: :required, athanor: :required]},
     home_measure: {"home_measure", [id: :required, home: :required]},
     home_reset: {"home_reset", [id: :required, home: :required]},
     home_retire: {"home_retire", [id: :required, home: :required]},
@@ -406,7 +414,8 @@ defmodule Prima.KeeperProtocol do
   `control`, `home_mode` (`"scratch"` or
   `"kept"`), `home`, `home_max_bytes`, `pty` and `hosts` are optional,
   `home` carried exactly when `home_mode` is `"kept"`, and `home_max_bytes`
-  only then. A home request carries `id` and `home`; a `home_list`, `id`
+  only then. A home request carries `id` and `home`, and a `home_make`
+  its `athanor` too; a `home_list`, `id`
   and an optional `after`; a `report`, `id` and `after`, a rev.
   """
   @type request ::
@@ -449,8 +458,9 @@ defmodule Prima.KeeperProtocol do
           | %{type: :release, spawn_id: String.t(), grace_ms: non_neg_integer()}
           | %{type: :pool, id: String.t(), pool: String.t()}
           | %{type: :measure, id: String.t(), place: String.t()}
+          | %{type: :home_make, id: String.t(), home: String.t(), athanor: String.t()}
           | %{
-              type: :home_make | :home_measure | :home_reset | :home_retire,
+              type: :home_measure | :home_reset | :home_retire,
               id: String.t(),
               home: String.t()
             }
@@ -845,8 +855,9 @@ defmodule Prima.KeeperProtocol do
   defp write(type, {:kind, kind}) when type in [:place, :assign] and kind in @kinds,
     do: {"kind", kind}
 
-  defp write(type, {:athanor, athanor}) when type in [:place, :assign | @packs_requests],
-    do: {"athanor", matching!(RunnerControl.athanor_id_pattern(), "athanor", athanor)}
+  defp write(type, {:athanor, athanor})
+       when type in [:place, :assign, :home_make | @packs_requests],
+       do: {"athanor", matching!(RunnerControl.athanor_id_pattern(), "athanor", athanor)}
 
   defp write(type, {:subject, subject}) when type in [:place, :assign],
     do: {"subject", matching!(@id, "subject", subject)}

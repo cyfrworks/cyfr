@@ -23,6 +23,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/cyfr/locus/keeper/internal/home"
 	"github.com/cyfr/locus/keeper/internal/pool"
 	"github.com/cyfr/locus/keeper/internal/scrolls"
 )
@@ -317,7 +318,7 @@ func First(probe bool) int {
 	if err != nil {
 		return fail("the stage's binary: %v", err)
 	}
-	if err := buildFiles(spec.Home, spec.Packs, spec.Machine); err != nil {
+	if err := buildFiles(spec.Home, spec.Work, spec.Packs, spec.Machine); err != nil {
 		return fail("the space's files: %v", err)
 	}
 	if spec.Terminal {
@@ -418,11 +419,13 @@ func bindAt(source, target string, writable bool) error {
 // and, read-only, the cgroup tree whose root is the space's own group; its
 // own /dev with the container's few device nodes, its own terminals and
 // /dev/shm; its own /tmp, /var/tmp and /run; its home, writable, at its
-// path, the only home it sees; given packs, its person's pack generation
+// path, the only home it sees, and a kept home's work folder, writable, at
+// home.WorkPath: nothing else of the kept homes' root, so no other home,
+// no other disk and no record; given packs, its person's pack generation
 // read only at scrolls.Path in its own /run; and a machine's space also its
 // device, read only at its path, and /dev/kvm. The root itself is
 // read-only once pivoted.
-func buildFiles(home, packs, machine string) error {
+func buildFiles(own, work, packs, machine string) error {
 	steps := []func() error{
 		func() error { return mount("", "/", "", unix.MS_REC|unix.MS_PRIVATE, "") },
 		func() error { return mount("space", Root, "tmpfs", unix.MS_NOSUID|unix.MS_NODEV, "mode=0755,size=4m") },
@@ -463,10 +466,16 @@ func buildFiles(home, packs, machine string) error {
 		},
 		func() error { return buildDev(machine != "") },
 		func() error {
-			if home == "" {
+			if own == "" {
 				return nil
 			}
-			return bind(home, true)
+			return bind(own, true)
+		},
+		func() error {
+			if work == "" {
+				return nil
+			}
+			return bindAt(work, filepath.Join(Root, home.WorkPath), true)
 		},
 		func() error {
 			if packs == "" {

@@ -95,9 +95,10 @@ defmodule Locus.Test.FakeKeeper do
   outside its mode, since nothing here has a group. `give_way/2` sends
   the client a `give_way` of a place, as cyfr-locus asks the floor's role.
 
-  Started with `kept_root: dir` (`start_client!/1`), it keeps homes as
-  cyfr-locus does, one folder per id under `dir`, as the test's own user,
-  whose uid stands in for every home's: `home_make` answers a made home's
+  Started with `kept_root: dir` (`start_client!/1`), it keeps homes by
+  cyfr-locus's requests, one folder per id under `dir` whatever athanor a
+  `home_make` names, as the test's own user, whose uid stands in for every
+  disk's: `home_make` answers a made home's
   owner or makes the folder 0700 and answers it, `home_measure` answers the
   bytes of the files under it or refuses one not made `home_absent`,
   `home_reset` makes it again empty, `home_retire` removes it, each of the

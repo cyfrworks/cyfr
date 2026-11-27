@@ -542,10 +542,11 @@ defmodule Cyfr.CrossLanguageDriftTest do
        ~w(reserved_env_prefixes request_bounds)},
       {"apps/cyfr/test/opus/programs/session_test.exs", ~w(pack_waits)},
       {"apps/locus/keeper/internal/protocol/protocol_test.go",
-       ~w(reserved_env_prefixes reserved_env signals bounds request_bounds rlimits kept_unbounded_rlimits frames control_frames relay_frames valid_requests invalid_requests home_requests replies home_replies packs_requests packs_replies)},
+       ~w(reserved_env_prefixes reserved_env signals bounds request_bounds rlimits kept_unbounded_rlimits frames control_frames relay_frames valid_requests invalid_requests home_requests replies home_replies home_elsewhere packs_requests packs_replies)},
       {"apps/locus/keeper/internal/packview/packview_test.go",
        ~w(pack_bounds pack_waits pack_archive pack_paths)},
       {"apps/locus/keeper/internal/relay/relay_test.go", ~w(relay_streams)},
+      {"apps/locus/keeper/internal/serve/disk_linux_test.go", ~w(home_elsewhere)},
       {"apps/locus/keeper/internal/serve/serve_linux_test.go", ~w(home_requests)},
       {"apps/locus/test/locus/keeper_test.exs", ~w(valid_requests)},
       {"apps/locus/test/locus/keeper_vectors_test.exs",
@@ -553,7 +554,7 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"apps/locus/test/locus/runtime/keeper_channel_test.exs", ~w(control_frames replies)},
       {"apps/locus/test/locus/runtime/keeper_memory_test.exs", ~w(valid_requests replies)},
       {"apps/prima/test/prima/keeper_protocol_test.exs",
-       ~w(reserved_env_prefixes reserved_env signals bounds request_bounds rlimits kept_unbounded_rlimits frames control_frames relay_frames relay_streams valid_requests invalid_requests home_requests replies home_replies packs_requests packs_replies)},
+       ~w(reserved_env_prefixes reserved_env signals bounds request_bounds rlimits kept_unbounded_rlimits frames control_frames relay_frames relay_streams valid_requests invalid_requests home_requests replies home_replies home_elsewhere packs_requests packs_replies)},
       {"apps/prima/test/prima/locus_pool_test.exs", ~w(replies)}
     ],
     "layout.json" => [

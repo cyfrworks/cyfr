@@ -162,9 +162,9 @@ defmodule Locus.Backends.Owners do
   step of this process, and the uids held never exceed the pool's size
   less its quarantined uids (`capacity`; a pool the launcher does not
   answer is `unavailable`). The uid is freed when the session's process
-  is gone. A kept session holds no uid of the pool: its home is made if it
-  is absent (`Locus.Launcher.home_ensure/2`) and the process runs under
-  the home's own uid.
+  is gone. A kept session holds no uid of the pool: its home is made on its
+  owner's athanor's disk if it is not (`Locus.Launcher.home_ensure/3`) and
+  the process runs under the disk's uid.
 
   `session/3` names the running or ended session every other session
   message reaches, and its mode, at exactly the owner's version; one the
@@ -1209,7 +1209,8 @@ defmodule Locus.Backends.Owners do
 
           {_ref, state} =
             run(state, {:open, [from], ask}, state.place_wait_ms + @home_timeout_ms * 2, fn ->
-              with :placed <- place.(), do: kept_ready(launcher, server, message.home_id, cap)
+              with :placed <- place.(),
+                   do: kept_ready(launcher, server, admitted.athanor, message.home_id, cap)
             end)
 
           {:noreply, state}
@@ -1384,10 +1385,10 @@ defmodule Locus.Backends.Owners do
     :exit, _reason -> :ok
   end
 
-  # Run in a process of its own: a kept home made if it is absent, and
-  # measured against its bound when it has one.
-  defp kept_ready(launcher, server, home_id, cap) do
-    with {:ok, _uid} <- launcher.home_ensure(server, home_id),
+  # Run in a process of its own: a kept home made on its athanor's disk if
+  # it is not, and measured against its bound when it has one.
+  defp kept_ready(launcher, server, athanor, home_id, cap) do
+    with {:ok, _uid} <- launcher.home_ensure(server, athanor, home_id),
          :ok <- under_cap(launcher, server, home_id, cap) do
       :kept
     end

@@ -1299,6 +1299,17 @@ def owner_of(label, e=1):
     return {"athanor": f"ath_{label}", "server": f"mcp_{label}", "e": e}
 
 
+def disk_of(owner):
+    """The owner's person's disk under the kept homes' root: the SHA-256 of their athanor's id in lowercase hex (the
+    keeper's home.Person, apps/locus/keeper/internal/home/disk.go)."""
+    return f"{KEPT_ROOT}/{hashlib.sha256(owner['athanor'].encode()).hexdigest()}"
+
+
+def home_of(owner, row):
+    """The kept home of the program row `row` on its owner's person's disk."""
+    return f"{disk_of(owner)}/programs/{row}"
+
+
 if __name__ == "__main__":
     if sys.argv[1:] != ["--self-check"]:
         sys.exit("usage: harness.py --self-check")

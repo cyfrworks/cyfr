@@ -305,7 +305,7 @@ class AfterPlaced(unittest.TestCase):
 
     def ran(self, memtotal_kb, placed):
         stdout = (f"memtotal:{memtotal_kb}\nreply:{json.dumps(placed)}\n"
-                  + 'reply:{"v": 8, "type": "spawned", "id": "1", "spawn_id": "x", "uid": 1, "pid": 2}\n')
+                  + 'reply:{"v": 9, "type": "spawned", "id": "1", "spawn_id": "x", "uid": 1, "pid": 2}\n')
         return subprocess.CompletedProcess([], 0, stdout, "")
 
     def test_the_place_placed_with_half_the_machine_passes_and_the_rest_is_answered(self):

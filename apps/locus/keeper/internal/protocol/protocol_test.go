@@ -56,6 +56,9 @@ type vectors struct {
 	Replies       []json.RawMessage `json:"replies"`
 	HomeRequests  []json.RawMessage `json:"home_requests"`
 	HomeReplies   []json.RawMessage `json:"home_replies"`
+	HomeElsewhere struct {
+		Made, Again, Reply json.RawMessage
+	} `json:"home_elsewhere"`
 	PacksRequests []json.RawMessage `json:"packs_requests"`
 	PacksReplies  []json.RawMessage `json:"packs_replies"`
 }
@@ -207,6 +210,34 @@ func TestSharedHomeRequestsParse(t *testing.T) {
 	}
 }
 
+// A home_make of a home another athanor's disk holds is a valid request,
+// refused bad_request by the keeper's state (TestAHomeOnOneDiskIsRefusedToAnother
+// in package serve), whose reply encodes to the vector's bytes.
+func TestTheHomeElsewhereVectorsParse(t *testing.T) {
+	v := loadVectors(t).HomeElsewhere
+	made, err := ParseRequest(v.Made)
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := ParseRequest(v.Again)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if made.Home != again.Home || made.Athanor == again.Athanor {
+		t.Fatalf("the two makes: %+v, %+v", made, again)
+	}
+	line, merr := json.Marshal(NewError(again.ID, "", CodeBadRequest))
+	if merr != nil {
+		t.Fatal(merr)
+	}
+	var got, want map[string]any
+	_ = json.Unmarshal(line, &got)
+	_ = json.Unmarshal(v.Reply, &want)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("reply %s, want %s", line, v.Reply)
+	}
+}
+
 // A kept spawn's home fields and a spawn's pty size are decoded; a spawn
 // that names scratch and no pty is today's spawn.
 func TestHomeFieldsAreDecoded(t *testing.T) {
@@ -230,7 +261,7 @@ func TestHomeFieldsAreDecoded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if home.Type != TypeHomeMake || home.ID != "22" || home.Home != kept.Home {
+	if home.Type != TypeHomeMake || home.ID != "22" || home.Home != kept.Home || home.Athanor != "ath_01a09fee-2c3d-7e4f-8a5b-6c7d8e9f0a1b" {
 		t.Fatalf("home_make decoded to %+v", home)
 	}
 	list, err := ParseRequest(v.HomeRequests[7])
@@ -263,30 +294,30 @@ func TestHomeRequestBounds(t *testing.T) {
 		line string
 		ok   bool
 	}{
-		{`{"v":8,"type":"home_retire","id":"1","home":"vlt_a-1"}`, true},
-		{`{"v":8,"type":"home_reset","id":"1","home":"` + longest + `"}`, true},
-		{`{"v":8,"type":"home_reset","id":"1","home":"` + longest + `a"}`, false},
-		{`{"v":8,"type":"home_retire","id":"1","home":"_a"}`, false},
-		{`{"v":8,"type":"home_retire","id":"1","home":"a.b"}`, false},
-		{`{"v":8,"type":"home_retire","id":"1","home":""}`, false},
-		{`{"v":8,"type":"home_retire","id":"1"}`, false},
-		{`{"v":8,"type":"home_retire","id":"1","home":"k","pool":"backends"}`, false},
-		{`{"v":8,"type":"home_retire","id":"1","home":"k","home_mode":"kept"}`, false},
-		{`{"v":8,"type":"home_retire","id":"1","home":"k","uid":1}`, false},
-		{`{"v":8,"type":"home_make","home":"k"}`, false},
-		{`{"v":8,"type":"home_list","id":"1"}`, true},
-		{`{"v":8,"type":"home_list","id":"1","after":"k"}`, true},
-		{`{"v":8,"type":"home_list","id":"1","after":""}`, false},
-		{`{"v":8,"type":"home_list","id":"1","after":"k","home":"k"}`, false},
-		{`{"v":8,"type":"pool","id":"1","pool":"backends","home":"k"}`, false},
-		{`{"v":8,"type":"pool","id":"1","pool":"backends","pty":{"rows":24,"cols":80}}`, false},
+		{`{"v":9,"type":"home_retire","id":"1","home":"vlt_a-1"}`, true},
+		{`{"v":9,"type":"home_reset","id":"1","home":"` + longest + `"}`, true},
+		{`{"v":9,"type":"home_reset","id":"1","home":"` + longest + `a"}`, false},
+		{`{"v":9,"type":"home_retire","id":"1","home":"_a"}`, false},
+		{`{"v":9,"type":"home_retire","id":"1","home":"a.b"}`, false},
+		{`{"v":9,"type":"home_retire","id":"1","home":""}`, false},
+		{`{"v":9,"type":"home_retire","id":"1"}`, false},
+		{`{"v":9,"type":"home_retire","id":"1","home":"k","pool":"backends"}`, false},
+		{`{"v":9,"type":"home_retire","id":"1","home":"k","home_mode":"kept"}`, false},
+		{`{"v":9,"type":"home_retire","id":"1","home":"k","uid":1}`, false},
+		{`{"v":9,"type":"home_make","home":"k"}`, false},
+		{`{"v":9,"type":"home_list","id":"1"}`, true},
+		{`{"v":9,"type":"home_list","id":"1","after":"k"}`, true},
+		{`{"v":9,"type":"home_list","id":"1","after":""}`, false},
+		{`{"v":9,"type":"home_list","id":"1","after":"k","home":"k"}`, false},
+		{`{"v":9,"type":"pool","id":"1","pool":"backends","home":"k"}`, false},
+		{`{"v":9,"type":"pool","id":"1","pool":"backends","pty":{"rows":24,"cols":80}}`, false},
 	} {
 		req, err := ParseRequest([]byte(c.line))
 		if c.ok != (err == nil) {
 			t.Errorf("%s: request %+v, refusal %+v", c.line, req, err)
 		}
 	}
-	spawn := `{"v":8,"type":"spawn","id":"1","place":"pl-1","pool":"backends","argv":["x"],"attach":{"path":"/run/a.sock","token":"` + strings.Repeat("a", 64) + `"}`
+	spawn := `{"v":9,"type":"spawn","id":"1","place":"pl-1","pool":"backends","argv":["x"],"attach":{"path":"/run/a.sock","token":"` + strings.Repeat("a", 64) + `"}`
 	for _, c := range []struct {
 		fields string
 		ok     bool
@@ -324,7 +355,7 @@ func TestAPageOfHomesFitsAFrame(t *testing.T) {
 	if len(line) > frame.MaxPayload {
 		t.Fatalf("a full page of homes is %d bytes, past a frame's %d", len(line), frame.MaxPayload)
 	}
-	if empty, _ := Encode(NewHomes("1", nil, "")); string(empty) != `{"v":8,"type":"homes","id":"1","ids":[]}`+"\n" {
+	if empty, _ := Encode(NewHomes("1", nil, "")); string(empty) != `{"v":9,"type":"homes","id":"1","ids":[]}`+"\n" {
 		t.Fatalf("an empty page is %s", empty)
 	}
 }
@@ -428,11 +459,11 @@ func TestAReportsAfterIsARev(t *testing.T) {
 		t.Fatalf("the vectors' reports are after %v", revs)
 	}
 	for _, line := range []string{
-		`{"v":8,"type":"report","id":"r","after":1.0}`,
-		`{"v":8,"type":"report","id":"r","after":1e3}`,
-		`{"v":8,"type":"report","id":"r","after":true}`,
-		`{"v":8,"type":"report","id":"r","after":null}`,
-		`{"v":8,"type":"home_list","id":"r","after":{"id":"k"}}`,
+		`{"v":9,"type":"report","id":"r","after":1.0}`,
+		`{"v":9,"type":"report","id":"r","after":1e3}`,
+		`{"v":9,"type":"report","id":"r","after":true}`,
+		`{"v":9,"type":"report","id":"r","after":null}`,
+		`{"v":9,"type":"home_list","id":"r","after":{"id":"k"}}`,
 	} {
 		if _, err := ParseRequest([]byte(line)); err == nil || err.Reply() != NewError("r", "", CodeBadRequest) {
 			t.Errorf("%s: refusal %+v", line, err)
@@ -516,7 +547,7 @@ func TestSharedPacksRepliesMatchTheEncoders(t *testing.T) {
 // of the request.
 func TestAPacksPutsLargestPartFitsALine(t *testing.T) {
 	data := base64.StdEncoding.EncodeToString(make([]byte, MaxPackPartBytes))
-	line := `{"v":8,"type":"packs_put","id":"` + strings.Repeat("i", 64) + `","athanor":"` + strings.Repeat("a", 256) +
+	line := `{"v":9,"type":"packs_put","id":"` + strings.Repeat("i", 64) + `","athanor":"` + strings.Repeat("a", 256) +
 		`","lifetime":"` + strings.Repeat("l", 128) + `","digest":"sha256:` + strings.Repeat("0", 64) + `","seq":65536,"last":true,"data":"` + data + `"}`
 	if len(line) > MaxLineBytes {
 		t.Fatalf("the largest put is %d bytes, past a line's %d", len(line), MaxLineBytes)
@@ -647,7 +678,7 @@ func TestASpawnNamesNoBound(t *testing.T) {
 			}
 		}
 	}
-	req, refused := ParseRequest([]byte(`{"v":8,"type":"place","id":"pl-5","kind":"terminal","athanor":"ath_one","athanor_max_bytes":2147483648}`))
+	req, refused := ParseRequest([]byte(`{"v":9,"type":"place","id":"pl-5","kind":"terminal","athanor":"ath_one","athanor_max_bytes":2147483648}`))
 	if refused != nil || req.AthanorMax == nil || *req.AthanorMax != 2<<30 {
 		t.Fatalf("a session's place with its athanor's ceiling: %+v, %+v", req, refused)
 	}
@@ -689,8 +720,8 @@ func TestRlimitsDefaultToTheCeilings(t *testing.T) {
 func TestMalformedJSONIsRefusedWithoutEchoingInput(t *testing.T) {
 	for _, line := range []string{
 		`not json`,
-		`{"v":8,"type":"pool","id":"1","pool":"backends"} {"v":2}`,
-		`{"v":8,"type":"spawn","id":"1","pool":"backends","argv":"secret-value"}`,
+		`{"v":9,"type":"pool","id":"1","pool":"backends"} {"v":2}`,
+		`{"v":9,"type":"spawn","id":"1","pool":"backends","argv":"secret-value"}`,
 		`[]`,
 		``,
 	} {
@@ -709,7 +740,7 @@ func TestMalformedJSONIsRefusedWithoutEchoingInput(t *testing.T) {
 }
 
 func TestEnvValueNeverAppearsInARefusal(t *testing.T) {
-	line := `{"v":8,"type":"spawn","id":"1","pool":"backends","argv":["x"],"env":{"TOKEN":"secret-value\u0000"},"memory_bytes":536870912,"attach":{"path":"/run/a.sock","token":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}}`
+	line := `{"v":9,"type":"spawn","id":"1","pool":"backends","argv":["x"],"env":{"TOKEN":"secret-value\u0000"},"memory_bytes":536870912,"attach":{"path":"/run/a.sock","token":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}}`
 	_, err := ParseRequest([]byte(line))
 	if err == nil {
 		t.Fatal("a NUL in an env value was accepted")

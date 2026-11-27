@@ -3,7 +3,7 @@
 
 // Package protocol defines the messages between `cyfr-locus serve` and its
 // clients, one role process each, over each one's inherited socket (fd 3):
-// one JSON object per line, each carrying `"v": 8` and a `type`.
+// one JSON object per line, each carrying `"v": 9` and a `type`.
 //
 // Each role's channel is its own. A request names only what is its role's:
 // a pool another role draws from is unknown (CodeUnknownPool), a spawn
@@ -15,42 +15,42 @@
 //
 // Client to keeper:
 //
-//	{"v":8,"type":"place","id":…,"kind":…,"athanor":…,"subject":…,"athanor_max_bytes":…}
-//	{"v":8,"type":"drop","place":…}
-//	{"v":8,"type":"assign","id":…,"place":…,"kind":…,"athanor":…,"subject":…}
-//	{"v":8,"type":"spawn","id":…,"place":…,"pool":…,"argv":[…],"env":{…},"rlimits":{…},"control":true,"attach":{"path":…,"token":…},"home_mode":"kept","home":…,"home_max_bytes":…,"pty":{"rows":…,"cols":…},"hosts":[…],"packs":{"athanor":…,"digest":…}}
-//	{"v":8,"type":"signal","spawn_id":…,"sig":"SIGTERM"}
-//	{"v":8,"type":"resize","spawn_id":…,"rows":…,"cols":…}
-//	{"v":8,"type":"release","spawn_id":…,"grace_ms":…}
-//	{"v":8,"type":"measure","id":…,"place":…}
-//	{"v":8,"type":"pool","id":…,"pool":…}
-//	{"v":8,"type":"home_make","id":…,"home":…}
-//	{"v":8,"type":"home_measure","id":…,"home":…}
-//	{"v":8,"type":"home_reset","id":…,"home":…}
-//	{"v":8,"type":"home_retire","id":…,"home":…}
-//	{"v":8,"type":"home_list","id":…,"after":…}
-//	{"v":8,"type":"report","id":…,"after":…}
-//	{"v":8,"type":"packs_hold","id":…,"athanor":…,"lifetime":…,"digest":…}
-//	{"v":8,"type":"packs_put","id":…,"athanor":…,"lifetime":…,"digest":…,"seq":…,"last":…,"data":…}
+//	{"v":9,"type":"place","id":…,"kind":…,"athanor":…,"subject":…,"athanor_max_bytes":…}
+//	{"v":9,"type":"drop","place":…}
+//	{"v":9,"type":"assign","id":…,"place":…,"kind":…,"athanor":…,"subject":…}
+//	{"v":9,"type":"spawn","id":…,"place":…,"pool":…,"argv":[…],"env":{…},"rlimits":{…},"control":true,"attach":{"path":…,"token":…},"home_mode":"kept","home":…,"home_max_bytes":…,"pty":{"rows":…,"cols":…},"hosts":[…],"packs":{"athanor":…,"digest":…}}
+//	{"v":9,"type":"signal","spawn_id":…,"sig":"SIGTERM"}
+//	{"v":9,"type":"resize","spawn_id":…,"rows":…,"cols":…}
+//	{"v":9,"type":"release","spawn_id":…,"grace_ms":…}
+//	{"v":9,"type":"measure","id":…,"place":…}
+//	{"v":9,"type":"pool","id":…,"pool":…}
+//	{"v":9,"type":"home_make","id":…,"home":…,"athanor":…}
+//	{"v":9,"type":"home_measure","id":…,"home":…}
+//	{"v":9,"type":"home_reset","id":…,"home":…}
+//	{"v":9,"type":"home_retire","id":…,"home":…}
+//	{"v":9,"type":"home_list","id":…,"after":…}
+//	{"v":9,"type":"report","id":…,"after":…}
+//	{"v":9,"type":"packs_hold","id":…,"athanor":…,"lifetime":…,"digest":…}
+//	{"v":9,"type":"packs_put","id":…,"athanor":…,"lifetime":…,"digest":…,"seq":…,"last":…,"data":…}
 //
 // Keeper to client:
 //
-//	{"v":8,"type":"placed","id":…,"memory_bytes":…}
-//	{"v":8,"type":"assigned","id":…}
-//	{"v":8,"type":"spawned","id":…,"spawn_id":…,"uid":…,"pid":…}
-//	{"v":8,"type":"error","id":…,"spawn_id":…,"code":…}   (id or spawn_id names the request; a spawn refused once made carries both)
-//	{"v":8,"type":"error","id":…,"code":"no_memory","held":{"need":…,"free":…,"mine":[{"kind":…,"subject":…,"bytes":…}],"others_bytes":…}}
-//	{"v":8,"type":"give_way","place":…}
-//	{"v":8,"type":"exited","spawn_id":…,"code":…,"signal":…,"memory":null | "cap" | "machine" | "either"}
-//	{"v":8,"type":"measured","id":…,"kind":…,"athanor":…,"subject":…,"bytes":…,"lesser":…,"age_ms":…}
-//	{"v":8,"type":"released","spawn_id":…}
-//	{"v":8,"type":"pool","id":…,"pool":…,"size":…,"free":…,"quarantined":…}
-//	{"v":8,"type":"home_made","id":…,"uid":…}
-//	{"v":8,"type":"home_measured","id":…,"bytes":…}
-//	{"v":8,"type":"home_retired","id":…}
-//	{"v":8,"type":"homes","id":…,"ids":[…],"next":…}
-//	{"v":8,"type":"reported","id":…,"report":{"boot":…,"budget":…,"work":…,"floor":…,"used":…,"counters":[…],"next":…}}
-//	{"v":8,"type":"packs","id":…,"state":"held" | "missing" | "taken"}
+//	{"v":9,"type":"placed","id":…,"memory_bytes":…}
+//	{"v":9,"type":"assigned","id":…}
+//	{"v":9,"type":"spawned","id":…,"spawn_id":…,"uid":…,"pid":…}
+//	{"v":9,"type":"error","id":…,"spawn_id":…,"code":…}   (id or spawn_id names the request; a spawn refused once made carries both)
+//	{"v":9,"type":"error","id":…,"code":"no_memory","held":{"need":…,"free":…,"mine":[{"kind":…,"subject":…,"bytes":…}],"others_bytes":…}}
+//	{"v":9,"type":"give_way","place":…}
+//	{"v":9,"type":"exited","spawn_id":…,"code":…,"signal":…,"memory":null | "cap" | "machine" | "either"}
+//	{"v":9,"type":"measured","id":…,"kind":…,"athanor":…,"subject":…,"bytes":…,"lesser":…,"age_ms":…}
+//	{"v":9,"type":"released","spawn_id":…}
+//	{"v":9,"type":"pool","id":…,"pool":…,"size":…,"free":…,"quarantined":…}
+//	{"v":9,"type":"home_made","id":…,"uid":…}
+//	{"v":9,"type":"home_measured","id":…,"bytes":…}
+//	{"v":9,"type":"home_retired","id":…}
+//	{"v":9,"type":"homes","id":…,"ids":[…],"next":…}
+//	{"v":9,"type":"reported","id":…,"report":{"boot":…,"budget":…,"work":…,"floor":…,"used":…,"counters":[…],"next":…}}
+//	{"v":9,"type":"packs","id":…,"state":"held" | "missing" | "taken"}
 //
 // A place follows one piece of work from before its preparation to its
 // release. The client names it with an `id` of its own minted before any
@@ -196,42 +196,51 @@
 // spawn's `pty` asks for a pseudo-terminal of its `rows` and `cols`,
 // exactly those two members, each 1..MaxPtySize; absent, the spawn has
 // none. The `home_make`, `home_measure`, `home_reset` and `home_retire`
-// requests name a kept home by its id, `home`, as a kept spawn does.
+// requests name a kept home by its id, `home`, as a kept spawn does, and
+// `home_make` names whose it is too, its `athanor`.
 //
-// The keeper alone knows its kept homes. A home is `<root>/<home>` under
-// its `--kept-homes <root>:<first>-<last>`, 0700, owned by a uid of the
-// range that is its own for its life: the folder's owner, read without
-// following a link, and no index of it is kept. A keeper given no
-// --kept-homes refuses every home request and every kept spawn as
-// CodeUnavailable. The keeper runs a kept spawn under its home's uid in its
-// home, and takes no uid of the pool for it; one naming a home not made is
-// refused as CodeHomeAbsent, one naming an entry that is not a home as
-// CodeBadRequest, and one whose home already holds home_max_bytes as
-// CodeHomeOverCap. A `pty` spawn's stdin, stdout and stderr are a
-// pseudo-terminal of the size it names, which its stdout frames carry; its
-// stderr ends at once. A `resize` sets that terminal's size to its `rows`
-// and `cols`, bounded as a spawn's `pty`, and the kernel signals SIGWINCH to
-// the terminal's foreground process group; like `signal` it has no reply
-// but a refusal: CodeUnknownSpawn for a spawn the keeper does not hold and
-// CodeBadRequest for one without a pseudo-terminal.
+// The keeper alone knows its kept homes. Each person, an athanor, has one
+// disk under its `--kept-homes <root>:<first>-<last>` (package home), owned
+// by one uid of the range that is the disk's for its life: a home of each
+// of the person's program rows, `programs/<home>`, and `work`, which every
+// program of the person shares at /work. The keeper keeps its record of
+// each disk, its uid and the homes it holds, beside the disk and never
+// walks inside it; `home_make` alone names the athanor, and every other
+// request finds a home by its id. A keeper given no --kept-homes refuses
+// every home request and every kept spawn as CodeUnavailable. The keeper
+// runs a kept spawn under its disk's uid in its home, with the disk's work
+// folder at /work and no other home in sight, and takes no uid of the pool
+// for it; one naming a home no disk holds is refused as CodeHomeAbsent, one
+// whose place is another athanor's than its disk's as CodeBadRequest, and
+// one whose home already holds home_max_bytes as CodeHomeOverCap. A `pty`
+// spawn's stdin, stdout and stderr are a pseudo-terminal of the size it
+// names, which its stdout frames carry; its stderr ends at once. A `resize`
+// sets that terminal's size to its `rows` and `cols`, bounded as a spawn's
+// `pty`, and the kernel signals SIGWINCH to the terminal's foreground
+// process group; like `signal` it has no reply but a refusal:
+// CodeUnknownSpawn for a spawn the keeper does not hold and CodeBadRequest
+// for one without a pseudo-terminal.
 //
-// The home requests act as helpers running as the home's uid, one request
+// The home requests act as helpers running as the disk's uid, one request
 // of a home at a time, each on a goroutine of its own, so two requests of
 // one home sent together are applied in either order. `home_make` answers
-// `home_made` with a made home's uid, or makes the home 0700 under the
-// lowest uid of the range that no entry under the root owns, no process
-// holds (the keeper's own read of /proc), no make or reset holds and the
-// keeper does not hold as retiring, quarantined or live, and answers that
-// uid; with every uid taken it is refused as CodeCapacity, and with a root
-// or a /proc that cannot be read as CodeUnavailable. `home_measure` answers
+// `home_made` with the disk's uid once the home is made on the disk of its
+// athanor: the disk is made first if it is not, under the lowest uid of the
+// range that no entry under the root owns, no disk's record holds, no
+// process holds (the keeper's own read of /proc), no make or reset holds
+// and the keeper does not hold as retiring, quarantined or live; with every
+// uid taken it is refused as CodeCapacity, and with a root or a /proc that
+// cannot be read as CodeUnavailable. One naming a home another athanor's
+// disk holds is refused as CodeBadRequest. `home_measure` answers
 // `home_measured` with the bytes allocated under the home, an empty home's
-// zero among them, or is refused as CodeHomeAbsent for a home not made.
-// `home_reset` ends every process of the home's uid and makes the home
-// again empty under that same uid, answered `home_made`; `home_retire` ends
-// every process of the uid and removes the home, answered `home_retired`.
-// Each of the two answers `home_retired` for a home not made, which it
-// leaves absent. `home_list` answers `homes`: the ids of the kept homes
-// after its `after` (every home without one), in byte order, at most
+// zero among them, or is refused as CodeHomeAbsent for a home no disk
+// holds. `home_reset` ends every session of the home, by its group, and
+// makes the home again empty, answered `home_made` with the disk's uid;
+// `home_retire` ends them and removes the home from its disk, answered
+// `home_retired`. Neither touches the disk's other homes, its work folder
+// or its uid, and each answers `home_retired` for a home no disk holds.
+// `home_list` answers `homes`: the ids of the homes the disks hold after
+// its `after` (every home without one), in byte order, at most
 // MaxHomeListIDs of them, with `next`, the last of them, when more follow,
 // which the next `home_list` names as its `after`.
 //
@@ -302,7 +311,7 @@ import (
 )
 
 // Version is the protocol version every message carries as `v`.
-const Version = 8
+const Version = 9
 
 // A place's kinds: a runner at rest and one given a run, a build, and a
 // program's and a terminal's session.
@@ -405,13 +414,13 @@ const (
 	// CodeHomeOverCap refuses a kept spawn whose home already holds its
 	// home_max_bytes.
 	CodeHomeOverCap = "home_over_cap"
-	// CodeUIDBusy refuses a kept spawn on a kept home's uid that is not free
-	// for it: retiring (its last spawn released, its processes not yet all
-	// ended) for longer than the spawn waits, quarantined (a retirement that
-	// could not finish), or live under another home.
+	// CodeUIDBusy refuses a kept spawn on a disk's uid that is not free for
+	// it: retiring (its last spawn released, its processes not yet all
+	// ended) for longer than the spawn waits, or quarantined (a retirement
+	// that could not finish).
 	CodeUIDBusy = "uid_busy"
 	// CodeHomeAbsent refuses a kept spawn or a home_measure naming a kept
-	// home that is not made.
+	// home no disk holds.
 	CodeHomeAbsent = "home_absent"
 	// CodeUnavailable refuses every home request and kept spawn of a keeper
 	// that keeps no homes (no --kept-homes), and a home_make or home_list
@@ -924,7 +933,20 @@ func ParseRequest(line []byte) (*Request, *RequestError) {
 		if !poolPattern.MatchString(req.Pool) {
 			return nil, refuse("pool must match " + poolPattern.String())
 		}
-	case TypeHomeMake, TypeHomeMeasure, TypeHomeReset, TypeHomeRetire:
+	case TypeHomeMake:
+		if !req.only("id", "home", "athanor") {
+			return nil, refuse("home_make carries only id, home and athanor")
+		}
+		if !idPattern.MatchString(req.ID) {
+			return nil, refuse("id must match " + idPattern.String())
+		}
+		if !home.ValidID(req.Home) {
+			return nil, refuse("home must be a kept home's id")
+		}
+		if !athanorPattern.MatchString(req.Athanor) {
+			return nil, refuse("athanor must match " + athanorPattern.String())
+		}
+	case TypeHomeMeasure, TypeHomeReset, TypeHomeRetire:
 		if !req.only("id", "home") {
 			return nil, refuse(req.Type + " carries only id and home")
 		}

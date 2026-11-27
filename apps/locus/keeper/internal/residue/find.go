@@ -52,8 +52,8 @@ func Find(roots Roots, uid int) (Found, error) {
 }
 
 // FindExcept is Find with the entry at except neither reported nor
-// searched: a kept home's own path, when its uid is scrubbed, since the home
-// is its uid's for the home's life.
+// searched: a person's disk, when its uid is scrubbed, since the disk, its
+// homes and its work folder are its uid's for the disk's life.
 func FindExcept(roots Roots, uid int, except string) (Found, error) {
 	var found Found
 	w := &walker{uid: uid, found: &found, except: except}

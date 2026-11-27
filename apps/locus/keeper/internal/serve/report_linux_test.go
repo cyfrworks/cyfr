@@ -40,7 +40,7 @@ func (r *poolRole) spawnIn(t *testing.T, s *server, id string) *spawn {
 // answers the `reported`, which must be nothing more.
 func (r *poolRole) report(t *testing.T, after uint64) protocol.Reported {
 	t.Helper()
-	r.write(t, fmt.Sprintf(`{"v":8,"type":"report","id":"rp","after":%d}`, after))
+	r.write(t, fmt.Sprintf(`{"v":9,"type":"report","id":"rp","after":%d}`, after))
 	line, _, err := r.channel.Next()
 	if err != nil {
 		t.Fatalf("role %s's report: %v", r.c.role.spec.Name, err)

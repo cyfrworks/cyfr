@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -57,6 +58,9 @@ func keptKeeper(t *testing.T) *keeper {
 	if err := home.CheckKeptRoot(root, heldGID(k.s.cfg, []Account{k.c.role.account}, k.s.accounts)); err != nil {
 		t.Fatal(err)
 	}
+	if err := k.s.loadDisks(); err != nil {
+		t.Fatal(err)
+	}
 	return k
 }
 
@@ -65,7 +69,11 @@ func keptKeeper(t *testing.T) *keeper {
 // the uid the draw gives the home.
 func (k *keeper) homeRequest(t *testing.T, typ, id, path string, uid int) map[string]any {
 	t.Helper()
-	k.s.handle(k.c, &protocol.Request{V: protocol.Version, Type: typ, ID: id, Home: filepath.Base(path)})
+	req := &protocol.Request{V: protocol.Version, Type: typ, ID: id, Home: filepath.Base(path)}
+	if typ == protocol.TypeHomeMake {
+		req.Athanor = k.athanorOf(req.Home)
+	}
+	k.s.handle(k.c, req)
 	reply := k.reply(t)
 	if typ == protocol.TypeHomeMake && reply["type"] == protocol.TypeHomeMade && reply["uid"] != float64(uid) {
 		t.Fatalf("home_make %s of %s answered uid %v, want %d", id, path, reply["uid"], uid)
@@ -151,7 +159,7 @@ func (k *keeper) releasedPair(t *testing.T, spawnID string) {
 func TestAKeptHomeLivesUnderItsOwnUID(t *testing.T) {
 	k := keptKeeper(t)
 	uid := testKeptFirst
-	path := filepath.Join(k.s.cfg.Kept.Root, "vlt_home-a")
+	path := k.keptPath("vlt_home-a")
 
 	if made := k.homeRequest(t, protocol.TypeHomeMake, "m1", path, uid); made["type"] != protocol.TypeHomeMade {
 		t.Fatalf("home_make: %v", made)
@@ -225,7 +233,7 @@ func TestAKeptHomeLivesUnderItsOwnUID(t *testing.T) {
 func TestAPooledUIDCannotReadAKeptHome(t *testing.T) {
 	k := keptKeeper(t)
 	uid := testKeptFirst
-	path := filepath.Join(k.s.cfg.Kept.Root, "vlt_home-b")
+	path := k.keptPath("vlt_home-b")
 	if made := k.homeRequest(t, protocol.TypeHomeMake, "m1", path, uid); made["type"] != protocol.TypeHomeMade {
 		t.Fatalf("home_make: %v", made)
 	}
@@ -245,32 +253,37 @@ func TestAPooledUIDCannotReadAKeptHome(t *testing.T) {
 	}
 }
 
-// A kept spawn names a made home: one not made is absent, an entry that is
-// no home (a file, or a folder of a uid outside the range) a bad request,
-// and a keeper that keeps no homes refuses it as unavailable.
+// A kept spawn names a home a disk's record holds: one not made is absent,
+// and so is an entry under the root that no record holds, a home of the
+// layout before the disks among them, which is never moved, listed or
+// used; a keeper that keeps no homes refuses it as unavailable.
 func TestAKeptSpawnOfNoHomeIsRefused(t *testing.T) {
 	k := keptKeeper(t)
 	root := k.s.cfg.Kept.Root
 	if err := os.WriteFile(filepath.Join(root, "vlt_file"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Mkdir(filepath.Join(root, "vlt_roots"), 0o700); err != nil {
+	old := filepath.Join(root, "vlt_old")
+	if err := os.Mkdir(old, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chown(old, testKeptFirst, testKeptFirst); err != nil {
 		t.Fatal(err)
 	}
 	for name, c := range map[string]struct {
 		req  *protocol.Request
 		code string
 	}{
-		"a home not made":                 {keptRequest(t, k.attach, "1", "true", filepath.Join(root, "vlt_absent"), nil), protocol.CodeHomeAbsent},
-		"a file":                          {keptRequest(t, k.attach, "2", "true", filepath.Join(root, "vlt_file"), nil), protocol.CodeBadRequest},
-		"a folder of a uid not the range": {keptRequest(t, k.attach, "3", "true", filepath.Join(root, "vlt_roots"), nil), protocol.CodeBadRequest},
+		"a home not made":                       {keptRequest(t, k.attach, "1", "true", filepath.Join(root, "vlt_absent"), nil), protocol.CodeHomeAbsent},
+		"a file":                                {keptRequest(t, k.attach, "2", "true", filepath.Join(root, "vlt_file"), nil), protocol.CodeHomeAbsent},
+		"a home of the layout before the disks": {keptRequest(t, k.attach, "3", "true", old, nil), protocol.CodeHomeAbsent},
 	} {
 		k.handleSpawn(t, c.req)
 		if refused := k.reply(t); refused["type"] != protocol.TypeError || refused["code"] != c.code {
 			t.Errorf("%s: %v", name, refused)
 		}
 		// The refusal freed the place the spawn named.
-		if placed := k.place(t, c.req.Place, k.kind()); placed["type"] != protocol.TypePlaced {
+		if placed := k.placeOf(t, c.req.Place, k.kind(), k.athanorOf(c.req.Home)); placed["type"] != protocol.TypePlaced {
 			t.Errorf("%s: placing its place again answered %v", name, placed)
 		}
 	}
@@ -281,35 +294,56 @@ func TestAKeptSpawnOfNoHomeIsRefused(t *testing.T) {
 	}
 }
 
-// Each new home takes the lowest uid of the range that no home owns: a
-// retired home's uid is drawn again, a made home's make answers its own
-// uid, and a range every uid of which a home owns makes none.
+// Each new disk takes the lowest uid of the range that nothing holds, a
+// folder of the layout before the disks among what does; every home of a
+// person is on their disk, under its uid; a retired home leaves its disk,
+// so its uid is never drawn again, and a range every uid of which a disk
+// or an old folder holds makes no new disk, though a new home on a disk
+// that has one is made.
 func TestAKeptHomeTakesTheLowestFreeUID(t *testing.T) {
 	k := keptKeeper(t)
 	root := k.s.cfg.Kept.Root
-	for uid := testKeptFirst; uid <= testKeptLast; uid++ {
-		path := filepath.Join(root, "vlt_n"+strconv.Itoa(uid))
+	old := filepath.Join(root, "vlt_old")
+	if err := os.Mkdir(old, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chown(old, testKeptFirst, testKeptFirst); err != nil {
+		t.Fatal(err)
+	}
+	for uid := testKeptFirst + 1; uid <= testKeptLast; uid++ {
+		path := k.keptPath("vlt_n" + strconv.Itoa(uid))
 		if made := k.homeRequest(t, protocol.TypeHomeMake, "m"+strconv.Itoa(uid), path, uid); made["type"] != protocol.TypeHomeMade {
 			t.Fatalf("home_make %s: %v", path, made)
 		}
 	}
-	if full := k.homeRequest(t, protocol.TypeHomeMake, "full", filepath.Join(root, "vlt_full"), 0); full["code"] != protocol.CodeCapacity {
-		t.Fatalf("home_make with every uid owned: %v", full)
+	if full := k.homeRequest(t, protocol.TypeHomeMake, "full", k.keptPath("vlt_full"), 0); full["code"] != protocol.CodeCapacity {
+		t.Fatalf("home_make of a new disk with every uid held: %v", full)
 	}
-	second := filepath.Join(root, "vlt_n"+strconv.Itoa(testKeptFirst+1))
-	if made := k.homeRequest(t, protocol.TypeHomeMake, "again", second, testKeptFirst+1); made["type"] != protocol.TypeHomeMade {
+	person := k.athanorOf("vlt_n" + strconv.Itoa(testKeptFirst+2))
+	k.share(person, "vlt_second", "vlt_back")
+	if made := k.homeRequest(t, protocol.TypeHomeMake, "second", k.keptPath("vlt_second"), testKeptFirst+2); made["type"] != protocol.TypeHomeMade {
+		t.Fatalf("home_make of a second home of a person: %v", made)
+	}
+	first := k.keptPath("vlt_n" + strconv.Itoa(testKeptFirst+2))
+	if made := k.homeRequest(t, protocol.TypeHomeMake, "again", first, testKeptFirst+2); made["type"] != protocol.TypeHomeMade {
 		t.Fatalf("home_make of a made home: %v", made)
 	}
-	if retired := k.homeRequest(t, protocol.TypeHomeRetire, "r", second, 0); retired["type"] != protocol.TypeHomeRetired {
+	if retired := k.homeRequest(t, protocol.TypeHomeRetire, "r", first, 0); retired["type"] != protocol.TypeHomeRetired {
 		t.Fatalf("home_retire: %v", retired)
 	}
-	if made := k.homeRequest(t, protocol.TypeHomeMake, "freed", filepath.Join(root, "vlt_freed"), testKeptFirst+1); made["type"] != protocol.TypeHomeMade {
-		t.Fatalf("home_make after a retirement: %v", made)
+	if full := k.homeRequest(t, protocol.TypeHomeMake, "freed", k.keptPath("vlt_freed"), 0); full["code"] != protocol.CodeCapacity {
+		t.Fatalf("home_make of a new disk after a home's retirement: %v", full)
+	}
+	if made := k.homeRequest(t, protocol.TypeHomeMake, "back", k.keptPath("vlt_back"), testKeptFirst+2); made["type"] != protocol.TypeHomeMade {
+		t.Fatalf("home_make on the disk of a retired home: %v", made)
 	}
 	list := k.homeRequest(t, protocol.TypeHomeList, "l", "", 0)
 	if ids, _ := json.Marshal(list["ids"]); list["type"] != protocol.TypeHomes || list["next"] != nil ||
-		string(ids) != `["vlt_freed","vlt_n39101","vlt_n39103","vlt_n39104"]` {
+		string(ids) != `["vlt_back","vlt_n39102","vlt_n39104","vlt_second"]` {
 		t.Fatalf("home_list: %v", list)
+	}
+	if info, err := os.Lstat(old); err != nil || info.Sys().(*syscall.Stat_t).Uid != testKeptFirst {
+		t.Fatalf("the folder of the layout before the disks: %v %v", info, err)
 	}
 }
 
@@ -318,9 +352,9 @@ func TestAKeptHomeTakesTheLowestFreeUID(t *testing.T) {
 // leave the keeper's map of home locks empty.
 func TestAHomesLockGoesWithItsLastRequest(t *testing.T) {
 	k := keptKeeper(t)
-	root := k.s.cfg.Kept.Root
 	for i := 0; i < 20; i++ {
-		path := filepath.Join(root, "vlt_c"+strconv.Itoa(i))
+		k.share("ath_c", "vlt_c"+strconv.Itoa(i))
+		path := k.keptPath("vlt_c" + strconv.Itoa(i))
 		if made := k.homeRequest(t, protocol.TypeHomeMake, "m", path, testKeptFirst); made["type"] != protocol.TypeHomeMade {
 			t.Fatalf("home_make %s: %v", path, made)
 		}
@@ -333,10 +367,10 @@ func TestAHomesLockGoesWithItsLastRequest(t *testing.T) {
 		}
 	}
 	k.s.mu.Lock()
-	left := len(k.s.homeOps)
+	left, disks := len(k.s.homeOps), len(k.s.diskOps)
 	k.s.mu.Unlock()
-	if left != 0 {
-		t.Fatalf("%d home locks are left after every home was retired", left)
+	if left != 0 || disks != 0 {
+		t.Fatalf("%d home locks and %d disk locks are left after every home was retired", left, disks)
 	}
 }
 
@@ -387,7 +421,7 @@ func TestAHomeNeverMadeLeavesNoLock(t *testing.T) {
 func TestAKeptHomeResetEmptiesItUnderItsUID(t *testing.T) {
 	k := keptKeeper(t)
 	uid := testKeptFirst
-	path := filepath.Join(k.s.cfg.Kept.Root, "vlt_home-reset")
+	path := k.keptPath("vlt_home-reset")
 	if made := k.homeRequest(t, protocol.TypeHomeMake, "m1", path, uid); made["type"] != protocol.TypeHomeMade {
 		t.Fatalf("home_make: %v", made)
 	}
@@ -413,7 +447,7 @@ func TestAKeptHomeResetEmptiesItUnderItsUID(t *testing.T) {
 		t.Fatalf("the home after its reset: %v %v", entries, err)
 	}
 
-	absent := filepath.Join(k.s.cfg.Kept.Root, "vlt_home-never")
+	absent := k.keptPath("vlt_home-never")
 	if reset := k.homeRequest(t, protocol.TypeHomeReset, "x2", absent, 0); reset["type"] != protocol.TypeHomeRetired {
 		t.Fatalf("home_reset of a home not made: %v", reset)
 	}
@@ -472,7 +506,7 @@ func TestAResizeReachesAPtySpawnsTerminal(t *testing.T) {
 	spawnID := spawned["spawn_id"].(string)
 	rc := k.accept(t)
 	rc.readUntil(t, func() bool { return strings.Contains(string(rc.got[frame.StreamStdout]), "24 80") })
-	resize, rerr := protocol.ParseRequest([]byte(`{"v":8,"type":"resize","spawn_id":"` + spawnID + `","rows":50,"cols":132}`))
+	resize, rerr := protocol.ParseRequest([]byte(`{"v":9,"type":"resize","spawn_id":"` + spawnID + `","rows":50,"cols":132}`))
 	if rerr != nil {
 		t.Fatal(rerr.Detail)
 	}
@@ -491,7 +525,7 @@ func TestAResizeReachesAPtySpawnsTerminal(t *testing.T) {
 func TestAKeptSpawnWritesPastTheFileSizeCeilingAndAPooledOneCannot(t *testing.T) {
 	k := keptKeeper(t)
 	uid := testKeptFirst
-	path := filepath.Join(k.s.cfg.Kept.Root, "vlt_home-big")
+	path := k.keptPath("vlt_home-big")
 	if made := k.homeRequest(t, protocol.TypeHomeMake, "m1", path, uid); made["type"] != protocol.TypeHomeMade {
 		t.Fatalf("home_make: %v", made)
 	}
@@ -518,28 +552,25 @@ func TestAKeptSpawnWritesPastTheFileSizeCeilingAndAPooledOneCannot(t *testing.T)
 	}
 }
 
-// A kept uid follows a pooled uid's discipline: from the release of its
-// last spawn it is retiring, and no new home's draw takes it, until every
-// process of it is gone, a child that ignores SIGTERM included; then it is
-// free.
+// A disk's uid follows a pooled uid's discipline, for the person at once:
+// from the release of their last spawn it is retiring until every process
+// of it is gone, a child that ignores SIGTERM included; then a new home of
+// theirs is made on their disk under it again.
 func TestAKeptUIDIsRetiringUntilEveryProcessOfItIsGone(t *testing.T) {
 	k := keptKeeper(t)
 	uid := testKeptFirst
-	a := filepath.Join(k.s.cfg.Kept.Root, "vlt_home-turn-a")
-	b := filepath.Join(k.s.cfg.Kept.Root, "vlt_home-turn-b")
-	c := filepath.Join(k.s.cfg.Kept.Root, "vlt_home-turn-c")
-	d := filepath.Join(k.s.cfg.Kept.Root, "vlt_home-turn-d")
+	k.share("ath_turn", "vlt_home-turn-a", "vlt_home-turn-d")
+	a := k.keptPath("vlt_home-turn-a")
+	b := k.keptPath("vlt_home-turn-b")
+	c := k.keptPath("vlt_home-turn-c")
+	d := k.keptPath("vlt_home-turn-d")
 	if made := k.homeRequest(t, protocol.TypeHomeMake, "m1", a, uid); made["type"] != protocol.TypeHomeMade {
 		t.Fatalf("home_make: %v", made)
 	}
 
-	// The uid runs a's spawn, whose child ignores SIGTERM. Its home's folder
-	// goes, so the uid is no home's owner: live, it is still no new home's.
+	// The uid runs a's spawn, whose child ignores SIGTERM.
 	spawned, rc := k.spawnKept(t, "turn", `(trap "" TERM; exec sleep 600) & echo forked; sleep 600`, a, uid)
 	rc.readUntil(t, func() bool { return strings.Contains(string(rc.got[frame.StreamStdout]), "forked\n") })
-	if err := os.RemoveAll(a); err != nil {
-		t.Fatal(err)
-	}
 	if made := k.homeRequest(t, protocol.TypeHomeMake, "m2", b, uid+1); made["type"] != protocol.TypeHomeMade {
 		t.Fatalf("home_make of another home beside a live uid: %v", made)
 	}
@@ -569,23 +600,24 @@ func TestAKeptUIDIsRetiringUntilEveryProcessOfItIsGone(t *testing.T) {
 		t.Fatalf("processes of kept uid %d once it retired: %+v %v", uid, c, err)
 	}
 	if made := k.homeRequest(t, protocol.TypeHomeMake, "m4", d, uid); made["type"] != protocol.TypeHomeMade {
-		t.Fatalf("home_make on the retired uid: %v", made)
+		t.Fatalf("home_make of the person's next home on the retired uid: %v", made)
 	}
-	for i, path := range []string{b, c, d} {
+	for i, path := range []string{a, b, c, d} {
 		if retired := k.homeRequest(t, protocol.TypeHomeRetire, "r"+strconv.Itoa(i), path, uid); retired["type"] != protocol.TypeHomeRetired {
 			t.Fatalf("home_retire: %v", retired)
 		}
 	}
 }
 
-// A kept uid whose retirement cannot finish (something of it outside its
-// home that it cannot remove) is quarantined: no new home's draw and no
-// spawn takes it, until the sweeper's retry finds nothing left. A space sees no
+// A disk's uid whose retirement cannot finish (something of it outside its
+// disk that it cannot remove) is quarantined: no spawn of any of the
+// person's programs takes it, until the sweeper's retry finds nothing
+// left. A space sees no
 // writable place outside its home, so the test leaves the entry itself.
 func TestAKeptUIDWhoseRetirementCannotFinishIsQuarantined(t *testing.T) {
 	k := keptKeeper(t)
 	uid := testKeptFirst
-	path := filepath.Join(k.s.cfg.Kept.Root, "vlt_home-quarantine")
+	path := k.keptPath("vlt_home-quarantine")
 	if made := k.homeRequest(t, protocol.TypeHomeMake, "m1", path, uid); made["type"] != protocol.TypeHomeMade {
 		t.Fatalf("home_make: %v", made)
 	}
@@ -618,12 +650,21 @@ func TestAKeptUIDWhoseRetirementCannotFinishIsQuarantined(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	if made := k.homeRequest(t, protocol.TypeHomeMake, "m2", filepath.Join(k.s.cfg.Kept.Root, "vlt_home-other"), uid+1); made["type"] != protocol.TypeHomeMade {
+	if made := k.homeRequest(t, protocol.TypeHomeMake, "m2", k.keptPath("vlt_home-other"), uid+1); made["type"] != protocol.TypeHomeMade {
 		t.Fatalf("home_make beside a quarantined uid: %v", made)
 	}
 	k.handleSpawn(t, keptRequest(t, k.attach, "again", "true", path, nil))
 	if busy := k.reply(t); busy["code"] != protocol.CodeUIDBusy {
 		t.Fatalf("a spawn on a quarantined uid: %v", busy)
+	}
+	k.share(k.athanorOf("vlt_home-quarantine"), "vlt_home-sibling")
+	sibling := k.keptPath("vlt_home-sibling")
+	if made := k.homeRequest(t, protocol.TypeHomeMake, "m3", sibling, uid); made["type"] != protocol.TypeHomeMade {
+		t.Fatalf("home_make of the person's other program beside the quarantine: %v", made)
+	}
+	k.handleSpawn(t, keptRequest(t, k.attach, "sibling", "true", sibling, nil))
+	if busy := k.reply(t); busy["code"] != protocol.CodeUIDBusy {
+		t.Fatalf("a spawn of the person's other program on the quarantined uid: %v", busy)
 	}
 
 	if err := os.Chmod(pinned, 0o777); err != nil {
@@ -751,25 +792,31 @@ func channelServer(t *testing.T, kept *home.Kept) (*server, *client, *protocol.L
 	return s, c, protocol.NewLineReader(theirs)
 }
 
-// home_list answers the homes in byte order, a page of at most
-// MaxHomeListIDs naming its last as next while more follow, and the page
-// after an id begins past it; an entry that is no home is not listed, and
-// a root that cannot be listed is unavailable. None needs root.
+// A home_list pages every home the disks' records hold in byte order,
+// whichever disk holds it; a folder under the root no record holds is no
+// home and is not listed. None needs root.
 func TestHomeListPagesTheHomesInOrder(t *testing.T) {
 	me := os.Getuid()
-	kept := &home.Kept{Root: t.TempDir(), First: me, Last: me}
-	var want []string
-	for i := 0; i < protocol.MaxHomeListIDs+3; i++ {
-		id := fmt.Sprintf("vlt_%04d", i)
-		want = append(want, id)
-		if err := os.Mkdir(filepath.Join(kept.Root, id), 0o700); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := os.WriteFile(filepath.Join(kept.Root, "vlt_file"), nil, 0o600); err != nil {
+	kept := &home.Kept{Root: t.TempDir(), First: me, Last: me + 1}
+	if err := os.Mkdir(filepath.Join(kept.Root, home.DisksDir), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	s, c, replies := channelServer(t, kept)
+	var want []string
+	disks := [2]home.Disk{{Athanor: "ath_a", Form: home.FormDirectory, UID: me}, {Athanor: "ath_b", Form: home.FormDirectory, UID: me + 1}}
+	for i := 0; i < protocol.MaxHomeListIDs+3; i++ {
+		id := fmt.Sprintf("vlt_%04d", i)
+		want = append(want, id)
+		disks[i%2] = disks[i%2].With(id)
+	}
+	for _, d := range disks {
+		if err := s.putDisk(d); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Mkdir(filepath.Join(kept.Root, "vlt_old"), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	list := func(after string) protocol.Homes {
 		t.Helper()
 		s.handle(c, &protocol.Request{V: protocol.Version, Type: protocol.TypeHomeList, ID: "l", After: protocol.AfterID(after)})
@@ -793,12 +840,5 @@ func TestHomeListPagesTheHomesInOrder(t *testing.T) {
 	}
 	if last := list(want[len(want)-1]); len(last.IDs) != 0 || last.Next != "" {
 		t.Fatalf("the page after the last home: %+v", last)
-	}
-
-	kept.Root = filepath.Join(kept.Root, "absent")
-	s.handle(c, &protocol.Request{V: protocol.Version, Type: protocol.TypeHomeList, ID: "l"})
-	line, _, _ := replies.Next()
-	if want := `{"v":8,"type":"error","id":"l","code":"unavailable"}`; string(line) != want {
-		t.Fatalf("a list of a root that cannot be read: %s", line)
 	}
 }

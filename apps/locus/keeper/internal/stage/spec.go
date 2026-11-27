@@ -48,9 +48,11 @@ type Spec struct {
 	HomeRoot string `json:"home_root"`
 	Home     string `json:"home"`
 	// Kept says Home is a kept home, made by its uid before the spawn and
-	// kept after it: the stage uses it as it is, under HomeRoot, the
-	// kept-homes root, and makes only its tmp directory when it is gone.
-	Kept bool `json:"kept"`
+	// kept after it: a home on a person's disk under HomeRoot, the
+	// kept-homes root, which the stage uses as it is, and Work is that
+	// disk's work folder, which the space sees at home.WorkPath.
+	Kept bool   `json:"kept"`
+	Work string `json:"work,omitempty"`
 	// Role names the role whose process this space runs, "" for a spawn's:
 	// its Home is the role's run folder, HomeRoot/Role, the keeper made for
 	// its uid; its Env is its whole environment, which the keeper built;
@@ -128,9 +130,11 @@ func (s Spec) Validate() error {
 		}
 	}
 	if s.Kept {
-		if err := (home.Kept{Root: s.HomeRoot, First: s.UID, Last: s.UID}).Validate(s.Home, s.UID); err != nil {
+		if err := (home.Kept{Root: s.HomeRoot}).ValidateHome(s.Home, s.Work); err != nil {
 			return err
 		}
+	} else if s.Work != "" {
+		return errors.New("only a kept spawn has a work folder")
 	} else if err := home.Validate(s.HomeRoot, s.Home, s.UID); err != nil {
 		return err
 	}
@@ -184,15 +188,16 @@ func (s Spec) validateRole() error {
 	return nil
 }
 
-// SearchPath is the spawn's PATH. A kept program's is CyfrBin, then the
-// home's .local/bin, where what the person installs goes, then Path; a
-// role's is its own environment's; every other spawn's is Path.
+// SearchPath is the spawn's PATH. A kept program's is CyfrBin, then its
+// home's .local/bin, then the work folder's, where what the person installs
+// goes for every program of theirs, then Path; a role's is its own
+// environment's; every other spawn's is Path.
 func (s Spec) SearchPath() string {
 	if s.Role != "" {
 		return s.Env["PATH"]
 	}
 	if s.Kept {
-		return CyfrBin + ":" + filepath.Join(s.Home, ".local", "bin") + ":" + Path
+		return CyfrBin + ":" + filepath.Join(s.Home, ".local", "bin") + ":" + filepath.Join(home.WorkPath, ".local", "bin") + ":" + Path
 	}
 	return Path
 }
@@ -200,8 +205,9 @@ func (s Spec) SearchPath() string {
 // Environ is the complete environment of the spawned process: HOME, USER,
 // LOGNAME, TMPDIR (the space's own /tmp) and PATH (SearchPath), then the spec's
 // own variables, sorted by name. A kept program is also given npm's prefix
-// and XDG_BIN_HOME in the home's .local, so what it installs lands on its
-// PATH, unless its own variables name them. Nothing is inherited.
+// and XDG_BIN_HOME in the work folder's .local, so what it installs lands
+// on the PATH of every program of the person, unless its own variables name
+// them. Nothing is inherited.
 func (s Spec) Environ() []string {
 	var env []string
 	if s.Role == "" {
@@ -215,8 +221,8 @@ func (s Spec) Environ() []string {
 	}
 	own := make(map[string]string, len(s.Env)+2)
 	if s.Kept {
-		own["NPM_CONFIG_PREFIX"] = filepath.Join(s.Home, ".local")
-		own["XDG_BIN_HOME"] = filepath.Join(s.Home, ".local", "bin")
+		own["NPM_CONFIG_PREFIX"] = filepath.Join(home.WorkPath, ".local")
+		own["XDG_BIN_HOME"] = filepath.Join(home.WorkPath, ".local", "bin")
 	}
 	for name, value := range s.Env {
 		own[name] = value

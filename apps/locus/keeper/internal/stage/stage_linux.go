@@ -391,13 +391,17 @@ func checkSocket(fd int) error {
 }
 
 // makeHome makes a scratch home, which must not exist yet; a kept home and
-// a role's run folder must exist and be the uid's and 0700.
+// a role's run folder must exist and be the uid's and 0700, and a kept
+// home's work folder a folder of the uid's.
 func makeHome(spec Spec) error {
 	if spec.Role != "" {
 		return home.CheckOwnDir(spec.Home, spec.UID, errors.New("not the role's run folder"))
 	}
 	if spec.Kept {
-		return home.CheckKeptHome(spec.Home, spec.UID)
+		if err := home.CheckKeptHome(spec.Home, spec.UID); err != nil {
+			return err
+		}
+		return home.CheckWork(spec.Work, spec.UID)
 	}
 	return os.Mkdir(spec.Home, 0o700)
 }

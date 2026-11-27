@@ -116,7 +116,7 @@ defmodule Locus.Backends.ServiceTest do
     end
 
     def drop(_agent, _id), do: :ok
-    def home_ensure(_agent, _id), do: {:ok, 40_001}
+    def home_ensure(_agent, _athanor, _id), do: {:ok, 40_001}
     def home_measure(_agent, _id), do: {:ok, 0}
     def home_reset(_agent, _id), do: :ok
     def home_retire(_agent, _id), do: :ok

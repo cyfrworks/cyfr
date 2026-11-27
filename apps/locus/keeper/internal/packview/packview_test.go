@@ -26,6 +26,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/cyfr/locus/keeper/internal/home"
 )
 
 const partBytes = 512 << 10
@@ -214,10 +216,10 @@ func TestAPutWritesEveryFileReadOnly(t *testing.T) {
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("the generation is\n%v\nwant\n%v", got, want)
 	}
-	if es := entries(t, filepath.Join(s.Dir(), Person("ath_1"))); fmt.Sprint(es) != fmt.Sprint([]string{d[7:]}) {
+	if es := entries(t, filepath.Join(s.Dir(), home.Person("ath_1"))); fmt.Sprint(es) != fmt.Sprint([]string{d[7:]}) {
 		t.Fatalf("the person's folder holds %v", es)
 	}
-	for _, p := range []string{s.Dir(), filepath.Join(s.Dir(), Person("ath_1"))} {
+	for _, p := range []string{s.Dir(), filepath.Join(s.Dir(), home.Person("ath_1"))} {
 		info, err := os.Stat(p)
 		if err != nil || info.Mode().Perm() != 0o711 {
 			t.Fatalf("%s: %v %v", p, info.Mode(), err)
@@ -252,7 +254,7 @@ func refused(t *testing.T, name string, b []byte, atPart int) {
 	if at != atPart {
 		t.Fatalf("%s: refused at part %d, want %d", name, at, atPart)
 	}
-	if es := entries(t, filepath.Join(s.Dir(), Person("ath_1"))); len(es) != 0 {
+	if es := entries(t, filepath.Join(s.Dir(), home.Person("ath_1"))); len(es) != 0 {
 		t.Fatalf("%s: left %v", name, es)
 	}
 	if held, err := s.Hold("ath_1", "lt_1", d); held || err != nil {
@@ -394,7 +396,7 @@ func TestARefusedPutLeavesNothing(t *testing.T) {
 		if _, err := s.Put(role, "ath_1", "lt_1", d, 1, false, ps[1]); !errors.Is(err, ErrRefused) {
 			t.Fatalf("a part after the refusal: %v", err)
 		}
-		if es := entries(t, filepath.Join(s.Dir(), Person("ath_1"))); len(es) != 0 {
+		if es := entries(t, filepath.Join(s.Dir(), home.Person("ath_1"))); len(es) != 0 {
 			t.Fatalf("left %v", es)
 		}
 	})
@@ -477,7 +479,7 @@ func TestASecondPutOfOneDigestChangesNothing(t *testing.T) {
 	if fmt.Sprint(before) != fmt.Sprint(after) || !os.SameFile(info, again) {
 		t.Fatalf("the second put changed the generation:\n%v\n%v", before, after)
 	}
-	if es := entries(t, filepath.Join(s.Dir(), Person("ath_1"))); fmt.Sprint(es) != fmt.Sprint([]string{d[7:]}) {
+	if es := entries(t, filepath.Join(s.Dir(), home.Person("ath_1"))); fmt.Sprint(es) != fmt.Sprint([]string{d[7:]}) {
 		t.Fatalf("left %v", es)
 	}
 }
@@ -537,7 +539,7 @@ func TestTwoStartsOfOnePersonAtOnce(t *testing.T) {
 	if err := <-second; err != nil || waits == 0 {
 		t.Fatalf("the second start: %v, after %d waits", err, waits)
 	}
-	if es := entries(t, filepath.Join(s.Dir(), Person("ath_1"))); fmt.Sprint(es) != fmt.Sprint([]string{d[7:]}) {
+	if es := entries(t, filepath.Join(s.Dir(), home.Person("ath_1"))); fmt.Sprint(es) != fmt.Sprint([]string{d[7:]}) {
 		t.Fatalf("left %v", es)
 	}
 }
@@ -625,7 +627,7 @@ func TestAPutFedSlowlyEndsAtItsBound(t *testing.T) {
 	if took := time.Since(began); took > s.putFor+time.Second {
 		t.Fatalf("refused after %v", took)
 	}
-	if es := entries(t, filepath.Join(s.Dir(), Person("ath_1"))); len(es) != 0 || len(s.puts) != 0 {
+	if es := entries(t, filepath.Join(s.Dir(), home.Person("ath_1"))); len(es) != 0 || len(s.puts) != 0 {
 		t.Fatalf("left %v, %d puts", es, len(s.puts))
 	}
 }
@@ -660,7 +662,7 @@ func TestTwoStartsOfOneKeyAreOneTransfer(t *testing.T) {
 	s.mu.Lock()
 	n := len(s.puts)
 	s.mu.Unlock()
-	if es := entries(t, filepath.Join(s.Dir(), Person("ath_1"))); n != 1 || len(es) != 1 {
+	if es := entries(t, filepath.Join(s.Dir(), home.Person("ath_1"))); n != 1 || len(es) != 1 {
 		t.Fatalf("%d registered, folders %v", n, es)
 	}
 }
@@ -687,7 +689,7 @@ func TestARoleEndingDuringARegistration(t *testing.T) {
 	if err := <-errs; !errors.Is(err, ErrRefused) {
 		t.Fatalf("a put begun after its role's end: %v", err)
 	}
-	if es, _ := os.ReadDir(filepath.Join(s.Dir(), Person("ath_1"))); len(s.puts) != 0 || len(es) != 0 {
+	if es, _ := os.ReadDir(filepath.Join(s.Dir(), home.Person("ath_1"))); len(s.puts) != 0 || len(es) != 0 {
 		t.Fatalf("%d pending, folders %v", len(s.puts), es)
 	}
 }
@@ -702,7 +704,7 @@ func TestARoleEndingMidStream(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.End(role)
-	if es := entries(t, filepath.Join(s.Dir(), Person("ath_1"))); len(s.puts) != 0 || len(es) != 0 {
+	if es := entries(t, filepath.Join(s.Dir(), home.Person("ath_1"))); len(s.puts) != 0 || len(es) != 0 {
 		t.Fatalf("%d pending, folders %v", len(s.puts), es)
 	}
 	if _, err := s.Put(role, "ath_1", "lt_1", d, 1, false, ps[1]); !errors.Is(err, ErrRefused) {
@@ -737,7 +739,7 @@ func TestAPutBeingFinishedStaysRegistered(t *testing.T) {
 		s.End(role)
 		_, err := os.Stat(s.Path("ath_1", d))
 		var folders []string
-		es, _ := os.ReadDir(filepath.Join(s.Dir(), Person("ath_1")))
+		es, _ := os.ReadDir(filepath.Join(s.Dir(), home.Person("ath_1")))
 		for _, e := range es {
 			folders = append(folders, e.Name())
 		}
@@ -761,7 +763,7 @@ func TestAPutBeingFinishedStaysRegistered(t *testing.T) {
 	if err := <-first; !errors.Is(err, ErrRefused) {
 		t.Errorf("the first put, its role ended while it was finished: %v", err)
 	}
-	if es := entries(t, filepath.Join(s.Dir(), Person("ath_1"))); len(es) != 0 || len(s.puts) != 0 {
+	if es := entries(t, filepath.Join(s.Dir(), home.Person("ath_1"))); len(es) != 0 || len(s.puts) != 0 {
 		t.Fatalf("left %v, %d registered", es, len(s.puts))
 	}
 }
@@ -780,7 +782,7 @@ func TestTheCleanupRule(t *testing.T) {
 		}
 		return d
 	}
-	person := filepath.Join(s.Dir(), Person("ath_1"))
+	person := filepath.Join(s.Dir(), home.Person("ath_1"))
 	has := func(ds ...string) {
 		t.Helper()
 		var want []string
@@ -864,7 +866,7 @@ func TestAnIdlePutIsDropped(t *testing.T) {
 	if _, err := s.Put(role, "ath_1", "lt_1", d, 2, true, []byte{}); !errors.Is(err, ErrRefused) {
 		t.Fatalf("a part after the idle bound: %v", err)
 	}
-	if es := entries(t, filepath.Join(s.Dir(), Person("ath_1"))); len(es) != 0 {
+	if es := entries(t, filepath.Join(s.Dir(), home.Person("ath_1"))); len(es) != 0 {
 		t.Fatalf("left %v", es)
 	}
 }
@@ -891,7 +893,7 @@ func TestAKeeperStartRemovesEveryPutFolder(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A keeper that died mid-put left its folder, half written.
-	half := filepath.Join(dir, Person("ath_1"), "."+strings.Repeat("1", 64)+".0123456789abcdef.part")
+	half := filepath.Join(dir, home.Person("ath_1"), "."+strings.Repeat("1", 64)+".0123456789abcdef.part")
 	if err := os.MkdirAll(filepath.Join(half, "p"), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -904,7 +906,7 @@ func TestAKeeperStartRemovesEveryPutFolder(t *testing.T) {
 	if err := New(dir).Sweep(); err != nil {
 		t.Fatal(err)
 	}
-	if es := entries(t, filepath.Join(dir, Person("ath_1"))); fmt.Sprint(es) != fmt.Sprint([]string{d[7:]}) {
+	if es := entries(t, filepath.Join(dir, home.Person("ath_1"))); fmt.Sprint(es) != fmt.Sprint([]string{d[7:]}) {
 		t.Fatalf("left %v", es)
 	}
 }

@@ -12,7 +12,8 @@ defmodule Locus.Launcher do
   pool `pool`, under the memory and processors the launcher sets by its
   place's kind (`Prima.LocusPool`), and answers the process's
   `t:handle/0`. A spec naming a kept `home` runs the process
-  in that home, under the home's own uid, and takes no uid of the pool;
+  in that home, under its disk's uid, with the disk's work folder at
+  `/work`, and takes no uid of the pool;
   `pty: %{rows: r, cols: c}` gives the process a pseudo-terminal of that
   size as its stdin, stdout and stderr, so its stdout carries what it
   writes to the terminal and no stderr is heard, and `c:resize/3` sets the
@@ -20,16 +21,19 @@ defmodule Locus.Launcher do
 
   ## Kept homes
 
-  A kept home is one folder per id under the launcher's kept-homes root,
-  owned by a uid of its own drawn from the launcher's kept-home range: no
-  other home and no pool is ever given that uid while the home lives.
-  `c:home_ensure/2` makes the home when it is absent, drawing its uid, and
-  answers the uid; `c:home_measure/2` answers the bytes it holds;
-  `c:home_reset/2` ends every process of its uid and empties it, keeping
-  its uid; `c:home_retire/2` ends every process of its uid, removes it and
-  frees its uid; `c:home_list/1` answers the id of every home it holds.
-  Each of the four acts as a helper under the home's uid, since nothing
-  else can read a home. A launcher with no kept-homes root refuses each,
+  A person, an athanor, has one disk under the launcher's kept-homes root,
+  owned by a uid of its own drawn from the launcher's kept-home range for
+  the disk's life: no other disk and no pool is ever given that uid. Each
+  of the person's program rows has a kept home on it, by the row's id, and
+  every program of the person shares the disk's work folder at `/work`.
+  `c:home_ensure/3` makes the home on its athanor's disk when it is not
+  made, the disk too when the person has none, and answers the disk's uid;
+  `c:home_measure/2` answers the bytes a home holds; `c:home_reset/2` ends
+  the home's sessions and empties it; `c:home_retire/2` ends them and
+  removes the home; neither touches the disk's other homes, its work
+  folder or its uid; `c:home_list/1` answers the id of every home the
+  disks hold. Each acts as a helper under the disk's uid, since nothing
+  else can read a disk. A launcher with no kept-homes root refuses each,
   and a spawn naming a home, `{:refused, "unavailable"}`. The process that called it is the process's
   owner: every event of the process reaches it as
   `{launcher_module, handle.ref, event}` (`t:event/0`), in order, until
@@ -268,8 +272,8 @@ defmodule Locus.Launcher do
   @callback pool_stats(GenServer.server() | keyword(), String.t()) ::
               {:ok, pool_stats()} | {:error, error()}
 
-  @doc "Make the kept home `id` if it is absent, drawing its uid; answer its uid."
-  @callback home_ensure(GenServer.server() | keyword(), String.t()) ::
+  @doc "Make the kept home `id` on the disk of the athanor if it is not made; answer the disk's uid."
+  @callback home_ensure(GenServer.server() | keyword(), String.t(), String.t()) ::
               {:ok, non_neg_integer()} | {:error, error()}
 
   @doc "The bytes the kept home `id` holds; `:absent` for a home not made."
@@ -279,10 +283,10 @@ defmodule Locus.Launcher do
   @doc "The id of every kept home the launcher holds."
   @callback home_list(GenServer.server() | keyword()) :: {:ok, [String.t()]} | {:error, error()}
 
-  @doc "End every process of the kept home `id`'s uid and empty the home, keeping its uid."
+  @doc "End every session of the kept home `id` and empty the home; nothing else of its disk changes."
   @callback home_reset(GenServer.server() | keyword(), String.t()) :: :ok | {:error, error()}
 
-  @doc "End every process of the kept home `id`'s uid, remove the home and free its uid."
+  @doc "End every session of the kept home `id` and remove the home; its disk's other homes, work folder and uid stay."
   @callback home_retire(GenServer.server() | keyword(), String.t()) :: :ok | {:error, error()}
 
   @doc """
@@ -339,7 +343,7 @@ defmodule Locus.Launcher do
   @optional_callbacks send_control: 2,
                       send_relay: 2,
                       close_relay: 1,
-                      home_ensure: 2,
+                      home_ensure: 3,
                       home_measure: 2,
                       home_reset: 2,
                       home_retire: 2,

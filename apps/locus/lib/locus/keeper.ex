@@ -158,27 +158,33 @@ defmodule Locus.Keeper do
 
   ## Kept homes
 
-  cyfr-locus given `--kept-homes` alone knows the kept homes, their
-  folders and their uids: this client names a home by its id
-  (`Prima.KeeperProtocol.home_id?/1`) and learns a home's uid only from
-  cyfr-locus's answer. `home_ensure/2` asks cyfr-locus for the home, which
-  answers a made home's uid, or draws one for a new home and makes the home
-  under it; `home_measure/2`, `home_reset/2` and `home_retire/2` ask
-  cyfr-locus, which acts as the home's uid, and `home_list/1` collects
+  cyfr-locus given `--kept-homes` alone knows the kept homes, the disks
+  they are on and the disks' uids: one disk a person, a home on it for
+  each of their program rows and a work folder all of them share. This
+  client names a home by its id (`Prima.KeeperProtocol.home_id?/1`) and
+  learns a disk's uid only from cyfr-locus's answer. `home_ensure/3` asks
+  cyfr-locus for the home on its athanor's disk, which makes the disk under
+  a uid it draws when the person has none yet, and the home on it when it
+  is not made; `home_measure/2`, `home_reset/2` and `home_retire/2` find
+  the home by its id alone and touch that home alone, as the disk's uid,
+  and `home_list/1` collects
   every page of cyfr-locus's list. cyfr-locus runs one request of a home at
   a time but serves each apart, so two sent together may be applied in
   either order: a reset or a retirement of a home that a request in flight
   will still make (a make, or a reset) is refused `conflict`, whether its
   caller still waits or not, never sent beside it: it is asked again once
   that has landed. A spec naming a kept `home` spawns there under the
-  home's uid, with its `home_max_bytes`; cyfr-locus refuses one naming a
-  home not made `home_absent`. A spec's `pty` size goes with its spawn, and
+  disk's uid, with its `home_max_bytes` and the disk's work folder at
+  `/work`; cyfr-locus refuses one naming a home no disk holds
+  `home_absent`, and one whose place is not the disk's athanor's
+  `bad_request`. A spec's `pty` size goes with its spawn, and
   `resize/3` asks cyfr-locus to set it again. A spec's `hosts` goes with its
   spawn (`Prima.KeeperProtocol`): cyfr-locus resolves them and has the
   island's guard hold the spawn's uid to their addresses, refusing the
   spawn `hosts_unresolved` or `guard_unavailable`. A cyfr-locus that keeps
   no homes refuses every home call and every spec naming a home
-  `unavailable`; a new home with every uid of its range taken, `capacity`.
+  `unavailable`; a new disk with every uid of its range taken, `capacity`;
+  a home another athanor's disk holds, `bad_request`.
 
   cyfr-locus keeps each person's packs beside the kept homes, one
   read-only generation for each set digest (`Prima.KeeperProtocol`,
@@ -620,25 +626,28 @@ defmodule Locus.Keeper do
   end
 
   @doc """
-  Make the kept home `id` if it is absent and answer its uid, as
-  cyfr-locus answers it: a made home's, or the lowest uid of the range
-  that cyfr-locus finds no home owning, no process holding and nothing of
-  its own holding, which its helper, running as that uid, makes the home
-  under. `{:refused, "unavailable"}` from a cyfr-locus that keeps no homes,
-  `{:refused, "capacity"}` with every uid of the range taken.
+  Make the kept home `id` on the disk of `athanor` if it is not made and
+  answer the disk's uid, as cyfr-locus answers it: the person's disk's, or,
+  for a person with none yet, the lowest uid of the range that cyfr-locus
+  finds no disk holding, no process holding and nothing of its own
+  holding, under which its helper makes the disk. `{:refused,
+  "unavailable"}` from a cyfr-locus that keeps no homes, `{:refused,
+  "capacity"}` with every uid of the range taken, `{:refused,
+  "bad_request"}` for a home another athanor's disk holds.
   """
   @impl Locus.Launcher
-  def home_ensure(server, id) when is_binary(id), do: home_call(server, {:home_ensure, id})
+  def home_ensure(server, athanor, id) when is_binary(athanor) and is_binary(id),
+    do: home_call(server, {:home_ensure, athanor, id})
 
-  @doc "The bytes the kept home `id` holds, measured as its uid; `:absent` for a home not made."
+  @doc "The bytes the kept home `id` holds, measured as its disk's uid; `:absent` for a home no disk holds."
   @impl Locus.Launcher
   def home_measure(server, id) when is_binary(id), do: home_call(server, {:home_measure, id})
 
-  @doc "End every process of the kept home `id`'s uid and make the home again empty, under that uid."
+  @doc "End every session of the kept home `id` and make the home again empty, nothing else of its disk touched."
   @impl Locus.Launcher
   def home_reset(server, id) when is_binary(id), do: home_call(server, {:home_reset, id})
 
-  @doc "End every process of the kept home `id`'s uid and remove the home, freeing its uid."
+  @doc "End every session of the kept home `id` and remove the home from its disk, whose other homes, work folder and uid stay."
   @impl Locus.Launcher
   def home_retire(server, id) when is_binary(id), do: home_call(server, {:home_retire, id})
 
@@ -1158,8 +1167,8 @@ defmodule Locus.Keeper do
     end
   end
 
-  def handle_call({:home_ensure, id}, from, state),
-    do: home_request(state, %{type: :home_make, home: id}, {:ensure, from})
+  def handle_call({:home_ensure, athanor, id}, from, state),
+    do: home_request(state, %{type: :home_make, home: id, athanor: athanor}, {:ensure, from})
 
   def handle_call(:home_list, from, state),
     do: home_request(state, %{type: :home_list}, {:list, from, []})

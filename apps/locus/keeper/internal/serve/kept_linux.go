@@ -7,12 +7,9 @@ package serve
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -51,8 +48,8 @@ func (s *server) keptLock(uid int) *sync.Mutex {
 	return l
 }
 
-// homeLock is a kept home's lock and the number of requests holding or
-// waiting for it; s.mu guards refs.
+// homeLock is a lock of a kept home or of a disk and the number of
+// requests holding or waiting for it; s.mu guards refs.
 type homeLock struct {
 	mu   sync.Mutex
 	refs int
@@ -62,14 +59,27 @@ type homeLock struct {
 // entry lives in homeOps only while a request holds or waits for it, so a
 // home retired, or an id never made, leaves nothing behind.
 func (s *server) lockHome(id string) (unlock func()) {
+	return s.lockIn(&s.homeOps, id)
+}
+
+// lockDisk takes the lock of the disk of athanor, which every change of its
+// record holds from its read to its write, and answers its release. Lock
+// order: a home's, then its disk's, then the uid's.
+func (s *server) lockDisk(athanor string) (unlock func()) {
+	return s.lockIn(&s.diskOps, athanor)
+}
+
+// lockIn takes the lock of key in *locks, made while a request holds or
+// waits for it and removed with its last.
+func (s *server) lockIn(locks *map[string]*homeLock, key string) (unlock func()) {
 	s.mu.Lock()
-	if s.homeOps == nil {
-		s.homeOps = map[string]*homeLock{}
+	if *locks == nil {
+		*locks = map[string]*homeLock{}
 	}
-	l := s.homeOps[id]
+	l := (*locks)[key]
 	if l == nil {
 		l = &homeLock{}
-		s.homeOps[id] = l
+		(*locks)[key] = l
 	}
 	l.refs++
 	s.mu.Unlock()
@@ -79,18 +89,15 @@ func (s *server) lockHome(id string) (unlock func()) {
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		if l.refs--; l.refs == 0 {
-			delete(s.homeOps, id)
+			delete(*locks, key)
 		}
 	}
 }
 
-// keptMaps makes the kept uids' state maps; s.mu is held.
+// keptMaps makes the kept uids' and the disks' state maps; s.mu is held.
 func (s *server) keptMaps() {
 	if s.keptLive == nil {
 		s.keptLive = map[int]int{}
-	}
-	if s.keptHomes == nil {
-		s.keptHomes = map[int]string{}
 	}
 	if s.keptRetiring == nil {
 		s.keptRetiring = map[int]chan struct{}{}
@@ -104,36 +111,89 @@ func (s *server) keptMaps() {
 	if s.keptMaking == nil {
 		s.keptMaking = map[int]bool{}
 	}
+	if s.disks == nil {
+		s.disks = map[string]*home.Disk{}
+	}
+	if s.homeDisk == nil {
+		s.homeDisk = map[string]string{}
+	}
 }
 
-// keptState is why a kept home's uid cannot take the home at path now,
-// with s.mu held: the channel its retirement closes when it is retiring,
-// busy when it is quarantined or live under another home.
-func (s *server) keptState(uid int, path string) (retiring chan struct{}, busy bool) {
+// loadDisks reads every disk's record (home.Kept.LoadDisks) into the
+// keeper's own index: the disk of each athanor, and whose disk holds each
+// home. A record the keeper cannot trust refuses its start.
+func (s *server) loadDisks() error {
+	disks, err := s.cfg.Kept.LoadDisks()
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.keptMaps()
+	for a, d := range disks {
+		s.disks[a] = d
+		for _, id := range d.Homes {
+			s.homeDisk[id] = a
+		}
+	}
+	return nil
+}
+
+// putDisk records d on its disk (home.Kept.WriteDisk) and then in the
+// index; the disk's lock is held. A record not written changes nothing.
+func (s *server) putDisk(d home.Disk) error {
+	if err := s.cfg.Kept.WriteDisk(d); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.keptMaps()
+	if old := s.disks[d.Athanor]; old != nil {
+		for _, id := range old.Homes {
+			delete(s.homeDisk, id)
+		}
+	}
+	s.disks[d.Athanor] = &d
+	for _, id := range d.Homes {
+		s.homeDisk[id] = d.Athanor
+	}
+	return nil
+}
+
+// keptAt is where a kept home is: whose disk holds it, the disk, the home
+// and the disk's work folder, and the disk's uid.
+type keptAt struct {
+	athanor, disk, path, work string
+	uid                       int
+}
+
+// keptState is why a disk's uid cannot take a spawn now, with s.mu held:
+// the channel its retirement closes when it is retiring, busy when it is
+// quarantined. Every home of a disk shares its uid, so a uid live under
+// one home takes a spawn of another.
+func (s *server) keptState(uid int) (retiring chan struct{}, busy bool) {
 	s.keptMaps()
 	if _, q := s.keptQuarantined[uid]; q {
 		return nil, true
 	}
-	if ch := s.keptRetiring[uid]; ch != nil {
-		return ch, false
-	}
-	return nil, s.keptLive[uid] > 0 && s.keptHomes[uid] != path
+	return s.keptRetiring[uid], false
 }
 
 // sweepKept retries the retirement of every quarantined kept uid, as the
-// sweeper retries a pooled one, and frees each once nothing of it remains.
+// sweeper retries a pooled one, and frees each once nothing of it remains
+// outside its disk.
 func (s *server) sweepKept() {
 	s.mu.Lock()
 	s.keptMaps()
 	todo := make(map[int]string, len(s.keptQuarantined))
-	for uid, path := range s.keptQuarantined {
-		todo[uid] = path
+	for uid, disk := range s.keptQuarantined {
+		todo[uid] = disk
 	}
 	s.mu.Unlock()
-	for uid, path := range todo {
+	for uid, disk := range todo {
 		lock := s.keptLock(uid)
 		lock.Lock()
-		clean := s.scrub(KeptAccount(uid), 0, nil, path)
+		clean := s.scrub(KeptAccount(uid), 0, nil, disk)
 		if clean {
 			s.mu.Lock()
 			delete(s.keptQuarantined, uid)
@@ -144,35 +204,34 @@ func (s *server) sweepKept() {
 	}
 }
 
-// keptHome looks up the kept home id for c under the home's lock: its
-// path, and its uid when it is made (home.Kept.Owner). It answers the
-// refusal of a keeper that keeps no homes, or of a role whose sessions keep
-// none (CodeUnavailable), of a home not made (CodeHomeAbsent, with its
-// path) and of an entry that is no home (CodeBadRequest).
-func (s *server) keptHome(c *client, id string) (path string, uid int, code string) {
+// keptHome finds the kept home id on the disk that holds it, from the
+// keeper's index of the disks' records: never by a walk inside a disk. It
+// answers the refusal of a keeper that keeps no homes, or of a role whose
+// sessions keep none (CodeUnavailable), and of a home no disk holds
+// (CodeHomeAbsent).
+func (s *server) keptHome(c *client, id string) (keptAt, string) {
 	if s.cfg.Kept == nil || !c.role.spec.Kept {
-		return "", 0, protocol.CodeUnavailable
+		return keptAt{}, protocol.CodeUnavailable
 	}
-	path = filepath.Join(s.cfg.Kept.Root, id)
-	uid, err := s.cfg.Kept.Owner(id)
-	switch {
-	case errors.Is(err, fs.ErrNotExist):
-		return path, 0, protocol.CodeHomeAbsent
-	case err != nil:
-		s.log.Warn("kept home %s: %v", id, err)
-		return path, 0, protocol.CodeBadRequest
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.keptMaps()
+	a, ok := s.homeDisk[id]
+	if !ok {
+		return keptAt{}, protocol.CodeHomeAbsent
 	}
-	return path, uid, ""
+	k := s.cfg.Kept
+	return keptAt{athanor: a, disk: k.DiskPath(a), path: k.HomePath(a, id), work: k.WorkOf(a), uid: s.disks[a].UID}, ""
 }
 
 // drawKept reads which uids of the range are taken (taken, home.Kept.Taken
-// in production) and holds the lowest that the reading does not hold and
-// the keeper holds for nothing (no make or reset holds it, and it is not
-// retiring, quarantined or live) as making until unmakeKept; with none left
-// it answers false. The reading and the draw are one step under keptDraw,
-// which unmakeKept takes too: a make that ends, its home now a folder of
-// its uid, cannot free that uid between another draw's reading, which saw
-// no folder, and that draw, so two homes never get one uid.
+// in production) and holds the lowest that the reading does not hold, no
+// disk's record holds and the keeper holds for nothing (no make or reset
+// holds it, and it is not retiring, quarantined or live) as making until
+// unmakeKept; with none left it answers false. The reading and the draw are
+// one step under keptDraw, which unmakeKept takes too: a make that ends,
+// its disk now recorded, cannot free that uid between another draw's
+// reading and that draw, so two disks never get one uid.
 func (s *server) drawKept(taken func() (map[int]bool, error)) (int, bool, error) {
 	s.keptDraw.Lock()
 	defer s.keptDraw.Unlock()
@@ -183,9 +242,13 @@ func (s *server) drawKept(taken func() (map[int]bool, error)) (int, bool, error)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.keptMaps()
+	recorded := make(map[int]bool, len(s.disks))
+	for _, d := range s.disks {
+		recorded[d.UID] = true
+	}
 	for uid := s.cfg.Kept.First; uid <= s.cfg.Kept.Last; uid++ {
 		_, quarantined := s.keptQuarantined[uid]
-		if held[uid] || s.keptMaking[uid] || quarantined || s.keptRetiring[uid] != nil || s.keptLive[uid] > 0 {
+		if held[uid] || recorded[uid] || s.keptMaking[uid] || quarantined || s.keptRetiring[uid] != nil || s.keptLive[uid] > 0 {
 			continue
 		}
 		s.keptMaking[uid] = true
@@ -194,8 +257,7 @@ func (s *server) drawKept(taken func() (map[int]bool, error)) (int, bool, error)
 	return 0, false, nil
 }
 
-// unmakeKept ends the hold drawKept or a reset took on uid, under keptDraw
-// (drawKept).
+// unmakeKept ends the hold drawKept took on uid, under keptDraw (drawKept).
 func (s *server) unmakeKept(uid int) {
 	s.keptDraw.Lock()
 	defer s.keptDraw.Unlock()
@@ -204,20 +266,24 @@ func (s *server) unmakeKept(uid int) {
 	delete(s.keptMaking, uid)
 }
 
-// startKeptSpawn starts a spawn in a made kept home, under the home's own
-// uid and no uid of a pool, refused as CodeHomeOverCap when the home already
-// holds its home_max_bytes. Its start holds the uid's lock, so it never
-// starts during the uid's full retirement or a home request. Every session
-// of the home shares the uid and its files, and each has its own space and
-// route, which reaches what its own start resolved. It answers as
+// startKeptSpawn starts a spawn in a home of a person's disk, under the
+// disk's uid and no uid of a pool, with the disk's work folder at /work,
+// refused as CodeHomeOverCap when the home already holds its
+// home_max_bytes, and as CodeBadRequest when its place is not the disk's
+// athanor's. Its start holds the home's lock until the spawn is held, so a
+// reset or a retirement of the home, which takes that lock, finds every
+// session of it; and it registers the spawn live under the uid's lock in
+// the same step that finds the uid not retiring, so the uid's full
+// retirement, which runs only once no spawn of the uid is live, never ends
+// a spawn of the person's other programs: one that began before it is
+// counted live and holds it off, or finds it retiring and waits for it.
+// Every session of the disk shares the uid, and each has its own space,
+// which sees its own home and the work folder and no other home, and its
+// own route, which reaches what its own start resolved. It answers as
 // startSpawn does.
 func (s *server) startKeptSpawn(c *client, req *protocol.Request, reach string, e egress, known bool, limits admission.Limits) (*spawn, string) {
-	// The home's uid, read under its lock, is the home's for its life: a
-	// home retired after this read is absent once the uid's lock is held,
-	// and a reset keeps the uid.
-	unlockHome := s.lockHome(req.Home)
-	path, uid, code := s.keptHome(c, req.Home)
-	unlockHome()
+	defer s.lockHome(req.Home)()
+	at, code := s.keptHome(c, req.Home)
 	if code != "" {
 		s.log.Warn("spawn %s refused: kept home %s: %s", req.ID, req.Home, code)
 		return nil, code
@@ -225,28 +291,32 @@ func (s *server) startKeptSpawn(c *client, req *protocol.Request, reach string, 
 	if !known {
 		return nil, protocol.CodeUnknownPool
 	}
+	s.mu.Lock()
+	p := c.places[req.Place]
+	others := p == nil || p.whose.Athanor != at.athanor
+	s.mu.Unlock()
+	if others {
+		s.log.Warn("spawn %s refused: its place is not the athanor's whose disk holds kept home %s", req.ID, req.Home)
+		return nil, protocol.CodeBadRequest
+	}
+	uid := at.uid
 	acct := KeptAccount(uid)
 	lock := s.keptLock(uid)
 	deadline := time.Now().Add(keptRetireWait)
 	// A uid whose last spawn was released is retiring until every process
-	// of it is gone: a spawn of the same home waits for that; one on a uid
-	// quarantined or live under another home is refused.
+	// of it is gone: a spawn waits for that; one on a uid quarantined is
+	// refused.
 	for {
+		lock.Lock()
 		s.mu.Lock()
-		retiring, busy := s.keptState(uid, path)
-		s.mu.Unlock()
+		retiring, busy := s.keptState(uid)
 		if retiring == nil && !busy {
-			lock.Lock()
-			s.mu.Lock()
-			retiring, busy = s.keptState(uid, path)
-			s.mu.Unlock()
-			if retiring == nil && !busy {
-				break
-			}
-			lock.Unlock()
+			break
 		}
+		s.mu.Unlock()
+		lock.Unlock()
 		if busy {
-			s.log.Warn("spawn %s refused: kept uid %d is quarantined or live under another home", req.ID, uid)
+			s.log.Warn("spawn %s refused: kept uid %d is quarantined", req.ID, uid)
 			return nil, protocol.CodeUIDBusy
 		}
 		select {
@@ -256,35 +326,31 @@ func (s *server) startKeptSpawn(c *client, req *protocol.Request, reach string, 
 			return nil, protocol.CodeUIDBusy
 		}
 	}
-	if err := home.CheckKeptHome(path, uid); err != nil {
-		lock.Unlock()
-		s.log.Warn("spawn %s refused: the kept home of uid %d is not made: %v", req.ID, uid, err)
-		if errors.Is(err, fs.ErrNotExist) {
-			return nil, protocol.CodeHomeAbsent
-		}
-		return nil, protocol.CodeBadRequest
-	}
-	if max := req.HomeMaxBytes; max != nil {
-		bytes, err := s.measureHome(acct, path)
-		if err != nil {
-			lock.Unlock()
-			s.log.Error("spawn %s: measuring the kept home of uid %d: %v", req.ID, uid, err)
-			return nil, protocol.CodeInternal
-		}
-		if bytes >= *max {
-			lock.Unlock()
-			s.log.Warn("spawn %s refused: the kept home of uid %d holds %d bytes, at or over its bound %d", req.ID, uid, bytes, *max)
-			return nil, protocol.CodeHomeOverCap
-		}
-	}
-	s.mu.Lock()
-	s.keptMaps()
+	// Live from here, in the step that found the uid not retiring (s.mu and
+	// the uid's lock held): its home's measure below runs as the uid.
 	s.keptLive[uid]++
-	s.keptHomes[uid] = path
 	s.mu.Unlock()
+	sp := &spawn{id: randomHex(16), client: c, kept: true, account: acct, keptHome: req.Home, home: at.path, work: at.work, disk: at.disk,
+		reach: reach, limits: limits, retired: make(chan struct{})}
+	if max := req.HomeMaxBytes; max != nil {
+		bytes, err := s.measureHome(acct, at.path)
+		switch {
+		case err != nil:
+			s.log.Error("spawn %s: measuring kept home %s of uid %d: %v", req.ID, req.Home, uid, err)
+			code = protocol.CodeInternal
+		case bytes >= *max:
+			s.log.Warn("spawn %s refused: kept home %s of uid %d holds %d bytes, at or over its bound %d", req.ID, req.Home, uid, bytes, *max)
+			code = protocol.CodeHomeOverCap
+		}
+	}
 	lock.Unlock()
+	if code != "" {
+		// Never made: it gives back its count as a released spawn does, and
+		// the uid retires when it was the last.
+		s.unliveKept(uid, at.disk)
+		return nil, code
+	}
 
-	sp := &spawn{id: randomHex(16), client: c, kept: true, account: acct, home: path, reach: reach, limits: limits, retired: make(chan struct{})}
 	s.madeIn(req.Place, sp)
 	if code, err := s.launch(sp, req, e); err != nil {
 		s.log.Error("spawn %s on kept uid %d: %v", req.ID, uid, err)
@@ -297,6 +363,52 @@ func (s *server) startKeptSpawn(c *client, req *protocol.Request, reach string, 
 	s.send(c, protocol.NewSpawned(req.ID, sp.id, uid, sp.leader.pid))
 	go s.watchLeader(sp)
 	return sp, ""
+}
+
+// unliveKept gives back the live count of a kept spawn refused before it
+// was made, as a released spawn's end does (retireKept): a uid left with
+// no live spawn is retiring, and is scrubbed now when nothing of it is
+// still ending, or by the last end otherwise.
+func (s *server) unliveKept(uid int, disk string) {
+	s.mu.Lock()
+	s.keptMaps()
+	var done chan struct{}
+	if s.keptLive[uid]--; s.keptLive[uid] <= 0 {
+		delete(s.keptLive, uid)
+		if s.keptRetiring[uid] == nil {
+			s.keptRetiring[uid] = make(chan struct{})
+		}
+		if s.keptEnding[uid] <= 0 {
+			done = s.keptRetiring[uid]
+		}
+	}
+	s.mu.Unlock()
+	if done != nil {
+		go s.scrubKept(uid, disk, done)
+	}
+}
+
+// scrubKept is a disk's uid's full retirement, once it is retiring and no
+// spawn of it is live or ending: every process of the uid is killed
+// (SIGKILL until none is left) and what it left outside its disk removed
+// before the uid is free; one that survives quarantines it, which holds
+// every program of the person until the sweeper's retry finishes it. done
+// closes at the end.
+func (s *server) scrubKept(uid int, disk string, done chan struct{}) {
+	lock := s.keptLock(uid)
+	lock.Lock()
+	clean := s.scrub(KeptAccount(uid), 0, nil, disk)
+	lock.Unlock()
+	s.mu.Lock()
+	delete(s.keptRetiring, uid)
+	if !clean {
+		s.keptQuarantined[uid] = disk
+	}
+	close(done)
+	s.mu.Unlock()
+	if !clean {
+		s.log.Warn("kept uid %d quarantined: a process or something it left outside its disk outlived retirement", uid)
+	}
 }
 
 // endInOrder ends a kept spawn's group by the levels a kept session ends
@@ -474,9 +586,11 @@ var poll = unix.Poll
 var probe = func(fd int) error { return unix.PidfdSendSignal(fd, 0, nil, 0) }
 
 // retireKept ends a kept spawn once: the processes of its own group, which
-// are everything it started, its leader first (endInOrder); then, when no other spawn holds its uid, the
-// uid's full retirement, every process of the uid and what it left on the
-// writable mounts and in the mqueue mount but its home. The uid stays its home's.
+// are everything it started, its leader first (endInOrder); then, when no
+// other spawn of the person holds its uid, the uid's full retirement
+// (scrubKept), every process of the uid and what it left on the writable
+// mounts and in the mqueue mount but its disk. The uid stays its disk's.
+// Whether the group was found empty is sp.ended.
 func (s *server) retireKept(sp *spawn, grace time.Duration, notify bool) {
 	sp.retireOnce.Do(func() {
 		uid := sp.account.UID
@@ -492,14 +606,20 @@ func (s *server) retireKept(sp *spawn, grace time.Duration, notify bool) {
 		s.keptEnding[uid]++
 		if s.keptLive[uid] <= 0 {
 			delete(s.keptLive, uid)
-			s.keptRetiring[uid] = make(chan struct{})
+			if s.keptRetiring[uid] == nil {
+				s.keptRetiring[uid] = make(chan struct{})
+			}
 		}
 		s.mu.Unlock()
 		go func() {
 			defer close(sp.retired)
-			if sp.group != nil && !s.endInOrder(sp.id, uid, sp.group, sp.leader, deadline) {
+			ended := sp.group == nil || s.endInOrder(sp.id, uid, sp.group, sp.leader, deadline)
+			if !ended {
 				s.log.Warn("spawn %s: processes of kept uid %d outlived their group's kill", sp.id, uid)
 			}
+			s.mu.Lock()
+			sp.ended = ended
+			s.mu.Unlock()
 			// Its processes are gone, or past their group's kill: its route
 			// carries nothing more.
 			s.withdrawRoute(sp.id, &sp.route)
@@ -521,24 +641,7 @@ func (s *server) retireKept(sp *spawn, grace time.Duration, notify bool) {
 			}
 			s.mu.Unlock()
 			if last {
-				// Every process of the uid is killed (SIGKILL until none is
-				// left) and what it left outside its home removed before the
-				// uid is free; one that survives quarantines it.
-				lock := s.keptLock(uid)
-				lock.Lock()
-				clean := s.scrub(sp.account, 0, nil, sp.home)
-				lock.Unlock()
-				s.mu.Lock()
-				delete(s.keptRetiring, uid)
-				delete(s.keptHomes, uid)
-				if !clean {
-					s.keptQuarantined[uid] = sp.home
-				}
-				close(done)
-				s.mu.Unlock()
-				if !clean {
-					s.log.Warn("spawn %s: kept uid %d quarantined: a process or something it left outside its home outlived retirement", sp.id, uid)
-				}
+				s.scrubKept(uid, sp.disk, done)
 			}
 
 			if notify {
@@ -562,45 +665,41 @@ func (s *server) retireKept(sp *spawn, grace time.Duration, notify bool) {
 }
 
 // handleHome answers a home request under the home's lock, each helper it
-// runs under the uid's lock: `home_make` answers a made home's uid or makes
-// the home under a uid it draws (makeHome), `home_measure` answers the
-// bytes allocated under it, `home_reset` ends every process of the uid and
-// makes the home again empty under it, and `home_retire` ends every process
-// of the uid and removes the home and everything else the uid left.
+// runs under the disk's uid's lock: `home_make` makes the home on its
+// athanor's disk (makeHome), `home_measure` answers the bytes allocated
+// under the home, `home_reset` ends the home's sessions and makes it again
+// empty, and `home_retire` ends them and removes the home from its disk
+// (retireHome).
 func (s *server) handleHome(c *client, req *protocol.Request) {
 	if s.keepsNoHomes(c, req) {
 		return
 	}
 	defer s.lockHome(req.Home)()
-	path, uid, code := s.keptHome(c, req.Home)
-	absent := code == protocol.CodeHomeAbsent
-	if code != "" && !absent {
-		s.log.Warn("%s %s refused: kept home %s: %s", req.Type, req.ID, req.Home, code)
-		s.send(c, protocol.NewError(req.ID, "", code))
+	if req.Type == protocol.TypeHomeMake {
+		s.makeHome(c, req)
 		return
 	}
+	at, code := s.keptHome(c, req.Home)
 	switch {
-	case req.Type == protocol.TypeHomeMake && !absent:
-		s.send(c, protocol.NewHomeMade(req.ID, uid))
-	case req.Type == protocol.TypeHomeMake:
-		s.makeHome(c, req, path)
-	case absent && req.Type == protocol.TypeHomeMeasure:
+	case code == protocol.CodeHomeAbsent && req.Type == protocol.TypeHomeMeasure:
 		s.send(c, protocol.NewError(req.ID, "", protocol.CodeHomeAbsent))
-	case absent:
+	case code == protocol.CodeHomeAbsent:
 		s.send(c, protocol.NewHomeRetired(req.ID))
+	case code != "":
+		s.send(c, protocol.NewError(req.ID, "", code))
 	case req.Type == protocol.TypeHomeMeasure:
-		uidLock := s.keptLock(uid)
+		uidLock := s.keptLock(at.uid)
 		uidLock.Lock()
-		bytes, err := s.measureHome(KeptAccount(uid), path)
+		bytes, err := s.measureHome(KeptAccount(at.uid), at.path)
 		uidLock.Unlock()
 		if err != nil {
-			s.log.Error("home_measure %s: uid %d: %v", req.ID, uid, err)
+			s.log.Error("home_measure %s: uid %d: %v", req.ID, at.uid, err)
 			s.send(c, protocol.NewError(req.ID, "", protocol.CodeInternal))
 			return
 		}
 		s.send(c, protocol.NewHomeMeasured(req.ID, bytes))
 	default:
-		s.retireHome(c, req, path, uid)
+		s.retireHome(c, req, at)
 	}
 }
 
@@ -619,90 +718,158 @@ func (s *server) keepsNoHomes(c *client, req *protocol.Request) bool {
 	return true
 }
 
-// makeHome makes the absent home at path under the lowest free uid of the
-// range (drawKept), held as making until the home is made.
-func (s *server) makeHome(c *client, req *protocol.Request, path string) {
-	uid, ok, err := s.drawKept(func() (map[int]bool, error) { return s.cfg.Kept.Taken("/proc") })
-	if err != nil {
-		s.log.Error("home_make %s: reading the kept homes' root and /proc: %v", req.ID, err)
-		s.send(c, protocol.NewError(req.ID, "", protocol.CodeUnavailable))
-		return
-	}
-	if !ok {
-		s.log.Warn("home_make %s refused: every kept uid is taken", req.ID)
-		s.send(c, protocol.NewError(req.ID, "", protocol.CodeCapacity))
-		return
-	}
-	defer s.unmakeKept(uid)
-	lock := s.keptLock(uid)
-	lock.Lock()
-	defer lock.Unlock()
-	if _, err := s.runHomeHelper(KeptAccount(uid), home.HelperSpec{Op: home.OpMake, Path: path, UID: uid}); err != nil {
-		s.log.Error("home_make %s: uid %d: %v", req.ID, uid, err)
-		s.send(c, protocol.NewError(req.ID, "", protocol.CodeInternal))
-		return
-	}
-	s.send(c, protocol.NewHomeMade(req.ID, uid))
-}
-
-// retireHome ends every process of the made home's uid and removes the home
-// and everything else the uid left, then, for a `home_reset`, makes the
-// home again empty under the same uid, which stays held as making between
-// the two so no draw takes it while no folder owns it.
-func (s *server) retireHome(c *client, req *protocol.Request, path string, uid int) {
-	reset := req.Type == protocol.TypeHomeReset
-	if reset {
-		s.mu.Lock()
-		s.keptMaps()
-		s.keptMaking[uid] = true
-		s.mu.Unlock()
-		defer s.unmakeKept(uid)
-	}
-	acct := KeptAccount(uid)
-	lock := s.keptLock(uid)
-	lock.Lock()
-	defer lock.Unlock()
-	if !s.scrub(acct, homeRetireGrace, []string{path}, "") {
-		s.log.Warn("%s %s: uid %d: a process or something it left outlived retirement", req.Type, req.ID, uid)
-		s.send(c, protocol.NewError(req.ID, "", protocol.CodeInternal))
-		return
-	}
-	if _, err := os.Lstat(path); !errors.Is(err, fs.ErrNotExist) {
-		s.log.Warn("%s %s: uid %d: the home is still there", req.Type, req.ID, uid)
-		s.send(c, protocol.NewError(req.ID, "", protocol.CodeInternal))
-		return
-	}
+// makeHome makes the home req names on the disk of its athanor, the home's
+// lock held. A disk not yet recorded is drawn the lowest free uid
+// (drawKept), held as making until its record holds it. The record comes
+// first: it holds the home before the folder is made, so a keeper killed
+// between the two leaves a home its record lists and no folder, which the
+// next make makes, and never a folder no record knows. The make itself is
+// the helper's, as the disk's uid, and makes the disk and its work folder
+// too where they are not yet made. A home another athanor's disk holds is
+// refused, and nothing changes.
+func (s *server) makeHome(c *client, req *protocol.Request) {
 	s.mu.Lock()
 	s.keptMaps()
-	delete(s.keptQuarantined, uid)
+	whose, held := s.homeDisk[req.Home]
 	s.mu.Unlock()
-	if !reset {
-		s.log.Info("kept uid %d retired with its home", uid)
-		s.send(c, protocol.NewHomeRetired(req.ID))
+	if held && whose != req.Athanor {
+		s.log.Warn("home_make %s refused: kept home %s is on another athanor's disk", req.ID, req.Home)
+		s.send(c, protocol.NewError(req.ID, "", protocol.CodeBadRequest))
 		return
 	}
-	if _, err := s.runHomeHelper(acct, home.HelperSpec{Op: home.OpMake, Path: path, UID: uid}); err != nil {
-		s.log.Error("home_reset %s: uid %d: %v", req.ID, uid, err)
+	unlockDisk := s.lockDisk(req.Athanor)
+	s.mu.Lock()
+	var d home.Disk
+	recorded := s.disks[req.Athanor] != nil
+	if recorded {
+		d = *s.disks[req.Athanor]
+	}
+	s.mu.Unlock()
+	if !recorded {
+		uid, ok, err := s.drawKept(func() (map[int]bool, error) { return s.cfg.Kept.Taken("/proc") })
+		if err != nil {
+			unlockDisk()
+			s.log.Error("home_make %s: reading the kept homes' root and /proc: %v", req.ID, err)
+			s.send(c, protocol.NewError(req.ID, "", protocol.CodeUnavailable))
+			return
+		}
+		if !ok {
+			unlockDisk()
+			s.log.Warn("home_make %s refused: every kept uid is taken", req.ID)
+			s.send(c, protocol.NewError(req.ID, "", protocol.CodeCapacity))
+			return
+		}
+		defer s.unmakeKept(uid)
+		d = home.Disk{Athanor: req.Athanor, Form: home.FormDirectory, UID: uid, Homes: []string{}}
+	}
+	if !recorded || !d.Holds(req.Home) {
+		if err := s.putDisk(d.With(req.Home)); err != nil {
+			unlockDisk()
+			s.log.Error("home_make %s: recording kept home %s on its disk: %v", req.ID, req.Home, err)
+			s.send(c, protocol.NewError(req.ID, "", protocol.CodeInternal))
+			return
+		}
+	}
+	unlockDisk()
+	lock := s.keptLock(d.UID)
+	lock.Lock()
+	defer lock.Unlock()
+	path := s.cfg.Kept.HomePath(req.Athanor, req.Home)
+	if _, err := s.runHomeHelper(KeptAccount(d.UID), home.HelperSpec{Op: home.OpMake, Path: path, UID: d.UID}); err != nil {
+		s.log.Error("home_make %s: uid %d: %v", req.ID, d.UID, err)
 		s.send(c, protocol.NewError(req.ID, "", protocol.CodeInternal))
 		return
 	}
-	s.log.Info("kept uid %d reset with its home", uid)
-	s.send(c, protocol.NewHomeMade(req.ID, uid))
+	s.send(c, protocol.NewHomeMade(req.ID, d.UID))
+}
+
+// retireHome ends every session of the home at, by its group, as a release
+// does, and then, as the disk's uid, makes the home again empty for a
+// `home_reset` or removes it for a `home_retire`; the home's lock is held,
+// so no session of it starts meanwhile. Nothing else of the disk is
+// touched: its other homes, their sessions, its work folder and its uid
+// stay. A session whose group outlives its kill refuses the request, which
+// changes nothing more. A retirement removes the folder before its record:
+// a keeper killed between the two leaves a home its record lists and no
+// folder, which the next retirement, or a make, settles.
+func (s *server) retireHome(c *client, req *protocol.Request, at keptAt) {
+	if !s.endHomeSessions(req.Home) {
+		s.log.Warn("%s %s: a session of kept home %s outlived its group's kill", req.Type, req.ID, req.Home)
+		s.send(c, protocol.NewError(req.ID, "", protocol.CodeInternal))
+		return
+	}
+	op := home.OpRemove
+	if req.Type == protocol.TypeHomeReset {
+		op = home.OpReset
+	}
+	lock := s.keptLock(at.uid)
+	lock.Lock()
+	_, err := s.runHomeHelper(KeptAccount(at.uid), home.HelperSpec{Op: op, Path: at.path, UID: at.uid})
+	lock.Unlock()
+	if err != nil {
+		s.log.Error("%s %s: kept home %s of uid %d: %v", req.Type, req.ID, req.Home, at.uid, err)
+		s.send(c, protocol.NewError(req.ID, "", protocol.CodeInternal))
+		return
+	}
+	if op == home.OpReset {
+		s.log.Info("kept home %s of uid %d reset", req.Home, at.uid)
+		s.send(c, protocol.NewHomeMade(req.ID, at.uid))
+		return
+	}
+	defer s.lockDisk(at.athanor)()
+	s.mu.Lock()
+	d := *s.disks[at.athanor]
+	s.mu.Unlock()
+	if err := s.putDisk(d.Without(req.Home)); err != nil {
+		s.log.Error("home_retire %s: removing kept home %s from its disk's record: %v", req.ID, req.Home, err)
+		s.send(c, protocol.NewError(req.ID, "", protocol.CodeInternal))
+		return
+	}
+	s.log.Info("kept home %s of uid %d retired; its disk, its work folder and its uid stay", req.Home, at.uid)
+	s.send(c, protocol.NewHomeRetired(req.ID))
+}
+
+// endHomeSessions ends every spawn the keeper holds in the kept home id, as
+// a release with homeRetireGrace does, and waits for each to be retired.
+// It answers whether every one's group was found empty.
+func (s *server) endHomeSessions(id string) bool {
+	s.mu.Lock()
+	var sessions []*spawn
+	for _, sp := range s.spawns {
+		if sp.kept && sp.keptHome == id {
+			sessions = append(sessions, sp)
+		}
+	}
+	s.mu.Unlock()
+	for _, sp := range sessions {
+		s.retire(sp, homeRetireGrace, true)
+	}
+	ended := true
+	for _, sp := range sessions {
+		<-sp.retired
+		s.mu.Lock()
+		ended = ended && sp.ended
+		s.mu.Unlock()
+	}
+	return ended
 }
 
 // handleHomeList answers a `home_list` with the page of kept home ids after
 // its `after`, at most protocol.MaxHomeListIDs, naming the last as `next`
-// when more follow.
+// when more follow: every home a disk's record holds, from the keeper's
+// index.
 func (s *server) handleHomeList(c *client, req *protocol.Request) {
 	if s.keepsNoHomes(c, req) {
 		return
 	}
-	ids, err := s.cfg.Kept.IDs()
-	if err != nil {
-		s.log.Error("home_list %s: listing the kept homes' root: %v", req.ID, err)
-		s.send(c, protocol.NewError(req.ID, "", protocol.CodeUnavailable))
-		return
+	s.mu.Lock()
+	s.keptMaps()
+	ids := make([]string, 0, len(s.homeDisk))
+	for id := range s.homeDisk {
+		ids = append(ids, id)
 	}
+	s.mu.Unlock()
+	sort.Strings(ids)
 	after := req.After.ID()
 	ids = ids[sort.SearchStrings(ids, after):]
 	if len(ids) > 0 && ids[0] == after {
@@ -716,14 +883,11 @@ func (s *server) handleHomeList(c *client, req *protocol.Request) {
 	s.send(c, protocol.NewHomes(req.ID, ids, next))
 }
 
-// measureHome answers the bytes allocated under a kept home, measured as its
-// uid; an absent home holds none.
+// measureHome answers the bytes allocated under a kept home, measured as
+// its disk's uid; a home not made holds none.
 func (s *server) measureHome(acct Account, path string) (uint64, error) {
 	out, err := s.runHomeHelper(acct, home.HelperSpec{Op: home.OpMeasure, Path: path, UID: acct.UID})
 	if err != nil {
-		if _, serr := os.Lstat(path); errors.Is(serr, fs.ErrNotExist) {
-			return 0, nil
-		}
 		return 0, err
 	}
 	return strconv.ParseUint(strings.TrimSpace(out), 10, 64)

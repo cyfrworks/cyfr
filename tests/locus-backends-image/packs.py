@@ -46,7 +46,7 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from harness import (  # noqa: E402
-    KEPT_ROOT, RELEASE_USER, STATUSES, VERSION, Stack, expect, new_lifetime, owner_of, probe, require_docker,
+    KEPT_ROOT, RELEASE_USER, STATUSES, VERSION, Stack, disk_of, expect, new_lifetime, owner_of, probe, require_docker,
 )
 from imagesuite import read_output, run  # noqa: E402
 
@@ -221,9 +221,10 @@ def main():
         status, answer = c.open(OTHER, "probe", key="a", home_id=OTHER_HOME, lifetime=lifetime, packs=digest)
         expect(status != 200, "another person's open naming a generation they never put is refused", answer)
         theirs = c.mcp(OTHER, "probe", key="b", home_id=OTHER_HOME)
-        seen = run_in(theirs, "ls /run/cyfr/scrolls 2>&1; ls " + KEPT_ROOT + " 2>&1; echo done")
-        expect("pstack" not in seen["stdout"] and "No such file or directory" in seen["stdout"],
-               "another person's session sees no packs and no kept root", seen)
+        seen = run_in(theirs, "ls /run/cyfr/scrolls 2>&1; ls -A " + KEPT_ROOT + " 2>&1; echo done")
+        expect("pstack" not in seen["stdout"] and "No such file or directory" in seen["stdout"]
+               and seen["stdout"].splitlines()[1:] == [disk_of(OTHER).rsplit("/", 1)[1], "done"],
+               "another person's session sees no packs, and under the kept root the path to its own disk alone", seen)
         # With a generation of their own, the other person binds theirs and
         # never this person's: not by this person's digest, which they hold
         # none of, nor beside their own.

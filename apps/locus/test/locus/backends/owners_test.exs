@@ -131,8 +131,14 @@ defmodule Locus.Backends.OwnersTest do
       end
     end
 
-    # A making the test holds waits here, before anything of the home is made.
-    def home_ensure(agent, id) do
+    # A making the test holds waits here, before anything of the home is
+    # made. Each making's athanor and home are kept, last first.
+    def home_ensure(agent, athanor, id) do
+      Agent.update(
+        agent,
+        &Map.update(&1, :ensured, [{athanor, id}], fn made -> [{athanor, id} | made] end)
+      )
+
       if test = Agent.get_and_update(agent, &Map.pop(&1, :before_ensure)) do
         send(test, {:home_about_to_be_created, self()})
 
@@ -141,7 +147,7 @@ defmodule Locus.Backends.OwnersTest do
         end
       end
 
-      Locus.DirectLauncher.home_ensure(root(agent), id)
+      Locus.DirectLauncher.home_ensure(root(agent), athanor, id)
     end
 
     # A measure the test makes fail stands for one the keeper could not
@@ -659,6 +665,26 @@ defmodule Locus.Backends.OwnersTest do
   end
 
   describe "sessions" do
+    test "a kept session's home is made on its owner's athanor's disk", ctx do
+      owners = start_owners(ctx)
+      kept = [program("cat", "exec cat", home: :kept)]
+
+      for athanor <- [@athanor, "ath_neighbour"] do
+        assert {:ok, _} = sync(owners, "a", {1, 1}, kept, athanor: athanor)
+      end
+
+      assert {:ok, _} = open(owners, "a", {1, 1}, "cat", home_id: @home)
+
+      assert {:ok, _} =
+               open(owners, "a", {1, 1}, "cat",
+                 home_id: "vlt_neighbour",
+                 athanor: "ath_neighbour"
+               )
+
+      assert Enum.sort(Agent.get(ctx.stub, & &1.ensured)) ==
+               [{"ath_neighbour", "vlt_neighbour"}, {@athanor, @home}]
+    end
+
     for ending <- [:close, :retire, :lapse] do
       @tag ending: ending
       test "a #{ending} wakes an in-flight receive and no later line revives its session", ctx do

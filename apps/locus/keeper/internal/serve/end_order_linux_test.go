@@ -259,7 +259,7 @@ func TestALeaderThatIgnoresTheEndIsKilledAtTheGracesEnd(t *testing.T) {
 func TestTwoSessionsOfOneHomeEachEndInTheirOwnTime(t *testing.T) {
 	k := keptKeeper(t)
 	uid := testKeptFirst
-	home := filepath.Join(k.s.cfg.Kept.Root, "vlt_end-order")
+	home := k.keptPath("vlt_end-order")
 	if made := k.homeRequest(t, protocol.TypeHomeMake, "m", home, uid); made["type"] != protocol.TypeHomeMade {
 		t.Fatalf("home_make: %v", made)
 	}
@@ -298,8 +298,8 @@ func TestTwoSessionsOfOneHomeEachEndInTheirOwnTime(t *testing.T) {
 func TestANewcomerWaitsForTheLastSessionsEnd(t *testing.T) {
 	k := keptKeeper(t)
 	uid := testKeptFirst
-	home := filepath.Join(k.s.cfg.Kept.Root, "vlt_newcomer")
-	other := filepath.Join(k.s.cfg.Kept.Root, "vlt_newcomer-other")
+	home := k.keptPath("vlt_newcomer")
+	other := k.keptPath("vlt_newcomer-other")
 	if made := k.homeRequest(t, protocol.TypeHomeMake, "m", home, uid); made["type"] != protocol.TypeHomeMade {
 		t.Fatalf("home_make: %v", made)
 	}
@@ -315,7 +315,7 @@ func TestANewcomerWaitsForTheLastSessionsEnd(t *testing.T) {
 		t.Fatalf("home_make of the home while its last session ends: %v", made)
 	}
 	k.s.mu.Lock()
-	retiring, busy := k.s.keptState(uid, home)
+	retiring, busy := k.s.keptState(uid)
 	k.s.mu.Unlock()
 	if retiring == nil || busy {
 		t.Fatalf("a spawn of the home while its last session ends would not wait for its retirement: %v %v", retiring, busy)
@@ -324,7 +324,7 @@ func TestANewcomerWaitsForTheLastSessionsEnd(t *testing.T) {
 		t.Fatalf("home_make of another home: %v", made)
 	}
 
-	if placed := k.place(t, "newcomer", k.kind()); placed["type"] != protocol.TypePlaced {
+	if placed := k.placeOf(t, "newcomer", k.kind(), k.athanorOf("vlt_newcomer")); placed["type"] != protocol.TypePlaced {
 		t.Fatalf("the newcomer's place answered %v", placed)
 	}
 	go k.s.handleSpawn(k.c, keptRequest(t, k.attach, "newcomer", `echo newcomer-started >> "$HOME/log"; sleep 600`, home, nil))
@@ -555,7 +555,7 @@ func (g heldScan) KillBy(time.Time) bool {
 func TestAScanNeverHoldsTheLockNorSignalsPastTheDeadline(t *testing.T) {
 	k := keptKeeper(t)
 	uid := testKeptFirst
-	home := filepath.Join(k.s.cfg.Kept.Root, "vlt_end-scan")
+	home := k.keptPath("vlt_end-scan")
 	if made := k.homeRequest(t, protocol.TypeHomeMake, "m", home, uid); made["type"] != protocol.TypeHomeMade {
 		t.Fatalf("home_make: %v", made)
 	}
