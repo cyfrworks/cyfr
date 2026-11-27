@@ -310,8 +310,9 @@ defmodule Aqua.Models do
 
   Returns `{:ok, %{"models" => %{provider => [id]}, "refs" => %{provider
   => versionless ref}, "errors" => %{provider => message}, "refused" =>
-  %{provider => message}}}`: `refused` holds a provider that refused the
-  key (`models/2`), `errors` every other one that listed nothing. A provider
+  %{provider => message}}}`: `refused` holds a provider that refused
+  (`models/2`), `errors` every other one that listed nothing, one whose
+  listing did not answer among them. A provider
   is the catalyst's name, prefixed by its namespace when that is not the
   local one, so two catalysts never share a row. A caller that may not
   read the athanor's components is `{:error, :forbidden}`; a component
@@ -415,32 +416,32 @@ defmodule Aqua.Models do
     do: listed(run_as_caller(ctx, ref, %{"operation" => "models", "params" => %{}}))
 
   @doc false
-  # What a `models` run answered, as `models/2` gives it: the ids listed,
-  # the provider's refusal of the key itself (the contract's
-  # `authentication`, `Prima.Model`), or what else was said instead.
+  # What a `models` run answered, as `models/2` gives it. A run the
+  # catalyst's own error ended keeps that sentence and nothing of its
+  # kind (`Opus.Close`), so it reads as the provider's refusal whatever
+  # the provider refused; a run that completed with no list, and one that
+  # was never run, said nothing of the key.
   @spec listed({:ok, term()} | {:error, term()}) ::
           {:ok, [String.t()]} | {:refused, String.t()} | {:error, String.t()}
-  def listed(run) do
-    with {:ok, result} <- run,
-         {:ok, %{"models" => models}} when is_list(models) <- Prima.Model.decode_envelope(result) do
-      {:ok,
-       models
-       |> Enum.map(&(is_map(&1) && &1["id"]))
-       |> Enum.filter(&(is_binary(&1) and &1 != ""))}
-    else
+  def listed({:ok, result}) do
+    case Prima.Model.decode_envelope(result) do
+      {:ok, %{"models" => models}} when is_list(models) ->
+        {:ok,
+         models
+         |> Enum.map(&(is_map(&1) && &1["id"]))
+         |> Enum.filter(&(is_binary(&1) and &1 != ""))}
+
       {:ok, _other} ->
         {:error, "the catalyst answered no model list"}
 
-      {:error, %{"type" => "authentication", "message" => message}} when is_binary(message) ->
-        {:refused, message}
-
-      {:error, %{"message" => message}} when is_binary(message) ->
+      {:error, %{"message" => message}} ->
         {:error, message}
-
-      {:error, reason} ->
-        {:error, refusal_text(reason)}
     end
   end
+
+  def listed({:error, sentence}) when is_binary(sentence), do: {:refused, sentence}
+  def listed({:error, %{"message" => message}}) when is_binary(message), do: {:refused, message}
+  def listed({:error, reason}), do: {:error, refusal_text(reason)}
 
   defp refusal_text(reason), do: Sanctum.Refusals.render(reason)
 
@@ -448,10 +449,10 @@ defmodule Aqua.Models do
   The brain `ref` (an installed catalyst release that speaks
   `model/chat@1`) asked for its models once, through the catalog as the
   caller, whatever its setup reads: `{:ok, ids}`; `{:refused, sentence}`
-  with the provider's own words when it refused the key (the contract's
-  `authentication` refusal); or `{:error, sentence}` when it listed
-  nothing for any other reason, a provider that did not answer among
-  them. What connecting a brain shows.
+  with the provider's own words when its run ended on them, as a key it
+  does not take ends it; or `{:error, sentence}` when it listed nothing
+  and refused nothing: a run that was never made, or an answer that is no
+  list. What connecting a brain shows.
   """
   @spec models(Context.t(), String.t()) ::
           {:ok, [String.t()]} | {:refused, String.t()} | {:error, String.t()}
