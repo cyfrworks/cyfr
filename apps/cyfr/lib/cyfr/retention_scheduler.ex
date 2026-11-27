@@ -495,7 +495,7 @@ defmodule Cyfr.RetentionScheduler do
     end
   end
 
-  # The host's record of who used what keeps the last
+  # The record of who used what keeps the last
   # `memory_retention_days` UTC days, today among them, in every athanor,
   # and the endpoints heard from in them (`Arca.MemoryRecord.purge/2`).
   defp purge_memory_record do

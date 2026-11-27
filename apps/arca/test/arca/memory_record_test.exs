@@ -3,13 +3,15 @@
 
 defmodule Arca.MemoryRecordTest do
   @moduledoc """
-  The host's record of who used what (`Arca.MemoryRecord`): a page is
+  The record of who used what (`Arca.MemoryRecord`): a page is
   stored only under the poller's claim and its member's slot, a counter
   is replaced only by a higher rev, a cursor of another boot stores
   nothing, every athanor reads its own and the platform all of them, and
   the days go by retention.
   """
   use ExUnit.Case, async: false
+
+  import Ecto.Query, only: [from: 2]
 
   alias Arca.{JobClaims, MemoryRecord}
 
@@ -277,11 +279,25 @@ defmodule Arca.MemoryRecordTest do
     test "says whether each endpoint answered within the bound it is handed, on the database's clock",
          %{claim: claim} do
       {:ok, _} = store(claim, 0, report([counter(1, "ath_a")]))
-      ten_ago = DateTime.add(Arca.ServerMetaStorage.now!(), -10, :second)
-      Arca.Repo.update_all(Arca.Schemas.MemoryEndpoint, set: [heard_at: ten_ago])
 
-      assert {:ok, [%{answering: true}]} = MemoryRecord.endpoints(Prima.Actor.system(), 15_000)
-      assert {:ok, [%{answering: false}]} = MemoryRecord.endpoints(Prima.Actor.system(), 5_000)
+      {:ok, _} =
+        MemoryRecord.store(claim, :none, "wrk_late", 0, report([counter(1, "ath_b")]), %{}, 90)
+
+      now = Arca.ServerMetaStorage.now!()
+
+      Arca.Repo.update_all(
+        from(e in Arca.Schemas.MemoryEndpoint, where: e.endpoint == ^@endpoint),
+        set: [heard_at: DateTime.add(now, -14, :second)]
+      )
+
+      Arca.Repo.update_all(
+        from(e in Arca.Schemas.MemoryEndpoint, where: e.endpoint == "wrk_late"),
+        set: [heard_at: DateTime.add(now, -16, :second)]
+      )
+
+      assert {:ok,
+              [%{endpoint: "wrk_late", answering: false}, %{endpoint: @endpoint, answering: true}]} =
+               MemoryRecord.endpoints(Prima.Actor.system(), 15_000)
     end
   end
 

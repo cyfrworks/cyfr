@@ -162,7 +162,7 @@ defmodule Opus.WorkerClient do
         url: url,
         headers: [{WorkerWire.auth_header(), header}, {"content-type", "application/json"}],
         body: body,
-        receive_timeout: WorkerAPI.request_timeout_ms(:status),
+        receive_timeout: Prima.LocusPool.ask_ms(),
         connect_options: [timeout: @connect_timeout_ms],
         retry: false,
         redirect: false,

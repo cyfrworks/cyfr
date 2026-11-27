@@ -279,6 +279,15 @@ defmodule Prima.LocusPool do
   @spec fresh_ms() :: pos_integer()
   def fresh_ms, do: 3 * @poll_ms
 
+  @doc """
+  How long CYFR waits for one ask's answer, on every service: one poll
+  interval. The endpoints are asked one after another, so one that
+  connects and never answers stretches a cycle to two polls, inside the
+  three-poll bound of `fresh_ms/0`, and the others still read as answering.
+  """
+  @spec ask_ms() :: pos_integer()
+  def ask_ms, do: @poll_ms
+
   @doc "The name CYFR stamps the builds service's report with in its record."
   @spec builds_endpoint() :: String.t()
   def builds_endpoint, do: "builds"

@@ -87,6 +87,9 @@ defmodule Compendium.Builds.Client do
   @supervisor Compendium.Builds.TaskSupervisor
   @connect_timeout_ms 5_000
   @health_timeout_ms 5_000
+  # The pool call's bound to connect: within it a connection not made is
+  # told apart from an answer that does not come.
+  @pool_connect_ms 2_000
 
   # A connection that closed or was reset had been made; a timeout before
   # the deadline is the connection attempt's own, so none was; anything
@@ -222,10 +225,11 @@ defmodule Compendium.Builds.Client do
         pool_key = Prima.LocusPool.pool_key(:builds, key)
         header = Prima.LocusPool.header(:builds, pool_key, System.system_time(:millisecond), body)
         max = Prima.Limits.default_max_response_size()
-        # A connection is given its own bound and the answer twice that
-        # after it, so a timeout past the connection's bound is an answer
-        # that did not come (`:deadline`), never a connection not made.
-        deadline = System.system_time(:millisecond) + @connect_timeout_ms + 1_000
+        # A connection is given 2 s and the answer one ask's bound
+        # (`Prima.LocusPool.ask_ms/0`), so a timeout past the connection's
+        # bound and a second more is an answer that did not come
+        # (`:deadline`), never a connection not made.
+        deadline = System.system_time(:millisecond) + @pool_connect_ms + 1_000
 
         response =
           Req.request(
@@ -236,8 +240,8 @@ defmodule Compendium.Builds.Client do
               {"content-type", "application/json"}
             ],
             body: body,
-            connect_options: [timeout: @connect_timeout_ms],
-            receive_timeout: 2 * @health_timeout_ms,
+            connect_options: [timeout: @pool_connect_ms],
+            receive_timeout: Prima.LocusPool.ask_ms(),
             retry: false,
             redirect: false,
             compressed: false,
