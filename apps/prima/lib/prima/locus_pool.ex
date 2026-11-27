@@ -631,14 +631,15 @@ defmodule Prima.LocusPool do
     do: is_integer(value) and value >= 0 and value <= Prima.KeeperProtocol.max_measured_bytes()
 
   # What a person calls each kind of holder, one and several, in the order
-  # a page lists the kinds.
+  # a page lists the kinds. A `tool` is a program marked `mcp`, which the
+  # Programs page lists as an "mcp program".
   @holder_words [
     {"run", {"run", "runs"}},
     {"build", {"build", "builds"}},
     {"program", {"program", "programs"}},
     {"terminal", {"terminal", "terminals"}},
     {"browser", {"browser", "browsers"}},
-    {"tool", {"tool", "tools"}}
+    {"tool", {"mcp program", "mcp programs"}}
   ]
   @holder_kinds Enum.map(@holder_words, &elem(&1, 0))
 

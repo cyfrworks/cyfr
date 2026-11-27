@@ -1141,14 +1141,15 @@ defmodule PrismWeb.SettingsLiveTest do
       assert section =~ "Memory use"
 
       assert section =~
-               "In use: 1000.0 MB of 4.7 GB; 164.0 MB more is kept ready for the next run."
+               "In use: 1000.0 MB of 4.7 GB, 336.0 MB of it set aside for work that is " <>
+                 "starting or stopping; 164.0 MB more is kept ready for the next run."
 
       assert section =~ "claude"
       assert section =~ "500.0 MB"
       assert section =~ "Day (UTC)"
-      assert section =~ "500 MB-hours"
-      assert section =~ "1 h 5 min"
-      assert section =~ "45 s"
+      used = view |> cells("#memory-days") |> Enum.map(&Enum.at(&1, 3))
+      assert ["461.5 MB on average", "at most 700.0 MB, for 1 hour 5 minutes"] in used
+      assert ["0 B on average", "at most 164.0 MB, for 45 seconds"] in used
       assert section =~ "1 × needed more memory than one piece of work may use"
       assert section =~ "2 × CYFR ran out of memory"
       assert section =~ "Counted a few seconds ago."
@@ -1159,6 +1160,193 @@ defmodule PrismWeb.SettingsLiveTest do
         refute html =~ "Memory use"
         refute has_element?(view, "#memory-use")
       end
+    end
+
+    # "In use" is the machine's charges, which hold a start at its
+    # allowance while its row shows what it really uses: the page says
+    # the part no row shows, and says nothing when the rows are the more.
+    test "the total says the part of it no holder's row shows" do
+      ops = test_user()
+      {:ok, _} = Sanctum.TestContext.ensure_platform(ops.user_id)
+      o = own_athanor_id(ops)
+
+      record!(
+        [
+          used(1, o, kind: "program", subject: "srv_o", mib: 500),
+          used(2, o, kind: "run", mib: 164)
+        ],
+        %{{o, "srv_o"} => %{name: "everything", shown: "program"}}
+      )
+
+      {view, _html} = build_conn() |> log_in_user(ops) |> mount_athanor("/settings")
+
+      use_line = fn ->
+        view
+        |> element(~s(#memory-use [data-test="memory-in-use"]))
+        |> render()
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.text()
+        |> String.trim()
+      end
+
+      assert use_line.() ==
+               "In use: 1000.0 MB of 4.7 GB, 336.0 MB of it set aside for work that is " <>
+                 "starting or stopping; 164.0 MB more is kept ready for the next run."
+
+      set_endpoint = fn fields ->
+        Arca.Repo.update_all(
+          from(e in Arca.Schemas.MemoryEndpoint, where: e.endpoint == "wrk_page"),
+          set: fields
+        )
+
+        send(view.pid, :memory)
+      end
+
+      set_endpoint.(floor: 0)
+
+      assert use_line.() ==
+               "In use: 1000.0 MB of 4.7 GB, 336.0 MB of it set aside for work that is " <>
+                 "starting or stopping."
+
+      set_endpoint.(used: 664 * @mib)
+      assert use_line.() == "In use: 664.0 MB of 4.7 GB."
+
+      set_endpoint.(used: 600 * @mib)
+      assert use_line.() == "In use: 600.0 MB of 4.7 GB."
+    end
+
+    test "a program marked mcp reads as an mcp program, its terminal as a terminal" do
+      ops = test_user()
+      {:ok, _} = Sanctum.TestContext.ensure_platform(ops.user_id)
+      o = own_athanor_id(ops)
+
+      record!(
+        [
+          used(1, o, kind: "program", subject: "srv_e", mib: 246, measured_ms: 1_000),
+          used(2, o, kind: "terminal", subject: "srv_e", mib: 233, measured_ms: 1_000)
+        ],
+        %{{o, "srv_e"} => %{name: "everything", shown: "tool"}}
+      )
+
+      {view, _html} = build_conn() |> log_in_user(ops) |> mount_athanor("/settings")
+
+      assert cells(view, ~s(#memory-use [data-test="memory-machine"] table)) == [
+               ["@#{ops_name(o)}", "terminal", "everything", "233.0 MB"],
+               ["@#{ops_name(o)}", "mcp program", "everything", "246.0 MB"]
+             ]
+
+      assert view |> cells("#memory-days") |> Enum.map(&Enum.at(&1, 2)) ==
+               [["everything", "terminal"], ["everything", "mcp program"]]
+    end
+
+    test "each day's row says its use in a person's units, in five columns" do
+      ops = test_user()
+      {:ok, _} = Sanctum.TestContext.ensure_platform(ops.user_id)
+      o = own_athanor_id(ops)
+      me = "@" <> ops_name(o)
+
+      record!(
+        [
+          used(1, o, kind: "run", peak: 28, measured_ms: 0),
+          used(2, o, kind: "build", mib_ms: 162 * 20_000, measured_ms: 20_000, peak: 318),
+          used(3, o,
+            kind: "program",
+            subject: "srv_e",
+            mib_ms: 192 * 600_000,
+            measured_ms: 600_000,
+            peak: 246
+          ),
+          used(4, o,
+            kind: "terminal",
+            subject: "srv_s",
+            mib_ms: 95 * 7_200_000,
+            measured_ms: 7_200_000,
+            peak: 143,
+            cap: 2,
+            machine: 1
+          )
+        ],
+        %{
+          {o, "srv_e"} => %{name: "everything", shown: "tool"},
+          {o, "srv_s"} => %{name: "shell", shown: "terminal"}
+        }
+      )
+
+      {view, _html} = build_conn() |> log_in_user(ops) |> mount_athanor("/settings")
+
+      table =
+        view |> element("#memory-days") |> render() |> LazyHTML.from_fragment()
+
+      assert table |> LazyHTML.query("thead th") |> Enum.map(&String.trim(LazyHTML.text(&1))) ==
+               ["Day (UTC)", "Person", "What", "Used", "Ended for memory"]
+
+      today = Date.to_iso8601(Date.utc_today())
+
+      assert cells(view, "#memory-days") == [
+               [
+                 today,
+                 me,
+                 ["build"],
+                 ["162.0 MB on average", "at most 318.0 MB, for 20 seconds"],
+                 ["—"]
+               ],
+               [today, me, ["run"], ["—", "at most 28.0 MB, for under a second"], ["—"]],
+               [
+                 today,
+                 me,
+                 ["shell", "terminal"],
+                 ["95.0 MB on average", "at most 143.0 MB, for 2 hours"],
+                 [
+                   "2 × needed more memory than one piece of work may use",
+                   "1 × CYFR ran out of memory"
+                 ]
+               ],
+               [
+                 today,
+                 me,
+                 ["everything", "mcp program"],
+                 ["192.0 MB on average", "at most 246.0 MB, for 10 minutes"],
+                 ["—"]
+               ]
+             ]
+
+      # The day stays in view while the table scrolls sideways.
+      for row <- LazyHTML.query(table, "tbody tr") do
+        [day | _] = LazyHTML.query(row, "td") |> Enum.to_list()
+        assert day |> LazyHTML.attribute("class") |> hd() =~ "sticky"
+      end
+    end
+
+    # Each row's cells, their words with runs of space, no-break ones
+    # among them, as one: a cell of lines as the list of its lines.
+    defp cells(view, selector) do
+      words =
+        &(&1
+          |> LazyHTML.text()
+          |> String.replace("\u00a0", " ")
+          |> String.split()
+          |> Enum.join(" "))
+
+      view
+      |> element(selector)
+      |> render()
+      |> LazyHTML.from_fragment()
+      |> LazyHTML.query("tbody tr")
+      |> Enum.map(fn row ->
+        row
+        |> LazyHTML.query("td")
+        |> Enum.map(fn cell ->
+          case Enum.to_list(LazyHTML.query(cell, "span.block")) do
+            [] -> words.(cell)
+            lines -> Enum.map(lines, words)
+          end
+        end)
+      end)
+    end
+
+    defp ops_name(athanor_id) do
+      {:ok, athanor} = Sanctum.Tenancy.Athanors.get(athanor_id)
+      athanor.slug
     end
 
     test "the days show seven at a time, the newest first" do
