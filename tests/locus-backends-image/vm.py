@@ -99,6 +99,12 @@ which hold nothing of the container's /probe mount.
   person's next session boots a VM; the keeper killed while a VM holds the
   disk is started again, and the person's next session boots a VM on the
   same image, finding what the last one wrote.
+- Folders: with the person's VM ended, a reset of one of their homes boots
+  their VM for it, which the keeper's log says is for a folder's reset,
+  and answers the home empty; a retirement of another home then needs no
+  boot of its own, answers it absent and takes it out of the disk's
+  record, which still holds the first; the next session in the reset home
+  joins the VM the reset booted and finds the home empty under its uid.
 - Measurements, printed. At a guest of 2,560 MiB: the guest's memory and
   processors as the keeper configured the VMM, the VMM's resident memory
   and its group's memory after a person's first boot and after an idle
@@ -130,7 +136,7 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from harness import (  # noqa: E402
-    CONNECT_PROBE, GUARD, HERE, KEPT_ROOT, POOL_FIRST, POOL_LAST, REFUSED, RELEASE, ROLE, SERVICE, Stack,
+    CONNECT_PROBE, GUARD, HERE, KEPT_ROOT, POOL_FIRST, POOL_LAST, REFUSED, RELEASE, ROLE, SERVICE, VERSION, Stack,
     disk_of, eventually, expect, home_of, owner_of, require_docker,
 )
 import imagesuite  # noqa: E402
@@ -369,7 +375,9 @@ CHARGE_SLACK = 16 * MIB
 WALL_SAID = "each person's work runs in a separate small computer on this machine"
 SPACES_SAID = "each person's work runs in its own space on this machine: the container was given no /dev/kvm"
 NO_VM_SAID = "is on a disk image, which runs only in its person's VM, and this machine runs none"
-BOOTED_SAID = "booted, its VMM pid"
+# Every boot of a person's VM, whatever it is for, and one for a folder's reset.
+BOOTED_SAID = ", its VMM pid"
+RESET_BOOT_SAID = "booted for a folder's reset, its VMM pid"
 GIVE_WAY_SAID = "a person's VM ends: it held no session, and a start needs its room"
 RELEASED_SAID = "a person's VM is released: its group is empty, its route withdrawn and its device let go"
 GUARD_LOST_SAID = re.compile(r"egress: the guard's connection \d+ ended")
@@ -909,6 +917,52 @@ def vmm_killed(image):
         stack.down()
 
 
+def folders_in_vm(image):
+    """A folder's reset with no VM of its person's running boots their VM for it, which the keeper's log names as
+    such, and leaves the home empty under its uid for the next session, which joins that VM; a retirement then needs
+    no boot of its own, and takes the home out of the disk's record, which still holds the other."""
+    stack = wall_stack("folders", image)
+    owner = owner_of("vm-folders")
+    reset_row, retired_row = row_of(owner), row_of(owner) + "-retired"
+    try:
+        up_wall(stack)
+        c = synced(stack, [(owner, [vm_probe()])])
+        for key, row in (("a", reset_row), ("b", retired_row)):
+            wrote = sh(c, owner, f'echo {key} > "$HOME/marker" && cat "$HOME/marker"', key, row)
+            expect(wrote["status"] == 0 and wrote["stdout"].strip() == key, f"a session writes into the home {row}",
+                   wrote)
+        uid = disk_record(stack, owner)["uid"]
+        released = stack.logs().count(RELEASED_SAID)
+        pid = next(iter(vmms(stack)))
+        killed = run("docker", "exec", "-u", "0", stack.container, "kill", "-KILL", str(pid), check=False)
+        expect(killed.returncode == 0, "the VMM is killed by the container's root", killed.stderr)
+        eventually(lambda: stack.logs().count(RELEASED_SAID) > released and not vmms(stack) and group_gone(stack, uid),
+                   "the VM to be released, its VMM and its group gone")
+
+        said = stack.logs().count(RESET_BOOT_SAID)
+        status, reset, _ = c.home(owner["athanor"], reset_row, "reset")
+        expect((status, reset) == (200, {"version": VERSION, "home_id": reset_row, "state": "empty"}),
+               "a folder's reset with no VM running answers the home empty", reset)
+        booted = vmms(stack)
+        expect(stack.logs().count(RESET_BOOT_SAID) == said + 1 and len(booted) == 1,
+               "the reset booted the person's VM, and the keeper's log says it was for a folder's reset", booted)
+
+        status, retired, _ = c.home(owner["athanor"], retired_row, "retire")
+        expect((status, retired) == (200, {"version": VERSION, "home_id": retired_row, "state": "absent"}),
+               "a folder's retirement answers the home absent", retired)
+        expect(vmms(stack) == booted, "the retirement needed no boot of its own", vmms(stack))
+        homes = disk_record(stack, owner)["homes"]
+        expect(retired_row not in homes and reset_row in homes,
+               "the retired home is out of the disk's record, the reset one in it", homes)
+
+        after = sh(c, owner, 'id -u; ls -A "$HOME"; cat /proc/sys/kernel/random/boot_id', "c", reset_row)
+        lines = after["stdout"].split()
+        expect(after["status"] == 0 and lines[0] == str(uid) and "marker" not in lines and vmms(stack) == booted,
+               "the next session finds the reset home empty under its uid, in the VM the reset booted", after)
+    finally:
+        stack.down()
+
+
 def guard_lost_at_start(image):
     """The guard killed during a session's start refuses the start and ends the VM; the keeper ends with its role's
     route, and once its container is started again behind the guard's successor, the person's next session boots."""
@@ -1296,7 +1350,7 @@ def main():
     print("ok: a person's machine boots from the image's programs, as the keeper makes them", flush=True)
 
     for case in (disk_and_boot, boot_identity, routes_and_names, packs_in_vm, ledger_one_vm, ledger_pressure,
-                 vmm_killed, guard_lost_at_start, keeper_lost, measurements):
+                 vmm_killed, folders_in_vm, guard_lost_at_start, keeper_lost, measurements):
         print(f"== {case.__name__}: {case.__doc__.split(chr(10))[0]}", flush=True)
         case(image)
     print("PASS: a person's machine boots from the image's programs, and a person's sessions run in their own VM")
