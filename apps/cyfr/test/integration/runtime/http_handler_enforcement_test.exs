@@ -7,7 +7,8 @@ defmodule Cyfr.EgressDenialTest do
   `record_denial` host call, which holds no context of its own. CYFR
   records the policy decisions among them for the audit trail, once each,
   in the attempt's athanor and for the attempt's component, and records
-  nothing for an attempt it no longer holds. Since the engine resolves
+  nothing for a refusal that is no policy decision, such as a request's
+  shape, or for an attempt it no longer holds. Since the engine resolves
   nothing, the pin CYFR refuses for a name that does not resolve is its own
   denial of the attempt, naming the host.
   """
@@ -71,6 +72,19 @@ defmodule Cyfr.EgressDenialTest do
     assert [row] = rows_for(attempt)
     assert row.event_type == "method_blocked"
     assert row.decision == "denied"
+  end
+
+  test "a reported credential-header refusal is no policy decision, and records nothing" do
+    attempt = attached("catalyst:local.audited-shape:1.0.0")
+
+    assert {:ok, true} =
+             denial(
+               attempt,
+               "credential_header_refused",
+               Prima.Refusal.message(:credential_header_refused)
+             )
+
+    assert rows_for(attempt) == []
   end
 
   test "a name the control plane cannot pin is its denial, naming the host" do

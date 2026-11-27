@@ -574,7 +574,7 @@ defmodule Cyfr.ChainTest do
       assert admitted(host.execution_id) == []
     end
 
-    test "a spawn-shaped child charges the budget and releases it when given back", %{
+    test "a spawn-shaped child charges the budget and releases it when it closes failed", %{
       ctx: ctx
     } do
       auth = authority_with_edges(%{@target_node => %{}})
@@ -585,8 +585,20 @@ defmodule Cyfr.ChainTest do
       assert entered!(child_id).cursor == {:bound, @target_node}
       assert Sanctum.TestContext.invoke_budget(auth).in_flight == 1
 
-      release!(host, admitted)
+      # The runner it was handed to cannot start it, and closes it failed
+      # with the child's own keys, as such a runner does.
+      child = Cyfr.Test.HostCaller.child(host, admitted)
+
+      outcome =
+        Cyfr.Test.AttemptFixtures.outcome(child, "failed", %{
+          "error" => "Execution refused: its runner could not start",
+          "abandoned" => false
+        })
+
+      assert {:ok, message} = FormulaHost.call(child, :fail, %{"outcome" => outcome})
+      assert is_binary(message)
       wait_until(fn -> Sanctum.TestContext.invoke_budget(auth).in_flight == 0 end, 5_000)
+      assert %{status: "failed"} = Arca.Repo.get!(Arca.Schemas.Execution, child_id)
     end
 
     test "a formula's emit is answered under the node's authority", %{ctx: ctx} do
