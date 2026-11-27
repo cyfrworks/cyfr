@@ -208,6 +208,11 @@ func (g *fakeGuest) boot(b vmBoot) (guestVM, error) {
 	refuse := g.refuseBoot
 	n := len(g.vms) + 1
 	g.mu.Unlock()
+	// As vm.Start: a machine whose processes the keeper's reaper would not
+	// hand their ends to is never started.
+	if b.Start == nil {
+		return nil, errors.New("vm: a machine needs its groups, a processor, 128 MiB, a device and a start")
+	}
 	network, err := b.Route(b.UID, nil, nil, nil, nil)
 	if err != nil {
 		return nil, err
