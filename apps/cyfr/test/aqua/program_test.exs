@@ -4850,6 +4850,36 @@ defmodule Aqua.ProgramTest do
       say(fake, row, idle(next, [input.id]))
       assert :completed = Task.await(loop, 30_000)
     end
+
+    # The rules ride a program's start instructions, which each harness's
+    # driver hands its program on the path it already has.
+    test "a program receives the athanor's rules at its start, and an edit reaches the next turn",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      actor = Sanctum.Context.actor(ctx)
+      {:ok, _} = Arca.Files.write(actor, "aqua/rules.md", "Answer in Welsh.\n")
+
+      turn = accept!(ctx, thread, row, "first")
+      loop = run(ctx, turn)
+      %{start: first} = started!(fake, row)
+      assert first["system"] =~ "`aqua/rules.md`:\n\nAnswer in Welsh.\n\n---\n\n"
+      handed!(fake, row, ctx, turn, loop)
+
+      {:ok, _} = Arca.Files.write(actor, "aqua/rules.md", "Answer in French.\n")
+
+      next = accept!(ctx, thread, row, "second")
+      loop = run(ctx, next)
+      opened!(fake, row, "boot-two")
+      %{start: second} = begun!(fake, row)
+
+      assert second["system"] =~ "`aqua/rules.md`:\n\nAnswer in French.\n\n---\n\n"
+      refute second["system"] =~ "Welsh"
+
+      _post = sent()
+      [input] = inputs(ctx, next)
+      say(fake, row, accepted(input))
+      say(fake, row, idle(next, [input.id]))
+      assert :completed = Task.await(loop, 30_000)
+    end
   end
 
   describe "a program that says it is signed out" do

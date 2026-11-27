@@ -5,9 +5,8 @@ defmodule CyfrWeb.SignInCeilingsTest do
   @moduledoc """
   Each sign-in path's shipped request ceiling, per address in a minute
   (`CyfrWeb.Plugs.AuthRateLimit` as the routers mount it), run up to at
-  its route and refused one past it: a company sign-in's start (30), the
-  sign-in callbacks with the vault's OAuth grant callback (60, one
-  bucket), a sign-in's ticket (30) and a protected device's unlock (30).
+  its route and refused one past it: the vault's OAuth grant callback
+  (60), a sign-in's ticket (30) and a protected device's unlock (30).
 
   Each test comes from an address of its own, so no other test's
   requests count against it.
@@ -29,25 +28,9 @@ defmodule CyfrWeb.SignInCeilingsTest do
     assert [_seconds] = get_resp_header(over, "retry-after")
   end
 
-  test "a company sign-in's start: 30 a minute", %{conn: conn} do
-    conn = from(conn, 1)
-
-    # The browser pipeline's CSRF check runs before this throttle; a test
-    # skips it as Plug provides, so the throttle is what answers.
-    run_up(30, fn ->
-      conn
-      |> Plug.Conn.put_private(:plug_skip_csrf_protection, true)
-      |> post("/auth/company")
-    end)
-  end
-
-  test "the sign-in callbacks and the vault's OAuth grant callback: 60 a minute, one bucket",
-       %{conn: conn} do
+  test "the vault's OAuth grant callback: 60 a minute", %{conn: conn} do
     conn = from(conn, 2)
-
-    for _ <- 1..30, do: refute(get(conn, "/auth/company/callback").status == 429)
-
-    run_up(30, fn -> get(conn, "/auth/oauth/callback") end)
+    run_up(60, fn -> get(conn, "/auth/oauth/callback") end)
   end
 
   test "a sign-in's ticket: 30 a minute", %{conn: conn} do

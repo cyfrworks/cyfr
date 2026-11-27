@@ -110,6 +110,44 @@ defmodule Compendium.AquaTemplateTest do
     assert {:ok, %{prompt: "soul prompt v2"}} = AquaAgent.get(ctx, "aqua")
   end
 
+  # The rules file is a shipped unit of its own beside the soul: a fill
+  # copies the default in, Files edits it in place and refuses its
+  # deletion, and a release with another default reaches a new athanor
+  # while an edited copy stays byte for byte.
+  test "the rules file: copied by a fill, edited in Files, never deleted, never overwritten", %{
+    ctx: ctx,
+    template: template
+  } do
+    File.write!(Path.join(template, "rules.md"), "default A\n")
+    fill!(ctx)
+    actor = Sanctum.Context.actor(ctx)
+
+    assert {:ok, %{content: "default A\n"}} = Arca.Files.read(actor, "aqua/rules.md")
+
+    assert {:ok, %{written: "aqua/rules.md"}} =
+             Arca.Files.write(actor, "aqua/rules.md", "ours\n")
+
+    assert Arca.Files.delete(actor, "aqua/rules.md") ==
+             {:error,
+              {:invalid_argument, "'aqua/rules.md' ships with the server and cannot be deleted"}}
+
+    # A release carries default B: the edited copy is the athanor's, and a
+    # new athanor's fill copies B.
+    File.write!(Path.join(template, "rules.md"), "default B\n")
+    assert {:ok, %{content: "ours\n"}} = Arca.Files.read(actor, "aqua/rules.md")
+
+    assert {:ok, [%{path: "aqua/aqua.md"}, %{path: "aqua/crew/scribe.md"}, rules]} =
+             AquaTemplate.status(ctx)
+
+    assert rules == %{path: "aqua/rules.md", state: :bundled_modified}
+
+    {_ath_a, other} = Sanctum.TestContext.two_contexts()
+    fill!(other)
+
+    assert {:ok, %{content: "default B\n"}} =
+             Arca.Files.read(Sanctum.Context.actor(other), "aqua/rules.md")
+  end
+
   test "status/1 tells shipped, modified, and own apart, and lists no pack", %{
     ctx: ctx,
     template: template

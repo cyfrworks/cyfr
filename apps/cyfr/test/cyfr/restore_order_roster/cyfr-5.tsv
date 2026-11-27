@@ -1,6 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
-apps/cyfr/test/cyfr_web/company_login_standing_test.exs	4	pending
 apps/cyfr/test/cyfr_web/context_guard_test.exs	1	pending
 apps/cyfr/test/cyfr_web/endpoint_http2_test.exs	2	pending
 apps/cyfr/test/cyfr_web/endpoint_parsers_test.exs	2	pending
@@ -18,13 +17,11 @@ apps/cyfr/test/cyfr_web/plugs/tincture_rate_limit_test.exs	3	pending
 apps/cyfr/test/cyfr_web/plugs/webhook_rate_limit_test.exs	2	pending
 apps/cyfr/test/prism/canvas_validation_test.exs	2	pending
 apps/cyfr/test/prism/tincture_registry_test.exs	2	pending
-apps/cyfr/test/prism_web/controllers/company_login_controller_test.exs	5	pending
 apps/cyfr/test/prism_web/live/aqua_live_consent_status_test.exs	1	pending
 apps/cyfr/test/prism_web/live/aqua_live_test.exs	2	pending
 apps/cyfr/test/prism_web/live/aqua_panel_live_test.exs	1	pending
 apps/cyfr/test/prism_web/live/canvas_live_test.exs	1	pending
 apps/cyfr/test/prism_web/live/command_palette_test.exs	1	pending
-apps/cyfr/test/prism_web/live/company_login_live_test.exs	3	pending
 apps/cyfr/test/prism_web/live/components_live_test.exs	1	pending
 apps/cyfr/test/prism_web/live/files_live_test.exs	4	pending
 apps/cyfr/test/prism_web/live/settings_live_test.exs	1	pending

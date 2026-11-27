@@ -171,17 +171,12 @@ image_release "$IMAGE" "$CELLS"
 #   separate  x.test, reading accounts at the directory dir.test
 #   self      x.test serving its own account pages: home and account
 #             service share one origin
-#   company   x.test serving its own account pages and requiring a company
-#             sign-in (join) at the OIDC issuer idp.test, a front with
-#             nothing behind it that only records what reaches it, at an
-#             address the client alone is told: whatever reaches it is the
-#             client's, whatever headers it carries
 #   pair      separate's two, with dir.test a CYFR of its own too, its own
 #             account service, set up with a setup token of its own: two
 #             CYFRs of one account
 SHAPE=separate
 if [ -f "$(dirname "$SCRIPT")/home" ]; then SHAPE="$(tr -d '[:space:]' <"$(dirname "$SCRIPT")/home")"; fi
-case "$SHAPE" in separate | self | company | pair) ;; *) fail "$(dirname "$SCRIPT")/home names no shape this driver makes: '$SHAPE'" ;; esac
+case "$SHAPE" in separate | self | pair) ;; *) fail "$(dirname "$SCRIPT")/home names no shape this driver makes: '$SHAPE'" ;; esac
 
 step "the run's authority and the CYFR ($SHAPE), from $IMAGE"
 browser_authority
@@ -198,7 +193,7 @@ case "$SHAPE" in
     identity_env "$DIR" CYFR_DIRECTORY_SERVE writer
     DIRECTORY_HOST=dir.test
     ;;
-  self | company)
+  self)
     identity_env "$X" CYFR_DIRECTORY_SERVE writer
     DIRECTORY_HOST=x.test
     ;;
@@ -213,31 +208,12 @@ if [ "$SHAPE" = pair ]; then
   LOG_SECRETS+=("$SECOND_SETUP_TOKEN")
   identity_env "$DIR" CYFR_SETUP_TOKEN "$SECOND_SETUP_TOKEN"
 fi
-if [ "$SHAPE" = company ]; then
-  # The issuer: a certificate of the run's authority and a front at an
-  # address of the run's own, forwarding to a port nothing listens on.
-  # Declared once x.test is configured, so that its inetrc does not name
-  # it: the CYFR's own server cannot reach it.
-  IDP="$WORK/idp"
-  mkdir -p "$IDP"
-  browser_certificate idp.test
-  printf 'CYFR_HOST=idp.test\nCYFR_PROXY_PORT=9\n' >"$IDP/.env"
-  identity_directory idp.test
-  IDP_SECRET="$(openssl rand -hex 32)"
-  LOG_SECRETS+=("$IDP_SECRET")
-fi
 identity_env "$X" CYFR_REGISTRY_URL "$DIRECTORY_HOST"
 identity_env "$X" CYFR_SETUP_TOKEN "$SETUP_TOKEN"
 # The CYFR's worker service, at a port of the run's own where nothing
 # listens unless a proof answers its status (media/).
 cell_pick_port WORKER_PORT
 identity_env "$X" CYFR_LOCUS_RUNTIME_WORKERS "wrk_proof=http://127.0.0.1:$WORKER_PORT"
-if [ "$SHAPE" = company ]; then
-  identity_env "$X" CYFR_COMPANY_LOGIN join
-  identity_env "$X" CYFR_OIDC_ISSUER https://idp.test
-  identity_env "$X" CYFR_OIDC_CLIENT_ID cyfr-desktop-proof
-  identity_env "$X" CYFR_OIDC_CLIENT_SECRET "$IDP_SECRET"
-fi
 
 step "starting them and their fronts"
 case "$SHAPE" in
@@ -247,7 +223,6 @@ esac
 if [ -n "${DIR:-}" ]; then identity_front_start "$DIR"; fi
 identity_start "$X"
 identity_front_start "$X"
-if [ "$SHAPE" = company ]; then identity_front_start "$IDP"; fi
 
 # What the script and its proof get: the CYFR's address, its account
 # directory, the run's authority, the setup token, the worker service's

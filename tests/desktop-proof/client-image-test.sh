@@ -61,7 +61,6 @@ server_stop() { :; }
 cell_pick_port() { printf -v "$1" '%s' 20001; }
 browser_authority() { BROWSER_AUTHORITY="$WORK/authority"; mkdir -p "$BROWSER_AUTHORITY"; echo pem >"$BROWSER_AUTHORITY/authority.pem"; }
 browser_home() { mkdir -p "$1"; }
-browser_certificate() { :; }
 identity_directory() { IDENTITY_FRONTS[$1]="127.0.0.$((${#IDENTITY_FRONTS[@]} + 2))"; }
 identity_env() { :; }
 identity_reaches_directory() { :; }

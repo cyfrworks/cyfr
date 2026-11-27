@@ -21,7 +21,6 @@ const page = asset("chooser.html")
 assert.ok(script && page, "the chooser's script and page")
 
 const HOME = "https://cyfr.example.com"
-const COMPANY = "This CYFR requires company sign-in. Open its address in a browser to continue. The CYFR app does not support company sign-in yet."
 // The passkey's way on: an address main alone answers, opening the CYFR's
 // own view at its sign-in page.
 const PASSKEY = "/bootstrap/signin"
@@ -94,8 +93,8 @@ const reload = (went) => chooser("", OPEN, OPEN, new URL(went.address, "http://1
   {type: "reload", saved: went.entry})
 
 test("with a notice to show the chooser stays, says it, and offers its way on to the device's pages", async () => {
-  for (const [notice, words] of [["company", COMPANY], ["unleft", UNLEFT], ["company,unleft", `${COMPANY} ${UNLEFT}`],
-    ["nothing-it-knows,company", COMPANY]]) {
+  for (const [notice, words] of [["unforgotten", UNFORGOTTEN], ["unleft", UNLEFT], ["unforgotten,unleft", `${UNFORGOTTEN} ${UNLEFT}`],
+    ["nothing-it-knows,unforgotten", UNFORGOTTEN]]) {
     const {$, went} = await chooser(notice, OPEN)
     assert.deepEqual(went.byItself, [], notice)
     assert.equal($("notice").textContent, words)
@@ -109,11 +108,11 @@ test("with a notice to show the chooser stays, says it, and offers its way on to
 })
 
 test("a reload of a chooser that stays keeps its notice, and its address never keeps the token", async () => {
-  const first = await chooser("company,unleft", OPEN)
+  const first = await chooser("unforgotten,unleft", OPEN)
   assert.doesNotMatch(first.went.address, /token/)
   const again = await reload(first.went)
   assert.deepEqual(again.went.byItself, [], "the reload did not move on")
-  assert.equal(again.$("notice").textContent, `${COMPANY} ${UNLEFT}`)
+  assert.equal(again.$("notice").textContent, `${UNFORGOTTEN} ${UNLEFT}`)
   assert.equal((await chooser("", OPEN)).went.address, "/bootstrap/", "with none, the bare address")
 })
 
@@ -127,11 +126,11 @@ test("with no notice to show the chooser moves on by itself", async () => {
 })
 
 test("on the passkey road the chooser stays with both ways on, a notice or none", async () => {
-  for (const notice of ["", "company"]) {
+  for (const notice of ["", "unforgotten"]) {
     const {$, went} = await chooser(notice, OPEN, OPEN, ROAD + (notice ? `&notice=${notice}` : ""))
     assert.deepEqual(went.byItself, [], notice)
     assert.deepEqual([$("road").hidden, $("passkey").hidden, $("either").hidden], [false, false, false], notice)
-    assert.equal($("notice").textContent, notice ? COMPANY : "")
+    assert.equal($("notice").textContent, notice ? UNFORGOTTEN : "")
     assert.deepEqual(went.asked, [], "it connects nothing by itself")
     $("passkey").onclick()
     assert.deepEqual(went.pressed, [], "not before the CYFR answered")
@@ -189,7 +188,7 @@ test("Try again loads nothing until a Connect at that CYFR answered with a way o
 })
 
 test("Try again shows only where main says the CYFR did not answer, and after a reload there", async () => {
-  for (const notice of ["", "company", "unleft"]) {
+  for (const notice of ["", "unforgotten", "unleft"]) {
     const {$} = await chooser("", OPEN, OPEN, ROAD + (notice ? `&notice=${notice}` : ""))
     assert.equal($("again").hidden, true, notice)
   }
@@ -290,7 +289,7 @@ test("the chooser's page holds no credential: it stores nothing and sends no tok
 })
 
 test("with a notice to show the chooser connects nothing by itself", async () => {
-  const {went} = await chooser("company", {cyfr: HOME, resume: HOME}, OPEN, ROAD + "&notice=company")
+  const {went} = await chooser("unforgotten", {cyfr: HOME, resume: HOME}, OPEN, ROAD + "&notice=unforgotten")
   assert.deepEqual(went.asked, [])
   assert.deepEqual(went.byItself, [])
 })
@@ -314,9 +313,9 @@ test("set up, as main's address names it, opens at setting up on this computer",
 })
 
 test("with no CYFR open a notice shows on Connect, and a Connect the person makes goes on", async () => {
-  const {$, went} = await chooser("company", {})
+  const {$, went} = await chooser("unforgotten", {})
   assert.deepEqual([$("choose").hidden, $("road").hidden], [false, true])
-  assert.equal($("notice").textContent, COMPANY)
+  assert.equal($("notice").textContent, UNFORGOTTEN)
   assert.deepEqual(went.byItself, [])
   $("connect").fire("submit")
   await settled()
@@ -336,7 +335,7 @@ test("an answer to a Connect that names its CYFR beside an error says the error 
 })
 
 test("an answer that is an error says the error and goes nowhere", async () => {
-  const {$, went} = await chooser("company", {error: "The record could not be read."})
+  const {$, went} = await chooser("unforgotten", {error: "The record could not be read."})
   assert.equal($("notice").textContent, "The record could not be read.")
   assert.deepEqual(went.byItself, [])
 })
@@ -356,7 +355,6 @@ const locked = {type: "locked", message: {type: "locked", home: HOME, account: A
 // Every notice, by name: its words, and what main observed that makes it
 // load the chooser with it.
 const NOTICES = {
-  company: {words: COMPANY, observed: [at(HOME + "/company-login", HOME + "/login"), locked]},
   unleft: {words: UNLEFT, observed: [{type: "navigate", window: "rail", url: LOOPBACK + "/rail/select?cyfr=https%3A%2F%2Fbob.example",
     target: "top", asker: "top", showing: LOOPBACK + "/rail/", by: LOOPBACK + "/rail/"}, {type: "late", id: 1}, ready]},
   unforgotten: {words: UNFORGOTTEN, observed: [locked, {type: "forgot", cleared: false}]},

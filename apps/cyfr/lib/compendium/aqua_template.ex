@@ -9,12 +9,13 @@ defmodule Compendium.AquaTemplate do
   mount in Docker.
 
   Provisioning copies the shipped tree into the athanor's `aqua/`
-  (`Arca.Overlay`); from then on the soul and the crew are the athanor's
-  own, and the seed is the default a reset copies in again. The seed ships
-  no crew member: every member is one the athanor made. The packs under
-  `aqua/scrolls/` are no part of a reset or of this status: `cyfr` follows
-  the release at each boot and every other pack is the person's
-  (`Compendium.Packs`).
+  (`Arca.Overlay`); from then on the soul, the rules file and the crew are
+  the athanor's own, and the seed is the default a reset copies in again.
+  An athanor made before the seed shipped a unit sees it as available
+  until a reset pulls it. The seed ships no crew member: every member is
+  one the athanor made. The packs under `aqua/scrolls/` are no part of a
+  reset or of this status: `cyfr` follows the release at each boot and
+  every other pack is the person's (`Compendium.Packs`).
 
   This module is the seed-side surface: `seed_check/0` (is the
   install's template well-formed — provisioning fails loud on a mount
@@ -74,8 +75,8 @@ defmodule Compendium.AquaTemplate do
 
   @doc """
   The files the seed ships, as paths relative to the aqua root — only what
-  the tree's grammar recognises as a unit, the soul and `crew/*.md`, the
-  packs left out. A seed that cannot be listed answers
+  the tree's grammar recognises as a unit, the soul, the rules file and
+  `crew/*.md`, the packs left out. A seed that cannot be listed answers
   nothing, and says so in the log — a silent empty list reads as "the
   install ships no files", which is never true.
   """
@@ -124,7 +125,8 @@ defmodule Compendium.AquaTemplate do
     end
   end
 
-  # The soul's and the crew's units: a pack is no part of the template.
+  # The soul's, the rules file's and the crew's units: a pack is no part of
+  # the template.
   defp agent_statuses(ctx) do
     with {:ok, statuses} <- Arca.Overlay.unit_statuses(Sanctum.Context.actor(ctx), "aqua"),
          do: {:ok, Map.reject(statuses, fn {unit, _state} -> pack?(unit) end)}
@@ -144,10 +146,10 @@ defmodule Compendium.AquaTemplate do
   defp unit_provenance(_ctx, _unit, _available_or_absent), do: {:ok, nil}
 
   @doc """
-  Reset the soul and the crew to what ships: every edited copy of a
-  shipped one is restored to the shipped bytes, and every shipped one the
-  athanor does not hold is copied in. The packs of `aqua/scrolls/` are
-  no part of it: `cyfr` follows CYFR's release (`Compendium.Packs`), and
+  Reset the soul, the rules file and the crew to what ships: every edited
+  copy of a shipped one is restored to the shipped bytes, and every
+  shipped one the athanor does not hold is copied in. The packs of
+  `aqua/scrolls/` are no part of it: `cyfr` follows CYFR's release (`Compendium.Packs`), and
   every other pack is the person's. By default athanor-made agents are KEPT
   and reported; `all: true` deletes them too, so the tree is
   exactly the shipped set. Either way the template's presence is checked

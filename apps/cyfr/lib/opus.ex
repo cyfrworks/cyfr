@@ -301,6 +301,15 @@ defmodule Opus do
   defdelegate memory(ctx, scope), to: Opus.Memory, as: :read
 
   @doc """
+  The ids of the worker services this CYFR dispatches runs to, as its
+  configuration names them (`Opus.Memory.endpoints/1`'s runtime entries),
+  for a page that says which of several has not answered.
+  """
+  @spec run_services() :: [String.t()]
+  def run_services,
+    do: for(%{service: :runtime, name: name} <- Opus.Memory.endpoints([]), do: name)
+
+  @doc """
   Advance a running chain's `authority` through one invocation of
   `reference` and run it synchronously under the resulting child
   authority, with the chain's execution as its lineage, never as a fresh

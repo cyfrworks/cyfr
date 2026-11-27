@@ -67,8 +67,7 @@ func keeperMain() int {
 		logf("refusing to start the keeper: installing its system-call policy: %v", err)
 		return 1
 	}
-	argv := []string{vm.GuestKeeper, "serve", "--role", vm.GuestRoleSpec, "--pool", vm.GuestPoolSpec,
-		"--home-root", vm.GuestHomeRoot, "--guard", vm.GuestGuardControl, "--", vm.GuestAgent, "relay"}
+	argv := keeperArgs(os.Getenv(vm.GuestPersonEnv) == "1")
 	err = syscall.Exec(argv[0], argv, os.Environ())
 	logf("refusing to start the keeper: %v", err)
 	return 1

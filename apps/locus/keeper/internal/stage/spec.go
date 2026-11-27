@@ -84,12 +84,20 @@ type Spec struct {
 	// only at scrolls.Path, "" for none: <kept root>/.packs/<a>/<d>.
 	Packs string `json:"packs,omitempty"`
 	// Machine names the image's programs' device a person's machine boots
-	// from (package vm), "" for every other space. A machine's space is a
-	// relay space whose relay leads nowhere, holding its VMM alone: its
-	// home is the machine's folder, and beside the container's directories
-	// it is given this device, read only at its path, and /dev/kvm in its
-	// /dev, which no other space is.
+	// from (package vm), "" for every other space. A machine's space holds
+	// its VMM alone: its home is the machine's folder, and beside the
+	// container's directories it is given this device, read only at its
+	// path, and /dev/kvm in its /dev, which no other space is. A relay
+	// machine's relay leads nowhere and it has no network (guest-check's);
+	// a routed one is a person's VM, whose route the guard makes as a
+	// machine's (package guard): it is given /dev/net/tun too, its name
+	// sockets are bound at pool.MachineNames, and its Disk.
 	Machine string `json:"machine,omitempty"`
+	// Disk is a person's VM's one writable drive, its disk image
+	// (home.FormImage) directly under the kept root, which its machine's
+	// space is given read and write at its path: the one file of the kept
+	// root it holds.
+	Disk string `json:"disk,omitempty"`
 	// KeptRoot is the keeper's kept-homes root, "" for a keeper that keeps
 	// none: every space is given it covered, as an empty folder of its own,
 	// wherever the container's directories would otherwise bind it, so no
@@ -136,8 +144,18 @@ func (s Spec) Validate() error {
 		if !filepath.IsAbs(s.Machine) || filepath.Clean(s.Machine) != s.Machine || !strings.HasSuffix(s.Machine, ".sqfs") {
 			return fmt.Errorf("machine device %q is not a clean absolute path to a .sqfs", s.Machine)
 		}
-		if s.Kept || s.Control || s.Terminal || s.Reach != pool.ReachRelay {
-			return errors.New("a machine's space is a relay space with no kept home, control channel or terminal")
+		if s.Kept || s.Control || s.Terminal {
+			return errors.New("a machine's space has no kept home, control channel or terminal")
+		}
+	}
+	if s.Disk != "" {
+		name := strings.TrimSuffix(filepath.Base(s.Disk), home.ImageSuffix)
+		switch {
+		case s.Machine == "" || s.Reach != pool.ReachRouted:
+			return errors.New("only a person's machine, a routed one, is given a disk")
+		case s.KeptRoot == "" || filepath.Clean(s.Disk) != s.Disk || filepath.Dir(s.Disk) != s.KeptRoot ||
+			!strings.HasSuffix(s.Disk, home.ImageSuffix) || !generationName.MatchString(name):
+			return fmt.Errorf("disk %q is not an image directly under the kept root %q", s.Disk, s.KeptRoot)
 		}
 	}
 	if s.Kept {

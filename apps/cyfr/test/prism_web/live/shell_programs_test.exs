@@ -214,6 +214,62 @@ defmodule PrismWeb.ShellProgramsTest do
     assert flash(desktop, "error") == nil
   end
 
+  test "two chips of one name each show and name the second they started, at every width",
+       %{conn: conn, user: user, athanor: athanor, row: row} do
+    first = start!(user, athanor, row)
+    {desktop, _html} = mount_desktop(conn)
+
+    link = fn session ->
+      desktop
+      |> element(chip(session) <> " a.canvas-shelf-app")
+      |> render()
+      |> LazyHTML.from_fragment()
+    end
+
+    shown = fn session, selector ->
+      link.(session) |> LazyHTML.query(selector) |> LazyHTML.text() |> String.trim()
+    end
+
+    # One alone shows its name and no time.
+    assert shown.(first, ".canvas-shelf-app-name") == "claude"
+    assert shown.(first, ".canvas-shelf-program-time") == ""
+
+    second = start!(user, athanor, row)
+    assert eventually(fn -> has_element?(desktop, chip(second)) end)
+
+    {:ok, running} = Opus.Programs.running(person(user, athanor))
+    assert Enum.sort(Enum.map(running, & &1.session)) == Enum.sort([first, second])
+
+    for %{session: session, started_at: at} <- running do
+      second_of_day = Calendar.strftime(at, "%H:%M:%S")
+
+      # The time stands outside the name, which a narrow shelf hides.
+      assert shown.(session, ".canvas-shelf-app-name") == "claude"
+      assert shown.(session, ".canvas-shelf-program-time") == second_of_day
+      assert shown.(session, ".canvas-shelf-app-name .canvas-shelf-program-time") == ""
+
+      # What the chip is called, hovered or read aloud, carries the second.
+      for attribute <- ["title", "aria-label"] do
+        assert [named] = link.(session) |> LazyHTML.query("a") |> LazyHTML.attribute(attribute)
+        assert String.starts_with?(named, "claude: running since #{second_of_day} UTC")
+      end
+
+      # Its Close says which it closes.
+      assert has_element?(
+               desktop,
+               chip(session) <>
+                 ~s( button.canvas-shelf-program-close[title="Close claude #{second_of_day}"])
+             )
+    end
+
+    # The narrow shelf hides the name and never the time.
+    css = File.read!(Path.expand("../../../assets/css/canvas_chrome.css", __DIR__))
+    [_, narrow] = Regex.run(~r/@media \(width < 768px\) \{(.*?)\n\}/s, css)
+    assert narrow =~ ".canvas-shelf-app-name { display: none; }"
+    refute narrow =~ ~r/\.canvas-shelf-program-time \{[^}]*display/
+    refute css =~ ~r/\.canvas-shelf-program-time \{[^}]*display: none/
+  end
+
   test "the shelf follows the person's topic: a start shows, a change is shown, an end leaves",
        %{conn: conn, user: user, athanor: athanor, row: row} do
     {desktop, _html} = mount_desktop(conn)

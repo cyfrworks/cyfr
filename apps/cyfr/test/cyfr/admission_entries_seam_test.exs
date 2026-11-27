@@ -37,8 +37,7 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
 
     keys = [
       cyfr: :tincture_rate_limit_max,
-      cyfr: :cron_scheduler_enabled,
-      sanctum: :company_login
+      cyfr: :cron_scheduler_enabled
     ]
 
     prev = Map.new(keys, fn {app, key} -> {{app, key}, Application.get_env(app, key)} end)
@@ -99,8 +98,6 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
     {PrismWeb.DeviceUnlockController, :redeem} => :device_unlock_ticket_unknown,
     {Emissary.Web.OAuthCallbackController, :callback} => :oauth_callback_unknown_state,
     {CyfrWeb.Plugs.AuthRateLimit, :call} => :device_unlock_rate_limited,
-    {PrismWeb.AuthController, :company_start} => :company_start_no_session,
-    {PrismWeb.AuthController, :company_callback} => :company_callback_no_session,
     {PrismWeb.PasskeyController, :complete} => :sign_in_passkey_ticket_unknown,
     {Opus.Schedules.Scheduler, :handle_info} => :schedule_fire_refused,
     {Opus.Host.Children, :call} => :host_api_lost_attempt,
@@ -575,24 +572,6 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
 
   def sign_in_passkey_ticket_unknown(_conn, _ctx),
     do: build_conn() |> get("/auth/passkey/complete/nope") |> sign_in_refused(302, "not_found")
-
-  # The company sign-in's entries decide only at a CYFR that requires one:
-  # anywhere else they send the browser to `/` and decide nothing.
-  defp company_login_required!,
-    do: Application.put_env(:sanctum, :company_login, %{mode: :join, days: nil, issuer: :oidc})
-
-  def company_start_no_session(_conn, _ctx) do
-    company_login_required!()
-    build_conn() |> post("/auth/company", %{}) |> sign_in_refused(302, "unauthenticated")
-  end
-
-  def company_callback_no_session(_conn, _ctx) do
-    company_login_required!()
-
-    build_conn()
-    |> get("/auth/company/callback", %{"state" => "no-such-state", "code" => "c"})
-    |> sign_in_refused(302, "forbidden")
-  end
 
   # ==========================================================================
   # Drivers: the execution-events stream

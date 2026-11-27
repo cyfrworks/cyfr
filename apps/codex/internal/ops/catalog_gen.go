@@ -434,7 +434,7 @@ func (args AquaListArgs) MarshalJSON() ([]byte, error) {
 type AquaResetArgs struct {
 	// Soul ('aqua'), crew member or guide (for get/update/delete/reset), or a scroll by its pack and its name, like 'mine:research' (for the skill_* actions)
 	Name Field[string] `json:"name,omitzero"`
-	// For reset: also DELETE the crew members the athanor made, so the soul and the crew become exactly the shipped set (default false keeps them). Reset never touches a pack of scrolls
+	// For reset: also DELETE the crew members the athanor made, so the soul, the rules file and the crew become exactly the shipped set (default false keeps them). Reset never touches a pack of scrolls
 	All Field[bool] `json:"all,omitzero"`
 }
 

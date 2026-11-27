@@ -15,6 +15,7 @@ defmodule PrismWeb.SettingsLiveTest do
   import Ecto.Query, only: [from: 2]
   import Prima.Test.Wait
 
+  alias PrismWeb.MemoryWords
   alias Sanctum.Test.RegistryStub
 
   test "the door section is shown to a platform admin and to nobody else", %{conn: conn} do
@@ -1148,10 +1149,19 @@ defmodule PrismWeb.SettingsLiveTest do
       assert section =~ "500.0 MB"
       assert section =~ "Day (UTC)"
       used = view |> cells("#memory-days") |> Enum.map(&Enum.at(&1, 3))
-      assert ["461.5 MB on average", "at most 700.0 MB, for 1 hour 5 minutes"] in used
-      assert ["0 B on average", "at most 164.0 MB, for 45 seconds"] in used
-      assert section =~ "1 × needed more memory than one piece of work may use"
-      assert section =~ "2 × CYFR ran out of memory"
+
+      assert [
+               "461.5 MB on average",
+               "at most 700.0 MB, for 1 hour 5 minutes in all",
+               "Ended for memory: " <> ended(cap: 1)
+             ] in used
+
+      assert [
+               "0 B on average",
+               "at most 164.0 MB, for 45 seconds in all",
+               "Ended for memory: " <> ended(machine: 2)
+             ] in used
+
       assert section =~ "Counted a few seconds ago."
       PrismWeb.Vocabulary.refute_vocabulary(section)
 
@@ -1239,7 +1249,7 @@ defmodule PrismWeb.SettingsLiveTest do
                [["everything", "terminal"], ["everything", "mcp program"]]
     end
 
-    test "each day's row says its use in a person's units, in five columns" do
+    test "each day's row says its use in a person's units, in four columns that stack when narrow" do
       ops = test_user()
       {:ok, _} = Sanctum.TestContext.ensure_platform(ops.user_id)
       o = own_athanor_id(ops)
@@ -1248,6 +1258,7 @@ defmodule PrismWeb.SettingsLiveTest do
       record!(
         [
           used(1, o, kind: "run", peak: 28, measured_ms: 0),
+          used(5, o, kind: "terminal", subject: "srv_z", peak: 0, measured_ms: 0),
           used(2, o, kind: "build", mib_ms: 162 * 20_000, measured_ms: 20_000, peak: 318),
           used(3, o,
             kind: "program",
@@ -1278,51 +1289,92 @@ defmodule PrismWeb.SettingsLiveTest do
         view |> element("#memory-days") |> render() |> LazyHTML.from_fragment()
 
       assert table |> LazyHTML.query("thead th") |> Enum.map(&String.trim(LazyHTML.text(&1))) ==
-               ["Day (UTC)", "Person", "What", "Used", "Ended for memory"]
+               ["Day (UTC)", "Person", "What", "Used"]
 
       today = Date.to_iso8601(Date.utc_today())
 
+      # A row that was ended says so under what it used; one that was not
+      # says nothing of it. With no time measured the cell is one line.
       assert cells(view, "#memory-days") == [
                [
                  today,
                  me,
-                 ["build"],
-                 ["162.0 MB on average", "at most 318.0 MB, for 20 seconds"],
-                 ["—"]
+                 [MemoryWords.kind(:build)],
+                 ["162.0 MB on average", "at most 318.0 MB, for 20 seconds in all"]
                ],
-               [today, me, ["run"], ["—", "at most 28.0 MB"], ["—"]],
+               [today, me, [MemoryWords.kind(:run)], ["at most 28.0 MB"]],
+               [today, me, [MemoryWords.kind(:terminal)], ["nothing measured"]],
                [
                  today,
                  me,
-                 ["shell", "terminal"],
-                 ["95.0 MB on average", "at most 143.0 MB, for 2 hours"],
+                 ["shell", MemoryWords.kind(:terminal)],
                  [
-                   "2 × needed more memory than one piece of work may use",
-                   "1 × CYFR ran out of memory"
+                   "95.0 MB on average",
+                   "at most 143.0 MB, for 2 hours in all",
+                   "Ended for memory: " <> ended(cap: 2, machine: 1)
                  ]
                ],
                [
                  today,
                  me,
-                 ["everything", "mcp program"],
-                 ["192.0 MB on average", "at most 246.0 MB, for 10 minutes"],
-                 ["—"]
+                 ["everything", MemoryWords.kind(:tool)],
+                 ["192.0 MB on average", "at most 246.0 MB, for 10 minutes in all"]
                ]
              ]
 
-      # The day stays in view while the table scrolls sideways.
-      for row <- LazyHTML.query(table, "tbody tr") do
-        [day | _] = LazyHTML.query(row, "td") |> Enum.to_list()
-        assert day |> LazyHTML.attribute("class") |> hd() =~ "sticky"
+      # Below the width its four columns fit at, the table is no table:
+      # its heading goes and each row and cell stacks, so nothing scrolls
+      # sideways and no column is held in place.
+      classes = fn selector ->
+        table |> LazyHTML.query(selector) |> Enum.flat_map(&LazyHTML.attribute(&1, "class"))
       end
 
-      # The dash where nothing was measured is muted, an average is not:
-      # each row's Used cell is its average, then its most at once.
-      [built, _at_most, ran | _] =
-        LazyHTML.query(table, "tbody tr td:nth-child(4) span") |> Enum.to_list()
+      for {selector, narrow, wide} <- [
+            {"table", "block", "sm:table"},
+            {"thead", "hidden", "sm:table-header-group"},
+            {"tbody tr", "block", "sm:table-row"},
+            {"tbody td", ~r/\b(inline-)?block\b/, "sm:table-cell"}
+          ],
+          class <- classes.(selector) do
+        assert class =~ narrow
+        assert class =~ wide
+        refute class =~ "sticky"
+      end
+    end
 
-      refute built |> LazyHTML.attribute("class") |> hd() =~ "text-gray-500"
-      assert ran |> LazyHTML.attribute("class") |> hd() =~ "text-gray-500"
+    # A day's endings as the shared words say them, joined as a row joins them.
+    defp ended(counts) do
+      %{cap: 0, machine: 0, either: 0}
+      |> Map.merge(Map.new(counts))
+      |> MemoryWords.ended()
+      |> Enum.join("; ")
+    end
+
+    test "a stacked day row breaks a long person's name inside its card" do
+      ops = test_user()
+      {:ok, _} = Sanctum.TestContext.ensure_platform(ops.user_id)
+      o = own_athanor_id(ops)
+      long = String.duplicate("w", 39)
+
+      Arca.Repo.update_all(from(a in Arca.Schemas.Athanor, where: a.id == ^o), set: [slug: long])
+      record!([used(1, o, kind: "run", mib_ms: 1_000, measured_ms: 1_000, peak: 1)], %{})
+
+      {view, _html} = build_conn() |> log_in_user(ops) |> mount_athanor("/settings")
+
+      [person] =
+        view
+        |> element("#memory-days")
+        |> render()
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query("tbody td:nth-child(2)")
+        |> Enum.to_list()
+
+      assert String.trim(LazyHTML.text(person)) == "@" <> long
+
+      # No wider than its row, and broken where it would be: as What is.
+      classes = person |> LazyHTML.attribute("class") |> hd() |> String.split()
+      assert "max-w-full" in classes
+      assert "break-words" in classes
     end
 
     # Each row's cells, their words with runs of space, no-break ones
@@ -1456,7 +1508,7 @@ defmodule PrismWeb.SettingsLiveTest do
       silent = [Opus.Programs.local(), Prima.LocusPool.builds_endpoint(), "wrk_gone"]
       for endpoint <- silent, do: record!([], %{}, endpoint)
       an_hour_ago = DateTime.add(DateTime.utc_now(), -3_600, :second)
-      since = Calendar.strftime(an_hour_ago, "%H:%M UTC")
+      since = MemoryWords.clock(an_hour_ago)
 
       Arca.Repo.update_all(from(e in Arca.Schemas.MemoryEndpoint, where: e.endpoint in ^silent),
         set: [heard_at: an_hour_ago]
@@ -1468,15 +1520,19 @@ defmodule PrismWeb.SettingsLiveTest do
       refute section =~ "Machine"
       assert section =~ "Counted a few seconds ago."
 
-      assert section =~
-               "The service for programs has not answered since #{since}, so what it runs is not counted."
+      # One stop is one sentence, as the shared words say it.
+      said =
+        PrismWeb.MemoryWords.silent(for e <- silent, do: %{endpoint: e, heard_at: an_hour_ago})
 
-      assert section =~
-               "The service for builds has not answered since #{since}, so what it runs is not counted."
+      assert said =~ "The services for builds, programs and runs (wrk_gone) have not answered"
+      assert said =~ "since #{since}"
 
-      assert section =~
-               "The service for runs (wrk_gone) has not answered since #{since}, " <>
-                 "so what it runs is not counted."
+      assert view
+             |> element(~s(#memory-use [data-test="memory-unanswered"]))
+             |> render()
+             |> LazyHTML.from_fragment()
+             |> LazyHTML.text()
+             |> String.trim() == said
 
       assert section |> String.split(~s(data-test="memory-machine")) |> length() == 2
     end

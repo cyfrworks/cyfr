@@ -176,7 +176,11 @@ func Main() int {
 		return fail("credentials: %v", err)
 	}
 	if spec.Reach == pool.ReachRouted {
-		if err := handRouteUp(RouteFD); err != nil {
+		names := spaceNames
+		if spec.Machine != "" {
+			names = pool.MachineNames
+		}
+		if err := handRouteUp(RouteFD, names); err != nil {
 			return fail("route: %v", err)
 		}
 	}
@@ -240,11 +244,11 @@ func probe(status *os.File, parent int) error {
 	}
 	switch {
 	case p.Route:
-		if err := handRouteUp(RouteFD); err != nil {
+		if err := handRouteUp(RouteFD, spaceNames); err != nil {
 			return fmt.Errorf("the space's route: %w", err)
 		}
 	case p.Routed:
-		udp, tcp, err := nameSockets()
+		udp, tcp, err := nameSockets(spaceNames)
 		if err != nil {
 			return fmt.Errorf("the space's loopback and name sockets: %w", err)
 		}

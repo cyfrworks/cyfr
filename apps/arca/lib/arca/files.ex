@@ -17,8 +17,8 @@ defmodule Arca.Files do
     * `:open` (`data/`) — list, read, write and delete anything.
     * `:shaped` (`components/`, `aqua/`) — files are read and edited in
       place, but only inside a unit the root's grammar recognises: a
-      component version directory of the `local` publisher, the soul, a
-      crew member or a pack of scrolls. Units are made and removed by their
+      component version directory of the `local` publisher, the soul, the
+      rules file, a crew member or a pack of scrolls. Units are made and removed by their
       own verbs (scaffold, pull, fork, the Aqua page); a unit the server
       ships is restored, never deleted. A pack, `aqua/scrolls/<pack>/`, is
       one door for every change to it: a write, a replace or a delete
@@ -494,9 +494,10 @@ defmodule Arca.Files do
   end
 
   defp above_unit_message(["aqua" | _], segments) do
-    "'#{join(segments)}' is outside any Aqua unit: the soul is aqua/aqua.md, a crew member is " <>
-      "aqua/crew/{name}.md, a scroll is aqua/scrolls/{pack}/skills/{name}/SKILL.md in a pack " <>
-      "named with letters, digits, '_' and '-' — create one from the Aqua page"
+    "'#{join(segments)}' is outside any Aqua unit: the soul is aqua/aqua.md, the rules file " <>
+      "is aqua/rules.md, a crew member is aqua/crew/{name}.md, a scroll is " <>
+      "aqua/scrolls/{pack}/skills/{name}/SKILL.md in a pack named with letters, digits, '_' " <>
+      "and '-' — create one from the Aqua page"
   end
 
   defp inside_file_message(segments),

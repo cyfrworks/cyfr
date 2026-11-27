@@ -276,7 +276,7 @@ defmodule Compendium.Providers.Aqua do
             ),
             Arg.new("all", :boolean,
               description:
-                "For reset: also DELETE the crew members the athanor made, so the soul and the crew become exactly the shipped set (default false keeps them). Reset never touches a pack of scrolls"
+                "For reset: also DELETE the crew members the athanor made, so the soul, the rules file and the crew become exactly the shipped set (default false keeps them). Reset never touches a pack of scrolls"
             )
           ],
           kind: :destructive,

@@ -2442,6 +2442,183 @@ defmodule PrismWeb.ProgramsLiveTest do
       assert list_status(view) == "starts when used"
     end
 
+    test "a program a person drives says it runs while the panel names it, and nothing otherwise",
+         %{conn: conn, athanor: athanor, user: user} do
+      _fake = controller!()
+      row = driven_row!(athanor)
+      names = %{{athanor.id, row.id} => %{name: "claude", shown: "program"}}
+
+      status = fn view ->
+        view
+        |> element(~s(tr[data-name="claude"] [data-test="status"]))
+        |> render()
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.text()
+        |> String.trim()
+      end
+
+      {:ok, _session} =
+        Opus.Programs.start(person(user, athanor), row.id, %{rows: 24, cols: 80, args: []})
+
+      recorded!([held(1, athanor, "terminal", row.id, 211)], names)
+
+      {view, _html} = mount_athanor(conn, "/programs", athanor)
+
+      assert view |> element(~s([data-test="memory"])) |> render() =~ "claude uses 211.0 MB"
+      assert status.(view) == "running"
+
+      # Its row's own line, opened, says the same word.
+      view |> element("tr[phx-value-name=claude]") |> render_click()
+      assert has_element?(view, ~s([data-test="program-status"]), "running")
+
+      recorded!([held(2, athanor, "terminal", row.id, 0)], names)
+      send(view.pid, :memory)
+
+      refute view |> element(~s([data-test="memory"])) |> render() =~ "claude uses"
+      assert status.(view) == "—"
+      refute has_element?(view, ~s([data-test="program-status"]), "running")
+    end
+
+    test "an open row's line follows the list: its word is the list's, and it counts no sessions",
+         %{conn: conn, athanor: athanor} do
+      fake = controller!()
+      row = ready_tool!(athanor)
+      names = %{{athanor.id, row.id} => %{name: "github", shown: "tool"}}
+
+      line = fn view ->
+        view
+        |> element(~s([data-test="program-status"]))
+        |> render()
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.text()
+        |> String.split()
+        |> Enum.join(" ")
+      end
+
+      recorded!([held(1, athanor, "program", row.id, 247)], names)
+
+      {view, _html} = mount_athanor(conn, "/programs", athanor)
+      view |> element("tr[phx-value-name=github]") |> render_click()
+
+      assert list_status(view) == "running"
+      assert line.(view) == "program running 0 crashes"
+
+      # The program holds nothing any more, as after the service that ran
+      # it stopped and started: the row stays open and is not read again,
+      # and its line says what the list says.
+      recorded!([held(2, athanor, "program", row.id, 0)], names)
+      send(view.pid, :memory)
+
+      assert list_status(view) == "starts when used"
+      assert line.(view) == "program starts when used 0 crashes"
+
+      # One crash is a crash.
+      Scripted.set(fake, :restarts, 1)
+      view |> element("tr[phx-value-name=github]") |> render_click()
+      view |> element("tr[phx-value-name=github]") |> render_click()
+      assert line.(view) == "program starts when used 1 crash"
+    end
+
+    test "Disable speaks of terminals only where one of the program is listed or counted",
+         %{conn: conn, athanor: athanor} do
+      controller!()
+      row = ready_tool!(athanor)
+
+      recorded!([held(1, athanor, "program", row.id, 247)], %{
+        {athanor.id, row.id} => %{name: "github", shown: "tool"}
+      })
+
+      {view, _html} = mount_athanor(conn, "/programs", athanor)
+      view |> element("tr[phx-value-name=github]") |> render_click()
+
+      asked = "Disable github? Everything running in it ends now."
+      assert question(view, ~s([data-test="memory-disable"])) == asked
+      assert question(view, ~s([data-test="toggle-enabled"])) == asked
+    end
+
+    test "Show moves to the terminal, whose heading carries the second its line does",
+         %{conn: conn, athanor: athanor, user: user} do
+      _fake = controller!()
+      row = driven_row!(athanor)
+      me = person(user, athanor)
+
+      for _n <- 1..2,
+          do: {:ok, _session} = Opus.Programs.start(me, row.id, %{rows: 24, cols: 80, args: []})
+
+      {:ok, [_first, second]} = Opus.Programs.running(me)
+
+      {view, _html} = mount_athanor(conn, "/programs", athanor)
+      view |> element("tr[phx-value-name=claude]") |> render_click()
+
+      view
+      |> element(~s([data-test="running-show"][phx-value-session="#{second.session}"]))
+      |> render_click()
+
+      # The frame stands in the element Show's address ends in, which the
+      # browser moves to (the test client drops an address's fragment).
+      assert has_element?(view, ~s(#terminal [data-test="terminal"]))
+
+      opened = PrismWeb.TerminalComponent.opened_words(second.started_at)
+      assert opened == "opened at " <> Calendar.strftime(second.started_at, "%H:%M:%S UTC")
+
+      assert view
+             |> element(~s([data-test="terminal-name"]))
+             |> render()
+             |> LazyHTML.from_fragment()
+             |> LazyHTML.text()
+             |> String.split()
+             |> Enum.join(" ") ==
+               "claude — a terminal CYFR runs in the program's own folder, " <> opened
+
+      assert view
+             |> element(~s([data-test="running-session"]), "shown above")
+             |> render() =~ "Terminal " <> opened
+    end
+
+    test "below the medium width the list is a name, its kind and a status",
+         %{conn: conn, athanor: athanor} do
+      _row = driven_row!(athanor)
+      {view, _html} = mount_athanor(conn, "/programs", athanor)
+      list = view |> element("#programs") |> render() |> LazyHTML.from_fragment()
+
+      shown = fn selector ->
+        for cell <- LazyHTML.query(list, selector) do
+          {cell |> LazyHTML.text() |> String.split() |> Enum.join(" "),
+           cell |> LazyHTML.attribute("class") |> hd() |> String.split() |> Enum.member?("hidden")}
+        end
+      end
+
+      assert shown.("thead th") == [
+               {"Name", false},
+               {"Runs", true},
+               {"Folder", true},
+               {"Status", false},
+               {"Tools", true}
+             ]
+
+      assert shown.(~s(tr[data-name="claude"] td)) == [
+               {"claude driven program", false},
+               {"driven by a person or a crew member", true},
+               {"kept", true},
+               {"—", false},
+               {"—", true}
+             ]
+
+      # What is hidden shows again from the medium width.
+      for selector <- ["thead th", ~s(tr[data-name="claude"] td)],
+          cell <- LazyHTML.query(list, selector),
+          class = hd(LazyHTML.attribute(cell, "class")),
+          class =~ "hidden" do
+        assert class =~ "md:table-cell"
+      end
+
+      # The kind stands under the name there.
+      assert list
+             |> LazyHTML.query(~s(tr[data-name="claude"] [data-test="transport"]))
+             |> LazyHTML.attribute("class")
+             |> hd() =~ "block"
+    end
+
     test "the list says a program starts when used while the service that runs it has not answered",
          %{conn: conn, athanor: athanor} do
       controller!()
@@ -2492,7 +2669,7 @@ defmodule PrismWeb.ProgramsLiveTest do
 
       assert panel =~
                "What uses memory cannot be counted right now. " <>
-                 "It was last counted at #{Calendar.strftime(an_hour_ago, "%H:%M UTC")}."
+                 "It was last counted at #{PrismWeb.MemoryWords.clock(an_hour_ago)}."
 
       refute panel =~ "a few seconds ago"
     end
@@ -2518,7 +2695,7 @@ defmodule PrismWeb.ProgramsLiveTest do
 
       assert panel =~
                "Some of it cannot be counted right now; that part was last counted at " <>
-                 "#{Calendar.strftime(an_hour_ago, "%H:%M UTC")}."
+                 "#{PrismWeb.MemoryWords.clock(an_hour_ago)}."
     end
 
     test "a line keeps its place when its size passes another's",

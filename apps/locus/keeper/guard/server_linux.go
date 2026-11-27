@@ -62,6 +62,11 @@ const (
 //	                             of the island's subnets, which a private
 //	                             role reaches; a value of any other form
 //	                             refuses the guard's start
+//	CYFR_GUARD_RESOLVER          optional: the resolver the routes' names
+//	                             are asked of, <IPv4 address>:<port>,
+//	                             Docker's 127.0.0.11:53 when unset; a
+//	                             person's VM's guard asks the host's guard
+//	                             at MachineNames:53
 func Main(args []string) int {
 	log := logx.New("cyfr-guard")
 	if len(args) != 0 {
@@ -120,6 +125,11 @@ func (g starting) start() (*net.UnixListener, *server, int) {
 		log.Error("refusing to start: CYFR_GUARD_CONTROL is '%s', not a clean absolute path: it names the control socket the keeper of the island reaches the guard on", socket)
 		return nil, nil, ExitConfig
 	}
+	upstream, ok := resolverOf(g.env("CYFR_GUARD_RESOLVER"))
+	if !ok {
+		log.Error("refusing to start: CYFR_GUARD_RESOLVER is '%s', not <IPv4 address>:<port>: it names the resolver the routes' names are asked of", g.env("CYFR_GUARD_RESOLVER"))
+		return nil, nil, ExitConfig
+	}
 	if sysctls(log, p) != nil {
 		return nil, nil, ExitRefused
 	}
@@ -174,6 +184,14 @@ func (g starting) start() (*net.UnixListener, *server, int) {
 		return nil, nil, ExitConfig
 	}
 	s := newServer(log, netns, rng, kernelRoutes{set: &rulesOf{log: log, at: p, st: st, lock: lock, bound: applyTimeout}})
+	s.upstream = upstream
+	// A guard whose kernel cannot hold a machine's route to whole IPv4
+	// packets serves every other route, and says so in its hello. Its line
+	// is information: where machines are wanted, the keeper that reads the
+	// hello warns (it gives spaces then).
+	if s.machines = probeMachines(); s.machines != "" {
+		log.Info("control: %s", s.machines)
+	}
 	if err := writeFile(p.ready(), recorded+"\n"); err != nil {
 		log.Error("refusing to start: writing %s: %v", p.ready(), err)
 		listener.Close()
@@ -182,6 +200,19 @@ func (g starting) start() (*net.UnixListener, *server, int) {
 	log.Info("ready: every rule installed, routes in %s", st.rng)
 	log.Info("control: serving %s in %s, routes in %s", socket, netns, rng)
 	return listener, s, 0
+}
+
+// resolverOf is the resolver the routes' names are asked of: value, an
+// IPv4 address and port in their one form, or Docker's where it is empty.
+func resolverOf(value string) (string, bool) {
+	if value == "" {
+		return islandResolver, true
+	}
+	ap, err := netip.ParseAddrPort(value)
+	if err != nil || !ap.Addr().Is4() || ap.Port() == 0 || ap.String() != value {
+		return "", false
+	}
+	return value, true
 }
 
 // listen makes the control's socket: its directory is root's own and is
@@ -235,6 +266,15 @@ type route struct {
 	// which no other route holds while this one stands.
 	port    int
 	private bool
+	// machine is a person's VM's route, uid its VMM's (control.go): its
+	// reach changes while it stands (change).
+	machine bool
+	uid     int
+	// nl is a machine's route netlink socket of its VMM's namespace, which
+	// its stage opened there and handed up with the rest: the guard's way
+	// to settle what only netlink settles in that namespace. Closed once
+	// the route is made.
+	nl *os.File
 	// sockets are the inodes of its two name sockets, which no other
 	// route may hold.
 	sockets [2]uint64
@@ -263,23 +303,41 @@ type routeMaker interface {
 	unpair(r *route) error
 	// unrules removes the route's rules.
 	unrules(r *route) error
+	// change replaces a machine's route's reach, old's, with next's: next
+	// is old with another reach and addresses.
+	change(old, next *route) error
 }
 
 // ruleSet installs and withdraws a route's rules: rulesOf in production.
 type ruleSet interface {
 	install(r *route) error
 	withdraw(r *route) error
+	change(old, next *route) error
 }
 
 // kernelRoutes makes routes in the kernel, the rules through set.
 type kernelRoutes struct{ set ruleSet }
 
 func (k kernelRoutes) pair(r *route) error {
-	if err := checkDescriptors(r.netns, r.udp, r.tcp); err != nil {
+	names := spaceNames
+	if r.machine {
+		names = MachineNames
+	}
+	if err := checkDescriptors(r.netns, r.udp, r.tcp, names); err != nil {
 		return err
+	}
+	if r.machine {
+		if err := checkNetlink(r.nl, r.netns); err != nil {
+			return err
+		}
 	}
 	if err := makePair(r.slot, r.netns); err != nil {
 		return err
+	}
+	if r.machine {
+		if err := machineEnd(r.slot); err != nil {
+			return err
+		}
 	}
 	own, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_DGRAM|syscall.SOCK_CLOEXEC, 0)
 	if err != nil {
@@ -288,6 +346,14 @@ func (k kernelRoutes) pair(r *route) error {
 	defer syscall.Close(own)
 	if err := setLink(own, outerName(r.slot), r.gateway); err != nil {
 		return err
+	}
+	// A machine's guest takes the inner address itself, behind the
+	// bridge: the inner end stays bare.
+	if r.machine {
+		if err := machineNeighbour(r); err != nil {
+			return err
+		}
+		return machineLinks(r)
 	}
 	space := int(r.udp.Fd())
 	if err := setLink(space, innerName, r.inner); err != nil {
@@ -305,10 +371,17 @@ func (k kernelRoutes) unpair(r *route) error {
 	if err := removePair(r.slot); err != nil {
 		return err
 	}
+	if r.machine {
+		if err := removeLink(tapName(r.slot)); err != nil {
+			return fmt.Errorf("removing the tap %s: %w", tapName(r.slot), err)
+		}
+	}
 	return forgetConnections(r.inner)
 }
 
 func (k kernelRoutes) unrules(r *route) error { return k.set.withdraw(r) }
+
+func (k kernelRoutes) change(old, next *route) error { return k.set.change(old, next) }
 
 // server answers every connection's requests one at a time: mu is held
 // across each request's changes, whichever connection asked.
@@ -319,6 +392,10 @@ type server struct {
 	maker routeMaker
 	// upstream is the island's resolver the routes' names are asked of.
 	upstream string
+	// machines is why the guard routes no machine, "" where it routes them
+	// (probeMachines): its hello says it, and each machine's admit is
+	// refused with it.
+	machines string
 
 	mu sync.Mutex
 	// taken holds the slots of routes made and not yet wholly withdrawn: a
@@ -392,7 +469,7 @@ func (s *server) serve(conn *net.UnixConn) {
 			s.onEnd()
 		}
 	}()
-	hello, err := Encode(Message{Type: TypeHello, Netns: s.netns})
+	hello, err := Encode(Message{Type: TypeHello, Netns: s.netns, Machines: s.machines})
 	if err == nil {
 		_, err = conn.Write(hello)
 	}
@@ -448,13 +525,51 @@ func (s *server) answer(id uint64, packet []byte, files []*os.File) Message {
 		if held {
 			return refuse("this connection already holds a route for the spawn")
 		}
-		_, err := s.admit(id, req, files)
+		if req.MachineUID != nil && s.machines != "" {
+			return refuse(s.machines)
+		}
+		r, err := s.admit(id, req, files)
 		if err != nil {
 			s.log.Error("control: connection %d: refused the route of spawn %s: %v", id, req.SpawnID, err)
 			return refuse("the guard could not make the route: " + err.Error())
 		}
 		keep = true
+		if r.machine {
+			return Message{Type: TypeAdmitted, SpawnID: req.SpawnID, Inner: r.inner.String(), Gateway: r.gateway.String()}
+		}
 		return Message{Type: TypeAdmitted, SpawnID: req.SpawnID}
+	case TypeChange:
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		r := s.routes[id][req.SpawnID]
+		if r == nil || r.gone {
+			return refuse("this connection holds no route for the spawn")
+		}
+		if !r.machine {
+			return refuse("only a machine's route changes its reach")
+		}
+		next := *r
+		next.reach, next.addresses = req.Reach, req.Addresses
+		if err := s.maker.change(r, &next); err != nil {
+			if !errors.Is(err, errRouteBroken) {
+				s.log.Error("control: connection %d: the reach of spawn %s's route stays as it was: %v", id, req.SpawnID, err)
+				return refuse("the guard could not change the route's reach, which stays as it was: " + err.Error())
+			}
+			// The route's rules are in no known state: it is withdrawn, and
+			// the answer says so by its member, whether the withdrawal
+			// finished or is left to the retry.
+			s.log.Error("control: connection %d: spawn %s's route is in no known state, and is withdrawn: %v", id, req.SpawnID, err)
+			how := "and withdrew it"
+			if werr := s.withdrawLocked(r); werr == nil {
+				delete(s.routes[id], req.SpawnID)
+			} else {
+				how = "and is withdrawing it, trying again: " + werr.Error()
+			}
+			return Message{Type: TypeRefused, SpawnID: req.SpawnID, Withdrawn: true,
+				Reason: "the guard could not change the route's reach, " + how + ": " + err.Error()}
+		}
+		r.reach, r.addresses = next.reach, next.addresses
+		return Message{Type: TypeChanged, SpawnID: req.SpawnID}
 	default:
 		// The lookup and every step of the withdrawal are taken under the
 		// one lock: no retry runs between them, and a route the retry
@@ -496,7 +611,7 @@ func (s *server) admit(id uint64, req Message, files []*os.File) (*route, error)
 		}
 	}
 	var sockets [2]uint64
-	for i, f := range files[1:] {
+	for i, f := range files[1:3] {
 		ino, err := nsInode(int(f.Fd()))
 		if err != nil {
 			return nil, err
@@ -510,6 +625,9 @@ func (s *server) admit(id uint64, req Message, files []*os.File) (*route, error)
 	gateway, inner := slotAddresses(s.rng, slot)
 	r := &route{spawnID: req.SpawnID, slot: slot, gateway: gateway, inner: inner, mark: s.marks, conn: id,
 		reach: req.Reach, addresses: req.Addresses, port: port, private: private, netns: files[0], udp: files[1], tcp: files[2], sockets: sockets}
+	if req.MachineUID != nil {
+		r.machine, r.uid, r.nl = true, *req.MachineUID, files[3]
+	}
 	s.taken[slot] = true
 	s.sockets[sockets[0]], s.sockets[sockets[1]] = true, true
 	if port != 0 {
@@ -533,14 +651,21 @@ func (s *server) admit(id uint64, req Message, files []*os.File) (*route, error)
 	}
 	r.names = n
 	s.routes[id][req.SpawnID] = r
-	if r.reach == ReachRole {
+	switch {
+	case r.reach == ReachRole:
 		s.log.Info("control: route %s of spawn %s made, %s to %s, reach role, port %d, private %t", outerName(r.slot), r.spawnID, r.gateway, r.inner, r.port, r.private)
-	} else {
+	case r.machine:
+		s.log.Info("control: route %s of machine %s made, %s to %s, uid %d, reach %s", outerName(r.slot), r.spawnID, r.gateway, r.inner, r.uid, r.reach)
+	default:
 		s.log.Info("control: route %s of spawn %s made, %s to %s, reach %s", outerName(r.slot), r.spawnID, r.gateway, r.inner, r.reach)
 	}
 	// The namespace is the pair's to hold now; the sockets are the names'.
 	_ = r.netns.Close()
 	r.netns = nil
+	if r.nl != nil {
+		_ = r.nl.Close()
+		r.nl = nil
+	}
 	return r, nil
 }
 

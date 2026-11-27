@@ -635,7 +635,7 @@ defmodule Cyfr.BoundariesTest do
       assert MapSet.member?(below, "Arca.PolicyLog")
     end
 
-    test "the security-row roster is exactly the thirty-three stores and the transitions, each a module" do
+    test "the security-row roster is exactly the thirty-one stores and the transitions, each a module" do
       assert Enum.sort(Boundaries.sanctum_only_storage()) ==
                Enum.sort(~w(
                  Arca.ConsentStorage Arca.ConsentProofStorage Arca.ProfileStorage
@@ -648,8 +648,7 @@ defmodule Cyfr.BoundariesTest do
                  Arca.PendingConfirmations Arca.Questions
                  Arca.InstallationClaims Arca.RequestRateWindows Arca.Shares Arca.ShareUsage
                  Arca.DecisionLog Arca.McpLog Arca.PolicyLog
-                 Arca.Invitations Arca.CompanyAuthorizations
-                 Arca.CompanyLoginAttempts Arca.SecurityTransitions
+                 Arca.Invitations Arca.SecurityTransitions
                  Arca.SharedThreads Arca.SharedThreadMembers Arca.SharedMessages
                ))
 
@@ -2088,7 +2087,7 @@ defmodule Cyfr.BoundariesTest do
              "a fifth port is an architecture change, not a catalog edit"
     end
 
-    test "every behaviour Sanctum declares is a listed port or a named internal strategy" do
+    test "every behaviour Sanctum declares is a listed port" do
       declared =
         for {path, lines} <- scan("apps/sanctum/lib/**/*.ex"),
             Enum.any?(lines, &String.contains?(elem(&1, 0), "@callback")),
@@ -2099,11 +2098,9 @@ defmodule Cyfr.BoundariesTest do
              Sanctum declares #{inspect(Enum.sort(declared))}; the catalog allows
              #{inspect(Boundaries.sanctum_behaviours())}.
 
-             A behaviour the identity domain declares is either one of the four
-             ports of `ARCHITECTURE.md` — something above it implements and the boot
-             writes in — or a named internal strategy, declared and implemented
-             inside Sanctum and selected by configuration. Anything else is a
-             fifth port, which is an architecture change.
+             A behaviour the identity domain declares is one of the four ports of
+             `ARCHITECTURE.md`: something above it implements and the boot writes
+             in. Anything else is a fifth port, which is an architecture change.
              """
     end
 

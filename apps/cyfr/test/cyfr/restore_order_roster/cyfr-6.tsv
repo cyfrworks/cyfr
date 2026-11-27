@@ -3,7 +3,7 @@
 apps/cyfr/test/cluster/support/boot.exs	1	pending
 apps/cyfr/test/cluster/support/cell.exs	3	pending
 apps/cyfr/test/cluster/support/support.exs	1	pending
-apps/cyfr/test/cyfr/admission_entries_seam_test.exs	3	pending
+apps/cyfr/test/cyfr/admission_entries_seam_test.exs	2	pending
 apps/cyfr/test/cyfr/admission_origin_test.exs	2	pending
 apps/cyfr/test/cyfr/application_boot_test.exs	8	pending
 apps/cyfr/test/cyfr/cell_test.exs	6	pending

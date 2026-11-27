@@ -336,9 +336,19 @@ defmodule PrismWeb.TerminalComponent do
   def ended_text(:unanswered), do: "The close was not confirmed yet; CYFR ends the program."
   def ended_text(:not_found), do: "This program is not running any more."
 
+  @doc """
+  When a terminal was opened, to the second, which tells it from another
+  of its program: the words its frame's heading and its line on a page
+  share.
+  """
+  @spec opened_words(DateTime.t()) :: String.t()
+  def opened_words(at), do: "opened at " <> Calendar.strftime(at, "%H:%M:%S UTC")
+
   attr :terminal, :map,
     required: true,
-    doc: "%{session, name, kept, ended, attached, closing, back}, as `show/2` left it"
+    doc:
+      "%{session, name, kept, ended, attached, closing, back}, as `show/2` left it, " <>
+        "with `opened_at` where the page knows when the session started"
 
   @doc "The frame of the terminal `terminal` names."
   def frame(assigns) do
@@ -351,7 +361,10 @@ defmodule PrismWeb.TerminalComponent do
       <div class="flex flex-wrap items-center justify-between gap-2 border-b border-gray-800 px-4 py-2">
         <span class="text-sm text-gray-300" data-test="terminal-name">
           <span class="font-mono text-blue-400">{@terminal.name}</span>
-          — a terminal CYFR runs in the program's own folder
+          — a terminal CYFR runs in the program's own folder<span
+            :if={@terminal[:opened_at]}
+            class="tabular-nums"
+          >, {opened_words(@terminal.opened_at)}</span>
         </span>
         <div class="flex items-center gap-3">
           <.link

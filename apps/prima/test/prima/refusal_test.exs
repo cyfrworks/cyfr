@@ -334,8 +334,6 @@ defmodule Prima.RefusalTest do
     {:no_person, :not_found},
     {:invitation_invalid, :not_found},
     {:handle_not_found, :not_found},
-    {:company_login_required, :forbidden},
-    {:company_subject_bound, :conflict},
     {:execution_failed, :internal},
     {:invalid_session, :unauthenticated},
     {:missing_generation, :unauthenticated},
@@ -515,6 +513,9 @@ defmodule Prima.RefusalTest do
     {{:harness, "Scout", {:start_failed, :unfit, :ask}}, :unavailable,
      "Scout could not start: its program does not take the model, effort or access chosen " <>
        "for it. Check them on Scout's card on the Aqua page."},
+    {{:harness, "Scout", {:start_failed, :too_many_tools, :ask}}, :unavailable,
+     "Scout could not start: Antigravity takes fewer tools than Aqua offers its crew. Turn " <>
+       "some off on the Aqua page."},
     {{:harness, "Aqua", {:start_failed, :broken, :message}}, :unavailable,
      "Aqua could not start: CYFR and its program's driver did not understand each other."},
     {{:harness, "Aqua", {:start_failed, :restarted, :message}}, :unavailable,
@@ -1017,19 +1018,6 @@ defmodule Prima.RefusalTest do
       assert %Refusal{class: :not_found} = Refusal.classify(:handle_not_found)
 
       for reason <- [:invitation_invalid, :handle_not_found],
-          do: assert(Refusal.reason?(reason))
-    end
-
-    test "a company sign-in a CYFR requires, and a company account bound to another, each say so" do
-      assert %Refusal{class: :forbidden, message: required} =
-               Refusal.classify(:company_login_required)
-
-      assert required =~ "sign in with your company's account"
-
-      assert %Refusal{class: :conflict, message: bound} = Refusal.classify(:company_subject_bound)
-      assert bound =~ "bound to someone else here"
-
-      for reason <- [:company_login_required, :company_subject_bound],
           do: assert(Refusal.reason?(reason))
     end
 

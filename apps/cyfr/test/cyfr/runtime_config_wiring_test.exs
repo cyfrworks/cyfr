@@ -548,136 +548,45 @@ defmodule Cyfr.RuntimeConfigWiringTest do
         end)
       end
     end
-
-    # The OpenID Connect issuer is a company sign-in's: its client lands
-    # where that sign-in reads it, its issuer names the provider
-    # configuration worker, and no sign-in strategy is configured.
-    test "the OpenID Connect issuer is the company sign-in's, with no sign-in strategy" do
-      oidc = %{
-        "CYFR_OIDC_ISSUER" => "https://auth.example.com",
-        "CYFR_OIDC_CLIENT_ID" => "cyfr",
-        "CYFR_OIDC_CLIENT_SECRET" => "secret"
-      }
-
-      with_env(Map.merge(oidc, %{"CYFR_PORT" => "4005"}), fn ->
-        config = read_prod_config!()
-
-        assert config[:sanctum][:oidc_client] == %{client_id: "cyfr", client_secret: "secret"}
-        assert config[:sanctum][:oidc_issuer] == "https://auth.example.com"
-
-        assert config[:ueberauth_oidcc][:issuers] == [
-                 %{name: :cyfr_oidc, issuer: "https://auth.example.com"}
-               ]
-
-        refute Keyword.has_key?(config, :ueberauth)
-      end)
-    end
   end
 
   # ==========================================================================
-  # The company sign-in
+  # Settings that are no setting
   # ==========================================================================
 
-  describe "the company sign-in" do
-    @company_unset %{
-      "CYFR_COMPANY_LOGIN" => nil,
-      "CYFR_COMPANY_LOGIN_DAYS" => nil,
-      "CYFR_WORKOS_CLIENT_ID" => nil,
-      "CYFR_WORKOS_API_KEY" => nil,
-      "CYFR_WORKOS_ORGANIZATION" => nil,
-      "CYFR_OIDC_ISSUER" => nil,
-      "CYFR_OIDC_CLIENT_ID" => nil,
-      "CYFR_OIDC_CLIENT_SECRET" => nil
-    }
-    @company_oidc %{
-      "CYFR_OIDC_ISSUER" => "https://auth.example.com",
-      "CYFR_OIDC_CLIENT_ID" => "cyfr",
-      "CYFR_OIDC_CLIENT_SECRET" => "secret"
-    }
-    @company_workos %{
-      "CYFR_WORKOS_CLIENT_ID" => "client_01HQCOMPANY",
-      "CYFR_WORKOS_API_KEY" => "sk_test_company_api_key",
-      "CYFR_WORKOS_ORGANIZATION" => "org_01HQCOMPANY"
-    }
-
-    defp company_env(overrides), do: Map.merge(@company_unset, overrides)
-
-    test "unset, Sanctum requires none and holds no WorkOS settings" do
-      with_env(@company_unset, fn ->
-        sanctum = read_prod_config!()[:sanctum]
-        assert Keyword.fetch!(sanctum, :company_login) == %{mode: :off, days: nil, issuer: nil}
-        assert Keyword.fetch!(sanctum, :workos) == nil
-      end)
-    end
-
-    test "accepted, Sanctum holds the mode, the days and the issuer, and WorkOS's settings apart" do
-      renew = %{"CYFR_COMPANY_LOGIN" => "renew", "CYFR_COMPANY_LOGIN_DAYS" => "30"}
-
-      with_env(company_env(Map.merge(@company_workos, renew)), fn ->
-        sanctum = read_prod_config!()[:sanctum]
-
-        assert Keyword.fetch!(sanctum, :company_login) == %{
-                 mode: :renew,
-                 days: 30,
-                 issuer: :workos
-               }
-
-        assert Keyword.fetch!(sanctum, :workos) == %{
-                 client_id: "client_01HQCOMPANY",
-                 api_key: "sk_test_company_api_key",
-                 organization: "org_01HQCOMPANY"
-               }
-      end)
-
-      with_env(company_env(Map.put(@company_oidc, "CYFR_COMPANY_LOGIN", "join")), fn ->
-        sanctum = read_prod_config!()[:sanctum]
-        assert Keyword.fetch!(sanctum, :company_login) == %{mode: :join, days: nil, issuer: :oidc}
-        assert Keyword.fetch!(sanctum, :workos) == nil
-        assert Keyword.fetch!(sanctum, :oidc_issuer) == "https://auth.example.com"
-      end)
-    end
-
-    # The boot raises the resolver's own sentence for the same settings, so
-    # nothing else refuses first and nothing rewords it; none carries the key.
-    test "each refusal refuses the boot with the resolver's sentence, never WorkOS's API key" do
-      join = %{"CYFR_COMPANY_LOGIN" => "join"}
-
-      for overrides <- [
-            %{"CYFR_COMPANY_LOGIN" => "always"},
-            Map.put(@company_oidc, "CYFR_COMPANY_LOGIN", "renew"),
-            Map.merge(@company_oidc, %{
-              "CYFR_COMPANY_LOGIN" => "renew",
-              "CYFR_COMPANY_LOGIN_DAYS" => "0"
-            }),
-            Map.merge(@company_oidc, %{"CYFR_COMPANY_LOGIN_DAYS" => "30"}),
-            Map.merge(join, Map.delete(@company_workos, "CYFR_WORKOS_ORGANIZATION")),
-            @company_workos,
-            join
-          ] do
-        env = company_env(overrides)
-        getenv = &Map.get(env, &1)
-        {:ok, oidc} = Cyfr.RuntimeConfig.oidc_config(getenv)
-
-        {:error, sentence} =
-          Cyfr.RuntimeConfig.company_login_config(getenv, oidc)
-
-        with_env(env, fn ->
-          error = assert_raise RuntimeError, &read_prod_config!/0
-          assert Exception.message(error) == sentence, inspect(overrides)
-          refute Exception.message(error) =~ "sk_test_company_api_key"
-        end)
-      end
-    end
-
+  describe "a setting CYFR does not declare" do
     # Every CYFR serves its pages: the switch that turned them off is no
     # setting, so a deployment still naming it is refused by name.
     test "CYFR_HEADLESS is no setting: the boot refuses it by name" do
-      with_env(company_env(%{"CYFR_HEADLESS" => "on"}), fn ->
+      with_env(%{"CYFR_HEADLESS" => "on"}, fn ->
         error = assert_raise RuntimeError, &read_prod_config!/0
 
         assert Exception.message(error) ==
                  "[Cyfr] FATAL: " <> Cyfr.Platform.Settings.Roster.refusal(["CYFR_HEADLESS"])
       end)
+    end
+
+    # No CYFR asks for a company sign-in: a deployment still naming one of
+    # its settings is refused by name, each on its own.
+    test "a company sign-in's settings are no settings: the boot refuses each by name" do
+      for {name, value} <- [
+            {"CYFR_COMPANY_LOGIN", "join"},
+            {"CYFR_COMPANY_LOGIN_DAYS", "30"},
+            {"CYFR_OIDC_ISSUER", "https://auth.example.com"},
+            {"CYFR_OIDC_CLIENT_ID", "cyfr"},
+            {"CYFR_OIDC_CLIENT_SECRET", "secret"},
+            {"CYFR_WORKOS_CLIENT_ID", "client_01HQ"},
+            {"CYFR_WORKOS_API_KEY", "sk_test_key"},
+            {"CYFR_WORKOS_ORGANIZATION", "org_01HQ"}
+          ] do
+        with_env(%{name => value}, fn ->
+          error = assert_raise RuntimeError, &read_prod_config!/0
+
+          assert Exception.message(error) ==
+                   "[Cyfr] FATAL: " <> Cyfr.Platform.Settings.Roster.refusal([name]),
+                 name
+        end)
+      end
     end
   end
 

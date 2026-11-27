@@ -50,6 +50,9 @@ defmodule Opus.FacadeTest do
     run_child: 5,
     run_root: 5,
     run_root_edge: 5,
+    # The configured ids of the services for runs: the Settings page names
+    # one that has not answered by its id only where there are several.
+    run_services: 0,
     # What a schedule's fire says, which Aqua sends and the schedule tool
     # bounds at every write: one wording for both.
     schedule_fire_text: 2,

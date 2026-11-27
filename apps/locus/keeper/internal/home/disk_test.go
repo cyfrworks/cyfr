@@ -126,7 +126,7 @@ func TestARecordTheKeeperCannotTrustIsRefused(t *testing.T) {
 			return os.WriteFile(filepath.Join(dir, "x.json"), []byte("{}"), RecordMode)
 		},
 		"another form": func(k Kept, dir string) error {
-			return os.WriteFile(k.recordPath(Person("ath_1")), []byte(`{"athanor":"ath_1","form":"image","uid":`+itoa(k.First)+`,"homes":[]}`), RecordMode)
+			return os.WriteFile(k.recordPath(Person("ath_1")), []byte(`{"athanor":"ath_1","form":"volume","uid":`+itoa(k.First)+`,"homes":[]}`), RecordMode)
 		},
 		"a uid outside the range": func(k Kept, dir string) error {
 			return os.WriteFile(k.recordPath(Person("ath_1")), []byte(`{"athanor":"ath_1","form":"directory","uid":`+itoa(k.Last+1)+`,"homes":[]}`), RecordMode)

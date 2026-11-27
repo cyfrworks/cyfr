@@ -9,6 +9,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"os"
 	"syscall"
 
 	"golang.org/x/sys/unix"
@@ -31,9 +32,14 @@ const RouteGo = 'g'
 // address on the link.
 const addrGenModeNone = 1
 
+// spaceNames is where a space's name sockets are bound: its own 127.0.0.11.
+var spaceNames = [4]byte{127, 0, 0, 11}
+
 // nameSockets brings the namespace's loopback up and binds a UDP and a
-// listening TCP socket at 127.0.0.11:53.
-func nameSockets() (udp, tcp int, err error) {
+// listening TCP socket at names:53: a space's at its own 127.0.0.11, a
+// person's machine's at pool.MachineNames, which no link of the space
+// holds until the guard's bridge does, so bound free of it.
+func nameSockets(names [4]byte) (udp, tcp int, err error) {
 	ctl, err := unix.Socket(unix.AF_INET, unix.SOCK_DGRAM|unix.SOCK_CLOEXEC, 0)
 	if err != nil {
 		return -1, -1, err
@@ -50,8 +56,17 @@ func nameSockets() (udp, tcp int, err error) {
 	if err := unix.IoctlIfreq(ctl, unix.SIOCSIFFLAGS, ifr); err != nil {
 		return -1, -1, fmt.Errorf("bringing the loopback up: %w", err)
 	}
-	at := &unix.SockaddrInet4{Port: 53, Addr: [4]byte{127, 0, 0, 11}}
+	at := &unix.SockaddrInet4{Port: 53, Addr: names}
+	free := func(fd int) error {
+		if names == spaceNames {
+			return nil
+		}
+		return unix.SetsockoptInt(fd, unix.IPPROTO_IP, unix.IP_FREEBIND, 1)
+	}
 	udp, err = unix.Socket(unix.AF_INET, unix.SOCK_DGRAM|unix.SOCK_CLOEXEC, 0)
+	if err == nil {
+		err = free(udp)
+	}
 	if err == nil {
 		err = unix.Bind(udp, at)
 	}
@@ -62,6 +77,9 @@ func nameSockets() (udp, tcp int, err error) {
 		return -1, -1, fmt.Errorf("the UDP name socket: %w", err)
 	}
 	tcp, err = unix.Socket(unix.AF_INET, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, 0)
+	if err == nil {
+		err = free(tcp)
+	}
 	if err == nil {
 		err = unix.Bind(tcp, at)
 	}
@@ -82,7 +100,7 @@ func nameSockets() (udp, tcp int, err error) {
 // network namespace, to the keeper over fd, closing its own copies, then
 // waits for the keeper's RouteGo; anything else, or the socket's end,
 // refuses the spawn.
-func handRouteUp(fd int) error {
+func handRouteUp(fd int, names [4]byte) error {
 	if err := checkSocket(fd); err != nil {
 		return err
 	}
@@ -90,15 +108,29 @@ func handRouteUp(fd int) error {
 	if err != nil {
 		return fmt.Errorf("the space's network namespace: %w", err)
 	}
-	udp, tcp, err := nameSockets()
+	udp, tcp, err := nameSockets(names)
 	if err != nil {
 		_ = unix.Close(netns)
 		return err
 	}
-	err = unix.Sendmsg(fd, []byte{'r'}, unix.UnixRights(netns, udp, tcp), nil, 0)
-	_ = unix.Close(netns)
-	_ = unix.Close(udp)
-	_ = unix.Close(tcp)
+	handed := []int{netns, udp, tcp}
+	// A person's machine's route is settled by netlink in its namespace
+	// too: the stage opens the socket here, holding NET_ADMIN in it, and
+	// the guard alone uses it (package guard).
+	if names != spaceNames {
+		nl, err := unix.Socket(unix.AF_NETLINK, unix.SOCK_RAW|unix.SOCK_CLOEXEC, unix.NETLINK_ROUTE)
+		if err != nil {
+			for _, f := range handed {
+				_ = unix.Close(f)
+			}
+			return fmt.Errorf("the machine's route netlink socket: %w", err)
+		}
+		handed = append(handed, nl)
+	}
+	err = unix.Sendmsg(fd, []byte{'r'}, unix.UnixRights(handed...), nil, 0)
+	for _, f := range handed {
+		_ = unix.Close(f)
+	}
 	if err != nil {
 		return fmt.Errorf("handing the route's descriptors up: %w", err)
 	}
@@ -242,4 +274,47 @@ func request(kind uint16, body []byte) error {
 			}
 		}
 	}
+}
+
+// ReceiveDescriptors reads one message of one byte from a stage or a
+// space's first process carrying exactly want descriptors, received
+// close-on-exec; any other message is refused and its descriptors closed.
+func ReceiveDescriptors(from *os.File, want int) ([]int, error) {
+	conn, err := from.SyscallConn()
+	if err != nil {
+		return nil, err
+	}
+	buf := make([]byte, 1)
+	oob := make([]byte, unix.CmsgSpace(4*want))
+	var n, oobn int
+	var rerr error
+	err = conn.Read(func(fd uintptr) bool {
+		n, oobn, _, _, rerr = unix.Recvmsg(int(fd), buf, oob, unix.MSG_CMSG_CLOEXEC)
+		return !errors.Is(rerr, unix.EAGAIN)
+	})
+	if err == nil {
+		err = rerr
+	}
+	if err != nil {
+		return nil, err
+	}
+	var fds []int
+	if oobn > 0 {
+		msgs, perr := unix.ParseSocketControlMessage(oob[:oobn])
+		if perr != nil {
+			return nil, perr
+		}
+		for i := range msgs {
+			if got, perr := unix.ParseUnixRights(&msgs[i]); perr == nil {
+				fds = append(fds, got...)
+			}
+		}
+	}
+	if n != 1 || len(fds) != want {
+		for _, fd := range fds {
+			_ = unix.Close(fd)
+		}
+		return nil, fmt.Errorf("a message of %d bytes and %d descriptors, not 1 and %d", n, len(fds), want)
+	}
+	return fds, nil
 }

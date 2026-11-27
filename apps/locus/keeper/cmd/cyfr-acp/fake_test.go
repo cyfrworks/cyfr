@@ -53,6 +53,9 @@ import (
 //	hang      opens two calls that never end
 //	running   runs its own command and a person's server named cyfr, saying so while they run
 //	callsteer opens a call of CYFR's, takes a steer while it is open, then calls the socket
+//	agyfail:S writes the one chunk agy writes when its model service failed with status S, then end_turn
+//	agyfailthen writes that chunk for UNAVAILABLE, then a word more
+//	agyquoted writes the 503 chunk the probe recorded with words quoted before its close, then end_turn
 //
 // It writes a canary to its standard error and its tier, which the driver
 // must never pass on. FAKE_SIGNED_OUT answers every session and prompt
@@ -316,6 +319,18 @@ func fakeACP() int {
 
 	runTurn := func(words string, params map[string]any) {
 		switch {
+		case strings.HasPrefix(words, "agyfail:"):
+			// As agy 1.5.16 ends a turn its model service failed, on the
+			// API-key path: one chunk, then end_turn with no usage.
+			chunk(agyFailureText(strings.TrimPrefix(words, "agyfail:")))
+			finish(map[string]any{"stopReason": "end_turn"})
+		case words == "agyquoted":
+			chunk(strings.Replace(agyRecorded503, "[]\n", "[] [quoted for context]\n", 1))
+			finish(map[string]any{"stopReason": "end_turn"})
+		case words == "agyfailthen":
+			chunk(agyFailureText("UNAVAILABLE"))
+			chunk(" and more")
+			finish(map[string]any{"stopReason": "end_turn", "usage": usage})
 		case oc && strings.Contains(words, "executes"):
 			// Three calls of CYFR's, one after another, inside one execute.
 			update(map[string]any{"sessionUpdate": "tool_call", "toolCallId": "call_execs", "name": "execute", "title": "execute", "status": "in_progress",
@@ -838,3 +853,13 @@ func fakeServers(openCode bool) int {
 	}
 	return 0
 }
+
+// agyFailureText is the chunk agy 1.5.16 writes for a model request that
+// failed with status, as the probe saw it for 429, 503, 401 and 500.
+func agyFailureText(status string) string {
+	return "\n⚠ agent executor error: generating and executing: Error 503, Message: HARNESS-WORDS The model is overloaded. Please try again later., Status: " + status + ", Details: []\n"
+}
+
+// agyRecorded503 is the chunk agy 1.5.16 wrote for a 503, as the probe
+// recorded it (antigravity/f6/).
+const agyRecorded503 = "\n⚠ agent executor error: generating and executing: Error 503, Message: The model is overloaded. Please try again later., Status: UNAVAILABLE, Details: []\n"

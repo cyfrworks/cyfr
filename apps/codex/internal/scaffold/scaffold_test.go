@@ -47,6 +47,7 @@ func TestIsManaged(t *testing.T) {
 		"wit",
 		"wit/cyfr/oauth/token.wit",
 		"aqua/aqua.md",
+		"aqua/rules.md",
 		"aqua/scrolls/cyfr/.cyfr-pack.json",
 		"aqua/scrolls/cyfr/skills/builder/SKILL.md",
 		"aqua/scrolls/cyfr/skills/canvas/SKILL.md",
@@ -196,7 +197,7 @@ func TestShippedProfilesAreManaged(t *testing.T) {
 func TestBundledPromptsMatchSeed(t *testing.T) {
 	seedAqua := filepath.Join("..", "..", "..", "..", "seed", "aqua")
 
-	soulShipped := false
+	soulShipped, rulesShipped := false, false
 	seedScrolls := map[string]bool{}
 
 	err := filepath.WalkDir(seedAqua, func(path string, d fs.DirEntry, err error) error {
@@ -218,6 +219,11 @@ func TestBundledPromptsMatchSeed(t *testing.T) {
 			soulShipped = true
 			if !IsManaged(tarPath) {
 				t.Errorf("the soul %q is not managed — `cyfr update` will never refresh it", tarPath)
+			}
+		case rel == "rules.md":
+			rulesShipped = true
+			if !IsManaged(tarPath) {
+				t.Errorf("the rules default %q is not managed — `cyfr update` will never refresh it", tarPath)
 			}
 		case strings.HasPrefix(rel, "crew/"):
 			t.Errorf("the seed ships the crew member %q: no crew member ships, each is the athanor's own", tarPath)
@@ -243,6 +249,9 @@ func TestBundledPromptsMatchSeed(t *testing.T) {
 
 	if !soulShipped {
 		t.Fatalf("no soul found at %s", filepath.Join(seedAqua, "aqua.md"))
+	}
+	if !rulesShipped {
+		t.Fatalf("no rules default found at %s", filepath.Join(seedAqua, "rules.md"))
 	}
 	if len(seedScrolls) == 0 {
 		t.Fatalf("no shipped scrolls found under %s", filepath.Join(seedAqua, "skills"))
@@ -522,13 +531,16 @@ func TestFetchWritesNothingUntilWrite(t *testing.T) {
 	}
 }
 
-// TestUpdateRefreshesCyfrsPackAndKeepsEveryOther is `cyfr update` over a
-// project holding CYFR's own pack and a member's: the release's files of
-// aqua/scrolls/cyfr/ replace the project's, and aqua/scrolls/mine/ stays
-// byte for byte, even where the release carries a file of that path.
-func TestUpdateRefreshesCyfrsPackAndKeepsEveryOther(t *testing.T) {
+// TestUpdateRefreshesShippedAquaAndKeepsEveryOther is `cyfr update` over a
+// project holding the rules default, CYFR's own pack and a member's: the
+// release's aqua/rules.md and files of aqua/scrolls/cyfr/ replace the
+// project's, so a new athanor is filled with the release's default, and
+// aqua/scrolls/mine/ stays byte for byte, even where the release carries a
+// file of that path.
+func TestUpdateRefreshesShippedAquaAndKeepsEveryOther(t *testing.T) {
 	t.Chdir(t.TempDir())
 	for path, data := range map[string]string{
+		"aqua/rules.md": "the release before's rules default",
 		"aqua/scrolls/cyfr/skills/builder/SKILL.md": "the release before's builder",
 		"aqua/scrolls/mine/skills/notes/SKILL.md":   "a member's own scroll",
 	} {
@@ -540,6 +552,7 @@ func TestUpdateRefreshesCyfrsPackAndKeepsEveryOther(t *testing.T) {
 		}
 	}
 	r := &Release{entries: []entry{
+		{name: "aqua/rules.md", mode: 0o644, data: []byte("this release's rules default")},
 		{name: "aqua/scrolls/cyfr/.cyfr-pack.json", mode: 0o644, data: []byte("{}\n")},
 		{name: "aqua/scrolls/cyfr/skills/builder/SKILL.md", mode: 0o644, data: []byte("this release's builder")},
 		{name: "aqua/scrolls/mine/skills/notes/SKILL.md", mode: 0o644, data: []byte("a release's file of that path")},
@@ -548,6 +561,7 @@ func TestUpdateRefreshesCyfrsPackAndKeepsEveryOther(t *testing.T) {
 		t.Fatal(err)
 	}
 	for path, want := range map[string]string{
+		"aqua/rules.md":                             "this release's rules default",
 		"aqua/scrolls/cyfr/.cyfr-pack.json":         "{}\n",
 		"aqua/scrolls/cyfr/skills/builder/SKILL.md": "this release's builder",
 		"aqua/scrolls/mine/skills/notes/SKILL.md":   "a member's own scroll",

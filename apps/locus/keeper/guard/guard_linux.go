@@ -96,15 +96,17 @@ func bounded() (context.Context, context.CancelFunc) {
 // digest, so nothing is ever recorded or compared of a table that could
 // not be read.
 func saves(ctx context.Context, log *logx.Logger) (string, error) {
-	v4, err := tool(ctx, "", false, "iptables-save", "-t", "filter")
-	if err != nil {
-		log.Error("iptables-save failed")
-		return "", err
-	}
-	v6, err := tool(ctx, "", false, "ip6tables-save", "-t", "filter")
-	if err != nil {
-		log.Error("ip6tables-save failed")
-		return "", err
+	var v4, v6 string
+	for _, s := range []struct {
+		tool, table string
+		into        *string
+	}{{"iptables-save", "filter", &v4}, {"iptables-save", "raw", &v4}, {"ip6tables-save", "filter", &v6}, {"ip6tables-save", "raw", &v6}} {
+		text, err := tool(ctx, "", false, s.tool, "-t", s.table)
+		if err != nil {
+			log.Error("%s failed, reading the %s table", s.tool, s.table)
+			return "", err
+		}
+		*s.into += strings.TrimRight(text, "\n") + "\n"
 	}
 	nat, err := tool(ctx, "", false, "iptables-save", "-t", "nat")
 	if err != nil {
@@ -149,7 +151,7 @@ func readIsland(log *logx.Logger, p place, env func(string) string, resolve func
 		return string(b)
 	}
 	routes := read("net/route")
-	isl := island{controlPlane: env("CYFR_GUARD_CONTROL_PLANE"), hostAPI: env("CYFR_GUARD_HOST_API"),
+	isl := island{controlPlane: env("CYFR_GUARD_CONTROL_PLANE"), hostAPI: env("CYFR_GUARD_HOST_API"), resolver: env("CYFR_GUARD_RESOLVER"),
 		routes: v4Routes(routes, false), subnets: v4Routes(routes, true),
 		v6Subnets: v6Subnets(read("net/ipv6_route")), local: localAddresses(read("net/fib_trie"))}
 	// A value the guard refuses is refused before any name is asked.
@@ -252,6 +254,56 @@ func (k *rulesOf) install(r *route) error {
 	if err := k.record(ctx, iface); err != nil {
 		return fail(fmt.Sprintf("route %s could not be recorded", iface), err)
 	}
+	k.log.Info("route %s for %s (%s) installed, mark %d", iface, r.inner, describeReach(r), r.mark)
+	return nil
+}
+
+// errRouteBroken is a change whose new rules went in but could not be
+// recorded, and whose old ones could not be put back: the route is in no
+// known state, and its server withdraws it.
+var errRouteBroken = errors.New("the route's rules are in no known state")
+
+// change replaces a machine's route chain, old's, with next's in one
+// commit and records it. A change the kernel refused leaves old's chain
+// standing. One whose commit may have gone in, a restore that outlived its
+// bound or a record that cannot be written, puts old's back on a bound of
+// its own, which old's record, written whole or not at all, still names;
+// where that fails too is errRouteBroken.
+func (k *rulesOf) change(old, next *route) error {
+	ctx, cancel := context.WithTimeout(context.Background(), k.bound)
+	defer cancel()
+	iface := outerName(next.slot)
+	unlock, err := k.exclusive(ctx)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	_, err = tool(ctx, changeRules(next, k.st), false, "iptables-restore", "-w", "5", "--noflush")
+	switch {
+	case err == nil:
+		err = k.record(ctx, iface)
+		if err == nil {
+			k.log.Info("route %s for %s changed to %s", iface, next.inner, describeReach(next))
+			return nil
+		}
+		err = fmt.Errorf("its record: %w", err)
+	case ctx.Err() == nil:
+		// The kernel refused the commit: the old chain stands whole.
+		return fmt.Errorf("route %s's new reach: %w", iface, err)
+	default:
+		err = fmt.Errorf("its restore did not finish within %s, and its commit may have gone in", k.bound)
+	}
+	back, cancelBack := context.WithTimeout(context.Background(), k.bound)
+	defer cancelBack()
+	if _, perr := tool(back, changeRules(old, k.st), false, "iptables-restore", "-w", "5", "--noflush"); perr != nil {
+		return fmt.Errorf("route %s's change is not known to stand (%v), and its old reach could not be put back (%v): %w", iface, err, perr, errRouteBroken)
+	}
+	return fmt.Errorf("route %s's change is not known to stand (%v), and its old reach is put back", iface, err)
+}
+
+// describeReach is a route's reach as the log says it, with its IPv4
+// addresses.
+func describeReach(r *route) string {
 	what := r.reach
 	switch {
 	case r.reach == ReachRole && r.private:
@@ -264,8 +316,7 @@ func (k *rulesOf) install(r *route) error {
 			what += " " + a
 		}
 	}
-	k.log.Info("route %s for %s (%s) installed, mark %d", iface, r.inner, what, r.mark)
-	return nil
+	return what
 }
 
 // withdraw removes r's rules and record; a route already gone is removed.
@@ -305,7 +356,10 @@ func listed(ctx context.Context, iface string) (installed, error) {
 	if k.in, err = iptables(ctx, false, "-S", chainIn); err != nil {
 		return k, err
 	}
-	k.roles, err = iptables(ctx, false, "-t", "nat", "-S", chainRoles)
+	if k.roles, err = iptables(ctx, false, "-t", "nat", "-S", chainRoles); err != nil {
+		return k, err
+	}
+	k.raw, err = iptables(ctx, false, "-t", "raw", "-S", "PREROUTING")
 	return k, err
 }
 

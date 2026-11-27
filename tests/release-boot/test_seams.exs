@@ -19,11 +19,9 @@
 #   - the host: each switched process, which this release runs, is
 #     started again and answers that it already runs: its start never read
 #     its switch, which would have answered `:ignore`;
-#   - Sanctum: the WorkOS sign-in keeps https://api.workos.com, a company
-#     sign-in's authorization URL comes from no injected OIDC client, the
-#     directory client takes no suite options, the OAuth presets take no
-#     scripted provider and the caller memo keeps its 2 s bound; an
-#     issuance refuses a fixture's generation snapshot; and
+#   - Sanctum: the directory client takes no suite options, the OAuth
+#     presets take no scripted provider and the caller memo keeps its 2 s
+#     bound; an issuance refuses a fixture's generation snapshot; and
 #     `Sanctum.Tenancy`'s compiled code names no resolver override.
 #
 # Seams with no cheap door are held elsewhere: the namespace cache's
@@ -57,7 +55,6 @@ reads = :counters.new(1, [])
 defmodule CyfrReleaseProof.Seam do
   def counter, do: :persistent_term.get({__MODULE__, :reads})
   def preset(_hint), do: hit(nil)
-  def authorize_url(_request), do: hit({:ok, "https://seam.invalid/oidc"})
   def hit(answer), do: tap(answer, fn _ -> :counters.add(counter(), 1, 1) end)
 end
 
@@ -85,9 +82,6 @@ handed =
     {:arca, :write_turn, false},
     {:arca, :decision_log_budget_ms, 1},
     {:arca, :record_sink_inline, true},
-    {:sanctum, :workos_api_url, "https://seam.invalid"},
-    {:sanctum, :workos, %{client_id: "client", organization: "org"}},
-    {:sanctum, :oidc_reauth_client, CyfrReleaseProof.Seam},
     {:sanctum, :directory_client, [not_an_option: true]},
     {:sanctum, :scripted_oauth_provider, CyfrReleaseProof.Seam},
     {:sanctum, :caller_memo_ttl_ms, 3_600_000}
@@ -172,24 +166,6 @@ try do
   end
 
   # Sanctum.
-  {:ok, url} =
-    Sanctum.Auth.WorkOS.authorize_url(%{redirect_uri: "https://example.com/callback"}, "state")
-
-  check.(URI.parse(url).host == "api.workos.com", "sent the WorkOS sign-in to #{url}")
-
-  # The shipped client asks this release's own issuer settings, which name
-  # none here: it answers unavailable, and never the injected client's URL.
-  oidc =
-    Sanctum.Auth.OIDC.authorize_url(
-      %{redirect_uri: "https://example.com/callback", nonce: "nonce", pkce_verifier: "verifier"},
-      "state"
-    )
-
-  check.(
-    oidc != {:ok, "https://seam.invalid/oidc"},
-    "took the injected OIDC client: #{inspect(oidc)}"
-  )
-
   check.(
     Sanctum.Directory.Client.log("not-an-identifier", "https://directory.invalid") ==
       {:error, :invalid_locator},
