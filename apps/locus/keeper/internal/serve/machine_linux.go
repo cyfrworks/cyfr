@@ -95,6 +95,9 @@ var vmEndWait = 2 * time.Second
 type guestVM interface {
 	ConnectWithin(left time.Duration) (guestControl, error)
 	Dial(port uint32, within time.Duration) (net.Conn, error)
+	// End asks the guest's first process to end the VM, and kills the VMM
+	// past within (vm.Machine.End).
+	End(within time.Duration) vm.Ended
 	Kill()
 	Done() <-chan struct{}
 	HowEnded() vm.Ended

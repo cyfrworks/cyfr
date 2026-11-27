@@ -2246,6 +2246,7 @@ func (s *server) sweep() {
 		s.retryClears()
 		s.retryNarrowing()
 		s.finishMachines()
+		s.endIdleMachines()
 	}
 	for _, e := range todo {
 		if !s.scrub(s.accounts[e.uid], 0, nil, "") {

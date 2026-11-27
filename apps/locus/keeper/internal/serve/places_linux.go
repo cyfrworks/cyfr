@@ -193,7 +193,8 @@ func (s *server) admit(ev admission.Events) {
 		ref.c.queue(protocol.NewNoMemory(ref.id, heldOf(r.Held)))
 	}
 	for _, e := range ev.GiveWay {
-		if _, ok := e.Ref.(machineRef); ok {
+		if vm, ok := e.Ref.(machineRef); ok {
+			go s.giveWay(vm.m)
 			continue
 		}
 		ref := e.Ref.(placeRef)

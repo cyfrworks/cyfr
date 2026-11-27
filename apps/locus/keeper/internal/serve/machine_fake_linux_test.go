@@ -53,6 +53,10 @@ type fakeVM struct {
 	// controls are its control connections' guest ends, each one's
 	// reader running.
 	controls []net.Conn
+	// unacked leaves an asked end unacknowledged; asked is the bound it
+	// was asked within.
+	unacked bool
+	asked   time.Duration
 }
 
 func (f *fakeVM) ConnectWithin(left time.Duration) (guestControl, error) {
@@ -93,7 +97,23 @@ func (f *fakeVM) end(how vm.Ended, cause cgroup.Cause) {
 	})
 }
 
-func (f *fakeVM) Kill()                 { f.end(vm.EndKilled, cgroup.NotKilled) }
+func (f *fakeVM) Kill() { f.end(vm.EndKilled, cgroup.NotKilled) }
+
+// End is acknowledged at once, unless the guest is told to leave its end
+// unacknowledged: then the VMM is killed, as vm.Machine.End kills one past
+// its bound (package vm's own tests), and the bound asked is kept.
+func (f *fakeVM) End(within time.Duration) vm.Ended {
+	f.mu.Lock()
+	unacked := f.unacked
+	f.asked = within
+	f.mu.Unlock()
+	if unacked {
+		f.end(vm.EndKilled, cgroup.NotKilled)
+	} else {
+		f.end(vm.EndAcknowledged, cgroup.NotKilled)
+	}
+	return f.HowEnded()
+}
 func (f *fakeVM) Done() <-chan struct{} { return f.done }
 func (f *fakeVM) HowEnded() vm.Ended {
 	f.mu.Lock()
