@@ -26,10 +26,19 @@ import (
 // resolveTimeout bounds the resolution of one spawn's hosts.
 const resolveTimeout = 10 * time.Second
 
-// lookupHost answers a host's addresses; the resolver of the keeper's own
-// namespace in production.
+// lookupHost answers a host's addresses: the resolver of the keeper's own
+// namespace, or the one it is given (Config.Resolver, resolverAt).
 var lookupHost = func(ctx context.Context, host string) ([]netip.Addr, error) {
 	return net.DefaultResolver.LookupNetIP(ctx, "ip", host)
+}
+
+// resolverAt answers a host's addresses from the resolver at addr alone.
+func resolverAt(addr string) func(context.Context, string) ([]netip.Addr, error) {
+	r := &net.Resolver{PreferGo: true, Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
+		var d net.Dialer
+		return d.DialContext(ctx, network, addr)
+	}}
+	return func(ctx context.Context, host string) ([]netip.Addr, error) { return r.LookupNetIP(ctx, "ip", host) }
 }
 
 // resolveHosts answers the addresses a spawn's hosts name, at this moment

@@ -39,7 +39,8 @@ func TestAPersonsKeeperKeepsTheirHomesOnTheirDisk(t *testing.T) {
 		t.Fatalf("guest-check's keeper: %v", check)
 	}
 	person := strings.Join(keeperArgs(true), " ")
-	for _, want := range []string{"--role backends:10013:4101:backends:kept", "--pool backends:20001-20032:routed", "--kept-homes /var/lib/locus/kept:40001-49999"} {
+	for _, want := range []string{"--role backends:10013:4101:backends:kept", "--pool backends:20001-20032:routed", "--kept-homes /var/lib/locus/kept:40001-49999",
+		"--resolver 169.254.0.53:53 --"} {
 		if !strings.Contains(person, want) {
 			t.Errorf("a person's keeper lacks %q: %s", want, person)
 		}

@@ -656,3 +656,36 @@ func TestBootProvesTheGuard(t *testing.T) {
 		t.Fatalf("a missing guard: %v", err)
 	}
 }
+
+// A keeper given a resolver asks a spawn's hosts of it alone: its question
+// reaches that address.
+func TestAGivenResolverIsAskedTheHosts(t *testing.T) {
+	pc, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pc.Close()
+	asked := make(chan []byte, 8)
+	go func() {
+		buf := make([]byte, 512)
+		for {
+			n, _, err := pc.ReadFrom(buf)
+			if err != nil {
+				return
+			}
+			asked <- append([]byte{}, buf[:n]...)
+		}
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_, _ = resolverAt(pc.LocalAddr().String())(ctx, "registry.example.org")
+	select {
+	case q := <-asked:
+		// A DNS question names its labels by their lengths.
+		if !strings.Contains(string(q), "\x08registry\x07example\x03org") {
+			t.Fatalf("the resolver was asked %q", q)
+		}
+	default:
+		t.Fatal("the given resolver was asked nothing")
+	}
+}

@@ -367,3 +367,20 @@ func TestPoolAccountsNamesEveryPooledUidAndGid(t *testing.T) {
 		t.Fatalf("accounts %+v", got)
 	}
 }
+
+// --resolver names the resolver a routed spawn's hosts are asked of: an
+// IPv4 address and port in their one form, or nothing, the namespace's own.
+func TestParseArgsResolver(t *testing.T) {
+	cfg, err := ParseArgs(strings.Fields(theRoles + " --resolver 169.254.0.53:53 -- run"))
+	if err != nil || cfg.Resolver != "169.254.0.53:53" {
+		t.Fatalf("%q, %v", cfg.Resolver, err)
+	}
+	if cfg, err := ParseArgs(strings.Fields(theRoles + " -- run")); err != nil || cfg.Resolver != "" {
+		t.Fatalf("with none given: %q, %v", cfg.Resolver, err)
+	}
+	for _, bad := range []string{"169.254.0.53", "169.254.0.53:0", "[::1]:53", "169.254.000.53:53", "resolver:53"} {
+		if _, err := ParseArgs(strings.Fields(theRoles + " --resolver " + bad + " -- run")); err == nil {
+			t.Errorf("--resolver %s was taken", bad)
+		}
+	}
+}

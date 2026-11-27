@@ -15,6 +15,7 @@ import (
 	"io"
 	"math"
 	"math/big"
+	"net/netip"
 	"os/user"
 	"path/filepath"
 	"regexp"
@@ -45,6 +46,12 @@ type Config struct {
 	// Guard is the socket of the island's egress guard's control (package
 	// guard), which routes every role's space.
 	Guard string
+	// Resolver is the resolver a routed spawn's hosts are asked of, an
+	// IPv4 address and port in their one form, "" for this network
+	// namespace's own (Docker's in the container). A person's VM's keeper
+	// is given the host's guard's (guard.MachineNames): its namespace has
+	// none, and the 127.0.0.11 its spaces read is their own name sockets'.
+	Resolver string
 }
 
 // RoleSpec is one --role: a process the keeper starts when its key is set,
@@ -149,7 +156,7 @@ func (r *roleFlags) Set(value string) error {
 }
 
 // Usage is the command line `serve` accepts.
-const Usage = "cyfr-locus serve --role <name>:<uid>:<port>:<pool>[:private][:kept] [--role …] --pool <name>:<first>-<last>:<relay|routed> [--pool …] --home-root <dir> [--kept-homes <dir>:<first>-<last>] --guard <socket> -- <command> [args…]"
+const Usage = "cyfr-locus serve --role <name>:<uid>:<port>:<pool>[:private][:kept] [--role …] --pool <name>:<first>-<last>:<relay|routed> [--pool …] --home-root <dir> [--kept-homes <dir>:<first>-<last>] --guard <socket> [--resolver <ipv4>:<port>] -- <command> [args…]"
 
 // ParseArgs parses the arguments after `serve`. Pools and roles may repeat:
 // pools with distinct names and disjoint ranges, roles with distinct names,
@@ -169,8 +176,14 @@ func ParseArgs(args []string) (Config, error) {
 	var kept string
 	fs.StringVar(&kept, "kept-homes", "", "the kept-homes root and the uids its homes own, <dir>:<first>-<last>")
 	fs.StringVar(&cfg.Guard, "guard", "", "the socket of the island's egress guard's control")
+	fs.StringVar(&cfg.Resolver, "resolver", "", "the resolver a routed spawn's hosts are asked of, <ipv4>:<port>")
 	if err := fs.Parse(args); err != nil {
 		return Config{}, err
+	}
+	if r := cfg.Resolver; r != "" {
+		if ap, err := netip.ParseAddrPort(r); err != nil || !ap.Addr().Is4() || ap.Port() == 0 || ap.String() != r {
+			return Config{}, fmt.Errorf("--resolver %q is not <ipv4>:<port> in its one form", r)
+		}
 	}
 	if kept != "" {
 		k, err := home.ParseKept(kept)

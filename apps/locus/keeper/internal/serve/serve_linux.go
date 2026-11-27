@@ -100,6 +100,9 @@ func Main(args []string) int {
 		log.Error("%v; usage: %s", err, Usage)
 		return ExitUsage
 	}
+	if cfg.Resolver != "" {
+		lookupHost = resolverAt(cfg.Resolver)
+	}
 	if err := CheckEnviron(os.Environ()); err != nil {
 		log.Error("refusing to start: %v", err)
 		return ExitConfig
