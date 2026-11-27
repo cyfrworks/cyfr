@@ -80,6 +80,9 @@ var (
 	// WhyUnfit: the program does not take the model, effort or access the
 	// work chose for it.
 	WhyUnfit = Why{"unfit"}
+	// WhyTooManyTools: the start's tools are past what the program takes
+	// whole, as its driver measures them.
+	WhyTooManyTools = Why{"too_many_tools"}
 	// WhyBroken: the driver and its holder did not read each other: a
 	// command the wire does not read or does not allow, or an output that
 	// could not be written.
@@ -88,7 +91,7 @@ var (
 
 // Whys are the codes an `ending` may name, in the wire's order.
 var Whys = []Why{WhyUnanswered, WhyServersUnlisted, WhyRefused, WhyOutdated, WhyUnsupported,
-	WhyEnded, WhyUnrunnable, WhyUnreadable, WhyUnfit, WhyBroken}
+	WhyEnded, WhyUnrunnable, WhyUnreadable, WhyUnfit, WhyTooManyTools, WhyBroken}
 
 func whyCodes() []string {
 	codes := make([]string, len(Whys))

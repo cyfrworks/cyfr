@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 CYFR Works Inc.
 
-// Package brainwire is the brain wire, version 6, a driver's side, for
+// Package brainwire is the brain wire, version 7, a driver's side, for
 // every brain driver (cmd/cyfr-claude-code, cmd/cyfr-codex, cmd/cyfr-acp):
 // tests/fixtures/brain_wire.json defines it (its "comment") and binds this
 // package and the holder (Opus.Brain.Wire) to the same lines. Commands come
@@ -29,7 +29,7 @@ import (
 )
 
 const (
-	Version      = 6
+	Version      = 7
 	MaxLineBytes = 1 << 20
 	MaxIDBytes   = 256
 	MaxList      = 1000

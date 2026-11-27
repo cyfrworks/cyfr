@@ -3,7 +3,7 @@
 
 defmodule Opus.Brain.Wire do
   @moduledoc """
-  The brain wire, version 6, the holder's side (`Opus.Brain`): one JSON
+  The brain wire, version 7, the holder's side (`Opus.Brain`): one JSON
   object per line over a brain driver's `run` session, commands from the
   holder and events from the driver. `tests/fixtures/brain_wire.json` binds
   this module and every driver's side (`apps/locus/keeper/internal/brainwire`,
@@ -21,7 +21,7 @@ defmodule Opus.Brain.Wire do
   read.
   """
 
-  @version 6
+  @version 7
   @max_line_bytes 1_048_576
   @max_id_bytes 256
   @max_list 1_000
@@ -60,7 +60,7 @@ defmodule Opus.Brain.Wire do
   # What a driver's `ending` may say of its end, its own finding and never
   # the program's words (`endings/0`).
   @endings ~w(unanswered servers_unlisted refused outdated unsupported ended unrunnable
-              unreadable unfit broken)
+              unreadable unfit too_many_tools broken)
 
   @commands %{
     "start" =>

@@ -513,6 +513,9 @@ defmodule Prima.RefusalTest do
     {{:harness, "Scout", {:start_failed, :unfit, :ask}}, :unavailable,
      "Scout could not start: its program does not take the model, effort or access chosen " <>
        "for it. Check them on Scout's card on the Aqua page."},
+    {{:harness, "Scout", {:start_failed, :too_many_tools, :ask}}, :unavailable,
+     "Scout could not start: Antigravity takes fewer tools than Aqua offers its crew. Turn " <>
+       "some off on the Aqua page."},
     {{:harness, "Aqua", {:start_failed, :broken, :message}}, :unavailable,
      "Aqua could not start: CYFR and its program's driver did not understand each other."},
     {{:harness, "Aqua", {:start_failed, :restarted, :message}}, :unavailable,
