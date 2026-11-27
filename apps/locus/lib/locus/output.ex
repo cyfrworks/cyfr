@@ -80,10 +80,13 @@ defmodule Locus.Output do
       are decoded, and a pinned fetch's larger read where it had room for
       it, asked without waiting: the read and the receive queue behind it,
       twice `fetch_read_ahead_bytes`, 524,288 bytes, to the fetch's end
-      (`Locus.Runtime.Relay`, `Locus.Runtime.HostClient`). The answers
-      (host calls', the service's own calls', CYFR's refusals) and a
-      fetch's head are given back once written or read, which waits on
-      no runner's credit and no upstream. A fetch's piece and an attached
+      (`Locus.Runtime.Relay`, `Locus.Runtime.HostClient`). An answer (a
+      host call's, the service's own calls', CYFR's refusal) is asked for
+      as its body begins and held while the rest of it is read from CYFR,
+      within the call's window, then until it is written or decoded; a
+      pinned fetch's head is given back once the relay has written it,
+      past no credit. None of them waits on a guest or on a fetch's
+      destination. A fetch's piece and an attached
       fetch's frame wait on the runner's credit, and the read-ahead on the
       upstream and the credit both, for as long as the attempt's deadline;
       so each leaves the room of the largest answer the role asks for at

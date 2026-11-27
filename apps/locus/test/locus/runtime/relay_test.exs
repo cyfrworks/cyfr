@@ -1698,9 +1698,9 @@ defmodule Locus.Runtime.RelayCountTest do
             runners = started ++ Enum.map(phase, &stop_reading!(host, test, limits, size, &1))
             fetches = runners |> Enum.map(&elem(&1, 2)) |> Enum.sum()
 
-            # Every fetch has read its window, or waits for room, or both.
+            # Every fetch has read its window or waits for room.
             wait_until(
-              fn -> windows_read(runners) + Locus.Output.held(@count).waiting >= fetches end,
+              fn -> settled(runners) == fetches end,
               60_000,
               "every fetch past its window or waiting for room"
             )
@@ -1775,7 +1775,7 @@ defmodule Locus.Runtime.RelayCountTest do
         flunk("a fetch ended at #{read[ref]} bytes: #{inspect(error)}")
 
       {:windows, ^test} ->
-        send(test, {:windows, self(), Enum.count(read, fn {_ref, bytes} -> bytes >= window end)})
+        send(test, {:windows, self(), for({ref, bytes} <- read, bytes >= window, do: ref)})
         unread(test, endpoint, read, window)
 
       :read ->
@@ -1784,12 +1784,24 @@ defmodule Locus.Runtime.RelayCountTest do
     end
   end
 
-  defp windows_read(runners) do
-    for {_attempt, %{pid: pid}, _count} <- runners, reduce: 0 do
+  # How many of the runners' fetches have read their window or wait at
+  # the count for room, each counted once: a fetch's asks are its worker's
+  # (the relay's `workers`, by the fetch's ref), and a waiting ask is the
+  # count's waiter.
+  defp settled(runners) do
+    waiting = MapSet.new(Map.values(:sys.get_state(@count).waiters), & &1.pid)
+
+    for {attempt, %{pid: pid}, _count} <- runners, reduce: 0 do
       sum ->
         send(pid, {:windows, self()})
-        assert_receive {:windows, ^pid, read}, 5_000
-        sum + read
+        assert_receive {:windows, ^pid, past}, 5_000
+
+        waits =
+          for {worker, ref} <- :sys.get_state(attempt.relay).workers,
+              MapSet.member?(waiting, worker),
+              do: ref
+
+        sum + MapSet.size(MapSet.new(past ++ waits))
     end
   end
 
