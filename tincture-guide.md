@@ -23,7 +23,7 @@ A frame hidden behind another is **suspended** unless it declares `frame.backgro
 
 ### Private and Public
 
-A tincture is private unless it has an active public consent profile. Publish one with `profile.publish` (the proof-bound consent walk) and unpublish by revoking it with `profile.revoke`; `tincture_visibility.get` reports the current answer. The manifest's `tincture.public` is a metadata hint only. A canvas is never public: it is the person's own data page, so no public profile is staged for one and the public route serves none. `profile.publish` refuses to stage one (`invalid_argument`), and its address answers not found, as a private tincture's does.
+A tincture is private unless it has an active public consent profile, and an app cannot be made public yet: `profile.publish` stages one, but nothing in Prism, the CYFR app or the command line finishes its consent walk. `profile.revoke` revokes one, and `tincture_visibility.get` reports the current answer. The manifest's `tincture.public` is a metadata hint only. A canvas is never public: it is the person's own data page, so no public profile is staged for one and the public route serves none. `profile.publish` refuses to stage one (`invalid_argument`), and its address answers not found, as a private tincture's does.
 
 | | Private | Public |
 |---|---|---|
@@ -625,11 +625,11 @@ RECOMMENDED:
 
 | `code` | When | Fix |
 |--------|------|-----|
-| `no_frame` | the page is not a frame the shell opened, or the handshake never came | open the tincture from the shell, or publish it and use its public address |
+| `no_frame` | the page is not a frame the shell opened, or the handshake never came | open the tincture from the shell |
 | `forbidden` (`frame_suspended`) | the frame is hidden and does not declare `frame.background` | act when shown, or declare `background` |
 | `forbidden` (`frame_moved`) | the version or its owner profile's grant changed since the frame opened | open the tincture again |
 | `forbidden` (undeclared) | the component, action or stream is not in the declaration | declare it and publish a new version |
-| `consent_required` | the tincture has no grant for the route that names what its version declares: none at all, one waiting for the person, or one made before the version declared more | grant it when the shell asks, or publish its public one |
+| `consent_required` | the tincture has no grant for the route that names what its version declares: none at all, one waiting for the person, or one made before the version declared more | grant it when the shell asks |
 | `rate_limited` | the frame's request rate or open streams are over their bound | wait the seconds it names; invoke on events, not per frame |
 | `invalid_argument` | a request that does not match the wire | pass a reference, an operation name and an object |
 | `unavailable` | the server could not answer | retry |

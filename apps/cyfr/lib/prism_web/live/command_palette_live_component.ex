@@ -86,6 +86,21 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
 
   def handle_event("pick", _params, socket), do: {:noreply, close(socket)}
 
+  # Enter in the search field opens the first result for what the field
+  # holds, filtered again here since the debounced search may not have
+  # reached the palette yet; with no result it opens nothing.
+  def handle_event("pick_first", %{"value" => query}, socket) when is_binary(query) do
+    CyfrWeb.ContextGuard.guard(socket, fn socket ->
+      socket =
+        socket |> assign(:query, query) |> find_components() |> find_threads() |> refilter()
+
+      case socket.assigns.items do
+        [%{to: to} | _] -> handle_event("pick", %{"to" => to}, socket)
+        [] -> {:noreply, socket}
+      end
+    end)
+  end
+
   defp close(socket) do
     socket
     |> assign(:open, false)
@@ -344,7 +359,7 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
       |> Enum.map(fn t ->
         %{
           kind: :tincture,
-          label: t.title || "#{t.publisher}.#{t.name}",
+          label: t.name,
           hint: if(Prism.Frames.canvas?(t), do: "desktop", else: "app"),
           to: tincture_path(t),
           icon: "palette",
@@ -418,9 +433,14 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
           phx-click-away="close"
           phx-target={@myself}
         >
-          <div class="border-b border-gray-800 px-4 py-3">
+          <form
+            class="border-b border-gray-800 px-4 py-3"
+            phx-submit="pick_first"
+            phx-target={@myself}
+          >
             <input
               type="text"
+              name="value"
               placeholder="Search pages, components, requests…  (Esc to close)"
               value={@query}
               phx-keyup="search"
@@ -428,7 +448,7 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
               phx-debounce="120"
               class="w-full bg-transparent text-sm text-white placeholder-gray-500 outline-none"
             />
-          </div>
+          </form>
 
           <ul class="max-h-[50vh] overflow-y-auto py-1">
             <li :if={@items == []} class="px-4 py-6 text-center text-sm text-gray-500">
@@ -455,7 +475,7 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
           </ul>
 
           <div class="flex items-center justify-between border-t border-gray-800 px-4 py-2 text-[11px] text-gray-500">
-            <span>↑ ↓ navigate</span>
+            <span>Enter opens the first</span>
             <span>⌘⇧K toggle</span>
           </div>
         </div>

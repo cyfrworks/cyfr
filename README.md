@@ -31,7 +31,7 @@ Components are the appliances in that system — purpose-built, sandboxed, and c
 - **Reagent** — pure compute, no I/O (transforms, validation, scoring)
 - **Catalyst** — I/O with the outside world (HTTP APIs, databases, secrets)
 - **Formula** — compositions that chain Reagents, Catalysts and other Formulas into workflows
-- **Tincture** — frontend experiences (HTML/JS/CSS) served by CYFR and can be interacted privately or publicly
+- **Tincture** — frontend experiences (HTML/JS/CSS) served by CYFR inside Prism
 
 Formulas support **execution event streaming** — long-running formulas (like agentic loops) push intermediate events (`emit`) so frontends see progressive updates in real-time via SSE or PubSub.
 
@@ -146,7 +146,7 @@ Around the desktop:
 - **`lite` / `dev`** — a per-person preference in Settings, not an edition. `dev` adds the developer views — **Executions**, **Activities**, **Enforcements**, **Components**, **Builds**, **Registry**, **Reports** — in a sidebar with live indicators; the ops surface stays reachable in `lite`, it just isn't the face. `lite` is everyone's default but the administrator's, who starts in `dev`.
 - **⌘⇧K** — the command palette, also from the drawer's Search… row.
 
-Tinctures can stay private inside Prism, or be made public and shared at CYFR's address, `<address>/t/@<namespace>/<publisher>/<name>`: `http://localhost:4000` with local access, which only its own computer reaches; `https://<machine>.<tailnet>.ts.net` with tailnet access, which your tailnet's devices reach through Tailscale Serve; and `https://<your domain>` with public access, through Caddy under a certificate it obtains over ACME. See [Deploy to a Server](#deploy-to-a-server). A canvas is never public: it is your own data page, so no public profile is staged for one and the public route serves none.
+Tinctures are private: they open inside Prism, for the people signed in to your CYFR. An app cannot be made public yet: nothing in Prism, the CYFR app or the command line does it.
 
 ## Project Layout
 
@@ -303,7 +303,7 @@ A version's **Push** on the Components page pushes a local component to the regi
 
 ### Tinctures
 
-Tinctures are CYFR's frontend component type — sandboxed HTML/JS/CSS apps managed by the runtime. They run inside Prism (private, authenticated — over your canvases in **Canvas**) or as standalone public pages at `https://<host>/t/<athanor>/<publisher>/<name>` (when explicitly made public).
+Tinctures are CYFR's frontend component type — sandboxed HTML/JS/CSS apps managed by the runtime. They run inside Prism (private, authenticated — over your canvases in **Canvas**).
 
 ```bash
 # Scaffold a static HTML/JS/CSS tincture
@@ -341,9 +341,9 @@ cyfr.title("Stock Dashboard");
 cyfr.ready();
 ```
 
-A public tincture opened at its address makes the same calls with no credential, under its public profile. The [Tincture Guide](tincture-guide.md) is the full reference.
+The [Tincture Guide](tincture-guide.md) is the full reference.
 
-Vanilla tinctures are simple static frontends; the React template gives you Vite + TypeScript out of the box. Tinctures default to private; publishing one is a consent decision — the profile tool's `publish` (plan → preview → commit) mints its public profile, and revoking that profile unpublishes it. If you make file changes outside the normal build flow, run `cyfr register` to rescan local components.
+Vanilla tinctures are simple static frontends; the React template gives you Vite + TypeScript out of the box. Tinctures are private. If you make file changes outside the normal build flow, run `cyfr register` to rescan local components.
 
 ### Fork a Component
 

@@ -50,9 +50,9 @@ var tinctureCmd = &cobra.Command{
 
 var tinctureVisibilityCmd = &cobra.Command{
 	Use:   "visibility",
-	Short: "Manage tincture public/private visibility",
-	Long: `Control whether a tincture is publicly accessible at /t/:athanor/:publisher/:name
-without authentication. Tinctures default to private (accessible only via Prism shell).`,
+	Short: "Show whether a tincture is public",
+	Long: `Show whether a tincture is publicly accessible at /t/:athanor/:publisher/:name
+without signing in. Tinctures are private (opened only in Prism); an app cannot be made public yet.`,
 }
 
 var tinctureVisibilityGetCmd = &cobra.Command{

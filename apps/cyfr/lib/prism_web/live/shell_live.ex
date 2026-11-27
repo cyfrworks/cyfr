@@ -507,17 +507,24 @@ defmodule PrismWeb.ShellLive do
 
   # `ui.tincture.focus` and the palette move the page to the desktop with
   # `?publisher=&tincture_name=` (`PrismWeb.DesktopLive`), which this view's
-  # hook reads from the page's address and hands here as `focus_named`. The picker is index-addressed, so the pair is resolved
-  # against the list the shell holds; a pair matching nothing leaves the
-  # current selection alone rather than snapping the person to the first
-  # card.
+  # hook reads from the page's address and hands here as `focus_named`. The
+  # pair is resolved against the list the shell holds, and the tincture it
+  # names is focused in the picker and opened, by the launch a person's own
+  # pick makes, so it opens over a canvas as without one and passes every
+  # check that launch passes. A pair matching nothing opens nothing and
+  # leaves the current selection alone rather than snapping the person to
+  # the first card.
   defp focus_named(socket, publisher, name) when is_binary(publisher) and is_binary(name) do
     case Enum.find_index(
            socket.assigns.tinctures,
            &(&1.publisher == publisher and &1.name == name)
          ) do
-      nil -> socket
-      idx -> focus_tincture(socket, idx)
+      nil ->
+        socket
+
+      idx ->
+        socket = focus_tincture(socket, idx)
+        launch_tincture(socket, Enum.at(socket.assigns.tinctures, idx).id)
     end
   end
 
@@ -608,57 +615,6 @@ defmodule PrismWeb.ShellLive do
         end)
 
         {:noreply, put_flash(socket, :info, "Refreshing apps…")}
-    end
-  end
-
-  def handle_event("copy_url", %{"tincture" => tincture_id}, socket) do
-    tincture = Enum.find(socket.assigns.tinctures, &(&1.id == tincture_id))
-
-    if tincture do
-      # The public address: the home's own origin (`Sanctum.origin/0`) plus
-      # the tincture's path.
-      url =
-        Cyfr.RuntimeConfig.origin() <>
-          Prima.TinctureUrl.path(tincture.athanor_segment, tincture.publisher, tincture.name)
-
-      {:noreply,
-       socket
-       |> push_event("clipboard", %{text: url})
-       |> put_flash(:info, "URL copied to clipboard")}
-    else
-      {:noreply, socket}
-    end
-  end
-
-  def handle_event("toggle_visibility", %{"tincture" => tincture_id}, socket) do
-    tincture = Enum.find(socket.assigns.tinctures, &(&1.id == tincture_id))
-
-    if tincture do
-      ctx = socket.assigns.context
-
-      with :ok <- Sanctum.Context.authorize(ctx, :execute) do
-        # Public-ness is a published profile, not a toggle: publishing is
-        # the proof-bound profile.publish walk, unpublishing revokes the
-        # public profile. Until the sheet drives publish here, say so.
-        message =
-          case tincture.public do
-            true ->
-              "Unpublish by revoking the public profile (profile.revoke)."
-
-            false ->
-              "Publish through the consent walk: profile.publish on this " <>
-                "app's owner profile."
-
-            :unknown ->
-              "This app's visibility can't be read right now. Try again shortly."
-          end
-
-        {:noreply, put_flash(socket, :info, message)}
-      else
-        _ -> {:noreply, socket}
-      end
-    else
-      {:noreply, socket}
     end
   end
 
@@ -4140,27 +4096,6 @@ defmodule PrismWeb.ShellLive do
           class="rounded-lg bg-accent-primary px-4 py-1.5 text-xs font-medium text-white transition-colors hover:bg-accent-hover"
         >
           Launch
-        </button>
-        <button
-          phx-click="toggle_visibility"
-          phx-value-tincture={@tincture.id}
-          disabled={@tincture.public == :unknown}
-          title={if @tincture.public == :unknown, do: "Visibility can't be read right now"}
-          class="rounded-lg border border-border-default bg-surface-raised px-3 py-1.5 text-xs text-text-secondary transition-colors hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          {case @tincture.public do
-            true -> "Make Private"
-            false -> "Make Public"
-            :unknown -> "Visibility unavailable"
-          end}
-        </button>
-        <button
-          phx-click="copy_url"
-          phx-value-tincture={@tincture.id}
-          class="rounded-lg border border-border-default bg-surface-raised px-3 py-1.5 text-xs text-text-secondary transition-colors hover:text-text-primary"
-          title="Copy public URL"
-        >
-          Copy URL
         </button>
         <button
           phx-click="open_report"

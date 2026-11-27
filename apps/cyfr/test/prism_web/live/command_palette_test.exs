@@ -119,6 +119,50 @@ defmodule PrismWeb.CommandPaletteTest do
     refute html =~ "palette-word"
   end
 
+  # An app is listed by its name, the name its desktop tile shows, while
+  # its description still finds it; Enter opens the first result for what
+  # the field holds, and with none opens nothing.
+  test "an app is listed by its name, found by its description, and Enter opens the first result",
+       %{conn: conn} do
+    user = test_user()
+    conn = log_in_user(conn, user)
+    athanor = seated_athanor()
+    ctx = %{Sanctum.TestContext.local() | user_id: user.user_id, athanor_id: athanor.id}
+
+    Arca.Test.UnitFixtures.tenant_component!(ctx, "tincture", "local", "palette-bird", "1.0.0",
+      manifest: %{
+        "name" => "palette-bird",
+        "type" => "tincture",
+        "version" => "1.0.0",
+        "publisher" => "local",
+        "description" => "A game of a small bird flying between pipes",
+        "tincture" => %{"entry" => "index.html"}
+      },
+      files: [{"index.html", "<!doctype html><title>palette-bird</title>"}]
+    )
+
+    Prism.TinctureRegistry.reload_athanor(athanor.id)
+
+    {view, _html} = mount_athanor(conn, "/settings")
+    view |> with_target("#command-palette") |> render_click("toggle", %{})
+    view |> element("#command-palette input") |> render_keyup(%{"value" => "pipes"})
+    html = view |> element("#command-palette") |> render()
+
+    item = ~s(#command-palette [phx-value-to="/?publisher=local&tincture_name=palette-bird"])
+    assert view |> element(item) |> render() =~ ~r{<span class="flex-1 truncate">\s*palette-bird\s*</span>}
+    refute html =~ "flying between pipes"
+    assert html =~ "Enter opens the first"
+    refute html =~ "↑ ↓ navigate"
+
+    assert view |> element("#command-palette form") |> render_submit(%{"value" => "zz-none"}) =~
+             "No matches."
+
+    assert {:error, {:live_redirect, %{to: to}}} =
+             view |> element("#command-palette form") |> render_submit(%{"value" => "pipes"})
+
+    assert to == athanor_path("/?publisher=local&tincture_name=palette-bird", athanor)
+  end
+
   # A component row as the registry writes one, `inserted_at` naming how new
   # it is.
   defp component_row!(ctx, name, inserted_at, description \\ nil, type \\ "catalyst") do

@@ -4,10 +4,11 @@
 defmodule PrismWeb.ShellLiveVisibilityTest do
   @moduledoc """
   Whether a tincture is public is read through `Sanctum.Consent.profiles/2`,
-  and a read that cannot answer renders a third state — "unavailable",
-  with no toggle — never "private". A store that is down, or a profile row
-  that cannot be decoded, says nothing about whether the tincture is
-  published. A tincture's copied URL is at the home's own address.
+  and a read that cannot answer renders a third state — "unavailable" —
+  never "private". A store that is down, or a profile row that cannot be
+  decoded, says nothing about whether the tincture is published. No
+  control offers to make an app public or to copy a public address: an
+  app cannot be made public yet.
   """
 
   use PrismWeb.ConnCase, async: false
@@ -87,19 +88,17 @@ defmodule PrismWeb.ShellLiveVisibilityTest do
     end
   end
 
-  # The toggle's own `disabled` attribute — not the `disabled:` style
-  # variants its class carries either way.
-  defp toggle_disabled?(html) do
-    [tag] = Regex.run(~r/<button[^>]*phx-click="toggle_visibility"[^>]*>/s, html)
-    tag |> String.replace(~r/class="[^"]*"/, "") |> String.match?(~r/\sdisabled[\s>=]/)
-  end
+  # Nothing a person can reach finishes a publish, so the picker offers
+  # no step toward one and no public address to copy.
+  defp offers_publishing?(html),
+    do: html =~ ~r/Make Public|Make Private|Copy URL|toggle_visibility|copy_url/
 
-  test "a tincture with no public profile reads private, with its toggle", %{conn: conn} do
+  test "a tincture with no public profile reads private, with nothing offering to publish it",
+       %{conn: conn} do
     {_view, html} = mount_desktop(conn)
 
     assert visibility(html) == "private"
-    assert html =~ "Make Public"
-    refute toggle_disabled?(html)
+    refute offers_publishing?(html)
   end
 
   test "an active public profile reads public", %{conn: conn, ctx: ctx} do
@@ -108,8 +107,7 @@ defmodule PrismWeb.ShellLiveVisibilityTest do
     {_view, html} = mount_desktop(conn)
 
     assert visibility(html) == "public"
-    assert html =~ "Make Private"
-    refute toggle_disabled?(html)
+    refute offers_publishing?(html)
   end
 
   @tag :capture_log
@@ -122,12 +120,7 @@ defmodule PrismWeb.ShellLiveVisibilityTest do
     html = render(view)
 
     assert visibility(html) == "unavailable"
-    refute html =~ "Make Public"
-    assert toggle_disabled?(html)
-
-    flash = render_click(view, "toggle_visibility", %{"tincture" => "iframe_#{@tincture}"})
-    assert flash =~ "can&#39;t be read right now"
-    assert flash =~ "This app&#39;s visibility"
+    refute offers_publishing?(html)
   end
 
   test "a public profile row that cannot be decoded reads unavailable", %{conn: conn, ctx: ctx} do
@@ -144,7 +137,6 @@ defmodule PrismWeb.ShellLiveVisibilityTest do
     {_view, html} = mount_desktop(conn)
 
     assert visibility(html) == "unavailable"
-    assert toggle_disabled?(html)
   end
 
   # What a person reads of an app on the desktop says app, never tincture.
@@ -173,9 +165,6 @@ defmodule PrismWeb.ShellLiveVisibilityTest do
     refute html =~
              ~r/[Tt]incture( \d| not|s installed|s registered)|this tincture|Refresh tinctures|(Previous|Next) tincture/
 
-    flash = render_click(view, "toggle_visibility", %{"tincture" => "iframe_#{@tincture}"})
-    assert flash =~ "on this app&#39;s owner profile."
-
     flash = render_click(view, "open_report", %{"tincture" => "iframe_none"})
     assert flash =~ "App not found; refresh and try again."
 
@@ -197,29 +186,5 @@ defmodule PrismWeb.ShellLiveVisibilityTest do
     html = render(view)
     assert html =~ "Your report goes to the registry&#39;s moderators."
     refute html =~ "cyfr.run"
-  end
-
-  # The address a person copies to share a public tincture is the home's
-  # own (`Sanctum.origin/0`), its public URL in a tailnet or public home,
-  # never the endpoint's own listener address.
-  test "a tincture's copied URL is at the home's own address", %{conn: conn} do
-    original = Application.fetch_env(:sanctum, :public_url)
-
-    on_exit(fn ->
-      case original do
-        {:ok, value} -> Application.put_env(:sanctum, :public_url, value)
-        :error -> Application.delete_env(:sanctum, :public_url)
-      end
-    end)
-
-    home = "https://cyfr.tail1a2b3c.ts.net"
-    Application.put_env(:sanctum, :public_url, home)
-
-    {view, _html} = mount_desktop(conn)
-    render_click(view, "copy_url", %{"tincture" => "iframe_#{@tincture}"})
-
-    assert_push_event(view, "clipboard", %{text: url})
-    assert String.starts_with?(url, home <> "/")
-    assert String.ends_with?(url, "/local/#{@tincture}")
   end
 end
