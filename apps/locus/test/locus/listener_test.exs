@@ -49,6 +49,9 @@ defmodule Locus.ListenerTest do
   @instant @vectors["hello"]["ts"]
   @lease_ms 30_000
 
+  @worker_api Path.expand("../../../../tests/fixtures/worker_api.json", __DIR__)
+              |> File.read!()
+              |> Jason.decode!()
   # An answer that must come before the body it waits on would arrive.
   @unread_ms 2_000
 
@@ -370,104 +373,10 @@ defmodule Locus.ListenerTest do
       {:ok, port: port, host: host, key: ScriptedHost.dispatch_key(host), boot: boot}
     end
 
-    test "a method or path that is no worker route is not_found", ctx do
-      for {method, path} <- [{"GET", "/worker/v1/status"}, {"POST", "/host/v1/status"}] do
-        client = ctx.port |> connect() |> send_request(method, path, [], "")
-        assert_refused(client, 404, wl(:not_found), :close)
-      end
-    end
-
-    test "an unsigned request to a path that is no callback is not_found", ctx do
-      client =
-        ctx.port
-        |> connect()
-        |> send_request("POST", "/worker/v1/attach", [], status_body(), :none)
-
-      assert_refused(client, 404, wl(:not_found), :close, @unread_ms)
-    end
-
-    test "a service without its credentials is unavailable before any header", ctx do
-      credentials = Locus.Runtime.Credentials.current()
-      :persistent_term.erase({Locus.Runtime.Credentials, :current})
-
-      try do
-        client =
-          ctx.port
-          |> connect()
-          |> send_request("POST", status_route(), [], status_body(), :none)
-
-        assert_refused(client, 503, wl(:unavailable), :close, @unread_ms)
-      after
-        Locus.Runtime.Credentials.install(credentials)
-      end
-    end
-
-    test "no header, or two, is malformed", ctx do
-      header = runtime_header(ctx, status_body())
-
-      for headers <- [[], [{"x-cyfr-auth", header}, {"x-cyfr-auth", header}]] do
-        client =
-          ctx.port
-          |> connect()
-          |> send_request("POST", status_route(), headers, status_body(), :none)
-
-        assert_refused(client, 401, wl(:malformed), :close, @unread_ms)
-      end
-    end
-
-    test "a header at another version is unknown_version, answered before the body", ctx do
-      "v1 " <> rest = runtime_header(ctx, status_body())
-
-      client =
-        ctx.port
-        |> connect()
-        |> send_request(
-          "POST",
-          status_route(),
-          [{"x-cyfr-auth", "v2 " <> rest}],
-          status_body(),
-          :none
-        )
-
-      assert_refused(client, 401, wl(:unknown_version), :close, @unread_ms)
-    end
-
-    test "a header that does not parse is malformed", ctx do
-      client =
-        ctx.port
-        |> connect()
-        |> send_request(
-          "POST",
-          status_route(),
-          [{"x-cyfr-auth", "v1 kind=request mac=x"}],
-          status_body(),
-          :none
-        )
-
-      assert_refused(client, 401, wl(:malformed), :close, @unread_ms)
-    end
-
-    test "a header two windows old is outside_window", ctx do
-      header = runtime_header(ctx, status_body(), ts: system_now() - 2 * WorkerAuth.window_ms())
-
-      client =
-        ctx.port
-        |> connect()
-        |> send_request("POST", status_route(), [{"x-cyfr-auth", header}], status_body(), :none)
-
-      assert_refused(client, 401, wl(:outside_window), :close, @unread_ms)
-    end
-
-    test "another service's key is bad_mac, answered before the body", ctx do
-      stranger = ScriptedHost.dispatch_key(ctx.host, "wrk_other")
-      header = runtime_header(ctx, status_body(), key: stranger)
-
-      client =
-        ctx.port
-        |> connect()
-        |> send_request("POST", status_route(), [{"x-cyfr-auth", header}], status_body(), :none)
-
-      assert_refused(client, 401, wl(:bad_mac), :close, @unread_ms)
+    test "every listener case of tests/fixtures/worker_api.json is answered as it says", ctx do
+      cases = @worker_api["listener"]
+      assert length(cases) >= 25
+      for c <- cases, do: listener_case(ctx, c)
     end
 
     test "a header for another service is malformed, and keeps no nonce", ctx do
@@ -483,38 +392,6 @@ defmodule Locus.ListenerTest do
 
       # The same nonce, addressed to this service, is its first use.
       assert_status_answered(ctx, connect(ctx.port), nonce: nonce)
-    end
-
-    test "a nonce presented twice is replayed", ctx do
-      nonce = nonce()
-      assert_status_answered(ctx, connect(ctx.port), nonce: nonce)
-
-      header = runtime_header(ctx, status_body(), nonce: nonce)
-
-      client =
-        ctx.port
-        |> connect()
-        |> send_request("POST", status_route(), [{"x-cyfr-auth", header}], status_body(), :none)
-
-      assert_refused(client, 401, wl(:replayed), :close, @unread_ms)
-    end
-
-    test "a verified header's nonce is spent before its body is checked", ctx do
-      header = runtime_header(ctx, status_body())
-      other = kill_body()
-
-      client =
-        ctx.port
-        |> connect()
-        |> send_request("POST", status_route(), [{"x-cyfr-auth", header}], other)
-
-      {_answer, client} = assert_refused(client, 401, wl(:bad_mac), :open)
-
-      # Its own body, under the same header, on the same connection.
-      client =
-        send_request(client, "POST", status_route(), [{"x-cyfr-auth", header}], status_body())
-
-      assert_refused(client, 401, wl(:replayed), :close)
     end
 
     test "an over-bound body is read to the bound before it is refused", ctx do
@@ -544,50 +421,6 @@ defmodule Locus.ListenerTest do
         ])
 
       assert_answer(answer, 400, wl(:malformed), :close)
-    end
-
-    test "a body other than the signed one is bad_mac, the connection kept", ctx do
-      header = runtime_header(ctx, status_body())
-
-      client =
-        ctx.port
-        |> connect()
-        |> send_request("POST", status_route(), [{"x-cyfr-auth", header}], kill_body())
-
-      {_answer, client} = assert_refused(client, 401, wl(:bad_mac), :open)
-      assert_status_answered(ctx, client)
-    end
-
-    test "a body without the wire's version, or at another, is unknown_version", ctx do
-      client =
-        Enum.reduce(
-          [
-            ~s({"op":"status","args":{}}),
-            ~s({"v":4,"op":"status","args":{}}),
-            ~s({"v":"2","op":"status","args":{}})
-          ],
-          connect(ctx.port),
-          fn body, client ->
-            headers = [{"x-cyfr-auth", runtime_header(ctx, body)}]
-            client = send_request(client, "POST", status_route(), headers, body)
-            {_answer, client} = assert_refused(client, 400, wl(:unknown_version), :open)
-            client
-          end
-        )
-
-      assert_status_answered(ctx, client)
-    end
-
-    test "a body naming another callback, or not JSON, is malformed", ctx do
-      client =
-        Enum.reduce([kill_body(), "not json"], connect(ctx.port), fn body, client ->
-          headers = [{"x-cyfr-auth", runtime_header(ctx, body)}]
-          client = send_request(client, "POST", status_route(), headers, body)
-          {_answer, client} = assert_refused(client, 400, wl(:malformed), :open)
-          client
-        end)
-
-      assert_status_answered(ctx, client)
     end
   end
 
@@ -622,6 +455,95 @@ defmodule Locus.ListenerTest do
     assert answer.status == 200
     assert %{"v" => 3, "ok" => %{"service" => "wrk_local"}} = Jason.decode!(answer.body)
     client
+  end
+
+  # One listener case of the vector file, made of this service's listener:
+  # its header and body as the case says, its answer byte for byte, and a
+  # connection the answer keeps answering a status next.
+  defp listener_case(ctx, c) do
+    body = listener_body(c["body"])
+    {client, headers} = listener_headers(ctx, c, body, connect(ctx.port))
+    {sent, timeout} = if c["before_body"], do: {:none, @unread_ms}, else: {:all, 10_000}
+    connection = if c["closes"], do: :close, else: :open
+
+    {answer, client} =
+      without_credentials(c["credentials"] == false, fn ->
+        client
+        |> send_request(c["method"] || "POST", c["path"], headers, body, sent)
+        |> answer(timeout)
+      end)
+
+    case c["answer"] do
+      nil ->
+        assert answer.status == c["status"], c["name"]
+        assert %{"v" => 3, "ok" => %{"service" => "wrk_local"}} = Jason.decode!(answer.body)
+        assert answer.headers["connection"] == nil, c["name"]
+
+      bytes ->
+        assert {answer.status, answer.body} == {c["status"], bytes}, c["name"]
+        assert_answer(answer, c["status"], bytes, connection)
+    end
+
+    if connection == :close, do: assert_closed(client), else: assert_status_answered(ctx, client)
+  end
+
+  defp listener_body(%{"json" => value}), do: Jason.encode!(value)
+  defp listener_body(%{"text" => text}), do: text
+  defp listener_body(%{"size" => bytes}), do: String.duplicate("x", bytes)
+
+  defp listener_headers(ctx, c, body, client) do
+    signed = fn opts -> runtime_header(ctx, body, opts) end
+    auth = &[{"x-cyfr-auth", &1}]
+
+    case c["header"] do
+      "none" ->
+        {client, []}
+
+      "twice" ->
+        header = signed.([])
+        {client, auth.(header) ++ auth.(header)}
+
+      "v2" ->
+        "v1 " <> rest = signed.([])
+        {client, auth.("v2 " <> rest)}
+
+      "text" ->
+        {client, auth.(c["header_text"])}
+
+      "signed" ->
+        ts = system_now() + (c["ts_offset_ms"] || 0)
+        {client, auth.(signed.(ts: ts, service: c["service"] || "wrk_local"))}
+
+      "other_key" ->
+        {client, auth.(signed.(key: ScriptedHost.dispatch_key(ctx.host, "wrk_other")))}
+
+      "other_body" ->
+        {client, auth.(runtime_header(ctx, kill_body()))}
+
+      "replay" ->
+        header = signed.([])
+        client = send_request(client, "POST", c["path"], auth.(header), kill_body())
+        {_answer, client} = assert_refused(client, 401, wl(:bad_mac), :open)
+        {client, auth.(header)}
+
+      "replay_answered" ->
+        nonce = nonce()
+        assert_status_answered(ctx, connect(ctx.port), nonce: nonce)
+        {client, auth.(signed.(nonce: nonce))}
+    end
+  end
+
+  defp without_credentials(false, run), do: run.()
+
+  defp without_credentials(true, run) do
+    credentials = Locus.Runtime.Credentials.current()
+    :persistent_term.erase({Locus.Runtime.Credentials, :current})
+
+    try do
+      run.()
+    after
+      Locus.Runtime.Credentials.install(credentials)
+    end
   end
 
   # ————— builds —————
@@ -1622,6 +1544,16 @@ defmodule Locus.ListenerTest do
       assert Listener.fresh(table, "n2", past, @window_ms) == :ok
       assert :ets.lookup(table, "n1") == []
       assert Listener.fresh(table, "n1", past, @window_ms) == :ok
+    end
+
+    test "a nonce is fresh or replayed at each presentation as worker_api.json says" do
+      table = nonce_table()
+      assert @worker_api["window_ms"] == @window_ms
+
+      for %{"nonce" => nonce, "now" => now, "fresh" => fresh} <- @worker_api["nonces"] do
+        expected = if fresh, do: :ok, else: {:error, :replayed}
+        assert Listener.fresh(table, nonce, now, @window_ms) == expected, "#{nonce} at #{now}"
+      end
     end
 
     test "the nonce table is created once, and a second creation keeps what it holds" do

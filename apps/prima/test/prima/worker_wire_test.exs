@@ -177,6 +177,57 @@ defmodule Prima.WorkerWireTest do
       end
     end
 
+    test "every request body reads as its callback or is refused, the version first" do
+      assert length(@worker["request_bodies"]) >= 20
+
+      for c <- @worker["request_bodies"] do
+        expected =
+          if c["error"],
+            do: {:error, String.to_existing_atom(c["error"])},
+            else: {:ok, String.to_existing_atom(c["callback"]), c["args"]}
+
+        assert WorkerWire.read_request_body(WorkerAPI, Jason.decode!(c["body"])) == expected,
+               c["why"]
+      end
+    end
+
+    test "every answer reads as ok, a refusal with its fields, or a lost answer" do
+      for c <- @worker["answers"] do
+        expected =
+          case c["reading"] do
+            "ok" -> {:ok, c["ok"]}
+            "error" -> {:error, c["error"], c["fields"]}
+            "lost" -> :lost
+          end
+
+        assert WorkerWire.read_answer(Jason.decode!(c["answer"])) == expected, c["why"]
+      end
+    end
+
+    test "every answer and body written is its bytes" do
+      for c <- @worker["answer_writes"] do
+        written =
+          case c["write"] do
+            "ok" -> WorkerWire.ok(c["ok"])
+            "error" -> WorkerWire.error(c["error"], c["fields"])
+            "request" -> WorkerWire.request_body(String.to_existing_atom(c["op"]), c["args"])
+          end
+
+        assert Jason.encode!(written) == c["bytes"], c["why"]
+      end
+    end
+
+    test "every base URL reads as its base, or is no base URL" do
+      for %{"text" => text, "base" => base} <- @worker["base_urls"] do
+        expected = if base, do: {:ok, base}, else: :error
+        assert WorkerWire.base_url(text) == expected, inspect(text)
+      end
+    end
+
+    test "a report names at most the vectors' count of attempts" do
+      assert WorkerWire.max_report_attempts() == @worker["max_report_attempts"]
+    end
+
     test "the vectors are at this version, named on the header this wire uses" do
       assert @host["version"] == WorkerWire.version()
       assert @worker["version"] == WorkerWire.version()

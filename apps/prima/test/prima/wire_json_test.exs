@@ -46,11 +46,11 @@ defmodule Prima.WireJsonTest do
   end
 
   test "every base64 text reads as Base reads it, or is refused" do
-    for {section, decode} <- [
-          {"base64url", &Base.url_decode64(&1, padding: false)},
-          {"base64", &Base.decode64/1}
+    for {section, cases, decode} <- [
+          {:base64url, @vectors["base64url"], &Base.url_decode64(&1, padding: false)},
+          {:base64, @vectors["base64"], &Base.decode64/1}
         ],
-        %{"text" => text, "bytes_hex" => bytes} <- @vectors[section] do
+        %{"text" => text, "bytes_hex" => bytes} <- cases do
       case bytes do
         nil ->
           assert :error == decode.(text), "#{section} #{inspect(text)}"

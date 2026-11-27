@@ -398,6 +398,27 @@ defmodule Locus.Runtime.WorkerListenerTest do
       end
     end
 
+    test "every start is answered as its vector says, and only the accepted one runs", context do
+      starts = @worker_api["starts"]
+      assert length(starts) >= 10
+
+      for c <- starts do
+        args = start_args(context, c["start"])
+        response = response(context, :start, request(:start, args))
+        assert {response.status, response.body} == {c["status"], c["answer"]}, c["name"]
+      end
+
+      # The accepted start's runner attaches, finds no artifact here and
+      # closes its attempt failed; no other start reached the host.
+      Prima.Test.Wait.wait_until(
+        fn -> ScriptedHost.requests(context.host, "fail") != [] end,
+        10_000
+      )
+
+      accepted = Enum.count(starts, &(&1["answer"] == ~s({"v":3,"ok":true})))
+      assert length(ScriptedHost.requests(context.host, "attach")) == accepted
+    end
+
     test "every status vector is the wire the listener writes for its status" do
       %{"valid" => valid, "invalid" => invalid} = @worker_api["status"]
 
@@ -411,6 +432,43 @@ defmodule Locus.Runtime.WorkerListenerTest do
           do: assert(:error == WorkerAPI.read_status(wire), why)
     end
   end
+
+  # The args CYFR would send this service and boot for a start, with the
+  # vector's change made to them.
+  defp start_args(context, change) do
+    attempt = start_attempt(context, change["assignment"], change["input"])
+
+    args = %{
+      "assignment" =>
+        if(change["assignment"] == "unread", do: "no token", else: attempt.assignment),
+      "input" => start_input(attempt, change["input"]),
+      "sealed_keys" => start_keys(context, attempt, change["keys"])
+    }
+
+    args |> Map.drop(List.wrap(change["drop"])) |> Map.merge(change["extra"] || %{})
+  end
+
+  defp start_attempt(context, "other_boot", _input),
+    do: ScriptedHost.attempt!(context.host, boot: "boot_other")
+
+  defp start_attempt(context, "other_service", _input),
+    do: ScriptedHost.attempt!(context.host, boot: context.boot, service: "wrk_other")
+
+  defp start_attempt(context, _assignment, "array"),
+    do: ScriptedHost.attempt!(context.host, boot: context.boot, input: [1])
+
+  defp start_attempt(context, _assignment, _input),
+    do: ScriptedHost.attempt!(context.host, boot: context.boot)
+
+  defp start_input(_attempt, "number"), do: 1
+  defp start_input(attempt, "other"), do: attempt.input <> " "
+  defp start_input(attempt, _input), do: attempt.input
+
+  defp start_keys(context, _attempt, "other_attempt"),
+    do: ScriptedHost.attempt!(context.host, boot: context.boot).sealed_keys
+
+  defp start_keys(_context, _attempt, "garbled"), do: "no.keys"
+  defp start_keys(_context, attempt, _keys), do: attempt.sealed_keys
 
   defp decode(vector), do: Jason.decode!(vector["body"])
 

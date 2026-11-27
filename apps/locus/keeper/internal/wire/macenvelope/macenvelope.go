@@ -324,6 +324,24 @@ func decimal(s string) bool {
 	return true
 }
 
+// MaxHeaderBytes is the most bytes a header of the envelope spans: its
+// version and kind, every field at its longest (a string's 256 bytes, an
+// integer's 16 digits), the body hash and the 43 characters of a MAC.
+// (A MAC may be any field text, but one longer than an HMAC-SHA256's
+// never verifies, so a header longer than this is malformed or forged.)
+func (e Envelope) MaxHeaderBytes() int {
+	n := len(Version + " kind=" + e.Kind)
+	for _, f := range e.Fields {
+		n += len(" " + f.header() + "=")
+		if f.Type == String {
+			n += MaxText
+		} else {
+			n += 16
+		}
+	}
+	return n + len(" body=") + 64 + len(" mac=") + MaxText
+}
+
 // Parsed is a header's fields, the body hash it names and its MAC.
 type Parsed struct {
 	Message  Message
@@ -344,6 +362,11 @@ func (e Envelope) Parse(header string) (Parsed, error) {
 	case versionToken(token):
 		return Parsed{}, ErrUnknownVersion
 	default:
+		return Parsed{}, ErrMalformed
+	}
+	// No header of the envelope is longer than its every value at its
+	// longest, so a longer one is malformed: refused before it is split.
+	if len(header) > e.MaxHeaderBytes() {
 		return Parsed{}, ErrMalformed
 	}
 	tokens := strings.Split(header, " ")[1:]

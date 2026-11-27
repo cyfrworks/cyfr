@@ -20,8 +20,10 @@
 //   - a document nested deeper than MaxDepth arrays and objects is refused
 //     before it is parsed (ErrTooDeep).
 //
-// A refusal names no byte of what it refused, so nothing a peer sent
-// reaches an error or a log through it.
+// Read bounds the depth it parses to; the size of what it reads is its
+// caller's bound, set before the bytes are read (a body's, at most
+// Prima.HostAPI.max_body_bytes/0). A refusal names no byte of what it
+// refused, so nothing a peer sent reaches an error or a log through it.
 package wirejson
 
 import (

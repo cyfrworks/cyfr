@@ -84,21 +84,10 @@ var (
 	Report  = macenvelope.Envelope{Prefix: label, Kind: "report", Fields: dispatchFields}
 )
 
-// MaxCallHeaderBytes is the most bytes a host call's header spans: its
-// version and kind, every field at its longest (a string's 256 bytes, an
-// integer's 16 digits), the body hash and the MAC's 43 characters.
-var MaxCallHeaderBytes = func() int {
-	n := len("v1 kind=call")
-	for _, f := range Call.Fields {
-		n += len(" " + f.Name + "=")
-		if f.Type == macenvelope.String {
-			n += macenvelope.MaxText
-		} else {
-			n += 16
-		}
-	}
-	return n + len(" body=") + 64 + len(" mac=") + 43
-}()
+// MaxCallHeaderBytes is the most bytes a host call's header spans with a
+// MAC an HMAC-SHA256 can be (43 characters), Prima's
+// max_host_call_header_bytes/0.
+var MaxCallHeaderBytes = Call.MaxHeaderBytes() - macenvelope.MaxText + 43
 
 // AssignKey is the key assignments are MAC'd with; only CYFR holds it.
 func AssignKey(root macenvelope.Key) macenvelope.Key {
