@@ -1282,7 +1282,9 @@ func standInForgedGuard(reach string) int {
 	if err != nil || len(fds) != 4 {
 		return fail("descriptors %v %v", fds, err)
 	}
-	f := func(i int) *os.File { return os.NewFile(uintptr(fds[i]), "handed") }
+	// Held until the admit is answered: a file no one holds may be closed
+	// by its finalizer before the admit sends it.
+	files := []*os.File{os.NewFile(uintptr(fds[0]), "netns"), os.NewFile(uintptr(fds[1]), "udp"), os.NewFile(uintptr(fds[2]), "tcp"), os.NewFile(uintptr(fds[3]), "netlink")}
 	sock := filepath.Join(dir, "guard.sock")
 	l, err := net.ListenUnix("unixpacket", &net.UnixAddr{Name: sock, Net: "unixpacket"})
 	if err != nil {
@@ -1302,8 +1304,11 @@ func standInForgedGuard(reach string) int {
 		addrs = []netip.Addr{forgedTarget}
 	}
 	client := NewClient(sock, "net:[test]", nil)
-	if _, err := client.AdmitMachine(testSpawn, vmmUID, reach, addrs, f(0), f(1), f(2), f(3)); err != nil {
+	if _, err := client.AdmitMachine(testSpawn, vmmUID, reach, addrs, files[0], files[1], files[2], files[3]); err != nil {
 		return fail("the admit: %v", err)
+	}
+	for _, f := range files {
+		f.Close()
 	}
 	// The route forwards, as the guard's island does: by its own link's
 	// forwarding, which the namespace's ip_forward would otherwise set.
