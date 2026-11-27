@@ -11,17 +11,15 @@
 
 use crate::wire::{MAX_DEPTH, MAX_OUTPUT_DEPTH};
 
-/// An attempt that ended before CYFR recorded its close.
-pub const ENDED: &str = "Execution attempt ended before it closed";
-
-/// An attempt the runner was told to stop.
-pub const CANCELLED: &str = "Execution cancelled before it completed";
-
 /// An attempt whose lease CYFR no longer holds for it.
 pub const LEASE_LOST: &str = "Execution lease lost: the row is no longer this attempt's to finish";
 
 /// An assignment whose authority or component type the runner cannot read.
 pub const UNRUNNABLE: &str = "Execution error: the assignment could not be run";
+
+/// A run whose node consents no memory at all, refused before its
+/// component is fetched, as the engine before this one refused it.
+pub const NO_MEMORY: &str = "Execution error: the engine raised an internal error";
 
 /// A component whose bytes CYFR did not answer.
 pub const NOT_FETCHED: &str = "Execution error: the component's bytes could not be fetched";

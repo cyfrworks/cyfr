@@ -37,6 +37,15 @@ fn main() -> ExitCode {
             return ExitCode::from(78);
         }
     };
+    // Each descriptor is adopted once: one named for both channels is no
+    // pair the keeper hands, and is refused before either is adopted.
+    if environment.relay == Relay::Fd(environment.control_fd) {
+        eprintln!(
+            "cyfr-runner: the control descriptor {} is the relay's",
+            environment.control_fd
+        );
+        return ExitCode::from(78);
+    }
     let control = match environment.control_fd {
         0 => None,
         fd => match adopt(fd) {
@@ -143,9 +152,11 @@ fn adopt(fd: u32) -> Option<UnixStream> {
     }
     // SAFETY: the descriptor is open (above), and was given to this
     // process by the keeper that started it (descriptors 3 and 4, its
-    // socketpairs' ends) or, for 3, named by the environment it set.
-    // Nothing else in the process names it: each is adopted once, here,
-    // before any other thread or file is opened, so the `OwnedFd` is its
+    // socketpairs' ends) or, for the control channel, named by the
+    // environment it set. Nothing else in the process names it: `main`
+    // adopts the control descriptor and the relay's once each, before any
+    // other thread or file is opened, and refuses a control descriptor
+    // equal to the relay's before adopting either, so the `OwnedFd` is its
     // one owner and closes it once.
     #[allow(unsafe_code)]
     let owned = unsafe { OwnedFd::from_raw_fd(raw) };

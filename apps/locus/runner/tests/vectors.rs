@@ -64,8 +64,8 @@ fn n(value: &Value) -> u64 {
         .unwrap_or_else(|| panic!("not a count: {value}"))
 }
 
-fn key(hex: &Value) -> Zeroizing<[u8; 32]> {
-    Zeroizing::new(wire::hex_key(s(hex)).expect("a 64-digit key"))
+fn key(hex: &Value) -> cyfr_runner::auth::Key {
+    wire::hex_key(s(hex)).expect("a 64-digit key")
 }
 
 /// The bytes of a vector's hex text.
@@ -1213,7 +1213,7 @@ fn host_every_call_a_runner_makes_crosses_as_the_vectors_write_it() {
 /// of the case, its answer sealed to the try's own header.
 struct Scripted {
     answers: Vec<Value>,
-    seal: Zeroizing<[u8; 32]>,
+    seal: cyfr_runner::auth::Key,
     iv: [u8; 12],
     posted: Vec<(String, Vec<u8>)>,
 }

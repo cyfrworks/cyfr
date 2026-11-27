@@ -10,7 +10,8 @@
 //! `record_denial`, which CYFR audits for the attempt; a report is never
 //! asked again, and the guest's answer does not wait on its outcome. A
 //! name the contract bounds out (`Prima.HostAPI.valid_field_name?/1`) is
-//! refused unreported. The name is the guest's, so no log line carries it.
+//! refused unreported. The name is the guest's, so no log line carries it,
+//! and each kind of line is logged once an attempt (`crate::attempt::Host::note`).
 
 use serde_json::Value;
 
@@ -42,7 +43,9 @@ impl catalyst::cyfr::vault::read::Host for Guest {
             )
         };
         if valid_field_name(&name) {
-            eprintln!("cyfr-runner: {component} was refused a vault field ({reason})");
+            run.host.note(reason, || {
+                format!("{component} was refused a vault field ({reason})")
+            });
             let outcome = run
                 .host
                 .call(
@@ -55,10 +58,14 @@ impl catalyst::cyfr::vault::read::Host for Guest {
                 .await;
             ended("record_denial", &outcome)?;
             if !matches!(outcome, Outcome::Answered(_)) {
-                eprintln!("cyfr-runner: {component}'s denial report was not answered");
+                run.host.note("an unanswered denial report", || {
+                    format!("{component}'s denial report was not answered")
+                });
             }
         } else {
-            eprintln!("cyfr-runner: {component} asked its vault for a name that is no field name");
+            run.host.note("a name that is no field name", || {
+                format!("{component} asked its vault for a name that is no field name")
+            });
         }
         Ok(Err(sentence))
     }

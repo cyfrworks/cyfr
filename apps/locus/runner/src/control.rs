@@ -29,7 +29,7 @@ use std::collections::BTreeMap;
 use std::ffi::OsString;
 
 use serde_json::{Map, Value};
-use zeroize::Zeroizing;
+use zeroize::{Zeroize as _, Zeroizing};
 
 use crate::auth::{Attempt, AttemptKeys, Key};
 use crate::wire::{
@@ -615,9 +615,7 @@ impl Reader<'_> {
 
     fn key(&self, field: &str) -> Result<Key, Refusal> {
         let value = self.string(field)?;
-        hex_key(value)
-            .map(Zeroizing::new)
-            .ok_or_else(|| Refusal::InvalidField(self.name(field)))
+        hex_key(value).ok_or_else(|| Refusal::InvalidField(self.name(field)))
     }
 
     // Base64 grows bytes by a third, so a text longer than the largest
@@ -911,12 +909,21 @@ pub enum Received {
     Closed,
 }
 
+/// The most bytes one read takes from the control channel.
+const READ_BYTES: usize = 64 * 1024;
+
 /// The runner's reading end of its control channel: lines from `reader`,
 /// each decoded as it ends. `next` keeps what it has read between calls,
 /// so a caller may stop waiting on it and call it again.
+///
+/// An `assign` line carries the token and the attempt's keys, so nothing
+/// of a line outlives its reading: the read chunk is cleared once its
+/// bytes are taken, and the buffer, reserved once for the longest line so
+/// it never moves, has the room a taken line leaves cleared.
 pub struct Lines<R> {
     reader: R,
-    buffer: Vec<u8>,
+    buffer: Zeroizing<Vec<u8>>,
+    chunk: Zeroizing<Vec<u8>>,
     closed: bool,
 }
 
@@ -924,18 +931,28 @@ impl<R: tokio::io::AsyncRead + Unpin> Lines<R> {
     pub fn new(reader: R) -> Self {
         Lines {
             reader,
-            buffer: Vec::new(),
+            buffer: Zeroizing::new(Vec::with_capacity(MAX_LINE_BYTES + 1 + READ_BYTES)),
+            chunk: Zeroizing::new(vec![0u8; READ_BYTES]),
             closed: false,
         }
     }
 
-    /// The next line's message, refusal, overflow or the channel's end.
+    /// The next line's message, refusal, overflow or the channel's end. A
+    /// line past `MAX_LINE_BYTES` is an overflow however it arrived.
     pub async fn next(&mut self) -> Received {
         use tokio::io::AsyncReadExt as _;
-        let mut chunk = vec![0u8; 64 * 1024];
         loop {
             if let Some(end) = self.buffer.iter().position(|byte| *byte == b'\n') {
+                if end > MAX_LINE_BYTES {
+                    return Received::Oversize;
+                }
+                let held = self.buffer.len();
                 let line: Zeroizing<Vec<u8>> = Zeroizing::new(self.buffer.drain(..=end).collect());
+                // The bytes moved down leave their old places behind.
+                let left = self.buffer.len();
+                self.buffer.resize(held, 0);
+                self.buffer[left..].zeroize();
+                self.buffer.truncate(left);
                 return match decode(&line) {
                     Ok(message) => Received::Message(message),
                     Err(refusal) => Received::Refused(refusal),
@@ -947,19 +964,39 @@ impl<R: tokio::io::AsyncRead + Unpin> Lines<R> {
             if self.closed {
                 return Received::Closed;
             }
-            match self.reader.read(&mut chunk).await {
+            match self.reader.read(&mut self.chunk).await {
                 Ok(0) | Err(_) => self.closed = true,
-                Ok(read) => self.buffer.extend_from_slice(&chunk[..read]),
+                Ok(read) => {
+                    self.buffer.extend_from_slice(&self.chunk[..read]);
+                    self.chunk[..read].zeroize();
+                }
             }
         }
     }
 }
 
+/// How many lines the runner's writing end holds before a sender waits:
+/// with an event's line at most `MAX_EVENT_LINE_BYTES`, what a guest's
+/// events can queue is bounded, and an attempt's close waits behind at
+/// most this many lines.
+pub const QUEUED_LINES: usize = 64;
+
 /// The runner's writing end of its control channel: one task writes every
-/// line in the order sent; `send_flushed` waits until its line is written.
+/// line in the order sent, from a queue of at most `QUEUED_LINES`; a
+/// sender waits for room, so a guest whose calls cause events is paced by
+/// the service's reading of them.
 #[derive(Clone)]
 pub struct Writer {
-    lines: tokio::sync::mpsc::UnboundedSender<(Vec<u8>, Option<tokio::sync::oneshot::Sender<()>>)>,
+    lines: tokio::sync::mpsc::Sender<(Vec<u8>, Option<tokio::sync::oneshot::Sender<()>>)>,
+}
+
+/// Why a message was not written.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Unwritten {
+    /// It holds a value no line carries: its member.
+    Invalid(Invalid),
+    /// The channel takes nothing more: its write failed, or it ended.
+    Closed,
 }
 
 impl Writer {
@@ -969,14 +1006,14 @@ impl Writer {
         W: tokio::io::AsyncWrite + Unpin + Send + 'static,
     {
         use tokio::io::AsyncWriteExt as _;
-        let (lines, mut queue) = tokio::sync::mpsc::unbounded_channel::<(
+        let (lines, mut queue) = tokio::sync::mpsc::channel::<(
             Vec<u8>,
             Option<tokio::sync::oneshot::Sender<()>>,
-        )>();
+        )>(QUEUED_LINES);
         tokio::spawn(async move {
             while let Some((line, written)) = queue.recv().await {
-                // A channel the service no longer reads takes nothing more;
-                // its end reaches the runner on the reading side.
+                // A channel whose write failed takes nothing more: its
+                // waiting senders hear it closed.
                 if writer.write_all(&line).await.is_err() || writer.flush().await.is_err() {
                     return;
                 }
@@ -988,22 +1025,24 @@ impl Writer {
         Writer { lines }
     }
 
-    /// Send `message`; a message no line carries is not sent, and its
-    /// member is answered.
-    pub fn send(&self, message: &Message) -> Result<(), Invalid> {
-        let line = encode(message)?;
-        let _ = self.lines.send((line, None));
-        Ok(())
+    /// Send `message` once the queue has room.
+    pub async fn send(&self, message: &Message) -> Result<(), Unwritten> {
+        let line = encode(message).map_err(Unwritten::Invalid)?;
+        self.lines
+            .send((line, None))
+            .await
+            .map_err(|_| Unwritten::Closed)
     }
 
-    /// Send `message` and wait until its line is written, or the writer has
-    /// stopped.
-    pub async fn send_flushed(&self, message: &Message) -> Result<(), Invalid> {
-        let line = encode(message)?;
+    /// Send `message` and wait until its line is written: `Closed` when the
+    /// writer stopped first, its write failed or the channel ended.
+    pub async fn send_flushed(&self, message: &Message) -> Result<(), Unwritten> {
+        let line = encode(message).map_err(Unwritten::Invalid)?;
         let (written, done) = tokio::sync::oneshot::channel();
-        if self.lines.send((line, Some(written))).is_ok() {
-            let _ = done.await;
-        }
-        Ok(())
+        self.lines
+            .send((line, Some(written)))
+            .await
+            .map_err(|_| Unwritten::Closed)?;
+        done.await.map_err(|_| Unwritten::Closed)
     }
 }

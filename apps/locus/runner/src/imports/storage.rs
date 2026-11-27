@@ -8,8 +8,8 @@
 //! to decide, while the attempt still holds its row.
 //!
 //! A guest's request is `{"action": a, "path": p}` with `"content"`
-//! (base64) for a write or append; `list` and `exists` without a path name
-//! the scope's listing (`""`). Success answers CYFR's members with
+//! (base64) for a write or append; `list` and `exists` without a path, or
+//! with a null one, name the scope's listing (`""`). Success answers CYFR's members with
 //! `"status": "ok"`. A refusal answers the error envelope: CYFR's own;
 //! `request_too_large` past the envelope bound; `invalid_json`,
 //! `invalid_request` or `unknown_action` for a request that does not read;
@@ -39,24 +39,33 @@ impl catalyst::cyfr::storage::files::Host for Guest {
     async fn call(&mut self, request: String) -> wasmtime::Result<String> {
         let run = self.run.clone();
         let started = Instant::now();
-        let (action, answer) = match requested(&request, run.limits.max_request_size) {
+        let (action, answer, end) = match requested(&request, run.limits.max_request_size) {
             Ok((action, args)) => {
                 let outcome = run.host.call("storage", args).await;
-                ended("storage", &outcome)?;
-                (action, stored(outcome))
+                match ended("storage", &outcome) {
+                    // CYFR's answer nested too deep ends the run, once its
+                    // call's event is sent, as an error.
+                    Err(end) => (action, Err(not_current()), Some(end)),
+                    Ok(()) => (action, stored(outcome), None),
+                }
             }
-            Err(refused) => ("unknown".to_owned(), Err(refused)),
+            Err(refused) => ("unknown".to_owned(), Err(refused), None),
         };
         let status = if answer.is_ok() { "ok" } else { "error" };
-        run.host.event(Event {
-            name: "storage.call",
-            measurements: vec![("duration_ms", elapsed_ms(started))],
-            metadata: vec![
-                ("component_ref", Meta::text(&run.component_ref)),
-                ("action", Meta::text(&action)),
-                ("status", Meta::text(status)),
-            ],
-        });
+        run.host
+            .event(Event {
+                name: "storage.call",
+                measurements: vec![("duration_ms", elapsed_ms(started))],
+                metadata: vec![
+                    ("component_ref", Meta::text(&run.component_ref)),
+                    ("action", Meta::text(&action)),
+                    ("status", Meta::text(status)),
+                ],
+            })
+            .await;
+        if let Some(end) = end {
+            return Err(end);
+        }
         Ok(match answer {
             Ok(mut members) => {
                 members.insert("status".to_owned(), Value::String("ok".to_owned()));
@@ -106,7 +115,8 @@ fn requested(
     }
     let path = match json.value().get("path") {
         Some(Value::String(path)) => path.clone(),
-        None if matches!(action.as_str(), "list" | "exists") => String::new(),
+        // An omitted path and a null one alike name the scope's listing.
+        None | Some(Value::Null) if matches!(action.as_str(), "list" | "exists") => String::new(),
         _ => {
             return Err(refusal(
                 "invalid_request",

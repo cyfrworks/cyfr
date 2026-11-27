@@ -449,9 +449,7 @@ defmodule Cyfr.BoundaryDeclarationsTest do
   # not name it.
   @docs_path Regex.compile!("(^|[^A-Za-z0-9_./-])" <> "docs" <> "/")
   @scanned ~w(apps tests scripts .github)
-  # Build output, which names nothing: the runner crate's is its cargo
-  # target.
-  @unscanned ~w(/vendor/ /priv/static/ /node_modules/ /_build/ /deps/ /.elixir_ls/ /apps/locus/runner/target/)
+  @unscanned ~w(/vendor/ /priv/static/ /node_modules/ /_build/ /deps/ /.elixir_ls/)
 
   test "no file under apps, tests, scripts or .github names a docs path outside a comment" do
     offending =

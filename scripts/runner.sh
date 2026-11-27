@@ -8,8 +8,8 @@
 #   scripts/runner.sh build   the release binary; prints its path
 #
 # Every cargo step is --locked to the committed Cargo.lock, under the Rust
-# release rust-toolchain.toml names, and builds into the crate's target
-# directory unless CARGO_TARGET_DIR names another. The crate's tests read
+# release rust-toolchain.toml names, and builds into _build/runner (the
+# crate's .cargo/config.toml) unless CARGO_TARGET_DIR names another. The crate's tests read
 # the vector files under tests/fixtures. handoff's runner row
 # (scripts/stages.tsv) runs check; test.yml's runner job runs check and
 # build.
@@ -35,7 +35,7 @@ case "$1" in
     ;;
   build)
     cargo build --locked --release || exit
-    echo "${CARGO_TARGET_DIR:-$PWD/target}/release/cyfr-runner"
+    echo "${CARGO_TARGET_DIR:-$(cd ../../.. && pwd -P)/_build/runner}/release/cyfr-runner"
     ;;
   *) usage ;;
 esac

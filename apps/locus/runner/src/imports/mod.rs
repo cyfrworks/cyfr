@@ -13,6 +13,12 @@
 //! included; one that cannot (CYFR's answer to one of its calls nested
 //! past `crate::wire::MAX_DEPTH`) ends the run with an `Ended`, which the
 //! attempt closes with its sentence.
+//!
+//! One limit on what is wiped: a vault value or an OAuth token crosses to
+//! the guest as the plain `String` the generated binding takes, which
+//! Wasmtime lowers into the guest's memory and then frees unwiped, beside
+//! the guest's own copy. The runner's own copies are cleared as they are
+//! dropped (`Run::fields`, `crate::wire::Json`).
 
 pub mod emit;
 pub mod oauth;

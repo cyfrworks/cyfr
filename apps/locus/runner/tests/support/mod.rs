@@ -12,7 +12,7 @@
 use std::io::{BufRead as _, BufReader, Read as _, Write as _};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
@@ -30,6 +30,11 @@ pub const SERVICE: &str = "wrk_testservice";
 pub const BOOT: &str = "boot_test-boot";
 pub const MEMBER: &str = "cyfr@127.0.0.1#boot_test-member";
 pub const ATHANOR: &str = "ath_test-athanor";
+
+/// The attempt keys every test job's assign carries: patterns a scan of the
+/// runner's memory finds only where a key was left.
+pub const CALL_KEY: [u8; 32] = *b"call-key:test-job:0123456789abcd";
+pub const SEAL_KEY: [u8; 32] = *b"seal-key:test-job:0123456789abcd";
 
 /// The repository's root.
 pub fn root() -> PathBuf {
@@ -111,8 +116,8 @@ impl Job {
     pub fn keys(&self) -> AttemptKeys {
         AttemptKeys {
             attempt: self.attempt(),
-            call: Zeroizing::new([7u8; 32]),
-            seal: Zeroizing::new([9u8; 32]),
+            call: CALL_KEY.into(),
+            seal: SEAL_KEY.into(),
         }
     }
 
@@ -197,12 +202,23 @@ pub fn standard(call: &Call, job: &Job) -> Reply {
 /// A runner under test and the service end it talks to.
 pub struct Service {
     child: Child,
-    stdin: Option<ChildStdin>,
+    stdin: Option<Box<dyn std::io::Write + Send>>,
     lines: mpsc::Receiver<String>,
     pub stderr: Arc<Mutex<String>>,
     dir: PathBuf,
     listener: Option<UnixListener>,
     pub calls: Arc<Mutex<Vec<Call>>>,
+    socket: Option<UnixStream>,
+}
+
+/// Where the runner's control channel is.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Control {
+    /// Standard input and output (`RUNTIME_CONTROL_FD=0`).
+    Stdio,
+    /// Descriptor 3, a socket, as the keeper hands it: a shell moves the
+    /// socket from its standard input there and runs the runner on it.
+    Descriptor3,
 }
 
 impl Service {
@@ -212,6 +228,10 @@ impl Service {
     }
 
     pub fn start_with(variables: &[(&str, &str)]) -> Service {
+        Service::start_on(Control::Stdio, variables)
+    }
+
+    pub fn start_on(control: Control, variables: &[(&str, &str)]) -> Service {
         static NEXT: AtomicU64 = AtomicU64::new(1);
         let dir = std::env::temp_dir().join(format!(
             "cyfr-runner-{}-{}",
@@ -221,25 +241,58 @@ impl Service {
         std::fs::create_dir_all(&dir).expect("a test folder");
         let socket = dir.join("relay.sock");
         let listener = UnixListener::bind(&socket).expect("the relay socket");
-        let mut command = Command::new(env!("CARGO_BIN_EXE_cyfr-runner"));
+        let runner = env!("CARGO_BIN_EXE_cyfr-runner");
+        let (mut command, ours) = match control {
+            Control::Stdio => {
+                let mut command = Command::new(runner);
+                command.stdin(Stdio::piped()).stdout(Stdio::piped());
+                (command, None)
+            }
+            Control::Descriptor3 => {
+                let (ours, theirs) = UnixStream::pair().expect("a socket pair");
+                let mut command = Command::new("/bin/sh");
+                command
+                    .arg("-c")
+                    .arg(r#"exec "$0" 3<&0 0</dev/null"#)
+                    .arg(runner)
+                    .stdin(Stdio::from(std::os::fd::OwnedFd::from(theirs)))
+                    .stdout(Stdio::null());
+                (command, Some(ours))
+            }
+        };
         command
             .env_clear()
             .env("RUNTIME_RUNNER_ID", RUNNER)
             .env("RUNTIME_SERVICE_ID", SERVICE)
             .env("RUNTIME_BOOT_ID", BOOT)
-            .env("RUNTIME_CONTROL_FD", "0")
             .env("RUNTIME_RELAY_SOCKET", &socket)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        if control == Control::Stdio {
+            command.env("RUNTIME_CONTROL_FD", "0");
+        }
         for (name, value) in variables {
             command.env(name, value);
         }
         let mut child = command.spawn().expect("the runner starts");
-        let stdout = child.stdout.take().expect("its output");
+        let socket = ours
+            .as_ref()
+            .map(|ours| ours.try_clone().expect("the socket"));
+        let (stdin, output): (
+            Box<dyn std::io::Write + Send>,
+            Box<dyn std::io::Read + Send>,
+        ) = match ours {
+            None => (
+                Box::new(child.stdin.take().expect("its input")),
+                Box::new(child.stdout.take().expect("its output")),
+            ),
+            Some(ours) => (
+                Box::new(ours.try_clone().expect("the socket")),
+                Box::new(ours),
+            ),
+        };
         let (send, lines) = mpsc::channel();
         std::thread::spawn(move || {
-            for line in BufReader::new(stdout).lines() {
+            for line in BufReader::new(output).lines() {
                 let Ok(line) = line else { return };
                 if send.send(line).is_err() {
                     return;
@@ -255,14 +308,28 @@ impl Service {
             collected.lock().expect("stderr").push_str(&text);
         });
         Service {
-            stdin: child.stdin.take(),
+            stdin: Some(stdin),
             child,
             lines,
             stderr,
             dir,
             listener: Some(listener),
             calls: Arc::new(Mutex::new(Vec::new())),
+            socket,
         }
+    }
+
+    /// The runner's process id.
+    pub fn pid(&self) -> u32 {
+        self.child.id()
+    }
+
+    /// Send one control line, as given, answering whether it was written
+    /// whole.
+    pub fn try_send_line(&mut self, line: &[u8]) -> std::io::Result<()> {
+        let stdin = self.stdin.as_mut().expect("the control channel is open");
+        stdin.write_all(line)?;
+        stdin.flush()
     }
 
     /// Send one control line, as given.
@@ -298,6 +365,9 @@ impl Service {
     /// End the control channel.
     pub fn close_control(&mut self) {
         self.stdin = None;
+        if let Some(socket) = &self.socket {
+            let _ = socket.shutdown(std::net::Shutdown::Write);
+        }
     }
 
     /// The next control line the runner writes, read as JSON, within
@@ -481,9 +551,11 @@ pub fn relay(mut stream: UnixStream, job: Job, mut script: Script, calls: Arc<Mu
 }
 
 pub fn seal(keys: &AttemptKeys, fields: &CallFields, plain: Vec<u8>) -> Vec<u8> {
-    static IV: AtomicU64 = AtomicU64::new(1);
-    let mut iv = [0u8; 12];
-    iv[..8].copy_from_slice(&IV.fetch_add(1, Ordering::Relaxed).to_be_bytes());
+    // A fresh IV from the system's random source for every answer.
+    let random = "the operating system's random source answers";
+    let [a, b, c, d, e, f, g, h] = getrandom::u64().expect(random).to_le_bytes();
+    let [i, j, k, l] = getrandom::u32().expect(random).to_le_bytes();
+    let iv = [a, b, c, d, e, f, g, h, i, j, k, l];
     auth::seal_call(&keys.seal, Direction::Answer, fields, &plain, &iv)
         .expect("an answer seals")
         .into_bytes()
@@ -601,4 +673,55 @@ pub fn deep_stack(test: fn()) {
         .expect("a test thread")
         .join()
         .expect("the test passes");
+}
+
+/// The runner's resident memory, in KiB.
+pub fn resident_kib(pid: u32) -> u64 {
+    std::fs::read_to_string(format!("/proc/{pid}/status"))
+        .unwrap_or_default()
+        .lines()
+        .find_map(|line| line.strip_prefix("VmRSS:"))
+        .and_then(|rest| rest.split_whitespace().next())
+        .and_then(|kib| kib.parse().ok())
+        .unwrap_or(0)
+}
+
+/// How many times each needle is in the writable memory of process `pid`
+/// (its heap, stacks and anonymous maps, its own binary's data included).
+pub fn scan(pid: u32, needles: &[&[u8]]) -> Vec<usize> {
+    use std::io::{Seek as _, SeekFrom};
+    let maps = std::fs::read_to_string(format!("/proc/{pid}/maps")).expect("the maps");
+    let mut memory = std::fs::File::open(format!("/proc/{pid}/mem")).expect("the memory");
+    let mut found = vec![0; needles.len()];
+    for line in maps.lines() {
+        let mut parts = line.split_whitespace();
+        let (Some(range), Some(perms)) = (parts.next(), parts.next()) else {
+            continue;
+        };
+        if !perms.starts_with("rw") || line.contains("[vvar") || line.contains("[vsys") {
+            continue;
+        }
+        let (start, end) = range.split_once('-').expect("a range");
+        let start = u64::from_str_radix(start, 16).expect("hex");
+        let end = u64::from_str_radix(end, 16).expect("hex");
+        let mut region = vec![0u8; usize::try_from(end - start).expect("a size")];
+        if memory.seek(SeekFrom::Start(start)).is_err() {
+            continue;
+        }
+        let mut read = 0;
+        while read < region.len() {
+            match memory.read(&mut region[read..]) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => read += n,
+            }
+        }
+        region.truncate(read);
+        for (count, needle) in found.iter_mut().zip(needles) {
+            *count += region
+                .windows(needle.len())
+                .filter(|window| window == needle)
+                .count();
+        }
+    }
+    found
 }

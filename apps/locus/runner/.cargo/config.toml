@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
+# The crate builds into the repository's _build, beside Mix's builds,
+# which the Docker context, the boundary scan and the islands' copies leave
+# out: every cargo call in the crate obeys it, scripts/runner.sh and CI's
+# cache with them. A path here is relative to the crate's folder.
+[build]
+target-dir = "../../../_build/runner"

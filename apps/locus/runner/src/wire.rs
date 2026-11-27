@@ -144,12 +144,14 @@ pub fn hex(bytes: &[u8]) -> String {
     text
 }
 
-/// The bytes 64 lowercase hexadecimal digits spell, or none.
-pub fn hex_key(text: &str) -> Option<[u8; 32]> {
+/// The key 64 lowercase hexadecimal digits spell, or none, written in place
+/// in the one allocation that holds it (`crate::auth::Key`).
+pub fn hex_key(text: &str) -> Option<crate::auth::Key> {
     if text.len() != 64 || !text.bytes().all(is_lower_hex) {
         return None;
     }
-    let mut key = [0u8; 32];
+    let mut key = crate::auth::Key::zeroed();
+    let bytes = key.bytes_mut();
     for (index, pair) in text.as_bytes().chunks(2).enumerate() {
         let digit = |b: u8| {
             if b.is_ascii_digit() {
@@ -158,7 +160,7 @@ pub fn hex_key(text: &str) -> Option<[u8; 32]> {
                 b - b'a' + 10
             }
         };
-        key[index] = (digit(pair[0]) << 4) | digit(pair[1]);
+        bytes[index] = (digit(pair[0]) << 4) | digit(pair[1]);
     }
     Some(key)
 }

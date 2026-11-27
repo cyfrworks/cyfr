@@ -15,15 +15,18 @@
 //! compilation. Backtraces are off, so no error carries a guest's own
 //! function names.
 //!
-//! **A component's bytes** are compiled in memory only after they hash to
-//! their digest, and only once the classifier (`classify`) admits them, in
-//! `Prima.ComponentFeatures`'s order: valid with the nine refused features
-//! off, they are the engine's to compile, and a compile that fails reads
-//! "Component compilation failed: ..."; otherwise valid with the
-//! validator's defaults they use a refused feature, and invalid they are
-//! no WebAssembly, each in Prima's sentence
-//! (`tests/fixtures/component_features.json`). A compile is kept for 15
-//! minutes by digest.
+//! **A component's bytes** are compiled in memory, on the compile thread,
+//! only after they hash to their digest. The engine's configuration is
+//! what refuses each refused feature; a compile it refuses is classified
+//! there, after it, in `Prima.ComponentFeatures`'s order (`classify`):
+//! valid with the nine refused features off, the failure is the engine's
+//! own, "Component compilation failed: ..."; otherwise valid with the
+//! validator's defaults it uses a refused feature, and invalid it is no
+//! WebAssembly, each in Prima's sentence
+//! (`tests/fixtures/component_features.json`). Nothing validates on the
+//! runner's own thread, so an attempt's budget, its lease and both
+//! channels run on whatever the compile thread is doing. A compile is
+//! kept for 15 minutes by digest, and leaves when they pass.
 //!
 //! **A run** has one store, its limits the one authority over its memory,
 //! tables and instances (`crate::imports::Guest`): a refused growth answers
@@ -36,7 +39,7 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use sha2::Digest as _;
 use wasmtime::component::{Component, HasSelf, Linker};
@@ -165,7 +168,8 @@ pub struct Engine {
     catalyst: Linker<Guest>,
     reagent: Linker<Guest>,
     compiler: Compiler,
-    kept: Mutex<HashMap<String, (Component, Instant)>>,
+    kept: Arc<Mutex<HashMap<String, (Component, u64)>>>,
+    compiles: std::sync::atomic::AtomicU64,
 }
 
 impl Engine {
@@ -193,30 +197,49 @@ impl Engine {
             catalyst,
             reagent,
             compiler,
-            kept: Mutex::new(HashMap::new()),
+            kept: Arc::new(Mutex::new(HashMap::new())),
+            compiles: std::sync::atomic::AtomicU64::new(0),
         }))
     }
 
     /// The compile kept for `digest`, if one is.
     pub fn kept(&self, digest: &str) -> Option<Component> {
-        let mut kept = self.kept.lock().expect("the kept compiles");
-        kept.retain(|_digest, (_component, at)| at.elapsed() < KEPT_FOR);
-        kept.get(digest).map(|(component, _at)| component.clone())
+        let kept = self.kept.lock().expect("the kept compiles");
+        kept.get(digest)
+            .map(|(component, _compile)| component.clone())
     }
 
-    /// Classify and compile `bytes`, which hash to `digest`, on the compile
-    /// thread, and keep the compile; or the sentence why not. A caller that
-    /// stops waiting leaves the compile to run out on its thread.
+    /// Compile `bytes`, which hash to `digest`, on the compile thread, and
+    /// keep the compile; or the sentence why not, a refused compile
+    /// classified there. A caller that stops waiting leaves the compile to
+    /// run out on its thread.
     pub async fn compile(&self, digest: &str, bytes: Vec<u8>) -> Result<Component, String> {
-        if let Err(refusal) = classify(&bytes) {
-            eprintln!("cyfr-runner: the component {digest} is refused ({refusal:?})");
-            return Err(unadmitted(refusal, digest));
-        }
-        let component = self.compiler.compile(bytes).await?;
+        let component = self.compiler.compile(digest, bytes).await?;
+        // Each compile is one entry, and its own timer removes it when its
+        // time passes, whether or not the runner looks it up again: a
+        // compile of the same digest after it is another entry and timer.
+        let compile = self
+            .compiles
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         self.kept
             .lock()
             .expect("the kept compiles")
-            .insert(digest.to_owned(), (component.clone(), Instant::now()));
+            .insert(digest.to_owned(), (component.clone(), compile));
+        let kept = Arc::downgrade(&self.kept);
+        let digest = digest.to_owned();
+        let until = tokio::time::Instant::now() + KEPT_FOR;
+        tokio::spawn(async move {
+            tokio::time::sleep_until(until).await;
+            if let Some(kept) = kept.upgrade() {
+                let mut kept = kept.lock().expect("the kept compiles");
+                if kept
+                    .get(&digest)
+                    .is_some_and(|(_component, at)| *at == compile)
+                {
+                    kept.remove(&digest);
+                }
+            }
+        });
         Ok(component)
     }
 
@@ -260,7 +283,9 @@ impl Engine {
     }
 }
 
-fn config() -> Config {
+/// The engine's configuration: what compiles and what the engine itself
+/// refuses.
+pub fn config() -> Config {
     let mut config = Config::new();
     config
         .wasm_component_model(true)
@@ -295,8 +320,10 @@ struct Compiler {
     jobs: std::sync::mpsc::Sender<Job>,
 }
 
-/// One compile: the bytes, and where its compile or sentence goes.
+/// One compile: the component's digest and bytes, and where its compile
+/// or sentence goes.
 type Job = (
+    String,
     Vec<u8>,
     tokio::sync::oneshot::Sender<Result<Component, String>>,
 );
@@ -308,19 +335,30 @@ impl Compiler {
             .name("compile".to_owned())
             .stack_size(COMPILE_STACK_BYTES)
             .spawn(move || {
-                for (bytes, reply) in queue {
-                    let compiled = Component::new(&engine, &bytes)
-                        .map_err(|error| words::not_compiled(&format!("{error:#}")));
+                for (digest, bytes, reply) in queue {
+                    let compiled = Component::new(&engine, &bytes).map_err(|error| {
+                        // The engine refuses every refused feature itself;
+                        // the classifier chooses the refusal's sentence.
+                        match classify(&bytes) {
+                            Ok(()) => words::not_compiled(&format!("{error:#}")),
+                            Err(refusal) => {
+                                eprintln!(
+                                    "cyfr-runner: the component {digest} is refused ({refusal:?})"
+                                );
+                                unadmitted(refusal, &digest)
+                            }
+                        }
+                    });
                     let _ = reply.send(compiled);
                 }
             })?;
         Ok(Compiler { jobs })
     }
 
-    async fn compile(&self, bytes: Vec<u8>) -> Result<Component, String> {
+    async fn compile(&self, digest: &str, bytes: Vec<u8>) -> Result<Component, String> {
         let (reply, compiled) = tokio::sync::oneshot::channel();
         self.jobs
-            .send((bytes, reply))
+            .send((digest.to_owned(), bytes, reply))
             .map_err(|_| words::not_compiled("the compile thread has ended"))?;
         compiled
             .await

@@ -11,8 +11,8 @@
 //!
 //! The read refuses what Prima refuses in what it reads: a cursor that is
 //! neither `"unbound"` nor `{"bound": ref}`, a bound cursor with no policy
-//! or naming no node of it, a node's limits missing a field or holding one
-//! of another type, and a vault projection whose fields are not an object.
+//! or naming no node of it, a node's limits that `Prima.Limits.new/1`
+//! refuses, and a vault projection whose fields are not an object.
 //! The rest of the authority is CYFR's, and is not read.
 //! `tests/fixtures/authority_wire.json` holds what both sides read alike.
 
@@ -20,7 +20,7 @@ use std::collections::BTreeSet;
 
 use serde_json::{Map, Value};
 
-use crate::wire::{Integer, Json, MAX_INTEGER, integer};
+use crate::wire::{Integer, Json, integer};
 
 /// A node's limits, as `Prima.Limits.to_map/1` writes them.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -103,39 +103,93 @@ pub fn read(authority: &Json) -> Result<Authority, Refused> {
     })
 }
 
+// A node's limits as `Prima.Limits.new/1` reads them: exactly the seven
+// members; each count a whole number, zero or more; each duration one
+// Prima's parser reads, not negative; and a rate limit of exactly its
+// requests, a count, and its window, a duration above zero.
 fn limits(limits: &Value) -> Result<Limits, Refused> {
     let Value::Object(limits) = limits else {
         return Err(Refused("limits"));
     };
+    const MEMBERS: [&str; 7] = [
+        "batch_timeout",
+        "max_concurrent_tasks",
+        "max_memory_bytes",
+        "max_request_size",
+        "max_response_size",
+        "rate_limit",
+        "timeout",
+    ];
+    if limits.len() != MEMBERS.len() || !limits.keys().all(|key| MEMBERS.contains(&key.as_str())) {
+        return Err(Refused("limits"));
+    }
     let count = |name: &'static str| match limits.get(name).and_then(integer) {
-        Some(Integer::Whole(n)) if n <= MAX_INTEGER => Ok(n),
+        Some(Integer::Whole(n)) => Ok(n),
         _ => Err(Refused(name)),
     };
-    let text = |name: &'static str| match limits.get(name) {
-        Some(Value::String(text)) => Ok(text.clone()),
+    let timed = |name: &'static str| match limits.get(name) {
+        Some(Value::String(text)) if duration(text).is_some_and(|sign| sign != Sign::Negative) => {
+            Ok(text.clone())
+        }
         _ => Err(Refused(name)),
     };
     let rate_limit = match limits.get("rate_limit") {
-        Some(Value::Object(rate)) => RateLimit {
+        Some(Value::Object(rate)) if rate.len() == 2 => RateLimit {
             requests: match rate.get("requests").and_then(integer) {
-                Some(Integer::Whole(n)) if n <= MAX_INTEGER => n,
+                Some(Integer::Whole(n)) => n,
                 _ => return Err(Refused("rate_limit")),
             },
             window: match rate.get("window") {
-                Some(Value::String(window)) => window.clone(),
+                Some(Value::String(window)) if duration(window) == Some(Sign::Positive) => {
+                    window.clone()
+                }
                 _ => return Err(Refused("rate_limit")),
             },
         },
         _ => return Err(Refused("rate_limit")),
     };
     Ok(Limits {
-        timeout: text("timeout")?,
-        batch_timeout: text("batch_timeout")?,
+        timeout: timed("timeout")?,
+        batch_timeout: timed("batch_timeout")?,
         max_memory_bytes: count("max_memory_bytes")?,
         max_request_size: count("max_request_size")?,
         max_response_size: count("max_response_size")?,
         max_concurrent_tasks: count("max_concurrent_tasks")?,
         rate_limit,
+    })
+}
+
+/// Which side of zero a duration falls.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Sign {
+    Negative,
+    Zero,
+    Positive,
+}
+
+// A duration as `Prima.Limits.parse_duration/1` reads one: an integer with
+// one of the units `ms`, `s`, `m` or `h`, tried in that order, or a bare
+// integer of seconds; an integer is an optional sign and decimal digits.
+// Its sign alone decides what the limits take of it.
+fn duration(text: &str) -> Option<Sign> {
+    let number = ["ms", "s", "m", "h"]
+        .iter()
+        .find_map(|unit| text.strip_suffix(unit))
+        .unwrap_or(text);
+    let (negative, digits) = match number.as_bytes().first() {
+        Some(b'-') => (true, &number[1..]),
+        Some(b'+') => (false, &number[1..]),
+        _ => (false, number),
+    };
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    Some(if digits.bytes().all(|b| b == b'0') {
+        Sign::Zero
+    } else if negative {
+        Sign::Negative
+    } else {
+        Sign::Positive
     })
 }
 

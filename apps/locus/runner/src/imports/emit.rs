@@ -39,10 +39,9 @@ impl catalyst::cyfr::emit::events::Host for Guest {
         {
             return Ok(reply.clone());
         }
-        eprintln!(
-            "cyfr-runner: {}'s emit was not answered",
-            host.execution_id()
-        );
+        host.note("an unanswered emit", || {
+            format!("{}'s emit was not answered", host.execution_id())
+        });
         Ok(error_json("dispatch_error", "The emit call failed."))
     }
 }

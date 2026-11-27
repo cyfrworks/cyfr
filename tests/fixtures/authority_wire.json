@@ -1105,6 +1105,154 @@
         "timeout": "15m"
       },
       "attached_fields": []
+    },
+    {
+      "why": "a node consenting no memory at all: read as zero, which the runner refuses to run before it fetches the component",
+      "authority": {
+        "activation": {
+          "catalyst:supabase.com.database": "sha256:act-catalyst",
+          "formula:local.daily-report": "sha256:act-formula"
+        },
+        "budget": {
+          "id": "bgt_AAAAAAAAAAHKmY6r"
+        },
+        "chain": [
+          "formula:local.daily-report"
+        ],
+        "consent_id": "cns_01a09fee-0000-7000-8000-000000000002",
+        "cursor": {
+          "bound": "formula:local.daily-report"
+        },
+        "depth": 0,
+        "invoke_mode": "open_inert",
+        "policy": {
+          "canonical": "jcs-1",
+          "nodes": {
+            "catalyst:supabase.com.database": {
+              "edges": {},
+              "limits": {
+                "batch_timeout": "2m",
+                "max_concurrent_tasks": 4,
+                "max_memory_bytes": 33554432,
+                "max_request_size": 524288,
+                "max_response_size": 2097152,
+                "rate_limit": {
+                  "requests": 20,
+                  "window": "10s"
+                },
+                "timeout": "45s"
+              }
+            },
+            "formula:local.daily-report": {
+              "edges": {
+                "@ingress": {}
+              },
+              "limits": {
+                "batch_timeout": "2m",
+                "max_concurrent_tasks": 4,
+                "max_memory_bytes": 0,
+                "max_request_size": 524288,
+                "max_response_size": 2097152,
+                "rate_limit": {
+                  "requests": 20,
+                  "window": "10s"
+                },
+                "timeout": "45s"
+              }
+            }
+          }
+        },
+        "profile_id": "prof_01a09fee-0000-7000-8000-000000000001",
+        "profile_kind": "owner",
+        "source_ref": "formula:local.daily-report"
+      },
+      "limits": {
+        "batch_timeout": "2m",
+        "max_concurrent_tasks": 4,
+        "max_memory_bytes": 0,
+        "max_request_size": 524288,
+        "max_response_size": 2097152,
+        "rate_limit": {
+          "requests": 20,
+          "window": "10s"
+        },
+        "timeout": "45s"
+      },
+      "attached_fields": []
+    },
+    {
+      "why": "durations in each spelling Prima's parser reads: whole seconds with no unit, milliseconds, and a leading plus",
+      "authority": {
+        "activation": {
+          "catalyst:supabase.com.database": "sha256:act-catalyst",
+          "formula:local.daily-report": "sha256:act-formula"
+        },
+        "budget": {
+          "id": "bgt_AAAAAAAAAAHKmY6r"
+        },
+        "chain": [
+          "formula:local.daily-report"
+        ],
+        "consent_id": "cns_01a09fee-0000-7000-8000-000000000002",
+        "cursor": {
+          "bound": "formula:local.daily-report"
+        },
+        "depth": 0,
+        "invoke_mode": "open_inert",
+        "policy": {
+          "canonical": "jcs-1",
+          "nodes": {
+            "catalyst:supabase.com.database": {
+              "edges": {},
+              "limits": {
+                "batch_timeout": "2m",
+                "max_concurrent_tasks": 4,
+                "max_memory_bytes": 33554432,
+                "max_request_size": 524288,
+                "max_response_size": 2097152,
+                "rate_limit": {
+                  "requests": 20,
+                  "window": "10s"
+                },
+                "timeout": "45s"
+              }
+            },
+            "formula:local.daily-report": {
+              "edges": {
+                "@ingress": {}
+              },
+              "limits": {
+                "batch_timeout": "+2m",
+                "max_concurrent_tasks": 4,
+                "max_memory_bytes": 33554432,
+                "max_request_size": 524288,
+                "max_response_size": 2097152,
+                "rate_limit": {
+                  "requests": 20,
+                  "window": "500ms"
+                },
+                "timeout": "90"
+              }
+            }
+          }
+        },
+        "profile_id": "prof_01a09fee-0000-7000-8000-000000000001",
+        "profile_kind": "owner",
+        "source_ref": "formula:local.daily-report"
+      },
+      "limits": {
+        "batch_timeout": "+2m",
+        "max_concurrent_tasks": 4,
+        "max_memory_bytes": 33554432,
+        "max_request_size": 524288,
+        "max_response_size": 2097152,
+        "rate_limit": {
+          "requests": 20,
+          "window": "500ms"
+        },
+        "timeout": "90"
+      },
+      "attached_fields": []
     }
   ],
   "refused": [
@@ -2435,6 +2583,435 @@
             "scope": "athanor"
           }
         },
+        "source_ref": "formula:local.daily-report"
+      }
+    },
+    {
+      "why": "a timeout that is no duration",
+      "authority": {
+        "activation": {
+          "catalyst:supabase.com.database": "sha256:act-catalyst",
+          "formula:local.daily-report": "sha256:act-formula"
+        },
+        "budget": {
+          "id": "bgt_AAAAAAAAAAHKmY6r"
+        },
+        "chain": [
+          "formula:local.daily-report"
+        ],
+        "consent_id": "cns_01a09fee-0000-7000-8000-000000000002",
+        "cursor": {
+          "bound": "formula:local.daily-report"
+        },
+        "depth": 0,
+        "invoke_mode": "open_inert",
+        "policy": {
+          "canonical": "jcs-1",
+          "nodes": {
+            "catalyst:supabase.com.database": {
+              "edges": {},
+              "limits": {
+                "batch_timeout": "2m",
+                "max_concurrent_tasks": 4,
+                "max_memory_bytes": 33554432,
+                "max_request_size": 524288,
+                "max_response_size": 2097152,
+                "rate_limit": {
+                  "requests": 20,
+                  "window": "10s"
+                },
+                "timeout": "45s"
+              }
+            },
+            "formula:local.daily-report": {
+              "edges": {
+                "@ingress": {}
+              },
+              "limits": {
+                "batch_timeout": "2m",
+                "max_concurrent_tasks": 4,
+                "max_memory_bytes": 33554432,
+                "max_request_size": 524288,
+                "max_response_size": 2097152,
+                "rate_limit": {
+                  "requests": 20,
+                  "window": "10s"
+                },
+                "timeout": "soon"
+              }
+            }
+          }
+        },
+        "profile_id": "prof_01a09fee-0000-7000-8000-000000000001",
+        "profile_kind": "owner",
+        "source_ref": "formula:local.daily-report"
+      }
+    },
+    {
+      "why": "a negative timeout",
+      "authority": {
+        "activation": {
+          "catalyst:supabase.com.database": "sha256:act-catalyst",
+          "formula:local.daily-report": "sha256:act-formula"
+        },
+        "budget": {
+          "id": "bgt_AAAAAAAAAAHKmY6r"
+        },
+        "chain": [
+          "formula:local.daily-report"
+        ],
+        "consent_id": "cns_01a09fee-0000-7000-8000-000000000002",
+        "cursor": {
+          "bound": "formula:local.daily-report"
+        },
+        "depth": 0,
+        "invoke_mode": "open_inert",
+        "policy": {
+          "canonical": "jcs-1",
+          "nodes": {
+            "catalyst:supabase.com.database": {
+              "edges": {},
+              "limits": {
+                "batch_timeout": "2m",
+                "max_concurrent_tasks": 4,
+                "max_memory_bytes": 33554432,
+                "max_request_size": 524288,
+                "max_response_size": 2097152,
+                "rate_limit": {
+                  "requests": 20,
+                  "window": "10s"
+                },
+                "timeout": "45s"
+              }
+            },
+            "formula:local.daily-report": {
+              "edges": {
+                "@ingress": {}
+              },
+              "limits": {
+                "batch_timeout": "2m",
+                "max_concurrent_tasks": 4,
+                "max_memory_bytes": 33554432,
+                "max_request_size": 524288,
+                "max_response_size": 2097152,
+                "rate_limit": {
+                  "requests": 20,
+                  "window": "10s"
+                },
+                "timeout": "-1s"
+              }
+            }
+          }
+        },
+        "profile_id": "prof_01a09fee-0000-7000-8000-000000000001",
+        "profile_kind": "owner",
+        "source_ref": "formula:local.daily-report"
+      }
+    },
+    {
+      "why": "a duration with two units",
+      "authority": {
+        "activation": {
+          "catalyst:supabase.com.database": "sha256:act-catalyst",
+          "formula:local.daily-report": "sha256:act-formula"
+        },
+        "budget": {
+          "id": "bgt_AAAAAAAAAAHKmY6r"
+        },
+        "chain": [
+          "formula:local.daily-report"
+        ],
+        "consent_id": "cns_01a09fee-0000-7000-8000-000000000002",
+        "cursor": {
+          "bound": "formula:local.daily-report"
+        },
+        "depth": 0,
+        "invoke_mode": "open_inert",
+        "policy": {
+          "canonical": "jcs-1",
+          "nodes": {
+            "catalyst:supabase.com.database": {
+              "edges": {},
+              "limits": {
+                "batch_timeout": "2m",
+                "max_concurrent_tasks": 4,
+                "max_memory_bytes": 33554432,
+                "max_request_size": 524288,
+                "max_response_size": 2097152,
+                "rate_limit": {
+                  "requests": 20,
+                  "window": "10s"
+                },
+                "timeout": "45s"
+              }
+            },
+            "formula:local.daily-report": {
+              "edges": {
+                "@ingress": {}
+              },
+              "limits": {
+                "batch_timeout": "5mm",
+                "max_concurrent_tasks": 4,
+                "max_memory_bytes": 33554432,
+                "max_request_size": 524288,
+                "max_response_size": 2097152,
+                "rate_limit": {
+                  "requests": 20,
+                  "window": "10s"
+                },
+                "timeout": "45s"
+              }
+            }
+          }
+        },
+        "profile_id": "prof_01a09fee-0000-7000-8000-000000000001",
+        "profile_kind": "owner",
+        "source_ref": "formula:local.daily-report"
+      }
+    },
+    {
+      "why": "a rate limit's window of zero: no window to count in",
+      "authority": {
+        "activation": {
+          "catalyst:supabase.com.database": "sha256:act-catalyst",
+          "formula:local.daily-report": "sha256:act-formula"
+        },
+        "budget": {
+          "id": "bgt_AAAAAAAAAAHKmY6r"
+        },
+        "chain": [
+          "formula:local.daily-report"
+        ],
+        "consent_id": "cns_01a09fee-0000-7000-8000-000000000002",
+        "cursor": {
+          "bound": "formula:local.daily-report"
+        },
+        "depth": 0,
+        "invoke_mode": "open_inert",
+        "policy": {
+          "canonical": "jcs-1",
+          "nodes": {
+            "catalyst:supabase.com.database": {
+              "edges": {},
+              "limits": {
+                "batch_timeout": "2m",
+                "max_concurrent_tasks": 4,
+                "max_memory_bytes": 33554432,
+                "max_request_size": 524288,
+                "max_response_size": 2097152,
+                "rate_limit": {
+                  "requests": 20,
+                  "window": "10s"
+                },
+                "timeout": "45s"
+              }
+            },
+            "formula:local.daily-report": {
+              "edges": {
+                "@ingress": {}
+              },
+              "limits": {
+                "batch_timeout": "2m",
+                "max_concurrent_tasks": 4,
+                "max_memory_bytes": 33554432,
+                "max_request_size": 524288,
+                "max_response_size": 2097152,
+                "rate_limit": {
+                  "requests": 20,
+                  "window": "0s"
+                },
+                "timeout": "45s"
+              }
+            }
+          }
+        },
+        "profile_id": "prof_01a09fee-0000-7000-8000-000000000001",
+        "profile_kind": "owner",
+        "source_ref": "formula:local.daily-report"
+      }
+    },
+    {
+      "why": "a node's limits carrying a member Prima does not know",
+      "authority": {
+        "activation": {
+          "catalyst:supabase.com.database": "sha256:act-catalyst",
+          "formula:local.daily-report": "sha256:act-formula"
+        },
+        "budget": {
+          "id": "bgt_AAAAAAAAAAHKmY6r"
+        },
+        "chain": [
+          "formula:local.daily-report"
+        ],
+        "consent_id": "cns_01a09fee-0000-7000-8000-000000000002",
+        "cursor": {
+          "bound": "formula:local.daily-report"
+        },
+        "depth": 0,
+        "invoke_mode": "open_inert",
+        "policy": {
+          "canonical": "jcs-1",
+          "nodes": {
+            "catalyst:supabase.com.database": {
+              "edges": {},
+              "limits": {
+                "batch_timeout": "2m",
+                "max_concurrent_tasks": 4,
+                "max_memory_bytes": 33554432,
+                "max_request_size": 524288,
+                "max_response_size": 2097152,
+                "rate_limit": {
+                  "requests": 20,
+                  "window": "10s"
+                },
+                "timeout": "45s"
+              }
+            },
+            "formula:local.daily-report": {
+              "edges": {
+                "@ingress": {}
+              },
+              "limits": {
+                "batch_timeout": "2m",
+                "max_concurrent_tasks": 4,
+                "max_memory_bytes": 33554432,
+                "max_request_size": 524288,
+                "max_response_size": 2097152,
+                "rate_limit": {
+                  "requests": 20,
+                  "window": "10s"
+                },
+                "timeout": "45s",
+                "spare_bytes": 1
+              }
+            }
+          }
+        },
+        "profile_id": "prof_01a09fee-0000-7000-8000-000000000001",
+        "profile_kind": "owner",
+        "source_ref": "formula:local.daily-report"
+      }
+    },
+    {
+      "why": "a rate limit carrying a member Prima does not know",
+      "authority": {
+        "activation": {
+          "catalyst:supabase.com.database": "sha256:act-catalyst",
+          "formula:local.daily-report": "sha256:act-formula"
+        },
+        "budget": {
+          "id": "bgt_AAAAAAAAAAHKmY6r"
+        },
+        "chain": [
+          "formula:local.daily-report"
+        ],
+        "consent_id": "cns_01a09fee-0000-7000-8000-000000000002",
+        "cursor": {
+          "bound": "formula:local.daily-report"
+        },
+        "depth": 0,
+        "invoke_mode": "open_inert",
+        "policy": {
+          "canonical": "jcs-1",
+          "nodes": {
+            "catalyst:supabase.com.database": {
+              "edges": {},
+              "limits": {
+                "batch_timeout": "2m",
+                "max_concurrent_tasks": 4,
+                "max_memory_bytes": 33554432,
+                "max_request_size": 524288,
+                "max_response_size": 2097152,
+                "rate_limit": {
+                  "requests": 20,
+                  "window": "10s"
+                },
+                "timeout": "45s"
+              }
+            },
+            "formula:local.daily-report": {
+              "edges": {
+                "@ingress": {}
+              },
+              "limits": {
+                "batch_timeout": "2m",
+                "max_concurrent_tasks": 4,
+                "max_memory_bytes": 33554432,
+                "max_request_size": 524288,
+                "max_response_size": 2097152,
+                "rate_limit": {
+                  "requests": 20,
+                  "window": "10s",
+                  "burst": 5
+                },
+                "timeout": "45s"
+              }
+            }
+          }
+        },
+        "profile_id": "prof_01a09fee-0000-7000-8000-000000000001",
+        "profile_kind": "owner",
+        "source_ref": "formula:local.daily-report"
+      }
+    },
+    {
+      "why": "a negative byte count",
+      "authority": {
+        "activation": {
+          "catalyst:supabase.com.database": "sha256:act-catalyst",
+          "formula:local.daily-report": "sha256:act-formula"
+        },
+        "budget": {
+          "id": "bgt_AAAAAAAAAAHKmY6r"
+        },
+        "chain": [
+          "formula:local.daily-report"
+        ],
+        "consent_id": "cns_01a09fee-0000-7000-8000-000000000002",
+        "cursor": {
+          "bound": "formula:local.daily-report"
+        },
+        "depth": 0,
+        "invoke_mode": "open_inert",
+        "policy": {
+          "canonical": "jcs-1",
+          "nodes": {
+            "catalyst:supabase.com.database": {
+              "edges": {},
+              "limits": {
+                "batch_timeout": "2m",
+                "max_concurrent_tasks": 4,
+                "max_memory_bytes": 33554432,
+                "max_request_size": 524288,
+                "max_response_size": 2097152,
+                "rate_limit": {
+                  "requests": 20,
+                  "window": "10s"
+                },
+                "timeout": "45s"
+              }
+            },
+            "formula:local.daily-report": {
+              "edges": {
+                "@ingress": {}
+              },
+              "limits": {
+                "batch_timeout": "2m",
+                "max_concurrent_tasks": 4,
+                "max_memory_bytes": 33554432,
+                "max_request_size": -1,
+                "max_response_size": 2097152,
+                "rate_limit": {
+                  "requests": 20,
+                  "window": "10s"
+                },
+                "timeout": "45s"
+              }
+            }
+          }
+        },
+        "profile_id": "prof_01a09fee-0000-7000-8000-000000000001",
+        "profile_kind": "owner",
         "source_ref": "formula:local.daily-report"
       }
     },

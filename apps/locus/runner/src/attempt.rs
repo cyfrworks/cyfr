@@ -82,6 +82,7 @@ pub struct Host {
     relay: Relay,
     control: Writer,
     lost: std::sync::atomic::AtomicBool,
+    notes: std::sync::Mutex<std::collections::BTreeMap<&'static str, u64>>,
 }
 
 impl Host {
@@ -91,6 +92,34 @@ impl Host {
             relay,
             control,
             lost: std::sync::atomic::AtomicBool::new(false),
+            notes: std::sync::Mutex::new(std::collections::BTreeMap::new()),
+        }
+    }
+
+    /// Log a line of `kind` that a guest's call can cause: the first of
+    /// each kind of the attempt is written, the rest counted, and
+    /// `noted` writes the counts at the attempt's end, so no guest writes
+    /// the runner's log at its own pace.
+    pub fn note(&self, kind: &'static str, line: impl FnOnce() -> String) {
+        let mut notes = self.notes.lock().expect("the attempt's notes");
+        let count = notes.entry(kind).or_insert(0);
+        *count += 1;
+        if *count == 1 {
+            eprintln!("cyfr-runner: {}", line());
+        }
+    }
+
+    /// Write how many more lines of each kind `note` held back.
+    pub fn noted(&self) {
+        let notes = std::mem::take(&mut *self.notes.lock().expect("the attempt's notes"));
+        for (kind, count) in notes {
+            if count > 1 {
+                eprintln!(
+                    "cyfr-runner: {} logged {kind} {} more times",
+                    self.execution_id(),
+                    count - 1
+                );
+            }
         }
     }
 
@@ -111,26 +140,36 @@ impl Host {
             unreachable!("an object")
         };
         let outcome = host::call(&mut poster, &self.caller, op, members).await;
-        if matches!(
-            outcome,
-            Outcome::Lost | Outcome::Uncertain | Outcome::Answered(Reading::Refused("lost"))
-        ) {
-            eprintln!(
-                "cyfr-runner: {}'s {} ended lost",
-                self.caller.keys.attempt.execution_id,
-                op.name()
-            );
+        let ended = match outcome {
+            Outcome::Lost | Outcome::Answered(Reading::Refused("lost")) => Some("lost"),
+            Outcome::Uncertain => Some("uncertain"),
+            _ => None,
+        };
+        if let Some(ended) = ended {
+            self.note("a call that ended lost or uncertain", || {
+                format!(
+                    "{}'s {} ended {ended}",
+                    self.caller.keys.attempt.execution_id,
+                    op.name()
+                )
+            });
             self.lost.store(true, std::sync::atomic::Ordering::Relaxed);
         }
         outcome
     }
 
-    /// Send one operator event; one no line carries is dropped, logged by
-    /// its name.
-    pub fn event(&self, event: Event) {
+    /// Send one operator event once the control channel's queue has room,
+    /// so a guest whose calls cause events is paced by the service's
+    /// reading of them. One no line carries is dropped and noted by its
+    /// name; one the channel no longer takes is dropped.
+    pub async fn event(&self, event: Event) {
         let name = event.name;
-        if self.control.send(&Message::Event(event)).is_err() {
-            eprintln!("cyfr-runner: the event {name} carries no line, and is not sent");
+        if let Err(crate::control::Unwritten::Invalid(_)) =
+            self.control.send(&Message::Event(event)).await
+        {
+            self.note("an event no line carries", || {
+                format!("the event {name} carries no line, and is not sent")
+            });
         }
     }
 
@@ -168,6 +207,13 @@ pub async fn run(start: Start, runner: Runner) -> Ended {
         runner.relay.clone(),
         runner.control.clone(),
     ));
+    let ended = attempt(&start, &runner, &host).await;
+    host.noted();
+    ended
+}
+
+async fn attempt(start: &Start, runner: &Runner, host: &Arc<Host>) -> Ended {
+    let assignment = &start.assignment;
     let attached = host
         .call(
             "attach",
@@ -206,7 +252,7 @@ pub async fn run(start: Start, runner: Runner) -> Ended {
                 "cyfr-runner: {} cannot run its assignment",
                 assignment.execution_id
             );
-            return close(&host, Run_::Failed(words::UNRUNNABLE.to_owned())).await;
+            return close(host, Run_::Failed(words::UNRUNNABLE.to_owned())).await;
         }
     };
     host.event(Event {
@@ -216,7 +262,8 @@ pub async fn run(start: Start, runner: Runner) -> Ended {
             ("execution_id", Meta::text(&assignment.execution_id)),
             ("reference", Meta::text(reference)),
         ],
-    });
+    })
+    .await;
     let budget_ms = budget_ms(assignment, now_ms());
     let imports = Arc::new(Run {
         host: host.clone(),
@@ -227,7 +274,7 @@ pub async fn run(start: Start, runner: Runner) -> Ended {
     });
     let work = execute(
         &runner.engine,
-        &host,
+        host,
         assignment,
         kind,
         imports,
@@ -247,7 +294,7 @@ pub async fn run(start: Start, runner: Runner) -> Ended {
         }
         () = renewing => Run_::Stopped(words::LEASE_LOST.to_owned()),
     };
-    close(&host, outcome).await
+    close(host, outcome).await
 }
 
 fn left_open(assignment: &Assignment, why: &str) -> Ended {
@@ -278,6 +325,11 @@ async fn execute(
     imports: Arc<Run>,
     input: &Json,
 ) -> Run_ {
+    // A node that consents no memory at all runs nothing: its store could
+    // hold no memory, and nothing of the component is fetched for it.
+    if imports.limits.max_memory_bytes == 0 {
+        return Run_::Failed(words::NO_MEMORY.to_owned());
+    }
     let digest = &assignment.component.digest;
     let component = match engine.kept(digest) {
         Some(component) => component,

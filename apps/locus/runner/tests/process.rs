@@ -12,6 +12,7 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 
+use cyfr_runner::control::Message;
 use support::{HOSTILE, Job, Reply, Service, TEST_WASM, standard};
 
 const SOON: Duration = Duration::from_secs(60);
@@ -304,13 +305,22 @@ fn the_channels_end_while_a_subtree_runs_ends_the_runner_once_it_completes() {
 #[test]
 fn the_runner_sends_its_engine_event_and_its_storage_events_on_its_control_channel() {
     let mut service = Service::start();
-    let job = Job::new("reagent", &format!("{TEST_WASM}/echo.wasm"), "{}");
+    let mut job = Job::new("catalyst", &format!("{HOSTILE}/storage_flood.wasm"), "{}");
+    job.timeout_ms = 300;
     service.assign(&job, Box::new(standard));
     let event = service.line(SOON);
     assert_eq!(
         event,
         json!({"v": 1, "type": "event", "name": "engine.authority_entered", "measurements": {},
                "metadata": {"execution_id": job.execution_id, "reference": job.reference}})
+    );
+    let mut storage = service.line(SOON);
+    let duration = storage["measurements"]["duration_ms"].take();
+    assert!(duration.is_u64(), "{duration}");
+    assert_eq!(
+        storage,
+        json!({"v": 1, "type": "event", "name": "storage.call", "measurements": {"duration_ms": null},
+               "metadata": {"component_ref": job.reference, "action": "unknown", "status": "error"}})
     );
 }
 
@@ -337,6 +347,17 @@ fn a_denial_report_whose_answer_is_lost_is_sent_once_and_the_run_goes_on() {
     assert_eq!(service.calls_of("record_denial").len(), 1);
     let output = &service.calls_of("complete")[0].args["outcome"]["output"];
     assert_eq!(output, &json!({"status": 200, "data": {"read": "OEEE"}}));
+    // Uncertain, never asked again: not lost after a second try.
+    service.close_control();
+    let _ = service.exit(SOON);
+    assert!(
+        service.errors().contains(&format!(
+            "{}'s record_denial ended uncertain",
+            job.execution_id
+        )),
+        "{}",
+        service.errors()
+    );
 }
 
 #[test]
@@ -681,4 +702,332 @@ fn a_shipped_catalyst_runs_its_describe() {
     assert!(fail.is_none(), "{fail:?}");
     let output = &service.calls_of("complete")[0].args["outcome"]["output"];
     assert_eq!(output["data"]["contracts"], json!(["model/chat@1"]));
+}
+
+// ============================================================================
+// What a guest can make the runner hold or write
+// ============================================================================
+
+/// The most resident memory a runner (built for its tests) holds while a
+/// guest floods it with events: what it holds running an ordinary
+/// catalyst, and room besides.
+const FLOOD_RESIDENT_KIB: u64 = 192 * 1024;
+
+#[test]
+fn a_guest_flooding_its_events_is_paced_and_its_close_follows_its_fail() {
+    let mut service = Service::start();
+    let mut job = Job::new("catalyst", &format!("{HOSTILE}/storage_flood.wasm"), "{}");
+    job.timeout_ms = 3_000;
+    service.assign(&job, Box::new(standard));
+    let pid = service.pid();
+    let mut highest = 0;
+    let mut events = 0u64;
+    let mut failed_at = None;
+    let frame = loop {
+        highest = highest.max(support::resident_kib(pid));
+        if failed_at.is_none() && !service.calls_of("fail").is_empty() {
+            failed_at = Some(std::time::Instant::now());
+        }
+        let line = service.line(SOON);
+        if line["type"] != "event" {
+            break line;
+        }
+        events += 1;
+    };
+    let closed = failed_at.map(|at| at.elapsed()).unwrap_or_default();
+    eprintln!(
+        "flood: {events} events, at most {highest} KiB resident, complete {closed:?} after fail"
+    );
+    assert_eq!(frame["type"], "complete", "{frame}");
+    assert!(events > 1, "the guest's events reached the service");
+    assert!(
+        highest < FLOOD_RESIDENT_KIB,
+        "the runner held {highest} KiB, past {FLOOD_RESIDENT_KIB}"
+    );
+    // The close waits behind at most the queue's lines.
+    assert!(
+        closed < Duration::from_secs(2),
+        "complete came {closed:?} after fail"
+    );
+    assert_eq!(
+        service.calls_of("fail")[0].args["outcome"]["error"],
+        "Execution timeout after 3000ms"
+    );
+}
+
+#[test]
+fn a_guest_causing_one_log_line_after_another_is_logged_once_with_a_count() {
+    let mut service = Service::start();
+    let mut job = Job::new("catalyst", &format!("{HOSTILE}/vault_log_flood.wasm"), "{}");
+    job.timeout_ms = 1_000;
+    service.assign(&job, Box::new(standard));
+    assert_eq!(service.frame(SOON)["type"], "complete");
+    service.close_control();
+    assert_eq!(service.exit(SOON).code(), Some(0));
+    let errors = service.errors();
+    let named: Vec<&str> = errors
+        .lines()
+        .filter(|line| line.contains("no field name"))
+        .collect();
+    assert_eq!(named.len(), 2, "{errors}");
+    assert!(
+        named[0].contains("asked its vault for a name that is no field name"),
+        "{errors}"
+    );
+    assert!(
+        named[1].starts_with(&format!(
+            "cyfr-runner: {} logged a name that is no field name ",
+            job.execution_id
+        )) && named[1].ends_with(" more times"),
+        "{errors}"
+    );
+    assert!(errors.len() < 4096, "{} bytes of log", errors.len());
+}
+
+// ============================================================================
+// Compiles, budgets and the engine's own refusals
+// ============================================================================
+
+#[test]
+fn a_budget_ends_its_attempt_whatever_the_compile_thread_is_doing() {
+    // slow_validate takes seconds to validate and compile; nothing of that
+    // runs on the runner's own thread, so the budget ends the run on time
+    // and the runner is not reused.
+    let mut service = Service::start();
+    let mut job = Job::new("reagent", &format!("{HOSTILE}/slow_validate.wasm"), "{}");
+    job.timeout_ms = 300;
+    let started = std::time::Instant::now();
+    service.assign(&job, Box::new(standard));
+    let complete = service.frame(SOON);
+    let took = started.elapsed();
+    eprintln!("slow_validate: closed {took:?} after its assign under a 300 ms budget");
+    assert_eq!(
+        complete,
+        json!({"v": 1, "type": "complete", "execution_id": job.execution_id, "clean": false})
+    );
+    assert_eq!(
+        service.calls_of("fail")[0].args["outcome"]["error"],
+        "Execution timeout after 300ms"
+    );
+    assert!(
+        took < Duration::from_secs(3),
+        "the close came after {took:?}"
+    );
+}
+
+#[test]
+fn a_node_consenting_no_memory_runs_nothing_and_fetches_nothing() {
+    let v = support::fixture("authority_wire.json");
+    let zero = v["read"]
+        .as_array()
+        .expect("read")
+        .iter()
+        .find(|case| case["limits"]["max_memory_bytes"] == 0)
+        .expect("a case consenting no memory");
+    let mut job = Job::new("reagent", &format!("{TEST_WASM}/echo.wasm"), "{}");
+    job.authority = zero["authority"].clone();
+    let (service, frame, fail) = failed(&job);
+    assert_eq!(frame["type"], "complete");
+    assert_eq!(service.ops(), ["attach", "fail"]);
+    assert_eq!(
+        fail.expect("a fail")["error"],
+        "Execution error: the engine raised an internal error"
+    );
+}
+
+#[test]
+fn sockets_are_refused_to_every_guest() {
+    let job = Job::new("reagent", &format!("{HOSTILE}/socket_probe.wasm"), "{}");
+    let (service, frame, _fail) = failed(&job);
+    assert_eq!(frame["type"], "complete");
+    let output = &service.calls_of("complete")[0].args["outcome"]["output"];
+    // "01" is wasi:sockets/network's access-denied.
+    assert_eq!(output, &json!({"tcp": "01", "udp": "01"}));
+}
+
+// ============================================================================
+// The runner's descriptors
+// ============================================================================
+
+#[test]
+fn a_control_descriptor_equal_to_the_relays_is_refused_before_either_is_adopted() {
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_cyfr-runner"))
+        .env_clear()
+        .env("RUNTIME_RUNNER_ID", support::RUNNER)
+        .env("RUNTIME_SERVICE_ID", support::SERVICE)
+        .env("RUNTIME_BOOT_ID", support::BOOT)
+        .env("RUNTIME_CONTROL_FD", "4")
+        .output()
+        .expect("the runner runs");
+    assert_eq!(output.status.code(), Some(78));
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        "cyfr-runner: the control descriptor 4 is the relay's\n"
+    );
+}
+
+#[test]
+fn the_runner_adopts_descriptor_3_as_its_control_channel() {
+    let mut service = Service::start_on(support::Control::Descriptor3, &[]);
+    let job = Job::new("reagent", &format!("{TEST_WASM}/echo.wasm"), r#"{"a":1}"#);
+    service.assign(&job, Box::new(standard));
+    assert_eq!(service.frame(SOON)["clean"], true);
+    service.close_control();
+    assert_eq!(service.exit(SOON).code(), Some(0));
+}
+
+#[test]
+fn nothing_of_the_token_or_the_keys_is_left_in_the_runners_memory_after_its_close() {
+    let mut service = Service::start_on(support::Control::Descriptor3, &[]);
+    let job = Job::new("catalyst", &format!("{HOSTILE}/vault_probe.wasm"), "{}");
+    let token = job.token();
+    let sent = Message::Assign {
+        assignment: zeroize::Zeroizing::new(token.clone()),
+        input: zeroize::Zeroizing::new(job.input.clone()),
+        keys: job.keys(),
+    };
+    let line = cyfr_runner::control::encode(&sent).expect("an assign line");
+    service.send_line(&line);
+    service.serve(
+        job.clone(),
+        Box::new(|call, job| match call.op.as_str() {
+            "attach" => Reply::Ok(json!({"PROBE_KEY": "the-value"})),
+            _ => standard(call, job),
+        }),
+    );
+    assert_eq!(service.frame(SOON)["clean"], true);
+    let call_hex = cyfr_runner::wire::hex(&support::CALL_KEY);
+    let seal_hex = cyfr_runner::wire::hex(&support::SEAL_KEY);
+    let needles: [&[u8]; 6] = [
+        support::RUNNER.as_bytes(),
+        &token.as_bytes()[..64],
+        call_hex.as_bytes(),
+        seal_hex.as_bytes(),
+        &support::CALL_KEY,
+        &support::SEAL_KEY,
+    ];
+    let found = support::scan(service.pid(), &needles);
+    // The scan finds what is there: the runner's own id.
+    assert!(found[0] > 0, "the scan read the runner's memory: {found:?}");
+    assert_eq!(
+        &found[1..],
+        &[0, 0, 0, 0, 0],
+        "token, keys' hex, keys' bytes"
+    );
+}
+
+// ============================================================================
+// One over-long control line, however it arrives
+// ============================================================================
+
+#[test]
+fn a_control_line_past_its_bound_ends_the_runner_however_it_arrives() {
+    use cyfr_runner::control::MAX_LINE_BYTES;
+    // One byte past the bound, whose newline arrives in the read that
+    // crosses it; and one far past it, whose newline arrives later.
+    for length in [MAX_LINE_BYTES + 1, MAX_LINE_BYTES + 512 * 1024] {
+        let mut service = Service::start();
+        let mut line = vec![b'x'; length];
+        line.push(b'\n');
+        // The runner may end before it has read the whole line.
+        let _ = service.try_send_line(&line);
+        assert_eq!(service.exit(SOON).code(), Some(1), "{length}");
+        assert!(
+            service.errors().contains("past the protocol's bound"),
+            "{length}: {}",
+            service.errors()
+        );
+    }
+}
+
+// ============================================================================
+// A control write that fails
+// ============================================================================
+
+/// A control channel that takes every line but `complete`, whose write
+/// fails: the service went away as the runner closed its subtree.
+struct BrokenPipe;
+
+impl tokio::io::AsyncWrite for BrokenPipe {
+    fn poll_write(
+        self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+        bytes: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        if bytes
+            .windows(17)
+            .any(|window| window == b"\"type\":\"complete\"")
+        {
+            std::task::Poll::Ready(Err(std::io::ErrorKind::BrokenPipe.into()))
+        } else {
+            std::task::Poll::Ready(Ok(bytes.len()))
+        }
+    }
+
+    fn poll_flush(
+        self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::task::Poll::Ready(Ok(()))
+    }
+
+    fn poll_shutdown(
+        self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::task::Poll::Ready(Ok(()))
+    }
+}
+
+#[tokio::test]
+async fn a_complete_the_control_channel_does_not_take_ends_the_runner_unsent() {
+    use cyfr_runner::control::{Environment, Lines, Writer};
+    use cyfr_runner::subtree::{RelayAt, serve};
+    let dir = std::env::temp_dir().join(format!("cyfr-runner-broken-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("a test folder");
+    let socket = dir.join("relay.sock");
+    let listener = std::os::unix::net::UnixListener::bind(&socket).expect("the relay socket");
+    let job = Job::new("reagent", &format!("{TEST_WASM}/echo.wasm"), "{}");
+    let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let (served, recorded) = (job.clone(), calls.clone());
+    std::thread::spawn(move || {
+        let (stream, _) = listener.accept().expect("the relay");
+        support::relay(stream, served, Box::new(standard), recorded);
+    });
+    let (mut service_end, runner_end) = tokio::io::duplex(1 << 20);
+    let line = cyfr_runner::control::encode(&job.assign()).expect("an assign line");
+    tokio::io::AsyncWriteExt::write_all(&mut service_end, &line)
+        .await
+        .expect("the line is written");
+    // The channel ends after the assign: a runner whose complete was
+    // written ends with 0 once it completes, one whose complete was not
+    // with 1.
+    drop(service_end);
+    let environment = Environment {
+        runner_id: support::RUNNER.to_owned(),
+        service_id: support::SERVICE.to_owned(),
+        boot: support::BOOT.to_owned(),
+        control_fd: 0,
+        relay: cyfr_runner::control::Relay::Socket(socket.display().to_string()),
+    };
+    let engine = cyfr_runner::engine::Engine::new().expect("the engine");
+    let status = serve(
+        environment,
+        engine,
+        Lines::new(runner_end),
+        Writer::start(BrokenPipe),
+        Some(RelayAt::Socket(socket.display().to_string())),
+    )
+    .await;
+    // The attempt closed with CYFR; its complete reached no service, so
+    // the runner ends with 1, not with the 0 of a complete that was sent.
+    assert_eq!(status, 1);
+    let ops: Vec<String> = calls
+        .lock()
+        .expect("calls")
+        .iter()
+        .map(|call| call.op.clone())
+        .collect();
+    assert_eq!(ops, ["attach", "fetch_artifact", "complete"]);
+    let _ = std::fs::remove_dir_all(&dir);
 }

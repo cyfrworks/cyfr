@@ -401,6 +401,7 @@ defmodule Cyfr.CrossLanguageDriftTest do
     ],
     "authority_wire.json" => [
       {"apps/locus/runner/tests/engine.rs", ~w(read refused)},
+      {"apps/locus/runner/tests/process.rs", ~w(read)},
       {"apps/prima/test/prima/authority_test.exs", ~w(version read refused)}
     ],
     "brain_wire.json" => [

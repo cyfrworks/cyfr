@@ -43,6 +43,9 @@ CYFR's, the runner crate's (`apps/locus/runner/tests/`), and the worker image's 
 | `thread_index` | reagent | `sync_lift` beside a `thread.index` builtin; refused for the component-model threading feature |
 | `legacy_try` | reagent | runs a legacy `try` block with a `catch_all`; refused for the legacy exception-handling feature |
 | `nested_output` | reagent | answers its input's length in nested arrays, a JSON value that deep, for the runner's depth bound on a guest's output |
+| `storage_flood` | catalyst | calls its storage forever with a request that is no JSON: each call is refused before any host call and is one `storage.call` event |
+| `vault_log_flood` | catalyst | asks its vault forever for a name carrying a control byte: each read is refused unreported, and is one line the runner would log |
+| `slow_validate` | none | imports an instance of 1,500 functions and instantiates a component of it 3,000 times: slow to validate, for a run whose budget ends while the compile thread works |
 
 ## Rebuilding
 
@@ -105,4 +108,10 @@ legacy_try.wat             sha256:2adc44fa64ff904bf6a019c2bbdfb9d6f44d4628d7e616
 legacy_try.wasm            sha256:244f4dbd5d1a29ff8c0b37fc84d21f3630f88b0b7451de28108610c7ea1dd454
 nested_output.wat          sha256:3ce720e5c66fb39198f2ec614efc5e28b01b4c436fc9ab23c00d3203758f55f6
 nested_output.wasm         sha256:dd21f5cce9f42efea0dd574d0a49293f81b73bf83bd98ade4cbda2d6a6169961
+storage_flood.wat          sha256:7e78a283bc928b0f6dc732b7c42a9a518f3bede2de981c5823c45bda33deb67b
+storage_flood.wasm         sha256:6ac5b830ad0faedf0cf223927120972ef1843aa62437db6bd9ed4d0708990622
+vault_log_flood.wat        sha256:1c223ece263e5549e7ee246da17a98dc9494eeb125d85cb9d3a712f94ce6dcf2
+vault_log_flood.wasm       sha256:971e8407c7934f41c2495b85f87fb34c9048975b91b52cdbf4952e117d9c8e6d
+slow_validate.wat          sha256:0cfefb7c8520d6da2f62c6c8fc3a7d2e81352d7cee84d409d94917d72bc5cdb8
+slow_validate.wasm         sha256:157de6295fc6e0dd345cfd777edc98464bb5fd932d99e97a09fbfe1564648ff6
 ```

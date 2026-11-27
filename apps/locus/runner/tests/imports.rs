@@ -93,12 +93,12 @@ impl Under {
     }
 
     async fn event(&mut self) -> Value {
-        let line = self
-            .events
-            .next_line()
-            .await
-            .expect("a line")
-            .expect("an event");
+        let line =
+            tokio::time::timeout(std::time::Duration::from_secs(10), self.events.next_line())
+                .await
+                .expect("an event within 10 s")
+                .expect("a line")
+                .expect("an event");
         serde_json::from_str(&line).expect("a JSON line")
     }
 }
@@ -330,6 +330,10 @@ fn an_answer_nested_past_the_depth_bound_ends_the_run() {
             Some(format!("Execution error: CYFR's answer to storage is nested deeper than {MAX_DEPTH} levels").as_str())
         );
         assert_eq!(under.calls().len(), 1, "never asked again");
+        // Its call's event is sent all the same, an error.
+        let event = under.event().await;
+        assert_eq!(event["name"], "storage.call");
+        assert_eq!(event["metadata"]["status"], "error");
     });
 }
 
@@ -597,6 +601,37 @@ fn an_ask_nobody_answers_is_unavailable_and_one_past_the_bound_invalid() {
         assert!(
             too_large.calls().is_empty(),
             "too large before it is posted"
+        );
+    });
+}
+
+#[test]
+fn storage_lists_and_checks_the_scope_for_a_null_path_as_for_an_omitted_one() {
+    run(|| async {
+        let mut under = under(
+            answering(|_call| Reply::Ok(json!({"files": []}))),
+            Limits::zero(),
+            &[],
+            &[],
+        )
+        .await;
+        for request in [
+            r#"{"action":"list","path":null}"#,
+            r#"{"action":"exists","path":null}"#,
+        ] {
+            under
+                .guest
+                .call(request.to_owned())
+                .await
+                .expect("an answer");
+        }
+        let paths: Vec<Value> = under.calls().into_iter().map(|call| call.args).collect();
+        assert_eq!(
+            paths,
+            [
+                json!({"action": "list", "path": ""}),
+                json!({"action": "exists", "path": ""})
+            ]
         );
     });
 }

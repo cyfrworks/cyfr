@@ -65,7 +65,10 @@ defmodule Locus.Runtime.StoreLimitsTest do
           "error_context",
           "thread_index",
           "legacy_try",
-          "nested_output"
+          "nested_output",
+          "storage_flood",
+          "vault_log_flood",
+          "slow_validate"
         ],
         ext <- ["wat", "wasm"] do
       file = "#{name}.#{ext}"

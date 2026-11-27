@@ -159,3 +159,42 @@ fn every_authority_reads_as_prima_reads_it() {
         assert!(read.is_err(), "{why}: {read:?}");
     }
 }
+
+#[test]
+fn the_engine_itself_refuses_every_refused_feature() {
+    // Each refused feature's guest, compiled straight into the engine the
+    // runner configures, with no classifier before it: the configuration,
+    // not the classifier, is what refuses it.
+    let v = support::fixture("component_features.json");
+    let engine = wasmtime::Engine::new(&engine::config()).expect("the engine");
+    let mut refused = Vec::new();
+    for case in cases(&v["cases"], "cases") {
+        let Some(feature) = case.get("feature") else {
+            continue;
+        };
+        let compiled = wasmtime::component::Component::new(&engine, case_bytes(case));
+        assert!(compiled.is_err(), "the engine compiled the {feature} guest");
+        refused.push(text(feature).to_owned());
+    }
+    let nine: Vec<String> = engine::REFUSED
+        .iter()
+        .map(|(name, _)| (*name).to_owned())
+        .collect();
+    assert_eq!(refused, nine);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_kept_compile_leaves_when_its_time_passes_with_no_lookup() {
+    let engine = engine::Engine::new().expect("the engine");
+    let bytes = support::bytes("apps/locus/test/support/runtime/test_wasm/echo.wasm");
+    let digest = engine::digest(&bytes);
+    engine.compile(&digest, bytes).await.expect("a compile");
+    assert!(engine.kept(&digest).is_some());
+    tokio::time::advance(engine::KEPT_FOR - std::time::Duration::from_secs(1)).await;
+    tokio::task::yield_now().await;
+    assert!(engine.kept(&digest).is_some(), "kept for its 15 minutes");
+    // Nothing looks it up in between: its own timer removes it.
+    tokio::time::advance(std::time::Duration::from_secs(2)).await;
+    tokio::task::yield_now().await;
+    assert!(engine.kept(&digest).is_none(), "gone once they pass");
+}
