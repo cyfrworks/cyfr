@@ -132,7 +132,6 @@ defmodule Prima.WorkerAPI do
                         "so it starts none: start the locus service with the security " <>
                         "option writable-cgroups=true (Docker Engine 28 or later on a cgroup v2 " <>
                         "host whose memory and cpu controllers reach the container)"
-  @keeper_code ~r/\A[a-z][a-z0-9_]{0,63}\z/
 
   # 2^53 − 1: the largest integer every JSON reader holds exactly.
   @max_integer 9_007_199_254_740_991
@@ -268,7 +267,7 @@ defmodule Prima.WorkerAPI do
   def keeper_refusal({:no_memory, held}), do: Map.put(keeper_refusal("no_memory"), :held, held)
 
   def keeper_refusal(code) when is_binary(code) do
-    reason = if Regex.match?(@keeper_code, code), do: code, else: "refused"
+    reason = if Regex.match?(@reason, code), do: code, else: "refused"
     %{reason: reason, message: "cyfr-locus refused to start a runner (#{reason})"}
   end
 
