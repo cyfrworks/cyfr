@@ -84,11 +84,10 @@ var keptOut = map[string]bool{"proc": true, "sys": true, "dev": true, "tmp": tru
 var devices = []string{"null", "zero", "full", "random", "urandom", "tty"}
 
 // tunDevice is the node a person's machine's space, a routed one, is given
-// beside machineDevice, which its VMM attaches to its tap through: the
-// container holds it at /dev/tun (docker-compose.yml), so its bind is one
-// of /dev's nodes the profile allows (apps/codex/internal/apparmor), and
-// the space links /dev/net/tun, where the VMM opens it, to it.
-const tunDevice = "tun"
+// beside machineDevice, which its VMM attaches to its tap through: at its
+// own path, by a recursive bind, which the profile allows into the space
+// (apps/codex/internal/apparmor) where it refuses a plain one.
+const tunDevice = "net/tun"
 
 // machineDevice is the node a machine's space is given beside devices,
 // for its VMM alone (Spec.Machine).
@@ -609,9 +608,6 @@ func buildDev(machine, tun bool) error {
 	if machine {
 		nodes = append(append([]string{}, devices...), machineDevice)
 	}
-	if tun {
-		nodes = append(nodes, tunDevice)
-	}
 	for _, node := range nodes {
 		target := Root + "/dev/" + node
 		f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY, 0o666)
@@ -623,16 +619,22 @@ func buildDev(machine, tun bool) error {
 			return err
 		}
 	}
-	for _, dir := range []string{"pts", "shm"} {
-		if err := os.Mkdir(Root+"/dev/"+dir, 0o755); err != nil {
+	if tun {
+		target := Root + "/dev/" + tunDevice
+		if err := os.Mkdir(filepath.Dir(target), 0o755); err != nil {
+			return err
+		}
+		f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY, 0o666)
+		if err != nil {
+			return err
+		}
+		_ = f.Close()
+		if err := mount("/dev/"+tunDevice, target, "", unix.MS_BIND|unix.MS_REC, ""); err != nil {
 			return err
 		}
 	}
-	if tun {
-		if err := os.Mkdir(Root+"/dev/net", 0o755); err != nil {
-			return err
-		}
-		if err := os.Symlink("../"+tunDevice, Root+"/dev/net/tun"); err != nil {
+	for _, dir := range []string{"pts", "shm"} {
+		if err := os.Mkdir(Root+"/dev/"+dir, 0o755); err != nil {
 			return err
 		}
 	}
