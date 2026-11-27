@@ -266,7 +266,9 @@ defmodule Locus.Runtime.EgressTest do
       assert Egress.relay_refusal(code, "public.test") == Egress.refusal(why, "public.test")
     end
 
-    assert Prima.RunnerRelay.pin_code({:uncertain, "unknown"}) == Prima.RunnerRelay.pin_code(:lost)
+    assert Prima.RunnerRelay.pin_code({:uncertain, "unknown"}) ==
+             Prima.RunnerRelay.pin_code(:lost)
+
     assert Egress.relay_refusal("rate_limited", "public.test") == :none
     assert Egress.relay_refusal(nil, "public.test") == :none
   end

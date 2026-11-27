@@ -231,7 +231,8 @@ defmodule Prima.RunnerRelay do
   # refusals of a runner's frame.
   @close_codes [
     {"frame_too_large", "a frame's length is past max_frame_bytes"},
-    {"malformed", "a frame is no JSON object, or a member is missing, of another type or invalid"},
+    {"malformed",
+     "a frame is no JSON object, or a member is missing, of another type or invalid"},
     {"bad_version", "a frame's v is not the version"},
     {"unknown_kind", "a frame's kind is none of the nine"},
     {"wrong_direction", "a frame of a kind its sender does not send"},

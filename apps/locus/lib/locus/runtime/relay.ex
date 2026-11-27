@@ -1183,7 +1183,9 @@ defmodule Locus.Runtime.Relay do
         # The connect and the wait for the answer time out alike; the
         # connect's own report says which.
         {:error, %Req.TransportError{reason: :timeout}} ->
-          if Process.get(@connect_watch) == :failed, do: end_code(:connect_timeout), else: end_code(:timeout)
+          if Process.get(@connect_watch) == :failed,
+            do: end_code(:connect_timeout),
+            else: end_code(:timeout)
 
         {:error, %Req.TransportError{reason: reason}} when is_atom(reason) ->
           code(reason)
@@ -1383,7 +1385,13 @@ defmodule Locus.Runtime.Relay do
 
       match?({:end, _}, fetch.done) and credit >= RunnerRelay.initial_credit() ->
         {:end, error} = fetch.done
-        finish(state, re, fetch, if(fetch.refused and is_nil(error), do: end_code(:refused), else: error))
+
+        finish(
+          state,
+          re,
+          fetch,
+          if(fetch.refused and is_nil(error), do: end_code(:refused), else: error)
+        )
 
       true ->
         {:noreply, put_fetch(state, re, fetch)}
