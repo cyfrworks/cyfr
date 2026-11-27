@@ -98,10 +98,17 @@ which hold nothing of the container's /probe mount.
   person's next session boots a VM; the keeper killed while a VM holds the
   disk is started again, and the person's next session boots a VM on the
   same image, finding what the last one wrote.
-- Measurements, printed: a disk image's allocated size after its first
-  boot and after an idle minute, the guard container's peak with one VM
-  routed, and the VMM group's memory before and after a session that binds
-  the largest generation a set may be.
+- Measurements, printed. At a guest of 2,560 MiB: the guest's memory and
+  processors as the keeper configured the VMM, the VMM's resident memory
+  and its group's memory after a person's first boot and after an idle
+  minute, the disk image's allocated size at each, the guard container's
+  peak with one VM routed, and the VMM's memory with a session binding the
+  largest generation a set may be. Then a VM's own cost at guests of
+  2,560 MiB, 8 GiB and the shipped sizing's rest, each the pool's rest,
+  three fresh VMs each: the guest's MemTotal and the VMM group's
+  memory.current and memory.stat at rest after its first session answered,
+  while a session answers and once it is released, every reading a raw line
+  and their ranges a table.
 
 Prerequisites: harness.py's, /dev/kvm and /dev/net/tun on the host, and
 the public network for the routes case's reaching steps, which are
@@ -122,7 +129,7 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from harness import (  # noqa: E402
-    CONNECT_PROBE, HERE, KEPT_ROOT, POOL_FIRST, POOL_LAST, REFUSED, RELEASE, ROLE, SERVICE, Stack,
+    CONNECT_PROBE, GUARD, HERE, KEPT_ROOT, POOL_FIRST, POOL_LAST, REFUSED, RELEASE, ROLE, SERVICE, Stack,
     disk_of, eventually, expect, home_of, owner_of, require_docker,
 )
 import imagesuite  # noqa: E402
@@ -991,43 +998,185 @@ def allocated(stack, owner):
     return int(read_output(stack.observe(f"du -k {image_of(owner)}"), "the image's du").split()[0]) // 1024
 
 
+def vmm_process(stack):
+    """The one VMM's pid and its API socket, from its command line."""
+    found = [p for p in stack.processes() if p["cmd"].split()[:1] == [FIRECRACKER]]
+    expect(len(found) == 1, "one VMM runs", found)
+    argv = found[0]["cmd"].split()
+    return found[0]["pid"], argv[argv.index("--api-sock") + 1]
+
+
+def vmm_resident(stack, pid):
+    """The VMM process's resident memory, from its status: VmRSS and its anonymous, file and shared parts, in MiB."""
+    text = read_output(stack.observe(f"grep -E '^(VmRSS|RssAnon|RssFile|RssShmem):' /proc/{pid}/status"),
+                       f"the VMM {pid}'s status")
+    return {line.split(":")[0]: int(line.split()[1]) // 1024 for line in text.splitlines()}
+
+
+def vmm_config(stack, api):
+    """The guest's processors and memory as the keeper configured its VMM, read from the VMM's own API."""
+    text = read_output(stack.observe(f"curl -sS --max-time 5 --unix-socket {api} http://localhost/vm/config"),
+                       "the VMM's configuration")
+    return json.loads(text)["machine-config"]
+
+
+def idle_minute(c, owner):
+    """A minute in which the owner holds no session, its lease renewed so its programs stay synced."""
+    end = time.monotonic() + 60
+    while time.monotonic() < end:
+        expect(c.renew([owner], lease_ms=60_000)[0] == 200, "the idle owner is renewed")
+        time.sleep(min(20, max(0, end - time.monotonic())))  # sleep-ok: the measure is of an idle minute
+
+
+def memory_line(stack, uid, pid):
+    """The VMM's resident memory and its group's memory.current and reading, as printed."""
+    current, reading = vmm_memory(stack, uid)
+    rss = vmm_resident(stack, pid)
+    return (f"VmRSS {rss['VmRSS']} MiB (anonymous {rss['RssAnon']}, file {rss['RssFile']}, shared "
+            f"{rss['RssShmem']}), its group's memory.current {current / MIB:.1f} MiB and reading "
+            f"{reading / MIB:.1f} MiB")
+
+
+def measured_at(stack, c, owner, put_largest):
+    """A person's first boot and an idle minute at the pool the stack's keeper runs, printed: the guest's memory as the
+    keeper gave it, the VMM's resident memory and its group's, the image's allocated size and the guard's peak; with
+    `put_largest`, the VMM's memory once a session binds the largest generation too. `c` is the controller that
+    greeted the stack's keeper."""
+    pool = [line for line in stack.logs().splitlines() if "the pool: budget" in line][-1].split("info: ", 1)[-1]
+    status, answer, _ = c.sync(owner, [vm_probe(), vm_probe("packed", packs=True)], lease_ms=60_000)
+    expect(status == 200, f"{owner['athanor']}'s programs are synced", answer)
+    guest = int(sh(c, owner, "awk '/^MemTotal:/ {print $2}' /proc/meminfo", "a")["stdout"].strip()) // 1024
+    uid = disk_record(stack, owner)["uid"]
+    pid, api = vmm_process(stack)
+    config = vmm_config(stack, api)
+    booted = memory_line(stack, uid, pid)
+    disk = allocated(stack, owner)
+    peak = read_output(stack.guard_exec("cat /sys/fs/cgroup/memory.peak /sys/fs/cgroup/memory.current"),
+                       "the guard's memory").split()
+    session = c.mcp(owner, "probe", key="a", home_id=row_of(owner)).session
+    expect(c.close(owner, session)[0] == 200, "the session is closed, its VM left idle")
+    idle_minute(c, owner)
+    expect(vmm_process(stack)[0] == pid, "the idle VM runs on through its idle minute")
+    idle = memory_line(stack, uid, pid)
+    idle_disk = allocated(stack, owner)
+    print(f"measured, {pool}: the keeper gave the guest {config['mem_size_mib']} MiB and "
+          f"{config['vcpu_count']} processors (its MemTotal {guest} MiB). After the person's first boot, with one "
+          f"session: {booted}; the image {disk} MiB allocated; the guard's memory.peak {int(peak[0]) / MIB:.1f} MiB "
+          f"(memory.current {int(peak[1]) / MIB:.1f} MiB) with one VM routed. After an idle minute with no "
+          f"session: {idle}; the image {idle_disk} MiB allocated", flush=True)
+    if not put_largest:
+        return
+    files = largest()
+    total = sum(len(d) for d, _x in files.values())
+    put_at = time.monotonic()
+    state, puts, client = packs.started(c, owner, "big", MEASURED_ROW, set_digest(files), program="packed",
+                                        files=files)
+    expect(state == "missing" and puts[-1][1]["state"] == "held", "the largest generation is put", puts[-1:])
+    held = packs.run_in(client, f"du -sb {SCROLLS}")
+    took = time.monotonic() - put_at
+    expect(held["status"] == 0 and int(held["stdout"].split()[0]) >= total,
+           "a session in the VM binds the largest generation", held)
+    time.sleep(3)  # sleep-ok: the group's counters settle a reading's batch after the put
+    print(f"measured, {pool}: with a session binding a generation of {len(files)} files, {total / MIB:.1f} MiB in "
+          f"4 packs, put and started in {took:.1f} s: {memory_line(stack, uid, pid)}", flush=True)
+
+
+# The guest sizes a person's VM's own cost is measured at: the keeper gives each guest its rest, which these pools
+# make on this machine; none is the shipped sizing, the largest guest it gives.
+COST_SIZES = (2560 * MIB, 8192 * MIB, None)
+COST_RUNS = 3
+# What of the VMM group's memory.stat each reading takes, where the kernel has it.
+COST_STAT = ("anon", "file", "kernel", "percpu", "kernel_stack", "pagetables")
+
+
+def cost_reading(stack, uid, pid):
+    """The VMM group's memory.current and its memory.stat's parts (COST_STAT, those the kernel has), and the VMM
+    process's VmRSS, in bytes."""
+    group = vmm_group(uid)
+    current = int(read_output(stack.exec(f"cat {group}/memory.current"), f"{group}/memory.current").strip())
+    stat = imagesuite.read_counters(stack.exec(f"cat {group}/memory.stat"), ("anon", "file", "kernel"),
+                                    f"{group}/memory.stat")
+    rss = vmm_resident(stack, pid)["VmRSS"] * MIB
+    return {"current": current, **{name: stat[name] for name in COST_STAT if name in stat}, "vmrss": rss}
+
+
+def vm_cost(stack, c, owner, size, run_number):
+    """One fresh VM's own cost at the stack's pool: (a) its first session answered and then nothing asked for 20 s,
+    (b) its session answering, (c) that session released; then the VMM is killed, so the next VM runs alone. Prints
+    each reading as a raw line and answers them with the guest's MemTotal and the keeper's configuration. `c` is the
+    controller that greeted the stack's keeper."""
+    status, answer, _ = c.sync(owner, [vm_probe()], lease_ms=60_000)
+    expect(status == 200, f"{owner['athanor']}'s programs are synced", answer)
+    expect(sh(c, owner, "echo answered", "a")["stdout"] == "answered\n", "the person's first session answers")
+    uid = disk_record(stack, owner)["uid"]
+    pid, api = vmm_process(stack)
+    config = vmm_config(stack, api)
+    time.sleep(20)  # sleep-ok: reading (a) is of the VM at rest, nothing asked of it for 20 s
+    at_rest = cost_reading(stack, uid, pid)
+    meminfo = sh(c, owner, "cat /proc/meminfo", "a")["stdout"]
+    answering = cost_reading(stack, uid, pid)
+    mem_total = int(next(line.split()[1] for line in meminfo.splitlines() if line.startswith("MemTotal:"))) * 1024
+    released = stack.logs().count("released in its person's VM")
+    session = c.mcp(owner, "probe", key="a", home_id=row_of(owner)).session
+    expect(c.close(owner, session)[0] == 200, "the session is closed")
+    eventually(lambda: stack.logs().count("released in its person's VM") > released, "the session's release")
+    time.sleep(3)  # sleep-ok: the guest reports the pages its session freed within its reporting delay
+    after = cost_reading(stack, uid, pid)
+    readings = {"size": size, "run": run_number, "mem_size_mib": config["mem_size_mib"],
+                "vcpu_count": config["vcpu_count"], "mem_total": mem_total, "a": at_rest, "b": answering, "c": after}
+    print("measured raw " + json.dumps(readings, sort_keys=True), flush=True)
+    print("measured raw meminfo " + json.dumps({"size": size, "run": run_number, "meminfo": meminfo}), flush=True)
+    run("docker", "exec", "-u", "0", stack.container, "kill", "-KILL", str(pid), check=False)
+    eventually(lambda: not vmms(stack) and group_gone(stack, uid), "the measured VM to be released", timeout_s=30)
+    return readings
+
+
+def cost_table(rows):
+    """The cost table: each guest size's range, min to max over its runs, of MemTotal and each reading's
+    memory.current, anon and kernel, in MiB."""
+    def spread(values):
+        low, high = min(values) / MIB, max(values) / MIB
+        return f"{low:.0f}" if round(low) == round(high) else f"{low:.0f}-{high:.0f}"
+
+    lines = ["guest size (rest, MemoryMiB) | MemTotal | (a) at rest: current/anon/kernel | "
+             "(b) answering: current/anon/kernel | (c) released: current/anon/kernel   [MiB, min-max of "
+             f"{COST_RUNS} fresh VMs]"]
+    for size in dict.fromkeys(r["size"] for r in rows):
+        runs = [r for r in rows if r["size"] == size]
+        cells = [f"{size // MIB} MiB ({'/'.join(sorted({str(r['mem_size_mib']) for r in runs}))})",
+                 spread([r["mem_total"] for r in runs])]
+        for reading in "abc":
+            cells.append("/".join(spread([r[reading][part] for r in runs]) for part in ("current", "anon", "kernel")))
+        lines.append(" | ".join(cells))
+    return "\n".join(lines)
+
+
 def measurements(image):
-    """A disk image's allocated size, the guard's peak with one VM routed, and the VMM group's memory beside the
-    largest generation, printed."""
+    """A person's VM's costs, printed: a first boot and an idle minute beside the largest generation at the first
+    guest size, and the VM's own cost at each of COST_SIZES, the shipped sizing's rest the last."""
     stack = wall_stack("measured", image)
-    owner = owner_of("vm-measured")
+    rows = []
     try:
-        up_wall(stack)
-        c = synced(stack, [(owner, [vm_probe(), vm_probe("packed", packs=True)])])
-        guest = sh(c, owner, "awk '/^MemTotal:/ {print $2}' /proc/meminfo", "a")["stdout"].strip()
-        booted = allocated(stack, owner)
-        peak = read_output(stack.guard_exec("cat /sys/fs/cgroup/memory.peak /sys/fs/cgroup/memory.current"),
-                           "the guard's memory").split()
-        uid = disk_record(stack, owner)["uid"]
-        session = c.mcp(owner, "probe", key="a", home_id=row_of(owner)).session
-        expect(c.close(owner, session)[0] == 200, "the session is closed, its VM left idle")
-        time.sleep(60)  # sleep-ok: the measure is of the image after an idle minute
-        idle = allocated(stack, owner)
-        quiet_current, quiet_reading = vmm_memory(stack, uid)
-        files = largest()
-        total = sum(len(d) for d, _x in files.values())
-        put_at = time.monotonic()
-        state, puts, client = packs.started(c, owner, "big", MEASURED_ROW, set_digest(files), program="packed",
-                                            files=files)
-        expect(state == "missing" and puts[-1][1]["state"] == "held", "the largest generation is put", puts[-1:])
-        held = packs.run_in(client, f"du -sb {SCROLLS}")
-        took = time.monotonic() - put_at
-        expect(held["status"] == 0 and int(held["stdout"].split()[0]) >= total,
-               "a session in the VM binds the largest generation", held)
-        time.sleep(3)  # sleep-ok: the group's counters settle a reading's batch after the put
-        packed_current, packed_reading = vmm_memory(stack, uid)
-        print(f"measured: the guest's memory {int(guest) // 1024} MiB at a pool's work of {WORK // MIB} MiB; the "
-              f"image's allocated size {booted} MiB after its first boot and {idle} MiB after an idle minute; the "
-              f"guard's memory.peak {int(peak[0]) / MIB:.1f} MiB (memory.current {int(peak[1]) / MIB:.1f} MiB) with "
-              f"one VM routed; the VMM group's memory.current {quiet_current / MIB:.1f} MiB (reading "
-              f"{quiet_reading / MIB:.1f} MiB) idle, and {packed_current / MIB:.1f} MiB (reading "
-              f"{packed_reading / MIB:.1f} MiB) with a session binding a generation of {len(files)} files, "
-              f"{total / MIB:.1f} MiB in 4 packs, put and started in {took:.1f} s", flush=True)
+        for index, work in enumerate(COST_SIZES):
+            if index:
+                # The guard's check fails once a person's VM has been routed, so compose starts no keeper behind it
+                # again: the guard is started afresh with the keeper at the next size, on the same volumes, where
+                # the image's programs' device stands.
+                stack.compose("stop", SERVICE)
+                stack.compose("up", "--detach", "--no-build", "--force-recreate", "--no-deps", GUARD)
+            up_wall(stack, work)
+            c = synced(stack, [])
+            pool = [line for line in stack.logs().splitlines() if "the pool: budget" in line][-1]
+            rest = int(re.search(r"rest (\d+) MiB", pool).group(1)) * MIB
+            print(f"measured: {pool.split('info: ', 1)[-1]}", flush=True)
+            if index == 0:
+                measured_at(stack, c, owner_of("vm-measured"), True)
+                pid, _api = vmm_process(stack)
+                run("docker", "exec", "-u", "0", stack.container, "kill", "-KILL", str(pid), check=False)
+                eventually(lambda: not vmms(stack), "the first measured VM to end", timeout_s=30)
+            for number in range(1, COST_RUNS + 1):
+                rows.append(vm_cost(stack, c, owner_of(f"vm-cost-{rest // MIB}-{number}"), rest, number))
+        print("measured, a person's VM's own cost by its guest's size:\n" + cost_table(rows), flush=True)
     finally:
         stack.down()
 
