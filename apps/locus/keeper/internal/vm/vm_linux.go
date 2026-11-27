@@ -99,6 +99,11 @@ type Config struct {
 	// the VMM's space is given covered but for it. "" for guest-check's
 	// machine, which has neither.
 	Disk, KeptRoot string
+	// UID is the uid a person's VM runs under: their disk's (home.Disk),
+	// whose alone the image is, so it is the VMM's two walls, its mount
+	// namespace and the image's owner. 0 allots one of MachineUIDs, as
+	// guest-check's machines are given.
+	UID int
 	// Route makes a person's VM's route from its VMM's space's network
 	// namespace and two name sockets, which the space hands up before the
 	// VMM is executed (package stage): the guard's machine route (package
@@ -118,12 +123,14 @@ type Network struct {
 type Machine struct {
 	id  string
 	dir string
-	// uid is the VMM's, allotted from MachineUIDs (allot) and its alone
-	// until the machine's end gives it back.
-	uid   int
-	gid   int
-	group *cgroup.Group
-	cmd   *exec.Cmd
+	// uid is the VMM's, its person's disk's (Config.UID) or allotted from
+	// MachineUIDs (allotted), and its alone until the machine's end gives
+	// it back (takeUID).
+	uid      int
+	allotted bool
+	gid      int
+	group    *cgroup.Group
+	cmd      *exec.Cmd
 	// done closes when the VMM's stage, which ends as the VMM ends, has
 	// exited and been reaped, and its waiter has cleared what the machine
 	// held (remove): on any end, the VMM's own exit among them.
@@ -152,36 +159,55 @@ type Machine struct {
 	cpuUsec   uint64
 }
 
-// machineUIDs is MachineUIDs' allotment in this keeper.
+// machineUIDs is MachineUIDs' allotment in this keeper, and given the uids
+// a person's VM runs under, each its disk's (Config.UID), while it runs.
 var machineUIDs = struct {
 	sync.Mutex
-	p *pool.Pool
-}{p: pool.New(MachineUIDs)}
+	p     *pool.Pool
+	given map[int]bool
+}{p: pool.New(MachineUIDs), given: map[int]bool{}}
 
-// allot takes a uid of MachineUIDs for one machine: a uid that still runs
-// a process, or has a folder left under Root, is withheld instead.
-func allot() (int, error) {
-	machineUIDs.Lock()
-	defer machineUIDs.Unlock()
-	uid, ok := machineUIDs.p.Allocate(func(uid int) bool {
-		c, err := procfs.ScanUID("/proc", uid, 0)
-		if err != nil || c.Total() > 0 {
-			return true
-		}
-		left, err := filepath.Glob(filepath.Join(Root, strconv.Itoa(uid)+"-*"))
-		return err != nil || len(left) > 0
-	})
-	if !ok {
-		return 0, fmt.Errorf("vm: every machine uid of %d-%d is in use", MachineUIDs.First, MachineUIDs.Last)
+// leftBy says the uid still runs a process or has a folder left under Root:
+// no machine starts under it.
+func leftBy(uid int) bool {
+	c, err := procfs.ScanUID("/proc", uid, 0)
+	if err != nil || c.Total() > 0 {
+		return true
 	}
-	return uid, nil
+	left, err := filepath.Glob(filepath.Join(Root, strconv.Itoa(uid)+"-*"))
+	return err != nil || len(left) > 0
 }
 
-// giveBack returns a machine's uid to the allotment.
-func giveBack(uid int) {
+// takeUID is the uid one machine runs under: given, its person's disk's,
+// which no other machine of this keeper holds and leftBy does not withhold;
+// or, given 0, one of MachineUIDs that leftBy does not withhold. It says
+// whether the uid was allotted, so the machine's end gives it back there.
+func takeUID(given int) (uid int, allotted bool, err error) {
 	machineUIDs.Lock()
 	defer machineUIDs.Unlock()
-	_ = machineUIDs.p.Release(uid)
+	if given > 0 {
+		if machineUIDs.given[given] || leftBy(given) {
+			return 0, false, fmt.Errorf("vm: uid %d runs a machine or a process, or has a machine's folder left", given)
+		}
+		machineUIDs.given[given] = true
+		return given, false, nil
+	}
+	uid, ok := machineUIDs.p.Allocate(leftBy)
+	if !ok {
+		return 0, false, fmt.Errorf("vm: every machine uid of %d-%d is in use", MachineUIDs.First, MachineUIDs.Last)
+	}
+	return uid, true, nil
+}
+
+// giveBack lets a machine's uid go: to the allotment, or out of given.
+func giveBack(uid int, allotted bool) {
+	machineUIDs.Lock()
+	defer machineUIDs.Unlock()
+	if allotted {
+		_ = machineUIDs.p.Release(uid)
+		return
+	}
+	delete(machineUIDs.given, uid)
 }
 
 // Start starts the VMM in a space the stage makes for it, as it makes a
@@ -195,8 +221,9 @@ func giveBack(uid int) {
 // nothing writable but its folder and the space's own fresh mounts. It is
 // the space every spawn has, the image's directories read only with it,
 // built by the same code. Its relay leads nowhere. Firecracker's own filter then holds it tighter.
-// Its uid is its own, allotted from MachineUIDs, and so is its group,
-// cgroup.Name of that uid.
+// Its uid is its own: a person's VM's their disk's, which owns their image
+// alone and runs nothing else on the host (Config.UID), guest-check's one
+// allotted from MachineUIDs; and so is its group, cgroup.Name of that uid.
 // Start takes cfg.Device: it is closed at the machine's end, or on an
 // error, as its group is removed and its uid given back.
 func Start(cfg Config) (*Machine, error) {
@@ -239,11 +266,11 @@ func start(cfg Config) (*Machine, error) {
 	if err := machinesRoot(); err != nil {
 		return nil, err
 	}
-	uid, err := allot()
+	uid, allotted, err := takeUID(cfg.UID)
 	if err != nil {
 		return nil, err
 	}
-	m := &Machine{uid: uid, gid: int(st.Gid), device: cfg.Device, done: make(chan struct{})}
+	m := &Machine{uid: uid, allotted: allotted, gid: int(st.Gid), device: cfg.Device, done: make(chan struct{})}
 	m.group, err = cfg.Groups.Create(cgroup.Name(uid), uint64(cfg.MemoryMiB+groupSlackMiB)<<20,
 		uint64(cfg.VCPUs)*cgroup.CPUPeriod)
 	if err != nil {
@@ -540,7 +567,7 @@ func (m *Machine) remove() {
 	}
 	m.leftOver = errors.Join(left...)
 	if m.uid > 0 && m.leftOver == nil {
-		giveBack(m.uid)
+		giveBack(m.uid, m.allotted)
 	}
 }
 

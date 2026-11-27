@@ -26,12 +26,13 @@ var (
 )
 
 // EnsureImage makes the image of athanor's disk unless it stands: a
-// temporary beside it, uid's and of group gid (the keeper's own uid and
-// the VMMs' group), ImageMode, ImageBytes long, made an ext4 filesystem by
-// mke2fs within MakeImageWait, synced and then renamed into place. A failure leaves no temporary, and a temporary
+// temporary beside it, of the disk's uid and its own group (as a kept
+// spawn runs, KeptAccount), ImageMode, ImageBytes long, made an ext4
+// filesystem by mke2fs within MakeImageWait, synced and then renamed into
+// place. A failure leaves no temporary, and a temporary
 // a dead keeper left is removed at the next LoadDisks. The disk's lock is
 // held, so no two makings of one image run at once.
-func (k Kept) EnsureImage(athanor string, uid, gid int) error {
+func (k Kept) EnsureImage(athanor string, uid int) error {
 	path := k.ImagePath(athanor)
 	if st, err := os.Lstat(path); err == nil {
 		if !st.Mode().IsRegular() {
@@ -42,7 +43,7 @@ func (k Kept) EnsureImage(athanor string, uid, gid int) error {
 		return err
 	}
 	var tmp string
-	err := AsFileIDs(uid, gid, func() error {
+	err := AsFileIDs(uid, uid, func() error {
 		f, err := os.CreateTemp(k.Root, "."+Person(athanor)+ImageSuffix+".*")
 		if err != nil {
 			return err
@@ -58,11 +59,13 @@ func (k Kept) EnsureImage(athanor string, uid, gid int) error {
 		}
 		return f.Close()
 	})
+	// The keeper holds no capability over files: the image, its uid's
+	// alone, is made and synced as that uid.
 	if err == nil {
-		err = makeFilesystem(tmp)
+		err = makeFilesystem(tmp, uid)
 	}
 	if err == nil {
-		err = syncFile(tmp)
+		err = AsFileIDs(uid, uid, func() error { return syncFile(tmp) })
 	}
 	if err == nil {
 		err = os.Rename(tmp, path)
@@ -79,11 +82,11 @@ func (k Kept) EnsureImage(athanor string, uid, gid int) error {
 	return nil
 }
 
-// makeFilesystem runs mke2fs on the file at path, in a process group of its
-// own killed whole past MakeImageWait: ext4, no blocks reserved, its inode
-// tables and journal left to the guest's first mount to initialize, and the
-// file not discarded, so it stays sparse.
-func makeFilesystem(path string) error {
+// makeFilesystem runs mke2fs as uid on the file at path, uid's, in a
+// process group of its own killed whole past MakeImageWait: ext4, no blocks
+// reserved, its inode tables and journal left to the guest's first mount to
+// initialize, and the file not discarded, so it stays sparse.
+func makeFilesystem(path string, uid int) error {
 	ctx, cancel := context.WithTimeout(context.Background(), MakeImageWait)
 	defer cancel()
 	cmd := exec.Command(Mke2fs, "-q", "-F", "-t", "ext4", "-m", "0",
@@ -92,6 +95,9 @@ func makeFilesystem(path string) error {
 	var out bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &out
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true, Pdeathsig: syscall.SIGKILL}
+	if uid != os.Getuid() {
+		cmd.SysProcAttr.Credential = &syscall.Credential{Uid: uint32(uid), Gid: uint32(uid), Groups: []uint32{}}
+	}
 	if err := cmd.Start(); err != nil {
 		return err
 	}

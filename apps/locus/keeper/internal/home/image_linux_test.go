@@ -34,13 +34,14 @@ func temporaries(t *testing.T, root string) []string {
 }
 
 // A person's disk image is one sparse ext4 file directly under the kept
-// root, named by the person, of the keeper's uid and the VMMs' group with
-// ImageMode, ImageBytes long though it holds far less, and made once: a
-// second ensure changes nothing.
+// root, named by the person, of the disk's uid and its own group with
+// ImageMode, the uid's alone, ImageBytes long though it holds far less, and
+// made once: a second ensure changes nothing. Here the disk's uid is the
+// test's own.
 func TestADisksImageIsASparseExt4FileMadeOnce(t *testing.T) {
 	needMke2fs(t)
 	k := keptOfMine(t, 1)
-	if err := k.EnsureImage("ath_1", os.Getuid(), os.Getgid()); err != nil {
+	if err := k.EnsureImage("ath_1", os.Getuid()); err != nil {
 		t.Fatal(err)
 	}
 	path := k.ImagePath("ath_1")
@@ -55,7 +56,7 @@ func TestADisksImageIsASparseExt4FileMadeOnce(t *testing.T) {
 	switch {
 	case !info.Mode().IsRegular() || info.Mode().Perm() != ImageMode:
 		t.Fatalf("the image is %s, not a regular file of %o", info.Mode(), ImageMode)
-	case int(st.Uid) != os.Getuid() || int(st.Gid) != os.Getgid():
+	case int(st.Uid) != os.Getuid() || int(st.Gid) != os.Getuid():
 		t.Fatalf("the image is %d:%d", st.Uid, st.Gid)
 	case info.Size() != ImageBytes:
 		t.Fatalf("the image is %d bytes long, not %d", info.Size(), ImageBytes)
@@ -74,7 +75,7 @@ func TestADisksImageIsASparseExt4FileMadeOnce(t *testing.T) {
 	}
 	before := st.Ino
 	mtime := info.ModTime()
-	if err := k.EnsureImage("ath_1", os.Getuid(), os.Getgid()); err != nil {
+	if err := k.EnsureImage("ath_1", os.Getuid()); err != nil {
 		t.Fatal(err)
 	}
 	again, err := os.Lstat(path)
@@ -108,7 +109,7 @@ func TestAFailedMakingLeavesNoImage(t *testing.T) {
 		Mke2fs, MakeImageWait = c.maker, c.wait
 		k := keptOfMine(t, 1)
 		began := time.Now()
-		err := k.EnsureImage("ath_1", os.Getuid(), os.Getgid())
+		err := k.EnsureImage("ath_1", os.Getuid())
 		if err == nil || !strings.Contains(err.Error(), c.why) {
 			t.Fatalf("%s: the making answered %v", c.maker, err)
 		}
@@ -164,7 +165,7 @@ func TestAnImagesPathThatIsNoRegularFileIsRefused(t *testing.T) {
 	if err := os.Symlink(target, k.ImagePath("ath_1")); err != nil {
 		t.Fatal(err)
 	}
-	err := k.EnsureImage("ath_1", os.Getuid(), os.Getgid())
+	err := k.EnsureImage("ath_1", os.Getuid())
 	if err == nil || !strings.Contains(err.Error(), "is not a regular file") {
 		t.Fatalf("a link at the image's path answered %v", err)
 	}
@@ -177,7 +178,7 @@ func TestAnImagesPathThatIsNoRegularFileIsRefused(t *testing.T) {
 	if err := os.Mkdir(k.ImagePath("ath_1"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := k.EnsureImage("ath_1", os.Getuid(), os.Getgid()); err == nil || !strings.Contains(err.Error(), "is not a regular file") {
+	if err := k.EnsureImage("ath_1", os.Getuid()); err == nil || !strings.Contains(err.Error(), "is not a regular file") {
 		t.Fatalf("a folder at the image's path answered %v", err)
 	}
 }

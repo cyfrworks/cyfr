@@ -899,11 +899,14 @@ func TestHomeListPagesTheHomesInOrder(t *testing.T) {
 // their disk's record and then its image, with no folder: the homes are made
 // inside it, by their VM's keeper. A second home is recorded on the same
 // image, which stands as it was. A home of an image is measured, reset and
-// retired by its person's VM alone: here, with none, each is refused. None
-// needs root.
+// retired by its person's VM alone: here, with none, each is refused. The
+// image is its disk's uid's, which the keeper makes it as: root alone does.
 func TestAnImageDiskIsRecordedAndMadeWithNoFolder(t *testing.T) {
 	if _, err := os.Stat(home.Mke2fs); err != nil {
 		t.Skipf("this host has no %s: %v", home.Mke2fs, err)
+	}
+	if os.Getuid() != 0 {
+		t.Skip("making an image as its disk's uid needs root")
 	}
 	// The disk's uid is one no process holds: no folder of it is made.
 	const free = 59999
@@ -911,8 +914,14 @@ func TestAnImageDiskIsRecordedAndMadeWithNoFolder(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(kept.Root, home.DisksDir), 0o700); err != nil {
 		t.Fatal(err)
 	}
+	// The root as the shipped one is, so its disk's uid makes its image in it.
+	for path, mode := range map[string]os.FileMode{filepath.Dir(kept.Root): 0o711, kept.Root: os.ModeSticky | 0o773} {
+		if err := os.Chmod(path, mode); err != nil {
+			t.Fatal(err)
+		}
+	}
 	s, c, replies := channelServer(t, kept)
-	s.imageDisks, s.machineGID = true, os.Getgid()
+	s.imageDisks = true
 	recorded := func() home.Disk {
 		s.mu.Lock()
 		defer s.mu.Unlock()
@@ -938,6 +947,9 @@ func TestAnImageDiskIsRecordedAndMadeWithNoFolder(t *testing.T) {
 	img, err := os.Lstat(kept.ImagePath("ath_1"))
 	if err != nil || img.Size() != home.ImageBytes {
 		t.Fatalf("the image: %v %v", img, err)
+	}
+	if st := img.Sys().(*syscall.Stat_t); st.Uid != free || st.Gid != free || img.Mode().Perm() != 0o600 {
+		t.Fatalf("the image is %d:%d %s, not its disk's uid's alone", st.Uid, st.Gid, img.Mode())
 	}
 	if _, err := os.Lstat(kept.DiskPath("ath_1")); !os.IsNotExist(err) {
 		t.Fatalf("an image's disk has a folder: %v", err)

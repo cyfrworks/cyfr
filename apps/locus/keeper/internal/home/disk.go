@@ -79,10 +79,10 @@ const (
 	// ImageBytes is an image's apparent size. The file is sparse: the
 	// volume holds what the guest has written.
 	ImageBytes = 64 << 30
-	// ImageMode makes an image its VMM's to read and write by its group,
-	// /dev/kvm's, which every VMM holds: each VMM's space is given its own
-	// person's image alone (package stage), so the group reaches no other.
-	ImageMode = 0o660
+	// ImageMode makes an image its disk's uid's alone, the uid its person's
+	// VM runs under (package vm): no other uid opens it, and each VMM's space
+	// is given its own person's image alone (package stage).
+	ImageMode = 0o600
 )
 
 // ImagePath is the image of athanor's disk, <root>/<a>.img.
