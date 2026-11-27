@@ -1735,6 +1735,18 @@ test("opened and cyfr's locked read in one go leave cyfr running and the chooser
   assert.equal(next.prevented, false, "main keeps to the CYFR cyfr committed")
 })
 
+// On the passkey road being sent to sign in is main's own lock, once its
+// CYFR is open; before, nothing of that CYFR loads, and so nothing locks.
+test("before its CYFR is open, being sent to sign in is refused and tells cyfr no lock", async () => {
+  await started(true)
+  child.proposes(HOME)
+  await settled()
+  const page = content()
+  page.webContents.url = HOME + "/threads"
+  assert.ok(redirected(page, HOME + "/login?error=signed_out").prevented, "nothing of it before it is open")
+  assert.ok(!child.heard.some((m) => m.type === "lock"), "and so no lock of it")
+})
+
 test("a frame asking the top frame to go to the sign-in route is refused and opens nothing", async () => {
   await signedIn()
   const page = content()

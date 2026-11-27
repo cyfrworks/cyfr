@@ -1082,9 +1082,7 @@ defmodule Cyfr.Boundaries do
       allow: [],
       reason:
         "an adapter names no other surface: the console and Emissary's adapters meet " <>
-          "only below them, in the host's shared web tier and the domains. The browser's " <>
-          "sign-in callbacks share the OAuth callback throttle through the shared " <>
-          "pipelines (`CyfrWeb.Pipelines`), not through Emissary's router. " <>
+          "only below them, in the host's shared web tier and the domains. " <>
           "Boundary traces a quote only where it expands, and `Prism.Router.routes/0` expands " <>
           "in the composition router, whose deps admit `Emissary`: only this row reads the " <>
           "quoted names."
@@ -1173,7 +1171,7 @@ defmodule Cyfr.Boundaries do
       depth: 3,
       allow: ~w(
         CyfrWeb.ApiError CyfrWeb.ContextGuard CyfrWeb.ErrorRenderer CyfrWeb.MinimalPage
-        CyfrWeb.Pipelines CyfrWeb.Plugs.ApiSecurityHeaders CyfrWeb.Plugs.AuthRateLimit
+        CyfrWeb.Plugs.ApiSecurityHeaders CyfrWeb.Plugs.AuthRateLimit
         CyfrWeb.Plugs.Authenticate CyfrWeb.Plugs.CORS CyfrWeb.Plugs.CallIdentity
         CyfrWeb.Plugs.FrameRequest CyfrWeb.Plugs.MCPOrigin CyfrWeb.Plugs.MCPRateLimit
         CyfrWeb.Plugs.ParserErrors CyfrWeb.Plugs.RawBodyReader
@@ -1185,9 +1183,7 @@ defmodule Cyfr.Boundaries do
         "Emissary's adapters read the host's shared web tier and never its root router, " <>
           "its endpoint or another adapter: the HTTP API renders its refusals " <>
           "(`CyfrWeb.ApiError`) and the OAuth grant callback its no-session page " <>
-          "(`CyfrWeb.MinimalPage`), and `Emissary.Router` " <>
-          "declares the OAuth callback throttle from the shared pipelines " <>
-          "(`CyfrWeb.Pipelines`). The MCP pipeline parses its body behind the transport's " <>
+          "(`CyfrWeb.MinimalPage`). The MCP pipeline parses its body behind the transport's " <>
           "rate limit and authentication with the host's one parser definition " <>
           "(`CyfrWeb.Plugs.ParserErrors` under `CyfrWeb.Plugs.RawBodyReader`'s options and " <>
           "caps), which the endpoint parses every other body with. " <>

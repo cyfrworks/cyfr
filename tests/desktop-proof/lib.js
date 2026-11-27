@@ -402,25 +402,16 @@ async function atRest(why) {
 
 // The chooser a lock since `shownBefore` (history's length as main said
 // it, or before where nothing else could load the chooser meanwhile)
-// brought back, and what it told (atRest); then each of `over` done to a
-// chooser that stayed, with what it told after each (kept); then, with
-// `onward`, Use this computer's key pressed where one still stays. Answers
-// those and where that left the app: the device's pages, or the chooser
-// that stayed.
-export async function afterLock(shownBefore, why, {over = [], onward = true} = {}) {
-  let rest = await atRest(why)
+// brought back, and what it told (atRest); then, with `onward`, Use this
+// computer's key pressed where one still stays. Answers those and where
+// that left the app: the device's pages, or the chooser that stayed.
+export async function afterLock(shownBefore, why, {onward = true} = {}) {
+  const rest = await atRest(why)
   const shown = history.slice(shownBefore).some(atBootstrap)
   const told = rest.told
-  const kept = []
-  for (const act of over) {
-    if (!rest.told?.stayed) break
-    await act(rest.w)
-    rest = await atRest(why)
-    kept.push(rest.told)
-  }
-  if (!onward || !rest.told) return {shown, told, kept, back: rest.w}
-  if (rest.told.stayed) await js(rest.w.webContents, `document.querySelector("#words").click(); 1`)
-  return {shown, told, kept, back: await contentAt(atDevice, `the device's pages after ${why}`)}
+  if (!onward || !told) return {shown, told, back: rest.w}
+  if (told.stayed) await js(rest.w.webContents, `document.querySelector("#words").click(); 1`)
+  return {shown, told, back: await contentAt(atDevice, `the device's pages after ${why}`)}
 }
 
 // Each sign-out the app's windows posted to the CYFR since `from`.
@@ -440,12 +431,12 @@ export async function lockedOut(w, why, act, options) {
   const shownBefore = history.length
   const lockedBefore = closedAtLock.length
   await act()
-  const {back, shown, told, kept} = await afterLock(shownBefore, why, options)
+  const {back, shown, told} = await afterLock(shownBefore, why, options)
   const atOnce = closedAtLock.slice(lockedBefore)
   const left = await sessionCookie(back)
   const after = await opens(cookie)
   return {back, before, after, left, closedAtOnce: atOnce.length > 0 && atOnce.every(Boolean),
-    chooser: {shown, told, kept}, signOuts: await signOutsSince(from), cookie}
+    chooser: {shown, told}, signOuts: await signOutsSince(from), cookie}
 }
 
 // What each road's lock shares: the session that opened a page opens
