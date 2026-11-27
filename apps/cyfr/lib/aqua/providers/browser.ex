@@ -745,6 +745,11 @@ defmodule Aqua.Providers.Browser do
           "Close this thread's window when done with it; the person can close Aqua's browser from what is running."
       )
 
+  # Memory ended the browser: said by its cause, and not asked again into
+  # the same end.
+  defp refusal({:ended, {:ended_by, cause}}),
+    do: conflict(Prima.Refusal.message({:memory, "Aqua's browser", cause}))
+
   defp refusal({:ended, _reason}),
     do: conflict("The browser stopped before it answered. Ask again to start it.")
 

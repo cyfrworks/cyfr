@@ -29,8 +29,8 @@ defmodule Opus.WorkerClient do
   (`Prima.Boot.id/0`) as the incarnation presenting it, under a fresh nonce.
   An answer is a `200` read up to `Prima.HostAPI.max_answer_bytes/0` and
   read at this wire's version (`Prima.WorkerWire.read_answer/1`):
-  `{"v": 2, "ok": value}` is the callback's success and
-  `{"v": 2, "error": name}` naming `malformed` or `not_found` its
+  `{"v": 3, "ok": value}` is the callback's success and
+  `{"v": 3, "error": name}` naming `malformed` or `not_found` its
   refusal; any other status, an answer without `v` or at another
   version, any other name, or anything else in an answer's place, is a
   lost answer. A lost answer is retried once, with a fresh nonce, when
@@ -39,12 +39,12 @@ defmodule Opus.WorkerClient do
   dispatch reconciles against the attempt.
 
   Two listener refusals are answers. A `start` refused `503`
-  `{"v": 2, "error": "no_memory", "held": held}` is `{:error, {:no_memory,
+  `{"v": 3, "error": "no_memory", "held": held}` is `{:error, {:no_memory,
   held}}`: the keeper found no room for its runner, `held`
   (`Prima.LocusPool.read_held/1`) says what holds the memory, and the
   service started nothing; one whose `held` does not read stays lost. And
   a `start` refused `503`
-  `{"v": 2, "error": "unavailable", "message": sentence}`, the worker service's
+  `{"v": 3, "error": "unavailable", "message": sentence}`, the worker service's
   account of why no runner can take it (its keeper refuses runners,
   `t:Prima.WorkerAPI.refusal/0`), is `{:error, {:unavailable, sentence}}`,
   since the service answers it only once it has decided to start nothing.
@@ -122,6 +122,65 @@ defmodule Opus.WorkerClient do
         {:ok, status} -> {:ok, status}
         :error -> {:error, :lost}
       end
+    end
+  end
+
+  @doc """
+  The worker service's report of who used what after `after_rev`
+  (`Prima.LocusPool`, the pool wire): a `POST` to its pool route signed
+  with the service's pool key (`Prima.LocusPool.pool_key/2` of its worker
+  key), read strictly (`Prima.LocusPool.read_answer/1`). Read only, so it
+  is never retried here: the next poll asks again. `{:error,
+  :unavailable}` for a service no connection was made to or no key
+  derives for, `{:error, :lost}` for anything else in an answer's place.
+  """
+  @spec pool(WorkerAPI.endpoint(), non_neg_integer()) ::
+          {:ok, Prima.LocusPool.report()} | {:error, transport_refusal()}
+  def pool(%{id: id, url: url}, after_rev)
+      when is_binary(id) and is_binary(url) and is_integer(after_rev) and after_rev >= 0 do
+    case Keys.locus_runtime_key(id) do
+      {:ok, worker_key} ->
+        body = Prima.LocusPool.request_body(after_rev)
+        pool_key = Prima.LocusPool.pool_key(:runtime, worker_key)
+
+        header =
+          Prima.LocusPool.header(:runtime, pool_key, System.system_time(:millisecond), body)
+
+        pool_post(url <> Prima.LocusPool.route(), header, body)
+
+      {:error, _invalid} ->
+        {:error, :unavailable}
+    end
+  end
+
+  defp pool_post(url, header, body) do
+    max_bytes = HostAPI.max_answer_bytes()
+
+    response =
+      Req.request(
+        method: :post,
+        url: url,
+        headers: [{WorkerWire.auth_header(), header}, {"content-type", "application/json"}],
+        body: body,
+        receive_timeout: Prima.LocusPool.ask_ms(),
+        connect_options: [timeout: @connect_timeout_ms],
+        retry: false,
+        redirect: false,
+        compressed: false,
+        decode_body: false,
+        into: Prima.BoundedBody.collector(max_bytes)
+      )
+
+    with {:ok, %Req.Response{status: 200} = resp} <- response,
+         {:ok, raw} <- Prima.BoundedBody.read(resp, max_bytes),
+         {:ok, report} <- Prima.LocusPool.read_answer(raw) do
+      {:ok, report}
+    else
+      {:error, %Req.TransportError{reason: reason}} when reason not in [:timeout, :closed] ->
+        {:error, :unavailable}
+
+      _lost ->
+        {:error, :lost}
     end
   end
 

@@ -297,6 +297,14 @@ defmodule Compendium do
   defdelegate tincture_control_runs(operation), to: Rules, as: :control_runs
 
   @doc """
+  The builds service's report of who used what after `after_rev`, for
+  CYFR's record of it (`Compendium.Builds.Client.pool/1`).
+  """
+  @spec builds_pool(non_neg_integer()) ::
+          {:ok, Prima.LocusPool.report()} | {:error, term()}
+  defdelegate builds_pool(after_rev), to: Compendium.Builds.Client, as: :pool
+
+  @doc """
   Whether a frame may ask the person for `operation` through a request
   (`Compendium.Tincture.Rules.request_operation/1`).
   """

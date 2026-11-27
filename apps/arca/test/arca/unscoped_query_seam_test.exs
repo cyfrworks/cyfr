@@ -450,6 +450,9 @@ defmodule Arca.UnscopedQuerySeamTest do
     "Arca.Schemas.JobClaim" =>
       "a mutual-exclusion token for one of the cell's singleton jobs, keyed by (kind, key); " <>
         "several kinds have no athanor at all, and a key naming one grants no reach into it",
+    "Arca.Schemas.MemoryEndpoint" =>
+      "an endpoint the host asks who used what of, keyed by its name: a machine's numbers " <>
+        "and its report's cursor, the host's own, which no athanor holds",
     "Arca.Schemas.ServerMeta" =>
       "the server's own facts (the schema and keyring fingerprints) — one row per key, no tenant",
     "Arca.PlatformSettings" =>

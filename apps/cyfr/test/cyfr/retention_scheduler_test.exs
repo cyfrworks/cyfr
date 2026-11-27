@@ -155,6 +155,66 @@ defmodule Cyfr.RetentionSchedulerTest do
     end
   end
 
+  describe "the record of who used what" do
+    # Days written straight into the record, of one athanor, so the
+    # cycle's own step is what removes them.
+    defp days!(days_ago) do
+      today = Date.utc_today()
+
+      rows =
+        for n <- days_ago do
+          %{
+            athanor_id: "ath_retention",
+            endpoint: "wrk_retention",
+            boot: String.duplicate("a", 32),
+            day: Date.add(today, -n),
+            kind: "run",
+            subject: "",
+            rev: n + 1,
+            shown: "run",
+            name: nil,
+            bytes: 0,
+            mib_ms: 0,
+            measured_ms: 0,
+            peak_bytes: 0,
+            cap: 0,
+            machine: 0,
+            either: 0
+          }
+        end
+
+      {_count, _} = Arca.Repo.insert_all(Arca.Schemas.MemoryCounter, rows)
+      :ok
+    end
+
+    defp days_left do
+      today = Date.utc_today()
+
+      from(c in Arca.Schemas.MemoryCounter, where: c.athanor_id == "ath_retention", select: c.day)
+      |> Arca.Repo.all()
+      |> Enum.map(&Date.diff(today, &1))
+      |> Enum.sort()
+    end
+
+    test "with the setting at 90 the day 89 days back stays and the day 90 back goes",
+         %{key: key} do
+      Cyfr.Test.Settings.put("memory_retention_days", 90)
+      days!([0, 89, 90, 400])
+
+      assert {:ok, summary} = RetentionScheduler.cycle(key: key, owner: "member-a")
+      assert "memory" in summary.steps
+      assert days_left() == [0, 89]
+    end
+
+    test "with the setting at 1 today stays and every day before it goes", %{key: key} do
+      Cyfr.Test.Settings.put("memory_retention_days", 1)
+      days!([0, 1, 2])
+
+      assert {:ok, _summary} = RetentionScheduler.cycle(key: key, owner: "member-a")
+      assert days_left() == [0]
+    end
+  end
+
   describe "the host's decisions" do
     setup do
       Cyfr.Test.Settings.put("decision_retention_days", 30)

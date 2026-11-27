@@ -71,6 +71,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     threads()
     turns()
     shared_threads()
+    memory_record()
     record_fingerprint()
   end
 
@@ -1396,6 +1397,10 @@ defmodule Arca.Repo.Migrations.Baseline do
         ~w(ok error result_lost cancelled uncertain)
       )
 
+    # What ended a lapsed attempt's runner for memory, else null.
+    attempt_ended_by =
+      known("execution_attempts_ended_by_known", "ended_by", ~w(cap machine either))
+
     create table(:execution_attempts, primary_key: false) do
       add :attempt, :string, primary_key: true, null: false
       add :athanor_id, :string, null: false
@@ -1430,9 +1435,15 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :started_at, :utc_datetime_usec, null: false
       add :running_since, :utc_datetime_usec
       add :ended_at, :utc_datetime_usec
+      add :ended_by, :string, check: if(sqlite?, do: attempt_ended_by)
     end
 
-    checked(sqlite?, :execution_attempts, [attempt_generation, attempt_state, attempt_outcome])
+    checked(sqlite?, :execution_attempts, [
+      attempt_generation,
+      attempt_state,
+      attempt_outcome,
+      attempt_ended_by
+    ])
 
     create unique_index(:execution_attempts, [:execution_id, :fence])
     create index(:execution_attempts, [:athanor_id, :state, :lease_until])
@@ -3060,6 +3071,73 @@ defmodule Arca.Repo.Migrations.Baseline do
     # Two appenders that read the same last `seq` cannot both write the
     # next one: the loser writes nothing and takes the one after.
     create unique_index(:shared_messages, [:thread_id, :seq])
+  end
+
+  # ==========================================================================
+  # Who used what
+  # ==========================================================================
+
+  # The record of the memory each person's work used on each
+  # machine (`Arca.MemoryRecord`), from the counters each Locus service
+  # reports. A counter is its athanor's row, keyed by the athanor first,
+  # then the endpoint that reported it, the keeper's boot, the UTC day, the
+  # keeper's kind and its subject, the empty string for none; `rev` is its
+  # role's at its last change, and a row is replaced only by a higher one.
+  # `name` and `shown` are what CYFR read of the subject's row when it was
+  # stored, kept after the row is gone. Rows of days past the
+  # `memory_retention_days` platform setting go.
+  defp memory_record do
+    sqlite? = repo().__adapter__() == Ecto.Adapters.SQLite3
+
+    # The keeper's kinds (`Prima.LocusPool.kinds/0`) and what a person
+    # reads each as (`Arca.MemoryRecord.shown/0`).
+    counter_kind =
+      known("memory_counters_kind_known", "kind", ~w(warm run build program terminal))
+
+    counter_shown =
+      known("memory_counters_shown_known", "shown", ~w(run build program terminal browser tool))
+
+    create table(:memory_counters, primary_key: false) do
+      add :athanor_id, :string, primary_key: true, null: false
+      add :endpoint, :string, primary_key: true, null: false
+      add :boot, :string, primary_key: true, null: false
+      add :day, :date, primary_key: true, null: false
+
+      add :kind, :string,
+        primary_key: true,
+        null: false,
+        check: if(sqlite?, do: counter_kind)
+
+      add :subject, :string, primary_key: true, null: false
+      add :rev, :bigint, null: false
+      add :shown, :string, null: false, check: if(sqlite?, do: counter_shown)
+      add :name, :string
+      add :bytes, :bigint, null: false
+      add :mib_ms, :bigint, null: false
+      add :measured_ms, :bigint, null: false
+      add :peak_bytes, :bigint, null: false
+      add :cap, :bigint, null: false
+      add :machine, :bigint, null: false
+      add :either, :bigint, null: false
+    end
+
+    checked(sqlite?, :memory_counters, [counter_kind, counter_shown])
+    create index(:memory_counters, [:day])
+    create index(:memory_counters, [:endpoint, :boot])
+
+    # Each endpoint CYFR asks, the host's own and no athanor's: the
+    # keeper's boot it last answered for, the rev its next ask follows, and
+    # the machine's numbers that answer carried.
+    create table(:memory_endpoints, primary_key: false) do
+      add :endpoint, :string, primary_key: true, null: false
+      add :boot, :string, null: false
+      add :after, :bigint, null: false
+      add :budget, :bigint, null: false
+      add :work, :bigint, null: false
+      add :floor, :bigint, null: false
+      add :used, :bigint, null: false
+      add :heard_at, :utc_datetime_usec, null: false
+    end
   end
 
   # ==========================================================================

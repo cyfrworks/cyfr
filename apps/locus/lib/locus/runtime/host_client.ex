@@ -27,7 +27,7 @@ defmodule Locus.Runtime.HostClient do
   whole deployment where only one member issues. Every call is one `POST`
   to the callback's route
   (`Prima.WorkerWire.host_route/1`): its body is the versioned JSON
-  `{"v": 2, "op": name, "args": {...}}` (`Prima.WorkerWire.request_body/2`)
+  `{"v": 3, "op": name, "args": {...}}` (`Prima.WorkerWire.request_body/2`)
   sealed with the attempt's seal key to the call's fields
   (`Prima.WorkerAuth.seal_call/5`), and its `x-cyfr-auth` header is the
   attempt's call-key signature over those fields — a fresh nonce and the
@@ -83,7 +83,7 @@ defmodule Locus.Runtime.HostClient do
   service's relay posts it for its runner (`Locus.Runtime.Relay`), and only the
   runner opens the frames. Every other call is read whole.
 
-  One call reaches CYFR beside a runner's: `runner_exited/4`, a worker
+  One call reaches CYFR beside a runner's: `runner_exited/7`, a worker
   service's report that one of its runners exited, a plain JSON body
   signed with that worker service's dispatch key and posted to the
   `runner_exited` host route, answered in plain JSON.
@@ -558,7 +558,10 @@ defmodule Locus.Runtime.HostClient do
   `refusal`, the code of the keeper's refusal of that runner after its
   start was answered, when CYFR has words for it
   (`Prima.WorkerAPI.runner_refusal/1`): any other is sent as none, which
-  CYFR reads as no reason. Every attempt
+  CYFR reads as no reason. `memory` is the memory limit that ended the
+  runner (`t:Locus.Runtime.Keeper.ended_for_memory/0`), sent as
+  `"cap"`, `"machine"` or `"either"`, and nil for a runner that ended
+  otherwise, sent as none. Every attempt
   one runner holds was issued by one member, so the report names that
   member (`at`) and is posted at its address; a member that is not the one
   named lapses nothing. The report is signed with the service's dispatch
@@ -570,7 +573,8 @@ defmodule Locus.Runtime.HostClient do
           String.t(),
           String.t(),
           [String.t()],
-          String.t() | nil
+          String.t() | nil,
+          Locus.Runtime.Keeper.ended_for_memory()
         ) :: :ok | {:error, term()}
   def runner_exited(
         %Locus.Runtime.Credentials{} = credentials,
@@ -578,7 +582,8 @@ defmodule Locus.Runtime.HostClient do
         boot,
         runner,
         attempts,
-        refusal
+        refusal,
+        memory
       )
       when is_binary(boot) and is_binary(runner) and is_list(attempts) do
     args = %{"member" => at.member, "runner" => runner, "attempts" => attempts}
@@ -587,6 +592,8 @@ defmodule Locus.Runtime.HostClient do
       if Prima.WorkerAPI.runner_refusal(refusal),
         do: Map.put(args, "refusal", refusal),
         else: args
+
+    args = Prima.HostAPI.put_memory_end(args, memory)
 
     body = Jason.encode!(WorkerWire.request_body(:runner_exited, args))
 

@@ -16,9 +16,11 @@ defmodule Locus.Runtime.RunnerProcess do
   make warm again is `{:message, complete, {:error, {:assign, reason}}}`;
   a frame the runner may not send, or a line that is not one, is
   `{:error, {:protocol, reason}}`), `:closed` once the
-  runner's end of the channel is closed, `{:exited, how}` once its
-  process ended and, for an attached runner, after its channel closed or
-  a bound passed, `:released` once the keeper has retired it,
+  runner's end of the channel is closed, `{:exited, how, memory}` once
+  its process ended, `memory` the limit that ended it
+  (`t:Locus.Runtime.Keeper.ended_for_memory/0`), and, for an attached
+  runner, after its channel closed or a bound passed, `:released` once
+  the keeper has retired it,
   `{:refused, reason}` when the keeper refused the spawn, so no process of
   the runner ever ran and nothing is left to release,
   `{:refused, reason, :release_follows}` when it refused it after making
@@ -277,7 +279,7 @@ defmodule Locus.Runtime.RunnerProcess do
 
   def handle_info({:EXIT, _pid, _reason}, state), do: {:noreply, state}
 
-  def handle_info({:control_drained, ref}, %{exited: {ref, _how}} = state),
+  def handle_info({:control_drained, ref}, %{exited: {ref, _ended}} = state),
     do: {:noreply, flush_exited(state)}
 
   def handle_info({:control_drained, _ref}, state), do: {:noreply, state}
@@ -388,14 +390,14 @@ defmodule Locus.Runtime.RunnerProcess do
   # the stream closes, bounded by `@control_drain_ms`, so the frames the
   # runner wrote before it ended (its `exit`, with what it holds) reach the
   # owner first.
-  defp on_event({:exited, how}, %{attached: true, closed: false} = state) do
+  defp on_event({:exited, how, memory}, %{attached: true, closed: false} = state) do
     ref = make_ref()
     Process.send_after(self(), {:control_drained, ref}, @control_drain_ms)
-    %{state | exited: {ref, how}}
+    %{state | exited: {ref, {:exited, how, memory}}}
   end
 
-  defp on_event({:exited, how}, state) do
-    notify(state, {:exited, how})
+  defp on_event({:exited, how, memory}, state) do
+    notify(state, {:exited, how, memory})
     state
   end
 
@@ -528,8 +530,8 @@ defmodule Locus.Runtime.RunnerProcess do
     %{state | released: true}
   end
 
-  defp flush_exited(%{exited: {_ref, how}} = state) do
-    notify(state, {:exited, how})
+  defp flush_exited(%{exited: {_ref, ended}} = state) do
+    notify(state, ended)
     %{state | exited: nil}
   end
 

@@ -378,6 +378,34 @@ defmodule Prima.LocusPoolTest do
       refute sentence =~ "mcp_private"
     end
 
+    test "names each holding whose subject CYFR read a name for, and counts the rest by kind" do
+      held = %{
+        need: 384 * @mib,
+        free: 0,
+        mine: [
+          %{kind: "program", subject: "mcp_codex", bytes: 300 * @mib},
+          %{kind: "program", subject: "mcp_claude", bytes: 600 * @mib},
+          %{kind: "terminal", subject: "mcp_claude", bytes: 100 * @mib},
+          # A row the person can no longer read: counted, never named.
+          %{kind: "program", subject: "mcp_deleted", bytes: 200 * @mib},
+          %{kind: "build", subject: nil, bytes: 900 * @mib}
+        ],
+        others_bytes: @gib
+      }
+
+      names = %{"mcp_claude" => "claude-code", "mcp_codex" => "codex"}
+      sentence = plain!(LocusPool.refusal_sentence(held, names))
+
+      assert sentence ==
+               "This CYFR has not enough memory free. Of yours, claude-code uses 700.0 MB, " <>
+                 "codex uses 300.0 MB, a program uses 200.0 MB and a build uses 900.0 MB. " <>
+                 "Others use 1.0 GB. Stop one on the Programs page, or wait."
+
+      refute sentence =~ "mcp_"
+      # A name is only ever one of the names handed: none comes from held.
+      assert LocusPool.refusal_sentence(held) == LocusPool.refusal_sentence(held, %{})
+    end
+
     test "of two people, each reads only their own work and the other's as a sum" do
       # The keeper's held for a refused build of each of two athanors, each
       # holding a program: its own by kind, the other's within others_bytes.
@@ -471,5 +499,10 @@ defmodule Prima.LocusPoolTest do
                "This CYFR has not enough memory free. Of yours, a program uses 600.0 MB. " <>
                  "Stop one on the Programs page, or wait."
     end
+  end
+
+  test "a withheld refusal says only that there is not enough memory free" do
+    assert LocusPool.refusal_sentence(:withheld) ==
+             "This CYFR has not enough memory free. Stop one on the Programs page, or wait."
   end
 end

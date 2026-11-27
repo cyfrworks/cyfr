@@ -286,6 +286,21 @@ defmodule Opus do
   defdelegate events_since(execution_id, cursor, athanor_id), to: Events, as: :since
 
   @doc """
+  Who used what memory, as `ctx` may read it (`Opus.Memory.read/2`): the
+  person's own (`:mine`), or everyone's for the platform administrator
+  (`:everyone`).
+  """
+  @spec memory(Sanctum.Context.t(), :mine | :everyone) ::
+          {:ok,
+           %{
+             machines: [Opus.Memory.machine()],
+             days: [Opus.Memory.day()],
+             unanswered: [Opus.Memory.unanswered()]
+           }}
+          | {:error, term()}
+  defdelegate memory(ctx, scope), to: Opus.Memory, as: :read
+
+  @doc """
   Advance a running chain's `authority` through one invocation of
   `reference` and run it synchronously under the resulting child
   authority, with the chain's execution as its lineage, never as a fresh

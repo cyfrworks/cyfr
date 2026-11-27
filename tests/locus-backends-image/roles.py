@@ -248,7 +248,7 @@ def test_run(stack, plane):
     boot = status[1]["ok"]["boot"]
     with open(ECHO, "rb") as f:
         attempt = plane.mint(boot, "reagent", ECHO_REF, f.read(), {"roles": "one"}, "ath_roles", 30_000)
-    expect(plane.start(base, attempt)[1] == {"v": 2, "ok": True}, "a run starts in the runtime role")
+    expect(plane.start(base, attempt)[1] == {"v": 3, "ok": True}, "a run starts in the runtime role")
     complete = plane.wait_seen("complete", attempt["execution_id"], 90)[0]
     expect(complete["args"]["outcome"]["output"] == {"roles": "one"}, "the run completes with its answer", complete)
 

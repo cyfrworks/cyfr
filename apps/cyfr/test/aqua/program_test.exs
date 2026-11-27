@@ -4253,25 +4253,148 @@ defmodule Aqua.ProgramTest do
       refute_received {:control, "home", _message, _fields}
     end
 
-    for {refusal, why} <- [
-          {"capacity", "its uids"},
+    for {refusal, why, words} <- [
+          {"capacity", "its uids",
+           "no more programs, or no more of this program's sessions, may run on this CYFR at " <>
+             "once. Stop one on the Programs page, or wait."},
           {{"capacity", %{need: 402_653_184, free: 0, mine: [], others_bytes: 1_073_741_824}},
-           "the pool's memory, carrying what holds it"}
+           "the pool's memory, carrying what holds it",
+           "this CYFR has not enough memory free. Work under way uses 1.0 GB. Wait, or try " <>
+             "again later."}
         ] do
       @refusal refusal
-      test "a start the backends refuse for want of room (#{why}) ends the turn saying there is " <>
-             "no room for another running program, not that the program is away",
+      @words words
+      test "a start the backends refuse for want of room (#{why}) ends the turn saying why, " <>
+             "not that the program is away",
            %{ctx: ctx, thread: thread, row: row, fake: fake} do
         Scripted.refuse_once(fake, "open", @refusal)
         turn = accept!(ctx, thread, row, "hello")
-
-        line =
-          "#{@title} could not start: this CYFR has no room for another running program. Stop " <>
-            "work in another thread or wait for it to end, then send your message again."
+        line = "#{@title} could not start: #{@words}"
 
         assert {:failed, ^line} = Task.await(run(ctx, turn), 30_000)
         assert system_lines(ctx, thread, turn) == [line]
       end
+    end
+
+    test "a start refused for the memory the person's own programs hold names them, by their rows",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      held = %{
+        need: 402_653_184,
+        free: 0,
+        mine: [
+          %{kind: "program", subject: row.id, bytes: 734_003_200},
+          %{
+            kind: "program",
+            subject: "mcp_01a09fee-0000-7000-8000-0000000000aa",
+            bytes: 104_857_600
+          }
+        ],
+        others_bytes: 1_073_741_824
+      }
+
+      Scripted.refuse_once(fake, "open", {"capacity", held})
+      turn = accept!(ctx, thread, row, "hello")
+
+      line =
+        "#{@title} could not start: this CYFR has not enough memory free. Of yours, #{row.name} " <>
+          "uses 700.0 MB and a program uses 100.0 MB. Others use 1.0 GB. Stop one on the " <>
+          "Programs page, or wait."
+
+      assert {:failed, ^line} = Task.await(run(ctx, turn), 30_000)
+      assert system_lines(ctx, thread, turn) == [line]
+    end
+
+    for {cause, words} <- [
+          cap: "it needed more memory than one piece of work may use on this machine.",
+          machine: "CYFR ran out of memory for what it runs.",
+          either:
+            "it ran out of memory, and CYFR could not tell whether its own cap or a limit " <>
+              "above it did it."
+        ] do
+      @cause cause
+      @words words
+      test "a program the machine ends for memory (#{cause}) at work ends the turn lost saying " <>
+             "so, and opens nothing again",
+           %{ctx: ctx, thread: thread, row: row, fake: fake} do
+        turn = accept!(ctx, thread, row, "work on it")
+        loop = run(ctx, turn)
+        started!(fake, row)
+        _post = sent()
+        [input] = inputs(ctx, turn)
+        say(fake, row, accepted(input))
+        committed!(ctx, thread, 4)
+
+        Scripted.end_sessions_for_memory(fake, row.id, @cause)
+        line = "#{@title} stopped: #{@words}"
+
+        assert {:failed, ^line} = Task.await(loop, 30_000)
+        assert system_lines(ctx, thread, turn) == [line]
+        refute_received {:session, "open", _wire, _fields}
+      end
+    end
+
+    test "a memory end its reader sees while the program starts ends the turn lost, saying so, " <>
+           "and opens nothing again",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      turn = accept!(ctx, thread, row, "work on it")
+      loop = run(ctx, turn)
+      opened!(fake, row, "boot-one")
+      assert %{"t" => "start"} = sent()
+
+      # The start is written and not yet answered when memory ends it.
+      Scripted.end_sessions_for_memory(fake, row.id, :machine)
+      line = "#{@title} stopped: CYFR ran out of memory for what it runs."
+
+      assert {:failed, ^line} = Task.await(loop, 30_000)
+      assert system_lines(ctx, thread, turn) == [line]
+      refute_received {:session, "open", _wire, _fields}
+    end
+
+    # A memory end that the brain's write meets before its reader does.
+    test "a memory end the work's write meets first, while starting, is said as memory",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      turn = accept!(ctx, thread, row, "work on it")
+      loop = run(ctx, turn)
+      opened!(fake, row, "boot-one")
+      assert %{"t" => "start"} = sent()
+
+      # The work's write waits at the service while memory ends the session.
+      Scripted.hold(fake, "send")
+      say(fake, row, started([]))
+      assert_receive {:held, "send", held}, 10_000
+      Scripted.end_sessions_for_memory(fake, row.id, :cap)
+      send(held, :go)
+
+      line =
+        "#{@title} stopped: it needed more memory than one piece of work may use on this machine."
+
+      assert {:failed, ^line} = Task.await(loop, 30_000)
+      refute_received {:session, "open", _wire, _fields}
+    end
+
+    test "a memory end a steer's post meets first, at work, is said as memory, " <>
+           "and opens nothing again",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      turn = accept!(ctx, thread, row, "work on it")
+      loop = run(ctx, turn)
+      started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+      committed!(ctx, thread, 4)
+
+      # The steer's post waits at the service while memory ends the session.
+      Scripted.hold(fake, "send")
+      _steer = steer!(ctx, thread, turn, "and this")
+      assert_receive {:held, "send", held}, 10_000
+      Scripted.end_sessions_for_memory(fake, row.id, :cap)
+      send(held, :go)
+
+      line =
+        "#{@title} stopped: it needed more memory than one piece of work may use on this machine."
+
+      refute_receive {:session, "open", _wire, _fields}, 3_000
+      assert {:failed, ^line} = Task.await(loop, 30_000)
     end
 
     test "the program's own silence after it took a post ends its work, saying so",

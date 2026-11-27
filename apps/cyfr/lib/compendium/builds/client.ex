@@ -87,6 +87,15 @@ defmodule Compendium.Builds.Client do
   @supervisor Compendium.Builds.TaskSupervisor
   @connect_timeout_ms 5_000
   @health_timeout_ms 5_000
+  # The pool call's bound to connect: within it a connection not made is
+  # told apart from an answer that does not come.
+  @pool_connect_ms 2_000
+
+  # A connection that closed or was reset had been made; a timeout before
+  # the deadline is the connection attempt's own, so none was; anything
+  # else never connected.
+  @lost [:closed, :econnreset, :econnaborted, :epipe, :enotconn]
+
   # How long past the deadline the builder's own `timeout` refusal, which
   # carries the build's log, is waited for before the request is ended:
   # this, or the time the build was given when that is less.
@@ -193,6 +202,75 @@ defmodule Compendium.Builds.Client do
         {:error, exception} ->
           {:error, transport(exception, :no_deadline)}
       end
+    end
+  end
+
+  @doc """
+  The builds service's report of who used what after `after_rev`
+  (`Prima.LocusPool`, the pool wire): a `POST` to its pool route signed
+  with its pool key (`Prima.LocusPool.pool_key/2` of the builds key), read
+  strictly (`Prima.LocusPool.read_answer/1`). `:not_configured` for no
+  builds service, `:unreachable` for no connection, `:disconnected` for a
+  connection that closed, `:deadline` for an answer that did not come in
+  time, `{:malformed, :pool}` for anything else in an answer's place.
+  """
+  @spec pool(non_neg_integer()) ::
+          {:ok, Prima.LocusPool.report()}
+          | {:error,
+             :not_configured | :unreachable | :disconnected | :deadline | {:malformed, :pool}}
+  def pool(after_rev) when is_integer(after_rev) and after_rev >= 0 do
+    case {RuntimeConfig.locus_builds_url(), RuntimeConfig.locus_builds_key()} do
+      {url, <<_::256>> = key} when is_binary(url) ->
+        body = Prima.LocusPool.request_body(after_rev)
+        pool_key = Prima.LocusPool.pool_key(:builds, key)
+        header = Prima.LocusPool.header(:builds, pool_key, System.system_time(:millisecond), body)
+        max = Prima.Limits.default_max_response_size()
+        # A connection is given 2 s and the answer one ask's bound
+        # (`Prima.LocusPool.ask_ms/0`), so a timeout past the connection's
+        # bound and a second more is an answer that did not come
+        # (`:deadline`), never a connection not made.
+        deadline = System.system_time(:millisecond) + @pool_connect_ms + 1_000
+
+        response =
+          Req.request(
+            method: :post,
+            url: url <> Prima.LocusPool.route(),
+            headers: [
+              {BuilderProtocol.auth_header(), header},
+              {"content-type", "application/json"}
+            ],
+            body: body,
+            connect_options: [timeout: @pool_connect_ms],
+            receive_timeout: Prima.LocusPool.ask_ms(),
+            retry: false,
+            redirect: false,
+            compressed: false,
+            decode_body: false,
+            into: BoundedBody.collector(max)
+          )
+
+        with {:ok, %Req.Response{status: 200} = resp} <- response,
+             {:ok, raw} <- BoundedBody.read(resp, max),
+             {:ok, report} <- Prima.LocusPool.read_answer(raw) do
+          {:ok, report}
+        else
+          # A timeout, a connection closed and none made, each as the
+          # client's own transport tells them apart (`transport/2`). Asked
+          # every few seconds, a service that is down is said by the answer
+          # and never logged here.
+          {:error, %Req.TransportError{reason: reason} = exception}
+          when reason in [:timeout | @lost] ->
+            {:error, transport(exception, deadline)}
+
+          {:error, %Req.TransportError{}} ->
+            {:error, :unreachable}
+
+          _other ->
+            {:error, {:malformed, :pool}}
+        end
+
+      _unconfigured ->
+        {:error, :not_configured}
     end
   end
 
@@ -459,11 +537,6 @@ defmodule Compendium.Builds.Client do
     do: {:protocol_mismatch, builder, client}
 
   defp refused(refusal, diagnostics), do: {:refused, refusal, diagnostics}
-
-  # A connection that closed or was reset had been made; a timeout before
-  # the deadline is the connection attempt's own, so none was; anything
-  # else never connected.
-  @lost [:closed, :econnreset, :econnaborted, :epipe, :enotconn]
 
   defp transport(%Req.TransportError{reason: reason}, _deadline) when reason in @lost,
     do: :disconnected

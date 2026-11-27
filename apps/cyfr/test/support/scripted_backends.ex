@@ -289,6 +289,25 @@ defmodule Cyfr.Test.ScriptedBackends do
   end
 
   @doc """
+  End every session of `server`'s owner as memory would, by `cause`
+  (`:cap`, `:machine` or `:either`): every later answer of each says it
+  ended and carries `ended_by`, as the service's does.
+  """
+  def end_sessions_for_memory(%{agent: agent}, server, cause)
+      when cause in [:cap, :machine, :either] do
+    Agent.update(agent, fn st ->
+      sessions =
+        Map.new(st.sessions, fn {id, s} ->
+          if elem(s.owner, 1) == server,
+            do: {id, %{s | running: false, exit_code: nil, ended_by: cause}},
+            else: {id, s}
+        end)
+
+      %{st | sessions: sessions}
+    end)
+  end
+
+  @doc """
   Put `bytes` into the running terminal session `session`'s output as its
   program wrote them, in chunks of at most the wire's
   `Prima.LocusBackends.max_chunk_bytes/0`, as the service buffers them.
@@ -1179,6 +1198,7 @@ defmodule Cyfr.Test.ScriptedBackends do
       seq: 0,
       running: true,
       exit_code: nil,
+      ended_by: nil,
       active: System.monotonic_time(:millisecond)
     }
 
@@ -1199,8 +1219,8 @@ defmodule Cyfr.Test.ScriptedBackends do
     status =
       Agent.get_and_update(agent, fn st ->
         case st.sessions[id] do
-          %{running: false} ->
-            {:ended, st}
+          %{running: false} = s ->
+            {{:ended, s.ended_by}, st}
 
           s ->
             for line <- lines,
@@ -1212,7 +1232,7 @@ defmodule Cyfr.Test.ScriptedBackends do
         end
       end)
 
-    session_answer(conn, Agent.get(agent, & &1), %{"status" => Atom.to_string(status)})
+    session_answer(conn, Agent.get(agent, & &1), written(status))
   end
 
   defp handle_mode(conn, agent, _fields, %{type: type, session: id} = message)
@@ -1220,8 +1240,8 @@ defmodule Cyfr.Test.ScriptedBackends do
     status =
       Agent.get_and_update(agent, fn st ->
         case st.sessions[id] do
-          %{running: false} ->
-            {:ended, st}
+          %{running: false} = s ->
+            {{:ended, s.ended_by}, st}
 
           s ->
             s = if type == :resize, do: %{s | size: {message.rows, message.cols}}, else: s
@@ -1233,7 +1253,7 @@ defmodule Cyfr.Test.ScriptedBackends do
         end
       end)
 
-    session_answer(conn, Agent.get(agent, & &1), %{"status" => Atom.to_string(status)})
+    session_answer(conn, Agent.get(agent, & &1), written(status))
   end
 
   # A recv counts as the session's use when it arrives, as Locus counts it,
@@ -1279,6 +1299,11 @@ defmodule Cyfr.Test.ScriptedBackends do
               do: Map.put(answer, "exit_code", s.exit_code),
               else: answer
 
+          answer =
+            if s.ended_by != nil and not s.running,
+              do: Map.put(answer, "ended_by", Atom.to_string(s.ended_by)),
+              else: answer
+
           session_answer(conn, st, answer)
         else
           # sleep-ok: the fake service's long-poll recv: it looks every 10 ms for lines until its
@@ -1303,6 +1328,12 @@ defmodule Cyfr.Test.ScriptedBackends do
   end
 
   defp now, do: System.monotonic_time(:millisecond)
+
+  defp written(:running), do: %{"status" => "running"}
+  defp written({:ended, nil}), do: %{"status" => "ended"}
+
+  defp written({:ended, cause}),
+    do: %{"status" => "ended", "ended_by" => Atom.to_string(cause)}
 
   # The scripted program, answering as an MCP server over stdio does: a
   # JSON-RPC request is answered with a line, a notification with nothing.

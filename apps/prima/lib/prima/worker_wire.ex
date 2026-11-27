@@ -33,7 +33,7 @@ defmodule Prima.WorkerWire do
       assignment started over its lifetime, not concurrently.
     * Every request body and every answer carries the wire's version as
       its first member, `v` (`version/0`). A request body is the JSON
-      `{"v": 2, "op": <callback>, "args": {...}}` (`request_body/2`,
+      `{"v": 3, "op": <callback>, "args": {...}}` (`request_body/2`,
       `read_request_body/2`), sealed as `Prima.WorkerAuth.seal_call/5`
       seals a host call's body. A sealed body cannot be versioned before
       it is opened: the header's `v1` token is what a listener reads before
@@ -41,8 +41,8 @@ defmodule Prima.WorkerWire do
       binds the plaintext to it, read after the body is opened and before
       its `op`. The route and the body's `op` name the same callback; a
       listener refuses a body whose `op` is not its route's.
-    * An answer is the JSON `{"v": 2, "ok": value}` on success and
-      `{"v": 2, "error": <name>, ...}` on a refusal, where `name` is the
+    * An answer is the JSON `{"v": 3, "ok": value}` on success and
+      `{"v": 3, "error": <name>, ...}` on a refusal, where `name` is the
       refusal (`lost`, `unavailable`, `replayed`, `malformed`, `bad_mac`,
       `unknown_version`, `claim_expired`, `not_found`, and for
       `c:Prima.HostAPI.egress_pin/3` the refusals
@@ -71,7 +71,7 @@ defmodule Prima.WorkerWire do
       URL name each other.
   """
 
-  @version 2
+  @version 3
   @auth_header Prima.MacEnvelope.auth_header()
   @host_prefix "/host/v1/"
   @worker_prefix "/worker/v1/"
@@ -91,14 +91,23 @@ defmodule Prima.WorkerWire do
   # escaped, and the comma that separates it from the next.
   @report_entry_bytes byte_size(Jason.encode!(@worst_id)) + 1
 
+  # The longest memory limit a report names (`Prima.HostAPI.put_memory_end/2`).
+  @longest_memory_end Enum.max_by(Prima.HostAPI.memory_ends(), &byte_size/1)
+
   # A report naming no attempt, its member and runner at the worst
-  # identifier: everything a report carries besides its list's entries,
-  # encoded as `request_body/2` encodes it.
+  # identifier and its memory limit the longest: everything a report
+  # carries besides its list's entries, encoded as `request_body/2`
+  # encodes it.
   @empty_report_bytes Jason.OrderedObject.new([
                         {"v", @version},
                         {"op", "runner_exited"},
                         {"args",
-                         %{"attempts" => [], "member" => @worst_id, "runner" => @worst_id}}
+                         %{
+                           "attempts" => [],
+                           "member" => @worst_id,
+                           "memory" => @longest_memory_end,
+                           "runner" => @worst_id
+                         }}
                       ])
                       |> Jason.encode!()
                       |> byte_size()
@@ -120,7 +129,8 @@ defmodule Prima.WorkerWire do
   The most attempts one `runner_exited` report names, its subtree's root
   included: as many as fit `Prima.HostAPI.max_body_bytes/0` when every
   identifier the report carries, its member and runner too, is the longest
-  the worker protocol allows and every byte of it is escaped. A worker
+  the worker protocol allows and every byte of it is escaped, and its
+  `memory` member the longest it may carry. A worker
   service holds no more for one runner, and names no more in the report
   of that runner's end.
 
@@ -249,8 +259,8 @@ defmodule Prima.WorkerWire do
 
   @doc """
   What a decoded answer says, or `:lost` when it is no answer at this
-  version: `{:ok, value}` for `{"v": 2, "ok": value}` and nothing else,
-  `{:error, name, fields}` for `{"v": 2, "error": name, ...}` with a
+  version: `{:ok, value}` for `{"v": 3, "ok": value}` and nothing else,
+  `{:error, name, fields}` for `{"v": 3, "error": name, ...}` with a
   string `name` and no `ok`, `fields` being its other members. An answer
   without `v`, at another version, or of any other shape is `:lost`, as a
   client counts an answer that never arrived: whether the call acted is

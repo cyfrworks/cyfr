@@ -14,7 +14,8 @@ defmodule Opus.HostTest do
   specific refusal attach names. A runner exit report is signed with the
   reporting worker service's own dispatch key, and lapses only the
   attempts dispatched to it; one naming a single attempt that no runner
-  took fails that run at once. A boot that does not hold the control
+  took fails that run at once, and one whose runner was ended for memory
+  fails each run it held saying so, by the limit that ended it. A boot that does not hold the control
   plane answers every call `lost`: it unseals nothing, its open attempts
   stop without closing their runs, and neither they, their waiters nor a
   runner exit report writes a row.
@@ -310,13 +311,13 @@ defmodule Opus.HostTest do
 
       for body <- [
             "not json",
-            ~s({"v":2,"op":"storage","args":{}}),
-            ~s({"v":2,"op":"renew"}),
-            ~s({"v":2,"op":"runner_exited","args":{}}),
-            ~s({"v":2,"op":"renew","args":{"attempts":[]},"extra":true}),
+            ~s({"v":3,"op":"storage","args":{}}),
+            ~s({"v":3,"op":"renew"}),
+            ~s({"v":3,"op":"runner_exited","args":{}}),
+            ~s({"v":3,"op":"renew","args":{"attempts":[]},"extra":true}),
             ~s(["renew"])
           ] do
-        assert %{"v" => 2, "error" => "lost"} =
+        assert %{"v" => 3, "error" => "lost"} =
                  AttemptFixtures.call(fixture, "ignored", %{}, body: body),
                body
       end
@@ -324,11 +325,11 @@ defmodule Opus.HostTest do
       # The version is read before the operation.
       for body <- [
             ~s({"op":"renew","args":{"attempts":[]}}),
-            ~s({"v":3,"op":"renew","args":{"attempts":[]}}),
+            ~s({"v":4,"op":"renew","args":{"attempts":[]}}),
             ~s({"v":"2","op":"renew","args":{"attempts":[]}}),
-            ~s({"v":3,"op":"nothing"})
+            ~s({"v":4,"op":"nothing"})
           ] do
-        assert %{"v" => 2, "error" => "unknown_version"} =
+        assert %{"v" => 3, "error" => "unknown_version"} =
                  AttemptFixtures.call(fixture, "ignored", %{}, body: body),
                body
       end
@@ -778,6 +779,74 @@ defmodule Opus.HostTest do
       assert message == "Parent execution (#{fixture.execution_id}) terminated"
     end
 
+    for {memory, said} <- [
+          {"cap",
+           "The run stopped: it needed more memory than one piece of work may use on this machine."},
+          {"machine", "The run stopped: CYFR ran out of memory for what it runs."},
+          {"either",
+           "The run stopped: it ran out of memory, and CYFR could not tell whether its own cap " <>
+             "or a limit above it did it."}
+        ] do
+      test "a held run whose runner was ended for memory (#{memory}) says so, and is run no more" do
+        fixture =
+          AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api), service_id: @service)
+
+        said = unquote(said)
+        assert %{"ok" => true} = report(fixture, args: %{"memory" => unquote(memory)})
+
+        assert {:error, {:uncertain, ^said}} = AttemptWaiter.await(fixture.pid, fixture.close)
+        assert %{status: "failed", error_message: ^said, error_class: "uncertain"} = row(fixture)
+
+        # Uncertain, its attempt lapsed: what it did is not known, so it is
+        # never run again, and its runner reaches nothing of it.
+        assert %{state: "lapsed", outcome: "uncertain"} =
+                 Arca.ExecutionAttempts.get(
+                   Prima.Actor.in_athanor(fixture.athanor_id),
+                   fixture.attempt
+                 )
+
+        events = terminal_events(fixture)
+        assert %{"error" => "lost"} = attach(fixture)
+        assert %{"ok" => true} = report(fixture, args: %{"memory" => unquote(memory)})
+        assert %{status: "failed", error_message: ^said} = row(fixture)
+        assert terminal_events(fixture) == events
+      end
+    end
+
+    # Where the report's lapse found the row no longer its to fail (a
+    # renewal that landed since), the attempt closes the run itself, in
+    # the same words.
+    test "a held run its attempt closes for a runner ended for memory says so" do
+      fixture =
+        AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api), service_id: @service)
+
+      holder = %{
+        service_id: @service,
+        boot_id: fixture.boot,
+        runner: fixture.runner,
+        memory: :machine
+      }
+
+      said = "The run stopped: CYFR ran out of memory for what it runs."
+      assert :ok = Opus.Attempt.stop_unclosed(fixture.attempt, holder)
+      assert {:error, {:uncertain, ^said}} = AttemptWaiter.await(fixture.pid, fixture.close)
+      assert %{status: "failed", error_message: ^said, error_class: "uncertain"} = row(fixture)
+    end
+
+    test "a report naming a memory limit it has no word for is lost, and lapses nothing" do
+      fixture =
+        AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api), service_id: @service)
+
+      for memory <- ["swap", "Cap", "", 1, nil, ["cap"]] do
+        assert %{"error" => "lost"} = report(fixture, args: %{"memory" => memory})
+      end
+
+      assert %{status: "running", error_message: nil} = row(fixture)
+      assert Process.alive?(fixture.pid)
+      assert %{"ok" => _} = renew(fixture)
+      Opus.Attempt.refuse(fixture.pid, "not started")
+    end
+
     test "fails at once a run its runner never took, and a later attach of it is lost" do
       fixture =
         AttemptFixtures.attached!(
@@ -817,7 +886,9 @@ defmodule Opus.HostTest do
 
       assert %{"ok" => true} = report(fixture, args: %{"refusal" => "capacity"})
 
-      said = @untaken <> ": there was no room for another run"
+      said =
+        "Nothing ran: the machine that would run it already runs 8 runs at once, as many as it can."
+
       assert {:error, ^said} = AttemptWaiter.await(fixture.pid, fixture.close)
       assert %{status: "failed", error_message: ^said} = row(fixture)
     end
@@ -1027,7 +1098,7 @@ defmodule Opus.HostTest do
     test "a connection the node's edge does not bind is refused before admission, naming its call id" do
       [vector] = Enum.filter(@vectors["calls"], &(&1["callback"] == "attached_fetch"))
       fixture = AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api))
-      %{"v" => 2, "op" => "attached_fetch", "args" => args} = Jason.decode!(vector["body"])
+      %{"v" => 3, "op" => "attached_fetch", "args" => args} = Jason.decode!(vector["body"])
       body = :attached_fetch |> WorkerWire.request_body(args) |> Jason.encode!()
       test_pid = self()
 
@@ -1040,7 +1111,7 @@ defmodule Opus.HostTest do
         fixture |> AttemptFixtures.header(body) |> Opus.Host.call(body) |> Jason.decode!()
 
       assert answer == %{
-               "v" => 2,
+               "v" => 3,
                "error" => "guest_error",
                "type" => "connection_not_granted",
                "message" => Prima.Refusal.message(:connection_not_granted),
@@ -1106,7 +1177,7 @@ defmodule Opus.HostTest do
       # answers it as every host call: lost, with nothing decided.
       body = :attached_fetch |> WorkerWire.request_body(args) |> Jason.encode!()
 
-      assert %{"v" => 2, "error" => "lost"} =
+      assert %{"v" => 3, "error" => "lost"} =
                fixture
                |> AttemptFixtures.header(body, member: "cyfr@10.0.0.9#boot_another")
                |> Opus.Host.call(body)
@@ -1145,14 +1216,14 @@ defmodule Opus.HostTest do
         answer =
           fixture |> AttemptFixtures.header(body) |> Opus.Host.call(body) |> Jason.decode!()
 
-        assert %{"v" => 2, "error" => "guest_error"} = answer
+        assert %{"v" => 3, "error" => "guest_error"} = answer
         assert Map.take(answer, Map.keys(expected)) == expected
       end
 
       no_call_id = Map.delete(args, "call_id")
       body = :attached_fetch |> WorkerWire.request_body(no_call_id) |> Jason.encode!()
 
-      assert %{"v" => 2, "error" => "malformed"} =
+      assert %{"v" => 3, "error" => "malformed"} =
                fixture
                |> AttemptFixtures.header(body)
                |> Opus.Host.call(body)
@@ -1173,7 +1244,7 @@ defmodule Opus.HostTest do
       for vector <- calls do
         op = vector["callback"]
         fixture = vector_fixture(op)
-        %{"v" => 2, "op" => ^op, "args" => args} = Jason.decode!(vector["body"])
+        %{"v" => 3, "op" => ^op, "args" => args} = Jason.decode!(vector["body"])
 
         body =
           op
@@ -1187,11 +1258,11 @@ defmodule Opus.HostTest do
 
         # The version is the answer's first member, as the vector writes it.
         # An attached request's success is its frames, never one answer.
-        assert String.starts_with?(raw, ~s({"v":2,)), op
+        assert String.starts_with?(raw, ~s({"v":3,)), op
 
         if op == "attached_fetch",
           do: refute(Map.has_key?(vector, "answer")),
-          else: assert(String.starts_with?(vector["answer"], ~s({"v":2,)), op)
+          else: assert(String.starts_with?(vector["answer"], ~s({"v":3,)), op)
 
         listed = for %{"answer" => refused} <- vector["refusals"], do: Jason.decode!(refused)
 
@@ -1211,7 +1282,7 @@ defmodule Opus.HostTest do
       fixture =
         AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api), service_id: @service)
 
-      assert %{"v" => 2, "op" => "runner_exited", "args" => args} = Jason.decode!(report["body"])
+      assert %{"v" => 3, "op" => "runner_exited", "args" => args} = Jason.decode!(report["body"])
       args = %{args | "runner" => fixture.runner, "attempts" => [fixture.attempt]}
 
       cross = report["cross_member"]
@@ -1219,7 +1290,7 @@ defmodule Opus.HostTest do
       refute other == fixture.member
 
       # The report the vector's peer sends: another member than this one.
-      assert Jason.decode!(~s({"v":2,"error":"#{cross["error"]}"})) ==
+      assert Jason.decode!(~s({"v":3,"error":"#{cross["error"]}"})) ==
                report_of(fixture, %{args | "member" => other})
 
       assert row(fixture).status == "running"
@@ -1230,6 +1301,41 @@ defmodule Opus.HostTest do
 
       assert {:error, {:uncertain, "Execution terminated: runner stopped without cleanup"}} =
                AttemptWaiter.await(fixture.pid, fixture.close)
+    end
+
+    @tag :capture_log
+    test "a report's memory limit is read as the vector writes it, and one of no word is lost" do
+      %{"memory" => memory, "memory_refusals" => refusals} = @vectors["report"]
+
+      fixture =
+        AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api), service_id: @service)
+
+      here = fn body ->
+        %{"args" => args} = Jason.decode!(body)
+
+        %{
+          args
+          | "member" => fixture.member,
+            "runner" => fixture.runner,
+            "attempts" => [fixture.attempt]
+        }
+      end
+
+      for refusal <- refusals do
+        assert Jason.decode!(~s({"v":3,"error":"#{refusal["error"]}"})) ==
+                 report_of(fixture, here.(refusal["body"])),
+               refusal["name"]
+      end
+
+      assert row(fixture).status == "running"
+      assert Process.alive?(fixture.pid)
+
+      assert Jason.decode!(memory["answer"]) == report_of(fixture, here.(memory["body"]))
+
+      said =
+        "The run stopped: it needed more memory than one piece of work may use on this machine."
+
+      assert {:error, {:uncertain, ^said}} = AttemptWaiter.await(fixture.pid, fixture.close)
     end
   end
 
@@ -1338,11 +1444,11 @@ defmodule Opus.HostTest do
       cases = Map.new(@vectors["connection_cases"], &{&1["name"], &1})
 
       play = fn name ->
-        %{"v" => 2, "op" => "admit_child", "args" => args} = Jason.decode!(cases[name]["body"])
+        %{"v" => 3, "op" => "admit_child", "args" => args} = Jason.decode!(cases[name]["body"])
         AttemptFixtures.call(fixture, "admit_child", args)
       end
 
-      assert %{"v" => 2, "ok" => %{"assignment" => token}} = play.("omitted")
+      assert %{"v" => 3, "ok" => %{"assignment" => token}} = play.("omitted")
       {:ok, admitted} = Assignment.read(token)
       {:ok, child} = Prima.Authority.from_wire(admitted.authority)
       assert child.cursor == {:bound, target}

@@ -293,7 +293,7 @@ defmodule PrismWeb.TerminalComponent do
          reason
        ) do
     if connected?(socket), do: Opus.Programs.detach(socket.assigns.context, session)
-    terminal = %{terminal | ended: if(reason in @endings, do: reason, else: :not_found)}
+    terminal = %{terminal | ended: ending(reason)}
 
     socket =
       socket
@@ -305,6 +305,10 @@ defmodule PrismWeb.TerminalComponent do
 
   defp ended(socket, _session, _reason), do: socket.view.terminal_ended(socket, nil)
 
+  defp ending({:ended_by, cause} = ended_by) when cause in [:cap, :machine, :either], do: ended_by
+  defp ending(reason) when reason in @endings, do: reason
+  defp ending(_unknown), do: :not_found
+
   defp kept(%{assigns: %{terminal: %{session: session} = terminal}} = socket, session, kept),
     do: assign(socket, :terminal, %{terminal | kept: kept})
 
@@ -313,6 +317,7 @@ defmodule PrismWeb.TerminalComponent do
   @doc "What the frame says when its session ended for `reason`."
   @spec ended_text(term()) :: String.t()
   def ended_text(:exited), do: "The program ended."
+  def ended_text({:ended_by, cause}), do: Prima.Refusal.message({:memory, "The program", cause})
 
   def ended_text(:restarted),
     do:

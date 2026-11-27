@@ -41,8 +41,9 @@ defmodule Prima.LocusPool do
   the asking place's own athanor's places, each with its `subject` only
   where the place is the asking role's, and everyone else's as one sum,
   `others_bytes`. No other athanor's name, subject or holding is in it.
-  `refusal_sentence/1` is the one sentence a person reads of it, for a
-  run and a build alike, built from `held` alone.
+  `refusal_sentence/2` is the one sentence a person reads of it, for
+  every kind of start, built from `held` and the names CYFR read for its
+  subjects.
 
   The keeper's Go reads this module's values from
   `tests/fixtures/locus_pool.json`, which `Prima.LocusPoolTest` holds to
@@ -132,6 +133,7 @@ defmodule Prima.LocusPool do
   @reading_gap_ms 2_000
 
   @version 1
+  @poll_ms 5_000
   @route "/locus/v1/pool"
   @services [:runtime, :builds, :backends]
   @max_request_bytes 1_024
@@ -261,6 +263,34 @@ defmodule Prima.LocusPool do
   @doc "The longest gap between a place's readings that is counted."
   @spec reading_gap_ms() :: pos_integer()
   def reading_gap_ms, do: @reading_gap_ms
+
+  @doc """
+  How often CYFR asks each service for its report (`Opus.Memory`), and
+  how often a page showing the record reads it again: 5 seconds.
+  """
+  @spec poll_ms() :: pos_integer()
+  def poll_ms, do: @poll_ms
+
+  @doc """
+  How long after its last answer an endpoint counts as answering: three
+  polls. One that has not answered within it holds nothing now, joins no
+  machine, and a refusal names no holder from it.
+  """
+  @spec fresh_ms() :: pos_integer()
+  def fresh_ms, do: 3 * @poll_ms
+
+  @doc """
+  How long CYFR waits for one ask's answer, on every service: one poll
+  interval. The endpoints are asked one after another, so one that
+  connects and never answers stretches a cycle to two polls, inside the
+  three-poll bound of `fresh_ms/0`, and the others still read as answering.
+  """
+  @spec ask_ms() :: pos_integer()
+  def ask_ms, do: @poll_ms
+
+  @doc "The name CYFR stamps the builds service's report with in its record."
+  @spec builds_endpoint() :: String.t()
+  def builds_endpoint, do: "builds"
 
   @doc "The pool wire's version, carried in every body and answer as `v`."
   @spec version() :: pos_integer()
@@ -600,8 +630,18 @@ defmodule Prima.LocusPool do
   defp bytes?(value),
     do: is_integer(value) and value >= 0 and value <= Prima.KeeperProtocol.max_measured_bytes()
 
-  # What a person calls each kind of place, in the order a sentence names
-  # them. A runner's two kinds are one word: a run.
+  # What a person calls each kind of holder, one and several.
+  @holder_words %{
+    "run" => {"run", "runs"},
+    "build" => {"build", "builds"},
+    "program" => {"program", "programs"},
+    "terminal" => {"terminal", "terminals"},
+    "browser" => {"browser", "browsers"},
+    "tool" => {"tool", "tools"}
+  }
+
+  # The kinds of place a refusal's sentence names, in its order, by the
+  # word a person reads each as. A runner's two kinds are one word: a run.
   @kind_words [
     {"program", ["program"]},
     {"terminal", ["terminal"]},
@@ -609,24 +649,40 @@ defmodule Prima.LocusPool do
     {"run", ["run", "warm"]}
   ]
   @stoppable ~w(program terminal)
+  @withheld "This CYFR has not enough memory free. Stop one on the Programs page, or wait."
 
   @doc """
   The one sentence a person reads of a start refused for room, from what
-  holds the pool (`held`) alone. It says that this CYFR has not enough
-  memory free and what holds it: the person's own work by kind, with a
-  count and its size, and everyone else's as one sum, then what the person
-  can do. A subject is never named, so no program's or other person's name
-  is in it. With nothing of the person's own in `held` it never says
-  "others": it says what is under way uses the memory. A runner's place is
-  no athanor's until its work is assigned, so a refused run's `held` holds
-  nothing of the person's own, and its sentence cannot tell the person
-  that the memory is their own programs'. When the start needs more than
-  everything held and free together, nothing anyone stops makes room: it
-  says only that this CYFR has not enough memory for it, what it needs and
-  what all its work can have, and gives no advice.
+  holds the pool (`held`) and the names CYFR read for its subjects
+  (`names`, a subject to the name its row has, read under the person's
+  own scope). It says that this CYFR has not enough memory free and what
+  holds it: the person's own work, each holding whose subject `names`
+  names by that name with its size (one name's holdings as one), every
+  other by kind with a count and its size, and everyone else's as one
+  sum, then what the person can do. No subject is spelled: a holding
+  whose subject `names` does not name is counted by its kind, so no
+  other person's name or row is in it. With nothing of the person's own
+  in `held` it never says "others": it says what is under way uses the
+  memory. A runner's place is no athanor's until its work is assigned,
+  so a refused run's `held` holds nothing of the person's own; a caller
+  that knows the person's holders from elsewhere hands them as `mine`
+  with their subjects, and their names here. When the start needs more
+  than everything held and free together, nothing anyone stops makes
+  room: it says only that this CYFR has not enough memory for it, what
+  it needs and what all its work can have, and gives no advice.
+
+  `:withheld` in place of `held` is the sentence told to a caller that
+  is told nothing of what holds the memory, a component in a chain among
+  them: that this CYFR has not enough memory free, with no name, size or
+  sum.
   """
-  @spec refusal_sentence(held()) :: String.t()
-  def refusal_sentence(%{need: need, free: free, mine: mine, others_bytes: others} = held) do
+  @spec refusal_sentence(held() | :withheld, %{String.t() => String.t()}) :: String.t()
+  def refusal_sentence(held, names \\ %{})
+
+  def refusal_sentence(:withheld, _names), do: @withheld
+
+  def refusal_sentence(%{need: need, free: free, mine: mine, others_bytes: others} = held, names)
+      when is_map(names) do
     case free + others + Enum.sum_by(mine, & &1.bytes) do
       0 ->
         "This CYFR has no memory free for it."
@@ -636,16 +692,16 @@ defmodule Prima.LocusPool do
           "and has #{Prima.Bytes.format(all)} for all its work."
 
       _stopping_helps ->
-        room_held(held)
+        room_held(held, names)
     end
   end
 
-  defp room_held(%{mine: [], others_bytes: others}),
+  defp room_held(%{mine: [], others_bytes: others}, _names),
     do:
       "This CYFR has not enough memory free. Work under way uses " <>
         "#{Prima.Bytes.format(others)}. Wait, or try again later."
 
-  defp room_held(%{mine: mine, others_bytes: others}) do
+  defp room_held(%{mine: mine, others_bytes: others}, names) do
     others = if others > 0, do: [" Others use #{Prima.Bytes.format(others)}."], else: []
 
     ending =
@@ -653,13 +709,25 @@ defmodule Prima.LocusPool do
         do: " Stop one on the Programs page, or wait.",
         else: " Wait, or try again later."
 
+    {named, unnamed} = Enum.split_with(mine, &is_map_key(names, &1.subject))
+
     IO.iodata_to_binary([
       "This CYFR has not enough memory free. Of yours, ",
-      mine |> yours() |> joined(),
+      (by_name(named, names) ++ yours(unnamed)) |> joined(),
       ".",
       others,
       ending
     ])
+  end
+
+  # Each name once, its holdings' sizes together, the largest first and
+  # then by name, so the sentence is the same for the same holdings.
+  defp by_name(named, names) do
+    named
+    |> Enum.group_by(&Map.fetch!(names, &1.subject), & &1.bytes)
+    |> Enum.map(fn {name, sizes} -> {name, Enum.sum(sizes)} end)
+    |> Enum.sort_by(fn {name, bytes} -> {-bytes, name} end)
+    |> Enum.map(fn {name, bytes} -> "#{name} uses #{Prima.Bytes.format(bytes)}" end)
   end
 
   defp yours(mine) do
@@ -668,12 +736,23 @@ defmodule Prima.LocusPool do
         held != [] do
       bytes = Prima.Bytes.format(Enum.sum_by(held, & &1.bytes))
 
+      {one, several} = holder_words(word)
+
       case length(held) do
-        1 -> "a #{word} uses #{bytes}"
-        n -> "#{n} #{word}s use #{bytes}"
+        1 -> "a #{one} uses #{bytes}"
+        n -> "#{n} #{several} use #{bytes}"
       end
     end
   end
+
+  @doc """
+  What a person calls a kind of holder (`run`, `build`, `program`,
+  `terminal`, `browser` or `tool`): its word for one and for several. A
+  sentence of what holds memory, here or on a page, takes its words from
+  this one table.
+  """
+  @spec holder_words(String.t()) :: {String.t(), String.t()}
+  def holder_words(kind) when is_map_key(@holder_words, kind), do: Map.fetch!(@holder_words, kind)
 
   defp joined([one]), do: one
   defp joined(items), do: Enum.join(Enum.drop(items, -1), ", ") <> " and " <> List.last(items)

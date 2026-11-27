@@ -844,7 +844,7 @@ defmodule Locus.KeeperVectorsTest do
               else: {:status, vector["code"]}
 
           assert_receive {Keeper, ^ref, {:exited, ^how, ^memory} = event}, 5_000
-          assert Locus.Runtime.Keeper.event(event) == {:exited, how}
+          assert Locus.Runtime.Keeper.event(event) == {:exited, how, memory}
 
         %{"type" => "released", "spawn_id" => spawn_id} ->
           {%{ref: ref}, _request, _spawned} = spawned_runner!(v, peer, name, spawn_id)

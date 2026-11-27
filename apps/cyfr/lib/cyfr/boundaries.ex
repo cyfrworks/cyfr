@@ -863,8 +863,9 @@ defmodule Cyfr.Boundaries do
       into: "Opus",
       allow: ~w(Opus Opus.Browser Opus.Programs),
       reason:
-        "the console reads executions, invokes tinctures and checks the executor " <>
-          "through the execution domain's root facade under the caller's context, and " <>
+        "the console reads executions, invokes tinctures, checks the executor and reads " <>
+          "who used what memory (`Opus.memory/2`) through the execution domain's root " <>
+          "facade under the caller's context, and " <>
           "shows the person's program terminals through the programs controller's facade " <>
           "(`Opus.Programs.attach/2`, `taken/3`, `detach/2`, `input/3`, `resize/4`, `keep/3`, " <>
           "`close/2`, `running/1`) under the person's own context, prefills the program " <>
@@ -1998,6 +1999,7 @@ defmodule Cyfr.Boundaries do
       focus: 2,
       for_scheduled: 2,
       internal: 1,
+      key_bound?: 1,
       refocus: 2,
       require_permission: 2,
       require_tenant!: 1,
@@ -2551,6 +2553,7 @@ defmodule Cyfr.Boundaries do
     execution_sweeper_enabled: :seam,
     execution_archive_watch_enabled: :seam,
     worker_watch_enabled: :seam,
+    memory_enabled: :seam,
     external_server_reconciler_enabled: :seam,
     provisioning_boot_enabled: :seam,
     retention_scheduler_enabled: :seam,

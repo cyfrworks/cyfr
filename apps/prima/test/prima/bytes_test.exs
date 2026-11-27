@@ -11,4 +11,9 @@ defmodule Prima.BytesTest do
     assert Prima.Bytes.format(384 * 1024 * 1024) == "384.0 MB"
     assert Prima.Bytes.format(3 * 512 * 1024 * 1024) == "1.5 GB"
   end
+
+  test "a count of a thousand units or more is written in figures, never as an exponent" do
+    assert Prima.Bytes.format(1000 * 1024 * 1024) == "1000.0 MB"
+    assert Prima.Bytes.format(2000 * 1024 * 1024 * 1024) == "2000.0 GB"
+  end
 end

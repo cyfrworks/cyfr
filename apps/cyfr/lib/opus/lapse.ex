@@ -19,6 +19,10 @@ defmodule Opus.Lapse do
   (`Opus.WorkerWatch`); and an attempt whose waiter exited, by
   its own id (`Opus.Attempt`).
 
+  A lapse says "Execution terminated: runner stopped without cleanup", but
+  one of a report whose runner the kernel ended for memory says that, by
+  the limit that ended it (`ended_for_memory/1`).
+
   A boot that does not hold the control plane (`Arca.ControlPlane.held?/0`)
   lapses nothing: the rows are the holder's to settle.
   """
@@ -35,20 +39,37 @@ defmodule Opus.Lapse do
   (`Arca.Execution.list_stale_running/2`). Answers whether it lapsed.
   """
   @spec lapse(map()) :: boolean()
-  def lapse(record) do
-    Arca.ControlPlane.held?() and lapse_owned(record)
+  def lapse(record), do: lapse(record, nil)
+
+  defp lapse(record, memory) do
+    Arca.ControlPlane.held?() and lapse_owned(record, memory)
   end
 
-  defp lapse_owned(record) do
+  @doc """
+  What a run says whose runner the kernel ended for memory, by the limit
+  that ended it (`t:Prima.HostAPI.memory_end/0`): `Prima.Refusal`'s
+  sentence for `{:memory, "The run", cause}`.
+  """
+  @spec ended_for_memory(:cap | :machine | :either) :: String.t()
+  def ended_for_memory(cause) when cause in [:cap, :machine, :either],
+    do: Prima.Refusal.message({:memory, "The run", cause})
+
+  # A lapse's words, by the memory limit that ended its runner where a
+  # report named one.
+  defp message(nil), do: @message
+  defp message(memory), do: ended_for_memory(memory)
+
+  defp lapse_owned(record, memory) do
     now = DateTime.utc_now()
     duration_ms = DateTime.diff(now, record.started_at, :millisecond)
+    message = message(memory)
 
-    case fail_row(record, now, duration_ms) do
+    case fail_row(record, memory, now, duration_ms) do
       {:ok, 0, _event_seq, _closed_questions} ->
         false
 
       {:ok, _count, event_seq, closed_questions} ->
-        lapsed(record, event_seq, closed_questions, now, duration_ms)
+        lapsed(record, message, event_seq, closed_questions, now, duration_ms)
         true
 
       :error ->
@@ -59,18 +80,19 @@ defmodule Opus.Lapse do
   # A lapse retires work: it needs the attempt's stored stamp, never a
   # grant that still stands (`Cyfr.Boundaries.system_responsibilities/0`).
   # A failure here commits nothing, and the lapse did not happen.
-  defp fail_row(record, now, duration_ms) do
+  defp fail_row(record, memory, now, duration_ms) do
     {count, event_seq, closed_questions} =
       Arca.Execution.mark_failed_if_running(
         record.id,
         %{
           completed_at: now,
           duration_ms: duration_ms,
-          error_message: @message,
+          error_message: message(memory),
           error_class: "uncertain"
         },
         attempt: record.attempt,
         lease_until: record.lease_until,
+        ended_by: memory,
         grant: stamp(record),
         verify: &Sanctum.ExecutionStanding.stamp_only/1
       )
@@ -96,7 +118,7 @@ defmodule Opus.Lapse do
   # telemetry, its event and its children's failure each run whatever the
   # one before it did, so a publication that cannot be made never leaves a
   # formula's children running.
-  defp lapsed(record, event_seq, closed_questions, now, duration_ms) do
+  defp lapsed(record, message, event_seq, closed_questions, now, duration_ms) do
     Logger.info("[Opus.Lapse] #{record.id} lapsed after #{duration_ms}ms")
 
     after_commit(record, "questions", fn ->
@@ -105,7 +127,7 @@ defmodule Opus.Lapse do
 
     after_commit(record, "telemetry", fn ->
       Telemetry.row_failed(record, %{
-        error: @message,
+        error: message,
         error_class: :uncertain,
         ended_at: now,
         duration_ms: duration_ms
@@ -115,7 +137,7 @@ defmodule Opus.Lapse do
     after_commit(record, "event", fn ->
       Events.publish(record.id, record, "execution.lapsed", event_seq, %{
         "status" => "failed",
-        "error" => @message
+        "error" => message
       })
     end)
 
@@ -155,14 +177,22 @@ defmodule Opus.Lapse do
   Lapse each of `attempts` that was dispatched to the worker service
   `service_id` (nil for one the control plane holds itself) on its boot
   `boot_id`, is claimed by `runner` when one is given, and still owns its
-  running execution. `{:error, :unavailable}` when the store cannot list
-  them.
+  running execution, saying that it ran out of memory where `memory`, a
+  report's, names the limit that ended its runner
+  (`ended_for_memory/1`), and recording that limit on the attempt it
+  lapses (`Arca.ExecutionAttempts`' `ended_by`). `{:error, :unavailable}`
+  when the store cannot list them.
   """
-  @spec dispatched(String.t() | nil, String.t(), String.t() | nil, [String.t()]) ::
-          :ok | {:error, :unavailable}
-  def dispatched(service_id, boot_id, runner, attempts)
+  @spec dispatched(
+          String.t() | nil,
+          String.t(),
+          String.t() | nil,
+          [String.t()],
+          Prima.HostAPI.memory_end()
+        ) :: :ok | {:error, :unavailable}
+  def dispatched(service_id, boot_id, runner, attempts, memory \\ nil)
       when is_binary(boot_id) and is_list(attempts) do
-    case listed(service_id, boot_id, runner, attempts) do
+    case listed(service_id, boot_id, runner, attempts, memory) do
       {:ok, _lapsed} -> :ok
       {:error, :unavailable} = unavailable -> unavailable
     end
@@ -180,15 +210,15 @@ defmodule Opus.Lapse do
   @spec boot(String.t(), String.t(), [String.t()]) :: {:ok, [map()]} | {:error, :unavailable}
   def boot(service_id, boot_id, attempts)
       when is_binary(service_id) and is_binary(boot_id) and is_list(attempts) do
-    listed(service_id, boot_id, nil, attempts)
+    listed(service_id, boot_id, nil, attempts, nil)
   end
 
-  defp listed(_service_id, _boot_id, _runner, []), do: {:ok, []}
+  defp listed(_service_id, _boot_id, _runner, [], _memory), do: {:ok, []}
 
-  defp listed(service_id, boot_id, runner, attempts) do
+  defp listed(service_id, boot_id, runner, attempts, memory) do
     case Arca.Execution.list_running_dispatched(attempts, service_id, boot_id, runner) do
       records when is_list(records) ->
-        {:ok, Enum.filter(records, &lapse/1)}
+        {:ok, Enum.filter(records, &lapse(&1, memory))}
 
       {:error, _reason} ->
         {:error, :unavailable}

@@ -300,7 +300,10 @@ defmodule Locus.DirectLauncherTest do
       :ok = Runner.release(channel, 0)
 
       assert_gone([leader, child])
-      assert {:exited, {:signal, "SIGKILL"}} = event_until(channel, &match?({:exited, _}, &1))
+
+      assert {:exited, {:signal, "SIGKILL"}, nil} =
+               event_until(channel, &match?({:exited, _, _}, &1))
+
       assert :released = event_until(channel, &(&1 == :released))
     end
 
