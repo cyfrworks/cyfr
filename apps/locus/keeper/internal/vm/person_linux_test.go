@@ -24,6 +24,9 @@ func stageEnd(t *testing.T) (*os.File, *os.File) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := unix.SetNonblock(fds[1], true); err != nil {
+		t.Fatal(err)
+	}
 	s, k := os.NewFile(uintptr(fds[0]), "stage"), os.NewFile(uintptr(fds[1]), "keeper")
 	t.Cleanup(func() { s.Close(); k.Close() })
 	return s, k
@@ -160,5 +163,50 @@ func TestAPersonsVMHasItsDiskCardAndAddress(t *testing.T) {
 	}
 	if args := got["/boot-source"].(map[string]any)["boot_args"]; args != "quiet cyfr.net=10.213.0.6,10.213.0.5" {
 		t.Fatalf("the command line: %v", args)
+	}
+}
+
+// Descriptors a space hands up just after the bound are never the keeper's:
+// none is left open in this process, however many times it happens.
+func TestARouteHandedUpPastTheBoundLeavesNothingOpen(t *testing.T) {
+	saved := stageWait
+	stageWait = 50 * time.Millisecond
+	t.Cleanup(func() { stageWait = saved })
+	open := func() int {
+		entries, err := os.ReadDir("/proc/self/fd")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(entries)
+	}
+	before := open()
+	for i := 0; i < 20; i++ {
+		s, k := stageEnd(t)
+		late := make(chan struct{})
+		go func() {
+			defer close(late)
+			time.Sleep(stageWait + 10*time.Millisecond) // sleep-ok: the hand-up comes just past the bound, as the review's did
+			var held []int
+			for j := 0; j < 3; j++ {
+				fd, err := unix.Open("/dev/null", unix.O_RDONLY|unix.O_CLOEXEC, 0)
+				if err == nil {
+					held = append(held, fd)
+				}
+			}
+			_ = unix.Sendmsg(int(s.Fd()), []byte{'r'}, unix.UnixRights(held...), nil, 0)
+			for _, fd := range held {
+				_ = unix.Close(fd)
+			}
+		}()
+		m := &Machine{uid: 30201}
+		if err := m.route(k, func(int, *os.File, *os.File, *os.File) (Network, error) { return Network{}, nil }); err == nil {
+			t.Fatal("a route handed up past the bound was taken")
+		}
+		<-late
+		s.Close()
+		k.Close()
+	}
+	if after := open(); after > before {
+		t.Fatalf("%d descriptors are left open by routes handed up past the bound", after-before)
 	}
 }

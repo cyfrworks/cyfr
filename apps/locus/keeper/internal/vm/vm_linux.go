@@ -318,6 +318,13 @@ func (m *Machine) startStage(self string, spec stage.Spec, cfg Config) error {
 	if err != nil {
 		return err
 	}
+	// The keeper's end is read by a deadline, as the keeper's own pairs are
+	// (package serve's keeperPair): non-blocking, so the runtime polls it.
+	if err := unix.SetNonblock(fds[1], true); err != nil {
+		_ = unix.Close(fds[0])
+		_ = unix.Close(fds[1])
+		return err
+	}
 	// A relay space's relay leads nowhere: the keeper keeps no end of it.
 	// A routed space's route socket is the stage's at the same descriptor,
 	// and the keeper's end takes its namespace and name sockets.
@@ -389,38 +396,20 @@ func (m *Machine) startStage(self string, spec stage.Spec, cfg Config) error {
 }
 
 // route takes the namespace and two name sockets a person's VM's space
-// hands up on its route socket within stageWait, has fn make the route as
-// the VMM's uid's, and tells the stage to go on. A space that hands nothing
-// up is Start's to kill, which ends the receive; what a receive that
-// answers after the bound took is closed.
+// hands up on its route socket, conn, by a read deadline stageWait away,
+// has fn make the route as the VMM's uid's, and tells the stage to go on. A
+// space that hands nothing up by then is Start's to kill; what it hands up
+// after is the socket's, closed with it.
 func (m *Machine) route(conn *os.File, fn func(uid int, netns, udp, tcp *os.File) (Network, error)) error {
-	type received struct {
-		fds []int
-		err error
-	}
-	got := make(chan received, 1)
-	abandoned := make(chan struct{})
-	go func() {
-		fds, err := stage.ReceiveDescriptors(conn, 3)
-		select {
-		case got <- received{fds, err}:
-		case <-abandoned:
-			for _, fd := range fds {
-				_ = unix.Close(fd)
-			}
-		}
-	}()
-	var r received
-	select {
-	case r = <-got:
-	case <-time.After(stageWait):
-		close(abandoned)
+	_ = conn.SetReadDeadline(time.Now().Add(stageWait))
+	fds, err := stage.ReceiveDescriptors(conn, 3)
+	if errors.Is(err, os.ErrDeadlineExceeded) {
 		return fmt.Errorf("vm: the VMM's space handed up no route within %s", stageWait)
 	}
-	if r.err != nil {
-		return fmt.Errorf("vm: the VMM's space's route: %w", r.err)
+	if err != nil {
+		return fmt.Errorf("vm: the VMM's space's route: %w", err)
 	}
-	netns, udp, tcp := os.NewFile(uintptr(r.fds[0]), "netns"), os.NewFile(uintptr(r.fds[1]), "names-udp"), os.NewFile(uintptr(r.fds[2]), "names-tcp")
+	netns, udp, tcp := os.NewFile(uintptr(fds[0]), "netns"), os.NewFile(uintptr(fds[1]), "names-udp"), os.NewFile(uintptr(fds[2]), "names-tcp")
 	n, err := fn(m.uid, netns, udp, tcp)
 	_ = netns.Close()
 	_ = udp.Close()
@@ -429,6 +418,7 @@ func (m *Machine) route(conn *os.File, fn func(uid int, netns, udp, tcp *os.File
 		return fmt.Errorf("vm: the machine's route: %w", err)
 	}
 	m.network = n
+	_ = conn.SetWriteDeadline(time.Now().Add(stageWait))
 	if _, err := conn.Write([]byte{stage.RouteGo}); err != nil {
 		return fmt.Errorf("vm: telling the VMM's space its route is made: %w", err)
 	}
