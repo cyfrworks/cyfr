@@ -282,6 +282,110 @@ defmodule Prima.WorkerAuthTest do
     end
   end
 
+  # A verified header's fields as the vector spells them, string-keyed.
+  defp verified({:ok, fields, hash}),
+    do: %{
+      "fields" => Map.new(fields, fn {k, v} -> {Atom.to_string(k), v} end),
+      "body_hash" => hash
+    }
+
+  defp verified({:error, reason}), do: %{"error" => Atom.to_string(reason)}
+
+  defp verify_kind("call", v, header, now),
+    do:
+      WorkerAuth.verify_host_call_header_under(
+        unhex(v["keys"]["attempt_call_hex"]),
+        header,
+        now
+      )
+
+  defp verify_kind("request", v, header, now),
+    do: WorkerAuth.verify_request_header(unhex(v["keys"]["dispatch_hex"]), header, now)
+
+  defp verify_kind("report", v, header, now),
+    do: WorkerAuth.verify_report_header(unhex(v["root_hex"]), header, now)
+
+  describe "the header, verification and seal vectors" do
+    test "every header of every kind reads by its grammar, or is refused as the vector says" do
+      v = @vectors
+      %{"accepted" => accepted, "refused" => refused} = v["headers"]
+      assert length(accepted) >= 15 and length(refused) >= 90
+
+      for c <- accepted ++ refused ++ v["verify"] do
+        expected = Map.take(c, ~w(fields body_hash error))
+
+        assert verified(verify_kind(c["kind"], v, c["header"], c["now"])) == expected,
+               "#{c["kind"]}: #{c["why"]}"
+      end
+
+      for %{"error" => error} <- refused, do: assert(error in ~w(malformed unknown_version))
+    end
+
+    test "the window is inclusive: a header a window from the clock verifies, one past it is refused" do
+      kinds = @vectors["verify"] |> Enum.map(& &1["kind"]) |> Enum.uniq() |> Enum.sort()
+      assert kinds == ~w(call report request)
+
+      for kind <- kinds do
+        cases = Enum.filter(@vectors["verify"], &(&1["kind"] == kind))
+        assert Enum.count(cases, &(&1["why"] =~ "a window" and &1["error"] == nil)) == 2
+
+        assert Enum.count(
+                 cases,
+                 &(&1["why"] =~ "past a window" and &1["error"] == "outside_window")
+               ) == 2
+      end
+    end
+
+    test "a body is held to the hash its verified header named" do
+      for c <- @vectors["body_checks"] do
+        expected = if c["error"], do: {:error, String.to_existing_atom(c["error"])}, else: :ok
+
+        assert WorkerAuth.verify_body(c["body_hash"], Base.decode64!(c["body_b64"])) == expected,
+               c["why"]
+      end
+    end
+
+    test "every sealed attempt keys open as the attempt they name, or are refused" do
+      dseal = unhex(@vectors["keys"]["dispatch_seal_hex"])
+      assert length(@vectors["open_attempt_keys"]) >= 25
+
+      for c <- @vectors["open_attempt_keys"] do
+        answer =
+          case WorkerAuth.open_attempt_keys(dseal, c["sealed"]) do
+            {:ok, %{attempt: attempt, call: call, seal: seal}} ->
+              %{
+                "attempt" => Map.new(attempt, fn {k, v} -> {Atom.to_string(k), v} end),
+                "call_hex" => hex(call),
+                "seal_hex" => hex(seal)
+              }
+
+            {:error, reason} ->
+              %{"error" => Atom.to_string(reason)}
+          end
+
+        assert answer == Map.take(c, ~w(attempt call_hex seal_hex error)), c["why"]
+      end
+    end
+
+    test "every sealed host call opens as the direction and call it was sealed for, or is refused" do
+      seal = unhex(@vectors["keys"]["attempt_seal_hex"])
+      assert length(@vectors["open_call"]) >= 12
+
+      for c <- @vectors["open_call"] do
+        call = Map.new(c["call"], fn {k, v} -> {String.to_existing_atom(k), v} end)
+        direction = String.to_existing_atom(c["direction"])
+
+        answer =
+          case WorkerAuth.open_call(seal, direction, call, c["sealed"]) do
+            {:ok, plain} -> %{"plaintext_b64" => Base.encode64(plain)}
+            {:error, reason} -> %{"error" => Atom.to_string(reason)}
+          end
+
+        assert answer == Map.take(c, ~w(plaintext_b64 error)), c["why"]
+      end
+    end
+  end
+
   # A read assignment as its payload spells it: every member it carries,
   # none for an absent optional one.
   defp read_wire(%Assignment{} = read) do

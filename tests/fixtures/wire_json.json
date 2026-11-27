@@ -1,0 +1,454 @@
+{
+  "comment": "How every wire of the worker protocol reads and writes JSON and base64, which Prima does with Jason and Elixir's Base on both sides of each wire (Prima.WorkerWire, Prima.WorkerAuth, Prima.Assignment, Prima.HostAPI, Prima.LocusPool, Prima.RunnerRelay, Prima.RunnerControl; none with the standard library's JSON), so a message means to the side that acts on it what it meant to the side that signed it. reads are documents (doc_b64, the bytes) each read as value: a member given twice is its first, an integer of any size is an integer kept whole, -0 is the integer 0, a fraction or an exponent is no integer, and a number below a double's range reads as zero. refused are documents no reader takes: bytes that are no UTF-8 or that spell a surrogate, an escape naming half a surrogate pair, a raw control character in a string, whitespace other than space, tab, line feed and carriage return, a number past a double's range, an integer of more than 1,024 characters, and anything after the one value. writes are values each written as bytes_b64: only quote, backslash and the control characters escaped, backspace, tab, line feed, form feed and carriage return by their two-character escapes and every other control character as \\u00XX in uppercase hexadecimal, so solidus, <, >, &, U+2028, U+2029 and DEL are written as themselves, and a plain map's members in the order of their names' bytes. base64url are texts as Base.url_decode64/2 with padding false reads them (bytes_hex, or null for a text it refuses): unpadded or with exactly the padding it would carry, bits past the last byte ignored, nothing outside the URL alphabet and no line break; base64 are texts as Base.decode64/1 reads them, its padding required. apps/prima/test/prima/wire_json_test.exs holds Jason and Base to every case, and the Go readers of the worker protocol (apps/locus/keeper/internal/wire/wirejson and macenvelope) are held to the same.",
+  "version": 1,
+  "max_integer_chars": 1024,
+  "base64": [
+    {
+      "bytes_hex": "61",
+      "text": "YQ=="
+    },
+    {
+      "bytes_hex": "61",
+      "text": "YR=="
+    },
+    {
+      "bytes_hex": "6162",
+      "text": "YWI="
+    },
+    {
+      "bytes_hex": "616263",
+      "text": "YWJj"
+    },
+    {
+      "bytes_hex": "",
+      "text": ""
+    },
+    {
+      "bytes_hex": null,
+      "text": "YQ"
+    },
+    {
+      "bytes_hex": null,
+      "text": "YQ="
+    },
+    {
+      "bytes_hex": null,
+      "text": "YQ==\n"
+    },
+    {
+      "bytes_hex": "fbff",
+      "text": "+/8="
+    },
+    {
+      "bytes_hex": null,
+      "text": "-_8="
+    },
+    {
+      "bytes_hex": null,
+      "text": "YQ==="
+    },
+    {
+      "bytes_hex": null,
+      "text": "Y Q="
+    }
+  ],
+  "base64url": [
+    {
+      "bytes_hex": "61",
+      "text": "YQ"
+    },
+    {
+      "bytes_hex": "61",
+      "text": "YQ=="
+    },
+    {
+      "bytes_hex": "61",
+      "text": "YR"
+    },
+    {
+      "bytes_hex": "6162",
+      "text": "YWI"
+    },
+    {
+      "bytes_hex": "6162",
+      "text": "YWI="
+    },
+    {
+      "bytes_hex": "616263",
+      "text": "YWJj"
+    },
+    {
+      "bytes_hex": "",
+      "text": ""
+    },
+    {
+      "bytes_hex": null,
+      "text": "YQ="
+    },
+    {
+      "bytes_hex": null,
+      "text": "Y"
+    },
+    {
+      "bytes_hex": null,
+      "text": "YQ==\n"
+    },
+    {
+      "bytes_hex": null,
+      "text": "Y\nQ"
+    },
+    {
+      "bytes_hex": null,
+      "text": "YQ==="
+    },
+    {
+      "bytes_hex": null,
+      "text": "Y Q"
+    },
+    {
+      "bytes_hex": null,
+      "text": "YQ==YQ=="
+    },
+    {
+      "bytes_hex": null,
+      "text": "+/8"
+    },
+    {
+      "bytes_hex": "fbff",
+      "text": "-_8"
+    },
+    {
+      "bytes_hex": null,
+      "text": "YQ%3D"
+    }
+  ],
+  "reads": [
+    {
+      "doc_b64": "eyJhIjoxLCJhIjoyfQ==",
+      "value": {
+        "a": 1
+      },
+      "why": "a member given twice is its first"
+    },
+    {
+      "doc_b64": "eyJhIjp7ImIiOjF9LCJhIjoyfQ==",
+      "value": {
+        "a": {
+          "b": 1
+        }
+      },
+      "why": "an object given twice is its first"
+    },
+    {
+      "doc_b64": "Ilx1ZDgwMFx1ZGMwMCI=",
+      "value": "𐀀",
+      "why": "a surrogate pair is one character"
+    },
+    {
+      "doc_b64": "Ilx1MDAwMCI=",
+      "value": "\u0000",
+      "why": "an escaped NUL"
+    },
+    {
+      "doc_b64": "Ilx1MDBlOVx1MDBFOSI=",
+      "value": "éé",
+      "why": "hexadecimal in either case"
+    },
+    {
+      "doc_b64": "IlwvIg==",
+      "value": "/",
+      "why": "an escaped solidus"
+    },
+    {
+      "doc_b64": "IuKAqOKAqSI=",
+      "value": "  ",
+      "why": "a raw U+2028 and U+2029"
+    },
+    {
+      "doc_b64": "In8i",
+      "value": "",
+      "why": "a raw DEL"
+    },
+    {
+      "doc_b64": "LTA=",
+      "value": 0,
+      "why": "minus zero is the integer 0"
+    },
+    {
+      "doc_b64": "MS4w",
+      "value": 1.0,
+      "why": "a fraction is no integer"
+    },
+    {
+      "doc_b64": "MWUy",
+      "value": 100.0,
+      "why": "an exponent is no integer"
+    },
+    {
+      "doc_b64": "MS4wMDAwMDAwMDAwMDAwMDAwMQ==",
+      "value": 1.0,
+      "why": "a fraction past a double's precision rounds"
+    },
+    {
+      "doc_b64": "MWUtNDAw",
+      "value": 0.0,
+      "why": "an underflow reads as 0.0"
+    },
+    {
+      "doc_b64": "LTFlLTQwMA==",
+      "value": -0.0,
+      "why": "a negative underflow reads as -0.0"
+    },
+    {
+      "doc_b64": "MS43OTc2OTMxMzQ4NjIzMTU3ZTMwOA==",
+      "value": 1.7976931348623157e+308,
+      "why": "the largest double"
+    },
+    {
+      "doc_b64": "MS4wZTAwMDAwMDAwMDAwMDAwMDAwMDI=",
+      "value": 100.0,
+      "why": "an exponent of many digits"
+    },
+    {
+      "doc_b64": "OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OQ==",
+      "value": 9999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999,
+      "why": "an integer of 1,024 characters"
+    },
+    {
+      "doc_b64": "LTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OQ==",
+      "value": -999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999,
+      "why": "a negative integer of 1,024 characters"
+    },
+    {
+      "doc_b64": "MTg0NDY3NDQwNzM3MDk1NTE2MTY=",
+      "value": 18446744073709551616,
+      "why": "an integer past 2^64, kept whole"
+    },
+    {
+      "doc_b64": "MS4xMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTE=",
+      "value": 1.1111111111111112,
+      "why": "a fraction of 3,000 digits"
+    },
+    {
+      "doc_b64": "IAkNCnsiYSIgOiAxICwgImIiOlsgXSB9Cg==",
+      "value": {
+        "a": 1,
+        "b": []
+      },
+      "why": "whitespace about the value and its members"
+    },
+    {
+      "doc_b64": "e30=",
+      "value": {},
+      "why": "an empty object"
+    },
+    {
+      "doc_b64": "W1tbXV0sW11d",
+      "value": [
+        [
+          []
+        ],
+        []
+      ],
+      "why": "nested arrays"
+    }
+  ],
+  "refused": [
+    {
+      "doc_b64": "Ilx1ZDgwMCI=",
+      "why": "a lone high surrogate"
+    },
+    {
+      "doc_b64": "Ilx1ZGMwMCI=",
+      "why": "a lone low surrogate"
+    },
+    {
+      "doc_b64": "Ilx1ZDgwMFx1MDA0MSI=",
+      "why": "a high surrogate before another escape"
+    },
+    {
+      "doc_b64": "Ilx1ZDgwMCI=",
+      "why": "a high surrogate at the end"
+    },
+    {
+      "doc_b64": "Iv8i",
+      "why": "bytes that are no UTF-8"
+    },
+    {
+      "doc_b64": "Iu2ggCI=",
+      "why": "a surrogate written in UTF-8"
+    },
+    {
+      "doc_b64": "IsCvIg==",
+      "why": "an overlong encoding"
+    },
+    {
+      "doc_b64": "IvSQgIAi",
+      "why": "a code point past U+10FFFF"
+    },
+    {
+      "doc_b64": "IuKAIg==",
+      "why": "a truncated sequence"
+    },
+    {
+      "doc_b64": "ImEJYiI=",
+      "why": "a raw tab in a string"
+    },
+    {
+      "doc_b64": "ImEKYiI=",
+      "why": "a raw line feed in a string"
+    },
+    {
+      "doc_b64": "77u/e30=",
+      "why": "a byte-order mark"
+    },
+    {
+      "doc_b64": "DHt9",
+      "why": "a form feed as whitespace"
+    },
+    {
+      "doc_b64": "MUU0MDA=",
+      "why": "an exponent past a double"
+    },
+    {
+      "doc_b64": "MS43OTc2OTMxMzQ4NjIzMTU5ZTMwOA==",
+      "why": "just past the largest double"
+    },
+    {
+      "doc_b64": "OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk=",
+      "why": "an integer of 1,025 characters"
+    },
+    {
+      "doc_b64": "LTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk=",
+      "why": "a negative integer of 1,025 characters"
+    },
+    {
+      "doc_b64": "OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OS41",
+      "why": "a fraction past a double"
+    },
+    {
+      "doc_b64": "WzEsXQ==",
+      "why": "a trailing comma"
+    },
+    {
+      "doc_b64": "MDE=",
+      "why": "a leading zero"
+    },
+    {
+      "doc_b64": "",
+      "why": "nothing"
+    },
+    {
+      "doc_b64": "ICA=",
+      "why": "only whitespace"
+    },
+    {
+      "doc_b64": "Ilx4Ig==",
+      "why": "an escape no JSON has"
+    },
+    {
+      "doc_b64": "IlxVMDA0MSI=",
+      "why": "a u escape in capitals"
+    },
+    {
+      "doc_b64": "dHJ1",
+      "why": "a short literal"
+    },
+    {
+      "doc_b64": "VHJ1ZQ==",
+      "why": "a literal in capitals"
+    },
+    {
+      "doc_b64": "eyJhIjoxfXg=",
+      "why": "bytes after the value"
+    },
+    {
+      "doc_b64": "MSAy",
+      "why": "two values"
+    },
+    {
+      "doc_b64": "LjU=",
+      "why": "a bare fraction"
+    },
+    {
+      "doc_b64": "MS4=",
+      "why": "a point without digits"
+    },
+    {
+      "doc_b64": "MWU=",
+      "why": "an exponent without digits"
+    },
+    {
+      "doc_b64": "KzE=",
+      "why": "a plus sign"
+    },
+    {
+      "doc_b64": "ImFiYw==",
+      "why": "an unclosed string"
+    },
+    {
+      "doc_b64": "eyJhIjox",
+      "why": "an unclosed object"
+    },
+    {
+      "doc_b64": "eyJhIn0=",
+      "why": "a member without a value"
+    },
+    {
+      "doc_b64": "e2E6MX0=",
+      "why": "a name that is no string"
+    },
+    {
+      "doc_b64": "Ilx1MDA=",
+      "why": "a truncated escape"
+    },
+    {
+      "doc_b64": "J2En",
+      "why": "a single quote"
+    },
+    {
+      "doc_b64": "TmFO",
+      "why": "NaN"
+    }
+  ],
+  "writes": [
+    {
+      "bytes_b64": "Ilx1MDAxRlxiXGZcIlxcIg==",
+      "value": "\u001f\b\f\"\\",
+      "why": "control characters, quote and backslash"
+    },
+    {
+      "bytes_b64": "Ii88PibigKjigKl/Ig==",
+      "value": "/<>&  ",
+      "why": "solidus, <, >, &, U+2028, U+2029 and DEL as themselves"
+    },
+    {
+      "bytes_b64": "Ilx0XG5cclx1MDAwMCI=",
+      "value": "\t\n\r\u0000",
+      "why": "tab, line feed, carriage return and NUL"
+    },
+    {
+      "bytes_b64": "ImNhZsOpIPCfmIAi",
+      "value": "café 😀",
+      "why": "characters past ASCII as themselves"
+    },
+    {
+      "bytes_b64": "eyJhIjoyLCJhYSI6W3RydWUsZmFsc2UsbnVsbF0sImIiOjF9",
+      "value": {
+        "a": 2,
+        "aa": [
+          true,
+          false,
+          null
+        ],
+        "b": 1
+      },
+      "why": "a plain map's members by name"
+    },
+    {
+      "bytes_b64": "OTAwNzE5OTI1NDc0MDk5Mw==",
+      "value": 9007199254740993,
+      "why": "an integer past 2^53"
+    }
+  ]
+}
