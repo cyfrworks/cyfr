@@ -83,6 +83,8 @@ pub struct Host {
     control: Writer,
     lost: std::sync::atomic::AtomicBool,
     notes: std::sync::Mutex<std::collections::BTreeMap<&'static str, u64>>,
+    /// The attempt's streams whose answers are still to be recorded.
+    watchers: std::sync::Mutex<Vec<Arc<crate::imports::stream::Watcher>>>,
 }
 
 impl Host {
@@ -93,6 +95,7 @@ impl Host {
             control,
             lost: std::sync::atomic::AtomicBool::new(false),
             notes: std::sync::Mutex::new(std::collections::BTreeMap::new()),
+            watchers: std::sync::Mutex::new(Vec::new()),
         }
     }
 
@@ -171,6 +174,38 @@ impl Host {
                 format!("the event {name} carries no line, and is not sent")
             });
         }
+    }
+
+    /// Keep `watcher` among the attempt's streams to record, forgetting
+    /// those already recorded whole.
+    pub fn watch(&self, watcher: Arc<crate::imports::stream::Watcher>) {
+        let mut watchers = self.watchers.lock().expect("the attempt's watchers");
+        watchers.retain(|watcher| !watcher.settled());
+        watchers.push(watcher);
+    }
+
+    /// Record what has arrived of each of the attempt's streams and is not
+    /// yet recorded, before the attempt closes: a stream's answer that
+    /// arrived while its guest ran is the attempt's, read or not.
+    pub async fn settle_streams(&self) {
+        let watchers = self
+            .watchers
+            .lock()
+            .expect("the attempt's watchers")
+            .clone();
+        for watcher in watchers {
+            watcher.settle(self).await;
+        }
+    }
+
+    /// The relay the attempt's calls and fetches go through.
+    pub fn relay(&self) -> &Relay {
+        &self.relay
+    }
+
+    /// The attempt's keys, which open its attached answers' frames.
+    pub fn keys(&self) -> &AttemptKeys {
+        &self.caller.keys
     }
 
     pub fn attempt(&self) -> &str {
@@ -344,7 +379,9 @@ async fn execute(
             }
         }
     };
-    let input = serde_json::to_string(input.value()).expect("a JSON value is written");
+    // The guest's input may carry what it fetches with: held cleared.
+    let input =
+        Zeroizing::new(serde_json::to_string(input.value()).expect("a JSON value is written"));
     match engine.run(kind, &component, imports, &input).await {
         Ok(output) if depth(output.as_bytes()) > MAX_OUTPUT_DEPTH => {
             Run_::Failed(words::output_too_deep())
@@ -392,6 +429,7 @@ async fn fetch(host: &Host, digest: &str) -> Result<Vec<u8>, String> {
 }
 
 async fn close(host: &Host, outcome: Run_) -> Ended {
+    host.settle_streams().await;
     let (op, fields, stopped) = match outcome {
         Run_::Output(mut output) => (
             "complete",

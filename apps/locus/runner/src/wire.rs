@@ -102,6 +102,12 @@ pub fn decode_base64url(text: impl AsRef<[u8]>) -> Option<Vec<u8>> {
         .ok()
 }
 
+/// `bytes` in standard base64 with its padding, written at the end of
+/// `text`.
+pub fn encode_base64_into(bytes: &[u8], text: &mut String) {
+    BASE64.encode_string(bytes, text);
+}
+
 /// `bytes` in unpadded base64url.
 pub fn encode_base64url(bytes: &[u8]) -> String {
     BASE64URL.encode(bytes)
@@ -578,6 +584,8 @@ pub struct Uri<'a> {
     pub scheme: Option<String>,
     pub userinfo: Option<&'a str>,
     pub host: Option<&'a str>,
+    /// The text after the host's colon, when the authority names one.
+    pub port: Option<&'a str>,
     pub path: Option<&'a str>,
     pub query: Option<&'a str>,
     pub fragment: Option<&'a str>,
@@ -611,14 +619,15 @@ pub fn parse_uri(text: &str) -> Uri<'_> {
         },
         None => (None, rest.strip_prefix('#')),
     };
-    let (userinfo, host) = match authority {
-        None => (None, None),
+    let (userinfo, host, port) = match authority {
+        None => (None, None, None),
         Some(authority) => split_authority(authority),
     };
     Uri {
         scheme,
         userinfo,
         host,
+        port,
         path: (!path.is_empty()).then_some(path),
         query,
         fragment,
@@ -626,10 +635,10 @@ pub fn parse_uri(text: &str) -> Uri<'_> {
 }
 
 // An authority's user information, everything before its last `@` with no
-// line feed before it, and its host: a bracketed address of letters,
-// digits, `:` and `.`, or everything up to a colon, then its brackets
-// trimmed.
-fn split_authority(authority: &str) -> (Option<&str>, Option<&str>) {
+// line feed before it; its host: a bracketed address of letters, digits,
+// `:` and `.`, or everything up to a colon, then its brackets trimmed; and
+// what follows the host's colon.
+fn split_authority(authority: &str) -> (Option<&str>, Option<&str>, Option<&str>) {
     let line = authority.find('\n').unwrap_or(authority.len());
     let (userinfo, rest) = match authority[..line].rfind('@') {
         Some(at) => (&authority[..at], &authority[at + 1..]),
@@ -640,8 +649,9 @@ fn split_authority(authority: &str) -> (Option<&str>, Option<&str>) {
         (inner.as_bytes()[close] == b']').then(|| &rest[..close + 2])
     });
     let host = bracketed.unwrap_or_else(|| &rest[..rest.find(':').unwrap_or(rest.len())]);
+    let port = rest[host.len()..].strip_prefix(':');
     let host = (!host.is_empty()).then(|| host.trim_start_matches('[').trim_end_matches(']'));
-    ((!userinfo.is_empty()).then_some(userinfo), host)
+    ((!userinfo.is_empty()).then_some(userinfo), host, port)
 }
 
 /// Whether `text` is a base URL a route is appended to as it is

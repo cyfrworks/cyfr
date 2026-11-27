@@ -15,6 +15,10 @@ defmodule Prima.PinnedTargetTest do
 
   alias Prima.PinnedTarget
 
+  @vectors Path.expand("../../../../tests/fixtures/host_api.json", __DIR__)
+           |> File.read!()
+           |> Jason.decode!()
+
   @pin %PinnedTarget{
     id: "pin_Vx1",
     ip: "203.0.113.10",
@@ -102,6 +106,18 @@ defmodule Prima.PinnedTargetTest do
     refute PinnedTarget.valid?(Map.from_struct(@pin))
   end
 
+  # The shared cases a runner holds its own reading of a pin to.
+  test "the pin_answer_refusals of tests/fixtures/host_api.json read as the vectors say" do
+    %{"pin" => pin, "reads" => reads, "refusals" => refusals} = @vectors["pin_answer_refusals"]
+    assert {:ok, %PinnedTarget{}} = PinnedTarget.read(pin)
+
+    for %{"why" => why, "pin" => read} <- reads,
+        do: assert({:ok, %PinnedTarget{}} = PinnedTarget.read(read), why)
+
+    for %{"why" => why, "pin" => refused} <- refusals,
+        do: assert(PinnedTarget.read(refused) == :error, why)
+  end
+
   test "a request is a URL with a host and a purpose, and a redirect names its pin" do
     assert {:ok, args} = PinnedTarget.request_args("https://api.example.test/x?y=1", :fetch)
     assert args == %{"url" => "https://api.example.test/x?y=1", "purpose" => "fetch"}
@@ -145,7 +161,7 @@ defmodule Prima.PinnedTargetTest do
 
   test "the refusals and purposes are the wire's names, and a pin expires after its instant" do
     assert PinnedTarget.refusals() ==
-             [:denied, :metadata, :resolution, :redirect_credentials, :malformed]
+             [:domain, :denied, :metadata, :resolution, :redirect_credentials, :malformed]
 
     assert PinnedTarget.purposes() == [:fetch, :stream, :redirect]
     refute PinnedTarget.expired?(@pin, @pin.expires_at)

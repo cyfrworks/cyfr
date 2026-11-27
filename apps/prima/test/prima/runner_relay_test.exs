@@ -111,6 +111,47 @@ defmodule Prima.RunnerRelayTest do
     assert div(RunnerRelay.max_body_bytes() + 2, 3) * 4 + 65_536 < RunnerRelay.max_frame_bytes()
   end
 
+  test "the caps and the codes are the fixture's" do
+    assert RunnerRelay.max_calls() == @vectors["max_calls"]
+    assert RunnerRelay.max_fetches() == @vectors["max_fetches"]
+
+    pairs = fn section ->
+      Enum.map(@vectors["codes"][section], &{&1["code"], &1["why"]})
+    end
+
+    assert RunnerRelay.fetch_end_codes() == pairs.("fetch_end")
+    assert RunnerRelay.close_codes() == pairs.("close")
+
+    # Every code is of the form decoding holds it to.
+    for {code, _why} <- RunnerRelay.fetch_end_codes() ++ RunnerRelay.close_codes(),
+        do: assert(code =~ ~r/\A[a-z][a-z0-9_]{0,63}\z/, code)
+
+    # A pin code for each of CYFR's refusals and the service's own, read
+    # back to its why; any other reason is a lost answer.
+    whys = Prima.PinnedTarget.refusals() ++ [:unavailable, :lost, :elsewhere, :expired]
+
+    for why <- whys do
+      code = RunnerRelay.pin_code(why)
+      assert {code, _} = List.keyfind(RunnerRelay.fetch_end_codes(), code, 0)
+      assert RunnerRelay.pin_why(code) == {:ok, why}
+    end
+
+    assert RunnerRelay.pin_code(:anything_else) == "pin_lost"
+    assert RunnerRelay.pin_why("timeout") == :error
+  end
+
+  test "a channel closes with a code of the roster, and with no other" do
+    assert RunnerRelay.close_code(:too_many_fetches) == "too_many_fetches"
+    assert RunnerRelay.close_code({:missing_field, "seq"}) == "malformed"
+    assert_raise ArgumentError, fn -> RunnerRelay.close_code(:not_a_code) end
+
+    # Every refusal the decoder answers has its code.
+    for refusal <- @vectors["refusals"] do
+      code = refusal |> reason() |> RunnerRelay.close_code()
+      assert List.keymember?(RunnerRelay.close_codes(), code, 0), refusal["why"]
+    end
+  end
+
   test "the exchange holds one frame of every kind, each sent by its side" do
     kinds =
       Enum.map(@vectors["exchange"], fn vector ->
