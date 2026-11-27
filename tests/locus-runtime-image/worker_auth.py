@@ -401,7 +401,7 @@ def first_member(text):
 # ---------------------------------------------------------------------------
 
 PIN_PURPOSES = ("fetch", "stream", "redirect")
-PIN_REFUSALS = ("denied", "metadata", "resolution", "redirect_credentials", "malformed")
+PIN_REFUSALS = ("domain", "denied", "metadata", "resolution", "redirect_credentials", "malformed")
 PIN_MEMBERS = {"id", "ip", "family", "scheme", "port", "host", "expires_at"}
 PIN_ID = re.compile(r"[A-Za-z0-9_-]{1,128}")
 _LABEL = r"[A-Za-z0-9_](?:[A-Za-z0-9_-]{0,61}[A-Za-z0-9_])?"
@@ -1133,14 +1133,16 @@ def check_host_api(path, primitives):
             assert (pin["scheme"], pin["host"], pin["port"]) == (scheme, host, port), f"{what}: the pin names the URL's origin"
         else:
             assert answer[1] in PIN_REFUSALS and answer[1] == case["name"], f"{what}: refused by its name"
+    # The pin cases run under an edge allowing every host, so a host
+    # outside the domains is an egress policy case's (`domain`, below).
     names = {case["name"] for case in v["egress_pin_cases"]}
-    assert {"fetch", "stream", "redirect"} | set(PIN_REFUSALS) - {"malformed"} <= names, "host_api: every pin case"
+    assert {"fetch", "stream", "redirect"} | set(PIN_REFUSALS) - {"malformed", "domain"} <= names, "host_api: every pin case"
 
     # The egress policy's cases, in the order one attempt makes them: each
     # call reproduced as a pin case is, and each answer derived from its
     # expect: the URL's host against domains, a redirect's URL against the
     # URL of the pin it names as from, a pin answered only where both hold,
-    # `denied` outside domains and `redirect_credentials` on another origin;
+    # `domain` outside domains and `redirect_credentials` on another origin;
     # and a hop's headers_after as headers_before without every header that
     # carries a credential.
     pinned, outcomes = {}, set()
@@ -1166,10 +1168,10 @@ def check_host_api(path, primitives):
             pinned[pin["id"]] = url
             outcomes.add("pinned")
         else:
-            refusal = "denied" if not allowed else "redirect_credentials"
+            refusal = "domain" if not allowed else "redirect_credentials"
             assert answer[0] == "error" and answer[1] == refusal, f"{what}: refused as {refusal}"
             outcomes.add(refusal)
-    assert outcomes == {"pinned", "denied", "redirect_credentials"}, "host_api: every egress policy outcome"
+    assert outcomes == {"pinned", "domain", "redirect_credentials"}, "host_api: every egress policy outcome"
 
     for refusal in v["pre_body_refusals"]:
         what = f"host_api pre-body {refusal['name']}"

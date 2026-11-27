@@ -452,7 +452,13 @@ defmodule Opus.Host.EgressTest do
         end
       end
 
-      assert fixture |> denials() |> Enum.map(& &1.decision) == List.duplicate("denied", 3)
+      # Each refusal is recorded once: the host outside the domains as the
+      # domain refusal it is, the two hops to another origin as denials.
+      rows = denials(fixture)
+      assert Enum.map(rows, & &1.decision) == List.duplicate("denied", 3)
+
+      assert rows |> Enum.map(& &1.event_type) |> Enum.sort() ==
+               ~w(denied denied domain_blocked)
     end
   end
 
@@ -587,13 +593,13 @@ defmodule Opus.Host.EgressTest do
       # The wildcard names every name below its base, and neither the base
       # itself nor a name that only contains it.
       for url <- ["https://example.test/", "https://api.example.test.evil.test/"] do
-        assert {:error, :denied} = pin(fixture, url, :fetch), url
+        assert {:error, :domain} = pin(fixture, url, :fetch), url
       end
 
       # A name outside the domains, and an IPv6 literal the domains do not
       # spell.
-      assert {:error, :denied} = pin(fixture, "https://dual.test/", :fetch)
-      assert {:error, :denied} = pin(fixture, "http://[2001:db8::20]:8080/", :stream)
+      assert {:error, :domain} = pin(fixture, "https://dual.test/", :fetch)
+      assert {:error, :domain} = pin(fixture, "http://[2001:db8::20]:8080/", :stream)
 
       # No name the domains refuse was looked up.
       looked_up = Enum.map(Resolver.looked_up(), fn {host, _family} -> host end)
@@ -603,10 +609,11 @@ defmodule Opus.Host.EgressTest do
 
       rows = denials(fixture)
       assert length(rows) == 4
+      assert Enum.all?(rows, &(&1.event_type == "domain_blocked"))
       assert Enum.any?(rows, &(&1.decision_reason =~ "[2001:db8::20]"))
     end
 
-    test "is denied under an authority with no egress edge, and allowed by \"*\"" do
+    test "is refused for its domain under an authority with no egress edge, and allowed by \"*\"" do
       for authority <- [
             Authority.zero(),
             %{Authority.zero() | resources: :none},
@@ -615,8 +622,8 @@ defmodule Opus.Host.EgressTest do
         fixture =
           AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api), authority: authority)
 
-        assert {:error, :denied} = pin(fixture, "https://203.0.113.10/", :fetch)
-        assert {:error, :denied} = pin(fixture, "http://[2001:db8::20]:8080/", :stream)
+        assert {:error, :domain} = pin(fixture, "https://203.0.113.10/", :fetch)
+        assert {:error, :domain} = pin(fixture, "http://[2001:db8::20]:8080/", :stream)
         assert [_, _] = denials(fixture)
       end
 
@@ -686,7 +693,7 @@ defmodule Opus.Host.EgressTest do
 
       # Outside the domains, to another origin within them, to another
       # port of the pin's host, and from a pin the attempt does not hold.
-      assert {:error, :denied} =
+      assert {:error, :domain} =
                pin(fixture, "https://outside.example.org/b", :redirect, from: from)
 
       for {url, from} <- [
@@ -746,7 +753,7 @@ defmodule Opus.Host.EgressTest do
       assert {:error, :resolution} =
                pin(fixture, "https://nothing.example.invalid/c?token=sk-dns", :fetch)
 
-      assert {:error, :denied} = pin(fixture, "https://login.other.test/d?token=sk-out", :fetch)
+      assert {:error, :domain} = pin(fixture, "https://login.other.test/d?token=sk-out", :fetch)
 
       assert {:error, :redirect_credentials} =
                pin(fixture, "https://api.example.test:8443/e?token=sk-hop", :redirect, from: from)
@@ -754,8 +761,13 @@ defmodule Opus.Host.EgressTest do
       rows = denials(fixture)
       assert length(rows) == 5
 
+      # The host outside the domains is the one row recorded as the domain
+      # refusal it is.
+      assert rows |> Enum.map(& &1.event_type) |> Enum.frequencies() ==
+               %{"denied" => 4, "domain_blocked" => 1}
+
       for row <- rows do
-        assert row.event_type == "denied" and row.decision == "denied"
+        assert row.decision == "denied"
         assert row.athanor_id == fixture.athanor_id
         refute row.decision_reason =~ "sk-"
         refute row.decision_reason =~ "?"
@@ -778,8 +790,8 @@ defmodule Opus.Host.EgressTest do
 
       # The control plane's own pin is decided as a guest's fetch is.
       assert {:ok, %PinnedTarget{ip: "203.0.113.10"}} = attached.("https://api.example.test/")
-      assert {:error, :denied} = attached.("https://other.test/a?token=sk-attached")
-      assert {:error, :denied} = pin(fixture, "https://other.test/b?token=sk-fetched", :fetch)
+      assert {:error, :domain} = attached.("https://other.test/a?token=sk-attached")
+      assert {:error, :domain} = pin(fixture, "https://other.test/b?token=sk-fetched", :fetch)
 
       assert fixture |> denials() |> Enum.map(& &1.decision_reason) |> Enum.sort() == [
                "attached: host other.test is not in the egress domains",

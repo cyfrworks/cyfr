@@ -45,6 +45,23 @@ defmodule Locus.Runtime.RelayVectorsTest do
                         ],
                         do: seq
 
+  # The fetch_end codes the service names: each `pin_` code is a pin the
+  # service's own ask got none for, read back as that refused pin; and the
+  # service's two caps are Prima's.
+  test "every pin code of the vectors reads back as its refused pin, and the caps are Prima's" do
+    pin_codes = for %{"code" => "pin_" <> _ = code} <- @vectors["codes"]["fetch_end"], do: code
+
+    assert length(pin_codes) ==
+             length(Prima.PinnedTarget.refusals() ++ [:unavailable, :lost, :elsewhere, :expired])
+
+    for code <- pin_codes do
+      refute Locus.Runtime.Egress.relay_refusal(code, "api.example.test") == :none, code
+    end
+
+    assert Prima.RunnerRelay.max_calls() == @vectors["max_calls"]
+    assert Prima.RunnerRelay.max_fetches() == @vectors["max_fetches"]
+  end
+
   defp json(%{"json" => json}), do: json
 
   defp json(%{"json_fill" => %{"prefix" => p, "repeat" => r, "times" => n, "suffix" => s}}),

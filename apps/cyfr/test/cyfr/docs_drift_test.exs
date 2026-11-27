@@ -1190,10 +1190,38 @@ defmodule Cyfr.DocsDriftTest do
     end
   end
 
-  # A pin the control plane refuses reaches the guest as one of the
-  # engine's error types (`Locus.Runtime.Egress`), and the fetch interface's error
-  # list in the component guide names every one.
-  test "component-guide's fetch error types name every type a refused pin reaches the guest as" do
+  # The error types each HTTP interface answers a guest are the guest
+  # error vectors' `fetch_types`, which the Rust runner's crate holds its
+  # imports to: the component guide's fetch error line and its streaming
+  # error table name exactly them, and every type a refused pin reaches
+  # the guest as in today's runner (`Locus.Runtime.Egress`) is one of the
+  # fetch's.
+  test "component-guide's HTTP error types are the guest error vectors' fetch_types" do
+    types =
+      @repo_root
+      |> Path.join("tests/fixtures/guest_error.json")
+      |> SourceTree.read()
+      |> Jason.decode!()
+      |> Map.fetch!("fetch_types")
+
+    guide = SourceTree.read(Path.join(@repo_root, "component-guide.md"))
+
+    [_, fetch] =
+      Regex.run(~r/^### `cyfr:http\/fetch`.*?^Error: `\{"error": \{"type": "([a-z_|]+)"/ms, guide)
+
+    assert Enum.sort(String.split(fetch, "|")) == Enum.sort(types["cyfr:http/fetch"])
+
+    [_, table] =
+      Regex.run(~r/^\*\*Streaming error types:\*\*\n\n(.*?)\n\n/ms, guide)
+
+    streaming = Regex.scan(~r/^\| `([a-z_]+)` \|/m, table, capture: :all_but_first)
+
+    [_, requests] =
+      Regex.run(~r/^\*\*Streaming error types:\*\*.*?^Request refusals: `([a-z_|]+)`/ms, guide)
+
+    assert Enum.sort(List.flatten(streaming) ++ String.split(requests, "|")) ==
+             Enum.sort(types["cyfr:http/streaming"])
+
     answered =
       @repo_root
       |> Path.join("apps/locus/lib/locus/runtime/egress.ex")
@@ -1202,17 +1230,10 @@ defmodule Cyfr.DocsDriftTest do
       |> List.flatten()
       |> Enum.uniq()
 
-    assert "redirect_credentials" in answered and "private_ip_blocked" in answered
+    assert "redirect_credentials" in answered and "domain_blocked" in answered
 
-    guide = SourceTree.read(Path.join(@repo_root, "component-guide.md"))
-
-    [_, types] =
-      Regex.run(~r/^### `cyfr:http\/fetch`.*?^Error: `\{"error": \{"type": "([a-z_|]+)"/ms, guide)
-
-    documented = String.split(types, "|")
-
-    assert answered -- documented == [],
-           "component-guide.md's fetch error types lack #{inspect(answered -- documented)}"
+    assert answered -- types["cyfr:http/fetch"] == [],
+           "guest_error.json's fetch_types lack #{inspect(answered -- types["cyfr:http/fetch"])}"
   end
 
   # The envelope a host function answers a guest's error with is the shared
@@ -1220,8 +1241,8 @@ defmodule Cyfr.DocsDriftTest do
   # component-guide spells it: the Error: lines of `cyfr:http/fetch` and
   # `cyfr:storage/files`, and the Invoke Error Types, whose table names the
   # fallback's type and the member a setup_required error carries besides.
-  # The error types themselves are held to their producers by the fetch
-  # error check above. The `model/chat@1` refusal, with its `provider`
+  # The error types themselves are held to the vectors' fetch_types by the
+  # check above. The `model/chat@1` refusal, with its `provider`
   # member, is a model catalyst's own result, not this envelope.
   test "component-guide's error envelope and its fallback type are the guest error vectors'" do
     vectors =
