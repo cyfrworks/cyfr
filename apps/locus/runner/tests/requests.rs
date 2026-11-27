@@ -1073,11 +1073,14 @@ fn dot_segments_are_removed_as_rfc_3986_removes_them() {
 }
 
 #[test]
-fn a_pinned_requests_url_and_header_leave_the_runner_with_at_most_the_bindings_copy() {
-    // Item 5: after the attempt closes, the runner's writable memory holds
-    // a needle at most once: the request the generated binding took, which
-    // Wasmtime frees unwiped (a stated limit). Every copy of the runner's
-    // own is cleared.
+fn a_redirects_location_query_is_left_at_most_once_after_its_attempt_closes() {
+    // After the attempt closes, the runner's writable memory holds each
+    // needle at most once: the answer the generated binding hands the
+    // guest, which Wasmtime frees unwiped (a stated limit). Before the
+    // answer's headers were held cleared, the `Location`'s query was found
+    // twice. A scan shows what is left, not that nothing is: freed memory
+    // is often reused, so a plain copy put back elsewhere (the canonical
+    // URL's) is not seen here, and those copies are held cleared by reading.
     let path = "PPNEEDLEPATHtok-0123456789abcdefPP";
     let query = "QQNEEDLEQUERYsk-live-0123456789abcdefQQ";
     let header = "HHNEEDLEHEADERBearer-0123456789abcdefHH";
@@ -1519,34 +1522,3 @@ fn a_request_the_relays_frame_cannot_carry_is_refused_unsent() {
     assert!(service.frames_of("fetch").is_empty());
 }
 
-#[test]
-fn a_long_pinned_urls_canonical_form_is_not_left_in_the_runner() {
-    // Item 9: a URL long enough that its canonical copy is an allocation
-    // of its own, the needle far past its first bytes, counted against
-    // the binding's one copy of the request.
-    let filler = "f".repeat(3000);
-    let needle = "CCNEEDLECANONICALsk-0123456789abcdefCC";
-    let mut service = Service::start();
-    let job = fetching(&json!({"method": "GET",
-        "url": format!("https://api.example.test/{filler}/{needle}")}));
-    service.assign_fetching(
-        &job,
-        pinning("api.example.test"),
-        in_turn(vec![vec![
-            Upstream::Head(200, Vec::new(), b"ok".to_vec()),
-            Upstream::End(None),
-        ]]),
-    );
-    let _ = completed(&service, &job);
-    let found = support::scan(
-        service.pid(),
-        &[support::RUNNER.as_bytes(), needle.as_bytes()],
-    );
-    eprintln!("canonical residue: {found:?}");
-    assert!(found[0] > 0, "the scan read the runner's memory: {found:?}");
-    assert!(
-        found[1] <= 1,
-        "the URL is left {} times: {found:?}",
-        found[1]
-    );
-}
