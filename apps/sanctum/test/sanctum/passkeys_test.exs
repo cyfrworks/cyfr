@@ -83,7 +83,7 @@ defmodule Sanctum.PasskeysTest do
     Context.build(
       user_id: user.id,
       athanor_id: athanor.id,
-      auth_method: :oidc,
+      auth_method: :session,
       authenticated: true,
       permissions: Context.person_permissions()
     )

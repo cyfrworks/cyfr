@@ -23,7 +23,7 @@ defmodule Sanctum.ExecutionReadAuthorizationTest do
         athanor_id: "ath_a",
         permissions: perms,
         scope: :athanor,
-        auth_method: :oidc,
+        auth_method: :session,
         authenticated: true
       ]
       |> Keyword.merge(opts)

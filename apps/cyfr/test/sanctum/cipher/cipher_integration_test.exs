@@ -37,7 +37,7 @@ defmodule Sanctum.CipherIntegrationTest do
       athanor_id: athanor_id,
       scope: :athanor,
       permissions: [:execute, :vault_read],
-      auth_method: :oidc,
+      auth_method: :session,
       authenticated: true
     )
   end
@@ -156,5 +156,5 @@ defmodule Sanctum.CipherIntegrationTest do
   end
 
   defp person_context(user_id),
-    do: Sanctum.Context.build(user_id: user_id, authenticated: true, auth_method: :oidc)
+    do: Sanctum.Context.build(user_id: user_id, authenticated: true, auth_method: :session)
 end

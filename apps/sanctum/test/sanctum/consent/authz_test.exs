@@ -88,7 +88,7 @@ defmodule Sanctum.Consent.AuthzTest do
         provider: "github",
         athanor_id: athanor.id,
         permissions: [:*],
-        auth_method: :oidc,
+        auth_method: :session,
         authenticated: true
       )
 
@@ -383,7 +383,7 @@ defmodule Sanctum.Consent.AuthzTest do
 
   describe "a paired client is the device channel's alone" do
     test "a guest-plane context carrying a client id is refused before anything else" do
-      for method <- [:device, :oidc] do
+      for method <- [:device, :session] do
         guest = Context.enter_guest(ctx(auth_method: method, client_id: "pcl_1"))
 
         assert Authz.authorize(guest, request()) == {:error, :guest_plane}
@@ -398,7 +398,7 @@ defmodule Sanctum.Consent.AuthzTest do
     end
 
     test "a tincture credential, a session or a key claiming a client id is refused" do
-      for method <- [:tincture, :oidc, :api_key] do
+      for method <- [:tincture, :session, :api_key] do
         claiming = ctx(auth_method: method, client_id: "pcl_1")
         refused = {:error, {:surface_not_permitted, method}}
 
@@ -512,8 +512,8 @@ defmodule Sanctum.Consent.AuthzTest do
     # Inside a running chain every call is guest-planed, so the plane
     # conjunct is dropped for all of them; the surface conjunct is what
     # keeps a key- or schedule-started run of the same formula out.
-    test "an :oidc session's chain gets through, guest plane and all" do
-      assert Authz.authorize_interactive_in_chain(ctx(auth_method: :oidc, plane: :guest)) ==
+    test "a :session chain gets through, guest plane and all" do
+      assert Authz.authorize_interactive_in_chain(ctx(auth_method: :session, plane: :guest)) ==
                {:ok, :interactive}
     end
 
@@ -525,7 +525,7 @@ defmodule Sanctum.Consent.AuthzTest do
     end
 
     test "the door still asks the plane; the chain does not" do
-      guest = ctx(auth_method: :oidc, plane: :guest)
+      guest = ctx(auth_method: :session, plane: :guest)
       assert {:error, _} = Authz.authorize_interactive(guest)
       assert {:ok, :interactive} = Authz.authorize_interactive_in_chain(guest)
     end
@@ -544,16 +544,16 @@ defmodule Sanctum.Consent.AuthzTest do
 
     test "a session a provider synthesized, with no stored credential behind it, may consent" do
       # Its establishment contract stands: nothing stored to reread.
-      assert Authz.authorize(ctx(auth_method: :oidc), request()) == {:ok, :interactive}
+      assert Authz.authorize(ctx(auth_method: :session), request()) == {:ok, :interactive}
 
-      assert Authz.authorize(ctx(auth_method: :oidc), request(override?: true)) ==
+      assert Authz.authorize(ctx(auth_method: :session), request(override?: true)) ==
                {:ok, :interactive}
     end
 
     test "permissions are never consulted" do
       # The whole reason consent is not a permission: `:*` satisfies every
       # permission check, so a permission could not exclude admin keys.
-      no_permissions = ctx(auth_method: :oidc, permissions: [])
+      no_permissions = ctx(auth_method: :session, permissions: [])
       assert Authz.authorize(no_permissions, request()) == {:ok, :interactive}
     end
   end
@@ -568,15 +568,15 @@ defmodule Sanctum.Consent.AuthzTest do
     end
 
     test "an unauthenticated or anonymous caller cannot consent" do
-      unauthenticated = Context.build(%{authenticated: false, auth_method: :oidc})
+      unauthenticated = Context.build(%{authenticated: false, auth_method: :session})
       assert Authz.authorize(unauthenticated, request()) == {:error, :not_authenticated}
 
-      anonymous = ctx(auth_method: :oidc, anonymous: true)
+      anonymous = ctx(auth_method: :session, anonymous: true)
       assert Authz.authorize(anonymous, request()) == {:error, :anonymous}
     end
 
     test "the guest plane is refused before anything else is considered" do
-      guest = Context.enter_guest(ctx(auth_method: :oidc))
+      guest = Context.enter_guest(ctx(auth_method: :session))
       assert Authz.authorize(guest, request()) == {:error, :guest_plane}
 
       # Even holding a perfectly valid capability.
@@ -655,7 +655,7 @@ defmodule Sanctum.Consent.AuthzTest do
 
   describe "request validation" do
     test "a request without a commit digest authorizes nothing" do
-      session = ctx(auth_method: :oidc)
+      session = ctx(auth_method: :session)
 
       assert Authz.authorize(session, %Request{commit_digest: ""}) == {:error, :invalid_request}
       assert Authz.authorize(session, %Request{commit_digest: nil}) == {:error, :invalid_request}
@@ -873,7 +873,7 @@ defmodule Sanctum.Consent.AuthzTest do
           provider: "github",
           athanor_id: athanor.id,
           permissions: [:*],
-          auth_method: :oidc,
+          auth_method: :session,
           authenticated: true
         )
 
@@ -935,8 +935,8 @@ defmodule Sanctum.Consent.AuthzTest do
       assert Authz.confirm(%{session_ctx | anonymous: true}, :credential_entry, change()) ==
                {:error, :anonymous}
 
-      assert Authz.confirm(ctx(auth_method: :oidc), :credential_entry, change()) ==
-               {:error, {:surface_not_permitted, :oidc}}
+      assert Authz.confirm(ctx(auth_method: :session), :credential_entry, change()) ==
+               {:error, {:surface_not_permitted, :session}}
 
       assert Authz.confirm(%{session_ctx | athanor_id: nil}, :credential_entry, change()) ==
                {:error, :missing_tenant}
@@ -1089,7 +1089,7 @@ defmodule Sanctum.Consent.AuthzTest do
 
       theirs = %{
         ctx(
-          auth_method: :oidc,
+          auth_method: :session,
           user_id: other.id,
           athanor_id: Sanctum.Test.People.athanor!(other).id
         )
@@ -1118,7 +1118,7 @@ defmodule Sanctum.Consent.AuthzTest do
           provider: "github",
           athanor_id: athanor.id,
           permissions: [:*],
-          auth_method: :oidc,
+          auth_method: :session,
           authenticated: true
         )
 
@@ -1238,7 +1238,7 @@ defmodule Sanctum.Consent.AuthzTest do
     end
 
     test "names an action of the table and a well-formed change" do
-      session = ctx(auth_method: :oidc)
+      session = ctx(auth_method: :session)
 
       assert Authz.confirm(session, :delete_everything, change()) == {:error, :invalid_request}
 

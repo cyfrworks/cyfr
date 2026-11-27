@@ -77,7 +77,7 @@ defmodule Sanctum.IssuanceTest do
         provider: "github",
         athanor_id: athanor.id,
         permissions: [:*],
-        auth_method: :oidc,
+        auth_method: :session,
         authenticated: true
       )
 
@@ -237,14 +237,14 @@ defmodule Sanctum.IssuanceTest do
                Context.build([auth_method: :device, client_id: ctx.client_id] ++ base)
 
       for {what, attrs} <- [
-            a_session: [auth_method: :oidc] ++ base,
+            a_session: [auth_method: :session] ++ base,
             another_client: [auth_method: :device, client_id: "pcl_another"] ++ base,
             no_client: [auth_method: :device] ++ base,
             no_key:
               [auth_method: :device, client_id: ctx.client_id] ++
                 Keyword.put(base, :credential_binding, Map.delete(binding, :kid)),
             a_key_on_a_sign_in:
-              [auth_method: :oidc] ++
+              [auth_method: :session] ++
                 Keyword.put(base, :credential_binding, %{
                   binding
                   | source_kind: :identity,

@@ -598,7 +598,7 @@ defmodule Aqua.Prompt do
     do: prefix_bytes(rest, left - 1, size + byte_size(<<point::utf8>>))
 
   defp notes(ctx) do
-    interactive? = ctx.auth_method == :oidc
+    interactive? = ctx.auth_method == :session
     read_rule = if interactive?, do: @read_rule, else: ""
 
     pinned =

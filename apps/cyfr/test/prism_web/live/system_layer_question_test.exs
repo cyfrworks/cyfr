@@ -95,7 +95,7 @@ defmodule PrismWeb.SystemLayerQuestionTest do
         athanor_id: athanor.id,
         permissions: Context.person_permissions(),
         scope: :athanor,
-        auth_method: :oidc,
+        auth_method: :session,
         authenticated: true
       )
 

@@ -78,7 +78,7 @@ defmodule Sanctum.PairingTest do
         provider: "passkey",
         athanor_id: certificate.athanor,
         permissions: [:*],
-        auth_method: :oidc,
+        auth_method: :session,
         authenticated: true
       )
 
@@ -155,19 +155,19 @@ defmodule Sanctum.PairingTest do
 
   describe "can_confirm?/1" do
     test "a signed-in browser session has a person behind it who can give a proof" do
-      assert Pairing.can_confirm?(ctx(auth_method: :oidc))
+      assert Pairing.can_confirm?(ctx(auth_method: :session))
     end
 
     test "a client with no person behind it confirms nothing" do
       nobody = [
-        ctx(auth_method: :oidc, plane: :guest),
+        ctx(auth_method: :session, plane: :guest),
         ctx(auth_method: :api_key),
         ctx(auth_method: :tincture),
         ctx(auth_method: :webhook),
         ctx(auth_method: :scheduled),
         ctx(auth_method: :system),
-        ctx(auth_method: :oidc, anonymous: true),
-        Context.build(%{auth_method: :oidc, authenticated: false})
+        ctx(auth_method: :session, anonymous: true),
+        Context.build(%{auth_method: :session, authenticated: false})
       ]
 
       for context <- nobody,

@@ -2635,7 +2635,7 @@ defmodule Compendium.ProviderTest do
     test "component.deprecate and component.yank admit a signed-in person to the handler",
          %{ctx: ctx} do
       ctx = %{ctx | origin: :interactive}
-      assert ctx.auth_method == :oidc
+      assert ctx.auth_method == :session
 
       for action <- ~w(deprecate yank) do
         assert action in visible_component_actions(ctx)
@@ -2703,7 +2703,7 @@ defmodule Compendium.ProviderTest do
     end
 
     test "registry's person-only actions are shown to a signed-in person", %{ctx: ctx} do
-      assert ctx.auth_method == :oidc
+      assert ctx.auth_method == :session
       visible = visible_actions("registry", ctx)
 
       for action <-
@@ -2714,7 +2714,7 @@ defmodule Compendium.ProviderTest do
     end
 
     test "component.push is shown to and dispatched for a signed-in person", %{ctx: ctx} do
-      assert ctx.auth_method == :oidc
+      assert ctx.auth_method == :session
       assert "push" in visible_component_actions(ctx)
 
       # Admitted: the handler runs and answers the domain's own refusal (no
