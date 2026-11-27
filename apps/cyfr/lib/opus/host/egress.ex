@@ -20,7 +20,7 @@ defmodule Opus.Host.Egress do
     1. the URL's host matches the edge's `egress.domains`
        (`Prima.Network.domain_allowed?/2`, where `"*"` matches every
        host); an authority with no edge, an edge with no egress, and a
-       host no pattern matches are `denied`;
+       host no pattern matches are `domain`;
     2. a `redirect` names, as `from`, a pin this attempt was answered
        within the last two windows, and its URL has that pin's origin
        (`Prima.Network.same_origin?/2`: scheme, host and effective port);
@@ -45,11 +45,13 @@ defmodule Opus.Host.Egress do
   IPv6 literal in brackets), an `id` minted for it and an `expires_at` one
   header window (`Prima.WorkerAuth.window_ms/0`) past the call. Every
   request is decided here afresh: the relay asks again at the moment it
-  sends (`Locus.Runtime.Relay`). Each of the four refusals is recorded as a denial of the attempt's component in
-  its athanor (`Sanctum.Policy.Enforcement.record/1`, as
-  `Opus.Host.Storage` records a runner's `record_denial`), its reason
-  led by the request's purpose (`fetch: …`, `attached: …`) and naming the
-  host and never the URL, whose path and query can carry a credential.
+  sends (`Locus.Runtime.Relay`). Each of the five refusals is recorded
+  once, here, as a denial of the attempt's component in its athanor
+  (`Sanctum.Policy.Enforcement.record/1`, as `Opus.Host.Storage` records
+  a runner's `record_denial`): `domain` as `domain_blocked`, the others as
+  `denied`. Its reason is led by the request's purpose (`fetch: …`,
+  `attached: …`) and names the host and never the URL, whose path and
+  query can carry a credential. No runner records a pin's refusal again.
 
   `pin/2` takes the purposes a runner may ask for and `:attached`, the pin
   CYFR takes for an attached request (`Opus.Host.AttachedFetch`), which
@@ -114,7 +116,7 @@ defmodule Opus.Host.Egress do
           {:error, :malformed}
 
         {:refused, refusal, sentence} ->
-          record(chain, request.purpose, sentence)
+          record(chain, refusal, request.purpose, sentence)
           {:error, refusal}
       end
     end
@@ -170,7 +172,7 @@ defmodule Opus.Host.Egress do
   defp domain_allowed(%URI{host: host} = uri, edge) do
     if Prima.Network.domain_allowed?(host, Edge.domains(edge)),
       do: :ok,
-      else: {:refused, :denied, "host #{host_of(uri)} is not in the egress domains"}
+      else: {:refused, :domain, "host #{host_of(uri)} is not in the egress domains"}
   end
 
   defp private_ips(%Edge{egress: %{private_ips: ips}}) when is_list(ips), do: ips
@@ -237,13 +239,14 @@ defmodule Opus.Host.Egress do
 
   # The same record a runner's `record_denial` of a policy refusal writes,
   # attributed to the attempt's component in its guest context, its reason
-  # led by the purpose the pin was asked for.
-  defp record(chain, purpose, sentence) do
+  # led by the purpose the pin was asked for: a host outside the domains as
+  # the domain refusal it is, every other refusal as a denial.
+  defp record(chain, refusal, purpose, sentence) do
     Sanctum.Policy.Enforcement.record(%{
       ctx: chain.ctx,
       component_ref: chain.component_ref,
       component_type: :catalyst,
-      event_type: :denied,
+      event_type: if(refusal == :domain, do: :domain_blocked, else: :denied),
       decision: :denied,
       decision_reason: "#{purpose}: #{sentence}"
     })

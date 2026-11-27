@@ -29,7 +29,7 @@ use zeroize::Zeroizing;
 use cyfr_runner::assignment::{self, Assignment};
 use cyfr_runner::auth::{self, Attempt, AttemptKeys, CallFields, Direction};
 use cyfr_runner::control::{self, Environment, EnvironmentRefusal, Message, Relay};
-use cyfr_runner::host::{self, Caller, Op, Outcome, Post, Reached, Reading, Retry};
+use cyfr_runner::host::{self, Caller, Op, Outcome, Place, Post, Reached, Reading, Retry};
 use cyfr_runner::relay::{self, Channel, Incoming, Outgoing};
 use cyfr_runner::wire;
 
@@ -777,7 +777,7 @@ fn relay_every_frame_the_encoder_refuses_is_not_sent_and_changes_nothing() {
             .expect(why);
         let frame: Value = serde_json::from_str(&relay_json(next)).expect("JSON");
         let state_free = channel.encode(&outgoing(&frame)).expect(why);
-        assert_eq!(state_free, relay_bytes(next), "{why}");
+        assert_eq!(*state_free, relay_bytes(next), "{why}");
     }
 }
 
@@ -1255,7 +1255,17 @@ fn header_fields(header: &str) -> CallFields {
 }
 
 impl Post for Scripted {
-    async fn post(&mut self, _op: Op, header: String, body: Vec<u8>) -> Option<Reached> {
+    async fn place(&mut self) -> Option<Place> {
+        Some(Place::free())
+    }
+
+    async fn post(
+        &mut self,
+        _op: Op,
+        header: String,
+        body: Vec<u8>,
+        _place: Place,
+    ) -> Option<Reached> {
         // A try past the case's answers meets none: the case's count of
         // posts then names the extra one.
         let answer = self.answers.get(self.posted.len()).cloned();
@@ -1372,7 +1382,17 @@ async fn every_answer_outcome() {
 struct Silent(usize);
 
 impl Post for Silent {
-    async fn post(&mut self, _op: Op, _header: String, _body: Vec<u8>) -> Option<Reached> {
+    async fn place(&mut self) -> Option<Place> {
+        Some(Place::free())
+    }
+
+    async fn post(
+        &mut self,
+        _op: Op,
+        _header: String,
+        _body: Vec<u8>,
+        _place: Place,
+    ) -> Option<Reached> {
         self.0 += 1;
         std::future::pending().await
     }
@@ -1593,4 +1613,199 @@ fn exact(number: &str) -> (bool, String, i64) {
     let trimmed = significant.trim_end_matches('0');
     let scale = exponent - fraction.len() as i64 + (significant.len() - trimmed.len()) as i64;
     (negative, trimmed.to_owned(), scale)
+}
+
+#[test]
+fn relay_the_caps_and_the_codes_are_the_vectors() {
+    let v = fixture("runner_relay.json");
+    assert_eq!(relay::MAX_CALLS as u64, n(&v["max_calls"]));
+    assert_eq!(relay::MAX_FETCHES as u64, n(&v["max_fetches"]));
+    let codes: Vec<&str> = cases(&v["codes"]["fetch_end"], "fetch_end")
+        .iter()
+        .map(|code| s(&code["code"]))
+        .collect();
+    assert_eq!(relay::FETCH_END_CODES.to_vec(), codes);
+    // Each close code is of the form a close carries, and so is each of
+    // the decoder's own.
+    for code in cases(&v["codes"]["close"], "close") {
+        assert!(relay::is_code(s(&code["code"])), "{code}");
+    }
+    for refusal in cases(&v["refusals"], "refusals") {
+        let code = relay_refusal(refusal).close_code();
+        assert!(
+            cases(&v["codes"]["close"], "close")
+                .iter()
+                .any(|close| s(&close["code"]) == code),
+            "{code} is no close code of the vectors"
+        );
+    }
+}
+
+#[test]
+fn requests_every_fetch_end_code_answers_the_guest_in_a_type_of_its_interface() {
+    use cyfr_runner::imports::http;
+    let v = fixture("runner_relay.json");
+    let types = fixture("guest_error.json");
+    let fetch: Vec<&str> = cases(&types["fetch_types"]["cyfr:http/fetch"], "fetch")
+        .iter()
+        .map(s)
+        .collect();
+    let limits = cyfr_runner::authority::Limits::zero();
+    for code in cases(&v["codes"]["fetch_end"], "fetch_end") {
+        let code = s(&code["code"]);
+        let answered = http::ended_with(code, "api.example.test", &limits);
+        assert!(
+            fetch.contains(&answered.kind.as_str()),
+            "{code}: {answered:?}"
+        );
+        // A code the relay names is read as its rule, never as the
+        // transport's failure it would name otherwise.
+        assert_ne!(
+            answered.message,
+            cyfr_runner::words::http_failed(code),
+            "{code} reads as a transport failure"
+        );
+    }
+    // Every refusal a pin answers, CYFR's or the runner's own.
+    for why in cyfr_runner::host::PIN_REFUSALS.iter().chain(&[
+        "unavailable",
+        "lost",
+        "elsewhere",
+        "expired",
+    ]) {
+        let answered = http::pin_refusal(why, "api.example.test");
+        assert!(fetch.contains(&answered.kind.as_str()), "{why}");
+        assert!(
+            relay::FETCH_END_CODES.contains(&format!("pin_{why}").as_str()),
+            "pin_{why} is no fetch_end code"
+        );
+    }
+    // Every type the runner answers, on each interface it answers it on.
+    let streaming: Vec<&str> = cases(&types["fetch_types"]["cyfr:http/streaming"], "streaming")
+        .iter()
+        .map(s)
+        .collect();
+    for (kind, on_fetch, on_stream) in http::Kind::ALL {
+        if on_fetch {
+            assert!(fetch.contains(&kind.name()), "fetch: {}", kind.name());
+        }
+        if on_stream {
+            assert!(
+                streaming.contains(&kind.name()),
+                "streaming: {}",
+                kind.name()
+            );
+        }
+    }
+}
+
+#[test]
+fn requests_the_header_rosters_are_the_vectors() {
+    use cyfr_runner::imports::http;
+    let v = fixture("host_api.json");
+    let names = |section: &Value, name: &str| -> Vec<String> {
+        cases(section, name)
+            .iter()
+            .map(|name| s(name).to_owned())
+            .collect()
+    };
+    let rosters = [
+        (http::FRAMING_HEADERS.to_vec(), &v["framing_headers"]),
+        (http::OVERRIDE_HEADERS.to_vec(), &v["override_headers"]),
+        (http::OVERRIDE_PREFIXES.to_vec(), &v["override_prefixes"]),
+        (http::CREDENTIAL_HEADERS.to_vec(), &v["credential_headers"]),
+    ];
+    for (roster, section) in rosters {
+        assert_eq!(roster, names(section, "a header roster"));
+    }
+    assert!(http::framing("Transfer-Encoding") && http::framing("X-Forwarded-For"));
+    assert!(!http::framing("accept"));
+}
+
+#[test]
+fn auth_every_attached_answers_frames_read_as_the_vectors_say() {
+    use cyfr_runner::auth::{AnswerFrame, FrameReader, Key};
+    use serde_json::json;
+    let v = fixture("host_api.json");
+    let mut seal: Key = Key::zeroed();
+    seal.bytes_mut()
+        .copy_from_slice(&hex_bytes(s(&v["keys"]["attempt_seal_hex"])));
+    let cases_of = &v["frame_cases"];
+    for case in cases(&cases_of["cases"], "cases") {
+        let name = s(&case["name"]);
+        let call_id = case
+            .get("call_id")
+            .map_or_else(|| s(&cases_of["call_id"]), s);
+        let mut reader = FrameReader::new(&seal, call_id);
+        let mut read = Vec::new();
+        let mut error = Value::Null;
+        for frame in cases(&case["frames"], "frames") {
+            let bytes = hex_bytes(s(&frame["frame_hex"]));
+            // A frame's length prefix is where the relay splits the stream
+            // (`Prima.WorkerAuth.split_frames/1`), refusing a length past
+            // the bound as soon as it is in; the reader takes the kind
+            // byte and sealed value the relay's `attached_frame` carries.
+            let length = u32::from_be_bytes(bytes[..4].try_into().expect("a length")) as usize;
+            if length > cyfr_runner::auth::MAX_ANSWER_FRAME_BYTES {
+                error = Value::String("frame_too_large".to_owned());
+                break;
+            }
+            match reader.read(&bytes[4..]) {
+                Ok(AnswerFrame::Head { status, headers }) => read.push(json!({"kind": "head",
+                    "status": status,
+                    "headers": headers.iter().map(|(n, v)| json!([n, v])).collect::<Vec<_>>()})),
+                Ok(AnswerFrame::Chunk(body)) => read.push(json!({"kind": "chunk",
+                    "body_b64": cyfr_runner::wire::encode_base64(&body)})),
+                Ok(AnswerFrame::End) => read.push(json!({"kind": "end"})),
+                Ok(AnswerFrame::Error { kind, message }) => {
+                    read.push(json!({"kind": "error", "type": kind, "message": message}));
+                }
+                Err(refusal) => {
+                    error = Value::String(snake(&format!("{refusal:?}")));
+                    break;
+                }
+            }
+        }
+        assert_eq!(
+            json!({"read": read, "error": error}),
+            json!({"read": case["expect"]["read"], "error": case["expect"]["error"]}),
+            "{name}"
+        );
+    }
+}
+
+fn hex_bytes(text: &str) -> Vec<u8> {
+    (0..text.len())
+        .step_by(2)
+        .map(|at| u8::from_str_radix(&text[at..at + 2], 16).expect("hex"))
+        .collect()
+}
+
+fn snake(name: &str) -> String {
+    let mut out = String::new();
+    for (index, c) in name.chars().enumerate() {
+        if c.is_ascii_uppercase() && index > 0 {
+            out.push('_');
+        }
+        out.push(c.to_ascii_lowercase());
+    }
+    out
+}
+
+#[test]
+fn requests_a_pin_is_read_as_prima_reads_one() {
+    use cyfr_runner::imports::http::read_pin;
+    let v = fixture("host_api.json");
+    let cases = &v["pin_answer_refusals"];
+    assert!(read_pin(&cases["pin"]).is_some());
+    for case in cases_of(&cases["reads"]) {
+        assert!(read_pin(&case["pin"]).is_some(), "{}", case["why"]);
+    }
+    for case in cases_of(&cases["refusals"]) {
+        assert!(read_pin(&case["pin"]).is_none(), "{}", case["why"]);
+    }
+}
+
+fn cases_of(value: &Value) -> &Vec<Value> {
+    value.as_array().expect("a list of cases")
 }

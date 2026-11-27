@@ -89,6 +89,24 @@ pub struct Job {
 }
 
 impl Job {
+    /// The job bound to a node of its own whose limits are the zero
+    /// limits with `limits` in their place.
+    pub fn bound(mut self, limits: Value) -> Job {
+        let mut node = json!({"batch_timeout": "30s", "max_concurrent_tasks": 1,
+                              "max_memory_bytes": 67_108_864, "max_request_size": 1_048_576,
+                              "max_response_size": 5_242_880,
+                              "rate_limit": {"requests": 100, "window": "1m"}, "timeout": "30s"});
+        node.as_object_mut()
+            .expect("limits")
+            .extend(limits.as_object().expect("limits").clone());
+        self.authority = json!({"cursor": {"bound": self.reference}, "depth": 0,
+            "invoke_mode": "open_inert", "activation": {}, "budget": {"id": "bgt_test"},
+            "chain": [self.reference],
+            "policy": {"canonical": "jcs-1",
+                       "nodes": {self.reference.clone(): {"edges": {}, "limits": node}}}});
+        self
+    }
+
     /// A job running the component at `path` as `kind` on `input`.
     pub fn new(kind: &'static str, path: &str, input: &str) -> Job {
         static NEXT: AtomicU64 = AtomicU64::new(1);
@@ -192,9 +210,43 @@ pub enum Reply {
     Frame(Vec<u8>),
     /// `{"v": 3, "ok": value}`, then the service's end of the stream closed.
     OkThenEnd(Value),
+    /// `{"v": 3, "ok": value}` after this long, written from a thread of its
+    /// own while the service reads on; its writing is logged, just before
+    /// it is written, as a call of op `answered:<op>`.
+    Later(Duration, Value),
 }
 
 pub type Script = Box<dyn FnMut(&Call, &Job) -> Reply + Send>;
+
+/// What the service end sends a fetch, in order, as its upstream answers.
+pub enum Upstream {
+    /// The first chunk: the answer's status and headers, and a body.
+    Head(u16, Vec<(&'static str, String)>, Vec<u8>),
+    /// The next bytes of the body.
+    Chunk(Vec<u8>),
+    /// One of an attached fetch's sealed answer frames, its kind byte and
+    /// sealed value.
+    Frame(Vec<u8>),
+    /// CYFR's refusal of an attached fetch: its signed header and sealed
+    /// answer.
+    Refusal(String, Vec<u8>),
+    /// The fetch's end, naming a code or none.
+    End(Option<&'static str>),
+    /// The service's `close`, then its end of the stream closed.
+    Close,
+    /// What came before written, then this long before what follows.
+    Pause(Duration),
+}
+
+/// How the service end answers each fetch the runner sends: the fetch's
+/// frame, and what is sent back for it at once. A fetch given no `End`
+/// stays open, its upstream slow.
+pub type Fetches = Box<dyn FnMut(&Value, &Job) -> Vec<Upstream> + Send>;
+
+/// A fetch script that answers nothing: every fetch stays open.
+pub fn silent_fetches() -> Fetches {
+    Box::new(|_fetch, _job| Vec::new())
+}
 
 /// The answers CYFR gives a job that runs and closes as asked.
 pub fn standard(call: &Call, job: &Job) -> Reply {
@@ -219,6 +271,8 @@ pub struct Service {
     dir: PathBuf,
     listener: Option<UnixListener>,
     pub calls: Arc<Mutex<Vec<Call>>>,
+    /// Every frame the runner sent on its relay, in order.
+    pub frames: Arc<Mutex<Vec<Value>>>,
     socket: Option<UnixStream>,
 }
 
@@ -327,6 +381,7 @@ impl Service {
             dir,
             listener: Some(listener),
             calls: Arc::new(Mutex::new(Vec::new())),
+            frames: Arc::new(Mutex::new(Vec::new())),
             socket,
         }
     }
@@ -358,10 +413,36 @@ impl Service {
         self.serve(job.clone(), script);
     }
 
+    /// Assign `job`, answer its relay's calls by `script` and its fetches
+    /// by `fetches`.
+    pub fn assign_fetching(&mut self, job: &Job, script: Script, fetches: Fetches) {
+        let line = control::encode(&job.assign()).expect("an assign frame");
+        self.send_line(&line);
+        self.serve_fetching(job.clone(), script, fetches);
+    }
+
+    /// The frames of `kind` the runner sent on its relay so far.
+    pub fn frames_of(&self, kind: &str) -> Vec<Value> {
+        self.frames
+            .lock()
+            .expect("the frames")
+            .iter()
+            .filter(|frame| frame["kind"] == kind)
+            .cloned()
+            .collect()
+    }
+
     /// Accept the relay and answer its calls by `script`, on a thread.
     pub fn serve(&mut self, job: Job, script: Script) {
+        self.serve_fetching(job, script, silent_fetches());
+    }
+
+    /// Accept the relay and answer its calls by `script` and its fetches
+    /// by `fetches`, on a thread.
+    pub fn serve_fetching(&mut self, job: Job, script: Script, fetches: Fetches) {
         let listener = self.listener.take().expect("the relay is not yet served");
         let calls = self.calls.clone();
+        let frames = self.frames.clone();
         let relay_end = std::thread::Builder::new().stack_size(STACK_BYTES);
         let _ = relay_end.spawn(move || {
             listener
@@ -370,7 +451,7 @@ impl Service {
             let Ok((stream, _)) = listener.accept() else {
                 return;
             };
-            relay(stream, job, script, calls);
+            relay_fetching(stream, job, script, fetches, calls, frames);
         });
     }
 
@@ -486,10 +567,33 @@ pub fn deep(bytes: &[u8]) -> Value {
 }
 
 /// The service's end of the relay: each `host_call` opened, recorded and
-/// answered by `script`.
-pub fn relay(mut stream: UnixStream, job: Job, mut script: Script, calls: Arc<Mutex<Vec<Call>>>) {
+/// answered by `script`, every fetch left open.
+pub fn relay(stream: UnixStream, job: Job, script: Script, calls: Arc<Mutex<Vec<Call>>>) {
+    relay_fetching(
+        stream,
+        job,
+        script,
+        silent_fetches(),
+        calls,
+        Arc::new(Mutex::new(Vec::new())),
+    );
+}
+
+/// The service's end of the relay: every frame recorded, each `host_call`
+/// opened, recorded and answered by `script`, and each `fetch` answered by
+/// `fetches`.
+pub fn relay_fetching(
+    mut stream: UnixStream,
+    job: Job,
+    mut script: Script,
+    mut fetches: Fetches,
+    calls: Arc<Mutex<Vec<Call>>>,
+    frames: Arc<Mutex<Vec<Value>>>,
+) {
     let keys = job.keys();
-    let mut seq = 0u64;
+    // What the service writes, and the seq of its next frame, shared with
+    // the threads that answer later.
+    let out = Arc::new(Mutex::new((stream.try_clone().expect("the stream"), 0u64)));
     loop {
         let mut length = [0u8; 4];
         if stream.read_exact(&mut length).is_err() {
@@ -500,6 +604,61 @@ pub fn relay(mut stream: UnixStream, job: Job, mut script: Script, calls: Arc<Mu
             return;
         }
         let frame: Value = serde_json::from_slice(&frame).expect("a relay frame");
+        frames.lock().expect("the frames").push(frame.clone());
+        if frame["kind"] == "fetch" {
+            let re = frame["seq"].as_u64().expect("a seq");
+            let attempt = frame["attempt"].as_str().expect("an attempt").to_owned();
+            // One fetch's frames go in one write, so its runner reads them
+            // together.
+            let mut written = Vec::new();
+            let mut writing = out.lock().expect("the writer");
+            for upstream in fetches(&frame, &job) {
+                if let Upstream::Pause(pause) = upstream {
+                    if writing.0.write_all(&written).is_err() {
+                        return;
+                    }
+                    written.clear();
+                    std::thread::sleep(pause); // sleep-ok: the upstream's pause, as the test scripts it
+                    continue;
+                }
+                let mut sent = json!({"v": 1, "attempt": attempt, "seq": writing.1, "re": re});
+                let members = match upstream {
+                    Upstream::Head(status, headers, body) => json!({"kind": "fetch_chunk",
+                        "status": status,
+                        "headers": headers.iter().map(|(name, value)| json!([name, value]))
+                                          .collect::<Vec<_>>(),
+                        "body": wire::encode_base64(&body)}),
+                    Upstream::Chunk(body) => json!({"kind": "fetch_chunk", "status": null,
+                        "headers": null, "body": wire::encode_base64(&body)}),
+                    Upstream::Frame(frame) => json!({"kind": "attached_frame",
+                        "frame": wire::encode_base64(&frame)}),
+                    Upstream::Refusal(header, body) => json!({"kind": "attached_refusal",
+                        "header": header, "body": wire::encode_base64(&body)}),
+                    Upstream::End(error) => json!({"kind": "fetch_end", "error": error}),
+                    Upstream::Close => {
+                        json!({"kind": "close", "reason": "malformed"})
+                    }
+                    Upstream::Pause(_) => unreachable!("written above"),
+                };
+                let closing = members["kind"] == "close";
+                sent.as_object_mut()
+                    .expect("an object")
+                    .extend(members.as_object().expect("an object").clone());
+                writing.1 += 1;
+                let json = sent.to_string();
+                let length = u32::try_from(json.len()).expect("a frame under 4 GiB");
+                written.extend_from_slice(&length.to_be_bytes());
+                written.extend_from_slice(json.as_bytes());
+                if closing {
+                    let _ = writing.0.write_all(&written);
+                    return;
+                }
+            }
+            if writing.0.write_all(&written).is_err() {
+                return;
+            }
+            continue;
+        }
         if frame["kind"] != "host_call" {
             continue;
         }
@@ -519,14 +678,40 @@ pub fn relay(mut stream: UnixStream, job: Job, mut script: Script, calls: Arc<Mu
         let re = frame["seq"].as_u64().expect("a seq");
         let (status, body) = match script(&call, &job) {
             Reply::Silent => continue,
+            Reply::Later(after, value) => {
+                let body = seal(
+                    &keys,
+                    &fields,
+                    json!({"v": 3, "ok": value}).to_string().into_bytes(),
+                );
+                let (out, calls, call) = (out.clone(), calls.clone(), call.clone());
+                std::thread::spawn(move || {
+                    std::thread::sleep(after); // sleep-ok: CYFR's answer comes this much later, as the test scripts it
+                    let mut writing = out.lock().expect("the writer");
+                    let answer = json!({"v": 1, "attempt": call.attempt, "seq": writing.1,
+                        "kind": "host_answer", "re": re, "status": 200,
+                        "body": wire::encode_base64(&body)});
+                    writing.1 += 1;
+                    // Logged before it is written: the runner's next call
+                    // can arrive before this thread runs again.
+                    calls.lock().expect("the calls").push(Call {
+                        op: format!("answered:{}", call.op),
+                        ..call
+                    });
+                    let _ = write_frame(&mut writing.0, &answer);
+                });
+                continue;
+            }
             Reply::Close => {
-                let close = json!({"v": 1, "attempt": call.attempt, "seq": seq, "kind": "close",
+                let mut writing = out.lock().expect("the writer");
+                let close = json!({"v": 1, "attempt": call.attempt, "seq": writing.1, "kind": "close",
                                    "reason": "malformed"});
-                let _ = write_frame(&mut stream, &close);
+                let _ = write_frame(&mut writing.0, &close);
                 return;
             }
             Reply::Frame(json) => {
-                let _ = write_raw(&mut stream, &json);
+                let mut writing = out.lock().expect("the writer");
+                let _ = write_raw(&mut writing.0, &json);
                 continue;
             }
             Reply::Dropped => (Value::Null, Vec::new()),
@@ -536,9 +721,10 @@ pub fn relay(mut stream: UnixStream, job: Job, mut script: Script, calls: Arc<Mu
                     &fields,
                     json!({"v": 3, "ok": value}).to_string().into_bytes(),
                 );
-                let answer = json!({"v": 1, "attempt": call.attempt, "seq": seq, "kind": "host_answer",
+                let mut writing = out.lock().expect("the writer");
+                let answer = json!({"v": 1, "attempt": call.attempt, "seq": writing.1, "kind": "host_answer",
                                     "re": re, "status": 200, "body": wire::encode_base64(&body)});
-                let _ = write_frame(&mut stream, &answer);
+                let _ = write_frame(&mut writing.0, &answer);
                 return;
             }
             Reply::Ok(value) => (
@@ -561,13 +747,116 @@ pub fn relay(mut stream: UnixStream, job: Job, mut script: Script, calls: Arc<Mu
             }
             Reply::Plain(plain) => (json!(200), seal(&keys, &fields, plain)),
         };
-        let answer = json!({"v": 1, "attempt": call.attempt, "seq": seq, "kind": "host_answer",
+        let mut writing = out.lock().expect("the writer");
+        let answer = json!({"v": 1, "attempt": call.attempt, "seq": writing.1, "kind": "host_answer",
                             "re": re, "status": status, "body": wire::encode_base64(&body)});
-        seq += 1;
-        if write_frame(&mut stream, &answer).is_err() {
+        writing.1 += 1;
+        if write_frame(&mut writing.0, &answer).is_err() {
             return;
         }
     }
+}
+
+/// Wait until `holds` holds, within a minute: what it looks for is the
+/// runner's, reached on its own time.
+pub fn eventually(mut holds: impl FnMut() -> bool) {
+    let until = Instant::now() + Duration::from_secs(60);
+    while !holds() {
+        assert!(
+            Instant::now() < until,
+            "the condition did not hold within a minute"
+        );
+        std::thread::sleep(Duration::from_millis(20)); // sleep-ok: polls a condition the runner reaches, bounded by a minute
+    }
+}
+
+/// A pin CYFR answers for `host` on `scheme`'s default port.
+pub fn pin(id: &str, scheme: &str, host: &str) -> Reply {
+    let port = if scheme == "https" { 443 } else { 80 };
+    Reply::Ok(
+        json!({"id": id, "ip": "203.0.113.10", "family": 4, "scheme": scheme,
+                     "port": port, "host": host, "expires_at": now_ms() + 30_000}),
+    )
+}
+
+/// One frame of an attached request's answer as CYFR seals it: its kind
+/// byte and its value sealed for `call_id` at `seq` under the attempt's
+/// seal key (`Prima.WorkerAuth.seal_frame/7`).
+pub fn seal_frame(job: &Job, call_id: &str, seq: u64, kind: &str, plain: &[u8]) -> Vec<u8> {
+    use aes_gcm::aead::{Aead, KeyInit, Payload};
+    let aad = format!("cyfr-locus/v1/runtime/frame-answer\n{call_id}\n{seq}\n{kind}");
+    let iv = random_iv();
+    let sealed = aes_gcm::Aes256Gcm::new((&job.seal_key).into())
+        .encrypt(
+            &aes_gcm::Nonce::from(iv),
+            Payload {
+                msg: plain,
+                aad: aad.as_bytes(),
+            },
+        )
+        .expect("a frame seals");
+    let (ciphertext, tag) = sealed.split_at(sealed.len() - 16);
+    let mut bytes = iv.to_vec();
+    bytes.extend_from_slice(tag);
+    bytes.extend_from_slice(ciphertext);
+    let byte = match kind {
+        "head" => b'h',
+        "chunk" => b'c',
+        "end" => b'e',
+        _error => b'x',
+    };
+    let mut frame = vec![byte];
+    frame.extend_from_slice(wire::encode_base64url(&bytes).as_bytes());
+    frame
+}
+
+/// CYFR's refusal of the attached fetch `call_id` as its listener answers
+/// it: the posted call's header, signed under the attempt's call key, and
+/// the guest error naming the call id, sealed as that call's answer.
+pub fn attached_refusal(job: &Job, call_id: &str, kind: &str, message: &str) -> Upstream {
+    refusal_as(job, call_id, kind, message, &Signed::default())
+}
+
+/// How a scripted refusal's header is signed: its age, the key it is
+/// signed under, and the attempt it names.
+#[derive(Default)]
+pub struct Signed {
+    pub age_ms: u64,
+    pub call_key: Option<[u8; 32]>,
+    pub attempt: Option<Attempt>,
+}
+
+/// An attached refusal as `attached_refusal` writes one, signed as `signed`
+/// says.
+pub fn refusal_as(
+    job: &Job,
+    call_id: &str,
+    kind: &str,
+    message: &str,
+    signed: &Signed,
+) -> Upstream {
+    let fields = CallFields {
+        attempt: signed.attempt.clone().unwrap_or_else(|| job.attempt()),
+        boot: BOOT.to_owned(),
+        runner: RUNNER.to_owned(),
+        member: MEMBER.to_owned(),
+        ts: now_ms() - signed.age_ms,
+        nonce: "n_attached_refusal".to_owned(),
+    };
+    let posted = b"the posted body";
+    let key = signed.call_key.unwrap_or(job.call_key);
+    let header = auth::host_call_header(&key, &fields, posted).expect("a header");
+    let answer = json!({"v": 3, "error": "guest_error", "type": kind, "message": message,
+                        "call_id": call_id});
+    let body = seal(&job.keys(), &fields, answer.to_string().into_bytes());
+    Upstream::Refusal(header, body)
+}
+
+fn random_iv() -> [u8; 12] {
+    let random = "the operating system's random source answers";
+    let [a, b, c, d, e, f, g, h] = getrandom::u64().expect(random).to_le_bytes();
+    let [i, j, k, l] = getrandom::u32().expect(random).to_le_bytes();
+    [a, b, c, d, e, f, g, h, i, j, k, l]
 }
 
 pub fn seal(keys: &AttemptKeys, fields: &CallFields, plain: Vec<u8>) -> Vec<u8> {
@@ -631,11 +920,16 @@ pub struct Scripted {
 }
 
 impl cyfr_runner::host::Post for Scripted {
+    async fn place(&mut self) -> Option<cyfr_runner::host::Place> {
+        Some(cyfr_runner::host::Place::free())
+    }
+
     fn post(
         &mut self,
         _op: cyfr_runner::host::Op,
         header: String,
         body: Vec<u8>,
+        _place: cyfr_runner::host::Place,
     ) -> impl std::future::Future<Output = Option<cyfr_runner::host::Reached>> {
         let keys = self.job.keys();
         let fields = call_fields(&header);
