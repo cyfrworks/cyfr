@@ -34,7 +34,16 @@ defmodule Prima.HostAPITest do
 
   use ExUnit.Case, async: true
 
-  alias Prima.{AttachedRequest, HostAPI, Network, PinnedTarget, Refusal, WorkerAuth, WorkerWire}
+  alias Prima.{
+    AttachedRequest,
+    HostAPI,
+    Network,
+    PinnedTarget,
+    Refusal,
+    RunnerRelay,
+    WorkerAuth,
+    WorkerWire
+  }
 
   @vectors Path.expand("../../../../tests/fixtures/host_api.json", __DIR__)
            |> File.read!()
@@ -441,14 +450,14 @@ defmodule Prima.HostAPITest do
       sealed
     end
 
-    test "is one whose answer fits the answer bound, and one byte more does not fit" do
+    test "is the largest whose answer fits every bound on its way, CYFR's answer and the relay's frame" do
       max = HostAPI.max_artifact_bytes()
+      fits = byte_size(sealed_artifact_answer(:binary.copy(<<0>>, max)))
+      over = byte_size(sealed_artifact_answer(:binary.copy(<<0>>, max + 1)))
 
-      assert byte_size(sealed_artifact_answer(:binary.copy(<<0>>, max))) <=
-               HostAPI.max_answer_bytes()
-
-      assert byte_size(sealed_artifact_answer(:binary.copy(<<0>>, max + 1))) >
-               HostAPI.max_answer_bytes()
+      assert fits <= HostAPI.max_answer_bytes()
+      assert fits <= RunnerRelay.max_answer_body_bytes()
+      assert over > min(HostAPI.max_answer_bytes(), RunnerRelay.max_answer_body_bytes())
     end
   end
 

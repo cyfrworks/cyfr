@@ -452,7 +452,7 @@ defmodule Prima.WorkerAuth do
   """
   @spec sealed_bytes(non_neg_integer()) :: non_neg_integer()
   def sealed_bytes(plaintext_bytes) when is_integer(plaintext_bytes) and plaintext_bytes >= 0 do
-    raw = 12 + 16 + plaintext_bytes
+    raw = @sealed_overhead_bytes + plaintext_bytes
 
     tail =
       case rem(raw, 3) do
