@@ -1,22 +1,20 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Locus.Runtime.OAuthHandlerTest do
+defmodule Cyfr.OAuthTokenCallTest do
   @moduledoc """
-  The `cyfr:oauth/token` host boundary.
-
-  A guest's token request is an `oauth_token` host call of its execution's
-  attached attempt: a dispensed token crosses as the token, and every
-  refusal — the edge's vault state as it stands when the token is asked
-  for, a tampered payload, an attempt that is no longer open — crosses the
-  WIT result<string, string> boundary as a bounded string that names the
-  shape of the failure, never the material involved.
+  What CYFR answers a guest's token request, the `oauth_token` host call
+  of its execution's attached attempt: a dispensed token is the answer,
+  and every refusal by the edge's vault state as it stands when the token
+  is asked for, or by a tampered payload, is a guest error whose message is
+  a bounded sentence naming the shape of the failure, never the material
+  involved. An attempt that is no longer open is answered no token.
   """
   use ExUnit.Case, async: false
 
   import Ecto.Query, only: [from: 2]
 
-  alias Cyfr.Test.AttemptFixtures
+  alias Cyfr.Test.{AttemptFixtures, HostCaller, RuntimeService}
 
   @token "tok-live"
 
@@ -25,25 +23,27 @@ defmodule Locus.Runtime.OAuthHandlerTest do
     {:ok, ctx: Sanctum.TestContext.local(:api)}
   end
 
-  # The import of a guest whose attempt is attached with `opts`
+  # The token request of a guest whose attempt is attached with `opts`
   # (`Cyfr.Test.AttemptFixtures.attached!/1`), and that attempt.
   defp token_fn(opts) do
     attempt =
       AttemptFixtures.attached!(Keyword.put_new(opts, :ctx, Sanctum.TestContext.local(:api)))
 
-    client =
-      Locus.Runtime.HostClient.new(attempt.keys, attempt.runner, attempt.boot, %{
-        member: attempt.member,
-        host_url: Cyfr.Test.RuntimeService.host_url()
-      })
-
-    {fun_of(client), attempt}
+    {fun_of(attempt), attempt}
   end
 
-  defp fun_of(host) do
-    imports = Locus.Runtime.OAuthHandler.build_oauth_imports(host)
-    {:fn, fun} = imports["cyfr:oauth/token@0.1.0"]["get-access-token"]
-    fun
+  # CYFR's answer to the attempt's `oauth_token` for a provider: the token,
+  # or the message of the guest error it refused with.
+  defp fun_of(attempt) do
+    fn provider ->
+      case HostCaller.call(attempt, RuntimeService.host_url(), :oauth_token, %{
+             "provider" => provider
+           }) do
+        {:ok, token} -> {:ok, token}
+        {:error, "guest_error", %{"message" => message}} -> {:error, message}
+        other -> other
+      end
+    end
   end
 
   defp oauth(attrs \\ %{}),
@@ -118,12 +118,12 @@ defmodule Locus.Runtime.OAuthHandlerTest do
     assert byte_size(message) < 1_000
   end
 
-  test "an attempt that is no longer open is refused as a string" do
+  test "an attempt that is no longer open is answered no token" do
     {fun, attempt} = token_fn(vault: oauth())
     ref = Process.monitor(attempt.pid)
     Process.exit(attempt.pid, :kill)
     assert_receive {:DOWN, ^ref, :process, _, :killed}
 
-    assert {:error, "the credential store is unavailable"} = fun.("google")
+    assert {:error, "lost", _fields} = fun.("google")
   end
 end

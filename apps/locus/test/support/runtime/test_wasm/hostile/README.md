@@ -12,7 +12,7 @@ run them are `Locus.Runtime.StoreLimitsTest`, `Locus.Runtime.TrapTest`,
 `Locus.Runtime.ComponentFeaturesTest`, `Locus.Runtime.WasiCapabilitiesTest` and `Locus.Runtime.VaultDenialTest`
 in this suite,
 `Locus.Runtime.MemoryBoundTest`, `Locus.Runtime.SecretAuditTest`,
-`Locus.Runtime.AttachedFetchTest`, `Locus.Runtime.FormulaHandlerTest`,
+`Locus.Runtime.AttachedFetchTest`, `Cyfr.FormulaHostCallsTest`,
 `Opus.Schedules.SchedulerTest`, `CyfrWeb.WebhookFlowIntegrationTest`,
 `Aqua.LaunchTest` and `Compendium.ComponentFeaturesAdmissionTest` in
 CYFR's, and the worker image's `tests/locus-runtime-image/runners.py` and

@@ -4,24 +4,23 @@
 Code.require_file("support/formula_host_helper.exs", __DIR__)
 Code.require_file("support/nested_execution_helper.exs", __DIR__)
 
-defmodule Locus.Runtime.FormulaHandlerTest do
+defmodule Cyfr.FormulaHostCallsTest do
   @moduledoc """
-  What CYFR decides of the host calls a formula's host functions make
-  (`Locus.Runtime.FormulaHandler`, run here as a formula's runner runs it, over the
-  suite's wire with the keys of an attached formula attempt): parsing,
-  dispatch through the catalog, invoke and in-chain plane containment, the
-  events a formula emits, and setup refusals. A child it admits is handed
-  to the runner the attempt presents, which is no process and starts
-  nothing, so its admission is what is asserted, at the wire.
+  What CYFR decides of the host calls a formula's host functions make,
+  each posted as its runner's worker service posts it, over the suite's
+  wire with the keys of an attached formula attempt: a child's admission
+  through the catalog's edges, invoke and in-chain plane containment, the
+  accounts a child names, the events a formula emits, and setup
+  refusals. A child it admits is handed to the runner the attempt
+  presents, which is no process and starts nothing, so its admission is
+  what is asserted, and the test gives it back.
 
   A formula's tasks run for real: the `nested-probe` formula, in a runner
   of its own, spawns children that run in its runner, awaits them, polls
   them, cancels them or leaves them to end with it, and answers what each
   host function answered it; and a formula whose calls name accounts its
   dependency's edge binds has each child's request reach a loopback
-  upstream with that account's credential. What only a runner's VM can see of a
-  formula's host functions (their telemetry, their tasks' processes) is
-  `Locus.Runtime.FormulaHandlerRunnerTest`'s, in the runtime's own suite.
+  upstream with that account's credential.
   """
 
   use ExUnit.Case, async: false
@@ -29,12 +28,10 @@ defmodule Locus.Runtime.FormulaHandlerTest do
   import Prima.Test.Wait
   import Ecto.Query, only: [from: 2]
 
-  alias Locus.Runtime.FormulaHandler
-  alias Locus.Runtime.Test.FormulaHost
+  alias Cyfr.Test.{AttemptFixtures, FormulaHost, HostCaller, TwoServices}
   alias Locus.Runtime.Test.NestedExecution, as: Probe
   alias Prima.Authority
   alias Prima.Authority.Blob
-  alias Cyfr.Test.TwoServices
   alias Sanctum.Consent.{Bootstrap}
 
   @moduletag :capture_log
@@ -111,8 +108,8 @@ defmodule Locus.Runtime.FormulaHandlerTest do
     {:ok, ctx: ctx, test_path: test_path, ref: @test_ref}
   end
 
-  # The host client of a formula's attached attempt under `authority`,
-  # whose events go on `stream_id` when given.
+  # A formula's attempt attached under `authority`, whose events go on
+  # `stream_id` when given.
   defp host!(ctx, authority, opts \\ []) do
     FormulaHost.attached!(
       [
@@ -121,20 +118,7 @@ defmodule Locus.Runtime.FormulaHandlerTest do
         component_ref: @fh_node <> ":0.1.0",
         activation_digest: @act_fh
       ] ++ opts
-    ).host
-  end
-
-  # Helper to build MCP-format requests
-  defp mcp_request(tool, action, args \\ %{}) do
-    Jason.encode!(%{"tool" => tool, "action" => action, "args" => args})
-  end
-
-  defp execution_run_request(reference, input, type \\ "reagent") do
-    mcp_request("execution", "run", %{
-      "reference" => reference,
-      "input" => input,
-      "type" => type
-    })
+    )
   end
 
   defp limits_map do
@@ -193,14 +177,33 @@ defmodule Locus.Runtime.FormulaHandlerTest do
     auth
   end
 
-  defp execute(json, host, auth), do: FormulaHandler.execute(json, host, FormulaHost.opts(auth))
+  # A child of `host`'s attempt made with `guest_fn` on `reference`, with
+  # `input` and the call's other `args`.
+  defp admit(host, guest_fn, reference, input, args \\ %{}),
+    do: FormulaHost.admit_child(host, reference, guest_fn, Map.put(args, "input", input))
 
-  # A request the handler refuses before it reaches a host call.
-  defp parse(json, host),
-    do: FormulaHandler.execute(json, host, limits: Prima.Limits.defaults(:formula))
+  # A child CYFR admitted is handed to the runner the attempt presents,
+  # which is no process: it gives the child back, as a runner that cannot
+  # start one does, which closes it failed and releases what it held.
+  defp release!(host, {:ok, admitted}) do
+    child = HostCaller.child(host, admitted)
 
-  defp imports(host, auth),
-    do: FormulaHandler.build_formula_imports(host, FormulaHost.opts(auth))
+    assert {:ok, true} =
+             FormulaHost.call(host, :release_child, %{"execution_id" => child.execution_id})
+
+    assert %{status: "failed"} = Arca.Repo.get!(Arca.Schemas.Execution, child.execution_id)
+    child
+  end
+
+  # The event `event` (JSON text) emitted by `host`'s attempt, and CYFR's
+  # reply to it.
+  defp emit(host, event) do
+    delta = AttemptFixtures.delta(host, event)
+    assert {:ok, [reply]} = FormulaHost.call(host, :push_deltas, %{"deltas" => [delta]})
+    Jason.decode!(reply)
+  end
+
+  @not_reachable "not reachable from a running chain"
 
   # The one child CYFR admitted for `host`'s attempt, as the answer to its
   # admission crossed the suite's wire: its execution and the authority
@@ -304,163 +307,79 @@ defmodule Locus.Runtime.FormulaHandlerTest do
   defp decoded(output), do: output
 
   # ============================================================================
-  # build_formula_imports/2
+  # A child of the formula
   # ============================================================================
 
-  describe "build_formula_imports/2" do
-    test "returns {imports, tracker_pid} tuple with all eight functions", %{ctx: ctx} do
-      host = host!(ctx, Authority.zero())
-
-      {imports, tracker_pid} =
-        FormulaHandler.build_formula_imports(host, limits: Prima.Limits.defaults(:formula))
-
-      assert is_map(imports)
-      assert is_pid(tracker_pid)
-      assert Process.alive?(tracker_pid)
-      assert Map.has_key?(imports, "cyfr:formula/invoke@0.1.0")
-
-      invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
-
-      for func_name <- [
-            "call",
-            "spawn",
-            "await",
-            "await-all",
-            "await-any",
-            "poll",
-            "cancel",
-            "emit"
-          ] do
-        assert Map.has_key?(invoke_ns, func_name), "Missing function: #{func_name}"
-        assert {:fn, func} = invoke_ns[func_name]
-        assert is_function(func, 1), "#{func_name} is not arity-1"
-      end
-
-      FormulaHandler.cleanup_registry(tracker_pid)
-    end
-  end
-
-  # ============================================================================
-  # execute/3 - JSON Parsing (MCP format)
-  # ============================================================================
-
-  describe "execute/3 - JSON parsing" do
-    setup %{ctx: ctx} do
-      {:ok, host: host!(ctx, Authority.zero())}
-    end
-
-    test "returns error for invalid JSON", %{host: host} do
-      parsed = Jason.decode!(parse("not json", host))
-      assert parsed["error"]["type"] == "invalid_json"
-      assert parsed["error"]["message"] =~ "Invalid JSON"
-    end
-
-    test "returns error when tool is missing", %{host: host} do
-      parsed = Jason.decode!(parse(Jason.encode!(%{"action" => "run"}), host))
-      assert parsed["error"]["type"] == "invalid_request"
-      assert parsed["error"]["message"] =~ "tool"
-    end
-
-    test "returns error when action is missing", %{host: host} do
-      parsed =
-        Jason.decode!(parse(Jason.encode!(%{"tool" => "execution"}), host))
-
-      assert parsed["error"]["type"] == "invalid_request"
-    end
-
-    test "returns error when args is not a map", %{host: host} do
-      json = Jason.encode!(%{"tool" => "execution", "action" => "run", "args" => "string"})
-      parsed = Jason.decode!(parse(json, host))
-      assert parsed["error"]["type"] == "invalid_request"
-      assert parsed["error"]["message"] =~ "args"
-    end
-  end
-
-  # ============================================================================
-  # execute/3 - MCP Dispatch
-  # ============================================================================
-
-  describe "execute/3 - MCP dispatch" do
-    test "dispatches execution.run through the chain on a consented edge", %{ctx: ctx, ref: ref} do
+  describe "a child of the formula" do
+    test "is admitted on a consented edge, bound to the target's node", %{ctx: ctx, ref: ref} do
       auth = authority(edges: %{@test_node => %{}})
       host = host!(ctx, auth)
 
-      parsed =
-        Jason.decode!(execute(execution_run_request(ref, %{"a" => 5, "b" => 3}), host, auth))
-
-      # The edge decision admitted the child, bound to the target's node;
-      # the runner this attempt presents starts nothing, so the call ends
-      # as the dispatch error of a child not started, never as a denial.
+      answer = admit(host, "call", ref, %{"a" => 5, "b" => 3})
+      assert {:ok, _admitted} = answer
       assert %{authority: %{cursor: {:bound, @test_node}}} = admitted!(host)
-      assert parsed["error"]["type"] == "dispatch_error"
-      refute parsed["error"]["type"] == "tool_denied"
+      release!(host, answer)
     end
 
-    test "dispatches to non-execution tools", %{ctx: ctx} do
-      auth = authority(tools: ["tools.list"])
-      parsed = Jason.decode!(execute(mcp_request("tools", "list"), host!(ctx, auth), auth))
-
-      assert parsed["status"] == "completed"
-      assert is_map(parsed["output"])
-    end
-
-    test "returns dispatch error for unregistered component", %{ctx: ctx} do
+    test "of a component the registry cannot resolve is refused at its admission", %{ctx: ctx} do
       # Dynamic dispatch to a ref the registry cannot resolve keeps its
       # error shape: the zero child is refused at its admission.
-      auth = authority()
-      json = execution_run_request("reagent:local.missing:0.1.0", %{"a" => 1})
-      parsed = Jason.decode!(execute(json, host!(ctx, auth), auth))
+      host = host!(ctx, authority())
 
-      assert parsed["error"]["type"] == "dispatch_error"
-      assert parsed["error"]["message"] == "Component not found: reagent:local.missing:0.1.0"
+      assert {:error, "guest_error",
+              %{
+                "type" => "dispatch_error",
+                "message" => "Component not found: reagent:local.missing:0.1.0"
+              }} = admit(host, "call", "reagent:local.missing:0.1.0", %{"a" => 1})
+
+      assert children(host.execution_id) == []
     end
 
-    test "an intercepted action is the host's only when the assignment names it", %{ctx: ctx} do
-      auth = authority(tools: ["execution.run"])
-      host = host!(ctx, auth)
-      json = execution_run_request("reagent:local.missing:0.1.0", %{})
+    test "is no catalog call: execution.run is not reachable from a running chain", %{ctx: ctx} do
+      host = host!(ctx, authority(tools: ["execution.run"]))
 
-      # Not intercepted, execution.run is a catalog call, which a running
-      # chain cannot make.
-      parsed =
-        Jason.decode!(
-          FormulaHandler.execute(json, host, limits: Authority.limits(auth), intercepted: [])
-        )
+      assert {:error, "guest_error", %{"type" => "dispatch_error", "message" => message}} =
+               FormulaHost.tool_call(host, "execution", "run", %{
+                 "reference" => "reagent:local.missing:0.1.0",
+                 "input" => %{}
+               })
 
-      assert parsed["error"]["type"] == "dispatch_error"
-      assert parsed["error"]["message"] =~ "not reachable from a running chain"
+      assert message =~ @not_reachable
     end
   end
 
   # ============================================================================
-  # execute/3 - Invoke containment
+  # Invoke containment
   # ============================================================================
 
-  describe "execute/3 - invoke containment" do
-    test "an edge_only authority denies an off-edge invoke", %{ctx: ctx, ref: ref} do
+  describe "invoke containment" do
+    test "an edge_only authority denies an off-edge invoke, called or spawned, holding nothing",
+         %{ctx: ctx, ref: ref} do
       auth = authority(invoke_mode: :edge_only)
+      host = host!(ctx, auth)
+      denied = "Invocation denied: " <> Prima.Authority.Transition.deny_message(:edge_only)
 
-      parsed =
-        Jason.decode!(execute(execution_run_request(ref, %{"a" => 1}), host!(ctx, auth), auth))
+      for guest_fn <- ["call", "spawn"] do
+        assert {:error, "guest_error", %{"type" => "tool_denied", "message" => ^denied}} =
+                 admit(host, guest_fn, ref, %{"a" => 1, "b" => 2})
+      end
 
-      assert parsed["error"]["type"] == "tool_denied"
-
-      assert parsed["error"]["message"] ==
-               "Invocation denied: " <> Prima.Authority.Transition.deny_message(:edge_only)
+      assert Sanctum.TestContext.invoke_budget(auth).in_flight == 0
+      assert children(host.execution_id) == []
     end
 
-    test "an open_inert authority runs an off-edge invoke inert, not denied", %{
+    test "an open_inert authority admits an off-edge invoke inert, not denied", %{
       ctx: ctx,
       ref: ref
     } do
-      auth = authority()
-      host = host!(ctx, auth)
+      host = host!(ctx, authority())
 
-      parsed = Jason.decode!(execute(execution_run_request(ref, %{"a" => 1}), host, auth))
+      answer = admit(host, "call", ref, %{"a" => 1})
+      assert {:ok, _admitted} = answer
 
       # The zero child carries nothing but is admitted, not refused.
       assert %{authority: %{cursor: :unbound, policy: :none}} = admitted!(host)
-      refute match?(%{"error" => %{"type" => "tool_denied"}}, parsed)
+      release!(host, answer)
     end
   end
 
@@ -469,7 +388,7 @@ defmodule Locus.Runtime.FormulaHandlerTest do
   # ============================================================================
 
   describe "a child naming an account" do
-    test "a call, a spawn and a stream naming an account their edge does not bind are answered " <>
+    test "a call and a spawn naming an account their edge does not bind are answered " <>
            "connection_not_granted, and no default stands in for it",
          %{ctx: ctx, ref: ref} do
       not_bound = Prima.Refusal.message(:connection_not_granted)
@@ -481,28 +400,14 @@ defmodule Locus.Runtime.FormulaHandlerTest do
             {authority(), "reagent:local.elsewhere:0.1.0"}
           ] do
         host = host!(ctx, auth)
-        {imports, tracker} = imports(host, auth)
-        spawn_fn = elem(imports["cyfr:formula/invoke@0.1.0"]["spawn"], 1)
 
-        named = fn action ->
-          mcp_request("execution", action, %{
-            "reference" => target,
-            "input" => %{"a" => 1},
-            "connection" => "Work"
-          })
-        end
-
-        for answer <- [
-              execute(named.("run"), host, auth),
-              spawn_fn.(named.("run")),
-              execute(named.("run_stream"), host, auth)
-            ] do
-          assert %{"error" => %{"type" => "connection_not_granted", "message" => ^not_bound}} =
-                   Jason.decode!(answer)
+        for guest_fn <- ["call", "spawn"] do
+          assert {:error, "guest_error",
+                  %{"type" => "connection_not_granted", "message" => ^not_bound}} =
+                   admit(host, guest_fn, target, %{"a" => 1}, %{"connection" => "Work"})
         end
 
         assert children(host.execution_id) == []
-        FormulaHandler.cleanup_registry(tracker)
       end
     end
 
@@ -510,19 +415,11 @@ defmodule Locus.Runtime.FormulaHandlerTest do
       ctx: ctx,
       ref: ref
     } do
-      auth = authority(edges: %{@test_node => %{}})
-      host = host!(ctx, auth)
+      host = host!(ctx, authority(edges: %{@test_node => %{}}))
 
       for connection <- ["", "work|home", "line\nbreak"] do
-        json =
-          mcp_request("execution", "run", %{
-            "reference" => ref,
-            "input" => %{},
-            "connection" => connection
-          })
-
-        assert %{"error" => %{"type" => "invalid_request", "message" => message}} =
-                 Jason.decode!(execute(json, host, auth))
+        assert {:error, "guest_error", %{"type" => "invalid_request", "message" => message}} =
+                 admit(host, "call", ref, %{}, %{"connection" => connection})
 
         assert message =~ "connection"
       end
@@ -570,173 +467,57 @@ defmodule Locus.Runtime.FormulaHandlerTest do
   end
 
   # ============================================================================
-  # execute/3 - In-chain plane containment
+  # In-chain plane containment
   # ============================================================================
 
-  describe "execute/3 - in-chain plane containment" do
+  describe "in-chain plane containment" do
     # session/key/policy mutation actions are external-plane only: the
     # reachability gate refuses them from a running chain before any
     # grant is consulted, so even a consented edge cannot open them.
 
     test "blocks an external-only tool with no grant", %{ctx: ctx} do
-      auth = authority()
-      json = mcp_request("session", "logout", %{})
-      parsed = Jason.decode!(execute(json, host!(ctx, auth), auth))
+      host = host!(ctx, authority())
 
-      assert parsed["error"]["type"] == "dispatch_error"
-      assert parsed["error"]["message"] =~ "not reachable from a running chain"
+      assert {:error, "guest_error", %{"type" => "dispatch_error", "message" => message}} =
+               FormulaHost.tool_call(host, "session", "logout")
+
+      assert message =~ @not_reachable
     end
 
     test "blocks an external-only tool even when the edge grants it", %{ctx: ctx} do
-      auth = authority(tools: ["vault.create"])
-      json = mcp_request("vault", "create", %{"name" => "n", "fields" => %{}})
-      parsed = Jason.decode!(execute(json, host!(ctx, auth), auth))
+      host = host!(ctx, authority(tools: ["vault.create"]))
 
-      assert parsed["error"]["type"] == "dispatch_error"
-      assert parsed["error"]["message"] =~ "not reachable from a running chain"
+      assert {:error, "guest_error", %{"type" => "dispatch_error", "message" => message}} =
+               FormulaHost.tool_call(host, "vault", "create", %{"name" => "n", "fields" => %{}})
+
+      assert message =~ @not_reachable
     end
 
     test "blocks key.create in-chain regardless of grants", %{ctx: ctx} do
-      auth = authority(tools: ["key.create"])
-      parsed = Jason.decode!(execute(mcp_request("key", "create", %{}), host!(ctx, auth), auth))
+      host = host!(ctx, authority(tools: ["key.create"]))
 
-      assert parsed["error"]["type"] == "dispatch_error"
-      assert parsed["error"]["message"] =~ "not reachable from a running chain"
+      assert {:error, "guest_error", %{"type" => "dispatch_error", "message" => message}} =
+               FormulaHost.tool_call(host, "key", "create")
+
+      assert message =~ @not_reachable
     end
 
-    test "allows granted in-chain tools through normally", %{ctx: ctx} do
-      auth = authority(tools: ["tools.list"])
-      parsed = Jason.decode!(execute(mcp_request("tools", "list"), host!(ctx, auth), auth))
-
-      refute match?(%{"error" => _}, parsed)
-      assert parsed["status"] == "completed"
-    end
-  end
-
-  # ============================================================================
-  # spawn - in-chain plane containment
-  # ============================================================================
-
-  describe "spawn - in-chain plane containment" do
-    test "a spawned external-only tool call is refused in the task result", %{ctx: ctx} do
+    test "a spawned external-only tool call is refused as a called one is", %{ctx: ctx} do
       # vault.delete is external-plane only: even a consented edge grant
       # cannot make credential mutation reachable from a running chain.
-      auth = authority(tools: ["vault.delete"])
-      {imports, tracker_pid} = imports(host!(ctx, auth), auth)
+      host = host!(ctx, authority(tools: ["vault.delete"]))
 
-      invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
-      spawn_fn = elem(invoke_ns["spawn"], 1)
-      await_fn = elem(invoke_ns["await"], 1)
+      assert {:error, "guest_error", %{"type" => "dispatch_error", "message" => message}} =
+               FormulaHost.tool_call(host, "vault", "delete", %{"id" => "vlt_test"}, "spawn")
 
-      spawn_result = spawn_fn.(mcp_request("vault", "delete", %{"id" => "vlt_test"}))
-      %{"task_id" => task_id} = Jason.decode!(spawn_result)
-
-      awaited = Jason.decode!(await_fn.(task_id))
-
-      assert awaited["status"] == "error"
-      assert awaited["error"]["type"] == "dispatch_error"
-      assert awaited["error"]["message"] =~ "not reachable from a running chain"
-
-      FormulaHandler.cleanup_registry(tracker_pid)
-    end
-  end
-
-  # ============================================================================
-  # spawn, await-all, poll and cancel: what CYFR decides before any task
-  # ============================================================================
-
-  describe "spawn, await-all, poll and cancel before any task" do
-    test "spawn returns error when request is invalid", %{ctx: ctx} do
-      auth = authority()
-      {imports, tracker_pid} = imports(host!(ctx, auth), auth)
-
-      spawn_fn = elem(imports["cyfr:formula/invoke@0.1.0"]["spawn"], 1)
-
-      parsed = Jason.decode!(spawn_fn.("not valid json"))
-      assert parsed["error"]["type"] == "invalid_json"
-
-      FormulaHandler.cleanup_registry(tracker_pid)
+      assert message =~ @not_reachable
     end
 
-    test "spawn denies an off-edge invoke under edge_only, synchronously", %{ctx: ctx, ref: ref} do
-      auth = authority(invoke_mode: :edge_only)
-      {imports, tracker_pid} = imports(host!(ctx, auth), auth)
+    test "allows granted in-chain tools through to the catalog", %{ctx: ctx} do
+      host = host!(ctx, authority(tools: ["tools.list"]))
 
-      spawn_fn = elem(imports["cyfr:formula/invoke@0.1.0"]["spawn"], 1)
-
-      # CYFR decides before any task exists: a denied spawn consumes no task
-      # slot and no budget.
-      parsed = Jason.decode!(spawn_fn.(execution_run_request(ref, %{"a" => 1, "b" => 2})))
-      assert parsed["error"]["type"] == "tool_denied"
-      assert Sanctum.TestContext.invoke_budget(auth).in_flight == 0
-      assert Locus.Runtime.AsyncTracker.room?(tracker_pid)
-
-      FormulaHandler.cleanup_registry(tracker_pid)
-    end
-
-    test "spawn under a full tracker admits no child", %{ctx: ctx, ref: ref} do
-      auth = authority(edges: %{@test_node => %{}})
-      host = host!(ctx, auth)
-
-      {imports, tracker_pid} =
-        FormulaHandler.build_formula_imports(host,
-          limits: %{Authority.limits(auth) | max_concurrent_tasks: 0},
-          intercepted: FormulaHost.intercepted()
-        )
-
-      spawn_fn = elem(imports["cyfr:formula/invoke@0.1.0"]["spawn"], 1)
-
-      parsed = Jason.decode!(spawn_fn.(execution_run_request(ref, %{})))
-      assert parsed["error"]["type"] == "resource_limit"
-      assert Sanctum.TestContext.invoke_budget(auth).in_flight == 0
-
-      assert Arca.Repo.all(
-               from(e in Arca.Schemas.Execution,
-                 where: e.parent_execution_id == ^host.execution_id,
-                 select: e.id
-               )
-             ) == []
-
-      FormulaHandler.cleanup_registry(tracker_pid)
-    end
-
-    test "await-all returns error for invalid JSON", %{ctx: ctx} do
-      auth = authority()
-      {imports, tracker_pid} = imports(host!(ctx, auth), auth)
-
-      await_all_fn = elem(imports["cyfr:formula/invoke@0.1.0"]["await-all"], 1)
-
-      parsed = Jason.decode!(await_all_fn.("not json"))
-      assert parsed["error"]["type"] == "invalid_json"
-
-      FormulaHandler.cleanup_registry(tracker_pid)
-    end
-
-    test "poll returns error for unknown task_id", %{ctx: ctx} do
-      auth = authority()
-      {imports, tracker_pid} = imports(host!(ctx, auth), auth)
-
-      poll_fn = elem(imports["cyfr:formula/invoke@0.1.0"]["poll"], 1)
-
-      parsed = Jason.decode!(poll_fn.("nonexistent_task"))
-      assert parsed["error"]["type"] == "invalid_request"
-      assert parsed["error"]["message"] =~ "Unknown"
-
-      FormulaHandler.cleanup_registry(tracker_pid)
-    end
-
-    test "cancel returns error for unknown task_id", %{ctx: ctx} do
-      auth = authority()
-      {imports, tracker_pid} = imports(host!(ctx, auth), auth)
-
-      cancel_fn = elem(imports["cyfr:formula/invoke@0.1.0"]["cancel"], 1)
-
-      parsed = Jason.decode!(cancel_fn.("nonexistent_task"))
-
-      assert parsed["error"]["type"] == "invalid_request"
-      assert parsed["error"]["message"] =~ "Unknown"
-
-      FormulaHandler.cleanup_registry(tracker_pid)
+      assert {:ok, output} = FormulaHost.tool_call(host, "tools", "list")
+      assert is_map(output)
     end
   end
 
@@ -1043,113 +824,50 @@ defmodule Locus.Runtime.FormulaHandlerTest do
   end
 
   # ============================================================================
-  # cleanup_registry/1
+  # Emit
   # ============================================================================
 
-  describe "cleanup_registry/1" do
-    test "stops tracker and returns :ok", %{ctx: ctx} do
-      {_imports, tracker_pid} =
-        FormulaHandler.build_formula_imports(host!(ctx, Authority.zero()),
-          limits: Prima.Limits.defaults(:formula)
-        )
-
-      assert Process.alive?(tracker_pid)
-      assert :ok == FormulaHandler.cleanup_registry(tracker_pid)
-      refute Process.alive?(tracker_pid)
-    end
-
-    test "returns :ok for non-pid values" do
-      assert :ok == FormulaHandler.cleanup_registry(nil)
-      assert :ok == FormulaHandler.cleanup_registry("some_string")
-    end
-
-    test "a tracker that is already gone is not an error" do
-      {:ok, pid} = Locus.Runtime.AsyncTracker.start_link(max_tasks: 1)
-      # Unlink before killing: the tracker is linked to whoever started it,
-      # which here is the test process.
-      Process.unlink(pid)
-      ref = Process.monitor(pid)
-      Process.exit(pid, :kill)
-      assert_receive {:DOWN, ^ref, :process, ^pid, _}
-      refute Process.alive?(pid)
-
-      assert FormulaHandler.cleanup_registry(pid) == :ok
-    end
-  end
-
-  # ============================================================================
-  # emit integration
-  # ============================================================================
-
-  describe "emit integration" do
-    test "emit returns ok with sequence number", %{ctx: ctx} do
+  describe "emit" do
+    test "a reply is ok with its sequence number", %{ctx: ctx} do
       # A stream id of its own: the sequence a stream starts at belongs to the
       # VM, so the expected first sequence holds only for an id no other test takes.
       stream = "exec_emit_test_#{System.unique_integer([:positive])}"
       host = host!(ctx, Authority.zero(), stream_id: stream)
 
-      {imports, tracker_pid} =
-        FormulaHandler.build_formula_imports(host, limits: Prima.Limits.defaults(:formula))
-
-      emit_fn = elem(imports["cyfr:formula/invoke@0.1.0"]["emit"], 1)
-
-      parsed = Jason.decode!(emit_fn.(Jason.encode!(%{"kind" => "turn_start", "turn" => 1})))
+      parsed = emit(host, Jason.encode!(%{"kind" => "turn_start", "turn" => 1}))
 
       assert parsed["ok"] == true
       # No durable event yet: the delta rides prefix 0.
       assert parsed["sequence"] == "0.1"
-
-      FormulaHandler.cleanup_registry(tracker_pid)
     end
 
-    test "emit sequence increments across calls", %{ctx: ctx} do
+    test "the sequence increments across emits", %{ctx: ctx} do
       stream = "exec_emit_seq_#{System.unique_integer([:positive])}"
       host = host!(ctx, Authority.zero(), stream_id: stream)
 
-      {imports, tracker_pid} =
-        FormulaHandler.build_formula_imports(host, limits: Prima.Limits.defaults(:formula))
-
-      emit_fn = elem(imports["cyfr:formula/invoke@0.1.0"]["emit"], 1)
-
-      r1 = Jason.decode!(emit_fn.(Jason.encode!(%{"kind" => "turn_start", "turn" => 1})))
-      r2 = Jason.decode!(emit_fn.(Jason.encode!(%{"kind" => "text_delta", "content" => "hi"})))
-      r3 = Jason.decode!(emit_fn.(Jason.encode!(%{"kind" => "tool_use", "tool" => "read"})))
+      r1 = emit(host, Jason.encode!(%{"kind" => "turn_start", "turn" => 1}))
+      r2 = emit(host, Jason.encode!(%{"kind" => "text_delta", "content" => "hi"}))
+      r3 = emit(host, Jason.encode!(%{"kind" => "tool_use", "tool" => "read"}))
 
       assert r1["sequence"] == "0.1"
       assert r2["sequence"] == "0.2"
       assert r3["sequence"] == "0.3"
-
-      FormulaHandler.cleanup_registry(tracker_pid)
     end
 
-    test "emit handles invalid JSON gracefully", %{ctx: ctx} do
+    test "an event that is not JSON is refused, not swallowed", %{ctx: ctx} do
       host = host!(ctx, Authority.zero(), stream_id: "exec_emit_bad")
 
-      {imports, tracker_pid} =
-        FormulaHandler.build_formula_imports(host, limits: Prima.Limits.defaults(:formula))
-
-      emit_fn = elem(imports["cyfr:formula/invoke@0.1.0"]["emit"], 1)
-
-      parsed = Jason.decode!(emit_fn.("not valid json"))
-
-      # Under an authority a malformed emit is refused loudly, not
-      # swallowed: the guest gets a typed error envelope.
-      assert parsed["error"]["type"] == "invalid_request"
-
-      FormulaHandler.cleanup_registry(tracker_pid)
+      # Under an authority a malformed emit is refused loudly: the guest
+      # gets a typed error.
+      assert emit(host, "not valid json")["error"]["type"] == "invalid_request"
     end
 
-    test "emit delivers events via PubSub", %{ctx: ctx} do
+    test "an event is delivered via PubSub", %{ctx: ctx} do
       execution_id = "exec_emit_pubsub_#{:rand.uniform(100_000)}"
       host = host!(ctx, Authority.zero(), stream_id: execution_id)
 
-      {imports, tracker_pid} =
-        FormulaHandler.build_formula_imports(host, limits: Prima.Limits.defaults(:formula))
-
       Opus.Events.subscribe(execution_id, ctx)
-
-      emit_fn = elem(imports["cyfr:formula/invoke@0.1.0"]["emit"], 1)
-      emit_fn.(Jason.encode!(%{"kind" => "turn_start", "turn" => 1}))
+      emit(host, Jason.encode!(%{"kind" => "turn_start", "turn" => 1}))
 
       assert_receive %Cyfr.Bus.ExecutionEvent{} = event, 2000
       assert event.type == "emit"
@@ -1159,10 +877,9 @@ defmodule Locus.Runtime.FormulaHandlerTest do
       assert event.data["turn"] == 1
 
       Opus.Events.unsubscribe(execution_id, ctx)
-      FormulaHandler.cleanup_registry(tracker_pid)
     end
 
-    test "emit masks dispensed secrets before the event leaves the runtime", %{ctx: ctx} do
+    test "an event is masked of dispensed secrets before it is delivered", %{ctx: ctx} do
       execution_id = "exec_emit_mask_#{:rand.uniform(100_000)}"
 
       host =
@@ -1171,14 +888,10 @@ defmodule Locus.Runtime.FormulaHandlerTest do
           vault: %{kind: "api_key", fields: %{"KEY" => "sk-super-secret-value"}}
         )
 
-      {imports, tracker_pid} =
-        FormulaHandler.build_formula_imports(host, limits: Prima.Limits.defaults(:formula))
-
       Opus.Events.subscribe(execution_id, ctx)
 
-      emit_fn = elem(imports["cyfr:formula/invoke@0.1.0"]["emit"], 1)
-
-      emit_fn.(
+      emit(
+        host,
         Jason.encode!(%{"kind" => "text_delta", "content" => "key is sk-super-secret-value"})
       )
 
@@ -1187,21 +900,15 @@ defmodule Locus.Runtime.FormulaHandlerTest do
       refute inspect(event) =~ "sk-super-secret-value"
 
       Opus.Events.unsubscribe(execution_id, ctx)
-      FormulaHandler.cleanup_registry(tracker_pid)
     end
 
-    test "emit buffers events for replay via since/2", %{ctx: ctx} do
+    test "events are buffered for replay via since/2", %{ctx: ctx} do
       execution_id = "exec_emit_buffer_#{:rand.uniform(100_000)}"
       host = host!(ctx, Authority.zero(), stream_id: execution_id)
 
-      {imports, tracker_pid} =
-        FormulaHandler.build_formula_imports(host, limits: Prima.Limits.defaults(:formula))
-
-      emit_fn = elem(imports["cyfr:formula/invoke@0.1.0"]["emit"], 1)
-
-      emit_fn.(Jason.encode!(%{"kind" => "turn_start", "turn" => 1}))
-      emit_fn.(Jason.encode!(%{"kind" => "text_delta", "content" => "hello"}))
-      emit_fn.(Jason.encode!(%{"kind" => "tool_use", "tool" => "read_file"}))
+      emit(host, Jason.encode!(%{"kind" => "turn_start", "turn" => 1}))
+      emit(host, Jason.encode!(%{"kind" => "text_delta", "content" => "hello"}))
+      emit(host, Jason.encode!(%{"kind" => "tool_use", "tool" => "read_file"}))
 
       events = Opus.Events.since(execution_id, {0, 0}, ctx.athanor_id)
       assert length(events) == 3
@@ -1211,13 +918,11 @@ defmodule Locus.Runtime.FormulaHandlerTest do
       events_after_1 = Opus.Events.since(execution_id, {0, 1}, ctx.athanor_id)
       assert length(events_after_1) == 2
       assert Enum.map(events_after_1, & &1.sequence) == ["0.2", "0.3"]
-
-      FormulaHandler.cleanup_registry(tracker_pid)
     end
 
     # CYFR's own telemetry: the host emits it as it pushes the event to the
     # stream.
-    test "emit telemetry fires on each emit", %{ctx: ctx} do
+    test "telemetry fires on each emit", %{ctx: ctx} do
       test_pid = self()
       execution_id = "exec_emit_telem_#{:rand.uniform(100_000)}"
       handler = "test-formula-emit-#{System.unique_integer([:positive])}"
@@ -1235,16 +940,9 @@ defmodule Locus.Runtime.FormulaHandlerTest do
       on_exit(fn -> :telemetry.detach(handler) end)
 
       host = host!(ctx, Authority.zero(), stream_id: execution_id)
-
-      {imports, tracker_pid} =
-        FormulaHandler.build_formula_imports(host, limits: Prima.Limits.defaults(:formula))
-
-      emit_fn = elem(imports["cyfr:formula/invoke@0.1.0"]["emit"], 1)
-      emit_fn.(Jason.encode!(%{"kind" => "turn_start", "turn" => 1}))
+      emit(host, Jason.encode!(%{"kind" => "turn_start", "turn" => 1}))
 
       assert_receive {:emitted, %{execution_id: ^execution_id}, %{sequence: "0.1"}}, 2000
-
-      FormulaHandler.cleanup_registry(tracker_pid)
     end
   end
 
@@ -1258,14 +956,10 @@ defmodule Locus.Runtime.FormulaHandlerTest do
       root_id = "exec_root_#{:rand.uniform(100_000)}"
       host = host!(ctx, Authority.zero(), stream_id: root_id)
 
-      {imports, tracker_pid} =
-        FormulaHandler.build_formula_imports(host, limits: Prima.Limits.defaults(:formula))
-
       Opus.Events.subscribe(root_id, ctx)
       Opus.Events.subscribe(host.execution_id, ctx)
 
-      emit_fn = elem(imports["cyfr:formula/invoke@0.1.0"]["emit"], 1)
-      emit_fn.(Jason.encode!(%{"kind" => "turn_start", "turn" => 1}))
+      emit(host, Jason.encode!(%{"kind" => "turn_start", "turn" => 1}))
 
       assert_receive %Cyfr.Bus.ExecutionEvent{} = event, 2000
       assert event.execution_id == root_id
@@ -1275,7 +969,6 @@ defmodule Locus.Runtime.FormulaHandlerTest do
 
       Opus.Events.unsubscribe(root_id, ctx)
       Opus.Events.unsubscribe(host.execution_id, ctx)
-      FormulaHandler.cleanup_registry(tracker_pid)
     end
   end
 
@@ -1308,43 +1001,21 @@ defmodule Locus.Runtime.FormulaHandlerTest do
   end
 
   # ============================================================================
-  # encode_error/2
+  # Setup error remediation
   # ============================================================================
 
-  describe "encode_error/2" do
-    test "encodes error as JSON" do
-      parsed = Jason.decode!(FormulaHandler.encode_error(:test_error, "something failed"))
-
-      assert parsed["error"]["type"] == "test_error"
-      assert parsed["error"]["message"] == "something failed"
-    end
-  end
-
-  # ============================================================================
-  # execute/3 - Setup error remediation
-  # ============================================================================
-
-  describe "execute/3 - setup error remediation" do
+  describe "setup error remediation" do
     test "an unsatisfiable consented dependency is setup_required with remediation", %{ctx: ctx} do
       # The consent names an edge to a component the installed world
       # cannot resolve: the bound invoke refuses with a remediation the
       # surface can act on, instead of a bare dispatch failure.
-      auth = authority(edges: %{"catalyst:local.no-policy-test" => %{}})
+      host = host!(ctx, authority(edges: %{"catalyst:local.no-policy-test" => %{}}))
 
-      json =
-        mcp_request("execution", "run", %{
-          "reference" => "catalyst:local.no-policy-test:0.1.0",
-          "input" => %{},
-          "type" => "catalyst"
-        })
-
-      parsed = Jason.decode!(execute(json, host!(ctx, auth), auth))
-
-      assert parsed["error"]["type"] == "setup_required"
+      assert {:error, "guest_error", %{"type" => "setup_required", "remediation" => remediation}} =
+               admit(host, "call", "catalyst:local.no-policy-test:0.1.0", %{})
 
       # One remediation shape on the wire, whichever dispatch path failed —
       # Prima.Remediation's, the one component-guide documents.
-      remediation = parsed["error"]["remediation"]
       assert remediation["component_ref"] == "catalyst:local.no-policy-test:0.1.0"
 
       assert Enum.sort(Map.keys(remediation)) ==
@@ -1353,21 +1024,15 @@ defmodule Locus.Runtime.FormulaHandlerTest do
       assert is_list(remediation["issues"])
     end
 
-    test "normal errors remain unchanged when not a setup issue", %{ctx: ctx} do
-      auth = authority()
+    test "normal errors carry no remediation when not a setup issue", %{ctx: ctx} do
+      host = host!(ctx, authority())
 
       # A missing component off the consent graph gives dispatch_error,
-      # not setup_required
-      json =
-        mcp_request("execution", "run", %{
-          "reference" => "reagent:local.does-not-exist:0.1.0",
-          "input" => %{}
-        })
+      # not setup_required.
+      assert {:error, "guest_error", %{"type" => "dispatch_error"} = refusal} =
+               admit(host, "call", "reagent:local.does-not-exist:0.1.0", %{})
 
-      parsed = Jason.decode!(execute(json, host!(ctx, auth), auth))
-
-      assert parsed["error"]["type"] == "dispatch_error"
-      refute Map.has_key?(parsed["error"], "remediation")
+      refute Map.has_key?(refusal, "remediation")
     end
   end
 end

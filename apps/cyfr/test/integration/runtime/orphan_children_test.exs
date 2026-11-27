@@ -4,7 +4,7 @@
 Code.require_file("support/nested_execution_helper.exs", __DIR__)
 Code.require_file("support/formula_host_helper.exs", __DIR__)
 
-defmodule Locus.Runtime.OrphanChildrenTest do
+defmodule Cyfr.OrphanChildrenTest do
   @moduledoc """
   A formula's children end with it and never outlive their deadline, which
   is their parent's at most.
@@ -15,9 +15,9 @@ defmodule Locus.Runtime.OrphanChildrenTest do
   a host call past that, its call is killed and its row fails with the
   timeout, and the formula's guest is answered so, as a call whose outcome
   is not known. A formula whose run was
-  cancelled or has closed admits no new child through `execution.run`,
-  `execution.run_stream` or a spawn its runner asks for: no row, no charge
-  row and no invoke slot is left behind. A `run_stream` child takes a
+  cancelled or has closed admits no new child, call-shaped or spawn-shaped,
+  that its runner asks for: no row, no charge row and no invoke slot is
+  left behind. A `run_stream` child takes a
   charge row, as a spawned child does, and gives it back.
 
   The formula and its children are the `nested-probe`, each child asking
@@ -25,8 +25,8 @@ defmodule Locus.Runtime.OrphanChildrenTest do
   formula's close is held there too, to keep it running. The children the
   deadline case bounds are the probe under another name, whose consent,
   an edge of the formula's, grants it one second. What a formula whose
-  run ended asks is asked as its runner asks it, over the wire with the
-  keys of its attempt (`Locus.Runtime.Test.FormulaHost`).
+  run ended asks is posted as its runner's host call, over the wire with
+  the keys of its attempt (`Cyfr.Test.FormulaHost`).
   """
 
   use ExUnit.Case, async: false
@@ -35,7 +35,7 @@ defmodule Locus.Runtime.OrphanChildrenTest do
   import Ecto.Query, only: [from: 2]
 
   alias Cyfr.Test.TwoServices
-  alias Locus.Runtime.Test.FormulaHost
+  alias Cyfr.Test.FormulaHost
   alias Locus.Runtime.Test.NestedExecution, as: Probe
   alias Sanctum.Consent.{Bootstrap}
 
@@ -45,7 +45,6 @@ defmodule Locus.Runtime.OrphanChildrenTest do
   @probe_node "formula:local.nested-probe"
   @brief "formula:local.brief-probe:0.1.0"
   @trapping "reagent:local.trapping-child:1.0.0"
-  @ended "The call failed."
 
   setup tags do
     Arca.Cache.init()
@@ -281,7 +280,7 @@ defmodule Locus.Runtime.OrphanChildrenTest do
   # ---------------------------------------------------------------------------
 
   # The probe as a root, echoing, held at its close: its id, its authority
-  # as its runner attached with it, the held close and the client its
+  # as its runner attached with it, the held close and the attempt its
   # runner holds.
   defp held_root!(ctx) do
     root_id = Prima.UUID7.execution_id()
@@ -323,33 +322,16 @@ defmodule Locus.Runtime.OrphanChildrenTest do
     }
   end
 
-  defp request_json(action), do: Jason.encode!(request(action))
-
-  # What the formula's own `call` host function answers for `action`,
-  # asked as its runner asks it.
-  defp formula_call(host, action, authority),
-    do:
-      Locus.Runtime.FormulaHandler.execute(
-        request_json(action),
-        host,
-        FormulaHost.opts(authority)
-      )
-
   defp refute_orphans_admitted(root_id, authority, row) do
-    # The formula's attempt is gone: every host call its runner makes for a
-    # child is refused before anything is admitted or charged.
-    assert %{"error" => %{"message" => @ended}} =
-             Jason.decode!(formula_call(row.host, "run", authority))
-
-    assert %{"error" => %{"message" => @ended}} =
-             Jason.decode!(formula_call(row.host, "run_stream", authority))
-
-    {imports, tracker} =
-      Locus.Runtime.FormulaHandler.build_formula_imports(row.host, FormulaHost.opts(authority))
-
-    %{"spawn" => {:fn, spawn_fn}} = imports["cyfr:formula/invoke@0.1.0"]
-    assert %{"error" => %{"message" => @ended}} = Jason.decode!(spawn_fn.(request_json("run")))
-    Locus.Runtime.FormulaHandler.cleanup_registry(tracker)
+    # The formula's attempt is gone: every child its runner asks CYFR to
+    # admit, call-shaped or spawn-shaped, is refused before anything is
+    # admitted or charged.
+    for guest_fn <- ["call", "spawn"] do
+      assert {:error, "lost", _fields} =
+               FormulaHost.admit_child(row.host, Probe.probe_ref(), guest_fn, %{
+                 "input" => Probe.held_input()
+               })
+    end
 
     children =
       from(e in Arca.Schemas.Execution, where: e.parent_execution_id == ^root_id, select: e.id)

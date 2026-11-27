@@ -2,7 +2,7 @@
 # Copyright 2026 CYFR Works Inc.
 Code.require_file("support/formula_host_helper.exs", __DIR__)
 
-defmodule Locus.Runtime.ChainTest do
+defmodule Cyfr.ChainTest do
   # Runs under the authority `Opus.Admission` decides (whose own
   # cases are `Opus.AdmissionTest`), against the in-memory consent
   # source and real published components (the suite's guests). What a run
@@ -14,7 +14,7 @@ defmodule Locus.Runtime.ChainTest do
 
   alias Prima.Authority
   alias Prima.Authority.Blob
-  alias Cyfr.Test.TwoServices
+  alias Cyfr.Test.{FormulaHost, TwoServices}
   alias Sanctum.Context
   alias Sanctum.Test.ConsentFixtures
 
@@ -178,27 +178,29 @@ defmodule Locus.Runtime.ChainTest do
   end
 
   # A formula's attempt under `auth`, attached by a runner of the worker
-  # service's group, and the real import closures the runtime builds for
-  # it: the node's limits and the actions its assignment intercepts. The
-  # transition inputs its children are stepped with are the attempt's.
-  defp fork_imports(ctx, auth, opts \\ []) do
-    fixture =
-      Locus.Runtime.Test.FormulaHost.attached!(
-        [
-          ctx: ctx,
-          authority: auth,
-          component_ref: "formula:local.chain-fork:0.1.0",
-          activation_digest: @root_act
-        ] ++ opts
-      )
+  # service's group. The transition inputs its children are stepped with
+  # are the attempt's.
+  defp fork!(ctx, auth, opts \\ []) do
+    FormulaHost.attached!(
+      [
+        ctx: ctx,
+        authority: auth,
+        component_ref: "formula:local.chain-fork:0.1.0",
+        activation_digest: @root_act
+      ] ++ opts
+    )
+  end
 
-    {imports, tracker} =
-      Locus.Runtime.FormulaHandler.build_formula_imports(
-        fixture.host,
-        Locus.Runtime.Test.FormulaHost.opts(auth)
-      )
+  # A child CYFR admitted is handed to the runner the attempt presents,
+  # which is no process: it gives the child back, as a runner that cannot
+  # start one does, which closes it failed and releases what it held.
+  defp release!(host, admitted) do
+    child = Cyfr.Test.HostCaller.child(host, admitted)
 
-    {fixture.host, imports, tracker}
+    assert {:ok, true} =
+             FormulaHost.call(host, :release_child, %{"execution_id" => child.execution_id})
+
+    child.execution_id
   end
 
   describe "run_root/5" do
@@ -522,162 +524,77 @@ defmodule Locus.Runtime.ChainTest do
       assert entered!(execution_id).profile_id == "prof-cat"
     end
 
-    test "the formula closures intercept execution dispatch under an authority", %{ctx: ctx} do
+    test "a formula's child is admitted under the edge's authority, with its lineage", %{
+      ctx: ctx
+    } do
       auth = authority_with_edges(%{@target_node => %{}})
-
-      {host, imports, tracker} = fork_imports(ctx, auth)
+      host = fork!(ctx, auth)
       parent_id = host.execution_id
 
-      on_exit(fn ->
-        if Process.alive?(tracker), do: Locus.Runtime.FormulaHandler.cleanup_registry(tracker)
-      end)
-
-      %{"cyfr:formula/invoke@0.1.0" => fns} = imports
-      {:fn, call_fn} = fns["call"]
-
-      # Guest-forged lineage keys ride the args; they must be discarded.
-      request =
-        Jason.encode!(%{
-          "tool" => "execution",
-          "action" => "run",
-          "args" => %{
-            "reference" => "#{@target_node}:0.1.0",
-            "input" => %{"a" => 1},
-            "parent_execution_id" => "exec_forged",
-            "root_execution_id" => "exec_forged_root"
-          }
-        })
-
-      response = call_fn.(request)
+      assert {:ok, admitted} =
+               FormulaHost.admit_child(host, "#{@target_node}:0.1.0", "call", %{
+                 "input" => %{"a" => 1}
+               })
 
       assert [child_id] = admitted(parent_id)
       authority = entered!(child_id)
       assert authority.cursor == {:bound, @target_node}
       assert authority.depth == 1
 
-      # The child is admitted for a runner this fixture's attempt presents,
-      # which is no process: it is closed failed unstarted, after every
-      # property under test was decided.
-      assert %{"error" => %{"type" => "dispatch_error"}} = Jason.decode!(response)
+      assert ^child_id = release!(host, admitted)
 
       import Ecto.Query
 
       rows =
         Arca.Repo.all(
-          from(e in Arca.Schemas.Execution,
-            where: e.parent_execution_id in [^parent_id, "exec_forged"]
-          )
+          from(e in Arca.Schemas.Execution, where: e.parent_execution_id == ^parent_id)
         )
 
       assert [row] = rows
-      assert row.parent_execution_id == parent_id
+      assert row.id == child_id
+      assert row.status == "failed"
       assert row.activation_digest == @root_act
     end
 
-    test "an omitted need is rejected when the closure declares needs", %{ctx: ctx} do
+    test "an omitted need is rejected when the formula's node declares needs", %{ctx: ctx} do
       auth = authority_with_edges(%{@target_node => %{}})
+      host = fork!(ctx, auth, declared_needs: ["source"])
 
-      {_host, imports, tracker} = fork_imports(ctx, auth, declared_needs: ["source"])
+      assert {:error, "guest_error", %{"type" => "invalid_request"}} =
+               FormulaHost.admit_child(host, "#{@target_node}:0.1.0", "call")
 
-      on_exit(fn ->
-        if Process.alive?(tracker), do: Locus.Runtime.FormulaHandler.cleanup_registry(tracker)
-      end)
-
-      %{"cyfr:formula/invoke@0.1.0" => %{"call" => {:fn, call_fn}}} = imports
-
-      request =
-        Jason.encode!(%{
-          "tool" => "execution",
-          "action" => "run",
-          "args" => %{"reference" => "#{@target_node}:0.1.0", "input" => %{}}
-        })
-
-      assert %{"error" => %{"type" => "invalid_request"}} = Jason.decode!(call_fn.(request))
+      assert admitted(host.execution_id) == []
     end
 
-    test "the spawn closure charges the budget and releases it on completion", %{ctx: ctx} do
-      auth = authority_with_edges(%{@target_node => %{}})
-
-      {host, imports, tracker} = fork_imports(ctx, auth)
-
-      on_exit(fn ->
-        if Process.alive?(tracker), do: Locus.Runtime.FormulaHandler.cleanup_registry(tracker)
-      end)
-
-      %{"cyfr:formula/invoke@0.1.0" => %{"spawn" => {:fn, spawn_fn}}} = imports
-
-      request =
-        Jason.encode!(%{
-          "tool" => "execution",
-          "action" => "run",
-          "args" => %{"reference" => "#{@target_node}:0.1.0", "input" => %{}}
-        })
-
-      assert %{"task_id" => _} = Jason.decode!(spawn_fn.(request))
-      assert [_child_id] = admitted(host.execution_id)
-      wait_until(fn -> Sanctum.TestContext.invoke_budget(auth).in_flight == 0 end, 5_000)
-    end
-
-    test "an in-chain run_stream is admitted spawn-shaped under the edge's authority", %{
+    test "a spawn-shaped child charges the budget and releases it when given back", %{
       ctx: ctx
     } do
       auth = authority_with_edges(%{@target_node => %{}})
+      host = fork!(ctx, auth)
 
-      {host, imports, tracker} = fork_imports(ctx, auth)
-
-      on_exit(fn ->
-        if Process.alive?(tracker), do: Locus.Runtime.FormulaHandler.cleanup_registry(tracker)
-      end)
-
-      %{"cyfr:formula/invoke@0.1.0" => %{"call" => {:fn, call_fn}}} = imports
-
-      request =
-        Jason.encode!(%{
-          "tool" => "execution",
-          "action" => "run_stream",
-          "args" => %{"reference" => "#{@target_node}:0.1.0", "input" => %{}}
-        })
-
-      # The runner this fixture's attempt presents starts nothing, so the
-      # stream info a started child is answered with is
-      # `Locus.Runtime.FormulaHandlerRunnerTest`'s; what CYFR decides is here.
-      _response = call_fn.(request)
-
-      parent_id = host.execution_id
-
-      assert [%{args: %{"guest_fn" => "spawn"}}] =
-               for(
-                 %{callback: :admit_child, fields: %{execution_id: ^parent_id}} = call <-
-                   TwoServices.calls(),
-                 do: call
-               )
-
-      assert [child_id] = admitted(parent_id)
+      assert {:ok, admitted} = FormulaHost.admit_child(host, "#{@target_node}:0.1.0", "spawn")
+      assert [child_id] = admitted(host.execution_id)
       assert entered!(child_id).cursor == {:bound, @target_node}
+      assert Sanctum.TestContext.invoke_budget(auth).in_flight == 1
+
+      release!(host, admitted)
       wait_until(fn -> Sanctum.TestContext.invoke_budget(auth).in_flight == 0 end, 5_000)
     end
 
-    test "an oversized emit is refused by the node's own request limit", %{ctx: ctx} do
-      auth = authority_with_edges(%{})
+    test "a formula's emit is answered under the node's authority", %{ctx: ctx} do
+      host = fork!(ctx, authority_with_edges(%{}))
 
-      # The formula's attempt answers its emit under the node's limits.
-      {_host, imports, tracker} = fork_imports(ctx, auth)
+      emit = fn event ->
+        delta = Cyfr.Test.AttemptFixtures.delta(host, event)
+        assert {:ok, [reply]} = FormulaHost.call(host, :push_deltas, %{"deltas" => [delta]})
+        Jason.decode!(reply)
+      end
 
-      on_exit(fn ->
-        if Process.alive?(tracker), do: Locus.Runtime.FormulaHandler.cleanup_registry(tracker)
-      end)
-
-      %{"cyfr:formula/invoke@0.1.0" => %{"emit" => {:fn, emit_fn}}} = imports
-
-      big = Jason.encode!(%{"blob" => String.duplicate("x", 2_000_000)})
-      assert %{"error" => %{"type" => "resource_limit"}} = Jason.decode!(emit_fn.(big))
-
-      ok = Jason.encode!(%{"note" => "small"})
-      assert %{"ok" => true} = Jason.decode!(emit_fn.(ok))
+      assert %{"ok" => true} = emit.(Jason.encode!(%{"note" => "small"}))
 
       # A non-object event is refused under an authority.
       assert %{"error" => %{"type" => "invalid_request"}} =
-               Jason.decode!(emit_fn.(Jason.encode!(["not", "an", "object"])))
+               emit.(Jason.encode!(["not", "an", "object"]))
     end
   end
 

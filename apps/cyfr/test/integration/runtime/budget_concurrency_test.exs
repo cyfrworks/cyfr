@@ -4,7 +4,7 @@
 Code.require_file("support/nested_execution_helper.exs", __DIR__)
 Code.require_file("support/formula_host_helper.exs", __DIR__)
 
-defmodule Locus.Runtime.BudgetConcurrencyTest do
+defmodule Cyfr.BudgetConcurrencyTest do
   @moduledoc """
   A root's invoke budget bounds a formula's spawned children however they
   race: under a cap of 2, five concurrent admissions of a child, asked
@@ -16,8 +16,8 @@ defmodule Locus.Runtime.BudgetConcurrencyTest do
   admission under the authority it holds for the formula's attempt.
 
   A guest spawns one child at a time, so the race is the host's: five
-  runners' worth of admissions at once, each made by the test with the
-  client of the formula's attempt (`Locus.Runtime.Test.FormulaHost`), and each
+  runners' worth of admissions at once, each posted by the test as one
+  host call of the formula's attempt (`Cyfr.Test.FormulaHost`), and each
   admitted child closed by the test as the runner it was handed to does,
   its outcome sent with the keys its admission handed over.
   """
@@ -27,7 +27,7 @@ defmodule Locus.Runtime.BudgetConcurrencyTest do
   import Prima.Test.Wait
 
   alias Prima.Authority.Budget
-  alias Locus.Runtime.Test.FormulaHost
+  alias Cyfr.Test.{AttemptFixtures, FormulaHost, HostCaller}
   alias Locus.Runtime.Test.NestedExecution, as: Probe
   alias Sanctum.Consent.{Bootstrap}
 
@@ -85,14 +85,9 @@ defmodule Locus.Runtime.BudgetConcurrencyTest do
     for n <- 1..@spawns do
       spawn_link(fn ->
         admitted =
-          Locus.Runtime.HostClient.admit_child(
-            formula.host,
-            Probe.probe_ref(),
-            nil,
-            %{"op" => "echo", "n" => n},
-            :spawn,
-            nil
-          )
+          FormulaHost.admit_child(formula, Probe.probe_ref(), "spawn", %{
+            "input" => %{"op" => "echo", "n" => n}
+          })
 
         send(test_pid, {:admitted, admitted})
       end)
@@ -104,16 +99,20 @@ defmodule Locus.Runtime.BudgetConcurrencyTest do
         answer
       end
 
-    children = for {:ok, child} <- answers, do: child
-    refused = for {:error, refusal} <- answers, do: refusal
+    children = for {:ok, admitted} <- answers, do: HostCaller.child(formula, admitted)
+    refused = for {:error, refusal, fields} <- answers, do: {refusal, fields}
 
     assert length(children) == @cap
 
     assert refused ==
              List.duplicate(
-               {:guest_error, "resource_limit",
-                "Invocation denied: " <>
-                  Prima.Authority.Transition.deny_message(:invoke_budget_exhausted)},
+               {"guest_error",
+                %{
+                  "type" => "resource_limit",
+                  "message" =>
+                    "Invocation denied: " <>
+                      Prima.Authority.Transition.deny_message(:invoke_budget_exhausted)
+                }},
                @spawns - @cap
              )
 
@@ -127,10 +126,10 @@ defmodule Locus.Runtime.BudgetConcurrencyTest do
 
     # Each admitted child closes as the runner it was handed to closes it.
     for child <- children do
-      assert {:ok, _recorded} =
-               Locus.Runtime.HostClient.complete(child.client, %{"echoed" => true})
+      outcome = AttemptFixtures.outcome(child, "completed", %{"output" => %{"echoed" => true}})
+      assert {:ok, _recorded} = FormulaHost.call(child, :complete, %{"outcome" => outcome})
 
-      id = child.assignment.execution_id
+      id = child.execution_id
 
       assert %{status: "completed", parent_execution_id: ^root_id} =
                Arca.Repo.get!(Arca.Schemas.Execution, id)
