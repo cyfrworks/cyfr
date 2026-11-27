@@ -27,7 +27,7 @@ defmodule Sanctum.TenantScopeSSOTTest do
         namespace: "ns",
         permissions: [:*],
         scope: :athanor,
-        auth_method: :oidc,
+        auth_method: :session,
         authenticated: true
       )
       |> Sanctum.TestContext.person!()
@@ -45,7 +45,7 @@ defmodule Sanctum.TenantScopeSSOTTest do
         athanor_id: nil,
         permissions: [:*],
         scope: :athanor,
-        auth_method: :oidc,
+        auth_method: :session,
         authenticated: true
       )
 

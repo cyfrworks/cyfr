@@ -15,7 +15,7 @@ defmodule Sanctum.Consent.Authz do
 
   | Caller | May consent |
   |---|---|
-  | A Sanctum session (`:oidc`) | yes — Prism web and the CLI land here |
+  | A Sanctum session (`:session`) | yes — Prism web and the CLI land here |
   | A paired device (`:device`), naming its paired client | yes — the person's own interactive client, on its device channel |
   | An API key with a capability pinned to this exact commit digest | yes, and only for that one commit |
   | A tincture token, webhook, cron, system, or unauthenticated caller | no |
@@ -328,7 +328,7 @@ defmodule Sanctum.Consent.Authz do
 
   @doc """
   The staging gate for plan and preview: authenticated, external-plane,
-  and a surface that could ever finish the walk (`:oidc` or a paired
+  and a surface that could ever finish the walk (`:session` or a paired
   `:device` interactively, `:api_key` through a digest-pinned
   capability). Staging grants nothing — the commit is where the consent
   class bites — but candidate listings are operator data, so anonymous
@@ -339,7 +339,7 @@ defmodule Sanctum.Consent.Authz do
     with :ok <- check_plane(ctx),
          :ok <- check_authenticated(ctx),
          {:ok, method} <- surface(ctx) do
-      if method in [:oidc, :device, :api_key],
+      if method in [:session, :device, :api_key],
         do: :ok,
         else: {:error, {:surface_not_permitted, method}}
     end
@@ -348,7 +348,7 @@ defmodule Sanctum.Consent.Authz do
   @doc """
   The interactive arm alone, for mutations that have no commit digest to
   bind — vault CRUD, profile revocation. Same plane and authentication
-  gates; only an `:oidc` session or a paired `:device` passes, and no key
+  gates; only a signed-in session (`:session`) or a paired `:device` passes, and no key
   capability can substitute (a digest-pinned capability is meaningless
   without a digest-shaped act). A paired device's standing is read on
   its channel, on every request, before the gate is asked
@@ -359,7 +359,7 @@ defmodule Sanctum.Consent.Authz do
     with :ok <- check_plane(ctx),
          :ok <- check_authenticated(ctx),
          {:ok, method} <- surface(ctx) do
-      if method in [:oidc, :device],
+      if method in [:session, :device],
         do: {:ok, :interactive},
         else: {:error, {:surface_not_permitted, method}}
     end
@@ -374,7 +374,7 @@ defmodule Sanctum.Consent.Authz do
   from the caps a person consented to, was applied at the dispatch
   chokepoint before this runs, and an action the turn's policy runs
   reaches here on the strength of that consent alone. The surface half
-  stays — only an `:oidc` session's chain gets
+  stays — only a `:session` chain gets
   through, so a key- or schedule-started run of the same formula is
   refused here exactly as it is at the door.
   """
@@ -382,7 +382,7 @@ defmodule Sanctum.Consent.Authz do
   def authorize_interactive_in_chain(%Context{} = ctx) do
     with :ok <- check_authenticated(ctx) do
       case ctx.auth_method do
-        :oidc -> {:ok, :interactive}
+        :session -> {:ok, :interactive}
         method -> {:error, {:surface_not_permitted, method}}
       end
     end
@@ -1085,7 +1085,7 @@ defmodule Sanctum.Consent.Authz do
   # console does — same class of act, same authorization. A paired device
   # is the person's own interactive client, and grants what their session
   # grants.
-  defp by_surface(method, _request, _now) when method in [:oidc, :device],
+  defp by_surface(method, _request, _now) when method in [:session, :device],
     do: {:ok, :interactive}
 
   defp by_surface(:api_key, request, now) do

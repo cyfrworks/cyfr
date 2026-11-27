@@ -43,7 +43,7 @@ defmodule Compendium.Providers.CanvasTest do
       athanor_id: Sanctum.TestContext.athanor_id(),
       permissions: Context.person_permissions(),
       scope: :athanor,
-      auth_method: :oidc,
+      auth_method: :session,
       authenticated: true
     )
     |> Sanctum.TestContext.via(:prism)

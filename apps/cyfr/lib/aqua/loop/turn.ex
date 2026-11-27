@@ -179,7 +179,8 @@ defmodule Aqua.Loop.Turn do
           authority: authority,
           crew: crew(ctx, roster, offered, soul?),
           requests: requests(ctx, thread),
-          where: Aqua.Prompt.where(ctx, thread)
+          where: Aqua.Prompt.where(ctx, thread),
+          turn_id: turn.id
         )
 
       {:ok, %{spec | system: prompt.instructions, facts: prompt.facts}}

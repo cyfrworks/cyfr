@@ -666,6 +666,80 @@ func TestTheHarnessesOwnToolRunsInItsBoxShownByNameOnly(t *testing.T) {
 	}
 }
 
+// The harness's own question is declined with CYFR's one sentence, which
+// its model reads as the tool's error, and a real permission of the same
+// turn is still allowed. The model's question, asked in its reply with its
+// choices, arrives as `said` byte for byte; a fresh driver resumes the
+// session and writes the person's answer after it.
+func TestTheHarnessesOwnQuestionIsDeclinedAndAskedInTheReply(t *testing.T) {
+	s := startDriver(t)
+	session := startFresh(s, map[string]any{})
+	work(s, "stp_work", []any{})
+	postText(s, "stp_post", "question")
+	var said []string
+	for _, e := range s.until("idle") {
+		if e["t"] == "ask" {
+			t.Fatalf("the harness's own question is not CYFR's to ask about: %v", e)
+		}
+		if e["t"] == "said" {
+			said = append(said, e["text"].(string))
+		}
+	}
+	if want := []string{"Which database should the export target?\n\n- PostgreSQL\n- SQLite"}; !reflect.DeepEqual(said, want) {
+		t.Fatalf("the question in the reply arrives as said, byte for byte:\n%q\nnot\n%q", want, said)
+	}
+	raw, err := os.ReadFile(filepath.Join(s.home, "question-answers.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var answers []any
+	if err := json.Unmarshal(raw, &answers); err != nil {
+		t.Fatal(err)
+	}
+	want := []any{
+		permissionAnswer("ask-1", map[string]any{"behavior": "deny", "message": brainwire.QuestionsDeclined}),
+		permissionAnswer("ask-2", map[string]any{"behavior": "allow", "updatedInput": map[string]any{"command": "touch export.sql"}}),
+	}
+	if !reflect.DeepEqual(answers, want) {
+		t.Fatalf("the question is declined with the sentence and the permission allowed, exactly\n%v\nnot\n%v", want, answers)
+	}
+	s.end()
+
+	again := startDriverIn(t, s.home)
+	again.expect("hello")
+	again.send(map[string]any{"t": "start", "gen": 3, "session": session, "config": map[string]any{}})
+	if e := again.expect("started"); e["fresh"] != false || e["session"] != session {
+		t.Fatalf("the next start resumes the session: %v", e)
+	}
+	work(again, "stp_work_2", []any{})
+	postText(again, "stp_answer", "PostgreSQL")
+	again.until("idle")
+	again.end()
+	transcript, err := os.ReadFile(filepath.Join(s.home, ".claude", "projects", "-fake", session+".jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var posts []string
+	for _, line := range strings.Split(strings.TrimSpace(string(transcript)), "\n") {
+		var entry struct {
+			Message struct {
+				Content []struct {
+					Text string `json:"text"`
+				} `json:"content"`
+			} `json:"message"`
+		}
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			t.Fatal(err)
+		}
+		for _, block := range entry.Message.Content {
+			posts = append(posts, block.Text)
+		}
+	}
+	if want := []string{"question", "PostgreSQL"}; !reflect.DeepEqual(posts, want) {
+		t.Fatalf("the answer is written after the question in the same session: %q", posts)
+	}
+}
+
 func TestTheHarnessesErrorIsTypedInTheDriversWords(t *testing.T) {
 	s := startDriver(t)
 	startFresh(s, map[string]any{})

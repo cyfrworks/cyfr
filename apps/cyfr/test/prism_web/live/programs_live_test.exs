@@ -39,7 +39,7 @@ defmodule PrismWeb.ProgramsLiveTest do
         athanor_id: athanor.id,
         permissions: [:*],
         scope: :athanor,
-        auth_method: :oidc,
+        auth_method: :session,
         authenticated: true
       )
 
@@ -353,7 +353,7 @@ defmodule PrismWeb.ProgramsLiveTest do
           athanor_id: athanor.id,
           permissions: [:*],
           scope: :athanor,
-          auth_method: :oidc,
+          auth_method: :session,
           authenticated: true
         )
 
@@ -538,7 +538,7 @@ defmodule PrismWeb.ProgramsLiveTest do
         athanor_id: athanor.id,
         permissions: [:*],
         scope: :athanor,
-        auth_method: :oidc,
+        auth_method: :session,
         authenticated: true
       )
 

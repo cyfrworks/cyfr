@@ -1527,3 +1527,76 @@ func TestAHeldCallIsShownAtAStop(t *testing.T) {
 		t.Fatalf("every call that ran is shown before the driver ends: %v", seen)
 	}
 }
+
+// No program sends CYFR its question: initialize advertises no form, so
+// Antigravity, Cursor and OpenCode each ask in their reply, which arrives
+// as `said` byte for byte, while a real permission of the same turn is
+// still allowed. A fresh driver goes on with the session, and the person's
+// answer is its next prompt (S1).
+func TestAQuestionIsTheProgramsReplyAndItsAnswerTheSessionsNextPrompt(t *testing.T) {
+	plain := map[string]any{"fs": map[string]any{"readTextFile": false, "writeTextFile": false}, "terminal": false}
+	picker := map[string]any{"fs": plain["fs"], "terminal": false, "_meta": map[string]any{"parameterizedModelPicker": true}}
+	for _, c := range []struct {
+		name         string
+		start        func(t *testing.T, home string) *wireSession
+		fresh        func(s *wireSession) string
+		capabilities map[string]any
+		allowed      string
+	}{
+		{"antigravity", func(t *testing.T, home string) *wireSession {
+			if home == "" {
+				return startDriver(t)
+			}
+			return startDriverWith(t, antigravity, home)
+		}, func(s *wireSession) string { return startFresh(s, map[string]any{}) }, plain, "allow"},
+		{"cursor", startCursor, freshCursor, picker, "allow-once"},
+		{"opencode", startOpenCode, func(s *wireSession) string { return freshOpenCode(s, map[string]any{}) }, plain, "allow"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := c.start(t, "")
+			session := c.fresh(s)
+			postText(s, "stp_q", "trn_1", "question")
+			if said := saidOf(s.until("idle")); said != fakeQuestion {
+				t.Fatalf("the question in the reply arrives as said, byte for byte:\n%q\nnot\n%q", fakeQuestion, said)
+			}
+			s.end()
+			raw, err := os.ReadFile(filepath.Join(s.home, "fake-question.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got map[string]any
+			if err := json.Unmarshal(raw, &got); err != nil {
+				t.Fatal(err)
+			}
+			want := map[string]any{"capabilities": c.capabilities, "permission": map[string]any{"jsonrpc": "2.0", "id": "q2",
+				"result": map[string]any{"outcome": map[string]any{"outcome": "selected", "optionId": c.allowed}}}}
+			if !reflect.DeepEqual(got, asJSON(t, want)) {
+				t.Fatalf("initialize advertises no form, and the permission is allowed, exactly\n%v\nnot\n%v", want, got)
+			}
+
+			r := c.start(t, s.home)
+			if e := resumed(r, session, filesTool); e["t"] != "started" || e["session"] != session || e["fresh"] != false {
+				t.Fatalf("a fresh driver goes on with the session: %v", e)
+			}
+			postText(r, "stp_a", "trn_2", "PostgreSQL")
+			if said := saidOf(r.until("idle")); said != "A1: PostgreSQL" {
+				t.Fatalf("the person's answer is the session's next prompt after its question: %q", said)
+			}
+			r.end()
+		})
+	}
+}
+
+// asJSON is v as JSON reads it back.
+func asJSON(t *testing.T, v any) any {
+	t.Helper()
+	raw, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var back any
+	if err := json.Unmarshal(raw, &back); err != nil {
+		t.Fatal(err)
+	}
+	return back
+}

@@ -22,7 +22,7 @@ defmodule Sanctum.Consent.RegistrationBindingTest do
       scope: :athanor,
       permissions: MapSet.new([:*]),
       authenticated: true,
-      auth_method: :oidc
+      auth_method: :session
     }
 
     profile = %{

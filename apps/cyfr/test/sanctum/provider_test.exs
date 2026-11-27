@@ -204,7 +204,7 @@ defmodule Sanctum.ProviderTest do
           provider: "github",
           permissions: [:*],
           scope: :athanor,
-          auth_method: :oidc,
+          auth_method: :session,
           namespace: "testns",
           authenticated: true
         )
@@ -295,7 +295,7 @@ defmodule Sanctum.ProviderTest do
       person = %{
         ctx
         | session_token_hash: Sanctum.Session.token_hash(own.token),
-          auth_method: :oidc
+          auth_method: :session
       }
 
       assert {:ok, %{ended: true}} =
@@ -910,7 +910,7 @@ defmodule Sanctum.ProviderTest do
           namespace: "ext_ns",
           permissions: [:*],
           scope: :athanor,
-          auth_method: :oidc,
+          auth_method: :session,
           authenticated: true
         )
         |> Sanctum.TestContext.issuer!()
@@ -922,7 +922,7 @@ defmodule Sanctum.ProviderTest do
           athanor_id: nil,
           permissions: [:*],
           scope: :athanor,
-          auth_method: :oidc,
+          auth_method: :session,
           authenticated: true
         )
 

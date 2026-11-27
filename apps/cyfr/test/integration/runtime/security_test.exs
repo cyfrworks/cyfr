@@ -34,7 +34,7 @@ defmodule Locus.Runtime.SecurityTest do
         athanor_id: "ath_sec_test_#{rand_id}",
         permissions: [:*],
         scope: :athanor,
-        auth_method: :oidc,
+        auth_method: :session,
         namespace: "testns",
         authenticated: true
       )

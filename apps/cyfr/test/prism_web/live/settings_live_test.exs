@@ -755,7 +755,7 @@ defmodule PrismWeb.SettingsLiveTest do
           athanor_id: own.id,
           permissions: [:*],
           scope: :athanor,
-          auth_method: :oidc,
+          auth_method: :session,
           authenticated: true
         )
 

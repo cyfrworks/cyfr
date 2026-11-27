@@ -594,7 +594,7 @@ defmodule Sanctum.ApiKeyTest do
   # (see Sanctum.ApiKey.context_from_metadata/1 and
   # Emissary.Web.Plugs.MCPRequestMetadata). Key validity is intentionally
   # DECOUPLED from the creator's *current* athanor membership — revocation is
-  # the control. The consequence (an offboarded OIDC user's key keeps athanor
+  # the control. The consequence (an offboarded person's key keeps athanor
   # access until the key is revoked) is the deliberate model, not an oversight.
   # Cross-tenant isolation for keys is proved separately in the cross-tenant
   # proof suite.
@@ -690,7 +690,7 @@ defmodule Sanctum.ApiKeyTest do
       person = %Context{
         permissions: MapSet.new([:*]),
         scope: :athanor,
-        auth_method: :oidc,
+        auth_method: :session,
         authenticated: true,
         request_id: nil
       }

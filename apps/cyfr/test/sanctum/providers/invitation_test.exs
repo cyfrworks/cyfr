@@ -43,7 +43,7 @@ defmodule Sanctum.Providers.InvitationTest do
       provider: "github",
       permissions: [:*],
       scope: :athanor,
-      auth_method: Keyword.get(opts, :auth_method, :oidc),
+      auth_method: Keyword.get(opts, :auth_method, :session),
       authenticated: true,
       platform_admin: Keyword.get(opts, :platform_admin, false)
     )

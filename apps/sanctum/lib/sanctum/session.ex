@@ -317,7 +317,7 @@ defmodule Sanctum.Session do
   ephemeral fields (request_id, etc.) nil. Returns `{:error, :invalid_session}`
   if the token is unknown or expired.
 
-  The context is the console's interactive class (`auth_method: :oidc`),
+  The context is the console's interactive class (`auth_method: :session`),
   the one a person's session carries on every surface.
 
   ## Examples
@@ -697,7 +697,7 @@ defmodule Sanctum.Session do
             # bounces a genuinely athanor-less user.
             athanor_id: row.athanor_id,
             scope: :athanor,
-            auth_method: :oidc,
+            auth_method: :session,
             session_token_hash: token_hash,
             # A protected device's session ends at its row's expiry unless
             # the device's channel slides it: a holder of this context, a

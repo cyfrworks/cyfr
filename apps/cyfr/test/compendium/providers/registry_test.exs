@@ -558,7 +558,7 @@ defmodule Compendium.Providers.RegistryTest do
             athanor_id: athanor.id,
             provider: "passkey",
             permissions: Sanctum.Context.person_permissions(),
-            auth_method: :oidc,
+            auth_method: :session,
             authenticated: true
           )
         )

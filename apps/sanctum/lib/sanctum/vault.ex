@@ -32,7 +32,7 @@ defmodule Sanctum.Vault do
   the server's URL (`destination_matches?/3`), and a stdio backend's
   environment a disclosed entry (`disclosed?/2`).
 
-  Every mutation requires the interactive consent class (`:oidc`
+  Every mutation requires the interactive consent class (`:session`
   surface, external plane) — no permission wildcard and no scoped key
   reaches these verbs. Entering and rotating material are sensitive
   changes (`credential_entry`), decided here by

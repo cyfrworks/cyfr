@@ -104,7 +104,7 @@ defmodule Sanctum.AccountKeysTest do
     do:
       Context.build(
         user_id: person.id,
-        auth_method: :oidc,
+        auth_method: :session,
         authenticated: true,
         session_token_hash: own_hash,
         permissions: Context.person_permissions()
