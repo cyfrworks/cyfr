@@ -42,7 +42,7 @@ defmodule Sanctum.Providers.SharedThreadToolsTest do
       provider: "github",
       permissions: [:*],
       scope: :athanor,
-      auth_method: Keyword.get(opts, :auth_method, :oidc),
+      auth_method: Keyword.get(opts, :auth_method, :session),
       authenticated: true
     )
   end

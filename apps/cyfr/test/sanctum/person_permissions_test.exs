@@ -32,7 +32,7 @@ defmodule Sanctum.PersonPermissionsTest do
       Context.build(
         user_id: "usr_person",
         permissions: person,
-        auth_method: :oidc,
+        auth_method: :session,
         authenticated: true
       )
 

@@ -34,7 +34,7 @@ defmodule CyfrWeb.SSETest do
       user_id: "usr_sse",
       athanor_id: athanor,
       scope: :athanor,
-      auth_method: :oidc,
+      auth_method: :session,
       session_token_hash: :crypto.strong_rand_bytes(32),
       authenticated: true,
       validated_at: DateTime.utc_now()

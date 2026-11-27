@@ -137,7 +137,7 @@ defmodule Compendium.OCI.TransportTest do
       Cyfr.Test.Sandbox.setup!(tags)
 
       user_id = "oci_transport_#{System.unique_integer([:positive])}"
-      ctx = Sanctum.Context.build(user_id: user_id, authenticated: true, auth_method: :oidc)
+      ctx = Sanctum.Context.build(user_id: user_id, authenticated: true, auth_method: :session)
       {:ok, ctx: ctx}
     end
 

@@ -25,7 +25,7 @@ defmodule Sanctum.Test.ConsentFixtures do
   The profile is keyed at name level (binding authorizes against the
   registration's own target), and the consent is a minimal open_inert
   versionless head — enough for `RegistrationBinding.authorize/3` to pass
-  for an interactive (oidc) context.
+  for an interactive (`:session`) context.
 
   An athanor has at most one active owner profile per target and label, so
   a second call for the same target answers the first one's id rather than

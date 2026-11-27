@@ -804,7 +804,7 @@ defmodule PrismWeb.SettingsLive do
   # How this page's session signed in, in words: every console session
   # is an account's sign-in in a browser, a passkey's or a device's
   # approval (`Sanctum.Session`).
-  defp signed_in_with(:oidc), do: "your account, in this browser"
+  defp signed_in_with(:session), do: "your account, in this browser"
   defp signed_in_with(:device), do: "a device of your account"
   defp signed_in_with(:api_key), do: "an API key"
   defp signed_in_with(_other), do: "-"

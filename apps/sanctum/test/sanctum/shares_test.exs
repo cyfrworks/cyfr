@@ -73,7 +73,7 @@ defmodule Sanctum.SharesTest do
       athanor_id: Sanctum.Test.People.athanor!(user).id,
       permissions: Context.person_permissions(),
       scope: :athanor,
-      auth_method: :oidc,
+      auth_method: :session,
       authenticated: true
     )
   end

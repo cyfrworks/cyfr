@@ -144,7 +144,7 @@ defmodule Sanctum.ConsentAfterInstallTest do
         athanor_id: Sanctum.TestContext.athanor_id(),
         permissions: [:*],
         scope: :athanor,
-        auth_method: :oidc,
+        auth_method: :session,
         authenticated: true
       )
       |> Sanctum.TestContext.via(:prism)

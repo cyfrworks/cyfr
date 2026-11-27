@@ -199,7 +199,7 @@ defmodule Arca.TenantIsolationTest do
         Sanctum.TestContext.platform(
           user_id: "platform_admin",
           permissions: [:*],
-          auth_method: :oidc,
+          auth_method: :session,
           namespace: "testns"
         )
 
@@ -703,7 +703,7 @@ defmodule Arca.TenantIsolationTest do
         Sanctum.TestContext.platform(
           user_id: "platform_admin",
           permissions: [:*],
-          auth_method: :oidc,
+          auth_method: :session,
           namespace: "testns"
         )
 
@@ -754,7 +754,7 @@ defmodule Arca.TenantIsolationTest do
         Sanctum.TestContext.platform(
           user_id: "platform_admin",
           permissions: [:*],
-          auth_method: :oidc,
+          auth_method: :session,
           namespace: "testns"
         )
 
@@ -812,7 +812,7 @@ defmodule Arca.TenantIsolationTest do
         Sanctum.TestContext.platform(
           user_id: "platform_admin",
           permissions: [:*],
-          auth_method: :oidc,
+          auth_method: :session,
           namespace: "testns"
         )
 

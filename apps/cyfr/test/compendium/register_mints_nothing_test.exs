@@ -62,7 +62,7 @@ defmodule Compendium.RegisterMintsNothingTest do
       assert :external in register.planes
       refute :in_chain in register.planes
 
-      # `:staging` admits :oidc AND :api_key (`Sanctum.Consent.Authz`), so
+      # `:staging` admits :session AND :api_key (`Sanctum.Consent.Authz`), so
       # scripted registration from `codex` survives; `:interactive` would
       # have taken it away.
       assert register.consent == :staging

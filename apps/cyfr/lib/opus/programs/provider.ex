@@ -19,7 +19,7 @@ defmodule Opus.Programs.Provider do
   ## Who the caller is
 
   Every action is `consent: :interactive`, which in a chain the gate
-  admits only for a person's own sign-in (an `:oidc` chain: a person's
+  admits only for a person's own sign-in (a `:session` chain: a person's
   turn, its continuation, a schedule's turn of that person), never a
   key's. The handler hands the session owner the
   context with the lineage the gate stamped on the call

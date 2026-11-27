@@ -1003,7 +1003,7 @@ defmodule Arca.FilesTest do
         athanor_id: home.id,
         permissions: Sanctum.Context.person_permissions(),
         scope: :athanor,
-        auth_method: :oidc,
+        auth_method: :session,
         authenticated: true
       )
 

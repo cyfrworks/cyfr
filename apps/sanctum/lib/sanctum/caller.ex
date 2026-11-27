@@ -812,7 +812,7 @@ defmodule Sanctum.Caller do
   defp session_binding?(_binding), do: false
 
   defp session_holder(%Context{
-         auth_method: :oidc,
+         auth_method: :session,
          session_token_hash: hash,
          credential_binding: binding
        })
