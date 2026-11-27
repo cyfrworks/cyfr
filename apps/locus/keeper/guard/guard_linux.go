@@ -103,7 +103,7 @@ func saves(ctx context.Context, log *logx.Logger) (string, error) {
 	}{{"iptables-save", "filter", &v4}, {"iptables-save", "raw", &v4}, {"ip6tables-save", "filter", &v6}, {"ip6tables-save", "raw", &v6}} {
 		text, err := tool(ctx, "", false, s.tool, "-t", s.table)
 		if err != nil {
-			log.Error("%s of the %s table failed", s.tool, s.table)
+			log.Error("%s failed, reading the %s table", s.tool, s.table)
 			return "", err
 		}
 		*s.into += strings.TrimRight(text, "\n") + "\n"

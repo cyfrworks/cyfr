@@ -19,6 +19,8 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/cyfr/locus/keeper/internal/logx"
 )
 
 // The saves the stand-in tools print, and the digest of them.
@@ -52,6 +54,28 @@ esac`,
 		}
 	}
 	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+}
+
+// A save that cannot be read is named by its tool first, whichever of its
+// tables failed: the builder suite and an operator read that line.
+func TestAFailedSaveIsNamedByItsTool(t *testing.T) {
+	for _, c := range []struct{ tool, table string }{
+		{"iptables-save", "filter"}, {"iptables-save", "raw"}, {"ip6tables-save", "filter"}, {"ip6tables-save", "raw"}} {
+		standInTools(t)
+		dir := t.TempDir()
+		body := "#!/bin/sh\nif [ \"$2\" = " + c.table + " ]; then exit 23; fi\nexit 0\n"
+		if err := os.WriteFile(filepath.Join(dir, c.tool), []byte(body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+		var out strings.Builder
+		ctx, cancel := bounded()
+		_, err := saves(ctx, logx.NewWriter(&out, "cyfr-guard", false))
+		cancel()
+		if want := "[cyfr-guard] error: " + c.tool + " failed, reading the " + c.table + " table"; err == nil || !strings.Contains(out.String(), want) {
+			t.Fatalf("%s of %s failing answered %v and logged %q, not %q", c.tool, c.table, err, out.String(), want)
+		}
+	}
 }
 
 // aPlace is a guard's folder holding what an earlier guard left (its

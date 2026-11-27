@@ -183,6 +183,22 @@ func TestAnImagesPathThatIsNoRegularFileIsRefused(t *testing.T) {
 	}
 }
 
+// A uid no disk has makes nothing: the making runs as the uid it is given.
+func TestAnImageOfNoDisksUIDIsRefused(t *testing.T) {
+	k := keptOfMine(t, 1)
+	for _, uid := range []int{0, -1, 1 << 31, 1 << 32} {
+		if err := k.EnsureImage("ath_1", uid); err == nil || !strings.Contains(err.Error(), "is not one a disk has") {
+			t.Fatalf("uid %d answered %v", uid, err)
+		}
+		if _, err := os.Lstat(k.ImagePath("ath_1")); !os.IsNotExist(err) {
+			t.Fatalf("uid %d made an image: %v", uid, err)
+		}
+		if left := temporaries(t, k.Root); len(left) != 0 {
+			t.Fatalf("uid %d left %v", uid, left)
+		}
+	}
+}
+
 // LoadDisks takes a record of an image, removes what a dead making left,
 // and still refuses a form it does not know.
 func TestTheRecordsTakeAnImageAndRemoveADeadMakingsTemporary(t *testing.T) {
