@@ -329,8 +329,8 @@ services:
       - /run/locus/builds:uid=10012,gid=10012,mode=0700,size=16m
       - /run/locus/backends:uid=10013,gid=10013,mode=0700,size=16m
     # Kept homes: a program's home that outlives its process, one 0700
-    # folder per login entry under a uid of its own, which the keeper alone
-    # finds, lists and draws. The volume is the homes' whole disk and their
+    # folder per login entry on its person's disk, under the disk's one uid,
+    # which the keeper alone finds, lists and draws. The volume is the homes' whole disk and their
     # only bound beside a row's own home_max_bytes; it is never under data/
     # and no backup carries it. The image makes its root root's and the
     # locus group's, 1773, which a new volume takes; no role mounts it or
