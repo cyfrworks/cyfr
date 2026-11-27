@@ -27,7 +27,7 @@ import {accountAndDevice, accountAt, accountWindow, answerWith, armWindow, bothW
 import {DIRECTORY, HOME, LOOPBACK, NAME, OUT, appWindows, arm, childOfFrame, rail, atBootstrap, atHome, bare, childOfThis, content, contentAt, decided,
   decisions, fault, frontLength, harvest, history, inputs, js, judged, literal, load, lockDetail, opens, pageKilled, passkeys,
   reachedSince, refused, row, run, section, seen, sessionCookie, sessionMark, shownAgain, signOutsSince, signedOutToWays,
-  submit, throughComputerLock, toldUnanswered, UNANSWERED, unansweredLoad, undisturbed, waitFor} from "../lib.js"
+  noticeShown, submit, throughComputerLock, toldUnanswered, UNANSWERED, unansweredLoad, undisturbed, waitFor} from "../lib.js"
 
 const OTHER = "desk-b"
 // The session the first launch left, as its mark alone (sessionMark).
@@ -492,10 +492,8 @@ async function keptPhase() {
       const loaded = new Promise((resolve) => chooser.webContents.once("did-finish-load", resolve))
       chooser.webContents.reload()
       await loaded
-      const kept = await waitFor(() => js(chooser.webContents, `(() => { const inSight = (id) => {
-        const e = document.querySelector(id); return !!e && e.getClientRects().length > 0 }
-        return {words: inSight("#notice") ? document.querySelector("#notice").textContent : "",
-          again: inSight("#again"), onward: inSight("#words")} })()`), "the chooser after its reload")
+      const kept = await waitFor(() => chooser.webContents.isLoading() ? null : noticeShown(chooser.webContents),
+        "the chooser's notice after its reload")
       const same = content() === chooser
       return [same && kept.words === UNANSWERED && kept.again && kept.onward, {...kept, same}]
     })

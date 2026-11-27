@@ -454,6 +454,17 @@ export const lockDetail = (out) => ({before: out.before, after: out.after, held:
 // The sentence for a page of the CYFR that did not load.
 export const UNANSWERED = `The CYFR at ${HOME} did not answer.`
 
+// The chooser in `wc` once it has drawn a notice: its words, and whether
+// Try again and the way on are in sight; null while it has not drawn one
+// (it asks /bootstrap/state before it draws its notice and controls).
+export async function noticeShown(wc) {
+  const at = await js(wc, `(() => { const inSight = (id) => {
+    const e = document.querySelector(id); return !!e && e.getClientRects().length > 0 }
+    return {words: inSight("#notice") ? document.querySelector("#notice").textContent : "",
+      again: inSight("#again"), onward: inSight("#words")} })()`)
+  return at.words && at.onward ? at : null
+}
+
 // A page of the CYFR asked for in `w` while its front takes nothing: what
 // failed, as main said it and as the front saw it, and what the person
 // then has: the chooser, in that same view where the content's storage is
@@ -476,12 +487,8 @@ export async function unansweredLoad(w) {
     const shows = await waitFor(async () => {
       const v = content()
       if (!v || !atBootstrap(v.webContents.getURL()) || v.webContents.isLoading()) return null
-      const at = await js(v.webContents, `(() => { const inSight = (id) => {
-        const e = document.querySelector(id); return !!e && e.getClientRects().length > 0 }
-        return {words: inSight("#notice") ? document.querySelector("#notice").textContent : "",
-          again: inSight("#again"), onward: inSight("#words")} })()`)
       shown = v
-      return at.words && at.onward ? at : null
+      return await noticeShown(v.webContents)
     }, "the chooser after a load that failed", 30_000).catch((e) => ({why: e.message}))
     out = {...shows, visible: !!shown && shown.isVisible(), view: shown === w ? "same" : shown ? "own" : null,
       inStore: !!shown && shown.webContents.session === ses,
