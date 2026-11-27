@@ -1064,11 +1064,12 @@ pub fn ip_family(ip: &str) -> Option<u8> {
 // 63 characters each and 253 in all, with an optional final dot.
 fn valid_host(host: &str) -> bool {
     // A bracketed host is the address the pin's `ip` would be, read by
-    // the same reader.
+    // the same reader; its first `]` is its last character, so a zone,
+    // which is any text, takes no bracket in.
     if let Some(inner) = host.strip_prefix('[') {
         return inner
             .strip_suffix(']')
-            .is_some_and(|inner| ip_family(inner) == Some(6));
+            .is_some_and(|inner| !inner.contains(']') && ip_family(inner) == Some(6));
     }
     let label = |label: &str| {
         let bytes = label.as_bytes();

@@ -1884,6 +1884,18 @@
         }
       },
       {
+        "why": "a bracketed IPv6 host with a second closing bracket, which a zone's text must not take in",
+        "pin": {
+          "expires_at": 1789305280602,
+          "family": 6,
+          "host": "[fe80::1%1]]",
+          "id": "pin_Vx1",
+          "ip": "fe80::1%1",
+          "port": 443,
+          "scheme": "https"
+        }
+      },
+      {
         "why": "a bracketed host that is no IPv6 literal",
         "pin": {
           "expires_at": 1789305280602,
