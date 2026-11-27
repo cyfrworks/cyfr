@@ -137,6 +137,11 @@ type profile struct {
 	failure func(text string) (kind, words string)
 	// access is the choices the driver lists, each with its native mode.
 	access []brainwire.Access[nativeAccess]
+	// toolBudget, where it is set, is the most a start's tools may take,
+	// each as its compact {name, description, parameters} (toolsBytes),
+	// for a program that drops tools from a longer list without a word: a
+	// start past it ends too_many_tools before the program runs.
+	toolBudget int
 }
 
 // nativeAccess is a choice's native setting: the session's mode, as its
@@ -253,7 +258,15 @@ var antigravity = &profile{
 	access: []brainwire.Access[nativeAccess]{
 		{Choice: brainwire.Choice{ID: "full-access", Name: "Full access, no approvals"}, Native: nativeAccess{mode: "default"}},
 	},
+	toolBudget: agyToolBudget,
 }
+
+// agyToolBudget is Antigravity's list budget. Measured on Antigravity
+// 1.5.16, the API-key path: it counts the sum of each of CYFR's tools as
+// its compact {name, description, parameters}, never the person's own
+// servers, and past about 57,200 bytes and 39 more a tool it drops whole
+// tools, largest first, saying nothing.
+const agyToolBudget = 57000
 
 // geminiPath is a way down Antigravity's folder: from GEMINI_HOME when it
 // is set, else from the home through `.gemini`.

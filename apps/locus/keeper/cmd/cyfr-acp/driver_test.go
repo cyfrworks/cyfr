@@ -913,6 +913,50 @@ func TestAStartSetsItsConfigOptionsAndRefusesWhatIsNotOffered(t *testing.T) {
 	}
 }
 
+// toolsOf are n tools whose compact {name, description, parameters}
+// together take exactly total bytes, as Antigravity counts a list, each
+// description within what every harness carries.
+func toolsOf(t *testing.T, n, total int) []any {
+	t.Helper()
+	tools := make([]any, 0, n)
+	for i := range n {
+		name := fmt.Sprintf("tool%d", i)
+		size := total / n
+		if i == n-1 {
+			size = total - (n-1)*(total/n)
+		}
+		bare, err := json.Marshal(brainwire.Tool{Name: name, Parameters: json.RawMessage(`{"type":"object"}`)})
+		if err != nil || size < len(bare) || size-len(bare) > brainwire.MaxDescription {
+			t.Fatalf("no tool %s of %d bytes: %v", name, size, err)
+		}
+		tools = append(tools, map[string]any{"name": name, "description": strings.Repeat("x", size-len(bare)), "parameters": map[string]any{"type": "object"}})
+	}
+	return tools
+}
+
+// Antigravity drops whole tools from a list past its budget and says
+// nothing, so a start whose tools sum past the profile's budget ends the
+// driver with too_many_tools before the program runs, and a list at the
+// budget starts.
+func TestAToolListPastAntigravitysBudgetEndsTheStart(t *testing.T) {
+	s := startDriver(t)
+	s.expect("hello")
+	s.send(startCommand("", map[string]any{}, toolsOf(t, 4, antigravity.toolBudget+1)...))
+	if why := s.why(); why != "too_many_tools" {
+		t.Fatalf("a list past the budget ends too_many_tools: %v", why)
+	}
+	if status := s.exit(); status != 2 || strings.Contains(s.output(), `"started"`) {
+		t.Fatalf("it ends the driver with 2 before anything starts: %d %q", status, s.stderr.String())
+	}
+
+	s = startDriver(t)
+	s.expect("hello")
+	s.send(startCommand("", map[string]any{}, toolsOf(t, 4, antigravity.toolBudget)...))
+	if started := s.expect("started"); started["fresh"] != true {
+		t.Fatalf("a list at the budget starts: %v", started)
+	}
+}
+
 // Models are listed from the running session, or from a listing session
 // of the driver's own, which is forgotten after; each model's efforts are
 // those it has a variant of, in the effort option's order.
@@ -1228,10 +1272,13 @@ func TestAListingNotHandedDoesNotStart(t *testing.T) {
 	t.Setenv("GEMINI_HOME", "")
 	t.Setenv(fakeEnv, "1")
 	t.Setenv("FAKE_NO_LIST", "1")
-	s := startDriverWith(t, antigravity, home, func(d *driver) { d.listWait = 300 * time.Millisecond })
-	s.expect("hello")
 	// A listing past what the socket holds, which a client that never reads
-	// cannot be handed.
+	// cannot be handed, and past Antigravity's budget: the profile is held
+	// to none here, so the start reaches its listing.
+	unbudgeted := *antigravity
+	unbudgeted.toolBudget = 0
+	s := startDriverWith(t, &unbudgeted, home, func(d *driver) { d.listWait = 300 * time.Millisecond })
+	s.expect("hello")
 	big := map[string]any{"name": "big", "description": strings.Repeat("d", 900_000), "parameters": map[string]any{"type": "object"}}
 	s.send(startCommand("", map[string]any{}, big))
 	var conn net.Conn

@@ -239,10 +239,22 @@ func (d *driver) unlistedAccess() string {
 	return "The crew member's access is not one CYFR runs " + d.p.title + " with, so nothing ran."
 }
 
+// toolsBytes is what tools take as a program counts its list: the sum of
+// each one's compact {name, description, parameters}.
+func toolsBytes(tools []brainwire.Tool) int {
+	size := 0
+	for _, t := range tools {
+		b, _ := json.Marshal(t)
+		size += len(b)
+	}
+	return size
+}
+
 // start binds the tool socket, starts the program and in it the session.
 // A configuration the program cannot honour ends the driver: an access the
 // driver does not list, the harness's own tools, which ACP has no switch
-// for, and a model or effort the session does not offer.
+// for, tools past the profile's budget, and a model or effort the session
+// does not offer.
 func (d *driver) start(members map[string]json.RawMessage, str func(string) string) error {
 	if d.h != nil {
 		return brainwire.Fail(2, brainwire.WhyBroken, "a start while the harness runs")
@@ -260,6 +272,9 @@ func (d *driver) start(members map[string]json.RawMessage, str func(string) stri
 	}
 	if config.HarnessTools != nil {
 		return brainwire.Fail(2, brainwire.WhyBroken, "a start names the harness's own tools, which "+d.p.title+" has no switch for")
+	}
+	if size := toolsBytes(tools); d.p.toolBudget > 0 && size > d.p.toolBudget {
+		return brainwire.Fail(2, brainwire.WhyTooManyTools, fmt.Sprintf("CYFR's tools take %d bytes, past the %d %s takes whole, so nothing ran.", size, d.p.toolBudget, d.p.title))
 	}
 	session := str("session")
 	resume := session != ""
