@@ -424,6 +424,22 @@ defmodule Compendium.BuildsTest do
       refute registered?(ctx)
     end
 
+    test "whose component is larger than a runner can fetch is refused as registration refuses it",
+         %{ctx: ctx} do
+      max = Prima.HostAPI.max_artifact_bytes()
+      over = Prima.Test.PaddedComponent.pad(@wasm, max + 1)
+      ScriptedBuilder.script([{:stream, [{:result, component(%{"component.wasm" => over})}]}])
+
+      assert {:error, reason} = compile(ctx)
+
+      assert Sanctum.Refusals.render(reason) ==
+               "The component is #{max + 1} bytes, and a component runs only up to #{max} " <>
+                 "bytes; make it smaller to register it."
+
+      refute Arca.exists?(Sanctum.Context.actor(ctx), @wasm_path)
+      refute registered?(ctx)
+    end
+
     test "a deadline passing while the builder works ends the request as a timeout", %{ctx: ctx} do
       ScriptedBuilder.script([{:stream, [{:progress, :compiling, "…"}, {:hold, self()}]}])
 
