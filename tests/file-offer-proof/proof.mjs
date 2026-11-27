@@ -76,7 +76,7 @@ if (!viewport) {
 
 const { sender: SENDER, recipient: RECIPIENT, outsider: OUTSIDER } = setup.people;
 const FOLDER = "data/reports";
-const STEPS = ["picker", "offered", "notice", "edited", "withdrawn", "accepted", "declined", "outsider", "storage"];
+const STEPS = ["picker", "offered", "notice", "edited", "withdrawn", "accepted", "declined", "outsider", "storage", "thread_scroll"];
 
 // Each file is one line of ASCII of an exact length, so every count is
 // exact and the editor carries it unchanged.
@@ -323,6 +323,93 @@ function counted(step, fact, expected, previous) {
   entry.cap = { sender: fact.usage.sender.cap, recipient: fact.usage.recipient.cap, outsider: fact.usage.outsider.cap };
   timeline.push(entry);
   return entry;
+}
+
+// The latest post can be in the page while still clipped by the message list.
+async function threadPosition(page, post) {
+  await page.waitForFunction((post) => {
+    const last = document.querySelector("#shared-messages > div:last-child > p + p");
+    return last?.textContent === post;
+  }, post);
+  return page.locator("#shared-messages").evaluate((list) => {
+    const box = list.getBoundingClientRect();
+    const post = list.lastElementChild.querySelector("p + p").getBoundingClientRect();
+    return {
+      top: list.scrollTop,
+      end: list.scrollHeight - list.clientHeight,
+      visible: post.top >= box.top && post.bottom <= box.bottom,
+    };
+  });
+}
+
+async function checkThreadScroll(sender, recipient) {
+  const views = [sender, recipient];
+  const openChat = (page) => page.locator("#chat-button").click();
+  const openThread = (page) => page.locator(`#shared-thread-${setup.thread.id} button`).click();
+  const send = async (post) => {
+    await sender.page.locator("#shared-input").fill(post);
+    await sender.page.locator("#shared-composer button[type=submit]").click();
+  };
+
+  for (const { page, person } of views) {
+    await page.goto(`${base}/a/${encodeURIComponent(person.segment)}`);
+    await page.waitForSelector(".phx-connected");
+    await openChat(page);
+    await openThread(page);
+  }
+
+  const history = Array.from({ length: 40 }, (_, i) => `Line ${i + 1} of earlier history`).join("\n");
+  const latest = "The newest post before closing Chat";
+  const files = Array.from({ length: 10 }, (_, i) => ({
+    name: `${"m".repeat(17)}-${i}.txt`,
+    mimeType: "text/plain",
+    buffer: Buffer.from("Thread scroll proof"),
+  }));
+  await sender.page.locator("#shared-composer input[type=file]").setInputFiles(files);
+  await send(history);
+  await threadPosition(sender.page, history);
+  await send(latest);
+  await Promise.all(views.map(({ page }) => threadPosition(page, latest)));
+  for (const { page } of views) {
+    await page.locator("#chat-close").click();
+    await openChat(page);
+  }
+  const reopened = await Promise.all(views.map(({ page }) => threadPosition(page, latest)));
+
+  await sender.page.locator("#shared-messages").evaluate(async (list) => {
+    if (list.scrollTop === 0) return;
+    await new Promise((resolve) => {
+      list.addEventListener("scroll", resolve, { once: true });
+      list.scrollTop = 0;
+    });
+  });
+
+  const next = "Sent while reading earlier history";
+  await send(next);
+  const posted = await Promise.all(views.map(({ page }) => threadPosition(page, next)));
+
+  for (const { page } of views) {
+    await page.reload();
+    await page.waitForSelector(".phx-connected");
+    await openChat(page);
+    await openThread(page);
+  }
+  const reloaded = await Promise.all(views.map(({ page }) => threadPosition(page, next)));
+
+  const fileRow = "#shared-messages ul";
+  const wideHeight = await recipient.page.locator(fileRow).evaluate((row) => row.offsetHeight);
+  await recipient.page.setViewportSize({ width: 320, height: 480 });
+  await recipient.page.waitForFunction(({ fileRow, wideHeight }) =>
+    document.querySelector(fileRow)?.offsetHeight > wideHeight, { fileRow, wideHeight });
+  await recipient.page.evaluate(() => new Promise((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(resolve));
+  }));
+  const narrowed = await threadPosition(recipient.page, next);
+
+  row("thread_scroll", [...reopened, ...posted, ...reloaded, narrowed].every(
+    ({ top, end, visible }) => end > 0 && end - top <= 1 && visible,
+  ), "the newest post is visible after reopening, Send from earlier history, reload, and narrowing the window",
+  { reopened, posted, reloaded, narrowed });
 }
 
 async function main() {
@@ -687,6 +774,8 @@ async function main() {
         forgedFact.usage.recipient.payloads === start.usage.recipient.payloads,
       "each person's whole tree, as the storage cap counts it, moved by each step as the offer's lifecycle states, and no snapshot or custody copy is left",
       timeline.map((t) => `${t.step}: ${["sender", "recipient", "outsider"].map((w) => `${w} ${t.moved[w] >= 0 ? "+" : ""}${t.moved[w]} (expected ${t.expected[w] ?? 0})`).join(", ")}${t.held ? "" : " FAILED"}`));
+
+    await checkThreadScroll(sender, recipient);
   } catch (error) {
     console.error(error);
     for (const view of [sender, recipient, outsider]) {

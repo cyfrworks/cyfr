@@ -499,7 +499,7 @@ defmodule Prima.HostAPITest do
 
           {:error, error, %{}} ->
             refute expect["domain_allowed"] and same_origin, name
-            expected = if expect["domain_allowed"], do: "redirect_credentials", else: "denied"
+            expected = if expect["domain_allowed"], do: "redirect_credentials", else: "domain"
             assert error == expected, name
         end
       end

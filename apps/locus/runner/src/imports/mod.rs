@@ -21,9 +21,11 @@
 //! dropped (`Run::fields`, `crate::wire::Json`).
 
 pub mod emit;
+pub mod http;
 pub mod oauth;
 pub mod question;
 pub mod storage;
+pub mod stream;
 pub mod vault;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -103,6 +105,11 @@ pub struct Guest {
     pub(crate) run: Arc<Run>,
     /// The number of the run's last ask (`cyfr:question/ask`).
     pub(crate) asks: u64,
+    /// The redirects the run received that its guest has not followed.
+    pub(crate) hops: std::collections::VecDeque<http::Hop>,
+    /// The run's open streams (`cyfr:http/streaming`), each a fetch it
+    /// owns: dropped with the store, each drains in the relay.
+    pub(crate) streams: stream::Streams,
 }
 
 impl Guest {
@@ -130,6 +137,8 @@ impl Guest {
             limits,
             run,
             asks: 0,
+            hops: std::collections::VecDeque::new(),
+            streams: stream::Streams::new(),
         }
     }
 
@@ -173,28 +182,4 @@ pub fn args(
         .into_iter()
         .map(|(name, value)| (name.to_owned(), value))
         .collect()
-}
-
-/// A guest's requests over HTTP: this runner does not make them, and
-/// answers each `request_failed`.
-const NO_REQUESTS: &str = "HTTP requests are not available in this runner";
-
-impl catalyst::cyfr::http::fetch::Host for Guest {
-    async fn request(&mut self, _request: String) -> wasmtime::Result<String> {
-        Ok(error_json("request_failed", NO_REQUESTS))
-    }
-}
-
-impl catalyst::cyfr::http::streaming::Host for Guest {
-    async fn request(&mut self, _request: String) -> wasmtime::Result<String> {
-        Ok(error_json("request_failed", NO_REQUESTS))
-    }
-
-    async fn read(&mut self, _handle: String) -> wasmtime::Result<String> {
-        Ok(error_json("request_failed", NO_REQUESTS))
-    }
-
-    async fn close(&mut self, _handle: String) -> wasmtime::Result<String> {
-        Ok(error_json("request_failed", NO_REQUESTS))
-    }
 }

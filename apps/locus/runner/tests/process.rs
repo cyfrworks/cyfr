@@ -884,7 +884,15 @@ fn the_runner_adopts_descriptor_3_as_its_control_channel() {
 #[test]
 fn nothing_of_the_token_or_the_keys_is_left_in_the_runners_memory_after_its_close() {
     let mut service = Service::start_on(support::Control::Descriptor3, &[]);
-    let job = Job::new("catalyst", &format!("{HOSTILE}/vault_probe.wasm"), "{}");
+    // The input carries what a guest might fetch with, past the first 16
+    // bytes of the text it is written to, which an allocator overwrites
+    // once that text is freed.
+    let input = "INPUTNEEDLEsk-live-0123456789abcdef";
+    let job = Job::new(
+        "catalyst",
+        &format!("{HOSTILE}/vault_probe.wasm"),
+        &json!({"a_padding": "0123456789abcdef0123456789abcdef", "note": input}).to_string(),
+    );
     let token = job.token();
     let sent = Message::Assign {
         assignment: zeroize::Zeroizing::new(token.clone()),
@@ -903,21 +911,22 @@ fn nothing_of_the_token_or_the_keys_is_left_in_the_runners_memory_after_its_clos
     assert_eq!(service.frame(SOON)["clean"], true);
     let call_hex = cyfr_runner::wire::hex(&job.call_key);
     let seal_hex = cyfr_runner::wire::hex(&job.seal_key);
-    let needles: [&[u8]; 6] = [
+    let needles: [&[u8]; 7] = [
         support::RUNNER.as_bytes(),
         &token.as_bytes()[..64],
         call_hex.as_bytes(),
         seal_hex.as_bytes(),
         &job.call_key,
         &job.seal_key,
+        input.as_bytes(),
     ];
     let found = support::scan(service.pid(), &needles);
     // The scan finds what is there: the runner's own id.
     assert!(found[0] > 0, "the scan read the runner's memory: {found:?}");
     assert_eq!(
         &found[1..],
-        &[0, 0, 0, 0, 0],
-        "token, keys' hex, keys' bytes"
+        &[0, 0, 0, 0, 0, 0],
+        "token, keys' hex, keys' bytes, input"
     );
 }
 
