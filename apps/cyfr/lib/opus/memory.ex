@@ -240,20 +240,24 @@ defmodule Opus.Memory do
       Enum.find(names, &(&1 == Opus.Programs.local())) || Prima.LocusPool.builds_endpoint()
   end
 
-  # A machine's holders by person, kind and subject, never by size, so a
-  # page that orders them keeps their places on a tie.
+  # A machine's holders by person, kind and subject, then the counter's own
+  # kind, endpoint and day, never by size: no two counters of one boot tie,
+  # so a page that orders them keeps their places whatever the database's
+  # order or their sizes.
   defp holders(counters, names, boot, people) do
-    for c <- Enum.sort_by(counters, &{&1.athanor_id, &1.shown, &1.subject || ""}),
-        c.endpoint in names,
-        c.boot == boot,
-        c.bytes > 0 do
+    counters
+    |> Enum.filter(&(&1.endpoint in names and &1.boot == boot and &1.bytes > 0))
+    |> Enum.sort_by(
+      &{&1.athanor_id, &1.shown, &1.subject || "", &1.kind, &1.endpoint, Date.to_erl(&1.day)}
+    )
+    |> Enum.map(fn c ->
       %{
         person: Map.fetch!(people, c.athanor_id),
         kind: Map.fetch!(@kinds, c.shown),
         name: c.name,
         bytes: c.bytes
       }
-    end
+    end)
   end
 
   # A day's counters of one person, kind and subject, across machines and
