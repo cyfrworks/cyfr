@@ -36,7 +36,12 @@ defmodule PrismWeb.ProgramsLive do
   and that Close does not end the rest. Disable asks first, in the
   browser, whenever anything of the program runs as far as the page
   knows: the read names it as holding memory, or a session of it is
-  listed. Its question covers the whole program and counts nothing. Until
+  listed. Its question covers the whole program and counts nothing, and
+  speaks of terminals only where one of the program is listed or counted.
+  Once a session of the person's has left the running ones, the line
+  under a machine's sizes says a terminal closed since they were counted,
+  until that machine answers again (`PrismWeb.MemoryWords.counted/2`): no
+  read is made for it. Until
   the first read answers it says nothing of them; a read that fails says the memory cannot be
   read, never that nothing of theirs uses it.
 
@@ -61,7 +66,10 @@ defmodule PrismWeb.ProgramsLive do
   a reload or a second tab attaches to the same running screen, and
   leaving ends nothing. An expanded row lists its running sessions, each
   to show again or close, kept current from the person's own
-  `Cyfr.Bus.programs/2` topic. No address starts, closes or changes
+  `Cyfr.Bus.programs/2` topic. Show's address ends in `#terminal`, the
+  element the frame stands in, so the browser moves to it, and the frame's
+  heading carries the second the session started in its line's own words
+  (`PrismWeb.TerminalComponent.opened_words/1`). No address starts, closes or changes
   anything: `?terminal=` only attaches to one of the person's own running
   sessions, and `&from=aqua` adds the way back to the Aqua page, which
   sent the person here to install it.
@@ -80,6 +88,12 @@ defmodule PrismWeb.ProgramsLive do
   machine, and `starts when used` otherwise, so the list and the panel say
   one thing from one read. Before the read answers, when it fails, and
   for what a service that has not answered runs, it is `starts when used`.
+  A program a person drives has no other status: it says `running` by the
+  same rule and a dash otherwise. An expanded row's own line says the
+  list's word, never what its details said when they were read, with the
+  program's crashes as of that read. Below the medium width the list
+  shows each row's name, kind and status; what it runs, its folder and its
+  tools show from that width up.
 
   `?add=<name>` opens the program form, driven, for a program brain of
   that name: its command as the brain's definition holds it

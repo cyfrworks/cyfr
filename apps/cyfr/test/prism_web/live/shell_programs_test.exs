@@ -236,7 +236,14 @@ defmodule PrismWeb.ShellProgramsTest do
     {:ok, running} = Opus.Programs.running(person(user, athanor))
 
     for %{session: session, started_at: at} <- running do
-      assert name.(session) == "claude " <> Calendar.strftime(at, "%H:%M:%S")
+      named = "claude " <> Calendar.strftime(at, "%H:%M:%S")
+      assert name.(session) == named
+
+      # Its Close says which it closes.
+      assert has_element?(
+               desktop,
+               chip(session) <> ~s( button.canvas-shelf-program-close[title="Close #{named}"])
+             )
     end
 
     assert Enum.sort(Enum.map(running, & &1.session)) == Enum.sort([first, second])

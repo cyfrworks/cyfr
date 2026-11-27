@@ -439,8 +439,8 @@ defmodule PrismWeb.CanvasLive do
                 type="button"
                 phx-click="close_program"
                 phx-value-session={program.session}
-                aria-label={"Close " <> program.name}
-                title={"Close " <> program.name}
+                aria-label={"Close " <> program_name(program, @programs)}
+                title={"Close " <> program_name(program, @programs)}
                 class="canvas-shelf-program-close"
               >
                 &times;

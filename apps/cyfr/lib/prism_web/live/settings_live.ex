@@ -1402,7 +1402,7 @@ defmodule PrismWeb.SettingsLive do
                     <td class="inline-block sm:table-cell sm:px-4 sm:py-3 sm:whitespace-nowrap">
                       {person_name(d.person)}
                     </td>
-                    <td class="block break-words sm:table-cell sm:px-4 sm:py-3">
+                    <td class="block break-words sm:table-cell sm:min-w-[11rem] sm:px-4 sm:py-3">
                       <span :if={d.name} class="block">{d.name}</span>
                       <span class={["block", d.name && "text-xs text-gray-500"]}>
                         {MemoryWords.kind(d.kind)}
