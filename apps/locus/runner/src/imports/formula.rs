@@ -255,22 +255,40 @@ async fn admit(run: &Run, request: ChildRequest, guest_fn: &str) -> Result<Admit
     ended("admit_child", &outcome).map_err(Unadmitted::Ended)?;
     let mut answer = match outcome {
         Outcome::Answered(Reading::Ok(answer)) => answer,
-        other => return Err(Unadmitted::Refused(host_refusal(host, "admit_child", other))),
+        other => {
+            return Err(Unadmitted::Refused(host_refusal(
+                host,
+                "admit_child",
+                other,
+            )));
+        }
     };
     let lost = || Unadmitted::Refused(error("dispatch_error", words::CALL_FAILED));
-    let token = match answer.take_member("assignment").map(|mut json| json.take_value()) {
+    let token = match answer
+        .take_member("assignment")
+        .map(|mut json| json.take_value())
+    {
         Some(Value::String(token)) => Zeroizing::new(token),
         _ => return Err(lost()),
     };
-    let sealed = match answer.take_member("attempt_keys").map(|mut json| json.take_value()) {
+    let sealed = match answer
+        .take_member("attempt_keys")
+        .map(|mut json| json.take_value())
+    {
         Some(Value::String(sealed)) => Zeroizing::new(sealed),
         _ => return Err(lost()),
     };
-    let input = match answer.take_member("input").map(|mut json| json.take_value()) {
+    let input = match answer
+        .take_member("input")
+        .map(|mut json| json.take_value())
+    {
         Some(Value::String(input)) => Zeroizing::new(input),
         _ => return Err(lost()),
     };
-    let secrets = match answer.take_member("secrets").map(|mut json| json.take_value()) {
+    let secrets = match answer
+        .take_member("secrets")
+        .map(|mut json| json.take_value())
+    {
         Some(Value::Object(secrets)) => Json::from_value(Value::Object(secrets)),
         _ => return Err(lost()),
     };
@@ -291,7 +309,10 @@ async fn admit(run: &Run, request: ChildRequest, guest_fn: &str) -> Result<Admit
         let released = host
             .call(
                 "release_child",
-                args([("execution_id", Value::String(assignment.execution_id.clone()))]),
+                args([(
+                    "execution_id",
+                    Value::String(assignment.execution_id.clone()),
+                )]),
             )
             .await;
         ended("release_child", &released).map_err(Unadmitted::Ended)?;
@@ -347,7 +368,9 @@ async fn checked(
     if crate::engine::digest(input.as_bytes()) != assignment.input_digest {
         return None;
     }
-    let input = read(input.as_bytes()).ok().filter(|input| input.value().is_object())?;
+    let input = read(input.as_bytes())
+        .ok()
+        .filter(|input| input.value().is_object())?;
     run.runner
         .relay
         .admit(&assignment.attempt)
@@ -456,11 +479,22 @@ impl Tasks {
         (self.tasks.len() as u64) < most
     }
 
-    fn add(&mut self, result: tokio::sync::oneshot::Receiver<Value>, abort: tokio::task::AbortHandle, child: Option<Stop>) -> String {
+    fn add(
+        &mut self,
+        result: tokio::sync::oneshot::Receiver<Value>,
+        abort: tokio::task::AbortHandle,
+        child: Option<Stop>,
+    ) -> String {
         let id = format!("task_{}", self.next);
         self.next += 1;
-        self.tasks
-            .insert(id.clone(), Task::Running { result, abort, child });
+        self.tasks.insert(
+            id.clone(),
+            Task::Running {
+                result,
+                abort,
+                child,
+            },
+        );
         id
     }
 
@@ -474,7 +508,11 @@ impl Tasks {
     // Wait for the task `id` until `deadline`: its result, stopping it if
     // the deadline passes; none for a task it does not hold. The task is
     // forgotten either way.
-    async fn take(&mut self, id: &str, deadline: tokio::time::Instant) -> Option<Result<Value, Failed>> {
+    async fn take(
+        &mut self,
+        id: &str,
+        deadline: tokio::time::Instant,
+    ) -> Option<Result<Value, Failed>> {
         let task = self.tasks.get_mut(id)?;
         let result = match task {
             Task::Done(result) => std::mem::replace(result, Err(Failed::Killed)),
@@ -547,7 +585,9 @@ fn listed(task_id: &Value, result: Result<Value, Failed>) -> Value {
 fn system_time() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |since| u64::try_from(since.as_micros()).unwrap_or(u64::MAX))
+        .map_or(0, |since| {
+            u64::try_from(since.as_micros()).unwrap_or(u64::MAX)
+        })
 }
 
 // The event of one tool or child call of the formula's.
@@ -584,8 +624,16 @@ fn answered(answer: Option<Answer>) -> Value {
 
 // A catalog tool call: its result, or the guest's refusal; and whether it
 // succeeded.
-async fn tool_call(host: &Host, request: Request, guest_fn: &str) -> wasmtime::Result<(Value, bool)> {
-    let Request { tool, action, mut args } = request;
+async fn tool_call(
+    host: &Host,
+    request: Request,
+    guest_fn: &str,
+) -> wasmtime::Result<(Value, bool)> {
+    let Request {
+        tool,
+        action,
+        mut args,
+    } = request;
     args.insert("action".to_owned(), Value::String(action));
     let outcome = host
         .call(
@@ -611,10 +659,18 @@ impl Guest {
     }
 
     fn intercepted(&self, name: &str) -> bool {
-        self.run.intercepted.iter().any(|intercepted| intercepted == name)
+        self.run
+            .intercepted
+            .iter()
+            .any(|intercepted| intercepted == name)
     }
 
-    async fn call_child(&mut self, name: &str, arm: Arm, args: Map<String, Value>) -> wasmtime::Result<Value> {
+    async fn call_child(
+        &mut self,
+        name: &str,
+        arm: Arm,
+        args: Map<String, Value>,
+    ) -> wasmtime::Result<Value> {
         let run = self.run.clone();
         let request = match child_request(name, args) {
             Ok(request) => request,
@@ -635,8 +691,9 @@ impl Guest {
                 // answer: its formula stopped, or its store dropped.
                 let guard = StopOnDrop::new(stop.clone());
                 let tree = run.runner.tree.clone();
-                if let Err((why, start)) =
-                    tree.start_child(admitted.start, run.runner.clone(), stop, Some(waiter)).await
+                if let Err((why, start)) = tree
+                    .start_child(admitted.start, run.runner.clone(), stop, Some(waiter))
+                    .await
                 {
                     guard.disarm();
                     let message = unstarted(&run, &start, why).await;
@@ -648,8 +705,9 @@ impl Guest {
             }
             Arm::Stream => {
                 let tree = run.runner.tree.clone();
-                if let Err((why, start)) =
-                    tree.start_child(admitted.start, run.runner.clone(), stop, None).await
+                if let Err((why, start)) = tree
+                    .start_child(admitted.start, run.runner.clone(), stop, None)
+                    .await
                 {
                     let message = unstarted(&run, &start, why).await;
                     return Ok(error("dispatch_error", &message));
@@ -660,7 +718,11 @@ impl Guest {
         }
     }
 
-    async fn spawn_child(&mut self, name: &str, args: Map<String, Value>) -> wasmtime::Result<Value> {
+    async fn spawn_child(
+        &mut self,
+        name: &str,
+        args: Map<String, Value>,
+    ) -> wasmtime::Result<Value> {
         let run = self.run.clone();
         let request = match child_request(name, args) {
             Ok(request) => request,
@@ -679,7 +741,12 @@ impl Guest {
         let (waiter, answer) = tokio::sync::oneshot::channel();
         let tree = run.runner.tree.clone();
         let started = tree
-            .start_child(admitted.start, run.runner.clone(), stop.clone(), Some(waiter))
+            .start_child(
+                admitted.start,
+                run.runner.clone(),
+                stop.clone(),
+                Some(waiter),
+            )
             .await;
         let task_id = match started {
             Err((why, start)) => {
@@ -692,7 +759,13 @@ impl Guest {
                 let started = Instant::now();
                 let task = tokio::spawn(async move {
                     let answer = answered(answer.await.ok());
-                    called(&host, "execution.run", answer.get("error").is_none(), started).await;
+                    called(
+                        &host,
+                        "execution.run",
+                        answer.get("error").is_none(),
+                        started,
+                    )
+                    .await;
                     let _ = result.send(answer);
                 });
                 self.tasks.add(received, task.abort_handle(), Some(stop))
@@ -825,18 +898,27 @@ impl invoke::Host for Guest {
         let deadline = tokio::time::Instant::now() + self.batch_timeout();
         self.tasks.refresh();
         let Some(result) = self.tasks.take(&task_id, deadline).await else {
-            return Ok(text(error("invalid_request", &words::unknown_task(&task_id))));
+            return Ok(text(error(
+                "invalid_request",
+                &words::unknown_task(&task_id),
+            )));
         };
         let duration_ms = elapsed_ms(started);
         let id = Value::String(task_id.clone());
         let (status, answer) = match result {
             Ok(result) => ("completed", awaited(&id, result)),
-            Err(Failed::Timeout) => ("timeout", json!({"status": "error", "error":
+            Err(Failed::Timeout) => (
+                "timeout",
+                json!({"status": "error", "error":
                 {"type": "timeout", "message": words::TASK_TIMED_OUT},
-                "task_id": task_id, "duration_ms": duration_ms})),
-            Err(failed) => ("error", json!({"status": "error", "error":
+                "task_id": task_id, "duration_ms": duration_ms}),
+            ),
+            Err(failed) => (
+                "error",
+                json!({"status": "error", "error":
                 {"type": "task_failed", "message": failed.sentence()},
-                "task_id": task_id, "duration_ms": duration_ms})),
+                "task_id": task_id, "duration_ms": duration_ms}),
+            ),
         };
         host.event(Event {
             name: "formula.await",
@@ -905,9 +987,9 @@ impl invoke::Host for Guest {
         self.tasks.refresh();
         // The first finished, in the guest's order; else the first of the
         // running to finish before the deadline. The others stay.
-        let finished = ids.iter().find(|id| {
-            matches!(self.tasks.tasks.get(id_text(id)), Some(Task::Done(_)))
-        });
+        let finished = ids
+            .iter()
+            .find(|id| matches!(self.tasks.tasks.get(id_text(id)), Some(Task::Done(_))));
         let winner = match finished {
             Some(id) => Some(id.clone()),
             None => {
@@ -981,8 +1063,10 @@ impl invoke::Host for Guest {
             ],
         })
         .await;
-        Ok(text(json!({"result": listed(&winner, result), "task_id": winner,
-            "pending": pending})))
+        Ok(text(
+            json!({"result": listed(&winner, result), "task_id": winner,
+            "pending": pending}),
+        ))
     }
 
     async fn poll(&mut self, task_id: String) -> wasmtime::Result<String> {

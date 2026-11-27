@@ -359,7 +359,9 @@ async fn attempt(
         kind,
         imports,
         // The guest's input may carry what it fetches with: held cleared.
-        Zeroizing::new(serde_json::to_string(start.input.value()).expect("a JSON value is written")),
+        Zeroizing::new(
+            serde_json::to_string(start.input.value()).expect("a JSON value is written"),
+        ),
     ));
     let mut work = Work(work);
     let mut poster = runner.relay.poster(host.attempt());
@@ -430,7 +432,10 @@ async fn attached(start: &Start, host: &Host) -> Result<Fields, (Ended, Answer)>
             },
             Answer::Failed(words::ENDED.to_owned()),
         )),
-        _ => Err(left_open(assignment, "its attach was refused or not answered")),
+        _ => Err(left_open(
+            assignment,
+            "its attach was refused or not answered",
+        )),
     }
 }
 

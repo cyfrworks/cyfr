@@ -352,11 +352,7 @@ pub fn open_attempt_keys(seal_key: &[u8; 32], sealed: &str) -> Result<AttemptKey
     let attempt = read_attempt(named).ok_or(Unsealable)?;
     // The attempt's six values, as the envelope writes each: an id of 1 to
     // 256 printable bytes, an integer to 2^53 − 1.
-    let ids = [
-        &attempt.athanor_id,
-        &attempt.execution_id,
-        &attempt.attempt,
-    ];
+    let ids = [&attempt.athanor_id, &attempt.execution_id, &attempt.attempt];
     if !ids.iter().all(|id| is_id(id))
         || !is_id(&attempt.service)
         || attempt.fence > MAX_INTEGER
@@ -373,7 +369,8 @@ pub fn open_attempt_keys(seal_key: &[u8; 32], sealed: &str) -> Result<AttemptKey
         attempt.generation.to_string(),
         attempt.service.clone(),
     ];
-    let plain = open_sealed(seal_key, &lines.join("\n"), sealed_keys.as_bytes()).ok_or(Unsealable)?;
+    let plain =
+        open_sealed(seal_key, &lines.join("\n"), sealed_keys.as_bytes()).ok_or(Unsealable)?;
     if plain.len() != 64 {
         return Err(Unsealable);
     }
@@ -396,7 +393,14 @@ fn read_attempt(named: &str) -> Option<Attempt> {
     let serde_json::Value::Object(members) = read.value() else {
         return None;
     };
-    let names = ["athanor_id", "execution_id", "attempt", "fence", "generation", "service"];
+    let names = [
+        "athanor_id",
+        "execution_id",
+        "attempt",
+        "fence",
+        "generation",
+        "service",
+    ];
     if members.len() != names.len() || !names.iter().all(|name| members.contains_key(*name)) {
         return None;
     }
