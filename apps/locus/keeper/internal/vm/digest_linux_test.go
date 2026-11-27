@@ -61,11 +61,18 @@ func TestTheDigestIsTheTreesAndNothingElse(t *testing.T) {
 	if again := digestOf(t, root); again != before {
 		t.Fatalf("the same tree with its digest file is %s, not %s", again, before)
 	}
-	for what, change := range map[string]func() error{
-		"contents": func() error { return os.WriteFile(filepath.Join(root, "file"), []byte("other"), 0o644) },
-		"mode":     func() error { return os.Chmod(filepath.Join(root, "file"), 0o600) },
-		"name":     func() error { return os.Rename(filepath.Join(root, "file"), filepath.Join(root, "renamed")) },
+	// In this order: a rename first would leave the contents' write to make
+	// the file anew under the process's umask, 0600 under 077, and the
+	// mode's change then changes nothing.
+	for _, step := range []struct {
+		what   string
+		change func() error
+	}{
+		{"contents", func() error { return os.WriteFile(filepath.Join(root, "file"), []byte("other"), 0o644) }},
+		{"mode", func() error { return os.Chmod(filepath.Join(root, "file"), 0o600) }},
+		{"name", func() error { return os.Rename(filepath.Join(root, "file"), filepath.Join(root, "renamed")) }},
 	} {
+		what, change := step.what, step.change
 		prev := digestOf(t, root)
 		if err := change(); err != nil {
 			t.Fatal(err)
