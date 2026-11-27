@@ -33,7 +33,9 @@ hmac = { version = "=0.13.0", default-features = false, features = ["zeroize"] }
 serde = { version = "=1.0.229", default-features = false, features = ["std"] }
 serde_json = { version = "=1.0.154", default-features = false, features = ["arbitrary_precision", "std", "unbounded_depth"] }
 sha2 = { version = "=0.11.2", default-features = false }
-tokio = { version = "=1.54.1", default-features = false, features = ["time"] }
+tokio = { version = "=1.54.1", default-features = false, features = ["io-util", "macros", "net", "rt", "sync", "time"] }
+wasmtime = { version = "=51.0.0", default-features = false, features = ["async", "component-model", "cranelift", "reexport-wasmparser", "runtime", "std"] }
+wasmtime-wasi = { version = "=51.0.0", default-features = false, features = ["p2"] }
 zeroize = { version = "=1.9.2", default-features = false, features = ["alloc"] }
 
 [dev-dependencies]

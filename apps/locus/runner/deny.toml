@@ -15,12 +15,29 @@ yanked = "deny"
 
 [licenses]
 version = 2
-allow = ["Apache-2.0", "MIT", "Unicode-3.0"]
+# Wasmtime and Cranelift are Apache-2.0 with the LLVM exception; encoding_rs
+# carries BSD-3-Clause beside its own, and foldhash (Cranelift's hasher) is
+# Zlib.
+allow = ["Apache-2.0", "Apache-2.0 WITH LLVM-exception", "BSD-3-Clause", "MIT", "Unicode-3.0", "Zlib"]
 confidence-threshold = 0.9
 
 [bans]
 multiple-versions = "deny"
 wildcards = "deny"
+# Each pair comes of Wasmtime's tree: Cranelift pins sha2 0.10 and its
+# RustCrypto family beside the crate's 0.11, and gimli takes hashbrown 0.16
+# beside the 0.17 of the rest; async-trait, a proc macro Wasmtime builds
+# with, takes syn 3, and the other proc macros (Wasmtime's, tracing's,
+# Tokio's) syn 2.
+skip = [
+    { crate = "block-buffer@0.10.4", reason = "Cranelift's sha2 0.10" },
+    { crate = "cpufeatures@0.2.17", reason = "Cranelift's sha2 0.10" },
+    { crate = "crypto-common@0.1.7", reason = "Cranelift's sha2 0.10" },
+    { crate = "digest@0.10.7", reason = "Cranelift's sha2 0.10" },
+    { crate = "sha2@0.10.9", reason = "Cranelift pins it" },
+    { crate = "hashbrown@0.16.1", reason = "gimli's, under Cranelift" },
+    { crate = "syn@2.0.119", reason = "the proc macros beside async-trait's syn 3" },
+]
 
 [sources]
 unknown-registry = "deny"

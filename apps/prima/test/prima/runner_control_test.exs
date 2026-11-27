@@ -15,6 +15,13 @@ defmodule Prima.RunnerControlTest do
   most open attempts round-trip, and the line bound leaves room for the
   largest input in base64. The encoder refuses, by raising, what the
   decoder would refuse.
+
+  The `events` section is the runner's `event` frame: its roster is
+  `RunnerControl.event_roster/0`, name by name and member by member in
+  wire order; every valid event encodes to exactly its line and decodes
+  back; every invalid line is refused with its refusal; and every cut
+  event encodes with each long metadata string cut to its bound on a
+  character boundary, which the line decodes back to.
   """
 
   use ExUnit.Case, async: true
@@ -24,6 +31,13 @@ defmodule Prima.RunnerControlTest do
   @vectors Path.expand("../../../../tests/fixtures/runner_control.json", __DIR__)
            |> File.read!()
            |> Jason.decode!()
+
+  # The roster again with every object's members in the file's order,
+  # since the roster's order is the wire's.
+  @ordered_events Path.expand("../../../../tests/fixtures/runner_control.json", __DIR__)
+                  |> File.read!()
+                  |> Jason.decode!(objects: :ordered_objects)
+                  |> then(& &1["events"])
 
   @worker_auth Path.expand("../../../../tests/fixtures/worker_auth.json", __DIR__)
                |> File.read!()
@@ -71,6 +85,30 @@ defmodule Prima.RunnerControlTest do
     do: Map.new(map, fn {name, value} -> {String.to_existing_atom(name), atom_keys(value)} end)
 
   defp atom_keys(value), do: value
+
+  # An event vector's message: atom keys for its type and members, its
+  # values as the line carries them. The codec is loaded first, so the
+  # roster's member names exist as atoms.
+  defp event_message(%{"type" => "event"} = fields) do
+    Code.ensure_loaded!(RunnerControl)
+    atom_keys(fields) |> Map.put(:type, :event)
+  end
+
+  # A roster member's type as the fixture spells it.
+  defp member_type(%{"type" => "integer"}), do: :integer
+  defp member_type(%{"type" => "string"}), do: :string
+  defp member_type(%{"type" => "string_or_null"}), do: :string_or_null
+
+  defp member_type(%{"one_of" => words, "or" => "http_status"}),
+    do: {:one_of, words, :http_status}
+
+  defp member_type(%{"one_of" => words} = type) when map_size(type) == 1, do: {:one_of, words}
+
+  defp roster_members(%Jason.OrderedObject{values: members}) do
+    Enum.map(members, fn {name, %Jason.OrderedObject{values: type}} ->
+      {String.to_existing_atom(name), member_type(Map.new(type))}
+    end)
+  end
 
   defp reason(%{"reason" => reason, "field" => field}),
     do: {String.to_existing_atom(reason), field}
@@ -135,9 +173,14 @@ defmodule Prima.RunnerControlTest do
     end
 
     test "every message type has a valid vector and every reason an invalid one" do
-      valid_types = Enum.map(@vectors["valid"], &String.to_existing_atom(&1["message"]["type"]))
+      valid_types =
+        Enum.map(
+          @vectors["valid"] ++ @vectors["events"]["valid"],
+          &String.to_existing_atom(&1["message"]["type"])
+        )
+
       assert Enum.sort(Enum.uniq(valid_types)) == Enum.sort(RunnerControl.types())
-      assert RunnerControl.types() == [:assign, :cancel_child, :child, :complete, :exit]
+      assert RunnerControl.types() == [:assign, :cancel_child, :child, :complete, :exit, :event]
 
       reasons = @vectors["invalid"] |> Enum.map(& &1["reason"]) |> Enum.uniq() |> Enum.sort()
 
@@ -171,12 +214,146 @@ defmodule Prima.RunnerControlTest do
       assert byte_size(assign.keys.call) == 32 and byte_size(assign.keys.seal) == 32
     end
 
-    test "the service sends assign and cancel_child, the runner complete and exit" do
+    test "the service sends assign and cancel_child, the runner complete, exit and event" do
       assert RunnerControl.sender(:assign) == :service
       assert RunnerControl.sender(:cancel_child) == :service
       assert RunnerControl.sender(:complete) == :runner
       assert RunnerControl.sender(:exit) == :runner
+      assert RunnerControl.sender(:event) == :runner
       assert_raise FunctionClauseError, fn -> RunnerControl.sender(:start) end
+    end
+  end
+
+  describe "the events section" do
+    test "the bounds are the fixture's, and the line bound is the channel's smaller one" do
+      events = @vectors["events"]
+      assert RunnerControl.max_event_line_bytes() == events["max_line_bytes"]
+      assert RunnerControl.max_event_string_bytes() == events["max_string_bytes"]
+      assert RunnerControl.max_event_line_bytes() < RunnerControl.max_line_bytes()
+    end
+
+    test "the roster is the codec's, event by event and member by member in wire order" do
+      roster =
+        Enum.map(@ordered_events["roster"], fn entry ->
+          %{
+            name: entry["name"],
+            measurements: roster_members(entry["measurements"]),
+            metadata: roster_members(entry["metadata"])
+          }
+        end)
+
+      assert roster == RunnerControl.event_roster()
+      assert length(roster) == 9
+    end
+
+    test "every valid event encodes to exactly its line and decodes to its message" do
+      cases = @vectors["events"]["valid"]
+      names = Enum.map(cases, & &1["message"]["name"]) |> Enum.uniq() |> Enum.sort()
+      assert names == RunnerControl.event_roster() |> Enum.map(& &1.name) |> Enum.sort()
+
+      for vector <- cases do
+        line = vector["line"]
+        message = event_message(vector["message"])
+
+        assert String.ends_with?(line, "\n"), vector["why"]
+        assert byte_size(line) - 1 <= RunnerControl.max_event_line_bytes(), vector["why"]
+        assert encoded(message) == line, vector["why"]
+        assert RunnerControl.decode(line) == {:ok, message}, vector["why"]
+        assert RunnerControl.decode(String.trim_trailing(line, "\n")) == {:ok, message}
+      end
+    end
+
+    test "system_time is microseconds since the epoch, which the integer domain holds" do
+      times =
+        for %{"message" => %{"measurements" => %{"system_time" => time}}} <-
+              @vectors["events"]["valid"],
+            do: time
+
+      assert times != []
+      max = 9_007_199_254_740_991
+
+      # The vectors' values are a current clock's in microseconds: after
+      # 2026-01-01, and within the domain, which nanoseconds now pass.
+      assert Enum.all?(times, &(&1 > 1_767_225_600_000_000 and &1 <= max))
+      assert System.os_time(:microsecond) <= max
+      assert System.os_time(:nanosecond) > max
+    end
+
+    test "every invalid event line is refused with its refusal" do
+      cases = @vectors["events"]["invalid"]
+
+      for vector <- cases do
+        line = vector["line"]
+        refusal = reason(vector["refusal"])
+        assert RunnerControl.decode(line) == {:error, refusal}, vector["why"]
+        assert RunnerControl.decode(line <> "\n") == {:error, refusal}, vector["why"]
+      end
+
+      refusals = Enum.map(cases, &reason(&1["refusal"]))
+
+      for expected <- [
+            {:invalid_field, "name"},
+            {:unknown_field, "measurements.bytes"},
+            {:unknown_field, "metadata.authority"},
+            {:missing_field, "measurements.system_time"},
+            {:missing_field, "metadata.status"},
+            {:wrong_type, "measurements.duration_ms"},
+            {:wrong_type, "metadata.component_ref"},
+            {:invalid_field, "measurements.duration_ms"},
+            {:invalid_field, "measurements.system_time"},
+            {:invalid_field, "metadata.status"},
+            {:oversize, "metadata.action"},
+            :oversize_line
+          ] do
+        assert expected in refusals, inspect(expected)
+      end
+
+      over = Enum.find(cases, &(&1["refusal"]["reason"] == "oversize_line"))
+      assert byte_size(over["line"]) == RunnerControl.max_event_line_bytes() + 1
+    end
+
+    test "every cut event encodes with its long strings cut on a character boundary" do
+      cases = @vectors["events"]["cut"]
+      assert cases != []
+      bound = RunnerControl.max_event_string_bytes()
+
+      for vector <- cases do
+        message = event_message(vector["message"])
+        assert encoded(message) == vector["line"], vector["why"]
+        assert {:ok, read} = RunnerControl.decode(vector["line"]), vector["why"]
+        assert read.measurements == message.measurements
+
+        for {member, value} <- message.metadata do
+          held = Map.fetch!(read.metadata, member)
+
+          if is_binary(value) and byte_size(value) > bound do
+            # The longest prefix within the bound that ends on a boundary.
+            rest = binary_part(value, byte_size(held), byte_size(value) - byte_size(held))
+            assert String.starts_with?(value, held), vector["why"]
+            assert byte_size(held) <= bound and byte_size(held) > bound - 4, vector["why"]
+            assert String.valid?(held) and String.valid?(rest), vector["why"]
+          else
+            assert held == value, vector["why"]
+          end
+        end
+      end
+
+      lengths =
+        for vector <- cases,
+            {_member, value} <- vector["message"]["metadata"],
+            is_binary(value) and byte_size(value) > bound,
+            do: byte_size(value)
+
+      assert 257 in lengths
+
+      inside =
+        for vector <- cases,
+            {_member, value} <- vector["message"]["metadata"],
+            is_binary(value) and byte_size(value) > bound,
+            not String.valid?(binary_part(value, 0, bound)),
+            do: value
+
+      assert inside != [], "a string whose cut falls inside a character"
     end
   end
 
@@ -304,6 +481,74 @@ defmodule Prima.RunnerControlTest do
       assert RunnerControl.max_line_bytes() >= largest_input + 1024 * 1024
       assert RunnerControl.max_input_bytes() == Prima.Limits.Ceiling.lowered(%{}).max_request_size
       assert RunnerControl.max_open() * (256 + 4) < HostAPI.max_body_bytes()
+    end
+  end
+
+  describe "an event" do
+    @event %{
+      type: :event,
+      name: "storage.call",
+      measurements: %{duration_ms: 3},
+      metadata: %{component_ref: "formula:local.daily-report", action: "read", status: "ok"}
+    }
+
+    test "encodes its members in the roster's order, whatever the map's" do
+      assert encoded(@event) ==
+               ~s({"v":1,"type":"event","name":"storage.call","measurements":{"duration_ms":3},) <>
+                 ~s("metadata":{"component_ref":"formula:local.daily-report","action":"read","status":"ok"}}\n)
+    end
+
+    test "raises for what decode would refuse" do
+      for bad <- [
+            %{@event | name: "storage.write"},
+            %{@event | name: :storage_call},
+            Map.delete(@event, :metadata),
+            %{@event | measurements: %{}},
+            %{@event | measurements: %{duration_ms: 3, bytes: 1}},
+            %{@event | measurements: %{duration_ms: -1}},
+            %{@event | measurements: %{duration_ms: 9_007_199_254_740_992}},
+            %{@event | metadata: Map.delete(@event.metadata, :status)},
+            %{@event | metadata: %{@event.metadata | status: "timeout"}},
+            %{@event | metadata: %{@event.metadata | status: :ok}},
+            %{@event | metadata: %{@event.metadata | action: nil}},
+            %{@event | metadata: %{@event.metadata | action: <<0xFF>>}},
+            %{@event | metadata: Map.put(@event.metadata, :authority, "{}")}
+          ] do
+        assert_raise ArgumentError, fn -> RunnerControl.encode(bad) end
+      end
+
+      http = %{
+        type: :event,
+        name: "http.request",
+        measurements: %{duration_ms: 1, system_time: 1},
+        metadata: %{component_ref: "c", method: "GET", hostname: "h", status: 200}
+      }
+
+      assert {:ok, _} = http |> encoded() |> RunnerControl.decode()
+
+      for status <- [99, 600, "200", "ok", 200.0] do
+        assert_raise ArgumentError, fn ->
+          RunnerControl.encode(put_in(http, [:metadata, :status], status))
+        end
+      end
+    end
+
+    test "a line still past the bound once its strings are cut is not a frame, and raises" do
+      # Each string is within the bound in bytes, and JSON escapes each of
+      # its control characters to six.
+      escaped = :binary.copy(<<1>>, RunnerControl.max_event_string_bytes())
+
+      message = %{
+        type: :event,
+        name: "http.request",
+        measurements: %{duration_ms: 1, system_time: 1},
+        metadata: %{component_ref: escaped, method: escaped, hostname: escaped, status: 200}
+      }
+
+      assert_raise ArgumentError, ~r/past 4096 bytes/, fn -> RunnerControl.encode(message) end
+
+      fits = put_in(message, [:metadata, :hostname], "h")
+      assert {:ok, ^fits} = fits |> encoded() |> RunnerControl.decode()
     end
   end
 

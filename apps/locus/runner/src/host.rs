@@ -11,7 +11,9 @@
 //! status is lost, and is asked once more unless the callback's class is
 //! `never`, when the call is uncertain at once, its effect perhaps done; a
 //! second loss is lost. A `413` is final, too large: the same body is
-//! refused again. A refusal naming `unknown_version`, plain at any version
+//! refused again. An answer that opens and is nested past
+//! `crate::wire::MAX_DEPTH` is final, too deep: the same answer comes
+//! again. A refusal naming `unknown_version`, plain at any version
 //! or sealed, is a host at another version, final and lost. CYFR's own
 //! answers are never asked again. A body past the host's bound is too
 //! large before it is posted.
@@ -31,7 +33,7 @@ use serde_json::{Map, Value};
 use zeroize::Zeroizing;
 
 use crate::auth::{AttemptKeys, CallFields, Direction, host_call_header, open_call, seal_call};
-use crate::wire::{Answer, Json, encode_base64url, parse, read_answer, request_body};
+use crate::wire::{self, Answer, Json, Unread, encode_base64url, parse, read_answer, request_body};
 
 /// The most bytes a host call's posted body spans: the host's bound.
 pub const MAX_BODY_BYTES: usize = 1_048_576;
@@ -199,6 +201,10 @@ pub enum Outcome {
     Uncertain,
     /// The body is past the host's bound, refused before it was read.
     TooLarge,
+    /// The answer opened, and is nested past `crate::wire::MAX_DEPTH`: the
+    /// same answer comes again, so the call is not asked again, and its
+    /// attempt ends.
+    TooDeep,
 }
 
 /// One try's end: final, or lost and perhaps asked again.
@@ -262,6 +268,7 @@ fn read(caller: &Caller, op: Op, fields: &CallFields, reached: Reached) -> Try {
             Ok(plain) => match answered(op, &plain) {
                 Ok(reading) => Try::Final(Outcome::Answered(reading)),
                 Err(Unanswered::OtherVersion) => Try::Final(Outcome::Lost),
+                Err(Unanswered::TooDeep) => Try::Final(Outcome::TooDeep),
                 Err(Unanswered::Lost) => Try::Lost,
             },
             Err(_) => Try::Lost,
@@ -289,11 +296,17 @@ pub enum Unanswered {
     Lost,
     /// It is a host's at another version of the wire.
     OtherVersion,
+    /// It is nested past `crate::wire::MAX_DEPTH`.
+    TooDeep,
 }
 
 /// The reading of `op`'s opened answer `plain`.
 pub fn answered(op: Op, plain: &[u8]) -> Result<Reading, Unanswered> {
-    let answer = parse(plain).and_then(read_answer).ok_or(Unanswered::Lost)?;
+    let answer = match wire::read(plain) {
+        Ok(json) => read_answer(json).ok_or(Unanswered::Lost)?,
+        Err(Unread::TooDeep) => return Err(Unanswered::TooDeep),
+        Err(Unread::Malformed) => return Err(Unanswered::Lost),
+    };
     let (name, mut fields) = match answer {
         Answer::Ok(value) => return Ok(Reading::Ok(value)),
         Answer::Error { name, fields } => (name, fields),

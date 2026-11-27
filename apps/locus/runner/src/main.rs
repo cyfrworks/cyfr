@@ -1,29 +1,153 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 CYFR Works Inc.
 
-//! The runner's program. This build reads its environment and runs
-//! nothing: it has no engine yet, so it ends with 69 (unavailable), or 78
-//! (a configuration error) when its environment names no runner. Nothing
-//! starts it.
+//! The runner's program. It reads its environment (`Environment`), takes
+//! its two channels, builds its engine and serves subtrees on a
+//! single-threaded runtime (`cyfr_runner::subtree::serve`) until it ends:
+//! 0 when its control channel ends with nothing running, 1 when it ends
+//! otherwise (after an `exit` frame where it has one to write), 69 when its
+//! engine cannot be built, and 78 when its environment is refused or names
+//! a channel it was not given. A panic aborts it, and its keeper reports
+//! the exit.
+//!
+//! Its control channel is descriptor 3, or standard input and output when
+//! `RUNTIME_CONTROL_FD` is 0; its relay is descriptor 4, or the unix socket
+//! `RUNTIME_RELAY_SOCKET` names, which it connects to with its first
+//! assignment. The runtime runs on a thread of `STACK_BYTES`, the stack the
+//! JSON reader needs at its deepest (`cyfr_runner::wire`).
 
-#![forbid(unsafe_code)]
+// The one place this crate takes up unsafe code: adopting the two
+// descriptors the keeper hands over (`adopt`). The library forbids it.
+#![deny(unsafe_code)]
 
+use std::os::fd::{FromRawFd as _, OwnedFd};
+use std::os::unix::net::UnixStream;
 use std::process::ExitCode;
 
-use cyfr_runner::control::Environment;
+use cyfr_runner::control::{Environment, Lines, Relay, Writer};
+use cyfr_runner::engine::Engine;
+use cyfr_runner::subtree::{RelayAt, serve};
+use cyfr_runner::wire::STACK_BYTES;
 
 fn main() -> ExitCode {
-    match Environment::read(std::env::vars_os()) {
-        Ok(environment) => {
-            eprintln!(
-                "cyfr-runner: runner {} has no engine yet, and runs nothing",
-                environment.runner_id
-            );
-            ExitCode::from(69)
-        }
+    let environment = match Environment::read(std::env::vars_os()) {
+        Ok(environment) => environment,
         Err(refusal) => {
             eprintln!("cyfr-runner: {refusal}");
-            ExitCode::from(78)
+            return ExitCode::from(78);
         }
+    };
+    let control = match environment.control_fd {
+        0 => None,
+        fd => match adopt(fd) {
+            Some(stream) => Some(stream),
+            None => {
+                eprintln!("cyfr-runner: the control descriptor {fd} is not open");
+                return ExitCode::from(78);
+            }
+        },
+    };
+    let relay = match &environment.relay {
+        Relay::Fd(fd) => match adopt(*fd) {
+            Some(stream) => Some(Ok(stream)),
+            None => {
+                eprintln!("cyfr-runner: the relay descriptor {fd} is not open");
+                return ExitCode::from(78);
+            }
+        },
+        Relay::Socket(path) => Some(Err(path.clone())),
+    };
+    let engine = match Engine::new() {
+        Ok(engine) => engine,
+        Err(error) => {
+            eprintln!("cyfr-runner: the engine cannot be built: {error}");
+            return ExitCode::from(69);
+        }
+    };
+    let runner = std::thread::Builder::new()
+        .name("runner".to_owned())
+        .stack_size(STACK_BYTES)
+        .spawn(move || run(environment, engine, control, relay));
+    match runner.map(|thread| thread.join()) {
+        Ok(Ok(status)) => ExitCode::from(status),
+        _ => ExitCode::from(1),
     }
+}
+
+fn run(
+    environment: Environment,
+    engine: std::sync::Arc<Engine>,
+    control: Option<UnixStream>,
+    relay: Option<Result<UnixStream, String>>,
+) -> u8 {
+    let runtime = match tokio::runtime::Builder::new_current_thread()
+        .enable_io()
+        .enable_time()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            eprintln!("cyfr-runner: the runtime cannot be built: {error}");
+            return 69;
+        }
+    };
+    let status = runtime.block_on(async move {
+        let relay_at = match relay {
+            Some(Ok(stream)) => match nonblocking(stream) {
+                Some(stream) => Some(RelayAt::Stream(stream)),
+                None => return 78,
+            },
+            Some(Err(path)) => Some(RelayAt::Socket(path)),
+            None => None,
+        };
+        match control {
+            None => {
+                let control = Writer::start(tokio::io::stdout());
+                serve(
+                    environment,
+                    engine,
+                    Lines::new(tokio::io::stdin()),
+                    control,
+                    relay_at,
+                )
+                .await
+            }
+            Some(stream) => {
+                let Some(stream) = nonblocking(stream) else {
+                    return 78;
+                };
+                let (reader, writer) = stream.into_split();
+                let control = Writer::start(writer);
+                serve(environment, engine, Lines::new(reader), control, relay_at).await
+            }
+        }
+    });
+    // Standard input is read on a blocking thread, which a shutdown would
+    // wait on for a line that may never come.
+    runtime.shutdown_background();
+    status
+}
+
+fn nonblocking(stream: UnixStream) -> Option<tokio::net::UnixStream> {
+    stream.set_nonblocking(true).ok()?;
+    tokio::net::UnixStream::from_std(stream).ok()
+}
+
+/// The stream on descriptor `fd`, when one is open there.
+fn adopt(fd: u32) -> Option<UnixStream> {
+    let raw = i32::try_from(fd).ok()?;
+    // A descriptor below 3 is standard input, output or error, never a
+    // channel; one that is not open has no entry here.
+    if raw < 3 || std::fs::symlink_metadata(format!("/proc/self/fd/{raw}")).is_err() {
+        return None;
+    }
+    // SAFETY: the descriptor is open (above), and was given to this
+    // process by the keeper that started it (descriptors 3 and 4, its
+    // socketpairs' ends) or, for 3, named by the environment it set.
+    // Nothing else in the process names it: each is adopted once, here,
+    // before any other thread or file is opened, so the `OwnedFd` is its
+    // one owner and closes it once.
+    #[allow(unsafe_code)]
+    let owned = unsafe { OwnedFd::from_raw_fd(raw) };
+    Some(UnixStream::from(owned))
 }

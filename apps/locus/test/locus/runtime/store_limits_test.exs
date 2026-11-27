@@ -59,7 +59,12 @@ defmodule Locus.Runtime.StoreLimitsTest do
           "exception_throw",
           "externref_table",
           "wide_arithmetic",
-          "socket_probe"
+          "socket_probe",
+          "stackful_lift",
+          "async_cancel",
+          "error_context",
+          "thread_index",
+          "legacy_try"
         ],
         ext <- ["wat", "wasm"] do
       file = "#{name}.#{ext}"

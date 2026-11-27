@@ -99,6 +99,13 @@ defmodule Prima.ComponentFeatures do
   def refused, do: @refused
 
   @doc """
+  The refused features by family, the family a refusal's log line names:
+  `refused/0` is their concatenation, in this order.
+  """
+  @spec families() :: [{atom(), [String.t()]}]
+  def families, do: @families
+
+  @doc """
   Check the configured validator and hold it for `check/1`. Raises when
   `config :prima, :wasm_tools` is unset or names no executable file by
   an absolute path.

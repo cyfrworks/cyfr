@@ -8,7 +8,10 @@
 //! A frame is one JSON object on one line, ending in a newline, of at most
 //! `MAX_LINE_BYTES` before it: `v` (1), `type`, then the type's fields in
 //! order, always all of them and nothing else. The service sends `assign`
-//! and `cancel_child`; the runner sends `child`, `complete` and `exit`.
+//! and `cancel_child`; the runner sends `child`, `complete`, `exit` and
+//! `event`, one of its operator events (`EVENTS`), whose line is at most
+//! `MAX_EVENT_LINE_BYTES` and whose strings the encoder cuts to
+//! `MAX_EVENT_STRING_BYTES` on a character boundary.
 //! `decode` answers the message or the first refusal, in this order: the
 //! line's length, one JSON object, the version, the type, an unknown
 //! member (the first by name), then each field in order, missing, of
@@ -17,6 +20,10 @@
 //! `crate::wire::parse` reads it, and the line's strings, the token and the
 //! keys' hex among them, are cleared once it is read.
 //! `tests/fixtures/runner_control.json` holds every frame and refusal.
+//!
+//! The runner's two ends of the channel (`Lines`, `Writer`) read and write
+//! its lines over the stream they are given, beside these codecs, which do
+//! no I/O.
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -66,6 +73,53 @@ pub enum Message {
     Complete { execution_id: String, clean: bool },
     /// The runner ends, still holding the attempts in `open`.
     Exit { runner: String, open: Vec<String> },
+    /// One of the runner's operator events, which its service forwards to
+    /// CYFR.
+    Event(Event),
+}
+
+/// An operator event a runner sends (`Prima.RunnerControl`'s roster): its
+/// name, the suffix of `[:cyfr, :locus, :runtime, ...]` joined with dots,
+/// and its measurements and metadata, each member in the roster's order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Event {
+    pub name: &'static str,
+    pub measurements: Vec<(&'static str, u64)>,
+    pub metadata: Vec<(&'static str, Meta)>,
+}
+
+/// A metadata value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Meta {
+    Text(String),
+    Integer(u64),
+    Null,
+}
+
+impl Meta {
+    pub fn text(text: &str) -> Meta {
+        Meta::Text(text.to_owned())
+    }
+}
+
+/// The most bytes an `event` line spans, its newline excluded.
+pub const MAX_EVENT_LINE_BYTES: usize = 4096;
+
+/// The most bytes an event's metadata string carries: a longer one is cut
+/// to this many on a character boundary as it is sent.
+pub const MAX_EVENT_STRING_BYTES: usize = 256;
+
+/// `text` cut to at most `MAX_EVENT_STRING_BYTES` bytes, never inside a
+/// character.
+pub fn cut(text: &str) -> &str {
+    if text.len() <= MAX_EVENT_STRING_BYTES {
+        return text;
+    }
+    let mut end = MAX_EVENT_STRING_BYTES;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    &text[..end]
 }
 
 impl std::fmt::Debug for Message {
@@ -100,6 +154,7 @@ impl std::fmt::Debug for Message {
                 .field("runner", runner)
                 .field("open", open)
                 .finish(),
+            Message::Event(event) => f.debug_tuple("Event").field(&event.name).finish(),
         }
     }
 }
@@ -133,12 +188,13 @@ const ATTEMPT_FIELDS: [&str; 6] = [
 ];
 
 /// Every type's wire name and its fields, in wire order.
-const TYPES: [(&str, &[&str]); 5] = [
+const TYPES: [(&str, &[&str]); 6] = [
     ("assign", &["assignment", "input", "keys"]),
     ("cancel_child", &["execution_id"]),
     ("child", &["execution_id", "attempt"]),
     ("complete", &["execution_id", "clean"]),
     ("exit", &["runner", "open"]),
+    ("event", &["name", "measurements", "metadata"]),
 ];
 
 impl Message {
@@ -149,6 +205,7 @@ impl Message {
             Message::Child { .. } => "child",
             Message::Complete { .. } => "complete",
             Message::Exit { .. } => "exit",
+            Message::Event(_) => "event",
         }
     }
 }
@@ -225,11 +282,180 @@ pub fn encode(message: &Message) -> Result<Vec<u8>, Invalid> {
             members.push(format!("\"runner\":{}", json_string(runner)));
             members.push(format!("\"open\":[{}]", open.join(",")));
         }
+        Message::Event(event) => {
+            members.extend(event_members(event)?);
+        }
     }
     let mut line = format!("{{{}}}", members.join(",")).into_bytes();
+    if matches!(message, Message::Event(_)) && line.len() > MAX_EVENT_LINE_BYTES {
+        return Err(Invalid("event"));
+    }
     line.push(b'\n');
     Ok(line)
 }
+
+// An event's members as written: its name, then its measurements and its
+// metadata in the roster's order, each string cut to its bound. An event
+// off the roster, or one that does not carry exactly its roster's members
+// and types, is no frame.
+fn event_members(event: &Event) -> Result<Vec<String>, Invalid> {
+    let (_name, measured, described) = EVENTS
+        .iter()
+        .find(|(name, _, _)| *name == event.name)
+        .ok_or(Invalid("name"))?;
+    if event.measurements.len() != measured.len() || event.metadata.len() != described.len() {
+        return Err(Invalid("event"));
+    }
+    let mut measurements = Vec::new();
+    for name in *measured {
+        let (_, value) = event
+            .measurements
+            .iter()
+            .find(|(given, _)| given == name)
+            .ok_or(Invalid("measurements"))?;
+        within_integer(*value, "measurements")?;
+        measurements.push(format!("{}:{value}", json_string(name)));
+    }
+    let mut metadata = Vec::new();
+    for (name, field) in *described {
+        let (_, value) = event
+            .metadata
+            .iter()
+            .find(|(given, _)| given == name)
+            .ok_or(Invalid("metadata"))?;
+        let written = match (field, value) {
+            (Field::Text | Field::TextOrNull, Meta::Text(text)) => json_string(cut(text)),
+            (Field::TextOrNull, Meta::Null) => "null".to_owned(),
+            (Field::Integer, Meta::Integer(integer)) if *integer <= MAX_INTEGER => {
+                integer.to_string()
+            }
+            (Field::Words(words) | Field::StatusOrWords(words), Meta::Text(word))
+                if words.contains(&word.as_str()) =>
+            {
+                json_string(word)
+            }
+            (Field::StatusOrWords(_), Meta::Integer(status)) if (100..=599).contains(status) => {
+                status.to_string()
+            }
+            _ => return Err(Invalid("metadata")),
+        };
+        metadata.push(format!("{}:{written}", json_string(name)));
+    }
+    Ok(vec![
+        format!("\"name\":{}", json_string(event.name)),
+        format!("\"measurements\":{{{}}}", measurements.join(",")),
+        format!("\"metadata\":{{{}}}", metadata.join(",")),
+    ])
+}
+
+/// What a metadata member of an event holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Field {
+    /// A string of at most `MAX_EVENT_STRING_BYTES`.
+    Text,
+    /// Such a string, or null.
+    TextOrNull,
+    /// An integer of the protocol's domain.
+    Integer,
+    /// One of these words.
+    Words(&'static [&'static str]),
+    /// An HTTP status, 100 to 599, or one of these words.
+    StatusOrWords(&'static [&'static str]),
+}
+
+const OK_ERROR: &[&str] = &["ok", "error"];
+
+/// One event of the roster: its name, its measurements and its metadata.
+pub type Roster = (
+    &'static str,
+    &'static [&'static str],
+    &'static [(&'static str, Field)],
+);
+
+/// The operator events a runner sends (`Prima.RunnerControl`'s roster):
+/// each name, its measurements (integers, each `duration_ms` in
+/// milliseconds and each `system_time` in microseconds since the epoch on
+/// the runner's clock) and its metadata, in the roster's order.
+pub const EVENTS: [Roster; 9] = [
+    (
+        "engine.authority_entered",
+        &[],
+        &[("execution_id", Field::Text), ("reference", Field::Text)],
+    ),
+    (
+        "http.request",
+        &["duration_ms", "system_time"],
+        &[
+            ("component_ref", Field::Text),
+            ("method", Field::Text),
+            ("hostname", Field::Text),
+            (
+                "status",
+                Field::StatusOrWords(&["response_too_large", "timeout", "error"]),
+            ),
+        ],
+    ),
+    (
+        "storage.call",
+        &["duration_ms"],
+        &[
+            ("component_ref", Field::Text),
+            ("action", Field::Text),
+            ("status", Field::Words(OK_ERROR)),
+        ],
+    ),
+    (
+        "mcp_tool.call",
+        &["duration_ms"],
+        &[
+            ("execution_id", Field::Text),
+            ("tool_action", Field::Text),
+            ("status", Field::Words(OK_ERROR)),
+        ],
+    ),
+    (
+        "formula.spawn",
+        &["system_time"],
+        &[
+            ("parent_execution_id", Field::Text),
+            ("task_id", Field::Text),
+            ("component_ref", Field::Text),
+        ],
+    ),
+    (
+        "formula.await",
+        &["duration_ms"],
+        &[
+            ("task_id", Field::Text),
+            ("status", Field::Words(&["completed", "timeout", "error"])),
+        ],
+    ),
+    (
+        "formula.await_all",
+        &["duration_ms"],
+        &[
+            ("parent_execution_id", Field::Text),
+            ("count", Field::Integer),
+            ("timed_out", Field::Integer),
+        ],
+    ),
+    (
+        "formula.cancel",
+        &["system_time"],
+        &[
+            ("parent_execution_id", Field::Text),
+            ("task_id", Field::Text),
+        ],
+    ),
+    (
+        "formula.await_any",
+        &["duration_ms"],
+        &[
+            ("parent_execution_id", Field::Text),
+            ("winner_task_id", Field::TextOrNull),
+        ],
+    ),
+];
 
 fn id(value: &str, name: &'static str) -> Result<(), Invalid> {
     if is_id(value) {
@@ -278,6 +504,9 @@ pub fn decode(line: &[u8]) -> Result<Message, Refusal> {
     else {
         return Err(Refusal::UnknownType);
     };
+    if *name == "event" && line.len() > MAX_EVENT_LINE_BYTES {
+        return Err(Refusal::OversizeLine);
+    }
     let reader = Reader {
         object,
         path: String::new(),
@@ -305,10 +534,11 @@ pub fn decode(line: &[u8]) -> Result<Message, Refusal> {
             execution_id: reader.id("execution_id")?,
             clean: reader.boolean("clean")?,
         }),
-        _exit => Ok(Message::Exit {
+        "exit" => Ok(Message::Exit {
             runner: reader.id("runner")?,
             open: reader.ids("open")?,
         }),
+        _event => reader.event().map(Message::Event),
     }
 }
 
@@ -430,6 +660,68 @@ impl Reader<'_> {
                 path: format!("{}.", self.name(field)),
             }),
             _ => Err(Refusal::WrongType(self.name(field))),
+        }
+    }
+
+    // An event: its name on the roster, then its measurements and its
+    // metadata, each object's unknown members first, then each member in
+    // the roster's order.
+    fn event(&self) -> Result<Event, Refusal> {
+        let named = self.string("name")?;
+        let Some((name, measured, described)) = EVENTS.iter().find(|(name, _, _)| *name == named)
+        else {
+            return Err(Refusal::InvalidField(self.name("name")));
+        };
+        let measurements_of = self.object("measurements")?;
+        measurements_of.no_unknown(measured)?;
+        let mut measurements = Vec::new();
+        for field in *measured {
+            measurements.push((*field, measurements_of.integer(field)?));
+        }
+        let metadata_of = self.object("metadata")?;
+        let names: Vec<&str> = described.iter().map(|(name, _)| *name).collect();
+        metadata_of.no_unknown(&names)?;
+        let mut metadata = Vec::new();
+        for (field, kind) in *described {
+            metadata.push((*field, metadata_of.meta(field, *kind)?));
+        }
+        Ok(Event {
+            name,
+            measurements,
+            metadata,
+        })
+    }
+
+    fn meta(&self, field: &str, kind: Field) -> Result<Meta, Refusal> {
+        let value = self.member(field)?;
+        let wrong = || Refusal::WrongType(self.name(field));
+        let invalid = || Refusal::InvalidField(self.name(field));
+        let text = |text: &str| {
+            if text.len() > MAX_EVENT_STRING_BYTES {
+                Err(Refusal::Oversize(self.name(field)))
+            } else {
+                Ok(Meta::Text(text.to_owned()))
+            }
+        };
+        match (kind, value) {
+            (Field::Text | Field::TextOrNull, Value::String(given)) => text(given),
+            (Field::TextOrNull, Value::Null) => Ok(Meta::Null),
+            (Field::Integer, _) => self.integer(field).map(Meta::Integer),
+            (Field::Words(words) | Field::StatusOrWords(words), Value::String(word)) => {
+                if words.contains(&word.as_str()) {
+                    Ok(Meta::Text(word.clone()))
+                } else {
+                    Err(invalid())
+                }
+            }
+            (Field::StatusOrWords(_), Value::Number(_)) => match integer(value) {
+                Some(Integer::Whole(status)) if (100..=599).contains(&status) => {
+                    Ok(Meta::Integer(status))
+                }
+                Some(_) => Err(invalid()),
+                None => Err(wrong()),
+            },
+            _ => Err(wrong()),
         }
     }
 
@@ -598,5 +890,120 @@ fn is_normal_absolute(path: &str) -> bool {
             .split('/')
             .all(|step| !step.is_empty() && step != "." && step != ".."),
         None => false,
+    }
+}
+
+// ============================================================================
+// The runner's end
+// ============================================================================
+
+/// What the runner reads from its control channel next.
+#[derive(Debug)]
+pub enum Received {
+    /// A frame.
+    Message(Message),
+    /// A line that is not a frame, and why: ignored, and logged by its
+    /// refusal alone.
+    Refused(Refusal),
+    /// A line past `MAX_LINE_BYTES` before its newline: the runner ends.
+    Oversize,
+    /// The channel's end.
+    Closed,
+}
+
+/// The runner's reading end of its control channel: lines from `reader`,
+/// each decoded as it ends. `next` keeps what it has read between calls,
+/// so a caller may stop waiting on it and call it again.
+pub struct Lines<R> {
+    reader: R,
+    buffer: Vec<u8>,
+    closed: bool,
+}
+
+impl<R: tokio::io::AsyncRead + Unpin> Lines<R> {
+    pub fn new(reader: R) -> Self {
+        Lines {
+            reader,
+            buffer: Vec::new(),
+            closed: false,
+        }
+    }
+
+    /// The next line's message, refusal, overflow or the channel's end.
+    pub async fn next(&mut self) -> Received {
+        use tokio::io::AsyncReadExt as _;
+        let mut chunk = vec![0u8; 64 * 1024];
+        loop {
+            if let Some(end) = self.buffer.iter().position(|byte| *byte == b'\n') {
+                let line: Zeroizing<Vec<u8>> = Zeroizing::new(self.buffer.drain(..=end).collect());
+                return match decode(&line) {
+                    Ok(message) => Received::Message(message),
+                    Err(refusal) => Received::Refused(refusal),
+                };
+            }
+            if self.buffer.len() > MAX_LINE_BYTES {
+                return Received::Oversize;
+            }
+            if self.closed {
+                return Received::Closed;
+            }
+            match self.reader.read(&mut chunk).await {
+                Ok(0) | Err(_) => self.closed = true,
+                Ok(read) => self.buffer.extend_from_slice(&chunk[..read]),
+            }
+        }
+    }
+}
+
+/// The runner's writing end of its control channel: one task writes every
+/// line in the order sent; `send_flushed` waits until its line is written.
+#[derive(Clone)]
+pub struct Writer {
+    lines: tokio::sync::mpsc::UnboundedSender<(Vec<u8>, Option<tokio::sync::oneshot::Sender<()>>)>,
+}
+
+impl Writer {
+    /// Start the writing task on `writer`, on the current Tokio runtime.
+    pub fn start<W>(mut writer: W) -> Writer
+    where
+        W: tokio::io::AsyncWrite + Unpin + Send + 'static,
+    {
+        use tokio::io::AsyncWriteExt as _;
+        let (lines, mut queue) = tokio::sync::mpsc::unbounded_channel::<(
+            Vec<u8>,
+            Option<tokio::sync::oneshot::Sender<()>>,
+        )>();
+        tokio::spawn(async move {
+            while let Some((line, written)) = queue.recv().await {
+                // A channel the service no longer reads takes nothing more;
+                // its end reaches the runner on the reading side.
+                if writer.write_all(&line).await.is_err() || writer.flush().await.is_err() {
+                    return;
+                }
+                if let Some(written) = written {
+                    let _ = written.send(());
+                }
+            }
+        });
+        Writer { lines }
+    }
+
+    /// Send `message`; a message no line carries is not sent, and its
+    /// member is answered.
+    pub fn send(&self, message: &Message) -> Result<(), Invalid> {
+        let line = encode(message)?;
+        let _ = self.lines.send((line, None));
+        Ok(())
+    }
+
+    /// Send `message` and wait until its line is written, or the writer has
+    /// stopped.
+    pub async fn send_flushed(&self, message: &Message) -> Result<(), Invalid> {
+        let line = encode(message)?;
+        let (written, done) = tokio::sync::oneshot::channel();
+        if self.lines.send((line, Some(written))).is_ok() {
+            let _ = done.await;
+        }
+        Ok(())
     }
 }
