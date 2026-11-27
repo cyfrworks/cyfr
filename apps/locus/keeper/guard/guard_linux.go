@@ -263,9 +263,10 @@ var errRouteBroken = errors.New("the route's rules are in no known state")
 
 // change replaces a machine's route chain, old's, with next's in one
 // commit and records it. A change the kernel refused leaves old's chain
-// standing; one it took but that cannot be recorded puts old's back, which
-// its record, written whole or not at all, still names; where that fails
-// too is errRouteBroken.
+// standing. One whose commit may have gone in, a restore that outlived its
+// bound or a record that cannot be written, puts old's back on a bound of
+// its own, which old's record, written whole or not at all, still names;
+// where that fails too is errRouteBroken.
 func (k *rulesOf) change(old, next *route) error {
 	ctx, cancel := context.WithTimeout(context.Background(), k.bound)
 	defer cancel()
@@ -275,18 +276,27 @@ func (k *rulesOf) change(old, next *route) error {
 		return err
 	}
 	defer unlock()
-	if _, err := tool(ctx, changeRules(next, k.st), false, "iptables-restore", "-w", "5", "--noflush"); err != nil {
+	_, err = tool(ctx, changeRules(next, k.st), false, "iptables-restore", "-w", "5", "--noflush")
+	switch {
+	case err == nil:
+		err = k.record(ctx, iface)
+		if err == nil {
+			k.log.Info("route %s for %s changed to %s", iface, next.inner, describeReach(next))
+			return nil
+		}
+		err = fmt.Errorf("its record: %w", err)
+	case ctx.Err() == nil:
+		// The kernel refused the commit: the old chain stands whole.
 		return fmt.Errorf("route %s's new reach: %w", iface, err)
+	default:
+		err = fmt.Errorf("its restore did not finish within %s, and its commit may have gone in", k.bound)
 	}
-	rerr := k.record(ctx, iface)
-	if rerr == nil {
-		k.log.Info("route %s for %s changed to %s", iface, next.inner, describeReach(next))
-		return nil
+	back, cancelBack := context.WithTimeout(context.Background(), k.bound)
+	defer cancelBack()
+	if _, perr := tool(back, changeRules(old, k.st), false, "iptables-restore", "-w", "5", "--noflush"); perr != nil {
+		return fmt.Errorf("route %s's change is not known to stand (%v), and its old reach could not be put back (%v): %w", iface, err, perr, errRouteBroken)
 	}
-	if _, err := tool(ctx, changeRules(old, k.st), false, "iptables-restore", "-w", "5", "--noflush"); err != nil {
-		return fmt.Errorf("route %s's change could not be recorded (%v) nor put back (%v): %w", iface, rerr, err, errRouteBroken)
-	}
-	return fmt.Errorf("route %s's change could not be recorded, and its old reach stands: %w", iface, rerr)
+	return fmt.Errorf("route %s's change is not known to stand (%v), and its old reach is put back", iface, err)
 }
 
 // describeReach is a route's reach as the log says it, with its IPv4

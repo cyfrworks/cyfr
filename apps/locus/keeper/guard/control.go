@@ -29,6 +29,7 @@
 //	{"v":4,"type":"changed","spawn_id":…}                                       guard
 //	{"v":4,"type":"cleared","spawn_id":…}                                       guard
 //	{"v":4,"type":"refused","spawn_id":…,"reason":…}                            guard
+//	{"v":4,"type":"refused","spawn_id":…,"reason":…,"withdrawn":true}           guard, to a change
 //
 // The hello names the network namespace the guard's rules judge, as
 // /proc/self/ns/net links to it; a keeper whose own differs is not behind
@@ -78,7 +79,9 @@
 // `admitted` only once all of that is in, and `refused` with a reason,
 // having made nothing that stays, otherwise. A `change` replaces a
 // machine's route's reach in one step, answered `changed` once the new
-// rules stand, or `refused` with the old ones standing. A `clear` withdraws the route
+// rules stand, or `refused`: with the old ones standing, or, saying
+// `withdrawn`, with the route withdrawn, its rules in no known state, which
+// ends the machine's route as a clear would. A `clear` withdraws the route
 // the connection made for that spawn: the pair first, which ends every
 // connection through it, then its sockets and rules, a role's forwarding
 // with them, and answers `cleared` once all of it is gone, or `refused`
@@ -177,6 +180,9 @@ type Message struct {
 	Inner   string `json:"inner,omitempty"`
 	Gateway string `json:"gateway,omitempty"`
 	Reason  string `json:"reason,omitempty"`
+	// Withdrawn is a refused change's: the route is withdrawn, its rules in
+	// no known state, where without it the old reach stands.
+	Withdrawn bool `json:"withdrawn,omitempty"`
 }
 
 // Encode renders a message as one packet.
@@ -218,7 +224,7 @@ func ParseRequest(packet []byte, descriptors int) (Message, error) {
 	if !spawnIDPattern.MatchString(m.SpawnID) {
 		return Message{}, errors.New("spawn_id must be 32 lowercase hexadecimal digits")
 	}
-	if m.Netns != "" || m.Reason != "" || m.Inner != "" || m.Gateway != "" {
+	if m.Netns != "" || m.Reason != "" || m.Inner != "" || m.Gateway != "" || m.Withdrawn {
 		return Message{}, errors.New("a request carries only spawn_id and, for an admit, its reach and what the reach names")
 	}
 	switch m.Type {
@@ -310,8 +316,9 @@ func checkReach(m Message) error {
 
 // ParseAnswer reads the guard's answer to a request of type asked for
 // spawnID: admitted to an admit, with a machine's two addresses or none,
-// changed to a change, cleared to a clear, or refused with a reason, each
-// naming that spawn. Any other message is refused.
+// changed to a change, cleared to a clear, or refused with a reason, a
+// change's saying whether its route is withdrawn, each naming that spawn.
+// Any other message is refused.
 func ParseAnswer(packet []byte, asked, spawnID string) (Message, error) {
 	m, err := Decode(packet)
 	if err != nil {
@@ -322,6 +329,9 @@ func ParseAnswer(packet []byte, asked, spawnID string) (Message, error) {
 	}
 	if (m.Inner != "") != (m.Gateway != "") || (m.Inner != "" && m.Type != TypeAdmitted) {
 		return Message{}, errors.New("an answer names a machine's two addresses, both, and only when admitted")
+	}
+	if m.Withdrawn && (m.Type != TypeRefused || asked != TypeChange) {
+		return Message{}, errors.New("only a change's refusal says its route is withdrawn")
 	}
 	for _, a := range []string{m.Inner, m.Gateway} {
 		if addr, err := CanonicalAddress(a); a != "" && (err != nil || !addr.Is4()) {

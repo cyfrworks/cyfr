@@ -398,3 +398,33 @@ func settled(t *testing.T, c *Client) {
 		time.Sleep(time.Millisecond) // sleep-ok: polls the end the reader marks, within a bound
 	}
 }
+
+// A change refused with its route withdrawn is ErrRouteWithdrawn, the route
+// gone; any other refusal leaves the old reach, and is not.
+func TestAChangeRefusedWithItsRouteWithdrawnIsToldApart(t *testing.T) {
+	g := startScripted(t, "net:[7]")
+	c := NewClient(g.path, "net:[7]", nil)
+	netns, udp, tcp := descriptors(t)
+	admitted := make(chan Machine, 1)
+	go func() {
+		m, _ := c.AdmitMachine(testSpawn, 30201, ReachNone, nil, netns, udp, tcp)
+		admitted <- m
+	}()
+	conn := g.accept(t)
+	request(t, conn)
+	answer(t, conn, Message{Type: TypeAdmitted, SpawnID: testSpawn, Inner: "10.213.0.2", Gateway: "10.213.0.1"})
+	m := <-admitted
+	done := make(chan error, 1)
+	for _, refusal := range []Message{
+		{Type: TypeRefused, SpawnID: testSpawn, Reason: "the old reach stands"},
+		{Type: TypeRefused, SpawnID: testSpawn, Reason: "withdrawn", Withdrawn: true},
+	} {
+		go func() { done <- c.Change(testSpawn, m.Route, ReachIsland, nil) }()
+		request(t, conn)
+		answer(t, conn, refusal)
+		err := <-done
+		if err == nil || refusal.Withdrawn != errors.Is(err, ErrRouteWithdrawn) {
+			t.Fatalf("a change refused as %+v returned %v", refusal, err)
+		}
+	}
+}

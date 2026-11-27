@@ -638,7 +638,7 @@ func TestAMachinesReachChangesWhileItsRouteStands(t *testing.T) {
 		t.Fatalf("the route holds %s %v after its change", reach, addrs)
 	}
 	ts.maker.setFail("change")
-	if c := change(testSpawn, `"reach":"island"`); c.Type != TypeRefused || !strings.Contains(c.Reason, "stays as it was") {
+	if c := change(testSpawn, `"reach":"island"`); c.Type != TypeRefused || c.Withdrawn || !strings.Contains(c.Reason, "stays as it was") {
 		t.Fatalf("a change the rules refused answered %+v", c)
 	}
 	if reach, _ := held(); reach != ReachHosts {
@@ -646,7 +646,7 @@ func TestAMachinesReachChangesWhileItsRouteStands(t *testing.T) {
 	}
 	ts.maker.setFail("broken")
 	before := len(ts.maker.taken())
-	if c := change(testSpawn, `"reach":"island"`); c.Type != TypeRefused || !strings.Contains(c.Reason, "withdrew it") {
+	if c := change(testSpawn, `"reach":"island"`); c.Type != TypeRefused || !c.Withdrawn || !strings.Contains(c.Reason, "and withdrew it") {
 		t.Fatalf("a change in no known state answered %+v", c)
 	}
 	if steps := strings.Join(ts.maker.taken()[before:], ","); !strings.Contains(steps, "unpair sp0") || !strings.Contains(steps, "unrules sp0") {
@@ -662,5 +662,21 @@ func TestAMachinesReachChangesWhileItsRouteStands(t *testing.T) {
 	}
 	if c := change(space, `"reach":"none"`); c.Type != TypeRefused || !strings.Contains(c.Reason, "only a machine's route") {
 		t.Fatalf("a change of a space's route answered %+v", c)
+	}
+}
+
+// A change in no known state whose withdrawal fails says withdrawn all the
+// same, the route left to the retry, and its words say so: never that the
+// guard withdrew it.
+func TestAChangeWhoseWithdrawalIsLeftToTheRetrySaysWithdrawn(t *testing.T) {
+	ts := startServer(t, "net:[1]")
+	r := dialRaw(t, ts.path)
+	if got := r.send(t, []byte(`{"v":4,"type":"admit","spawn_id":"`+testSpawn+`","reach":"none","machine_uid":30201}`), three(t)...); got.Type != TypeAdmitted {
+		t.Fatalf("the machine's admit answered %+v", got)
+	}
+	ts.maker.setFail("broken", "unpair")
+	c := r.send(t, []byte(`{"v":4,"type":"change","spawn_id":"`+testSpawn+`","reach":"island"}`))
+	if c.Type != TypeRefused || !c.Withdrawn || !strings.Contains(c.Reason, "is withdrawing it") || strings.Contains(c.Reason, "withdrew it") {
+		t.Fatalf("a change whose withdrawal failed answered %+v", c)
 	}
 }

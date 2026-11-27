@@ -547,7 +547,10 @@ func TestAMachinesChangeIsOneCommitOrTheOldChainStands(t *testing.T) {
 	sent := filepath.Join(tools, "sent")
 	// Each restore's input is kept, one file each, and the restore fails
 	// while the file "refuse" holds the count of restores to refuse.
+	// One listed in "slow" takes its input, as a commit that went in, and
+	// outlives a change's bound. sleep-ok: the stand-in outlives the bound.
 	restore := "#!/bin/sh\nn=$(ls " + tools + " | grep -c '^sent')\ncat > " + sent + ".$n\n" +
+		"if [ -f " + tools + "/slow ] && grep -qx \"$n\" " + tools + "/slow; then exec sleep 30; fi\n" +
 		"if [ -f " + tools + "/refuse ] && grep -qx \"$n\" " + tools + "/refuse; then exit 1; fi\nexit 0\n"
 	if err := os.WriteFile(filepath.Join(tools, "iptables-restore"), []byte(restore), 0o755); err != nil {
 		t.Fatal(err)
@@ -617,6 +620,35 @@ func TestAMachinesChangeIsOneCommitOrTheOldChainStands(t *testing.T) {
 	refuse("5")
 	if err := k.change(&next, old); !errors.Is(err, errRouteBroken) {
 		t.Fatalf("a change neither recorded nor put back answered %v", err)
+	}
+
+	// A restore that outlives its bound may have committed: the old chain
+	// is put back on a bound of its own, and where that cannot be done the
+	// route is in no known state.
+	if err := os.Remove(p.routes()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(p.routes(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	refuse()
+	slow := func(nths ...string) {
+		if err := os.WriteFile(filepath.Join(tools, "slow"), []byte(strings.Join(nths, "\n")+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	slow("6")
+	k.bound = 300 * time.Millisecond
+	err = k.change(old, &next)
+	if err == nil || errors.Is(err, errRouteBroken) || !strings.Contains(err.Error(), "its old reach is put back") {
+		t.Fatalf("a change past its bound answered %v", err)
+	}
+	if read(7) != changeRules(old, st) {
+		t.Fatalf("a change past its bound put back:\n%s", read(7))
+	}
+	slow("8", "9")
+	if err := k.change(old, &next); !errors.Is(err, errRouteBroken) {
+		t.Fatalf("a change past its bound whose put-back outlived its own answered %v", err)
 	}
 }
 

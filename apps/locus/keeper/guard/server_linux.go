@@ -519,14 +519,22 @@ func (s *server) answer(id uint64, packet []byte, files []*os.File) Message {
 		next := *r
 		next.reach, next.addresses = req.Reach, req.Addresses
 		if err := s.maker.change(r, &next); err != nil {
-			s.log.Error("control: connection %d: the reach of spawn %s's route stays as it was: %v", id, req.SpawnID, err)
-			if errors.Is(err, errRouteBroken) {
-				if werr := s.withdrawLocked(r); werr == nil {
-					delete(s.routes[id], req.SpawnID)
-				}
-				return refuse("the guard could not change the route's reach, and withdrew it: " + err.Error())
+			if !errors.Is(err, errRouteBroken) {
+				s.log.Error("control: connection %d: the reach of spawn %s's route stays as it was: %v", id, req.SpawnID, err)
+				return refuse("the guard could not change the route's reach, which stays as it was: " + err.Error())
 			}
-			return refuse("the guard could not change the route's reach, which stays as it was: " + err.Error())
+			// The route's rules are in no known state: it is withdrawn, and
+			// the answer says so by its member, whether the withdrawal
+			// finished or is left to the retry.
+			s.log.Error("control: connection %d: spawn %s's route is in no known state, and is withdrawn: %v", id, req.SpawnID, err)
+			how := "and withdrew it"
+			if werr := s.withdrawLocked(r); werr == nil {
+				delete(s.routes[id], req.SpawnID)
+			} else {
+				how = "and is withdrawing it, trying again: " + werr.Error()
+			}
+			return Message{Type: TypeRefused, SpawnID: req.SpawnID, Withdrawn: true,
+				Reason: "the guard could not change the route's reach, " + how + ": " + err.Error()}
 		}
 		r.reach, r.addresses = next.reach, next.addresses
 		return Message{Type: TypeChanged, SpawnID: req.SpawnID}

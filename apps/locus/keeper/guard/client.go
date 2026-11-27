@@ -139,9 +139,17 @@ func (c *Client) AdmitMachine(spawnID string, uid int, reach string, addrs []net
 	return Machine{Route: r, Inner: inner, Gateway: gateway}, nil
 }
 
+// ErrRouteWithdrawn is a change the guard refused with its route withdrawn,
+// its rules in no known state: the machine has no route any more, as when
+// its connection ends (ErrConnectionGone). Any other refusal of a change
+// leaves the old reach standing.
+var ErrRouteWithdrawn = errors.New("the guard withdrew the route")
+
 // Change asks the guard to replace the reach of the machine's route r and
-// answers once it says changed; the old reach stands on any other answer.
-// A route whose connection has ended is not asked for: ErrConnectionGone.
+// answers once it says changed. A refusal with the route withdrawn is
+// ErrRouteWithdrawn, and a route whose connection has ended is not asked
+// for, ErrConnectionGone: either way the route is gone. On any other error
+// the old reach stands.
 func (c *Client) Change(spawnID string, r Route, reach string, addrs []netip.Addr) error {
 	m := Message{Type: TypeChange, SpawnID: spawnID, Reach: reach}
 	if err := withAddresses(&m, addrs); err != nil {
@@ -183,11 +191,14 @@ func (c *Client) onRoute(m Message, r Route) error {
 	if current == nil || current.number != r.Conn {
 		return ErrConnectionGone
 	}
-	number, _, err := c.request(m, nil)
+	number, reply, err := c.request(m, nil)
 	if err == nil && number != r.Conn {
 		// A connection ended and another was dialed between the check
 		// and the request: the route went with the first.
 		return ErrConnectionGone
+	}
+	if err != nil && reply.Withdrawn {
+		return fmt.Errorf("%w: %v", ErrRouteWithdrawn, err)
 	}
 	return err
 }
