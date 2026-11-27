@@ -85,6 +85,27 @@ defmodule Prima.RunnerRelay do
     * `close` — `reason`, a code (`close_code/1`); the sender closes the
       channel after it.
 
+  ## Codes
+
+  A `fetch_end`'s `error` and a `close`'s `reason` are codes: a lowercase
+  letter, then up to 63 lowercase letters, digits or `_`. Decoding holds a
+  code to that form alone. The codes a worker service names, each with
+  what it means, are `fetch_end_codes/0` and `close_codes/0`: a fetch's
+  end names one of the first, or the transport's own name for a failure
+  after the request was sent (`econnrefused`, say), which a runner reads
+  as such; a channel closes with one of the second, and with no other.
+  A fetch the service's own ask for its pin got none for ends with the
+  code `pin_code/1` names for why.
+
+  ## In flight
+
+  A worker service carries at most `max_calls/0` host calls and
+  `max_fetches/0` fetches of a runner unanswered at once, a fetch counted
+  until its `fetch_end`, whether or not its runner still reads it, and
+  closes the channel for the one past either (`too_many_calls`,
+  `too_many_fetches`). A runner holds itself to both, refusing its guest
+  rather than sending past them.
+
   A body travels in standard base64 with padding and is at most
   `max_body_bytes/0` decoded, `Prima.HostAPI.max_answer_bytes/0`.
 
@@ -168,6 +189,74 @@ defmodule Prima.RunnerRelay do
 
   # 2^53 − 1: the largest integer every JSON reader holds exactly.
   @max_integer 9_007_199_254_740_991
+
+  @max_calls 64
+  @max_fetches 16
+
+  # Why a service's ask for a fetch's pin got none: a refusal CYFR
+  # answered, or the service's own reading of the answer.
+  @pin_whys PinnedTarget.refusals() ++ [:unavailable, :lost, :elsewhere, :expired]
+
+  # Every code a service ends a fetch with, and what it means.
+  @fetch_end_codes [
+                     {"timeout",
+                      "the attempt's deadline or the node's timeout passed before the answer ended"},
+                     {"connect_timeout", "the pinned address was not connected to in time"},
+                     {"rate_limited", "the consented rate is exhausted"},
+                     {"method_blocked", "the method is outside the edge's egress methods"},
+                     {"scheme_blocked", "the scheme is outside the edge's egress schemes"},
+                     {"domain_blocked", "the host is outside the edge's egress domains"},
+                     {"invalid_request",
+                      "a header frames or routes the request or overrides its method or target"},
+                     {"request_too_large",
+                      "the body, URL and headers pass the node's max_request_size"},
+                     {"response_too_large", "the answer passed the node's max_response_size"},
+                     {"private_ip_blocked", "the pinned address is a metadata address"},
+                     {"http_error", "the request failed after it was sent"},
+                     {"fetch_failed", "the service's worker for the fetch ended without an end"},
+                     {"refused",
+                      "CYFR refused the attached request before admitting it (its attached_refusal)"},
+                     {"bad_frame", "CYFR's attached answer does not read"},
+                     {"lost", "CYFR did not answer the attached request as admitted"},
+                     {"uncertain", "no answer to the attached request reached the service"}
+                   ] ++
+                     Enum.map(
+                       @pin_whys,
+                       &{"pin_" <> Atom.to_string(&1),
+                        "the service's own ask for the fetch's pin was answered #{&1}"}
+                     )
+
+  # Every code a channel closes with, and what it means: the decoder's
+  # refusals, the end of the channel's work, and the service's own
+  # refusals of a runner's frame.
+  @close_codes [
+    {"frame_too_large", "a frame's length is past max_frame_bytes"},
+    {"malformed", "a frame is no JSON object, or a member is missing, of another type or invalid"},
+    {"bad_version", "a frame's v is not the version"},
+    {"unknown_kind", "a frame's kind is none of the nine"},
+    {"wrong_direction", "a frame of a kind its sender does not send"},
+    {"body_too_large", "a body past max_body_bytes"},
+    {"out_of_order", "a seq other than the next"},
+    {"unknown_attempt", "an attempt the channel does not carry"},
+    {"unknown_reference", "an re naming no unanswered call or open fetch"},
+    {"wrong_answer", "an answer its fetch does not take"},
+    {"credit_exceeded", "a chunk or frame past its fetch's credit"},
+    {"done", "the channel's work is over"},
+    {"take_rate", "a runner's take_rate, which is the service's own call"},
+    {"too_many_calls", "a host call past max_calls unanswered"},
+    {"too_many_fetches", "a fetch past max_fetches open"},
+    {"unknown_pin", "a pinned fetch naming a pin the service holds none of"},
+    {"attempt_mismatch", "a host call's header naming another attempt"},
+    {"runner_mismatch", "a host call's header naming another runner"},
+    {"boot_mismatch", "a host call's header naming another boot"},
+    {"member_mismatch", "a host call's header naming another member"},
+    {"unknown_version", "a host call's header of another version"},
+    {"outside_window", "a host call's header outside the window"},
+    {"bad_mac", "a host call's header or body that does not verify"},
+    {"malformed_call", "a host call's body that does not open as its operation"},
+    {"request_too_large", "an emitted event past the node's max_request_size"}
+  ]
+  @close_by_reason Map.new(@close_codes, fn {code, _why} -> {String.to_atom(code), code} end)
 
   # A worker service reports `runner_exited` itself, and posts an
   # `attached_fetch` for the runner's attached `fetch`: neither is a
@@ -334,11 +423,58 @@ defmodule Prima.RunnerRelay do
   @doc """
   The code a `close` frame carries for `reason`: the reason's own name, or
   `malformed` for a refusal naming a member. `:done` closes a channel
-  whose work is over.
+  whose work is over. A reason off `close_codes/0` raises
+  `ArgumentError`: no channel closes with a code this module does not name.
   """
-  @spec close_code(reason() | :done) :: String.t()
-  def close_code(reason) when is_atom(reason), do: Atom.to_string(reason)
+  @spec close_code(reason() | atom()) :: String.t()
+  def close_code(reason) when is_map_key(@close_by_reason, reason),
+    do: Map.fetch!(@close_by_reason, reason)
+
   def close_code({_refusal, _name}), do: "malformed"
+
+  def close_code(reason),
+    do: raise(ArgumentError, "not a close code: #{Prima.LoggerContext.shape(reason)}")
+
+  @doc "Every code a channel closes with, in order, each with what it means."
+  @spec close_codes() :: [{String.t(), String.t()}]
+  def close_codes, do: @close_codes
+
+  @doc """
+  Every code a service ends a fetch with, in order, each with what it
+  means. A `fetch_end` naming any other code ends it for the transport's
+  own failure, which that code names.
+  """
+  @spec fetch_end_codes() :: [{String.t(), String.t()}]
+  def fetch_end_codes, do: @fetch_end_codes
+
+  @doc """
+  The code a service ends a fetch with when its own ask for the fetch's
+  pin got none, for `why`: a refusal `Prima.PinnedTarget.refusals/0`
+  names, `:unavailable` or `:lost` (CYFR's answer), `:elsewhere` (a pin
+  naming another target than the request's) or `:expired` (the runner's
+  pin past its `expires_at` when its fetch arrived). Any other reason is a
+  lost answer, `pin_lost`.
+  """
+  @spec pin_code(term()) :: String.t()
+  def pin_code(why) when why in @pin_whys, do: "pin_" <> Atom.to_string(why)
+  def pin_code(_why), do: "pin_lost"
+
+  @doc "Why a fetch ended with the code `pin_code/1` names for it, or `:error` for another code."
+  @spec pin_why(term()) :: {:ok, atom()} | :error
+  def pin_why(code) do
+    case Enum.find(@pin_whys, &(pin_code(&1) == code)) do
+      nil -> :error
+      why -> {:ok, why}
+    end
+  end
+
+  @doc "The most host calls a service carries of a runner unanswered at once."
+  @spec max_calls() :: pos_integer()
+  def max_calls, do: @max_calls
+
+  @doc "The most fetches a service carries of a runner open at once, each until its `fetch_end`."
+  @spec max_fetches() :: pos_integer()
+  def max_fetches, do: @max_fetches
 
   @doc "The channel as `side` opens it, carrying the assigned `attempt`."
   @spec new(side(), String.t()) :: t()

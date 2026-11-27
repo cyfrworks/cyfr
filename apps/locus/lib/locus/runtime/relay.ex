@@ -67,7 +67,7 @@ defmodule Locus.Runtime.Relay do
   answer that is
   refused, lost or names another scheme, host or port than the request's
   (`Locus.Runtime.Egress.names?/2`) ends the fetch with the code
-  `Locus.Runtime.Egress.relay_code/1` names, and nothing connects. The
+  `Prima.RunnerRelay.pin_code/1` names, and nothing connects. The
   fetch connects only to the address of that answer, with the pin's host
   for TLS (`Locus.Runtime.Egress.connect_options/3`) and as the `Host`
   this process sets itself, with the pin's port unless it is the scheme's
@@ -181,8 +181,8 @@ defmodule Locus.Runtime.Relay do
   @attempt_fields [:athanor_id, :execution_id, :attempt, :fence, :generation, :service]
   @assignment_fields [:athanor_id, :execution_id, :attempt, :fence, :generation]
 
-  @max_calls 64
-  @max_fetches 16
+  @max_calls RunnerRelay.max_calls()
+  @max_fetches RunnerRelay.max_fetches()
   @max_pins 256
   # The most body bytes one `fetch_chunk` carries: a slice of the credit,
   # so no one chunk holds the channel's writer for long.
@@ -196,6 +196,11 @@ defmodule Locus.Runtime.Relay do
   @envelope_bytes 1024
 
   @purposes %{"fetch" => :fetch, "stream" => :stream}
+
+  # The codes a fetch ends with, each one `Prima.RunnerRelay` names.
+  @fetch_end_codes Map.new(RunnerRelay.fetch_end_codes(), fn {code, _why} ->
+                     {String.to_atom(code), code}
+                   end)
 
   # The engine's method atom for each method a destination may name.
   # The HTTP client opens a connection in the process that makes the
@@ -390,7 +395,7 @@ defmodule Locus.Runtime.Relay do
       with_fetch(state, re, fn state, fetch -> pump(state, re, %{fetch | done: {:end, error}}) end)
 
   defp info({:fetch_deadline, re}, state),
-    do: with_fetch(state, re, fn state, fetch -> finish(state, re, fetch, "timeout") end)
+    do: with_fetch(state, re, fn state, fetch -> finish(state, re, fetch, end_code(:timeout)) end)
 
   defp info({:attached_event, re, event}, state),
     do: with_fetch(state, re, &attached_event(&1, re, &2, event))
@@ -411,7 +416,7 @@ defmodule Locus.Runtime.Relay do
     case {reason, state.fetches[re]} do
       {:normal, _fetch} -> {:noreply, state}
       {_reason, nil} -> {:noreply, state}
-      {_reason, fetch} -> finish(state, re, fetch, "fetch_failed")
+      {_reason, fetch} -> finish(state, re, fetch, end_code(:fetch_failed))
     end
   end
 
@@ -868,27 +873,27 @@ defmodule Locus.Runtime.Relay do
 
     cond do
       now >= bound.deadline ->
-        {:refuse, "timeout"}
+        {:refuse, end_code(:timeout)}
 
       PinnedTarget.expired?(pin, now) ->
-        {:refuse, Egress.relay_code(:expired)}
+        {:refuse, RunnerRelay.pin_code(:expired)}
 
       EdgeGuard.check_method(bound.edge, frame.method) != :ok ->
-        {:refuse, "method_blocked"}
+        {:refuse, end_code(:method_blocked)}
 
       EdgeGuard.check_scheme(bound.edge, pin.scheme) != :ok ->
-        {:refuse, "scheme_blocked"}
+        {:refuse, end_code(:scheme_blocked)}
 
       EdgeGuard.check_domain(bound.edge, unbracket(pin.host)) != :ok ->
-        {:refuse, "domain_blocked"}
+        {:refuse, end_code(:domain_blocked)}
 
       Enum.any?(frame.headers, fn {name, _value} ->
         Prima.Network.framing_or_override_header?(name)
       end) ->
-        {:refuse, "invalid_request"}
+        {:refuse, end_code(:invalid_request)}
 
       EdgeGuard.check_request_size(bound.limits, request) != :ok ->
-        {:refuse, "request_too_large"}
+        {:refuse, end_code(:request_too_large)}
 
       true ->
         {:ok,
@@ -912,19 +917,19 @@ defmodule Locus.Runtime.Relay do
 
     cond do
       now >= bound.deadline ->
-        {:refuse, "timeout"}
+        {:refuse, end_code(:timeout)}
 
       EdgeGuard.check_method(bound.edge, frame.method) != :ok ->
-        {:refuse, "method_blocked"}
+        {:refuse, end_code(:method_blocked)}
 
       EdgeGuard.check_scheme(bound.edge, String.downcase(scheme || "")) != :ok ->
-        {:refuse, "scheme_blocked"}
+        {:refuse, end_code(:scheme_blocked)}
 
       EdgeGuard.check_domain(bound.edge, unbracket(host || "")) != :ok ->
-        {:refuse, "domain_blocked"}
+        {:refuse, end_code(:domain_blocked)}
 
       EdgeGuard.check_request_size(bound.limits, request) != :ok ->
-        {:refuse, "request_too_large"}
+        {:refuse, end_code(:request_too_large)}
 
       true ->
         {:ok,
@@ -1019,7 +1024,7 @@ defmodule Locus.Runtime.Relay do
   # How the poster's answer ends the fetch: nil for an answer relayed
   # whole; `timeout` for a sink stopped at the deadline.
   defp attached_end(:ok), do: nil
-  defp attached_end(:halted), do: "timeout"
+  defp attached_end(:halted), do: end_code(:timeout)
   defp attached_end({:error, code}), do: code
 
   defp start_fetch(state, re, bound, request) do
@@ -1073,7 +1078,7 @@ defmodule Locus.Runtime.Relay do
   defp rate(client, bound) do
     case HostClient.take_rate(client, "http:" <> bound.component_ref) do
       :ok -> :ok
-      {:error, _refused} -> "rate_limited"
+      {:error, _refused} -> end_code(:rate_limited)
     end
   end
 
@@ -1083,10 +1088,10 @@ defmodule Locus.Runtime.Relay do
   defp decided(client, request) do
     case HostClient.egress_pin(client, request.url, purpose: request.purpose, from: request.from) do
       {:ok, pin} ->
-        if Egress.names?(pin, request.uri), do: {:ok, pin}, else: Egress.relay_code(:elsewhere)
+        if Egress.names?(pin, request.uri), do: {:ok, pin}, else: RunnerRelay.pin_code(:elsewhere)
 
       {:error, why} ->
-        Egress.relay_code(why)
+        RunnerRelay.pin_code(why)
     end
   end
 
@@ -1140,18 +1145,18 @@ defmodule Locus.Runtime.Relay do
 
         cond do
           not headed?(relay, re, resp, bound) ->
-            Process.put({__MODULE__, :error}, "timeout")
+            Process.put({__MODULE__, :error}, end_code(:timeout))
             {:halt, {req, resp}}
 
           bytes > max_bytes ->
-            Process.put({__MODULE__, :error}, "response_too_large")
+            Process.put({__MODULE__, :error}, end_code(:response_too_large))
             {:halt, {req, resp}}
 
           delivered?(relay, re, data, bound) ->
             {:cont, {req, resp}}
 
           true ->
-            Process.put({__MODULE__, :error}, "timeout")
+            Process.put({__MODULE__, :error}, end_code(:timeout))
             {:halt, {req, resp}}
         end
       end
@@ -1171,23 +1176,23 @@ defmodule Locus.Runtime.Relay do
       case Req.request(opts) do
         {:ok, resp} ->
           case Process.get({__MODULE__, :error}) do
-            nil -> if headed?(relay, re, resp, bound), do: nil, else: "timeout"
+            nil -> if headed?(relay, re, resp, bound), do: nil, else: end_code(:timeout)
             error -> error
           end
 
         # The connect and the wait for the answer time out alike; the
         # connect's own report says which.
         {:error, %Req.TransportError{reason: :timeout}} ->
-          if Process.get(@connect_watch) == :failed, do: "connect_timeout", else: "timeout"
+          if Process.get(@connect_watch) == :failed, do: end_code(:connect_timeout), else: end_code(:timeout)
 
         {:error, %Req.TransportError{reason: reason}} when is_atom(reason) ->
           code(reason)
 
         {:error, _exception} ->
-          "http_error"
+          end_code(:http_error)
       end
     else
-      {:error, _type, _message} -> "private_ip_blocked"
+      {:error, _type, _message} -> end_code(:private_ip_blocked)
     end
   end
 
@@ -1298,6 +1303,8 @@ defmodule Locus.Runtime.Relay do
     |> Enum.take(128)
   end
 
+  defp end_code(name), do: Map.fetch!(@fetch_end_codes, name)
+
   defp code(reason) do
     text = Atom.to_string(reason)
     if Regex.match?(~r/\A[a-z][a-z0-9_]{0,63}\z/, text), do: text, else: "http_error"
@@ -1341,7 +1348,7 @@ defmodule Locus.Runtime.Relay do
         {:noreply, put_fetch(state, re, %{fetch | refused: true})}
 
       {:error, :unencodable} ->
-        finish(state, re, fetch, "bad_frame")
+        finish(state, re, fetch, end_code(:bad_frame))
 
       {:error, reason} ->
         stop_write(state, reason)
@@ -1376,7 +1383,7 @@ defmodule Locus.Runtime.Relay do
 
       match?({:end, _}, fetch.done) and credit >= RunnerRelay.initial_credit() ->
         {:end, error} = fetch.done
-        finish(state, re, fetch, if(fetch.refused and is_nil(error), do: "refused", else: error))
+        finish(state, re, fetch, if(fetch.refused and is_nil(error), do: end_code(:refused), else: error))
 
       true ->
         {:noreply, put_fetch(state, re, fetch)}

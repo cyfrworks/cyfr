@@ -261,12 +261,12 @@ defmodule Locus.Runtime.EgressTest do
 
   test "a relay's code for a pin it got none for reads back as the refusal of the same reason" do
     for why <- Prima.PinnedTarget.refusals() ++ [:unavailable, :lost, :elsewhere, :expired] do
-      code = Egress.relay_code(why)
+      code = Prima.RunnerRelay.pin_code(why)
       assert code =~ ~r/\A[a-z][a-z0-9_]{0,63}\z/, "#{why} is no relay code"
       assert Egress.relay_refusal(code, "public.test") == Egress.refusal(why, "public.test")
     end
 
-    assert Egress.relay_code({:uncertain, "unknown"}) == Egress.relay_code(:lost)
+    assert Prima.RunnerRelay.pin_code({:uncertain, "unknown"}) == Prima.RunnerRelay.pin_code(:lost)
     assert Egress.relay_refusal("rate_limited", "public.test") == :none
     assert Egress.relay_refusal(nil, "public.test") == :none
   end
