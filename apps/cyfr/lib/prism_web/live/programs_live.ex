@@ -1565,7 +1565,7 @@ defmodule PrismWeb.ProgramsLive do
       <section data-test="memory" class="space-y-3">
         <h3 class="text-sm font-medium text-gray-400">Memory in use now</h3>
         <p
-          :if={Enum.all?(@memory.machines, &(&1.holders == []))}
+          :if={@memory.unanswered == [] and Enum.all?(@memory.machines, &(&1.holders == []))}
           class="text-sm text-gray-300"
         >
           Nothing of yours uses memory now.

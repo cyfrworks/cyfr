@@ -2154,7 +2154,8 @@ defmodule PrismWeb.ProgramsLiveTest do
       {view, _html} = mount_athanor(conn, "/programs", athanor)
       panel = view |> element(~s([data-test="memory"])) |> render()
 
-      assert panel =~ "A build uses 600.0 MB"
+      refute panel =~ "A build uses"
+      refute panel =~ "Nothing of yours uses memory now."
 
       assert panel =~
                "Counted at #{Calendar.strftime(an_hour_ago, "%H:%M UTC")}, and may be out of date."
