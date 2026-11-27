@@ -28,7 +28,7 @@ apps/cyfr/test/prism_web/live/settings_live_test.exs	1	pending
 apps/cyfr/test/prism_web/live/shell_canvas_test.exs	2	pending
 apps/cyfr/test/prism_web/live/shell_frame_test.exs	1	pending
 apps/cyfr/test/prism_web/live/shell_live_test.exs	1	pending
-apps/cyfr/test/prism_web/live/shell_live_visibility_test.exs	2	pending
+apps/cyfr/test/prism_web/live/shell_live_visibility_test.exs	1	pending
 apps/cyfr/test/prism_web/live/shell_prompts_test.exs	1	pending
 apps/cyfr/test/prism_web/live/shell_tincture_url_test.exs	2	pending
 apps/cyfr/test/prism_web/live/system_layer_test.exs	5	pending
