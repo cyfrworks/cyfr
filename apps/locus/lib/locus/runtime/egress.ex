@@ -42,8 +42,8 @@ defmodule Locus.Runtime.Egress do
 
   `refusal/2` is how every refused pin reaches the guest, whichever end
   asked for it: a relay that ends a fetch because its own ask got no pin
-  names why with `relay_code/1`, and the runner's handlers read that code
-  back with `relay_refusal/2`.
+  names why with `Prima.RunnerRelay.pin_code/1`, and the runner's
+  handlers read that code back with `relay_refusal/2`.
 
   ## Redirects
 
@@ -95,7 +95,8 @@ defmodule Locus.Runtime.Egress do
 
   @typedoc "The guest error type of a refused pin."
   @type refusal ::
-          :invalid_url
+          :domain_blocked
+          | :invalid_url
           | :invalid_request
           | :dns_error
           | :private_ip_blocked
@@ -115,14 +116,6 @@ defmodule Locus.Runtime.Egress do
   # The redirects an attempt's handlers remember before the guest follows
   # them; the oldest is forgotten first.
   @max_hops 8
-
-  # The codes a relay ends a fetch with when its own ask for the fetch's
-  # pin got none, each naming why; every one is a `Prima.RunnerRelay` code.
-  @relay_codes Map.new(
-                 PinnedTarget.refusals() ++ [:unavailable, :lost, :elsewhere, :expired],
-                 &{&1, "pin_" <> Atom.to_string(&1)}
-               )
-  @relay_whys Map.new(@relay_codes, fn {why, code} -> {code, why} end)
 
   @read_bytes 65_536
 
@@ -256,6 +249,11 @@ defmodule Locus.Runtime.Egress do
   """
   @spec refusal(term(), String.t()) ::
           {:refused, refusal(), String.t()} | {:error, refusal(), String.t()}
+  # A host outside the edge's domains, in the words of CYFR's own refusal
+  # of an attached request's.
+  def refusal(:domain, host),
+    do: {:refused, :domain_blocked, "HTTP egress refused: #{host} is not in the egress domains"}
+
   def refusal(:denied, host),
     do:
       {:refused, :private_ip_blocked, "Address of #{host} blocked: the egress policy refuses it"}
@@ -287,22 +285,14 @@ defmodule Locus.Runtime.Egress do
     do: {:error, :dns_error, "HTTP egress refused: the execution attempt is not current"}
 
   @doc """
-  The code a relay ends a fetch with (a `Prima.RunnerRelay` code) when it
-  got no pin for the fetch's request, for `why` as a pin answer names it
-  (`t:why/0`); any other reason is a lost answer, `pin_lost`.
-  """
-  @spec relay_code(term()) :: String.t()
-  def relay_code(why), do: Map.get(@relay_codes, why, @relay_codes.lost)
-
-  @doc """
   How a fetch the relay ended with `code` answers the guest, for a request
-  to `host`, when the code is a `relay_code/1`: as `refusal/2` answers that
-  reason. Any other code is `:none`.
+  to `host`, when the code is a `Prima.RunnerRelay.pin_code/1`: as
+  `refusal/2` answers that reason. Any other code is `:none`.
   """
   @spec relay_refusal(term(), String.t()) ::
           {:refused, refusal(), String.t()} | {:error, refusal(), String.t()} | :none
   def relay_refusal(code, host) do
-    case Map.fetch(@relay_whys, code) do
+    case Prima.RunnerRelay.pin_why(code) do
       {:ok, why} -> refusal(why, host)
       :error -> :none
     end

@@ -1,5 +1,5 @@
 {
-  "comment": "The vectors pinning Prima.RunnerRelay, the relay between a runner and its worker service: the runner's host calls and pinned fetches, carried on a socketpair the keeper makes for every spawn of an isolated pool as the runner's file descriptor 4, beside Prima.RunnerControl on fd 3, and over the attach connection as the keeper's relay stream (5, tests/fixtures/keeper_protocol.json), which the service opens with a zero-length frame. Prima's codec test (apps/prima/test/prima/runner_relay_test.exs) reads them whole. The Rust runner's crate (apps/locus/runner/tests/vectors.rs) reads the runner's half: it encodes every runner frame of `exchange` to exactly its bytes, decodes every service frame, and takes each refusal whose receiver is the runner. The runtime's test (apps/locus/test/locus/runtime/relay_vectors_test.exs) reads them too: the worker service's end (Locus.Runtime.Relay) takes each refusal the service receives, and the runner's end (Locus.Runtime.Relay.Runner) plays `exchange` through its own API up to the first attached fetch's fetch_end, sending every runner frame as exactly its bytes, and takes each refusal the runner receives after the frames before it. A frame is a 4-byte big-endian length and one JSON object of that many bytes. `exchange` is played in order between a runner's channel and a service's, each opened for `attempt`: the sender encodes each frame to exactly `json` behind its length and the receiver decodes it; a `json_fill` is `prefix`, then `repeat` written `times` times, then `suffix`, and `encoded_sha256` is the SHA-256 of the whole frame, length included. Bodies travel in standard base64 with padding, at most max_body_bytes decoded; a fetch starts with initial_credit, and the service sends no chunk past the credit outstanding. Each refusal is decoded by `receiver` after the first `after` frames of `exchange` have passed, and closes the channel with `reason`. Every host_call's header is a real one: the egress_pin call in `exchange` is signed with tests/fixtures/worker_auth.json's attempt call key over its `call` fields and its body is sealed with that attempt's seal key and `body_iv_hex`, and the host_answer's body is that call's answer, a pin, sealed with `answer_iv_hex`, so a service verifies and opens them as it would a runner's (Prima.WorkerAuth.verify_host_call_header_under/3). A fetch is pinned (pin, method, path, headers, body) or attached (call_id, connection, purpose, method, url, headers, body), told apart by the connection it names, and never both: the service posts an attached fetch to CYFR as host_api.json's attached_fetch call, member for member, and relays the answer as attached_frame frames (each frame of the answer, its kind byte and sealed value, unopened, charged to the fetch's credit by those bytes) or one attached_refusal (the call's signed header as posted and CYFR's sealed answer as received), before the fetch_end. The exchange's attached frames open for its first attached fetch's call_id under worker_auth.json's attempt seal key, and its refusal is host_api.json's attached_fetch call refused destination_mismatch, naming the second's. A refusal whose reason names a member carries it as `field`. max_headers, max_header_name_bytes and max_header_value_bytes bound a fetch's headers (Prima.AttachedRequest's bounds); max_signed_header_bytes bounds a signed header (Prima.WorkerAuth.max_host_call_header_bytes/0); max_attached_frame_bytes bounds an attached_frame's decoded bytes (Prima.WorkerAuth.max_frame_bytes/0); ops are the host API callbacks a host_call may name (Prima.RunnerRelay.ops/0). The refusals a runner receives hold each rule a runner's decoder applies to a service's frame, one case for each: the frame's length, its JSON and version, its kind and direction, each member's presence, JSON type, grammar and bound, the order of seq, and what the channel's state takes. encode_refusals are frames a runner's channel refuses to send, after the first `after` frames of `exchange`, before it numbers them or records anything: each `frame` as the encoder takes it (its kind, its attempt and its kind's members, a body in base64), refused for its `member`, the first in the kind's order that is not of its type, grammar or bound (Prima's encoder raises, naming it), or for its `reason`, what the channel's state does not take. methods are the methods a fetch names (Prima.Destination.methods/0), purposes an attached fetch's, max_path_bytes a pinned fetch's path bound and max_url_bytes an attached fetch's URL bound (Prima.AttachedRequest.max_url_bytes/0); an attached fetch's URL is an http or https URL with a host and no user information, as Prima.Network.parse_url/1 reads it. A member given twice is its first.",
+  "comment": "The vectors pinning Prima.RunnerRelay, the relay between a runner and its worker service: the runner's host calls and pinned fetches, carried on a socketpair the keeper makes for every spawn of an isolated pool as the runner's file descriptor 4, beside Prima.RunnerControl on fd 3, and over the attach connection as the keeper's relay stream (5, tests/fixtures/keeper_protocol.json), which the service opens with a zero-length frame. Prima's codec test (apps/prima/test/prima/runner_relay_test.exs) reads them whole. The Rust runner's crate (apps/locus/runner/tests/vectors.rs) reads the runner's half: it encodes every runner frame of `exchange` to exactly its bytes, decodes every service frame, and takes each refusal whose receiver is the runner. The runtime's test (apps/locus/test/locus/runtime/relay_vectors_test.exs) reads them too: the worker service's end (Locus.Runtime.Relay) takes each refusal the service receives, and the runner's end (Locus.Runtime.Relay.Runner) plays `exchange` through its own API up to the first attached fetch's fetch_end, sending every runner frame as exactly its bytes, and takes each refusal the runner receives after the frames before it. A frame is a 4-byte big-endian length and one JSON object of that many bytes. `exchange` is played in order between a runner's channel and a service's, each opened for `attempt`: the sender encodes each frame to exactly `json` behind its length and the receiver decodes it; a `json_fill` is `prefix`, then `repeat` written `times` times, then `suffix`, and `encoded_sha256` is the SHA-256 of the whole frame, length included. Bodies travel in standard base64 with padding, at most max_body_bytes decoded; a fetch starts with initial_credit, and the service sends no chunk past the credit outstanding. Each refusal is decoded by `receiver` after the first `after` frames of `exchange` have passed, and closes the channel with `reason`. Every host_call's header is a real one: the egress_pin call in `exchange` is signed with tests/fixtures/worker_auth.json's attempt call key over its `call` fields and its body is sealed with that attempt's seal key and `body_iv_hex`, and the host_answer's body is that call's answer, a pin, sealed with `answer_iv_hex`, so a service verifies and opens them as it would a runner's (Prima.WorkerAuth.verify_host_call_header_under/3). A fetch is pinned (pin, method, path, headers, body) or attached (call_id, connection, purpose, method, url, headers, body), told apart by the connection it names, and never both: the service posts an attached fetch to CYFR as host_api.json's attached_fetch call, member for member, and relays the answer as attached_frame frames (each frame of the answer, its kind byte and sealed value, unopened, charged to the fetch's credit by those bytes) or one attached_refusal (the call's signed header as posted and CYFR's sealed answer as received), before the fetch_end. The exchange's attached frames open for its first attached fetch's call_id under worker_auth.json's attempt seal key, and its refusal is host_api.json's attached_fetch call refused destination_mismatch, naming the second's. A refusal whose reason names a member carries it as `field`. max_headers, max_header_name_bytes and max_header_value_bytes bound a fetch's headers (Prima.AttachedRequest's bounds); max_signed_header_bytes bounds a signed header (Prima.WorkerAuth.max_host_call_header_bytes/0); max_attached_frame_bytes bounds an attached_frame's decoded bytes (Prima.WorkerAuth.max_frame_bytes/0); ops are the host API callbacks a host_call may name (Prima.RunnerRelay.ops/0). The refusals a runner receives hold each rule a runner's decoder applies to a service's frame, one case for each: the frame's length, its JSON and version, its kind and direction, each member's presence, JSON type, grammar and bound, the order of seq, and what the channel's state takes. encode_refusals are frames a runner's channel refuses to send, after the first `after` frames of `exchange`, before it numbers them or records anything: each `frame` as the encoder takes it (its kind, its attempt and its kind's members, a body in base64), refused for its `member`, the first in the kind's order that is not of its type, grammar or bound (Prima's encoder raises, naming it), or for its `reason`, what the channel's state does not take. methods are the methods a fetch names (Prima.Destination.methods/0), purposes an attached fetch's, max_path_bytes a pinned fetch's path bound and max_url_bytes an attached fetch's URL bound (Prima.AttachedRequest.max_url_bytes/0); an attached fetch's URL is an http or https URL with a host and no user information, as Prima.Network.parse_url/1 reads it. A member given twice is its first. max_calls and max_fetches are the most host calls unanswered and fetches open (each until its fetch_end, read or not) a service carries of one runner; the one past either closes the channel (too_many_calls, too_many_fetches), and a runner refuses its guest rather than send it (Prima.RunnerRelay.max_calls/0, max_fetches/0). codes are every code a service names, each with what it means (Prima.RunnerRelay.fetch_end_codes/0, close_codes/0): a fetch_end's error is one of `fetch_end`, or the transport's own name for a failure after the request was sent, and a close's reason one of `close`; the `pin_` codes end a fetch whose service's own ask for its pin got none, one for each refusal of Prima.PinnedTarget.refusals/0 and for unavailable, lost, elsewhere and expired (Prima.RunnerRelay.pin_code/1). Decoding holds a code to its form alone.",
   "version": 1,
   "attempt": "att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42",
   "max_body_bytes": 5242880,
@@ -43,6 +43,218 @@
   ],
   "max_path_bytes": 8192,
   "max_url_bytes": 8192,
+  "max_calls": 64,
+  "max_fetches": 16,
+  "codes": {
+    "fetch_end": [
+      {
+        "code": "timeout",
+        "why": "the attempt's deadline or the node's timeout passed before the answer ended"
+      },
+      {
+        "code": "connect_timeout",
+        "why": "the pinned address was not connected to in time"
+      },
+      {
+        "code": "rate_limited",
+        "why": "the consented rate is exhausted"
+      },
+      {
+        "code": "method_blocked",
+        "why": "the method is outside the edge's egress methods"
+      },
+      {
+        "code": "scheme_blocked",
+        "why": "the scheme is outside the edge's egress schemes"
+      },
+      {
+        "code": "domain_blocked",
+        "why": "the host is outside the edge's egress domains"
+      },
+      {
+        "code": "invalid_request",
+        "why": "a header frames or routes the request or overrides its method or target"
+      },
+      {
+        "code": "request_too_large",
+        "why": "the body, URL and headers pass the node's max_request_size"
+      },
+      {
+        "code": "response_too_large",
+        "why": "the answer passed the node's max_response_size"
+      },
+      {
+        "code": "private_ip_blocked",
+        "why": "the pinned address is a metadata address"
+      },
+      {
+        "code": "http_error",
+        "why": "the request failed after it was sent"
+      },
+      {
+        "code": "fetch_failed",
+        "why": "the service's worker for the fetch ended without an end"
+      },
+      {
+        "code": "refused",
+        "why": "CYFR refused the attached request before admitting it (its attached_refusal)"
+      },
+      {
+        "code": "bad_frame",
+        "why": "CYFR's attached answer does not read"
+      },
+      {
+        "code": "lost",
+        "why": "CYFR did not answer the attached request as admitted"
+      },
+      {
+        "code": "uncertain",
+        "why": "no answer to the attached request reached the service"
+      },
+      {
+        "code": "pin_domain",
+        "why": "the service's own ask for the fetch's pin was answered domain"
+      },
+      {
+        "code": "pin_denied",
+        "why": "the service's own ask for the fetch's pin was answered denied"
+      },
+      {
+        "code": "pin_metadata",
+        "why": "the service's own ask for the fetch's pin was answered metadata"
+      },
+      {
+        "code": "pin_resolution",
+        "why": "the service's own ask for the fetch's pin was answered resolution"
+      },
+      {
+        "code": "pin_redirect_credentials",
+        "why": "the service's own ask for the fetch's pin was answered redirect_credentials"
+      },
+      {
+        "code": "pin_malformed",
+        "why": "the service's own ask for the fetch's pin was answered malformed"
+      },
+      {
+        "code": "pin_unavailable",
+        "why": "the service's own ask for the fetch's pin was answered unavailable"
+      },
+      {
+        "code": "pin_lost",
+        "why": "the service's own ask for the fetch's pin was answered lost"
+      },
+      {
+        "code": "pin_elsewhere",
+        "why": "the service's own ask for the fetch's pin was answered elsewhere"
+      },
+      {
+        "code": "pin_expired",
+        "why": "the service's own ask for the fetch's pin was answered expired"
+      }
+    ],
+    "close": [
+      {
+        "code": "frame_too_large",
+        "why": "a frame's length is past max_frame_bytes"
+      },
+      {
+        "code": "malformed",
+        "why": "a frame is no JSON object, or a member is missing, of another type or invalid"
+      },
+      {
+        "code": "bad_version",
+        "why": "a frame's v is not the version"
+      },
+      {
+        "code": "unknown_kind",
+        "why": "a frame's kind is none of the nine"
+      },
+      {
+        "code": "wrong_direction",
+        "why": "a frame of a kind its sender does not send"
+      },
+      {
+        "code": "body_too_large",
+        "why": "a body past max_body_bytes"
+      },
+      {
+        "code": "out_of_order",
+        "why": "a seq other than the next"
+      },
+      {
+        "code": "unknown_attempt",
+        "why": "an attempt the channel does not carry"
+      },
+      {
+        "code": "unknown_reference",
+        "why": "an re naming no unanswered call or open fetch"
+      },
+      {
+        "code": "wrong_answer",
+        "why": "an answer its fetch does not take"
+      },
+      {
+        "code": "credit_exceeded",
+        "why": "a chunk or frame past its fetch's credit"
+      },
+      {
+        "code": "done",
+        "why": "the channel's work is over"
+      },
+      {
+        "code": "take_rate",
+        "why": "a runner's take_rate, which is the service's own call"
+      },
+      {
+        "code": "too_many_calls",
+        "why": "a host call past max_calls unanswered"
+      },
+      {
+        "code": "too_many_fetches",
+        "why": "a fetch past max_fetches open"
+      },
+      {
+        "code": "unknown_pin",
+        "why": "a pinned fetch naming a pin the service holds none of"
+      },
+      {
+        "code": "attempt_mismatch",
+        "why": "a host call's header naming another attempt"
+      },
+      {
+        "code": "runner_mismatch",
+        "why": "a host call's header naming another runner"
+      },
+      {
+        "code": "boot_mismatch",
+        "why": "a host call's header naming another boot"
+      },
+      {
+        "code": "member_mismatch",
+        "why": "a host call's header naming another member"
+      },
+      {
+        "code": "unknown_version",
+        "why": "a host call's header of another version"
+      },
+      {
+        "code": "outside_window",
+        "why": "a host call's header outside the window"
+      },
+      {
+        "code": "bad_mac",
+        "why": "a host call's header or body that does not verify"
+      },
+      {
+        "code": "malformed_call",
+        "why": "a host call's body that does not open as its operation"
+      },
+      {
+        "code": "request_too_large",
+        "why": "an emitted event past the node's max_request_size"
+      }
+    ]
+  },
   "exchange": [
     {
       "why": "host_call: the runner's egress_pin call for https://api.example.com/v1/items?page=2, its header signed with worker_auth.json's attempt call key over its call fields and its body sealed with the attempt seal key and body_iv",

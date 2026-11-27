@@ -43,8 +43,10 @@ defmodule Prima.PinnedTarget do
   ## Refusals
 
   A pin CYFR does not grant is answered as a `Prima.WorkerWire` error
-  named by `refusals/0`: `denied` (the attempt's policy refuses the
-  address), `metadata` (a metadata address, refused before any policy),
+  named by `refusals/0`: `domain` (the URL's host is outside the edge's
+  egress domains, refused before it is resolved), `denied` (the attempt's
+  policy refuses the address), `metadata` (a metadata address, refused
+  before any policy),
   `resolution` (the name resolves to no address), `redirect_credentials`
   (a redirect hop that would carry the request's credentials to another
   origin than the pin it came from) and `malformed` (the args do not
@@ -62,7 +64,7 @@ defmodule Prima.PinnedTarget do
 
   @typedoc "A pin `egress_pin` refuses, as its error answer names it."
   @type refusal ::
-          :denied | :metadata | :resolution | :redirect_credentials | :malformed
+          :domain | :denied | :metadata | :resolution | :redirect_credentials | :malformed
 
   @typedoc "An `egress_pin` request's args, read."
   @type request :: %{url: String.t(), purpose: purpose(), from: String.t() | nil}
@@ -78,7 +80,7 @@ defmodule Prima.PinnedTarget do
         }
 
   @purposes [:fetch, :stream, :redirect]
-  @refusals [:denied, :metadata, :resolution, :redirect_credentials, :malformed]
+  @refusals [:domain, :denied, :metadata, :resolution, :redirect_credentials, :malformed]
   @members ~w(id ip family scheme port host expires_at)
 
   @id ~r/\A[A-Za-z0-9_-]{1,128}\z/
