@@ -55,6 +55,12 @@ const (
 // makes the pair.
 const RouteLink = "eth0"
 
+// MachineNames is where a person's VM's names are answered: the address its
+// VMM's space's two name sockets are bound to, port 53, which the guard's
+// bridge there holds (package guard), and which the guest's guard asks, as
+// a space asks its own 127.0.0.11.
+var MachineNames = [4]byte{169, 254, 0, 53}
+
 // Spec names a pool, its inclusive uid range and its spaces' reach.
 type Spec struct {
 	Name  string

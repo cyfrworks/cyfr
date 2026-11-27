@@ -119,7 +119,7 @@ func keeper() int {
 	if _, err := read(control); err != nil {
 		return fail("the guard's hello: %v", err)
 	}
-	admit, _ := json.Marshal(map[string]any{"v": 3, "type": "admit", "spawn_id": spawnID, "reach": "role", "port": port, "private": private})
+	admit, _ := json.Marshal(map[string]any{"v": 4, "type": "admit", "spawn_id": spawnID, "reach": "role", "port": port, "private": private})
 	if _, _, err := control.WriteMsgUnix(admit, syscall.UnixRights(fds...), nil); err != nil {
 		return fail("the admit: %v", err)
 	}
@@ -144,7 +144,7 @@ func keeper() int {
 			return 0
 		}
 		if strings.TrimSpace(line) == "clear" {
-			clear, _ := json.Marshal(map[string]any{"v": 3, "type": "clear", "spawn_id": spawnID})
+			clear, _ := json.Marshal(map[string]any{"v": 4, "type": "clear", "spawn_id": spawnID})
 			if _, err := control.Write(clear); err != nil {
 				return fail("the clear: %v", err)
 			}

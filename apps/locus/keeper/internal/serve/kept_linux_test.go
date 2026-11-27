@@ -293,6 +293,19 @@ func TestAKeptSpawnOfNoHomeIsRefused(t *testing.T) {
 			t.Errorf("%s: placing its place again answered %v", name, placed)
 		}
 	}
+	// A home on a disk image runs in its person's VM alone: where none
+	// runs it, its spawn is refused by name and nothing of it is touched.
+	image := home.Disk{Athanor: "ath_image", Form: home.FormImage, UID: testKeptFirst, Homes: []string{"vlt_image"}}
+	if err := k.s.putDisk(image); err != nil {
+		t.Fatal(err)
+	}
+	k.handleSpawn(t, keptRequest(t, k.attach, "5", "true", filepath.Join(root, "vlt_image"), nil))
+	if refused := k.reply(t); refused["code"] != protocol.CodeUnavailable {
+		t.Fatalf("a kept spawn of a disk image with no VM: %v", refused)
+	}
+	if _, err := os.Lstat(k.s.cfg.Kept.DiskPath("ath_image")); !os.IsNotExist(err) {
+		t.Fatalf("a refused spawn of a disk image made a folder for it: %v", err)
+	}
 	k.s.cfg.Kept = nil
 	k.handleSpawn(t, keptRequest(t, k.attach, "4", "true", filepath.Join(root, "vlt_absent"), nil))
 	if refused := k.reply(t); refused["code"] != protocol.CodeUnavailable {
@@ -879,5 +892,86 @@ func TestHomeListPagesTheHomesInOrder(t *testing.T) {
 	}
 	if last := list(want[len(want)-1]); len(last.IDs) != 0 || last.Next != "" {
 		t.Fatalf("the page after the last home: %+v", last)
+	}
+}
+
+// Where the machine's disks take the image form, a person's first home makes
+// their disk's record and then its image, with no folder: the homes are made
+// inside it, by their VM's keeper. A second home is recorded on the same
+// image, which stands as it was. A home of an image is measured, reset and
+// retired by its person's VM alone: here, with none, each is refused. The
+// image is its disk's uid's, which the keeper makes it as: root alone does.
+func TestAnImageDiskIsRecordedAndMadeWithNoFolder(t *testing.T) {
+	if _, err := os.Stat(home.Mke2fs); err != nil {
+		t.Skipf("this host has no %s: %v", home.Mke2fs, err)
+	}
+	if os.Getuid() != 0 {
+		t.Skip("making an image as its disk's uid needs root")
+	}
+	// The disk's uid is one no process holds: no folder of it is made.
+	const free = 59999
+	kept := &home.Kept{Root: t.TempDir(), First: free, Last: free}
+	if err := os.Mkdir(filepath.Join(kept.Root, home.DisksDir), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// The root as the shipped one is, so its disk's uid makes its image in it.
+	for path, mode := range map[string]os.FileMode{filepath.Dir(kept.Root): 0o711, kept.Root: os.ModeSticky | 0o773} {
+		if err := os.Chmod(path, mode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s, c, replies := channelServer(t, kept)
+	s.imageDisks = true
+	recorded := func() home.Disk {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if d := s.disks["ath_1"]; d != nil {
+			return *d
+		}
+		return home.Disk{}
+	}
+	next := func() string {
+		line, _, err := replies.Next()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(line)
+	}
+	s.handle(c, &protocol.Request{V: protocol.Version, Type: protocol.TypeHomeMake, ID: "m1", Home: "vlt_a", Athanor: "ath_1"})
+	if got, want := next(), fmt.Sprintf(`{"v":9,"type":"home_made","id":"m1","uid":%d}`, free); got != want {
+		t.Fatalf("the first make answered %s, want %s", got, want)
+	}
+	if d := recorded(); d.Form != home.FormImage || !d.Holds("vlt_a") {
+		t.Fatalf("the record reads %+v", d)
+	}
+	img, err := os.Lstat(kept.ImagePath("ath_1"))
+	if err != nil || img.Size() != home.ImageBytes {
+		t.Fatalf("the image: %v %v", img, err)
+	}
+	if st := img.Sys().(*syscall.Stat_t); st.Uid != free || st.Gid != free || img.Mode().Perm() != 0o600 {
+		t.Fatalf("the image is %d:%d %s, not its disk's uid's alone", st.Uid, st.Gid, img.Mode())
+	}
+	if _, err := os.Lstat(kept.DiskPath("ath_1")); !os.IsNotExist(err) {
+		t.Fatalf("an image's disk has a folder: %v", err)
+	}
+	s.handle(c, &protocol.Request{V: protocol.Version, Type: protocol.TypeHomeMake, ID: "m2", Home: "vlt_b", Athanor: "ath_1"})
+	if got := next(); !strings.Contains(got, `"type":"home_made"`) {
+		t.Fatalf("the second make answered %s", got)
+	}
+	if d := recorded(); !d.Holds("vlt_a") || !d.Holds("vlt_b") {
+		t.Fatalf("the record reads %+v", d)
+	}
+	again, err := os.Lstat(kept.ImagePath("ath_1"))
+	if err != nil || !os.SameFile(img, again) || !again.ModTime().Equal(img.ModTime()) {
+		t.Fatalf("the second home made the image again: %v", err)
+	}
+	for _, typ := range []string{protocol.TypeHomeMeasure, protocol.TypeHomeReset, protocol.TypeHomeRetire} {
+		s.handle(c, &protocol.Request{V: protocol.Version, Type: typ, ID: "r", Home: "vlt_a"})
+		if got := next(); got != `{"v":9,"type":"error","id":"r","code":"unavailable"}` {
+			t.Errorf("a %s of an image's home with no VM answered %s", typ, got)
+		}
+	}
+	if d := recorded(); !d.Holds("vlt_a") {
+		t.Fatalf("a refused retirement changed the record: %+v", d)
 	}
 }

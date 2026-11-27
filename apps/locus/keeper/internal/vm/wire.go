@@ -92,6 +92,28 @@ const (
 	// GuestHomeRoot is the guest keeper's home root; the role's homes are
 	// a tmpfs of the guest's own at GuestHomeRoot/GuestRole.
 	GuestHomeRoot = "/var/lib/locus/homes"
+	// GuestPersonEnv, set to 1 in the guest keeper's step, says the guest
+	// is a person's VM: its first process found the person's disk,
+	// GuestDisk, and mounted it at GuestKeptRoot, and its card set up
+	// (NetArg). Its keeper's one role then keeps homes, its pool is routed
+	// by the guest's guard, and its kept homes are the disk's, drawn from
+	// GuestKeptUIDs (GuestPersonRoleSpec, GuestPersonPoolSpec).
+	GuestPersonEnv = "CYFR_GUEST_PERSON"
+	// GuestDisk is the person's disk image in the guest: the second drive,
+	// after the image's programs.
+	GuestDisk = "/dev/vdb"
+	// GuestKeptRoot is the guest keeper's kept-homes root, where the disk
+	// is mounted, and GuestKeptUIDs the uids it draws the disk's from.
+	GuestKeptRoot = "/var/lib/locus/kept"
+	GuestKeptUIDs = "40001-49999"
+	// GuestPersonRoleSpec and GuestPersonPoolSpec are a person's VM's role
+	// and pool on the guest keeper's command line.
+	GuestPersonRoleSpec = GuestRoleSpec + ":kept"
+	GuestPersonPoolSpec = GuestPool + ":20001-20032:routed"
+	// NetArg names a person's VM's address and gateway on its kernel's
+	// command line, NetArg=<inner>,<gateway>, which its first process sets
+	// its card to (guard.GuestLink).
+	NetArg = "cyfr.net"
 	// GuestRunDir is the role's run folder, its uid's own, 0700, where the
 	// keeper's relays reach the attach socket it listens on.
 	GuestRunDir = "/run/locus/" + GuestRole
@@ -129,17 +151,19 @@ const (
 	// Root is the machines' folders' root, a home root (mode 1733,
 	// root's) on the container's /run/locus tmpfs, which a restart of the
 	// container clears: each machine's folder is its VMM's space's home,
-	// made by the stage as the VMM's uid (MachineUIDs), 0700, holding its
+	// made by the stage as the VMM's uid (Config.UID), 0700, holding its
 	// API and vsock sockets.
 	Root = "/run/locus/machines"
 	// MachineUser names a machine's VMM's uid in its space.
 	MachineUser = "locus-machine"
 )
 
-// MachineUIDs is the range each machine's VMM takes a uid of its own from
-// while it runs, as a spawn takes one of its pool's: no pool, role or kept
-// home has one of them, and no two machines share one, so retiring a
-// machine's uid ends that machine alone and no VMM may signal another's.
+// MachineUIDs is the range a machine that is no person's, guest-check's,
+// takes a uid of its own from while it runs, as a spawn takes one of its
+// pool's: no pool, role or kept home has one of them, and no two machines
+// share one, so retiring a machine's uid ends that machine alone and no VMM
+// may signal another's. A person's VM runs under their disk's uid, which
+// no other process of the host runs under.
 var MachineUIDs = pool.Spec{Name: "machines", First: 30201, Last: 30456, Reach: pool.ReachRelay}
 
 // HelloVersion is the version of the agent's Hello line, apart from the

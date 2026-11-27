@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 
@@ -179,25 +180,58 @@ func TestAVMMsOwnExitClearsItsFolderAndItsLockByItself(t *testing.T) {
 // Each machine is allotted a uid of its own from MachineUIDs, and one given
 // back is the last to be allotted again.
 func TestEachMachineIsAllottedAUIDOfItsOwn(t *testing.T) {
-	a, err := allot()
+	a, allotted, err := takeUID(0)
+	if err != nil || !allotted {
+		t.Fatal(allotted, err)
+	}
+	b, _, err := takeUID(0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := allot()
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { giveBack(b) })
+	t.Cleanup(func() { giveBack(b, true) })
 	if a == b || !MachineUIDs.Contains(a) || !MachineUIDs.Contains(b) {
 		t.Fatalf("two machines were allotted %d and %d, not two uids of %d-%d", a, b, MachineUIDs.First, MachineUIDs.Last)
 	}
-	giveBack(a)
-	c, err := allot()
+	giveBack(a, true)
+	c, _, err := takeUID(0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { giveBack(c) })
+	t.Cleanup(func() { giveBack(c, true) })
 	if c == a {
 		t.Fatalf("the uid %d given back was allotted again before the rest", a)
+	}
+}
+
+// A person's VM runs under their disk's uid, given, which no second machine
+// of this keeper takes while the first runs, and which is no allotment's:
+// its end lets it go, and a uid that runs a process is refused.
+func TestAPersonsVMRunsUnderItsDisksUIDAlone(t *testing.T) {
+	const disk = 59998
+	uid, allotted, err := takeUID(disk)
+	if err != nil || uid != disk || allotted {
+		t.Fatalf("a person's VM took uid %d (allotted %t): %v", uid, allotted, err)
+	}
+	if _, _, err := takeUID(disk); err == nil {
+		t.Fatal("a second machine took the uid a first runs under")
+	}
+	giveBack(disk, false)
+	if _, _, err := takeUID(disk); err != nil {
+		t.Fatalf("a uid let go was refused: %v", err)
+	}
+	giveBack(disk, false)
+	busy := os.Getuid()
+	if busy == 0 {
+		// As root, a process of a uid of the test's own.
+		busy = 59997
+		sleeper := exec.Command("sleep", "30")
+		sleeper.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: uint32(busy), Gid: uint32(busy)}}
+		if err := sleeper.Start(); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = sleeper.Process.Kill(); _ = sleeper.Wait() })
+	}
+	if _, _, err := takeUID(busy); err == nil {
+		t.Fatal("a uid that runs a process was taken")
 	}
 }

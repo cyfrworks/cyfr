@@ -231,6 +231,7 @@ RUN --mount=type=bind,source=scripts/apt-key.sh,target=/tmp/apt-key.sh \
     build-essential \
     iptables \
     squashfs-tools \
+    e2fsprogs \
     procps \
     && apt-get install -y --no-install-recommends fonts-liberation fonts-dejavu-core fonts-noto-color-emoji fonts-noto-cjk \
     && dpkg-query -W -f '${Package}\n' | sort > /tmp/before-browser \
@@ -368,7 +369,9 @@ COPY --from=keeper /out/cyfr-locus /usr/local/bin/cyfr-locus
 # A person's machine: the guest agent, which a guest's kernel runs as its
 # first process from the image's programs (squashfs-tools' mksquashfs, above,
 # makes them into the machines' device in the `guest` volume), and on amd64
-# the guest kernel and Firecracker (package vm).
+# the guest kernel and Firecracker (package vm). e2fsprogs' mke2fs, above,
+# makes each person's disk image, their VM's one writable drive (package
+# home).
 # The volume's mount point, /var/lib/locus/guest, is Docker's to make: a
 # new volume is root's, 0755, and each machine's sockets are kept there
 # too, in a folder root's and its VMM's group's alone.

@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"net/netip"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -138,6 +139,9 @@ func TestTheStaticRulesAreTheTableAndTheIslandsRowsInOrder(t *testing.T) {
 			"ip6tables -A FORWARD -i sp+ -j REJECT --reject-with icmp6-adm-prohibited",
 			"ip6tables -A FORWARD -o sp+ -j REJECT --reject-with icmp6-adm-prohibited",
 			"ip6tables -A INPUT -i sp+ -j REJECT --reject-with icmp6-adm-prohibited",
+			"ip6tables -t raw -A PREROUTING -i sp+ -j DROP",
+			"iptables -t raw -A OUTPUT -p icmp --icmp-type 11/1 -j DROP",
+			"ip6tables -t raw -A OUTPUT -p ipv6-icmp --icmpv6-type 3/1 -j DROP",
 			"iptables -t nat -N CYFR_GUARD_ROLES",
 			// The island's own addresses are its local addresses on its
 			// subnets: neither the loopback's nor one outside them.
@@ -379,6 +383,33 @@ func TestEachReachsRouteIsItsChainsAndJumps(t *testing.T) {
 			t.Errorf("%s's route:\n%s\nwant:\n%s", c.name, got, c.want)
 		}
 	}
+
+	// A machine's route is a space's of its reach; with no live session it
+	// reaches nothing past the guard, not even a target the deployment
+	// names, and a change replaces its route chain alone, declaring it
+	// first so the commit flushes the old lines.
+	none := aRoute(ReachNone)
+	none.machine, none.uid = true, 30201
+	refuseAll := "-A CYFR_GUARD_R3 -j CYFR_GUARD_REFUSE\n-A CYFR_GUARD_R3 -j REJECT --reject-with icmp-admin-prohibited\n"
+	// A machine's route drops, before routing, what its guest sends from
+	// any address but its own.
+	sources := "*raw\n-A PREROUTING -i sp3 ! -s 10.213.0.14/32 -j DROP\nCOMMIT\n"
+	if got, want := routeRules(none, st), head+other+refuseAll+jumps+"COMMIT\n"+sources; got != want {
+		t.Errorf("a machine's route with no session:\n%s\nwant:\n%s", got, want)
+	}
+	if got, want := changeRules(none, st), "*filter\n:CYFR_GUARD_R3 - [0:0]\n-A CYFR_GUARD_R3 ! -s 10.213.0.14/32 -j DROP\n"+other+refuseAll+"COMMIT\n"; got != want {
+		t.Errorf("a change to none:\n%s\nwant:\n%s", got, want)
+	}
+	machineHosts := *hosts
+	machineHosts.machine, machineHosts.uid = true, 30201
+	if got, want := routeRules(&machineHosts, st), routeRules(hosts, st)+sources; got != want {
+		t.Errorf("a machine's hosts route is not a space's and its sources' line:\n%s\nwant:\n%s", got, want)
+	}
+	if got, want := changeRules(&machineHosts, st), "*filter\n:CYFR_GUARD_R3 - [0:0]\n-A CYFR_GUARD_R3 ! -s 10.213.0.14/32 -j DROP\n"+other+held+
+		"-A CYFR_GUARD_R3 -d 1.2.3.4/32 -j CYFR_GUARD_P3\n-A CYFR_GUARD_R3 -d 5.6.7.8/32 -j CYFR_GUARD_P3\n"+
+		"-A CYFR_GUARD_R3 -j REJECT --reject-with icmp-admin-prohibited\nCOMMIT\n"; got != want {
+		t.Errorf("a change to hosts:\n%s\nwant:\n%s", got, want)
+	}
 }
 
 // A route's record is what the kernel lists of its chains and of its jumps,
@@ -418,6 +449,19 @@ func TestARoutesRecordAndRemovalAreItsOwnLinesAlone(t *testing.T) {
 	if !reflect.DeepEqual(chains, []string{"sp3"}) || !reflect.DeepEqual(jumps, []string{"sp3", "sp31"}) {
 		t.Errorf("the routes listed %q, jumped to %q", chains, jumps)
 	}
+
+	// A machine's route's line in the raw table is its own as well: in its
+	// record, and removed first, and another machine's stays.
+	machine := installed{r: "-N CYFR_GUARD_R3\n", p: "-N CYFR_GUARD_P3\n", out: "-N CYFR_GUARD_ROUTES\n", in: "-N CYFR_GUARD_REPLIES\n",
+		roles: "-N CYFR_GUARD_ROLES\n",
+		raw:   "-P PREROUTING ACCEPT\n-A PREROUTING -i sp3 ! -s 10.213.0.14/32 -j DROP\n-A PREROUTING -i sp31 ! -s 10.213.0.126/32 -j DROP\n"}
+	if got, want := routeText("sp3", machine), machine.r+machine.p+"-A PREROUTING -i sp3 ! -s 10.213.0.14/32 -j DROP\n"; got != want {
+		t.Errorf("a machine's record:\n%s\nwant:\n%s", got, want)
+	}
+	if got, want := removal("sp3", machine), "*raw\n-D PREROUTING -i sp3 ! -s 10.213.0.14/32 -j DROP\nCOMMIT\n*nat\nCOMMIT\n*filter\n"+
+		"-F CYFR_GUARD_R3\n-F CYFR_GUARD_P3\n-X CYFR_GUARD_R3\n-X CYFR_GUARD_P3\nCOMMIT\n"; got != want {
+		t.Errorf("a machine's removal:\n%s\nwant:\n%s", got, want)
+	}
 }
 
 // The digest is of the static rules: comments, the policies' counters,
@@ -453,6 +497,48 @@ func TestTheDigestIsOfTheStaticRulesAlone(t *testing.T) {
 	for name, s := range moved {
 		if digest(s[0], s[1], s[2]) == base {
 			t.Errorf("%s leaves the digest", name)
+		}
+	}
+}
+
+// A guard given a resolver, a person's VM's guard given the host's guard
+// at a link-local address, lets its own processes reach that one address
+// and port, before the metadata and private refusals would refuse it; a
+// guard given none, as every host's, holds no such rule.
+func TestAGivenResolverIsTheOneOwnDestinationPastTheRefusals(t *testing.T) {
+	log, _ := logged()
+	plain, err := staticRules(log, anIsland())
+	if err != nil {
+		t.Fatal(err)
+	}
+	isl := anIsland()
+	isl.resolver = "169.254.0.53:53"
+	given, err := staticRules(log, isl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := commands(given.rules)
+	at := func(want string) int {
+		for i, l := range lines {
+			if l == want {
+				return i
+			}
+		}
+		return -1
+	}
+	udp := at("iptables -A CYFR_GUARD -d 169.254.0.53/32 -p udp --dport 53 -j ACCEPT")
+	tcp := at("iptables -A CYFR_GUARD -d 169.254.0.53/32 -p tcp --dport 53 -j ACCEPT")
+	refused := at("iptables -A CYFR_GUARD -d 169.254.0.0/16 -j REJECT --reject-with icmp-admin-prohibited")
+	if udp < 0 || tcp < 0 || refused < 0 || udp > refused || tcp > refused {
+		t.Fatalf("the resolver's rules at %d and %d, the metadata's refusal at %d:\n%s", udp, tcp, refused, strings.Join(lines, "\n"))
+	}
+	without := slices.DeleteFunc(slices.Clone(lines), func(l string) bool { return strings.Contains(l, "169.254.0.53") })
+	if !slices.Equal(without, commands(plain.rules)) {
+		t.Fatalf("a given resolver changed more than its two rules:\n%s", strings.Join(lines, "\n"))
+	}
+	for _, l := range commands(plain.rules) {
+		if strings.Contains(l, "169.254.0.53") {
+			t.Fatalf("a guard given no resolver holds %q", l)
 		}
 	}
 }

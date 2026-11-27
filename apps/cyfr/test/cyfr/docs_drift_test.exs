@@ -1340,7 +1340,14 @@ defmodule Cyfr.DocsDriftTest do
     # guest's first process hands its own guard the first and the last.
     "CYFR_GUARD_CONTROL_PLANE" => :compose,
     "CYFR_GUARD_HOST_API" => :compose,
-    "CYFR_GUARD_CONTROL" => :compose
+    "CYFR_GUARD_CONTROL" => :compose,
+    # A person's VM's first process hands its own guard the host's guard
+    # as its resolver (cmd/cyfr-guest); unset, every other guard asks
+    # Docker's.
+    "CYFR_GUARD_RESOLVER" => :guest,
+    # The same first process tells its keeper's step it serves a person:
+    # it found their disk and their card (cmd/cyfr-guest).
+    "CYFR_GUEST_PERSON" => :guest
   }
 
   # Every quoted upper-case name the releases' readers spell: what a

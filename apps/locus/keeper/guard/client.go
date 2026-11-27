@@ -87,16 +87,76 @@ func NewClient(path, netns string, lost func(conn uint64)) *Client {
 // connection's end has been handled (lost) before Admit returns.
 func (c *Client) Admit(spawnID, reach string, addrs []netip.Addr, netns, udp, tcp *os.File) (Route, error) {
 	m := Message{Type: TypeAdmit, SpawnID: spawnID, Reach: reach}
-	if reach == ReachHosts {
-		if len(addrs) == 0 || len(addrs) > MaxAddresses {
-			return Route{}, fmt.Errorf("an admit names 1..%d addresses", MaxAddresses)
-		}
-		m.Addresses = make([]string, len(addrs))
-		for i, a := range addrs {
-			m.Addresses[i] = a.Unmap().WithZone("").String()
-		}
+	if err := withAddresses(&m, addrs); err != nil {
+		return Route{}, err
 	}
-	return c.admit(m, netns, udp, tcp)
+	r, _, err := c.admit(m, netns, udp, tcp)
+	return r, err
+}
+
+// withAddresses sets a hosts reach's addresses on m, in their one form.
+func withAddresses(m *Message, addrs []netip.Addr) error {
+	if m.Reach != ReachHosts {
+		return nil
+	}
+	if len(addrs) == 0 || len(addrs) > MaxAddresses {
+		return fmt.Errorf("a reach of hosts names 1..%d addresses", MaxAddresses)
+	}
+	m.Addresses = make([]string, len(addrs))
+	for i, a := range addrs {
+		m.Addresses[i] = a.Unmap().WithZone("").String()
+	}
+	return nil
+}
+
+// Machine is an admitted machine's route: its connection, and the guest's
+// address and gateway, a /30's two hosts.
+type Machine struct {
+	Route
+	Inner, Gateway netip.Addr
+}
+
+// AdmitMachine asks the guard for a person's VM's route (control.go): the
+// VMM's uid, which will own its tap, the reach of the person's live
+// sessions together (ReachNone, ReachIsland, or ReachHosts with exactly
+// addrs), and the VMM's space's namespace, two name sockets, bound to
+// MachineNames:53, and route netlink socket. It answers as Admit does,
+// with the guest's two addresses.
+func (c *Client) AdmitMachine(spawnID string, uid int, reach string, addrs []netip.Addr, netns, udp, tcp, nl *os.File) (Machine, error) {
+	m := Message{Type: TypeAdmit, SpawnID: spawnID, Reach: reach, MachineUID: &uid}
+	if err := withAddresses(&m, addrs); err != nil {
+		return Machine{}, err
+	}
+	number, reply, err := c.request(m, unix.UnixRights(int(netns.Fd()), int(udp.Fd()), int(tcp.Fd()), int(nl.Fd())))
+	r := Route{Conn: number}
+	if err != nil {
+		return Machine{Route: r}, err
+	}
+	inner, ierr := netip.ParseAddr(reply.Inner)
+	gateway, gerr := netip.ParseAddr(reply.Gateway)
+	if ierr != nil || gerr != nil {
+		return Machine{Route: r}, fmt.Errorf("the guard admitted machine %s without its addresses", spawnID)
+	}
+	return Machine{Route: r, Inner: inner, Gateway: gateway}, nil
+}
+
+// ErrRouteWithdrawn is a change the guard refused with its route withdrawn,
+// its rules in no known state: the machine has no route any more, as when
+// its connection ends (ErrConnectionGone). Any other refusal of a change
+// leaves the old reach standing.
+var ErrRouteWithdrawn = errors.New("the guard withdrew the route")
+
+// Change asks the guard to replace the reach of the machine's route r and
+// answers once it says changed. A refusal with the route withdrawn is
+// ErrRouteWithdrawn, and a route whose connection has ended is not asked
+// for, ErrConnectionGone: either way the route is gone. On any other error
+// the old reach stands.
+func (c *Client) Change(spawnID string, r Route, reach string, addrs []netip.Addr) error {
+	m := Message{Type: TypeChange, SpawnID: spawnID, Reach: reach}
+	if err := withAddresses(&m, addrs); err != nil {
+		return err
+	}
+	return c.onRoute(m, r)
 }
 
 // AdmitRole asks the guard for the route of a role's service process,
@@ -107,46 +167,56 @@ func (c *Client) AdmitRole(spawnID string, port uint16, private bool, netns, udp
 		return Route{}, errors.New("a role admit names a port of 1..65535")
 	}
 	p := int(port)
-	return c.admit(Message{Type: TypeAdmit, SpawnID: spawnID, Reach: ReachRole, Port: &p, Private: &private}, netns, udp, tcp)
+	r, _, err := c.admit(Message{Type: TypeAdmit, SpawnID: spawnID, Reach: ReachRole, Port: &p, Private: &private}, netns, udp, tcp)
+	return r, err
 }
 
-func (c *Client) admit(m Message, netns, udp, tcp *os.File) (Route, error) {
-	number, err := c.request(m, unix.UnixRights(int(netns.Fd()), int(udp.Fd()), int(tcp.Fd())))
-	return Route{Conn: number}, err
+func (c *Client) admit(m Message, netns, udp, tcp *os.File) (Route, Message, error) {
+	number, reply, err := c.request(m, unix.UnixRights(int(netns.Fd()), int(udp.Fd()), int(tcp.Fd())))
+	return Route{Conn: number}, reply, err
 }
 
 // Clear asks the guard to withdraw the route r and answers once it says
 // cleared. A route whose connection has ended is not asked for:
 // ErrConnectionGone.
 func (c *Client) Clear(spawnID string, r Route) error {
+	return c.onRoute(Message{Type: TypeClear, SpawnID: spawnID}, r)
+}
+
+// onRoute sends m, a request about the route r, over r's connection, and
+// answers ErrConnectionGone for a connection that has ended.
+func (c *Client) onRoute(m Message, r Route) error {
 	c.mu.Lock()
 	current := c.settle()
 	c.mu.Unlock()
 	if current == nil || current.number != r.Conn {
 		return ErrConnectionGone
 	}
-	number, err := c.request(Message{Type: TypeClear, SpawnID: spawnID}, nil)
+	number, reply, err := c.request(m, nil)
 	if err == nil && number != r.Conn {
 		// A connection ended and another was dialed between the check
 		// and the request: the route went with the first.
 		return ErrConnectionGone
 	}
+	if err != nil && reply.Withdrawn {
+		return fmt.Errorf("%w: %v", ErrRouteWithdrawn, err)
+	}
 	return err
 }
 
 // request sends one request and reads its answer, answering the number of
-// the connection it went over.
-func (c *Client) request(m Message, rights []byte) (uint64, error) {
+// the connection it went over and the answer.
+func (c *Client) request(m Message, rights []byte) (uint64, Message, error) {
 	packet, err := Encode(m)
 	if err != nil {
-		return 0, err
+		return 0, Message{}, err
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	l := c.settle()
 	if l == nil {
 		if l, err = c.connect(); err != nil {
-			return 0, err
+			return 0, Message{}, err
 		}
 	}
 	l.mu.Lock()
@@ -155,17 +225,17 @@ func (c *Client) request(m Message, rights []byte) (uint64, error) {
 	_ = l.conn.SetWriteDeadline(time.Now().Add(replyTimeout))
 	if _, _, err := l.conn.WriteMsgUnix(packet, rights, nil); err != nil {
 		c.end(l)
-		return l.number, fmt.Errorf("the guard: sending the %s: %w", m.Type, err)
+		return l.number, Message{}, fmt.Errorf("the guard: sending the %s: %w", m.Type, err)
 	}
 	var answer []byte
 	select {
 	case answer = <-l.answers:
 	case <-l.ended:
 		c.link = nil
-		return l.number, fmt.Errorf("the guard's connection ended before it answered the %s of spawn %s", m.Type, m.SpawnID)
+		return l.number, Message{}, fmt.Errorf("the guard's connection ended before it answered the %s of spawn %s", m.Type, m.SpawnID)
 	case <-time.After(replyTimeout):
 		c.end(l)
-		return l.number, fmt.Errorf("the guard did not answer the %s of spawn %s", m.Type, m.SpawnID)
+		return l.number, Message{}, fmt.Errorf("the guard did not answer the %s of spawn %s", m.Type, m.SpawnID)
 	}
 	l.mu.Lock()
 	l.waiting = false
@@ -173,12 +243,16 @@ func (c *Client) request(m Message, rights []byte) (uint64, error) {
 	reply, err := ParseAnswer(answer, m.Type, m.SpawnID)
 	if err != nil {
 		c.end(l)
-		return l.number, fmt.Errorf("the guard's answer to the %s of spawn %s: %w", m.Type, m.SpawnID, err)
+		return l.number, Message{}, fmt.Errorf("the guard's answer to the %s of spawn %s: %w", m.Type, m.SpawnID, err)
 	}
 	if reply.Type == TypeRefused {
-		return l.number, fmt.Errorf("the guard refused the %s of spawn %s: %s", m.Type, m.SpawnID, reply.Reason)
+		return l.number, reply, fmt.Errorf("the guard refused the %s of spawn %s: %s", m.Type, m.SpawnID, reply.Reason)
 	}
-	return l.number, nil
+	if (reply.Inner != "") != (m.MachineUID != nil) {
+		c.end(l)
+		return l.number, Message{}, fmt.Errorf("the guard's answer to the %s of spawn %s names a machine's addresses where it should not, or lacks them", m.Type, m.SpawnID)
+	}
+	return l.number, reply, nil
 }
 
 // settle answers the connection standing, after forgetting one that has
@@ -302,7 +376,7 @@ func (c *Client) read(l *link) {
 // refused, its descriptors closed.
 func readPacket(conn *net.UnixConn, rights *[]int) ([]byte, error) {
 	buf := make([]byte, MaxMessageBytes+1)
-	oob := make([]byte, unix.CmsgSpace(4*AdmitDescriptors))
+	oob := make([]byte, unix.CmsgSpace(4*MachineDescriptors))
 	n, oobn, flags, _, err := conn.ReadMsgUnix(buf, oob)
 	if err != nil {
 		return nil, err

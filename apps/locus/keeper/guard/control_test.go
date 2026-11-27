@@ -94,7 +94,7 @@ func TestTheGuardTakesEveryRequestOfTheVectorsAndRefusesTheRest(t *testing.T) {
 	for i := range many {
 		many[i] = `"10.0.` + strconv.Itoa(i/256) + `.` + strconv.Itoa(i%256) + `"`
 	}
-	packet := `{"v":3,"type":"admit","spawn_id":"00112233445566778899aabbccddeeff","reach":"hosts","addresses":[` + strings.Join(many, ",") + `]}`
+	packet := `{"v":4,"type":"admit","spawn_id":"00112233445566778899aabbccddeeff","reach":"hosts","addresses":[` + strings.Join(many, ",") + `]}`
 	if _, err := ParseRequest([]byte(packet), AdmitDescriptors); err == nil {
 		t.Error("an admit of more than MaxAddresses was accepted")
 	}

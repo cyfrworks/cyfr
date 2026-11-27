@@ -65,12 +65,16 @@ package guard
 // only as a reply of a connection carrying its own route's mark, and a
 // withdrawn route leaves no connection in the kernel's table (the control
 // removes them as it removes the pair), so a later route that took its
-// address inherits nothing of it. IPv6 has no route: a space's IPv6
-// packet, and any packet a space sends to this namespace itself, is
-// refused. A refusal answers the sender at once with an
-// administratively-prohibited ICMP, which it sees as EHOSTUNREACH, never a
-// timeout: the namespace's ICMP rate limit is off, so every refusal is
-// answered.
+// address inherits nothing of it. IPv6 has no route: a space holds no
+// IPv6 address and sends none, and what IPv6 arrives from a route, which
+// only a machine's guest can write, is dropped before routing, unanswered.
+// Any packet a space sends to this namespace itself is refused. A refusal
+// answers the sender at once with an administratively-prohibited ICMP,
+// which it sees as EHOSTUNREACH, never a timeout: the namespace's ICMP
+// rate limit is off, so every refusal is answered. A machine's route drops
+// a packet of any source but its guest's own address the same way
+// (routeRules), so no refusal or error of the kernel's is ever sent to an
+// address the guest named.
 //
 // A route of reach `role` is a role's service process, listening on its
 // port in its space, and is the one route anything enters by: a new TCP
@@ -168,6 +172,9 @@ type island struct {
 	local []string
 	// hostAPI is CYFR_GUARD_HOST_API's value.
 	hostAPI string
+	// resolver is CYFR_GUARD_RESOLVER's value, "" where it is unset and the
+	// resolver is Docker's on the namespace's loopback.
+	resolver string
 }
 
 // static is what the guard installs as it starts, and what each route's
@@ -246,6 +253,17 @@ func staticRules(log *logx.Logger, isl island) (static, error) {
 	v6("-A", chainOwn, "-o", "sp+", "-j", "REJECT", "--reject-with", reject6)
 	v4("-A", chainOwn, "-m", "conntrack", "!", "--ctstate", "NEW", "-j", "ACCEPT")
 	v6("-A", chainOwn, "-m", "conntrack", "!", "--ctstate", "NEW", "-j", "ACCEPT")
+	// A resolver the guard was given, a person's VM's guard's the host's
+	// guard on a link-local address, is the one address and port of what
+	// follows its own processes reach, the guard asking its routes' names
+	// among them.
+	if isl.resolver != "" {
+		ap := netip.MustParseAddrPort(isl.resolver)
+		log.Info("resolver %s passes this namespace's own processes", isl.resolver)
+		for _, proto := range []string{"udp", "tcp"} {
+			v4("-A", chainOwn, "-d", ap.Addr().String()+"/32", "-p", proto, "--dport", strconv.Itoa(int(ap.Port())), "-j", "ACCEPT")
+		}
+	}
 	for _, cidr := range metadataV4 {
 		reject(chainOwn, cidr)
 	}
@@ -301,6 +319,18 @@ func staticRules(log *logx.Logger, isl island) (static, error) {
 	v6("-A", "FORWARD", "-i", "sp+", "-j", "REJECT", "--reject-with", reject6)
 	v6("-A", "FORWARD", "-o", "sp+", "-j", "REJECT", "--reject-with", reject6)
 	v6("-A", "INPUT", "-i", "sp+", "-j", "REJECT", "--reject-with", reject6)
+	// No route carries IPv6, and a space sends none. What arrives from a
+	// route in it, a guest's, is dropped before routing and the connection
+	// table, so nothing answers it, not the kernel's own errors either.
+	v6("-t", "raw", "-A", "PREROUTING", "-i", "sp+", "-j", "DROP")
+	// Defragmentation runs before the raw table, so a guest's first
+	// fragment from a source not its own is held whole by the kernel, and
+	// one never completed ends in the kernel's own reassembly-time error to
+	// that source, quoting it, whatever the reverse-path filtering. No such
+	// error leaves this namespace, of either family: they tell a sender
+	// only that its datagram was lost, which nothing on the island needs.
+	v4("-t", "raw", "-A", "OUTPUT", "-p", "icmp", "--icmp-type", "11/1", "-j", "DROP")
+	v6("-t", "raw", "-A", "OUTPUT", "-p", "ipv6-icmp", "--icmpv6-type", "3/1", "-j", "DROP")
 	v4("-t", "nat", "-N", chainRoles)
 	for _, address := range addresses {
 		log.Info("island address %s", address)
@@ -638,10 +668,46 @@ func routeRules(r *route, st static) string {
 	line(":%s - [0:0]", pc)
 	line("-A %s -m connmark --mark 0 -j CONNMARK --set-mark %s", pc, mark)
 	line("-A %s -j ACCEPT", pc)
-	line("-A %s ! -s %s/32 -j DROP", rc, inner)
-	// A role's replies on the connections forwarded to it.
+	b.WriteString(routeChain(r, st))
+	line("-A %s -i %s -j %s", chainOut, iface, rc)
+	line("-A %s -o %s -m connmark --mark %s -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT", chainIn, iface, mark)
+	// A connection forwarded to the role, which took the route's mark as
+	// it was forwarded. Through this route's pair, its destination is the
+	// space's address: the rule names none, as iptables lists `-d` before
+	// `-o` and every rule of a route in this chain is found by its `-o`.
 	if port != "" {
-		line("-A %s -p tcp --sport %s -m conntrack --ctstate DNAT --ctdir REPLY -m connmark --mark %s -j ACCEPT", rc, port, mark)
+		line("-A %s -o %s -p tcp --dport %s -m conntrack --ctstate DNAT --ctdir ORIGINAL -m connmark --mark %s -j ACCEPT", chainIn, iface, port, mark)
+	}
+	line("COMMIT")
+	// A machine's guest can write any source on its tap: a packet from the
+	// route with any but its own is dropped before routing and the
+	// connection table, so neither the rules nor the kernel answers it.
+	if r.machine {
+		line("*raw")
+		line("-A PREROUTING -i %s ! -s %s/32 -j DROP", iface, inner)
+		line("COMMIT")
+	}
+	if port != "" {
+		line("*nat")
+		line("-A %s -p tcp --dport %s -m comment --comment %s -j CONNMARK --set-mark %s", chainRoles, port, iface, mark)
+		line("-A %s -p tcp --dport %s -m comment --comment %s -j DNAT --to-destination %s:%s", chainRoles, port, iface, inner, port)
+		line("COMMIT")
+	}
+	return b.String()
+}
+
+// routeChain is the lines of r's route chain, which judges every packet of
+// its space's out through the route: from its own address alone, to no
+// other route, then by its reach. A machine's change replaces them alone
+// (changeRules).
+func routeChain(r *route, st static) string {
+	rc, pc := chainRoute+strconv.Itoa(r.slot), chainPass+strconv.Itoa(r.slot)
+	var b strings.Builder
+	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
+	line("-A %s ! -s %s/32 -j DROP", rc, r.inner)
+	// A role's replies on the connections forwarded to it.
+	if r.reach == ReachRole {
+		line("-A %s -p tcp --sport %d -m conntrack --ctstate DNAT --ctdir REPLY -m connmark --mark %d -j ACCEPT", rc, r.port, r.mark)
 	}
 	line("-A %s -o sp+ -j REJECT --reject-with %s", rc, reject4)
 	switch {
@@ -652,6 +718,10 @@ func routeRules(r *route, st static) string {
 		line("-A %s -j %s", rc, chainRefuse)
 		line("-A %s -d %s -j REJECT --reject-with %s", rc, st.rng, reject4)
 		line("-A %s -j %s", rc, pc)
+	case r.reach == ReachNone:
+		// A machine with no live session reaches nothing past the guard.
+		line("-A %s -j %s", rc, chainRefuse)
+		line("-A %s -j REJECT --reject-with %s", rc, reject4)
 	default:
 		line("-A %s -j %s", rc, chainRefuse)
 		for _, t := range st.targets {
@@ -671,23 +741,14 @@ func routeRules(r *route, st static) string {
 			line("-A %s -j %s", rc, pc)
 		}
 	}
-	line("-A %s -i %s -j %s", chainOut, iface, rc)
-	line("-A %s -o %s -m connmark --mark %s -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT", chainIn, iface, mark)
-	// A connection forwarded to the role, which took the route's mark as
-	// it was forwarded. Through this route's pair, its destination is the
-	// space's address: the rule names none, as iptables lists `-d` before
-	// `-o` and every rule of a route in this chain is found by its `-o`.
-	if port != "" {
-		line("-A %s -o %s -p tcp --dport %s -m conntrack --ctstate DNAT --ctdir ORIGINAL -m connmark --mark %s -j ACCEPT", chainIn, iface, port, mark)
-	}
-	line("COMMIT")
-	if port != "" {
-		line("*nat")
-		line("-A %s -p tcp --dport %s -m comment --comment %s -j CONNMARK --set-mark %s", chainRoles, port, iface, mark)
-		line("-A %s -p tcp --dport %s -m comment --comment %s -j DNAT --to-destination %s:%s", chainRoles, port, iface, inner, port)
-		line("COMMIT")
-	}
 	return b.String()
+}
+
+// changeRules are the iptables-restore lines that replace r's route chain
+// with its reach's in one commit: declaring the chain flushes it, so the
+// chain holds the old lines or the new ones and never neither.
+func changeRules(r *route, st static) string {
+	return "*filter\n:" + chainRoute + strconv.Itoa(r.slot) + " - [0:0]\n" + routeChain(r, st) + "COMMIT\n"
 }
 
 // installed is what the kernel lists of the route chains and jumps: each
@@ -695,8 +756,9 @@ func routeRules(r *route, st static) string {
 type installed struct {
 	// r and p are the route's own chains, each "" where it is absent.
 	r, p string
-	// out, in and roles are the chains every route's jumps are in.
-	out, in, roles string
+	// out, in and roles are the chains every route's jumps are in, and raw
+	// the raw table's PREROUTING, which holds a machine's source's line.
+	out, in, roles, raw string
 }
 
 // routeLines are the lines of the jump chains that are iface's: its jump
@@ -714,6 +776,7 @@ func routeLines(iface string, k installed) []string {
 	pick(k.out, "-A "+chainOut+" -i "+iface+" ", all)
 	pick(k.in, "-A "+chainIn+" -o "+iface+" ", all)
 	pick(k.roles, "-A "+chainRoles+" ", func(l string) bool { return strings.Contains(l, " --comment "+iface+" -j ") })
+	pick(k.raw, "-A PREROUTING -i "+iface+" ", all)
 	return lines
 }
 
@@ -736,8 +799,19 @@ func routeText(iface string, k installed) string {
 func removal(iface string, k installed) string {
 	slot := strings.TrimPrefix(iface, "sp")
 	var b strings.Builder
-	b.WriteString("*nat\n")
 	lines := routeLines(iface, k)
+	raw := func(l string) bool { return strings.HasPrefix(l, "-A PREROUTING ") }
+	// Only a machine's route holds a line in the raw table.
+	if slices.ContainsFunc(lines, raw) {
+		b.WriteString("*raw\n")
+		for _, l := range lines {
+			if raw(l) {
+				b.WriteString("-D " + l[3:] + "\n")
+			}
+		}
+		b.WriteString("COMMIT\n")
+	}
+	b.WriteString("*nat\n")
 	for _, l := range lines {
 		if strings.HasPrefix(l, "-A "+chainRoles+" ") {
 			b.WriteString("-D " + l[3:] + "\n")
@@ -745,7 +819,7 @@ func removal(iface string, k installed) string {
 	}
 	b.WriteString("COMMIT\n*filter\n")
 	for _, l := range lines {
-		if !strings.HasPrefix(l, "-A "+chainRoles+" ") {
+		if !strings.HasPrefix(l, "-A "+chainRoles+" ") && !raw(l) {
 			b.WriteString("-D " + l[3:] + "\n")
 		}
 	}
@@ -768,14 +842,15 @@ var (
 	// digestDropped are the lines of a save the digest leaves out: its
 	// comments, the routes' chains and the rules of the chains every
 	// route's jumps are in.
-	digestDropped = regexp.MustCompile(`^(#|:(` + chainRoute + `|` + chainPass + `)[0-9]+ |-A (` + chainRoute + `|` + chainPass + `)[0-9]+ |-A (` + chainOut + `|` + chainIn + `|` + chainRoles + `) )`)
+	digestDropped = regexp.MustCompile(`^(#|:(` + chainRoute + `|` + chainPass + `)[0-9]+ |-A (` + chainRoute + `|` + chainPass + `)[0-9]+ |-A (` + chainOut + `|` + chainIn + `|` + chainRoles + `) |-A PREROUTING -i sp[0-9]+ )`)
 	// counters are the packet and byte counters a save prints beside a
 	// built-in chain's policy.
 	counters = regexp.MustCompile(` \[[0-9]+:[0-9]+\]$`)
 )
 
 // digest is the digest of the static rules in the saves of both families'
-// filter tables and the IPv4 nat table: the nat table's lines of the
+// filter and raw tables (v4 and v6 each the two saves' text) and the IPv4
+// nat table: the nat table's lines of the
 // guard's own chains alone (Docker's resolver keeps rules of its own
 // there), the save's comments and timestamps and the counters it prints
 // beside each built-in chain's policy left out, since both move while the

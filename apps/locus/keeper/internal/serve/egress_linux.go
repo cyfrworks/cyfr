@@ -18,8 +18,6 @@ import (
 	"syscall"
 	"time"
 
-	"golang.org/x/sys/unix"
-
 	"github.com/cyfr/locus/keeper/guard"
 	"github.com/cyfr/locus/keeper/internal/protocol"
 	"github.com/cyfr/locus/keeper/internal/stage"
@@ -158,54 +156,11 @@ func (s *server) admitRoute(route *os.File, held **guard.Route, owner *client, a
 // receiveRoute reads the one message of a routed stage: its network
 // namespace, its UDP and its TCP name socket.
 func receiveRoute(route *os.File) ([]*os.File, error) {
-	fds, err := receiveDescriptors(route, guard.AdmitDescriptors)
+	fds, err := stage.ReceiveDescriptors(route, guard.AdmitDescriptors)
 	if err != nil {
 		return nil, err
 	}
 	return []*os.File{os.NewFile(uintptr(fds[0]), "netns"), os.NewFile(uintptr(fds[1]), "names-udp"), os.NewFile(uintptr(fds[2]), "names-tcp")}, nil
-}
-
-// receiveDescriptors reads one message of one byte from a stage or a
-// space's first process carrying exactly want descriptors, received
-// close-on-exec; any other message is refused and its descriptors closed.
-func receiveDescriptors(from *os.File, want int) ([]int, error) {
-	conn, err := from.SyscallConn()
-	if err != nil {
-		return nil, err
-	}
-	buf := make([]byte, 1)
-	oob := make([]byte, unix.CmsgSpace(4*want))
-	var n, oobn int
-	var rerr error
-	err = conn.Read(func(fd uintptr) bool {
-		n, oobn, _, _, rerr = unix.Recvmsg(int(fd), buf, oob, unix.MSG_CMSG_CLOEXEC)
-		return !errors.Is(rerr, unix.EAGAIN)
-	})
-	if err == nil {
-		err = rerr
-	}
-	if err != nil {
-		return nil, err
-	}
-	var fds []int
-	if oobn > 0 {
-		msgs, perr := unix.ParseSocketControlMessage(oob[:oobn])
-		if perr != nil {
-			return nil, perr
-		}
-		for i := range msgs {
-			if got, perr := unix.ParseUnixRights(&msgs[i]); perr == nil {
-				fds = append(fds, got...)
-			}
-		}
-	}
-	if n != 1 || len(fds) != want {
-		for _, fd := range fds {
-			_ = unix.Close(fd)
-		}
-		return nil, fmt.Errorf("a message of %d bytes and %d descriptors, not 1 and %d", n, len(fds), want)
-	}
-	return fds, nil
 }
 
 // withdrawRoute has the guard withdraw a space's route, held in held under
