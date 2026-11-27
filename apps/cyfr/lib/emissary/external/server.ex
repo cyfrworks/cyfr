@@ -1254,6 +1254,10 @@ defmodule Emissary.External.Server do
     end
   end
 
+  @doc false
+  @spec program_initialize_wait(integer(), integer()) :: non_neg_integer()
+  def program_initialize_wait(timeout_ms, remaining_ms), do: max(min(timeout_ms, remaining_ms), 0)
+
   defp initialize_program(state, deadline) do
     params = %{
       "protocolVersion" => Protocol.legacy_version(),
@@ -1261,7 +1265,8 @@ defmodule Emissary.External.Server do
       "clientInfo" => %{"name" => "cyfr", "version" => Prima.Version.current()}
     }
 
-    answer_by = min(deadline, System.monotonic_time(:millisecond) + state.timeout_ms)
+    now = System.monotonic_time(:millisecond)
+    answer_by = now + program_initialize_wait(state.timeout_ms, deadline - now)
 
     with {:ok, result, %State{session: %{}} = state} <-
            request(state, "initialize", params, answer_by, false),

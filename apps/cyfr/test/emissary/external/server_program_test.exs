@@ -180,6 +180,14 @@ defmodule Emissary.External.ServerProgramTest do
     assert Enum.map(tools, & &1["name"]) == @tools
   end
 
+  test "the first answer gets the configured wait within the remaining connect time" do
+    assert Emissary.External.Server.program_initialize_wait(20_000, 36_000) == 20_000
+    assert Emissary.External.Server.program_initialize_wait(50_000, 36_000) == 36_000
+    assert Emissary.External.Server.program_initialize_wait(0, 36_000) == 0
+    assert Emissary.External.Server.program_initialize_wait(20_000, 0) == 0
+    assert Emissary.External.Server.program_initialize_wait(20_000, -1) == 0
+  end
+
   test "testing a program again after initialize times out discovers its tools",
        %{ctx: ctx, fake: fake, row: row} do
     Scripted.set(fake, :silent, ["initialize"])
