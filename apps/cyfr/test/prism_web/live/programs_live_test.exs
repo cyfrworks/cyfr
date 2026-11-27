@@ -2328,12 +2328,19 @@ defmodule PrismWeb.ProgramsLiveTest do
       _fake = controller!()
       row = driven_row!(athanor)
 
-      recorded!([held(1, athanor, "program", row.id, 300)], %{
-        {athanor.id, row.id} => %{name: "claude", shown: "program"}
-      })
+      # A terminal's size still counted after it closed is no terminal to
+      # close: the page says nothing of terminals it lists none of.
+      recorded!(
+        [
+          held(1, athanor, "program", row.id, 300),
+          held(2, athanor, "terminal", row.id, 50)
+        ],
+        %{{athanor.id, row.id} => %{name: "claude", shown: "program"}}
+      )
 
       {view, _html} = mount_athanor(conn, "/programs", athanor)
 
+      assert view |> element(~s([data-test="memory"])) |> render() =~ "claude uses 350.0 MB"
       refute view |> element(~s([data-test="memory-disable"])) |> render() =~ "data-confirm"
       refute has_element?(view, ~s([data-test="memory-session"]))
       refute has_element?(view, ~s([data-test="memory-terminals"]))

@@ -34,7 +34,8 @@ defmodule PrismWeb.ProgramsLive do
   size, several say it once for all of them, and a program that also runs
   by itself says which part its terminals are, since Close ends a
   terminal and only Disable ends the rest. Disable asks first, in the
-  browser, when it would end open terminals, and says how many. Until the first read answers
+  browser, when it would end open terminals, and says how many. Until the
+  first read answers
   it says nothing of them; a read that fails says the memory cannot be
   read, never that nothing of theirs uses it.
 
@@ -1749,7 +1750,7 @@ defmodule PrismWeb.ProgramsLive do
   # CYFR counts a program's terminals on a machine as one size, apart from
   # what the program holds by itself (`Opus.Memory`'s holders of one name,
   # kind `:terminal` and the row's own): what the terminals use, or nil
-  # when none is counted, and what the rest is and uses.
+  # when none is counted, and the holder that is the rest.
   defp terminal_bytes(holders, name) do
     case for(%{name: ^name, kind: :terminal, bytes: bytes} <- holders, do: bytes) do
       [] -> nil
@@ -1770,7 +1771,10 @@ defmodule PrismWeb.ProgramsLive do
 
   # What a person reads of a program's terminals as a whole: which part of
   # its line they are when the program also runs by itself, and that
-  # several are counted together.
+  # several are counted together. Nothing of terminals the page lists
+  # none of: a size counted for one that just closed is not one to close.
+  defp terminal_words(_holders, [], _name), do: []
+
   defp terminal_words(holders, sessions, name) do
     bytes = terminal_bytes(holders, name)
     rest = rest(holders, name)
