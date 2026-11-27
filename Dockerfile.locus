@@ -468,6 +468,7 @@ HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=3 \
 # whose key (LOCUS_<NAME>_KEY) is set: the runtime's, private, reaching
 # core's host API, whose runners the warm floor keeps; the builds'; and the
 # backends', whose programs keep their homes
-# under --kept-homes, each uid of 40001-49999 held by one home for its life
-# and given to no pool or other home.
+# under --kept-homes, each uid of 40001-49999 a person's disk's for its
+# life, shared by all that person's homes and given to no pool and to no
+# other person's disk.
 ENTRYPOINT ["cyfr-locus", "serve", "--role", "runtime:10011:4200:runner:private:floor", "--role", "builds:10012:4100:build", "--role", "backends:10013:4101:backends:kept", "--pool", "runner:30101-30108:relay", "--pool", "build:30001-30016:routed", "--pool", "backends:20001-20032:routed", "--home-root", "/var/lib/locus/homes", "--kept-homes", "/var/lib/locus/kept:40001-49999", "--guard", "/run/cyfr-guard-control/guard.sock", "--", "/app/bin/locus", "start"]
