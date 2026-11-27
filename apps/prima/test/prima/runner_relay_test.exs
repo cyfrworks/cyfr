@@ -98,6 +98,15 @@ defmodule Prima.RunnerRelayTest do
     assert RunnerRelay.max_body_bytes() == HostAPI.max_answer_bytes()
     assert RunnerRelay.max_frame_bytes() == @vectors["max_frame_bytes"]
     assert RunnerRelay.initial_credit() == @vectors["initial_credit"]
+    assert AttachedRequest.max_headers() == @vectors["max_headers"]
+    assert AttachedRequest.max_header_name_bytes() == @vectors["max_header_name_bytes"]
+    assert AttachedRequest.max_header_value_bytes() == @vectors["max_header_value_bytes"]
+    assert WorkerAuth.max_host_call_header_bytes() == @vectors["max_signed_header_bytes"]
+    assert WorkerAuth.max_frame_bytes() == @vectors["max_attached_frame_bytes"]
+    assert Enum.map(RunnerRelay.ops(), &Atom.to_string/1) == @vectors["ops"]
+    assert Prima.Destination.methods() == @vectors["methods"]
+    assert Enum.map(AttachedRequest.purposes(), &Atom.to_string/1) == @vectors["purposes"]
+    assert AttachedRequest.max_url_bytes() == @vectors["max_url_bytes"]
     # The largest body in base64 fits a frame with room for its envelope.
     assert div(RunnerRelay.max_body_bytes() + 2, 3) * 4 + 65_536 < RunnerRelay.max_frame_bytes()
   end
@@ -211,26 +220,61 @@ defmodule Prima.RunnerRelayTest do
     end
   end
 
+  # Each frame a runner's channel refuses to send: the member it names, or
+  # what the channel's state does not take, before anything is numbered.
+  for {refusal, index} <- Enum.with_index(@vectors["encode_refusals"]) do
+    test "not sent: #{refusal["why"]}" do
+      refusal = Enum.at(@vectors["encode_refusals"], unquote(index))
+      runner = play(refusal["after"]).runner
+      sent = frame(Jason.encode!(refusal["frame"]))
+
+      case refusal do
+        %{"member" => member} ->
+          assert_raise ArgumentError, ~r/\A#{member} is not of its type or bound\z/, fn ->
+            RunnerRelay.encode(runner, sent)
+          end
+
+        %{"reason" => reason} ->
+          assert RunnerRelay.encode(runner, sent) == {:error, String.to_existing_atom(reason)}
+      end
+    end
+  end
+
+  test "the encoder's refusals name members of every kind a runner sends" do
+    kinds =
+      for %{"frame" => %{"kind" => kind}} <- @vectors["encode_refusals"], uniq: true, do: kind
+
+    assert Enum.sort(kinds) == ~w(close credit fetch host_call)
+  end
+
+  test "a pinned fetch's path is held to the fixture's bound" do
+    runner = play(2).runner
+    [_call, _answer, fetch | _rest] = Enum.map(@vectors["exchange"], &frame(json(&1)))
+    at_bound = %{fetch | path: "/" <> String.duplicate("a", @vectors["max_path_bytes"] - 1)}
+    assert {:ok, _bytes, _runner} = RunnerRelay.encode(runner, at_bound)
+  end
+
   test "the fixture's refusals are the channel's typed reasons" do
     reasons = Enum.map(@vectors["refusals"], &reason/1)
 
-    assert Enum.sort(reasons) ==
-             Enum.sort([
-               :unknown_attempt,
-               :out_of_order,
-               :body_too_large,
-               :credit_exceeded,
-               :frame_too_large,
-               :wrong_direction,
-               {:unknown_field, "pin"},
-               {:missing_field, "pin"},
-               {:unknown_field, "url"},
-               {:unknown_field, "path"},
-               :wrong_answer,
-               :wrong_answer,
-               :wrong_answer
-             ])
+    # Every typed reason closes a channel in some refusal, and the runner's
+    # half of the refusals meets every one of them.
+    assert reasons |> Enum.map(&reason_name/1) |> Enum.uniq() |> Enum.sort() ==
+             Enum.sort(~w(frame_too_large malformed bad_version unknown_kind wrong_direction
+                          unknown_field missing_field wrong_type invalid_field body_too_large
+                          out_of_order unknown_attempt unknown_reference wrong_answer
+                          credit_exceeded)a)
+
+    runner =
+      for %{"receiver" => "runner"} = refusal <- @vectors["refusals"],
+          uniq: true,
+          do: reason_name(reason(refusal))
+
+    assert Enum.sort(runner) == Enum.sort(Enum.map(reasons, &reason_name/1) |> Enum.uniq())
   end
+
+  defp reason_name({name, _field}), do: name
+  defp reason_name(name), do: name
 
   describe "an attached fetch" do
     defp host_api,

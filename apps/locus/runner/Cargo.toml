@@ -1,0 +1,48 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
+# The WASM runner: one program the keeper starts per runner, which reads
+# its control channel (descriptor 3, Prima.RunnerControl) and its relay
+# (descriptor 4, Prima.RunnerRelay), signs and seals its host calls under
+# its attempt's keys (Prima.WorkerAuth) and reads its assignment
+# (Prima.Assignment). Every frame, seal, signature and bound here is held
+# to the vector files under tests/fixtures by tests/vectors.rs.
+#
+# Every dependency is pinned to one version and every build is --locked
+# (scripts/runner.sh); deny.toml is what `cargo deny` admits.
+[package]
+name = "cyfr-runner"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.100"
+license = "Apache-2.0"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "cyfr-runner"
+path = "src/main.rs"
+
+[dependencies]
+aes-gcm = { version = "=0.11.1", default-features = false, features = ["aes", "alloc", "zeroize"] }
+base64 = { version = "=0.23.1", default-features = false, features = ["alloc"] }
+getrandom = { version = "=0.4.3", default-features = false }
+hmac = { version = "=0.13.0", default-features = false, features = ["zeroize"] }
+serde = { version = "=1.0.229", default-features = false, features = ["std"] }
+serde_json = { version = "=1.0.154", default-features = false, features = ["arbitrary_precision", "std", "unbounded_depth"] }
+sha2 = { version = "=0.11.2", default-features = false }
+tokio = { version = "=1.54.1", default-features = false, features = ["time"] }
+zeroize = { version = "=1.9.2", default-features = false, features = ["alloc"] }
+
+[dev-dependencies]
+tokio = { version = "=1.54.1", default-features = false, features = ["macros", "rt", "test-util", "time"] }
+
+# A panic ends the runner at once: its keeper reports the exit, and no
+# half-finished state is unwound into.
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"

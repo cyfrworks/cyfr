@@ -1,5 +1,5 @@
 {
-  "comment": "The vectors pinning Prima.HostAPI as it crosses HTTP (Prima.WorkerWire): every call a runner makes and the report a worker service makes, sealed and signed with the keys of tests/fixtures/worker_auth.json, whose values keys repeats (root_hex is the root every other key derives from). Every consumer reproduces each call from its fields: body is the request body Prima.WorkerWire.request_body/2 writes, sealed as body_sealed in the body direction under the attempt seal key with body_iv_hex (Prima.WorkerAuth.seal_call/5); header is the host-call header over body_sealed, the bytes posted, under the attempt call key; answer is the answer written for it, sealed as answer_sealed in the answer direction with answer_iv_hex. Every body and answer carries v, the wire version, as its first member; a body whose v is absent or not version is unknown_version after it is opened and before its op is read, and an answer without it, or at another, is a lost answer. refusals are the plain answers each call may be given instead, with why. pre_body_refusals are headers a listener refuses before it reads a body, at now, for the member at standing, each answered at status with the refusal error names, in the order Prima.WorkerAuth documents: a version token other than v1, a header that does not parse, a timestamp outside window_ms, a MAC that is not the call key's, another generation, another member at the same generation, and a nonce the storage call (never retried) already presented for its attempt within the window. body_refusals are opened bodies posted at the renew route, refused with error. report is a worker service's runner_exited, plain under its dispatch key, answered plain; its cross_member names another member than the verifying one and is refused with error. Its memory carries memory, the memory limit its runner was ended at (cap, machine or either, absent for none), and is answered as the report is; its memory_refusals carry a memory that is none of those three, or no string, each refused with error. retry_identity is one admit_child body sent twice, each time sealed and signed afresh under a new timestamp and nonce: the body, and so its child_key, is the same. connection_cases are admit_child calls under one attempt, in order, each answered as CYFR answers it for an attempt whose edge to the reference binds no named account: omitted names no connection and is admitted, its answer holding the child's assignment and in it the child's authority as the host answers it; named names the account Work, which the edge does not bind, and is refused connection_not_granted, setup required, with no default used in its place; reused repeats omitted's child_key naming Work, and is refused invalid_request before anything is answered from that key's child, since a key names one child and the connection it was admitted with. egress_pin_cases are egress_pin calls by name, answered with a Prima.PinnedTarget (id, ip, family, scheme, port, host, expires_at) or refused as Prima.PinnedTarget.refusals/0 names; a redirect names the pin its hop came from as from. egress_policy_cases are egress_pin calls in the order one attempt makes them, under an authority whose egress.domains is domains, each answered as an egress_pin case is; expect names whether the URL's host matches domains (domain_allowed, Prima.Network.domain_allowed?/2) and, for a redirect, whether its URL has the origin of the URL whose pin it names as from (same_origin, Prima.Network.same_origin?/2: scheme, host and effective port). A pin is answered only where both hold; a first request outside domains is denied and a hop to another origin is redirect_credentials. attached_fetch is the one call whose success is no single answer: posted with a Prima.AttachedRequest naming the runner's call_id, it is refused before admission by an ordinary sealed answer, a guest_error whose call_id is the request's (its refusals, each sealed with answer_iv_hex as answer_sealed), and admitted it is answered with frames, so the call carries no answer and the frames are frame_cases. A frame is a 4-byte big-endian length, one kind byte in clear (h head, c chunk, e end, x error) and the sealed value: Prima.MacEnvelope's seal of the plaintext under the attempt seal key, label cyfr-locus/v1/runtime/frame-answer, fields call_id, seq and kind (Prima.WorkerAuth.seal_frame/7). Each case's frames are read in order by a reader for call_id, one frame at a time; sealed_for says what a frame was sealed as (its call_id, seq, kind, iv_hex and plaintext_b64), tampered_from what a changed frame was sealed as before it changed, and expect the frames read (a head's status and headers, a chunk's body_b64, an end, an error's type and message) and the refusal that ends the answer, or null. egress_pin_internal_purposes are egress_pin calls naming a purpose CYFR alone takes (attached), each refused malformed. framing_headers and override_headers are the lowercase names, in order, of the headers a guest request, ordinary or attached, may not set and an attach rule may not name: those that route or frame a request (Prima.Network.framing_headers/0) and those that override its method or target or claim a forwarded origin, a proxy hop or a client address (Prima.Network.override_headers/0); override_prefixes are the lowercase prefixes (Prima.Network.override_prefixes/0) any name starting with which is one of the latter too. An attached request setting one, in any case, is refused invalid_request naming it as spelled. credential_headers are the lowercase names, in order, of the headers that carry a credential (Prima.Network.credential_headers/0): an attached request naming one, in any case, is refused credential_header_refused. A catalyst's ask (question_ask, question_wait): question_ask's body pins ask_no, a positive integer the runner takes once for each call of the guest's ask, and the request's action, summary and operation; question_wait's pins ask_no and max_wait_ms, at most Prima.HostAPI.max_question_wait_ms/0. Each answer is a success: {answer}, {pending: true}, or for question_ask {retry_after_ms}, a positive integer, an answer being \"allowed\", \"denied\" or {\"none\": \"unattended\" | \"invalid\" | \"unavailable\"} (Prima.HostAPI.answer_to_wire/1); each is refused lost for an attempt that is not live. question_cases holds them in the order one attempt asks: request_digests are a request's digest, SHA-256 as lowercase hexadecimal over its action, summary and operation, each prefixed with its UTF-8 byte length as an unsigned 32-bit big-endian integer (Opus.Host.Question.request_digest/3), and cases are calls, each answered as CYFR answers it: opened admits an ask whose question opens; keyed_replay is opened's body under a fresh header, answered the same wait; changed is opened's number with another request, invalid; paced is past its root's allowance and paced_admitted the same body sent again, admitted; unattended and invalid are asks answered at once; and the waits are one that timed out, pending, and one of each final answer.",
+  "comment": "The vectors pinning Prima.HostAPI as it crosses HTTP (Prima.WorkerWire): every call a runner makes and the report a worker service makes, sealed and signed with the keys of tests/fixtures/worker_auth.json, whose values keys repeats (root_hex is the root every other key derives from). Every consumer reproduces each call from its fields: body is the request body Prima.WorkerWire.request_body/2 writes, sealed as body_sealed in the body direction under the attempt seal key with body_iv_hex (Prima.WorkerAuth.seal_call/5); header is the host-call header over body_sealed, the bytes posted, under the attempt call key; answer is the answer written for it, sealed as answer_sealed in the answer direction with answer_iv_hex. Every body and answer carries v, the wire version, as its first member; a body whose v is absent or not version is unknown_version after it is opened and before its op is read, and an answer without it, or at another, is a lost answer. refusals are the plain answers each call may be given instead, with why. pre_body_refusals are headers a listener refuses before it reads a body, at now, for the member at standing, each answered at status with the refusal error names, in the order Prima.WorkerAuth documents: a version token other than v1, a header that does not parse, a timestamp outside window_ms, a MAC that is not the call key's, another generation, another member at the same generation, and a nonce the storage call (never retried) already presented for its attempt within the window. body_refusals are opened bodies posted at the renew route, refused with error. report is a worker service's runner_exited, plain under its dispatch key, answered plain; its cross_member names another member than the verifying one and is refused with error. Its memory carries memory, the memory limit its runner was ended at (cap, machine or either, absent for none), and is answered as the report is; its memory_refusals carry a memory that is none of those three, or no string, each refused with error. retry_identity is one admit_child body sent twice, each time sealed and signed afresh under a new timestamp and nonce: the body, and so its child_key, is the same. connection_cases are admit_child calls under one attempt, in order, each answered as CYFR answers it for an attempt whose edge to the reference binds no named account: omitted names no connection and is admitted, its answer holding the child's assignment and in it the child's authority as the host answers it; named names the account Work, which the edge does not bind, and is refused connection_not_granted, setup required, with no default used in its place; reused repeats omitted's child_key naming Work, and is refused invalid_request before anything is answered from that key's child, since a key names one child and the connection it was admitted with. egress_pin_cases are egress_pin calls by name, answered with a Prima.PinnedTarget (id, ip, family, scheme, port, host, expires_at) or refused as Prima.PinnedTarget.refusals/0 names; a redirect names the pin its hop came from as from. egress_policy_cases are egress_pin calls in the order one attempt makes them, under an authority whose egress.domains is domains, each answered as an egress_pin case is; expect names whether the URL's host matches domains (domain_allowed, Prima.Network.domain_allowed?/2) and, for a redirect, whether its URL has the origin of the URL whose pin it names as from (same_origin, Prima.Network.same_origin?/2: scheme, host and effective port). A pin is answered only where both hold; a first request outside domains is denied and a hop to another origin is redirect_credentials. attached_fetch is the one call whose success is no single answer: posted with a Prima.AttachedRequest naming the runner's call_id, it is refused before admission by an ordinary sealed answer, a guest_error whose call_id is the request's (its refusals, each sealed with answer_iv_hex as answer_sealed), and admitted it is answered with frames, so the call carries no answer and the frames are frame_cases. A frame is a 4-byte big-endian length, one kind byte in clear (h head, c chunk, e end, x error) and the sealed value: Prima.MacEnvelope's seal of the plaintext under the attempt seal key, label cyfr-locus/v1/runtime/frame-answer, fields call_id, seq and kind (Prima.WorkerAuth.seal_frame/7). Each case's frames are read in order by a reader for call_id, one frame at a time; sealed_for says what a frame was sealed as (its call_id, seq, kind, iv_hex and plaintext_b64), tampered_from what a changed frame was sealed as before it changed, and expect the frames read (a head's status and headers, a chunk's body_b64, an end, an error's type and message) and the refusal that ends the answer, or null. egress_pin_internal_purposes are egress_pin calls naming a purpose CYFR alone takes (attached), each refused malformed. framing_headers and override_headers are the lowercase names, in order, of the headers a guest request, ordinary or attached, may not set and an attach rule may not name: those that route or frame a request (Prima.Network.framing_headers/0) and those that override its method or target or claim a forwarded origin, a proxy hop or a client address (Prima.Network.override_headers/0); override_prefixes are the lowercase prefixes (Prima.Network.override_prefixes/0) any name starting with which is one of the latter too. An attached request setting one, in any case, is refused invalid_request naming it as spelled. credential_headers are the lowercase names, in order, of the headers that carry a credential (Prima.Network.credential_headers/0): an attached request naming one, in any case, is refused credential_header_refused. A catalyst's ask (question_ask, question_wait): question_ask's body pins ask_no, a positive integer the runner takes once for each call of the guest's ask, and the request's action, summary and operation; question_wait's pins ask_no and max_wait_ms, at most Prima.HostAPI.max_question_wait_ms/0. Each answer is a success: {answer}, {pending: true}, or for question_ask {retry_after_ms}, a positive integer, an answer being \"allowed\", \"denied\" or {\"none\": \"unattended\" | \"invalid\" | \"unavailable\"} (Prima.HostAPI.answer_to_wire/1); each is refused lost for an attempt that is not live. question_cases holds them in the order one attempt asks: request_digests are a request's digest, SHA-256 as lowercase hexadecimal over its action, summary and operation, each prefixed with its UTF-8 byte length as an unsigned 32-bit big-endian integer (Opus.Host.Question.request_digest/3), and cases are calls, each answered as CYFR answers it: opened admits an ask whose question opens; keyed_replay is opened's body under a fresh header, answered the same wait; changed is opened's number with another request, invalid; paced is past its root's allowance and paced_admitted the same body sent again, admitted; unattended and invalid are asks answered at once; and the waits are one that timed out, pending, and one of each final answer. answer_outcomes are what a host call's caller makes of what reaches it, try by try: each case's callback is posted once per entry of answers, which is in order what each try met, a status of null for no answer at all (a transport failure, an answer later than the callback's timeouts_ms or past max_answer_bytes), or a status with its answer (JSON sealed to that try's call in the answer direction) or its plain body. outcome is the call's: answer (the last answer, read at this version, is the call's, CYFR's own refusals lost and unavailable included), lost, uncertain or too_large, and posted how many times it was posted; an answer's reading is what the call reads it as: its ok value, refused (a refusal by name: lost, unavailable, replayed, malformed, bad_mac, claim_expired or not_found, and for egress_pin a pin's refusal too), guest_error (its type and message, both text, and its remediation when that is an object), setup_required (its payload, an object) or failed (its message, text). Any other refusal, or one of those without what it carries, is no answer. A member given twice is its first, and an integer of any size is kept whole. A reading's ok_json is its ok value as JSON text, for a value nested deeper than a reader of this file need take: any depth is read. A try that meets no answer, a 200 that does not open or is no answer at this version, or any other status is lost, and is asked once more unless the callback's class in retries is never, when the call is uncertain at once; a second loss is lost. A 413 is final too_large, and a refusal naming unknown_version, plain at any version or sealed, is final lost: neither is asked again. Locus.Runtime.HostClient's test and the Rust runner's crate play every case.",
   "version": 3,
   "auth_header": "x-cyfr-auth",
   "routes": {
@@ -2237,5 +2237,738 @@
     "x-auth-token",
     "x-access-token",
     "x-csrf-token"
+  ],
+  "answer_outcomes": [
+    {
+      "why": "a lost answer is asked once more, and the second try's answer is the call's",
+      "callback": "renew",
+      "answers": [
+        {
+          "status": null
+        },
+        {
+          "status": 200,
+          "answer": "{\"v\":3,\"ok\":{}}"
+        }
+      ],
+      "outcome": "answer",
+      "posted": 2,
+      "reading": {
+        "ok": {}
+      }
+    },
+    {
+      "why": "a second lost answer is lost: an idempotent call",
+      "callback": "renew",
+      "answers": [
+        {
+          "status": null
+        },
+        {
+          "status": null
+        }
+      ],
+      "outcome": "lost",
+      "posted": 2
+    },
+    {
+      "why": "a second lost answer is lost: an outcome call",
+      "callback": "complete",
+      "answers": [
+        {
+          "status": null
+        },
+        {
+          "status": null
+        }
+      ],
+      "outcome": "lost",
+      "posted": 2
+    },
+    {
+      "why": "a second lost answer is lost: a batch call",
+      "callback": "push_deltas",
+      "answers": [
+        {
+          "status": null
+        },
+        {
+          "status": null
+        }
+      ],
+      "outcome": "lost",
+      "posted": 2
+    },
+    {
+      "why": "a second lost answer is lost: a keyed call",
+      "callback": "admit_child",
+      "answers": [
+        {
+          "status": null
+        },
+        {
+          "status": null
+        }
+      ],
+      "outcome": "lost",
+      "posted": 2
+    },
+    {
+      "why": "a lost answer to a call that is never retried is uncertain, asked once",
+      "callback": "take_rate",
+      "answers": [
+        {
+          "status": null
+        }
+      ],
+      "outcome": "uncertain",
+      "posted": 1
+    },
+    {
+      "why": "CYFR's unavailable is an answer, never asked again",
+      "callback": "renew",
+      "answers": [
+        {
+          "status": 200,
+          "answer": "{\"v\":3,\"error\":\"unavailable\"}"
+        }
+      ],
+      "outcome": "answer",
+      "posted": 1,
+      "reading": {
+        "refused": "unavailable"
+      }
+    },
+    {
+      "why": "CYFR's lost is an answer, never asked again",
+      "callback": "renew",
+      "answers": [
+        {
+          "status": 200,
+          "answer": "{\"v\":3,\"error\":\"lost\"}"
+        }
+      ],
+      "outcome": "answer",
+      "posted": 1,
+      "reading": {
+        "refused": "lost"
+      }
+    },
+    {
+      "why": "a 413 is final whatever its body: the same body is refused again",
+      "callback": "renew",
+      "answers": [
+        {
+          "status": 413,
+          "plain": "{\"v\":3,\"error\":\"lost\"}"
+        }
+      ],
+      "outcome": "too_large",
+      "posted": 1
+    },
+    {
+      "why": "a 413 to a call that is never retried is final, not uncertain",
+      "callback": "take_rate",
+      "answers": [
+        {
+          "status": 413,
+          "plain": ""
+        }
+      ],
+      "outcome": "too_large",
+      "posted": 1
+    },
+    {
+      "why": "a 413 after a lost answer is the one retry's answer",
+      "callback": "renew",
+      "answers": [
+        {
+          "status": null
+        },
+        {
+          "status": 413,
+          "plain": "not json"
+        }
+      ],
+      "outcome": "too_large",
+      "posted": 2
+    },
+    {
+      "why": "a plain refusal naming unknown_version: a host at another version, asked once",
+      "callback": "renew",
+      "answers": [
+        {
+          "status": 401,
+          "plain": "{\"v\":3,\"error\":\"unknown_version\"}"
+        }
+      ],
+      "outcome": "lost",
+      "posted": 1
+    },
+    {
+      "why": "a plain refusal naming unknown_version is read at any version",
+      "callback": "renew",
+      "answers": [
+        {
+          "status": 401,
+          "plain": "{\"v\":4,\"error\":\"unknown_version\"}"
+        }
+      ],
+      "outcome": "lost",
+      "posted": 1
+    },
+    {
+      "why": "a sealed answer naming unknown_version: a host at another version, asked once",
+      "callback": "renew",
+      "answers": [
+        {
+          "status": 200,
+          "answer": "{\"v\":3,\"error\":\"unknown_version\"}"
+        }
+      ],
+      "outcome": "lost",
+      "posted": 1
+    },
+    {
+      "why": "any other refusal by status is lost and asked again as the class allows",
+      "callback": "renew",
+      "answers": [
+        {
+          "status": 401,
+          "plain": "{\"v\":3,\"error\":\"bad_mac\"}"
+        },
+        {
+          "status": 401,
+          "plain": "{\"v\":3,\"error\":\"bad_mac\"}"
+        }
+      ],
+      "outcome": "lost",
+      "posted": 2
+    },
+    {
+      "why": "any other refusal by status, to a call that is never retried, is uncertain",
+      "callback": "take_rate",
+      "answers": [
+        {
+          "status": 401,
+          "plain": "{\"v\":3,\"error\":\"bad_mac\"}"
+        }
+      ],
+      "outcome": "uncertain",
+      "posted": 1
+    },
+    {
+      "why": "another status is lost, and asked again",
+      "callback": "renew",
+      "answers": [
+        {
+          "status": 500,
+          "plain": ""
+        },
+        {
+          "status": null
+        }
+      ],
+      "outcome": "lost",
+      "posted": 2
+    },
+    {
+      "why": "an answer without v, then one at another version: both lost",
+      "callback": "renew",
+      "answers": [
+        {
+          "status": 200,
+          "answer": "{\"ok\":{}}"
+        },
+        {
+          "status": 200,
+          "answer": "{\"v\":4,\"ok\":{}}"
+        }
+      ],
+      "outcome": "lost",
+      "posted": 2
+    },
+    {
+      "why": "an answer whose v is text is lost: uncertain for a call never retried",
+      "callback": "take_rate",
+      "answers": [
+        {
+          "status": 200,
+          "answer": "{\"v\":\"3\",\"ok\":true}"
+        }
+      ],
+      "outcome": "uncertain",
+      "posted": 1
+    },
+    {
+      "why": "an answer with a member beside ok is lost, and the retry's answer is the call's",
+      "callback": "renew",
+      "answers": [
+        {
+          "status": 200,
+          "answer": "{\"v\":3,\"ok\":{},\"extra\":true}"
+        },
+        {
+          "status": 200,
+          "answer": "{\"v\":3,\"ok\":{}}"
+        }
+      ],
+      "outcome": "answer",
+      "posted": 2,
+      "reading": {
+        "ok": {}
+      }
+    },
+    {
+      "why": "an error that is not text is lost",
+      "callback": "renew",
+      "answers": [
+        {
+          "status": 200,
+          "answer": "{\"v\":3,\"error\":7}"
+        },
+        {
+          "status": 200,
+          "answer": "{\"v\":3,\"ok\":{}}"
+        }
+      ],
+      "outcome": "answer",
+      "posted": 2,
+      "reading": {
+        "ok": {}
+      }
+    },
+    {
+      "why": "a sealed answer that is not JSON is lost",
+      "callback": "renew",
+      "answers": [
+        {
+          "status": 200,
+          "answer": "not json"
+        },
+        {
+          "status": 200,
+          "answer": "{\"v\":3,\"ok\":{}}"
+        }
+      ],
+      "outcome": "answer",
+      "posted": 2,
+      "reading": {
+        "ok": {}
+      }
+    },
+    {
+      "why": "a 200 whose body does not open as the call's answer is lost",
+      "callback": "renew",
+      "answers": [
+        {
+          "status": 200,
+          "plain": "not sealed"
+        },
+        {
+          "status": null
+        }
+      ],
+      "outcome": "lost",
+      "posted": 2
+    },
+    {
+      "why": "a guest error without its type and message is no answer: uncertain for a call never retried",
+      "callback": "take_rate",
+      "answers": [
+        {
+          "status": 200,
+          "answer": "{\"v\":3,\"error\":\"guest_error\"}"
+        }
+      ],
+      "outcome": "uncertain",
+      "posted": 1
+    },
+    {
+      "why": "a guest error whose message is no text is no answer, and the retry's answer is the call's",
+      "callback": "renew",
+      "answers": [
+        {
+          "status": 200,
+          "answer": "{\"v\":3,\"error\":\"guest_error\",\"type\":\"denied\",\"message\":7}"
+        },
+        {
+          "status": 200,
+          "answer": "{\"v\":3,\"ok\":{}}"
+        }
+      ],
+      "outcome": "answer",
+      "posted": 2,
+      "reading": {
+        "ok": {}
+      }
+    },
+    {
+      "why": "a guest error with its type and message is the call's",
+      "callback": "renew",
+      "answers": [
+        {
+          "status": 200,
+          "answer": "{\"v\":3,\"error\":\"guest_error\",\"message\":\"No grant.\",\"type\":\"denied\"}"
+        }
+      ],
+      "outcome": "answer",
+      "posted": 1,
+      "reading": {
+        "guest_error": {
+          "type": "denied",
+          "message": "No grant."
+        }
+      }
+    },
+    {
+      "why": "a guest error's remediation is the call's when it is an object",
+      "callback": "renew",
+      "answers": [
+        {
+          "status": 200,
+          "answer": "{\"v\":3,\"error\":\"guest_error\",\"message\":\"Connect github first.\",\"remediation\":{\"kind\":\"oauth\",\"provider\":\"github\"},\"type\":\"oauth_required\"}"
+        }
+      ],
+      "outcome": "answer",
+      "posted": 1,
+      "reading": {
+        "guest_error": {
+          "type": "oauth_required",
+          "message": "Connect github first.",
+          "remediation": {
+            "kind": "oauth",
+            "provider": "github"
+          }
+        }
+      }
+    },
+    {
+      "why": "a guest error's remediation that is no object is left out",
+      "callback": "renew",
+      "answers": [
+        {
+          "status": 200,
+          "answer": "{\"v\":3,\"error\":\"guest_error\",\"message\":\"m\",\"remediation\":\"x\",\"type\":\"t\"}"
+        }
+      ],
+      "outcome": "answer",
+      "posted": 1,
+      "reading": {
+        "guest_error": {
+          "type": "t",
+          "message": "m"
+        }
+      }
+    },
+    {
+      "why": "a required setup with its payload is the call's",
+      "callback": "renew",
+      "answers": [
+        {
+          "status": 200,
+          "answer": "{\"v\":3,\"error\":\"setup_required\",\"payload\":{\"fields\":[\"API_KEY\"],\"kind\":\"vault_edge\"}}"
+        }
+      ],
+      "outcome": "answer",
+      "posted": 1,
+      "reading": {
+        "setup_required": {
+          "fields": [
+            "API_KEY"
+          ],
+          "kind": "vault_edge"
+        }
+      }
+    },
+    {
+      "why": "a required setup without its payload is no answer",
+      "callback": "renew",
+      "answers": [
+        {
+          "status": 200,
+          "answer": "{\"v\":3,\"error\":\"setup_required\"}"
+        },
+        {
+          "status": null
+        }
+      ],
+      "outcome": "lost",
+      "posted": 2
+    },
+    {
+      "why": "a failure with its message is the call's",
+      "callback": "renew",
+      "answers": [
+        {
+          "status": 200,
+          "answer": "{\"v\":3,\"error\":\"failed\",\"message\":\"the output exceeds the node's response size\"}"
+        }
+      ],
+      "outcome": "answer",
+      "posted": 1,
+      "reading": {
+        "failed": "the output exceeds the node's response size"
+      }
+    },
+    {
+      "why": "a failure without its message is no answer",
+      "callback": "renew",
+      "answers": [
+        {
+          "status": 200,
+          "answer": "{\"v\":3,\"error\":\"failed\"}"
+        },
+        {
+          "status": null
+        }
+      ],
+      "outcome": "lost",
+      "posted": 2
+    },
+    {
+      "why": "CYFR's replayed is an answer, never asked again",
+      "callback": "renew",
+      "answers": [
+        {
+          "status": 200,
+          "answer": "{\"v\":3,\"error\":\"replayed\"}"
+        }
+      ],
+      "outcome": "answer",
+      "posted": 1,
+      "reading": {
+        "refused": "replayed"
+      }
+    },
+    {
+      "why": "CYFR's malformed is an answer, never asked again",
+      "callback": "renew",
+      "answers": [
+        {
+          "status": 200,
+          "answer": "{\"v\":3,\"error\":\"malformed\"}"
+        }
+      ],
+      "outcome": "answer",
+      "posted": 1,
+      "reading": {
+        "refused": "malformed"
+      }
+    },
+    {
+      "why": "CYFR's bad_mac is an answer, never asked again",
+      "callback": "renew",
+      "answers": [
+        {
+          "status": 200,
+          "answer": "{\"v\":3,\"error\":\"bad_mac\"}"
+        }
+      ],
+      "outcome": "answer",
+      "posted": 1,
+      "reading": {
+        "refused": "bad_mac"
+      }
+    },
+    {
+      "why": "CYFR's claim_expired is an answer, never asked again",
+      "callback": "renew",
+      "answers": [
+        {
+          "status": 200,
+          "answer": "{\"v\":3,\"error\":\"claim_expired\"}"
+        }
+      ],
+      "outcome": "answer",
+      "posted": 1,
+      "reading": {
+        "refused": "claim_expired"
+      }
+    },
+    {
+      "why": "CYFR's not_found is an answer, never asked again",
+      "callback": "renew",
+      "answers": [
+        {
+          "status": 200,
+          "answer": "{\"v\":3,\"error\":\"not_found\"}"
+        }
+      ],
+      "outcome": "answer",
+      "posted": 1,
+      "reading": {
+        "refused": "not_found"
+      }
+    },
+    {
+      "why": "a refusal by a name the host API does not give is no answer",
+      "callback": "renew",
+      "answers": [
+        {
+          "status": 200,
+          "answer": "{\"v\":3,\"error\":\"nope\"}"
+        },
+        {
+          "status": null
+        }
+      ],
+      "outcome": "lost",
+      "posted": 2
+    },
+    {
+      "why": "a pin's denied answers an egress_pin",
+      "callback": "egress_pin",
+      "answers": [
+        {
+          "status": 200,
+          "answer": "{\"v\":3,\"error\":\"denied\"}"
+        }
+      ],
+      "outcome": "answer",
+      "posted": 1,
+      "reading": {
+        "refused": "denied"
+      }
+    },
+    {
+      "why": "a pin's metadata answers an egress_pin",
+      "callback": "egress_pin",
+      "answers": [
+        {
+          "status": 200,
+          "answer": "{\"v\":3,\"error\":\"metadata\"}"
+        }
+      ],
+      "outcome": "answer",
+      "posted": 1,
+      "reading": {
+        "refused": "metadata"
+      }
+    },
+    {
+      "why": "a pin's resolution answers an egress_pin",
+      "callback": "egress_pin",
+      "answers": [
+        {
+          "status": 200,
+          "answer": "{\"v\":3,\"error\":\"resolution\"}"
+        }
+      ],
+      "outcome": "answer",
+      "posted": 1,
+      "reading": {
+        "refused": "resolution"
+      }
+    },
+    {
+      "why": "a pin's redirect_credentials answers an egress_pin",
+      "callback": "egress_pin",
+      "answers": [
+        {
+          "status": 200,
+          "answer": "{\"v\":3,\"error\":\"redirect_credentials\"}"
+        }
+      ],
+      "outcome": "answer",
+      "posted": 1,
+      "reading": {
+        "refused": "redirect_credentials"
+      }
+    },
+    {
+      "why": "a pin's malformed answers an egress_pin",
+      "callback": "egress_pin",
+      "answers": [
+        {
+          "status": 200,
+          "answer": "{\"v\":3,\"error\":\"malformed\"}"
+        }
+      ],
+      "outcome": "answer",
+      "posted": 1,
+      "reading": {
+        "refused": "malformed"
+      }
+    },
+    {
+      "why": "a pin's refusal answers no other callback: no answer, and the retry's answer is the call's",
+      "callback": "renew",
+      "answers": [
+        {
+          "status": 200,
+          "answer": "{\"v\":3,\"error\":\"denied\"}"
+        },
+        {
+          "status": 200,
+          "answer": "{\"v\":3,\"ok\":{}}"
+        }
+      ],
+      "outcome": "answer",
+      "posted": 2,
+      "reading": {
+        "ok": {}
+      }
+    },
+    {
+      "why": "a member given twice is its first: CYFR's lost, never asked again",
+      "callback": "renew",
+      "answers": [
+        {
+          "status": 200,
+          "answer": "{\"v\":3,\"error\":\"lost\",\"error\":7}"
+        }
+      ],
+      "outcome": "answer",
+      "posted": 1,
+      "reading": {
+        "refused": "lost"
+      }
+    },
+    {
+      "why": "an integer past 64 bits is kept whole",
+      "callback": "renew",
+      "answers": [
+        {
+          "status": 200,
+          "answer": "{\"v\":3,\"ok\":18446744073709551617}"
+        }
+      ],
+      "outcome": "answer",
+      "posted": 1,
+      "reading": {
+        "ok": 18446744073709551617
+      }
+    },
+    {
+      "why": "an answer nested 128 arrays deep is read whole",
+      "callback": "renew",
+      "answers": [
+        {
+          "status": 200,
+          "answer": "{\"v\":3,\"ok\":[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[0]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]}"
+        }
+      ],
+      "outcome": "answer",
+      "posted": 1,
+      "reading": {
+        "ok_json": "[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[0]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]"
+      }
+    },
+    {
+      "why": "an answer nested 2000 arrays deep is read whole",
+      "callback": "renew",
+      "answers": [
+        {
+          "status": 200,
+          "answer": "{\"v\":3,\"ok\":[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[0]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]}"
+        }
+      ],
+      "outcome": "answer",
+      "posted": 1,
+      "reading": {
+        "ok_json": "[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[0]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]"
+      }
+    }
   ]
 }

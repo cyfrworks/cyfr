@@ -222,6 +222,82 @@ defmodule Locus.Runtime.HostClientTest do
     assert length(ScriptedHost.requests(host, "renew")) == 2
   end
 
+  # The callbacks the outcomes vector posts, one of each retry class, as a
+  # client makes each.
+  defp outcome_call("renew", client), do: HostClient.renew(client, [client.attempt])
+  defp outcome_call("complete", client), do: HostClient.complete(client, %{"done" => true})
+
+  defp outcome_call("push_deltas", client),
+    do: HostClient.push_deltas(client, [~s({"type":"note"})])
+
+  defp outcome_call("admit_child", client),
+    do: HostClient.admit_child(client, "reagent:local.missing:0.1.0", nil, %{}, :call, nil)
+
+  defp outcome_call("take_rate", client), do: HostClient.take_rate(client, "http:x")
+
+  defp outcome_call("egress_pin", client),
+    do: HostClient.egress_pin(client, "https://api.example.test/x")
+
+  # What the client answers for a vector's reading of an answer.
+  defp reading(%{"ok" => value}), do: {:ok, value}
+  defp reading(%{"ok_json" => text}), do: {:ok, Jason.decode!(text)}
+  defp reading(%{"refused" => name}), do: {:error, String.to_existing_atom(name)}
+
+  defp reading(%{"guest_error" => %{"remediation" => remediation} = error}),
+    do: {:error, {:guest_error, error["type"], error["message"], remediation}}
+
+  defp reading(%{"guest_error" => error}),
+    do: {:error, {:guest_error, error["type"], error["message"]}}
+
+  defp reading(%{"setup_required" => payload}), do: {:error, {:setup_required, payload}}
+  defp reading(%{"failed" => message}), do: {:error, {:failed, message}}
+
+  defp scripted(%{"status" => nil}), do: :drop
+  defp scripted(%{"status" => 200, "answer" => json}), do: {:answer, json}
+  defp scripted(%{"status" => status, "plain" => body}), do: {:raw, status, body}
+
+  test "each answer outcome of the vectors: what a call makes of what each try met", %{
+    host: host,
+    client: client
+  } do
+    cases = @host_api["answer_outcomes"]
+    assert length(cases) >= 40
+
+    # One case for every class the callbacks' retries name.
+    classes =
+      for %{"callback" => callback} <- cases, uniq: true, do: @host_api["retries"][callback]
+
+    assert Enum.sort(classes) == ~w(batch idempotent keyed never outcome)
+
+    for %{"why" => why, "callback" => callback, "answers" => answers} = vector <- cases do
+      ScriptedHost.script(host, callback, Enum.map(answers, &scripted/1))
+      before = length(ScriptedHost.requests(host, callback))
+
+      {result, _log} = with_log(fn -> outcome_call(callback, client) end)
+
+      assert length(ScriptedHost.requests(host, callback)) - before == vector["posted"], why
+
+      case vector["outcome"] do
+        "lost" ->
+          assert result == {:error, :lost}, why
+
+        "uncertain" ->
+          assert {:error, {:uncertain, _sentence}} = result, why
+
+        "too_large" ->
+          assert result == {:error, :too_large}, why
+
+        "answer" ->
+          # A value answers only renew in the vectors, which reads it as
+          # it came; every other reading is the client's own.
+          assert result == reading(vector["reading"]), why
+
+          if Map.has_key?(vector["reading"], "ok") or Map.has_key?(vector["reading"], "ok_json"),
+            do: assert(callback == "renew", why)
+      end
+    end
+  end
+
   describe "a body past the host's bound" do
     test "is refused for good: posted once, whatever the call's class or the refusal's body",
          %{host: host, client: client} do

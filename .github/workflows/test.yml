@@ -1093,6 +1093,42 @@ jobs:
           mix compile --warnings-as-errors
           mix test
 
+  # The WASM runner's crate (apps/locus/runner) on amd64 and on a native
+  # arm64 runner, the two architectures the Locus image ships: its format,
+  # lints and tests, which hold its wires to the vector files under
+  # tests/fixtures, then its release build, every step --locked under the
+  # Rust release rust-toolchain.toml names (scripts/runner.sh).
+  runner:
+    name: The runner's crate (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {arch: amd64, runner: ubuntu-latest}
+          - {arch: arm64, runner: ubuntu-24.04-arm}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install the Rust release rust-toolchain.toml names
+        run: |
+          set -euo pipefail
+          channel="$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)"
+          [ -n "$channel" ] || { echo "::error::rust-toolchain.toml names no channel" >&2; exit 1; }
+          rustup toolchain install "$channel" --profile minimal --component rustfmt,clippy
+      - name: Cache the crate's dependencies and build
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            apps/locus/runner/target
+          key: ${{ runner.os }}-${{ matrix.arch }}-runner-${{ hashFiles('rust-toolchain.toml', 'apps/locus/runner/Cargo.lock') }}
+      - name: Check the crate
+        run: scripts/runner.sh check
+      - name: Build the release binary
+        run: scripts/runner.sh build
+
   # On amd64 and on a native arm64 runner: the runtime's native guest
   # tests (test_wasm/ and its hostile guests) run the engine's precompiled
   # NIF and Cranelift's code for each architecture the Locus image ships.
