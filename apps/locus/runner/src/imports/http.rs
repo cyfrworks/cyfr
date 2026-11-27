@@ -53,8 +53,8 @@
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
-use serde_json::{Map, Value};
-use zeroize::Zeroizing;
+use serde_json::Value;
+use zeroize::{Zeroize as _, Zeroizing};
 
 use super::{Guest, Run, args, catalyst, ended, error_json};
 use crate::auth::FrameReader;
@@ -181,9 +181,9 @@ pub enum Kind {
 
 impl Kind {
     /// Every kind, with whether a fetch's and a stream's answer may carry
-    /// it: a stream answers a failure after its request was sent as
-    /// `request_failed`, never `http_error`, and its own kinds are its
-    /// alone.
+    /// it. A stream answers the runner's own failure after its request was
+    /// sent as `request_failed`, but CYFR's `http_error` for an attached
+    /// stream's upstream as given; a stream's own kinds are its alone.
     pub const ALL: [(Kind, bool, bool); 18] = [
         (Kind::InvalidJson, true, true),
         (Kind::InvalidRequest, true, true),
@@ -199,7 +199,7 @@ impl Kind {
         (Kind::RedirectCredentials, true, true),
         (Kind::Timeout, true, true),
         (Kind::RequestFailed, true, true),
-        (Kind::HttpError, true, false),
+        (Kind::HttpError, true, true),
         (Kind::StreamLimit, false, true),
         (Kind::InvalidHandle, false, true),
         (Kind::EncodingError, false, true),
@@ -485,7 +485,9 @@ fn multipart_body(
     let mut bytes = [0u8; 16];
     getrandom::fill(&mut bytes).expect("the operating system's random source answers");
     let boundary = crate::wire::hex(&bytes);
-    let mut body = Zeroizing::new(Vec::new());
+    // Each part read first, its head and its content, so the body is
+    // reserved once at its whole size and never moves as it is written.
+    let mut read: Vec<(Zeroizing<String>, Zeroizing<Vec<u8>>)> = Vec::with_capacity(parts.len());
     for part in parts {
         let Some(part) = part.as_object() else {
             return Err(invalid(words::MULTIPART_PART.to_owned()));
@@ -493,29 +495,26 @@ fn multipart_body(
         let Some(name) = part.get("name").and_then(text_of) else {
             return Err(invalid(words::MULTIPART_PART.to_owned()));
         };
-        body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
-        match (part.get("data"), part.get("value")) {
+        read.push(match (part.get("data"), part.get("value")) {
             (Some(Value::String(data)), _) => {
                 let data = Zeroizing::new(
                     decode_base64(data).ok_or_else(|| invalid(words::bad_part_base64(&name)))?,
                 );
-                let filename = match part.get("filename").and_then(Value::as_str) {
-                    Some(filename) => format!("; filename=\"{}\"", quoted(filename)),
+                let filename = Zeroizing::new(match part.get("filename").and_then(Value::as_str) {
+                    Some(filename) => format!("; filename=\"{}\"", *quoted(filename)),
                     None => String::new(),
-                };
+                });
                 let content_type = part
                     .get("content_type")
                     .and_then(Value::as_str)
                     .unwrap_or("application/octet-stream");
-                body.extend_from_slice(
-                    format!(
-                        "content-disposition: form-data; name=\"{}\"{filename}\r\ncontent-type: \
-                         {content_type}\r\n\r\n",
-                        quoted(&name)
-                    )
-                    .as_bytes(),
-                );
-                body.extend_from_slice(&data);
+                let head = Zeroizing::new(format!(
+                    "--{boundary}\r\ncontent-disposition: form-data; name=\"{}\"{}\r\ncontent-type: \
+                     {content_type}\r\n\r\n",
+                    *quoted(&name),
+                    *filename
+                ));
+                (head, data)
             }
             (_, value) => {
                 let value = match value {
@@ -524,22 +523,37 @@ fn multipart_body(
                         text_of(value).unwrap_or_else(|| Zeroizing::new(value.to_string()))
                     }
                 };
-                body.extend_from_slice(
-                    format!(
-                        "content-disposition: form-data; name=\"{}\"\r\n\r\n",
-                        quoted(&name)
-                    )
-                    .as_bytes(),
-                );
-                body.extend_from_slice(value.as_bytes());
+                let head = Zeroizing::new(format!(
+                    "--{boundary}\r\ncontent-disposition: form-data; name=\"{}\"\r\n\r\n",
+                    *quoted(&name)
+                ));
+                (head, Zeroizing::new(value.as_bytes().to_vec()))
             }
-        }
+        });
+    }
+    let close = format!("--{boundary}--\r\n");
+    let size = read
+        .iter()
+        .map(|(head, data)| head.len() + data.len() + 2)
+        .sum::<usize>()
+        + close.len();
+    let mut body = Zeroizing::new(Vec::with_capacity(size));
+    for (head, data) in &read {
+        body.extend_from_slice(head.as_bytes());
+        body.extend_from_slice(data);
         body.extend_from_slice(b"\r\n");
     }
-    body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
-    headers
-        .0
-        .retain(|(name, _)| !name.eq_ignore_ascii_case("content-type"));
+    body.extend_from_slice(close.as_bytes());
+    debug_assert_eq!(body.len(), size);
+    // The guest's own content type is cleared as it goes.
+    headers.0.retain_mut(|(name, value)| {
+        let keep = !name.eq_ignore_ascii_case("content-type");
+        if !keep {
+            name.zeroize();
+            value.zeroize();
+        }
+        keep
+    });
     headers.0.push((
         "content-type".to_owned(),
         format!("multipart/form-data; boundary={boundary}"),
@@ -559,8 +573,8 @@ fn text_of(value: &Value) -> Option<Zeroizing<String>> {
     }
 }
 
-fn quoted(text: &str) -> String {
-    text.replace('"', "%22")
+fn quoted(text: &str) -> Zeroizing<String> {
+    Zeroizing::new(text.replace('"', "%22"))
 }
 
 // ============================================================================
@@ -663,13 +677,20 @@ impl Url {
     /// scheme and host: the port only when it is not the scheme's default,
     /// an IPv6 host in brackets.
     pub fn canonical(&self) -> Zeroizing<String> {
+        // The most it can take, each part with its mark, the host with its
+        // brackets and a port of five digits: reserved once, so it never
+        // moves.
         let mut text = Zeroizing::new(String::with_capacity(
             [&self.userinfo, &self.path, &self.query, &self.fragment]
                 .iter()
                 .map(|part| part.as_deref().map_or(0, String::len) + 1)
                 .sum::<usize>()
+                + self.scheme.as_deref().map_or(0, str::len)
+                + 1
                 + self.host.as_deref().map_or(0, str::len)
-                + 24,
+                + 2
+                + 2
+                + 6,
         ));
         if let Some(scheme) = &self.scheme {
             text.push_str(scheme);
@@ -994,11 +1015,9 @@ pub fn read_pin(pin: &Value) -> Option<Pin> {
         && id
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-');
-    let family = match pin.get("ip")?.as_str()?.parse::<std::net::IpAddr>().ok()? {
-        std::net::IpAddr::V4(_) => 4,
-        std::net::IpAddr::V6(_) => 6,
-    };
-    let family_matches = crate::wire::bounded(pin.get("family")?, 4..=6).ok() == Some(family);
+    let family = ip_family(pin.get("ip")?.as_str()?)?;
+    let family_matches =
+        crate::wire::bounded(pin.get("family")?, 4..=6).ok() == Some(u64::from(family));
     let scheme = pin.get("scheme")?.as_str()?;
     let port = crate::wire::bounded(pin.get("port")?, 1..=65_535).ok()?;
     let expires = crate::wire::bounded(pin.get("expires_at")?, 0..=crate::wire::MAX_INTEGER);
@@ -1023,6 +1042,21 @@ pub fn read_pin(pin: &Value) -> Option<Pin> {
             port: u16::try_from(port).ok()?,
         },
     })
+}
+
+/// The family of an IP literal as Erlang's `inet:parse_strict_address/1`
+/// reads one (`Prima.PinnedTarget`): a dotted quad of four decimal octets
+/// without leading zeros, or an IPv6 address, which may carry a zone after
+/// `%`, of any text, only when its first group is `fe80` or `ff02` and it
+/// embeds no IPv4 address. None for anything else.
+pub fn ip_family(ip: &str) -> Option<u8> {
+    if let Ok(address) = ip.parse::<std::net::IpAddr>() {
+        return Some(if address.is_ipv4() { 4 } else { 6 });
+    }
+    let (address, _zone) = ip.split_once('%')?;
+    let address = address.parse::<std::net::Ipv6Addr>().ok()?;
+    let scoped = matches!(address.segments()[0], 0xfe80 | 0xff02);
+    (scoped && !ip[..ip.find('%')?].contains('.')).then_some(6)
 }
 
 // A pin's host: an IPv6 literal in brackets, or a hostname of labels of
@@ -1257,7 +1291,7 @@ async fn collect(
     let mut head: Option<(u16, Headers)> = None;
     let mut body: Zeroizing<Vec<u8>> = Zeroizing::new(Vec::new());
     loop {
-        let Some(taken) = sent.fetch.next(PIECE_BYTES, wait).await else {
+        let Some(taken) = sent.fetch.next(PIECE_BYTES, false, wait).await else {
             return Err(Collected::TimedOut);
         };
         match taken {
@@ -1320,45 +1354,92 @@ fn redirected(hops: &mut VecDeque<Hop>, asked: &Asked, pin: &Pin, status: u16, h
 /// serde_json writes them. The body is written once, straight into the
 /// answer, which is reserved whole.
 pub fn response(status: u16, headers: &[Header], body: &[u8], base64: bool) -> String {
-    // An answer's headers may carry what the guest fetches with (a
-    // `Location`'s query, a cookie): their JSON is cleared once written.
-    let headers = Zeroizing::new(
-        crate::wire::Json::from_value(Value::Object(
-            headers
-                .iter()
-                .map(|(name, value)| (name.clone(), Value::String(value.clone())))
-                .collect::<Map<String, Value>>(),
-        ))
-        .value()
-        .to_string(),
-    );
-    let body_bytes = if base64 {
-        body.len().div_ceil(3) * 4
-    } else {
-        body.len() * 2
+    // The headers by name, the last of a repeated one: borrowed, so no
+    // value is copied or dropped on the way.
+    let headers: std::collections::BTreeMap<&str, &str> = headers
+        .iter()
+        .map(|(name, value)| (name.as_str(), value.as_str()))
+        .collect();
+    let text = (!base64).then(|| std::str::from_utf8(body).ok());
+    let body_bytes = match text {
+        None => body.len().div_ceil(3) * 4,
+        Some(Some(text)) => escaped_len(text.bytes(), false),
+        Some(None) => escaped_len(body.iter().copied(), true),
     };
-    let mut answer = String::with_capacity(body_bytes + headers.len() + 64);
-    answer.push_str("{\"body\":\"");
-    if base64 {
-        crate::wire::encode_base64_into(body, &mut answer);
-        answer.push_str("\",\"body_encoding\":\"base64\"");
-    } else {
-        match std::str::from_utf8(body) {
-            Ok(text) => escape_into(text, &mut answer),
-            Err(_) => {
-                for byte in body {
-                    escape_char(char::from(*byte), &mut answer);
-                }
+    // Each `"name":"value"`, a comma between, in braces.
+    let headers_bytes = 2
+        + headers.len().saturating_sub(1)
+        + headers
+            .iter()
+            .map(|(name, value)| {
+                escaped_len(name.bytes(), false) + escaped_len(value.bytes(), false) + 5
+            })
+            .sum::<usize>();
+    let status = status.to_string();
+    let (open, encoding, heads, stat) = (
+        "{\"body\":\"",
+        "\",\"body_encoding\":\"base64\"",
+        ",\"headers\":",
+        ",\"status\":",
+    );
+    let size = open.len()
+        + body_bytes
+        + if base64 { encoding.len() } else { 1 }
+        + heads.len()
+        + headers_bytes
+        + stat.len()
+        + status.len()
+        + 1;
+    // Counted to the byte, so it is written in place once.
+    let mut answer = String::with_capacity(size);
+    answer.push_str(open);
+    match text {
+        None => {
+            crate::wire::encode_base64_into(body, &mut answer);
+            answer.push_str(encoding);
+        }
+        Some(Some(text)) => {
+            escape_into(text, &mut answer);
+            answer.push('"');
+        }
+        Some(None) => {
+            for byte in body {
+                escape_char(char::from(*byte), &mut answer);
             }
+            answer.push('"');
+        }
+    }
+    answer.push_str(heads);
+    answer.push('{');
+    for (index, (name, value)) in headers.iter().enumerate() {
+        if index > 0 {
+            answer.push(',');
         }
         answer.push('"');
+        escape_into(name, &mut answer);
+        answer.push_str("\":\"");
+        escape_into(value, &mut answer);
+        answer.push('"');
     }
-    answer.push_str(",\"headers\":");
-    answer.push_str(&headers);
-    answer.push_str(",\"status\":");
-    answer.push_str(&status.to_string());
     answer.push('}');
+    answer.push_str(stat);
+    answer.push_str(&status);
+    answer.push('}');
+    debug_assert_eq!(answer.len(), size);
     answer
+}
+
+// How long `bytes` are once escaped as `escape_char` escapes each: as
+// UTF-8 text, or each byte read as Latin-1.
+fn escaped_len(bytes: impl Iterator<Item = u8>, latin1: bool) -> usize {
+    bytes
+        .map(|byte| match byte {
+            b'"' | b'\\' | b'\n' | b'\r' | b'\t' | 0x08 | 0x0c => 2,
+            0x00..=0x1f => 6,
+            0x80..=0xff if latin1 => 2,
+            _ => 1,
+        })
+        .sum()
 }
 
 // `text` escaped as serde_json escapes a string's contents, its runs of

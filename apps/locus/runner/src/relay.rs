@@ -1175,13 +1175,23 @@ pub enum Ended {
 pub struct Inbox {
     head: Option<(u16, Headers)>,
     head_read: bool,
-    /// The body arrived and not yet read: at most the credit outstanding.
-    body: Zeroizing<Vec<u8>>,
+    /// The body arrived and not yet read: at most the credit outstanding,
+    /// in a buffer reserved once at the credit so it never moves. What a
+    /// take moves down leaves its old places cleared, so the bytes past
+    /// its length are clear, and what is written is cleared on drop: the
+    /// reservation is never written whole.
+    body: Vec<u8>,
     end: Option<Ended>,
     /// The fetch's owner dropped it: what arrives is granted back at once.
     drained: bool,
     opener: Option<Opener>,
     attached: bool,
+}
+
+impl Drop for Inbox {
+    fn drop(&mut self) {
+        self.body.as_mut_slice().zeroize();
+    }
 }
 
 impl Inbox {
@@ -1279,13 +1289,20 @@ impl Fetch {
 
     /// The next of the answer, at most `most` bytes of its body at once,
     /// waiting at most `wait` for one; none when nothing arrived. Each body
-    /// piece taken is granted back to the service.
-    pub async fn next(&mut self, most: usize, wait: std::time::Duration) -> Option<Taken> {
+    /// piece taken is granted back to the service. A reader of `text` takes
+    /// the valid text before an invalid byte apart from it, so what came
+    /// before is not lost to what follows.
+    pub async fn next(
+        &mut self,
+        most: usize,
+        text: bool,
+        wait: std::time::Duration,
+    ) -> Option<Taken> {
         let mut changed = self.shared.changed.subscribe();
         let until = tokio::time::Instant::now() + wait;
         loop {
             changed.borrow_and_update();
-            if let Some(taken) = self.take(most) {
+            if let Some(taken) = self.take(most, text) {
                 return Some(taken);
             }
             if tokio::time::timeout_at(until, changed.changed())
@@ -1297,7 +1314,7 @@ impl Fetch {
         }
     }
 
-    fn take(&mut self, most: usize) -> Option<Taken> {
+    fn take(&mut self, most: usize, text: bool) -> Option<Taken> {
         let taken = {
             let mut inbox = self.shared.inbox.lock().expect("a fetch's inbox");
             if !inbox.head_read
@@ -1307,7 +1324,7 @@ impl Fetch {
                 return Some(Taken::Head { status, headers });
             }
             if !inbox.body.is_empty() {
-                Some(Taken::Body(take_front(&mut inbox.body, most)))
+                Some(Taken::Body(take_front(&mut inbox.body, most, text)))
             } else {
                 inbox.end.clone().map(Taken::End)
             }
@@ -1325,8 +1342,16 @@ impl Fetch {
 // The first `most` bytes of `body`, at a character's boundary where the
 // rest of a character would follow: the bytes after them move down and the
 // places they leave are cleared, so the buffer never moves.
-fn take_front(body: &mut Zeroizing<Vec<u8>>, most: usize) -> Zeroizing<Vec<u8>> {
+fn take_front(body: &mut Vec<u8>, most: usize, text: bool) -> Zeroizing<Vec<u8>> {
     let mut cut = body.len().min(most.max(1));
+    // Valid text before an invalid byte is taken apart from it.
+    if text
+        && let Err(error) = std::str::from_utf8(&body[..cut])
+        && error.error_len().is_some()
+        && error.valid_up_to() > 0
+    {
+        cut = error.valid_up_to();
+    }
     // A character cut in two is left whole for the next take, unless that
     // would take nothing.
     let mut start = cut;
@@ -1628,7 +1653,7 @@ impl Serving {
                 head_read: false,
                 // The most it holds is the credit outstanding: reserved once,
                 // so it never moves.
-                body: Zeroizing::new(Vec::with_capacity(INITIAL_CREDIT as usize)),
+                body: Vec::with_capacity(INITIAL_CREDIT as usize),
                 end: None,
                 drained: false,
                 opener,
@@ -1687,10 +1712,12 @@ impl Serving {
         let Some(owned) = self.owned.get(&re) else {
             return Ok(());
         };
+        // What it holds is cleared as far as it was written, and it keeps no
+        // buffer while it drains: what arrives is discarded.
         owned.shared.with(|inbox| {
             inbox.drained = true;
-            inbox.body.zeroize();
-            inbox.body.clear();
+            inbox.body.as_mut_slice().zeroize();
+            inbox.body = Vec::new();
         });
         let outstanding = owned.received - owned.granted;
         self.grant(re, outstanding)

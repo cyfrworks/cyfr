@@ -766,32 +766,52 @@ fn peak_while<T>(pid: u32, run: impl FnOnce() -> T) -> (u64, T) {
 
 /// One stream's answer of `bytes` cut into `chunks`, held unread while its
 /// guest reads another for six seconds: the runner's peak in KiB.
-fn held_unread(bytes: usize, chunks: usize) -> u64 {
+fn held_unread(bytes: usize, chunks: usize) -> (u64, Duration) {
     let mut service = Service::start();
     let job = streaming(
         "stream_hold",
         &json!({"method": "GET", "url": "https://api.example.test/events"}),
     );
+    // A slow runner's test build decodes a frame in some tens of
+    // microseconds on the runner's one thread, beside the guest's reads.
+    let job = Job {
+        timeout_ms: 120_000,
+        ..job
+    };
     let piece = bytes / chunks;
     let mut first = vec![Upstream::Head(200, Vec::new(), Vec::new())];
     first.extend((0..chunks).map(|_| Upstream::Chunk(vec![b'a'; piece])));
+    let started = std::time::Instant::now();
     service.assign_fetching(&job, pinning("api.example.test"), in_turn(vec![first]));
     let pid = service.pid();
     let (peak, (output, _, _)) = peak_while(pid, || completed(&service, &job));
     assert_eq!(output, json!({"data": "", "done": false}));
-    peak
+    (peak, started.elapsed())
 }
+
+/// How many one-byte chunks the unread stream is fed: enough that a frame
+/// held as its own allocation stands well clear of the bytes held whole,
+/// few enough that a slow runner's test build feeds them well inside the
+/// attempt's budget (the body gives the measured margin).
+const HELD_CHUNKS: usize = 300_000;
 
 #[test]
 fn a_stream_held_unread_holds_its_body_as_bytes_however_the_upstream_cuts_it() {
-    // Item 1: the same million bytes whole, and as a million one-byte
-    // chunks, each frame some 90 bytes on the wire.
-    let whole = held_unread(1_000_000, 1);
-    let pieces = held_unread(1_000_000, 1_000_000);
-    eprintln!("held unread: one chunk {whole} KiB, a million chunks {pieces} KiB");
+    // Item 1: the same bytes whole, and as one-byte chunks, each frame
+    // some 90 bytes on the wire.
+    let chunks: usize = std::env::var("CYFR_HELD_CHUNKS")
+        .ok()
+        .and_then(|chunks| chunks.parse().ok())
+        .unwrap_or(HELD_CHUNKS);
+    let (whole, _) = held_unread(chunks, 1);
+    let (pieces, took) = held_unread(chunks, chunks);
+    eprintln!(
+        "held unread: one chunk {whole} KiB, {chunks} chunks {pieces} KiB, the attempt {} ms",
+        took.as_millis()
+    );
     assert!(
-        pieces <= whole + 4 * 1024,
-        "a million one-byte chunks held {pieces} KiB against {whole} KiB whole"
+        pieces <= whole + 3 * 1024,
+        "{chunks} one-byte chunks held {pieces} KiB against {whole} KiB whole"
     );
 }
 

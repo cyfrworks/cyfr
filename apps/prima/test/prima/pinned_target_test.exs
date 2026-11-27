@@ -108,8 +108,11 @@ defmodule Prima.PinnedTargetTest do
 
   # The shared cases a runner holds its own reading of a pin to.
   test "the pin_answer_refusals of tests/fixtures/host_api.json read as the vectors say" do
-    %{"pin" => pin, "refusals" => refusals} = @vectors["pin_answer_refusals"]
+    %{"pin" => pin, "reads" => reads, "refusals" => refusals} = @vectors["pin_answer_refusals"]
     assert {:ok, %PinnedTarget{}} = PinnedTarget.read(pin)
+
+    for %{"why" => why, "pin" => read} <- reads,
+        do: assert({:ok, %PinnedTarget{}} = PinnedTarget.read(read), why)
 
     for %{"why" => why, "pin" => refused} <- refusals,
         do: assert(PinnedTarget.read(refused) == :error, why)

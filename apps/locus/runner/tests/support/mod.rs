@@ -210,6 +210,10 @@ pub enum Reply {
     Frame(Vec<u8>),
     /// `{"v": 3, "ok": value}`, then the service's end of the stream closed.
     OkThenEnd(Value),
+    /// `{"v": 3, "ok": value}` after this long, written from a thread of its
+    /// own while the service reads on; its writing is logged as a call of
+    /// op `answered:<op>`.
+    Later(Duration, Value),
 }
 
 pub type Script = Box<dyn FnMut(&Call, &Job) -> Reply + Send>;
@@ -585,7 +589,9 @@ pub fn relay_fetching(
     frames: Arc<Mutex<Vec<Value>>>,
 ) {
     let keys = job.keys();
-    let mut seq = 0u64;
+    // What the service writes, and the seq of its next frame, shared with
+    // the threads that answer later.
+    let out = Arc::new(Mutex::new((stream.try_clone().expect("the stream"), 0u64)));
     loop {
         let mut length = [0u8; 4];
         if stream.read_exact(&mut length).is_err() {
@@ -603,8 +609,9 @@ pub fn relay_fetching(
             // One fetch's frames go in one write, so its runner reads them
             // together.
             let mut written = Vec::new();
+            let mut writing = out.lock().expect("the writer");
             for upstream in fetches(&frame, &job) {
-                let mut sent = json!({"v": 1, "attempt": attempt, "seq": seq, "re": re});
+                let mut sent = json!({"v": 1, "attempt": attempt, "seq": writing.1, "re": re});
                 let members = match upstream {
                     Upstream::Head(status, headers, body) => json!({"kind": "fetch_chunk",
                         "status": status,
@@ -626,17 +633,17 @@ pub fn relay_fetching(
                 sent.as_object_mut()
                     .expect("an object")
                     .extend(members.as_object().expect("an object").clone());
-                seq += 1;
+                writing.1 += 1;
                 let json = sent.to_string();
                 let length = u32::try_from(json.len()).expect("a frame under 4 GiB");
                 written.extend_from_slice(&length.to_be_bytes());
                 written.extend_from_slice(json.as_bytes());
                 if closing {
-                    let _ = stream.write_all(&written);
+                    let _ = writing.0.write_all(&written);
                     return;
                 }
             }
-            if stream.write_all(&written).is_err() {
+            if writing.0.write_all(&written).is_err() {
                 return;
             }
             continue;
@@ -660,14 +667,38 @@ pub fn relay_fetching(
         let re = frame["seq"].as_u64().expect("a seq");
         let (status, body) = match script(&call, &job) {
             Reply::Silent => continue,
+            Reply::Later(after, value) => {
+                let body = seal(
+                    &keys,
+                    &fields,
+                    json!({"v": 3, "ok": value}).to_string().into_bytes(),
+                );
+                let (out, calls, call) = (out.clone(), calls.clone(), call.clone());
+                std::thread::spawn(move || {
+                    std::thread::sleep(after); // sleep-ok: CYFR's answer comes this much later, as the test scripts it
+                    let mut writing = out.lock().expect("the writer");
+                    let answer = json!({"v": 1, "attempt": call.attempt, "seq": writing.1,
+                        "kind": "host_answer", "re": re, "status": 200,
+                        "body": wire::encode_base64(&body)});
+                    writing.1 += 1;
+                    let _ = write_frame(&mut writing.0, &answer);
+                    calls.lock().expect("the calls").push(Call {
+                        op: format!("answered:{}", call.op),
+                        ..call
+                    });
+                });
+                continue;
+            }
             Reply::Close => {
-                let close = json!({"v": 1, "attempt": call.attempt, "seq": seq, "kind": "close",
+                let mut writing = out.lock().expect("the writer");
+                let close = json!({"v": 1, "attempt": call.attempt, "seq": writing.1, "kind": "close",
                                    "reason": "malformed"});
-                let _ = write_frame(&mut stream, &close);
+                let _ = write_frame(&mut writing.0, &close);
                 return;
             }
             Reply::Frame(json) => {
-                let _ = write_raw(&mut stream, &json);
+                let mut writing = out.lock().expect("the writer");
+                let _ = write_raw(&mut writing.0, &json);
                 continue;
             }
             Reply::Dropped => (Value::Null, Vec::new()),
@@ -677,9 +708,10 @@ pub fn relay_fetching(
                     &fields,
                     json!({"v": 3, "ok": value}).to_string().into_bytes(),
                 );
-                let answer = json!({"v": 1, "attempt": call.attempt, "seq": seq, "kind": "host_answer",
+                let mut writing = out.lock().expect("the writer");
+                let answer = json!({"v": 1, "attempt": call.attempt, "seq": writing.1, "kind": "host_answer",
                                     "re": re, "status": 200, "body": wire::encode_base64(&body)});
-                let _ = write_frame(&mut stream, &answer);
+                let _ = write_frame(&mut writing.0, &answer);
                 return;
             }
             Reply::Ok(value) => (
@@ -702,10 +734,11 @@ pub fn relay_fetching(
             }
             Reply::Plain(plain) => (json!(200), seal(&keys, &fields, plain)),
         };
-        let answer = json!({"v": 1, "attempt": call.attempt, "seq": seq, "kind": "host_answer",
+        let mut writing = out.lock().expect("the writer");
+        let answer = json!({"v": 1, "attempt": call.attempt, "seq": writing.1, "kind": "host_answer",
                             "re": re, "status": status, "body": wire::encode_base64(&body)});
-        seq += 1;
-        if write_frame(&mut stream, &answer).is_err() {
+        writing.1 += 1;
+        if write_frame(&mut writing.0, &answer).is_err() {
             return;
         }
     }

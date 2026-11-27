@@ -186,7 +186,7 @@ async fn next_piece(stream: &mut Stream, limits: &Limits) -> Piece {
     let until = Instant::now() + READ_WAIT;
     loop {
         let wait = until.saturating_duration_since(Instant::now());
-        let Some(taken) = stream.sent.fetch.next(PIECE_BYTES, wait).await else {
+        let Some(taken) = stream.sent.fetch.next(PIECE_BYTES, true, wait).await else {
             return Piece::None;
         };
         match taken {
@@ -231,6 +231,7 @@ pub fn stream_end(end: &Ended, host: &str, limits: &Limits) -> Option<Refusal> {
 /// arrives: the attempt's event and report (the module's description). The watcher holds its attempt's host weakly: once the
 /// attempt is gone there is nothing to record for it.
 pub struct Watcher {
+    settling: tokio::sync::Mutex<()>,
     evented: AtomicBool,
     settled: AtomicBool,
     fields: EventFields,
@@ -244,6 +245,7 @@ impl Watcher {
     /// end, beside its guest's reads.
     fn start(run: &super::Run, sent: &Sent, fields: EventFields, host: &str) {
         let watcher = Arc::new(Watcher {
+            settling: tokio::sync::Mutex::new(()),
             evented: AtomicBool::new(false),
             settled: AtomicBool::new(false),
             fields,
@@ -269,8 +271,12 @@ impl Watcher {
     }
 
     /// Record what has arrived and is not yet recorded, once; whether the
-    /// stream has ended and everything of it is recorded.
+    /// stream has ended and everything of it is recorded. One settling at
+    /// a time: a caller waits for one already under way, its event sent
+    /// and its report answered or failed, so the attempt that settles its
+    /// streams before it closes waits for what its watchers are reporting.
     pub async fn settle(&self, host: &Host) -> bool {
+        let _settling = self.settling.lock().await;
         let (status, end) = self.watch.now();
         if let Some(status) = status
             && !self.evented.swap(true, Ordering::SeqCst)
@@ -282,7 +288,7 @@ impl Watcher {
         let Some(end) = end else {
             return false;
         };
-        if self.settled.swap(true, Ordering::SeqCst) {
+        if self.settled.load(Ordering::SeqCst) {
             return true;
         }
         let refused = stream_end(&end, &self.host, &self.limits);
@@ -294,6 +300,8 @@ impl Watcher {
             // attempt's own calls meet the same answer.
             let _ = http::record(host, &refused).await;
         }
+        // Settled once everything of it is recorded, not when it began.
+        self.settled.store(true, Ordering::SeqCst);
         true
     }
 
