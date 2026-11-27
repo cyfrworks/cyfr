@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cyfr/locus/keeper/internal/home"
 	"github.com/cyfr/locus/keeper/internal/pool"
 	"github.com/cyfr/locus/keeper/internal/protocol"
 )
@@ -346,6 +347,18 @@ func TestMachineSpecValidation(t *testing.T) {
 	person.Disk = "/var/lib/locus/kept/" + strings.Repeat("b", 64) + ".img"
 	if err := person.Validate(); err != nil {
 		t.Fatal(err)
+	}
+	// A person's VMM writes its disk's image to the image's own size, and
+	// no space without a disk may write as far.
+	written := person
+	written.Limits.Fsize = home.ImageBytes
+	if err := written.Validate(); err != nil {
+		t.Fatalf("a person's VMM writing its image: %v", err)
+	}
+	diskless := machine
+	diskless.Limits.Fsize = home.ImageBytes
+	if err := diskless.Validate(); err == nil {
+		t.Fatal("a machine with no disk may write files of an image's size")
 	}
 	routedNoDisk := person
 	routedNoDisk.Disk = ""

@@ -180,8 +180,10 @@ func (s Spec) Validate() error {
 	}
 	c := protocol.Ceilings
 	l := s.Limits
-	// A kept spawn's file size may be unlimited (protocol.KeptUnbounded).
-	fsizeOK := l.Fsize != 0 && (l.Fsize <= c.Fsize || (s.Kept && l.Fsize == protocol.Unlimited))
+	// A kept spawn's file size may be unlimited (protocol.KeptUnbounded),
+	// and a person's VMM's is its disk's image's own size.
+	fsizeOK := l.Fsize != 0 && (l.Fsize <= c.Fsize || (s.Kept && l.Fsize == protocol.Unlimited) ||
+		(s.Disk != "" && l.Fsize == home.ImageBytes))
 	if l.Nofile == 0 || l.Nofile > c.Nofile || l.Nproc == 0 || l.Nproc > c.Nproc || l.Core > c.Core || !fsizeOK {
 		return fmt.Errorf("limits %+v are outside the ceilings %+v", l, c)
 	}

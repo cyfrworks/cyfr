@@ -74,6 +74,18 @@ const (
 // descriptors, and no file of its own past its sockets.
 var machineLimits = protocol.Limits{Nofile: 256, Nproc: 64, Core: 0, Fsize: 1 << 20}
 
+// limitsOf are the limits of cfg's VMM: machineLimits, but a person's VM,
+// which writes its disk's image, may write it to the image's own size
+// (home.ImageBytes) and no further; past its limit the kernel would end
+// the VMM with SIGXFSZ at the guest's first write there.
+func limitsOf(cfg Config) protocol.Limits {
+	l := machineLimits
+	if cfg.Disk != "" {
+		l.Fsize = home.ImageBytes
+	}
+	return l
+}
+
 // Config is one machine.
 type Config struct {
 	// Device is the image's programs, attached read only as the root. The
@@ -289,7 +301,7 @@ func start(cfg Config) (*Machine, error) {
 	m.clear = func() error { return runRetire(m.uid, m.gid, m.dir) }
 	spec := stage.Spec{UID: m.uid, GID: m.gid, User: MachineUser, HomeRoot: Root, Home: m.dir,
 		Argv:   []string{Firecracker, "--api-sock", m.api(), "--id", m.id, "--level", "Warning"},
-		Limits: machineLimits, Reach: pool.ReachRelay, Cgroup: m.group.Path(), Machine: cfg.Device.Path,
+		Limits: limitsOf(cfg), Reach: pool.ReachRelay, Cgroup: m.group.Path(), Machine: cfg.Device.Path,
 		Disk: cfg.Disk, KeptRoot: cfg.KeptRoot}
 	if cfg.Route != nil {
 		spec.Reach = pool.ReachRouted

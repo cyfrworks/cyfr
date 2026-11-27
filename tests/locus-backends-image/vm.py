@@ -47,22 +47,87 @@ else beyond its role's own confinement, on a kept-homes volume and a
   from order 0 and from the kernel's own order: the processor time of
   each, and what the VMM held at the session's release, are printed.
 
-Prerequisites: harness.py's, and /dev/kvm on the host. Usage: tests/locus-backends-image/vm.py IMAGE
+Then a person's sessions run in their own VM (plan V2), each case on a
+stack of its own: docker-compose.yml's locus service, as harness.py runs
+it, with compose.kvm.yml layered last, which gives the locus container
+/dev/kvm and /dev/net/tun and the guard /dev/net/tun, and a pool whose work
+is sized as memory.py sizes it. Every session runs the probe program from
+its environment (`vm_probe`): a VM's root is the image's programs alone,
+which hold nothing of the container's /probe mount.
+
+- The disk and the boot: the keeper says it gives the wall. A person's
+  first session makes their disk an image, a regular file of the disk's
+  uid and group, 0600, its record of the image form, and no disk folder,
+  and runs in a VM under that uid: its boot identity is not the
+  container's. Started again on the same kept volume without the devices,
+  the keeper says it gives spaces, and the person's next session is
+  refused, the keeper naming the disk image that runs only in a VM, with
+  no VM booted and nothing of the image changed.
+- Boot identity: one person's two sessions, each a space of its own, read
+  one boot identity, and a second person's session another, each person's
+  VM under their own disk's uid.
+- Routes and names: one person's two programs, given different hosts, run
+  in one VM; each reaches its own host and is refused the other's at once,
+  on the guest's own route of that session, while the host's guard holds
+  the VM's one route to both. A session's names are answered through the
+  VM's card and the host's guard (Docker's answer for the stack's own
+  service name), and another person's session finds nothing of the first
+  person's disk, image or homes.
+- Packs in a VM: a generation put for a session in a VM is its space's
+  read-only folder at the path a host gives it, byte for byte: its
+  executable runs from there, and nothing there is written, made or
+  renamed. A newer generation put while that session runs reaches a new
+  session in the same VM, while the old session still reads its own.
+- The ledger (plan native-locus section 23), on the pool report: while a
+  person's first session starts, `used` holds at least a session's
+  allowance and the VM's own; past the allowance's time it is the VMM's
+  group's reading, and the counters' bytes, the sessions' by subject, sum
+  to no more. A second session of the person joins and `used` is still
+  the VM's reading, not the VM's and the session's. In a pool that holds
+  one VM's start and not two, a second person's start is refused
+  `capacity` while the first person's session lives on; once that session
+  has ended, the second person's start makes the first person's idle VM
+  give way and is admitted, and with the first VM released `used` and
+  `free` are what they were before its boot, beside the second VM's own
+  charge.
+- Losses on the host's side: the VMM killed with two sessions running ends
+  both, the VM is released, and the person's next session boots a new VM;
+  the guard killed during a session's start refuses that start and ends
+  the VM, and the keeper, whose role's route went with the guard, ends and
+  its container starts again behind the guard's successor, where the
+  person's next session boots a VM; the keeper killed while a VM holds the
+  disk is started again, and the person's next session boots a VM on the
+  same image, finding what the last one wrote.
+- Measurements, printed: a disk image's allocated size after its first
+  boot and after an idle minute, the guard container's peak with one VM
+  routed, and the VMM group's memory before and after a session that binds
+  the largest generation a set may be.
+
+Prerequisites: harness.py's, /dev/kvm and /dev/net/tun on the host, and
+the public network for the routes case's reaching steps, which are
+skipped, each with its reason, under CYFR_TEST_OFFLINE=1. Usage:
+tests/locus-backends-image/vm.py IMAGE
 """
 
+import hashlib
 import json
 import os
 import re
 import secrets
 import sys
+import threading
 import time
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from harness import KEPT_ROOT, POOL_FIRST, POOL_LAST, RELEASE, ROLE, Stack, expect, require_docker  # noqa: E402
+from harness import (  # noqa: E402
+    CONNECT_PROBE, HERE, KEPT_ROOT, POOL_FIRST, POOL_LAST, REFUSED, RELEASE, ROLE, SERVICE, Stack,
+    disk_of, eventually, expect, home_of, owner_of, require_docker,
+)
 import imagesuite  # noqa: E402
-from imagesuite import PROJECT_PREFIX, run  # noqa: E402
+from imagesuite import PROJECT_PREFIX, read_output, run  # noqa: E402
+import packs  # noqa: E402
 
 KVM = "/dev/kvm"
 # The machines' folder, the guest volume's mount point, as the role table names it.
@@ -261,6 +326,712 @@ def keeper_killed(stack, image, kept, guest, project):
         run("docker", "rm", "--force", container, check=False)
 
 
+# ————— a person's sessions in their VM (plan V2) —————
+
+KVM_LAYER = os.path.join(HERE, "compose.kvm.yml")
+# What a person's first session holds while it starts: a session's allowance and the VM's own.
+SESSION_ALLOWANCE, MACHINE_BYTES = imagesuite.ALLOWANCE_BYTES["session"], imagesuite.MACHINE_BYTES
+FIRST_START = SESSION_ALLOWANCE + MACHINE_BYTES
+MIB = 1 << 20
+# The pool's work of a stack that gives the wall: two first starts at once fit it.
+WORK = 2048 * MIB
+# The pool's work that holds one VM's first start and not a second beside a running VM.
+TIGHT_WORK = FIRST_START + 16 * MIB
+# How far apart the keeper's charge of a VM and the suite's own reading of its group may be: the two are read at
+# different instants of a guest that is idle but not still.
+CHARGE_SLACK = 16 * MIB
+# What the keeper says of the wall at its start, and of the losses and ends it meets.
+WALL_SAID = "each person's work runs in a separate small computer on this machine"
+SPACES_SAID = "each person's work runs in its own space on this machine: the container was given no /dev/kvm"
+NO_VM_SAID = "is on a disk image, which runs only in its person's VM, and this machine runs none"
+BOOTED_SAID = "booted, its VMM pid"
+GIVE_WAY_SAID = "a person's VM ends: it held no session, and a start needs its room"
+RELEASED_SAID = "a person's VM is released: its group is empty, its route withdrawn and its device let go"
+GUARD_LOST_SAID = re.compile(r"egress: the guard's connection \d+ ended")
+# The VMM, as its stage executes it (internal/vm's Firecracker).
+FIRECRACKER = "/usr/lib/cyfr/guest/firecracker"
+
+
+def row_of(owner):
+    """The home of the owner's one program in these cases: a kept home's id names one athanor's home alone."""
+    return "mcp_" + owner["athanor"].removeprefix("ath_") + "-home"
+
+# The packs' folder of a session's space, on a host and in a VM alike (packs.py).
+SCROLLS = "/run/cyfr/scrolls"
+
+with open(os.path.join(HERE, "probe-backend.mjs"), encoding="utf-8") as _probe:
+    PROBE_SOURCE = _probe.read()
+
+
+def vm_probe(name="probe", **program):
+    """The probe program, a kept one, as a session in a VM runs it: its source carried in its environment, since a
+    VM's root is the image's programs alone and holds nothing of the container's /probe mount."""
+    return {"name": name, "command": 'exec node --input-type=module -e "$PROBE_SOURCE"',
+            "env": {"PROBE_SOURCE": PROBE_SOURCE}, "home": "kept", **program}
+
+
+def wall_stack(name, image):
+    """A stack of its own that gives the wall: compose.kvm.yml layered last."""
+    return Stack(f"locus-backends-vm-{name}", image, layers=[KVM_LAYER])
+
+
+def up_wall(stack, work=WORK):
+    """Starts the stack at the pool's work `work`, and waits for the keeper to say it gives the wall."""
+    stack.up(work_bytes=work)
+    eventually(lambda: WALL_SAID in stack.logs(), "the keeper to say it gives the wall", timeout_s=30)
+
+
+def synced(stack, owners):
+    """A controller of the stack that has greeted it and synced each owner's programs, `owners` being (owner,
+    programs) pairs."""
+    c = stack.controller()
+    expect(c.hello()[0] == 200, "the service is greeted")
+    for owner, programs in owners:
+        status, answer, _ = c.sync(owner, programs, lease_ms=60_000)
+        expect(status == 200, f"{owner['athanor']}'s programs are synced", answer)
+    return c
+
+
+def sh(c, owner, script, key="k", row=None, program="probe"):
+    """`script` run by `sh -c` in the session of `key` of the owner's program, in its home `row` (`row_of` by
+    default): the probe's answer."""
+    return packs.run_in(c.mcp(owner, program, key=key, home_id=row or row_of(owner)), script)
+
+
+def boot_id(c, owner, key="k", row=None, program="probe"):
+    """The boot identity the session of `key` reads."""
+    read = sh(c, owner, "cat /proc/sys/kernel/random/boot_id", key, row, program)["stdout"].strip()
+    if not BOOT_ID.match(read):
+        sys.exit(f"FAIL: {owner['athanor']}'s session {key} reads no boot identity: {read!r}")
+    return read
+
+
+def container_boot(stack):
+    """The Locus container's boot identity, its kernel's."""
+    return read_output(stack.exec("cat /proc/sys/kernel/random/boot_id"), "the container's boot identity").strip()
+
+
+def vmms(stack):
+    """The VMMs running in the Locus container, {pid: uid}; none where it runs nothing."""
+    return {p["pid"]: p["uids"][0] for p in stack.processes() if p["cmd"].split()[:1] == [FIRECRACKER]}
+
+
+def person_of(owner):
+    return disk_of(owner).rsplit("/", 1)[1]
+
+
+def image_of(owner):
+    """The owner's person's disk image: <kept root>/<sha256(athanor)>.img (the keeper's home.Kept.ImagePath)."""
+    return disk_of(owner) + ".img"
+
+
+def disk_record(stack, owner):
+    """The keeper's record of the owner's person's disk, read by the observer."""
+    path = f"{KEPT_ROOT}/.disks/{person_of(owner)}.json"
+    return json.loads(read_output(stack.observe(f"cat {path}"), f"the record {path}"))
+
+
+# An image's stat, every field a write to it changes among them: uid, gid, mode, size, inode, allocated blocks,
+# modification and change times, then its type.
+IMAGE_STAT = "%u %g %a %s %i %b %Y %Z %F"
+
+
+def parse_stat(text, what):
+    fields = text.strip().split(" ", 8)
+    if len(fields) != 9:
+        sys.exit(f"FAIL: {what} printed no stat: {text!r}")
+    names = ["uid", "gid", "mode", "size", "inode", "blocks", "mtime", "ctime"]
+    return {**{n: int(v) if n != "mode" else v for n, v in zip(names, fields)}, "type": fields[8]}
+
+
+def image_stat(stack, owner):
+    """The owner's disk image's stat, and whether a disk folder stands beside it, read by the observer."""
+    out = read_output(stack.observe(f"stat -c '{IMAGE_STAT}' {image_of(owner)}; "
+                                    f"test -e {disk_of(owner)} && echo folder || echo none"),
+                      f"the stat of {image_of(owner)}").splitlines()
+    return parse_stat(out[0], image_of(owner)), out[1] == "folder"
+
+
+def volume_image_stat(stack, image, owner):
+    """The image's stat read from the kept volume by a container of its own, while the stack's Locus is stopped."""
+    out = run("docker", "run", "--rm", *imagesuite.run_name(f"{stack.project}-stat"), "--network", "none",
+              "--mount", f"type=volume,source={stack.project}_homes,target={KEPT_ROOT},readonly",
+              "--entrypoint", "stat", image, "-c", IMAGE_STAT, image_of(owner)).stdout
+    return parse_stat(out, f"the volume's {image_of(owner)}")
+
+
+def vmm_group(uid):
+    """The group a person's VM's VMM runs in: under the backends role's group in work, named by its disk's uid."""
+    return f"{imagesuite.work_group(ROLE)}/keeper-{uid}/bound"
+
+
+def vmm_memory(stack, uid):
+    """The VMM group's memory.current, and its reading as the keeper takes it (cgroup.Group.Used): anon, shmem and the
+    kernel's, less what slab may reclaim."""
+    group = vmm_group(uid)
+    current = read_output(stack.exec(f"cat {group}/memory.current"), f"{group}/memory.current").strip()
+    stat = imagesuite.read_counters(stack.exec(f"cat {group}/memory.stat"),
+                                    ("anon", "shmem", "kernel", "slab_reclaimable"), f"{group}/memory.stat")
+    return int(current), stat["anon"] + stat["shmem"] + stat["kernel"] - stat["slab_reclaimable"]
+
+
+def group_gone(stack, uid):
+    group = vmm_group(uid).removesuffix("/bound")
+    return imagesuite.read_word(stack.exec(f"test -e {group} && echo present || echo absent"),
+                                ("present", "absent"), f"the probe of {group}") == "absent"
+
+
+def pool_report(stack):
+    """One page of the backends role's pool report: its used, work and counters at one instant."""
+    status, answer = imagesuite.pool_ask(stack.base, "backends", stack.key)
+    if status != 200 or not isinstance(answer, dict):
+        sys.exit(f"FAIL: the pool route answers {status}: {answer}")
+    report = answer["report"]
+    if "next" in report:
+        sys.exit(f"FAIL: the pool report pages past {len(report['counters'])} counters: {report['next']}")
+    return report
+
+
+def ended(c, owner, session):
+    """The session's last recv answer once it runs no more, or None."""
+    status, answer = c.recv(owner, session, 0, 0)
+    if status != 200:
+        sys.exit(f"FAIL: a recv of {session} is refused: {status} {answer}")
+    return None if answer["running"] else answer
+
+
+def guard_routes(stack):
+    """The guard's record of every route it holds, by its guard's end: the rules recorded for each."""
+    listed = read_output(stack.guard_exec('for f in /run/cyfr-guard/routes/sp*; do [ -f "$f" ] && printf "== %s\\n" '
+                                          '"${f##*/}" && cat "$f"; done; true'), "the guard's routes")
+    out, iface = {}, None
+    for line in listed.splitlines():
+        if line.startswith("== "):
+            iface = line[3:]
+            out[iface] = []
+        elif iface:
+            out[iface].append(line)
+    return out
+
+
+def connects(c, owner, targets, key, row, program):
+    """The kernel's answer to one connection from the session to each target (harness.py's CONNECT_PROBE)."""
+    status, answer = c.mcp(owner, program, key=key, home_id=row).call(
+        "run", {"argv": ["node", "-e", CONNECT_PROBE, "targets", *targets]})
+    result = (answer or {}).get("result") or {}
+    if status != 200 or result.get("isError") or "content" not in result:
+        sys.exit(f"FAIL: the connection probe of {owner['athanor']}'s {program} session: {status} {answer}")
+    probed = json.loads(result["content"][0]["text"])
+    expect(probed["status"] == 0, f"{owner['athanor']}'s {program} session's connection probe ran to its end", probed)
+    return dict(line.split("=", 1) for line in probed["stdout"].splitlines() if "=" in line)
+
+
+def disk_and_boot(image):
+    """A person's first session in a VM makes their disk an image and boots in it; without the devices the image's
+    sessions are refused by name and nothing of the image changes."""
+    stack = wall_stack("disk", image)
+    owner = owner_of("vm-disk")
+    try:
+        up_wall(stack)
+        c = synced(stack, [(owner, [vm_probe()])])
+        guest = boot_id(c, owner)
+        expect(guest != container_boot(stack), "the person's first session runs in a VM: its boot identity is not "
+               "the container's", guest)
+        record = disk_record(stack, owner)
+        stat, folder = image_stat(stack, owner)
+        expect(record["form"] == "image" and record["athanor"] == owner["athanor"]
+               and record["homes"] == [row_of(owner)],
+               "the person's disk is recorded of the image form, holding the session's home", record)
+        expect(stat["type"] == "regular file" and stat["uid"] == stat["gid"] == record["uid"] and stat["mode"] == "600"
+               and not folder, "the disk is an image, a regular file of the disk's uid and group, 0600, and no "
+               "disk folder stands", [stat, folder])
+        machines = vmms(stack)
+        expect(list(machines.values()) == [record["uid"]], "the person's one VMM runs under their disk's uid",
+               machines)
+        print(f"the first session's image: {stat['size'] >> 30} GiB apparent, {stat['blocks'] * 512 // MIB} MiB "
+              "allocated", flush=True)
+
+        stack.compose("stop", SERVICE)
+        before = volume_image_stat(stack, image, owner)
+        stack.layers = []
+        stack.up(work_bytes=WORK)
+        eventually(lambda: SPACES_SAID in stack.logs(), "the keeper without the devices to say it gives spaces",
+                   timeout_s=30)
+        c = synced(stack, [(owner, [vm_probe()])])
+        status, answer = c.open(owner, "probe", key="spaces", home_id=row_of(owner))
+        expect(status != 200, "without the devices the person's next session is refused", [status, answer])
+        logs = stack.logs()
+        expect(NO_VM_SAID in logs and f"kept home {row_of(owner)} {NO_VM_SAID}" in logs,
+               "the keeper names the disk image, which runs only in its person's VM, as why", logs[-3000:])
+        expect(BOOTED_SAID not in logs and not vmms(stack), "no VM boots", logs[-3000:])
+        after, folder = image_stat(stack, owner)
+        expect(after == before and not folder, "nothing of the image changes, and no disk folder is made",
+               [before, after])
+        expect(disk_record(stack, owner) == record, "the disk's record is as it was")
+    finally:
+        stack.down()
+
+
+def boot_identity(image):
+    """One person's sessions share their VM's boot identity, and another person's VM has its own."""
+    stack = wall_stack("boot", image)
+    one, two = owner_of("vm-one"), owner_of("vm-two")
+    try:
+        up_wall(stack)
+        c = synced(stack, [(one, [vm_probe()]), (two, [vm_probe()])])
+        first, second, other = boot_id(c, one, "a"), boot_id(c, one, "b"), boot_id(c, two, "a")
+        spaces = [sh(c, one, "readlink /proc/self/ns/pid", key)["stdout"] for key in ("a", "b")]
+        expect(first == second and spaces[0] != spaces[1],
+               "one person's two sessions, each a space of its own, read one boot identity", [first, second, spaces])
+        expect(other != first and container_boot(stack) not in (first, other),
+               "a second person's session reads another, and neither is the container's", [first, other])
+        machines = sorted(vmms(stack).values())
+        expect(machines == sorted([disk_record(stack, one)["uid"], disk_record(stack, two)["uid"]]),
+               "each person's VM runs under their own disk's uid", machines)
+    finally:
+        stack.down()
+
+
+NPM, ONE_ONE = "registry.npmjs.org", "one.one.one.one"
+NPM_ROW, ONE_ROW = "mcp_vm-npm", "mcp_vm-one"
+
+
+def routes_and_names(image):
+    """One person's sessions with different hosts keep their own routes in one VM; names are answered through the
+    host's guard; another person finds nothing of theirs."""
+    offline = os.environ.get("CYFR_TEST_OFFLINE") == "1"
+    stack = wall_stack("routes", image)
+    person, other = owner_of("vm-routes"), owner_of("vm-neighbour")
+    try:
+        up_wall(stack)
+        c = synced(stack, [(person, [vm_probe("npm", hosts=[NPM]), vm_probe("one", hosts=[ONE_ONE])]),
+                           (other, [vm_probe()])])
+        sessions = [("npm", NPM_ROW, f"{NPM}:443", "1.1.1.1:443"), ("one", ONE_ROW, "1.1.1.1:443", f"{NPM}:443")]
+        boots = {boot_id(c, person, "k", row, program) for program, row, _own, _theirs in sessions}
+        expect(len(boots) == 1, "the person's two programs run in one VM", boots)
+        named = sh(c, person, f"getent hosts {SERVICE}", "k", NPM_ROW, "npm")
+        expect(named["status"] == 0 and SERVICE in named["stdout"],
+               f"a session's names are answered through the host's guard: Docker's answer for {SERVICE}", named)
+        npm = sh(c, person, f"getent ahostsv4 {NPM} | awk '{{print $1}}' | sort -u", "k", NPM_ROW, "npm")
+        npm_addrs = npm["stdout"].split()
+        expect(npm["status"] == 0 and npm_addrs and "1.1.1.1" not in npm_addrs,
+               f"{NPM} resolves in the VM to addresses of its own", npm)
+        for program, row, own, theirs in sessions:
+            codes = connects(c, person, [own, theirs], "k", row, program)
+            expect(codes.get(theirs) in REFUSED,
+                   f"the {program} session is refused the other session's host, {theirs}, at once", codes)
+            if offline:
+                print(f"skip: the {program} session's {own} is not reached: CYFR_TEST_OFFLINE=1 says this host has "
+                      "no public network", flush=True)
+            else:
+                expect(codes.get(own) == "connected", f"the {program} session reaches its own host, {own}", codes)
+        routes = guard_routes(stack)
+        both = [iface for iface, rules in routes.items()
+                if any("-d 1.1.1.1/32" in r for r in rules)
+                and any(f"-d {a}/32" in r for r in rules for a in npm_addrs)]
+        expect(len(both) == 1, "the host's guard holds the VM one route, allowing both sessions' hosts", routes)
+
+        apart = sh(c, other, f"ls -A {KEPT_ROOT}; for p in {disk_of(person)} {image_of(person)} "
+                             f"{home_of(person, NPM_ROW)}; do test -e $p && echo reached $p || echo no $p; done")
+        expect(person_of(person) not in apart["stdout"].splitlines()[:-3]
+               and apart["stdout"].splitlines()[-3:] == [f"no {disk_of(person)}", f"no {image_of(person)}",
+                                                         f"no {home_of(person, NPM_ROW)}"],
+               "another person's session finds nothing of the person's disk, image or homes", apart)
+        print(f"another person's session lists under the kept root: {apart['stdout'].splitlines()[:-3]}", flush=True)
+    finally:
+        stack.down()
+
+
+PACKS_ROW = "mcp_vm-packs"
+# A newer generation of the same packs: one file's bytes changed.
+NEWER = {**packs.FILES,
+         "pstack/skills/poteto-mode/SKILL.md": (b"---\nname: poteto-mode\n---\n# the newer one\n", False)}
+
+
+def packs_in_vm(image):
+    """A person's packs are their VM session's read-only folder, and a newer generation reaches a new session while an
+    old one keeps its own."""
+    stack = wall_stack("packs", image)
+    owner = owner_of("vm-packs")
+    try:
+        up_wall(stack)
+        c = synced(stack, [(owner, [vm_probe(packs=True)])])
+        digest = packs.digest_of(packs.FILES)
+        state, puts, old = packs.started(c, owner, "old", PACKS_ROW, digest)
+        expect(state == "missing" and puts and all(s == 200 for s, _a in puts) and puts[-1][1]["state"] == "held",
+               "a first start finds the person's packs missing and puts them, the last part held", puts)
+        listing = packs.run_in(old, f"cat /proc/sys/kernel/random/boot_id; find {SCROLLS} -type f | sort; echo; "
+                                    f"find {SCROLLS} -type f | sort | xargs sha256sum")
+        first, rest = listing["stdout"].split("\n", 1)
+        expect(first.strip() != container_boot(stack), "the session that binds the packs runs in the person's VM",
+               listing)
+        names, sums = rest.split("\n\n", 1)
+        expect(names.split() == sorted(f"{SCROLLS}/{p}" for p in packs.FILES),
+               f"the VM session's {SCROLLS} holds the packs as put, at the path a host gives it", names)
+        for path, (data, _x) in packs.FILES.items():
+            expect(f"{hashlib.sha256(data).hexdigest()}  {SCROLLS}/{path}" in sums, f"{path} is the bytes put", sums)
+        tried = packs.run_in(old,
+                             f"{SCROLLS}/pstack/skills/poteto-mode/scripts/hello; "
+                             f"touch {SCROLLS}/pstack/new 2>&1; echo rc=$?; "
+                             f"mkdir {SCROLLS}/pstack/skills/poteto-mode/scripts/node_modules 2>&1; echo rc=$?; "
+                             f"mv {SCROLLS}/taste {SCROLLS}/gone 2>&1; echo rc=$?; "
+                             f"sh -c 'echo x >> {SCROLLS}/taste/skills/taste/SKILL.md' 2>&1; echo rc=$?; "
+                             f"grep ' {SCROLLS} ' /proc/self/mountinfo")
+        out = tried["stdout"]
+        expect(out.startswith("hello from a pack\n"), "a pack's executable runs from the folder in the VM", out)
+        expect(out.count("Read-only file system") == 3 and "Permission denied" in out and "rc=0" not in out,
+               "a new file, a new folder and a rename fail read only, and an append is refused", out)
+        mount = [line for line in out.splitlines() if f" {SCROLLS} " in line]
+        expect(len(mount) == 1 and " ro," in mount[0], "the folder is a read-only mount of the session's space", mount)
+
+        newer = packs.digest_of(NEWER)
+        state, puts, new = packs.started(c, owner, "new", PACKS_ROW, newer, files=NEWER)
+        expect(state == "missing" and puts[-1][1]["state"] == "held",
+               "a newer generation is put while the old session runs", puts)
+        skill = f"cat /proc/sys/kernel/random/boot_id; cat {SCROLLS}/pstack/skills/poteto-mode/SKILL.md"
+        seen_new, seen_old = packs.run_in(new, skill)["stdout"], packs.run_in(old, skill)["stdout"]
+        expect(seen_new.split("\n", 1)[0] == first.strip()
+               and seen_new.split("\n", 1)[1] == NEWER["pstack/skills/poteto-mode/SKILL.md"][0].decode(),
+               "the newer generation reaches a new session in the same VM", seen_new)
+        expect(seen_old.split("\n", 1)[1] == packs.FILES["pstack/skills/poteto-mode/SKILL.md"][0].decode(),
+               "the old session still reads its own generation", seen_old)
+    finally:
+        stack.down()
+
+
+class Sampler(threading.Thread):
+    """Reads the pool report's `used` and whether a VMM runs, every fifth of a second until stopped: (monotonic time,
+    used, a VMM running) each time, or the failure that stopped it."""
+
+    def __init__(self, stack):
+        super().__init__(daemon=True)
+        self.stack, self.stopped, self.samples, self.failure = stack, threading.Event(), [], None
+
+    def run(self):
+        try:
+            while not self.stopped.is_set():
+                used = pool_report(self.stack)["used"]
+                running = imagesuite.listing(self.stack.exec(
+                    'for d in /proc/[0-9]*; do [ "$(cat $d/comm 2>/dev/null)" = firecracker ] && echo ${d#/proc/}; '
+                    'done; true'), "the container's VMMs").split()
+                self.samples.append((time.monotonic(), used, bool(running)))
+                self.stopped.wait(0.2)
+        except (Exception, SystemExit) as error:
+            self.failure = repr(error)
+
+
+def charged_at_reading(stack, uid, what, timeout_s=40):
+    """Waits until the pool report's `used` is the VMM group's reading, the keeper's one charge for the VM: answers
+    (report, memory.current, the reading)."""
+    def settled():
+        report = pool_report(stack)
+        current, reading = vmm_memory(stack, uid)
+        return (report, current, reading) if abs(report["used"] - reading) <= CHARGE_SLACK else None
+    return eventually(settled, what, timeout_s)
+
+
+def ledger_one_vm(image):
+    """The ledger of one VM: its first start holds a session's allowance and the VM's own, then the VMM's reading is
+    the one charge, the counters sum to no more, and a second session of the person adds nothing to it."""
+    stack = wall_stack("ledger", image)
+    owner = owner_of("vm-ledger")
+    try:
+        up_wall(stack)
+        c = synced(stack, [(owner, [vm_probe()])])
+        before = pool_report(stack)
+        sampler = Sampler(stack)
+        sampler.start()
+        try:
+            status, answer = c.mcp(owner, "probe", key="a", home_id=row_of(owner)).request("tools/list", {})
+            opened = pool_report(stack)
+        finally:
+            sampler.stopped.set()
+            sampler.join()
+        expect(status == 200 and "result" in answer, "the person's first session starts", answer)
+        expect(sampler.failure is None, "the report and the VMM are read throughout the start", sampler.failure)
+        running = [(t, used) for t, used, vmm in sampler.samples if vmm]
+        expect(running, "the VMM was seen running during the start", sampler.samples[-10:])
+        boot = running[0][0]
+        held = [used for t, used in running if t < boot + 9]
+        expect(held and min(held) >= FIRST_START,
+               f"from the VMM's start on, while its allowance's time runs, used holds at least "
+               f"{SESSION_ALLOWANCE // MIB} + {MACHINE_BYTES // MIB} MiB",
+               {"samples": [u // MIB for u in held], "least": FIRST_START // MIB})
+        print(f"used before the first boot {before['used'] // MIB} MiB; during the start at least "
+              f"{min(held) // MIB} MiB over {len(held)} readings; as the open answered {opened['used'] // MIB} MiB",
+              flush=True)
+        uid = disk_record(stack, owner)["uid"]
+        report, current, reading = charged_at_reading(stack, uid, "used to be the VMM group's reading")
+        counters = report["counters"]
+        theirs = [k for k in counters if (k.get("athanor"), k.get("subject")) == (owner["athanor"], owner["server"])]
+        print(f"one session: used {report['used'] / MIB:.1f} MiB, the VMM group's reading {reading / MIB:.1f} MiB, "
+              f"its memory.current {current / MIB:.1f} MiB, the counters {[k['bytes'] // MIB for k in counters]} MiB",
+              flush=True)
+        expect(report["used"] <= current + CHARGE_SLACK, "used is no more than the VMM group's memory.current",
+               [report["used"], current])
+        expect(len(theirs) == 1 and theirs[0]["kind"] == "program" and theirs[0]["bytes"] > 0
+               and all(k.get("athanor") and k.get("subject") for k in counters),
+               "the session's reading is counted under its subject, and every counter is a session's", counters)
+        expect(sum(k["bytes"] for k in counters) <= report["used"], "the counters' bytes sum to no more than used",
+               [counters, report["used"]])
+
+        expect(c.mcp(owner, "probe", key="b", home_id=row_of(owner)).request("tools/list", {})[0] == 200,
+               "a second session of the person joins their VM")
+        time.sleep(imagesuite.ALLOWANCE_MS / 1000 + 1)  # sleep-ok: the joining session's allowance holds this long
+        report, current, reading = charged_at_reading(stack, uid, "used to be the VMM group's reading again")
+        theirs = [k for k in report["counters"]
+                  if (k.get("athanor"), k.get("subject")) == (owner["athanor"], owner["server"])]
+        print(f"two sessions: used {report['used'] / MIB:.1f} MiB, the VMM group's reading {reading / MIB:.1f} MiB, "
+              f"its memory.current {current / MIB:.1f} MiB, the counters "
+              f"{[k['bytes'] // MIB for k in report['counters']]} MiB", flush=True)
+        expect(len(theirs) == 1 and theirs[0]["bytes"] > CHARGE_SLACK
+               and abs(report["used"] - reading) <= CHARGE_SLACK < theirs[0]["bytes"],
+               "with a second session used is still the VM's reading, not the VM's and the sessions' together",
+               {"used": report["used"], "reading": reading, "counter": theirs})
+        expect(sum(k["bytes"] for k in report["counters"]) <= report["used"],
+               "the counters' bytes still sum to no more than used", report)
+    finally:
+        stack.down()
+
+
+def ledger_pressure(image):
+    """In a pool holding one VM's start, a second person's start is refused while the first person's session lives,
+    and makes their idle VM give way once it has ended; with that VM released the pool is as before but for the new
+    VM."""
+    stack = wall_stack("pressure", image)
+    first, second = owner_of("vm-press-a"), owner_of("vm-press-b")
+    try:
+        up_wall(stack, TIGHT_WORK)
+        c = synced(stack, [(first, [vm_probe()]), (second, [vm_probe()])])
+        before = pool_report(stack)
+        free_before = before["work"] - before["used"]
+        routes_before = set(guard_routes(stack))
+        a_boot = boot_id(c, first, "a")
+        a_uid = disk_record(stack, first)["uid"]
+        a_vmm = vmms(stack)
+        expect(list(a_vmm.values()) == [a_uid], "the first person's VM runs", a_vmm)
+        charged_at_reading(stack, a_uid, "the first VM to be charged its reading")
+
+        started = time.monotonic()
+        status, answer = c.open(second, "probe", key="b", home_id=row_of(second), timeout=90)
+        waited = time.monotonic() - started
+        expect(status == 409 and answer.get("error") == "capacity" and answer["held"]["need"] == FIRST_START
+               and answer["held"]["mine"] == [] and answer["held"]["others_bytes"] > 0,
+               "with the first person's session live, the second person's start is refused capacity, needing a "
+               "session's allowance and a VM's", [status, answer])
+        print(f"the second start was refused after {waited:.1f} s: {answer['held']}", flush=True)
+        expect(boot_id(c, first, "a") == a_boot and vmms(stack) == a_vmm,
+               "the first person's session lives on, in the same VM")
+
+        said = stack.logs().count(RELEASED_SAID)
+        session = c.mcp(first, "probe", key="a", home_id=row_of(first)).session
+        expect(c.close(first, session)[0] == 200, "the first person's session is closed")
+        eventually(lambda: ended(c, first, session), "the first person's session to end")
+        expect(vmms(stack) == a_vmm, "the first person's VM outlives their last session")
+        b_boot = boot_id(c, second, "b")
+        logs = stack.logs()
+        expect(GIVE_WAY_SAID in logs and logs.count(RELEASED_SAID) > said and not any(p in vmms(stack) for p in a_vmm),
+               "the second person's start makes the first person's idle VM give way, which is released",
+               logs[-3000:])
+        expect(b_boot != a_boot, "the second person's start is admitted, in a VM of their own", [a_boot, b_boot])
+        b_uid = disk_record(stack, second)["uid"]
+        expect(group_gone(stack, a_uid), "the first VM's group is gone")
+        routes = set(guard_routes(stack))
+        expect(len(routes) == len(routes_before) + 1, "of the two VMs' routes the guard holds the second's alone",
+               [sorted(routes_before), sorted(routes)])
+        report, current, reading = charged_at_reading(stack, b_uid, "the second VM to be charged its reading")
+        free = report["work"] - report["used"]
+        print(f"before the first boot used {before['used'] // MIB} MiB and free {free_before // MIB} MiB; with the "
+              f"first VM released and the second's reading {reading / MIB:.1f} MiB, used "
+              f"{report['used'] / MIB:.1f} MiB and free {free / MIB:.1f} MiB", flush=True)
+        expect(abs(report["used"] - (before["used"] + reading)) <= CHARGE_SLACK
+               and abs(free - (free_before - reading)) <= CHARGE_SLACK,
+               "with the first VM released, used and free are what they were before its boot, beside the second "
+               "VM's own charge", {"before": before, "after": report, "reading": reading})
+    finally:
+        stack.down()
+
+
+def vmm_killed(image):
+    """The VMM killed with two sessions running ends both and releases the VM; the next session boots a new one."""
+    stack = wall_stack("vmm-killed", image)
+    owner = owner_of("vm-killed")
+    try:
+        up_wall(stack)
+        c = synced(stack, [(owner, [vm_probe()])])
+        first = boot_id(c, owner, "a")
+        expect(boot_id(c, owner, "b") == first, "the person's two sessions run in their VM")
+        sessions = [c.mcp(owner, "probe", key=key, home_id=row_of(owner)).session for key in ("a", "b")]
+        machines = vmms(stack)
+        expect(len(machines) == 1, "one VMM runs", machines)
+        uid = disk_record(stack, owner)["uid"]
+        said = stack.logs().count(RELEASED_SAID)
+        pid = next(iter(machines))
+        killed = run("docker", "exec", "-u", "0", stack.container, "kill", "-KILL", str(pid), check=False)
+        expect(killed.returncode == 0, "the VMM is killed by the container's root", killed.stderr)
+        answers = [eventually(lambda s=s: ended(c, owner, s), "a session to end with its VM") for s in sessions]
+        print(f"the sessions' last answers: {[{k: v for k, v in a.items() if k != 'lines'} for a in answers]}",
+              flush=True)
+        expect(all(not a["running"] for a in answers), "both sessions end with their VMM", answers)
+        eventually(lambda: stack.logs().count(RELEASED_SAID) > said and not vmms(stack) and group_gone(stack, uid),
+                   "the VM to be released, its VMM and its group gone")
+        program = c.program(owner)
+        print(f"the program's status after the VMM's kill: {program}", flush=True)
+        again = boot_id(c, owner, "c")
+        expect(again != first and container_boot(stack) != again,
+               "the person's next session boots a new VM", [first, again])
+    finally:
+        stack.down()
+
+
+def guard_lost_at_start(image):
+    """The guard killed during a session's start refuses the start and ends the VM; the keeper ends with its role's
+    route, and once its container is started again behind the guard's successor, the person's next session boots."""
+    stack = wall_stack("guard-lost", image)
+    owner = owner_of("vm-guard-lost")
+    try:
+        up_wall(stack)
+        c = synced(stack, [(owner, [vm_probe()])])
+        restarts = stack.inspect(stack.container)["RestartCount"]
+        result = {}
+
+        def start():
+            try:
+                result["open"] = c.open(owner, "probe", key="a", home_id=row_of(owner), timeout=90)
+            except Exception as error:  # the guard's loss cuts the request's connection, in whatever form
+                result["error"] = repr(error)
+        opening = threading.Thread(target=start, daemon=True)
+        opening.start()
+        eventually(lambda: vmms(stack) or "open" in result or "error" in result, "the VMM to start", timeout_s=60)
+        expect(vmms(stack) and not result, "the guard is lost while the session's start is under way, its VMM up",
+               result)
+        pids = read_output(stack.guard_exec("for p in /proc/[0-9]*; do grep -qa guard-control $p/cmdline 2>/dev/null "
+                                            "&& echo ${p#/proc/}; done; true"), "the guard's processes").split()
+        expect(pids, "the guard's control runs", pids)
+        stack.guard_exec(f"kill -KILL {' '.join(pids)}")
+        opening.join(120)
+        print(f"the start's answer: {result}", flush=True)
+        expect("error" in result or result.get("open", (200,))[0] != 200, "the start under way is refused", result)
+
+        def again():
+            info = stack.inspect(stack.container)
+            return info["RestartCount"] > restarts and info["State"]["Running"]
+        eventually(again, "the Locus container to start again", timeout_s=120)
+        logs = stack.logs()
+        print("the keeper said: " + " | ".join(line.split("|", 1)[-1].strip() for line in logs.splitlines()
+                                              if GUARD_LOST_SAID.search(line) or "keeper ends" in line), flush=True)
+        expect(GUARD_LOST_SAID.search(logs), "the keeper says the guard's connection ended", logs[-3000:])
+        stack.published()
+        expect(not vmms(stack), "the VM ended with the guard", vmms(stack))
+        c = synced(stack, [(owner, [vm_probe()])])
+        booted = boot_id(c, owner, "b")
+        expect(booted != container_boot(stack) and len(vmms(stack)) == 1,
+               "behind the guard's successor the person's next session boots a VM", booted)
+    finally:
+        stack.down()
+
+
+def keeper_lost(image):
+    """The keeper killed while a VM holds the disk: started again, the person's next session boots a VM on the same
+    image and finds what the last one wrote."""
+    stack = wall_stack("keeper-lost", image)
+    owner = owner_of("vm-keeper-lost")
+    try:
+        up_wall(stack)
+        c = synced(stack, [(owner, [vm_probe()])])
+        wrote = sh(c, owner, 'echo kept > "$HOME/kept.txt" && sync && echo written', "a")
+        expect(wrote["stdout"] == "written\n", "a session writes a file in its home", wrote)
+        first = boot_id(c, owner, "a")
+        record = disk_record(stack, owner)
+        stat, _folder = image_stat(stack, owner)
+        keepers = [p["pid"] for p in stack.processes() if p["cmd"].startswith("cyfr-locus serve")]
+        expect(len(keepers) == 1 and vmms(stack), "the keeper runs the person's VM", keepers)
+        restarts = stack.inspect(stack.container)["RestartCount"]
+        run("docker", "exec", "-u", "0", stack.container, "kill", "-KILL", str(keepers[0]), check=False)
+
+        def again():
+            info = stack.inspect(stack.container)
+            return info["RestartCount"] > restarts and info["State"]["Running"]
+        eventually(again, "the Locus container to start again", timeout_s=60)
+        stack.published()
+        c = synced(stack, [(owner, [vm_probe()])])
+        later = boot_id(c, owner, "b")
+        kept = sh(c, owner, 'cat "$HOME/kept.txt"', "b")
+        machines = vmms(stack)
+        expect(later != first and kept["stdout"] == "kept\n" and list(machines.values()) == [record["uid"]],
+               "the person's next session boots a VM of their disk's uid and finds what the last one wrote",
+               [first, later, kept, machines])
+        after, _folder = image_stat(stack, owner)
+        expect(after["inode"] == stat["inode"] and disk_record(stack, owner) == record,
+               "it runs on the same image, its record as it was", [stat, after])
+    finally:
+        stack.down()
+
+
+MEASURED_ROW = "mcp_vm-measured"
+
+
+def largest():
+    """The largest generation a set may be, cheaply made: four packs of two random files each, every file under the
+    store's bound on one file and every pack under its own, all of them under the set's (packview's MaxFileBytes,
+    MaxPackBytes and MaxSetBytes)."""
+    return {f"big{i}/{name}": (os.urandom(size), False)
+            for i in range(4) for name, size in (("one.bin", 19_000_000), ("two.bin", 13_000_000))}
+
+
+def set_digest(files):
+    """A set digest as the control plane names one, here of the files' own digests (packs.py's digest_of holds every
+    byte twice over, which a large set makes costly)."""
+    return "sha256:" + hashlib.sha256(json.dumps(sorted(
+        (path, hashlib.sha256(data).hexdigest()) for path, (data, _x) in files.items())).encode()).hexdigest()
+
+
+def allocated(stack, owner):
+    """The image's allocated size, as du reads it, in MiB."""
+    return int(read_output(stack.observe(f"du -k {image_of(owner)}"), "the image's du").split()[0]) // 1024
+
+
+def measurements(image):
+    """A disk image's allocated size, the guard's peak with one VM routed, and the VMM group's memory beside the
+    largest generation, printed."""
+    stack = wall_stack("measured", image)
+    owner = owner_of("vm-measured")
+    try:
+        up_wall(stack)
+        c = synced(stack, [(owner, [vm_probe(), vm_probe("packed", packs=True)])])
+        guest = sh(c, owner, "awk '/^MemTotal:/ {print $2}' /proc/meminfo", "a")["stdout"].strip()
+        booted = allocated(stack, owner)
+        peak = read_output(stack.guard_exec("cat /sys/fs/cgroup/memory.peak /sys/fs/cgroup/memory.current"),
+                           "the guard's memory").split()
+        uid = disk_record(stack, owner)["uid"]
+        session = c.mcp(owner, "probe", key="a", home_id=row_of(owner)).session
+        expect(c.close(owner, session)[0] == 200, "the session is closed, its VM left idle")
+        time.sleep(60)  # sleep-ok: the measure is of the image after an idle minute
+        idle = allocated(stack, owner)
+        quiet_current, quiet_reading = vmm_memory(stack, uid)
+        files = largest()
+        total = sum(len(d) for d, _x in files.values())
+        put_at = time.monotonic()
+        state, puts, client = packs.started(c, owner, "big", MEASURED_ROW, set_digest(files), program="packed",
+                                            files=files)
+        expect(state == "missing" and puts[-1][1]["state"] == "held", "the largest generation is put", puts[-1:])
+        held = packs.run_in(client, f"du -sb {SCROLLS}")
+        took = time.monotonic() - put_at
+        expect(held["status"] == 0 and int(held["stdout"].split()[0]) >= total,
+               "a session in the VM binds the largest generation", held)
+        time.sleep(3)  # sleep-ok: the group's counters settle a reading's batch after the put
+        packed_current, packed_reading = vmm_memory(stack, uid)
+        print(f"measured: the guest's memory {int(guest) // 1024} MiB at a pool's work of {WORK // MIB} MiB; the "
+              f"image's allocated size {booted} MiB after its first boot and {idle} MiB after an idle minute; the "
+              f"guard's memory.peak {int(peak[0]) / MIB:.1f} MiB (memory.current {int(peak[1]) / MIB:.1f} MiB) with "
+              f"one VM routed; the VMM group's memory.current {quiet_current / MIB:.1f} MiB (reading "
+              f"{quiet_reading / MIB:.1f} MiB) idle, and {packed_current / MIB:.1f} MiB (reading "
+              f"{packed_reading / MIB:.1f} MiB) with a session binding a generation of {len(files)} files, "
+              f"{total / MIB:.1f} MiB in 4 packs, put and started in {took:.1f} s", flush=True)
+    finally:
+        stack.down()
+
+
 def main():
     if len(sys.argv) != 2:
         sys.exit("usage: tests/locus-backends-image/vm.py IMAGE")
@@ -348,7 +1119,13 @@ def main():
         stack.down()
         for volume in volumes:
             run("docker", "volume", "rm", "--force", volume, check=False)
-    print("PASS: a person's machine boots from the image's programs, as the keeper makes them")
+    print("ok: a person's machine boots from the image's programs, as the keeper makes them", flush=True)
+
+    for case in (disk_and_boot, boot_identity, routes_and_names, packs_in_vm, ledger_one_vm, ledger_pressure,
+                 vmm_killed, guard_lost_at_start, keeper_lost, measurements):
+        print(f"== {case.__name__}: {case.__doc__.split(chr(10))[0]}", flush=True)
+        case(image)
+    print("PASS: a person's machine boots from the image's programs, and a person's sessions run in their own VM")
 
 
 if __name__ == "__main__":

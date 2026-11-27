@@ -13,6 +13,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/cyfr/locus/keeper/internal/home"
 	"github.com/cyfr/locus/keeper/internal/stage"
 )
 
@@ -208,5 +209,18 @@ func TestARouteHandedUpPastTheBoundLeavesNothingOpen(t *testing.T) {
 	}
 	if after := open(); after > before {
 		t.Fatalf("%d descriptors are left open by routes handed up past the bound", after-before)
+	}
+}
+
+// A person's VMM writes its disk's image, up to the image's own size, and
+// no further; guest-check's, which has no disk, keeps its file-size limit
+// at its sockets'. Past its limit the kernel would end the VMM at the
+// guest's first write there.
+func TestAPersonsVMMWritesItsImageToItsSize(t *testing.T) {
+	if got := limitsOf(Config{Disk: "/var/lib/locus/kept/" + strings.Repeat("b", 64) + ".img"}).Fsize; got != home.ImageBytes {
+		t.Fatalf("a person's VMM may write %d bytes of a file, want its image's %d", got, uint64(home.ImageBytes))
+	}
+	if got := limitsOf(Config{}).Fsize; got != machineLimits.Fsize {
+		t.Fatalf("guest-check's VMM may write %d bytes of a file, want %d", got, machineLimits.Fsize)
 	}
 }
