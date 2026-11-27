@@ -34,7 +34,7 @@ defmodule PrismWeb.BrowserLogoutTest do
           provider: "local",
           athanor_id: Sanctum.TestContext.athanor_id(),
           permissions: Sanctum.Context.person_permissions(),
-          auth_method: :oidc
+          auth_method: :session
         )
       )
 

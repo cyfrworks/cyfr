@@ -248,7 +248,7 @@ defmodule Sanctum.Gate.ErrorRenderersTest do
 
   # Every member of `Sanctum.Context`'s `t:auth_method/0`, `nil` included.
   @auth_methods [
-    :oidc,
+    :session,
     :device,
     :api_key,
     :scheduled,
@@ -324,7 +324,7 @@ defmodule Sanctum.Gate.ErrorRenderersTest do
             Sanctum.Refusals.admission({:missing_permission, :admin})
           ] do
         assert Sanctum.Refusals.classify(reason, :api_key).message =~ "--scope admin"
-        refute Sanctum.Refusals.classify(reason, :oidc).message =~ "--scope"
+        refute Sanctum.Refusals.classify(reason, :session).message =~ "--scope"
         refute Sanctum.Refusals.classify(reason).message =~ "--scope"
       end
     end

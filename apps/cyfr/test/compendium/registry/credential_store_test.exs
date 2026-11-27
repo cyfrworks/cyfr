@@ -19,7 +19,7 @@ defmodule Compendium.Registry.CredentialStoreTest do
   # The store keys by the person a context names, never by an id handed
   # in beside it.
   defp as(user_id),
-    do: Sanctum.Context.build(user_id: user_id, authenticated: true, auth_method: :oidc)
+    do: Sanctum.Context.build(user_id: user_id, authenticated: true, auth_method: :session)
 
   defp token, do: "cyfr_pt_#{:crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)}"
 

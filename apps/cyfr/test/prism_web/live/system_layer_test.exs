@@ -198,7 +198,7 @@ defmodule PrismWeb.SystemLayerTest do
         athanor_id: athanor.id,
         permissions: Context.person_permissions(),
         scope: :athanor,
-        auth_method: :oidc,
+        auth_method: :session,
         authenticated: true
       )
 
@@ -295,7 +295,7 @@ defmodule PrismWeb.SystemLayerTest do
       athanor_id: athanor.id,
       permissions: Context.person_permissions(),
       scope: :athanor,
-      auth_method: :oidc,
+      auth_method: :session,
       authenticated: true
     )
   end
@@ -510,7 +510,7 @@ defmodule PrismWeb.SystemLayerTest do
       refute render(view) =~ "sk-none"
 
       # Nothing reached the vault under the person the context names.
-      person = %{ctx | plane: :external, auth_method: :oidc}
+      person = %{ctx | plane: :external, auth_method: :session}
       {:ok, entries} = Sanctum.Vault.list(person)
       refute Enum.any?(entries, &(&1.name == name))
     end

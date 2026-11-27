@@ -12,7 +12,7 @@ defmodule Cyfr.LoggerContextSanctumTest do
         user_id: "user_123",
         athanor_id: "ath_abc",
         permissions: [:execute],
-        auth_method: :oidc,
+        auth_method: :session,
         namespace: "testns",
         authenticated: true
       )
@@ -22,6 +22,6 @@ defmodule Cyfr.LoggerContextSanctumTest do
     metadata = Logger.metadata()
     assert metadata[:user_id] == "user_123"
     assert metadata[:athanor_id] == "ath_abc"
-    assert metadata[:auth_method] == :oidc
+    assert metadata[:auth_method] == :session
   end
 end

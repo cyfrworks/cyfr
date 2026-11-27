@@ -81,7 +81,7 @@ defmodule Sanctum.UnauthorizedVocabularyTest do
   end
 
   test "no sentence names an internal field or spells a term" do
-    for {reason, _class} <- @exemplars, method <- [nil, :api_key, :oidc] do
+    for {reason, _class} <- @exemplars, method <- [nil, :api_key, :session] do
       message = Unauthorized.message(reason, method)
 
       for private <- ["athanor_id", "{:", "%{", "=>", "consent_class_required", "guest-plane"] do

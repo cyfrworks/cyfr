@@ -32,7 +32,7 @@ defmodule Opus.RunTest do
         athanor_id: "ath_test",
         permissions: [:*],
         scope: :athanor,
-        auth_method: :oidc,
+        auth_method: :session,
         namespace: "testns",
         authenticated: true
       )

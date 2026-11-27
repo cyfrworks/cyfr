@@ -45,7 +45,7 @@ defmodule Sanctum.TestContext do
       athanor_id: athanor_id,
       permissions: [:*],
       scope: :athanor,
-      auth_method: :oidc,
+      auth_method: :session,
       authenticated: true
     )
   end
@@ -230,7 +230,7 @@ defmodule Sanctum.TestContext do
   Build a permissive single-user test Context with namespace `"testns"`,
   working in the `"ath_test"` athanor.
 
-  Impersonates a logged-in user (`auth_method: :oidc`) so tests exercise
+  Impersonates a logged-in user (`auth_method: :session`) so tests exercise
   the same authorization path production does.
   Use this in tests, factories and fixtures.
   """
@@ -244,7 +244,7 @@ defmodule Sanctum.TestContext do
       athanor_id: @athanor_id,
       permissions: Context.person_permissions(),
       scope: :athanor,
-      auth_method: :oidc,
+      auth_method: :session,
       authenticated: true
     )
   end
@@ -687,7 +687,7 @@ defmodule Sanctum.TestContext do
   # authenticated context that asked: where a confirmation is proven,
   # whatever surface asked for it.
   defp interactive(%Context{} = ctx),
-    do: %{ctx | auth_method: :oidc, client_id: nil, plane: :external, anonymous: false}
+    do: %{ctx | auth_method: :session, client_id: nil, plane: :external, anonymous: false}
 
   @doc """
   The person `user_id`'s account, made once and the same in every process
@@ -848,7 +848,7 @@ defmodule Sanctum.TestContext do
         provider: provider,
         athanor_id: athanor_id,
         permissions: Context.person_permissions(),
-        auth_method: :oidc
+        auth_method: :session
       )
 
     {:ok, session} = Sanctum.Session.create(base, generation_snapshot: snapshot!(base))
@@ -874,7 +874,7 @@ defmodule Sanctum.TestContext do
         provider: "local",
         athanor_id: Sanctum.Test.People.athanor!(user).id,
         permissions: Context.person_permissions(),
-        auth_method: :oidc
+        auth_method: :session
       )
 
     {:ok, %{token: token}} = create_session(ctx)

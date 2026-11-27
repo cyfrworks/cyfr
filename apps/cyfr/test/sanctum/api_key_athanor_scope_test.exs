@@ -41,7 +41,7 @@ defmodule Sanctum.ApiKeyAthanorScopeTest do
         provider: "github",
         athanor_id: a.id,
         permissions: [:*],
-        auth_method: :oidc,
+        auth_method: :session,
         authenticated: true
       )
 

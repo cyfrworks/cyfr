@@ -47,14 +47,14 @@ defmodule PrismWeb.ConsentSheetComponentTest do
 
   alias Sanctum.Context
 
-  defp oidc_ctx do
+  defp session_ctx do
     Context.build(
       user_id: "consent_sheet_test_user",
       namespace: "consent_sheet_test_user",
       athanor_id: "ath_test",
       permissions: [:*],
       scope: :athanor,
-      auth_method: :oidc,
+      auth_method: :session,
       authenticated: true
     )
   end
@@ -64,7 +64,7 @@ defmodule PrismWeb.ConsentSheetComponentTest do
       render_component(PrismWeb.ConsentSheetComponent,
         id: "consent-sheet",
         ref: "publisher/does-not-exist@0.0.1",
-        context: oidc_ctx()
+        context: session_ctx()
       )
 
     # The plan fails on the nonexistent ref — that's expected. What must
@@ -126,7 +126,7 @@ defmodule PrismWeb.ConsentSheetComponentTest do
         id: "consent-sheet",
         ref: walk.ref,
         walk: walk,
-        context: oidc_ctx(),
+        context: session_ctx(),
         athanor_name: "Home"
       )
 
@@ -244,7 +244,7 @@ defmodule PrismWeb.ConsentSheetComponentTest do
       id: "consent-sheet",
       ref: ref,
       walk: walk,
-      context: oidc_ctx(),
+      context: session_ctx(),
       athanor_route: Keyword.get(opts, :athanor_route)
     )
   end
@@ -1788,7 +1788,7 @@ defmodule PrismWeb.ConsentSheetComponentTest do
         id: "consent-sheet",
         ref: walk.ref,
         walk: walk,
-        context: oidc_ctx()
+        context: session_ctx()
       )
 
     assert html =~ ~s(data-test="grant-unresolved")
@@ -1823,7 +1823,7 @@ defmodule PrismWeb.ConsentSheetComponentTest do
         id: "consent-sheet",
         ref: app,
         walk: walk.(asks),
-        context: oidc_ctx()
+        context: session_ctx()
       )
     end
 
@@ -1890,7 +1890,7 @@ defmodule PrismWeb.ConsentSheetComponentTest do
         id: "consent-sheet",
         ref: walk.ref,
         walk: walk,
-        context: oidc_ctx()
+        context: session_ctx()
       )
 
     assert html =~ "asks for b.example, which your grant does not give"
@@ -1935,7 +1935,7 @@ defmodule PrismWeb.ConsentSheetComponentTest do
           id: "consent-sheet",
           ref: walk.ref,
           walk: walk,
-          context: oidc_ctx()
+          context: session_ctx()
         )
 
       text =
@@ -1995,7 +1995,7 @@ defmodule PrismWeb.ConsentSheetComponentTest do
 
     groups =
       PrismWeb.ConsentSheetComponent
-      |> render_component(id: "consent-sheet", ref: app, walk: walk, context: oidc_ctx())
+      |> render_component(id: "consent-sheet", ref: app, walk: walk, context: session_ctx())
       |> LazyHTML.from_fragment()
       |> LazyHTML.query(~s([data-test="grant-delta"] [data-test="grant-delta-node"]))
       |> Enum.map(fn group ->

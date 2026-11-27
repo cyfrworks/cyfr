@@ -125,7 +125,7 @@ defmodule Sanctum.SessionTest do
       # deleting one changes nothing about who the person is.
       registry = Compendium.RegistryHost.canonical_host()
 
-      person = Sanctum.Context.build(user_id: user_id, authenticated: true, auth_method: :oidc)
+      person = Sanctum.Context.build(user_id: user_id, authenticated: true, auth_method: :session)
 
       :ok =
         Compendium.Registry.CredentialStore.put_push_token(
@@ -147,7 +147,7 @@ defmodule Sanctum.SessionTest do
 
     test "a loaded session carries the interactive class", %{ctx: ctx} do
       {:ok, session} = Session.create(ctx)
-      assert {:ok, %{auth_method: :oidc}} = Session.load(session.token)
+      assert {:ok, %{auth_method: :session}} = Session.load(session.token)
     end
 
     test "returns error for expired session", %{ctx: ctx} do
