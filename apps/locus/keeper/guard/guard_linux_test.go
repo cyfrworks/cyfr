@@ -6,6 +6,8 @@
 package guard
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/netip"
@@ -417,32 +419,44 @@ func TestARouteChangeWaitsForTheLockOnlyWithinItsBound(t *testing.T) {
 	if err := unix.Flock(int(held.Fd()), unix.LOCK_UN); err != nil {
 		t.Fatal(err)
 	}
+	// The change once the lock is free runs on a bound sized for a loaded
+	// runner, set under the server's lock, which every change runs under.
+	s.mu.Lock()
+	k.bound = applyTimeout
+	s.mu.Unlock()
 	if got := c.send(t, admit("00000000000000000000000000000003"), three(t)...); got.Type != TypeAdmitted {
 		t.Fatalf("an admit once the lock is free answered %+v\n%s", got, out)
 	}
 }
 
 // A private host in a loose IPv4 spelling (shorthand, octal, hex, one
-// integer), which the script's getent read as inet_aton does (010.9.9.9
-// as 8.9.9.9), is no address to the guard: it is asked as a name, and an
-// all-digit one the resolver refuses unasked, so it opens nothing, in the
-// script's sentence.
+// integer, or parts of each), which the script's getent read as inet_aton
+// does (010.9.9.9 as 8.9.9.9), is no address to the guard, and no resolver
+// is asked of it, Go's own or the C library's: it opens nothing, in the
+// script's sentence. A name that only begins like one is asked.
 func TestAPrivateHostInALooseIPv4SpellingOpensNothing(t *testing.T) {
 	p := aPlace(t, "1")
 	env := map[string]string{"CYFR_GUARD_CONTROL_PLANE": controlPlane,
-		"CYFR_PRIVATE_EGRESS_TARGETS": "10.1,010.9.9.9,0x0a090909,167314698"}
+		"CYFR_PRIVATE_EGRESS_TARGETS": "10.1,010.9.9.9,0x0a090909,167314698,0x0a.9.011,10.9.9.9.,10.0x9g"}
+	var asked []string
 	resolve := func(name, network string) []string {
-		if strings.ContainsAny(name, "abcdefghijklmnopqrstuvwxyz") {
-			// A name the island's resolver holds no record of, as Docker's
-			// answers 0x0a090909.
+		asked = append(asked, name)
+		if name == "10.0x9g" {
+			// A name, which the island's resolver holds no record of.
 			return nil
 		}
+		// The real resolver, the C library's with GODEBUG=netdns=cgo,
+		// which reads a loose spelling as inet_aton does: the guard asks
+		// it nothing of one.
 		return resolveHost(name, network)
 	}
 	log, out := logged()
 	isl := readIsland(log, p, func(k string) string { return env[k] }, resolve)
 	if isl.targets != nil {
 		t.Fatalf("a loose spelling opened %q", isl.targets)
+	}
+	if want := []string{"10.0x9g"}; !reflect.DeepEqual(asked, want) {
+		t.Fatalf("the resolver was asked %q, want %q", asked, want)
 	}
 	for _, target := range strings.Split(env["CYFR_PRIVATE_EGRESS_TARGETS"], ",") {
 		if line := "[cyfr-guard] info: private target " + target + " resolves to nothing here: it opens nothing\n"; !strings.Contains(out.String(), line) {
@@ -466,5 +480,44 @@ func TestAControlPlaneIsRefusedBeforeAnyNameIsAsked(t *testing.T) {
 		if _, err := staticRules(log, isl); err == nil || !strings.Contains(out.String(), "[cyfr-guard] error: CYFR_GUARD_CONTROL_PLANE is ") {
 			t.Fatalf("a control plane of %q was not refused:\n%s", value, out)
 		}
+	}
+}
+
+// lateContext is a context whose deadline passes before it is done, as a
+// loaded runner's timer fires late: done closes only at its cancel.
+type lateContext struct {
+	context.Context
+	deadline time.Time
+}
+
+func (c lateContext) Deadline() (time.Time, bool) { return c.deadline, true }
+
+// A wait for the lock ends only once the change's context is done, so the
+// change judges its timeout by the one clock its bound is: a wait that ends
+// by the wall clock while the context's timer has not fired would read as
+// a lock error, with no timeout line.
+func TestALockWaitEndsOnlyWithItsContext(t *testing.T) {
+	p := aPlace(t, "1")
+	lock, err := os.OpenFile(p.lock(), os.O_RDWR|os.O_CREATE, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	held, err := os.OpenFile(p.lock(), os.O_RDWR, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+	if err := unix.Flock(int(held.Fd()), unix.LOCK_SH); err != nil {
+		t.Fatal(err)
+	}
+	inner, cancel := context.WithCancel(context.Background())
+	ctx := lateContext{Context: inner, deadline: time.Now().Add(20 * time.Millisecond)}
+	// The context is done well after its deadline has passed.
+	timer := time.AfterFunc(300*time.Millisecond, cancel)
+	defer timer.Stop()
+	err = flockBy(ctx, lock, unix.LOCK_EX)
+	if err == nil || ctx.Err() == nil || !errors.Is(err, ctx.Err()) {
+		t.Fatalf("the wait for the lock ended with %v while the context's error is %v", err, ctx.Err())
 	}
 }

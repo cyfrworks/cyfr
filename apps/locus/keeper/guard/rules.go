@@ -585,7 +585,10 @@ func resolveNetwork(local []string, ifInet6 string) string {
 
 // resolveTarget is a private host's addresses in network's families: an
 // address itself where it is of one of them, a name's as resolve answers
-// it, and none in a family network lacks.
+// it, and none in a family network lacks. An IPv4 address that is not
+// written in full (looseIPv4) is none, and no resolver is asked of it,
+// since one built on the C library reads it as inet_aton does, 010.9.9.9
+// as 8.9.9.9.
 func resolveTarget(target, network string, resolve func(name, network string) []string) []string {
 	if network == "" {
 		return nil
@@ -596,8 +599,16 @@ func resolveTarget(target, network string, resolve func(name, network string) []
 		}
 		return nil
 	}
+	if looseIPv4.MatchString(target) {
+		return nil
+	}
 	return resolve(target, network)
 }
+
+// looseIPv4 is what inet_aton reads as an IPv4 address: one to four parts
+// split by dots, each decimal, octal or hexadecimal (0x), a trailing dot
+// apart; one written in full and canonical netip takes first.
+var looseIPv4 = regexp.MustCompile(`^(0[xX][0-9a-fA-F]*|[0-9]+)(\.(0[xX][0-9a-fA-F]*|[0-9]+)){0,3}\.?$`)
 
 // routeLink is a route's guard's end.
 var routeLink = regexp.MustCompile(`^sp[0-9]+$`)

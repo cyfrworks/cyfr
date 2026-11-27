@@ -8,6 +8,7 @@ import (
 	"net/netip"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/cyfr/locus/keeper/internal/logx"
@@ -28,9 +29,28 @@ func anIsland() island {
 	}
 }
 
-func logged() (*logx.Logger, *bytes.Buffer) {
-	var b bytes.Buffer
-	return logx.NewWriter(&b, "cyfr-guard", false), &b
+// lockedBuffer is a log the guard's goroutines write and a test reads,
+// each under its lock.
+type lockedBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (l *lockedBuffer) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+
+func (l *lockedBuffer) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.String()
+}
+
+func logged() (*logx.Logger, *lockedBuffer) {
+	b := &lockedBuffer{}
+	return logx.NewWriter(b, "cyfr-guard", false), b
 }
 
 func commands(rules []rule) []string {

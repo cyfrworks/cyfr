@@ -206,8 +206,7 @@ type rulesOf struct {
 // the script's flock ran inside its 30 s, and answers its release: a lock
 // another process holds past the bound ends the change, never the control.
 func (k *rulesOf) exclusive(ctx context.Context) (func(), error) {
-	deadline, _ := ctx.Deadline()
-	if err := flockBy(k.lock, unix.LOCK_EX, deadline); err != nil {
+	if err := flockBy(ctx, k.lock, unix.LOCK_EX); err != nil {
 		return nil, fmt.Errorf("taking the guard's lock: %w", err)
 	}
 	return func() { _ = unix.Flock(int(k.lock.Fd()), unix.LOCK_UN) }, nil
@@ -426,12 +425,18 @@ func check(log *logx.Logger, p place) error {
 
 // shared takes lock shared within wait.
 func shared(lock *os.File, wait time.Duration) bool {
-	return flockBy(lock, unix.LOCK_SH, time.Now().Add(wait)) == nil
+	ctx, cancel := context.WithTimeout(context.Background(), wait)
+	defer cancel()
+	return flockBy(ctx, lock, unix.LOCK_SH) == nil
 }
 
-// flockBy takes lock as how (LOCK_SH or LOCK_EX) by deadline, which flock
-// takes no bound of: it tries without blocking until then.
-func flockBy(lock *os.File, how int, deadline time.Time) error {
+// flockBy takes lock as how (LOCK_SH or LOCK_EX) before ctx is done,
+// which flock takes no bound of: it tries without blocking until then, and
+// answers ctx's error once ctx is done, so its caller reads the one clock
+// the change's bound is.
+func flockBy(ctx context.Context, lock *os.File, how int) error {
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
 	for {
 		err := unix.Flock(int(lock.Fd()), how|unix.LOCK_NB)
 		if err == nil {
@@ -440,10 +445,11 @@ func flockBy(lock *os.File, how int, deadline time.Time) error {
 		if !errors.Is(err, unix.EWOULDBLOCK) {
 			return err
 		}
-		if time.Now().After(deadline) {
-			return context.DeadlineExceeded
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-tick.C:
 		}
-		time.Sleep(10 * time.Millisecond) // sleep-ok: flock has no timed wait; polled within the change's or the check's bound
 	}
 }
 
