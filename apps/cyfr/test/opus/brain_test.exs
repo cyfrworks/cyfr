@@ -2550,6 +2550,38 @@ defmodule Opus.BrainTest do
       end
     end
 
+    test "a one command whose write meets its session ended for memory answers lost, and its " <>
+           "holder ends without a crash",
+         %{fake: fake, ctx: ctx, row: row} do
+      test = self()
+      Scripted.hold(fake, "send", 30_000)
+      spawn(fn -> send(test, {:asked, Brain.models(ctx, row.id)}) end)
+      assert_receive {:session, "open", _open, _fields}, 5_000
+      first_read!()
+      say(fake, row, hello())
+      assert_receive {:held, "send", writing}, 5_000
+      Scripted.end_sessions_for_memory(fake, row.id, :cap)
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          send(writing, :go)
+          assert_receive {:asked, answer}, 10_000
+          assert answer == {:error, :lost}
+          # A crash report is logged before its process is gone: once no
+          # holder is left, every line it would log has been logged.
+          wait_until(
+            fn -> Registry.count(Opus.Brain.Registry) == 0 end,
+            5_000,
+            "the holder to end"
+          )
+
+          Logger.flush()
+        end)
+
+      refute log =~ "CaseClauseError"
+      refute log =~ "terminating"
+    end
+
     @tag :long
     @tag timeout: 180_000
     @tag ownership_timeout: 180_000

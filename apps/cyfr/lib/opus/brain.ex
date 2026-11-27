@@ -171,6 +171,8 @@ defmodule Opus.Brain do
   it to stand down), when the driver's process ends (`:exited`, or
   `{:exited, why}` when its last line, an `ending`, said why: one of
   `Opus.Brain.Wire.endings/0` as an atom, the driver's own finding), when
+  memory ended the driver's process (`{:ended_by, cause}`, the service's
+  `:cap`, `:machine` or `:either`, `Opus.Programs.Session`), when
   the service it ran on started again (`:restarted`: a read refused for a
   stale boot, or the box syncing the owner again under another boot; a
   sync under the same boot leaves the session going on under the new
@@ -325,7 +327,11 @@ defmodule Opus.Brain do
   opens the driver's session and after. Answers the held session, whose
   first line is the driver's `hello`; `{:error, {:not_admitted, reason}}`
   for a binding that does not prove, or the refusal of the owner's hold or
-  the session's open.
+  the session's open. A refusal for room is `{:error, {:no_room, held,
+  names}}`: what holds the memory as the keeper gave it, and the names of
+  the binding's person's own rows among its subjects, read under that
+  person's scope (`Opus.Programs.held_names/2`); or `held` nil and no
+  names for a refusal that carries none.
   """
   @spec open(binding()) :: {:ok, brain()} | {:error, term()}
   def open(%{ctx: %Sanctum.Context{athanor_id: athanor_id}} = binding)
@@ -334,14 +340,30 @@ defmodule Opus.Brain do
 
     with :ok <- replace(key, binding) do
       case DynamicSupervisor.start_child(@holders, {__MODULE__, key}) do
-        {:ok, pid} -> call(pid, {:open, self(), binding}, @open_ms + @answer_margin_ms)
-        {:error, {:already_started, _pid}} -> {:error, :busy}
-        {:error, _reason} -> {:error, :unavailable}
+        {:ok, pid} ->
+          pid
+          |> call({:open, self(), binding}, @open_ms + @answer_margin_ms)
+          |> roomless(binding)
+
+        {:error, {:already_started, _pid}} ->
+          {:error, :busy}
+
+        {:error, _reason} ->
+          {:error, :unavailable}
       end
     end
   catch
     :exit, _ -> {:error, :unavailable}
   end
+
+  defp roomless({:error, {:refused, {:capacity, held}, _boot}}, binding),
+    do: {:error, {:no_room, held, Programs.held_names(Sanctum.Context.actor(binding.ctx), held)}}
+
+  defp roomless({:error, {:refused, :capacity, _boot}}, _binding),
+    do: {:error, {:no_room, nil, %{}}}
+
+  defp roomless({:error, :capacity}, _binding), do: {:error, {:no_room, nil, %{}}}
+  defp roomless(answer, _binding), do: answer
 
   @doc """
   Write `command` (a brain wire command: `start`, `work`, `post` or
@@ -358,7 +380,10 @@ defmodule Opus.Brain do
   took the write); or `{:error, :uncertain}`, a write that may have
   reached the driver, its answer lost among them: the holder's reply that
   did not come, the holder's death while it wrote and a service that
-  answers the session ended, which can follow the writing.
+  answers the session ended, which can follow the writing; or
+  `{:error, {:ended_by, cause}}`, a write the service answered with the
+  session ended for memory (`:cap`, `:machine` or `:either`), which may
+  have reached the driver too.
   """
   @spec write(brain(), binding(), Wire.message()) :: :ok | {:error, term()}
   def write({pid, ref}, binding, %{} = command) when is_map(ref) do
@@ -774,6 +799,7 @@ defmodule Opus.Brain do
     case cut(state, fn -> Session.send(grant, session, [line], @write_ms) end) do
       {:ok, :running} -> :ok
       {:ok, :ended} -> {:error, :lost}
+      {:ok, {:ended_by, _cause}} -> {:error, :lost}
       {:error, :deadline} -> {:error, :lost}
       {:error, {:refused, code, _boot}} when code in @gone -> {:error, :lost}
       {:error, reason} -> if uncertain?(reason), do: {:error, :lost}, else: {:error, :not_written}
@@ -1379,6 +1405,9 @@ defmodule Opus.Brain do
   defp lines(state, %{dropped: dropped}) when dropped > 0,
     do: {:stop, :normal, ended(state, :dropped)}
 
+  defp lines(state, %{lines: [], running: false, ended_by: cause}) when cause != nil,
+    do: {:stop, :normal, ended(state, {:ended_by, cause})}
+
   defp lines(state, %{lines: [], running: false}),
     do: {:stop, :normal, ended(state, exited(state))}
 
@@ -1544,6 +1573,12 @@ defmodule Opus.Brain do
       # The service answers ended too for a write that failed part way.
       {:ok, :ended} ->
         {:stop, :normal, {:error, :uncertain}, ended(state, :interrupted)}
+
+      # Memory ended the process, the write among what it may have taken:
+      # the writer is told the cause itself, since it hears this answer
+      # before the end its holder tells.
+      {:ok, {:ended_by, _cause} = ended_by} ->
+        {:stop, :normal, {:error, ended_by}, ended(state, ended_by)}
 
       {:error, {:refused, :stale_boot, _boot}} ->
         {:stop, :normal, {:error, :ended}, ended(state, :restarted)}

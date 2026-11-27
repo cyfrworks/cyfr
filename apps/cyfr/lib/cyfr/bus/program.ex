@@ -35,6 +35,7 @@ defmodule Cyfr.Bus.Program do
           by: :person | :aqua | :browser | nil,
           reason:
             :exited
+            | {:ended_by, :cap | :machine | :either}
             | :restarted
             | :closed
             | :unanswered

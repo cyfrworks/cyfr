@@ -40,10 +40,15 @@ defmodule Opus.Programs.Session do
   since or not, and the open is resumed; the packs as they stand reach the
   next lifetime.
 
-  Answers are the wire's (`Prima.LocusBackends.read_session_answer/2`).
-  A refusal is `{:error, {:refused, code, boot}}` with the code a box
-  answers it as (`Opus.Programs.Box.refusal_name/1`) and the service boot
-  id the answer named; a service that cannot be reached
+  Answers are the wire's (`Prima.LocusBackends.read_session_answer/2`):
+  a `recv` or an `output` of an ended session carries its `ended_by`,
+  what ended its process for memory (`:cap`, `:machine` or `:either`) or
+  nil, and a `send`, `input` or `resize` to one answers `:ended`, or
+  `{:ended_by, cause}` where memory ended it. A refusal is
+  `{:error, {:refused, code, boot}}` with the code a box answers it as
+  (`Opus.Programs.Box.refusal_name/1`) and the service boot id the answer
+  named, a `capacity` that carries what holds the pool as
+  `{:capacity, held}` (`Prima.LocusPool.t:held/0`); a service that cannot be reached
   `{:error, :backends_unavailable}`; an answer that does not read
   `{:error, {:unreadable, error}}`.
   """
@@ -56,8 +61,11 @@ defmodule Opus.Programs.Session do
   @open_timeout_ms 310_000
 
   @type grant :: Opus.Programs.Box.grant()
+
+  @typedoc "What a write answers: the session runs, or ended, and why where memory ended it."
+  @type written :: :running | :ended | {:ended_by, LocusBackends.ended_by()}
   @type refusal ::
-          {:refused, atom(), String.t() | nil}
+          {:refused, atom() | {:capacity, Prima.LocusPool.held()}, String.t() | nil}
           | :backends_unavailable
           | {:unreadable, term()}
           | {:invalid, term()}
@@ -242,12 +250,12 @@ defmodule Opus.Programs.Session do
   The answer is awaited `timeout_ms` (default #{@send_timeout_ms}).
   """
   @spec send(grant(), String.t(), [String.t()], pos_integer()) ::
-          {:ok, :running | :ended} | {:error, refusal()}
+          {:ok, written()} | {:error, refusal()}
   def send(grant, session, lines, timeout_ms \\ @send_timeout_ms) when is_list(lines) do
     message = Map.merge(base(:send, grant), %{session: session, lines: lines})
 
-    with {:ok, %{status: status}} <- post(grant, message, timeout_ms),
-         do: {:ok, status}
+    with {:ok, answer} <- post(grant, message, timeout_ms),
+         do: {:ok, written(answer)}
   end
 
   @doc """
@@ -263,7 +271,8 @@ defmodule Opus.Programs.Session do
              lines: [LocusBackends.line()],
              dropped: non_neg_integer(),
              running: boolean(),
-             exit_code: 0..255 | nil
+             exit_code: 0..255 | nil,
+             ended_by: LocusBackends.ended_by() | nil
            }}
           | {:error, refusal()}
   def recv(grant, session, after_seq, max_wait_ms, slack_ms \\ @slack_ms) do
@@ -284,22 +293,22 @@ defmodule Opus.Programs.Session do
   longer runs. The answer is awaited `timeout_ms` (default #{@send_timeout_ms}).
   """
   @spec input(grant(), String.t(), binary(), pos_integer()) ::
-          {:ok, :running | :ended} | {:error, refusal()}
+          {:ok, written()} | {:error, refusal()}
   def input(grant, session, bytes, timeout_ms \\ @send_timeout_ms) when is_binary(bytes) do
     message = Map.merge(base(:input, grant), %{session: session, bytes: bytes})
 
-    with {:ok, %{status: status}} <- post(grant, message, timeout_ms),
-         do: {:ok, status}
+    with {:ok, answer} <- post(grant, message, timeout_ms),
+         do: {:ok, written(answer)}
   end
 
   @doc "Set a terminal session's size; `:ended` once it no longer runs."
   @spec resize(grant(), String.t(), pos_integer(), pos_integer(), pos_integer()) ::
-          {:ok, :running | :ended} | {:error, refusal()}
+          {:ok, written()} | {:error, refusal()}
   def resize(grant, session, rows, cols, timeout_ms \\ @send_timeout_ms) do
     message = Map.merge(base(:resize, grant), %{session: session, rows: rows, cols: cols})
 
-    with {:ok, %{status: status}} <- post(grant, message, timeout_ms),
-         do: {:ok, status}
+    with {:ok, answer} <- post(grant, message, timeout_ms),
+         do: {:ok, written(answer)}
   end
 
   @doc """
@@ -312,7 +321,8 @@ defmodule Opus.Programs.Session do
              chunks: [LocusBackends.chunk()],
              dropped: non_neg_integer(),
              running: boolean(),
-             exit_code: 0..255 | nil
+             exit_code: 0..255 | nil,
+             ended_by: LocusBackends.ended_by() | nil
            }}
           | {:error, refusal()}
   def output(grant, session, after_seq, max_wait_ms, slack_ms \\ @slack_ms) do
@@ -343,6 +353,10 @@ defmodule Opus.Programs.Session do
            request(grant, :close, body, timeout_ms, max, &LocusBackends.read_close_answer/1),
          do: :ok
   end
+
+  defp written(%{status: :running}), do: :running
+  defp written(%{status: :ended, ended_by: nil}), do: :ended
+  defp written(%{status: :ended, ended_by: cause}), do: {:ended_by, cause}
 
   defp base(type, grant), do: Map.put(named(grant), :type, type)
 
@@ -415,14 +429,17 @@ defmodule Opus.Programs.Session do
     do: {:refused, :backends_refused_signature, Opus.Programs.Box.boot_header(headers)}
 
   defp refusal(status, headers, body) do
-    # A capacity for room carries what holds the pool, which nothing here
-    # reads yet: the refusal is its code.
     with {:ok, refusal} <- LocusBackends.read_refusal(body),
          code = LocusBackends.code(refusal),
          true <- LocusBackends.status(code) == status do
-      {:refused, Opus.Programs.Box.refusal_name(code), Opus.Programs.Box.boot_header(headers)}
+      {:refused, named_refusal(refusal), Opus.Programs.Box.boot_header(headers)}
     else
       _ -> {:unreadable, {:status, status}}
     end
   end
+
+  # A capacity for room keeps what holds the pool, which the refusal's
+  # sentence names (`Opus.Programs.full/3`); every other refusal is its code.
+  defp named_refusal({:capacity, _held} = capacity), do: capacity
+  defp named_refusal(code), do: Opus.Programs.Box.refusal_name(code)
 end

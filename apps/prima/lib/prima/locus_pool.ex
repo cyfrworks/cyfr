@@ -41,8 +41,9 @@ defmodule Prima.LocusPool do
   the asking place's own athanor's places, each with its `subject` only
   where the place is the asking role's, and everyone else's as one sum,
   `others_bytes`. No other athanor's name, subject or holding is in it.
-  `refusal_sentence/1` is the one sentence a person reads of it, for a
-  run and a build alike, built from `held` alone.
+  `refusal_sentence/2` is the one sentence a person reads of it, for
+  every kind of start, built from `held` and the names CYFR read for its
+  subjects.
 
   The keeper's Go reads this module's values from
   `tests/fixtures/locus_pool.json`, which `Prima.LocusPoolTest` holds to
@@ -612,21 +613,30 @@ defmodule Prima.LocusPool do
 
   @doc """
   The one sentence a person reads of a start refused for room, from what
-  holds the pool (`held`) alone. It says that this CYFR has not enough
-  memory free and what holds it: the person's own work by kind, with a
-  count and its size, and everyone else's as one sum, then what the person
-  can do. A subject is never named, so no program's or other person's name
-  is in it. With nothing of the person's own in `held` it never says
-  "others": it says what is under way uses the memory. A runner's place is
-  no athanor's until its work is assigned, so a refused run's `held` holds
-  nothing of the person's own, and its sentence cannot tell the person
-  that the memory is their own programs'. When the start needs more than
-  everything held and free together, nothing anyone stops makes room: it
-  says only that this CYFR has not enough memory for it, what it needs and
-  what all its work can have, and gives no advice.
+  holds the pool (`held`) and the names CYFR read for its subjects
+  (`names`, a subject to the name its row has, read under the person's
+  own scope). It says that this CYFR has not enough memory free and what
+  holds it: the person's own work, each holding whose subject `names`
+  names by that name with its size (one name's holdings as one), every
+  other by kind with a count and its size, and everyone else's as one
+  sum, then what the person can do. No subject is spelled: a holding
+  whose subject `names` does not name is counted by its kind, so no
+  other person's name or row is in it. With nothing of the person's own
+  in `held` it never says "others": it says what is under way uses the
+  memory. A runner's place is no athanor's until its work is assigned,
+  so a refused run's `held` holds nothing of the person's own; a caller
+  that knows the person's holders from elsewhere hands them as `mine`
+  with their subjects, and their names here. When the start needs more
+  than everything held and free together, nothing anyone stops makes
+  room: it says only that this CYFR has not enough memory for it, what
+  it needs and what all its work can have, and gives no advice.
   """
-  @spec refusal_sentence(held()) :: String.t()
-  def refusal_sentence(%{need: need, free: free, mine: mine, others_bytes: others} = held) do
+  @spec refusal_sentence(held(), %{String.t() => String.t()}) :: String.t()
+  def refusal_sentence(
+        %{need: need, free: free, mine: mine, others_bytes: others} = held,
+        names \\ %{}
+      )
+      when is_map(names) do
     case free + others + Enum.sum_by(mine, & &1.bytes) do
       0 ->
         "This CYFR has no memory free for it."
@@ -636,16 +646,16 @@ defmodule Prima.LocusPool do
           "and has #{Prima.Bytes.format(all)} for all its work."
 
       _stopping_helps ->
-        room_held(held)
+        room_held(held, names)
     end
   end
 
-  defp room_held(%{mine: [], others_bytes: others}),
+  defp room_held(%{mine: [], others_bytes: others}, _names),
     do:
       "This CYFR has not enough memory free. Work under way uses " <>
         "#{Prima.Bytes.format(others)}. Wait, or try again later."
 
-  defp room_held(%{mine: mine, others_bytes: others}) do
+  defp room_held(%{mine: mine, others_bytes: others}, names) do
     others = if others > 0, do: [" Others use #{Prima.Bytes.format(others)}."], else: []
 
     ending =
@@ -653,13 +663,25 @@ defmodule Prima.LocusPool do
         do: " Stop one on the Programs page, or wait.",
         else: " Wait, or try again later."
 
+    {named, unnamed} = Enum.split_with(mine, &is_map_key(names, &1.subject))
+
     IO.iodata_to_binary([
       "This CYFR has not enough memory free. Of yours, ",
-      mine |> yours() |> joined(),
+      (by_name(named, names) ++ yours(unnamed)) |> joined(),
       ".",
       others,
       ending
     ])
+  end
+
+  # Each name once, its holdings' sizes together, the largest first and
+  # then by name, so the sentence is the same for the same holdings.
+  defp by_name(named, names) do
+    named
+    |> Enum.group_by(&Map.fetch!(names, &1.subject), & &1.bytes)
+    |> Enum.map(fn {name, sizes} -> {name, Enum.sum(sizes)} end)
+    |> Enum.sort_by(fn {name, bytes} -> {-bytes, name} end)
+    |> Enum.map(fn {name, bytes} -> "#{name} uses #{Prima.Bytes.format(bytes)}" end)
   end
 
   defp yours(mine) do

@@ -343,9 +343,16 @@ defmodule Locus.Backends.Owners do
     :exit, _reason -> {:error, :unavailable}
   end
 
-  @doc "The session `id` of the owner `invoke` names: its process and its mode."
+  @doc """
+  The session `id` of the owner `invoke` names: its process, its mode and
+  what ended its process for memory, which the session told this table
+  before it was vacated (`:cap`, `:machine` or `:either`), else nil. The
+  cause is kept for every later answer of the session, its process gone
+  or not.
+  """
   @spec session(GenServer.server(), map(), String.t()) ::
-          {:ok, pid() | nil, LocusBackends.mode()} | {:error, LocusBackends.code()}
+          {:ok, pid() | nil, LocusBackends.mode(), LocusBackends.ended_by() | nil}
+          | {:error, LocusBackends.code()}
   def session(server \\ __MODULE__, invoke, id),
     do: GenServer.call(server, {:session, invoke, id})
 
@@ -514,7 +521,7 @@ defmodule Locus.Backends.Owners do
     case admit_owner(state, invoke) do
       {:ok, owner, state} ->
         case Map.fetch(owner.sessions, id) do
-          {:ok, session} -> {:reply, {:ok, session.pid, session.mode}, state}
+          {:ok, session} -> {:reply, {:ok, session.pid, session.mode, session.ended_by}, state}
           :error -> {:reply, {:error, :unknown_session}, state}
         end
 
@@ -1512,6 +1519,7 @@ defmodule Locus.Backends.Owners do
           packs: ask.packs,
           running: true,
           started: false,
+          ended_by: nil,
           opened: System.unique_integer([:monotonic]),
           waiting: froms
         }
@@ -1615,6 +1623,12 @@ defmodule Locus.Backends.Owners do
     owner = Map.fetch!(state.owners, owner.id)
     if ended.crash, do: crashed(state, owner, session, ended.error), else: state
   end
+
+  # Memory ended the session's process: kept for its later answers. It
+  # comes before `:vacated`, from the session itself, so it is here before
+  # the session's process record goes.
+  defp session_event(state, owner, session_id, session, {:memory, cause}),
+    do: put_session(state, owner, session_id, %{session | ended_by: cause})
 
   # The launcher, through the session: its spawn refused with nothing of
   # it made, or nothing of its process left.

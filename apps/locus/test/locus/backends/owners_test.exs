@@ -423,7 +423,7 @@ defmodule Locus.Backends.OwnersTest do
   end
 
   defp session_pid(owners, server, version, id) do
-    {:ok, pid, _mode} = Owners.session(owners, invoke(server, version), id)
+    {:ok, pid, _mode, _ended_by} = Owners.session(owners, invoke(server, version), id)
     pid
   end
 
@@ -701,7 +701,7 @@ defmodule Locus.Backends.OwnersTest do
 
           refute Process.alive?(pid)
         else
-          assert :ended = Backend.send_lines(pid, ["after"])
+          assert {:ended, nil} = Backend.send_lines(pid, ["after"])
           assert %{running: false, lines: []} = Backend.recv(pid, 1, 0)
         end
       end
@@ -731,7 +731,7 @@ defmodule Locus.Backends.OwnersTest do
       assert again != first
 
       # The ended session is still answered, as ended.
-      assert {:ok, ^pid, :run} = Owners.session(owners, invoke("a", {1, 1}), first)
+      assert {:ok, ^pid, :run, nil} = Owners.session(owners, invoke("a", {1, 1}), first)
 
       assert {:error, :unknown_session} =
                Owners.session(owners, invoke("a", {1, 1}), "ss_" <> String.duplicate("f", 32))
@@ -772,7 +772,7 @@ defmodule Locus.Backends.OwnersTest do
         assert {:ok, %{session: id} = opened} = open(owners, "a", v, name, terminal)
         assert opened == %{status: :running, session: id, resumed: false}
         assert id != run
-        assert {:ok, pid, :terminal} = Owners.session(owners, invoke("a", v), id)
+        assert {:ok, pid, :terminal, nil} = Owners.session(owners, invoke("a", v), id)
         assert {:ok, %{session: ^id, resumed: true}} = open(owners, "a", v, name, terminal)
 
         # Gone before the test ends, so nothing of them outlives it.

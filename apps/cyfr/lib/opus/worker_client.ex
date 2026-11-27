@@ -29,8 +29,8 @@ defmodule Opus.WorkerClient do
   (`Prima.Boot.id/0`) as the incarnation presenting it, under a fresh nonce.
   An answer is a `200` read up to `Prima.HostAPI.max_answer_bytes/0` and
   read at this wire's version (`Prima.WorkerWire.read_answer/1`):
-  `{"v": 2, "ok": value}` is the callback's success and
-  `{"v": 2, "error": name}` naming `malformed` or `not_found` its
+  `{"v": 3, "ok": value}` is the callback's success and
+  `{"v": 3, "error": name}` naming `malformed` or `not_found` its
   refusal; any other status, an answer without `v` or at another
   version, any other name, or anything else in an answer's place, is a
   lost answer. A lost answer is retried once, with a fresh nonce, when
@@ -39,12 +39,12 @@ defmodule Opus.WorkerClient do
   dispatch reconciles against the attempt.
 
   Two listener refusals are answers. A `start` refused `503`
-  `{"v": 2, "error": "no_memory", "held": held}` is `{:error, {:no_memory,
+  `{"v": 3, "error": "no_memory", "held": held}` is `{:error, {:no_memory,
   held}}`: the keeper found no room for its runner, `held`
   (`Prima.LocusPool.read_held/1`) says what holds the memory, and the
   service started nothing; one whose `held` does not read stays lost. And
   a `start` refused `503`
-  `{"v": 2, "error": "unavailable", "message": sentence}`, the worker service's
+  `{"v": 3, "error": "unavailable", "message": sentence}`, the worker service's
   account of why no runner can take it (its keeper refuses runners,
   `t:Prima.WorkerAPI.refusal/0`), is `{:error, {:unavailable, sentence}}`,
   since the service answers it only once it has decided to start nothing.

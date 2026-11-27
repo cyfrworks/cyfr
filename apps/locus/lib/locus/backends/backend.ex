@@ -19,7 +19,10 @@ defmodule Locus.Backends.Backend do
   `:started` once the launcher answers the spawn. It is `running` until
   its process ends, and then `ended`: what it buffered stays readable,
   every later `recv/3` answers `running: false`, and every later
-  `send_lines/2`, `input/2` and `resize/3` answers `:ended`. The process
+  `send_lines/2`, `input/2` and `resize/3` answers `{:ended, ended_by}`,
+  `ended_by` being what ended its process for memory once it is known
+  (`:cap`, `:machine` or `:either`, as below), else nil, as every later
+  `recv/3` answers it too. The process
   stays its until it is gone and its owners hear `{:ended, end}`, `end`
   saying whether the end was a crash (`crash: true`: the process exited
   of its own accord with a status other than 0 or by a signal, wrote a
@@ -128,6 +131,7 @@ defmodule Locus.Backends.Backend do
             required(:dropped) => non_neg_integer(),
             required(:running) => boolean(),
             required(:exit_code) => 0..255 | nil,
+            required(:ended_by) => :cap | :machine | :either | nil,
             optional(:grant) => Locus.Output.grant()
           }
           | %{
@@ -135,6 +139,7 @@ defmodule Locus.Backends.Backend do
               required(:dropped) => non_neg_integer(),
               required(:running) => boolean(),
               required(:exit_code) => 0..255 | nil,
+              required(:ended_by) => :cap | :machine | :either | nil,
               optional(:grant) => Locus.Output.grant()
             }
 
@@ -161,13 +166,16 @@ defmodule Locus.Backends.Backend do
   """
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts)
 
-  @doc "Write `lines` to the session's process, each with a newline: `:running` or `:ended`."
-  @spec send_lines(GenServer.server(), [String.t()]) :: :running | :ended
+  @typedoc "What a write to the session answers: its process runs, or ended and why (moduledoc)."
+  @type written :: :running | {:ended, :cap | :machine | :either | nil}
+
+  @doc "Write `lines` to the session's process, each with a newline (`t:written/0`)."
+  @spec send_lines(GenServer.server(), [String.t()]) :: written()
   def send_lines(server, lines) when is_list(lines),
     do: write(server, {:send, Enum.map(lines, &[&1, ?\n])})
 
-  @doc "Write `bytes` to a terminal session's process as they are: `:running` or `:ended`."
-  @spec input(GenServer.server(), binary()) :: :running | :ended
+  @doc "Write `bytes` to a terminal session's process as they are (`t:written/0`)."
+  @spec input(GenServer.server(), binary()) :: written()
   def input(server, bytes) when is_binary(bytes), do: write(server, {:input, bytes})
 
   # The session names how the bytes reach its process, and the caller
@@ -179,16 +187,16 @@ defmodule Locus.Backends.Backend do
       {:write, launcher, handle, data} ->
         case launcher.send(handle, data) do
           :ok -> :running
-          {:error, _reason} -> :ended
+          {:error, _reason} -> {:ended, nil}
         end
 
-      :ended ->
-        :ended
+      {:ended, _ended_by} = ended ->
+        ended
     end
   end
 
-  @doc "Set a terminal session's size: `:running` or `:ended`."
-  @spec resize(GenServer.server(), pos_integer(), pos_integer()) :: :running | :ended
+  @doc "Set a terminal session's size (`t:written/0`)."
+  @spec resize(GenServer.server(), pos_integer(), pos_integer()) :: written()
   def resize(server, rows, cols) when is_integer(rows) and is_integer(cols),
     do: GenServer.call(server, {:resize, rows, cols}, @call_margin_ms)
 
@@ -281,6 +289,8 @@ defmodule Locus.Backends.Backend do
         released: false,
         ending: nil,
         ended: nil,
+        # What ended the process for memory, once the launcher said so.
+        ended_by: nil,
         # Recvs waiting for a line or the end, and ready ones asking the
         # count for room, by the ask's reference.
         waiters: [],
@@ -303,19 +313,19 @@ defmodule Locus.Backends.Backend do
   @impl GenServer
   def handle_call({kind, _data}, _from, %{status: status} = state)
       when kind in [:send, :input] and status != :running,
-      do: {:reply, :ended, used(state)}
+      do: {:reply, {:ended, state.ended_by}, used(state)}
 
   def handle_call({kind, data}, _from, state) when kind in [:send, :input],
     do: {:reply, {:write, state.launcher, state.handle, data}, used(state)}
 
   def handle_call({:resize, _rows, _cols}, _from, %{status: status} = state)
       when status != :running,
-      do: {:reply, :ended, used(state)}
+      do: {:reply, {:ended, state.ended_by}, used(state)}
 
   def handle_call({:resize, rows, cols}, _from, state) do
     case state.launcher.resize(state.handle, rows, cols) do
       :ok -> {:reply, :running, used(state)}
-      {:error, _reason} -> {:reply, :ended, used(state)}
+      {:error, _reason} -> {:reply, {:ended, state.ended_by}, used(state)}
     end
   end
 
@@ -520,6 +530,7 @@ defmodule Locus.Backends.Backend do
   # The leader's end; the session ends once nothing of it is left, so every
   # line it wrote is read first.
   defp on_event(state, {:exited, code, signal, memory}) do
+    state = if memory, do: %{state | ended_by: memory}, else: state
     if memory, do: notify(state, {:memory, memory})
 
     if state.ending,
@@ -695,7 +706,15 @@ defmodule Locus.Backends.Backend do
     running = state.status != :ended
     exit_code = if running, do: nil, else: Map.get(state.ending || %{}, :exit_code)
     taken_as = if state.mode == :terminal, do: :chunks, else: :lines
-    answer = Map.put(%{dropped: dropped, running: running, exit_code: exit_code}, taken_as, taken)
+    ended_by = if running, do: nil, else: state.ended_by
+
+    answer =
+      Map.put(
+        %{dropped: dropped, running: running, exit_code: exit_code, ended_by: ended_by},
+        taken_as,
+        taken
+      )
+
     {answer, %{state | relay: relay}}
   end
 

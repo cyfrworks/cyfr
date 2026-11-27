@@ -16,9 +16,11 @@ defmodule Locus.Runtime.WorkerServiceTest do
   the hex the channel carries.
 
   Over a scripted keeper's runners, whose frames the test writes: a
-  report names at most `Prima.WorkerWire.max_report_attempts/0`
-  attempts, and at that bound, every identifier at its longest, it fits
-  the body CYFR reads and is accepted. A runner starting one child past
+  runner ended for memory is reported with the limit that ended it, and
+  one ended otherwise with none. A report names at most
+  `Prima.WorkerWire.max_report_attempts/0` attempts, and at that bound,
+  every identifier and its memory limit at their longest, it fits the
+  body CYFR reads and is accepted. A runner starting one child past
   the bound is ended at once, as a kill of its root ends it, the bound
   logged, and its report names what the service held. The ids an `exit`
   lists that the service does not hold follow the held ones, and what is
@@ -440,6 +442,27 @@ defmodule Locus.Runtime.WorkerServiceTest do
       end
     end
 
+    for memory <- [:cap, :machine, :either] do
+      test "a runner ended for memory (#{memory}) is reported with the limit that ended it",
+           context do
+        {root, runner} = started!(context)
+        ScriptedKeeper.exit(runner, 137, unquote(memory))
+
+        assert [%{args: args}] = reports(context)
+        assert args["attempts"] == [root.attempt]
+        assert args["memory"] == unquote(Atom.to_string(memory))
+      end
+    end
+
+    test "a runner ended otherwise is reported with no memory limit", context do
+      {root, runner} = started!(context)
+      ScriptedKeeper.exit(runner, 137)
+
+      assert [%{args: args}] = reports(context)
+      assert args["attempts"] == [root.attempt]
+      refute Map.has_key?(args, "memory")
+    end
+
     test "an end report at the bound, every attempt at its longest, fits and is accepted",
          context do
       max = WorkerWire.max_report_attempts()
@@ -450,11 +473,12 @@ defmodule Locus.Runtime.WorkerServiceTest do
 
       log =
         capture_log(fn ->
-          ScriptedKeeper.exit(runner, 137)
+          # Ended for memory above its bound: the report's longest limit.
+          ScriptedKeeper.exit(runner, 137, :machine)
           assert [%{args: args, body: body}] = reports(context)
 
           root_attempt = root.attempt
-          assert %{"attempts" => [^root_attempt | children]} = args
+          assert %{"attempts" => [^root_attempt | children], "memory" => "machine"} = args
 
           assert Enum.sort(children) == Enum.sort(held)
           assert byte_size(body) <= HostAPI.max_body_bytes()

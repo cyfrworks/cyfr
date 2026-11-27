@@ -982,13 +982,21 @@ defmodule Arca.ExecutionAttempts do
   end
 
   @doc false
-  @spec lapse!(String.t(), DateTime.t(), Prima.ExecutionGrant.t()) :: non_neg_integer() | nil
+  @spec lapse!(
+          String.t(),
+          DateTime.t(),
+          Prima.ExecutionGrant.t(),
+          :cap | :machine | :either | nil
+        ) :: non_neg_integer() | nil
   # `lapse/3` inside a caller's transaction that already asked the check.
+  # `ended_by` is what ended the attempt's runner for memory, written in
+  # the same write that lapses it: one of the three causes, or nil.
   # arca:unscoped-ok the sweeper retires lapsed attempts across all
   # tenants; the id comes from its own scan, never from a request, and the
   # grant names the athanor.
   # arca:db-raise-ok inside the caller's transaction
-  def lapse!(attempt, %DateTime{} = seen, %Prima.ExecutionGrant{} = grant) do
+  def lapse!(attempt, %DateTime{} = seen, %Prima.ExecutionGrant{} = grant, ended_by \\ nil)
+      when ended_by in [nil, :cap, :machine, :either] do
     lapsing =
       from(a in ExecutionAttempt,
         where: a.attempt == ^attempt and a.state == "running" and a.lease_until == ^seen,
@@ -1009,7 +1017,8 @@ defmodule Arca.ExecutionAttempts do
               state: "lapsed",
               outcome: "uncertain",
               running_since: nil,
-              ended_at: DateTime.utc_now()
+              ended_at: DateTime.utc_now(),
+              ended_by: ended_by && Atom.to_string(ended_by)
             ]
           )
 

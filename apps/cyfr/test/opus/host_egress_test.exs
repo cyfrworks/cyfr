@@ -496,7 +496,7 @@ defmodule Opus.Host.EgressTest do
   end
 
   defp args(vector) do
-    %{"v" => 2, "op" => "egress_pin", "args" => args} = Jason.decode!(vector["body"])
+    %{"v" => 3, "op" => "egress_pin", "args" => args} = Jason.decode!(vector["body"])
     args
   end
 
@@ -787,7 +787,7 @@ defmodule Opus.Host.EgressTest do
              ]
 
       # A runner never asks for it.
-      assert %{"v" => 2, "error" => "malformed"} =
+      assert %{"v" => 3, "error" => "malformed"} =
                AttemptFixtures.call(fixture, "egress_pin", %{
                  "url" => "https://api.example.test/",
                  "purpose" => "attached"
@@ -815,7 +815,7 @@ defmodule Opus.Host.EgressTest do
             %{"url" => "https://api.example.test/", "purpose" => "fetch", "from" => "pin_x"},
             %{"url" => "https://api.example.test/", "purpose" => "post"}
           ] do
-        assert %{"v" => 2, "error" => "malformed"} =
+        assert %{"v" => 3, "error" => "malformed"} =
                  AttemptFixtures.call(fixture, "egress_pin", args),
                inspect(args)
       end

@@ -658,8 +658,11 @@ defmodule PrismWeb.AquaLive do
   defp listed(socket, name, result) do
     answer =
       case result do
-        {:ok, %{models: _models} = listing} -> {:ok, listing}
-        {:error, reason} -> {:error, unlisted_words(reason, AgentsComponent.program_title(name))}
+        {:ok, %{models: _models} = listing} ->
+          {:ok, listing}
+
+        {:error, reason} ->
+          {:error, unlisted_words(socket, reason, AgentsComponent.program_title(name))}
       end
 
     if name in socket.assigns.waiting,
@@ -710,18 +713,28 @@ defmodule PrismWeb.AquaLive do
   # Why a list did not come, said as that: the program's sentence, signed
   # out only where its driver read that, no room, packs not made ready
   # (the refusal's own sentence), or no answer.
-  defp unlisted_words({:signed_out, sentence}, _title), do: sentence
+  defp unlisted_words(_socket, {:signed_out, sentence}, _title), do: sentence
 
-  defp unlisted_words(packs, _title) when packs in [:packs_unready, :packs_moved],
+  defp unlisted_words(_socket, packs, _title) when packs in [:packs_unready, :packs_moved],
     do: Prima.Refusal.message(packs)
 
-  defp unlisted_words({:refused, sentence}, _title) when is_binary(sentence), do: sentence
+  defp unlisted_words(_socket, {:refused, sentence}, _title) when is_binary(sentence),
+    do: sentence
 
-  defp unlisted_words({:refused, :capacity, _boot}, _title),
-    do: "This CYFR has no room for another running program right now."
+  # No room: what holds the memory, the person's own programs by name.
+  defp unlisted_words(socket, {:refused, {:capacity, held}, _boot}, title),
+    do: no_room(socket, title, held)
 
-  defp unlisted_words(_unanswered, title),
+  defp unlisted_words(socket, {:refused, :capacity, _boot}, title),
+    do: no_room(socket, title, nil)
+
+  defp unlisted_words(_socket, _unanswered, title),
     do: "#{title} did not answer, so its list of models is not shown."
+
+  defp no_room(socket, title, held) do
+    actor = Sanctum.Context.actor(socket.assigns.context)
+    Prima.Refusal.message(Opus.Programs.full(actor, title, held))
+  end
 
   # The person may have signed in there: what waited on the terminal, its
   # program first among it, is asked.
