@@ -211,8 +211,8 @@ pub enum Reply {
     /// `{"v": 3, "ok": value}`, then the service's end of the stream closed.
     OkThenEnd(Value),
     /// `{"v": 3, "ok": value}` after this long, written from a thread of its
-    /// own while the service reads on; its writing is logged as a call of
-    /// op `answered:<op>`.
+    /// own while the service reads on; its writing is logged, just before
+    /// it is written, as a call of op `answered:<op>`.
     Later(Duration, Value),
 }
 
@@ -692,11 +692,13 @@ pub fn relay_fetching(
                         "kind": "host_answer", "re": re, "status": 200,
                         "body": wire::encode_base64(&body)});
                     writing.1 += 1;
-                    let _ = write_frame(&mut writing.0, &answer);
+                    // Logged before it is written: the runner's next call
+                    // can arrive before this thread runs again.
                     calls.lock().expect("the calls").push(Call {
                         op: format!("answered:{}", call.op),
                         ..call
                     });
+                    let _ = write_frame(&mut writing.0, &answer);
                 });
                 continue;
             }
