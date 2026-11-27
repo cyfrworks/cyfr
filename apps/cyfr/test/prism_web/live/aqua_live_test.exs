@@ -788,6 +788,36 @@ defmodule PrismWeb.AquaLiveTest do
       assert has_element?(view, "#aqua-restore-result", "Kept (1)")
     end
 
+    # A restore puts an edited rules file back too, so the page names it
+    # before the press, in the blurb and in the confirmation.
+    test "restoring the shipped files names the rules file before it puts it back",
+         %{conn: conn, ctx: ctx} do
+      actor = Sanctum.Context.actor(ctx)
+      shipped = File.read!(Path.expand("../../../../../seed/aqua/rules.md", __DIR__))
+      {:ok, _} = Arca.Files.write(actor, "aqua/rules.md", "Answer in French.\n")
+
+      {view, _html} = mount_athanor(conn, "/aqua")
+
+      assert has_element?(
+               view,
+               "#aqua-restore p",
+               "Aqua's own file and the athanor's rules file, aqua/rules.md, ship with the server."
+             )
+
+      assert has_element?(
+               view,
+               ~s(#aqua-restore button[phx-click=restore_shipped][data-confirm="Restore the shipped files? ) <>
+                 "An edited copy of Aqua's own file or of the athanor's rules file, " <>
+                 "aqua/rules.md, goes back to what ships with the server. Crew members this " <>
+                 ~s(athanor made and your packs of scrolls are kept."])
+             )
+
+      view |> element("#aqua-restore button[phx-click=restore_shipped]") |> render_click()
+
+      assert {:ok, %{content: ^shipped}} = Arca.Files.read(actor, "aqua/rules.md")
+      assert has_element?(view, "#aqua-restore-result", "aqua/rules.md")
+    end
+
     test "removing everything the athanor made deletes a crew member it made too",
          %{conn: conn, ctx: ctx} do
       {:ok, _} =

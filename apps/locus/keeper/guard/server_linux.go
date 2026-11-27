@@ -185,6 +185,13 @@ func (g starting) start() (*net.UnixListener, *server, int) {
 	}
 	s := newServer(log, netns, rng, kernelRoutes{set: &rulesOf{log: log, at: p, st: st, lock: lock, bound: applyTimeout}})
 	s.upstream = upstream
+	// A guard whose kernel cannot hold a machine's route to whole IPv4
+	// packets serves every other route, and says so in its hello. Its line
+	// is information: where machines are wanted, the keeper that reads the
+	// hello warns (it gives spaces then).
+	if s.machines = probeMachines(); s.machines != "" {
+		log.Info("control: %s", s.machines)
+	}
 	if err := writeFile(p.ready(), recorded+"\n"); err != nil {
 		log.Error("refusing to start: writing %s: %v", p.ready(), err)
 		listener.Close()
@@ -385,6 +392,10 @@ type server struct {
 	maker routeMaker
 	// upstream is the island's resolver the routes' names are asked of.
 	upstream string
+	// machines is why the guard routes no machine, "" where it routes them
+	// (probeMachines): its hello says it, and each machine's admit is
+	// refused with it.
+	machines string
 
 	mu sync.Mutex
 	// taken holds the slots of routes made and not yet wholly withdrawn: a
@@ -458,7 +469,7 @@ func (s *server) serve(conn *net.UnixConn) {
 			s.onEnd()
 		}
 	}()
-	hello, err := Encode(Message{Type: TypeHello, Netns: s.netns})
+	hello, err := Encode(Message{Type: TypeHello, Netns: s.netns, Machines: s.machines})
 	if err == nil {
 		_, err = conn.Write(hello)
 	}
@@ -513,6 +524,9 @@ func (s *server) answer(id uint64, packet []byte, files []*os.File) Message {
 		s.mu.Unlock()
 		if held {
 			return refuse("this connection already holds a route for the spawn")
+		}
+		if req.MachineUID != nil && s.machines != "" {
+			return refuse(s.machines)
 		}
 		r, err := s.admit(id, req, files)
 		if err != nil {

@@ -377,6 +377,90 @@ defmodule Aqua.PromptTest do
     refute prompt =~ "Actions that need approval"
   end
 
+  describe "the athanor's rules file" do
+    @rules_heading "\n\n---\n\n## Rules\n\n" <>
+                     "The athanor's rules, as the person keeps them in `aqua/rules.md`:\n\n"
+
+    defp rules!(ctx, content, encoding \\ "utf8") do
+      {:ok, _} =
+        Arca.Files.write(Sanctum.Context.actor(ctx), "aqua/rules.md", content, encoding)
+
+      :ok
+    end
+
+    defp instructions(ctx), do: Prompt.compose(ctx, agent: agent(), authority: nil).instructions
+
+    test "the shipped default is in the instructions, before the notes, and an edit replaces it",
+         %{ctx: ctx} do
+      shipped =
+        Path.expand("../../../../seed/aqua/rules.md", __DIR__) |> File.read!() |> String.trim()
+
+      [_before, rest] = String.split(instructions(ctx), @rules_heading, parts: 2)
+      assert String.starts_with?(rest, shipped <> "\n\n---\n\n## Notes\n\n")
+
+      :ok = rules!(ctx, "Answer in French.\n")
+      [_before, rest] = String.split(instructions(ctx), @rules_heading, parts: 2)
+      assert String.starts_with?(rest, "Answer in French.\n\n---\n\n## Notes\n\n")
+      refute rest =~ shipped
+    end
+
+    test "an empty file turns the rules off", %{ctx: ctx} do
+      :ok = rules!(ctx, " \n\n\t\n")
+      refute instructions(ctx) =~ "## Rules"
+    end
+
+    test "an athanor with no rules file is told nothing of one" do
+      {_ath_a, bare} = Sanctum.TestContext.two_contexts()
+      assert {:error, _} = Arca.Files.read(Sanctum.Context.actor(bare), "aqua/rules.md")
+      refute instructions(bare) =~ "## Rules"
+    end
+
+    test "a file that is not text is said to be unreadable", %{ctx: ctx} do
+      :ok = rules!(ctx, Base.encode64(<<0xFF, 0xFE, 0, 1>>), "base64")
+
+      assert instructions(ctx) =~
+               "\n\n---\n\n## Rules\n\nThe athanor's rules file could not be read as text." <>
+                 "\n\n---\n\n## Notes"
+    end
+
+    test "a file past 20,000 characters is cut there, with a note that says so", %{ctx: ctx} do
+      :ok = rules!(ctx, String.duplicate("é", 20_000) <> "TAIL")
+      [_before, rest] = String.split(instructions(ctx), @rules_heading, parts: 2)
+
+      assert String.starts_with?(
+               rest,
+               String.duplicate("é", 20_000) <>
+                 "\n\n(The rules file goes on past 20,000 characters; the rest is not read.)" <>
+                 "\n\n---\n\n## Notes"
+             )
+
+      refute rest =~ "TAIL"
+    end
+
+    # One grapheme can be any size: the bound counts code points, so the
+    # section is at most 80,000 bytes and a program's start stays on the wire.
+    test "a file of one huge grapheme is cut at 20,000 code points and a program's start carries it",
+         %{ctx: ctx} do
+      rules = "a" <> String.duplicate(<<0xCC, 0x81>>, 550_000)
+      assert String.length(rules) == 1
+      :ok = rules!(ctx, rules)
+
+      composed = Prompt.compose(ctx, agent: agent(), authority: nil)
+      [_before, rest] = String.split(composed.instructions, @rules_heading, parts: 2)
+
+      assert String.starts_with?(
+               rest,
+               "a" <>
+                 String.duplicate(<<0xCC, 0x81>>, 19_999) <>
+                 "\n\n(The rules file goes on past 20,000 characters; the rest is not read.)" <>
+                 "\n\n---\n\n## Notes"
+             )
+
+      start = %{"t" => "start", "gen" => 1, "config" => %{}, "system" => composed.instructions}
+      assert {:ok, _line} = Opus.Brain.Wire.encode(start)
+    end
+  end
+
   describe "the athanor's notes" do
     setup do
       test_path = Path.join(System.tmp_dir!(), "prompt_notes_#{:rand.uniform(1_000_000)}")

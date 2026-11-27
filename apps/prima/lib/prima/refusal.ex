@@ -2065,6 +2065,11 @@ defmodule Prima.Refusal do
       {"#{member} could not start: its program does not take the model, effort or access " <>
          "chosen for it.", "Check them on #{member}'s card on the Aqua page."}
 
+  defp start_failed(member, :too_many_tools),
+    do:
+      {"#{member} could not start: Antigravity takes fewer tools than Aqua offers its crew.",
+       "Turn some off on the Aqua page."}
+
   defp start_failed(member, :broken),
     do:
       {"#{member} could not start: CYFR and its program's driver did not understand each other.",

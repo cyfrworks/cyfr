@@ -239,10 +239,23 @@ func (d *driver) unlistedAccess() string {
 	return "The crew member's access is not one CYFR runs " + d.p.title + " with, so nothing ran."
 }
 
+// toolsBytes is what tools take as a program counts its list: the sum of
+// each one's compact {name, description, parameters}, `<`, `>` and `&`
+// written as themselves.
+func toolsBytes(tools []brainwire.Tool) int {
+	size := 0
+	for _, t := range tools {
+		b, _ := brainwire.Marshal(t)
+		size += len(b)
+	}
+	return size
+}
+
 // start binds the tool socket, starts the program and in it the session.
 // A configuration the program cannot honour ends the driver: an access the
 // driver does not list, the harness's own tools, which ACP has no switch
-// for, and a model or effort the session does not offer.
+// for, tools past the profile's budget, and a model or effort the session
+// does not offer.
 func (d *driver) start(members map[string]json.RawMessage, str func(string) string) error {
 	if d.h != nil {
 		return brainwire.Fail(2, brainwire.WhyBroken, "a start while the harness runs")
@@ -260,6 +273,11 @@ func (d *driver) start(members map[string]json.RawMessage, str func(string) stri
 	}
 	if config.HarnessTools != nil {
 		return brainwire.Fail(2, brainwire.WhyBroken, "a start names the harness's own tools, which "+d.p.title+" has no switch for")
+	}
+	if d.p.toolBudget > 0 {
+		if size := toolsBytes(tools); size > d.p.toolBudget {
+			return brainwire.Fail(2, brainwire.WhyTooManyTools, fmt.Sprintf("CYFR's tools take %d bytes, past the %d %s takes whole, so nothing ran.", size, d.p.toolBudget, d.p.title))
+		}
 	}
 	session := str("session")
 	resume := session != ""
@@ -301,7 +319,7 @@ func (d *driver) start(members map[string]json.RawMessage, str func(string) stri
 	}
 	d.h, d.config, d.access, d.tools, d.cwd = h, config, access.Native, tools, cwd
 	d.starting = &starting{resume: resume, session: session, system: str("system")}
-	return d.ask(d.starting, stageInitialize, "initialize", initializeParams())
+	return d.ask(d.starting, stageInitialize, "initialize", initializeParams(d.p))
 }
 
 // ask writes the start's next request and waits on its answer.
@@ -418,11 +436,11 @@ func (d *driver) models(id string) error {
 	if err := d.folderRefused(); err != nil {
 		return d.c.Refuse(id, capital(err.Error())+".")
 	}
-	// A program whose efforts are read by selecting each model lists them
-	// in a listing session of the driver's own even while one runs, whose
-	// model the listing must not change.
+	// A program whose efforts are read apart lists them in a listing
+	// session of the driver's own even while one runs, whose model the
+	// listing must not change.
 	listed := listing{answer: d.answer}
-	if d.h == nil || d.p.selectEfforts {
+	if d.h == nil || d.p.efforts != nil {
 		var account string
 		var err error
 		listed, account, err = d.listOnce()

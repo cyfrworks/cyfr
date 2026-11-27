@@ -600,8 +600,9 @@ const (
 )
 
 // machineEnd readies a machine's route's guard's end, slot's, before it
-// comes up: no IPv6 address, GatewayMAC, no ARP and strict reverse-path
-// filtering, which is read back. The kernel filters by the larger of the
+// comes up: only a whole IPv4 packet let in at its ingress, no IPv6
+// address, GatewayMAC, no ARP and strict reverse-path filtering, which is
+// read back. The kernel filters by the larger of the
 // link's rp_filter and the namespace's `all`, so where `all` is loose the
 // raw table's line (routeRules) is what drops a forged source.
 func machineEnd(slot int) error {
@@ -609,6 +610,11 @@ func machineEnd(slot int) error {
 	index, err := linkIndex(name)
 	if err != nil {
 		return err
+	}
+	// Before anything else, and before it comes up: only a whole IPv4
+	// packet enters from the guest (ingress_linux.go).
+	if err := wholeIPv4Only(index); err != nil {
+		return fmt.Errorf("%s: %w", name, err)
 	}
 	if err := netlinkDo(unix.RTM_SETLINK, 0, v6Off(index)); err != nil {
 		return fmt.Errorf("no IPv6 on %s: %w", name, err)

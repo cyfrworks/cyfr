@@ -319,18 +319,6 @@ func staticRules(log *logx.Logger, isl island) (static, error) {
 	v6("-A", "FORWARD", "-i", "sp+", "-j", "REJECT", "--reject-with", reject6)
 	v6("-A", "FORWARD", "-o", "sp+", "-j", "REJECT", "--reject-with", reject6)
 	v6("-A", "INPUT", "-i", "sp+", "-j", "REJECT", "--reject-with", reject6)
-	// No route carries IPv6, and a space sends none. What arrives from a
-	// route in it, a guest's, is dropped before routing and the connection
-	// table, so nothing answers it, not the kernel's own errors either.
-	v6("-t", "raw", "-A", "PREROUTING", "-i", "sp+", "-j", "DROP")
-	// Defragmentation runs before the raw table, so a guest's first
-	// fragment from a source not its own is held whole by the kernel, and
-	// one never completed ends in the kernel's own reassembly-time error to
-	// that source, quoting it, whatever the reverse-path filtering. No such
-	// error leaves this namespace, of either family: they tell a sender
-	// only that its datagram was lost, which nothing on the island needs.
-	v4("-t", "raw", "-A", "OUTPUT", "-p", "icmp", "--icmp-type", "11/1", "-j", "DROP")
-	v6("-t", "raw", "-A", "OUTPUT", "-p", "ipv6-icmp", "--icmpv6-type", "3/1", "-j", "DROP")
 	v4("-t", "nat", "-N", chainRoles)
 	for _, address := range addresses {
 		log.Info("island address %s", address)

@@ -7,11 +7,13 @@ defmodule Compendium.AquaPath do
   scope's one spelling, as `Compendium.ComponentPath` is for `components/`
   and `Arca.ThreadStorage.blob_root/1` for `threads/`.
 
-  The tree holds one soul, the crew, and the packs of scrolls (`locate/1`
-  is the grammar the overlay consults, via `Arca.Storage.UnitLocator`):
+  The tree holds one soul, the athanor's rules file, the crew, and the
+  packs of scrolls (`locate/1` is the grammar the overlay consults, via
+  `Arca.Storage.UnitLocator`):
 
       aqua/
       ├── aqua.md                    # the soul — the one assistant an athanor has
+      ├── rules.md                   # the rules every brain's instructions carry
       ├── crew/<name>.md             # one frontmatter-markdown file per crew member
       └── scrolls/<pack>/            # one pack, as its author published it
           ├── .cyfr-pack.json        # CYFR's record of the pack (`Compendium.Packs`)
@@ -37,6 +39,7 @@ defmodule Compendium.AquaPath do
   # `agent:local.aqua` and the file at the root of the tree are one name.
   @soul Prima.AgentRef.soul_name()
   @soul_file @soul <> ".md"
+  @rules_file "rules.md"
   @crew "crew"
   @scrolls "scrolls"
   @skills "skills"
@@ -104,6 +107,19 @@ defmodule Compendium.AquaPath do
   """
   @spec soul_file() :: [String.t()]
   def soul_file, do: @root ++ [@soul_file]
+
+  @doc """
+  The athanor's rules file — a shadow unit of its own beside the soul,
+  plain text that every brain's instructions carry (`Aqua.Prompt`).
+
+  ## Examples
+
+      iex> Compendium.AquaPath.rules_file()
+      ["aqua", "rules.md"]
+
+  """
+  @spec rules_file() :: [String.t()]
+  def rules_file, do: @root ++ [@rules_file]
 
   @doc """
   The crew directory.
@@ -223,9 +239,9 @@ defmodule Compendium.AquaPath do
 
   @doc """
   The overlay's unit grammar for `aqua/` (`Arca.Storage.UnitLocator`):
-  the soul and each crew member are file-shaped units (a valid-named
-  `.md` file), a pack a valid-named directory unit sentinel'd by its
-  record. A unit is a claim the storage layer acts on — the shipped
+  the soul, the rules file and each crew member are file-shaped units (a
+  valid-named `.md` file), a pack a valid-named directory unit sentinel'd
+  by its record. A unit is a claim the storage layer acts on — the shipped
   copy, the lock, status — so only the grammar mints one: a stray
   `crew/notes.txt` or a junk-named pack folder stays plain storage, outside
   the roster and the reset bookkeeping.
@@ -234,6 +250,9 @@ defmodule Compendium.AquaPath do
 
       iex> Compendium.AquaPath.locate(["aqua", "aqua.md"])
       {:file, ["aqua", "aqua.md"]}
+
+      iex> Compendium.AquaPath.locate(["aqua", "rules.md"])
+      {:file, ["aqua", "rules.md"]}
 
       iex> Compendium.AquaPath.locate(["aqua", "crew", "explorer.md"])
       {:file, ["aqua", "crew", "explorer.md"]}
@@ -250,6 +269,7 @@ defmodule Compendium.AquaPath do
   """
   @impl Arca.Storage.UnitLocator
   def locate([@root_name, @soul_file | _rest]), do: {:file, soul_file()}
+  def locate([@root_name, @rules_file | _rest]), do: {:file, rules_file()}
 
   def locate([@root_name, @crew, file | _rest]) do
     if String.ends_with?(file, ".md") and valid_name?(Path.basename(file, ".md")) do
@@ -269,14 +289,14 @@ defmodule Compendium.AquaPath do
 
   def locate(_path), do: :above_unit
 
-  # A crew member or the soul is created by writing its own file: the write
-  # of the unit's one file is its commit. A pack is made by the write of
+  # A crew member, the soul or the rules file is created by writing its own
+  # file: the write of the unit's one file is its commit. A pack is made by the write of
   # any file under its folder, through `admit_edit/4`.
   @impl Arca.Storage.UnitLocator
   def creates_by_write?(_unit), do: true
 
-  # A pack is committed whole by every write; the soul and a crew member
-  # are one file each.
+  # A pack is committed whole by every write; the soul, the rules file and
+  # a crew member are one file each.
   @impl Arca.Storage.UnitLocator
   def commits_whole?([@root_name, @scrolls, _pack]), do: true
   def commits_whole?(_unit), do: false

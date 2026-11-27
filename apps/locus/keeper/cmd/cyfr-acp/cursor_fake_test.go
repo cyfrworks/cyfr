@@ -32,9 +32,15 @@ import (
 // kind other with an empty rawInput, then updated to
 // {providerIdentifier, toolName, args}, and asked with
 // session/request_permission; no usage on any prompt's answer; no
-// session/close and no session/delete. Every listing of `mcp list`, load,
-// cancel and handed server is logged in `$HOME/fake-acp.log`. A prompt's
-// last text picks what the turn does:
+// session/close and no session/delete. Initialized with
+// `clientCapabilities._meta.parameterizedModelPicker`, as F3 probed it, its
+// `model` option lists base models and the current model's own options
+// follow it, a setter answering the options of the model then set and
+// refusing -32602 an option or value that model lacks; without, one value
+// a model fixes its parameters in. `cursor/list_available_models` gives
+// every model's own options with no session. Every listing of `mcp list`,
+// load, cancel, setter and handed server is logged in `$HOME/fake-acp.log`.
+// A prompt's last text picks what the turn does:
 //
 //	fail        writes the chunk the probe saw on a dead network, alone, then end_turn
 //	unauth      writes its unauthenticated failure alone
@@ -161,15 +167,77 @@ func fakeCursor() int {
 			answer(id, map[string]any{"stopReason": stop})
 		}
 	}
-	options := []any{
-		map[string]any{"id": "mode", "name": "Mode", "category": "mode", "type": "select", "currentValue": "agent", "options": []any{
-			map[string]any{"value": "agent", "name": "Agent"}, map[string]any{"value": "plan", "name": "Plan"}, map[string]any{"value": "ask", "name": "Ask"}}},
-		map[string]any{"id": "model", "name": "Model", "category": "model", "type": "select", "currentValue": "default[]", "options": []any{
-			map[string]any{"value": "default[]", "name": "Auto"},
-			map[string]any{"value": "claude-opus-5-5[context=300k,effort=medium,fast=false]", "name": "claude-opus-5-5"}}},
+	mode := map[string]any{"id": "mode", "name": "Mode", "category": "mode", "type": "select", "currentValue": "agent", "options": []any{
+		map[string]any{"value": "agent", "name": "Agent"}, map[string]any{"value": "plan", "name": "Plan"}, map[string]any{"value": "ask", "name": "Ask"}}}
+	selectOf := func(id, name, category, current string, values ...string) map[string]any {
+		choices := []any{}
+		for _, v := range values {
+			choices = append(choices, map[string]any{"value": v, "name": strings.ToUpper(v[:1]) + v[1:]})
+		}
+		return map[string]any{"id": id, "name": name, "category": category, "type": "select", "currentValue": current, "options": choices}
+	}
+	// Each base model and its own options, as F3's list_available_models
+	// gave them: Auto none, one an effort, one a thinking switch beside its
+	// effort in the same category, and a context of its own.
+	models := []struct {
+		value, name string
+		options     []any
+	}{
+		{"default", "Auto", []any{}},
+		{"claude-opus-5-5", "Claude Opus 5.5", []any{selectOf("effort", "Effort", "thought_level", "medium", "low", "medium", "high", "xhigh", "max")}},
+		{"claude-opus-5", "Claude Opus 5", []any{selectOf("thinking", "Thinking", "thought_level", "true", "false", "true"),
+			selectOf("effort", "Effort", "thought_level", "high", "low", "medium", "high"), selectOf("context", "Context", "model_config", "300k", "300k", "1m")}},
+	}
+	var picker bool
+	current := "default"
+	ownOptions := func() []any {
+		for _, m := range models {
+			if m.value == current {
+				return m.options
+			}
+		}
+		return nil
+	}
+	options := func() []any {
+		if !picker {
+			return []any{mode, map[string]any{"id": "model", "name": "Model", "category": "model", "type": "select", "currentValue": "default[]", "options": []any{
+				map[string]any{"value": "default[]", "name": "Auto"},
+				map[string]any{"value": "claude-opus-5-5[context=300k,effort=medium,fast=false]", "name": "claude-opus-5-5"}}}}
+		}
+		base := []any{}
+		for _, m := range models {
+			base = append(base, map[string]any{"value": m.value, "name": m.name})
+		}
+		return append([]any{mode, map[string]any{"id": "model", "name": "Model", "category": "model", "type": "select", "currentValue": current, "options": base}}, ownOptions()...)
+	}
+	// set is a setter's refusal as Cursor words it, or "" once it is set.
+	set := func(id, value string) string {
+		switch {
+		case !picker || id == "mode":
+			return ""
+		case id == "model":
+			for _, m := range models {
+				if m.value == value {
+					current = value
+					return ""
+				}
+			}
+			return "Invalid value for model: " + value
+		}
+		for _, o := range ownOptions() {
+			if o.(map[string]any)["id"] == id {
+				for _, c := range o.(map[string]any)["options"].([]any) {
+					if c.(map[string]any)["value"] == value {
+						return ""
+					}
+				}
+				return "Invalid value for " + id + ": " + value
+			}
+		}
+		return "Unknown model config option: " + id
 	}
 	sessionResult := func(id string) map[string]any {
-		r := map[string]any{"modes": map[string]any{"currentModeId": "agent", "availableModes": []any{}}, "configOptions": options,
+		r := map[string]any{"modes": map[string]any{"currentModeId": "agent", "availableModes": []any{}}, "configOptions": options(),
 			"models": map[string]any{"currentModelId": "default[]", "availableModels": []any{map[string]any{"modelId": "default[]", "name": "Auto"}}}}
 		if id != "" {
 			r["sessionId"] = id
@@ -339,6 +407,9 @@ func fakeCursor() int {
 					ch <- json.RawMessage(line)
 				}
 			case m.Method == "initialize":
+				capabilities, _ := m.Params["clientCapabilities"].(map[string]any)
+				meta, _ := capabilities["_meta"].(map[string]any)
+				picker = meta["parameterizedModelPicker"] == true
 				answer(m.ID, map[string]any{"protocolVersion": 1, "agentCapabilities": map[string]any{"loadSession": os.Getenv("FAKE_NO_LOAD") == "",
 					"mcpCapabilities": map[string]any{"http": true, "sse": true}, "promptCapabilities": map[string]any{"audio": false, "embeddedContext": false, "image": true},
 					"sessionCapabilities": map[string]any{"list": map[string]any{}}},
@@ -376,7 +447,18 @@ func fakeCursor() int {
 				chunk("REPLAYED-CANARY")
 				answer(m.ID, sessionResult(""))
 			case m.Method == "session/set_config_option":
-				answer(m.ID, map[string]any{"configOptions": options})
+				logLine("set " + str("configId") + " " + str("value"))
+				if refused := set(str("configId"), str("value")); refused != "" {
+					failWith(m.ID, -32602, "Invalid params", map[string]any{"message": refused})
+					continue
+				}
+				answer(m.ID, map[string]any{"configOptions": options()})
+			case m.Method == "cursor/list_available_models":
+				listed := []any{}
+				for _, m := range models {
+					listed = append(listed, map[string]any{"value": m.value, "name": m.name, "configOptions": m.options})
+				}
+				answer(m.ID, map[string]any{"models": listed})
 			case m.Method == "session/prompt":
 				words := ""
 				prompt, _ := m.Params["prompt"].([]any)
