@@ -340,7 +340,12 @@ fn a_renewal_whose_answer_is_lost_is_sent_again_and_the_run_goes_on() {
     );
     let complete = service.frame(Duration::from_secs(120));
     assert_eq!(complete["clean"], false);
-    assert_eq!(service.calls_of("renew").len(), 2);
+    let renewals = service.calls_of("renew");
+    assert_eq!(renewals.len(), 2);
+    // Asked again under a fresh header: another nonce and signature, the
+    // same body.
+    assert_ne!(renewals[0].header, renewals[1].header);
+    assert_eq!(renewals[0].args, renewals[1].args);
     let fail = &service.calls_of("fail")[0].args["outcome"];
     assert_eq!(fail["error"], "Execution timeout after 62000ms");
 }

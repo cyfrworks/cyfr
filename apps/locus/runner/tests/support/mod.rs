@@ -155,6 +155,8 @@ pub struct Call {
     pub op: String,
     pub args: Value,
     pub attempt: String,
+    /// The call's signed header, as posted.
+    pub header: String,
 }
 
 /// How the script answers a call.
@@ -419,6 +421,7 @@ pub fn relay(mut stream: UnixStream, job: Job, mut script: Script, calls: Arc<Mu
             op: request["op"].as_str().expect("an op").to_owned(),
             args: request["args"].clone(),
             attempt: frame["attempt"].as_str().expect("an attempt").to_owned(),
+            header: header.to_owned(),
         };
         calls.lock().expect("the calls").push(call.clone());
         let re = frame["seq"].as_u64().expect("a seq");
@@ -538,6 +541,7 @@ impl cyfr_runner::host::Post for Scripted {
             op: request["op"].as_str().expect("an op").to_owned(),
             args: request["args"].clone(),
             attempt: fields.attempt.attempt.clone(),
+            header: header.clone(),
         };
         self.calls.push(call.clone());
         let reached = match (self.script)(&call, &self.job) {
