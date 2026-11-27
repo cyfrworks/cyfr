@@ -117,7 +117,7 @@ defmodule Emissary.MCP.ActionCoverageTest do
   # A chain's call, a person's own sign-in's chain when the action is
   # interactive, the only chain the gate admits it in.
   defp chain_context(%Prima.Operation{consent: :interactive}),
-    do: %{chain_context(nil) | auth_method: :oidc}
+    do: %{chain_context(nil) | auth_method: :session}
 
   defp chain_context(_operation) do
     Context.enter_guest(%Context{

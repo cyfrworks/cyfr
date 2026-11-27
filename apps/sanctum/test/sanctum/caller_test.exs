@@ -64,7 +64,7 @@ defmodule Sanctum.CallerTest do
             provider: "github",
             namespace: user[:namespace],
             permissions: [:*],
-            auth_method: :oidc,
+            auth_method: :session,
             authenticated: true
           ],
           attrs

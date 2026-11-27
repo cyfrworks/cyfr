@@ -349,7 +349,7 @@ defmodule Sanctum.ValidationCredentialTest do
         athanor_id: athanor_id,
         permissions: [:*],
         scope: :athanor,
-        auth_method: :oidc,
+        auth_method: :session,
         authenticated: true
       )
 
@@ -443,7 +443,7 @@ defmodule Sanctum.ValidationCredentialRaceTest do
         athanor_id: athanor,
         permissions: [:*],
         scope: :athanor,
-        auth_method: :oidc,
+        auth_method: :session,
         authenticated: true
       )
 

@@ -59,7 +59,7 @@ defmodule Sanctum.Providers.DecisionTest do
           athanor_id: "ath_other_decision",
           permissions: [:*],
           scope: :athanor,
-          auth_method: :oidc,
+          auth_method: :session,
           authenticated: true
         )
 

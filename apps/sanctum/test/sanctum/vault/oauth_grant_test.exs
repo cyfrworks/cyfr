@@ -44,7 +44,7 @@ defmodule Sanctum.Vault.OAuthGrantStandingTest do
           user_id: user.id,
           provider: "github",
           athanor_id: athanor.id,
-          auth_method: :oidc,
+          auth_method: :session,
           authenticated: true
         )
       )

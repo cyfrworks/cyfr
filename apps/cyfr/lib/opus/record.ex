@@ -294,7 +294,7 @@ defmodule Opus.Record do
   defp device(%Context{}), do: nil
 
   # A person's own sign-in: a page's, or a session's on the HTTP API.
-  defp person(%Context{auth_method: :oidc, authenticated: true, anonymous: false, user_id: id})
+  defp person(%Context{auth_method: :session, authenticated: true, anonymous: false, user_id: id})
        when is_binary(id),
        do: :person
 

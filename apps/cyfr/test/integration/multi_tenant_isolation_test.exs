@@ -38,7 +38,7 @@ defmodule MultiTenantIsolationTest do
         athanor_id: athanor_a.id,
         permissions: @permissions,
         scope: :athanor,
-        auth_method: :oidc,
+        auth_method: :session,
         namespace: "testns",
         authenticated: true
       )
@@ -49,7 +49,7 @@ defmodule MultiTenantIsolationTest do
         athanor_id: athanor_b.id,
         permissions: @permissions,
         scope: :athanor,
-        auth_method: :oidc,
+        auth_method: :session,
         namespace: "testns",
         authenticated: true
       )
