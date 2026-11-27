@@ -366,20 +366,66 @@ func TestCursorSignedOutIsItsOneShape(t *testing.T) {
 	}
 }
 
-// Cursor's models are its `model` option's values whole, each a model and
-// its parameters, with no efforts; the listing's session is removed.
-func TestCursorsModelsAreItsValuesWhole(t *testing.T) {
+// Cursor, initialized with its parameterized picker, lists its base
+// models, each with its own efforts as cursor/list_available_models gives
+// them, a thinking switch beside an effort being none, with a session
+// running or none; the listing's session is removed.
+func TestCursorListsEachModelWithItsOwnEfforts(t *testing.T) {
+	want := "[map[efforts:[] id:default name:Auto] map[efforts:[low medium high xhigh max] id:claude-opus-5-5 name:Claude Opus 5.5] " +
+		"map[efforts:[low medium high] id:claude-opus-5 name:Claude Opus 5]]"
 	s := startCursor(t, "")
 	s.expect("hello")
 	s.send(map[string]any{"t": "models", "id": "mdl_1"})
-	e := s.expect("models")
-	if fmt.Sprint(e["models"]) != "[map[efforts:[] id:default[] name:Auto] map[efforts:[] id:claude-opus-5-5[context=300k,effort=medium,fast=false] name:claude-opus-5-5]]" {
-		t.Fatalf("the models whole: %v", e["models"])
+	if e := s.expect("models"); fmt.Sprint(e["models"]) != want {
+		t.Fatalf("each base model with its own efforts: %v", e["models"])
 	}
 	entries, _ := os.ReadDir(filepath.Join(s.home, ".cursor", "acp-sessions"))
 	if len(entries) != 0 {
 		t.Fatalf("the listing's session is removed: %v", entries)
 	}
+
+	s = startCursor(t, "")
+	freshCursor(s)
+	s.send(map[string]any{"t": "models", "id": "mdl_2"})
+	if e := s.expect("models"); fmt.Sprint(e["models"]) != want {
+		t.Fatalf("listed alike while a session runs: %v", e["models"])
+	}
+}
+
+// A start sets the model, then its effort, each as that model offers it;
+// an effort the model does not offer ends the driver unfit before
+// anything runs.
+func TestCursorsStartSetsTheModelThenItsEffort(t *testing.T) {
+	s := startCursor(t, "")
+	s.expect("hello")
+	s.send(startCommand("", map[string]any{"model": "claude-opus-5", "effort": "high"}, filesTool))
+	if started := s.expect("started"); started["fresh"] != true {
+		t.Fatalf("it starts: %v", started)
+	}
+	var sets []string
+	for _, line := range strings.Split(strings.TrimSpace(readLog(s.home)), "\n") {
+		if strings.HasPrefix(line, "set ") {
+			sets = append(sets, line)
+		}
+	}
+	if !reflect.DeepEqual(sets, []string{"set model claude-opus-5", "set effort high"}) {
+		t.Fatalf("the model, then its effort, and no thinking switch: %v", sets)
+	}
+
+	s = startCursor(t, "")
+	s.expect("hello")
+	s.send(startCommand("", map[string]any{"model": "claude-opus-5", "effort": "max"}, filesTool))
+	if why := s.why(); why != "unfit" {
+		t.Fatalf("an effort the model lacks is unfit: %v", why)
+	}
+	if status := s.exit(); status != 2 || strings.Contains(s.output(), `"started"`) {
+		t.Fatalf("it ends the driver with 2 before anything starts: %d %q", status, s.stderr.String())
+	}
+}
+
+func readLog(home string) string {
+	held, _ := os.ReadFile(filepath.Join(home, "fake-acp.log"))
+	return string(held)
 }
 
 // A load is what Cursor offers to go on with a session: without it the

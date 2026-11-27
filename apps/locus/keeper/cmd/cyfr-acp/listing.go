@@ -67,7 +67,7 @@ func (d *driver) openOneOff() (*oneOff, error) {
 		return nil, err
 	}
 	o := &oneOff{p: p, wait: d.answerWait}
-	answer, err := o.call("initialize", initializeParams())
+	answer, err := o.call("initialize", initializeParams(d.p))
 	if err == nil {
 		var init initialized
 		var caps agentCapabilities
@@ -123,7 +123,7 @@ func (o *oneOff) call(method string, params any) (rpc, error) {
 func (o *oneOff) close() { o.p.Stop() }
 
 // listing is what a listing session offered: its answer, and each model's
-// efforts where the profile reads them by selecting the model.
+// efforts where the profile reads them apart (profile's efforts).
 type listing struct {
 	answer  sessionAnswer
 	efforts map[string][]string
@@ -193,8 +193,8 @@ func (d *driver) listOnce() (listing, string, error) {
 	}
 	_, _ = record.WriteString(listed.SessionID)
 	out := listing{answer: listed}
-	if d.p.selectEfforts {
-		out.efforts = o.selectEach(listed)
+	if d.p.efforts != nil {
+		out.efforts = d.p.efforts(o, listed)
 	}
 	_, _ = o.call("session/close", map[string]any{"sessionId": listed.SessionID})
 	var gone error

@@ -319,7 +319,7 @@ func (d *driver) start(members map[string]json.RawMessage, str func(string) stri
 	}
 	d.h, d.config, d.access, d.tools, d.cwd = h, config, access.Native, tools, cwd
 	d.starting = &starting{resume: resume, session: session, system: str("system")}
-	return d.ask(d.starting, stageInitialize, "initialize", initializeParams())
+	return d.ask(d.starting, stageInitialize, "initialize", initializeParams(d.p))
 }
 
 // ask writes the start's next request and waits on its answer.
@@ -436,11 +436,11 @@ func (d *driver) models(id string) error {
 	if err := d.folderRefused(); err != nil {
 		return d.c.Refuse(id, capital(err.Error())+".")
 	}
-	// A program whose efforts are read by selecting each model lists them
-	// in a listing session of the driver's own even while one runs, whose
-	// model the listing must not change.
+	// A program whose efforts are read apart lists them in a listing
+	// session of the driver's own even while one runs, whose model the
+	// listing must not change.
 	listed := listing{answer: d.answer}
-	if d.h == nil || d.p.selectEfforts {
+	if d.h == nil || d.p.efforts != nil {
 		var account string
 		var err error
 		listed, account, err = d.listOnce()
