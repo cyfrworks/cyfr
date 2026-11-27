@@ -50,7 +50,7 @@ defmodule PrismWeb.ConsentSheetComponent do
   re-grant opens instead on what its head binds, the entry and its
   lifetime, never wider than the head. The candidates open unasked only
   where the plan says a choice is required.
-  A need nothing can meet offers "Connect your <provider> account" where
+  A need nothing can meet offers "Paste your <provider> API key" where
   it takes an API key: the layer's credential-entry prompt, prefilled from
   the need, in front of the grant, whose sheet comes back with the new
   entry bound. A need the component reads itself says when the entries
@@ -581,7 +581,7 @@ defmodule PrismWeb.ConsentSheetComponent do
     end)
   end
 
-  # "Connect your <provider> account": the layer's credential-entry prompt
+  # "Paste your <provider> API key": the layer's credential-entry prompt
   # for an API key the need takes, prefilled from it, in front of this
   # grant, which comes back with the entry bound.
   def handle_event("connect", %{"slot" => token, "need" => need_name}, socket) do
@@ -1310,7 +1310,7 @@ defmodule PrismWeb.ConsentSheetComponent do
       <div :if={@plan && !unresolved(@plan)} class="space-y-3">
         <section :if={warnings(@plan) != []} class="consent-sheet__warnings">
           <p :for={warning <- warnings(@plan)}>{warning}</p>
-          <p :if={assigns[:athanor_route]}>
+          <p :if={assigns[:athanor_route] && vault_first?(@plan)} data-test="grant-vault-first">
             <.link
               navigate={PrismWeb.Focus.path(@athanor_route, "/vault")}
               class="consent-sheet__link underline"
@@ -1721,7 +1721,7 @@ defmodule PrismWeb.ConsentSheetComponent do
         data-test="grant-connect"
         class="consent-sheet__choice"
       >
-        Connect your {field(@need, :provider)} account
+        Paste your {field(@need, :provider)} API key
       </button>
 
       <p
@@ -2928,6 +2928,19 @@ defmodule PrismWeb.ConsentSheetComponent do
   end
 
   defp warnings(plan), do: plan[:warnings] || []
+
+  # Whether the warnings send the person to the vault first: not when
+  # every required need the vault cannot meet takes a key pasted on this
+  # sheet (`connectable?/1`), whose button is the way to meet it.
+  defp vault_first?(plan) do
+    unmet =
+      for need <- List.wrap(plan[:needs]),
+          field(need, :required) == true,
+          candidates_of(need) == [],
+          do: need
+
+    unmet == [] or not Enum.all?(unmet, &connectable?/1)
+  end
 
   # The actions the plan's catalysts declare they ask about, in the plan's
   # order: the app's own first, then each dependency's under its name.

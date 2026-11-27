@@ -623,15 +623,15 @@ describe("the line desktop 0.2.0", () => {
   })
 })
 
-// 0.3.5: a feed's widget with no reading names its feed and how to bind one,
+// 0.3.6: a feed's widget with no reading names its feed and how to bind one,
 // the threads are Aqua's daily and workspace threads and shared ones, and
 // the threads widget's Archived button lists the archived ones instead.
-const V3 = new URL("../../../../../seed/components/tinctures/local/line/0.3.5/", import.meta.url)
+const V3 = new URL("../../../../../seed/components/tinctures/local/line/0.3.6/", import.meta.url)
 // A daily thread's title: the ISO date `n` days from today, in UTC, the
 // stand-in's person's zone.
 const day = (n) => new Date(Date.now() + n * 86400000).toISOString().slice(0, 10)
 
-describe("the line desktop 0.3.5", () => {
+describe("the line desktop 0.3.6", () => {
   test("a tap on an app's button that opens nothing says why under it, the shipped canvas's words, for four seconds from the last answer; an open says nothing", async () => {
     const p = desk({version: V3})
     await flush()
@@ -835,5 +835,20 @@ describe("the line desktop 0.3.5", () => {
     flip(p)
     assert.deepEqual(listed(p), [])
     assert.match(p.seen(), /Threads Archived All threads No archived threads\./)
+  })
+
+  // The vault knows whether an entry needs re-authorisation and nothing of
+  // whether its provider takes the key, so the card says only the first.
+  test("the Vault card marks an entry that needs re-authorisation and calls no other entry fine", async () => {
+    const p = desk({version: V3, width: 1440})
+    await flush()
+    p.picture("vault.changes", [
+      {name: "anthropic", type: "api_key", status: "fine"},
+      {name: "dropbox", type: "oauth", status: "needs_reauthorisation"},
+    ])
+    await flush()
+    assert.match(p.seen(), /2 entries · 1 to look at/)
+    assert.match(p.seen(), /dropbox .*Needs re-authorisation/)
+    assert.doesNotMatch(p.seen(), /Fine/)
   })
 })

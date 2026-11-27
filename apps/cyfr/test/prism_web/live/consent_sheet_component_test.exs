@@ -465,8 +465,21 @@ defmodule PrismWeb.ConsentSheetComponentTest do
 
     html = sheet(plan, athanor_route: "home")
 
+    # A need only the vault can meet sends the person there first; where
+    # every unmet need takes a key pasted on the sheet, nothing does.
+    warned = Map.put(plan, :warnings, ["The key credential needs an API key."])
+    vault_first = ~s([data-test="grant-vault-first"])
+
+    assert texts(sheet(warned, athanor_route: "home"), vault_first) == [
+             "Add a vault entry first, then come back here."
+           ]
+
+    pasted = %{warned | needs: Enum.reject(warned.needs, &(&1.need == "mail"))}
+    assert texts(sheet(pasted, athanor_route: "home"), vault_first) == []
+    assert sheet(pasted, athanor_route: "home") =~ "The key credential needs an API key."
+
     key = need_html(html, "key")
-    assert key =~ "Connect your keyed.example account"
+    assert key =~ "Paste your keyed.example API key"
     refute key =~ ~s(data-test="grant-why")
 
     mail = need_html(html, "mail")
@@ -477,7 +490,7 @@ defmodule PrismWeb.ConsentSheetComponentTest do
     assert model =~ ~s(data-test="grant-why")
     assert model =~ "reads the value itself"
     assert model =~ "attach-only"
-    assert model =~ "Connect your model.example account"
+    assert model =~ "Paste your model.example API key"
 
     [update] =
       model

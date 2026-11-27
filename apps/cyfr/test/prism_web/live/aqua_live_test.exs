@@ -259,7 +259,30 @@ defmodule PrismWeb.AquaLiveTest do
 
   # What the setup says while nothing is connected and nothing ticked.
   @setup_needs "Tick what you have: a key from a model provider, or Claude Code, " <>
-                 "OpenAI Codex, Antigravity, OpenCode or Cursor on your own plan."
+                 "OpenAI Codex, Antigravity or Cursor on your own plan. With neither, tick " <>
+                 "OpenCode: its own free models need no key and no sign-in."
+
+  # What a program's row says it needs, and its step once its row stands
+  # and nothing is known of its account: OpenCode alone answers unsigned.
+  defp program_need("opencode"),
+    do:
+      "runs in its own folder on OpenCode's free models, with no key or sign-in; " <>
+        "sign in only to use a provider of yours"
+
+  defp program_need(_name), do: "runs in its own folder, signed in to your own plan"
+
+  defp installed_step("opencode", _title),
+    do: "OpenCode: ready on its free models. Sign in only to use a provider of yours."
+
+  defp installed_step(_name, title), do: "#{title}: sign it in on its terminal."
+
+  # The words of the setup's row of a brain: how it stands, what its
+  # provider answered, and its way to replace a refused key.
+  defp standing(view, provider),
+    do: texts(view, ~s(#aqua-setup-brain-#{provider} [data-test="setup-standing"]))
+
+  defp answer(view, provider),
+    do: texts(view, ~s(#aqua-setup-brain-#{provider} [data-test="setup-answer"]))
 
   # The setup read again, as the page reads it after a write of its own,
   # which asks no program.
@@ -1391,12 +1414,139 @@ defmodule PrismWeb.AquaLiveTest do
       # The refused key offers none of the old models; nothing else moved.
       assert picker(view) == {%{"other" => ["other-1"]}, refs}
 
+      # A key the provider refused is not connected: the row says so with
+      # the way to replace it, and neither the first step nor the crew's
+      # counts it.
+      assert standing(view, "keyed") == ["not connected"]
+
+      assert has_element?(
+               view,
+               ~s(#aqua-setup-brain-keyed a[data-test="setup-replace-key"][href="#{athanor_path("/vault")}"]),
+               "Replace the key in the Vault"
+             )
+
+      assert has_element?(view, ~s(#aqua-setup-step-brains[data-done="false"]))
+
+      assert has_element?(
+               view,
+               ~s([data-test="setup-crew-waits"]),
+               "Connect a program or key first."
+             )
+
       {:ok, [%{id: profile_id} | _]} = Sanctum.Consent.profiles(ctx, ref)
       {:ok, head} = Sanctum.Consent.head_consent(ctx, profile_id)
       assert Enum.any?(head.vault_refs, &(&1.vault_entry_id == entry.id))
 
+      # The page opened again asks nothing of the person and still says
+      # it: the listing every load runs carries what the provider said.
+      {view, _html} = mount_athanor(conn, "/aqua?setup=1")
+
+      Prima.Test.Wait.wait_until(
+        fn -> standing(view, "keyed") == ["not connected"] end,
+        10_000,
+        "the refusal, read again"
+      )
+
+      assert answer(view, "keyed") == [
+               ~s(keyed answered: the catalyst answered something that is not the envelope: %{"ran" => true})
+             ]
+
+      assert has_element?(view, ~s(#aqua-setup-brain-keyed a[data-test="setup-replace-key"]))
+      assert has_element?(view, ~s(#aqua-setup-step-brains[data-done="false"]))
+
       # The brain's models call runs beside the page; it ends before the test does.
       Cyfr.Test.Sandbox.end_views()
+    end
+
+    # The row of a brain whose key is saved, in each state the page can
+    # hold for it (`PrismWeb.AquaLive.setup/1`): only a provider that
+    # listed its models reads connected.
+    test "a saved key reads key saved until its provider answers, connected once it lists " <>
+           "its models, and not connected with its words once it refuses" do
+      brain = %{
+        provider: "keyed",
+        ref: "catalyst:local.keyed",
+        need: %{qualifier: "keyed.test", reason: nil},
+        state: :ready,
+        shared: nil
+      }
+
+      row = fn assigns ->
+        html =
+          render_component(
+            &PrismWeb.AquaLive.setup/1,
+            Map.merge(
+              %{
+                open: true,
+                providers: {:ok, [brain]},
+                programs: [],
+                known: %{},
+                runnable: [],
+                listings: %{},
+                terminal: nil,
+                ticked: MapSet.new(),
+                asking: MapSet.new(),
+                model_errors: %{},
+                models_loaded: true,
+                agents_read: nil,
+                models_by_provider: %{},
+                catalyst_refs: %{},
+                member_draft: PrismWeb.AquaLive.AgentsComponent.empty_draft(),
+                athanor: "home",
+                admin_next: false
+              },
+              assigns
+            )
+          )
+
+        tree = LazyHTML.from_fragment(html)
+        words = fn selector ->
+          tree |> LazyHTML.query(selector) |> Enum.map(&(&1 |> LazyHTML.text() |> String.trim()))
+        end
+
+        %{
+          standing: words.(~s(#aqua-setup-brain-keyed [data-test="setup-standing"])),
+          answer: words.(~s(#aqua-setup-brain-keyed [data-test="setup-answer"])),
+          replace: words.(~s(#aqua-setup-brain-keyed [data-test="setup-replace-key"])),
+          done: LazyHTML.attribute(LazyHTML.query(tree, "#aqua-setup-step-brains"), "data-done")
+        }
+      end
+
+      # The page's first listing is still out, or a grant here is asking.
+      asking = %{standing: ["key saved"], answer: ["Asking keyed…"], replace: [], done: ["true"]}
+      assert row.(%{models_loaded: false}) == asking
+      assert row.(%{asking: MapSet.new([brain.ref])}) == asking
+
+      # The listing came back with nothing for it.
+      assert row.(%{}) == %{standing: ["key saved"], answer: [], replace: [], done: ["true"]}
+
+      assert row.(%{models_by_provider: %{"keyed" => ["m-1", "m-2"]}}) ==
+               %{
+                 standing: ["connected"],
+                 answer: ["keyed answered with 2 models."],
+                 replace: [],
+                 done: ["true"]
+               }
+
+      assert row.(%{model_errors: %{"keyed" => "invalid x-api-key"}}) ==
+               %{
+                 standing: ["not connected"],
+                 answer: ["keyed answered: invalid x-api-key"],
+                 replace: ["Replace the key in the Vault"],
+                 done: ["false"]
+               }
+
+      # A key someone shared is not the person's to replace.
+      shared = %{brain | shared: %{owner: "Mira", person_daily: nil}}
+
+      assert %{standing: ["not connected"], replace: []} =
+               row.(%{
+                 providers: {:ok, [shared]},
+                 model_errors: %{"keyed" => "invalid x-api-key"}
+               })
+
+      # A brain with no key to save does not say one was.
+      assert %{standing: ["granted"]} = row.(%{providers: {:ok, [%{brain | need: nil}]}})
     end
 
     test "reconnecting a third-party brain by its versioned reference fills its own picker " <>
@@ -1562,12 +1712,21 @@ defmodule PrismWeb.AquaLiveTest do
 
     test "a brain that needs nothing asks only for the grant, and is connected once granted",
          %{conn: conn, ctx: ctx} do
-      publish_brain!(ctx, "open", %{})
+      # The chat fixture answers its models with one model.
+      {:ok, _} =
+        Compendium.Registry.publish_bytes(ctx, File.read!(Cyfr.Test.ChatFixture.wasm_path()), %{
+          name: "open",
+          version: "0.1.0",
+          type: "catalyst",
+          description: "A model catalyst",
+          manifest: Jason.encode!(%{"contracts" => [Prima.Model.chat_contract()]})
+        })
+
       {view, _html} = mount_athanor(conn, "/aqua?setup=1")
 
       assert has_element?(view, ~s(#aqua-setup-brain-open[data-state="needs_grant"]))
       assert has_element?(view, "#aqua-setup-brain-open label", "needs only your grant")
-      refute has_element?(view, "#aqua-setup-brain-open", "connected")
+      assert standing(view, "open") == []
 
       assert has_element?(view, ~s([data-test="setup-needs"]), @setup_needs)
 
@@ -1588,14 +1747,16 @@ defmodule PrismWeb.AquaLiveTest do
       view |> element(~s(#system-layer-dialog button[phx-click="confirm"])) |> render_click()
 
       Prima.Test.Wait.wait_until(
-        fn -> has_element?(view, ~s(#aqua-setup-brain-open[data-state="ready"]), "connected") end,
-        5_000,
+        fn -> standing(view, "open") == ["connected"] end,
+        10_000,
         "the brain connected"
       )
 
+      assert has_element?(view, ~s(#aqua-setup-brain-open[data-state="ready"]))
+      assert answer(view, "open") == ["open answered with one model."]
+
       # A connected brain is a member's: the crew's step waits on none, and
-      # Aqua's waits for a member to run on. (The form offers a key once
-      # its provider lists models, which this one's does not.)
+      # Aqua's waits for a member to run on.
       refute has_element?(view, ~s([data-test="setup-crew-waits"]))
       assert has_element?(view, ~s([data-test="setup-aqua-waits"]), "Make a crew member first.")
       refute has_element?(view, "#aqua-setup-member")
@@ -2543,7 +2704,7 @@ defmodule PrismWeb.AquaLiveTest do
 
         assert texts(view, brain <> " label span") == [
                  title,
-                 "a plan: to run #{title} in its own folder, signed in to your own plan"
+                 program_need(name)
                ]
 
         view |> element(brain <> " input") |> render_click()
@@ -2571,7 +2732,8 @@ defmodule PrismWeb.AquaLiveTest do
         row = program_row!(ctx, name, command)
         reread_setup(view)
         settled(fn -> has_element?(view, brain <> ~s([data-state="installed"])) end, "installed")
-        assert has_element?(view, step, "#{title}: sign it in on its terminal.")
+        assert has_element?(view, step, installed_step(name, title))
+        assert has_element?(view, step <> ~s( [data-test="sign-in"]), "Sign in")
         refute has_element?(view, step <> ~s( a[data-test="install-program"]))
         harness!(view, "mine", "program:#{name}")
 

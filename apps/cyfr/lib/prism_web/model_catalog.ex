@@ -91,20 +91,27 @@ defmodule PrismWeb.ModelCatalog do
 
   @doc """
   Decode a `{:list_models_result, tag, {:ok, result}}` payload into
-  `%{models: %{provider => [model_id]}, refs: %{provider => ref}}` — both
-  halves, so a page cannot silently drop one again.
+  `%{models: %{provider => [model_id]}, refs: %{provider => ref}, errors:
+  %{provider => sentence}}` — every part, so a page cannot silently drop
+  one again. `errors` is what a provider that listed no models said
+  instead.
   """
-  @spec parse(term()) :: %{models: map(), refs: map()}
+  @spec parse(term()) :: %{models: map(), refs: map(), errors: map()}
   def parse(result) when is_map(result) do
     models =
       (result["models"] || %{})
       |> Enum.filter(fn {_provider, ids} -> is_list(ids) end)
       |> Map.new(fn {provider, ids} -> {provider, Enum.filter(ids, &is_binary/1)} end)
 
-    %{models: models, refs: result["refs"] || %{}}
+    errors =
+      (result["errors"] || %{})
+      |> Enum.filter(fn {_provider, sentence} -> is_binary(sentence) end)
+      |> Map.new()
+
+    %{models: models, refs: result["refs"] || %{}, errors: errors}
   end
 
-  def parse(_), do: %{models: %{}, refs: %{}}
+  def parse(_), do: %{models: %{}, refs: %{}, errors: %{}}
 
   # Spelled here rather than in `Arca.Cache.Keys`: the entry is the
   # console's own read-through, nothing else reads or sweeps it by shape.
