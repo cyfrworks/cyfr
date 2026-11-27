@@ -35,9 +35,9 @@ defmodule Sanctum.Providers.Vault do
   # handler they gate; Sanctum.Provider assembles its roster from these.
   def definition do
     alias Prima.{Arg, Operation}
-    # Mutations are interactive-consent surfaces (signed-in sessions only,
-    # by owner decision — no permission conjunct); list admits the
-    # staging class so keys can enumerate entries.
+    # Mutations are interactive-consent surfaces (a signed-in session or a
+    # paired device, by owner decision — no permission conjunct); list
+    # admits the staging class so keys can enumerate entries.
     destination = fn opts ->
       Arg.new(
         "destination",

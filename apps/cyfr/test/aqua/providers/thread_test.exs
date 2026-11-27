@@ -149,9 +149,9 @@ defmodule Aqua.Providers.ThreadTest do
       ctx: ctx,
       thread: thread
     } do
-      # `authorize_interactive/1` admits `:session` and nothing else. The
-      # plane gate says nothing about this axis: a `*` key is on the
-      # external plane and would sail through it.
+      # `authorize_interactive/1` admits a signed-in session or a paired
+      # device and nothing else. The plane gate says nothing about this
+      # axis: a `*` key is on the external plane and would sail through it.
       star = %{ctx | auth_method: :api_key, permissions: MapSet.new([:*])}
 
       assert {:error,

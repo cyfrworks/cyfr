@@ -117,8 +117,8 @@ for p in \
   'CYFR_MAX_CONCURRENT_EXECUTIONS' \
   'CYFR_WORKER_WATCH_' \
   '(^|[^A-Za-z])([Ee]states?([^a-z]|$)|ESTATES?([^A-Z]|$))|[a-z]Estate' \
-  ':oidc([^a-z_]|$)' \
-  '\b[Oo][Ii][Dd][Cc] sessions?\b' \
+  ':"oidc"|:oidc([^A-Za-z0-9_?!]|$)' \
+  '\b[Oo][Ii][Dd][Cc] [Ss][Ee][Ss][Ss][Ii][Oo][Nn][Ss]?\b' \
   ; do
   status=0
   hits="$(git grep -In "$regex" "$p" -- $paths $excl)" || status=$?

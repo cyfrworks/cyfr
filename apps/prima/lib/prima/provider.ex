@@ -370,10 +370,12 @@ defmodule Prima.Provider do
     `Sanctum.Context.require_permission/3`. Absent means any
     authenticated caller.
   - `:consent` — the consent surface class (`Sanctum.Consent.Authz`):
-    `:interactive` admits a person's signed-in session only, `:staging` also
-    admits API keys. The domain keeps its own finer Authz checks (the
-    digest-pinned commit arm, conditional registration bindings) — dispatch
-    applies the coarse class, the domain the exact one.
+    `:interactive` admits a signed-in session or a paired device at
+    external dispatch and only a session's chain inside a running chain;
+    `:staging` also admits API keys. The domain keeps its own finer Authz
+    checks (the digest-pinned commit arm, conditional registration
+    bindings) — dispatch applies the coarse class, the domain the exact
+    one.
   - `:scope` — `:platform` admits only the server's operators
     (`Sanctum.Context.platform_admin`): the door verbs, and the one
     execution action that releases every athanor's slots. Everyone else is
