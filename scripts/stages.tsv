@@ -66,7 +66,7 @@ handoff	image-test	-	600	-	scripts/image.sh,tests/image-stub.sh,tests/image-test
 handoff	apt-key-test	-	600	-	scripts/apt-key.sh,tests/apt-key-test.sh,tests/apt-key-archive.py,tests/apt-key-release/**	bash tests/apt-key-test.sh
 handoff	janitor-test	1	900	-	scripts/janitor.sh,scripts/image.sh,scripts/lib/run-names.sh,tests/image-stub.sh,tests/janitor-test.sh,tests/install-screen-proof/prepare.sh,tests/install-screen-proof/base-image.sh	bash tests/janitor-test.sh
 handoff	release-boot-names-test	-	600	-	tests/release-boot/**	bash tests/release-boot/names-test.sh
-handoff	imagesuite-test	1	600	-	tests/imagesuite.py,tests/imagesuite_test.py	python3 -I tests/imagesuite_test.py
+handoff	imagesuite-test	1	600	-	tests/imagesuite.py,tests/imagesuite_test.py,tests/builder-image/**,tests/locus-runtime-image/**,tests/locus-backends-image/**	python3 -I tests/imagesuite_test.py
 handoff	registry-stand-in-test	-	600	-	tests/registry-stand-in/**	python3 -I tests/registry-stand-in/standin_test.py
 handoff	install-screen-stored-test	-	600	-	tests/install-screen-proof/box.py,tests/install-screen-proof/box_test.py	python3 -I tests/install-screen-proof/box_test.py
 handoff	runtime-image-checks	-	600	-	tests/locus-runtime-image/**	python3 -I tests/locus-runtime-image/canary_test.py && python3 -I tests/locus-runtime-image/worker_auth.py --self-check

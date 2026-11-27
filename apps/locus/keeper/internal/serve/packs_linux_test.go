@@ -226,7 +226,8 @@ func TestASpaceSeesItsPersonsPacksReadOnly(t *testing.T) {
 	store := packview.New(filepath.Join(k.s.cfg.Kept.Root, packview.DirName))
 	k.s.packs = store
 	uid := testKeptFirst
-	path := filepath.Join(k.s.cfg.Kept.Root, "vlt_packs")
+	k.share(testAthanor, "vlt_packs")
+	path := k.keptPath("vlt_packs")
 	if made := k.homeRequest(t, protocol.TypeHomeMake, "m1", path, uid); made["type"] != protocol.TypeHomeMade {
 		t.Fatalf("home_make: %v", made)
 	}
@@ -243,7 +244,7 @@ func TestASpaceSeesItsPersonsPacksReadOnly(t *testing.T) {
 
 	placeOf := func(id, athanor string) {
 		t.Helper()
-		k.s.handle(k.c, parsed(t, `{"v":8,"type":"place","id":"`+id+`","kind":"program","athanor":"`+athanor+`"}`))
+		k.s.handle(k.c, parsed(t, `{"v":9,"type":"place","id":"`+id+`","kind":"program","athanor":"`+athanor+`"}`))
 		if placed := k.reply(t); placed["type"] != protocol.TypePlaced {
 			t.Fatalf("place %s: %v", id, placed)
 		}
@@ -332,13 +333,13 @@ func TestAClaimedPlaceKeepsItsPacksAthanor(t *testing.T) {
 		return m
 	}
 	packs := &protocol.SpawnPacks{Athanor: testAthanor, Digest: setDigest("claim")}
-	if r := handle(`{"v":8,"type":"place","id":"p1","kind":"program","athanor":"` + testAthanor + `"}`); r["type"] != protocol.TypePlaced {
+	if r := handle(`{"v":9,"type":"place","id":"p1","kind":"program","athanor":"` + testAthanor + `"}`); r["type"] != protocol.TypePlaced {
 		t.Fatalf("place: %v", r)
 	}
 	if got, _ := s.claimPlace(c, &protocol.Request{Place: "p1", Packs: packs}); got != claimed {
 		t.Fatalf("a claim naming its place's athanor's packs: %v", got)
 	}
-	if r := handle(`{"v":8,"type":"assign","id":"a1","place":"p1","kind":"program","athanor":"ath_other"}`); r["type"] != protocol.TypeError || r["code"] != protocol.CodeBadRequest {
+	if r := handle(`{"v":9,"type":"assign","id":"a1","place":"p1","kind":"program","athanor":"ath_other"}`); r["type"] != protocol.TypeError || r["code"] != protocol.CodeBadRequest {
 		t.Fatalf("an assign by the kept role, of another athanor, to a place whose spawn binds packs: %v", r)
 	}
 	s.mu.Lock()
@@ -348,11 +349,11 @@ func TestAClaimedPlaceKeepsItsPacksAthanor(t *testing.T) {
 		t.Fatalf("the place is %s's", whose)
 	}
 	// No role but the floor's assigns: a session's place keeps whose it is.
-	if r := handle(`{"v":8,"type":"assign","id":"a2","place":"p1","kind":"program","athanor":"` + testAthanor + `","subject":"prg_2"}`); r["type"] != protocol.TypeError || r["code"] != protocol.CodeBadRequest {
+	if r := handle(`{"v":9,"type":"assign","id":"a2","place":"p1","kind":"program","athanor":"` + testAthanor + `","subject":"prg_2"}`); r["type"] != protocol.TypeError || r["code"] != protocol.CodeBadRequest {
 		t.Fatalf("an assign keeping the athanor: %v", r)
 	}
 
-	if r := handle(`{"v":8,"type":"place","id":"p2","kind":"program","athanor":"ath_other"}`); r["type"] != protocol.TypePlaced {
+	if r := handle(`{"v":9,"type":"place","id":"p2","kind":"program","athanor":"ath_other"}`); r["type"] != protocol.TypePlaced {
 		t.Fatalf("place: %v", r)
 	}
 	if got, _ := s.claimPlace(c, &protocol.Request{Place: "p2", Packs: packs}); got != claimOthersPacks {
@@ -375,7 +376,8 @@ func TestAGenerationGoesWithItsPlacesFinalRelease(t *testing.T) {
 	store := packview.New(filepath.Join(k.s.cfg.Kept.Root, packview.DirName))
 	k.s.packs = store
 	uid := testKeptFirst
-	path := filepath.Join(k.s.cfg.Kept.Root, "vlt_final")
+	k.share(testAthanor, "vlt_final")
+	path := k.keptPath("vlt_final")
 	if made := k.homeRequest(t, protocol.TypeHomeMake, "m1", path, uid); made["type"] != protocol.TypeHomeMade {
 		t.Fatalf("home_make: %v", made)
 	}
@@ -391,7 +393,7 @@ func TestAGenerationGoesWithItsPlacesFinalRelease(t *testing.T) {
 	for _, d := range []string{store.Dir(), filepath.Dir(gen)} {
 		_ = os.Chmod(d, 0o711)
 	}
-	k.s.handle(k.c, parsed(t, `{"v":8,"type":"place","id":"k1","kind":"program","athanor":"`+testAthanor+`"}`))
+	k.s.handle(k.c, parsed(t, `{"v":9,"type":"place","id":"k1","kind":"program","athanor":"`+testAthanor+`"}`))
 	if placed := k.reply(t); placed["type"] != protocol.TypePlaced {
 		t.Fatalf("place: %v", placed)
 	}

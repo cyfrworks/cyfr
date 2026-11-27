@@ -20,6 +20,7 @@ import (
 	"github.com/cyfr/locus/keeper/internal/admission"
 	"github.com/cyfr/locus/keeper/internal/cgroup"
 	"github.com/cyfr/locus/keeper/internal/frame"
+	"github.com/cyfr/locus/keeper/internal/home"
 	"github.com/cyfr/locus/keeper/internal/logx"
 	"github.com/cyfr/locus/keeper/internal/pool"
 	"github.com/cyfr/locus/keeper/internal/protocol"
@@ -171,7 +172,7 @@ wait`, k.helper)
 	}
 	// The kill is counted once, at the hostile spawn's release, in the
 	// counter of the two spawns' places, which no reading made.
-	k.s.handle(k.c, parsed(t, `{"v":8,"type":"report","id":"rp","after":0}`))
+	k.s.handle(k.c, parsed(t, `{"v":9,"type":"report","id":"rp","after":0}`))
 	report, _ := k.reply(t)["report"].(map[string]any)
 	counters, _ := report["counters"].([]any)
 	if len(counters) != 1 {
@@ -233,7 +234,7 @@ func TestAnExitForAnotherReasonIsNotAMemoryEnd(t *testing.T) {
 func (k *keeper) measure(t *testing.T, place string) map[string]any {
 	t.Helper()
 	id := "measure-" + place
-	k.s.handle(k.c, parsed(t, `{"v":8,"type":"measure","id":"`+id+`","place":"`+place+`"}`))
+	k.s.handle(k.c, parsed(t, `{"v":9,"type":"measure","id":"`+id+`","place":"`+place+`"}`))
 	m := k.reply(t)
 	if _, named := m["spawn_id"]; named || m["id"] != id {
 		t.Fatalf("measuring %s answered %v", place, m)
@@ -286,7 +287,7 @@ func TestTwoSpawnsOfOneUIDAreMeasuredApartWithTheirTmpfs(t *testing.T) {
 	}
 	const mib = 1 << 20
 	uid := testKeptFirst
-	path := filepath.Join(k.s.cfg.Kept.Root, "vlt_measured")
+	path := k.keptPath("vlt_measured")
 	if made := k.homeRequest(t, protocol.TypeHomeMake, "m1", path, uid); made["type"] != protocol.TypeHomeMade {
 		t.Fatalf("home_make: %v", made)
 	}
@@ -628,7 +629,7 @@ func TestARetirementWithoutAnExitCountsItsKillAtTheRelease(t *testing.T) {
 	for _, kept := range []bool{false, true} {
 		t.Run(fmt.Sprintf("kept %t", kept), func(t *testing.T) {
 			k, sp, _ := killedAtItsCap(t, kept)
-			k.s.handle(k.c, parsed(t, fmt.Sprintf(`{"v":8,"type":"place","id":"pk","kind":%q,"athanor":"ath_k"}`, k.kind())))
+			k.s.handle(k.c, parsed(t, fmt.Sprintf(`{"v":9,"type":"place","id":"pk","kind":%q,"athanor":"ath_k"}`, k.kind())))
 			if placed := k.reply(t); placed["type"] != protocol.TypePlaced {
 				t.Fatalf("the place: %v", placed)
 			}
@@ -642,7 +643,7 @@ func TestARetirementWithoutAnExitCountsItsKillAtTheRelease(t *testing.T) {
 			if told := k.toldSoFar(t); len(told) != 0 {
 				t.Fatalf("a retirement without notice told %v", told)
 			}
-			k.s.handle(k.c, parsed(t, `{"v":8,"type":"report","id":"rp","after":0}`))
+			k.s.handle(k.c, parsed(t, `{"v":9,"type":"report","id":"rp","after":0}`))
 			report, _ := k.reply(t)["report"].(map[string]any)
 			counters, _ := report["counters"].([]any)
 			if len(counters) != 1 {
@@ -738,7 +739,9 @@ func endedSpawn(t *testing.T, kept bool, script string) (*keeper, *spawn, string
 		uid = testKeptFirst
 		sp.kept = true
 		sp.account = KeptAccount(uid)
-		sp.home = filepath.Join(k.s.cfg.Kept.Root, "vlt_killed")
+		sp.home, sp.keptHome = k.keptPath("vlt_killed"), "vlt_killed"
+		sp.disk = filepath.Dir(filepath.Dir(sp.home))
+		sp.work = filepath.Join(sp.disk, home.WorkDir)
 		if made := k.homeRequest(t, protocol.TypeHomeMake, "killed", sp.home, uid); made["type"] != protocol.TypeHomeMade {
 			t.Fatalf("home_make: %v", made)
 		}
@@ -761,7 +764,6 @@ func endedSpawn(t *testing.T, kept bool, script string) (*keeper, *spawn, string
 	if kept {
 		k.s.keptMaps()
 		k.s.keptLive[uid] = 1
-		k.s.keptHomes[uid] = sp.home
 	}
 	k.s.mu.Unlock()
 	return k, sp, dir

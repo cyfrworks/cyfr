@@ -81,30 +81,40 @@ func TestSpecValidationRefusals(t *testing.T) {
 	}
 }
 
-// A kept program's PATH is CYFR's drivers, then what the person installs
-// in the home, then the system's, and npm installs and XDG_BIN_HOME land
-// on it; its own variables may name another prefix.
+// keptHome and keptWork are a home and its disk's work folder under the
+// shipped kept-homes root.
+const (
+	keptRoot = "/var/lib/locus/kept"
+	keptDisk = keptRoot + "/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	keptHome = keptDisk + "/programs/vlt_01a-b"
+	keptWork = keptDisk + "/work"
+)
+
+// A kept program's PATH is CYFR's drivers, then what it installs in its
+// own home, then what the person installs for every program in /work, then
+// the system's, and npm installs and XDG_BIN_HOME land in /work; its own
+// variables may name another prefix.
 func TestKeptEnvironPutsTheHomeAfterCyfrsDrivers(t *testing.T) {
 	kept := validSpec()
-	kept.Kept, kept.Home, kept.User = true, "/var/lib/locus/kept/vlt_01a-b", "40001"
+	kept.Kept, kept.Home, kept.Work, kept.User = true, keptHome, keptWork, "40001"
 	got := kept.Environ()
 	want := []string{
-		"HOME=/var/lib/locus/kept/vlt_01a-b",
+		"HOME=" + keptHome,
 		"LOGNAME=40001",
-		"PATH=/opt/cyfr/bin:/var/lib/locus/kept/vlt_01a-b/.local/bin:" + Path,
+		"PATH=/opt/cyfr/bin:" + keptHome + "/.local/bin:/work/.local/bin:" + Path,
 		"TMPDIR=/tmp",
 		"USER=40001",
 		"API_KEY=k",
 		"NODE_ENV=production",
-		"NPM_CONFIG_PREFIX=/var/lib/locus/kept/vlt_01a-b/.local",
-		"XDG_BIN_HOME=/var/lib/locus/kept/vlt_01a-b/.local/bin",
+		"NPM_CONFIG_PREFIX=/work/.local",
+		"XDG_BIN_HOME=/work/.local/bin",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("environ\n got %q\nwant %q", got, want)
 	}
 	kept.Env = map[string]string{"NPM_CONFIG_PREFIX": "/elsewhere"}
 	if got := kept.Environ(); !reflect.DeepEqual(got[len(got)-2:], []string{"NPM_CONFIG_PREFIX=/elsewhere",
-		"XDG_BIN_HOME=/var/lib/locus/kept/vlt_01a-b/.local/bin"}) {
+		"XDG_BIN_HOME=/work/.local/bin"}) {
 		t.Fatalf("a row's own prefix: %q", got)
 	}
 }
@@ -148,13 +158,14 @@ func TestLookPathUsesTheSpawnsPath(t *testing.T) {
 	}
 }
 
-// A kept spawn's home is directly under the kept-homes root, named by an
-// id, and its group is named for its spawn; a pooled spawn's group may not
-// be a spawn's, nor a kept spawn's another uid's.
+// A kept spawn's home is on a disk directly under the kept-homes root,
+// named by an id, with that disk's work folder, and its group is named for
+// its spawn; a pooled spawn's group may not be a spawn's, nor a kept
+// spawn's another uid's, and only a kept spawn has a work folder.
 func TestKeptSpecValidation(t *testing.T) {
 	kept := validSpec()
 	kept.UID, kept.GID, kept.User = 40001, 40001, "40001"
-	kept.HomeRoot, kept.Home, kept.Kept = "/var/lib/locus/kept", "/var/lib/locus/kept/vlt_01a-b", true
+	kept.HomeRoot, kept.Home, kept.Work, kept.Kept, kept.KeptRoot = keptRoot, keptHome, keptWork, true, keptRoot
 	kept.Cgroup = "/keeper-s-0123456789abcdef0123456789abcdef"
 	if err := kept.Validate(); err != nil {
 		t.Fatal(err)
@@ -164,10 +175,20 @@ func TestKeptSpecValidation(t *testing.T) {
 		t.Fatalf("a kept spawn in its uid's group: %v", err)
 	}
 	for name, mutate := range map[string]func(*Spec){
-		"a home below another": func(s *Spec) { s.Home = "/var/lib/locus/kept/a/b" },
-		"a home elsewhere":     func(s *Spec) { s.Home = "/var/lib/locus/homes/vlt_a" },
-		"another uid's group":  func(s *Spec) { s.Cgroup = "/keeper-40002" },
-		"a malformed group":    func(s *Spec) { s.Cgroup = "/keeper-s-xyz" },
+		"a home below another":                  func(s *Spec) { s.Home = keptHome + "/b" },
+		"a home elsewhere":                      func(s *Spec) { s.Home = "/var/lib/locus/homes/vlt_a" },
+		"a home of the layout before the disks": func(s *Spec) { s.Home = keptRoot + "/vlt_01a-b" },
+		"another disk's work folder": func(s *Spec) {
+			s.Work = keptRoot + "/fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210/work"
+		},
+		"no work folder":              func(s *Spec) { s.Work = "" },
+		"no kept root to cover":       func(s *Spec) { s.KeptRoot = "" },
+		"another kept root":           func(s *Spec) { s.KeptRoot = "/opt/kept" },
+		"a kept root not clean":       func(s *Spec) { s.KeptRoot, s.HomeRoot = keptRoot+"/", keptRoot+"/" },
+		"the disk as its home":        func(s *Spec) { s.Home = keptDisk },
+		"the work folder as its home": func(s *Spec) { s.Home = keptWork },
+		"another uid's group":         func(s *Spec) { s.Cgroup = "/keeper-40002" },
+		"a malformed group":           func(s *Spec) { s.Cgroup = "/keeper-s-xyz" },
 	} {
 		s := kept
 		s.Cgroup = "/keeper-s-0123456789abcdef0123456789abcdef"
@@ -191,6 +212,11 @@ func TestKeptSpecValidation(t *testing.T) {
 	pooled.Cgroup = "/keeper-s-0123456789abcdef0123456789abcdef"
 	if err := pooled.Validate(); err == nil {
 		t.Fatal("a pooled spawn in a spawn's group was accepted")
+	}
+	worked := validSpec()
+	worked.Work = keptWork
+	if err := worked.Validate(); err == nil {
+		t.Fatal("a pooled spawn with a work folder was accepted")
 	}
 }
 

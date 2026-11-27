@@ -12,7 +12,6 @@ import (
 	"io"
 	"net"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -85,7 +84,7 @@ func eachSpawn(t *testing.T, check func(t *testing.T, k *keeper, spawn start)) {
 	})
 	t.Run("kept", func(t *testing.T) {
 		k := keptKeeper(t)
-		path := filepath.Join(k.s.cfg.Kept.Root, "vlt_relay")
+		path := k.keptPath("vlt_relay")
 		if made := k.homeRequest(t, protocol.TypeHomeMake, "m1", path, testKeptFirst); made["type"] != protocol.TypeHomeMade {
 			t.Fatalf("home_make: %v", made)
 		}

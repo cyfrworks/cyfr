@@ -98,11 +98,13 @@ defmodule Prima.LocusBackends do
   homes whose program row no longer exists.
 
   A `home` message acts on one kept home of one athanor: `op` `reset` ends
-  every session in the home `home_id` names and makes it again empty under
-  the same uid (`state` `empty`); `op` `retire` ends them and removes the
-  home, freeing its uid (`state` `absent`). The box that holds a home
-  draws its uid, from the kept-home range its keeper is given, when the
-  home is first made, at the first `open` that names it. A home that work
+  every session in the home `home_id` names and makes it again empty
+  (`state` `empty`); `op` `retire` ends them and removes the home
+  (`state` `absent`); neither touches the athanor's other homes, nor the
+  disk they are on, its `/work` or its uid. The box makes a home at the
+  first `open` that names it, on its athanor's disk, which it makes too,
+  under a uid it draws from the kept-home range its keeper is given, when
+  the athanor has none yet. A home that work
   in flight will still make, an `open` being prepared in it or an earlier
   make or reset of it, or a change of it still running, is refused
   `conflict`: it is busy, not gone, and its caller may send the message

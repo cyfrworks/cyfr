@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
-"""A kept home of the backends image is its program's own disk, under a uid of its own.
+"""A person's kept programs share one disk of the backends image, under one uid of theirs.
 
 Run as docker-compose.yml's locus-backends service, its kept homes on the
 shipped `homes` volume under the keeper's `--kept-homes`, and driven only by
 requests signed as CYFR signs them (harness.py):
 
-- A kept program's process runs with its home, one folder per program row
-  under the kept homes' root, 0700, as its HOME, under a uid of the home's
-  own: in the kept range, never a pool uid, and no uid of the pool is taken
-  while only kept sessions run. Two homes never share a uid.
+- A person, an athanor, has one disk under the kept homes' root, named by
+  the SHA-256 of their athanor's id, under one uid of the kept range, never
+  a pool uid: a kept program's process runs with its row's home on it,
+  0700, as its HOME, and no uid of the pool is taken while only kept
+  sessions run. Two people's disks never share a uid.
 - Two sessions of one row share its home and its uid, each a process of
   its own, and closing one leaves the other running.
 - A kept home survives retirement: what one session wrote is there for the
@@ -18,14 +19,26 @@ requests signed as CYFR signs them (harness.py):
 - No pooled uid and not the backends role's user can read a home, and the
   role's user cannot list the kept homes' root: the keeper alone does, and
   no role is of the root's group.
+- A tool one of the person's programs installs in /work, on npm's prefix,
+  is on the PATH of their others and of no one else's: another person's
+  program has a /work of its own, empty of it, under another uid, and finds
+  neither the person's home nor their disk.
+- No session reaches the kept homes' root: on what the kernel holds (the
+  session's own mount table), the kept volume is in its space only as its
+  own home, at that home's path, and its disk's work folder, at /work;
+  under the root it sees the path to its home alone, and no record.
 - Two rows of one program, as Aqua's two browsers are, run in two homes
-  under two uids: the cookies and storage one keeps in its profile the
-  other neither reads, lists nor writes.
+  of the person's one disk under its one uid: the cookies and storage one
+  keeps in its profile the other neither reads, lists nor writes.
 - A home past its row's `home_max_bytes` has its sessions ended within the
   measuring period, is reported over its cap, and refuses an open
   `home_over_cap` until a reset, which leaves it empty under its uid.
-- Retiring a home (its program row deleted) ends its sessions and every
-  process of its uid and removes its folder.
+- Retiring a home (its program row deleted) ends that program's sessions,
+  a detached process of theirs included, and removes its folder, while the
+  person's other program runs on, with its home, /work and the uid.
+- A disk whose every row is retired keeps its /work and its uid through
+  the sweeps and a restart: the person's next program finds the tool they
+  installed, under the same uid.
 - A terminal runs the program's command with the open's argv (a sign-in's
   words, `login`) on a pseudo-terminal of the open's size in its kept home,
   told the wire's terminal type in `TERM`: a run message to it is refused,
@@ -45,13 +58,18 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from harness import (  # noqa: E402
-    KEPT_FIRST, KEPT_LAST, KEPT_ROOT, POOL_FIRST, POOL_LAST, RELEASE_USER, STATUSES, VERSION, WIRE, Stack,
-    eventually, expect, owner_of, probe, require_docker, unb64,
+    KEPT_FIRST, KEPT_LAST, KEPT_ROOT, POOL_FIRST, POOL_LAST, RELEASE_USER, STATUSES, VERSION, WIRE, Stack, disk_of,
+    eventually, expect, home_of, owner_of, probe, require_docker, run, unb64,
 )
 import imagesuite  # noqa: E402
 
 OWNER, NEIGHBOUR = owner_of("kept"), owner_of("neighbour")
-SHARED, CAPPED, SIGNED, RETIRED = (f"mcp_kept-{name}" for name in ("shared", "capped", "signed", "retired"))
+SHARED, CAPPED, SIGNED, RETIRED, BACK = (f"mcp_kept-{name}" for name in ("shared", "capped", "signed", "retired", "back"))
+# The neighbour's own kept program, a home on their disk.
+THEIRS = "mcp_kept-theirs"
+# A tool the person installs for every program of theirs, where npm puts one.
+TOOL = ('mkdir -p "$NPM_CONFIG_PREFIX/bin" && printf "#!/bin/sh\\necho shared-tool\\n" > "$XDG_BIN_HOME/their-tool" '
+        '&& chmod 0755 "$XDG_BIN_HOME/their-tool" && echo "$NPM_CONFIG_PREFIX $XDG_BIN_HOME"')
 # Two rows of one program, each a home: the person's browser and the one kept apart.
 BROWSER, APART = (f"mcp_kept-{name}" for name in ("browser", "apart"))
 # A profile as Chrome keeps one: its cookies and its storage, in the home's folder.
@@ -74,14 +92,28 @@ PROGRAMS = [
 ]
 
 
+def kept_mounts(c, owner, program, key, home_id, home):
+    """The session's mounts of the kept volume, from its own /proc/self/mountinfo: (root, mount point) of each mount
+    on the device its home is on, and every mount point under the kept homes' root."""
+    table = sh(c, owner, "cat /proc/self/mountinfo", program=program, key=key, home_id=home_id)["stdout"]
+    rows = [line.split(" ") for line in table.splitlines()]
+    device = next(r[2] for r in rows if r[4] == home)
+    volume = sorted((r[3], r[4]) for r in rows if r[2] == device and (r[4] == home or r[4] == "/work"
+                                                                      or r[4].startswith(KEPT_ROOT)))
+    under = sorted(r[4] for r in rows if r[4] == KEPT_ROOT or r[4].startswith(KEPT_ROOT + "/"))
+    roots = [r[3] for r in rows if r[2] == device]
+    return volume, under, roots
+
+
 def refusal(code):
     return STATUSES[code], {"version": VERSION, "error": code}
 
 
 def home_gone(stack, home):
-    """Whether `home` is gone, from the word a root shell prints after a stat it can make in the kept root."""
+    """Whether `home` is gone, from the word the observer prints: a home is inside its person's disk, 0700, which no
+    process of the container but its uid's searches."""
     probe_home = f"test -e {home} && echo present || echo absent"
-    return imagesuite.read_word(stack.exec(probe_home), ("present", "absent"), f"the probe of {home}") == "absent"
+    return imagesuite.read_word(stack.observe(probe_home), ("present", "absent"), f"the probe of {home}") == "absent"
 
 
 def sh(c, owner, script, program="probe", key="mcp", home_id=None):
@@ -113,14 +145,15 @@ def main():
         expect(c.hello()[0] == 200, "the service is greeted")
         status, answer, _ = c.sync(OWNER, PROGRAMS)
         expect(status == 200, "an owner of three kept programs is synced", answer)
-        status, answer, _ = c.sync(NEIGHBOUR, [probe()])
-        expect(status == 200, "a neighbour with a scratch program is synced", answer)
+        status, answer, _ = c.sync(NEIGHBOUR, [probe(), probe("kept", home="kept")])
+        expect(status == 200, "a neighbour with a scratch program and a kept one is synced", answer)
         pool = c.hello()[1]["pool"]
 
-        # ————— a home of its own, under a uid of its own —————
+        # ————— a home of its own, on the person's disk, under its uid —————
         a = whoami(c, OWNER, key="a", home_id=SHARED)
-        expect(a["home"] == f"{KEPT_ROOT}/{SHARED}" and a["home_mode"] == "700" and a["cwd"] == a["home"]
-               and a["tmpdir"] == "/tmp", "a kept program runs in its row's home, 0700, as HOME, its TMPDIR its space's own", a)
+        expect(a["home"] == home_of(OWNER, SHARED) and a["home_mode"] == "700" and a["cwd"] == a["home"]
+               and a["tmpdir"] == "/tmp",
+               "a kept program runs in its row's home on its person's disk, 0700, as HOME, its TMPDIR its space's own", a)
         expect(KEPT_FIRST <= a["uid"] <= KEPT_LAST and not POOL_FIRST <= a["uid"] <= POOL_LAST
                and a["gid"] == a["uid"], "it runs under a uid of the kept range, never a pool uid", a)
         expect(c.hello()[1]["pool"]["free"] == pool["free"], "a kept session takes no uid of the pool")
@@ -167,12 +200,54 @@ def main():
                f"{RELEASE_USER} cannot list the kept homes' root, whose group it is not of",
                listed.stdout + listed.stderr)
 
+        # ————— the person's tools, in /work, are theirs alone —————
+        installed = sh(c, OWNER, TOOL, key="a", home_id=SHARED)
+        expect(installed["stdout"] == "/work/.local /work/.local/bin\n",
+               "npm's prefix and XDG_BIN_HOME are the person's /work, where a tool is installed", installed)
+        used = sh(c, OWNER, 'their-tool; command -v their-tool; echo "$PATH"', key="own", home_id=BROWSER)
+        expect(used["stdout"].startswith("shared-tool\n/work/.local/bin/their-tool\n/opt/cyfr/bin:")
+               and f":{home_of(OWNER, BROWSER)}/.local/bin:/work/.local/bin:" in used["stdout"],
+               "the person's other program finds the tool on its PATH, after its own home's", used)
+        theirs = whoami(c, NEIGHBOUR, "kept", key="t", home_id=THEIRS)
+        expect(theirs["uid"] != a["uid"] and KEPT_FIRST <= theirs["uid"] <= KEPT_LAST
+               and theirs["home"] == home_of(NEIGHBOUR, THEIRS),
+               "another person's kept program runs on a disk of their own, under another uid", [a, theirs])
+        apart_from = sh(c, NEIGHBOUR, f'command -v their-tool || echo none; ls -A /work | wc -l; '
+                                      f'for p in "{a["home"]}/kept.txt" "{disk_of(OWNER)}/work" "{KEPT_ROOT}/.disks"; do '
+                                      f'cat "$p" >/dev/null 2>&1 || ls "$p" >/dev/null 2>&1 && echo "reached $p" || echo "no $p"; done',
+                        program="kept", key="t", home_id=THEIRS)
+        expect(apart_from["stdout"] == f"none\n0\nno {a['home']}/kept.txt\nno {disk_of(OWNER)}/work\nno {KEPT_ROOT}/.disks\n",
+               "another person's program has no tool of the person's, an empty /work, and reaches neither the "
+               "person's sign-in, their /work nor the disks' records", apart_from)
+
+        # ————— no session reaches the kept homes' root, on the kernel's own table —————
+        for owner, program, key, row, who in [(OWNER, "probe", "a", SHARED, a), (NEIGHBOUR, "kept", "t", THEIRS, theirs)]:
+            volume, under, roots = kept_mounts(c, owner, program, key, row, who["home"])
+            person = disk_of(owner).rsplit("/", 1)[1]
+            expect([m for _r, m in volume] == sorted([who["home"], "/work"])
+                   and all(r.endswith(f"/{person}/programs/{row}") for r, m in volume if m == who["home"])
+                   and all(r.endswith(f"/{person}/work") for r, m in volume if m == "/work")
+                   and under == [who["home"]],
+                   f"{owner['athanor']}'s session holds the kept volume as its own home and its disk's /work alone",
+                   [volume, under])
+            expect(not any("/.disks" in r or ("/programs/" in r and not r.endswith(f"/programs/{row}")) for r in roots),
+                   f"{owner['athanor']}'s session holds no record, no other home and no other disk of the volume", roots)
+            seen = sh(c, owner, f'ls -A {KEPT_ROOT}; ls -A {disk_of(owner)}; ls -A {disk_of(owner)}/programs',
+                      program=program, key=key, home_id=row)
+            expect(seen["stdout"] == f"{person}\nprograms\n{row}\n",
+                   f"under the root {owner['athanor']}'s session sees the path to its own home alone", seen)
+        owned = stack.observe(f'stat -c "%u %a" {disk_of(OWNER)} {disk_of(OWNER)}/work {KEPT_ROOT}/.disks; '
+                              f'stat -c "%u %a" {KEPT_ROOT}/.disks/{disk_of(OWNER).rsplit("/", 1)[1]}.json')
+        expect(owned.stdout == f"{a['uid']} 700\n{a['uid']} 700\n0 700\n0 600\n",
+               "the disk and its work folder are the person's uid's, 0700; the records' folder and the person's "
+               "record are the keeper's alone", owned.stdout + owned.stderr)
+
         # ————— two rows of one program: nothing crosses their homes —————
         own = whoami(c, OWNER, key="own", home_id=BROWSER)
         apart = whoami(c, OWNER, key="apart", home_id=APART)
-        expect(own["uid"] != apart["uid"] and own["home"] != apart["home"]
+        expect(own["uid"] == apart["uid"] == a["uid"] and own["home"] != apart["home"]
                and {own["home_mode"], apart["home_mode"]} == {"700"},
-               "two rows of one program run in two homes, 0700, under two uids", [own, apart])
+               "two rows of one program run in two homes, 0700, of the person's disk, under its one uid", [own, apart])
         for key, home in [("own", BROWSER), ("apart", APART)]:
             wrote = sh(c, OWNER, PROFILE.format(name=key), key=key, home_id=home)
             expect(wrote["stdout"] == "done\n", f"the {key} row keeps a profile in its home", wrote)
@@ -194,8 +269,9 @@ def main():
 
         # ————— the disk bound —————
         capped = whoami(c, OWNER, "capped", home_id=CAPPED)
-        expect(capped["uid"] != a["uid"] and KEPT_FIRST <= capped["uid"] <= KEPT_LAST,
-               "another row's home has a uid of its own", [a["uid"], capped["uid"]])
+        capped_process = stack.outside(capped)
+        expect(capped["uid"] == a["uid"] and capped["home"] == home_of(OWNER, CAPPED),
+               "another program's home is on the person's disk, under its uid", [a["uid"], capped["uid"]])
         # The keeper measures every MEASURE_S and ends an over-cap home's sessions, so the write past the cap either
         # answers first or, on a slower machine, has its session ended at the cap while it writes. Either way what
         # follows holds: the home is over its cap, its sessions are ended, opens are refused until a reset.
@@ -212,7 +288,10 @@ def main():
         over = eventually(lambda: (lambda p: p if p["over_cap"] and p["sessions"] == 0 else None)(
             c.program(OWNER, "capped")), "the home's sessions to be ended at its cap", timeout_s=MEASURE_S + 20)
         expect(over["home_bytes"] >= CAP, "the status reports the home's measured bytes past its cap", over)
-        eventually(lambda: not stack.under_uid(capped["uid"]), f"no process of uid {capped['uid']} past the cap")
+        eventually(lambda: not any(p["pid"] == capped_process["pid"] for p in stack.processes()),
+                   "the capped session's process to end past the cap")
+        expect(whoami(c, OWNER, key="a", home_id=SHARED)["pid"] == again["pid"],
+               "ending the capped home's sessions leaves the person's other program running under the uid")
         expect(time.monotonic() - started <= MEASURE_S + 10, "the cap is enforced within the measuring period")
         status, answer = c.open(OWNER, "capped", key="mcp", home_id=CAPPED)
         expect((status, answer) == refusal("home_over_cap"), "a home over its cap refuses an open", answer)
@@ -256,19 +335,47 @@ def main():
 
         # ————— retirement with the entry —————
         retiring = whoami(c, OWNER, key="r", home_id=RETIRED)
+        expect(retiring["uid"] == a["uid"], "the retired row's home is on the person's disk too", retiring)
         sh(c, OWNER, 'echo gone > "$HOME/file"; (trap "" TERM; exec sleep 100000) >/dev/null 2>&1 &', key="r",
            home_id=RETIRED)
+        expect(any("sleep 100000" in p["cmd"] for p in stack.under_uid(a["uid"])), "the row's detached process runs")
         client = c.mcp(OWNER, "probe", key="r", home_id=RETIRED)
         status, retired, _ = c.home(OWNER["athanor"], RETIRED, "retire")
         expect((status, retired) == (200, {"version": VERSION, "home_id": RETIRED, "state": "absent"}),
                "a retire answers the home absent", retired)
-        eventually(lambda: not stack.under_uid(retiring["uid"]),
-                   f"every process of uid {retiring['uid']} to end, a detached one included")
+        eventually(lambda: not any("sleep 100000" in p["cmd"] for p in stack.processes()),
+                   "the retired program's processes to end, a detached one included")
         expect(home_gone(stack, retiring["home"]), "the retired home's folder is gone")
         status, answer = c.recv(OWNER, client.session, client.after, 0)
         expect(status == 200 and answer["running"] is False, "the retired home's session answers running: false",
                answer)
-        expect(not home_gone(stack, a["home"]), "retiring one row's home leaves another's")
+        survivor = whoami(c, OWNER, key="a", home_id=SHARED)
+        kept = sh(c, OWNER, 'cat "$HOME/kept.txt"; their-tool', key="a", home_id=SHARED)
+        expect(survivor["pid"] == again["pid"] and survivor["uid"] == a["uid"] and not home_gone(stack, a["home"])
+               and kept["stdout"] == "kept-value\nshared-tool\n",
+               "retiring one row's home leaves the person's other program running, with its home, /work and the uid",
+               [survivor, kept])
+
+        # ————— a disk with no row keeps /work and its uid through the sweeps and a restart —————
+        for row in [SHARED, BROWSER, APART, CAPPED, SIGNED]:
+            status, retired, _ = c.home(OWNER["athanor"], row, "retire")
+            expect((status, retired["state"]) == (200, "absent"), f"{row}'s home is retired", retired)
+        eventually(lambda: not stack.under_uid(a["uid"]), f"no process of uid {a['uid']} once every row is retired")
+        expect(stack.observe(f"test -d {disk_of(OWNER)}/work && ls -A {disk_of(OWNER)}/programs | wc -l").stdout
+               == "0\n", "the disk holds no home and keeps its work folder")
+        # The service's sweep runs every second and the keeper's sweeper with it: a few of them pass.
+        time.sleep(3)  # sleep-ok: the sweeps tick each second, and nothing observable says one has passed
+        run("docker", "restart", stack.container)
+        stack.published()
+        c = stack.controller()
+        expect(c.hello()[0] == 200, "the service is greeted after its restart")
+        status, answer, _ = c.sync(OWNER, PROGRAMS)
+        expect(status == 200, "the owner is synced again", answer)
+        back = whoami(c, OWNER, key="back", home_id=BACK)
+        tool = sh(c, OWNER, "their-tool", key="back", home_id=BACK)
+        expect(back["uid"] == a["uid"] and back["home"] == home_of(OWNER, BACK) and tool["stdout"] == "shared-tool\n",
+               "the person's next program, after the sweeps and a restart, is on their disk under the same uid and "
+               "finds the tool they installed", [back, tool])
     finally:
         stack.down()
 

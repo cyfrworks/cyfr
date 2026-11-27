@@ -18,9 +18,13 @@ import (
 )
 
 // KeptRootMode is the mode the kept-homes root must have: sticky, and
-// writable and searchable but not listable by the uids that make their homes
-// in it; its owner (uid 0, the keeper, which lists it to draw a new home's
-// uid) and its group, which no process the keeper starts holds, list it.
+// writable and searchable but not listable by the uids that make their
+// disks in it, each as its own uid (Make); its owner (uid 0, the keeper,
+// which lists it to draw a new disk's uid and keeps the disks' records in
+// it) and its group, which no process the keeper starts holds, list it. No
+// session reaches it, wherever it is: every space is given it covered, and
+// holds of it only the path to a kept session's own home, with that disk's
+// work folder at /work (package stage, Spec.KeptRoot).
 const KeptRootMode = fs.ModeDir | fs.ModeSticky | 0o773
 
 // KeptHomeMode is the mode every kept home has: its own uid's alone.
@@ -32,10 +36,10 @@ const MaxKeptUIDs = 65536
 // idPattern is a kept home's id: a login entry's id, a plain file name.
 var idPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`)
 
-// Kept is the kept-homes root and the uid range its homes are owned by, as
-// `--kept-homes <root>:<first>-<last>` names them. A kept home is
-// `<root>/<id>`, 0700, owned by a uid of the range that no other home holds
-// while it lives; the uid is the home's for the home's life.
+// Kept is the kept-homes root and the uid range its disks are owned by, as
+// `--kept-homes <root>:<first>-<last>` names them. Each person has one disk
+// under the root, owned by a uid of the range that no other disk holds, the
+// disk's for its life, and each of their programs a kept home on it (disk.go).
 type Kept struct {
 	Root  string
 	First int
@@ -72,55 +76,9 @@ func (k Kept) Contains(uid int) bool { return uid >= k.First && uid <= k.Last }
 // ValidID reports whether id names a kept home.
 func ValidID(id string) bool { return idPattern.MatchString(id) }
 
-// Validate checks that path is a kept home's: directly under the root,
-// named by a valid id, and that uid is the range's.
-func (k Kept) Validate(path string, uid int) error {
-	if filepath.Clean(path) != path || filepath.Dir(path) != k.Root || !ValidID(filepath.Base(path)) {
-		return fmt.Errorf("kept home %q is not a home directly under %s", path, k.Root)
-	}
-	if !k.Contains(uid) {
-		return fmt.Errorf("uid %d is outside the kept-home range %d-%d", uid, k.First, k.Last)
-	}
-	return nil
-}
-
-// Owner is the uid of the kept home id: the owner of its folder under the
-// root, read without following a symbolic link, a directory owned by a uid
-// of the range. An absent home is fs.ErrNotExist; anything else there is
-// ErrNotKeptHome.
-func (k Kept) Owner(id string) (int, error) {
-	info, err := os.Lstat(filepath.Join(k.Root, id))
-	if err != nil {
-		return 0, err
-	}
-	st, ok := info.Sys().(*syscall.Stat_t)
-	if !ok || !info.IsDir() || !k.Contains(int(st.Uid)) {
-		return 0, fmt.Errorf("%s: %w", id, ErrNotKeptHome)
-	}
-	return int(st.Uid), nil
-}
-
-// IDs is the id of every kept home under the root, in byte order: each
-// entry named by a valid id that is a home (Owner).
-func (k Kept) IDs() ([]string, error) {
-	entries, err := os.ReadDir(k.Root)
-	if err != nil {
-		return nil, err
-	}
-	ids := []string{}
-	for _, e := range entries {
-		if !ValidID(e.Name()) {
-			continue
-		}
-		if _, err := k.Owner(e.Name()); err == nil {
-			ids = append(ids, e.Name())
-		}
-	}
-	return ids, nil
-}
-
-// Taken is every uid of the range that is not free for a new home: the
-// owner of any entry under the root, a home or not, and any uid a process
+// Taken is every uid of the range that is not free for a new disk: the
+// owner of any entry under the root, a disk or not (a home of a layout
+// before the disks among them, whose uid is so never drawn), and any uid a process
 // under procRoot (a /proc mount) holds (procfs.HeldUIDs). A root or a
 // /proc that cannot be read takes them all, as an error.
 func (k Kept) Taken(procRoot string) (map[int]bool, error) {
@@ -153,10 +111,20 @@ func (k Kept) Taken(procRoot string) (map[int]bool, error) {
 	return taken, nil
 }
 
-// CheckKeptRoot verifies that root is a directory owned by uid 0 with
-// KeptRootMode whose group no process the keeper starts holds (held): the
-// group's bits give it a list of every kept home.
+// CheckKeptRoot verifies that root is its own path, through no symbolic
+// link, and a directory owned by uid 0 with KeptRootMode whose group no
+// process the keeper starts holds (held): the group's bits give it a list
+// of every disk.
 func CheckKeptRoot(root string, held func(gid int) bool) error {
+	// A root through a symbolic link would be covered in a space at its
+	// link's path, not the folder the link leads to (package stage).
+	resolved, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return err
+	}
+	if resolved != root {
+		return fmt.Errorf("kept-homes root %s resolves to %s: give the folder's own path, through no symbolic link", root, resolved)
+	}
 	info, err := os.Lstat(root)
 	if err != nil {
 		return err

@@ -377,14 +377,14 @@ func ResolveAccounts(cfg Config, lookup Lookup) ([]Account, map[int]Account, err
 	return roles, accounts, nil
 }
 
-// KeptAccount is the account a kept home's uid runs as: no user entry, its
-// own number as its name and as its gid.
+// KeptAccount is the account a disk's uid runs as: no user entry, its own
+// number as its name and as its gid.
 func KeptAccount(uid int) Account {
 	return Account{UID: uid, GID: uid, Name: strconv.Itoa(uid)}
 }
 
 // checkKeptUIDs refuses a kept-home range that holds a role's gid, a pooled
-// gid, or a uid with a user entry: a kept home's uid runs as KeptAccount, so
+// gid, or a uid with a user entry: a disk's uid runs as KeptAccount, so
 // its gid is its own number, which no other account may hold.
 func checkKeptUIDs(k home.Kept, roleGIDs map[int]string, poolGIDs map[int]int, lookup Lookup) error {
 	for gid, role := range roleGIDs {

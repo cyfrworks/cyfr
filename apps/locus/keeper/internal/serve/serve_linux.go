@@ -236,6 +236,14 @@ func Main(args []string) int {
 	for _, spec := range cfg.Pools {
 		s.pools[spec.Name] = pool.New(spec)
 	}
+	// Which homes each disk holds is its record's, read once here: a kept
+	// spawn and every home request but a make find a home by its id alone.
+	if cfg.Kept != nil {
+		if err := s.loadDisks(); err != nil {
+			log.Error("refusing to start: reading the disks' records: %v", err)
+			return ExitConfig
+		}
+	}
 	netns, err := os.Readlink("/proc/self/ns/net")
 	if err != nil {
 		log.Error("refusing to start: reading this network namespace: %v", err)
@@ -640,9 +648,19 @@ func (c *child) reaped() bool {
 	}
 }
 
+// keptRoot is the kept-homes root every space is given covered
+// (stage.Spec.KeptRoot), "" for a keeper that keeps none.
+func (s *server) keptRoot() string {
+	if s.cfg.Kept == nil {
+		return ""
+	}
+	return s.cfg.Kept.Root
+}
+
 // spawn is one allocation: a uid, its home, its leader and its relay. A
-// kept spawn runs under its kept home's uid in that home, and has no pool:
-// several kept spawns may share a uid, and the uid is never a pool's.
+// kept spawn runs under its disk's uid in its home on that disk, and has no
+// pool: every kept spawn of a person shares the disk's uid, and the uid is
+// never a pool's.
 type spawn struct {
 	id string
 	// client is the start of the role process that asked for it: its
@@ -653,8 +671,11 @@ type spawn struct {
 	kept    bool
 	account Account
 	home    string
-	leader  *child
-	relay   *child
+	// keptHome, work and disk are a kept spawn's home's id, its disk's work
+	// folder, bound at /work, and its disk.
+	keptHome, work, disk string
+	leader               *child
+	relay                *child
 	// group is the spawn's memory-bounded cgroup, nil until it is created,
 	// with limits, its place's kind's at its claim.
 	group  *cgroup.Group
@@ -693,6 +714,12 @@ type spawn struct {
 	// retired closes when retirement has finished.
 	retired    chan struct{}
 	retireOnce sync.Once
+	// ended says a kept spawn's group was found empty at its retirement,
+	// set before groupEnded closes, which a kept spawn's retirement closes
+	// once its group's end returned, before its relay drains; s.mu guards
+	// ended.
+	ended      bool
+	groupEnded chan struct{}
 	// packs is the generation its space binds (packview.Store.Acquire),
 	// whose release its final release calls (forget); nil for none.
 	packs func()
@@ -803,31 +830,41 @@ type server struct {
 	groupKilled  func(sp *spawn) bool
 	readerStarts func(r *role)
 	roleStarted  func(r *role)
-	waiters      map[int]*child
-	// keptLive counts the live spawns of each kept home's uid; keptOps
-	// holds each such uid's lock, which a spawn's start, the uid's full
-	// retirement and a home request take, so none of them interleaves
-	// with another of the same uid. A kept uid follows a pooled uid's
-	// discipline: keptHomes names the home a live uid runs in; from the
-	// release of its last spawn until every process of it is ended and
-	// nothing it left remains, it is retiring (keptRetiring, its channel
-	// closed at the end); a retirement that cannot finish quarantines it
-	// (keptQuarantined, naming its home) until the sweeper's retry does.
-	// keptMaking holds the uid a home_make drew, or a home_reset's, from the
-	// draw until the home is made, so no other draw takes it while no folder
-	// owns it; keptDraw makes a draw's reading and its draw one step
-	// (drawKept). homeOps holds each kept home's lock, by its id, while a
-	// home request or a kept spawn's lookup of its home holds or waits for
-	// it, outside the uid's (lockHome).
+	// measuring is called at a kept home's measure, under its uid's lock:
+	// tests hold a kept spawn's start there.
+	measuring func(path string)
+	waiters   map[int]*child
+	// keptLive counts the live spawns of each disk's uid; keptOps holds
+	// each such uid's lock, which a spawn's start, the uid's full
+	// retirement and a home request's helper take, so none of them
+	// interleaves with another of the same uid. A kept uid follows a pooled
+	// uid's discipline, a person's at once: from the release of its last
+	// spawn until every process of it is ended and nothing it left outside
+	// its disk remains, it is retiring (keptRetiring, its channel closed at
+	// the end); a retirement that cannot finish quarantines it
+	// (keptQuarantined, naming its disk) until the sweeper's retry does.
+	// keptMaking holds the uid a home_make drew for a new disk from the draw
+	// until the disk's record holds it, so no other draw takes it; keptDraw
+	// makes a draw's reading and its draw one step (drawKept). disks is
+	// every disk's record by its athanor, and homeDisk whose disk holds each
+	// home (loadDisks, putDisk). homeOps holds each kept home's lock, by its
+	// id, and diskOps each disk's, by its athanor, while a request holds or
+	// waits for it (lockHome, lockDisk).
 	keptLive        map[int]int
 	keptEnding      map[int]int // a kept uid's released spawns still ending in order (retireKept)
 	keptOps         map[int]*sync.Mutex
-	keptHomes       map[int]string
 	keptRetiring    map[int]chan struct{}
 	keptQuarantined map[int]string
 	keptMaking      map[int]bool
 	keptDraw        sync.Mutex
-	homeOps         map[string]*homeLock
+	disks           map[string]*home.Disk
+	homeDisk        map[string]string
+	keptWithheld    map[int]bool // a uid whose disk's record did not read back after a failed write (putDisk)
+	diskOps         map[string]*homeLock
+	// writeDisk writes a disk's record, home.Kept.WriteDisk when nil: tests
+	// fail it.
+	writeDisk func(home.Disk) error
+	homeOps   map[string]*homeLock
 	// packs is every person's packs (package packview) under the kept
 	// homes' root; nil for a keeper that keeps no homes.
 	packs *packview.Store
@@ -1592,6 +1629,7 @@ func (s *server) launch(sp *spawn, req *protocol.Request, e egress) (string, err
 		User:     sp.account.Name,
 		HomeRoot: homeRoot,
 		Home:     sp.home,
+		Work:     sp.work,
 		Kept:     sp.kept,
 		Argv:     req.Argv,
 		Env:      req.Env,
@@ -1601,6 +1639,7 @@ func (s *server) launch(sp *spawn, req *protocol.Request, e egress) (string, err
 		Reach:    sp.reach,
 		Cgroup:   group.Path(),
 		Packs:    packs,
+		KeptRoot: s.keptRoot(),
 	})
 	if err != nil {
 		return protocol.CodeInternal, err

@@ -32,8 +32,8 @@
 // `stage`, `relay`, `retire` and `home` are helpers that read their
 // instructions from a pipe on fd 3. A stage starts in its space with the
 // keeper's ids until its namespace is mapped; retirement helpers start as
-// their pooled uid, home helpers as their kept home's uid, and relays start
-// as their spawn's role's uid, in that role's group.
+// their pooled uid, home helpers as their person's disk's uid, and relays
+// start as their spawn's role's uid, in that role's group.
 package main
 
 import (

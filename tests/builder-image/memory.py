@@ -158,7 +158,7 @@ exec npm run build
 """ % (HELD, HOLDING)
 MEASURE = {"holding": HOLDING, "poll_ms": 200, "margin_ms": 100, "grace_ms": 0}
 # The keeper's protocol: every line carries its version.
-V = 8
+V = 9
 
 # The room case. A build's allowance (Prima.LocusPool), the room it needs
 # and its least charge until ten seconds after its spawn; the pool's work,

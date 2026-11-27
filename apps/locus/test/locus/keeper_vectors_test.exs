@@ -185,7 +185,7 @@ defmodule Locus.KeeperVectorsTest do
     assert line ==
              Jason.encode!(%{vector | "id" => sent["id"], "attach" => sent["attach"]}) <> "\n"
 
-    send_reply(peer, %{v: 8, type: "error", id: sent["id"], code: "capacity"})
+    send_reply(peer, %{v: 9, type: "error", id: sent["id"], code: "capacity"})
     assert {{:error, :capacity}, []} = Task.await(task, 10_000)
   end
 
@@ -490,7 +490,7 @@ defmodule Locus.KeeperVectorsTest do
     asked = next_request(peer)
     send_reply(peer, %{answering(asked, reply(v, "reported")) | "id" => "report-0"})
     assert Task.yield(task, 200) == nil
-    send_reply(peer, %{"v" => 8, "type" => "error", "id" => asked["id"], "code" => "bad_request"})
+    send_reply(peer, %{"v" => 9, "type" => "error", "id" => asked["id"], "code" => "bad_request"})
     assert Task.await(task, 5_000) == {:error, {:refused, "bad_request"}}
   end
 

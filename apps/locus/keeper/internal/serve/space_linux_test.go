@@ -20,6 +20,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/cyfr/locus/keeper/internal/frame"
+	"github.com/cyfr/locus/keeper/internal/home"
 	"github.com/cyfr/locus/keeper/internal/protocol"
 	"github.com/cyfr/locus/keeper/internal/stage"
 )
@@ -138,24 +139,38 @@ func pidsOf(t *testing.T, uid int, comm string) []int {
 	return pids
 }
 
-// Two sessions of one folder, a kept home's spawns under its one uid, each
-// see and signal only their own: each lists its own processes alone, under
-// the space's init as pid 1, cannot signal the other's, has a /tmp of its
-// own, sees its own home alone under the kept homes' root, no terminal of
-// another, no group but its own, whose cap it reads at the root of its
-// cgroup tree, and can mount nothing.
+// Two sessions of one folder, a kept home's spawns under its disk's one
+// uid, each see and signal only their own: each lists its own processes
+// alone, under the space's init as pid 1, cannot signal the other's, has a
+// /tmp of its own, sees its own home alone under the kept homes' root, not
+// the person's other home on the same disk under the same uid, nor another
+// person's disk, nor the disks' records, and the disk's work folder at
+// /work alone, writable; no terminal of another, no group but its own,
+// whose cap it reads at the root of its cgroup tree, and can mount nothing.
 func TestTwoSessionsOfOneFolderSeeAndSignalOnlyTheirOwn(t *testing.T) {
 	k := keptKeeper(t)
 	uid := testKeptFirst
-	path := filepath.Join(k.s.cfg.Kept.Root, "vlt_home-two")
-	other := filepath.Join(k.s.cfg.Kept.Root, "vlt_home-other")
+	k.share("ath_two", "vlt_home-two", "vlt_home-sibling")
+	path := k.keptPath("vlt_home-two")
+	sibling := k.keptPath("vlt_home-sibling")
+	other := k.keptPath("vlt_home-other")
+	disk := filepath.Dir(filepath.Dir(path))
 	for i, h := range []struct {
 		path string
 		uid  int
-	}{{path, uid}, {other, uid + 1}} {
+	}{{path, uid}, {sibling, uid}, {other, uid + 1}} {
 		if made := k.homeRequest(t, protocol.TypeHomeMake, "m"+strconv.Itoa(i), h.path, h.uid); made["type"] != protocol.TypeHomeMade {
 			t.Fatalf("home_make %s: %v", h.path, made)
 		}
+	}
+	// The person's other program has signed in: its home holds its sign-in,
+	// its uid's, which the second session's uid could read were it in sight.
+	signin := filepath.Join(sibling, "signin")
+	if err := os.WriteFile(signin, []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chown(signin, uid, uid); err != nil {
+		t.Fatal(err)
 	}
 	a, rcA := k.spawnKept(t, "a", `echo a > /tmp/mine; echo ready; exec sleep 600`, path, uid)
 	rcA.readUntil(t, func() bool { return strings.Contains(string(rcA.got[frame.StreamStdout]), "ready\n") })
@@ -171,17 +186,22 @@ echo "init:$(cat /proc/1/comm)"
 kill -0 %d 2>/dev/null && echo signalled || echo unsignalled
 echo "mine:$(cat /tmp/mine 2>/dev/null || echo none)"
 echo "homes:$(ls -A %s | tr '\n' ' ')"
+echo "disk:$(ls -A %s | tr '\n' ' ')"
+echo "programs:$(ls -A %s/programs | tr '\n' ' ')"
+echo "sibling:$(cat %s/signin 2>&1 >/dev/null | grep -c 'No such file')"
+echo work > /work/tool && echo "work:$(cat /work/tool)"
 echo "pts:$(ls -A /dev/pts | tr '\n' ' ')"
 echo "groups:$(find /sys/fs/cgroup -mindepth 1 -type d | wc -l)"
 echo "cap:$(cat /sys/fs/cgroup/memory.max)"
 echo "tmpdir:$TMPDIR"
 %s mounts
-echo done`, sleeps[0], k.s.cfg.Kept.Root, k.helper)
+echo done`, sleeps[0], k.s.cfg.Kept.Root, disk, disk, sibling, k.helper)
 	b, rcB := k.spawnKept(t, "b", script, path, uid)
 	rcB.readUntil(t, func() bool { return false })
 	stdout := string(rcB.got[frame.StreamStdout])
 	for _, want := range []string{
-		"init:cyfr-locus\n", "unsignalled\n", "mine:none\n", "homes:" + filepath.Base(path) + " \n", "pts:ptmx \n",
+		"init:cyfr-locus\n", "unsignalled\n", "mine:none\n", "homes:" + filepath.Base(disk) + " \n",
+		"disk:programs \n", "programs:" + filepath.Base(path) + " \n", "sibling:1\n", "work:work\n", "pts:ptmx \n",
 		"groups:0\n", "cap:67108864\n", "tmpdir:/tmp\n",
 		"mount: EPERM\n", "umount2: EPERM\n", "pivot_root: EPERM\n", "open_tree: EPERM\n", "fsopen: EPERM\n",
 		"mount_setattr: EPERM\n", "unshare: EPERM\n", "done\n",
@@ -192,6 +212,9 @@ echo done`, sleeps[0], k.s.cfg.Kept.Root, k.helper)
 	}
 	if comms := regexpFind(`comms:([^\n]*)`, stdout); strings.Contains(comms, "sleep") || !strings.Contains(comms, "cyfr-locus") {
 		t.Errorf("the second session lists %q", comms)
+	}
+	if data, err := os.ReadFile(filepath.Join(disk, home.WorkDir, "tool")); err != nil || string(data) != "work\n" {
+		t.Errorf("what the session wrote to /work, on its disk: %q %v", data, err)
 	}
 	k.releasedPair(t, b)
 	if got := pidsOf(t, uid, "sleep"); len(got) != 1 || got[0] != sleeps[0] {
@@ -210,7 +233,7 @@ echo done`, sleeps[0], k.s.cfg.Kept.Root, k.helper)
 func TestASpacesProcessesEndWithItsCommand(t *testing.T) {
 	k := keptKeeper(t)
 	uid := testKeptFirst
-	path := filepath.Join(k.s.cfg.Kept.Root, "vlt_home-end")
+	path := k.keptPath("vlt_home-end")
 	if made := k.homeRequest(t, protocol.TypeHomeMake, "m", path, uid); made["type"] != protocol.TypeHomeMade {
 		t.Fatalf("home_make: %v", made)
 	}
@@ -355,7 +378,7 @@ func containsInt(list []int, v int) bool {
 func TestAKeptClosesSignalReachesTheCommandAlone(t *testing.T) {
 	k := keptKeeper(t)
 	uid := testKeptFirst
-	path := filepath.Join(k.s.cfg.Kept.Root, "vlt_home-close")
+	path := k.keptPath("vlt_home-close")
 	if made := k.homeRequest(t, protocol.TypeHomeMake, "m", path, uid); made["type"] != protocol.TypeHomeMade {
 		t.Fatalf("home_make: %v", made)
 	}
@@ -381,7 +404,7 @@ wait`
 func TestAKeptCloseEndsWhatTheCommandLeftInItsTurn(t *testing.T) {
 	k := keptKeeper(t)
 	uid := testKeptFirst
-	path := filepath.Join(k.s.cfg.Kept.Root, "vlt_home-order")
+	path := k.keptPath("vlt_home-order")
 	if made := k.homeRequest(t, protocol.TypeHomeMake, "m", path, uid); made["type"] != protocol.TypeHomeMade {
 		t.Fatalf("home_make: %v", made)
 	}
@@ -403,7 +426,7 @@ func TestAKeptCloseEndsWhatTheCommandLeftInItsTurn(t *testing.T) {
 func TestASpacesMessageQueueIsItsOwn(t *testing.T) {
 	k := keptKeeper(t)
 	uid := testKeptFirst
-	path := filepath.Join(k.s.cfg.Kept.Root, "vlt_home-queue")
+	path := k.keptPath("vlt_home-queue")
 	if made := k.homeRequest(t, protocol.TypeHomeMake, "m", path, uid); made["type"] != protocol.TypeHomeMade {
 		t.Fatalf("home_make: %v", made)
 	}
@@ -445,7 +468,7 @@ func TestAProgramBehindShellsEndsInItsTurn(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			k := keptKeeper(t)
 			uid := testKeptFirst
-			path := filepath.Join(k.s.cfg.Kept.Root, "vlt_home-turn")
+			path := k.keptPath("vlt_home-turn")
 			if made := k.homeRequest(t, protocol.TypeHomeMake, "m", path, uid); made["type"] != protocol.TypeHomeMade {
 				t.Fatalf("home_make: %v", made)
 			}
@@ -481,7 +504,7 @@ X
 func TestAKeptCloseAsksEachProcessLeftOnce(t *testing.T) {
 	k := keptKeeper(t)
 	uid := testKeptFirst
-	path := filepath.Join(k.s.cfg.Kept.Root, "vlt_home-once")
+	path := k.keptPath("vlt_home-once")
 	if made := k.homeRequest(t, protocol.TypeHomeMake, "m", path, uid); made["type"] != protocol.TypeHomeMade {
 		t.Fatalf("home_make: %v", made)
 	}
@@ -510,7 +533,7 @@ while :; do sleep 0.05; done`
 func TestAKeptCloseAsksEveryProcessLeftToEnd(t *testing.T) {
 	k := keptKeeper(t)
 	uid := testKeptFirst
-	path := filepath.Join(k.s.cfg.Kept.Root, "vlt_home-every")
+	path := k.keptPath("vlt_home-every")
 	if made := k.homeRequest(t, protocol.TypeHomeMake, "m", path, uid); made["type"] != protocol.TypeHomeMade {
 		t.Fatalf("home_make: %v", made)
 	}

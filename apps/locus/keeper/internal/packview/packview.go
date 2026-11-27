@@ -8,9 +8,8 @@
 // names, which a space binds at /run/cyfr/scrolls (package stage).
 //
 // A generation is <dir>/<a>/<d>/, where dir is <kept root>/.packs, <a> the
-// SHA-256 of the athanor's id in lowercase hex (the id's grammar allows a
-// slash) and <d> the set digest's hex. Its files are mode 0444, or 0555
-// with the executable bit; its folders 0555. dir and each <a> are 0711: a
+// athanor's folder name, its disk's too (home.Person), and <d> the set
+// digest's hex. Its files are mode 0444, or 0555 with the executable bit; its folders 0555. dir and each <a> are 0711: a
 // space's first process builds its files as the session's uid, which
 // passes through them by name and lists neither. Everything is the
 // keeper's own.
@@ -83,6 +82,8 @@ import (
 	"unicode/utf8"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/cyfr/locus/keeper/internal/home"
 )
 
 // Bounds of a generation, the store's (Compendium.Packs.bounds/0), which
@@ -324,12 +325,6 @@ func absent(err error) bool {
 // Dir is the store's folder.
 func (s *Store) Dir() string { return s.dir }
 
-// Person is an athanor's folder name, <a>.
-func Person(athanor string) string {
-	sum := sha256.Sum256([]byte(athanor))
-	return hex.EncodeToString(sum[:])
-}
-
 // digestHex is a set digest's folder name, <d>: "sha256:" and its hex.
 func digestHex(digest string) (string, bool) {
 	h, ok := strings.CutPrefix(digest, "sha256:")
@@ -339,7 +334,7 @@ func digestHex(digest string) (string, bool) {
 // Path is the generation's folder.
 func (s *Store) Path(athanor, digest string) string {
 	d, _ := digestHex(digest)
-	return filepath.Join(s.dir, Person(athanor), d)
+	return filepath.Join(s.dir, home.Person(athanor), d)
 }
 
 // Hold holds the generation athanor and digest name for lifetime when it
@@ -350,7 +345,7 @@ func (s *Store) Hold(athanor, lifetime, digest string) (bool, error) {
 	if !ok {
 		return false, ErrRefused
 	}
-	a := Person(athanor)
+	a := home.Person(athanor)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.expire()
@@ -432,7 +427,7 @@ func (s *Store) Acquire(athanor, digest string) (path string, empty bool, releas
 	if !ok {
 		return "", false, nil, ErrAbsent
 	}
-	a := Person(athanor)
+	a := home.Person(athanor)
 	path = filepath.Join(s.dir, a, d)
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -534,7 +529,7 @@ func (s *Store) Put(owner *Owner, athanor, lifetime, digest string, seq uint64, 
 // athanor in the register, one being finished or dropped among them,
 // refuses it ErrUnderWay.
 func (s *Store) begin(owner *Owner, key putKey, d string) (*put, error) {
-	a := Person(key.athanor)
+	a := home.Person(key.athanor)
 	var suffix [8]byte
 	if _, err := rand.Read(suffix[:]); err != nil {
 		return nil, err
@@ -554,7 +549,7 @@ func (s *Store) begin(owner *Owner, key putKey, d string) (*put, error) {
 			return ErrRefused
 		}
 		for q := range s.puts {
-			if q != old && Person(q.key.athanor) == a {
+			if q != old && home.Person(q.key.athanor) == a {
 				return ErrUnderWay
 			}
 		}
@@ -684,7 +679,7 @@ func (s *Store) commit(p *put, d string) error {
 	if err == nil {
 		err = syncDir(p.dir)
 	}
-	a := Person(p.key.athanor)
+	a := home.Person(p.key.athanor)
 	target := filepath.Join(s.dir, a, d)
 	s.mu.Lock()
 	defer s.mu.Unlock()

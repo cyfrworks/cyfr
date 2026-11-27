@@ -122,12 +122,12 @@ func (r *poolRole) quiet(t *testing.T) {
 // before: a measure is answered in order behind them.
 func (r *poolRole) sync(t *testing.T) {
 	t.Helper()
-	r.write(t, `{"v":8,"type":"measure","id":"sync","place":"none"}`)
+	r.write(t, `{"v":9,"type":"measure","id":"sync","place":"none"}`)
 	r.expect(t, protocol.NewError("sync", "", protocol.CodeUnmeasured))
 }
 
 func placeLine(id, kind, athanor, subject string) string {
-	m := map[string]any{"v": 8, "type": "place", "id": id, "kind": kind}
+	m := map[string]any{"v": 9, "type": "place", "id": id, "kind": kind}
 	if athanor != "" {
 		m["athanor"] = athanor
 	}
@@ -151,11 +151,11 @@ func sessionPlaced(id string) protocol.Placed {
 func TestARolePlacesOnlyItsOwnKinds(t *testing.T) {
 	_, runtime, backends, _ := poolKeeper(t, 4096*mibs)
 	runtime.write(t, placeLine("b", "build", "", ""), placeLine("p", "program", "ath_a", ""), placeLine("w", "warm", "", ""),
-		`{"v":8,"type":"assign","id":"as","place":"w","kind":"terminal","athanor":"ath_a"}`)
+		`{"v":9,"type":"assign","id":"as","place":"w","kind":"terminal","athanor":"ath_a"}`)
 	runtime.expect(t, protocol.NewError("b", "", protocol.CodeBadRequest), protocol.NewError("p", "", protocol.CodeBadRequest),
 		runnerPlaced("w", 4096*mibs), protocol.NewError("as", "", protocol.CodeBadRequest))
 	backends.write(t, placeLine("w", "warm", "", ""), placeLine("r", "run", "ath_a", ""), placeLine("p", "program", "ath_a", ""),
-		`{"v":8,"type":"assign","id":"as","place":"p","kind":"run","athanor":"ath_a"}`)
+		`{"v":9,"type":"assign","id":"as","place":"p","kind":"run","athanor":"ath_a"}`)
 	backends.expect(t, protocol.NewError("w", "", protocol.CodeBadRequest), protocol.NewError("r", "", protocol.CodeBadRequest),
 		protocol.NewPlaced("p", admission.LimitsOf(protocol.KindProgram, 4096*mibs).MemoryBytes),
 		protocol.NewError("as", "", protocol.CodeBadRequest))
@@ -170,9 +170,9 @@ func TestAWaitingPlaceIsNeitherSpawnedNorKeptPastItsDrop(t *testing.T) {
 	backends.write(t, placeLine("p1", "program", "ath_a", ""), placeLine("p2", "program", "ath_a", ""),
 		placeLine("p3", "program", "ath_a", ""), placeLine("p4", "program", "ath_b", ""))
 	backends.expect(t, sessionPlaced("p1"), sessionPlaced("p2"))
-	backends.write(t, `{"v":8,"type":"spawn","id":"s3","place":"p3","pool":"backends","argv":["true"],"attach":{"path":"/run/a.sock","token":"`+testToken+`"}}`)
+	backends.write(t, `{"v":9,"type":"spawn","id":"s3","place":"p3","pool":"backends","argv":["true"],"attach":{"path":"/run/a.sock","token":"`+testToken+`"}}`)
 	backends.expect(t, protocol.NewError("s3", "", protocol.CodeBadRequest))
-	backends.write(t, `{"v":8,"type":"drop","place":"p3"}`, `{"v":8,"type":"drop","place":"p1"}`)
+	backends.write(t, `{"v":9,"type":"drop","place":"p3"}`, `{"v":9,"type":"drop","place":"p1"}`)
 	backends.expect(t, sessionPlaced("p4"))
 	backends.sync(t)
 	s.mu.Lock()
@@ -191,8 +191,8 @@ func TestAStartAsksIdleRunnersToGiveWayAndIsAdmittedAfter(t *testing.T) {
 	s, runtime, backends, clock := poolKeeper(t, 1100*mibs)
 	runtime.write(t, placeLine("floor", "warm", "", ""), placeLine("k1", "warm", "", ""), placeLine("k2", "warm", "", ""))
 	runtime.expect(t, runnerPlaced("floor", 1100*mibs), runnerPlaced("k1", 1100*mibs), runnerPlaced("k2", 1100*mibs))
-	runtime.write(t, `{"v":8,"type":"assign","id":"a1","place":"k1","kind":"warm","athanor":"ath_a"}`,
-		`{"v":8,"type":"assign","id":"a2","place":"k2","kind":"warm","athanor":"ath_b"}`)
+	runtime.write(t, `{"v":9,"type":"assign","id":"a1","place":"k1","kind":"warm","athanor":"ath_a"}`,
+		`{"v":9,"type":"assign","id":"a2","place":"k2","kind":"warm","athanor":"ath_b"}`)
 	runtime.expect(t, protocol.NewAssigned("a1"), protocol.NewAssigned("a2"))
 	// 936 for work beside F, two kept runners of 164: a session's 384
 	// fits, a second's is 160 short, which the older kept runner covers.
@@ -220,7 +220,7 @@ func TestARefusalForRoomSaysWhatHoldsAndNothingOfOthers(t *testing.T) {
 	s, runtime, backends, clock := poolKeeper(t, 1300*mibs)
 	runtime.write(t, placeLine("floor", "warm", "", ""), placeLine("r1", "warm", "", ""))
 	runtime.expect(t, runnerPlaced("floor", 1300*mibs), runnerPlaced("r1", 1300*mibs))
-	runtime.write(t, `{"v":8,"type":"assign","id":"a1","place":"r1","kind":"run","athanor":"ath_mine","subject":"cmp_secret"}`)
+	runtime.write(t, `{"v":9,"type":"assign","id":"a1","place":"r1","kind":"run","athanor":"ath_mine","subject":"cmp_secret"}`)
 	runtime.expect(t, protocol.NewAssigned("a1"))
 	backends.write(t, placeLine("mine", "program", "ath_mine", "mcp_mine"), placeLine("theirs", "program", "ath_theirs", "mcp_theirs"),
 		placeLine("next", "program", "ath_mine", "mcp_next"))

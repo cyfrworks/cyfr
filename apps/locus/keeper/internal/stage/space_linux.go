@@ -23,6 +23,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/cyfr/locus/keeper/internal/home"
 	"github.com/cyfr/locus/keeper/internal/pool"
 	"github.com/cyfr/locus/keeper/internal/scrolls"
 )
@@ -317,7 +318,7 @@ func First(probe bool) int {
 	if err != nil {
 		return fail("the stage's binary: %v", err)
 	}
-	if err := buildFiles(spec.Home, spec.Packs, spec.Machine); err != nil {
+	if err := buildFiles(spec); err != nil {
 		return fail("the space's files: %v", err)
 	}
 	if spec.Terminal {
@@ -418,15 +419,30 @@ func bindAt(source, target string, writable bool) error {
 // and, read-only, the cgroup tree whose root is the space's own group; its
 // own /dev with the container's few device nodes, its own terminals and
 // /dev/shm; its own /tmp, /var/tmp and /run; its home, writable, at its
-// path, the only home it sees; given packs, its person's pack generation
+// path, the only home it sees, and a kept home's work folder, writable, at
+// home.WorkPath: nothing else of the kept homes' root, so no other home,
+// no other disk and no record; given packs, its person's pack generation
 // read only at scrolls.Path in its own /run; and a machine's space also its
 // device, read only at its path, and /dev/kvm. The root itself is
-// read-only once pivoted.
-func buildFiles(home, packs, machine string) error {
+// read-only once pivoted. The kept homes' root is a folder of the
+// container's wherever its operator put it: where the container's
+// directories would bind it (outside keptOut), an empty read-only tmpfs
+// covers it before the home and /work are bound, so whatever its location
+// the space holds of it only the path to its own home.
+func buildFiles(spec Spec) error {
+	own, work, packs, machine := spec.Home, spec.Work, spec.Packs, spec.Machine
+	covered := spec.KeptRoot != "" && !keptOut[strings.SplitN(strings.TrimPrefix(spec.KeptRoot, "/"), "/", 2)[0]]
 	steps := []func() error{
 		func() error { return mount("", "/", "", unix.MS_REC|unix.MS_PRIVATE, "") },
 		func() error { return mount("space", Root, "tmpfs", unix.MS_NOSUID|unix.MS_NODEV, "mode=0755,size=4m") },
 		bindContainerRoot,
+		func() error {
+			if !covered {
+				return nil
+			}
+			return mount("space-kept", filepath.Join(Root, spec.KeptRoot), "tmpfs",
+				unix.MS_NOSUID|unix.MS_NODEV|unix.MS_NOEXEC, "mode=0755,size=64k")
+		},
 		func() error {
 			for _, dir := range []string{"proc", "sys", "dev", "tmp", "run", "var/tmp", ".old"} {
 				if err := os.MkdirAll(filepath.Join(Root, dir), 0o755); err != nil {
@@ -463,10 +479,16 @@ func buildFiles(home, packs, machine string) error {
 		},
 		func() error { return buildDev(machine != "") },
 		func() error {
-			if home == "" {
+			if own == "" {
 				return nil
 			}
-			return bind(home, true)
+			return bind(own, true)
+		},
+		func() error {
+			if work == "" {
+				return nil
+			}
+			return bindAt(work, filepath.Join(Root, home.WorkPath), true)
 		},
 		func() error {
 			if packs == "" {
@@ -479,6 +501,12 @@ func buildFiles(home, packs, machine string) error {
 				return nil
 			}
 			return bindFile(machine)
+		},
+		func() error {
+			if !covered {
+				return nil
+			}
+			return setAttr(filepath.Join(Root, spec.KeptRoot), unix.MOUNT_ATTR_RDONLY, false)
 		},
 		func() error {
 			if err := unix.PivotRoot(Root, Root+"/.old"); err != nil {

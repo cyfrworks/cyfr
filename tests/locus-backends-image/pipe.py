@@ -9,7 +9,7 @@ row's kept home:
 
 - An open in mode `run` starts the row's command with the opener's argv
   appended (`cat -`), in the row's kept home as its HOME, under the
-  home's own uid (the kept range, never a pool uid), and answers
+  uid of its person's disk (the kept range, never a pool uid), and answers
   `resumed: false`; a second open of the same lifetime answers the same
   session, `resumed: true`, and once its process ended is refused
   `lifetime_over`.
@@ -40,8 +40,8 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from harness import (  # noqa: E402
-    BOUNDS, KEPT_FIRST, KEPT_LAST, KEPT_ROOT, POOL_FIRST, POOL_LAST, STATUSES, VERSION, Stack, eventually,
-    expect, owner_of, require_docker,
+    BOUNDS, KEPT_FIRST, KEPT_LAST, POOL_FIRST, POOL_LAST, STATUSES, VERSION, Stack, eventually,
+    expect, home_of, owner_of, require_docker,
 )
 import imagesuite  # noqa: E402
 
@@ -51,7 +51,7 @@ KEY = "chat-1"
 ARGV = ["-"]
 IDLE_MS = 5_000
 # The row's command: `cat`, after a first line naming its HOME, which a
-# process of the home's own uid keeps from every other reader. The service
+# process of its disk's uid keeps from every other reader. The service
 # appends the opener's argv (`"$@"`), so `cat -` is what runs.
 COMMAND = 'echo "home=$HOME"; exec cat'
 PROGRAM = {"name": "cat", "command": COMMAND, "env": {}, "home": "kept"}
@@ -80,8 +80,8 @@ def kept_uid(process):
 
 
 def home_line(home_id):
-    """The first line the row's command writes, in `home_id`'s kept home."""
-    return f"home={KEPT_ROOT}/{home_id}"
+    """The first line the row's command writes, in `home_id`'s kept home on its owner's disk."""
+    return f"home={home_of(OWNER, home_id)}"
 
 
 def read_until(c, session, after, done, timeout_s=30):
@@ -101,8 +101,10 @@ def read_until(c, session, after, done, timeout_s=30):
 
 
 def home_gone(stack, home):
+    """Whether the kept `home` is gone, as the observer finds it inside its person's disk, which no process of the
+    container but its uid's searches."""
     probe_home = f"test -e {home} && echo present || echo absent"
-    return imagesuite.read_word(stack.exec(probe_home), ("present", "absent"), f"the probe of {home}") == "absent"
+    return imagesuite.read_word(stack.observe(probe_home), ("present", "absent"), f"the probe of {home}") == "absent"
 
 
 def scripted_controller(image):
@@ -203,7 +205,7 @@ def scripted_controller(image):
                "a retire answers the home absent", retired)
         eventually(lambda: not stack.under_uid(uid), f"every process of uid {uid} to end with its home")
         expect(not cat_processes(stack), "the session's process is gone")
-        expect(home_gone(stack, f"{KEPT_ROOT}/{HOME}"), "the retired home's folder is gone")
+        expect(home_gone(stack, home_of(OWNER, HOME)), "the retired home's folder is gone")
         status, answer = c.recv(OWNER, session, seqs[-1], 0)
         expect(status == 200 and answer["running"] is False, "the session answers running: false", answer)
     finally:

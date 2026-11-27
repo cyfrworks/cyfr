@@ -234,7 +234,7 @@ func startChrome(path, home string, b *browser, logging []string) (*chromeProces
 	}
 	// Chrome's own sandbox cannot start under the backends service's
 	// options (no new privileges, and a seccomp profile that denies making
-	// a namespace), so Chrome runs without it, held by the home's uid, the
+	// a namespace), so Chrome runs without it, held by its space, the
 	// egress guard, the read-only root and its memory bound.
 	// The debugging pipe makes Chrome tell its pages navigator.webdriver is
 	// true; AutomationControlled, the one feature behind it, is turned off

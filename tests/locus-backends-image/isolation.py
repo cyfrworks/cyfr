@@ -79,8 +79,8 @@ from harness import (  # noqa: E402
     CONNECT_PROBE, ENDPOINT_ADDRESS, GUARD, HOME_ROOT, KEEPER_CAPS, KEPT_FIRST, KEPT_LAST, KEPT_ROOT, NETWORK,
     POOL_FIRST, POOL_LAST, PORT,
     PROBE, PROJECT_PREFIX, REFUSED, RELEASE, RELEASE_BIN, RELEASE_UID, RELEASE_USER, ROLE, ROUTES, RUN_DIR, SERVICE,
-    VERSION, Controller, Stack, eventually, expect, owner_of, owner_key, pool_user, post, probe, require_docker, run,
-    image_user_name, wait_healthy, wire_json,
+    VERSION, Controller, Stack, disk_of, eventually, expect, owner_of, owner_key, pool_user, post, probe,
+    require_docker, run, image_user_name, wait_healthy, wire_json,
 )
 
 # On the path once harness.py is loaded.
@@ -355,8 +355,10 @@ def test_kept_spaces(stack, run_kept, sessions, uid):
                                           "mount -t tmpfs none /tmp 2>/dev/null && echo mounted || echo unmounted; "
                                           "unshare -m true 2>/dev/null && echo unshared || echo kept"])
     lines = views["stdout"].splitlines()
-    expect(lines[0] == KEPT_ENTRY and "pts:ptmx" in lines and "groups:0" in lines and "unmounted" in lines and "kept" in lines,
-           "the second session sees its own home alone, no other terminal or group, and mounts nothing", views)
+    expect(lines[0] == disk_of(KEPT_OWNER).rsplit("/", 1)[1] and "pts:ptmx" in lines and "groups:0" in lines
+           and "unmounted" in lines and "kept" in lines,
+           "the second session sees the path to its own disk alone, no other terminal or group, and mounts nothing",
+           views)
     cap = next((l.split(":", 1)[1] for l in lines if l.startswith("cap:")), "")
     expect(cap.isdigit() and int(cap) > 0, "the second session reads its own memory cap at the root of its cgroup tree", views)
 

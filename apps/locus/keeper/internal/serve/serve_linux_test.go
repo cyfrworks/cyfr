@@ -208,6 +208,9 @@ type keeper struct {
 	// helper is the test binary, executable by every uid: the commands
 	// spawns run (TestMain).
 	helper string
+	// athanors names whose disk each kept home is on, by its id; a home
+	// not named is on a disk of its own, "ath_" and its id (athanorOf).
+	athanors map[string]string
 }
 
 // testClient is a client of a role "test" drawing from spec, of account
@@ -547,7 +550,7 @@ func parsed(t *testing.T, line string) *protocol.Request {
 // place has the keeper hold a place of id for kind, and answers its reply.
 func (k *keeper) place(t *testing.T, id, kind string) map[string]any {
 	t.Helper()
-	k.s.handle(k.c, parsed(t, `{"v":8,"type":"place","id":"`+id+`","kind":"`+kind+`"}`))
+	k.s.handle(k.c, parsed(t, `{"v":9,"type":"place","id":"`+id+`","kind":"`+kind+`"}`))
 	return k.reply(t)
 }
 
@@ -565,10 +568,48 @@ func (k *keeper) kind() string {
 // once its preparation is done.
 func (k *keeper) handleSpawn(t *testing.T, req *protocol.Request) {
 	t.Helper()
-	if placed := k.place(t, req.Place, k.kind()); placed["type"] != protocol.TypePlaced || placed["id"] != req.Place {
+	placed := map[string]any{}
+	if req.HomeMode == protocol.HomeKept {
+		placed = k.placeOf(t, req.Place, k.kind(), k.athanorOf(req.Home))
+	} else {
+		placed = k.place(t, req.Place, k.kind())
+	}
+	if placed["type"] != protocol.TypePlaced || placed["id"] != req.Place {
 		t.Fatalf("place %s answered %v", req.Place, placed)
 	}
 	k.s.handleSpawn(k.c, req)
+}
+
+// placeOf places id of kind for athanor, as a session's place names its
+// person.
+func (k *keeper) placeOf(t *testing.T, id, kind, athanor string) map[string]any {
+	t.Helper()
+	k.s.handle(k.c, parsed(t, `{"v":9,"type":"place","id":"`+id+`","kind":"`+kind+`","athanor":"`+athanor+`"}`))
+	return k.reply(t)
+}
+
+// athanorOf is whose disk the kept home id is on: the one share named, or
+// "ath_" and the id, a person of its own.
+func (k *keeper) athanorOf(id string) string {
+	if a, ok := k.athanors[id]; ok {
+		return a
+	}
+	return "ath_" + id
+}
+
+// share puts the kept homes ids on the disk of athanor: one person's.
+func (k *keeper) share(athanor string, ids ...string) {
+	if k.athanors == nil {
+		k.athanors = map[string]string{}
+	}
+	for _, id := range ids {
+		k.athanors[id] = athanor
+	}
+}
+
+// keptPath is where the kept home id is: on its athanor's disk.
+func (k *keeper) keptPath(id string) string {
+	return k.s.cfg.Kept.HomePath(k.athanorOf(id), id)
 }
 
 func (k *keeper) release(t *testing.T, spawnID string) {
@@ -864,7 +905,7 @@ func TestHomeRequestsWithoutKeptHomesAreRefused(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := theirs.Write([]byte(`{"v":8,"type":"pool","id":"after","pool":"backends"}` + "\n")); err != nil {
+	if _, err := theirs.Write([]byte(`{"v":9,"type":"pool","id":"after","pool":"backends"}` + "\n")); err != nil {
 		t.Fatal(err)
 	}
 	lr := protocol.NewLineReader(theirs)
@@ -923,7 +964,7 @@ func TestAResizeSetsTheTerminalOrIsRefused(t *testing.T) {
 	c := testClient(ours, pool.Spec{Name: "runner"}, Account{})
 	withPty.client, plain.client = c, c
 	resize := func(spawnID string) *protocol.Request {
-		req, rerr := protocol.ParseRequest([]byte(`{"v":8,"type":"resize","spawn_id":"` + spawnID + `","rows":50,"cols":132}`))
+		req, rerr := protocol.ParseRequest([]byte(`{"v":9,"type":"resize","spawn_id":"` + spawnID + `","rows":50,"cols":132}`))
 		if rerr != nil {
 			t.Fatal(rerr.Detail)
 		}

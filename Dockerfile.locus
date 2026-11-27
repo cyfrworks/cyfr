@@ -31,8 +31,8 @@
 # locus-build01…locus-build16 (30001-30016), backends as
 # locus-backend01…locus-backend32 (20001-20032) — with a 0700 home under
 # its role's folder of /var/lib/locus/homes, or a program's kept home
-# under /var/lib/locus/kept owned by a uid of its own (40001-49999, no
-# user entry), inside a memory bound of its own that the keeper sets by
+# on its person's disk under /var/lib/locus/kept, owned by that disk's
+# one uid (40001-49999, no user entry), inside a memory bound of its own that the keeper sets by
 # its kind (a build 1 GiB, a runner and a backend half of the pool's work,
 # never under 420 MiB and 384 MiB), and inside the
 # pool's work, one memory bound for all of Locus's work, at its role's
@@ -325,8 +325,8 @@ RUN ln -s /usr/local/cargo/bin/* /usr/local/bin/
 # /var/lib/locus/kept is the kept homes' root, the `homes` volume, which
 # takes this directory's owner and mode when it is first made: root's and
 # the locus group's, 1773, as the keeper's start checks; the keeper alone
-# lists it, and a kept home's uid, which has no user entry, makes its own
-# 0700 folder there. /var/lib/locus/space is where a space's first
+# lists it, and a disk's uid, which has no user entry, makes its own
+# 0700 folder there, the person's disk. /var/lib/locus/space is where a space's first
 # process builds the space's files, in a mount namespace of its own: here
 # it stays empty.
 RUN groupadd -r -g 10001 locus \
@@ -468,6 +468,7 @@ HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=3 \
 # whose key (LOCUS_<NAME>_KEY) is set: the runtime's, private, reaching
 # core's host API, whose runners the warm floor keeps; the builds'; and the
 # backends', whose programs keep their homes
-# under --kept-homes, each uid of 40001-49999 held by one home for its life
-# and given to no pool or other home.
+# under --kept-homes, each uid of 40001-49999 a person's disk's for its
+# life, shared by all that person's homes and given to no pool and to no
+# other person's disk.
 ENTRYPOINT ["cyfr-locus", "serve", "--role", "runtime:10011:4200:runner:private:floor", "--role", "builds:10012:4100:build", "--role", "backends:10013:4101:backends:kept", "--pool", "runner:30101-30108:relay", "--pool", "build:30001-30016:routed", "--pool", "backends:20001-20032:routed", "--home-root", "/var/lib/locus/homes", "--kept-homes", "/var/lib/locus/kept:40001-49999", "--guard", "/run/cyfr-guard-control/guard.sock", "--", "/app/bin/locus", "start"]

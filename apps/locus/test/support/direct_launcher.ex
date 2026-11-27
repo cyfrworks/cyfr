@@ -62,12 +62,13 @@ defmodule Locus.DirectLauncher do
   ## Kept homes and pseudo-terminals
 
   Given `kept_root: dir` as its server (`launcher_server`), it keeps homes
-  as `Locus.Launcher` says: one folder per id under `dir`, made by
-  `home_ensure/2`, measured by `home_measure/2` (the bytes of its regular
+  by `Locus.Launcher`'s calls, one folder per id under `dir`, made by
+  `home_ensure/3`, measured by `home_measure/2` (the bytes of its regular
   files), emptied by `home_reset/2` and removed by `home_retire/2`. This
-  node's own user stands in for each home's uid, so `home_ensure/2`
-  answers the folder's owner, which is that user's uid for every home:
-  nothing here keeps one home from another. A spawn naming a home runs
+  node's own user stands in for every disk's uid, so `home_ensure/3`
+  answers the folder's owner, which is that user's uid for every home: it
+  takes the athanor and keeps no disk, so nothing here keeps one person's
+  homes from another's and no session has a `/work`. A spawn naming a home runs
   with that folder as its `HOME`, and is refused `"home_over_cap"` when a
   `home_max_bytes` it names is reached, `"home_absent"` for a home not made
   and `"unavailable"` for a launcher with no kept root; a reset or a
@@ -505,7 +506,7 @@ defmodule Locus.DirectLauncher do
   # ————— kept homes —————
 
   @impl Locus.Launcher
-  def home_ensure(opts, id) do
+  def home_ensure(opts, _athanor, id) do
     with {:ok, path} <- home_path(opts, id),
          :ok <- File.mkdir_p(Path.join(path, "tmp")),
          :ok <- File.chmod(path, 0o700),
@@ -530,7 +531,7 @@ defmodule Locus.DirectLauncher do
       # A home not made is left absent, as the keeper leaves one.
       if File.dir?(path) do
         File.rm_rf(path)
-        with {:ok, _uid} <- home_ensure(opts, id), do: :ok
+        with {:ok, _uid} <- home_ensure(opts, nil, id), do: :ok
       else
         :ok
       end
