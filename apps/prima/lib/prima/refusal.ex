@@ -832,7 +832,8 @@ defmodule Prima.Refusal do
   # A program, a terminal, a tool or the browser whose start the backends
   # refused for want of room: what holds the memory (`held`, the keeper's),
   # the person's own holdings named by the names CYFR read for them under
-  # the person's own scope (`Prima.LocusPool.refusal_sentence/2`); or, with
+  # the person's own scope (`Prima.LocusPool.refusal_sentence/2`), or
+  # nothing of it, `:withheld`, for a caller told no name, size or sum; or, with
   # no `held`, for want of a program's place on this CYFR or of a session
   # of this one program's own, which the wire does not tell apart: one
   # sentence true of both, naming no count.
@@ -841,6 +842,12 @@ defmodule Prima.Refusal do
       {:rate_limited,
        "#{member} could not start: no more programs, or no more of this program's " <>
          "sessions, may run on this CYFR at once. Stop one on the Programs page, or wait."}
+
+  defp row({:program_full, member, :withheld, _names}) when is_binary(member),
+    do:
+      {:rate_limited,
+       "#{member} could not start: " <>
+         lower_first(Prima.LocusPool.refusal_sentence(:withheld))}
 
   defp row({:program_full, member, %{} = held, %{} = names}) when is_binary(member),
     do:

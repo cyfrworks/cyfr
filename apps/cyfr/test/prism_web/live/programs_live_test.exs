@@ -2024,4 +2024,196 @@ defmodule PrismWeb.ProgramsLiveTest do
              "X-Short" => "seven77"
            }
   end
+
+  describe "memory in use now" do
+    @mib 1_048_576
+    @boot String.duplicate("e", 32)
+
+    # A page of the record as the poller stores it, under the cell's
+    # claim, for one endpoint.
+    defp recorded!(counters, names \\ %{}, endpoint \\ "wrk_page") do
+      {:ok, claim} =
+        Arca.JobClaims.claim("memory", Arca.JobClaims.cell_key(), "boot_page", 60_000)
+
+      report = %{
+        boot: @boot,
+        budget: 8_000 * @mib,
+        work: 4_800 * @mib,
+        floor: 164 * @mib,
+        used: 1_000 * @mib,
+        counters: counters,
+        next: nil
+      }
+
+      {:ok, rows} = Arca.MemoryRecord.endpoints(Prima.Actor.system(), Prima.LocusPool.fresh_ms())
+
+      after_rev =
+        case Enum.find(rows, &(&1.endpoint == endpoint)) do
+          %{after: after_rev} -> after_rev
+          nil -> 0
+        end
+
+      {:ok, _stored} =
+        Arca.MemoryRecord.store(claim, :none, endpoint, after_rev, report, names, 90)
+
+      :ok
+    end
+
+    defp held(rev, athanor, kind, subject, mib) do
+      %{
+        rev: rev,
+        day: Date.utc_today(),
+        athanor: athanor.id,
+        kind: kind,
+        subject: subject,
+        bytes: mib * @mib,
+        mib_ms: 0,
+        measured_ms: 0,
+        peak_bytes: mib * @mib,
+        cap: 0,
+        machine: 0,
+        either: 0
+      }
+    end
+
+    # Another person with a program of their own, signed in apart.
+    defp other_person! do
+      other = test_user()
+      _conn = log_in_user(build_conn(), other)
+      athanor = seated_athanor()
+      {athanor, driven_row!(athanor, "their-secret-tool")}
+    end
+
+    test "names the person's own holders with the controls they have, and everyone else's as one sum",
+         %{conn: conn, athanor: athanor, user: user} do
+      _fake = controller!()
+      row = driven_row!(athanor)
+
+      {:ok, session} =
+        Opus.Programs.start(person(user, athanor), row.id, %{rows: 24, cols: 80, args: []})
+
+      {theirs, their_row} = other_person!()
+
+      recorded!(
+        [
+          held(1, athanor, "program", row.id, 300),
+          held(2, athanor, "run", nil, 164),
+          held(3, theirs, "program", their_row.id, 500)
+        ],
+        %{
+          {athanor.id, row.id} => %{name: "claude", shown: "program"},
+          {theirs.id, their_row.id} => %{name: "their-secret-tool", shown: "program"}
+        }
+      )
+
+      {view, _html} = mount_athanor(conn, "/programs", athanor)
+      panel = view |> element(~s([data-test="memory"])) |> render()
+
+      assert panel =~ "Memory in use now"
+      assert panel =~ "claude uses 300.0 MB"
+      assert panel =~ "A run uses 164.0 MB"
+      assert panel =~ "Others use 500.0 MB."
+      assert panel =~ "Counted a few seconds ago."
+      refute panel =~ "their-secret-tool"
+      refute panel =~ "Machine "
+      PrismWeb.Vocabulary.refute_vocabulary(panel)
+
+      # The run has no control; the program has its row's Disable and its
+      # session's Close.
+      assert has_element?(view, ~s([data-test="memory-disable"][phx-value-name="claude"]))
+      assert panel |> String.split(~s(data-test="memory-disable")) |> length() == 2
+      assert panel |> String.split(~s(data-test="memory-close")) |> length() == 2
+
+      view
+      |> element(~s([data-test="memory-close"][phx-value-session="#{session}"]))
+      |> render_click()
+
+      assert_receive {:session, "close", _message, _fields}, 2_000
+    end
+
+    test "a person with nothing of theirs held reads only that, and the others' sum",
+         %{conn: conn, athanor: athanor} do
+      {theirs, their_row} = other_person!()
+
+      recorded!([held(1, theirs, "program", their_row.id, 500)], %{
+        {theirs.id, their_row.id} => %{name: "their-secret-tool", shown: "program"}
+      })
+
+      {view, _html} = mount_athanor(conn, "/programs", athanor)
+      panel = view |> element(~s([data-test="memory"])) |> render()
+
+      assert panel =~ "Nothing of yours uses memory now."
+      assert panel =~ "Others use 500.0 MB."
+      refute panel =~ "their-secret-tool"
+    end
+
+    test "a machine that has not answered within three polls says when it was counted, and holds nothing of theirs now",
+         %{conn: conn, athanor: athanor} do
+      recorded!([held(1, athanor, "build", nil, 600)])
+      an_hour_ago = DateTime.add(DateTime.utc_now(), -3_600, :second)
+      Arca.Repo.update_all(Arca.Schemas.MemoryEndpoint, set: [heard_at: an_hour_ago])
+
+      {view, _html} = mount_athanor(conn, "/programs", athanor)
+      panel = view |> element(~s([data-test="memory"])) |> render()
+
+      refute panel =~ "A build uses"
+      refute panel =~ "Nothing of yours uses memory now."
+
+      assert panel =~
+               "Counted at #{Calendar.strftime(an_hour_ago, "%H:%M UTC")}, and may be out of date."
+
+      refute panel =~ "a few seconds ago"
+    end
+
+    test "a service that has not answered beside one that has, on one boot, is no machine of its own",
+         %{conn: conn, athanor: athanor} do
+      recorded!([held(1, athanor, "build", nil, 600)])
+      recorded!([], %{}, "local")
+      an_hour_ago = DateTime.add(DateTime.utc_now(), -3_600, :second)
+
+      require Ecto.Query
+
+      Arca.Repo.update_all(Ecto.Query.where(Arca.Schemas.MemoryEndpoint, endpoint: "local"),
+        set: [heard_at: an_hour_ago]
+      )
+
+      {view, _html} = mount_athanor(conn, "/programs", athanor)
+      panel = view |> element(~s([data-test="memory"])) |> render()
+
+      refute panel =~ "Machine"
+      assert panel =~ "A build uses 600.0 MB"
+      assert panel =~ "Counted a few seconds ago."
+
+      assert panel =~
+               "Some of it was last counted at #{Calendar.strftime(an_hour_ago, "%H:%M UTC")}, " <>
+                 "and may be out of date."
+    end
+
+    test "before the first read it says nothing of theirs, and a read that fails says it cannot be read",
+         %{conn: conn, athanor: athanor} do
+      # The mount's own render is served before the first read's message.
+      {:ok, view, html} = live(conn, PrismWeb.ConnCase.athanor_path("/programs", athanor))
+
+      assert html =~ "Memory in use now"
+      refute html =~ "Nothing of yours uses memory now."
+      refute html =~ "cannot be read"
+
+      assert view |> element(~s([data-test="memory"])) |> render() =~
+               "Nothing of yours uses memory now."
+
+      Arca.Repo.query!("ALTER TABLE memory_endpoints RENAME TO memory_endpoints_unavailable")
+
+      try do
+        ExUnit.CaptureLog.capture_log(fn ->
+          send(view.pid, :memory)
+          panel = view |> element(~s([data-test="memory"])) |> render()
+
+          assert panel =~ "Memory in use cannot be read right now."
+          refute panel =~ "Nothing of yours uses memory now."
+        end)
+      after
+        Arca.Repo.query!("ALTER TABLE memory_endpoints_unavailable RENAME TO memory_endpoints")
+      end
+    end
+  end
 end

@@ -1539,11 +1539,10 @@ defmodule Emissary.External.Server do
   defp backends_words(state, :capacity), do: no_room(state, :places)
   defp backends_words(_state, reason), do: backends_reason(reason)
 
+  # What holds the memory is withheld here: the tool server's caller may
+  # be a component, which is told no name, size or sum.
   defp no_room(state, :memory),
-    do:
-      {:no_room,
-       "#{state.name} could not start: this CYFR has not enough memory free. Stop one on " <>
-         "the Programs page, or wait."}
+    do: {:no_room, Prima.Refusal.message({:program_full, state.name, :withheld, %{}})}
 
   defp no_room(state, :places),
     do: {:no_room, Prima.Refusal.message({:program_full, state.name, nil, %{}})}

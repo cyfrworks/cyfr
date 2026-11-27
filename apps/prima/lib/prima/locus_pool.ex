@@ -630,8 +630,18 @@ defmodule Prima.LocusPool do
   defp bytes?(value),
     do: is_integer(value) and value >= 0 and value <= Prima.KeeperProtocol.max_measured_bytes()
 
-  # What a person calls each kind of place, in the order a sentence names
-  # them. A runner's two kinds are one word: a run.
+  # What a person calls each kind of holder, one and several.
+  @holder_words %{
+    "run" => {"run", "runs"},
+    "build" => {"build", "builds"},
+    "program" => {"program", "programs"},
+    "terminal" => {"terminal", "terminals"},
+    "browser" => {"browser", "browsers"},
+    "tool" => {"tool", "tools"}
+  }
+
+  # The kinds of place a refusal's sentence names, in its order, by the
+  # word a person reads each as. A runner's two kinds are one word: a run.
   @kind_words [
     {"program", ["program"]},
     {"terminal", ["terminal"]},
@@ -639,6 +649,7 @@ defmodule Prima.LocusPool do
     {"run", ["run", "warm"]}
   ]
   @stoppable ~w(program terminal)
+  @withheld "This CYFR has not enough memory free. Stop one on the Programs page, or wait."
 
   @doc """
   The one sentence a person reads of a start refused for room, from what
@@ -659,12 +670,18 @@ defmodule Prima.LocusPool do
   than everything held and free together, nothing anyone stops makes
   room: it says only that this CYFR has not enough memory for it, what
   it needs and what all its work can have, and gives no advice.
+
+  `:withheld` in place of `held` is the sentence told to a caller that
+  is told nothing of what holds the memory, a component in a chain among
+  them: that this CYFR has not enough memory free, with no name, size or
+  sum.
   """
-  @spec refusal_sentence(held(), %{String.t() => String.t()}) :: String.t()
-  def refusal_sentence(
-        %{need: need, free: free, mine: mine, others_bytes: others} = held,
-        names \\ %{}
-      )
+  @spec refusal_sentence(held() | :withheld, %{String.t() => String.t()}) :: String.t()
+  def refusal_sentence(held, names \\ %{})
+
+  def refusal_sentence(:withheld, _names), do: @withheld
+
+  def refusal_sentence(%{need: need, free: free, mine: mine, others_bytes: others} = held, names)
       when is_map(names) do
     case free + others + Enum.sum_by(mine, & &1.bytes) do
       0 ->
@@ -719,12 +736,23 @@ defmodule Prima.LocusPool do
         held != [] do
       bytes = Prima.Bytes.format(Enum.sum_by(held, & &1.bytes))
 
+      {one, several} = holder_words(word)
+
       case length(held) do
-        1 -> "a #{word} uses #{bytes}"
-        n -> "#{n} #{word}s use #{bytes}"
+        1 -> "a #{one} uses #{bytes}"
+        n -> "#{n} #{several} use #{bytes}"
       end
     end
   end
+
+  @doc """
+  What a person calls a kind of holder (`run`, `build`, `program`,
+  `terminal`, `browser` or `tool`): its word for one and for several. A
+  sentence of what holds memory, here or on a page, takes its words from
+  this one table.
+  """
+  @spec holder_words(String.t()) :: {String.t(), String.t()}
+  def holder_words(kind) when is_map_key(@holder_words, kind), do: Map.fetch!(@holder_words, kind)
 
   defp joined([one]), do: one
   defp joined(items), do: Enum.join(Enum.drop(items, -1), ", ") <> " and " <> List.last(items)

@@ -500,4 +500,9 @@ defmodule Prima.LocusPoolTest do
                  "Stop one on the Programs page, or wait."
     end
   end
+
+  test "a withheld refusal says only that there is not enough memory free" do
+    assert LocusPool.refusal_sentence(:withheld) ==
+             "This CYFR has not enough memory free. Stop one on the Programs page, or wait."
+  end
 end
