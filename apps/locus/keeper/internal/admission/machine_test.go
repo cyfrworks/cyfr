@@ -215,3 +215,35 @@ func TestADetachedSessionIsChargedByItself(t *testing.T) {
 		t.Fatalf("the detached session is charged %d, want its allowance", got)
 	}
 }
+
+// The start that boots a person's VM needs room for its allowance and the
+// VM's own together: in a pool that holds one but not both it waits, and
+// is refused at once where no pool of W could hold both; a start in a VM
+// already admitted needs its allowance alone.
+func TestABootingStartNeedsTheVMsOwnRoomBesideItsAllowance(t *testing.T) {
+	small := New(600*mib, false)
+	if ev := small.Place(inVM(NewMachine("backends", "ath_a", nil), "p1"), at(0)); len(ev.Refused) != 1 {
+		t.Fatalf("a booting start no pool of 600 MiB holds was not refused at once: %+v", ev)
+	}
+	l := New(1100*mib, false)
+	held := session("ath_b", "q1")
+	spawned(t, l, held, 0, 500*mib)
+	l.Read(held, 500*mib, false, at(20))
+	m := NewMachine("backends", "ath_a", nil)
+	boot := inVM(m, "p1")
+	if ev := l.Place(boot, at(20)); len(ev.Admitted) != 0 {
+		t.Fatalf("a booting start was admitted with %d free beside its %d: %+v", free(l, 20), boot.startNeed(), ev)
+	}
+	l.Drop(boot, at(21))
+	l.Drop(held, at(21))
+	first := inVM(m, "p1")
+	admitted(t, l.Place(first, at(22)), first)
+	// 390 MiB are left: a session joining the admitted VM fits, another
+	// person's booting start does not.
+	join := inVM(m, "p2")
+	admitted(t, l.Place(join, at(22)), join)
+	other := inVM(NewMachine("backends", "ath_c", nil), "r1")
+	if ev := l.Place(other, at(22)); len(ev.Admitted) != 0 {
+		t.Fatalf("another person's booting start was admitted: %+v", ev)
+	}
+}

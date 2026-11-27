@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -37,6 +38,7 @@ func TestAPersonsSessionsRunInTheirOwnVM(t *testing.T) {
 	k.disk(t, "ath_b", "vlt_b1")
 	_, conn := k.session(t, "s1", "ath_a", "vlt_a1", nil)
 	buf := make([]byte, frame.MaxPayload)
+	_ = conn.SetReadDeadline(time.Now().Add(20 * time.Second))
 	if stream, out, err := frame.Read(conn, buf); err != nil || stream != frame.StreamStdout || string(out) != "from the guest\n" {
 		t.Fatalf("the role's half read %d %q %v, want the guest's own output", stream, out, err)
 	}
@@ -603,3 +605,55 @@ func TestTheWallIsGivenOnlyWhereAFirstSessionInAVMFits(t *testing.T) {
 }
 
 var _ = net.Pipe
+
+// A home on an image is measured by its person's VM: the one standing, or
+// one booted for a session place of the person's, as the measure before a
+// capped session's spawn is; its home is made in the guest first. With no
+// session of the person's placed, no VM boots for a measure.
+func TestAHomesMeasureOfAnImageGoesThroughItsVM(t *testing.T) {
+	k := newVMKeeper(t)
+	k.disk(t, "ath_a", "vlt_a1")
+	measure := func(id string) map[string]any {
+		k.s.handle(k.c, &protocol.Request{V: protocol.Version, Type: protocol.TypeHomeMeasure, ID: id, Home: "vlt_a1"})
+		return k.next(t)
+	}
+	if m := measure("m0"); m["type"] != "error" || m["code"] != protocol.CodeUnavailable || len(k.guest.booted()) != 0 {
+		t.Fatalf("a measure with no session placed answered %v and booted %d VMs", m, len(k.guest.booted()))
+	}
+	k.place(t, "p-s1", "ath_a")
+	if m := measure("m1"); m["type"] != "home_measured" || m["bytes"] != float64(12345) {
+		t.Fatalf("a measure before the person's first spawn answered %v", m)
+	}
+	if n := len(k.guest.booted()); n != 1 {
+		t.Fatalf("the measure booted %d VMs, want the person's one", n)
+	}
+	k.s.handleSpawn(k.c, k.spawnReq("s1", "p-s1", "vlt_a1", nil))
+	k.expect(t, "spawned")
+	if m := measure("m2"); m["type"] != "home_measured" || len(k.guest.booted()) != 1 {
+		t.Fatalf("a measure while the VM runs answered %v, %d VMs", m, len(k.guest.booted()))
+	}
+	var seen []string
+	for _, r := range k.guest.requests() {
+		if r == protocol.TypeHomeMake || r == protocol.TypeHomeMeasure || r == protocol.TypeSpawn {
+			seen = append(seen, r)
+		}
+	}
+	want := []string{"home_make", "home_measure", "home_make", "spawn", "home_make", "home_measure"}
+	if !reflect.DeepEqual(seen, want) {
+		t.Fatalf("the guest read %v, want %v", seen, want)
+	}
+}
+
+// A person's VM is given its role's work's processors, or the machine's
+// where those are unbounded, never fewer than a session's.
+func TestAVMsProcessorsAreItsRolesWork(t *testing.T) {
+	s := &server{}
+	for _, c := range []struct {
+		work uint64
+		want int
+	}{{3 * cgroup.CPUPeriod, 3}, {cgroup.CPUPeriod / 2, 2}, {0, min(max(runtime.NumCPU(), 2), maxVCPUs)}} {
+		if got := s.machineVCPUs(&role{workCPU: c.work}); got != c.want {
+			t.Errorf("work %d: %d processors, want %d", c.work, got, c.want)
+		}
+	}
+}

@@ -15,6 +15,7 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"runtime"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -347,14 +348,19 @@ func (s *server) machineMiB() int {
 }
 
 // machineVCPUs is a person's VM's processors: as many as its role's work
-// is given, at least a session's.
+// is given, or as the machine has where that is unbounded, as a person's
+// sessions on the host may together use; at least a session's, at most
+// maxVCPUs.
 func (s *server) machineVCPUs(r *role) int {
-	n := int(admission.Processors[admission.Session])
+	n := runtime.NumCPU()
 	if r.workCPU > 0 {
-		n = max(n, int((r.workCPU+cgroup.CPUPeriod-1)/cgroup.CPUPeriod))
+		n = int((r.workCPU + cgroup.CPUPeriod - 1) / cgroup.CPUPeriod)
 	}
-	return n
+	return min(max(n, int(admission.Processors[admission.Session])), maxVCPUs)
 }
+
+// maxVCPUs is the most processors one VM is given: Firecracker's own bound.
+const maxVCPUs = 32
 
 // machineLink is m's control connection, made where none stands: within
 // guestWait, its Hello from the boot m first heard, or m is lost.
@@ -873,6 +879,49 @@ func (s *server) guestStart(l *guestLink, sp *spawn, req *protocol.Request, at k
 	}
 	sp.splice(roleEnd, guestEnd)
 	return ""
+}
+
+// measureInMachine answers a home_measure of a home on an image, which
+// only its person's VM reaches: through the VM standing, or one booted for
+// it where a session place of the person's holds the VM's room, as the
+// measure before a capped session's spawn does. The home is made in the
+// guest first, as a session's start makes it, so a home never yet started
+// there measures as empty. With no session of the person's placed, no VM
+// is booted for it here, and it is refused unavailable.
+func (s *server) measureInMachine(c *client, req *protocol.Request, at keptAt) {
+	s.mu.Lock()
+	m := s.vms[at.athanor]
+	held := m != nil && !m.ending && (m.vm != nil || m.entry.Admitted())
+	s.mu.Unlock()
+	if !held {
+		s.log.Warn("home_measure %s refused: kept home %s is on a disk image, and no session of its person holds a place that boots their VM", req.ID, req.Home)
+		s.send(c, protocol.NewError(req.ID, "", protocol.CodeUnavailable))
+		return
+	}
+	if code := s.bootMachine(m, at, c.role); code != "" {
+		s.send(c, protocol.NewError(req.ID, "", code))
+		return
+	}
+	l, code := s.machineLink(m)
+	if code != "" {
+		s.send(c, protocol.NewError(req.ID, "", code))
+		return
+	}
+	answer, err := l.ask(protocol.Request{V: protocol.Version, Type: protocol.TypeHomeMake, ID: randomHex(16), Home: req.Home,
+		Athanor: at.athanor}, l.guestWait)
+	if err == nil && answer.Type == "home_made" {
+		answer, err = l.ask(protocol.Request{V: protocol.Version, Type: protocol.TypeHomeMeasure, ID: randomHex(16), Home: req.Home}, l.guestWait)
+	}
+	switch {
+	case err != nil:
+		s.loseMachine(m, fmt.Sprintf("its guest did not answer home_measure %s: %v", req.ID, err))
+		s.send(c, protocol.NewError(req.ID, "", protocol.CodeUnavailable))
+	case answer.Type == "home_measured":
+		s.send(c, protocol.NewHomeMeasured(req.ID, answer.Bytes))
+	default:
+		s.log.Warn("home_measure %s refused: its VM's keeper refused it: %s", req.ID, answer.Code)
+		s.send(c, protocol.NewError(req.ID, "", guestCode(answer.Code)))
+	}
 }
 
 // guestCode is the code a refusal of the guest's keeper refuses its

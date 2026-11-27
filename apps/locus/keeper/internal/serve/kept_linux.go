@@ -756,6 +756,8 @@ func (s *server) handleHome(c *client, req *protocol.Request) {
 		s.send(c, protocol.NewHomeRetired(req.ID))
 	case code != "":
 		s.send(c, protocol.NewError(req.ID, "", code))
+	case at.image && s.wall && req.Type == protocol.TypeHomeMeasure:
+		s.measureInMachine(c, req, at)
 	case at.image:
 		// An image's homes are inside it, which the host never walks: only
 		// its person's VM measures, resets or retires one.

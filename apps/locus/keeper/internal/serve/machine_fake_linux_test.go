@@ -331,6 +331,8 @@ func (g *fakeGuest) own(req map[string]any) []any {
 		}
 		code := 0
 		return []any{protocol.NewExited(spawnID, &code, nil, nil), protocol.NewReleased(spawnID)}
+	case protocol.TypeHomeMeasure:
+		return []any{protocol.NewHomeMeasured(id, 12345)}
 	case protocol.TypeMeasure:
 		return []any{protocol.NewMeasured(id, protocol.Whose{Kind: "program"}, protocol.Reading{Bytes: 90 << 20}, 0)}
 	}

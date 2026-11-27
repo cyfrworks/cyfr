@@ -27,6 +27,7 @@ import (
 	"github.com/cyfr/locus/keeper/internal/pool"
 	"github.com/cyfr/locus/keeper/internal/protocol"
 	"github.com/cyfr/locus/keeper/internal/residue"
+	"github.com/cyfr/locus/keeper/internal/vm"
 )
 
 // Config is the parsed command line.
@@ -209,6 +210,11 @@ func ParseArgs(args []string) (Config, error) {
 			if k.First <= p.Last && p.First <= k.Last {
 				return Config{}, fmt.Errorf("the kept-home uids %d-%d overlap pool %s", k.First, k.Last, p.Name)
 			}
+		}
+		// A person's VM runs under their disk's uid, and guest-check's
+		// machines under one of the machines' own: the two never meet.
+		if m := vm.MachineUIDs; k.First <= m.Last && m.First <= k.Last {
+			return Config{}, fmt.Errorf("the kept-home uids %d-%d overlap the machines' uids %d-%d", k.First, k.Last, m.First, m.Last)
 		}
 		if k.Root == cfg.HomeRoot || strings.HasPrefix(k.Root, cfg.HomeRoot+"/") || strings.HasPrefix(cfg.HomeRoot, k.Root+"/") {
 			return Config{}, errors.New("--kept-homes and --home-root must not hold one another")

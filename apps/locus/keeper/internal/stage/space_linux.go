@@ -542,9 +542,6 @@ func buildFiles(spec Spec) error {
 	return nil
 }
 
-// bindContainerRoot gives the space the container's root: each directory
-// but those in keptOut bound read-only at its path, each symbolic link
-// made again. Its other entries are left out.
 // spaceProc mounts the space's own proc at Root/proc and, in a person's
 // machine's space, turns IPv6 off there (NoIPv6) before the space's
 // command, the VMM, starts.
@@ -582,6 +579,9 @@ func NoIPv6(proc string) error {
 	return nil
 }
 
+// bindContainerRoot gives the space the container's root: each directory
+// but those in keptOut bound read-only at its path, each symbolic link
+// made again. Its other entries are left out.
 func bindContainerRoot() error {
 	entries, err := os.ReadDir("/")
 	if err != nil {

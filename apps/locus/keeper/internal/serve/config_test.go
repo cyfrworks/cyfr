@@ -263,6 +263,7 @@ func TestParseArgsKeptHomes(t *testing.T) {
 		"/var/lib/locus/kept:1-70000",           // too many
 		"/var/lib/locus/kept",                   // no range
 		"/var/lib/locus/kept:10010-10020",       // holds a role's uid
+		"/var/lib/locus/kept:30456-30500",       // overlaps the machines' uids
 	} {
 		args := strings.Replace(theRoles, "/var/lib/locus/kept:40001-49999", kept, 1) + " -- run"
 		if _, err := ParseArgs(strings.Fields(args)); err == nil {
