@@ -863,8 +863,9 @@ defmodule Cyfr.Boundaries do
       into: "Opus",
       allow: ~w(Opus Opus.Browser Opus.Programs),
       reason:
-        "the console reads executions, invokes tinctures and checks the executor " <>
-          "through the execution domain's root facade under the caller's context, and " <>
+        "the console reads executions, invokes tinctures, checks the executor and reads " <>
+          "who used what memory (`Opus.memory/2`) through the execution domain's root " <>
+          "facade under the caller's context, and " <>
           "shows the person's program terminals through the programs controller's facade " <>
           "(`Opus.Programs.attach/2`, `taken/3`, `detach/2`, `input/3`, `resize/4`, `keep/3`, " <>
           "`close/2`, `running/1`) under the person's own context, prefills the program " <>
