@@ -62,11 +62,20 @@ async fn under(
         .await
         .expect("the relay carries the attempt");
     let (lines, written) = tokio::io::duplex(1 << 20);
+    let control = Writer::start(written);
     let host = Arc::new(Host::new(
         support::caller(&job),
-        relay,
-        Writer::start(written),
+        relay.clone(),
+        control.clone(),
     ));
+    let runner = cyfr_runner::attempt::Runner {
+        engine: cyfr_runner::engine::Engine::new().expect("an engine"),
+        relay,
+        control,
+        runner_id: support::RUNNER.to_owned(),
+        boot: support::BOOT.to_owned(),
+        tree: cyfr_runner::subtree::Tree::unserved(support::ATHANOR, &job.execution_id),
+    };
     let run = Run {
         host,
         component_ref: job.reference.clone(),
@@ -79,6 +88,8 @@ async fn under(
             .iter()
             .map(|name| (*name).to_owned())
             .collect::<BTreeSet<_>>(),
+        runner,
+        intercepted: Vec::new(),
     };
     Under {
         guest: Guest::new(Arc::new(run)),

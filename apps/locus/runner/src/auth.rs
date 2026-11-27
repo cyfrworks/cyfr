@@ -333,6 +333,88 @@ fn additional_data(direction: Direction, fields: &CallFields) -> Result<String, 
     Ok(lines.join("\n"))
 }
 
+/// The additional data's label of an attempt's keys, sealed for the runner
+/// that runs it (`Prima.WorkerAuth.seal_attempt_keys/3`).
+pub const ATTEMPT_KEYS_LABEL: &str = "cyfr-locus/v1/runtime/attempt-keys";
+
+/// The attempt and the keys `sealed` holds, opened with `seal_key`: the
+/// keys of a child CYFR admitted, sealed under its parent attempt's seal
+/// key (`Prima.WorkerAuth.open_attempt_keys/2`). `sealed` is the attempt
+/// it names, as base64url JSON with exactly the attempt's six members,
+/// each of its type, then `.` and the sealed call and seal keys, whose
+/// additional data is the label and that attempt's values; anything else,
+/// or a seal that does not open as that attempt, is `Unsealable`.
+pub fn open_attempt_keys(seal_key: &[u8; 32], sealed: &str) -> Result<AttemptKeys, Unsealable> {
+    let (named, sealed_keys) = sealed.split_once('.').ok_or(Unsealable)?;
+    if sealed_keys.contains('.') {
+        return Err(Unsealable);
+    }
+    let attempt = read_attempt(named).ok_or(Unsealable)?;
+    // The attempt's six values, as the envelope writes each: an id of 1 to
+    // 256 printable bytes, an integer to 2^53 − 1.
+    let ids = [
+        &attempt.athanor_id,
+        &attempt.execution_id,
+        &attempt.attempt,
+    ];
+    if !ids.iter().all(|id| is_id(id))
+        || !is_id(&attempt.service)
+        || attempt.fence > MAX_INTEGER
+        || attempt.generation > MAX_INTEGER
+    {
+        return Err(Unsealable);
+    }
+    let lines = [
+        ATTEMPT_KEYS_LABEL.to_owned(),
+        attempt.athanor_id.clone(),
+        attempt.execution_id.clone(),
+        attempt.attempt.clone(),
+        attempt.fence.to_string(),
+        attempt.generation.to_string(),
+        attempt.service.clone(),
+    ];
+    let plain = open_sealed(seal_key, &lines.join("\n"), sealed_keys.as_bytes()).ok_or(Unsealable)?;
+    if plain.len() != 64 {
+        return Err(Unsealable);
+    }
+    let mut call = Key::zeroed();
+    let mut seal = Key::zeroed();
+    call.bytes_mut().copy_from_slice(&plain[..32]);
+    seal.bytes_mut().copy_from_slice(&plain[32..]);
+    Ok(AttemptKeys {
+        attempt,
+        call,
+        seal,
+    })
+}
+
+// The attempt `named` writes: base64url JSON with exactly the six members
+// of an attempt, its strings strings and its integers integers.
+fn read_attempt(named: &str) -> Option<Attempt> {
+    let json = decode_base64url(named)?;
+    let read = crate::wire::read(&json).ok()?;
+    let serde_json::Value::Object(members) = read.value() else {
+        return None;
+    };
+    let names = ["athanor_id", "execution_id", "attempt", "fence", "generation", "service"];
+    if members.len() != names.len() || !names.iter().all(|name| members.contains_key(*name)) {
+        return None;
+    }
+    let text = |name: &str| members[name].as_str().map(str::to_owned);
+    let whole = |name: &str| match crate::wire::integer(&members[name]) {
+        Some(crate::wire::Integer::Whole(value)) => Some(value),
+        _ => None,
+    };
+    Some(Attempt {
+        athanor_id: text("athanor_id")?,
+        execution_id: text("execution_id")?,
+        attempt: text("attempt")?,
+        fence: whole("fence")?,
+        generation: whole("generation")?,
+        service: text("service")?,
+    })
+}
+
 /// The window a host call's header's `ts` is honoured within, either way of
 /// now, in milliseconds (`Prima.WorkerAuth.window_ms/0`).
 pub const WINDOW_MS: u64 = 30_000;

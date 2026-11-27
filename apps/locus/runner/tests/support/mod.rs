@@ -86,6 +86,18 @@ pub struct Job {
     /// memory looks for.
     pub call_key: [u8; 32],
     pub seal_key: [u8; 32],
+    /// What its assignment names beside the attempt: its athanor, service,
+    /// boot and member, and the actions its host intercepts.
+    pub athanor: String,
+    pub service: String,
+    pub boot: String,
+    pub member: String,
+    pub intercepted: Vec<String>,
+    /// The attempt its keys name, when it is not its assignment's.
+    pub keys_attempt: Option<Attempt>,
+    /// The jobs of its subtree the service admitted as children, shared by
+    /// every copy: the service end opens each one's calls under its keys.
+    pub family: Arc<Mutex<Vec<Job>>>,
 }
 
 impl Job {
@@ -123,7 +135,54 @@ impl Job {
                               "activation": {}, "budget": {"id": "bgt_test"}, "chain": []}),
             call_key: random_key(),
             seal_key: random_key(),
+            athanor: ATHANOR.to_owned(),
+            service: SERVICE.to_owned(),
+            boot: BOOT.to_owned(),
+            member: MEMBER.to_owned(),
+            intercepted: Vec::new(),
+            keys_attempt: None,
+            family: Arc::new(Mutex::new(Vec::new())),
         }
+    }
+
+    /// A child of this job's subtree, running the component at `path` as
+    /// `kind` on `input`: of the same athanor and member, sharing its
+    /// family.
+    pub fn child(&self, kind: &'static str, path: &str, input: &str) -> Job {
+        let mut child = Job::new(kind, path, input);
+        child.athanor.clone_from(&self.athanor);
+        child.family = self.family.clone();
+        child
+    }
+
+    /// The job whose attempt is `attempt`: this one or a child admitted.
+    pub fn of(&self, attempt: &str) -> Job {
+        if attempt == self.attempt {
+            return self.clone();
+        }
+        self.family
+            .lock()
+            .expect("the family")
+            .iter()
+            .find(|child| child.attempt == attempt)
+            .cloned()
+            .unwrap_or_else(|| self.clone())
+    }
+
+    /// CYFR's answer to an `admit_child` of this job's for `child`: its
+    /// assignment, its keys sealed under this job's seal key, its input
+    /// and no vault fields. The child joins the family.
+    pub fn admitted(&self, child: &Job) -> Value {
+        self.family.lock().expect("the family").push(child.clone());
+        json!({"assignment": child.token(), "attempt_keys": self.sealed_keys(child),
+               "input": String::from_utf8(child.input.clone()).expect("a text input"),
+               "secrets": {}})
+    }
+
+    /// `child`'s keys sealed for this job's runner under its seal key, as
+    /// `Prima.WorkerAuth.seal_attempt_keys/3` seals them.
+    pub fn sealed_keys(&self, child: &Job) -> String {
+        sealed_attempt_keys(&self.seal_key, &child.keys())
     }
 
     pub fn digest(&self) -> String {
@@ -132,18 +191,18 @@ impl Job {
 
     pub fn attempt(&self) -> Attempt {
         Attempt {
-            athanor_id: ATHANOR.to_owned(),
+            athanor_id: self.athanor.clone(),
             execution_id: self.execution_id.clone(),
             attempt: self.attempt.clone(),
             fence: 2,
             generation: 7,
-            service: SERVICE.to_owned(),
+            service: self.service.clone(),
         }
     }
 
     pub fn keys(&self) -> AttemptKeys {
         AttemptKeys {
-            attempt: self.attempt(),
+            attempt: self.keys_attempt.clone().unwrap_or_else(|| self.attempt()),
             call: self.call_key.into(),
             seal: self.seal_key.into(),
         }
@@ -154,17 +213,18 @@ impl Job {
     pub fn token(&self) -> String {
         let now = now_ms();
         let payload = json!({
-            "v": 1, "generation": 7, "service": SERVICE, "boot": BOOT, "member": MEMBER,
+            "v": 1, "generation": 7, "service": self.service, "boot": self.boot,
+            "member": self.member,
             "issued_at": now, "claim_by": now + 30_000,
             "execution_id": self.execution_id, "attempt": self.attempt, "fence": 2,
-            "root_execution_id": self.execution_id, "athanor_id": ATHANOR,
+            "root_execution_id": self.execution_id, "athanor_id": self.athanor,
             "actor": {"authenticated": true, "user_id": "usr_test"},
             "authority": self.authority,
             "component": {"ref": self.reference, "type": self.kind, "digest": self.digest(),
                           "declared_needs": []},
             "input_digest": format!("sha256:{}", auth::sha256_hex(&self.input)),
             "timeout_ms": self.timeout_ms, "deadline": now + self.timeout_ms + 60_000,
-            "lease_until": now + 180_000, "intercepted": [],
+            "lease_until": now + 180_000, "intercepted": self.intercepted,
         });
         format!(
             "{}.{}",
@@ -252,7 +312,9 @@ pub fn silent_fetches() -> Fetches {
 pub fn standard(call: &Call, job: &Job) -> Reply {
     match call.op.as_str() {
         "attach" => Reply::Ok(json!({})),
-        "fetch_artifact" => Reply::Ok(Value::String(wire::encode_base64(&job.component))),
+        "fetch_artifact" => Reply::Ok(Value::String(wire::encode_base64(
+            &job.of(&call.attempt).component,
+        ))),
         "complete" => Reply::Ok(call.args["outcome"]["output"].clone()),
         "fail" => Reply::Ok(call.args["outcome"]["error"].clone()),
         "renew" => Reply::Ok(json!({ call.attempt.clone(): {"lease_until": now_ms() + 180_000} })),
@@ -590,7 +652,6 @@ pub fn relay_fetching(
     calls: Arc<Mutex<Vec<Call>>>,
     frames: Arc<Mutex<Vec<Value>>>,
 ) {
-    let keys = job.keys();
     // What the service writes, and the seq of its next frame, shared with
     // the threads that answer later.
     let out = Arc::new(Mutex::new((stream.try_clone().expect("the stream"), 0u64)));
@@ -664,6 +725,7 @@ pub fn relay_fetching(
         }
         let header = frame["header"].as_str().expect("a header");
         let fields = call_fields(header);
+        let keys = job.of(&fields.attempt.attempt).keys();
         let sealed = wire::decode_base64(frame["body"].as_str().expect("a body")).expect("base64");
         let plain = auth::open_call(&keys.seal, Direction::Body, &fields, &sealed)
             .expect("a body sealed under the attempt's key");
@@ -850,6 +912,49 @@ pub fn refusal_as(
                         "call_id": call_id});
     let body = seal(&job.keys(), &fields, answer.to_string().into_bytes());
     Upstream::Refusal(header, body)
+}
+
+/// `keys` sealed under `seal_key` for the runner of their attempt
+/// (`Prima.WorkerAuth.seal_attempt_keys/3`): the attempt as base64url JSON,
+/// `.`, and the two keys sealed under the attempt-keys label and the
+/// attempt's values.
+pub fn sealed_attempt_keys(seal_key: &[u8; 32], keys: &AttemptKeys) -> String {
+    use aes_gcm::aead::{Aead, KeyInit, Payload};
+    let a = &keys.attempt;
+    let named = json!({"athanor_id": a.athanor_id, "execution_id": a.execution_id,
+        "attempt": a.attempt, "fence": a.fence, "generation": a.generation,
+        "service": a.service});
+    let aad = [
+        auth::ATTEMPT_KEYS_LABEL.to_owned(),
+        a.athanor_id.clone(),
+        a.execution_id.clone(),
+        a.attempt.clone(),
+        a.fence.to_string(),
+        a.generation.to_string(),
+        a.service.clone(),
+    ]
+    .join("\n");
+    let mut plain = keys.call.to_vec();
+    plain.extend_from_slice(&keys.seal[..]);
+    let iv = random_iv();
+    let sealed = aes_gcm::Aes256Gcm::new(seal_key.into())
+        .encrypt(
+            &aes_gcm::Nonce::from(iv),
+            Payload {
+                msg: &plain,
+                aad: aad.as_bytes(),
+            },
+        )
+        .expect("the keys seal");
+    let (ciphertext, tag) = sealed.split_at(sealed.len() - 16);
+    let mut bytes = iv.to_vec();
+    bytes.extend_from_slice(tag);
+    bytes.extend_from_slice(ciphertext);
+    format!(
+        "{}.{}",
+        wire::encode_base64url(named.to_string().as_bytes()),
+        wire::encode_base64url(&bytes)
+    )
 }
 
 fn random_iv() -> [u8; 12] {

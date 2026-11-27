@@ -46,7 +46,7 @@ use wasmtime::component::{Component, HasSelf, Linker};
 use wasmtime::wasmparser::{Validator, WasmFeatures};
 use wasmtime::{Config, OptLevel, Store, Trap};
 
-use crate::imports::{Ended, Guest, Run, catalyst, reagent};
+use crate::imports::{Ended, Guest, Run, catalyst, formula_world, reagent};
 use crate::wire::STACK_BYTES;
 use crate::words;
 
@@ -81,6 +81,7 @@ pub const REFUSED: [(&str, WasmFeatures); 9] = [
 pub enum Kind {
     Reagent,
     Catalyst,
+    Formula,
 }
 
 impl Kind {
@@ -89,6 +90,7 @@ impl Kind {
         match name {
             "reagent" => Some(Kind::Reagent),
             "catalyst" => Some(Kind::Catalyst),
+            "formula" => Some(Kind::Formula),
             _ => None,
         }
     }
@@ -98,6 +100,7 @@ impl Kind {
         match self {
             Kind::Reagent => "cyfr:reagent/compute@0.1.0",
             Kind::Catalyst => "cyfr:catalyst/run@0.1.0",
+            Kind::Formula => "cyfr:formula/run@0.1.0",
         }
     }
 }
@@ -166,6 +169,7 @@ pub fn digest(bytes: &[u8]) -> String {
 pub struct Engine {
     engine: wasmtime::Engine,
     catalyst: Linker<Guest>,
+    formula: Linker<Guest>,
     reagent: Linker<Guest>,
     compiler: Compiler,
     kept: Arc<Mutex<HashMap<String, (Component, u64)>>>,
@@ -182,6 +186,9 @@ impl Engine {
         let mut catalyst = Linker::new(&engine);
         wasmtime_wasi::p2::add_to_linker_async(&mut catalyst)?;
         catalyst::Catalyst::add_to_linker::<_, HasSelf<_>>(&mut catalyst, |guest| guest)?;
+        let mut formula = Linker::new(&engine);
+        wasmtime_wasi::p2::add_to_linker_async(&mut formula)?;
+        formula_world::Formula::add_to_linker::<_, HasSelf<_>>(&mut formula, |guest| guest)?;
         let ticker = engine.clone();
         std::thread::Builder::new()
             .name("epoch".to_owned())
@@ -195,6 +202,7 @@ impl Engine {
         Ok(Arc::new(Engine {
             engine,
             catalyst,
+            formula,
             reagent,
             compiler,
             kept: Arc::new(Mutex::new(HashMap::new())),
@@ -280,6 +288,16 @@ impl Engine {
                         .map_err(not_instantiated)?;
                 instance
                     .cyfr_catalyst_run()
+                    .call_run(&mut store, input)
+                    .await
+            }
+            Kind::Formula => {
+                let instance =
+                    formula_world::Formula::instantiate_async(&mut store, component, &self.formula)
+                        .await
+                        .map_err(not_instantiated)?;
+                instance
+                    .cyfr_formula_run()
                     .call_run(&mut store, input)
                     .await
             }

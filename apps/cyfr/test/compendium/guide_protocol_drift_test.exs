@@ -128,7 +128,9 @@ defmodule Compendium.GuideProtocolDriftTest do
   # nothing.
   # A formula's invoke errors are rendered in two places: the runner's
   # `Locus.Runtime.FormulaHandler`, and CYFR's answer to a child or catalog tool call
-  # it refuses (`Opus.Host.Children`).
+  # it refuses (`Opus.Host.Children`). The guest error vectors' `invoke_types`
+  # name the same types, and the Rust runner's crate holds the types its
+  # formula import answers to them.
   test "component-guide's invoke error table matches the invoke error vocabulary" do
     handler =
       [
@@ -141,7 +143,8 @@ defmodule Compendium.GuideProtocolDriftTest do
       [
         ~r/(?:encode_error(?:_with_remediation)?|guest_error)\(:(\w+)/,
         ~r/"type" => "(\w+)"/,
-        ~r/\{:guest_error, "(\w+)"/
+        ~r/\{:guest_error, "(\w+)"/,
+        ~r/\{:error, :(\w+),\s+"/
       ]
       |> Enum.flat_map(&Regex.scan(&1, handler))
       |> Enum.map(fn [_, t] -> t end)
@@ -162,5 +165,13 @@ defmodule Compendium.GuideProtocolDriftTest do
            "component-guide.md's invoke error table drifted from " <>
              "the invoke error vocabulary: documented #{inspect(documented)}, " <>
              "produced #{inspect(produced)}"
+
+    vectors =
+      Path.join(@project_root, "tests/fixtures/guest_error.json")
+      |> File.read!()
+      |> Jason.decode!()
+
+    assert documented == Enum.sort(vectors["invoke_types"]),
+           "component-guide.md's invoke error table drifted from guest_error.json's invoke_types"
   end
 end

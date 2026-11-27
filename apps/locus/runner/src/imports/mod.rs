@@ -3,8 +3,9 @@
 
 //! What a component sees (section 5.3 of the plan): the bindings
 //! `bindgen!` generates from `wit/`, the store's data a run's imports
-//! answer from, and each import. A catalyst gets every import of its world
-//! and a reagent none of CYFR's; both get WASI p2 with no standard input
+//! answer from, and each import. A catalyst gets every import of its world,
+//! a formula its invoke (`formula`) and a reagent none of CYFR's; each gets
+//! WASI p2 with no standard input
 //! or output, arguments, environment, preopened directory, socket or name
 //! lookup (`engine`).
 //!
@@ -21,6 +22,7 @@
 //! dropped (`Run::fields`, `crate::wire::Json`).
 
 pub mod emit;
+pub mod formula;
 pub mod http;
 pub mod oauth;
 pub mod question;
@@ -47,6 +49,16 @@ pub mod catalyst {
     wasmtime::component::bindgen!({
         path: "../../../wit/catalyst",
         world: "catalyst",
+        imports: { default: async | trappable },
+        exports: { default: async },
+    });
+}
+
+/// The formula world's bindings: its invoke, every function async.
+pub mod formula_world {
+    wasmtime::component::bindgen!({
+        path: "../../../wit/formula",
+        world: "formula",
         imports: { default: async | trappable },
         exports: { default: async },
     });
@@ -95,6 +107,11 @@ pub struct Run {
     pub fields: BTreeMap<String, Zeroizing<String>>,
     /// The fields the edge projects that CYFR attaches and never hands over.
     pub attached: BTreeSet<String>,
+    /// The runner the run is on, which a formula's children run on too.
+    pub runner: crate::attempt::Runner,
+    /// The `tool.action` names the assignment says its host runs as a
+    /// child rather than the catalog.
+    pub intercepted: Vec<String>,
 }
 
 /// A run's store data.
@@ -110,6 +127,8 @@ pub struct Guest {
     /// The run's open streams (`cyfr:http/streaming`), each a fetch it
     /// owns: dropped with the store, each drains in the relay.
     pub(crate) streams: stream::Streams,
+    /// A formula's spawned tasks: dropped with the store, each is stopped.
+    pub(crate) tasks: formula::Tasks,
 }
 
 impl Guest {
@@ -139,6 +158,7 @@ impl Guest {
             asks: 0,
             hops: std::collections::VecDeque::new(),
             streams: stream::Streams::new(),
+            tasks: formula::Tasks::new(),
         }
     }
 

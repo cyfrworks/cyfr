@@ -495,8 +495,9 @@ defmodule Cyfr.CrossLanguageDriftTest do
        ~w(intervals args_max_bytes result_max_bytes reasons bindings binding_ids inputs crons results envelopes bounds)}
     ],
     "guest_error.json" => [
+      {"apps/cyfr/test/compendium/guide_protocol_drift_test.exs", ~w(invoke_types)},
       {"apps/cyfr/test/cyfr/docs_drift_test.exs", ~w(envelope fallback fetch_types)},
-      {"apps/locus/runner/tests/vectors.rs", ~w(fetch_types)},
+      {"apps/locus/runner/tests/vectors.rs", ~w(fetch_types invoke_types)},
       {"apps/locus/test/locus/runtime/formula_handler_vectors_test.exs",
        ~w(encode_error setup_required)},
       {"apps/prima/test/prima/wit_response_vectors_test.exs", ~w(envelope fallback)}
@@ -753,7 +754,7 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"apps/cyfr/test/cyfr/locus_runtime_key_task_test.exs",
        ~w(keys root_hex root_text service)},
       {"apps/locus/runner/tests/vectors.rs",
-       ~w(assignment assignment_reads attempt boot call host_url keys member sealed_call)},
+       ~w(assignment assignment_reads attempt boot call host_url keys member sealed_attempt_keys sealed_call)},
       {"apps/locus/test/locus/runtime/relay_vectors_test.exs",
        ~w(assignment attempt call host_url keys)},
       {"apps/prima/test/prima/runner_control_test.exs",

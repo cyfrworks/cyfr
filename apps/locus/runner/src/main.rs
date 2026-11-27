@@ -3,7 +3,8 @@
 
 //! The runner's program. It reads its environment (`Environment`), takes
 //! its two channels, builds its engine and serves subtrees on a
-//! single-threaded runtime (`cyfr_runner::subtree::serve`) until it ends:
+//! runtime of as many worker threads as its processors
+//! (`cyfr_runner::subtree::serve`) until it ends:
 //! 0 when its control channel ends with nothing running, 1 when it ends
 //! otherwise (after an `exit` frame where it has one to write), 69 when its
 //! engine cannot be built, and 78 when its environment is refused or names
@@ -13,8 +14,9 @@
 //! Its control channel is descriptor 3, or standard input and output when
 //! `RUNTIME_CONTROL_FD` is 0; its relay is descriptor 4, or the unix socket
 //! `RUNTIME_RELAY_SOCKET` names, which it connects to with its first
-//! assignment. The runtime runs on a thread of `STACK_BYTES`, the stack the
-//! JSON reader needs at its deepest (`cyfr_runner::wire`).
+//! assignment. The loop runs on a thread of `STACK_BYTES`, the stack the
+//! JSON reader needs at its deepest (`cyfr_runner::wire`), and so does each
+//! worker.
 
 // The one place this crate takes up unsafe code: adopting the two
 // descriptors the keeper hands over (`adopt`). The library forbids it.
@@ -89,7 +91,14 @@ fn run(
     control: Option<UnixStream>,
     relay: Option<Result<UnixStream, String>>,
 ) -> u8 {
-    let runtime = match tokio::runtime::Builder::new_current_thread()
+    // As many workers as the runner's processors (`available_parallelism`
+    // reads its quota), so a formula's children need not wait for each
+    // other; the loop over the control channel runs on this thread.
+    let workers = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
+    let runtime = match tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(workers)
+        .thread_name("runner-worker")
+        .thread_stack_size(STACK_BYTES)
         .enable_io()
         .enable_time()
         .build()
@@ -100,7 +109,10 @@ fn run(
             return 69;
         }
     };
-    let status = runtime.block_on(async move {
+    // Each attempt's budget, lease and close run on this thread with the
+    // loop (`cyfr_runner::subtree`); its component's work on the workers.
+    let local = tokio::task::LocalSet::new();
+    let status = runtime.block_on(local.run_until(async move {
         let relay_at = match relay {
             Some(Ok(stream)) => match nonblocking(stream) {
                 Some(stream) => Some(RelayAt::Stream(stream)),
@@ -130,7 +142,7 @@ fn run(
                 serve(environment, engine, Lines::new(reader), control, relay_at).await
             }
         }
-    });
+    }));
     // Standard input is read on a blocking thread, which a shutdown would
     // wait on for a line that may never come.
     runtime.shutdown_background();

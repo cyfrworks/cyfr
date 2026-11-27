@@ -1115,6 +1115,10 @@ enum Command {
         attempt: String,
         reply: tokio::sync::oneshot::Sender<Result<(), Rebind>>,
     },
+    Admit {
+        attempt: String,
+        reply: tokio::sync::oneshot::Sender<bool>,
+    },
     Call {
         attempt: String,
         op: Op,
@@ -1425,6 +1429,21 @@ impl Relay {
             return Err(Rebind::Busy);
         }
         answer.await.unwrap_or(Err(Rebind::Busy))
+    }
+
+    /// Carry `attempt` too, another attempt of the subtree it carries (a
+    /// formula's child); whether it does: never on a relay that carries no
+    /// subtree or is closed.
+    pub async fn admit(&self, attempt: &str) -> bool {
+        let (reply, answer) = tokio::sync::oneshot::channel();
+        let command = Command::Admit {
+            attempt: attempt.to_owned(),
+            reply,
+        };
+        if self.commands.send(command).is_err() {
+            return false;
+        }
+        answer.await.unwrap_or(false)
     }
 
     /// Whether nothing is outstanding on the channel and nothing of the
@@ -1969,6 +1988,14 @@ async fn serve<R>(
                         let _ = reply.send(bound);
                         Ok(())
                     }
+                    Command::Admit { attempt, reply } => {
+                        let admitted = serving
+                            .channel
+                            .as_mut()
+                            .is_some_and(|open| open.admit(&attempt).is_ok());
+                        let _ = reply.send(admitted);
+                        Ok(())
+                    }
                     Command::Idle { reply } => {
                         let idle = !serving.doubtful
                             && serving.channel.as_ref().is_none_or(Channel::idle);
@@ -2052,7 +2079,7 @@ async fn serve<R>(
             Command::Bind { reply, .. } => {
                 let _ = reply.send(Err(Rebind::Busy));
             }
-            Command::Idle { reply } | Command::Room { reply } => {
+            Command::Idle { reply } | Command::Room { reply } | Command::Admit { reply, .. } => {
                 let _ = reply.send(false);
             }
             Command::Call { reply, .. } => {
