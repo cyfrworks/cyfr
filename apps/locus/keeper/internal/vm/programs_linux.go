@@ -12,6 +12,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -93,14 +94,34 @@ func Programs(log io.Writer, start proc.Start) Maker {
 // which -one-file-system's test of device numbers misses for a folder or a
 // file bound from the root's own filesystem; the kept homes' volume and
 // Docker's /etc/hosts, resolv.conf and hostname are among them (the image
-// case holds a device to it). -e takes every argument after it, so it is
-// last. -mem bounds the maker's caches inside the container's memory.
+// case holds a device to it). The guest's own files (guestFiles) are given
+// as pseudo files, and the root's of their names are left out with the
+// rest, as mksquashfs keeps a source's file over a pseudo file of its name.
+// -e takes every argument after it, so it is last. -mem bounds the maker's
+// caches inside the container's memory.
 func MakeArgs(root, out string, leave []string) []string {
 	args := []string{root, out, "-one-file-system", "-comp", "lz4", "-noappend", "-no-progress", "-quiet", "-mem", "256M", "-wildcards"}
-	if len(leave) > 0 {
-		args = append(append(args, "-e"), leave...)
+	escape := strings.NewReplacer("\n", `\n`, "\t", `\t`)
+	leave = slices.Clone(leave)
+	for _, f := range guestFiles {
+		args = append(args, "-p", f.Path+" f 644 0 0 printf '"+escape.Replace(f.Body)+"'")
+		if !slices.Contains(leave, f.Path) {
+			leave = append(leave, f.Path)
+		}
 	}
-	return args
+	return append(append(args, "-e"), leave...)
+}
+
+// guestFiles are the files a guest holds in place of the image's: on the
+// host Docker binds them into the container, and in a guest nothing does.
+// A session's space reads them from the root, as on the host: its resolver
+// is at 127.0.0.11, where a routed space's two name sockets are bound in
+// its own namespace (package guard), and its hosts are the loopback's.
+// Neither body holds a quote or a percent sign, which the pseudo file's
+// printf would read.
+var guestFiles = []struct{ Path, Body string }{
+	{"etc/resolv.conf", "nameserver 127.0.0.11\noptions ndots:0\n"},
+	{"etc/hosts", "127.0.0.1\tlocalhost\n::1\tlocalhost ip6-localhost ip6-loopback\n"},
 }
 
 // leftOut is what of root the device leaves out, as mksquashfs -wildcards

@@ -34,8 +34,9 @@ else beyond its role's own confinement, on a kept-homes volume and a
   is the acknowledged one, and its group holds no process.
 - The device holds the image's own files and the mount points as empty
   folders, and nothing of another filesystem: not the canary a sign-in left
-  in the kept-homes volume, nor Docker's bound /etc/hosts, resolv.conf and
-  hostname. A maker that crossed into other mounts fails here.
+  in the kept-homes volume, nor Docker's bound /etc/hostname; its
+  /etc/hosts and resolv.conf are the guest's own, not Docker's. A maker that
+  crossed into other mounts fails here.
 - A second start finds the device and makes none, and boots a new guest,
   and a second machine beside it in the same keeper, under a uid of its
   own, ends acknowledged while the first goes on to answer for its space.
@@ -202,6 +203,15 @@ def listing(image, volume, device):
               f"type=volume,source={volume},target=/v,readonly", "--entrypoint", "unsquashfs", image,
               "-l", "-d", "", f"/v/{name}").stdout
     return {line.strip() for line in out.splitlines() if line.startswith("/")}
+
+
+def device_file(image, volume, device, path):
+    """The body of the file at path in the device, from the image's own unsquashfs."""
+    name = os.path.basename(device)
+    return run("docker", "run", "--rm", "--network", "none", "--mount",
+               f"type=volume,source={volume},target=/v,readonly", "--entrypoint", "unsquashfs", image,
+               "-cat", f"/v/{name}", path.lstrip("/")).stdout
+
 
 
 def kvm_gid():
@@ -1225,8 +1235,15 @@ def main():
             inside = sorted(p for p in paths if p.startswith(mount + "/"))
             expect(not inside, f"the device holds nothing under the mount point {mount}", inside[:10])
         expect(not any(canary in p for p in paths), "the device holds no canary of the kept homes' volume")
-        for bound in ("/etc/hosts", "/etc/resolv.conf", "/etc/hostname"):
-            expect(bound not in paths, f"the device holds no Docker-bound {bound}")
+        expect("/etc/hostname" not in paths, "the device holds no Docker-bound /etc/hostname")
+        # The guest's own (package vm's guestFiles): its spaces' resolver is
+        # their own name sockets', and Docker's lines are not carried in.
+        resolver = device_file(image, guest, first["device"], "/etc/resolv.conf")
+        expect(resolver.splitlines()[:1] == ["nameserver 127.0.0.11"] and "Docker" not in resolver,
+               "the device's /etc/resolv.conf is the guest's own, its spaces' resolver at 127.0.0.11", repr(resolver))
+        hosts = device_file(image, guest, first["device"], "/etc/hosts")
+        expect(hosts.splitlines()[:1] == ["127.0.0.1\tlocalhost"] and len(hosts.splitlines()) == 2,
+               "the device's /etc/hosts is the guest's own, the loopback's alone", repr(hosts))
 
         code, second, stderr = guest_check(stack, image, kept, guest, extra=("--beside",))
         booted(code, second, stderr, "the second start")
