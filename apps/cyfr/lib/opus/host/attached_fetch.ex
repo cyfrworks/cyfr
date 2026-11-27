@@ -928,12 +928,24 @@ defmodule Opus.Host.AttachedFetch do
   end
 
   # The request's process is stopped, which closes its connection, and
-  # nothing it sent is left behind.
+  # nothing it sent is left behind. A kill takes effect only when the
+  # killed process is next scheduled out or waits for a message, so a send
+  # of its own can land after a drain that does not wait: the drain waits
+  # for the `:DOWN` of a monitor set here, which comes after everything the
+  # process sent, and at once when it has already ended (a stop after its
+  # `:DOWN`, or a second stop). The wait always ends: a kill cannot be
+  # trapped, and the process is only ever in a receive or in a step that
+  # runs to its end within its time slice.
   defp stop(upstream) do
     Process.demonitor(upstream.monitor, [:flush])
+    ended = Process.monitor(upstream.pid)
     Process.exit(upstream.pid, :kill)
+
+    receive do
+      {:DOWN, ^ended, :process, _pid, _reason} -> :ok
+    end
+
     drain(upstream.tag)
-    :ok
   end
 
   defp drain(tag) do
