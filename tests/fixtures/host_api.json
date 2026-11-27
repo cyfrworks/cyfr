@@ -2100,6 +2100,18 @@
           "port": 443,
           "scheme": "https"
         }
+      },
+      {
+        "why": "a link-local IPv6 address with a zone, as the ip and as the bracketed host",
+        "pin": {
+          "expires_at": 1789305280602,
+          "family": 6,
+          "host": "[fe80::1%1]",
+          "id": "pin_Vx1",
+          "ip": "fe80::1%1",
+          "port": 443,
+          "scheme": "https"
+        }
       }
     ]
   },

@@ -55,6 +55,8 @@ CYFR's, the runner crate's (`apps/locus/runner/tests/`, `stream_*`, `fetch_twice
 | `stream_late` | catalyst | opens a stream, reads a second sixty times, then reads the first once and answers that read: an answer read some six seconds after it arrived |
 | `stream_pile` | catalyst | opens streams with its input as the request, closing none, until one is refused, and answers the refusal |
 | `fetch_garbage` | catalyst | hands its fetch the text `{"method":`, which is no JSON, and answers the fetch's answer |
+| `stream_twice` | catalyst | opens a stream, reads it twice and answers the second read |
+| `stream_until` | catalyst | opens a stream and reads it until a read hands data, an error or the end, and answers that read |
 
 ## Rebuilding
 
@@ -141,4 +143,8 @@ stream_pile.wat            sha256:b1fa1792dc0a720ad805397dc9c9e48d71d0e17545e667
 stream_pile.wasm           sha256:5428547d54d0acf3a0ecef919ccb0de38ec97a6f4249bf4fa005474e24a77447
 fetch_garbage.wat          sha256:1aeaed4fa0a5799495f17bff41ca5151cb129be24e0c7d75e5aa3aa354d560e8
 fetch_garbage.wasm         sha256:1e746c7f664de67f0e5efd1b20e649ddbf67bd857323aa760688697023ada74a
+stream_twice.wat           sha256:79fb683d2a1670350c5f80fddd874b63eb7e45e056c8a41d6b68795f29b0523a
+stream_twice.wasm          sha256:451be323de707ba2a913d320a2b99103b623e1699acbe460d5fd3122abc6428f
+stream_until.wat           sha256:2c3d7e80e5b4ea81b67d75c1e2fd68d7770851359b95c489c619fd14705b5a3d
+stream_until.wasm          sha256:5c6d6471e2f48e7eee3a5a3f54be528d023084ad16ae7565b11fa6969bc261fc
 ```

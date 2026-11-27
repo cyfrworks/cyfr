@@ -234,6 +234,8 @@ pub enum Upstream {
     End(Option<&'static str>),
     /// The service's `close`, then its end of the stream closed.
     Close,
+    /// What came before written, then this long before what follows.
+    Pause(Duration),
 }
 
 /// How the service end answers each fetch the runner sends: the fetch's
@@ -611,6 +613,14 @@ pub fn relay_fetching(
             let mut written = Vec::new();
             let mut writing = out.lock().expect("the writer");
             for upstream in fetches(&frame, &job) {
+                if let Upstream::Pause(pause) = upstream {
+                    if writing.0.write_all(&written).is_err() {
+                        return;
+                    }
+                    written.clear();
+                    std::thread::sleep(pause); // sleep-ok: the upstream's pause, as the test scripts it
+                    continue;
+                }
                 let mut sent = json!({"v": 1, "attempt": attempt, "seq": writing.1, "re": re});
                 let members = match upstream {
                     Upstream::Head(status, headers, body) => json!({"kind": "fetch_chunk",
@@ -628,6 +638,7 @@ pub fn relay_fetching(
                     Upstream::Close => {
                         json!({"kind": "close", "reason": "malformed"})
                     }
+                    Upstream::Pause(_) => unreachable!("written above"),
                 };
                 let closing = members["kind"] == "close";
                 sent.as_object_mut()

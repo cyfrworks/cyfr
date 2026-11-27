@@ -1324,7 +1324,9 @@ impl Fetch {
                 return Some(Taken::Head { status, headers });
             }
             if !inbox.body.is_empty() {
-                Some(Taken::Body(take_front(&mut inbox.body, most, text)))
+                let ended = inbox.end.is_some();
+                // Nothing yet, when a character waits for its rest.
+                take_front(&mut inbox.body, most, text, ended).map(Taken::Body)
             } else {
                 inbox.end.clone().map(Taken::End)
             }
@@ -1339,34 +1341,37 @@ impl Fetch {
     }
 }
 
-// The first `most` bytes of `body`, at a character's boundary where the
-// rest of a character would follow: the bytes after them move down and the
-// places they leave are cleared, so the buffer never moves.
-fn take_front(body: &mut Vec<u8>, most: usize, text: bool) -> Zeroizing<Vec<u8>> {
-    let mut cut = body.len().min(most.max(1));
-    // Valid text before an invalid byte is taken apart from it.
-    if text
-        && let Err(error) = std::str::from_utf8(&body[..cut])
-        && error.error_len().is_some()
-        && error.valid_up_to() > 0
-    {
-        cut = error.valid_up_to();
-    }
-    // A character cut in two is left whole for the next take, unless that
-    // would take nothing.
-    let mut start = cut;
-    while start < body.len() && start > 0 && cut - start < 3 && (body[start] & 0xc0) == 0x80 {
-        start -= 1;
-    }
-    if start > 0 && start < cut {
-        cut = start;
+// The first `most` bytes of `body`; for a reader of text, cut where it
+// stops being text. When some of the bytes at the front read as UTF-8 and
+// those up to the cut do not, exactly the valid part is taken: before an
+// invalid byte, and before a character unfinished, whether by the stream or
+// by the read's size, so a whole event is never lost to what follows it.
+// When none at the front does, an invalid sequence is taken alone, so the
+// text after it is not lost with it; and an unfinished character waits for
+// its rest (none is taken) while the stream has not ended, and is taken as
+// it is once it has. The bytes after the cut move down and the places they
+// leave are cleared, so the buffer never moves.
+fn take_front(
+    body: &mut Vec<u8>,
+    most: usize,
+    text: bool,
+    ended: bool,
+) -> Option<Zeroizing<Vec<u8>>> {
+    let mut cut = body.len().min(most.max(4));
+    if text && let Err(error) = std::str::from_utf8(&body[..cut]) {
+        match (error.valid_up_to(), error.error_len()) {
+            (0, Some(invalid)) => cut = invalid,
+            (0, None) if !ended => return None,
+            (0, None) => {}
+            (valid, _) => cut = valid,
+        }
     }
     let taken = Zeroizing::new(body[..cut].to_vec());
     let held = body.len();
     body.copy_within(cut..held, 0);
     body[held - cut..held].zeroize();
     body.truncate(held - cut);
-    taken
+    Some(taken)
 }
 
 impl Drop for Fetch {
