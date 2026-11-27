@@ -25,6 +25,9 @@ on:
       - 'tests/fixtures/wire_json.json'
       - 'tests/fixtures/worker_api.json'
       - 'tests/fixtures/worker_auth.json'
+      - 'tests/fixtures/host_api.json'
+      - 'tests/fixtures/authority_wire.json'
+      - 'tests/fixtures/runner_relay.json'
       - 'tests/fixtures/residue-canary.go'
       - '.github/workflows/keeper-ci.yml'
   pull_request:
@@ -37,6 +40,9 @@ on:
       - 'tests/fixtures/wire_json.json'
       - 'tests/fixtures/worker_api.json'
       - 'tests/fixtures/worker_auth.json'
+      - 'tests/fixtures/host_api.json'
+      - 'tests/fixtures/authority_wire.json'
+      - 'tests/fixtures/runner_relay.json'
       - 'tests/fixtures/residue-canary.go'
       - '.github/workflows/keeper-ci.yml'
   workflow_call:

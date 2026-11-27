@@ -58,6 +58,8 @@ defmodule Prima.HostAPITest do
   @attached_guest_types ~w(invalid_request method_blocked scheme_blocked domain_blocked
                            private_ip_blocked dns_error rate_limited request_too_large)
 
+  defp unhex(text), do: Base.decode16!(text, case: :lower)
+
   defp root, do: Base.decode16!(@vectors["keys"]["root_hex"], case: :lower)
   defp atoms(wire, names), do: Map.new(names, &{&1, Map.fetch!(wire, Atom.to_string(&1))})
   defp standing(wire), do: %{generation: wire["generation"], member: wire["member"]}
@@ -435,6 +437,93 @@ defmodule Prima.HostAPITest do
         {:ok, request} = cases[hop] |> args_of() |> PinnedTarget.read_request()
         assert request.purpose == :redirect
         assert request.from == answer_of(cases["fetch"])["id"]
+      end
+    end
+  end
+
+  describe "the service side's vectors" do
+    test "every stream of answer frames splits, unopened, as its vector says" do
+      assert length(@vectors["frame_splits"]) >= 10
+
+      for c <- @vectors["frame_splits"] do
+        expected =
+          if c["error"],
+            do: {:error, String.to_existing_atom(c["error"])},
+            else: {:ok, Enum.map(c["frames_hex"], &unhex/1), unhex(c["rest_hex"])}
+
+        assert WorkerAuth.split_frames(unhex(c["stream_hex"])) == expected, c["why"]
+      end
+    end
+
+    test "every frame's body bytes are counted from its sealed length alone" do
+      for c <- @vectors["frame_body_bytes"] do
+        assert WorkerAuth.frame_body_bytes(unhex(c["frame_hex"])) == c["bytes"], c["why"]
+      end
+    end
+
+    test "an answer carries frames by its content type" do
+      for %{"content_types" => types, "frames" => frames} <- @vectors["frames_content_types"] do
+        assert WorkerWire.frames_content_type?(types) == frames, inspect(types)
+      end
+    end
+
+    test "every host matches the egress domains as its vector says" do
+      assert length(@vectors["domain_cases"]) >= 20
+
+      for c <- @vectors["domain_cases"] do
+        assert Prima.Network.domain_allowed?(c["host"], c["patterns"]) == c["allowed"], c["why"]
+      end
+    end
+
+    test "every header name is ruled as its vector says" do
+      for c <- @vectors["header_rules"] do
+        assert Prima.Network.framing_or_override_header?(c["name"]) == c["framing_or_override"],
+               c["name"]
+
+        assert Prima.Network.credential_header?(c["name"]) == c["credential"], c["name"]
+      end
+    end
+
+    test "every Host header is written as its vector says" do
+      for %{"scheme" => scheme, "host" => host, "port" => port, "header" => header} <-
+            @vectors["host_headers"] do
+        assert Prima.Network.host_header(%URI{scheme: scheme, host: host, port: port}) == header
+      end
+    end
+
+    test "every attached request is posted with its vector's args, which read back to it" do
+      for %{"request" => r, "args" => args} = c <- @vectors["attached_requests"] do
+        request = %Prima.AttachedRequest{
+          call_id: r["call_id"],
+          connection: r["connection"],
+          method: r["method"],
+          url: r["url"],
+          headers: Enum.map(r["headers"], &List.to_tuple/1),
+          body: Base.decode64!(r["body_b64"]),
+          purpose: String.to_existing_atom(r["purpose"])
+        }
+
+        assert Jason.encode!(Prima.AttachedRequest.to_args(request)) == args, c["why"]
+        assert {:ok, ^request} = Prima.AttachedRequest.read(Jason.decode!(args))
+      end
+    end
+
+    test "a pin expires past its expiry, and every pin request reads as its vector says" do
+      pin = %Prima.PinnedTarget{
+        id: "p",
+        ip: "203.0.113.10",
+        family: 4,
+        scheme: "https",
+        port: 443,
+        host: "h",
+        expires_at: 0
+      }
+
+      for %{"expires_at" => at, "now" => now, "expired" => expired} <- @vectors["pin_expiry"],
+          do: assert(Prima.PinnedTarget.expired?(%{pin | expires_at: at}, now) == expired)
+
+      for c <- @vectors["pin_requests"] do
+        assert match?({:ok, _}, Prima.PinnedTarget.read_request(c["args"])) == c["read"], c["why"]
       end
     end
   end

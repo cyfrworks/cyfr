@@ -54,6 +54,46 @@ defmodule Locus.Runtime.EdgeGuardTest do
   # Fail-closed
   # ==========================================================================
 
+  @host_api Path.expand("../../../../../tests/fixtures/host_api.json", __DIR__)
+            |> File.read!()
+            |> Jason.decode!()
+
+  describe "the relay's checks as host_api.json holds them" do
+    test "every method, scheme and host is checked against its edge as the vector says" do
+      assert length(@host_api["edge_checks"]) >= 10
+
+      for c <- @host_api["edge_checks"] do
+        {:ok, edge} = Prima.Authority.Blob.parse_edge(%{"egress" => c["egress"]})
+        assert EdgeGuard.check_method(edge, c["method"]) == :ok == c["method_allowed"], c["why"]
+        assert EdgeGuard.check_scheme(edge, c["scheme"]) == :ok == c["scheme_allowed"], c["why"]
+        assert EdgeGuard.check_domain(edge, c["host"]) == :ok == c["domain_allowed"], c["why"]
+      end
+    end
+
+    test "every request's body, URL and headers are counted against max_request_size" do
+      for c <- @host_api["request_sizes"] do
+        {:ok, limits} =
+          Prima.Limits.new(%{
+            "timeout" => "30s",
+            "batch_timeout" => "30s",
+            "max_memory_bytes" => 1,
+            "max_request_size" => c["max_request_size"],
+            "max_response_size" => 1,
+            "max_concurrent_tasks" => 1,
+            "rate_limit" => %{"requests" => 1, "window" => "1m"}
+          })
+
+        request = %{
+          url: c["url"],
+          headers: Enum.map(c["headers"], &List.to_tuple/1),
+          body: Base.decode64!(c["body_b64"])
+        }
+
+        assert EdgeGuard.check_request_size(limits, request) == :ok == c["within"], c["why"]
+      end
+    end
+  end
+
   describe "an edge that grants nothing" do
     test "a nil edge denies every resource it guards" do
       assert Edge.domains(nil) == []

@@ -494,6 +494,44 @@ defmodule Prima.AuthorityTest do
       for vector <- cases do
         assert {:error, _reason} = Authority.from_wire(vector["authority"]), vector["why"]
       end
+
+      # A case a worker service carries unread is refused in the vault's
+      # projection, the one part it does not read.
+      for %{"unread_by_service" => true} = vector <- cases,
+          do: assert(vector["why"] =~ "projection", vector["why"])
+    end
+
+    test "every duration reads to its milliseconds, or is no duration" do
+      assert length(@wire["durations"]) >= 30
+
+      for %{"text" => text, "ms" => ms} <- @wire["durations"] do
+        expected = if ms, do: {:ok, ms}, else: :error
+
+        assert (case Prima.Limits.parse_duration(text) do
+                  {:ok, read} -> {:ok, read}
+                  {:error, _sentence} -> :error
+                end) == expected,
+               inspect(text)
+      end
+    end
+
+    test "every egress reads as its lists, as written, or is refused" do
+      assert length(@wire["egress"]) >= 10
+
+      for %{"authority" => authority, "egress" => egress} = vector <- @wire["egress"] do
+        case Authority.from_wire(authority) do
+          {:ok, %Authority{resources: edge}} ->
+            read = edge.egress || %{}
+
+            assert Map.new(~w(domains methods schemes private_ips)a, fn k ->
+                     {Atom.to_string(k), Map.get(read, k) || []}
+                   end) == egress,
+                   vector["why"]
+
+          {:error, _reason} ->
+            assert egress == nil, vector["why"]
+        end
+      end
     end
   end
 

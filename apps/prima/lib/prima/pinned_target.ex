@@ -155,13 +155,13 @@ defmodule Prima.PinnedTarget do
 
   @doc """
   Whether `pin` is a `t:t/0` whose every field is as the module doc says:
-  an id, an IP literal that parses and a family that matches it, an
+  an id, an IP literal that parses and a family, an integer, that matches it, an
   `http` or `https` scheme, a port of 1 to 65535, a hostname or bracketed
   IPv6 literal, and an expiry of 0 to 2^53 − 1.
   """
   @spec valid?(term()) :: boolean()
   def valid?(%__MODULE__{} = pin) do
-    valid_id?(pin.id) and family_of(pin.ip) == {:ok, pin.family} and
+    valid_id?(pin.id) and is_integer(pin.family) and family_of(pin.ip) == {:ok, pin.family} and
       pin.scheme in ["http", "https"] and is_integer(pin.port) and pin.port in 1..65_535 and
       valid_host?(pin.host) and is_integer(pin.expires_at) and
       pin.expires_at in 0..@max_integer

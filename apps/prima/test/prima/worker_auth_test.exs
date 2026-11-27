@@ -345,6 +345,19 @@ defmodule Prima.WorkerAuthTest do
       end
     end
 
+    test "the tokens a worker service reads apart from the crate are read and refused as Prima reads them" do
+      %{"refused" => refused, "read" => read, "carried" => carried} =
+        @vectors["assignment_service_reads"]
+
+      assert length(refused) >= 12 and length(carried) >= 8
+
+      for %{"token" => token, "why" => why} <- refused ++ carried,
+          do: assert({:error, :malformed} = Assignment.read(token), why)
+
+      for %{"token" => token, "why" => why} <- read,
+          do: assert({:ok, %Assignment{}} = Assignment.read(token), why)
+    end
+
     test "every sealed attempt keys open as the attempt they name, or are refused" do
       dseal = unhex(@vectors["keys"]["dispatch_seal_hex"])
       assert length(@vectors["open_attempt_keys"]) >= 25

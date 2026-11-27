@@ -322,3 +322,63 @@ func VerifyBody(bodyHash string, body []byte) error {
 	}
 	return nil
 }
+
+// An attached request's answer is a stream of frames: a 4-byte big-endian
+// length, one kind byte in clear (h head, c chunk, e end, x error) and a
+// sealed value. A worker service carries them unopened.
+const (
+	// MaxFrameBytes is the most a frame spans after its length prefix.
+	MaxFrameBytes = 65_536
+	// MaxChunkBytes is the most body bytes one chunk carries.
+	MaxChunkBytes = 32_768
+)
+
+// ErrFrameTooLarge is a frame whose length is past MaxFrameBytes, known as
+// soon as its length is in.
+var ErrFrameTooLarge = errors.New("frame_too_large")
+
+// SplitFrames is the complete frames at the head of buffer, each its kind
+// byte and sealed value, and the bytes after them, which wait for more; or
+// ErrFrameTooLarge for a length past MaxFrameBytes, and ErrMalformed for
+// one below two bytes. Nothing is opened (Prima.WorkerAuth.split_frames/1).
+func SplitFrames(buffer []byte) (frames [][]byte, rest []byte, err error) {
+	for len(buffer) >= 4 {
+		n := uint64(buffer[0])<<24 | uint64(buffer[1])<<16 | uint64(buffer[2])<<8 | uint64(buffer[3])
+		switch {
+		case n > MaxFrameBytes:
+			return nil, nil, ErrFrameTooLarge
+		case n < 2:
+			return nil, nil, ErrMalformed
+		case uint64(len(buffer)-4) < n:
+			return frames, buffer, nil
+		}
+		frames = append(frames, buffer[4:4+n])
+		buffer = buffer[4+n:]
+	}
+	return frames, buffer, nil
+}
+
+// FrameBodyBytes is the body bytes a frame, its kind byte and sealed
+// value, carries, read from the sealed value's length without opening it:
+// a chunk's plaintext length under the seal's layout (unpadded base64url
+// of the 12-byte IV, the 16-byte tag and the ciphertext); every other
+// kind carries none, nor does a length no seal produces
+// (Prima.WorkerAuth.frame_body_bytes/1).
+func FrameBodyBytes(frame []byte) int {
+	if len(frame) == 0 || frame[0] != 'c' {
+		return 0
+	}
+	n := len(frame) - 1
+	var decoded int
+	switch n % 4 {
+	case 0:
+		decoded = n / 4 * 3
+	case 2:
+		decoded = n/4*3 + 1
+	case 3:
+		decoded = n/4*3 + 2
+	case 1:
+		decoded = 0
+	}
+	return max(decoded-28, 0)
+}

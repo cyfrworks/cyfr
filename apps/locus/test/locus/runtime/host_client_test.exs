@@ -364,6 +364,30 @@ defmodule Locus.Runtime.HostClientTest do
     end
   end
 
+  test "each answer bound of the vectors: an answer is kept to the answer bound as its status says",
+       %{host: host, attempt: attempt} do
+    json = Jason.encode!(Prima.WorkerWire.request_body(:renew, %{"attempts" => []}))
+
+    for c <- @host_api["answer_bounds"] do
+      ScriptedHost.script(
+        host,
+        "renew",
+        {:raw, c["status"], String.duplicate("x", c["body_bytes"])}
+      )
+
+      fields = call_fields(attempt)
+      {:ok, sealed} = Prima.WorkerAuth.seal_call(attempt.keys.seal, :body, fields, json)
+      {:ok, header} = Prima.WorkerAuth.host_call_header(attempt.keys.call, fields, sealed)
+
+      expected =
+        if c["arrived"],
+          do: {:ok, c["status"], String.duplicate("x", c["kept_bytes"])},
+          else: :error
+
+      assert HostClient.post_call(host.url, :renew, header, sealed) == expected, c["why"]
+    end
+  end
+
   test "an answer past the answer bound, or not an answer, is lost", %{host: host, client: client} do
     ScriptedHost.script(
       host,
