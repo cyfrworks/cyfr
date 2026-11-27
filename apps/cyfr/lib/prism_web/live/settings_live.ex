@@ -1337,8 +1337,8 @@ defmodule PrismWeb.SettingsLive do
               <p class="text-sm text-gray-300">{machine_use(machine)}</p>
               <p :if={machine.holders == []} class="text-sm text-gray-300">
                 {if MemoryWords.heading(@memory, machine.machine),
-                  do: "Nothing uses memory on it now.",
-                  else: "Nothing uses memory now."}
+                  do: "No person's work uses memory on it now.",
+                  else: "No person's work uses memory now."}
               </p>
               <.table
                 :if={machine.holders != []}

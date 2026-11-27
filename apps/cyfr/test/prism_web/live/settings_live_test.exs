@@ -1285,7 +1285,7 @@ defmodule PrismWeb.SettingsLiveTest do
       assert section |> String.split(~s(data-test="memory-machine")) |> length() == 2
     end
 
-    test "one machine holding nothing says so without naming a machine" do
+    test "one machine holding no person's work says so without naming a machine" do
       ops = test_user()
       {:ok, _} = Sanctum.TestContext.ensure_platform(ops.user_id)
       record!([], %{})
@@ -1293,7 +1293,7 @@ defmodule PrismWeb.SettingsLiveTest do
       {view, _html} = build_conn() |> log_in_user(ops) |> mount_athanor("/settings")
       section = view |> element("#memory-use") |> render()
 
-      assert section =~ "Nothing uses memory now."
+      assert section =~ "No person&#39;s work uses memory now."
       refute section =~ "on it now"
       refute section =~ "Machine"
     end
@@ -1354,6 +1354,47 @@ defmodule PrismWeb.SettingsLiveTest do
                ["program", "ant", "800.0 MB"],
                ["program", "bee", "50.0 MB"]
              ]
+    end
+
+    test "two rows of one person and kind with no name keep their places when their sizes cross" do
+      ops = test_user()
+      {:ok, _} = Sanctum.TestContext.ensure_platform(ops.user_id)
+      o = own_athanor_id(ops)
+
+      record!(
+        [
+          used(1, o, kind: "terminal", subject: "srv_a", mib: 900),
+          used(2, o, kind: "terminal", subject: "srv_b", mib: 600)
+        ],
+        %{}
+      )
+
+      {view, _html} = build_conn() |> log_in_user(ops) |> mount_athanor("/settings")
+
+      sizes = fn ->
+        view
+        |> element(~s(#memory-use [data-test="memory-machine"] table))
+        |> render()
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query("tbody tr td:last-child")
+        |> Enum.map(&String.trim(LazyHTML.text(&1)))
+      end
+
+      assert sizes.() == ["900.0 MB", "600.0 MB"]
+
+      record!(
+        [
+          used(3, o, kind: "terminal", subject: "srv_a", mib: 800),
+          used(4, o, kind: "terminal", subject: "srv_b", mib: 950)
+        ],
+        %{},
+        "wrk_page",
+        2
+      )
+
+      send(view.pid, :memory)
+
+      assert sizes.() == ["800.0 MB", "950.0 MB"]
     end
   end
 end
