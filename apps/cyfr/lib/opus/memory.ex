@@ -57,7 +57,8 @@ defmodule Opus.Memory do
   ARCHITECTURE.md §5.1 names beside a share. A machine is the endpoints
   that answered within `Prima.LocusPool.fresh_ms/0` on one keeper boot, named by its
   worker service's id, else by the backends service's name, else
-  `builds`; that boot's holders are what it holds now. An endpoint that
+  `builds`; that boot's holders are what it holds now, by person, kind and
+  subject, never by size. An endpoint that
   has not answered within it holds nothing now and joins no machine: the
   read names it under `unanswered` with when it last answered, and a
   machine's `others` is then the others' use at the services that did
@@ -239,16 +240,24 @@ defmodule Opus.Memory do
       Enum.find(names, &(&1 == Opus.Programs.local())) || Prima.LocusPool.builds_endpoint()
   end
 
+  # A machine's holders by person, kind and subject, then the counter's own
+  # kind, endpoint and day, never by size: no two counters of one boot tie,
+  # so a page that orders them keeps their places whatever the database's
+  # order or their sizes.
   defp holders(counters, names, boot, people) do
-    for c <- counters, c.endpoint in names, c.boot == boot, c.bytes > 0 do
+    counters
+    |> Enum.filter(&(&1.endpoint in names and &1.boot == boot and &1.bytes > 0))
+    |> Enum.sort_by(
+      &{&1.athanor_id, &1.shown, &1.subject || "", &1.kind, &1.endpoint, Date.to_erl(&1.day)}
+    )
+    |> Enum.map(fn c ->
       %{
         person: Map.fetch!(people, c.athanor_id),
         kind: Map.fetch!(@kinds, c.shown),
         name: c.name,
         bytes: c.bytes
       }
-    end
-    |> Enum.sort_by(&{-&1.bytes, &1.person.athanor, &1.name || ""})
+    end)
   end
 
   # A day's counters of one person, kind and subject, across machines and

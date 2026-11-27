@@ -2160,7 +2160,8 @@ defmodule PrismWeb.ProgramsLiveTest do
       refute panel =~ "Nothing of yours uses memory now."
 
       assert panel =~
-               "Counted at #{Calendar.strftime(an_hour_ago, "%H:%M UTC")}, and may be out of date."
+               "What uses memory cannot be counted right now. " <>
+                 "It was last counted at #{Calendar.strftime(an_hour_ago, "%H:%M UTC")}."
 
       refute panel =~ "a few seconds ago"
     end
@@ -2185,8 +2186,65 @@ defmodule PrismWeb.ProgramsLiveTest do
       assert panel =~ "Counted a few seconds ago."
 
       assert panel =~
-               "Some of it was last counted at #{Calendar.strftime(an_hour_ago, "%H:%M UTC")}, " <>
-                 "and may be out of date."
+               "Some of it cannot be counted right now; that part was last counted at " <>
+                 "#{Calendar.strftime(an_hour_ago, "%H:%M UTC")}."
+    end
+
+    test "a line keeps its place when its size passes another's",
+         %{conn: conn, athanor: athanor} do
+      zed = driven_row!(athanor, "zed")
+      abe = driven_row!(athanor, "abe")
+
+      names = %{
+        {athanor.id, zed.id} => %{name: "zed", shown: "program"},
+        {athanor.id, abe.id} => %{name: "abe", shown: "program"}
+      }
+
+      recorded!(
+        [
+          held(1, athanor, "build", nil, 900),
+          held(2, athanor, "program", zed.id, 600),
+          held(3, athanor, "run", nil, 300),
+          held(4, athanor, "program", abe.id, 100)
+        ],
+        names
+      )
+
+      {view, _html} = mount_athanor(conn, "/programs", athanor)
+
+      lines = fn ->
+        view
+        |> render()
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query(~s([data-test="memory-holder"] > span:first-child))
+        |> Enum.map(&LazyHTML.text/1)
+      end
+
+      assert lines.() == [
+               "abe uses 100.0 MB",
+               "zed uses 600.0 MB",
+               "A run uses 300.0 MB",
+               "A build uses 900.0 MB"
+             ]
+
+      recorded!(
+        [
+          held(5, athanor, "build", nil, 100),
+          held(6, athanor, "program", zed.id, 50),
+          held(7, athanor, "run", nil, 1_000),
+          held(8, athanor, "program", abe.id, 800)
+        ],
+        names
+      )
+
+      send(view.pid, :memory)
+
+      assert lines.() == [
+               "abe uses 800.0 MB",
+               "zed uses 50.0 MB",
+               "A run uses 1000.0 MB",
+               "A build uses 100.0 MB"
+             ]
     end
 
     test "before the first read it says nothing of theirs, and a read that fails says it cannot be read",

@@ -27,7 +27,8 @@ defmodule PrismWeb.ProgramsLive do
   again every poll (`Prima.LocusPool.poll_ms/0`): each program by its name with
   the Disable its row has and the Close of each of its sessions, a run and
   a build by kind with no control, everyone else's use as one sum, and how
-  fresh the count is (`PrismWeb.MemoryWords`). Until the first read answers
+  fresh the count is (`PrismWeb.MemoryWords`); programs by name, then the
+  kinds, so a line never moves when a size changes. Until the first read answers
   it says nothing of them; a read that fails says the memory cannot be
   read, never that nothing of theirs uses it.
 
@@ -1554,7 +1555,9 @@ defmodule PrismWeb.ProgramsLive do
     """
   end
 
-  attr :memory, :map, required: true
+  # The read's machines and silent endpoints, or `:unread` before the first
+  # read answers, or `:unreadable` after one failed.
+  attr :memory, :any, required: true
   attr :servers, :list, required: true
   attr :running, :list, required: true
 

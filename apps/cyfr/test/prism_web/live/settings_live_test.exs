@@ -1070,7 +1070,7 @@ defmodule PrismWeb.SettingsLiveTest do
     @mib 1_048_576
     @boot String.duplicate("f", 32)
 
-    defp record!(counters, names, endpoint \\ "wrk_page") do
+    defp record!(counters, names, endpoint \\ "wrk_page", after_rev \\ 0) do
       {:ok, claim} =
         Arca.JobClaims.claim("memory", Arca.JobClaims.cell_key(), "boot_page", 60_000)
 
@@ -1084,7 +1084,9 @@ defmodule PrismWeb.SettingsLiveTest do
         next: nil
       }
 
-      {:ok, _stored} = Arca.MemoryRecord.store(claim, :none, endpoint, 0, report, names, 90)
+      {:ok, _stored} =
+        Arca.MemoryRecord.store(claim, :none, endpoint, after_rev, report, names, 90)
+
       :ok
     end
 
@@ -1147,7 +1149,7 @@ defmodule PrismWeb.SettingsLiveTest do
       assert section =~ "500 MB-hours"
       assert section =~ "1 h 5 min"
       assert section =~ "45 s"
-      assert section =~ "1 × needed more than one piece of work may use"
+      assert section =~ "1 × needed more memory than one piece of work may use"
       assert section =~ "2 × CYFR ran out of memory"
       assert section =~ "Counted a few seconds ago."
       PrismWeb.Vocabulary.refute_vocabulary(section)
@@ -1250,15 +1252,17 @@ defmodule PrismWeb.SettingsLiveTest do
       end
     end
 
-    test "a service that has not answered is named under the machines, never as one" do
+    test "a service that has not answered is said as the service it is, never as a machine" do
       ops = test_user()
       {:ok, _} = Sanctum.TestContext.ensure_platform(ops.user_id)
       o = own_athanor_id(ops)
       record!([used(1, o, subject: "srv_o", mib: 500, peak: 500)], %{})
-      record!([], %{}, "local")
+      silent = [Opus.Programs.local(), Prima.LocusPool.builds_endpoint(), "wrk_gone"]
+      for endpoint <- silent, do: record!([], %{}, endpoint)
       an_hour_ago = DateTime.add(DateTime.utc_now(), -3_600, :second)
+      since = Calendar.strftime(an_hour_ago, "%H:%M UTC")
 
-      Arca.Repo.update_all(from(e in Arca.Schemas.MemoryEndpoint, where: e.endpoint == "local"),
+      Arca.Repo.update_all(from(e in Arca.Schemas.MemoryEndpoint, where: e.endpoint in ^silent),
         set: [heard_at: an_hour_ago]
       )
 
@@ -1269,9 +1273,128 @@ defmodule PrismWeb.SettingsLiveTest do
       assert section =~ "Counted a few seconds ago."
 
       assert section =~
-               "local has not answered since #{Calendar.strftime(an_hour_ago, "%H:%M UTC")}."
+               "The service for programs has not answered since #{since}, so what it runs is not counted."
+
+      assert section =~
+               "The service for builds has not answered since #{since}, so what it runs is not counted."
+
+      assert section =~
+               "The service for runs (wrk_gone) has not answered since #{since}, " <>
+                 "so what it runs is not counted."
 
       assert section |> String.split(~s(data-test="memory-machine")) |> length() == 2
+    end
+
+    test "one machine holding no person's work says so without naming a machine" do
+      ops = test_user()
+      {:ok, _} = Sanctum.TestContext.ensure_platform(ops.user_id)
+      record!([], %{})
+
+      {view, _html} = build_conn() |> log_in_user(ops) |> mount_athanor("/settings")
+      section = view |> element("#memory-use") |> render()
+
+      assert section =~ "No person&#39;s work uses memory now."
+      refute section =~ "on it now"
+      refute section =~ "Machine"
+    end
+
+    test "a row keeps its place when its size passes another's" do
+      ops = test_user()
+      {:ok, _} = Sanctum.TestContext.ensure_platform(ops.user_id)
+      o = own_athanor_id(ops)
+
+      names = %{
+        {o, "srv_b"} => %{name: "bee", shown: "program"},
+        {o, "srv_a"} => %{name: "ant", shown: "program"}
+      }
+
+      record!(
+        [
+          used(1, o, kind: "program", subject: "srv_b", mib: 900),
+          used(2, o, kind: "program", subject: "srv_a", mib: 600),
+          used(3, o, kind: "run", mib: 300)
+        ],
+        names
+      )
+
+      {view, _html} = build_conn() |> log_in_user(ops) |> mount_athanor("/settings")
+
+      rows = fn ->
+        view
+        |> element(~s(#memory-use [data-test="memory-machine"] table))
+        |> render()
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query("tbody tr")
+        |> Enum.map(fn row ->
+          row |> LazyHTML.query("td") |> Enum.drop(1) |> Enum.map(&String.trim(LazyHTML.text(&1)))
+        end)
+      end
+
+      assert rows.() == [
+               ["run", "—", "300.0 MB"],
+               ["program", "ant", "600.0 MB"],
+               ["program", "bee", "900.0 MB"]
+             ]
+
+      record!(
+        [
+          used(4, o, kind: "program", subject: "srv_b", mib: 50),
+          used(5, o, kind: "program", subject: "srv_a", mib: 800),
+          used(6, o, kind: "run", mib: 950)
+        ],
+        names,
+        "wrk_page",
+        3
+      )
+
+      send(view.pid, :memory)
+
+      assert rows.() == [
+               ["run", "—", "950.0 MB"],
+               ["program", "ant", "800.0 MB"],
+               ["program", "bee", "50.0 MB"]
+             ]
+    end
+
+    test "two rows of one person and kind with no name keep their places when their sizes cross" do
+      ops = test_user()
+      {:ok, _} = Sanctum.TestContext.ensure_platform(ops.user_id)
+      o = own_athanor_id(ops)
+
+      record!(
+        [
+          used(1, o, kind: "terminal", subject: "srv_a", mib: 900),
+          used(2, o, kind: "terminal", subject: "srv_b", mib: 600)
+        ],
+        %{}
+      )
+
+      {view, _html} = build_conn() |> log_in_user(ops) |> mount_athanor("/settings")
+
+      sizes = fn ->
+        view
+        |> element(~s(#memory-use [data-test="memory-machine"] table))
+        |> render()
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query("tbody tr td:last-child")
+        |> Enum.map(&String.trim(LazyHTML.text(&1)))
+      end
+
+      assert sizes.() == ["900.0 MB", "600.0 MB"]
+
+      record!(
+        [
+          used(3, o, kind: "terminal", subject: "srv_a", mib: 800),
+          used(4, o, kind: "terminal", subject: "srv_b", mib: 950)
+        ],
+        %{},
+        "wrk_page",
+        2
+      )
+
+      send(view.pid, :memory)
+
+      assert sizes.() == ["800.0 MB", "950.0 MB"]
     end
   end
 end

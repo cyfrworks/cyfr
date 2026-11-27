@@ -313,6 +313,42 @@ defmodule Opus.MemoryTest do
                ended: %{cap: 2, machine: 0, either: 0}
              }
     end
+
+    test "two runs of one person on two endpoints of one boot keep one order, however stored or sized",
+         %{alice: alice, terry: terry, admin: admin, claim: claim} do
+      a = alice.actor.athanor_id
+      t = terry.actor.athanor_id
+
+      # Each poll asks both endpoints: one not asked is forgotten.
+      polled = fn local, wrk ->
+        Opus.Memory.poll(
+          [
+            endpoint("local", :backends, once(report(local))),
+            endpoint("wrk_local", :runtime, once(report(wrk)))
+          ],
+          claim,
+          :none
+        )
+      end
+
+      # The administrator's read, which no athanor's scope orders.
+      sizes = fn whose ->
+        assert {:ok, %{machines: [machine]}} = Opus.Memory.read(admin, :everyone)
+        for h <- machine.holders, h.person == person(whose), do: h.bytes
+      end
+
+      # Alice's run is stored first at local, Terry's first at wrk_local.
+      polled.([counter(1, a, kind: "run", bytes: 40)], [counter(1, t, kind: "run", bytes: 31)])
+      polled.([counter(2, t, kind: "run", bytes: 41)], [counter(2, a, kind: "run", bytes: 30)])
+
+      assert sizes.(alice) == [40, 30]
+      assert sizes.(terry) == [41, 31]
+
+      polled.([], [counter(3, a, kind: "run", bytes: 90), counter(4, t, kind: "run", bytes: 91)])
+
+      assert sizes.(alice) == [40, 90]
+      assert sizes.(terry) == [41, 91]
+    end
   end
 
   describe "the pool request" do
