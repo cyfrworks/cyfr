@@ -1070,7 +1070,7 @@ defmodule PrismWeb.SettingsLiveTest do
     @mib 1_048_576
     @boot String.duplicate("f", 32)
 
-    defp record!(counters, names) do
+    defp record!(counters, names, endpoint \\ "wrk_page") do
       {:ok, claim} =
         Arca.JobClaims.claim("memory", Arca.JobClaims.cell_key(), "boot_page", 60_000)
 
@@ -1084,7 +1084,7 @@ defmodule PrismWeb.SettingsLiveTest do
         next: nil
       }
 
-      {:ok, _stored} = Arca.MemoryRecord.store(claim, :none, "wrk_page", 0, report, names, 90)
+      {:ok, _stored} = Arca.MemoryRecord.store(claim, :none, endpoint, 0, report, names, 90)
       :ok
     end
 
@@ -1185,6 +1185,93 @@ defmodule PrismWeb.SettingsLiveTest do
 
       assert days =~ Date.to_iso8601(Date.add(today, -8))
       refute has_element?(view, ~s([data-test="memory-more"]))
+    end
+
+    test "a mark taken away shows no more days, though the page still offers them" do
+      # The page's context is kept as read for a minute, so only the
+      # click's own read of the record can see the mark gone.
+      Prima.Test.Env.put_app_env(:sanctum, :caller_memo_ttl_ms, 60_000)
+      ops = test_user()
+      {:ok, _} = Sanctum.TestContext.ensure_platform(ops.user_id)
+      o = own_athanor_id(ops)
+      today = Date.utc_today()
+
+      record!(
+        for(
+          n <- 0..8,
+          do: used(n + 1, o, kind: "build", day: Date.add(today, -n), measured_ms: 1_000)
+        ),
+        %{}
+      )
+
+      {view, _html} = build_conn() |> log_in_user(ops) |> mount_athanor("/settings")
+      assert view |> element("#memory-days") |> render() =~ Date.to_iso8601(Date.add(today, -6))
+
+      # The mark taken away as `Sanctum.TestContext.ensure_platform/1` sets it.
+      {1, _} =
+        Arca.Repo.update_all(from(u in Arca.Schemas.User, where: u.id == ^ops.user_id),
+          set: [platform_admin_at: nil]
+        )
+
+      view |> element(~s([data-test="memory-more"])) |> render_click()
+      section = view |> element("#memory-use") |> render()
+
+      refute section =~ Date.to_iso8601(Date.add(today, -7))
+      refute section =~ Date.to_iso8601(Date.add(today, -8))
+      refute section =~ Date.to_iso8601(today)
+      assert section =~ "Memory use cannot be read right now."
+    end
+
+    # The page's guard reads the person's standing before any message is
+    # served, so a store that cannot say who administers stops the page
+    # there; the read fails here at the record's own table.
+    test "a record that cannot be read keeps nothing of it, and says so" do
+      ops = test_user()
+      {:ok, _} = Sanctum.TestContext.ensure_platform(ops.user_id)
+      o = own_athanor_id(ops)
+      record!([used(1, o, subject: "srv_o", mib: 500, peak: 500)], %{})
+
+      {view, _html} = build_conn() |> log_in_user(ops) |> mount_athanor("/settings")
+      assert view |> element("#memory-use") |> render() =~ "500.0 MB"
+
+      Arca.Repo.query!("ALTER TABLE memory_endpoints RENAME TO memory_endpoints_unavailable")
+
+      try do
+        ExUnit.CaptureLog.capture_log(fn ->
+          send(view.pid, :memory)
+          section = view |> element("#memory-use") |> render()
+
+          assert section =~ "Memory use cannot be read right now."
+          refute section =~ "500.0 MB"
+          refute section =~ "Nothing has reported its memory yet"
+        end)
+      after
+        Arca.Repo.query!("ALTER TABLE memory_endpoints_unavailable RENAME TO memory_endpoints")
+      end
+    end
+
+    test "a service that has not answered is named under the machines, never as one" do
+      ops = test_user()
+      {:ok, _} = Sanctum.TestContext.ensure_platform(ops.user_id)
+      o = own_athanor_id(ops)
+      record!([used(1, o, subject: "srv_o", mib: 500, peak: 500)], %{})
+      record!([], %{}, "local")
+      an_hour_ago = DateTime.add(DateTime.utc_now(), -3_600, :second)
+
+      Arca.Repo.update_all(from(e in Arca.Schemas.MemoryEndpoint, where: e.endpoint == "local"),
+        set: [heard_at: an_hour_ago]
+      )
+
+      {view, _html} = build_conn() |> log_in_user(ops) |> mount_athanor("/settings")
+      section = view |> element("#memory-use") |> render()
+
+      refute section =~ "Machine"
+      assert section =~ "Counted a few seconds ago."
+
+      assert section =~
+               "local has not answered since #{Calendar.strftime(an_hour_ago, "%H:%M UTC")}."
+
+      assert section |> String.split(~s(data-test="memory-machine")) |> length() == 2
     end
   end
 end

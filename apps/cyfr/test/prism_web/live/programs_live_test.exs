@@ -2031,7 +2031,7 @@ defmodule PrismWeb.ProgramsLiveTest do
 
     # A page of the record as the poller stores it, under the cell's
     # claim, for one endpoint.
-    defp recorded!(counters, names \\ %{}) do
+    defp recorded!(counters, names \\ %{}, endpoint \\ "wrk_page") do
       {:ok, claim} =
         Arca.JobClaims.claim("memory", Arca.JobClaims.cell_key(), "boot_page", 60_000)
 
@@ -2045,14 +2045,16 @@ defmodule PrismWeb.ProgramsLiveTest do
         next: nil
       }
 
+      {:ok, rows} = Arca.MemoryRecord.endpoints(Prima.Actor.system(), Prima.LocusPool.fresh_ms())
+
       after_rev =
-        case Arca.MemoryRecord.endpoints(Prima.Actor.system(), Prima.LocusPool.fresh_ms()) do
-          {:ok, [%{after: after_rev}]} -> after_rev
-          {:ok, []} -> 0
+        case Enum.find(rows, &(&1.endpoint == endpoint)) do
+          %{after: after_rev} -> after_rev
+          nil -> 0
         end
 
       {:ok, _stored} =
-        Arca.MemoryRecord.store(claim, :none, "wrk_page", after_rev, report, names, 90)
+        Arca.MemoryRecord.store(claim, :none, endpoint, after_rev, report, names, 90)
 
       :ok
     end
@@ -2161,6 +2163,57 @@ defmodule PrismWeb.ProgramsLiveTest do
                "Counted at #{Calendar.strftime(an_hour_ago, "%H:%M UTC")}, and may be out of date."
 
       refute panel =~ "a few seconds ago"
+    end
+
+    test "a service that has not answered beside one that has, on one boot, is no machine of its own",
+         %{conn: conn, athanor: athanor} do
+      recorded!([held(1, athanor, "build", nil, 600)])
+      recorded!([], %{}, "local")
+      an_hour_ago = DateTime.add(DateTime.utc_now(), -3_600, :second)
+
+      require Ecto.Query
+
+      Arca.Repo.update_all(Ecto.Query.where(Arca.Schemas.MemoryEndpoint, endpoint: "local"),
+        set: [heard_at: an_hour_ago]
+      )
+
+      {view, _html} = mount_athanor(conn, "/programs", athanor)
+      panel = view |> element(~s([data-test="memory"])) |> render()
+
+      refute panel =~ "Machine"
+      assert panel =~ "A build uses 600.0 MB"
+      assert panel =~ "Counted a few seconds ago."
+
+      assert panel =~
+               "Some of it was last counted at #{Calendar.strftime(an_hour_ago, "%H:%M UTC")}, " <>
+                 "and may be out of date."
+    end
+
+    test "before the first read it says nothing of theirs, and a read that fails says it cannot be read",
+         %{conn: conn, athanor: athanor} do
+      # The mount's own render is served before the first read's message.
+      {:ok, view, html} = live(conn, PrismWeb.ConnCase.athanor_path("/programs", athanor))
+
+      assert html =~ "Memory in use now"
+      refute html =~ "Nothing of yours uses memory now."
+      refute html =~ "cannot be read"
+
+      assert view |> element(~s([data-test="memory"])) |> render() =~
+               "Nothing of yours uses memory now."
+
+      Arca.Repo.query!("ALTER TABLE memory_endpoints RENAME TO memory_endpoints_unavailable")
+
+      try do
+        ExUnit.CaptureLog.capture_log(fn ->
+          send(view.pid, :memory)
+          panel = view |> element(~s([data-test="memory"])) |> render()
+
+          assert panel =~ "Memory in use cannot be read right now."
+          refute panel =~ "Nothing of yours uses memory now."
+        end)
+      after
+        Arca.Repo.query!("ALTER TABLE memory_endpoints_unavailable RENAME TO memory_endpoints")
+      end
     end
   end
 end

@@ -27,7 +27,9 @@ defmodule PrismWeb.ProgramsLive do
   again every poll (`Prima.LocusPool.poll_ms/0`): each program by its name with
   the Disable its row has and the Close of each of its sessions, a run and
   a build by kind with no control, everyone else's use as one sum, and how
-  fresh the count is (`PrismWeb.MemoryWords`).
+  fresh the count is (`PrismWeb.MemoryWords`). Until the first read answers
+  it says nothing of them; a read that fails says the memory cannot be
+  read, never that nothing of theirs uses it.
 
   Forms add an http server (its config as JSON) and a program, its mark
   chosen. **Edit** on an expanded program replaces its whole definition
@@ -154,8 +156,9 @@ defmodule PrismWeb.ProgramsLive do
       # The person's running sessions (`Opus.Programs.running/1`).
       |> assign(:running, [])
       # What of the person's holds memory now, by machine, and the
-      # machines that have not answered (`Opus.memory/2`).
-      |> assign(:memory, %{machines: [], unanswered: []})
+      # endpoints that have not answered (`Opus.memory/2`); `:unread`
+      # until the first read answers, `:unreadable` when the last failed.
+      |> assign(:memory, :unread)
       # Whether a terminal this page opens adds the way back to Aqua.
       |> assign(:from_aqua, false)
       # What the page is doing until a call's answer comes; nil when idle.
@@ -425,7 +428,7 @@ defmodule PrismWeb.ProgramsLive do
         {:noreply, assign(socket, :memory, %{machines: machines, unanswered: unanswered})}
 
       {:error, _unread} ->
-        {:noreply, socket}
+        {:noreply, assign(socket, :memory, :unreadable)}
     end
   end
 
@@ -1564,13 +1567,23 @@ defmodule PrismWeb.ProgramsLive do
     <.card>
       <section data-test="memory" class="space-y-3">
         <h3 class="text-sm font-medium text-gray-400">Memory in use now</h3>
+        <p :if={@memory == :unreadable} class="text-sm text-gray-300">
+          Memory in use cannot be read right now.
+        </p>
         <p
-          :if={@memory.unanswered == [] and Enum.all?(@memory.machines, &(&1.holders == []))}
+          :if={
+            is_map(@memory) and @memory.unanswered == [] and
+              Enum.all?(@memory.machines, &(&1.holders == []))
+          }
           class="text-sm text-gray-300"
         >
           Nothing of yours uses memory now.
         </p>
-        <div :for={machine <- @memory.machines} class="space-y-2" data-test="memory-machine">
+        <div
+          :for={machine <- if(is_map(@memory), do: @memory.machines, else: [])}
+          class="space-y-2"
+          data-test="memory-machine"
+        >
           <h4
             :if={MemoryWords.heading(@memory, machine.machine)}
             class="text-xs text-gray-500 uppercase"
@@ -1616,15 +1629,13 @@ defmodule PrismWeb.ProgramsLive do
             {MemoryWords.counted(machine)}
           </p>
         </div>
-        <div :for={silent <- @memory.unanswered} class="space-y-1" data-test="memory-unanswered">
-          <h4
-            :if={MemoryWords.heading(@memory, silent.endpoint)}
-            class="text-xs text-gray-500 uppercase"
-          >
-            {MemoryWords.heading(@memory, silent.endpoint)}
-          </h4>
-          <p class="text-xs text-gray-500">{MemoryWords.counted(silent)}</p>
-        </div>
+        <p
+          :if={is_map(@memory) and MemoryWords.stale(@memory)}
+          class="text-xs text-gray-500"
+          data-test="memory-unanswered"
+        >
+          {MemoryWords.stale(@memory)}
+        </p>
       </section>
     </.card>
     """

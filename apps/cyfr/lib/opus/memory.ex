@@ -63,8 +63,8 @@ defmodule Opus.Memory do
   machine's `others` is then the others' use at the services that did
   answer. A counter of
   no athanor (the warm floor's fresh runners) was never stored, so a
-  machine's holders need not add up to its `used`. A day is a
-  UTC day, counted at the keeper.
+  machine's holders need not add up to its `used`. A day is a UTC day,
+  counted at the keeper.
   """
 
   use GenServer
@@ -179,25 +179,6 @@ defmodule Opus.Memory do
   end
 
   def read(%Sanctum.Context{}, :everyone), do: {:error, :forbidden}
-
-  @doc """
-  What a start refused for room at `endpoint` says of `actor`'s own
-  holders: the record's current holders of the actor's athanor on that
-  endpoint's machine (`Arca.MemoryRecord.holders_now/3`), put to `held`
-  by `Prima.LocusPool.named_held/2`, for
-  `Prima.LocusPool.refusal_sentence/2`. An endpoint that has not
-  answered within `Prima.LocusPool.fresh_ms/0`, or a record that cannot be
-  read, leaves `held` as it came, with no names. The record is at most a
-  poll old.
-  """
-  @spec held_for(Prima.Actor.t(), String.t(), Prima.LocusPool.held()) ::
-          {Prima.LocusPool.held(), %{String.t() => String.t()}}
-  def held_for(%Prima.Actor{} = actor, endpoint, %{} = held) when is_binary(endpoint) do
-    case MemoryRecord.holders_now(actor, endpoint, Prima.LocusPool.fresh_ms()) do
-      {:ok, holders} -> Prima.LocusPool.named_held(held, holders)
-      {:error, _unnamed} -> {held, %{}}
-    end
-  end
 
   # ---------------------------------------------------------------------------
   # The read's shape

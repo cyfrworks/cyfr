@@ -630,8 +630,18 @@ defmodule Prima.LocusPool do
   defp bytes?(value),
     do: is_integer(value) and value >= 0 and value <= Prima.KeeperProtocol.max_measured_bytes()
 
-  # What a person calls each kind of place, in the order a sentence names
-  # them. A runner's two kinds are one word: a run.
+  # What a person calls each kind of holder, one and several.
+  @holder_words %{
+    "run" => {"run", "runs"},
+    "build" => {"build", "builds"},
+    "program" => {"program", "programs"},
+    "terminal" => {"terminal", "terminals"},
+    "browser" => {"browser", "browsers"},
+    "tool" => {"tool", "tools"}
+  }
+
+  # The kinds of place a refusal's sentence names, in its order, by the
+  # word a person reads each as. A runner's two kinds are one word: a run.
   @kind_words [
     {"program", ["program"]},
     {"terminal", ["terminal"]},
@@ -726,58 +736,23 @@ defmodule Prima.LocusPool do
         held != [] do
       bytes = Prima.Bytes.format(Enum.sum_by(held, & &1.bytes))
 
+      {one, several} = holder_words(word)
+
       case length(held) do
-        1 -> "a #{word} uses #{bytes}"
-        n -> "#{n} #{word}s use #{bytes}"
+        1 -> "a #{one} uses #{bytes}"
+        n -> "#{n} #{several} use #{bytes}"
       end
     end
   end
 
   @doc """
-  What a start refused for room says of the person's own holders, from
-  `holders`, the record's current holders of the person's athanor on the
-  refusing endpoint's machine (`Arca.MemoryRecord.holders_now/3`): `held`
-  with its `mine` taken from them and the names of their rows, for
-  `refusal_sentence/2`.
-
-  The holders are used only when they fit within what `held` says is
-  held, the refusal's charges: `ΣR ≤ others_bytes + Σmine`. Then `mine` is
-  them and `others_bytes` is `others_bytes + Σmine − ΣR`, never below 0,
-  so what is held and free together is the refusal's own and the
-  sentence's branches decide as they would on `held`. With none, or more
-  than `held` holds (a holder ended since the record was read), `held` is
-  answered as it came with no names.
+  What a person calls a kind of holder (`run`, `build`, `program`,
+  `terminal`, `browser` or `tool`): its word for one and for several. A
+  sentence of what holds memory, here or on a page, takes its words from
+  this one table.
   """
-  @spec named_held(held(), [
-          %{
-            kind: String.t(),
-            subject: String.t() | nil,
-            name: String.t() | nil,
-            bytes: non_neg_integer()
-          }
-        ]) :: {held(), %{String.t() => String.t()}}
-  def named_held(%{} = held, []), do: {held, %{}}
-
-  def named_held(%{mine: mine, others_bytes: others} = held, holders) when is_list(holders) do
-    held_bytes = others + Enum.sum_by(mine, & &1.bytes)
-    theirs = Enum.sum_by(holders, & &1.bytes)
-
-    if theirs <= held_bytes do
-      names =
-        for %{subject: subject, name: name} <- holders,
-            is_binary(subject) and is_binary(name),
-            into: %{},
-            do: {subject, name}
-
-      {%{
-         held
-         | mine: Enum.map(holders, &Map.take(&1, [:kind, :subject, :bytes])),
-           others_bytes: held_bytes - theirs
-       }, names}
-    else
-      {held, %{}}
-    end
-  end
+  @spec holder_words(String.t()) :: {String.t(), String.t()}
+  def holder_words(kind) when is_map_key(@holder_words, kind), do: Map.fetch!(@holder_words, kind)
 
   defp joined([one]), do: one
   defp joined(items), do: Enum.join(Enum.drop(items, -1), ", ") <> " and " <> List.last(items)

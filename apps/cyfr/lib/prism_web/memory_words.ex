@@ -9,22 +9,14 @@ defmodule PrismWeb.MemoryWords do
   times are said as the Programs page says them.
   """
 
-  @kinds %{
-    run: {"run", "runs"},
-    build: {"build", "builds"},
-    program: {"program", "programs"},
-    terminal: {"terminal", "terminals"},
-    browser: {"browser", "browsers"},
-    tool: {"tool", "tools"}
-  }
-
   @doc """
-  A machine's heading, by its name: none where the record names one
-  machine alone, answering or not, `Machine <name>` where it names several.
+  A machine's heading, by its name: `Machine <name>` where several
+  machines answered, none where one did. An endpoint that has not
+  answered is never a machine: the read does not say whose machine it is.
   """
-  @spec heading(%{machines: [map()], unanswered: [map()]}, String.t()) :: String.t() | nil
-  def heading(%{machines: machines, unanswered: unanswered}, name) do
-    if length(machines) + length(unanswered) > 1, do: "Machine " <> name
+  @spec heading(%{machines: [map()]}, String.t()) :: String.t() | nil
+  def heading(%{machines: machines}, name) do
+    if length(machines) > 1, do: "Machine " <> name
   end
 
   @doc """
@@ -60,22 +52,40 @@ defmodule PrismWeb.MemoryWords do
   def others(%{others: 0}), do: nil
   def others(%{others: bytes}), do: "Others use #{size(bytes)}."
 
-  @doc """
-  How fresh a count is: a machine's, which answered within three polls,
-  was counted a few seconds ago; one that has not answered since says
-  when it last did, and that it may be out of date.
-  """
+  @doc "How fresh a machine's count is: it answered within three polls."
   @spec counted(map()) :: String.t()
-  def counted(%{endpoint: _name, heard_at: at}),
-    do: "Counted at #{Calendar.strftime(at, "%H:%M UTC")}, and may be out of date."
-
   def counted(%{machine: _name}), do: "Counted a few seconds ago."
 
-  @doc "What a person calls a kind of holder."
-  @spec kind(atom()) :: String.t()
-  def kind(kind), do: elem(Map.fetch!(@kinds, kind), 0)
+  @doc """
+  What the person's own read says of its endpoints that have not answered
+  within three polls, after what the machines that did answer hold: that
+  some of it was last counted when the oldest of them last answered, and
+  may be out of date; with no machine answering, when it was counted. Nil
+  when every endpoint answered.
+  """
+  @spec stale(%{machines: [map()], unanswered: [map()]}) :: String.t() | nil
+  def stale(%{unanswered: []}), do: nil
 
-  defp kinds(kind), do: elem(Map.fetch!(@kinds, kind), 1)
+  def stale(%{machines: machines, unanswered: silent}) do
+    at = silent |> Enum.map(& &1.heard_at) |> Enum.min(DateTime) |> clock()
+
+    case machines do
+      [] -> "Counted at #{at}, and may be out of date."
+      _answered -> "Some of it was last counted at #{at}, and may be out of date."
+    end
+  end
+
+  @doc "An endpoint that has not answered within three polls, by its name, for the administrator."
+  @spec silent(%{endpoint: String.t(), heard_at: DateTime.t()}) :: String.t()
+  def silent(%{endpoint: name, heard_at: at}), do: "#{name} has not answered since #{clock(at)}."
+
+  defp clock(at), do: Calendar.strftime(at, "%H:%M UTC")
+
+  @doc "What a person calls a kind of holder (`Prima.LocusPool.holder_words/1`)."
+  @spec kind(atom()) :: String.t()
+  def kind(kind), do: elem(Prima.LocusPool.holder_words(Atom.to_string(kind)), 0)
+
+  defp kinds(kind), do: elem(Prima.LocusPool.holder_words(Atom.to_string(kind)), 1)
 
   @doc "A size as the pages spell it."
   @spec size(non_neg_integer()) :: String.t()

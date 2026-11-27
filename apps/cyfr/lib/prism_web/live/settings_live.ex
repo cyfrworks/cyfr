@@ -45,7 +45,10 @@ defmodule PrismWeb.SettingsLive do
       it now by person, kind and name, then each UTC day's use by person,
       kind and name, the newest seven days first and seven more at a time,
       never a thread or content. It is read again every poll
-      (`Prima.LocusPool.poll_ms/0`).
+      (`Prima.LocusPool.poll_ms/0`) and before more days are shown, so a
+      mark taken away shows nothing more. An endpoint that has not
+      answered is named under the machines, never as one; a read that
+      fails says memory use cannot be read, never that nothing reported.
     * **Administrators** — in the allowlist, for a platform administrator:
       the people carrying the mark, another person made an administrator
       (`door.mark_admin`) and a mark taken away (`door.clear_admin`), never
@@ -118,10 +121,10 @@ defmodule PrismWeb.SettingsLive do
       |> assign(:platform_settings, [])
       |> assign(:host_decisions, [])
       |> assign(:host_decision, nil)
-      # Who used what memory (`Opus.memory/2`, `:everyone`), and how many
-      # of its days the table shows.
-      |> assign(:memory, %{machines: [], unanswered: []})
-      |> assign(:memory_days, [])
+      # Who used what memory (`Opus.memory/2`, `:everyone`): `:unread`
+      # until the first read answers, `:unreadable` when the last failed;
+      # and how many of its days the table shows.
+      |> assign(:memory, :unread)
       |> assign(:memory_shown, @memory_days)
       |> assign(:settings_revision, nil)
       |> assign(:settings_members, [])
@@ -235,8 +238,15 @@ defmodule PrismWeb.SettingsLive do
     door_call(socket, "door/remove", %{"id" => id}, "Entry removed.")
   end
 
-  def handle_event("memory_more", _params, socket),
-    do: {:noreply, update(socket, :memory_shown, &(&1 + @memory_days))}
+  # More days are shown only from a read that answers now: the
+  # administrator's standing is read again with it.
+  def handle_event("memory_more", _params, socket) do
+    socket = read_memory(socket)
+
+    if is_map(socket.assigns.memory),
+      do: {:noreply, update(socket, :memory_shown, &(&1 + @memory_days))},
+      else: {:noreply, socket}
+  end
 
   def handle_event("admin_mark", %{"person" => person}, socket),
     do: marking(socket, "mark_admin", String.trim(person))
@@ -419,24 +429,10 @@ defmodule PrismWeb.SettingsLive do
 
   def handle_info(%Cyfr.Bus.SettingsChanged{kind: :observed}, socket), do: {:noreply, socket}
 
-  # Who used what is read again as often as CYFR asks for it. A person
-  # who no longer administers reads nothing, and the section empties.
+  # Who used what is read again as often as CYFR asks for it.
   def handle_info(:memory, socket) do
     Process.send_after(self(), :memory, Prima.LocusPool.poll_ms())
-
-    case Opus.memory(socket.assigns.context, :everyone) do
-      {:ok, %{machines: machines, unanswered: unanswered, days: days}} ->
-        {:noreply,
-         socket
-         |> assign(:memory, %{machines: machines, unanswered: unanswered})
-         |> assign(:memory_days, days)}
-
-      {:error, _not_read} ->
-        {:noreply,
-         socket
-         |> assign(:memory, %{machines: [], unanswered: []})
-         |> assign(:memory_days, [])}
-    end
+    {:noreply, read_memory(socket)}
   end
 
   def handle_info(msg, socket) do
@@ -502,6 +498,15 @@ defmodule PrismWeb.SettingsLive do
     end
   end
 
+  # The record as the administrator reads it now. A read that fails, a
+  # person who no longer administers among them, keeps nothing of it.
+  defp read_memory(socket) do
+    case Opus.memory(socket.assigns.context, :everyone) do
+      {:ok, %{machines: _, unanswered: _, days: _} = read} -> assign(socket, :memory, read)
+      {:error, _not_read} -> assign(socket, :memory, :unreadable)
+    end
+  end
+
   # A machine's numbers: what is in use of what work may use, and what is
   # kept ready for the next run beside it.
   defp machine_use(%{used: used, work: work, floor: 0}),
@@ -522,6 +527,8 @@ defmodule PrismWeb.SettingsLive do
   end
 
   defp more_days?(days, shown), do: days |> Enum.map(& &1.day) |> Enum.uniq() |> length() > shown
+
+  defp more_days_words, do: "Show #{@memory_days} more days"
 
   defp blank_as_dash(""), do: "—"
   defp blank_as_dash(text), do: text
@@ -1306,11 +1313,17 @@ defmodule PrismWeb.SettingsLive do
               Who used memory on this CYFR: each person's runs, builds and programs, by
               name and UTC day. No thread or content is kept.
             </p>
-            <div :if={@memory == %{machines: [], unanswered: []}} class="py-2">
+            <p :if={@memory == :unreadable} class="text-sm text-gray-300">
+              Memory use cannot be read right now.
+            </p>
+            <div
+              :if={is_map(@memory) and @memory.machines == [] and @memory.unanswered == []}
+              class="py-2"
+            >
               <.empty_state message="Nothing has reported its memory yet" />
             </div>
             <div
-              :for={machine <- @memory.machines}
+              :for={machine <- if(is_map(@memory), do: @memory.machines, else: [])}
               class="space-y-2 mb-4"
               data-test="memory-machine"
             >
@@ -1336,21 +1349,15 @@ defmodule PrismWeb.SettingsLive do
               </.table>
               <p class="text-xs text-gray-500">{MemoryWords.counted(machine)}</p>
             </div>
-            <div
-              :for={silent <- @memory.unanswered}
-              class="space-y-1 mb-4"
+            <p
+              :for={silent <- if(is_map(@memory), do: @memory.unanswered, else: [])}
+              class="text-xs text-gray-500 mb-4"
               data-test="memory-unanswered"
             >
-              <h4
-                :if={MemoryWords.heading(@memory, silent.endpoint)}
-                class="text-xs text-gray-500 uppercase"
-              >
-                {MemoryWords.heading(@memory, silent.endpoint)}
-              </h4>
-              <p class="text-xs text-gray-500">{MemoryWords.counted(silent)}</p>
-            </div>
-            <div :if={@memory_days != []} id="memory-days">
-              <.table id="memory-day-rows" rows={shown_days(@memory_days, @memory_shown)}>
+              {MemoryWords.silent(silent)}
+            </p>
+            <div :if={is_map(@memory) and @memory.days != []} id="memory-days">
+              <.table id="memory-day-rows" rows={shown_days(@memory.days, @memory_shown)}>
                 <:col :let={d} label="Day (UTC)">{Date.to_iso8601(d.day)}</:col>
                 <:col :let={d} label="Person">{person_name(d.person)}</:col>
                 <:col :let={d} label="What">{MemoryWords.kind(d.kind)}</:col>
@@ -1364,12 +1371,12 @@ defmodule PrismWeb.SettingsLive do
               </.table>
             </div>
             <.button
-              :if={more_days?(@memory_days, @memory_shown)}
+              :if={is_map(@memory) and more_days?(@memory.days, @memory_shown)}
               variant="ghost"
               phx-click="memory_more"
               data-test="memory-more"
             >
-              Show 7 more days
+              {more_days_words()}
             </.button>
           </section>
         </.card>

@@ -301,65 +301,6 @@ defmodule Arca.MemoryRecordTest do
     end
   end
 
-  describe "holders_now/3" do
-    test "answers the actor's own athanor's current holders on the endpoint's machine, and no one else's",
-         %{claim: claim} do
-      names = %{{"ath_a", "srv_a"} => %{name: "claude", shown: "program"}}
-
-      page =
-        report([
-          counter(1, "ath_a", subject: "srv_a", bytes: 300),
-          counter(2, "ath_a", kind: "run", subject: nil, bytes: 40),
-          counter(3, "ath_a", subject: "srv_idle", bytes: 0),
-          counter(4, "ath_b", subject: "srv_b", bytes: 900)
-        ])
-
-      {:ok, _} = store(claim, 0, page, names)
-
-      assert {:ok, holders} =
-               MemoryRecord.holders_now(
-                 Arca.Test.Actor.local(athanor_id: "ath_a"),
-                 @endpoint,
-                 15_000
-               )
-
-      assert Enum.sort_by(holders, & &1.bytes) == [
-               %{kind: "run", subject: nil, name: nil, bytes: 40},
-               %{kind: "program", subject: "srv_a", name: "claude", bytes: 300}
-             ]
-
-      assert {:ok, [%{subject: "srv_b"}]} =
-               MemoryRecord.holders_now(
-                 Arca.Test.Actor.local(athanor_id: "ath_b"),
-                 @endpoint,
-                 15_000
-               )
-
-      assert {:error, :no_athanor} =
-               MemoryRecord.holders_now(Prima.Actor.system(), @endpoint, 15_000)
-    end
-
-    test "an endpoint not heard within three polls answers :unanswered", %{claim: claim} do
-      {:ok, _} = store(claim, 0, report([counter(1, "ath_a", bytes: 300)]))
-      silent = DateTime.add(DateTime.utc_now(), -60, :second)
-      Arca.Repo.update_all(Arca.Schemas.MemoryEndpoint, set: [heard_at: silent])
-
-      assert {:error, :unanswered} =
-               MemoryRecord.holders_now(
-                 Arca.Test.Actor.local(athanor_id: "ath_a"),
-                 @endpoint,
-                 15_000
-               )
-
-      assert {:error, :unanswered} =
-               MemoryRecord.holders_now(
-                 Arca.Test.Actor.local(athanor_id: "ath_a"),
-                 "wrk_never",
-                 15_000
-               )
-    end
-  end
-
   describe "the reads" do
     setup %{claim: claim} do
       page =
