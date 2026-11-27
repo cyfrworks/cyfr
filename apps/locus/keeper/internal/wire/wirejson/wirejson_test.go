@@ -12,16 +12,19 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"strconv"
 	"strings"
 	"testing"
 )
 
 type wireCase struct {
-	Why   string          `json:"why"`
-	Doc   string          `json:"doc_b64"`
-	Value json.RawMessage `json:"value"`
-	Bytes string          `json:"bytes_b64"`
+	Why       string          `json:"why"`
+	Doc       string          `json:"doc_b64"`
+	Value     json.RawMessage `json:"value"`
+	ValueJSON string          `json:"value_json"`
+	Bytes     string          `json:"bytes_b64"`
+	// Go is the Go reader's own answer where the two ends differ, as the
+	// vector states it.
+	Go string `json:"go"`
 }
 
 // wireVectors is tests/fixtures/wire_json.json, which Prima's test holds
@@ -63,9 +66,9 @@ func same(a, b any) bool {
 			y, _ := new(big.Int).SetString(string(b), 10)
 			return x.Cmp(y) == 0
 		}
-		x, _ := strconv.ParseFloat(string(a), 64)
-		y, _ := strconv.ParseFloat(string(b), 64)
-		return x == y && math.Signbit(x) == math.Signbit(y)
+		x, okA := a.Float()
+		y, okB := b.Float()
+		return okA && okB && x == y && math.Signbit(x) == math.Signbit(y)
 	case []any:
 		b, ok := b.([]any)
 		if !ok || len(a) != len(b) {
@@ -95,16 +98,30 @@ func same(a, b any) bool {
 
 func TestEveryDocumentReadsAsPrimasReaderReadsIt(t *testing.T) {
 	reads := vectors(t).Reads
-	if len(reads) < 20 {
+	if len(reads) < 25 {
 		t.Fatalf("%d reads", len(reads))
 	}
+	differences := 0
 	for _, c := range reads {
 		doc, _ := base64.StdEncoding.DecodeString(c.Doc)
 		got, err := Read(doc)
-		want, werr := Read(c.Value)
-		if err != nil || werr != nil || !same(got, want) {
-			t.Errorf("%s: %#v, %v; want %s", c.Why, got, err, c.Value)
+		switch c.Go {
+		case "too_deep":
+			differences++
+			if !errors.Is(err, ErrTooDeep) {
+				t.Errorf("%s: %v; Go refuses it too_deep", c.Why, err)
+			}
+		case "":
+			want, werr := Read(c.Value)
+			if err != nil || werr != nil || !same(got, want) {
+				t.Errorf("%s: %#v, %v; want %s", c.Why, got, err, c.Value)
+			}
+		default:
+			t.Errorf("%s: no Go answer %q", c.Why, c.Go)
 		}
+	}
+	if differences == 0 {
+		t.Error("no read case states the depth the two ends differ at")
 	}
 	if n := vectors(t).MaxIntegerChars; n != maxIntegerText {
 		t.Errorf("the vector's longest integer is %d characters, the reader's %d", n, maxIntegerText)
@@ -125,15 +142,34 @@ func TestEveryRefusedDocumentIsRefused(t *testing.T) {
 }
 
 func TestEveryValueIsWrittenAsPrimasWriterWritesIt(t *testing.T) {
-	for _, c := range vectors(t).Writes {
-		v, err := Read(c.Value)
+	writes := vectors(t).Writes
+	if len(writes) < 14 {
+		t.Fatalf("%d writes", len(writes))
+	}
+	refused := 0
+	for _, c := range writes {
+		v, err := Read([]byte(c.ValueJSON))
 		if err != nil {
-			t.Fatal(err)
+			t.Fatalf("%s: %v", c.Why, err)
 		}
 		want, _ := base64.StdEncoding.DecodeString(c.Bytes)
-		if got, err := Write(v); err != nil || string(got) != string(want) {
-			t.Errorf("%s: %q, %v; want %q", c.Why, got, err, want)
+		got, err := Write(v)
+		switch c.Go {
+		case "unwritable":
+			refused++
+			if !errors.Is(err, ErrUnwritable) {
+				t.Errorf("%s: written as %q; Go refuses it", c.Why, got)
+			}
+		case "":
+			if err != nil || string(got) != string(want) {
+				t.Errorf("%s: %q, %v; want %q", c.Why, got, err, want)
+			}
+		default:
+			t.Errorf("%s: no Go answer %q", c.Why, c.Go)
 		}
+	}
+	if refused == 0 {
+		t.Error("no write case states what Go refuses to write")
 	}
 }
 
@@ -180,10 +216,6 @@ func TestAnIntegerReadsWithinItsRange(t *testing.T) {
 		if n, ok := Uint(c.v, c.max); n != c.n || ok != c.read {
 			t.Errorf("Uint(%#v, %d) = %d, %v", c.v, c.max, n, ok)
 		}
-	}
-	if !(Number("-0").Negative() == false && Number("-1").Negative() && Number("-0.0").Negative() == false &&
-		Number("-0.1").Negative() && Number("-0e5").Negative() == false) {
-		t.Fatal("the sign of a number")
 	}
 }
 

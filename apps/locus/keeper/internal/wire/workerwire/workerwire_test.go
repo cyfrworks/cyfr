@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/cyfr/locus/keeper/internal/wire/wirejson"
+	"github.com/cyfr/locus/keeper/internal/wire/workerapi"
 )
 
 // vectors is the part of tests/fixtures/worker_api.json that holds
@@ -31,6 +32,10 @@ type vectors struct {
 		Callback string          `json:"callback"`
 		Args     json.RawMessage `json:"args"`
 		Error    *string         `json:"error"`
+		// Go is the Go reader's own answer where the two ends differ.
+		Go *struct {
+			Error string `json:"error"`
+		} `json:"go"`
 	} `json:"request_bodies"`
 	Answers []struct {
 		Why     string          `json:"why"`
@@ -114,8 +119,16 @@ func TestEveryRequestBodyReadsAsPrimaReadsIt(t *testing.T) {
 	if len(v.RequestBodies) < 20 {
 		t.Fatalf("%d bodies", len(v.RequestBodies))
 	}
+	differences := 0
 	for _, c := range v.RequestBodies {
-		callback, args, err := ReadRequestBody(WorkerCallbacks, read(t, []byte(c.Body)))
+		if c.Go != nil {
+			differences++
+			if _, err := wirejson.Read([]byte(c.Body)); err == nil || err.Error() != c.Go.Error {
+				t.Errorf("%s: read with %v; Go refuses it %s", c.Why, err, c.Go.Error)
+			}
+			continue
+		}
+		callback, args, err := ReadRequestBody(workerapi.Callbacks(), read(t, []byte(c.Body)))
 		switch {
 		case c.Error != nil:
 			if err == nil || err.Error() != *c.Error {
@@ -125,19 +138,25 @@ func TestEveryRequestBodyReadsAsPrimaReadsIt(t *testing.T) {
 			t.Errorf("%s: %s %v, %v", c.Why, callback, args, err)
 		}
 	}
+	if differences == 0 {
+		t.Error("no body states the depth the two ends differ at")
+	}
 	for _, r := range v.Requests {
-		callback, args, err := ReadRequestBody(WorkerCallbacks, read(t, []byte(r.Body)))
+		callback, args, err := ReadRequestBody(workerapi.Callbacks(), read(t, []byte(r.Body)))
 		if err != nil || callback != r.Callback || written(t, RequestBody(callback, args)) != r.Body {
 			t.Errorf("%s: %s, %v", r.Callback, written(t, RequestBody(callback, args)), err)
 		}
 	}
-	if _, _, err := ReadRequestBody(WorkerCallbacks, nil); !errors.Is(err, ErrMalformed) {
+	if _, _, err := ReadRequestBody(workerapi.Callbacks(), nil); !errors.Is(err, ErrMalformed) {
 		t.Error("null")
 	}
 }
 
 func TestEveryAnswerReadsAsPrimaReadsIt(t *testing.T) {
 	v := load(t)
+	if len(v.Answers) < 15 {
+		t.Fatalf("%d answers", len(v.Answers))
+	}
 	for _, c := range v.Answers {
 		r, value, name, fields := ReadAnswer(read(t, []byte(c.Answer)))
 		switch c.Reading {
@@ -153,6 +172,8 @@ func TestEveryAnswerReadsAsPrimaReadsIt(t *testing.T) {
 			if r != Lost {
 				t.Errorf("%s: %v", c.Why, r)
 			}
+		default:
+			t.Errorf("%s: no reading %q", c.Why, c.Reading)
 		}
 	}
 	for _, r := range v.Requests {
@@ -174,6 +195,9 @@ func TestEveryAnswerReadsAsPrimaReadsIt(t *testing.T) {
 
 func TestEveryAnswerAndBodyIsWrittenAsPrimaWritesIt(t *testing.T) {
 	v := load(t)
+	if len(v.AnswerWrites) < 5 {
+		t.Fatalf("%d writes", len(v.AnswerWrites))
+	}
 	for _, c := range v.AnswerWrites {
 		var w wirejson.Ordered
 		switch c.Write {
@@ -183,6 +207,8 @@ func TestEveryAnswerAndBodyIsWrittenAsPrimaWritesIt(t *testing.T) {
 			w = Error(c.Error, read(t, c.Fields).(map[string]any))
 		case "request":
 			w = RequestBody(c.Op, read(t, c.Args))
+		default:
+			t.Fatalf("%s: no writer %q", c.Why, c.Write)
 		}
 		if got := written(t, w); got != c.Bytes {
 			t.Errorf("%s: %s, want %s", c.Why, got, c.Bytes)

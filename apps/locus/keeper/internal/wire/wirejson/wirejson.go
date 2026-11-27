@@ -30,6 +30,7 @@ import (
 	"errors"
 	"sort"
 	"strconv"
+	"strings"
 	"unicode/utf16"
 	"unicode/utf8"
 )
@@ -73,21 +74,19 @@ func (n Number) Integer() bool {
 	return true
 }
 
-// Negative is whether the number is below zero: "-0" is not.
-func (n Number) Negative() bool {
-	if len(n) == 0 || n[0] != '-' {
-		return false
+// Float is the number as a float, as Jason reads it: its text parsed
+// whole, but for a zero with an exponent and no fraction, which Jason
+// reads as 0.0 whatever its sign ("-0e5" is 0.0, where "-0.0e5" and
+// "-1e-400" are -0.0). No wire of the protocol reads a float; this is the
+// one reading a caller makes of one.
+func (n Number) Float() (float64, bool) {
+	text := string(n)
+	mantissa, _, exponent := strings.Cut(strings.ToLower(text), "e")
+	if exponent && strings.TrimPrefix(mantissa, "-") == "0" {
+		return 0, true
 	}
-	for i := 1; i < len(n); i++ {
-		switch n[i] {
-		case '0', '.', '-', '+':
-		case 'e', 'E':
-			return false
-		default:
-			return true
-		}
-	}
-	return false
+	f, err := strconv.ParseFloat(text, 64)
+	return f, err == nil
 }
 
 // Uint is the integer v is when it is an integer from 0 to max; ok is false
@@ -478,12 +477,21 @@ type Member struct {
 type Ordered []Member
 
 // Write writes v as Prima's writer writes it: nil, a bool, a string, an
-// integer of any Go integer type, a Number, a []any, an Ordered, or a
-// map[string]any of at most 32 members, which Prima writes in the order of
-// their names' bytes. Strings are written as Jason writes them: `"` and
-// `\` escaped, backspace, tab, line feed, form feed and carriage return as
-// their two-character escapes, every other control character as \u00XX in
-// uppercase hexadecimal, and every other character as itself.
+// integer of any Go integer type, a Number that is an integer as Jason
+// writes one (no leading zero, no minus before a zero, no fraction or
+// exponent), a []any or []string, an Ordered, or a map[string]any of at
+// most 32 members, which Prima writes in the order of their names' bytes.
+// Strings are written as Jason writes them: " and \ escaped, backspace,
+// tab, line feed, form feed and carriage return as their two-character
+// escapes, every other control character as \u00XX in uppercase
+// hexadecimal, and every other character as itself.
+//
+// Anything else is ErrUnwritable: a float, which Jason writes in a form of
+// its own (1e2 as 100.0, 1.50 as 1.5); text that is no UTF-8; and a map
+// of more than 32 members, which Jason writes in the order of Erlang's map
+// of that size, by its keys' hashes, that no other writer spells. A worker
+// service writes only values it made, all of them integers and maps far
+// smaller; a document it carries it passes on as the bytes it received.
 func Write(v any) ([]byte, error) {
 	w := writer{}
 	if !w.value(v) {
@@ -511,11 +519,7 @@ func (w *writer) value(v any) bool {
 	case uint32:
 		w.buf = strconv.AppendUint(w.buf, uint64(v), 10)
 	case Number:
-		p := parser{data: []byte(v)}
-		if len(v) == 0 || !(v[0] == '-' || digit(v[0])) {
-			return false
-		}
-		if _, ok := p.number(); !ok || p.at != len(p.data) {
+		if !canonicalInteger(string(v)) {
 			return false
 		}
 		w.buf = append(w.buf, v...)
@@ -559,6 +563,22 @@ func (w *writer) value(v any) bool {
 		return w.members(members)
 	default:
 		return false
+	}
+	return true
+}
+
+// canonicalInteger is whether text is an integer as Jason writes one:
+// decimal digits without a leading zero, a minus before any but 0, and
+// at most 1,024 characters, which is what Jason reads.
+func canonicalInteger(text string) bool {
+	digits := strings.TrimPrefix(text, "-")
+	if digits == "" || len(text) > maxIntegerText || (digits[0] == '0' && (len(digits) > 1 || len(text) > 1)) {
+		return false
+	}
+	for i := 0; i < len(digits); i++ {
+		if !digit(digits[i]) {
+			return false
+		}
 	}
 	return true
 }

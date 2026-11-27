@@ -693,6 +693,8 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"tests/locus-runtime-image/namespace_test.py", ~w(valid)}
     ],
     "runner_relay.json" => [
+      {"apps/locus/keeper/internal/wire/workerauth/workerauth_test.go",
+       ~w(max_signed_header_bytes)},
       {"apps/locus/runner/tests/vectors.rs",
        ~w(version attempt max_body_bytes max_frame_bytes initial_credit max_headers max_header_name_bytes max_header_value_bytes max_signed_header_bytes max_attached_frame_bytes ops methods purposes max_path_bytes max_url_bytes max_calls max_fetches codes exchange refusals encode_refusals)},
       {"apps/locus/test/locus/runtime/relay_vectors_test.exs",

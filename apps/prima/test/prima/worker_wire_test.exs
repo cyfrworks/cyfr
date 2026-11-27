@@ -192,6 +192,8 @@ defmodule Prima.WorkerWireTest do
     end
 
     test "every answer reads as ok, a refusal with its fields, or a lost answer" do
+      assert length(@worker["answers"]) >= 15
+
       for c <- @worker["answers"] do
         expected =
           case c["reading"] do
@@ -205,6 +207,8 @@ defmodule Prima.WorkerWireTest do
     end
 
     test "every answer and body written is its bytes" do
+      assert length(@worker["answer_writes"]) >= 5
+
       for c <- @worker["answer_writes"] do
         written =
           case c["write"] do
@@ -218,6 +222,8 @@ defmodule Prima.WorkerWireTest do
     end
 
     test "every base URL reads as its base, or is no base URL" do
+      assert length(@worker["base_urls"]) >= 30
+
       for %{"text" => text, "base" => base} <- @worker["base_urls"] do
         expected = if base, do: {:ok, base}, else: :error
         assert WorkerWire.base_url(text) == expected, inspect(text)

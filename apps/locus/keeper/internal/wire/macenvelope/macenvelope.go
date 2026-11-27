@@ -24,14 +24,16 @@
 // zeros.
 //
 // A Key prints as "Key(..)" under every verb and refuses to be marshalled,
-// and no error of this package names a value, so neither a key nor what a
-// peer sent reaches a log through it.
+// the zero Key is no key, and no error of this package names a value, so
+// neither a key nor what a peer sent reaches a log through it. Every seal
+// draws its own iv.
 package macenvelope
 
 import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
@@ -57,10 +59,6 @@ const (
 	MaxText = 256
 )
 
-// Services are the services signing under the island's domain, by their
-// names within it.
-var Services = []string{"builds", "backends", "runtime"}
-
 // Label is the label a service's keys derive over: "<domain>/<service>".
 func Label(service string) string { return Domain + "/" + service }
 
@@ -68,6 +66,8 @@ var (
 	ErrUnknownVersion = errors.New("unknown_version")
 	ErrMalformed      = errors.New("malformed")
 	ErrUnsealable     = errors.New("unsealable")
+	// ErrNoKey is a zero Key given where a key signs, derives or seals.
+	ErrNoKey = errors.New("no_key")
 )
 
 // InvalidField is a message whose field Name holds no value its type
@@ -83,6 +83,12 @@ func (e InvalidField) Error() string { return "invalid_field " + e.Name }
 // one, and never as the bytes; a pointer to an array or a slice would be
 // printed whole under a verb it does not take. A Key is never changed
 // once made, so copies share its bytes.
+//
+// The zero Key is no key: it signs, verifies, derives, seals and opens
+// nothing, so a key a failed decode answers beside false grants nothing
+// to a caller that drops the false. == compares two Keys' identity, not
+// their bytes, and so does a map keyed by them; Equal is the one
+// comparison.
 type Key struct{ b *string }
 
 const redacted = "Key(..)"
@@ -95,15 +101,13 @@ func (Key) Format(f fmt.State, _ rune)   { io.WriteString(f, redacted) }
 func (Key) MarshalText() ([]byte, error) { return nil, errUnwritten }
 func (Key) MarshalJSON() ([]byte, error) { return nil, errUnwritten }
 
-// Equal is whether k and o are the same key, compared in constant time.
-func (k Key) Equal(o Key) bool { return subtle.ConstantTimeCompare(k.bytes(), o.bytes()) == 1 }
+// Zero is whether k is the zero Key, which is no key.
+func (k Key) Zero() bool { return k.b == nil }
 
-// bytes are the key's bytes; the zero Key's are 32 zeroes.
-func (k Key) bytes() []byte {
-	if k.b == nil {
-		return make([]byte, 32)
-	}
-	return []byte(*k.b)
+// Equal is whether k and o are the same key, compared in constant time;
+// the zero Key equals no key, itself included.
+func (k Key) Equal(o Key) bool {
+	return !k.Zero() && !o.Zero() && subtle.ConstantTimeCompare([]byte(*k.b), []byte(*o.b)) == 1
 }
 
 func keyOf(b []byte) Key {
@@ -111,14 +115,21 @@ func keyOf(b []byte) Key {
 	return Key{b: &s}
 }
 
-func (k Key) mac(text []byte) []byte {
-	m := hmac.New(sha256.New, k.bytes())
+// mac is the HMAC-SHA256 of text under k, or false for the zero Key.
+func (k Key) mac(text []byte) ([]byte, bool) {
+	if k.Zero() {
+		return nil, false
+	}
+	m := hmac.New(sha256.New, []byte(*k.b))
 	m.Write(text)
-	return m.Sum(nil)
+	return m.Sum(nil), true
 }
 
 func (k Key) aead() (cipher.AEAD, error) {
-	c, err := aes.NewCipher(k.bytes())
+	if k.Zero() {
+		return nil, ErrNoKey
+	}
+	c, err := aes.NewCipher([]byte(*k.b))
 	if err != nil {
 		return nil, err
 	}
@@ -126,7 +137,8 @@ func (k Key) aead() (cipher.AEAD, error) {
 }
 
 // DecodeRoot reads a root secret as it is configured: exactly 64
-// hexadecimal digits, in either case.
+// hexadecimal digits, in either case. Anything else is the zero Key and
+// false.
 func DecodeRoot(text string) (Key, bool) {
 	if len(text) != 64 {
 		return Key{}, false
@@ -139,7 +151,8 @@ func DecodeRoot(text string) (Key, bool) {
 	return keyOf(b), true
 }
 
-// KeyFromBytes is the key of 32 bytes, as a sealed value carries one.
+// KeyFromBytes is the key of 32 bytes, as a sealed value carries one; any
+// other length is the zero Key and false.
 func KeyFromBytes(b []byte) (Key, bool) {
 	if len(b) != 32 {
 		return Key{}, false
@@ -147,9 +160,13 @@ func KeyFromBytes(b []byte) (Key, bool) {
 	return keyOf(b), true
 }
 
-// Derive is the key HMAC-SHA256 of key over label derives.
+// Derive is the key HMAC-SHA256 of key over label derives; from the zero
+// Key, the zero Key.
 func Derive(key Key, label string) Key {
-	sum := key.mac([]byte(label))
+	sum, ok := key.mac([]byte(label))
+	if !ok {
+		return Key{}
+	}
 	defer clear(sum)
 	return keyOf(sum)
 }
@@ -200,12 +217,6 @@ func Text(s string) bool {
 		}
 	}
 	return true
-}
-
-// ValidValue is whether v is a value a field of t takes.
-func ValidValue(t Type, v any) bool {
-	_, ok := write(t, v)
-	return ok
 }
 
 func write(t Type, v any) (string, bool) {
@@ -262,6 +273,9 @@ func lines(label string, fields []Field, m Message) (string, error) {
 // DeriveFields is the key derived from key over label and the message's
 // fields, one per line.
 func DeriveFields(key Key, label string, fields []Field, m Message) (Key, error) {
+	if key.Zero() {
+		return Key{}, ErrNoKey
+	}
 	text, err := lines(label, fields, m)
 	if err != nil {
 		return Key{}, err
@@ -295,12 +309,16 @@ func (e Envelope) Header(key Key, m Message, body []byte) (string, error) {
 		return "", err
 	}
 	hash := BodyHash(body)
+	mac, ok := key.mac([]byte(e.canonical(vs, hash)))
+	if !ok {
+		return "", ErrNoKey
+	}
 	var b strings.Builder
 	b.WriteString(Version + " kind=" + e.Kind)
 	for i, f := range e.Fields {
 		b.WriteString(" " + f.header() + "=" + vs[i])
 	}
-	b.WriteString(" body=" + hash + " mac=" + EncodeURL(key.mac([]byte(e.canonical(vs, hash)))))
+	b.WriteString(" body=" + hash + " mac=" + EncodeURL(mac))
 	return b.String(), nil
 }
 
@@ -452,7 +470,8 @@ func (e Envelope) VerifyHeader(key Key, m Message, bodyHash, mac string) bool {
 	if err != nil {
 		return false
 	}
-	return equal(EncodeURL(key.mac([]byte(e.canonical(vs, bodyHash)))), mac)
+	expected, ok := key.mac([]byte(e.canonical(vs, bodyHash)))
+	return ok && equal(EncodeURL(expected), mac)
 }
 
 // VerifyBody is whether body is the one a verified header named by its
@@ -468,8 +487,18 @@ func (e Envelope) Verify(key Key, p Parsed, body []byte) bool {
 }
 
 // Seal seals plaintext with key to label and the message's fields, under
-// the 12 bytes of iv, which the caller draws fresh for every seal.
-func Seal(key Key, label string, fields []Field, m Message, plaintext, iv []byte) (string, error) {
+// 12 bytes of iv it draws from crypto/rand for this seal alone.
+func Seal(key Key, label string, fields []Field, m Message, plaintext []byte) (string, error) {
+	iv := make([]byte, 12)
+	if _, err := rand.Read(iv); err != nil {
+		return "", err
+	}
+	return seal(key, label, fields, m, plaintext, iv)
+}
+
+// seal is Seal under the iv given, which only a vector test, reproducing a
+// seal's bytes, gives.
+func seal(key Key, label string, fields []Field, m Message, plaintext, iv []byte) (string, error) {
 	if len(iv) != 12 {
 		return "", errors.New("an iv is 12 bytes")
 	}

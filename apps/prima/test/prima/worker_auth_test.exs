@@ -337,6 +337,8 @@ defmodule Prima.WorkerAuthTest do
     end
 
     test "a body is held to the hash its verified header named" do
+      assert length(@vectors["body_checks"]) >= 3
+
       for c <- @vectors["body_checks"] do
         expected = if c["error"], do: {:error, String.to_existing_atom(c["error"])}, else: :ok
 

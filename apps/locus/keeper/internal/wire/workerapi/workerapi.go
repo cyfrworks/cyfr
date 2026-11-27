@@ -10,12 +10,14 @@
 package workerapi
 
 import (
+	"errors"
 	"regexp"
 	"unicode/utf8"
 )
 
-// Callbacks are the WorkerAPI's callbacks.
-var Callbacks = []string{"start", "kill", "status"}
+// Callbacks are the WorkerAPI's callbacks, the one list of them
+// (Prima.WorkerAPI.callbacks/0); every call answers a list of its own.
+func Callbacks() []string { return []string{"start", "kill", "status"} }
 
 // Retry is what CYFR may do when a callback's answer is lost: kill and
 // status again, start never.
@@ -32,13 +34,19 @@ var RunnerStates = []string{"fresh", "idle", "busy", "tainted"}
 // MaxMessageBytes is the most bytes a refusal's sentence spans.
 const MaxMessageBytes = 1024
 
+// MaxMemoryBytes is the largest memory bound a status carries, 2^53 − 1.
+const MaxMemoryBytes = 1<<53 - 1
+
 var code = regexp.MustCompile(`\A[a-z][a-z0-9_]{0,63}\z`)
 
 // Refusal is why a worker service's keeper refuses to start runners: a
-// code and a sentence for the operator.
+// code and a sentence for the operator, and, for a place refused for room
+// (no_memory), the keeper's held, what holds the memory, which a start
+// refused for it answers and a status never carries.
 type Refusal struct {
 	Reason  string
 	Message string
+	Held    map[string]any
 }
 
 // Status is a worker service's state, as its status answer carries it.
@@ -65,13 +73,26 @@ func ValidRefusalMessage(message string) bool {
 	return true
 }
 
+// ErrInvalid is a status Prima.WorkerAPI.status_to_wire/1 refuses.
+var ErrInvalid = errors.New("invalid_status")
+
 // Wire is the status as its JSON answer spells it, which CYFR reads
 // (Prima.WorkerAPI.read_status/1): a plain map, which Prima writes with
-// its members by name.
-func (s Status) Wire() map[string]any {
+// its members by name. A status Prima would not write is ErrInvalid: a
+// count for other runner states than the four, a memory bound past
+// 2^53 − 1, or a refusal whose reason is no code, whose sentence is not
+// one a refusal carries, or that carries held.
+func (s Status) Wire() (map[string]any, error) {
+	if len(s.Runners) != len(RunnerStates) || s.MemoryBytes > MaxMemoryBytes {
+		return nil, ErrInvalid
+	}
 	runners := map[string]any{}
 	for _, state := range RunnerStates {
-		runners[state] = s.Runners[state]
+		n, counted := s.Runners[state]
+		if !counted {
+			return nil, ErrInvalid
+		}
+		runners[state] = n
 	}
 	attempts := make([]any, len(s.Attempts))
 	for i, a := range s.Attempts {
@@ -81,13 +102,16 @@ func (s Status) Wire() map[string]any {
 	if s.MemoryBytes > 0 {
 		memory = s.MemoryBytes
 	}
-	if s.Refusal != nil {
-		refusal = map[string]any{"reason": s.Refusal.Reason, "message": s.Refusal.Message}
+	if r := s.Refusal; r != nil {
+		if !code.MatchString(r.Reason) || !ValidRefusalMessage(r.Message) || r.Held != nil {
+			return nil, ErrInvalid
+		}
+		refusal = map[string]any{"reason": r.Reason, "message": r.Message}
 	}
 	return map[string]any{
 		"service": s.Service, "boot": s.Boot, "runners": runners,
 		"attempts": attempts, "memory_bytes": memory, "refusal": refusal,
-	}
+	}, nil
 }
 
 // ReportRefusals are the codes of a keeper's refusal a worker service's
@@ -113,10 +137,11 @@ const memoryUnavailable = "cyfr-locus cannot bound a runner's memory and CPU in 
 	"host whose memory and cpu controllers reach the container)"
 
 // KeeperRefusal is the refusal a worker service holds for its keeper's
-// refusal of a runner's spawn with code: memory_unavailable names what the
-// deployment lacks, any other code of a code's shape is named as it was
-// sent, and anything else is refused.
-func KeeperRefusal(c string) Refusal {
+// refusal of a runner's spawn with code (Prima.WorkerAPI.keeper_refusal/1):
+// memory_unavailable names what the deployment lacks; no_memory keeps the
+// keeper's held beside it; any other code of a code's shape is named as it
+// was sent, and anything else is refused.
+func KeeperRefusal(c string, held map[string]any) Refusal {
 	if c == "memory_unavailable" {
 		return Refusal{Reason: c, Message: memoryUnavailable}
 	}
@@ -124,5 +149,9 @@ func KeeperRefusal(c string) Refusal {
 	if code.MatchString(c) {
 		reason = c
 	}
-	return Refusal{Reason: reason, Message: "cyfr-locus refused to start a runner (" + reason + ")"}
+	r := Refusal{Reason: reason, Message: "cyfr-locus refused to start a runner (" + reason + ")"}
+	if c == "no_memory" {
+		r.Held = held
+	}
+	return r
 }

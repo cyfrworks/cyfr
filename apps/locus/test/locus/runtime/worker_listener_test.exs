@@ -404,7 +404,8 @@ defmodule Locus.Runtime.WorkerListenerTest do
 
       for c <- starts do
         args = start_args(context, c["start"])
-        response = response(context, :start, request(:start, args))
+        assert c["header"] == "signed", c["name"]
+        response = response(context, :start, request(:start, args), path: c["path"])
         assert {response.status, response.body} == {c["status"], c["answer"]}, c["name"]
       end
 

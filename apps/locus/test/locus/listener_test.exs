@@ -459,32 +459,51 @@ defmodule Locus.ListenerTest do
 
   # One listener case of the vector file, made of this service's listener:
   # its header and body as the case says, its answer byte for byte, and a
-  # connection the answer keeps answering a status next.
-  defp listener_case(ctx, c) do
-    body = listener_body(c["body"])
-    {client, headers} = listener_headers(ctx, c, body, connect(ctx.port))
-    {sent, timeout} = if c["before_body"], do: {:none, @unread_ms}, else: {:all, 10_000}
-    connection = if c["closes"], do: :close, else: :open
+  # connection the answer keeps answering a status next. A case of
+  # several requests makes them one after another on one connection.
+  defp listener_case(ctx, %{"requests" => requests} = c) do
+    assert requests != [], c["name"]
 
-    {answer, client} =
-      without_credentials(c["credentials"] == false, fn ->
+    client =
+      Enum.reduce(requests, connect(ctx.port), fn request, client ->
+        {answer, client} = listener_request(ctx, request, client)
+        assert {answer.status, answer.body} == {request["status"], request["answer"]}, c["name"]
+        assert answer.headers["connection"] == nil, c["name"]
         client
-        |> send_request(c["method"] || "POST", c["path"], headers, body, sent)
-        |> answer(timeout)
       end)
 
-    case c["answer"] do
-      nil ->
+    assert_status_answered(ctx, client)
+  end
+
+  defp listener_case(ctx, c) do
+    connection = if c["closes"], do: :close, else: :open
+    {answer, client} = listener_request(ctx, c, connect(ctx.port))
+
+    case {c["answer"], c["reading"]} do
+      {nil, "ok"} ->
         assert answer.status == c["status"], c["name"]
         assert %{"v" => 3, "ok" => %{"service" => "wrk_local"}} = Jason.decode!(answer.body)
         assert answer.headers["connection"] == nil, c["name"]
 
-      bytes ->
+      {bytes, nil} when is_binary(bytes) ->
         assert {answer.status, answer.body} == {c["status"], bytes}, c["name"]
         assert_answer(answer, c["status"], bytes, connection)
     end
 
     if connection == :close, do: assert_closed(client), else: assert_status_answered(ctx, client)
+  end
+
+  # One request of a case on `client`, and its answer.
+  defp listener_request(ctx, c, client) do
+    body = listener_body(c["body"])
+    {client, headers} = listener_headers(ctx, c, body, client)
+    {sent, timeout} = if c["before_body"], do: {:none, @unread_ms}, else: {:all, 10_000}
+
+    without_credentials(c["credentials"] == false, fn ->
+      client
+      |> send_request(c["method"] || "POST", c["path"], headers, body, sent)
+      |> answer(timeout)
+    end)
   end
 
   defp listener_body(%{"json" => value}), do: Jason.encode!(value)
@@ -1549,6 +1568,7 @@ defmodule Locus.ListenerTest do
     test "a nonce is fresh or replayed at each presentation as worker_api.json says" do
       table = nonce_table()
       assert @worker_api["window_ms"] == @window_ms
+      assert length(@worker_api["nonces"]) >= 7
 
       for %{"nonce" => nonce, "now" => now, "fresh" => fresh} <- @worker_api["nonces"] do
         expected = if fresh, do: :ok, else: {:error, :replayed}
