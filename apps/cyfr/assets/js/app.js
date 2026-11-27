@@ -71,6 +71,11 @@ Hooks.ScrollBottom = {
       this._following = this._nearBottom()
     }
     this.el.addEventListener("scroll", this._onScroll, { passive: true })
+    this.handleEvent("scroll:bottom", ({id}) => {
+      if (this.el.id !== id) return
+      this._following = true
+      this._follow()
+    })
     this.observer = new MutationObserver(() => this._follow())
     this.observer.observe(this.el, { childList: true, subtree: true })
     this._follow()
