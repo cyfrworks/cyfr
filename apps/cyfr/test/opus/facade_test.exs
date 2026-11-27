@@ -39,10 +39,9 @@ defmodule Opus.FacadeTest do
     get: 2,
     list_by_request: 3,
     loads_packs?: 1,
-    # Who used what memory, which the Programs and Settings pages read, and
-    # how often they read it again (`Opus.Memory`).
+    # Who used what memory, which the Programs and Settings pages read
+    # (`Opus.Memory`).
     memory: 2,
-    memory_poll_ms: 0,
     pause_turn_root: 3,
     read_threads: 2,
     release_turn_root: 3,

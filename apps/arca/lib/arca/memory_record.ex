@@ -388,6 +388,68 @@ defmodule Arca.MemoryRecord do
   def counters(%Prima.Actor{}), do: {:error, :no_athanor}
 
   @doc """
+  What the actor's own athanor holds now on `endpoint`'s machine, for a
+  refusal's sentence (`Prima.LocusPool.named_held/2`): each counter of
+  that athanor with bytes on the machine's current boot, by its kind,
+  subject and the name CYFR read of its row. The machine is the endpoints
+  that answered within `Prima.LocusPool.fresh_ms/0` on `endpoint`'s boot,
+  on the database's clock. `{:error, :unanswered}` for an endpoint this
+  CYFR has not heard from within it. Only an athanor actor reads it, and
+  only its own athanor's rows; no other athanor's row or sum is read.
+  """
+  @spec holders_now(Prima.Actor.t(), String.t()) ::
+          {:ok,
+           [
+             %{
+               kind: String.t(),
+               subject: String.t() | nil,
+               name: String.t() | nil,
+               bytes: non_neg_integer()
+             }
+           ]}
+          | {:error, :unanswered | :no_athanor | term()}
+  def holders_now(%Prima.Actor{athanor_id: athanor_id} = actor, endpoint)
+      when resolved(athanor_id) and not platform(actor) and is_binary(endpoint) do
+    Errors.with_db_rescue("Arca.MemoryRecord.holders_now", fn ->
+      now = Arca.ServerMetaStorage.now!()
+
+      case answering_machine(endpoint, now) do
+        {boot, machine} ->
+          rows =
+            from(c in MemoryCounter,
+              where: c.endpoint in ^machine and c.boot == ^boot and c.bytes > 0,
+              select: %{kind: c.kind, subject: c.subject, name: c.name, bytes: c.bytes}
+            )
+            |> Arca.QueryHelpers.where_athanor(athanor_id)
+            |> Arca.Repo.all()
+
+          {:ok, Enum.map(rows, fn row -> %{row | subject: none_as_nil(row.subject)} end)}
+
+        :unanswered ->
+          {:error, :unanswered}
+      end
+    end)
+  end
+
+  def holders_now(%Prima.Actor{}, _endpoint), do: {:error, :no_athanor}
+
+  # The endpoints of `endpoint`'s boot that answered within the bound, or
+  # `:unanswered` when `endpoint` itself has not.
+  # arca:unscoped-ok the host's own rows of its endpoints, which no athanor holds.
+  defp answering_machine(endpoint, now) do
+    fresh = DateTime.add(now, -Prima.LocusPool.fresh_ms(), :millisecond)
+    rows = from(e in MemoryEndpoint, where: e.heard_at >= ^fresh) |> Arca.Repo.all()
+
+    case Enum.find(rows, &(&1.endpoint == endpoint)) do
+      %{boot: boot} -> {boot, for(e <- rows, e.boot == boot, do: e.endpoint)}
+      nil -> :unanswered
+    end
+  end
+
+  defp none_as_nil(@none), do: nil
+  defp none_as_nil(subject), do: subject
+
+  @doc """
   For each endpoint, the bytes every athanor but the actor's holds now on
   its current boot, as one sum: no athanor, kind, subject or name of
   theirs.

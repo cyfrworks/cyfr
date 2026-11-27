@@ -45,7 +45,7 @@ defmodule PrismWeb.SettingsLive do
       it now by person, kind and name, then each UTC day's use by person,
       kind and name, the newest seven days first and seven more at a time,
       never a thread or content. It is read again every poll
-      (`Opus.memory_poll_ms/0`).
+      (`Prima.LocusPool.poll_ms/0`).
     * **Administrators** — in the allowlist, for a platform administrator:
       the people carrying the mark, another person made an administrator
       (`door.mark_admin`) and a mark taken away (`door.clear_admin`), never
@@ -422,7 +422,7 @@ defmodule PrismWeb.SettingsLive do
   # Who used what is read again as often as CYFR asks for it. A person
   # who no longer administers reads nothing, and the section empties.
   def handle_info(:memory, socket) do
-    Process.send_after(self(), :memory, Opus.memory_poll_ms())
+    Process.send_after(self(), :memory, Prima.LocusPool.poll_ms())
 
     case Opus.memory(socket.assigns.context, :everyone) do
       {:ok, %{machines: machines, unanswered: unanswered, days: days}} ->

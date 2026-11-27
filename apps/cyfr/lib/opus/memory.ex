@@ -22,7 +22,7 @@ defmodule Opus.Memory do
 
   ## The poller
 
-  Every `poll_ms/0` one member of the cell asks every endpoint: the
+  Every `Prima.LocusPool.poll_ms/0` one member of the cell asks every endpoint: the
   member that holds its slot (`Arca.ControlPlane.held?/0`), is the cell's
   proposed owner of `memory:cell` (`Cyfr.Cell.mine?/1`) and holds the
   cell's `memory` claim (`Arca.JobClaims`), leased for three polls. It
@@ -55,7 +55,7 @@ defmodule Opus.Memory do
   by the athanor's owner, kind and program name, never a thread or
   content, and `others` 0. These two are the widening across athanors
   ARCHITECTURE.md §5.1 names beside a share. A machine is the endpoints
-  that answered within `fresh_ms/0` on one keeper boot, named by its
+  that answered within `Prima.LocusPool.fresh_ms/0` on one keeper boot, named by its
   worker service's id, else by the backends service's name, else
   `builds`; that boot's holders are what it holds now. An endpoint that
   has not answered within it holds nothing now and joins no machine: the
@@ -74,11 +74,8 @@ defmodule Opus.Memory do
 
   alias Arca.{JobClaims, MemoryRecord}
 
-  @poll_ms 5_000
   @kind "memory"
-  @lease_ms 3 * @poll_ms
-  @fresh_ms 3 * @poll_ms
-  @builds "builds"
+  @lease_ms Prima.LocusPool.fresh_ms()
   @kinds %{
     "run" => :run,
     "build" => :build,
@@ -120,7 +117,7 @@ defmodule Opus.Memory do
           holders: [holder()]
         }
 
-  @typedoc "An endpoint that has not answered within `fresh_ms/0`, and when it last did."
+  @typedoc "An endpoint that has not answered within `Prima.LocusPool.fresh_ms/0`, and when it last did."
   @type unanswered :: %{endpoint: String.t(), heard_at: DateTime.t()}
 
   @type day :: %{
@@ -134,23 +131,11 @@ defmodule Opus.Memory do
           ended: %{cap: non_neg_integer(), machine: non_neg_integer(), either: non_neg_integer()}
         }
 
-  @doc "How often the record is asked of every endpoint, and how often a page reading it reads again."
-  @spec poll_ms() :: pos_integer()
-  def poll_ms, do: @poll_ms
-
-  @doc """
-  How long after its last answer an endpoint counts as answering: three
-  polls. One that has not answered within it holds nothing "now" and joins
-  no machine, and a refusal names no holder from it.
-  """
-  @spec fresh_ms() :: pos_integer()
-  def fresh_ms, do: @fresh_ms
-
   @doc """
   The record as `ctx` may read it: `:mine`, the person's own with
   everyone else's as one sum, or `:everyone`, the platform
   administrator's. `machines` are the endpoints that answered within
-  `fresh_ms/0`, joined by keeper boot; `unanswered` the others, each by
+  `Prima.LocusPool.fresh_ms/0`, joined by keeper boot; `unanswered` the others, each by
   its name and when it last answered, holding nothing now.
 
   `:mine` reads only a context scoped to one athanor, and only that
@@ -196,64 +181,22 @@ defmodule Opus.Memory do
   def read(%Sanctum.Context{}, :everyone), do: {:error, :forbidden}
 
   @doc """
-  What a start refused for room at `endpoint` says of the person's own
-  holders, from the record: `held` (the refusal's, charges) with its
-  `mine` taken from the record's latest holders of `actor`'s athanor on
-  that endpoint's machine, and the names of their rows, for
-  `Prima.LocusPool.refusal_sentence/2`.
-
-  The record is used only when the endpoint answered within `fresh_ms/0`
-  and the person's holders it names (`R`) fit within what `held` says is
-  held: `ΣR ≤ others_bytes + Σmine`. Then `mine` is `R` and
-  `others_bytes` is `others_bytes + Σmine − ΣR`, never below 0, so what
-  is held and free together is the refusal's own and the sentence's
-  branches decide as they would on `held`. Otherwise, with nothing of the
-  person's in the record, an endpoint that has not answered, or a
-  record larger than `held` (a holder ended since the poll), `held` is
-  answered as it came with no names. The record is at most a poll old.
+  What a start refused for room at `endpoint` says of `actor`'s own
+  holders: the record's current holders of the actor's athanor on that
+  endpoint's machine (`Arca.MemoryRecord.holders_now/2`), put to `held`
+  by `Prima.LocusPool.named_held/2`, for
+  `Prima.LocusPool.refusal_sentence/2`. An endpoint that has not
+  answered within `Prima.LocusPool.fresh_ms/0`, or a record that cannot be
+  read, leaves `held` as it came, with no names. The record is at most a
+  poll old.
   """
   @spec held_for(Prima.Actor.t(), String.t(), Prima.LocusPool.held()) ::
           {Prima.LocusPool.held(), %{String.t() => String.t()}}
-  def held_for(%Prima.Actor{athanor_id: athanor_id}, endpoint, %{} = held)
-      when is_binary(athanor_id) and athanor_id != "" and is_binary(endpoint) do
-    actor = Prima.Actor.in_athanor(athanor_id)
-
-    with {:ok, endpoints} <- MemoryRecord.endpoints(actor),
-         %{boot: boot} = asked <- Enum.find(endpoints, &(&1.endpoint == endpoint)),
-         true <- answering?(asked),
-         machine = for(e <- endpoints, e.boot == boot, answering?(e), do: e.endpoint),
-         {:ok, counters} <- MemoryRecord.counters(actor),
-         [_ | _] = mine <- own_holders(counters, machine, boot),
-         held_bytes = held.others_bytes + Enum.sum_by(held.mine, & &1.bytes),
-         true <- Enum.sum_by(mine, & &1.bytes) <= held_bytes do
-      names =
-        for %{subject: subject, name: name} <- counters_named(counters, machine, boot),
-            into: %{},
-            do: {subject, name}
-
-      {%{held | mine: mine, others_bytes: held_bytes - Enum.sum_by(mine, & &1.bytes)}, names}
-    else
-      _use_held -> {held, %{}}
+  def held_for(%Prima.Actor{} = actor, endpoint, %{} = held) when is_binary(endpoint) do
+    case MemoryRecord.holders_now(actor, endpoint) do
+      {:ok, holders} -> Prima.LocusPool.named_held(held, holders)
+      {:error, _unnamed} -> {held, %{}}
     end
-  end
-
-  def held_for(%Prima.Actor{}, _endpoint, %{} = held), do: {held, %{}}
-
-  defp answering?(%{heard_at: heard_at}),
-    do: DateTime.diff(DateTime.utc_now(), heard_at, :millisecond) <= @fresh_ms
-
-  defp now_held(counters, machine, boot),
-    do: for(c <- counters, c.endpoint in machine, c.boot == boot, c.bytes > 0, do: c)
-
-  defp own_holders(counters, machine, boot) do
-    for c <- now_held(counters, machine, boot),
-        do: %{kind: c.kind, subject: c.subject, bytes: c.bytes}
-  end
-
-  defp counters_named(counters, machine, boot) do
-    for c <- now_held(counters, machine, boot),
-        is_binary(c.subject) and is_binary(c.name),
-        do: c
   end
 
   # ---------------------------------------------------------------------------
@@ -265,7 +208,10 @@ defmodule Opus.Memory do
     now = DateTime.utc_now()
 
     {answering, silent} =
-      Enum.split_with(endpoints, &(DateTime.diff(now, &1.heard_at, :millisecond) <= @fresh_ms))
+      Enum.split_with(
+        endpoints,
+        &(DateTime.diff(now, &1.heard_at, :millisecond) <= Prima.LocusPool.fresh_ms())
+      )
 
     %{
       machines: machines(answering, counters, others, people),
@@ -313,8 +259,8 @@ defmodule Opus.Memory do
   end
 
   defp machine_name(names) do
-    Enum.find(names, &(&1 not in [Opus.Programs.local(), @builds])) ||
-      Enum.find(names, &(&1 == Opus.Programs.local())) || @builds
+    Enum.find(names, &(&1 not in [Opus.Programs.local(), Prima.LocusPool.builds_endpoint()])) ||
+      Enum.find(names, &(&1 == Opus.Programs.local())) || Prima.LocusPool.builds_endpoint()
   end
 
   defp holders(counters, names, boot, people) do
@@ -437,7 +383,13 @@ defmodule Opus.Memory do
 
   defp builds do
     if Cyfr.RuntimeConfig.locus_builds_url() && Cyfr.RuntimeConfig.locus_builds_key(),
-      do: [%{name: @builds, service: :builds, ask: &Compendium.builds_pool/1}],
+      do: [
+        %{
+          name: Prima.LocusPool.builds_endpoint(),
+          service: :builds,
+          ask: &Compendium.builds_pool/1
+        }
+      ],
       else: []
   end
 
@@ -459,7 +411,7 @@ defmodule Opus.Memory do
   @impl true
   def handle_info(:poll, state) do
     state = tick(state)
-    Process.send_after(self(), :poll, @poll_ms)
+    Process.send_after(self(), :poll, Prima.LocusPool.poll_ms())
     {:noreply, state}
   end
 

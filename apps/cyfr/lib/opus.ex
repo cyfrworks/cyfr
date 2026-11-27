@@ -295,10 +295,6 @@ defmodule Opus do
           | {:error, term()}
   defdelegate memory(ctx, scope), to: Opus.Memory, as: :read
 
-  @doc "How often the record of who used what is asked again (`Opus.Memory.poll_ms/0`)."
-  @spec memory_poll_ms() :: pos_integer()
-  defdelegate memory_poll_ms(), to: Opus.Memory, as: :poll_ms
-
   @doc """
   Advance a running chain's `authority` through one invocation of
   `reference` and run it synchronously under the resulting child

@@ -133,6 +133,7 @@ defmodule Prima.LocusPool do
   @reading_gap_ms 2_000
 
   @version 1
+  @poll_ms 5_000
   @route "/locus/v1/pool"
   @services [:runtime, :builds, :backends]
   @max_request_bytes 1_024
@@ -262,6 +263,25 @@ defmodule Prima.LocusPool do
   @doc "The longest gap between a place's readings that is counted."
   @spec reading_gap_ms() :: pos_integer()
   def reading_gap_ms, do: @reading_gap_ms
+
+  @doc """
+  How often CYFR asks each service for its report (`Opus.Memory`), and
+  how often a page showing the record reads it again: 5 seconds.
+  """
+  @spec poll_ms() :: pos_integer()
+  def poll_ms, do: @poll_ms
+
+  @doc """
+  How long after its last answer an endpoint counts as answering: three
+  polls. One that has not answered within it holds nothing now, joins no
+  machine, and a refusal names no holder from it.
+  """
+  @spec fresh_ms() :: pos_integer()
+  def fresh_ms, do: 3 * @poll_ms
+
+  @doc "The name CYFR stamps the builds service's report with in its record."
+  @spec builds_endpoint() :: String.t()
+  def builds_endpoint, do: "builds"
 
   @doc "The pool wire's version, carried in every body and answer as `v`."
   @spec version() :: pos_integer()
@@ -701,6 +721,52 @@ defmodule Prima.LocusPool do
         1 -> "a #{word} uses #{bytes}"
         n -> "#{n} #{word}s use #{bytes}"
       end
+    end
+  end
+
+  @doc """
+  What a start refused for room says of the person's own holders, from
+  `holders`, the record's current holders of the person's athanor on the
+  refusing endpoint's machine (`Arca.MemoryRecord.holders_now/2`): `held`
+  with its `mine` taken from them and the names of their rows, for
+  `refusal_sentence/2`.
+
+  The holders are used only when they fit within what `held` says is
+  held, the refusal's charges: `ΣR ≤ others_bytes + Σmine`. Then `mine` is
+  them and `others_bytes` is `others_bytes + Σmine − ΣR`, never below 0,
+  so what is held and free together is the refusal's own and the
+  sentence's branches decide as they would on `held`. With none, or more
+  than `held` holds (a holder ended since the record was read), `held` is
+  answered as it came with no names.
+  """
+  @spec named_held(held(), [
+          %{
+            kind: String.t(),
+            subject: String.t() | nil,
+            name: String.t() | nil,
+            bytes: non_neg_integer()
+          }
+        ]) :: {held(), %{String.t() => String.t()}}
+  def named_held(%{} = held, []), do: {held, %{}}
+
+  def named_held(%{mine: mine, others_bytes: others} = held, holders) when is_list(holders) do
+    held_bytes = others + Enum.sum_by(mine, & &1.bytes)
+    theirs = Enum.sum_by(holders, & &1.bytes)
+
+    if theirs <= held_bytes do
+      names =
+        for %{subject: subject, name: name} <- holders,
+            is_binary(subject) and is_binary(name),
+            into: %{},
+            do: {subject, name}
+
+      {%{
+         held
+         | mine: Enum.map(holders, &Map.take(&1, [:kind, :subject, :bytes])),
+           others_bytes: held_bytes - theirs
+       }, names}
+    else
+      {held, %{}}
     end
   end
 

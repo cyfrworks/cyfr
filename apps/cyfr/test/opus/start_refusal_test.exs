@@ -284,6 +284,29 @@ defmodule Opus.StartRefusalTest do
   end
 
   @tag :capture_log
+  test "a run a component asked for in its chain is told no name, size or sum",
+       %{ctx: ctx, refusal: refusal} do
+    recorded!(ctx)
+    serve!({503, WorkerWire.error(:no_memory, %{"held" => @room})}, refusal)
+
+    # The parent is a component's run, its attempt on a worker service.
+    parent = Cyfr.Test.AttemptFixtures.attached!(ctx: ctx, attach: false)
+
+    assert %{service_id: "wrk_fixture"} =
+             Arca.ExecutionAttempts.current(Sanctum.Context.actor(ctx), parent.execution_id)
+
+    {result, row, _id} =
+      run(ctx,
+        parent_execution_id: parent.execution_id,
+        root_execution_id: parent.execution_id
+      )
+
+    sentence = "This CYFR has not enough memory free. Stop one on the Programs page, or wait."
+    assert result == {:error, sentence}
+    assert row.error_message == sentence
+  end
+
+  @tag :capture_log
   test "a run a tincture asked for is told no name, size or sum", %{ctx: ctx, refusal: refusal} do
     recorded!(ctx)
     serve!({503, WorkerWire.error(:no_memory, %{"held" => @room})}, refusal)

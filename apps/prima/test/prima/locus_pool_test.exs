@@ -500,4 +500,65 @@ defmodule Prima.LocusPoolTest do
                  "Stop one on the Programs page, or wait."
     end
   end
+
+  describe "the person's holders put to a refusal" do
+    @mib 1024 * 1024
+
+    defp refusal(others, mine \\ []),
+      do: %{need: 164 * @mib, free: 8 * @mib, mine: mine, others_bytes: others * @mib}
+
+    defp holder(kind, subject, name, mib),
+      do: %{kind: kind, subject: subject, name: name, bytes: mib * @mib}
+
+    test "within what the refusal holds, they are the person's, and the rest is others'" do
+      holders = [holder("program", "srv_c", "claude", 600), holder("run", nil, nil, 100)]
+
+      assert {held, %{"srv_c" => "claude"}} = LocusPool.named_held(refusal(2048), holders)
+      assert held.others_bytes == 1348 * @mib
+
+      assert [%{kind: "program", subject: "srv_c", bytes: _}, %{kind: "run", subject: nil}] =
+               held.mine
+    end
+
+    test "none leaves the refusal as it came" do
+      assert LocusPool.named_held(refusal(2048), []) == {refusal(2048), %{}}
+    end
+
+    test "more than the refusal holds leaves it as it came" do
+      held = refusal(500, [%{kind: "build", subject: nil, bytes: 100 * @mib}])
+
+      assert LocusPool.named_held(held, [holder("program", "srv_c", "claude", 601)]) ==
+               {held, %{}}
+    end
+
+    test "a holder whose row is gone has no name and is counted by its kind" do
+      {held, names} =
+        LocusPool.named_held(refusal(1024), [holder("program", "srv_gone", nil, 300)])
+
+      assert names == %{}
+
+      assert LocusPool.refusal_sentence(held, names) ==
+               "This CYFR has not enough memory free. Of yours, a program uses 300.0 MB. " <>
+                 "Others use 724.0 MB. Stop one on the Programs page, or wait."
+    end
+
+    test "holders that are all the refusal holds leave others at 0, and the sentence names none" do
+      {held, names} =
+        LocusPool.named_held(refusal(700), [holder("program", "srv_c", "claude", 700)])
+
+      assert held.others_bytes == 0
+      refute LocusPool.refusal_sentence(held, names) =~ "Others"
+    end
+
+    test "the refusal's own holdings count toward what it holds, and never go below 0" do
+      held = refusal(100, [%{kind: "build", subject: nil, bytes: 200 * @mib}])
+      {named, _names} = LocusPool.named_held(held, [holder("program", "srv_c", "claude", 300)])
+      assert named.others_bytes == 0
+    end
+
+    test "a withheld refusal says only that there is not enough memory free" do
+      assert LocusPool.refusal_sentence(:withheld) ==
+               "This CYFR has not enough memory free. Stop one on the Programs page, or wait."
+    end
+  end
 end

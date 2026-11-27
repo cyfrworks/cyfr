@@ -562,9 +562,28 @@ defmodule Compendium.Builds do
 
     case Client.build(request, opts) do
       {:ok, built} -> {:ok, built}
+      {:error, {:refused, {:no_memory, held}, _diagnostics}} -> {:error, room(ctx, held)}
       {:error, outcome} -> {:error, refusal(outcome)}
     end
   end
+
+  # A build refused for room: the person's own holders on the builds
+  # service's machine by name, from the record of who used what, when the
+  # person asked on the external plane (a page, their own tool call, a
+  # canvas build). A build asked inside a chain, a component's or a turn's,
+  # is told no name, size or sum: the build carries no word of who in the
+  # chain asked.
+  defp room(%Context{plane: :external} = ctx, held) do
+    {held, names} =
+      case Arca.MemoryRecord.holders_now(Context.actor(ctx), Prima.LocusPool.builds_endpoint()) do
+        {:ok, holders} -> Prima.LocusPool.named_held(held, holders)
+        {:error, _unnamed} -> {held, %{}}
+      end
+
+    "Builder: " <> Prima.LocusPool.refusal_sentence(held, names)
+  end
+
+  defp room(%Context{}, _held), do: "Builder: " <> Prima.LocusPool.refusal_sentence(:withheld)
 
   defp refusal(:not_configured),
     do: "builds are disabled on this server: no builds service is configured"

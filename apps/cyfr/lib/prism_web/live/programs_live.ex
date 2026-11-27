@@ -24,7 +24,7 @@ defmodule PrismWeb.ProgramsLive do
 
   **Memory in use now**, above the list, is what of the person's holds
   memory on each machine (`Opus.memory/2`, `:mine`), read at mount and
-  again every poll (`Opus.memory_poll_ms/0`): each program by its name with
+  again every poll (`Prima.LocusPool.poll_ms/0`): each program by its name with
   the Disable its row has and the Close of each of its sessions, a run and
   a build by kind with no control, everyone else's use as one sum, and how
   fresh the count is (`PrismWeb.MemoryWords`).
@@ -418,7 +418,7 @@ defmodule PrismWeb.ProgramsLive do
 
   # What holds memory is read again as often as CYFR asks for it.
   def handle_info(:memory, socket) do
-    Process.send_after(self(), :memory, Opus.memory_poll_ms())
+    Process.send_after(self(), :memory, Prima.LocusPool.poll_ms())
 
     case Opus.memory(socket.assigns.context, :mine) do
       {:ok, %{machines: machines, unanswered: unanswered}} ->

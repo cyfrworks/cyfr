@@ -163,6 +163,85 @@ defmodule Compendium.Builds.BuildRefusalsTest do
       assert length(ScriptedBuilder.requests()) == length(refusals)
     end
 
+    # The person's record of who uses what on the builds service's
+    # machine: a program of theirs named `claude`, 300 MiB.
+    defp recorded!(ctx) do
+      {:ok, claim} =
+        Arca.JobClaims.claim("memory", Arca.JobClaims.cell_key(), "boot_test", 60_000)
+
+      counter = %{
+        rev: 1,
+        day: Date.utc_today(),
+        athanor: ctx.athanor_id,
+        kind: "program",
+        subject: "srv_claude",
+        bytes: 300 * 1024 * 1024,
+        mib_ms: 0,
+        measured_ms: 0,
+        peak_bytes: 0,
+        cap: 0,
+        machine: 0,
+        either: 0
+      }
+
+      report = %{
+        boot: String.duplicate("b", 32),
+        budget: 0,
+        work: 0,
+        floor: 0,
+        used: 0,
+        counters: [counter],
+        next: nil
+      }
+
+      names = %{{ctx.athanor_id, "srv_claude"} => %{name: "claude", shown: "program"}}
+
+      {:ok, _} =
+        Arca.MemoryRecord.store(
+          claim,
+          :none,
+          Prima.LocusPool.builds_endpoint(),
+          0,
+          report,
+          names,
+          90
+        )
+
+      :ok
+    end
+
+    @room {:no_memory,
+           %{
+             need: 800 * 1024 * 1024,
+             free: 0,
+             mine: [%{kind: "program", subject: "mcp_private", bytes: 384 * 1024 * 1024}],
+             others_bytes: 1024 * 1024 * 1024
+           }}
+
+    test "a person's own build refused for room names their holders from the record" do
+      ctx = scaffolded(local_ctx())
+      recorded!(ctx)
+      ScriptedBuilder.script([{:refuse, @room}])
+
+      assert {:error, reason} = compile(ctx)
+
+      assert err_msg(reason) ==
+               "Builder: This CYFR has not enough memory free. Of yours, claude uses 300.0 MB. " <>
+                 "Others use 1.1 GB. Stop one on the Programs page, or wait."
+    end
+
+    test "a build asked inside a chain is told no name, size or sum" do
+      ctx = scaffolded(local_ctx())
+      recorded!(ctx)
+      ScriptedBuilder.script([{:refuse, @room}])
+
+      assert {:error, reason} = compile(Sanctum.Context.enter_guest(ctx))
+
+      assert err_msg(reason) ==
+               "Builder: This CYFR has not enough memory free. Stop one on the Programs page, " <>
+                 "or wait."
+    end
+
     @tag :capture_log
     test "a wrong key is the builder's unauthorized, and a builder that is not there is unavailable" do
       ctx = scaffolded(local_ctx())
