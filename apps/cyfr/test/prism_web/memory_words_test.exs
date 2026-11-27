@@ -49,16 +49,24 @@ defmodule PrismWeb.MemoryWordsTest do
     @at ~U[2026-11-27 10:38:20Z]
     @later ~U[2026-11-27 10:41:00Z]
 
-    test "are one sentence, in the order builds, programs, runs, since the earliest" do
-      silent = [
-        %{endpoint: "wrk_local", heard_at: @later},
-        %{endpoint: Opus.Programs.local(), heard_at: @at},
-        %{endpoint: Prima.LocusPool.builds_endpoint(), heard_at: @later}
-      ]
+    test "are one sentence, in the order builds, programs, runs" do
+      silent = fn runs, programs, builds ->
+        MemoryWords.silent([
+          %{endpoint: "wrk_local", heard_at: runs},
+          %{endpoint: Opus.Programs.local(), heard_at: programs},
+          %{endpoint: Prima.LocusPool.builds_endpoint(), heard_at: builds}
+        ])
+      end
 
-      assert MemoryWords.silent(silent) ==
+      # All at one time on the clock: that time is every one's.
+      assert silent.(@at, @at, ~U[2026-11-27 10:38:55Z]) ==
                "The services for builds, programs and runs have not answered since 10:38 UTC, " <>
                  "so what they run is not counted."
+
+      # At different times: the time is the earliest, and is said to be.
+      assert silent.(@later, @at, @later) ==
+               "The services for builds, programs and runs have not answered, the first of " <>
+                 "them since 10:38 UTC, so what they run is not counted."
     end
 
     test "one alone is said alone, the one service for runs without its id" do
@@ -82,16 +90,5 @@ defmodule PrismWeb.MemoryWordsTest do
                "The services for runs (wrk_a) and runs (wrk_b) have not answered since " <>
                  "10:38 UTC, so what they run is not counted."
     end
-  end
-
-  test "a count no newer than a terminal's close says so, and a newer one is fresh again" do
-    machine = %{heard_at: ~U[2026-11-27 10:38:20Z]}
-
-    assert MemoryWords.counted(machine) == "Counted a few seconds ago."
-
-    assert MemoryWords.counted(machine, ~U[2026-11-27 10:38:21Z]) ==
-             "A terminal closed since this was counted."
-
-    assert MemoryWords.counted(machine, ~U[2026-11-27 10:38:19Z]) == "Counted a few seconds ago."
   end
 end

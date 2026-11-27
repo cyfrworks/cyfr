@@ -1405,7 +1405,7 @@ defmodule PrismWeb.SettingsLive do
                     <td class="inline-block pr-3 text-gray-500 sm:table-cell sm:px-4 sm:py-3 sm:text-gray-300 sm:whitespace-nowrap">
                       {Date.to_iso8601(d.day)}
                     </td>
-                    <td class="inline-block sm:table-cell sm:px-4 sm:py-3 sm:whitespace-nowrap">
+                    <td class="inline-block max-w-full break-words sm:table-cell sm:px-4 sm:py-3 sm:whitespace-nowrap">
                       {person_name(d.person)}
                     </td>
                     <td class="block break-words sm:table-cell sm:px-4 sm:py-3 sm:whitespace-nowrap">
@@ -1421,14 +1421,12 @@ defmodule PrismWeb.SettingsLive do
                           "block",
                           if(at > 0, do: "text-xs text-gray-500", else: "sm:whitespace-nowrap")
                         ]}
-                        data-test="memory-day-used"
                       >
                         {line}
                       </span>
                       <span
                         :if={MemoryWords.ended(d.ended) != []}
                         class="block text-xs text-amber-400"
-                        data-test="memory-day-ended"
                       >
                         Ended for memory: {Enum.join(MemoryWords.ended(d.ended), "; ")}
                       </span>

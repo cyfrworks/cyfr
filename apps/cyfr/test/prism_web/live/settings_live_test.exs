@@ -15,6 +15,7 @@ defmodule PrismWeb.SettingsLiveTest do
   import Ecto.Query, only: [from: 2]
   import Prima.Test.Wait
 
+  alias PrismWeb.MemoryWords
   alias Sanctum.Test.RegistryStub
 
   test "the door section is shown to a platform admin and to nobody else", %{conn: conn} do
@@ -1152,13 +1153,13 @@ defmodule PrismWeb.SettingsLiveTest do
       assert [
                "461.5 MB on average",
                "at most 700.0 MB, for 1 hour 5 minutes in all",
-               "Ended for memory: 1 × needed more memory than one piece of work may use"
+               "Ended for memory: " <> ended(cap: 1)
              ] in used
 
       assert [
                "0 B on average",
                "at most 164.0 MB, for 45 seconds in all",
-               "Ended for memory: 2 × CYFR ran out of memory"
+               "Ended for memory: " <> ended(machine: 2)
              ] in used
 
       assert section =~ "Counted a few seconds ago."
@@ -1298,26 +1299,25 @@ defmodule PrismWeb.SettingsLiveTest do
                [
                  today,
                  me,
-                 ["build"],
+                 [MemoryWords.kind(:build)],
                  ["162.0 MB on average", "at most 318.0 MB, for 20 seconds in all"]
                ],
-               [today, me, ["run"], ["at most 28.0 MB"]],
-               [today, me, ["terminal"], ["nothing measured"]],
+               [today, me, [MemoryWords.kind(:run)], ["at most 28.0 MB"]],
+               [today, me, [MemoryWords.kind(:terminal)], ["nothing measured"]],
                [
                  today,
                  me,
-                 ["shell", "terminal"],
+                 ["shell", MemoryWords.kind(:terminal)],
                  [
                    "95.0 MB on average",
                    "at most 143.0 MB, for 2 hours in all",
-                   "Ended for memory: 2 × needed more memory than one piece of work may use; " <>
-                     "1 × CYFR ran out of memory"
+                   "Ended for memory: " <> ended(cap: 2, machine: 1)
                  ]
                ],
                [
                  today,
                  me,
-                 ["everything", "mcp program"],
+                 ["everything", MemoryWords.kind(:tool)],
                  ["192.0 MB on average", "at most 246.0 MB, for 10 minutes in all"]
                ]
              ]
@@ -1340,6 +1340,41 @@ defmodule PrismWeb.SettingsLiveTest do
         assert class =~ wide
         refute class =~ "sticky"
       end
+    end
+
+    # A day's endings as the shared words say them, joined as a row joins them.
+    defp ended(counts) do
+      %{cap: 0, machine: 0, either: 0}
+      |> Map.merge(Map.new(counts))
+      |> MemoryWords.ended()
+      |> Enum.join("; ")
+    end
+
+    test "a stacked day row breaks a long person's name inside its card" do
+      ops = test_user()
+      {:ok, _} = Sanctum.TestContext.ensure_platform(ops.user_id)
+      o = own_athanor_id(ops)
+      long = String.duplicate("w", 39)
+
+      Arca.Repo.update_all(from(a in Arca.Schemas.Athanor, where: a.id == ^o), set: [slug: long])
+      record!([used(1, o, kind: "run", mib_ms: 1_000, measured_ms: 1_000, peak: 1)], %{})
+
+      {view, _html} = build_conn() |> log_in_user(ops) |> mount_athanor("/settings")
+
+      [person] =
+        view
+        |> element("#memory-days")
+        |> render()
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query("tbody td:nth-child(2)")
+        |> Enum.to_list()
+
+      assert String.trim(LazyHTML.text(person)) == "@" <> long
+
+      # No wider than its row, and broken where it would be: as What is.
+      classes = person |> LazyHTML.attribute("class") |> hd() |> String.split()
+      assert "max-w-full" in classes
+      assert "break-words" in classes
     end
 
     # Each row's cells, their words with runs of space, no-break ones

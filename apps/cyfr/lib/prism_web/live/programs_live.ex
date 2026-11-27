@@ -38,10 +38,8 @@ defmodule PrismWeb.ProgramsLive do
   knows: the read names it as holding memory, or a session of it is
   listed. Its question covers the whole program and counts nothing, and
   speaks of terminals only where one of the program is listed or counted.
-  Once a session of the person's has left the running ones, the line
-  under a machine's sizes says a terminal closed since they were counted,
-  until that machine answers again (`PrismWeb.MemoryWords.counted/2`): no
-  read is made for it. Until
+  A closed terminal's line goes at once and its size at the next count.
+  Until
   the first read answers it says nothing of them; a read that fails says the memory cannot be
   read, never that nothing of theirs uses it.
 
@@ -187,9 +185,6 @@ defmodule PrismWeb.ProgramsLive do
       # endpoints that have not answered (`Opus.memory/2`); `:unread`
       # until the first read answers, `:unreadable` when the last failed.
       |> assign(:memory, :unread)
-      # When a terminal of the person's last left the running ones: a
-      # count no newer than it is from before that close.
-      |> assign(:closed_at, nil)
       # Whether a terminal this page opens adds the way back to Aqua.
       |> assign(:from_aqua, false)
       # What the page is doing until a call's answer comes; nil when idle.
@@ -985,22 +980,8 @@ defmodule PrismWeb.ProgramsLive do
   def terminal_dismissed(socket),
     do: push_patch(socket, to: PrismWeb.Focus.path(socket.assigns.athanor_route, "/programs"))
 
-  # A session that was running and is no longer has closed: the sizes
-  # shown were counted before it did.
   defp load_running(socket) do
-    if connected?(socket) do
-      now = running(socket)
-      gone = Enum.map(socket.assigns.running, & &1.session) -- Enum.map(now, & &1.session)
-
-      socket
-      |> assign(:running, now)
-      |> assign(
-        :closed_at,
-        if(gone == [], do: socket.assigns.closed_at, else: DateTime.utc_now())
-      )
-    else
-      socket
-    end
+    if connected?(socket), do: assign(socket, :running, running(socket)), else: socket
   end
 
   defp running(socket) do
@@ -1249,7 +1230,6 @@ defmodule PrismWeb.ProgramsLive do
         servers={@servers}
         running={@running}
         shown={shown_session(@terminal)}
-        closed_at={@closed_at}
       />
 
       <.card>
@@ -1672,8 +1652,6 @@ defmodule PrismWeb.ProgramsLive do
   attr :servers, :list, required: true
   attr :running, :list, required: true
   attr :shown, :string, default: nil
-  # When a terminal of the person's last ended, or nil.
-  attr :closed_at, :any, default: nil
 
   # What of the person's holds memory now, on each machine, each named
   # holder with the Disable its row has and a line for each of its
@@ -1746,7 +1724,7 @@ defmodule PrismWeb.ProgramsLive do
             {MemoryWords.others(machine)}
           </p>
           <p class="text-xs text-gray-500" data-test="memory-counted">
-            {MemoryWords.counted(machine, @closed_at)}
+            {MemoryWords.counted(machine)}
           </p>
         </div>
         <p

@@ -2575,39 +2575,6 @@ defmodule PrismWeb.ProgramsLiveTest do
              |> render() =~ "Terminal " <> opened
     end
 
-    test "after a terminal closes, the sizes say they were counted before, until a newer count",
-         %{conn: conn, athanor: athanor, user: user} do
-      _fake = controller!()
-      row = driven_row!(athanor)
-      me = person(user, athanor)
-      names = %{{athanor.id, row.id} => %{name: "claude", shown: "program"}}
-
-      {:ok, session} = Opus.Programs.start(me, row.id, %{rows: 24, cols: 80, args: []})
-      recorded!([held(1, athanor, "terminal", row.id, 211)], names)
-
-      {view, _html} = mount_athanor(conn, "/programs", athanor)
-      counted = fn -> view |> element(~s([data-test="memory-counted"])) |> render() end
-
-      assert counted.() =~ "Counted a few seconds ago."
-
-      assert {:ok, :closed} = Opus.Programs.close(me, session)
-
-      # Its line goes at once; the size stays, and says what it is.
-      assert eventually(fn -> not has_element?(view, ~s([data-test="memory-session"])) end)
-      panel = view |> element(~s([data-test="memory"])) |> render()
-      assert panel =~ "claude uses 211.0 MB"
-      assert counted.() =~ "A terminal closed since this was counted."
-      refute counted.() =~ "Counted a few seconds ago."
-
-      # A read of the same count changes nothing; a newer count is fresh.
-      send(view.pid, :memory)
-      assert counted.() =~ "A terminal closed since this was counted."
-
-      recorded!([held(2, athanor, "terminal", row.id, 0)], names)
-      send(view.pid, :memory)
-      refute has_element?(view, ~s([data-test="memory-counted"]), "A terminal closed")
-    end
-
     test "below the medium width the list is a name, its kind and a status",
          %{conn: conn, athanor: athanor} do
       _row = driven_row!(athanor)

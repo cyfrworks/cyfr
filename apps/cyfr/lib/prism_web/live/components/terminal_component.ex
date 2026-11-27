@@ -364,7 +364,6 @@ defmodule PrismWeb.TerminalComponent do
           — a terminal CYFR runs in the program's own folder<span
             :if={@terminal[:opened_at]}
             class="tabular-nums"
-            data-test="terminal-opened"
           >, {opened_words(@terminal.opened_at)}</span>
         </span>
         <div class="flex items-center gap-3">

@@ -68,18 +68,9 @@ defmodule PrismWeb.MemoryWords do
   def others(%{others: 0}), do: nil
   def others(%{others: bytes}), do: "Others use #{size(bytes)}."
 
-  @doc """
-  How fresh a machine's count is: it answered within three polls. While a
-  terminal of the person's closed after the machine last answered
-  (`closed_at`), its sizes are from before that close, and the line says
-  so until a newer count arrives.
-  """
-  @spec counted(%{heard_at: DateTime.t()}, DateTime.t() | nil) :: String.t()
-  def counted(%{heard_at: heard_at}, closed_at \\ nil) do
-    if closed_at && DateTime.compare(heard_at, closed_at) != :gt,
-      do: "A terminal closed since this was counted.",
-      else: "Counted a few seconds ago."
-  end
+  @doc "How fresh a machine's count is: it answered within three polls."
+  @spec counted(map()) :: String.t()
+  def counted(%{machine: _name}), do: "Counted a few seconds ago."
 
   @doc """
   What the person's own read says of its endpoints that have not answered
@@ -108,15 +99,17 @@ defmodule PrismWeb.MemoryWords do
   administrator, as one sentence: each by the service it is, the builds'
   (`Prima.LocusPool.builds_endpoint/0`), the programs'
   (`Opus.Programs.local/0`) or one for runs, in that order, since the
-  earliest of their last answers. A service for runs carries its id only
-  where this CYFR knows several, configured (`Opus.run_services/0`)
-  or silent. Nil when every endpoint answered.
+  earliest of their last answers, which the sentence calls the first of
+  them where they read differently on the clock. A service for runs
+  carries its id only where this CYFR knows several, configured
+  (`Opus.run_services/0`) or silent. Nil when every endpoint answered.
   """
   @spec silent([%{endpoint: String.t(), heard_at: DateTime.t()}]) :: String.t() | nil
   def silent([]), do: nil
 
   def silent(silent) do
     at = silent |> Enum.map(& &1.heard_at) |> Enum.min(DateTime) |> clock()
+    together = silent |> Enum.map(&clock(&1.heard_at)) |> Enum.uniq() |> length() == 1
     names = Enum.map(silent, & &1.endpoint)
     several = length(Enum.uniq(Opus.run_services() ++ Enum.filter(names, &runs?/1))) > 1
 
@@ -124,9 +117,13 @@ defmodule PrismWeb.MemoryWords do
       [one] ->
         "The service for #{one} has not answered since #{at}, so what it runs is not counted."
 
-      services ->
+      services when together ->
         "The services for #{joined(services)} have not answered since #{at}, " <>
           "so what they run is not counted."
+
+      services ->
+        "The services for #{joined(services)} have not answered, the first of them " <>
+          "since #{at}, so what they run is not counted."
     end
   end
 

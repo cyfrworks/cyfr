@@ -431,8 +431,11 @@ defmodule PrismWeb.CanvasLive do
                 class="canvas-shelf-app"
               >
                 <span class="canvas-app-icon" aria-hidden="true">{program_icon(program)}</span>
-                <span class="canvas-shelf-app-name truncate">
-                  {program_name(program, @programs)}
+                <span class="canvas-shelf-app-name truncate">{program.name}</span>
+                <%!-- Beside a chip of the same name, the second it started,
+                     which stays where a narrow shelf hides the name. --%>
+                <span :if={alike?(program, @programs)} class="canvas-shelf-program-time">
+                  {started(program)}
                 </span>
               </.link>
               <button
@@ -780,19 +783,24 @@ defmodule PrismWeb.CanvasLive do
   defp program_title(program) do
     program.name <>
       ": running since " <>
-      Calendar.strftime(program.started_at, "%H:%M UTC") <>
+      started(program) <>
+      " UTC" <>
       starter(program.by) <>
       if(program.kept, do: ", kept", else: "") <>
       if(program.attached, do: "", else: ", not open on any screen")
   end
 
-  # A chip's words: the program's name, and where another chip carries
-  # the same name, the second it started, which tells the two apart as the
-  # Programs page's lines do.
-  defp program_name(%{name: name, started_at: at}, programs) do
-    if Enum.count(programs, &(&1.name == name)) > 1,
-      do: name <> " " <> Calendar.strftime(at, "%H:%M:%S"),
-      else: name
+  # Whether another chip carries this program's name: the two are then
+  # told apart by the second each started, as the Programs page's lines do.
+  defp alike?(%{name: name}, programs), do: Enum.count(programs, &(&1.name == name)) > 1
+
+  defp started(%{started_at: at}), do: Calendar.strftime(at, "%H:%M:%S")
+
+  # What a chip's Close names: the program, with its second where chips are alike.
+  defp program_name(program, programs) do
+    if alike?(program, programs),
+      do: program.name <> " " <> started(program),
+      else: program.name
   end
 
   # Who started a running program, in the shelf's words; a person's own
