@@ -684,7 +684,7 @@ func routeRules(r *route, st static) string {
 	// connection table, so neither the rules nor the kernel answers it.
 	if r.machine {
 		line("*raw")
-		line("-A PREROUTING -i %s ! -s %s/32 -j DROP", iface, inner)
+		line("%s", sourceLine(iface, inner))
 		line("COMMIT")
 	}
 	if port != "" {
@@ -761,8 +761,22 @@ type installed struct {
 	out, in, roles, raw string
 }
 
+// sourceLine is a machine's route's line in the raw table, which drops
+// every packet from its route with any source but its guest's own: written
+// in the order iptables lists it back (the source before the interface),
+// so it is the one form the route's rules install, its record and its
+// removal read, and the static rules' digest leaves out (sourceLines).
+func sourceLine(iface, inner string) string {
+	return fmt.Sprintf("-A PREROUTING ! -s %s/32 -i %s -j DROP", inner, iface)
+}
+
+// sourceLines are every route's raw-table line as iptables lists it,
+// their route's interface the first group.
+var sourceLines = regexp.MustCompile(`^-A PREROUTING ! -s [0-9.]+/32 -i (sp[0-9]+) -j DROP$`)
+
 // routeLines are the lines of the jump chains that are iface's: its jump
-// out, its replies and a role's forwarding, in that order.
+// out, its replies and a role's forwarding, in that order, and a machine's
+// raw-table line.
 func routeLines(iface string, k installed) []string {
 	var lines []string
 	pick := func(text, prefix string, match func(string) bool) {
@@ -776,7 +790,10 @@ func routeLines(iface string, k installed) []string {
 	pick(k.out, "-A "+chainOut+" -i "+iface+" ", all)
 	pick(k.in, "-A "+chainIn+" -o "+iface+" ", all)
 	pick(k.roles, "-A "+chainRoles+" ", func(l string) bool { return strings.Contains(l, " --comment "+iface+" -j ") })
-	pick(k.raw, "-A PREROUTING -i "+iface+" ", all)
+	pick(k.raw, "-A PREROUTING ", func(l string) bool {
+		m := sourceLines.FindStringSubmatch(l)
+		return m != nil && m[1] == iface
+	})
 	return lines
 }
 
@@ -842,7 +859,7 @@ var (
 	// digestDropped are the lines of a save the digest leaves out: its
 	// comments, the routes' chains and the rules of the chains every
 	// route's jumps are in.
-	digestDropped = regexp.MustCompile(`^(#|:(` + chainRoute + `|` + chainPass + `)[0-9]+ |-A (` + chainRoute + `|` + chainPass + `)[0-9]+ |-A (` + chainOut + `|` + chainIn + `|` + chainRoles + `) |-A PREROUTING -i sp[0-9]+ )`)
+	digestDropped = regexp.MustCompile(`^(#|:(` + chainRoute + `|` + chainPass + `)[0-9]+ |-A (` + chainRoute + `|` + chainPass + `)[0-9]+ |-A (` + chainOut + `|` + chainIn + `|` + chainRoles + `) |-A PREROUTING ! -s [0-9.]+/32 -i sp[0-9]+ -j DROP$)`)
 	// counters are the packet and byte counters a save prints beside a
 	// built-in chain's policy.
 	counters = regexp.MustCompile(` \[[0-9]+:[0-9]+\]$`)
