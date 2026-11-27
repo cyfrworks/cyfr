@@ -9,11 +9,12 @@ defmodule Aqua.Prompt do
 
   ## Inputs
 
-    * `agent` — the resolved agent and its policy: the soul's authored
+    * `agent` — the resolved agent and its policy: its offered tools under
+      `"tools"`, which say whether it writes files, and the soul's authored
       prompt under `"prompt"`, which opens its prompt, CYFR's part
-      (`briefing/3`) following; a crew member has none (nil there), and
+      (`briefing/4`) following; a crew member has none (nil there), and
       its prompt opens with how a job reaches it, then CYFR's part
-      (`crew_briefing/3`).
+      (`crew_briefing/4`).
     * `own_tools?` — whether the agent's brain has tools of its own, acting
       in a folder of its own (the soul's is its member's), as its harness
       says (`Aqua.Harness.facts/1`); false for a brain with none.
@@ -105,10 +106,11 @@ defmodule Aqua.Prompt do
   Compose the system prompt for a turn.
 
   `:agent` is required: the soul's carries its authored prompt under
-  `"prompt"`, which CYFR's part (`briefing/3`) follows, and a crew
-  member's nil there, whose prompt is `crew_briefing/3`, both for the
-  agent's brain (`:own_tools?`, `:search?`, `:loader?`); everything else narrows what
-  the prompt claims.
+  `"prompt"`, which CYFR's part (`briefing/4`) follows, and a crew
+  member's nil there, whose prompt is `crew_briefing/4`, both for the
+  agent's brain (`:own_tools?`, `:search?`, `:loader?`) and whether the
+  agent is offered `files.write`; everything else narrows what the prompt
+  claims.
   A nil `:authority` means the caller could not resolve one — the prompt
   then claims no capabilities at all, which is the fail-closed reading.
   """
@@ -117,19 +119,25 @@ defmodule Aqua.Prompt do
     own_tools? = Keyword.get(opts, :own_tools?, false)
     search? = Keyword.get(opts, :search?, false)
     loader? = Keyword.get(opts, :loader?, false)
+    agent = Keyword.fetch!(opts, :agent)
+    authority = Keyword.get(opts, :authority)
+    writes? = writes?(agent)
 
     # The soul's own prompt, then CYFR's part, which a crew member's prompt
     # carries too; a crew member has no prompt of its own.
     opening =
-      case Keyword.fetch!(opts, :agent) do
+      case agent do
         %{"prompt" => prompt} when is_binary(prompt) ->
-          [String.trim_trailing(prompt), "\n\n---\n\n", briefing(own_tools?, search?, loader?)]
+          [
+            String.trim_trailing(prompt),
+            "\n\n---\n\n",
+            briefing(own_tools?, search?, loader?, writes?)
+          ]
 
         %{"prompt" => nil} ->
-          crew_briefing(own_tools?, search?, loader?)
+          crew_briefing(own_tools?, search?, loader?, writes?)
       end
 
-    authority = Keyword.get(opts, :authority)
     where = Keyword.get(opts, :where)
 
     instructions =
@@ -142,7 +150,8 @@ defmodule Aqua.Prompt do
         rules(ctx),
         notes(ctx),
         crew(Keyword.get(opts, :crew, [])),
-        where(where)
+        where(where),
+        plans(writes?)
       ])
 
     facts =
@@ -216,9 +225,15 @@ defmodule Aqua.Prompt do
               "- When a scroll's steps have changed under you, propose the change with " <>
               "`aqua.skill_update`: it waits in the thread for the person to save it."
 
-  @own_tools_briefing "\n- Your own tools work in your folder, the program's folder this " <>
-                        "athanor keeps for you: read, edit and run there as you would " <>
-                        "anywhere.\n" <>
+  @own_folder "\n- Your own tools work in your folder, the program's folder this athanor " <>
+                "keeps for you: read, edit and run there as you would anywhere.\n" <>
+                "- Your folder is your workbench, and the person does not see it."
+
+  # Said beside the workbench where the agent is offered `files.write`.
+  @workbench_write " What they should see, keep or open, write with CYFR's files tool under " <>
+                     "`data/`."
+
+  @own_tools_briefing "\n" <>
                         "- The athanor's files, components and stored state are reached through " <>
                         "CYFR's tools only. A call CYFR refuses comes back with a sentence that " <>
                         "says so; carry on with what does not depend on it.\n" <>
@@ -277,23 +292,30 @@ defmodule Aqua.Prompt do
   limit, failed calls, scrolls kept current), then the rule on scrolls
   and outside text, which names the thread's mark by its stand-in
   (`Aqua.Reader.token/0`). A brain with tools of its own (`own_tools?`) is
-  told besides that its own tools act in its own folder and that the
-  athanor is reached through CYFR's tools, which CYFR decides, and that
-  what it leaves running ends as it answers; a brain whose
+  told besides that its own tools act in its own folder, a workbench the
+  person does not see, and, where it is offered `files.write`
+  (`writes?`), that what the person should see is written under `data/`
+  with CYFR's files tool; that the athanor is reached through CYFR's
+  tools, which CYFR decides; and that what it leaves running ends as it
+  answers; a brain whose
   requests offer its provider's own search (`search?`) is told it has it.
   A model's brain is told nothing of a folder. A program that loads the
   athanor's packs itself (`loader?`), which has no scroll index, is told
   how to propose a scroll beside how to propose a change, and its rule
   speaks of the scrolls CYFR delivers.
   """
-  @spec briefing(boolean(), boolean(), boolean()) :: String.t()
-  def briefing(own_tools?, search?, loader?)
-      when is_boolean(own_tools?) and is_boolean(search?) and is_boolean(loader?) do
+  @spec briefing(boolean(), boolean(), boolean(), boolean()) :: String.t()
+  def briefing(own_tools?, search?, loader?, writes?)
+      when is_boolean(own_tools?) and is_boolean(search?) and is_boolean(loader?) and
+             is_boolean(writes?) do
     IO.iodata_to_binary([
       @standing,
       if(loader?, do: @loader_propose, else: []),
       frames_rule(Reader.token(), loader?),
-      if(own_tools?, do: @own_tools_briefing, else: []),
+      if(own_tools?,
+        do: [@own_folder, if(writes?, do: @workbench_write, else: []), @own_tools_briefing],
+        else: []
+      ),
       if(search?, do: @search_briefing, else: [])
     ])
   end
@@ -302,14 +324,14 @@ defmodule Aqua.Prompt do
   What a crew member's prompt opens with: how a job arrives and where its
   reply goes, and that the scrolls a job names come with it, with how to
   read another unless the program loads the packs itself (`loader?`),
-  then CYFR's part (`briefing/3`).
+  then CYFR's part (`briefing/4`).
   """
-  @spec crew_briefing(boolean(), boolean(), boolean()) :: String.t()
-  def crew_briefing(own_tools?, search?, loader?),
+  @spec crew_briefing(boolean(), boolean(), boolean(), boolean()) :: String.t()
+  def crew_briefing(own_tools?, search?, loader?, writes?),
     do:
       @crew_member <>
         if(loader?, do: ".", else: @crew_skill_get) <>
-        "\n\n" <> briefing(own_tools?, search?, loader?)
+        "\n\n" <> briefing(own_tools?, search?, loader?, writes?)
 
   # ---------------------------------------------------------------------------
   # Sections
@@ -448,6 +470,35 @@ defmodule Aqua.Prompt do
       [] -> []
       lines -> [@section, "## This turn\n\n", Enum.join(lines, "\n\n")]
     end
+  end
+
+  # Whether the agent is offered `files.write`, the one way a brain writes a
+  # file the person sees: the files catalyst holds its own grant of
+  # `data/`, so the agent's offered set, a crew member's the soul's, says
+  # it (`Aqua.Offered`), never the agent's own grant.
+  defp writes?(%{"tools" => tools}) when is_list(tools),
+    do: tools |> Aqua.Offered.resolve(:off) |> Aqua.Offered.offered?("files.write")
+
+  defp writes?(_agent), do: false
+
+  # How a brain plans: asked for a plan, or judging the work large enough to
+  # owe one, it writes the plan to a file of its own under the turn's id,
+  # or, where it cannot write one, gives it in its reply, and asks whether
+  # to proceed.
+  defp plans(true = _writes?) do
+    "\n\n---\n\n## Plans\n\nWhen you are asked for a plan, or the work is large enough to " <>
+      "owe one, write the plan with `files.write` to " <>
+      "`data/aqua/plans/<turn id>-<n>-<short-name>.md`: `<turn id>` is this turn's id, `<n>` " <>
+      "counts the plans you write in this turn from 1, and `<short-name>` is a few words of " <>
+      "your own in lower case, joined by hyphens. Then ask whether to proceed, naming the " <>
+      "file, and change nothing else before the answer. When the answer asks for changes, " <>
+      "write the revision as a new plan of this turn, keeping its short name, and ask again."
+  end
+
+  defp plans(false = _writes?) do
+    "\n\n---\n\n## Plans\n\nWhen you are asked for a plan, or the work is large enough to " <>
+      "owe one, give the plan in your reply and ask whether to proceed, and change nothing " <>
+      "before the answer. When the answer asks for changes, give the revision and ask again."
   end
 
   # Describe only granted scopes, using the names from
