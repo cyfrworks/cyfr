@@ -37,6 +37,10 @@ defmodule Locus.OutputTest do
         send(test, {self(), :reserved, Output.reserve(output, bytes, deadline)})
         holder_loop(output, test)
 
+      {:reserve, bytes, deadline, opts} ->
+        send(test, {self(), :reserved, Output.reserve(output, bytes, deadline, opts)})
+        holder_loop(output, test)
+
       {:return, grant} ->
         Output.return(grant)
         send(test, {self(), :returned})
@@ -301,6 +305,49 @@ defmodule Locus.OutputTest do
       send(a, {:return, grant})
       assert_receive {^c, :reserved, {:ok, _grant}}
       assert_held(output, answering: 10 * @kib, waiting: 0)
+    end
+
+    test "an ask that leaves room is granted only while that much stays free beside it, " <>
+           "behind every ask that leaves none, and one past the bound with what it leaves is :full at once" do
+      output = start(%{answering: 100 * @kib})
+      [a, b, c, d, e] = for _n <- 1..5, do: holder(output)
+
+      # On an empty count: it could never be granted, so it is not waited for.
+      assert Output.reserve(output, 60 * @kib + 1, later(60_000), leave: 40 * @kib) == :full
+
+      send(a, {:reserve, 50 * @kib, later(5_000)})
+      assert_receive {^a, :reserved, {:ok, grant_a}}
+
+      # 30 fits beside 50, but not with 40 left free beside it.
+      send(b, {:reserve, 30 * @kib, later(300), [leave: 40 * @kib]})
+      assert_receive {^b, :reserved, :full}, 2_000
+
+      # One that leaves none waits for room; one that leaves room, and
+      # would fit, waits behind it.
+      send(c, {:reserve, 60 * @kib, later(5_000)})
+      wait_until(fn -> Output.held(output).waiting == 1 end, 5_000, "the ask queued")
+      send(b, {:reserve, 10 * @kib, later(5_000), [leave: 30 * @kib]})
+      wait_until(fn -> Output.held(output).waiting == 2 end, 5_000, "the ask leaving room queued")
+      refute_received {_, :reserved, _}
+
+      send(a, {:return, grant_a})
+      assert_receive {^c, :reserved, {:ok, _grant_c}}
+      assert_receive {^b, :reserved, {:ok, grant_b}}
+      assert_held(output, answering: 70 * @kib, waiting: 0)
+
+      # One that leaves room and waits never stands ahead of one that
+      # leaves none and fits.
+      send(d, {:reserve, 20 * @kib, later(5_000), [leave: 20 * @kib]})
+      wait_until(fn -> Output.held(output).waiting == 1 end, 5_000, "the ask leaving room queued")
+      send(e, {:reserve, 30 * @kib, later(5_000)})
+      assert_receive {^e, :reserved, {:ok, grant_e}}
+      assert_held(output, answering: 100 * @kib, waiting: 1)
+
+      send(e, {:return, grant_e})
+      refute_receive {^d, :reserved, _}, 200
+      send(b, {:return, grant_b})
+      assert_receive {^d, :reserved, {:ok, _grant_d}}
+      assert_held(output, answering: 80 * @kib, waiting: 0)
     end
   end
 end

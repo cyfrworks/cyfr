@@ -118,11 +118,14 @@ defmodule Locus.Runtime.Relay do
     * A pinned fetch's head, its headers as this process filters them,
       and each piece of its body are asked for by the fetch's worker, by
       the attempt's deadline, before they are handed on, and given back
-      once this process says every byte of them was written. No room by
-      the deadline ends the fetch `timeout`, nothing of the head or piece
-      handed on.
+      once this process says every byte of them was written. A piece
+      waits on the runner's credit to be written, so it is granted only
+      while the count keeps `answer_room/0` free beside it, waiting behind
+      every answer that waits. No room by the deadline ends the fetch
+      `timeout`, nothing of the head or piece handed on.
     * An attached fetch's frame is asked for by the poster's sink the
-      same way, and CYFR's refusal by its poster as its reading begins,
+      same way, leaving the answers their room as a piece does, and
+      CYFR's refusal by its poster as its reading begins,
       whole, by the length it declares
       (`Locus.Runtime.HostClient.attached_fetch/3`), and freed as the
       poster exits once this process has written it; no room halts the
@@ -265,6 +268,19 @@ defmodule Locus.Runtime.Relay do
   def held(bytes, frames)
       when is_integer(bytes) and bytes > 0 and is_integer(frames) and frames > 0,
       do: bytes + 4 * div(bytes + 2, 3) + frames * @envelope_bytes
+
+  @doc """
+  The room a fetch's ask leaves free in the runtime's count, for the
+  answers: the largest one ask the relay makes of it, CYFR's refusal of
+  an attached fetch at the host answer bound
+  (`Prima.HostAPI.max_answer_bytes/0`) in its frame with its signed
+  header. Every other ask is at most this. A fetch's asks are those that
+  wait on the runner's credit or on the upstream before they give their
+  room back: a pinned fetch's piece, an attached fetch's frame and a
+  pinned fetch's read-ahead.
+  """
+  @spec answer_room() :: pos_integer()
+  def answer_room, do: refusal_held(HostAPI.max_answer_bytes())
 
   # ---------------------------------------------------------------------------
   # Server
@@ -597,6 +613,14 @@ defmodule Locus.Runtime.Relay do
   # instant in milliseconds; none are asked for nothing.
   defp reserve(0, _by), do: {:ok, nil}
   defp reserve(bytes, by), do: Locus.Output.reserve(@count, bytes, by)
+
+  # An ask that waits on the runner's credit or on the upstream before it
+  # gives its room back leaves the answers theirs (`answer_room/0`).
+  defp fetch_reserve(0, _by), do: {:ok, nil}
+  defp fetch_reserve(bytes, by), do: Locus.Output.reserve(@count, bytes, by, leave: answer_room())
+
+  # A piece of `bytes`, as its frames hold it.
+  defp piece_held(bytes), do: held(bytes, max(div(bytes + @chunk_bytes - 1, @chunk_bytes), 1))
 
   defp return(nil), do: :ok
   defp return(grant), do: Locus.Output.return(grant)
@@ -944,7 +968,7 @@ defmodule Locus.Runtime.Relay do
         handed(relay, re, event)
 
       {:frame, frame} = event ->
-        case reserve(held(byte_size(frame), 1), by(deadline)) do
+        case fetch_reserve(held(byte_size(frame), 1), by(deadline)) do
           {:ok, grant} ->
             handed(relay, re, event)
             return(grant)
@@ -1072,11 +1096,17 @@ defmodule Locus.Runtime.Relay do
   # largest body a fetch may receive, 50 MiB, takes about 350 s over a
   # 300 ms round trip, past a catalyst's three minutes, and through the
   # larger one about 120 (`Prima.LocusRoles`, `fetch_read_ahead_bytes`).
-  # Without room it reads 64 KiB at a time.
+  # The room is held while the upstream thinks and for the whole of a
+  # long stream, so it is granted only while the count keeps free beside
+  # it `answer_room/0` and the largest piece a fetch asks for, a larger
+  # read's: read-ahead never takes the room the answers need, nor the room
+  # a fetch holding it needs to hand its next piece on. Without room it
+  # reads 64 KiB at a time.
   defp read_ahead do
     ahead = Prima.LocusRoles.role!(:runtime).memory.fetch_read_ahead_bytes
+    now = System.monotonic_time(:millisecond)
 
-    case reserve(2 * ahead, System.monotonic_time(:millisecond)) do
+    case Locus.Output.reserve(@count, 2 * ahead, now, leave: answer_room() + piece_held(ahead)) do
       {:ok, grant} -> {ahead, grant}
       :full -> {Prima.LocusRoles.role!(:runtime).memory.fetch_read_bytes, nil}
     end
@@ -1234,11 +1264,10 @@ defmodule Locus.Runtime.Relay do
   # the relay's to end: it kills this process at the deadline. A piece is
   # written in a frame for each chunk of it when the runner's credit
   # covers a chunk at a time; a runner granting less makes more frames,
-  # and each frame past those is its envelope more than was asked for.
+  # and each frame past those is its envelope more than was asked for. It
+  # waits on the runner's credit, so it leaves the answers their room.
   defp delivered?(relay, re, data, bound) do
-    frames = max(div(byte_size(data) + @chunk_bytes - 1, @chunk_bytes), 1)
-
-    case reserve(held(byte_size(data), frames), by(bound.deadline)) do
+    case fetch_reserve(piece_held(byte_size(data)), by(bound.deadline)) do
       {:ok, grant} ->
         send(relay, {:fetch_data, re, data})
 
