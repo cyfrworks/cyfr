@@ -6,7 +6,8 @@
 //!
 //! - `request(json)` answers `{"handle": h}` once the request is sent, or
 //!   its refusal. At most `MAX_STREAMS` are open at once, and none past
-//!   the relay's `crate::relay::MAX_FETCHES` (`stream_limit`). A stream's
+//!   the relay's `crate::relay::MAX_FETCHES`, which counts a stream closed
+//!   until its answer has drained (`stream_limit` for either). A stream's
 //!   request takes no `multipart`.
 //! - `read(h)` answers the next piece of the answer as `{"data", "done"}`,
 //!   with `"status"` once the answer has begun, waiting at most
@@ -19,19 +20,33 @@
 //!
 //! The relay sends the answer only against the credit the guest's reads
 //! grant: each piece a read hands the guest is granted back, so a guest
-//! that reads slowly holds the service's connection waiting, never the
-//! runner's memory past one credit. A stream closed early, by its guest or
-//! by its attempt's end, drains in the relay (`crate::relay::Fetch`), and
-//! its guest goes on as it chooses.
+//! that reads slowly holds the service's connection waiting, and the
+//! runner holds at most one credit of it. A stream closed early, by its
+//! guest or by its attempt's end, drains in the relay (`crate::relay::Fetch`),
+//! and its guest goes on as it chooses.
+//!
+//! What a stream's answer means for its attempt is recorded when it
+//! arrives, whether or not its guest reads it (`Watcher`): its
+//! `http.request` event when its head arrives (or with `error` when it
+//! ends with none), the relay's refusal reported to CYFR, and an attached
+//! answer lost or uncertain marking the runner unclean. A read answers the
+//! guest and records nothing of that again.
 
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 
 use serde_json::{Map, Value};
 
-use super::http::{self, Asked, Pinning, Purpose, Read, Sent, refusal, refused_answer};
+use super::http::{
+    self, EventFields, Kind, Pinning, Purpose, Refusal, Sent, refusal, refused_answer,
+};
 use super::{Guest, catalyst, error_json};
+use crate::attempt::Host;
+use crate::authority::Limits;
 use crate::control::Meta;
+use crate::relay::{Ended, Taken, Watch};
 use crate::words;
 
 /// The most streams an execution holds open at once.
@@ -40,15 +55,19 @@ pub const MAX_STREAMS: usize = 3;
 /// How long a read waits for a piece before it answers none.
 pub const READ_WAIT: Duration = Duration::from_millis(100);
 
+/// The most of an answer one read hands its guest.
+pub const PIECE_BYTES: usize = 256 * 1024;
+
 /// The answer of a piece that is no text (`tests/fixtures/guest_error.json`'s
 /// `fallback`).
 const NOT_TEXT: &str =
     r#"{"error":{"type":"encoding_error","message":"Failed to encode response"}}"#;
 
-/// One open stream.
+/// One open stream: its fetch, and what its reads answer from. The request
+/// it was sent for is not kept.
 pub struct Stream {
     sent: Sent,
-    asked: Asked,
+    host: String,
     started: Instant,
     timeout_ms: u64,
     status: Option<u16>,
@@ -64,7 +83,7 @@ impl catalyst::cyfr::http::streaming::Host for Guest {
     async fn request(&mut self, request: String) -> wasmtime::Result<String> {
         let request = zeroize::Zeroizing::new(request);
         if self.streams.len() >= MAX_STREAMS {
-            return Ok(error_json("stream_limit", words::STREAM_LIMIT));
+            return Ok(error_json(Kind::StreamLimit.name(), words::STREAM_LIMIT));
         }
         let run = self.run.clone();
         let asked = match http::requested(&request, &run.limits, Purpose::Stream) {
@@ -72,6 +91,7 @@ impl catalyst::cyfr::http::streaming::Host for Guest {
             Err(refused) => return refused_answer(&run, refused).await,
         };
         drop(request);
+        let started = Instant::now();
         let pinning = Pinning {
             hops: &mut self.hops,
             purpose: Purpose::Stream,
@@ -80,6 +100,12 @@ impl catalyst::cyfr::http::streaming::Host for Guest {
             Ok(sent) => sent,
             Err(refused) => return refused_answer(&run, refused).await,
         };
+        Watcher::start(
+            &run,
+            &sent,
+            EventFields::of(&run, &asked, started),
+            &asked.host,
+        );
         let mut bytes = [0u8; 16];
         getrandom::fill(&mut bytes).expect("the operating system's random source answers");
         let handle = crate::wire::encode_base64url(&bytes);
@@ -87,8 +113,8 @@ impl catalyst::cyfr::http::streaming::Host for Guest {
             handle.clone(),
             Stream {
                 sent,
-                asked,
-                started: Instant::now(),
+                host: asked.host.clone(),
+                started,
                 timeout_ms: run.limits.timeout_ms(),
                 status: None,
                 read_bytes: 0,
@@ -102,35 +128,38 @@ impl catalyst::cyfr::http::streaming::Host for Guest {
         let run = self.run.clone();
         let Some(stream) = self.streams.get_mut(&handle) else {
             return Ok(error_json(
-                "invalid_handle",
+                Kind::InvalidHandle.name(),
                 &words::unknown_handle(&handle),
             ));
         };
         if stream.started.elapsed() > Duration::from_millis(stream.timeout_ms) {
             self.streams.remove(&handle);
             let seconds = run.limits.timeout_ms() / 1000;
-            return Ok(error_json("timeout", &words::stream_timed_out(seconds)));
+            return Ok(error_json(
+                Kind::Timeout.name(),
+                &words::stream_timed_out(seconds),
+            ));
         }
-        match next_piece(&run, stream).await {
+        match next_piece(stream, &run.limits).await {
             Piece::Data(data) => {
                 let max = run.limits.max_response_size;
                 let size = stream.read_bytes + data.len() as u64;
                 if size > max {
                     self.streams.remove(&handle);
-                    let refused = refusal("response_too_large", words::stream_counted(size, max));
+                    let refused = refusal(Kind::ResponseTooLarge, words::stream_counted(size, max));
                     return refused_answer(&run, refused).await;
                 }
                 stream.read_bytes = size;
-                stream.sent.fetch.grant(data.len());
                 let Ok(data) = std::str::from_utf8(&data) else {
                     return Ok(NOT_TEXT.to_owned());
                 };
                 Ok(answer(data, false, stream.status))
             }
             Piece::None => Ok(answer("", stream.done, stream.status)),
+            // Recorded as it arrived: the guest is answered alone.
             Piece::Failed(refused) => {
                 self.streams.remove(&handle);
-                refused_answer(&run, refused).await
+                Ok(error_json(&refused.kind, &refused.message))
             }
         }
     }
@@ -145,84 +174,146 @@ impl catalyst::cyfr::http::streaming::Host for Guest {
 enum Piece {
     Data(zeroize::Zeroizing<Vec<u8>>),
     None,
-    Failed(http::Refusal),
+    Failed(Refusal),
 }
 
 // The next piece of `stream`'s answer, waiting at most `READ_WAIT` for one.
-async fn next_piece(run: &super::Run, stream: &mut Stream) -> Piece {
+async fn next_piece(stream: &mut Stream, limits: &Limits) -> Piece {
     if stream.done {
         return Piece::None;
     }
     let until = Instant::now() + READ_WAIT;
     loop {
         let wait = until.saturating_duration_since(Instant::now());
-        let keys = run.host.keys();
-        let Some(read) = http::next(
-            &mut stream.sent,
-            keys,
-            &stream.asked.host,
-            &run.limits,
-            wait,
-        )
-        .await
-        else {
+        let Some(taken) = stream.sent.fetch.next(PIECE_BYTES, wait).await else {
             return Piece::None;
         };
-        match read {
-            Read::Head { status, body, .. } => {
-                stream.status = Some(status);
-                // A stream's event is its answer's beginning.
-                http::http_event(
-                    run,
-                    &stream.asked,
-                    Meta::Integer(u64::from(status)),
-                    stream.started,
-                )
-                .await;
-                if !body.is_empty() {
-                    return Piece::Data(body);
-                }
-            }
-            Read::Body(body) => return Piece::Data(body),
-            Read::End => {
+        match taken {
+            Taken::Head { status, .. } => stream.status = Some(status),
+            Taken::Body(body) => return Piece::Data(body),
+            Taken::End(Ended::Whole) => {
                 stream.done = true;
                 return Piece::None;
             }
-            Read::Nothing => {}
-            Read::Lost => {
-                run.host.unclean();
-                return failed(run, stream, refusal("request_failed", words::HTTP_FAILED)).await;
-            }
-            Read::Failed(refused) => {
-                let refused = match refused.kind.as_str() {
-                    "response_too_large" if !refused.by_cyfr => refusal(
-                        "response_too_large",
-                        words::stream_too_large(run.limits.max_response_size),
-                    ),
-                    "timeout" if !refused.by_cyfr => refusal(
-                        "timeout",
-                        words::stream_idle(run.limits.timeout_ms() / 1000),
-                    ),
-                    // A request that failed after it was sent failed as a
-                    // stream's request.
-                    "http_error" => http::Refusal {
-                        kind: "request_failed".to_owned(),
-                        ..refused
-                    },
-                    _ => refused,
-                };
-                return failed(run, stream, refused).await;
+            Taken::End(end) => {
+                let attached = stream.sent.pin.is_none();
+                let (refused, _unknown) = stream_end(&end, attached, &stream.host, limits);
+                return Piece::Failed(refused.expect("an end other than whole refuses"));
             }
         }
     }
 }
 
-// A stream that ended early: its event when its answer never began.
-async fn failed(run: &super::Run, stream: &Stream, refused: http::Refusal) -> Piece {
-    if stream.status.is_none() {
-        http::http_event(run, &stream.asked, Meta::text("error"), stream.started).await;
+/// How a stream's `end` answers its guest's request to `host`: as a
+/// fetch's (`http::ended_as`), but a pinned stream that stopped arriving
+/// answers the idle timeout, one past its size the stream's sentence, and a
+/// failure after its request was sent `request_failed`; CYFR's own type,
+/// `http_error` for an attached answer's upstream among them, as given.
+pub fn stream_end(
+    end: &Ended,
+    attached: bool,
+    host: &str,
+    limits: &Limits,
+) -> (Option<Refusal>, bool) {
+    let (refused, unknown) = http::ended_as(end, attached, host, limits);
+    let refused = refused.map(|refused| match end {
+        Ended::Code(code) if code == "timeout" => refusal(
+            Kind::Timeout,
+            words::stream_idle(limits.timeout_ms() / 1000),
+        ),
+        Ended::Code(code) if code == "response_too_large" => refusal(
+            Kind::ResponseTooLarge,
+            words::stream_too_large(limits.max_response_size),
+        ),
+        _ if refused.is(Kind::HttpError) => Refusal {
+            kind: Kind::RequestFailed.name().to_owned(),
+            ..refused
+        },
+        _ => refused,
+    });
+    (refused, unknown)
+}
+
+/// What a stream's answer means for its attempt, recorded once each as it
+/// arrives: the attempt's event, report and uncertainty (the module's
+/// description). The watcher holds its attempt's host weakly: once the
+/// attempt is gone there is nothing to record for it.
+pub struct Watcher {
+    evented: AtomicBool,
+    settled: AtomicBool,
+    fields: EventFields,
+    attached: bool,
+    host: String,
+    limits: Limits,
+    watch: Watch,
+}
+
+impl Watcher {
+    /// Watch `sent`'s answer for its attempt, `run`, from now until its
+    /// end, beside its guest's reads.
+    fn start(run: &super::Run, sent: &Sent, fields: EventFields, host: &str) {
+        let watcher = Arc::new(Watcher {
+            evented: AtomicBool::new(false),
+            settled: AtomicBool::new(false),
+            fields,
+            attached: sent.pin.is_none(),
+            host: host.to_owned(),
+            limits: run.limits.clone(),
+            watch: sent.fetch.watch(),
+        });
+        run.host.watch(watcher.clone());
+        let attempt = Arc::downgrade(&run.host);
+        let mut changed = sent.fetch.watch();
+        tokio::spawn(async move {
+            loop {
+                let Some(host) = Weak::upgrade(&attempt) else {
+                    return;
+                };
+                if watcher.settle(&host).await {
+                    return;
+                }
+                drop(host);
+                changed.changed().await;
+            }
+        });
     }
-    Piece::Failed(refused)
+
+    /// Record what has arrived and is not yet recorded, once; whether the
+    /// stream has ended and everything of it is recorded.
+    pub async fn settle(&self, host: &Host) -> bool {
+        let (status, end) = self.watch.now();
+        if let Some(status) = status
+            && !self.evented.swap(true, Ordering::SeqCst)
+        {
+            self.fields
+                .send(host, Meta::Integer(u64::from(status)))
+                .await;
+        }
+        let Some(end) = end else {
+            return false;
+        };
+        if self.settled.swap(true, Ordering::SeqCst) {
+            return true;
+        }
+        let (refused, unknown) = stream_end(&end, self.attached, &self.host, &self.limits);
+        if !self.evented.swap(true, Ordering::SeqCst) {
+            self.fields.send(host, Meta::text("error")).await;
+        }
+        if unknown {
+            host.unclean();
+        }
+        if let Some(refused) = refused {
+            // A report whose answer is too deep ends nothing here: the
+            // attempt's own calls meet the same answer.
+            let _ = http::record(host, &refused).await;
+        }
+        true
+    }
+
+    /// Whether everything of the stream is recorded.
+    pub fn settled(&self) -> bool {
+        self.settled.load(Ordering::SeqCst)
+    }
 }
 
 // A read's answer: its data and whether the answer ended, and its status

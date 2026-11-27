@@ -89,6 +89,24 @@ pub struct Job {
 }
 
 impl Job {
+    /// The job bound to a node of its own whose limits are the zero
+    /// limits with `limits` in their place.
+    pub fn bound(mut self, limits: Value) -> Job {
+        let mut node = json!({"batch_timeout": "30s", "max_concurrent_tasks": 1,
+                              "max_memory_bytes": 67_108_864, "max_request_size": 1_048_576,
+                              "max_response_size": 5_242_880,
+                              "rate_limit": {"requests": 100, "window": "1m"}, "timeout": "30s"});
+        node.as_object_mut()
+            .expect("limits")
+            .extend(limits.as_object().expect("limits").clone());
+        self.authority = json!({"cursor": {"bound": self.reference}, "depth": 0,
+            "invoke_mode": "open_inert", "activation": {}, "budget": {"id": "bgt_test"},
+            "chain": [self.reference],
+            "policy": {"canonical": "jcs-1",
+                       "nodes": {self.reference.clone(): {"edges": {}, "limits": node}}}});
+        self
+    }
+
     /// A job running the component at `path` as `kind` on `input`.
     pub fn new(kind: &'static str, path: &str, input: &str) -> Job {
         static NEXT: AtomicU64 = AtomicU64::new(1);
@@ -210,6 +228,8 @@ pub enum Upstream {
     Refusal(String, Vec<u8>),
     /// The fetch's end, naming a code or none.
     End(Option<&'static str>),
+    /// The service's `close`, then its end of the stream closed.
+    Close,
 }
 
 /// How the service end answers each fetch the runner sends: the fetch's
@@ -598,7 +618,11 @@ pub fn relay_fetching(
                     Upstream::Refusal(header, body) => json!({"kind": "attached_refusal",
                         "header": header, "body": wire::encode_base64(&body)}),
                     Upstream::End(error) => json!({"kind": "fetch_end", "error": error}),
+                    Upstream::Close => {
+                        json!({"kind": "close", "reason": "malformed"})
+                    }
                 };
+                let closing = members["kind"] == "close";
                 sent.as_object_mut()
                     .expect("an object")
                     .extend(members.as_object().expect("an object").clone());
@@ -607,6 +631,10 @@ pub fn relay_fetching(
                 let length = u32::try_from(json.len()).expect("a frame under 4 GiB");
                 written.extend_from_slice(&length.to_be_bytes());
                 written.extend_from_slice(json.as_bytes());
+                if closing {
+                    let _ = stream.write_all(&written);
+                    return;
+                }
             }
             if stream.write_all(&written).is_err() {
                 return;
@@ -740,16 +768,38 @@ pub fn seal_frame(job: &Job, call_id: &str, seq: u64, kind: &str, plain: &[u8]) 
 /// it: the posted call's header, signed under the attempt's call key, and
 /// the guest error naming the call id, sealed as that call's answer.
 pub fn attached_refusal(job: &Job, call_id: &str, kind: &str, message: &str) -> Upstream {
+    refusal_as(job, call_id, kind, message, &Signed::default())
+}
+
+/// How a scripted refusal's header is signed: its age, the key it is
+/// signed under, and the attempt it names.
+#[derive(Default)]
+pub struct Signed {
+    pub age_ms: u64,
+    pub call_key: Option<[u8; 32]>,
+    pub attempt: Option<Attempt>,
+}
+
+/// An attached refusal as `attached_refusal` writes one, signed as `signed`
+/// says.
+pub fn refusal_as(
+    job: &Job,
+    call_id: &str,
+    kind: &str,
+    message: &str,
+    signed: &Signed,
+) -> Upstream {
     let fields = CallFields {
-        attempt: job.attempt(),
+        attempt: signed.attempt.clone().unwrap_or_else(|| job.attempt()),
         boot: BOOT.to_owned(),
         runner: RUNNER.to_owned(),
         member: MEMBER.to_owned(),
-        ts: now_ms(),
+        ts: now_ms() - signed.age_ms,
         nonce: "n_attached_refusal".to_owned(),
     };
     let posted = b"the posted body";
-    let header = auth::host_call_header(&job.call_key, &fields, posted).expect("a header");
+    let key = signed.call_key.unwrap_or(job.call_key);
+    let header = auth::host_call_header(&key, &fields, posted).expect("a header");
     let answer = json!({"v": 3, "error": "guest_error", "type": kind, "message": message,
                         "call_id": call_id});
     let body = seal(&job.keys(), &fields, answer.to_string().into_bytes());
@@ -824,11 +874,16 @@ pub struct Scripted {
 }
 
 impl cyfr_runner::host::Post for Scripted {
+    async fn place(&mut self) -> Option<cyfr_runner::host::Place> {
+        Some(cyfr_runner::host::Place::free())
+    }
+
     fn post(
         &mut self,
         _op: cyfr_runner::host::Op,
         header: String,
         body: Vec<u8>,
+        _place: cyfr_runner::host::Place,
     ) -> impl std::future::Future<Output = Option<cyfr_runner::host::Reached>> {
         let keys = self.job.keys();
         let fields = call_fields(&header);

@@ -29,7 +29,7 @@ use zeroize::Zeroizing;
 use cyfr_runner::assignment::{self, Assignment};
 use cyfr_runner::auth::{self, Attempt, AttemptKeys, CallFields, Direction};
 use cyfr_runner::control::{self, Environment, EnvironmentRefusal, Message, Relay};
-use cyfr_runner::host::{self, Caller, Op, Outcome, Post, Reached, Reading, Retry};
+use cyfr_runner::host::{self, Caller, Op, Outcome, Place, Post, Reached, Reading, Retry};
 use cyfr_runner::relay::{self, Channel, Incoming, Outgoing};
 use cyfr_runner::wire;
 
@@ -1255,7 +1255,17 @@ fn header_fields(header: &str) -> CallFields {
 }
 
 impl Post for Scripted {
-    async fn post(&mut self, _op: Op, header: String, body: Vec<u8>) -> Option<Reached> {
+    async fn place(&mut self) -> Option<Place> {
+        Some(Place::free())
+    }
+
+    async fn post(
+        &mut self,
+        _op: Op,
+        header: String,
+        body: Vec<u8>,
+        _place: Place,
+    ) -> Option<Reached> {
         // A try past the case's answers meets none: the case's count of
         // posts then names the extra one.
         let answer = self.answers.get(self.posted.len()).cloned();
@@ -1372,7 +1382,17 @@ async fn every_answer_outcome() {
 struct Silent(usize);
 
 impl Post for Silent {
-    async fn post(&mut self, _op: Op, _header: String, _body: Vec<u8>) -> Option<Reached> {
+    async fn place(&mut self) -> Option<Place> {
+        Some(Place::free())
+    }
+
+    async fn post(
+        &mut self,
+        _op: Op,
+        _header: String,
+        _body: Vec<u8>,
+        _place: Place,
+    ) -> Option<Reached> {
         self.0 += 1;
         std::future::pending().await
     }
@@ -1660,29 +1680,22 @@ fn requests_every_fetch_end_code_answers_the_guest_in_a_type_of_its_interface() 
             "pin_{why} is no fetch_end code"
         );
     }
-    // The runner's own refusals of a request, and a stream's.
+    // Every type the runner answers, on each interface it answers it on.
     let streaming: Vec<&str> = cases(&types["fetch_types"]["cyfr:http/streaming"], "streaming")
         .iter()
         .map(s)
         .collect();
-    for kind in [
-        "invalid_json",
-        "invalid_request",
-        "credential_header_refused",
-        "request_too_large",
-        "response_too_large",
-        "request_failed",
-        "timeout",
-    ] {
-        assert!(fetch.contains(&kind), "{kind}");
-    }
-    for kind in [
-        "stream_limit",
-        "invalid_handle",
-        "timeout",
-        "request_failed",
-    ] {
-        assert!(streaming.contains(&kind), "{kind}");
+    for (kind, on_fetch, on_stream) in http::Kind::ALL {
+        if on_fetch {
+            assert!(fetch.contains(&kind.name()), "fetch: {}", kind.name());
+        }
+        if on_stream {
+            assert!(
+                streaming.contains(&kind.name()),
+                "streaming: {}",
+                kind.name()
+            );
+        }
     }
 }
 
@@ -1777,4 +1790,19 @@ fn snake(name: &str) -> String {
         out.push(c.to_ascii_lowercase());
     }
     out
+}
+
+#[test]
+fn requests_a_pin_is_read_as_prima_reads_one() {
+    use cyfr_runner::imports::http::read_pin;
+    let v = fixture("host_api.json");
+    let cases = &v["pin_answer_refusals"];
+    assert!(read_pin(&cases["pin"]).is_some());
+    for case in cases_of(&cases["refusals"]) {
+        assert!(read_pin(&case["pin"]).is_none(), "{}", case["why"]);
+    }
+}
+
+fn cases_of(value: &Value) -> &Vec<Value> {
+    value.as_array().expect("a list of cases")
 }

@@ -15,11 +15,12 @@
 //!   its address (`private_ip_blocked`, `dns_error`), and a redirect's hop
 //!   against the pin it came from (`redirect_credentials`), and records
 //!   each refusal itself; the runner records none of them again. A pin
-//!   naming another scheme, host or port than the URL's, or a hop's pin on
-//!   another origin than its `from`, is refused by the runner as its own.
-//!   The request goes through the relay naming the pin, and the relay's
-//!   service end decides its method, scheme, headers and size, takes it
-//!   from the consented rate and asks CYFR again before it connects.
+//!   naming another scheme, host or port than the URL's, a hop's pin on
+//!   another origin than its `from`'s, or an answer `Prima.PinnedTarget`
+//!   would not read, is refused by the runner as its own. The request goes
+//!   through the relay naming the pin, and the relay's service end decides
+//!   its method, scheme, headers and size, takes it from the consented rate
+//!   and asks CYFR again before it connects.
 //! - **An attached request** (one naming a `connection`) asks for no pin:
 //!   it is built as `Prima.AttachedRequest` builds one and read back as
 //!   CYFR reads it, so a credential header (`credential_header_refused`)
@@ -27,36 +28,43 @@
 //!   relay checks it and CYFR makes it, attaching the credential, so none
 //!   enters the runner; CYFR's answer comes back as frames sealed for the
 //!   attempt and the request's `call_id`, and its refusal as its own type
-//!   and sentence.
+//!   and sentence, both read as they arrive (`crate::relay`).
 //!
-//! The runner records the relay's refusals (`record_denial`), and its own
-//! refusals of a size, of the types CYFR records (`RECORDED`). A request
-//! that would pass `crate::relay::MAX_FETCHES` open is refused unsent.
+//! A method the relay's frame cannot carry (`crate::relay::METHODS`) is the
+//! one refusal the runner makes for the relay, since the frame cannot be
+//! written: `method_blocked`, before the pin. The runner records the
+//! relay's refusals (`record_denial`), and its own refusals of a method or
+//! a size, of the types CYFR records (`RECORDED`). A request that would
+//! pass `crate::relay::MAX_FETCHES` open is refused unsent.
 //!
-//! A fetch's answer is read as it arrives, each chunk granted back as
+//! A fetch's answer is read as it arrives, each piece granted back as
 //! credit, to at most the node's `max_response_size`; a fetch abandoned
 //! before its end (too large, timed out, the attempt ended) drains in the
 //! relay. A redirecting answer (`3xx` with a `Location`) is answered as
-//! it is: the guest's next request to where it points is the redirect's
-//! next hop from this request's pin, and at most `MAX_HOPS` are kept.
+//! it is: the guest's next request to where it points, its scheme and host
+//! in any case, is the redirect's next hop from this request's pin, and at
+//! most `MAX_HOPS` are kept.
 //!
-//! The guest's headers and body, which may carry its credentials, are
-//! held cleared on drop; the `String` the generated binding takes for the
-//! request is Wasmtime's, freed unwiped beside the guest's own copy.
+//! The guest's URL, headers and body, which may carry its credentials, are
+//! held in cleared types from their reading to their sending, refusal or
+//! drop; the `String` the generated binding takes for the request is
+//! Wasmtime's, freed unwiped beside the guest's own copy.
 
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 use serde_json::{Map, Value};
-use zeroize::{Zeroize as _, Zeroizing};
+use zeroize::Zeroizing;
 
 use super::{Guest, Run, args, catalyst, ended, error_json};
-use crate::auth::{AnswerFrame, Direction, FrameReader};
+use crate::auth::FrameReader;
 use crate::authority::Limits;
 use crate::control::{Event, Meta};
-use crate::host::{Outcome, Reading, answered};
-use crate::relay::{Fetch, FetchEvent, Header, MAX_FETCHES, Outgoing, Unfetched};
-use crate::wire::{Unread, decode_base64, encode_base64, encode_base64url, read};
+use crate::host::{Outcome, Reading};
+use crate::relay::{
+    Ended, Fetch, Header, Headers, MAX_FETCHES, METHODS, Opener, Outgoing, Taken, Unfetched,
+};
+use crate::wire::{Unread, decode_base64, encode_base64url, read};
 use crate::words;
 
 /// The slack above twice the consented `max_request_size` a request's
@@ -125,17 +133,114 @@ pub const CREDENTIAL_HEADERS: [&str; 7] = [
     "x-csrf-token",
 ];
 
+/// The pin refusals the relay names a fetch's end by, each `pin_` and its
+/// reason: CYFR's (`crate::host::PIN_REFUSALS`) and the service's own
+/// (`Prima.RunnerRelay.pin_code/1`). Any other `pin_` code is a transport's.
+pub const PIN_WHYS: [&str; 10] = [
+    "domain",
+    "denied",
+    "metadata",
+    "resolution",
+    "redirect_credentials",
+    "malformed",
+    "unavailable",
+    "lost",
+    "elsewhere",
+    "expired",
+];
+
+// ============================================================================
+// The types a runner answers its guest
+// ============================================================================
+
+/// Every error type the runner answers a guest's HTTP import with, beside
+/// CYFR's own, which an attached request's refusal carries as given: each
+/// of `tests/fixtures/guest_error.json`'s `fetch_types` for the interfaces
+/// it is answered on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    InvalidJson,
+    InvalidRequest,
+    CredentialHeaderRefused,
+    RequestTooLarge,
+    ResponseTooLarge,
+    DomainBlocked,
+    MethodBlocked,
+    SchemeBlocked,
+    RateLimited,
+    PrivateIpBlocked,
+    DnsError,
+    RedirectCredentials,
+    Timeout,
+    RequestFailed,
+    HttpError,
+    StreamLimit,
+    InvalidHandle,
+    EncodingError,
+}
+
+impl Kind {
+    /// Every kind, with whether a fetch's and a stream's answer may carry
+    /// it: a stream answers a failure after its request was sent as
+    /// `request_failed`, never `http_error`, and its own kinds are its
+    /// alone.
+    pub const ALL: [(Kind, bool, bool); 18] = [
+        (Kind::InvalidJson, true, true),
+        (Kind::InvalidRequest, true, true),
+        (Kind::CredentialHeaderRefused, true, true),
+        (Kind::RequestTooLarge, true, true),
+        (Kind::ResponseTooLarge, true, true),
+        (Kind::DomainBlocked, true, true),
+        (Kind::MethodBlocked, true, true),
+        (Kind::SchemeBlocked, true, true),
+        (Kind::RateLimited, true, true),
+        (Kind::PrivateIpBlocked, true, true),
+        (Kind::DnsError, true, true),
+        (Kind::RedirectCredentials, true, true),
+        (Kind::Timeout, true, true),
+        (Kind::RequestFailed, true, true),
+        (Kind::HttpError, true, false),
+        (Kind::StreamLimit, false, true),
+        (Kind::InvalidHandle, false, true),
+        (Kind::EncodingError, false, true),
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Kind::InvalidJson => "invalid_json",
+            Kind::InvalidRequest => "invalid_request",
+            Kind::CredentialHeaderRefused => "credential_header_refused",
+            Kind::RequestTooLarge => "request_too_large",
+            Kind::ResponseTooLarge => "response_too_large",
+            Kind::DomainBlocked => "domain_blocked",
+            Kind::MethodBlocked => "method_blocked",
+            Kind::SchemeBlocked => "scheme_blocked",
+            Kind::RateLimited => "rate_limited",
+            Kind::PrivateIpBlocked => "private_ip_blocked",
+            Kind::DnsError => "dns_error",
+            Kind::RedirectCredentials => "redirect_credentials",
+            Kind::Timeout => "timeout",
+            Kind::RequestFailed => "request_failed",
+            Kind::HttpError => "http_error",
+            Kind::StreamLimit => "stream_limit",
+            Kind::InvalidHandle => "invalid_handle",
+            Kind::EncodingError => "encoding_error",
+        }
+    }
+}
+
 /// The refusals CYFR records when the runner reports them
 /// (`Opus.Host.Storage`'s denials): the relay's, and the runner's own of a
-/// size. Every other refusal is the guest's to read and no one's to record.
-pub const RECORDED: [&str; 7] = [
-    "domain_blocked",
-    "method_blocked",
-    "scheme_blocked",
-    "request_too_large",
-    "response_too_large",
-    "private_ip_blocked",
-    "rate_limited",
+/// method or a size. Every other refusal is the guest's to read and no
+/// one's to record.
+pub const RECORDED: [Kind; 7] = [
+    Kind::DomainBlocked,
+    Kind::MethodBlocked,
+    Kind::SchemeBlocked,
+    Kind::RequestTooLarge,
+    Kind::ResponseTooLarge,
+    Kind::PrivateIpBlocked,
+    Kind::RateLimited,
 ];
 
 /// A refusal the guest is answered: its type and sentence, and whether
@@ -147,18 +252,34 @@ pub struct Refusal {
     pub by_cyfr: bool,
 }
 
-pub(super) fn refusal(kind: &str, message: impl Into<String>) -> Refusal {
+impl Refusal {
+    /// Whether the runner reports this refusal to CYFR for its record.
+    pub fn recorded(&self) -> bool {
+        !self.by_cyfr && RECORDED.iter().any(|kind| kind.name() == self.kind)
+    }
+
+    /// Whether it is of `kind` and the runner's own.
+    pub fn is(&self, kind: Kind) -> bool {
+        !self.by_cyfr && self.kind == kind.name()
+    }
+}
+
+/// The runner's own refusal of `kind`.
+pub fn refusal(kind: Kind, message: impl Into<String>) -> Refusal {
     Refusal {
-        kind: kind.to_owned(),
+        kind: kind.name().to_owned(),
         message: message.into(),
         by_cyfr: false,
     }
 }
 
+// A refusal CYFR decided, and recorded already: of a kind of the runner's
+// vocabulary for a pin, or of CYFR's own for an attached request.
 fn cyfr(kind: &str, message: impl Into<String>) -> Refusal {
     Refusal {
+        kind: kind.to_owned(),
+        message: message.into(),
         by_cyfr: true,
-        ..refusal(kind, message)
     }
 }
 
@@ -187,21 +308,15 @@ pub struct Asked {
     /// name.
     pub host: String,
     pub(super) origin: Origin,
+    /// The URL as `Url::canonical` spells it, by which a redirect's hop is
+    /// known.
+    pub(super) canonical: Zeroizing<String>,
     /// The path and query the relay's fetch names.
     pub(super) path: Zeroizing<String>,
-    pub(super) headers: Vec<Header>,
+    pub(super) headers: Headers,
     pub(super) body: Zeroizing<Vec<u8>>,
     pub(super) response_base64: bool,
     pub(super) connection: Option<String>,
-}
-
-impl Drop for Asked {
-    fn drop(&mut self) {
-        for (name, value) in &mut self.headers {
-            name.zeroize();
-            value.zeroize();
-        }
-    }
 }
 
 /// A scheme, host and effective port: what a pin names and a redirect
@@ -237,9 +352,9 @@ pub struct Pin {
     pub origin: Origin,
 }
 
-/// A redirect an attempt received: where it points, as `canonical` spells
-/// it, and the pin the redirecting answer came from.
-pub type Hop = (String, Pin);
+/// A redirect an attempt received: where it points, as `Url::canonical`
+/// spells it, and the pin the redirecting answer came from.
+pub type Hop = (Zeroizing<String>, Pin);
 
 // ============================================================================
 // Reading a guest's request
@@ -253,14 +368,14 @@ pub fn requested(request: &str, limits: &Limits, purpose: Purpose) -> Result<Ask
         .saturating_mul(2)
         .saturating_add(ENVELOPE_OVERHEAD);
     if request.len() as u64 > envelope {
-        return Err(refusal("request_too_large", words::REQUEST_TOO_LARGE));
+        return Err(refusal(Kind::RequestTooLarge, words::REQUEST_TOO_LARGE));
     }
     let json = match read(request.as_bytes()) {
         Ok(json) => json,
-        Err(Unread::TooDeep) => return Err(refusal("invalid_json", words::request_too_deep())),
-        Err(Unread::Malformed) => return Err(refusal("invalid_json", words::REQUEST_NOT_JSON)),
+        Err(Unread::TooDeep) => return Err(refusal(Kind::InvalidJson, words::request_too_deep())),
+        Err(Unread::Malformed) => return Err(refusal(Kind::InvalidJson, words::REQUEST_NOT_JSON)),
     };
-    let invalid = |message: &str| refusal("invalid_request", message);
+    let invalid = |message: &str| refusal(Kind::InvalidRequest, message);
     let Some(object) = json.value().as_object() else {
         return Err(invalid(words::NO_METHOD_OR_URL));
     };
@@ -272,9 +387,10 @@ pub fn requested(request: &str, limits: &Limits, purpose: Purpose) -> Result<Ask
     };
     let url = Zeroizing::new(url.clone());
     let parts = Url::parse(&url).ok_or_else(|| invalid(words::BAD_URL))?;
-    let Some(host) = parts.host.clone().filter(|host| !host.is_empty()) else {
+    let Some(host) = parts.host.as_deref().filter(|host| !host.is_empty()) else {
         return Err(invalid(words::NO_HOSTNAME));
     };
+    let host = host.to_owned();
     if parts.userinfo.is_some() {
         return Err(invalid(words::URL_CREDENTIALS));
     }
@@ -309,13 +425,13 @@ pub fn requested(request: &str, limits: &Limits, purpose: Purpose) -> Result<Ask
         None => (headers, Zeroizing::new(body.as_bytes().to_vec())),
     };
     let origin = parts.origin().ok_or_else(|| invalid(words::BAD_URL))?;
-    let path = Zeroizing::new(parts.path_and_query());
     Ok(Asked {
         method: method.to_uppercase(),
+        canonical: parts.canonical(),
+        path: parts.path_and_query(),
         url,
         host,
         origin,
-        path,
         headers,
         body,
         response_base64: base64("response_encoding"),
@@ -325,9 +441,10 @@ pub fn requested(request: &str, limits: &Limits, purpose: Purpose) -> Result<Ask
 
 // Headers are an object of names to values or an array of `[name, value]`
 // pairs, a value a string or a scalar read as its text.
-fn headers(value: Option<&Value>) -> Result<Vec<Header>, Refusal> {
-    let invalid = || refusal("invalid_request", words::BAD_HEADERS);
-    let pair = |name: &str, value: &Value| {
+fn headers(value: Option<&Value>) -> Result<Headers, Refusal> {
+    let invalid = || refusal(Kind::InvalidRequest, words::BAD_HEADERS);
+    let mut read = Headers::default();
+    let mut pair = |name: &str, value: &Value| {
         if name.is_empty() {
             return Err(invalid());
         }
@@ -335,32 +452,36 @@ fn headers(value: Option<&Value>) -> Result<Vec<Header>, Refusal> {
             Value::Array(_) | Value::Object(_) => return Err(invalid()),
             value => text_of(value).ok_or_else(invalid)?,
         };
-        Ok((name.to_owned(), value))
+        read.0.push((name.to_owned(), (*value).clone()));
+        Ok(())
     };
     match value {
-        None | Some(Value::Null) => Ok(Vec::new()),
-        Some(Value::Object(members)) => members
-            .iter()
-            .map(|(name, value)| pair(name, value))
-            .collect(),
-        Some(Value::Array(pairs)) => pairs
-            .iter()
-            .map(|entry| match entry.as_array().map(Vec::as_slice) {
-                Some([Value::String(name), value]) => pair(name, value),
-                _ => Err(invalid()),
-            })
-            .collect(),
-        Some(_) => Err(invalid()),
+        None | Some(Value::Null) => {}
+        Some(Value::Object(members)) => {
+            for (name, value) in members {
+                pair(name, value)?;
+            }
+        }
+        Some(Value::Array(pairs)) => {
+            for entry in pairs {
+                match entry.as_array().map(Vec::as_slice) {
+                    Some([Value::String(name), value]) => pair(name, value)?,
+                    _ => return Err(invalid()),
+                }
+            }
+        }
+        Some(_) => return Err(invalid()),
     }
+    Ok(read)
 }
 
 // A multipart request's parts encoded as `multipart/form-data`, its
 // boundary in the content type that replaces the guest's own.
 fn multipart_body(
     parts: &[Value],
-    mut headers: Vec<Header>,
-) -> Result<(Vec<Header>, Zeroizing<Vec<u8>>), Refusal> {
-    let invalid = |message: String| refusal("invalid_request", message);
+    mut headers: Headers,
+) -> Result<(Headers, Zeroizing<Vec<u8>>), Refusal> {
+    let invalid = |message: String| refusal(Kind::InvalidRequest, message);
     let mut bytes = [0u8; 16];
     getrandom::fill(&mut bytes).expect("the operating system's random source answers");
     let boundary = crate::wire::hex(&bytes);
@@ -369,10 +490,9 @@ fn multipart_body(
         let Some(part) = part.as_object() else {
             return Err(invalid(words::MULTIPART_PART.to_owned()));
         };
-        let Some(name) = part.get("name").map(text_of) else {
+        let Some(name) = part.get("name").and_then(text_of) else {
             return Err(invalid(words::MULTIPART_PART.to_owned()));
         };
-        let name = name.ok_or_else(|| invalid(words::MULTIPART_PART.to_owned()))?;
         body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
         match (part.get("data"), part.get("value")) {
             (Some(Value::String(data)), _) => {
@@ -399,8 +519,10 @@ fn multipart_body(
             }
             (_, value) => {
                 let value = match value {
-                    None => String::new(),
-                    Some(value) => text_of(value).unwrap_or_else(|| value.to_string()),
+                    None => Zeroizing::new(String::new()),
+                    Some(value) => {
+                        text_of(value).unwrap_or_else(|| Zeroizing::new(value.to_string()))
+                    }
                 };
                 body.extend_from_slice(
                     format!(
@@ -415,21 +537,24 @@ fn multipart_body(
         body.extend_from_slice(b"\r\n");
     }
     body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
-    headers.retain(|(name, _)| !name.eq_ignore_ascii_case("content-type"));
-    headers.push((
+    headers
+        .0
+        .retain(|(name, _)| !name.eq_ignore_ascii_case("content-type"));
+    headers.0.push((
         "content-type".to_owned(),
         format!("multipart/form-data; boundary={boundary}"),
     ));
     Ok((headers, body))
 }
 
-// A scalar's text, as Elixir's `to_string/1` writes it.
-fn text_of(value: &Value) -> Option<String> {
+// A scalar's text, as Elixir's `to_string/1` writes it, cleared when it is
+// dropped.
+fn text_of(value: &Value) -> Option<Zeroizing<String>> {
     match value {
-        Value::String(text) => Some(text.clone()),
-        Value::Number(number) => Some(number.to_string()),
-        Value::Bool(value) => Some(value.to_string()),
-        Value::Null => Some(String::new()),
+        Value::String(text) => Some(Zeroizing::new(text.clone())),
+        Value::Number(number) => Some(Zeroizing::new(number.to_string())),
+        Value::Bool(value) => Some(Zeroizing::new(value.to_string())),
+        Value::Null => Some(Zeroizing::new(String::new())),
         _ => None,
     }
 }
@@ -442,18 +567,25 @@ fn quoted(text: &str) -> String {
 // URLs, as Elixir's `URI` reads, writes and merges them
 // ============================================================================
 
+/// A part of a URL, which may carry a credential: cleared when dropped.
+type Part = Option<Zeroizing<String>>;
+
+fn part(text: Option<&str>) -> Part {
+    text.map(|text| Zeroizing::new(text.to_owned()))
+}
+
 /// A URL's parts as `URI.parse/1` reads them, with its port.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Url {
     pub scheme: Option<String>,
-    pub userinfo: Option<String>,
+    pub userinfo: Part,
     /// Without brackets.
     pub host: Option<String>,
     /// The port the URL names, as text, when it names one.
     pub port: Option<String>,
-    pub path: Option<String>,
-    pub query: Option<String>,
-    pub fragment: Option<String>,
+    pub path: Part,
+    pub query: Part,
+    pub fragment: Part,
 }
 
 impl Url {
@@ -466,12 +598,12 @@ impl Url {
         }
         Some(Url {
             scheme: uri.scheme,
-            userinfo: uri.userinfo.map(str::to_owned),
+            userinfo: part(uri.userinfo),
             host: uri.host.map(str::to_owned),
             port: port.map(str::to_owned),
-            path: uri.path.map(str::to_owned),
-            query: uri.query.map(str::to_owned),
-            fragment: uri.fragment.map(str::to_owned),
+            path: part(uri.path),
+            query: part(uri.query),
+            fragment: part(uri.fragment),
         })
     }
 
@@ -504,16 +636,18 @@ impl Url {
     }
 
     /// The path and query a fetch names: `/` for none.
-    pub fn path_and_query(&self) -> String {
-        let mut path = match self.path.as_deref() {
-            None | Some("") => "/".to_owned(),
-            Some(path) => path.to_owned(),
-        };
-        if let Some(query) = &self.query {
-            path.push('?');
-            path.push_str(query);
+    pub fn path_and_query(&self) -> Zeroizing<String> {
+        let path = self.path.as_deref().map_or("", String::as_str);
+        let query = self.query.as_deref().map(String::as_str);
+        let mut text = Zeroizing::new(String::with_capacity(
+            path.len().max(1) + query.map_or(0, |query| query.len() + 1),
+        ));
+        text.push_str(if path.is_empty() { "/" } else { path });
+        if let Some(query) = query {
+            text.push('?');
+            text.push_str(query);
         }
-        path
+        text
     }
 
     /// Whether this is a URL a guest's request may name
@@ -524,10 +658,19 @@ impl Url {
             && self.userinfo.is_none()
     }
 
-    /// The URL as `URI.to_string/1` writes it: the port only when it is not
-    /// the scheme's default, an IPv6 host in brackets.
-    pub fn canonical(&self) -> String {
-        let mut text = String::new();
+    /// The URL as `URI.to_string/1` writes it, its host lowercased, so a
+    /// redirect's hop is known however the guest's library spells its
+    /// scheme and host: the port only when it is not the scheme's default,
+    /// an IPv6 host in brackets.
+    pub fn canonical(&self) -> Zeroizing<String> {
+        let mut text = Zeroizing::new(String::with_capacity(
+            [&self.userinfo, &self.path, &self.query, &self.fragment]
+                .iter()
+                .map(|part| part.as_deref().map_or(0, String::len) + 1)
+                .sum::<usize>()
+                + self.host.as_deref().map_or(0, str::len)
+                + 24,
+        ));
         if let Some(scheme) = &self.scheme {
             text.push_str(scheme);
             text.push(':');
@@ -538,12 +681,13 @@ impl Url {
                 text.push_str(userinfo);
                 text.push('@');
             }
+            let host = host.to_ascii_lowercase();
             if host.contains(':') {
                 text.push('[');
-                text.push_str(host);
+                text.push_str(&host);
                 text.push(']');
             } else {
-                text.push_str(host);
+                text.push_str(&host);
             }
             if let Some(port) = self.effective_port()
                 && Some(port) != self.default_port()
@@ -552,16 +696,11 @@ impl Url {
                 text.push_str(&port.to_string());
             }
         }
-        if let Some(path) = &self.path {
-            text.push_str(path);
-        }
-        if let Some(query) = &self.query {
-            text.push('?');
-            text.push_str(query);
-        }
-        if let Some(fragment) = &self.fragment {
-            text.push('#');
-            text.push_str(fragment);
+        for (mark, part) in [("", &self.path), ("?", &self.query), ("#", &self.fragment)] {
+            if let Some(part) = part {
+                text.push_str(mark);
+                text.push_str(part);
+            }
         }
         text
     }
@@ -569,35 +708,42 @@ impl Url {
     /// `reference` resolved against this URL, as `URI.merge/2` resolves it
     /// (RFC 3986, section 5.2).
     pub fn merge(&self, reference: &Url) -> Url {
+        let removed = |path: &Part| -> Part {
+            path.as_deref()
+                .map(|path| Zeroizing::new(remove_dot_segments(path)))
+        };
         if reference.scheme.is_some() {
             return Url {
-                path: reference.path.as_deref().map(remove_dot_segments),
+                path: removed(&reference.path),
                 ..reference.clone()
             };
         }
         if reference.host.is_some() {
             return Url {
                 scheme: self.scheme.clone(),
-                path: reference.path.as_deref().map(remove_dot_segments),
+                path: removed(&reference.path),
                 ..reference.clone()
             };
         }
-        let (path, query) = match reference.path.as_deref() {
+        let (path, query) = match reference.path.as_deref().map(String::as_str) {
             None | Some("") => (
                 self.path.clone(),
                 reference.query.clone().or_else(|| self.query.clone()),
             ),
             Some(path) if path.starts_with('/') => {
-                (Some(remove_dot_segments(path)), reference.query.clone())
+                (removed(&reference.path), reference.query.clone())
             }
             Some(path) => {
-                let base = self.path.as_deref().unwrap_or("");
-                let merged = match base.rfind('/') {
+                let base = self.path.as_deref().map_or("", String::as_str);
+                let merged = Zeroizing::new(match base.rfind('/') {
                     Some(slash) => format!("{}{path}", &base[..=slash]),
                     None if self.host.is_some() => format!("/{path}"),
                     None => path.to_owned(),
-                };
-                (Some(remove_dot_segments(&merged)), reference.query.clone())
+                });
+                (
+                    Some(Zeroizing::new(remove_dot_segments(&merged))),
+                    reference.query.clone(),
+                )
             }
         };
         Url {
@@ -612,49 +758,79 @@ impl Url {
     }
 }
 
-// RFC 3986, section 5.2.4: `.` and `..` segments removed from `path`.
-fn remove_dot_segments(path: &str) -> String {
-    let mut input = path.to_owned();
-    let mut output = String::new();
-    while !input.is_empty() {
-        if let Some(rest) = input.strip_prefix("../") {
-            input = rest.to_owned();
-        } else if let Some(rest) = input.strip_prefix("./") {
-            input = rest.to_owned();
-        } else if input.starts_with("/./") {
-            input.replace_range(..3, "/");
-        } else if input == "/." {
-            input = "/".to_owned();
-        } else if input.starts_with("/../") || input == "/.." {
-            let cut = if input == "/.." { 3 } else { 4 };
-            input.replace_range(..cut, "/");
-            match output.rfind('/') {
-                Some(slash) => output.truncate(slash),
-                None => output.clear(),
+/// RFC 3986, section 5.2.4: `.` and `..` segments removed from `path`, in
+/// one pass over it. The input is the rest of `path`, after a `/` the
+/// algorithm put back when `lead` is set; each segment the output takes is
+/// kept as a unit with its leading `/`, so a `..` removes the last unit.
+pub fn remove_dot_segments(path: &str) -> String {
+    let mut rest = path;
+    let mut lead = false;
+    let mut units: Vec<(bool, &str)> = Vec::new();
+    loop {
+        if !lead {
+            if let Some(after) = rest.strip_prefix("../") {
+                rest = after;
+                continue;
             }
-        } else if input == "." || input == ".." {
-            input.clear();
-        } else {
-            let start = usize::from(input.starts_with('/'));
-            let end = input[start..]
-                .find('/')
-                .map_or(input.len(), |at| at + start);
-            output.push_str(&input[..end]);
-            input.replace_range(..end, "");
+            if let Some(after) = rest.strip_prefix("./") {
+                rest = after;
+                continue;
+            }
+            if rest == "." || rest == ".." {
+                break;
+            }
         }
+        let (slash, after) = if lead {
+            (true, rest)
+        } else if let Some(after) = rest.strip_prefix('/') {
+            (true, after)
+        } else {
+            (false, rest)
+        };
+        if slash {
+            if let Some(next) = after.strip_prefix("./") {
+                (rest, lead) = (next, true);
+                continue;
+            }
+            if after == "." {
+                (rest, lead) = ("", true);
+                continue;
+            }
+            if let Some(next) = after.strip_prefix("../") {
+                (rest, lead) = (next, true);
+                units.pop();
+                continue;
+            }
+            if after == ".." {
+                (rest, lead) = ("", true);
+                units.pop();
+                continue;
+            }
+        } else if after.is_empty() {
+            break;
+        }
+        let end = after.find('/').unwrap_or(after.len());
+        units.push((slash, &after[..end]));
+        (rest, lead) = (&after[end..], false);
     }
-    output
+    let mut out = String::with_capacity(path.len() + 1);
+    for (slash, segment) in units {
+        if slash {
+            out.push('/');
+        }
+        out.push_str(segment);
+    }
+    out
 }
 
 // ============================================================================
 // Sending a request
 // ============================================================================
 
-/// A request sent: the fetch the guest's import owns, the reader of an
-/// attached request's frames, and the pin a pinned one was sent on.
+/// A request sent: the fetch the guest's import owns, and the pin a pinned
+/// one was sent on.
 pub struct Sent {
     pub fetch: Fetch,
-    pub frames: Option<FrameReader>,
     pub pin: Option<Pin>,
 }
 
@@ -676,15 +852,25 @@ pub(super) async fn send(
 ) -> wasmtime::Result<Result<Sent, Refusal>> {
     let host = run.host.clone();
     let purpose = pinning.purpose;
+    // A method no frame carries is refused for the relay, before the pin.
+    if !METHODS.contains(&asked.method.as_str()) {
+        return Ok(Err(refusal(
+            Kind::MethodBlocked,
+            words::unsupported_method(&asked.method),
+        )));
+    }
     // A request past the relay's fetches is held back before it is pinned.
     if !host.relay().room().await {
         return Ok(Err(refusal_in_flight(purpose)));
     }
-    let (frame, frames, pin) = match &asked.connection {
+    let (frame, opener, pin) = match &asked.connection {
         Some(connection) => match attached(host.attempt(), asked, connection, purpose) {
             Ok((frame, call_id)) => (
                 frame,
-                Some(FrameReader::new(&host.keys().seal, &call_id)),
+                Some(Opener {
+                    frames: FrameReader::new(&host.keys().seal, &call_id),
+                    keys: host.keys().clone(),
+                }),
                 None,
             ),
             Err(refused) => return Ok(Err(refused)),
@@ -699,18 +885,18 @@ pub(super) async fn send(
                 pin: pin.id.clone(),
                 method: asked.method.clone(),
                 path: (*asked.path).clone(),
-                headers: asked.headers.clone(),
+                headers: asked.headers.0.clone(),
                 body: (*asked.body).clone(),
             };
             (frame, None, Some(pin))
         }
     };
-    match host.relay().fetch(frame).await {
-        Ok(fetch) => Ok(Ok(Sent { fetch, frames, pin })),
+    match host.relay().fetch(frame, opener).await {
+        Ok(fetch) => Ok(Ok(Sent { fetch, pin })),
         Err(Unfetched::Busy) => Ok(Err(refusal_in_flight(purpose))),
-        Err(Unfetched::Invalid(_)) => Ok(Err(refusal("invalid_request", words::UNSENDABLE))),
+        Err(Unfetched::Invalid(_)) => Ok(Err(refusal(Kind::InvalidRequest, words::UNSENDABLE))),
         Err(Unfetched::Closed) => Ok(Err(refusal(
-            "http_error",
+            Kind::HttpError,
             words::http_failed("relay_closed"),
         ))),
     }
@@ -718,8 +904,8 @@ pub(super) async fn send(
 
 fn refusal_in_flight(purpose: Purpose) -> Refusal {
     let kind = match purpose {
-        Purpose::Fetch => "request_failed",
-        Purpose::Stream => "stream_limit",
+        Purpose::Fetch => Kind::RequestFailed,
+        Purpose::Stream => Kind::StreamLimit,
     };
     refusal(kind, words::requests_in_flight(MAX_FETCHES))
 }
@@ -732,11 +918,12 @@ async fn pinned(
     asked: &Asked,
     pinning: Pinning<'_>,
 ) -> wasmtime::Result<Result<Pin, Refusal>> {
-    let canonical = Url::parse(&asked.url).map(|url| url.canonical());
-    let from = canonical.and_then(|canonical| {
-        let at = pinning.hops.iter().position(|(url, _)| *url == canonical)?;
-        pinning.hops.remove(at).map(|(_, from)| from)
-    });
+    let from = pinning
+        .hops
+        .iter()
+        .position(|(url, _)| *url == asked.canonical)
+        .and_then(|at| pinning.hops.remove(at))
+        .map(|(_, from)| from);
     let mut members = vec![("url", Value::String((*asked.url).clone()))];
     match &from {
         Some(from) => {
@@ -751,19 +938,19 @@ async fn pinned(
     let pin = match outcome {
         Outcome::Answered(Reading::Ok(pin)) => match read_pin(pin.value()) {
             Some(pin) => pin,
-            None => return Ok(Err(refusal("dns_error", words::PIN_NOT_CURRENT))),
+            None => return Ok(Err(refusal(Kind::DnsError, words::PIN_NOT_CURRENT))),
         },
         Outcome::Answered(Reading::Refused(why)) => return Ok(Err(pin_refusal(why, host))),
         _ => return Ok(Err(pin_refusal("lost", host))),
     };
     if !pin.origin.same(&asked.origin) {
-        return Ok(Err(refusal("dns_error", words::pin_elsewhere(host))));
+        return Ok(Err(refusal(Kind::DnsError, words::pin_elsewhere(host))));
     }
     if let Some(from) = &from
         && !from.origin.same(&pin.origin)
     {
         return Ok(Err(refusal(
-            "redirect_credentials",
+            Kind::RedirectCredentials,
             words::redirect_refused(host),
         )));
     }
@@ -775,22 +962,28 @@ async fn pinned(
 /// reasons (`unavailable`, `lost`, `elsewhere`, `expired`) as its own.
 pub fn pin_refusal(why: &str, host: &str) -> Refusal {
     match why {
-        "domain" => cyfr("domain_blocked", words::pin_domain(host)),
-        "denied" => cyfr("private_ip_blocked", words::pin_denied(host)),
-        "metadata" => cyfr("private_ip_blocked", words::pin_metadata(host)),
-        "resolution" => cyfr("dns_error", words::pin_resolution(host)),
-        "redirect_credentials" => cyfr("redirect_credentials", words::redirect_refused(host)),
-        "malformed" => cyfr("invalid_request", words::BAD_URL),
-        "elsewhere" => refusal("dns_error", words::pin_elsewhere(host)),
-        "expired" => refusal("dns_error", words::pin_expired(host)),
-        "unavailable" => refusal("dns_error", words::pin_unavailable(host)),
-        _lost => refusal("dns_error", words::PIN_NOT_CURRENT),
+        "domain" => cyfr(Kind::DomainBlocked.name(), words::pin_domain(host)),
+        "denied" => cyfr(Kind::PrivateIpBlocked.name(), words::pin_denied(host)),
+        "metadata" => cyfr(Kind::PrivateIpBlocked.name(), words::pin_metadata(host)),
+        "resolution" => cyfr(Kind::DnsError.name(), words::pin_resolution(host)),
+        "redirect_credentials" => cyfr(
+            Kind::RedirectCredentials.name(),
+            words::redirect_refused(host),
+        ),
+        "malformed" => cyfr(Kind::InvalidRequest.name(), words::BAD_URL),
+        "elsewhere" => refusal(Kind::DnsError, words::pin_elsewhere(host)),
+        "expired" => refusal(Kind::DnsError, words::pin_expired(host)),
+        "unavailable" => refusal(Kind::DnsError, words::pin_unavailable(host)),
+        _lost => refusal(Kind::DnsError, words::PIN_NOT_CURRENT),
     }
 }
 
-// A pin as `Prima.PinnedTarget.read/1` reads one: its id and its origin;
-// none for anything else.
-fn read_pin(pin: &Value) -> Option<Pin> {
+/// A pin as `Prima.PinnedTarget.read/1` reads one: exactly its seven
+/// members, an id of 1 to 128 base64url characters, an IP literal and the
+/// family that matches it, an `http` or `https` scheme, a port of 1 to
+/// 65535, a hostname or bracketed IPv6 literal, and an expiry of 0 to
+/// 2^53 − 1; its id and origin. None for anything else.
+pub fn read_pin(pin: &Value) -> Option<Pin> {
     let pin = pin.as_object()?;
     let members = ["id", "ip", "family", "scheme", "port", "host", "expires_at"];
     if pin.len() != members.len() || !members.iter().all(|member| pin.contains_key(*member)) {
@@ -801,10 +994,21 @@ fn read_pin(pin: &Value) -> Option<Pin> {
         && id
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-');
+    let family = match pin.get("ip")?.as_str()?.parse::<std::net::IpAddr>().ok()? {
+        std::net::IpAddr::V4(_) => 4,
+        std::net::IpAddr::V6(_) => 6,
+    };
+    let family_matches = crate::wire::bounded(pin.get("family")?, 4..=6).ok() == Some(family);
     let scheme = pin.get("scheme")?.as_str()?;
     let port = crate::wire::bounded(pin.get("port")?, 1..=65_535).ok()?;
+    let expires = crate::wire::bounded(pin.get("expires_at")?, 0..=crate::wire::MAX_INTEGER);
     let host = pin.get("host")?.as_str()?;
-    if !valid_id || !matches!(scheme, "http" | "https") || host.is_empty() {
+    if !valid_id
+        || !family_matches
+        || !matches!(scheme, "http" | "https")
+        || expires.is_err()
+        || !valid_host(host)
+    {
         return None;
     }
     let host = host
@@ -821,6 +1025,27 @@ fn read_pin(pin: &Value) -> Option<Pin> {
     })
 }
 
+// A pin's host: an IPv6 literal in brackets, or a hostname of labels of
+// letters, digits, `_` and `-`, none starting or ending with `-`, at most
+// 63 characters each and 253 in all, with an optional final dot.
+fn valid_host(host: &str) -> bool {
+    if let Some(inner) = host.strip_prefix('[') {
+        return inner
+            .strip_suffix(']')
+            .is_some_and(|inner| inner.parse::<std::net::Ipv6Addr>().is_ok());
+    }
+    let label = |label: &str| {
+        let bytes = label.as_bytes();
+        (1..=63).contains(&bytes.len())
+            && bytes
+                .iter()
+                .all(|b| b.is_ascii_alphanumeric() || *b == b'_' || *b == b'-')
+            && bytes[0] != b'-'
+            && bytes[bytes.len() - 1] != b'-'
+    };
+    (1..=253).contains(&host.len()) && host.strip_suffix('.').unwrap_or(host).split('.').all(label)
+}
+
 // The attached fetch of `asked`, built as `Prima.AttachedRequest` builds
 // one and read back as CYFR reads it (`Prima.AttachedRequest.read/1`), so
 // the runner refuses what CYFR would; and its call id.
@@ -830,7 +1055,7 @@ fn attached(
     connection: &str,
     purpose: Purpose,
 ) -> Result<(Outgoing, String), Refusal> {
-    let unread = || refusal("invalid_request", words::ATTACHED_UNREAD);
+    let unread = || refusal(Kind::InvalidRequest, words::ATTACHED_UNREAD);
     let connection_valid = {
         let bytes = connection.as_bytes();
         (1..=32).contains(&bytes.len())
@@ -842,11 +1067,12 @@ fn attached(
     let url_valid = asked.url.len() <= crate::relay::MAX_URL_BYTES
         && crate::wire::is_text(&asked.url)
         && Url::parse(&asked.url).is_some_and(|url| url.admissible());
-    if !connection_valid || !crate::relay::METHODS.contains(&asked.method.as_str()) || !url_valid {
+    if !connection_valid || !url_valid {
         return Err(unread());
     }
-    let shaped = asked.headers.len() <= crate::relay::MAX_HEADERS
-        && asked.headers.iter().all(|(name, value)| {
+    let headers = &asked.headers.0;
+    let shaped = headers.len() <= crate::relay::MAX_HEADERS
+        && headers.iter().all(|(name, value)| {
             name.len() <= crate::relay::MAX_HEADER_NAME_BYTES
                 && !name.is_empty()
                 && name
@@ -858,18 +1084,17 @@ fn attached(
     if !shaped {
         return Err(unread());
     }
-    if asked
-        .headers
+    if headers
         .iter()
         .any(|(name, _)| CREDENTIAL_HEADERS.contains(&name.to_ascii_lowercase().as_str()))
     {
         return Err(refusal(
-            "credential_header_refused",
+            Kind::CredentialHeaderRefused,
             words::CREDENTIAL_HEADER,
         ));
     }
-    if let Some((name, _)) = asked.headers.iter().find(|(name, _)| framing(name)) {
-        return Err(refusal("invalid_request", words::attached_header(name)));
+    if let Some((name, _)) = headers.iter().find(|(name, _)| framing(name)) {
+        return Err(refusal(Kind::InvalidRequest, words::attached_header(name)));
     }
     if asked.body.len() > crate::host::MAX_BODY_BYTES {
         return Err(unread());
@@ -884,7 +1109,7 @@ fn attached(
         purpose: purpose.name().to_owned(),
         method: asked.method.clone(),
         url: (*asked.url).clone(),
-        headers: asked.headers.clone(),
+        headers: headers.clone(),
         body: (*asked.body).clone(),
     };
     Ok((frame, call_id))
@@ -902,197 +1127,69 @@ pub fn framing(name: &str) -> bool {
 }
 
 // ============================================================================
-// An answer, as it arrives
+// How a fetch ends, as its guest is told
 // ============================================================================
 
-/// What one event of a fetch came to.
-pub enum Read {
-    /// The answer's status and headers, and the first of its body.
-    Head {
-        status: u16,
-        headers: Vec<Header>,
-        body: Zeroizing<Vec<u8>>,
-    },
-    /// The next of the answer's body.
-    Body(Zeroizing<Vec<u8>>),
-    /// The answer ended whole.
-    End,
-    /// The fetch ended early: the guest's refusal.
-    Failed(Refusal),
-    /// An attached request's answer was lost, or never reached its
-    /// service: what CYFR did is unknown, as a lost host call's is, and the
-    /// runner is not reused.
-    Lost,
-    /// Nothing the guest reads: a frame of no body, granted back.
-    Nothing,
-}
-
-/// The next event of `sent`, read as the guest reads it, within `wait`;
-/// none when nothing arrived. Every byte the relay charged for an event is
-/// granted back once it is read, but an attached chunk's body, which the
-/// caller grants as it hands it on.
-pub async fn next(
-    sent: &mut Sent,
-    keys: &crate::auth::AttemptKeys,
-    host: &str,
-    limits: &Limits,
-    wait: Duration,
-) -> Option<Read> {
-    let event = tokio::time::timeout(wait, sent.fetch.next()).await.ok()?;
-    Some(match event {
-        FetchEvent::Head {
-            status,
-            headers,
-            body,
-        } => Read::Head {
-            status,
-            headers,
-            body,
-        },
-        FetchEvent::Chunk(body) => Read::Body(body),
-        FetchEvent::Frame(frame) => {
-            let Some(reader) = sent.frames.as_mut() else {
-                return Some(Read::Failed(refusal("http_error", words::HTTP_FAILED)));
-            };
-            match reader.read(&frame) {
-                Ok(AnswerFrame::Head { status, headers }) => {
-                    sent.fetch.grant(frame.len());
-                    Read::Head {
-                        status,
-                        headers,
-                        body: Zeroizing::new(Vec::new()),
-                    }
-                }
-                Ok(AnswerFrame::Chunk(body)) => {
-                    sent.fetch.grant(frame.len() - body.len());
-                    Read::Body(body)
-                }
-                Ok(AnswerFrame::End) => {
-                    sent.fetch.grant(frame.len());
-                    Read::End
-                }
-                Ok(AnswerFrame::Error { kind, message }) => Read::Failed(cyfr(&kind, message)),
-                Err(_unread) => Read::Failed(refusal("http_error", words::HTTP_FAILED)),
-            }
-        }
-        FetchEvent::Refusal { header, body } => {
-            match attached_refusal(sent, keys, &header, &body) {
-                Refused::Cyfr(refused) => Read::Failed(refused),
-                Refused::Lost => Read::Lost,
-                Refused::Unread => Read::Failed(refusal("http_error", words::HTTP_FAILED)),
-            }
-        }
-        FetchEvent::End(None) => match &sent.frames {
-            // An attached answer ends at its own `end`; a fetch that ends
-            // before it is short.
-            Some(reader) if !reader.done() => {
-                Read::Failed(refusal("http_error", words::HTTP_FAILED))
-            }
-            Some(_) => Read::Nothing,
-            None => Read::End,
-        },
-        FetchEvent::End(Some(code)) if sent.frames.is_some() && uncertain(&code) => Read::Lost,
-        FetchEvent::End(Some(code)) => Read::Failed(ended_with(&code, host, limits)),
-        FetchEvent::Closed => {
-            Read::Failed(refusal("http_error", words::http_failed("relay_closed")))
-        }
-    })
-}
-
-enum Refused {
-    Cyfr(Refusal),
-    Lost,
-    Unread,
-}
-
-// CYFR's refusal of an attached request, taken only as the answer to the
-// call this fetch's attempt posted: its header verifies under the attempt's
-// call key and names the attempt, its answer opens as that call's, and a
-// guest error names the fetch's call id.
-fn attached_refusal(
-    sent: &Sent,
-    keys: &crate::auth::AttemptKeys,
-    header: &str,
-    body: &[u8],
-) -> Refused {
-    let Some(reader) = &sent.frames else {
-        return Refused::Unread;
-    };
-    let now = crate::attempt::now_ms();
-    let Ok((fields, _hash)) = crate::auth::verify_call_header(&keys.call, header, now) else {
-        return Refused::Unread;
-    };
-    if fields.attempt != keys.attempt {
-        return Refused::Unread;
-    }
-    let Ok(plain) = crate::auth::open_call(&keys.seal, Direction::Answer, &fields, body) else {
-        return Refused::Unread;
-    };
-    let Ok(read) = answered(
-        crate::host::Op::named("egress_pin").expect("a callback"),
-        &plain,
-    ) else {
-        return Refused::Unread;
-    };
-    match read {
-        Reading::GuestError { kind, message, .. } => {
-            // The call id an attached refusal names is beside its type.
-            let named = crate::wire::parse(&plain).and_then(|answer| {
-                answer
-                    .value()
-                    .get("call_id")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned)
-            });
-            if named.as_deref() == Some(reader.call_id()) {
-                Refused::Cyfr(cyfr(&kind, message.as_str()))
-            } else {
-                Refused::Unread
-            }
-        }
-        Reading::Refused("lost") => Refused::Lost,
-        _ => Refused::Unread,
-    }
-}
-
 /// How a fetch the relay ended early with `code` answers a guest's request
-/// to `host` (`Prima.RunnerRelay.fetch_end_codes/0`): a code naming why its
-/// own ask for the pin got none as that refused pin does; any other code
-/// the relay names as its rule; and a code it does not name as the
-/// transport's failure.
+/// to `host` (`Prima.RunnerRelay.fetch_end_codes/0`): a pin code of the
+/// roster as that refused pin does; any other code the relay names as its
+/// rule; and a code it does not name, a `pin_` code off the roster among
+/// them, as the transport's failure that code names.
 pub fn ended_with(code: &str, host: &str, limits: &Limits) -> Refusal {
-    if let Some(why) = code.strip_prefix("pin_") {
+    if let Some(why) = code.strip_prefix("pin_")
+        && PIN_WHYS.contains(&why)
+    {
         return pin_refusal(why, host);
     }
     let timeout = limits.timeout_ms();
     match code {
-        "timeout" => refusal("timeout", words::request_timeout(timeout)),
+        "timeout" => refusal(Kind::Timeout, words::request_timeout(timeout)),
         "connect_timeout" => refusal(
-            "timeout",
+            Kind::Timeout,
             words::connect_timeout(CONNECT_TIMEOUT_MS.min(timeout)),
         ),
-        "rate_limited" => refusal("rate_limited", words::RATE_LIMITED),
+        "rate_limited" => refusal(Kind::RateLimited, words::RATE_LIMITED),
         "response_too_large" => refusal(
-            "response_too_large",
+            Kind::ResponseTooLarge,
             words::response_too_large(limits.max_response_size),
         ),
-        "request_too_large" => refusal("request_too_large", words::SERVICE_SIZE),
-        "method_blocked" => refusal("method_blocked", words::SERVICE_METHOD),
-        "scheme_blocked" => refusal("scheme_blocked", words::SERVICE_SCHEME),
-        "domain_blocked" => refusal("domain_blocked", words::SERVICE_DOMAIN),
-        "invalid_request" => refusal("invalid_request", words::SERVICE_HEADER),
-        "private_ip_blocked" => refusal("private_ip_blocked", words::SERVICE_METADATA),
+        "request_too_large" => refusal(Kind::RequestTooLarge, words::SERVICE_SIZE),
+        "method_blocked" => refusal(Kind::MethodBlocked, words::SERVICE_METHOD),
+        "scheme_blocked" => refusal(Kind::SchemeBlocked, words::SERVICE_SCHEME),
+        "domain_blocked" => refusal(Kind::DomainBlocked, words::service_domain(host)),
+        "invalid_request" => refusal(Kind::InvalidRequest, words::SERVICE_HEADER),
+        "private_ip_blocked" => refusal(Kind::PrivateIpBlocked, words::SERVICE_METADATA),
         "lost" | "uncertain" | "http_error" | "bad_frame" | "fetch_failed" | "refused" => {
-            refusal("http_error", words::HTTP_FAILED)
+            refusal(Kind::HttpError, words::HTTP_FAILED)
         }
-        code => refusal("http_error", words::http_failed(code)),
+        code => refusal(Kind::HttpError, words::http_failed(code)),
     }
 }
 
-/// Whether the relay's `code` leaves what CYFR did unknown: an attached
-/// request's answer lost, or never reaching its service.
-pub fn uncertain(code: &str) -> bool {
-    matches!(code, "lost" | "uncertain")
+/// How a fetch's `end` answers a guest's request to `host`, a fetch whole
+/// answering nothing; and whether what CYFR did is unknown, an attached
+/// answer lost or never reaching its service, which leaves the runner
+/// unclean.
+pub fn ended_as(
+    end: &Ended,
+    attached: bool,
+    host: &str,
+    limits: &Limits,
+) -> (Option<Refusal>, bool) {
+    match end {
+        Ended::Whole => (None, false),
+        Ended::Code(code) => (
+            Some(ended_with(code, host, limits)),
+            attached && matches!(code.as_str(), "lost" | "uncertain"),
+        ),
+        Ended::Cyfr { kind, message } => (Some(cyfr(kind, message.as_str())), false),
+        Ended::Lost => (Some(refusal(Kind::HttpError, words::HTTP_FAILED)), true),
+        Ended::Unread => (Some(refusal(Kind::HttpError, words::HTTP_FAILED)), false),
+        Ended::Closed => (
+            Some(refusal(Kind::HttpError, words::http_failed("relay_closed"))),
+            false,
+        ),
+    }
 }
 
 // ============================================================================
@@ -1124,34 +1221,29 @@ impl catalyst::cyfr::http::fetch::Host for Guest {
             Err(Collected::TimedOut) => Meta::text("timeout"),
             Err(Collected::Failed(_)) => Meta::text("error"),
         };
-        http_event(&run, &asked, status, started).await;
+        drop(sent.fetch);
+        let fields = EventFields::of(&run, &asked, started);
+        fields.send(&run.host, status).await;
         match answer {
             Ok((status, headers, body)) => {
                 if let Some(pin) = &sent.pin {
-                    redirected(&mut self.hops, &asked, pin, status, &headers);
+                    redirected(&mut self.hops, &asked, pin, status, &headers.0);
                 }
-                Ok(response(status, &headers, &body, asked.response_base64))
+                Ok(response(status, &headers.0, &body, asked.response_base64))
             }
             Err(Collected::TooLarge(size)) => {
-                drop(sent);
                 let max = run.limits.max_response_size;
                 let refused = refusal(
-                    "response_too_large",
+                    Kind::ResponseTooLarge,
                     words::response_counted(size.max(max + 1), max),
                 );
                 refused_answer(&run, refused).await
             }
-            Err(Collected::TimedOut) => {
-                drop(sent);
-                Ok(error_json(
-                    "timeout",
-                    &words::request_timeout(run.limits.timeout_ms()),
-                ))
-            }
-            Err(Collected::Failed(refused)) => {
-                drop(sent);
-                refused_answer(&run, refused).await
-            }
+            Err(Collected::TimedOut) => Ok(error_json(
+                Kind::Timeout.name(),
+                &words::request_timeout(run.limits.timeout_ms()),
+            )),
+            Err(Collected::Failed(refused)) => refused_answer(&run, refused).await,
         }
     }
 }
@@ -1162,70 +1254,56 @@ enum Collected {
     Failed(Refusal),
 }
 
+/// The most of an answer's body one read takes.
+const PIECE_BYTES: usize = 1024 * 1024;
+
 // The whole answer of `sent`: its status, headers and body, read to at most
 // the node's `max_response_size`, each piece granted back as it is read.
 async fn collect(
     run: &Run,
     asked: &Asked,
     sent: &mut Sent,
-) -> Result<(u16, Vec<Header>, Zeroizing<Vec<u8>>), Collected> {
-    let keys = run.host.keys();
+) -> Result<(u16, Headers, Zeroizing<Vec<u8>>), Collected> {
     let max = run.limits.max_response_size;
     let wait = Duration::from_millis(run.limits.timeout_ms()) + RELAY_GRACE;
-    let mut head: Option<(u16, Vec<Header>)> = None;
+    let mut head: Option<(u16, Headers)> = None;
     let mut body: Zeroizing<Vec<u8>> = Zeroizing::new(Vec::new());
     loop {
-        let Some(read) = next(sent, keys, &asked.host, &run.limits, wait).await else {
+        let Some(taken) = sent.fetch.next(PIECE_BYTES, wait).await else {
             return Err(Collected::TimedOut);
         };
-        match read {
-            Read::Head {
-                status,
-                headers,
-                body: first,
-            } => {
-                head = Some((status, headers));
-                take(sent, &mut body, &first, max)?;
-            }
-            Read::Body(piece) => take(sent, &mut body, &piece, max)?,
-            Read::End => {
-                let Some((status, headers)) = head else {
-                    return Err(Collected::Failed(refusal("http_error", words::HTTP_FAILED)));
-                };
-                return Ok((status, headers, body));
-            }
-            Read::Failed(refused) => {
-                if refused.kind == "response_too_large" && !refused.by_cyfr {
-                    return Err(Collected::TooLarge(body.len() as u64));
+        match taken {
+            Taken::Head { status, headers } => head = Some((status, headers)),
+            Taken::Body(piece) => {
+                let size = body.len() as u64 + piece.len() as u64;
+                if size > max {
+                    return Err(Collected::TooLarge(size));
                 }
-                return Err(Collected::Failed(refused));
+                // Reserved for the whole of what is held, so it moves at
+                // most once a doubling: what a move leaves behind unwiped
+                // is the upstream's answer to the guest, which it holds too.
+                body.extend_from_slice(&piece);
             }
-            Read::Lost => {
-                run.host.unclean();
-                return Err(Collected::Failed(refusal("http_error", words::HTTP_FAILED)));
+            Taken::End(end) => {
+                let attached = sent.pin.is_none();
+                let (refused, unknown) = ended_as(&end, attached, &asked.host, &run.limits);
+                if unknown {
+                    run.host.unclean();
+                }
+                return match (refused, head) {
+                    (Some(refused), _) if refused.is(Kind::ResponseTooLarge) => {
+                        Err(Collected::TooLarge(body.len() as u64))
+                    }
+                    (Some(refused), _) => Err(Collected::Failed(refused)),
+                    (None, Some((status, headers))) => Ok((status, headers, body)),
+                    (None, None) => Err(Collected::Failed(refusal(
+                        Kind::HttpError,
+                        words::HTTP_FAILED,
+                    ))),
+                };
             }
-            Read::Nothing => {}
         }
     }
-}
-
-// Add `piece` to the answer's `body`, past the bound refused; and grant it
-// back.
-fn take(
-    sent: &Sent,
-    body: &mut Zeroizing<Vec<u8>>,
-    piece: &[u8],
-    max: u64,
-) -> Result<(), Collected> {
-    let size = body.len() as u64 + piece.len() as u64;
-    if size > max {
-        return Err(Collected::TooLarge(size));
-    }
-    // A move as the body grows leaves its old bytes behind unwiped: they
-    // are the upstream's answer to the guest, which the guest holds too.
-    body.extend_from_slice(piece);
-    sent.fetch.grant(piece.len());
-    Ok(())
 }
 
 // A redirecting answer's next hop, from the pin it came from: where its
@@ -1244,60 +1322,108 @@ fn redirected(hops: &mut VecDeque<Hop>, asked: &Asked, pin: &Pin, status: u16, h
         return;
     };
     let next = base.merge(&reference);
-    let canonical = next.canonical();
-    if !Url::parse(&canonical).is_some_and(|url| url.admissible()) {
+    if !next.admissible() {
         return;
     }
+    let canonical = next.canonical();
     hops.retain(|(url, _)| *url != canonical);
     hops.truncate(MAX_HOPS - 1);
     hops.push_front((canonical, pin.clone()));
 }
 
 /// The answer of a whole response: its status, its headers (the last of a
-/// repeated name), and its body as text, or as base64 when asked.
-fn response(status: u16, headers: &[Header], body: &[u8], base64: bool) -> String {
-    let headers: Map<String, Value> = headers
-        .iter()
-        .map(|(name, value)| (name.clone(), Value::String(value.clone())))
-        .collect();
-    let mut answer = Map::new();
-    answer.insert("status".to_owned(), Value::from(status));
-    answer.insert("headers".to_owned(), Value::Object(headers));
-    if base64 {
-        answer.insert("body".to_owned(), Value::String(encode_base64(body)));
-        answer.insert(
-            "body_encoding".to_owned(),
-            Value::String("base64".to_owned()),
-        );
+/// repeated name), and its body as text, UTF-8 as it is and anything else
+/// read as Latin-1, or as base64 when asked; the members in the order
+/// serde_json writes them. The body is written once, straight into the
+/// answer, which is reserved whole.
+pub fn response(status: u16, headers: &[Header], body: &[u8], base64: bool) -> String {
+    // An answer's headers may carry what the guest fetches with (a
+    // `Location`'s query, a cookie): their JSON is cleared once written.
+    let headers = Zeroizing::new(
+        crate::wire::Json::from_value(Value::Object(
+            headers
+                .iter()
+                .map(|(name, value)| (name.clone(), Value::String(value.clone())))
+                .collect::<Map<String, Value>>(),
+        ))
+        .value()
+        .to_string(),
+    );
+    let body_bytes = if base64 {
+        body.len().div_ceil(3) * 4
     } else {
-        answer.insert("body".to_owned(), Value::String(text(body)));
+        body.len() * 2
+    };
+    let mut answer = String::with_capacity(body_bytes + headers.len() + 64);
+    answer.push_str("{\"body\":\"");
+    if base64 {
+        crate::wire::encode_base64_into(body, &mut answer);
+        answer.push_str("\",\"body_encoding\":\"base64\"");
+    } else {
+        match std::str::from_utf8(body) {
+            Ok(text) => escape_into(text, &mut answer),
+            Err(_) => {
+                for byte in body {
+                    escape_char(char::from(*byte), &mut answer);
+                }
+            }
+        }
+        answer.push('"');
     }
-    Value::Object(answer).to_string()
+    answer.push_str(",\"headers\":");
+    answer.push_str(&headers);
+    answer.push_str(",\"status\":");
+    answer.push_str(&status.to_string());
+    answer.push('}');
+    answer
 }
 
-/// `bytes` as text: UTF-8 as it is, anything else read as Latin-1.
-pub fn text(bytes: &[u8]) -> String {
-    match std::str::from_utf8(bytes) {
-        Ok(text) => text.to_owned(),
-        Err(_) => bytes.iter().map(|byte| char::from(*byte)).collect(),
+// `text` escaped as serde_json escapes a string's contents, its runs of
+// bytes that need none copied whole.
+fn escape_into(text: &str, out: &mut String) {
+    let mut run = 0;
+    for (at, byte) in text.bytes().enumerate() {
+        if byte < 0x20 || byte == b'"' || byte == b'\\' {
+            out.push_str(&text[run..at]);
+            escape_char(char::from(byte), out);
+            run = at + 1;
+        }
+    }
+    out.push_str(&text[run..]);
+}
+
+fn escape_char(c: char, out: &mut String) {
+    match c {
+        '"' => out.push_str("\\\""),
+        '\\' => out.push_str("\\\\"),
+        '\n' => out.push_str("\\n"),
+        '\r' => out.push_str("\\r"),
+        '\t' => out.push_str("\\t"),
+        '\u{08}' => out.push_str("\\b"),
+        '\u{0c}' => out.push_str("\\f"),
+        c if (c as u32) < 0x20 => {
+            out.push_str("\\u00");
+            out.push(char::from(b"0123456789abcdef"[(c as usize) >> 4]));
+            out.push(char::from(b"0123456789abcdef"[(c as usize) & 0xf]));
+        }
+        c => out.push(c),
     }
 }
 
 /// The guest's answer to a refusal, which the runner reports to CYFR when
 /// it is one CYFR records and did not decide itself.
 pub(super) async fn refused_answer(run: &Run, refused: Refusal) -> wasmtime::Result<String> {
-    record(run, &refused).await?;
+    record(&run.host, &refused).await?;
     Ok(error_json(&refused.kind, &refused.message))
 }
 
 /// Report `refused` to CYFR for its record, when CYFR records it and did
 /// not decide it itself.
-pub(super) async fn record(run: &Run, refused: &Refusal) -> wasmtime::Result<()> {
-    if refused.by_cyfr || !RECORDED.contains(&refused.kind.as_str()) {
+pub(super) async fn record(host: &crate::attempt::Host, refused: &Refusal) -> wasmtime::Result<()> {
+    if !refused.recorded() {
         return Ok(());
     }
-    let outcome = run
-        .host
+    let outcome = host
         .call(
             "record_denial",
             args([
@@ -1309,28 +1435,47 @@ pub(super) async fn record(run: &Run, refused: &Refusal) -> wasmtime::Result<()>
     ended("record_denial", &outcome)
 }
 
-/// The `http.request` event of a request made: its method, the host it
-/// asked for, and its status, or why it has none; its `system_time` in
-/// microseconds since the epoch, as the roster takes it.
-pub(super) async fn http_event(run: &Run, asked: &Asked, status: Meta, started: Instant) {
-    let system_time = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |since| {
-            u64::try_from(since.as_micros()).unwrap_or(u64::MAX)
-        });
-    run.host
-        .event(Event {
+/// What a request's `http.request` event names, beside its status: its
+/// component, method and the host it asked for, and when it began.
+#[derive(Clone)]
+pub struct EventFields {
+    component_ref: String,
+    method: String,
+    hostname: String,
+    started: Instant,
+}
+
+impl EventFields {
+    pub(super) fn of(run: &Run, asked: &Asked, started: Instant) -> EventFields {
+        EventFields {
+            component_ref: run.component_ref.clone(),
+            method: asked.method.clone(),
+            hostname: asked.host.clone(),
+            started,
+        }
+    }
+
+    /// Send the event with `status`, an HTTP status or why it has none; its
+    /// `system_time` in microseconds since the epoch, as the roster takes it.
+    pub async fn send(&self, host: &crate::attempt::Host, status: Meta) {
+        let system_time = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |since| {
+                u64::try_from(since.as_micros()).unwrap_or(u64::MAX)
+            });
+        host.event(Event {
             name: "http.request",
             measurements: vec![
-                ("duration_ms", super::storage::elapsed_ms(started)),
+                ("duration_ms", super::storage::elapsed_ms(self.started)),
                 ("system_time", system_time),
             ],
             metadata: vec![
-                ("component_ref", Meta::text(&run.component_ref)),
-                ("method", Meta::text(&asked.method)),
-                ("hostname", Meta::text(&asked.host)),
+                ("component_ref", Meta::text(&self.component_ref)),
+                ("method", Meta::text(&self.method)),
+                ("hostname", Meta::text(&self.hostname)),
                 ("status", status),
             ],
         })
         .await;
+    }
 }

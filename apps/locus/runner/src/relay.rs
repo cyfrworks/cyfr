@@ -28,7 +28,7 @@
 //! reads it. `tests/fixtures/runner_relay.json` holds every frame and
 //! refusal.
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{Map, Value};
 use zeroize::{Zeroize as _, Zeroizing};
@@ -115,6 +115,17 @@ pub const FETCH_END_CODES: [&str; 26] = [
 
 /// An answer or request header: its name and value.
 pub type Header = (String, String);
+
+/// A request's or an answer's headers, cleared when they are dropped: a
+/// guest's may carry its credentials, and an answer's what it fetches with.
+#[derive(Clone, Default, PartialEq, Eq)]
+pub struct Headers(pub Vec<Header>);
+
+impl Drop for Headers {
+    fn drop(&mut self) {
+        clear_headers(&mut self.0);
+    }
+}
 
 /// A frame a runner sends. A fetch's headers and body are a guest's, which
 /// may carry its credentials: they are cleared when the frame is dropped,
@@ -1071,24 +1082,32 @@ impl Reader<'_> {
 /// that owns the `Channel` and reads, one that writes, and a handle every
 /// host call and fetch of the runner's subtree goes through.
 ///
-/// The relay has no cancel for a call or a fetch (section 5.5 of the plan):
-/// a call whose caller stopped waiting stays outstanding on the channel
-/// until its answer arrives, which is then discarded; a fetch whose owner
-/// dropped it (`Fetch`) drains: it is granted back what it received and
-/// was not granted, then each chunk or frame as it arrives, until its
-/// `fetch_end`. The channel is not idle meanwhile. A host call past
-/// `MAX_CALLS` unanswered waits for an answer to free its room, and a fetch
-/// past `MAX_FETCHES` open is refused (`Unfetched::Busy`): the service
-/// closes the channel for either. A frame the codec refuses is answered
-/// with a `close` naming its code; that, the service's own `close`, the
-/// stream's end or a failed write closes the relay: every call still
-/// waiting is answered as lost, every fetch still open hears that it
-/// ended (`FetchEvent::Closed`), and `closed` says so, which ends the
-/// runner.
+/// The relay has no cancel for a call or a fetch (section 5.5 of the plan).
+/// A host call waits for a place among `MAX_CALLS` before it is signed
+/// (`Place`), and holds it until its answer arrives: a caller that stopped
+/// waiting before it had one leaves nothing behind, and one that stopped
+/// after leaves its call outstanding until the answer, which is then
+/// discarded. A fetch past `MAX_FETCHES` open is refused unsent
+/// (`Unfetched::Busy`): the service closes the channel for either.
+///
+/// A fetch's answer is held in its `Inbox` as it arrives, whoever reads it:
+/// its head, its body as bytes, never more than the credit the runner
+/// granted however the service cuts it, and its end. An attached fetch's
+/// frames are opened, and CYFR's refusal of one verified, as they arrive. A
+/// fetch whose owner dropped it (`Fetch`) drains: what it held and each
+/// piece after is granted back at once, and its end is still recorded. An
+/// attached fetch whose answer ended lost or uncertain leaves the channel
+/// doubtful until the runner's next subtree, which it is not given: what
+/// CYFR did is unknown (`idle`). A frame the codec refuses is answered with
+/// a `close` naming its code; that, the service's own `close`, the stream's
+/// end or a failed write closes the relay: every call still waiting is
+/// answered as lost, every fetch still open ends `Ended::Closed`, and
+/// `closed` says so, which ends the runner.
 #[derive(Clone)]
 pub struct Relay {
     commands: tokio::sync::mpsc::UnboundedSender<Command>,
     closed: tokio::sync::watch::Receiver<bool>,
+    places: std::sync::Arc<tokio::sync::Semaphore>,
 }
 
 enum Command {
@@ -1101,13 +1120,15 @@ enum Command {
         op: Op,
         header: String,
         body: Vec<u8>,
+        place: crate::host::Place,
         reply: tokio::sync::oneshot::Sender<Option<crate::host::Reached>>,
     },
     Idle {
         reply: tokio::sync::oneshot::Sender<bool>,
     },
     Fetch {
-        frame: Outgoing,
+        frame: Box<Outgoing>,
+        opener: Option<Box<Opener>>,
         reply: tokio::sync::oneshot::Sender<Result<Fetch, Unfetched>>,
     },
     Room {
@@ -1122,29 +1143,85 @@ enum Command {
     },
 }
 
-/// What the owner of a fetch hears of it, in order: its answer, then its
-/// end.
-pub enum FetchEvent {
-    /// A pinned fetch's first chunk: the answer's status and headers, and
-    /// the first of its body.
-    Head {
-        status: u16,
-        headers: Vec<Header>,
-        body: Zeroizing<Vec<u8>>,
-    },
-    /// The next bytes of a pinned fetch's answer body.
-    Chunk(Zeroizing<Vec<u8>>),
-    /// One of an attached fetch's sealed answer frames, its kind byte and
-    /// sealed value.
-    Frame(Zeroizing<Vec<u8>>),
-    /// CYFR's refusal of an attached fetch: the call's signed header and
-    /// its sealed answer.
-    Refusal { header: String, body: Vec<u8> },
-    /// The fetch's end: none for an answer delivered whole, or the code
-    /// the service ended it with.
-    End(Option<String>),
+/// What opens an attached fetch's answer as it arrives: the reader of its
+/// frames, sealed for its call id, and the attempt's keys, under which
+/// CYFR's refusal of it is verified.
+pub struct Opener {
+    pub frames: crate::auth::FrameReader,
+    pub keys: crate::auth::AttemptKeys,
+}
+
+/// How a fetch ended.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Ended {
+    /// Its answer arrived whole.
+    Whole,
+    /// The service ended it early with this code
+    /// (`Prima.RunnerRelay.fetch_end_codes/0`, or a transport's own).
+    Code(String),
+    /// CYFR answered it with a guest error of its own: its refusal of an
+    /// attached request, verified, or an attached answer's `error` frame.
+    Cyfr { kind: String, message: String },
+    /// CYFR answered an attached request `lost`: what it did is unknown.
+    Lost,
+    /// An attached answer, or CYFR's refusal of it, that does not read, or
+    /// an answer that ended before its own end.
+    Unread,
     /// The relay closed before the fetch's end.
     Closed,
+}
+
+/// What the runner holds of one fetch's answer until it is read.
+pub struct Inbox {
+    head: Option<(u16, Headers)>,
+    head_read: bool,
+    /// The body arrived and not yet read: at most the credit outstanding.
+    body: Zeroizing<Vec<u8>>,
+    end: Option<Ended>,
+    /// The fetch's owner dropped it: what arrives is granted back at once.
+    drained: bool,
+    opener: Option<Opener>,
+    attached: bool,
+}
+
+impl Inbox {
+    /// The answer's status, once its head arrived.
+    pub fn status(&self) -> Option<u16> {
+        self.head.as_ref().map(|(status, _)| *status)
+    }
+
+    /// How the fetch ended, once it did.
+    pub fn end(&self) -> Option<&Ended> {
+        self.end.as_ref()
+    }
+
+    /// Whether the fetch is attached.
+    pub fn attached(&self) -> bool {
+        self.attached
+    }
+}
+
+/// A fetch's inbox, shared by the relay that fills it and those that read
+/// it, and the count of its changes.
+struct Shared {
+    inbox: std::sync::Mutex<Inbox>,
+    changed: tokio::sync::watch::Sender<u64>,
+}
+
+impl Shared {
+    fn with<T>(&self, change: impl FnOnce(&mut Inbox) -> T) -> T {
+        let out = change(&mut self.inbox.lock().expect("a fetch's inbox"));
+        self.changed.send_modify(|count| *count += 1);
+        out
+    }
+}
+
+/// What a read of a fetch takes, in order: its head once, then its body,
+/// then its end.
+pub enum Taken {
+    Head { status: u16, headers: Headers },
+    Body(Zeroizing<Vec<u8>>),
+    End(Ended),
 }
 
 /// Why a fetch was not sent.
@@ -1158,40 +1235,118 @@ pub enum Unfetched {
     Closed,
 }
 
-/// A fetch the runner sent: what its owner hears of it, and the credit it
-/// grants back as it reads. Dropped before its end, the fetch drains.
+/// A fetch the runner sent: its inbox, and the credit it grants back as it
+/// reads. Dropped before its end, the fetch drains.
 pub struct Fetch {
     re: u64,
-    events: tokio::sync::mpsc::UnboundedReceiver<FetchEvent>,
+    shared: std::sync::Arc<Shared>,
     commands: tokio::sync::mpsc::UnboundedSender<Command>,
-    ended: bool,
+}
+
+/// One who watches a fetch's inbox without reading it: what its attempt
+/// records of it, whoever reads its answer.
+pub struct Watch {
+    shared: std::sync::Arc<Shared>,
+    changed: tokio::sync::watch::Receiver<u64>,
+}
+
+impl Watch {
+    /// The answer's status and end as they stand.
+    pub fn now(&self) -> (Option<u16>, Option<Ended>) {
+        let inbox = self.shared.inbox.lock().expect("a fetch's inbox");
+        (inbox.status(), inbox.end.clone())
+    }
+
+    /// Whether the fetch is attached.
+    pub fn attached(&self) -> bool {
+        self.shared.inbox.lock().expect("a fetch's inbox").attached
+    }
+
+    /// Wait for the inbox to change.
+    pub async fn changed(&mut self) {
+        let _ = self.changed.changed().await;
+    }
 }
 
 impl Fetch {
-    /// The next event of the fetch: `Closed` once the relay has closed.
-    pub async fn next(&mut self) -> FetchEvent {
-        let event = self.events.recv().await.unwrap_or(FetchEvent::Closed);
-        self.ended |= matches!(event, FetchEvent::End(_) | FetchEvent::Closed);
-        event
-    }
-
-    /// Grant the service `bytes` more of the answer: the bytes the owner
-    /// has read. The relay grants no more than the fetch has received.
-    pub fn grant(&self, bytes: usize) {
-        if bytes > 0 {
-            let _ = self.commands.send(Command::Credit {
-                re: self.re,
-                bytes: bytes as u64,
-            });
+    /// One who watches this fetch's inbox.
+    pub fn watch(&self) -> Watch {
+        Watch {
+            shared: self.shared.clone(),
+            changed: self.shared.changed.subscribe(),
         }
     }
+
+    /// The next of the answer, at most `most` bytes of its body at once,
+    /// waiting at most `wait` for one; none when nothing arrived. Each body
+    /// piece taken is granted back to the service.
+    pub async fn next(&mut self, most: usize, wait: std::time::Duration) -> Option<Taken> {
+        let mut changed = self.shared.changed.subscribe();
+        let until = tokio::time::Instant::now() + wait;
+        loop {
+            changed.borrow_and_update();
+            if let Some(taken) = self.take(most) {
+                return Some(taken);
+            }
+            if tokio::time::timeout_at(until, changed.changed())
+                .await
+                .is_err()
+            {
+                return None;
+            }
+        }
+    }
+
+    fn take(&mut self, most: usize) -> Option<Taken> {
+        let taken = {
+            let mut inbox = self.shared.inbox.lock().expect("a fetch's inbox");
+            if !inbox.head_read
+                && let Some((status, headers)) = inbox.head.clone()
+            {
+                inbox.head_read = true;
+                return Some(Taken::Head { status, headers });
+            }
+            if !inbox.body.is_empty() {
+                Some(Taken::Body(take_front(&mut inbox.body, most)))
+            } else {
+                inbox.end.clone().map(Taken::End)
+            }
+        };
+        if let Some(Taken::Body(body)) = &taken {
+            let _ = self.commands.send(Command::Credit {
+                re: self.re,
+                bytes: body.len() as u64,
+            });
+        }
+        taken
+    }
+}
+
+// The first `most` bytes of `body`, at a character's boundary where the
+// rest of a character would follow: the bytes after them move down and the
+// places they leave are cleared, so the buffer never moves.
+fn take_front(body: &mut Zeroizing<Vec<u8>>, most: usize) -> Zeroizing<Vec<u8>> {
+    let mut cut = body.len().min(most.max(1));
+    // A character cut in two is left whole for the next take, unless that
+    // would take nothing.
+    let mut start = cut;
+    while start < body.len() && start > 0 && cut - start < 3 && (body[start] & 0xc0) == 0x80 {
+        start -= 1;
+    }
+    if start > 0 && start < cut {
+        cut = start;
+    }
+    let taken = Zeroizing::new(body[..cut].to_vec());
+    let held = body.len();
+    body.copy_within(cut..held, 0);
+    body[held - cut..held].zeroize();
+    body.truncate(held - cut);
+    taken
 }
 
 impl Drop for Fetch {
     fn drop(&mut self) {
-        if !self.ended {
-            let _ = self.commands.send(Command::Abandon { re: self.re });
-        }
+        let _ = self.commands.send(Command::Abandon { re: self.re });
     }
 }
 
@@ -1210,6 +1365,7 @@ impl Relay {
         let (closed_tx, closed) = tokio::sync::watch::channel(false);
         let (bytes, outbox) = tokio::sync::mpsc::unbounded_channel::<Zeroizing<Vec<u8>>>();
         let (write_failed_tx, write_failed) = tokio::sync::oneshot::channel::<()>();
+        let places = std::sync::Arc::new(tokio::sync::Semaphore::new(MAX_CALLS));
         tokio::spawn(write_frames(writer, outbox, write_failed_tx));
         tokio::spawn(serve(
             reader,
@@ -1218,8 +1374,13 @@ impl Relay {
             bytes,
             write_failed,
             closed_tx,
+            places.clone(),
         ));
-        Relay { commands, closed }
+        Relay {
+            commands,
+            closed,
+            places,
+        }
     }
 
     /// Carry `attempt` alone, for the subtree it roots; refused while the
@@ -1236,7 +1397,9 @@ impl Relay {
         answer.await.unwrap_or(Err(Rebind::Busy))
     }
 
-    /// Whether nothing is outstanding on the channel.
+    /// Whether nothing is outstanding on the channel and nothing of the
+    /// last subtree is in doubt: no call unanswered, no fetch open, and no
+    /// attached fetch whose answer ended lost or uncertain.
     pub async fn idle(&self) -> bool {
         let (reply, answer) = tokio::sync::oneshot::channel();
         if self.commands.send(Command::Idle { reply }).is_err() {
@@ -1255,14 +1418,20 @@ impl Relay {
         answer.await.unwrap_or(false)
     }
 
-    /// Send `frame`, a pinned or an attached fetch, and own it.
-    pub async fn fetch(&self, frame: Outgoing) -> Result<Fetch, Unfetched> {
+    /// Send `frame`, a pinned or an attached fetch, and own it; an attached
+    /// fetch's answer is opened by `opener` as it arrives.
+    pub async fn fetch(&self, frame: Outgoing, opener: Option<Opener>) -> Result<Fetch, Unfetched> {
         debug_assert!(matches!(
             frame,
             Outgoing::PinnedFetch { .. } | Outgoing::AttachedFetch { .. }
         ));
         let (reply, answer) = tokio::sync::oneshot::channel();
-        if self.commands.send(Command::Fetch { frame, reply }).is_err() {
+        let command = Command::Fetch {
+            frame: Box::new(frame),
+            opener: opener.map(Box::new),
+            reply,
+        };
+        if self.commands.send(command).is_err() {
             return Err(Unfetched::Closed);
         }
         answer.await.unwrap_or(Err(Unfetched::Closed))
@@ -1290,11 +1459,23 @@ pub struct Poster {
 }
 
 impl crate::host::Post for Poster {
+    fn place(&mut self) -> impl std::future::Future<Output = Option<crate::host::Place>> {
+        let places = self.relay.places.clone();
+        async move {
+            places
+                .acquire_owned()
+                .await
+                .ok()
+                .map(crate::host::Place::held)
+        }
+    }
+
     fn post(
         &mut self,
         op: Op,
         header: String,
         body: Vec<u8>,
+        place: crate::host::Place,
     ) -> impl std::future::Future<Output = Option<crate::host::Reached>> {
         let (reply, answer) = tokio::sync::oneshot::channel();
         let sent = self
@@ -1305,6 +1486,7 @@ impl crate::host::Post for Poster {
                 op,
                 header,
                 body,
+                place,
                 reply,
             })
             .is_ok();
@@ -1334,23 +1516,29 @@ async fn write_frames<W>(
     }
 }
 
-/// A fetch as its owner holds it in the relay: where its events go (none
-/// once its owner dropped it, and it drains), and how much of its answer it
-/// received and was granted back.
+/// A fetch as the relay holds it: its inbox, and how much of its answer it
+/// received and granted back.
 struct Owned {
-    events: Option<tokio::sync::mpsc::UnboundedSender<FetchEvent>>,
+    shared: std::sync::Arc<Shared>,
     received: u64,
     granted: u64,
+}
+
+/// A host call sent and not yet answered: who waits for its answer, and the
+/// place it holds until then.
+struct Waiting {
+    reply: tokio::sync::oneshot::Sender<Option<crate::host::Reached>>,
+    _place: crate::host::Place,
 }
 
 /// What the relay's task holds.
 struct Serving {
     channel: Option<Channel>,
     root: String,
-    waiting: BTreeMap<u64, tokio::sync::oneshot::Sender<Option<crate::host::Reached>>>,
-    /// Calls past `MAX_CALLS` unanswered, in the order made.
-    queued: VecDeque<Command>,
+    waiting: BTreeMap<u64, Waiting>,
     owned: BTreeMap<u64, Owned>,
+    /// An attached fetch of the subtree ended lost or uncertain.
+    doubtful: bool,
     commands: tokio::sync::mpsc::UnboundedSender<Command>,
     outbox: tokio::sync::mpsc::UnboundedSender<Zeroizing<Vec<u8>>>,
 }
@@ -1369,20 +1557,15 @@ impl Serving {
         op: Op,
         header: String,
         body: Vec<u8>,
+        place: crate::host::Place,
         reply: tokio::sync::oneshot::Sender<Option<crate::host::Reached>>,
     ) -> Result<(), Ends> {
         let Some(open) = self.channel.as_mut() else {
             let _ = reply.send(None);
             return Ok(());
         };
-        if open.open_calls() >= MAX_CALLS {
-            self.queued.push_back(Command::Call {
-                attempt,
-                op,
-                header,
-                body,
-                reply,
-            });
+        // A caller gone before its call was written leaves nothing to send.
+        if reply.is_closed() {
             return Ok(());
         }
         let seq = open.sent;
@@ -1394,7 +1577,13 @@ impl Serving {
         };
         match open.encode(&frame) {
             Ok(bytes) => {
-                self.waiting.insert(seq, reply);
+                self.waiting.insert(
+                    seq,
+                    Waiting {
+                        reply,
+                        _place: place,
+                    },
+                );
                 self.send(bytes)
             }
             Err(_unsent) => {
@@ -1407,6 +1596,7 @@ impl Serving {
     fn fetch(
         &mut self,
         frame: Outgoing,
+        opener: Option<Opener>,
         reply: tokio::sync::oneshot::Sender<Result<Fetch, Unfetched>>,
     ) -> Result<(), Ends> {
         let Some(open) = self.channel.as_mut() else {
@@ -1429,26 +1619,38 @@ impl Serving {
                 return Ok(());
             }
         };
+        let attached = matches!(frame, Outgoing::AttachedFetch { .. });
         drop(frame);
-        let (events, receiver) = tokio::sync::mpsc::unbounded_channel();
-        let fetch = Fetch {
-            re,
-            events: receiver,
-            commands: self.commands.clone(),
-            ended: false,
-        };
+        let (changed, _) = tokio::sync::watch::channel(0);
+        let shared = std::sync::Arc::new(Shared {
+            inbox: std::sync::Mutex::new(Inbox {
+                head: None,
+                head_read: false,
+                // The most it holds is the credit outstanding: reserved once,
+                // so it never moves.
+                body: Zeroizing::new(Vec::with_capacity(INITIAL_CREDIT as usize)),
+                end: None,
+                drained: false,
+                opener,
+                attached,
+            }),
+            changed,
+        });
         self.owned.insert(
             re,
             Owned {
-                events: Some(events),
+                shared: shared.clone(),
                 received: 0,
                 granted: 0,
             },
         );
+        let fetch = Fetch {
+            re,
+            shared,
+            commands: self.commands.clone(),
+        };
         // An owner gone before it heard of its fetch drains it.
-        if let Err(unsent) = reply.send(Ok(fetch)) {
-            drop(unsent);
-        }
+        let _ = reply.send(Ok(fetch));
         self.send(bytes)
     }
 
@@ -1479,31 +1681,122 @@ impl Serving {
         Ok(())
     }
 
-    // The owner of `re` dropped it: it drains.
+    // The owner of `re` dropped it: it drains. What it held unread is
+    // cleared and granted back; its end is still recorded as it comes.
     fn abandon(&mut self, re: u64) -> Result<(), Ends> {
-        if let Some(owned) = self.owned.get_mut(&re) {
-            owned.events = None;
-            let outstanding = owned.received - owned.granted;
-            return self.grant(re, outstanding);
-        }
-        Ok(())
+        let Some(owned) = self.owned.get(&re) else {
+            return Ok(());
+        };
+        owned.shared.with(|inbox| {
+            inbox.drained = true;
+            inbox.body.zeroize();
+            inbox.body.clear();
+        });
+        let outstanding = owned.received - owned.granted;
+        self.grant(re, outstanding)
     }
 
-    // A frame of the fetch `re`, `bytes` of its credit: handed to its owner,
-    // or granted back at once when it drains.
-    fn deliver(&mut self, re: u64, bytes: usize, event: FetchEvent) -> Result<(), Ends> {
+    // `bytes` of the fetch `re`'s credit arrived, `body` of them its body:
+    // held for its reader, or granted back at once when it drains. Every
+    // other byte of the frame is granted back at once.
+    fn arrived(&mut self, re: u64, bytes: usize, body: Option<&[u8]>) -> Result<(), Ends> {
         let Some(owned) = self.owned.get_mut(&re) else {
             return Ok(());
         };
         owned.received += bytes as u64;
-        let handed = owned
-            .events
-            .as_ref()
-            .is_some_and(|events| events.send(event).is_ok());
-        if !handed {
-            return self.abandon(re);
+        let held = owned.shared.with(|inbox| match body {
+            Some(body) if !inbox.drained && inbox.end.is_none() => {
+                inbox.body.extend_from_slice(body);
+                body.len()
+            }
+            _ => 0,
+        });
+        self.grant(re, (bytes - held) as u64)
+    }
+
+    // An attached fetch's frame, opened as it arrives.
+    fn frame(&mut self, re: u64, frame: Zeroizing<Vec<u8>>) -> Result<(), Ends> {
+        let Some(shared) = self.owned.get(&re).map(|owned| owned.shared.clone()) else {
+            return Ok(());
+        };
+        let read = shared.with(|inbox| {
+            if inbox.end.is_some() {
+                return None;
+            }
+            let opener = inbox.opener.as_mut()?;
+            Some(opener.frames.read(&frame))
+        });
+        match read {
+            Some(Ok(crate::auth::AnswerFrame::Head { status, headers })) => {
+                shared.with(|inbox| inbox.head = Some((status, Headers(headers))));
+                self.arrived(re, frame.len(), None)
+            }
+            Some(Ok(crate::auth::AnswerFrame::Chunk(body))) => {
+                self.arrived(re, frame.len(), Some(&body))
+            }
+            Some(Ok(crate::auth::AnswerFrame::End)) => {
+                self.ends(re, Ended::Whole);
+                self.arrived(re, frame.len(), None)
+            }
+            Some(Ok(crate::auth::AnswerFrame::Error { kind, message })) => {
+                self.ends(re, Ended::Cyfr { kind, message });
+                self.arrived(re, frame.len(), None)
+            }
+            Some(Err(_unread)) => {
+                self.ends(re, Ended::Unread);
+                self.arrived(re, frame.len(), None)
+            }
+            // After its end, or a fetch with no opener: granted back.
+            None => self.arrived(re, frame.len(), None),
         }
-        Ok(())
+    }
+
+    // CYFR's refusal of an attached fetch, verified as it arrives.
+    fn refusal(&mut self, re: u64, header: &str, body: &[u8]) {
+        let Some(shared) = self.owned.get(&re).map(|owned| owned.shared.clone()) else {
+            return;
+        };
+        let ended = shared.with(|inbox| match (&inbox.end, &inbox.opener) {
+            (None, Some(opener)) => Some(read_refusal(opener, header, body)),
+            _ => None,
+        });
+        if let Some(ended) = ended {
+            self.ends(re, ended);
+        }
+    }
+
+    // The fetch `re` ended: recorded once, the first end it has.
+    fn ends(&mut self, re: u64, ended: Ended) {
+        let Some(owned) = self.owned.get(&re) else {
+            return;
+        };
+        let doubtful = owned.shared.with(|inbox| {
+            if inbox.end.is_some() {
+                return false;
+            }
+            let doubtful = inbox.attached
+                && matches!(&ended, Ended::Lost)
+                    | matches!(&ended, Ended::Code(code) if code == "lost" || code == "uncertain");
+            inbox.end = Some(ended);
+            doubtful
+        });
+        self.doubtful |= doubtful;
+    }
+
+    // The service's end of the fetch `re`: its code, or none for an answer
+    // sent whole, which an attached answer short of its own end is not.
+    fn fetch_end(&mut self, re: u64, error: Option<String>) {
+        let short = self.owned.get(&re).is_some_and(|owned| {
+            let inbox = owned.shared.inbox.lock().expect("a fetch's inbox");
+            inbox.attached && inbox.end.is_none()
+        });
+        let ended = match error {
+            Some(code) => Ended::Code(code),
+            None if short => Ended::Unread,
+            None => Ended::Whole,
+        };
+        self.ends(re, ended);
+        self.owned.remove(&re);
     }
 
     // The frames decoded from the service, in order; whether the service
@@ -1514,9 +1807,11 @@ impl Serving {
                 Incoming::HostAnswer {
                     re, status, body, ..
                 } => {
-                    if let Some(reply) = self.waiting.remove(&re) {
-                        let _ =
-                            reply.send(status.map(|status| crate::host::Reached { status, body }));
+                    // The answer frees its call's place.
+                    if let Some(waiting) = self.waiting.remove(&re) {
+                        let _ = waiting
+                            .reply
+                            .send(status.map(|status| crate::host::Reached { status, body }));
                     }
                 }
                 Incoming::FetchChunk {
@@ -1526,56 +1821,72 @@ impl Serving {
                     body,
                     ..
                 } => {
-                    let bytes = body.len();
                     let body = Zeroizing::new(body);
-                    let event = match (status, headers) {
-                        (Some(status), Some(headers)) => FetchEvent::Head {
-                            status,
-                            headers,
-                            body,
-                        },
-                        _ => FetchEvent::Chunk(body),
-                    };
-                    self.deliver(re, bytes, event)?;
+                    if let (Some(status), Some(headers), Some(owned)) =
+                        (status, headers, self.owned.get(&re))
+                    {
+                        owned
+                            .shared
+                            .with(|inbox| inbox.head = Some((status, Headers(headers))));
+                    }
+                    self.arrived(re, body.len(), Some(&body))?;
                 }
                 Incoming::AttachedFrame { re, frame, .. } => {
-                    let bytes = frame.len();
-                    self.deliver(re, bytes, FetchEvent::Frame(Zeroizing::new(frame)))?;
+                    self.frame(re, Zeroizing::new(frame))?;
                 }
                 Incoming::AttachedRefusal {
                     re, header, body, ..
-                } => {
-                    self.deliver(re, 0, FetchEvent::Refusal { header, body })?;
-                }
-                Incoming::FetchEnd { re, error, .. } => {
-                    if let Some(owned) = self.owned.remove(&re)
-                        && let Some(events) = owned.events
-                    {
-                        let _ = events.send(FetchEvent::End(error));
-                    }
-                }
+                } => self.refusal(re, &header, &body),
+                Incoming::FetchEnd { re, error, .. } => self.fetch_end(re, error),
                 Incoming::Close { .. } => return Ok(true),
             }
         }
-        // An answer frees room for the calls that wait for it.
-        while self
-            .channel
-            .as_ref()
-            .is_some_and(|open| open.open_calls() < MAX_CALLS)
-        {
-            let Some(Command::Call {
-                attempt,
-                op,
-                header,
-                body,
-                reply,
-            }) = self.queued.pop_front()
-            else {
-                break;
-            };
-            self.call(attempt, op, header, body, reply)?;
-        }
         Ok(false)
+    }
+}
+
+/// CYFR's refusal of the attached fetch `opener` opens, as it arrives:
+/// taken only as the answer to the call this fetch's attempt posted, its
+/// header verified under the attempt's call key within its window and
+/// naming the attempt, its answer opened as that call's, and a guest error
+/// naming the fetch's call id. CYFR's `lost` leaves what it did unknown;
+/// anything else does not read.
+pub fn read_refusal(opener: &Opener, header: &str, body: &[u8]) -> Ended {
+    let keys = &opener.keys;
+    let now = crate::attempt::now_ms();
+    let Ok((fields, _hash)) = crate::auth::verify_call_header(&keys.call, header, now) else {
+        return Ended::Unread;
+    };
+    if fields.attempt != keys.attempt {
+        return Ended::Unread;
+    }
+    let Ok(plain) =
+        crate::auth::open_call(&keys.seal, crate::auth::Direction::Answer, &fields, body)
+    else {
+        return Ended::Unread;
+    };
+    // An attached fetch's answer reads as any call's but a pin's.
+    let op = Op::named("storage").expect("a callback");
+    match crate::host::answered(op, &plain) {
+        Ok(crate::host::Reading::GuestError { kind, message, .. }) => {
+            let named = crate::wire::parse(&plain).and_then(|answer| {
+                answer
+                    .value()
+                    .get("call_id")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+            });
+            if named.as_deref() == Some(opener.frames.call_id()) {
+                Ended::Cyfr {
+                    kind: kind.to_string(),
+                    message: message.to_string(),
+                }
+            } else {
+                Ended::Unread
+            }
+        }
+        Ok(crate::host::Reading::Refused("lost")) => Ended::Lost,
+        _ => Ended::Unread,
     }
 }
 
@@ -1586,6 +1897,7 @@ async fn serve<R>(
     outbox: tokio::sync::mpsc::UnboundedSender<Zeroizing<Vec<u8>>>,
     mut write_failed: tokio::sync::oneshot::Receiver<()>,
     closed: tokio::sync::watch::Sender<bool>,
+    places: std::sync::Arc<tokio::sync::Semaphore>,
 ) where
     R: tokio::io::AsyncRead + Unpin,
 {
@@ -1594,8 +1906,8 @@ async fn serve<R>(
         channel: None,
         root: String::new(),
         waiting: BTreeMap::new(),
-        queued: VecDeque::new(),
         owned: BTreeMap::new(),
+        doubtful: false,
         commands,
         outbox,
     };
@@ -1609,11 +1921,15 @@ async fn serve<R>(
                 let Some(command) = command else { break };
                 let done = match command {
                     Command::Bind { attempt, reply } => {
-                        let bound = match serving.channel.as_mut() {
-                            None => Channel::new(&attempt)
-                                .map(|opened| serving.channel = Some(opened))
-                                .map_err(Rebind::Invalid),
-                            Some(open) => open.rebind(&attempt),
+                        let bound = if serving.doubtful {
+                            Err(Rebind::Busy)
+                        } else {
+                            match serving.channel.as_mut() {
+                                None => Channel::new(&attempt)
+                                    .map(|opened| serving.channel = Some(opened))
+                                    .map_err(Rebind::Invalid),
+                                Some(open) => open.rebind(&attempt),
+                            }
                         };
                         if bound.is_ok() {
                             serving.root = attempt;
@@ -1622,7 +1938,9 @@ async fn serve<R>(
                         Ok(())
                     }
                     Command::Idle { reply } => {
-                        let _ = reply.send(serving.channel.as_ref().is_none_or(Channel::idle));
+                        let idle = !serving.doubtful
+                            && serving.channel.as_ref().is_none_or(Channel::idle);
+                        let _ = reply.send(idle);
                         Ok(())
                     }
                     Command::Room { reply } => {
@@ -1633,10 +1951,12 @@ async fn serve<R>(
                         let _ = reply.send(room);
                         Ok(())
                     }
-                    Command::Call { attempt, op, header, body, reply } => {
-                        serving.call(attempt, op, header, body, reply)
+                    Command::Call { attempt, op, header, body, place, reply } => {
+                        serving.call(attempt, op, header, body, place, reply)
                     }
-                    Command::Fetch { frame, reply } => serving.fetch(frame, reply),
+                    Command::Fetch { frame, opener, reply } => {
+                        serving.fetch(*frame, opener.map(|opener| *opener), reply)
+                    }
                     Command::Credit { re, bytes } => serving.grant(re, bytes),
                     Command::Abandon { re } => serving.abandon(re),
                 };
@@ -1678,17 +1998,19 @@ async fn serve<R>(
             _ = &mut write_failed => break,
         }
     }
-    // Every call still waiting hears that no answer will come, and every
-    // fetch still open that it has ended.
-    for (_seq, reply) in std::mem::take(&mut serving.waiting) {
-        let _ = reply.send(None);
+    // No call takes a place again; every call still waiting hears that no
+    // answer will come, and every fetch still open that it has ended.
+    places.close();
+    for (_seq, waiting) in std::mem::take(&mut serving.waiting) {
+        let _ = waiting.reply.send(None);
     }
-    for queued in std::mem::take(&mut serving.queued) {
-        if let Command::Call { reply, .. } = queued {
-            let _ = reply.send(None);
-        }
+    for (_re, owned) in std::mem::take(&mut serving.owned) {
+        owned.shared.with(|inbox| {
+            if inbox.end.is_none() {
+                inbox.end = Some(Ended::Closed);
+            }
+        });
     }
-    serving.owned.clear();
     drop(buffer);
     let _ = closed.send(true);
     // Commands sent after the close are answered as the closed relay's.

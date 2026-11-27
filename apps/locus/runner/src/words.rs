@@ -172,13 +172,24 @@ pub const SERVICE_METHOD: &str =
     "HTTP egress refused by the worker service's check: the method is not in the egress methods";
 pub const SERVICE_SCHEME: &str =
     "HTTP egress refused by the worker service's check: the scheme is not in the egress schemes";
-pub const SERVICE_DOMAIN: &str =
-    "HTTP egress refused by the worker service's check: the host is not in the egress domains";
 pub const SERVICE_HEADER: &str = "HTTP egress refused by the worker service's check: the request \
                                   sets a header only the client making it sets";
 pub const SERVICE_SIZE: &str = "HTTP egress refused by the worker service's check: the request's \
                                 body, URL and headers exceed the consented max_request_size";
 pub const SERVICE_METADATA: &str = "metadata IP blocked";
+
+/// The worker service's check of a request to `host`, outside the egress
+/// domains: the host the guest asked for, an attached request's too.
+pub fn service_domain(host: &str) -> String {
+    format!(
+        "HTTP egress refused by the worker service's check: {host} is not in the egress domains"
+    )
+}
+
+/// A method the relay's frame cannot carry, in today's runner's words.
+pub fn unsupported_method(method: &str) -> String {
+    format!("Unsupported HTTP method: {method}")
+}
 pub const RATE_LIMITED: &str = "HTTP egress refused: the consented rate limit is exhausted";
 
 /// A request that timed out, or whose connection did, after `ms`.

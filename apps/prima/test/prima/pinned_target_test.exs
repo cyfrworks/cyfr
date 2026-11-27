@@ -15,6 +15,10 @@ defmodule Prima.PinnedTargetTest do
 
   alias Prima.PinnedTarget
 
+  @vectors Path.expand("../../../../tests/fixtures/host_api.json", __DIR__)
+           |> File.read!()
+           |> Jason.decode!()
+
   @pin %PinnedTarget{
     id: "pin_Vx1",
     ip: "203.0.113.10",
@@ -100,6 +104,15 @@ defmodule Prima.PinnedTargetTest do
     assert :error = PinnedTarget.read(@pin)
     assert :error = PinnedTarget.read(nil)
     refute PinnedTarget.valid?(Map.from_struct(@pin))
+  end
+
+  # The shared cases a runner holds its own reading of a pin to.
+  test "the pin_answer_refusals of tests/fixtures/host_api.json read as the vectors say" do
+    %{"pin" => pin, "refusals" => refusals} = @vectors["pin_answer_refusals"]
+    assert {:ok, %PinnedTarget{}} = PinnedTarget.read(pin)
+
+    for %{"why" => why, "pin" => refused} <- refusals,
+        do: assert(PinnedTarget.read(refused) == :error, why)
   end
 
   test "a request is a URL with a host and a purpose, and a redirect names its pin" do

@@ -874,12 +874,17 @@ streaming::close(handle);
 
 | Error | Cause |
 |-------|-------|
-| `stream_limit` | Max 3 concurrent streams per execution |
-| `timeout` | The stream outlasted the component's consented `timeout`, or no data arrived for that long |
-| `request_failed` | The request failed before any response (connection refused, TLS, DNS) |
+| `stream_limit` | Max 3 concurrent streams per execution, or as many requests in flight as the execution's relay carries: a stream closed before its answer ended counts until the answer has drained |
+| `timeout` | The stream outlasted the component's consented `timeout`, or no data arrived for that long, or its connection could not be made in time |
+| `request_failed` | The request failed before any response (connection refused, TLS, DNS), or after it was sent |
 | `stream_error` | The transport broke mid-stream |
 | `invalid_handle` | Unknown or already-closed handle |
 | `response_too_large` | Cumulative data exceeds `max_response_size` |
+| `encoding_error` | A piece of the answer that is not UTF-8 text |
+| `http_error` | CYFR's own failure of an attached stream's upstream |
+
+A stream's request is refused as a fetch's is.
+Request refusals: `invalid_json|invalid_request|credential_header_refused|domain_blocked|method_blocked|scheme_blocked|rate_limited|private_ip_blocked|dns_error|redirect_credentials|request_too_large`
 
 ### `cyfr:vault/read` — `get(name) -> result<string, string>`
 Returns `Ok(value)` or `Err("access-denied: {name}")`. Requires a granted profile whose projection includes `name`. Private vault material is served from an entry that permits disclosure, projected to the `fields` the need declared: each name answers the value of the entry field the grant maps it to. An attach-only entry refuses the read. Public `provides` values are also readable through this interface without a vault entry.

@@ -1215,7 +1215,12 @@ defmodule Cyfr.DocsDriftTest do
       Regex.run(~r/^\*\*Streaming error types:\*\*\n\n(.*?)\n\n/ms, guide)
 
     streaming = Regex.scan(~r/^\| `([a-z_]+)` \|/m, table, capture: :all_but_first)
-    assert Enum.sort(List.flatten(streaming)) == Enum.sort(types["cyfr:http/streaming"])
+
+    [_, requests] =
+      Regex.run(~r/^\*\*Streaming error types:\*\*.*?^Request refusals: `([a-z_|]+)`/ms, guide)
+
+    assert Enum.sort(List.flatten(streaming) ++ String.split(requests, "|")) ==
+             Enum.sort(types["cyfr:http/streaming"])
 
     answered =
       @repo_root
