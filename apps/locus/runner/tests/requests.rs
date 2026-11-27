@@ -42,11 +42,13 @@ fn pinning(host: &'static str) -> support::Script {
 }
 
 /// The run's output and its close, once the runner reports the subtree
-/// complete, and every event it sent before.
+/// complete, and every event it sent before. Each line is awaited a minute,
+/// or the attempt's budget when that is longer.
 fn completed(service: &Service, job: &Job) -> (Value, Value, Vec<Value>) {
+    let wait = SOON.max(Duration::from_millis(job.timeout_ms));
     let mut events = Vec::new();
     let complete = loop {
-        let line = service.line(SOON);
+        let line = service.line(wait);
         if line["type"] == "event" {
             events.push(line);
         } else {
@@ -774,8 +776,8 @@ fn held_unread(bytes: usize, chunks: usize) -> (u64, Duration) {
     );
     // A slow runner's test build decodes a frame in some tens of
     // microseconds on the runner's one thread, beside the guest's reads:
-    // this host's attempt takes some 12 s, a hosted runner's some 2.4
-    // times that, and the budget is five times that and more.
+    // this host's attempt takes some 12 s, a hosted runner's at most 25 s,
+    // and the budget, which `completed` waits too, is seven times that.
     let job = Job {
         timeout_ms: 180_000,
         ..job
