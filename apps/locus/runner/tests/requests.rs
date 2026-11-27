@@ -1270,7 +1270,8 @@ fn an_attached_requests_domain_refusal_by_the_relay_names_the_host_it_asked_for(
         in_turn(vec![vec![Upstream::End(Some("domain_blocked"))]]),
     );
     let (output, _, _) = completed(&service, &job);
-    let message = words::service_domain("api.example.test");
+    let message = "HTTP egress refused by the worker service's check: api.example.test is not in \
+                   the egress domains";
     assert_eq!(
         output,
         json!({"error": {"type": "domain_blocked", "message": message}})
@@ -1516,4 +1517,36 @@ fn a_request_the_relays_frame_cannot_carry_is_refused_unsent() {
         json!({"error": {"type": "invalid_request", "message": words::UNSENDABLE}})
     );
     assert!(service.frames_of("fetch").is_empty());
+}
+
+#[test]
+fn a_long_pinned_urls_canonical_form_is_not_left_in_the_runner() {
+    // Item 9: a URL long enough that its canonical copy is an allocation
+    // of its own, the needle far past its first bytes, counted against
+    // the binding's one copy of the request.
+    let filler = "f".repeat(3000);
+    let needle = "CCNEEDLECANONICALsk-0123456789abcdefCC";
+    let mut service = Service::start();
+    let job = fetching(&json!({"method": "GET",
+        "url": format!("https://api.example.test/{filler}/{needle}")}));
+    service.assign_fetching(
+        &job,
+        pinning("api.example.test"),
+        in_turn(vec![vec![
+            Upstream::Head(200, Vec::new(), b"ok".to_vec()),
+            Upstream::End(None),
+        ]]),
+    );
+    let _ = completed(&service, &job);
+    let found = support::scan(
+        service.pid(),
+        &[support::RUNNER.as_bytes(), needle.as_bytes()],
+    );
+    eprintln!("canonical residue: {found:?}");
+    assert!(found[0] > 0, "the scan read the runner's memory: {found:?}");
+    assert!(
+        found[1] <= 1,
+        "the URL is left {} times: {found:?}",
+        found[1]
+    );
 }
