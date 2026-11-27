@@ -18,7 +18,7 @@ in this suite,
 `Locus.Runtime.AttachedFetchTest`, `Cyfr.FormulaHostCallsTest`,
 `Opus.Schedules.SchedulerTest`, `CyfrWeb.WebhookFlowIntegrationTest`,
 `Aqua.LaunchTest` and `Compendium.ComponentFeaturesAdmissionTest` in
-CYFR's, and the worker image's `tests/locus-runtime-image/runners.py` and
+CYFR's, the runner crate's (`apps/locus/runner/tests/`), and the worker image's `tests/locus-runtime-image/runners.py` and
 `tests/locus-runtime-image/canary.py`.
 
 | Guest | World | Does |
@@ -42,6 +42,7 @@ CYFR's, and the worker image's `tests/locus-runtime-image/runners.py` and
 | `error_context` | reagent | `sync_lift` beside an `error-context.drop` builtin; refused for the component-model error-context feature |
 | `thread_index` | reagent | `sync_lift` beside a `thread.index` builtin; refused for the component-model threading feature |
 | `legacy_try` | reagent | runs a legacy `try` block with a `catch_all`; refused for the legacy exception-handling feature |
+| `nested_output` | reagent | answers its input's length in nested arrays, a JSON value that deep, for the runner's depth bound on a guest's output |
 
 ## Rebuilding
 
@@ -102,4 +103,6 @@ thread_index.wat           sha256:04f120ad4c7f342e5d1b039dd955e0ea5942d45570f838
 thread_index.wasm          sha256:43d05d009f61e8b9dd152adcbd1ed5392c99973285a3b4f61d1b377e5c8d48cd
 legacy_try.wat             sha256:2adc44fa64ff904bf6a019c2bbdfb9d6f44d4628d7e616bc3e72c5e79d52ab4a
 legacy_try.wasm            sha256:244f4dbd5d1a29ff8c0b37fc84d21f3630f88b0b7451de28108610c7ea1dd454
+nested_output.wat          sha256:3ce720e5c66fb39198f2ec614efc5e28b01b4c436fc9ab23c00d3203758f55f6
+nested_output.wasm         sha256:dd21f5cce9f42efea0dd574d0a49293f81b73bf83bd98ade4cbda2d6a6169961
 ```

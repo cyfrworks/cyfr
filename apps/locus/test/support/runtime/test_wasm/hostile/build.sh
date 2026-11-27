@@ -43,7 +43,7 @@ case "$("$wasm_tools" --version 2>/dev/null)" in
 esac
 
 # Each guest and the world it is a component of, or `text`.
-guests="extra_memory:reagent wide_table:reagent grower:reagent vault_probe:catalyst attached_header_probe:catalyst credential_canary:catalyst trapper:reagent async_lift:text sync_lift:text gc_alloc:text exception_throw:text externref_table:text wide_arithmetic:text socket_probe:text stackful_lift:text async_cancel:text error_context:text thread_index:text legacy_try:text"
+guests="extra_memory:reagent wide_table:reagent grower:reagent vault_probe:catalyst attached_header_probe:catalyst credential_canary:catalyst trapper:reagent async_lift:text sync_lift:text gc_alloc:text exception_throw:text externref_table:text wide_arithmetic:text socket_probe:text stackful_lift:text async_cancel:text error_context:text thread_index:text legacy_try:text nested_output:text"
 
 digest() { shasum -a 256 "$1" | cut -d' ' -f1; }
 

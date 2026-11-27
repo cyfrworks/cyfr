@@ -5,8 +5,7 @@
 ;; for an input of N bytes, N `[` and then N `]`, a JSON value nested N
 ;; deep. It lets a test hand the engine a guest output at exactly the depth
 ;; a document is read to, and one level past it. A component text, built
-;; with the wasm-tools scripts/wasm-tools.sh pins:
-;;   wasm-tools parse nest.wat -o nest.wasm
+;; by `build.sh` (README.md).
 (component
   (core module $m
     (memory (export "memory") 1)

@@ -359,13 +359,13 @@ fn a_guests_output_at_the_depth_bound_is_read_and_one_past_it_is_refused() {
 }
 
 fn guests_output_at_the_bound() {
-    // nest.wasm answers its input's length in nested arrays.
+    // nested_output answers its input's length in nested arrays.
     let input = |depth: usize| format!(r#"{{"p":"{}"}}"#, "x".repeat(depth - 8));
     // A guest's output is read one level under the bound, so CYFR's answer
     // recording it reads too.
     let job = Job::new(
         "reagent",
-        "apps/locus/runner/tests/support/nest.wasm",
+        &format!("{HOSTILE}/nested_output.wasm"),
         &input(MAX_OUTPUT_DEPTH),
     );
     let (service, frame, fail) = failed(&job);
@@ -382,7 +382,7 @@ fn guests_output_at_the_bound() {
 
     let job = Job::new(
         "reagent",
-        "apps/locus/runner/tests/support/nest.wasm",
+        &format!("{HOSTILE}/nested_output.wasm"),
         &input(MAX_OUTPUT_DEPTH + 1),
     );
     let (_service, frame, fail) = failed(&job);
