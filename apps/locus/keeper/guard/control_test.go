@@ -19,7 +19,7 @@ import (
 type vectors struct {
 	Comment string          `json:"comment"`
 	Hello   json.RawMessage `json:"hello"`
-	// HelloRoutingNoMachine is the hello of a guard whose host's kernel
+	// HelloRoutingNoMachine is the hello of a guard whose kernel
 	// cannot hold a machine's route to whole IPv4 packets.
 	HelloRoutingNoMachine json.RawMessage `json:"hello_routing_no_machine"`
 	Requests              []struct {

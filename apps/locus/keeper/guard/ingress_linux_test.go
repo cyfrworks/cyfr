@@ -166,9 +166,10 @@ func reportIngress(before map[string]uint64) int {
 }
 
 // From a machine's route only a whole IPv4 packet enters the guard's
-// namespace: a guest's unfinished first fragments, from its own address
-// and from forged ones, of both families, reach neither its reassembly nor
-// its IPv6, which hold nothing of them; its ARP flood and its router
+// namespace: a guest's unfinished fragments, first, middle, last and with
+// options, from its own address and from forged ones, of both families,
+// reach neither its reassembly nor its IPv6, which hold nothing of them;
+// its tagged frames, in one VLAN tag and two, its ARP flood and its router
 // advertisements are dropped at the ingress with every other frame; and
 // its own whole datagram still leaves under a reach that allows it. Run as
 // the forged-source test runs, on the real rules and kernel.
@@ -185,9 +186,11 @@ func TestAMachinesRouteLetsOnlyAWholeIPv4PacketIn(t *testing.T) {
 		t.Skipf("this host has no /dev/net/tun: %v", err)
 	}
 	// The forger's frames the ingress counts: IPv4 fragments, forged and
-	// its own; whole IPv4 datagrams, forged and its own; and every other
-	// frame, IPv6 whole and in fragments, ARP and router advertisements.
-	const fragments, whole, other = 4, 16, 6 + 4 + ingressARP + ingressAdverts
+	// its own, first, middle, last and with options; whole IPv4 datagrams,
+	// forged and its own; and every other frame, IPv6 whole and in
+	// fragments, tagged frames (judged by their tag), ARP and router
+	// advertisements.
+	const fragments, whole, other = 8, 16, 6 + 4 + 7 + ingressARP + ingressAdverts
 	for _, reach := range []string{ReachNone, ReachHosts} {
 		cmd := exec.Command(os.Args[0], "-test.run=^$")
 		cmd.Env = append(os.Environ(), forgedGuardMode+"="+reach+"+ingress")
@@ -223,7 +226,8 @@ func TestAMachinesRouteLetsOnlyAWholeIPv4PacketIn(t *testing.T) {
 
 // standInProbe tries the start's check in a namespace of its own, as the
 // guard does, with the kernel's own names and then with a classifier no
-// kernel has, and says what each answered and whether its pair was left.
+// kernel has, and says what each answered and whether its pair was left
+// after each.
 func standInProbe() int {
 	ctl, err := unix.Socket(unix.AF_INET, unix.SOCK_DGRAM|unix.SOCK_CLOEXEC, 0)
 	if err == nil {
@@ -233,12 +237,16 @@ func standInProbe() int {
 		fmt.Printf("probe: %v\n", err)
 		return 1
 	}
+	left := func(after string) {
+		if _, err := linkIndex(probeName); err == nil {
+			fmt.Printf("probe: its pair is left after %s\n", after)
+		}
+	}
 	fmt.Printf("probe: the kernel's own: %q\n", probeMachines())
+	left("the kernel's own try")
 	flowerKind = "cyfr-no-such-classifier"
 	fmt.Printf("probe: no such classifier: %q\n", probeMachines())
-	if _, err := linkIndex(probeName); err == nil {
-		fmt.Println("probe: its pair is left")
-	}
+	left("a try that fails")
 	return 0
 }
 
@@ -260,7 +268,7 @@ func TestTheGuardsStartTriesAMachinesIngressFilter(t *testing.T) {
 	if !strings.Contains(string(out), `probe: the kernel's own: ""`) {
 		t.Errorf("this kernel does not hold a machine's route to whole IPv4 packets:\n%s", out)
 	}
-	if !strings.Contains(string(out), "probe: no such classifier: \"this host's kernel cannot hold a machine's route to whole IPv4 packets at its ingress") {
+	if !strings.Contains(string(out), "probe: no such classifier: \"the guard routes no machine: this kernel cannot hold a machine's route to whole IPv4 packets at its ingress (it needs the kernel's modules sch_ingress, cls_flower and act_gact)") {
 		t.Errorf("a classifier the kernel lacks did not refuse machines:\n%s", out)
 	}
 	if strings.Contains(string(out), "its pair is left") {

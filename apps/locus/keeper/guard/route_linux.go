@@ -600,8 +600,9 @@ const (
 )
 
 // machineEnd readies a machine's route's guard's end, slot's, before it
-// comes up: only a whole IPv4 packet let in at its ingress, no IPv6 address, GatewayMAC, no ARP and strict reverse-path
-// filtering, which is read back. The kernel filters by the larger of the
+// comes up: only a whole IPv4 packet let in at its ingress, no IPv6
+// address, GatewayMAC, no ARP and strict reverse-path filtering, which is
+// read back. The kernel filters by the larger of the
 // link's rp_filter and the namespace's `all`, so where `all` is loose the
 // raw table's line (routeRules) is what drops a forged source.
 func machineEnd(slot int) error {

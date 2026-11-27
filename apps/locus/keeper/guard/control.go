@@ -22,7 +22,7 @@
 //	{"v":4,"type":"admit","spawn_id":…,"reach":"island"}                        keeper, with three descriptors
 //	{"v":4,"type":"admit","spawn_id":…,"reach":"hosts","addresses":[…]}         keeper, with three descriptors
 //	{"v":4,"type":"admit","spawn_id":…,"reach":"role","port":…,"private":…}     keeper, with three descriptors
-//	{"v":4,"type":"admit","spawn_id":…,"machine_uid":…,"reach":…}               keeper, with three descriptors
+//	{"v":4,"type":"admit","spawn_id":…,"machine_uid":…,"reach":…}               keeper, with four descriptors
 //	{"v":4,"type":"change","spawn_id":…,"reach":…,"addresses":[…]}              keeper
 //	{"v":4,"type":"clear","spawn_id":…}                                         keeper
 //	{"v":4,"type":"admitted","spawn_id":…}                                      guard
@@ -36,7 +36,7 @@
 // /proc/self/ns/net links to it; a keeper whose own differs is not behind
 // that guard (a guard that restarted took a new namespace, and the
 // service still runs in the old one) and takes none of its answers. A
-// guard whose host's kernel cannot hold a machine's route to whole IPv4
+// guard whose kernel cannot hold a machine's route to whole IPv4
 // packets at its ingress says why in the hello's `machines`, and refuses
 // every machine's admit; it serves every other route.
 //

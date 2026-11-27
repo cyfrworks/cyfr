@@ -48,7 +48,6 @@ const (
 	guestLinkMode    = "CYFR_GUARD_TEST_GUEST_LINK"
 	forgedGuardMode  = "CYFR_GUARD_TEST_FORGED"
 	forgerMode       = "CYFR_GUARD_TEST_FORGER"
-	timersMode       = "CYFR_GUARD_TEST_TIMERS"
 	probeMode        = "CYFR_GUARD_TEST_PROBE"
 )
 
@@ -68,8 +67,6 @@ func TestMain(m *testing.M) {
 		os.Exit(standInForgedGuard(os.Getenv(forgedGuardMode)))
 	case os.Getenv(forgerMode) != "":
 		os.Exit(standInForger())
-	case os.Getenv(timersMode) != "":
-		os.Exit(shortTimers())
 	case os.Getenv(probeMode) != "":
 		os.Exit(standInProbe())
 	}
@@ -1134,13 +1131,13 @@ func hexIPv4(h string) string {
 // outside and an island address, to the guard's own IPv6 address on the
 // island and past it, which no route carries; and a first fragment of
 // each family from a forged source, to the guard and past it, never
-// completed, which the kernel holds before the raw table sees it and
-// whose reassembly ends, its timers shortened here to a second, in the
-// kernel's own error to that source. Under reach none and under a reach
-// of that host, nothing leaves by the island's link but, under the reach,
-// the guest's own packet from its own address, and nothing comes back to
-// the guest. The namespace's own rp_filter is as the host's: loose on
-// this host, so the raw table's lines alone are what drop them.
+// completed. Under reach none and under a reach of that host, nothing
+// leaves by the island's link but, under the reach, the guest's own packet
+// from its own address, and nothing comes back to the guest. The
+// namespace's own rp_filter is as the host's: loose on this host, so the
+// route's raw-table line alone is what drops a forged whole datagram; its
+// ingress drops every fragment and all IPv6 before it
+// (TestAMachinesRouteLetsOnlyAWholeIPv4PacketIn counts them).
 func TestAGuestsForgedSourcesCarryNothingOut(t *testing.T) {
 	if os.Getuid() != 0 {
 		t.Skip("the VMM's own uid is mapped beside the guard's by root alone")
@@ -1183,12 +1180,11 @@ func standInForgedGuard(mode string) int {
 		fmt.Printf("guard: "+format+"\n", args...)
 		return 1
 	}
-	// With "+ingress" the forger writes, beside its forged frames, unfinished
-	// fragments of its own, an ARP flood and router advertisements, and the
-	// guard reads what of them reached its IP layer, the reassembly's memory
-	// and its ingress filter's counts (TestAMachinesRouteLetsOnlyAWholeIPv4PacketIn);
-	// the reassembly timers keep their length then, so a fragment held is
-	// still held when it is read.
+	// With "+ingress" the forger writes, beside its forged frames,
+	// unfinished fragments of its own, tagged frames, an ARP flood and
+	// router advertisements, and the guard reads what of them reached its
+	// IP layer, the reassembly's memory and its ingress filter's counts
+	// (TestAMachinesRouteLetsOnlyAWholeIPv4PacketIn).
 	reach, ingress := strings.CutSuffix(mode, "+ingress")
 	ctl, err := unix.Socket(unix.AF_INET, unix.SOCK_DGRAM|unix.SOCK_CLOEXEC, 0)
 	if err != nil {
@@ -1196,17 +1192,6 @@ func standInForgedGuard(mode string) int {
 	}
 	if err := linkUp(ctl, "lo"); err != nil {
 		return fail("the loopback: %v", err)
-	}
-	// The reassembly timers, shortened to a second by a child in this
-	// network namespace with a mount and process namespace of its own, for
-	// the proc it writes them through.
-	if !ingress {
-		timers := exec.Command(os.Args[0], "-test.run=^$")
-		timers.Env = []string{timersMode + "=1"}
-		timers.SysProcAttr = &syscall.SysProcAttr{Cloneflags: syscall.CLONE_NEWNS | syscall.CLONE_NEWPID, Pdeathsig: syscall.SIGKILL}
-		if out, err := timers.CombinedOutput(); err != nil {
-			return fail("shortening the reassembly timers: %v %s", err, out)
-		}
 	}
 	// ext0 is the island's way out: an L3 tun the test reads, holding the
 	// island's address, the default route through it.
@@ -1348,7 +1333,8 @@ func standInForgedGuard(mode string) int {
 	}
 	var leaving []string
 	p := make([]byte, 4096)
-	// Past the fragments' shortened reassembly, a second, and what follows.
+	// What the forger's frames make leave, whatever the kernel answers them
+	// with.
 	for end := time.Now().Add(4 * time.Second); time.Now().Before(end); {
 		n, err := unix.Read(ext, p)
 		if err != nil {
@@ -1435,23 +1421,6 @@ func ipv6Frame(dst, src net.HardwareAddr, from, to netip.Addr, hop byte, payload
 	return append(append(f, ip...), u...)
 }
 
-// shortTimers shortens the reassembly timers of its network namespace,
-// IPv4's, IPv6's and connection tracking's, to a second.
-func shortTimers() int {
-	proc, err := spaceProcOf()
-	if err != nil {
-		fmt.Println(err)
-		return 1
-	}
-	for _, timer := range []string{"net/ipv4/ipfrag_time", "net/ipv6/ip6frag_time", "net/netfilter/nf_conntrack_frag6_timeout"} {
-		if err := os.WriteFile(proc+"/sys/"+timer, []byte("1\n"), 0); err != nil {
-			fmt.Println(err)
-			return 1
-		}
-	}
-	return 0
-}
-
 // fragmentData is a UDP datagram's first 400 bytes, the forger's tag
 // first, whose header claims 2,000: what a first fragment carries.
 func fragmentData(tag string) []byte {
@@ -1489,6 +1458,42 @@ func firstFragment6(from, to netip.Addr, id uint32, tag string) []byte {
 	copy(ip[24:], t16[:])
 	f := append(append(append([]byte{}, GatewayMAC...), GuestMAC...), 0x86, 0xdd)
 	return append(append(f, ip...), payload...)
+}
+
+// laterFragment4 is firstFragment4 at offset (in 8-byte units), more to
+// follow or not: a middle or a last fragment.
+func laterFragment4(from, to netip.Addr, id uint16, tag string, offset uint16, more bool) []byte {
+	f := firstFragment4(from, to, id, tag)
+	ip := f[14:34]
+	v := offset
+	if more {
+		v |= 0x2000
+	}
+	binary.BigEndian.PutUint16(ip[6:], v)
+	binary.BigEndian.PutUint16(ip[10:], 0)
+	binary.BigEndian.PutUint16(ip[10:], csum(ip))
+	return f
+}
+
+// tagged is frame with a VLAN tag of tpid and vid after its addresses.
+func tagged(frame []byte, tpid, vid uint16) []byte {
+	out := append([]byte{}, frame[:12]...)
+	out = append(out, byte(tpid>>8), byte(tpid), byte(vid>>8), byte(vid))
+	return append(out, frame[12:]...)
+}
+
+// optioned is a first fragment whose IPv4 header holds 4 bytes of options.
+func optioned(from, to netip.Addr, id uint16, tag string) []byte {
+	f := firstFragment4(from, to, id, tag)
+	out := append([]byte{}, f[:34]...)
+	out = append(out, 1, 1, 1, 1)
+	out = append(out, f[34:]...)
+	ip := out[14:38]
+	ip[0] = 0x46
+	binary.BigEndian.PutUint16(ip[2:], binary.BigEndian.Uint16(ip[2:])+4)
+	binary.BigEndian.PutUint16(ip[10:], 0)
+	binary.BigEndian.PutUint16(ip[10:], csum(ip))
+	return out
 }
 
 // tagOf is the forger's tag a packet carries or quotes, "" for none.
@@ -1596,13 +1601,26 @@ func standInForger() int {
 		firstFragment6(netip.MustParseAddr("2001:db8:999::9"), forgedTargetV6, 4, "frag6-forwarded"),
 	}
 	if os.Getenv(forgerMode) == "ingress" {
-		// Unfinished first fragments from the guest's own addresses, an
-		// ARP flood of senders of its choosing, and router advertisements.
+		// Unfinished fragments from the guest's own addresses, first,
+		// middle, last and with options; fragments and ARP in one VLAN
+		// tag and two; an ARP flood of senders of its choosing; and router
+		// advertisements.
 		fragments = append(fragments,
 			firstFragment4(inner, gateway, 5, "own-frag4-to-guard"),
 			firstFragment4(inner, forgedTarget, 6, "own-frag4-forwarded"),
 			firstFragment6(guestLinkLocal, forgedGuardV6, 7, "own-frag6-to-guard"),
-			firstFragment6(guestLinkLocal, forgedTargetV6, 8, "own-frag6-forwarded"))
+			firstFragment6(guestLinkLocal, forgedTargetV6, 8, "own-frag6-forwarded"),
+			laterFragment4(inner, gateway, 9, "own-later4-to-guard", 185, false),
+			laterFragment4(netip.MustParseAddr("203.0.113.9"), forgedTarget, 10, "middle4-forwarded", 50, true),
+			laterFragment4(inner, forgedTarget, 11, "own-later4-forwarded", 185, false),
+			optioned(inner, gateway, 12, "own-optioned-frag4"),
+			tagged(firstFragment4(inner, gateway, 13, "vid0-frag4"), 0x8100, 0),
+			tagged(firstFragment4(inner, gateway, 14, "vid7-frag4"), 0x8100, 7),
+			tagged(firstFragment4(inner, gateway, 15, "qinq-frag4"), 0x88a8, 0),
+			tagged(tagged(firstFragment4(inner, gateway, 16, "qinq2-frag4"), 0x8100, 0), 0x88a8, 0),
+			tagged(firstFragment6(guestLinkLocal, forgedGuardV6, 17, "vid0-frag6"), 0x8100, 0),
+			tagged(arpRequest(GuestMAC, inner, gateway), 0x8100, 5),
+			tagged(tagged(arpRequest(GuestMAC, inner, gateway), 0x8100, 0), 0x88a8, 0))
 		for i := range ingressARP {
 			fragments = append(fragments, arpRequest(net.HardwareAddr{0x06, 0x66, 0, 0, 0, byte(i)},
 				netip.AddrFrom4([4]byte{10, 213, 9, byte(i)}), gateway))

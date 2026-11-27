@@ -706,7 +706,7 @@ func TestAChangeWhoseWithdrawalIsLeftToTheRetrySaysWithdrawn(t *testing.T) {
 	}
 }
 
-// A guard whose host's kernel cannot hold a machine's route to whole IPv4
+// A guard whose kernel cannot hold a machine's route to whole IPv4
 // packets says why in its hello, which the keeper's client reads, and
 // refuses each machine's admit with it, making nothing; every other route
 // it serves as before.

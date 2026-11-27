@@ -7,7 +7,6 @@ package guard
 
 import (
 	"encoding/binary"
-	"errors"
 	"fmt"
 
 	"golang.org/x/sys/unix"
@@ -35,7 +34,10 @@ import (
 // the end. It needs the host kernel's ingress qdisc, flower classifier and
 // generic action, which it tries at its start on a pair of its own
 // (probeMachines): a guard whose kernel lacks one routes no machine, says
-// so in its hello, and refuses each machine's admit.
+// so in its hello, and refuses each machine's admit. The try runs wherever
+// the guard runs, in a person's VM too, whose kernel is built without the
+// three, so the guest's guard routes no machine either: true, and nothing
+// asks it to.
 
 // The traffic control layer's names and numbers (linux/pkt_sched.h,
 // linux/pkt_cls.h, linux/tc_act/tc_gact.h), which golang.org/x/sys does
@@ -59,13 +61,16 @@ const (
 	ethPAll         = 0x0003
 )
 
-// Seams of the filter's making: the kinds the kernel is asked for, which a
-// test names wrongly to make the start's check fail.
-var (
+// The kinds the kernel is asked for: the qdisc, the classifier and the
+// action, each a module of its own (sch_ingress, cls_flower, act_gact).
+const (
 	ingressKind = "ingress"
-	flowerKind  = "flower"
 	gactKind    = "gact"
 )
+
+// flowerKind is the classifier's kind: a variable, so a test names one no
+// kernel has to make the start's check fail.
+var flowerKind = "flower"
 
 // tcmsg is a struct tcmsg for link index, of handle and parent, info its
 // last word (a filter's priority and protocol).
@@ -143,9 +148,12 @@ const (
 	probePeer = "cyfr-probe1"
 )
 
+// modulesHint names what a kernel needs for a machine's route's ingress.
+const modulesHint = "it needs the kernel's modules sch_ingress, cls_flower and act_gact"
+
 // probeMachines tries, on a veth pair of the guard's own that it removes
 // after, what a machine's route's end is given (wholeIPv4Only), and answers
-// "" where the kernel gives all of it, or why the guard routes no machine.
+// "" where this kernel gives all of it, or why the guard routes no machine.
 // A pair an earlier guard left is removed first.
 func probeMachines() string {
 	_ = removeLink(probeName)
@@ -155,19 +163,16 @@ func probeMachines() string {
 	body := rtattr(ifinfomsg(), unix.IFLA_IFNAME, cstring(probeName))
 	body = rtattr(body, unix.IFLA_LINKINFO, info)
 	if err := netlinkDo(unix.RTM_NEWLINK, unix.NLM_F_CREATE|unix.NLM_F_EXCL, body); err != nil {
-		return "the guard could not make a pair to try a machine's ingress filter on: " + err.Error()
+		return "the guard routes no machine: it could not make a pair to try a machine's ingress filter on: " + err.Error()
 	}
 	defer func() { _ = removeLink(probeName) }()
 	index, err := linkIndex(probeName)
 	if err != nil {
-		return "the guard could not find its pair to try a machine's ingress filter on: " + err.Error()
+		return "the guard routes no machine: it could not find its pair to try a machine's ingress filter on: " + err.Error()
 	}
 	if err := wholeIPv4Only(index); err != nil {
-		why := err.Error()
-		if errors.Is(err, unix.ENOENT) || errors.Is(err, unix.EOPNOTSUPP) {
-			why += " (the kernel lacks the ingress qdisc, the flower classifier or the generic action)"
-		}
-		return "this host's kernel cannot hold a machine's route to whole IPv4 packets at its ingress: " + why
+		return "the guard routes no machine: this kernel cannot hold a machine's route to whole IPv4 packets at its ingress (" +
+			modulesHint + "): " + err.Error()
 	}
 	return ""
 }
