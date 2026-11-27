@@ -149,7 +149,10 @@ defmodule PrismWeb.CommandPaletteTest do
     html = view |> element("#command-palette") |> render()
 
     item = ~s(#command-palette [phx-value-to="/?publisher=local&tincture_name=palette-bird"])
-    assert view |> element(item) |> render() =~ ~r{<span class="flex-1 truncate">\s*palette-bird\s*</span>}
+
+    assert view |> element(item) |> render() =~
+             ~r{<span class="flex-1 truncate">\s*palette-bird\s*</span>}
+
     refute html =~ "flying between pipes"
     assert html =~ "Enter opens the first"
     refute html =~ "↑ ↓ navigate"

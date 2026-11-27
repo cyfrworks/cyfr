@@ -11,8 +11,8 @@ defmodule PrismWeb.DesktopLive do
   Dashboard page's close returns to (`path/1`).
 
   `?publisher=<p>&tincture_name=<n>` (the palette's and Aqua's
-  `ui.tincture.focus`) asks the desktop's picker to show that tincture;
-  the desktop's own hook reads it from this page's address and hands it to
+  `ui.tincture.focus`) asks the desktop to open that tincture; the
+  desktop's own hook reads it from this page's address and hands it to
   the shell (`PrismWeb.ShellLive`, `focus_named`), so the page does
   nothing with it. A person with no athanor of their own is sent to sign
   in again.
