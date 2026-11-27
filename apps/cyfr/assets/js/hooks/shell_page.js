@@ -125,8 +125,13 @@ const ShellPage = {
       }
     }
 
+    // A move names where the page went. A join's stop (`initial`) is the
+    // page's own address now: LiveView replays the stop its first join made,
+    // with that join's address, each time the view joins again after a
+    // reconnect, and the named address that join was at is long replaced.
     this._onMoved = (event) => {
-      const href = (event.detail && event.detail.to) || window.location.href
+      const detail = event.detail || {}
+      const href = (detail.kind !== "initial" && detail.to) || window.location.href
       shown(href)
       focus(href)
     }

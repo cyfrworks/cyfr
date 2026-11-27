@@ -96,6 +96,17 @@ describe("a desktop address naming a tincture", () => {
     assert.deepEqual(patches, [{to: "/a/@alice", opts: {replace: true}}])
   })
 
+  // A LiveView that joins again after a reconnect replays its first join's
+  // stop, with the address that join was at.
+  test("is not handed to the shell again when a rejoin replays the first join's address", () => {
+    at("/a/@alice")
+    const {pushed} = mount()
+    windowListeners["phx:page-loading-stop"]({
+      detail: {kind: "initial", to: ORIGIN + "/a/@alice?publisher=local&tincture_name=palette-app"}
+    })
+    assert.deepEqual(pushed, [])
+  })
+
   test("moves nowhere on an answer that names no address of this origin", () => {
     at("/a/@alice?publisher=local&tincture_name=palette-app")
     const {replies, patches} = mount()
