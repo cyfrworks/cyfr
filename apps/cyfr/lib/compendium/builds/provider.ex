@@ -160,13 +160,24 @@ defmodule Compendium.Builds.Provider do
                }}
 
             {:error, reason} ->
-              {:ok, %{valid: false, reason: validation_failure(reason)}}
+              {:ok, failure(reason)}
           end
 
         :error ->
           {:error, {:invalid_argument, "Invalid base64 encoding"}}
       end
     end
+  end
+
+  # An invalid answer: the refusal's tag and, for a reason the refusal
+  # table reads (`Prima.Refusal`), its sentence, as registration refuses
+  # the same bytes.
+  defp failure(reason) do
+    failure = %{valid: false, reason: validation_failure(reason)}
+
+    if Prima.Refusal.reason?(reason),
+      do: Map.put(failure, :message, Sanctum.Refusals.render(reason)),
+      else: failure
   end
 
   # A refusal's tag, as the builder names it: a tuple reason carries the

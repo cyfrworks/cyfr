@@ -66,6 +66,8 @@ defmodule Compendium.Builds.Client do
       carry.
     * `{:malformed, reason}` — the answer is not the protocol's, or its
       result did not verify.
+    * `{:too_large, size, max}` — the component built is larger than a
+      runner can fetch (`Prima.Wasm`).
 
   ## Cancellation
 
@@ -139,6 +141,7 @@ defmodule Compendium.Builds.Client do
           | {:refused, BuilderProtocol.refusal(), [String.t()]}
           | {:protocol_mismatch, pos_integer(), pos_integer() | nil}
           | {:malformed, term()}
+          | {:too_large, pos_integer(), pos_integer()}
 
   @doc """
   Build `request` on the builds service and answer the verified build, or
@@ -616,6 +619,7 @@ defmodule Compendium.Builds.Client do
   defp validate(wasm) do
     case Prima.Wasm.validate(wasm) do
       {:ok, validation} -> {:ok, validation}
+      {:error, {:too_large, _size, _max} = too_large} -> {:error, too_large}
       {:error, reason} -> {:error, {:malformed, {:invalid_wasm, reason}}}
     end
   end

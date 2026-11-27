@@ -592,6 +592,32 @@ defmodule Prima.RunnerRelayTest do
     end
   end
 
+  describe "a host answer's body" do
+    test "at its bound fits the frame of the longest attempt" do
+      longest = String.duplicate(~s("), 256)
+      runner = RunnerRelay.new(:runner, longest)
+      service = RunnerRelay.new(:service, longest)
+      call = %{kind: :host_call, attempt: longest, op: :fetch_artifact, header: "h", body: ""}
+      {:ok, bytes, _runner} = RunnerRelay.encode(runner, call)
+      {:ok, _frames, "", service} = RunnerRelay.decode(service, IO.iodata_to_binary(bytes))
+
+      max = RunnerRelay.max_answer_body_bytes()
+      assert max <= RunnerRelay.max_body_bytes()
+      body = :binary.copy("a", max)
+
+      assert {:ok, [<<length::32>>, _json], _service} =
+               RunnerRelay.encode(service, %{
+                 kind: :host_answer,
+                 attempt: longest,
+                 re: 0,
+                 status: 200,
+                 body: body
+               })
+
+      assert length <= RunnerRelay.max_frame_bytes()
+    end
+  end
+
   describe "the encoder" do
     test "raises on what the decoder refuses as malformed" do
       runner = RunnerRelay.new(:runner, @attempt)

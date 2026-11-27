@@ -34,7 +34,16 @@ defmodule Prima.HostAPITest do
 
   use ExUnit.Case, async: true
 
-  alias Prima.{AttachedRequest, HostAPI, Network, PinnedTarget, Refusal, WorkerAuth, WorkerWire}
+  alias Prima.{
+    AttachedRequest,
+    HostAPI,
+    Network,
+    PinnedTarget,
+    Refusal,
+    RunnerRelay,
+    WorkerAuth,
+    WorkerWire
+  }
 
   @vectors Path.expand("../../../../tests/fixtures/host_api.json", __DIR__)
            |> File.read!()
@@ -427,6 +436,28 @@ defmodule Prima.HostAPITest do
         assert request.purpose == :redirect
         assert request.from == answer_of(cases["fetch"])["id"]
       end
+    end
+  end
+
+  describe "the largest component a runner can fetch" do
+    # The `fetch_artifact` answer as CYFR writes it (`Opus.Host.Storage`):
+    # the bytes in base64 as the answer's `ok`, sealed for the call.
+    defp sealed_artifact_answer(bytes) do
+      call = Enum.find(@vectors["calls"], &(&1["callback"] == "fetch_artifact"))
+      fields = atoms(call["fields"], @call_fields)
+      json = Jason.encode!(WorkerWire.ok(Base.encode64(bytes)))
+      {:ok, sealed} = WorkerAuth.seal_call(keys!(fields).seal, :answer, fields, json)
+      sealed
+    end
+
+    test "is the largest whose answer fits every bound on its way, CYFR's answer and the relay's frame" do
+      max = HostAPI.max_artifact_bytes()
+      fits = byte_size(sealed_artifact_answer(:binary.copy(<<0>>, max)))
+      over = byte_size(sealed_artifact_answer(:binary.copy(<<0>>, max + 1)))
+
+      assert fits <= HostAPI.max_answer_bytes()
+      assert fits <= RunnerRelay.max_answer_body_bytes()
+      assert over > min(HostAPI.max_answer_bytes(), RunnerRelay.max_answer_body_bytes())
     end
   end
 

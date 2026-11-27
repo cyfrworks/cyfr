@@ -622,6 +622,10 @@ defmodule Compendium.Builds do
   defp refusal({:protocol_mismatch, builder, client}),
     do: "Builder: " <> BuilderProtocol.describe_refusal({:protocol_mismatch, builder, client})
 
+  # A component too large for a runner to fetch is refused in `Prima.Refusal`'s
+  # sentence, as registration refuses it.
+  defp refusal({:too_large, _size, _max} = too_large), do: too_large
+
   # The reason can carry text of the builder's choosing — a path, a field
   # name — so what is logged of it is bounded.
   defp refusal({:malformed, reason}) do

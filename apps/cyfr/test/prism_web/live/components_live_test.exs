@@ -67,6 +67,70 @@ defmodule PrismWeb.ComponentsLiveTest do
     {:ok, conn: conn, ctx: ctx, seed: seed}
   end
 
+  test "a scan's refusals stay listed on the page, each in its sentence, until the next scan",
+       %{conn: conn, ctx: ctx} do
+    max = Prima.HostAPI.max_artifact_bytes()
+    core_module = <<0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00>>
+    manifest = &Jason.encode!(%{"type" => "reagent", "version" => &1})
+    unit = &["components", "reagents", "local", &1, &2]
+
+    # Two refusals, twenty entries: more than the log's 12rem shows at once.
+    big = for patch <- 1..3, do: "1.0.#{patch}"
+    core = for patch <- 1..17, do: "1.0.#{patch}"
+
+    for version <- big do
+      Arca.Test.UnitFixtures.lay_unit!(ctx, unit.("big-tool", version), [
+        {"cyfr-manifest.json", manifest.(version)},
+        {"reagent.wasm", Prima.Test.PaddedComponent.pad(@valid_wasm, max + 1)}
+      ])
+    end
+
+    for version <- core do
+      Arca.Test.UnitFixtures.lay_unit!(ctx, unit.("core-tool", version), [
+        {"cyfr-manifest.json", manifest.(version)},
+        {"reagent.wasm", core_module}
+      ])
+    end
+
+    {view, _html} = mount_athanor(conn, "/components")
+    view |> element("button[phx-click=register]") |> render_click()
+
+    Prima.Test.Wait.wait_until(
+      fn -> render(view) =~ "components; 20 not registered, listed on this page" end,
+      5_000,
+      "the scan that refuses"
+    )
+
+    log = view |> element("#register-log") |> render()
+
+    for version <- big do
+      assert log =~
+               "big-tool #{version} was not registered: The component is #{max + 1} bytes, " <>
+                 "and a component runs only up to #{max} bytes; make it smaller to register it."
+    end
+
+    for version <- core do
+      assert log =~
+               "core-tool #{version} was not registered: The binary is a core WebAssembly " <>
+                 "module, not a component; CYFR registers and runs WebAssembly components only."
+    end
+
+    # The next scan, which refuses nothing, leaves no list.
+    actor = Sanctum.Context.actor(ctx)
+    for version <- big, do: :ok = Arca.delete_tree(actor, unit.("big-tool", version))
+    for version <- core, do: :ok = Arca.delete_tree(actor, unit.("core-tool", version))
+
+    view |> element("button[phx-click=register]") |> render_click()
+
+    Prima.Test.Wait.wait_until(
+      fn -> not has_element?(view, "#register-log") end,
+      5_000,
+      "the scan that refuses nothing"
+    )
+
+    refute render(view) =~ "was not registered"
+  end
+
   # The store made unable to read `table` for the rest of the test: the
   # table renamed inside the test's sandbox transaction, which the sandbox
   # rolls back on every exit of the test, the table's name with it. No

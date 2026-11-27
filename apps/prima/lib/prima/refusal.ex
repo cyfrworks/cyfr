@@ -1114,6 +1114,14 @@ defmodule Prima.Refusal do
            "component-model async, GC or exception handling."}
   end
 
+  # A component larger than a runner can fetch (`Prima.Wasm`), refused
+  # where it is published, registered or built.
+  defp row({:too_large, size, max}) when is_integer(size) and is_integer(max),
+    do:
+      {:invalid_argument,
+       "The component is #{size} bytes, and a component runs only up to #{max} bytes; " <>
+         "make it smaller to register it."}
+
   # A core WebAssembly module where a component is published, registered
   # or built (`Prima.Wasm`), refused in that module's own sentence.
   defp row({:core_module, sentence}) when is_binary(sentence), do: {:invalid_argument, sentence}

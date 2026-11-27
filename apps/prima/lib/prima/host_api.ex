@@ -297,6 +297,27 @@ defmodule Prima.HostAPI do
   @spec max_answer_bytes() :: pos_integer()
   def max_answer_bytes, do: Prima.Limits.default_max_response_size()
 
+  @doc """
+  The most bytes a component may have and still reach its runner, which
+  fetches it as one `c:fetch_artifact/2` answer: the bytes in standard
+  base64 as the answer's `ok` value (`Prima.WorkerWire.ok/1`), sealed
+  (`Prima.WorkerAuth.sealed_bytes/1`), held to every bound on its way:
+  `max_answer_bytes/0` as CYFR answers it, and the body its runner's
+  relay frame carries (`Prima.RunnerRelay.max_answer_body_bytes/0`).
+  Registration admits no larger component (`Prima.Wasm`).
+  """
+  @spec max_artifact_bytes() :: pos_integer()
+  def max_artifact_bytes do
+    max = min(max_answer_bytes(), Prima.RunnerRelay.max_answer_body_bytes())
+    opening = byte_size(Jason.encode!(Prima.WorkerWire.ok("")))
+
+    # Sealing only lengthens an answer, so the longest whose seal fits is
+    # at most three quarters of the bound.
+    answer = Enum.find(div(3 * max, 4)..0//-1, &(Prima.WorkerAuth.sealed_bytes(&1) <= max))
+
+    div(answer - opening, 4) * 3
+  end
+
   alias Prima.Assignment
   alias Prima.Delta
   alias Prima.Outcome

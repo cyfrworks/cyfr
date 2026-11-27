@@ -177,6 +177,9 @@ defmodule Prima.RunnerRelay do
   @methods Prima.Destination.methods()
 
   @id ~r/\A[\x21-\x7E]{1,256}\z/
+  # The longest JSON an attempt id takes: the most characters `@id`
+  # admits, each one JSON escapes to two.
+  @longest_id String.duplicate(~s("), 256)
   @signed_header ~r/\A[\x20-\x7E]+\z/
   @path ~r/\A\/[\x21-\x7E]*\z/
   @url ~r/\A[\x21-\x7E]+\z/
@@ -297,6 +300,21 @@ defmodule Prima.RunnerRelay do
   @spec max_frame_bytes() :: pos_integer()
   def max_frame_bytes, do: @max_frame_bytes
 
+  @doc """
+  The most bytes a `host_answer`'s body carries, decoded: at most
+  `max_body_bytes/0`, and no more than the longest such frame holds
+  within `max_frame_bytes/0`, its attempt and every member at their
+  longest and the body in base64.
+  """
+  @spec max_answer_body_bytes() :: pos_integer()
+  def max_answer_body_bytes do
+    {:host_answer, :service, members} = List.keyfind(@kinds, :host_answer, 0)
+    written = for {member, type} <- members, do: {Atom.to_string(member), longest(type)}
+    envelope = IO.iodata_length(frame_json(@longest_id, @max_integer, :host_answer, written))
+
+    min(@max_body_bytes, div(@max_frame_bytes - envelope, 4) * 3)
+  end
+
   @doc "The credit a fetch starts with: one body of `max_body_bytes/0`."
   @spec initial_credit() :: pos_integer()
   def initial_credit, do: @max_body_bytes
@@ -390,12 +408,7 @@ defmodule Prima.RunnerRelay do
     read = Map.put(fields, :seq, channel.sent)
 
     with {:ok, channel} <- step(channel, kind, read) do
-      json =
-        [{"v", @version}, {"attempt", attempt}, {"seq", read.seq}, {"kind", Atom.to_string(kind)}]
-        |> Kernel.++(written)
-        |> Jason.OrderedObject.new()
-        |> Jason.encode_to_iodata!()
-
+      json = frame_json(attempt, read.seq, kind, written)
       length = IO.iodata_length(json)
       if length > @max_frame_bytes, do: raise(ArgumentError, "the frame is over the bound")
       {:ok, [<<length::32>>, json], %{channel | sent: channel.sent + 1}}
@@ -403,6 +416,21 @@ defmodule Prima.RunnerRelay do
   end
 
   def encode(%__MODULE__{}, _frame), do: raise(ArgumentError, "kind is not a frame kind")
+
+  # A frame's JSON: `v`, `attempt`, `seq` and `kind`, then its kind's
+  # members as written.
+  defp frame_json(attempt, seq, kind, written) do
+    [{"v", @version}, {"attempt", attempt}, {"seq", seq}, {"kind", Atom.to_string(kind)}]
+    |> Kernel.++(written)
+    |> Jason.OrderedObject.new()
+    |> Jason.encode_to_iodata!()
+  end
+
+  # Each `host_answer` member at its longest written form but the body,
+  # which is empty: `null` is longer than any status.
+  defp longest(:seq), do: @max_integer
+  defp longest({:nullable, :status}), do: nil
+  defp longest(:body), do: ""
 
   # A fetch naming a connection is an attached fetch; every other frame of
   # a kind has that kind's one shape.

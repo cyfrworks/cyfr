@@ -103,6 +103,21 @@ defmodule Compendium.Builds.ProviderTest do
       assert result.suggested_type == "reagent"
     end
 
+    test "answers a component too large to fetch invalid, by its tag and with both sizes" do
+      max = Prima.HostAPI.max_artifact_bytes()
+      over = Prima.Test.PaddedComponent.pad(@valid_wasm, max + 1)
+
+      assert {:ok, %{valid: false, reason: "too_large", message: message}} =
+               Provider.handle("build", local_ctx(), %{
+                 "action" => "validate",
+                 "wasm_base64" => Base.encode64(over)
+               })
+
+      assert message ==
+               "The component is #{max + 1} bytes, and a component runs only up to #{max} " <>
+                 "bytes; make it smaller to register it."
+    end
+
     test "answers a core module invalid, by its tag" do
       core_module = <<0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00>>
 
