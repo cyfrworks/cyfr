@@ -204,6 +204,13 @@ same worktree refuses, naming the run that holds it.
   (`rustc_version` in `apps/cyfr/test/support/test_wasm/build-fixture.sh`)
   with the same two targets; a handoff check missing its toolchain reads
   `not run 69`.
+- The WASM runner's crate (`apps/locus/runner`) builds with the Rust
+  release `rust-toolchain.toml` names and that release's `rustfmt` and
+  `clippy` (`rustup component add rustfmt clippy`). `scripts/runner.sh
+  check` runs its format check, its lints and its tests, which hold its
+  wires to the vector files under `tests/fixtures`; every cargo step is
+  `--locked` to its `Cargo.lock`, and the Security workflow's `cargo deny`
+  admits what `apps/locus/runner/deny.toml` allows.
 - A test waits on an event or a bounded condition (`assert_receive`,
   `Prima.Test.Wait.wait_until/3`), not on a clock. A `Process.sleep` or
   `:timer.sleep` under `apps/*/test` carries its reason on its line or in
@@ -246,8 +253,8 @@ same worktree refuses, naming the run that holds it.
     `go test` of the CLI and of the keeper when a path their workflows
     watch changed, the CYFR app's unit tests (`desktop-js`) when the app,
     the account pages' code it bundles or their shared fixtures changed,
-    the model catalysts' `cargo test` and the test WASM
-    fixtures' check when their sources changed, and the light self-test of
+    the model catalysts' `cargo test`, the runner crate's check and the
+    test WASM fixtures' check when their sources changed, and the light self-test of
     every harness script you touched. PostgreSQL, Dialyzer, the apps
     compiled and tested alone (CI's island jobs), the proofs under `tests/`
     and the tests no change reaches run on every pull request whose paths

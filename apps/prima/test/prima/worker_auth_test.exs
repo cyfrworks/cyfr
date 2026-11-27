@@ -256,6 +256,20 @@ defmodule Prima.WorkerAuthTest do
       assert {:ok, a["payload"]} == Prima.JCS.encode(Jason.decode!(a["payload"]))
     end
 
+    test "every assignment read reads as its payload, and every refused one with its reason",
+         %{v: v} do
+      %{"valid" => valid, "invalid" => invalid} = v["assignment_reads"]
+
+      for %{"why" => why, "token" => token, "payload" => payload} <- valid do
+        assert {:ok, %Assignment{} = read} = Assignment.read(token), why
+        assert read_wire(read) == payload, why
+      end
+
+      for %{"why" => why, "token" => token, "reason" => reason} <- invalid do
+        assert Assignment.read(token) == {:error, String.to_existing_atom(reason)}, why
+      end
+    end
+
     test "every valid root text decodes to the root, and every invalid one is refused",
          %{v: v, root: root} do
       for text <- v["root_text"]["valid"],
@@ -267,6 +281,34 @@ defmodule Prima.WorkerAuthTest do
       assert :error = MacEnvelope.decode_root(nil)
     end
   end
+
+  # A read assignment as its payload spells it: every member it carries,
+  # none for an absent optional one.
+  defp read_wire(%Assignment{} = read) do
+    component =
+      %{
+        "ref" => read.component.ref,
+        "type" => read.component.type,
+        "digest" => read.component.digest,
+        "declared_needs" => read.component.declared_needs,
+        "activation_digest" => read.component.activation_digest
+      }
+
+    step = read.step && %{"id" => read.step.id, "generation" => read.step.generation}
+
+    read
+    |> Map.from_struct()
+    |> Map.merge(%{
+      actor: Prima.Actor.to_wire(read.actor),
+      component: component,
+      step: step
+    })
+    |> Map.new(fn {name, value} -> {Atom.to_string(name), without_nil(value)} end)
+    |> Map.reject(fn {_name, value} -> value == nil end)
+  end
+
+  defp without_nil(%{} = map), do: map |> Map.reject(fn {_k, v} -> v == nil end)
+  defp without_nil(value), do: value
 
   defp assert_mac(key, canonical, header) do
     [_signed, mac] = String.split(header, " mac=")

@@ -496,9 +496,11 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"apps/cyfr/test/opus/host_egress_test.exs", ~w(egress_pin_cases egress_policy_cases)},
       {"apps/cyfr/test/opus/host_listener_test.exs", ~w(calls pre_body_refusals body_refusals)},
       {"apps/cyfr/test/opus/host_test.exs", ~w(version calls report connection_cases)},
+      {"apps/locus/runner/tests/vectors.rs",
+       ~w(version max_body_bytes retries timeouts_ms keys calls answer_outcomes)},
       {"apps/locus/test/locus/runtime/formula_handler_runner_test.exs", ~w(connection_cases)},
       {"apps/locus/test/locus/runtime/host_client_test.exs",
-       ~w(connection_cases egress_pin_cases egress_policy_cases)},
+       ~w(connection_cases egress_pin_cases egress_policy_cases retries answer_outcomes)},
       {"apps/locus/test/locus/runtime/question_import_test.exs", ~w(question_cases)},
       {"apps/prima/test/prima/host_api_test.exs",
        ~w(routes retries timeouts_ms max_body_bytes max_answer_bytes window_ms standing keys calls pre_body_refusals report retry_identity connection_cases question_cases egress_pin_cases egress_policy_cases egress_pin_internal_purposes frame_cases)},
@@ -668,17 +670,22 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"tests/pairing-proof/run.sh", ~w()}
     ],
     "runner_control.json" => [
+      {"apps/locus/runner/tests/vectors.rs",
+       ~w(version max_line_bytes max_input_bytes max_open valid invalid environment)},
       {"apps/locus/test/locus/runtime/runner_control_vectors_test.exs",
        ~w(max_line_bytes valid invalid)},
       {"apps/prima/test/prima/runner_control_test.exs",
        ~w(version max_line_bytes max_input_bytes max_open valid invalid)},
+      {"apps/locus/test/locus/runtime/settings_test.exs", ~w(environment)},
       {"tests/locus-runtime-image/namespace_test.py", ~w(valid)}
     ],
     "runner_relay.json" => [
+      {"apps/locus/runner/tests/vectors.rs",
+       ~w(version attempt max_body_bytes max_frame_bytes initial_credit max_headers max_header_name_bytes max_header_value_bytes max_signed_header_bytes max_attached_frame_bytes ops exchange refusals)},
       {"apps/locus/test/locus/runtime/relay_vectors_test.exs",
        ~w(attempt initial_credit exchange refusals)},
       {"apps/prima/test/prima/runner_relay_test.exs",
-       ~w(version attempt max_body_bytes max_frame_bytes initial_credit exchange refusals)},
+       ~w(version attempt max_body_bytes max_frame_bytes initial_credit max_headers max_header_name_bytes max_header_value_bytes max_signed_header_bytes max_attached_frame_bytes ops exchange refusals)},
       {"tests/locus-runtime-image/namespace_test.py", ~w(exchange)}
     ],
     "setup-folders.json" => [
@@ -732,6 +739,8 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"apps/cyfr/test/cyfr/locus_dev_stack_task_test.exs", ~w(keys root_hex service)},
       {"apps/cyfr/test/cyfr/locus_runtime_key_task_test.exs",
        ~w(keys root_hex root_text service)},
+      {"apps/locus/runner/tests/vectors.rs",
+       ~w(assignment assignment_reads attempt boot call host_url keys member sealed_call)},
       {"apps/locus/test/locus/runtime/relay_vectors_test.exs",
        ~w(assignment attempt call host_url keys)},
       {"apps/prima/test/prima/runner_control_test.exs",
@@ -739,7 +748,7 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"apps/prima/test/prima/runner_relay_test.exs", ~w(attempt call keys service)},
       {"apps/prima/test/prima/worker_api_test.exs", ~w(keys root_hex service)},
       {"apps/prima/test/prima/worker_auth_test.exs",
-       ~w(assignment attempt boot call host_url keys member report request root_hex root_text sealed_attempt_keys sealed_call sealed_frames service)},
+       ~w(assignment assignment_reads attempt boot call host_url keys member report request root_hex root_text sealed_attempt_keys sealed_call sealed_frames service)},
       {"tests/locus-runtime-image/runners.py", ~w(attempt boot report service)},
       {"tests/locus-runtime-image/worker_auth.py",
        ~w(assignment attempt boot call host_url keys member report root_hex root_text sealed_attempt_keys sealed_call sealed_frames service)}

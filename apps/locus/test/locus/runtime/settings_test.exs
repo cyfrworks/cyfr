@@ -8,14 +8,61 @@ defmodule Locus.Runtime.SettingsTest do
   unset, no setting for how many runners are kept ahead or what bounds
   one, and no `LOCUS_RUNTIME_*` name in the environment that `Locus.Config`
   does not declare; the environment a runner is handed is its declared
-  `RUNTIME_*` names alone; and the module reads no variable by name.
-  `Locus.Config`'s suite holds how the environment is read.
+  `RUNTIME_*` names alone, as `tests/fixtures/runner_control.json`'s
+  `environment` writes it, and every environment of that section reads
+  as its runner or is refused as it says, through `Locus.Config.runner/1`;
+  and the module reads no variable by name. `Locus.Config`'s suite holds
+  how the rest of the environment is read.
   """
 
   # `pool!/0` reads the application environment, which one test alters.
   use ExUnit.Case, async: false
 
   alias Locus.Runtime.Settings
+
+  # Read as this module compiles, so a checkout without the file fails
+  # here, naming it, rather than running without the vectors.
+  @environment Path.expand("../../../../../tests/fixtures/runner_control.json", __DIR__)
+               |> File.read!()
+               |> Jason.decode!()
+               |> Map.fetch!("environment")
+
+  describe "a runner's environment, as runner_control.json's environment holds it" do
+    test "the service writes exactly the vector's environment for its settings" do
+      %{"settings" => settings, "environment" => written} = @environment["written"]
+      settings = Map.new(settings, fn {key, value} -> {String.to_existing_atom(key), value} end)
+
+      assert Settings.runner_environment(settings) == written
+    end
+
+    test "every valid environment reads as its runner" do
+      for %{"why" => why, "environment" => env, "runner" => runner} <- @environment["valid"] do
+        assert {:ok, read} = Locus.Config.runner(env), why
+
+        relay =
+          case read.relay do
+            {:fd, fd} -> %{"fd" => fd}
+            {:socket, path} -> %{"socket" => path}
+          end
+
+        assert %{
+                 "runner_id" => read.runner_id,
+                 "service_id" => read.service_id,
+                 "boot" => read.boot,
+                 "control_fd" => read.control_fd,
+                 "relay" => relay
+               } == runner,
+               why
+      end
+    end
+
+    test "every invalid environment is refused, naming its variable" do
+      for %{"why" => why, "environment" => env, "reason" => reason, "name" => name} <-
+            @environment["invalid"] do
+        assert Locus.Config.runner(env) == {:error, {String.to_existing_atom(reason), name}}, why
+      end
+    end
+  end
 
   describe "pool/2" do
     test "defaults: a 15 min idle TTL, a 5 s watchdog grace, a 2 s release grace, and nothing else" do

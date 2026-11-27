@@ -98,6 +98,12 @@ defmodule Prima.RunnerRelayTest do
     assert RunnerRelay.max_body_bytes() == HostAPI.max_answer_bytes()
     assert RunnerRelay.max_frame_bytes() == @vectors["max_frame_bytes"]
     assert RunnerRelay.initial_credit() == @vectors["initial_credit"]
+    assert AttachedRequest.max_headers() == @vectors["max_headers"]
+    assert AttachedRequest.max_header_name_bytes() == @vectors["max_header_name_bytes"]
+    assert AttachedRequest.max_header_value_bytes() == @vectors["max_header_value_bytes"]
+    assert WorkerAuth.max_host_call_header_bytes() == @vectors["max_signed_header_bytes"]
+    assert WorkerAuth.max_frame_bytes() == @vectors["max_attached_frame_bytes"]
+    assert Enum.map(RunnerRelay.ops(), &Atom.to_string/1) == @vectors["ops"]
     # The largest body in base64 fits a frame with room for its envelope.
     assert div(RunnerRelay.max_body_bytes() + 2, 3) * 4 + 65_536 < RunnerRelay.max_frame_bytes()
   end
@@ -214,23 +220,24 @@ defmodule Prima.RunnerRelayTest do
   test "the fixture's refusals are the channel's typed reasons" do
     reasons = Enum.map(@vectors["refusals"], &reason/1)
 
-    assert Enum.sort(reasons) ==
-             Enum.sort([
-               :unknown_attempt,
-               :out_of_order,
-               :body_too_large,
-               :credit_exceeded,
-               :frame_too_large,
-               :wrong_direction,
-               {:unknown_field, "pin"},
-               {:missing_field, "pin"},
-               {:unknown_field, "url"},
-               {:unknown_field, "path"},
-               :wrong_answer,
-               :wrong_answer,
-               :wrong_answer
-             ])
+    # Every typed reason closes a channel in some refusal, and the runner's
+    # half of the refusals meets every one of them.
+    assert reasons |> Enum.map(&reason_name/1) |> Enum.uniq() |> Enum.sort() ==
+             Enum.sort(~w(frame_too_large malformed bad_version unknown_kind wrong_direction
+                          unknown_field missing_field wrong_type invalid_field body_too_large
+                          out_of_order unknown_attempt unknown_reference wrong_answer
+                          credit_exceeded)a)
+
+    runner =
+      for %{"receiver" => "runner"} = refusal <- @vectors["refusals"],
+          uniq: true,
+          do: reason_name(reason(refusal))
+
+    assert Enum.sort(runner) == Enum.sort(Enum.map(reasons, &reason_name/1) |> Enum.uniq())
   end
+
+  defp reason_name({name, _field}), do: name
+  defp reason_name(name), do: name
 
   describe "an attached fetch" do
     defp host_api,

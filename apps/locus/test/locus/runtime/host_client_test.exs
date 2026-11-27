@@ -222,6 +222,70 @@ defmodule Locus.Runtime.HostClientTest do
     assert length(ScriptedHost.requests(host, "renew")) == 2
   end
 
+  # The callbacks the outcomes vector posts, one of each retry class, as a
+  # client makes each.
+  defp outcome_call("renew", client), do: HostClient.renew(client, [client.attempt])
+  defp outcome_call("complete", client), do: HostClient.complete(client, %{"done" => true})
+
+  defp outcome_call("push_deltas", client),
+    do: HostClient.push_deltas(client, [~s({"type":"note"})])
+
+  defp outcome_call("admit_child", client),
+    do: HostClient.admit_child(client, "reagent:local.missing:0.1.0", nil, %{}, :call, nil)
+
+  defp outcome_call("take_rate", client), do: HostClient.take_rate(client, "http:x")
+
+  defp scripted(%{"status" => nil}), do: :drop
+  defp scripted(%{"status" => 200, "answer" => json}), do: {:answer, json}
+  defp scripted(%{"status" => status, "plain" => body}), do: {:raw, status, body}
+
+  test "each answer outcome of the vectors: what a call makes of what each try met", %{
+    host: host,
+    client: client
+  } do
+    cases = @host_api["answer_outcomes"]
+    assert length(cases) >= 20
+
+    # One case for every class the callbacks' retries name.
+    classes =
+      for %{"callback" => callback} <- cases, uniq: true, do: @host_api["retries"][callback]
+
+    assert Enum.sort(classes) == ~w(batch idempotent keyed never outcome)
+
+    for %{"why" => why, "callback" => callback, "answers" => answers} = vector <- cases do
+      ScriptedHost.script(host, callback, Enum.map(answers, &scripted/1))
+      before = length(ScriptedHost.requests(host, callback))
+
+      {result, _log} = with_log(fn -> outcome_call(callback, client) end)
+
+      assert length(ScriptedHost.requests(host, callback)) - before == vector["posted"], why
+
+      case vector["outcome"] do
+        "lost" ->
+          assert result == {:error, :lost}, why
+
+        "uncertain" ->
+          assert {:error, {:uncertain, _sentence}} = result, why
+
+        "too_large" ->
+          assert result == {:error, :too_large}, why
+
+        "answer" ->
+          # Only renew is answered in the vectors; it reads its answer's
+          # value, or CYFR's refusal by name.
+          assert callback == "renew", why
+
+          expected =
+            case Jason.decode!(List.last(answers)["answer"]) do
+              %{"ok" => value} -> {:ok, value}
+              %{"error" => name} -> {:error, String.to_existing_atom(name)}
+            end
+
+          assert result == expected, why
+      end
+    end
+  end
+
   describe "a body past the host's bound" do
     test "is refused for good: posted once, whatever the call's class or the refusal's body",
          %{host: host, client: client} do
