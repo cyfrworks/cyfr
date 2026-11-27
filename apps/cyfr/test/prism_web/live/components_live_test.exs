@@ -67,26 +67,54 @@ defmodule PrismWeb.ComponentsLiveTest do
     {:ok, conn: conn, ctx: ctx, seed: seed}
   end
 
-  test "a component the scan refuses is said in its refusal's sentence", %{conn: conn, ctx: ctx} do
+  test "a scan's refusals stay listed on the page, each in its sentence, until the next scan",
+       %{conn: conn, ctx: ctx} do
     max = Prima.HostAPI.max_artifact_bytes()
+    core_module = <<0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00>>
+    manifest = &Jason.encode!(%{"type" => "reagent", "version" => &1})
+    unit = &["components", "reagents", "local", &1, &2]
 
-    Arca.Test.UnitFixtures.lay_unit!(
-      ctx,
-      ["components", "reagents", "local", "big-tool", "1.0.0"],
-      [
-        {"cyfr-manifest.json", Jason.encode!(%{"type" => "reagent", "version" => "1.0.0"})},
-        {"reagent.wasm", Prima.Test.PaddedComponent.pad(@valid_wasm, max + 1)}
-      ]
-    )
+    Arca.Test.UnitFixtures.lay_unit!(ctx, unit.("big-tool", "1.0.0"), [
+      {"cyfr-manifest.json", manifest.("1.0.0")},
+      {"reagent.wasm", Prima.Test.PaddedComponent.pad(@valid_wasm, max + 1)}
+    ])
+
+    versions = for patch <- 1..99, do: "1.0.#{patch}"
+
+    for version <- versions do
+      Arca.Test.UnitFixtures.lay_unit!(ctx, unit.("core-tool", version), [
+        {"cyfr-manifest.json", manifest.(version)},
+        {"reagent.wasm", core_module}
+      ])
+    end
 
     {view, _html} = mount_athanor(conn, "/components")
     view |> element("button[phx-click=register]") |> render_click()
 
-    sentence =
-      "big-tool 1.0.0 was not registered: The component is #{max + 1} bytes, and a " <>
-        "component runs only up to #{max} bytes; make it smaller to register it."
+    Prima.Test.Wait.wait_until(fn ->
+      render(view) =~ "components; 100 not registered, listed on this page"
+    end)
 
-    Prima.Test.Wait.wait_until(fn -> render(view) =~ sentence end)
+    log = view |> element("#register-log") |> render()
+
+    assert log =~
+             "big-tool 1.0.0 was not registered: The component is #{max + 1} bytes, and a " <>
+               "component runs only up to #{max} bytes; make it smaller to register it."
+
+    for version <- versions do
+      assert log =~
+               "core-tool #{version} was not registered: The binary is a core WebAssembly " <>
+                 "module, not a component; CYFR registers and runs WebAssembly components only."
+    end
+
+    # The next scan, which refuses nothing, leaves no list.
+    actor = Sanctum.Context.actor(ctx)
+    :ok = Arca.delete_tree(actor, unit.("big-tool", "1.0.0"))
+    for version <- versions, do: :ok = Arca.delete_tree(actor, unit.("core-tool", version))
+
+    view |> element("button[phx-click=register]") |> render_click()
+    Prima.Test.Wait.wait_until(fn -> not has_element?(view, "#register-log") end)
+    refute render(view) =~ "was not registered"
   end
 
   # The store made unable to read `table` for the rest of the test: the
