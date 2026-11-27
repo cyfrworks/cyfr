@@ -328,12 +328,12 @@ function counted(step, fact, expected, previous) {
 // The latest post can be in the page while still clipped by the message list.
 async function threadPosition(page, post) {
   await page.waitForFunction((post) => {
-    const last = document.querySelector("#shared-messages > div:last-child > p:last-child");
+    const last = document.querySelector("#shared-messages > div:last-child > p + p");
     return last?.textContent === post;
   }, post);
   return page.locator("#shared-messages").evaluate((list) => {
     const box = list.getBoundingClientRect();
-    const post = list.lastElementChild.querySelector("p:last-child").getBoundingClientRect();
+    const post = list.lastElementChild.querySelector("p + p").getBoundingClientRect();
     return {
       top: list.scrollTop,
       end: list.scrollHeight - list.clientHeight,
@@ -360,6 +360,12 @@ async function checkThreadScroll(sender, recipient) {
 
   const history = Array.from({ length: 40 }, (_, i) => `Line ${i + 1} of earlier history`).join("\n");
   const latest = "The newest post before closing Chat";
+  const files = Array.from({ length: 10 }, (_, i) => ({
+    name: `${"m".repeat(17)}-${i}.txt`,
+    mimeType: "text/plain",
+    buffer: Buffer.from("Thread scroll proof"),
+  }));
+  await sender.page.locator("#shared-composer input[type=file]").setInputFiles(files);
   await send(history);
   await threadPosition(sender.page, history);
   await send(latest);
@@ -390,10 +396,20 @@ async function checkThreadScroll(sender, recipient) {
   }
   const reloaded = await Promise.all(views.map(({ page }) => threadPosition(page, next)));
 
-  row("thread_scroll", [...reopened, ...posted, ...reloaded].every(
+  const fileRow = "#shared-messages ul";
+  const wideHeight = await recipient.page.locator(fileRow).evaluate((row) => row.offsetHeight);
+  await recipient.page.setViewportSize({ width: 320, height: 480 });
+  await recipient.page.waitForFunction(({ fileRow, wideHeight }) =>
+    document.querySelector(fileRow)?.offsetHeight > wideHeight, { fileRow, wideHeight });
+  await recipient.page.evaluate(() => new Promise((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(resolve));
+  }));
+  const narrowed = await threadPosition(recipient.page, next);
+
+  row("thread_scroll", [...reopened, ...posted, ...reloaded, narrowed].every(
     ({ top, end, visible }) => end > 0 && end - top <= 1 && visible,
-  ), "both people see the newest post after reopening, Send from earlier history, and reload",
-  { reopened, posted, reloaded });
+  ), "the newest post is visible after reopening, Send from earlier history, reload, and narrowing the window",
+  { reopened, posted, reloaded, narrowed });
 }
 
 async function main() {
