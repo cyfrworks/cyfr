@@ -507,8 +507,8 @@ defmodule PrismWeb.ShellLive do
 
   # `ui.tincture.focus` and the palette move the page to the desktop with
   # `?publisher=&tincture_name=` (`PrismWeb.DesktopLive`), which this view's
-  # hook reads from the page's address and hands here as `focus_named`. The
-  # pair is resolved against the list the shell holds, and the tincture it
+  # hook reads from the page's address and hands here as `focus_named`, once
+  # (`handle_event/3`'s answer). The pair is resolved against the list the shell holds, and the tincture it
   # names is focused in the picker and opened, by the launch a person's own
   # pick makes, so it opens over a canvas as without one and passes every
   # check that launch passes. A pair matching nothing opens nothing and
@@ -535,8 +535,13 @@ defmodule PrismWeb.ShellLive do
   # ============================================================================
 
   @impl true
-  def handle_event("focus_named", %{"publisher" => publisher, "name" => name}, socket),
-    do: {:noreply, focus_named(socket, publisher, name)}
+  # The named address is used once: whatever it opened, or nothing, the
+  # answer names the desktop's plain address, which the hook puts in its
+  # place, so a reconnect, a reload or Back finds nothing to open again.
+  def handle_event("focus_named", %{"publisher" => publisher, "name" => name}, socket) do
+    desktop = PrismWeb.DesktopLive.path(socket.assigns.athanor_route)
+    {:reply, %{desktop: desktop}, focus_named(socket, publisher, name)}
+  end
 
   # Whether a Dashboard page is drawn over the desktop now, as the
   # desktop's own hook reads the page's address after each move.

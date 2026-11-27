@@ -2822,6 +2822,23 @@ defmodule PrismWeb.ShellCanvasTest do
       settle!(view, fn -> assigns(view).grant_prompts != %{} end)
     end
 
+    # The named address is used once: the answer names the desktop's plain
+    # address, which the hook puts in its place, whatever the shell did.
+    test "is answered with the desktop's plain address, opened or not",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      tincture!(ctx, "app-dash")
+      two_canvases!(ctx, user, athanor)
+      view = shell!(conn)
+      desktop = athanor_path("", athanor)
+
+      named!(view, "app-dash")
+      assert_reply(view, %{desktop: ^desktop})
+      assert %{state: :live} = launched(view, "app-dash")
+
+      named!(view, "nobody")
+      assert_reply(view, %{desktop: ^desktop})
+    end
+
     test "an app the person's listing does not hold opens nothing: another person's, another publisher's, or none",
          %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
       {:ok, other} =

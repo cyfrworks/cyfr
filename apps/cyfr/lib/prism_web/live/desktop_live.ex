@@ -14,7 +14,9 @@ defmodule PrismWeb.DesktopLive do
   `ui.tincture.focus`) asks the desktop to open that tincture; the
   desktop's own hook reads it from this page's address and hands it to
   the shell (`PrismWeb.ShellLive`, `focus_named`), so the page does
-  nothing with it. A person with no athanor of their own is sent to sign
+  nothing with it. Once the shell has acted on it, the hook patches this
+  page to its plain address in the named one's place, which is why the
+  page takes params at all. A person with no athanor of their own is sent to sign
   in again.
 
   It holds the page's system layer (`PrismWeb.SystemLayer`), as every
@@ -38,6 +40,9 @@ defmodule PrismWeb.DesktopLive do
         {:ok, socket |> assign(:page_title, "Desktop") |> assign(:overlay, false)}
     end
   end
+
+  @impl true
+  def handle_params(_params, _uri, socket), do: {:noreply, socket}
 
   @impl true
   def render(assigns) do

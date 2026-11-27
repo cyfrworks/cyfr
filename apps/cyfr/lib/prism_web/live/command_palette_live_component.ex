@@ -353,13 +353,17 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
           "&tincture_name=#{URI.encode_www_form(t.name)}"
   end
 
+  # An app is listed by its name; two of one name, from two publishers,
+  # each by its publisher and name, so no two results read alike.
   defp tincture_items(ctx) do
     try do
-      Prism.TinctureRegistry.list_tinctures(ctx)
-      |> Enum.map(fn t ->
+      tinctures = Prism.TinctureRegistry.list_tinctures(ctx)
+      shared = tinctures |> Enum.frequencies_by(& &1.name) |> Map.filter(fn {_, n} -> n > 1 end)
+
+      Enum.map(tinctures, fn t ->
         %{
           kind: :tincture,
-          label: t.name,
+          label: if(Map.has_key?(shared, t.name), do: "#{t.publisher}.#{t.name}", else: t.name),
           hint: if(Prism.Frames.canvas?(t), do: "desktop", else: "app"),
           to: tincture_path(t),
           icon: "palette",

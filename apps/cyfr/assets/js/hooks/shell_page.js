@@ -13,7 +13,8 @@
 // desktop, moves the page the same way to a workspace thread's layer. And the desktop's own
 // address with `?publisher=&tincture_name=` (the palette's and Aqua's focus
 // on a tincture, PrismWeb.DesktopLive) is handed to the shell as
-// `focus_named`, and with `?shell=desktops` (the palette's desktops) or
+// `focus_named`, once: the shell's answer names the desktop's plain address,
+// which replaces the named one, and with `?shell=desktops` (the palette's desktops) or
 // `?shell=threads&ref=<id>` (the palette's threads, the ref optional) as
 // the shell's key `shell_key`, each read when the hook mounts and after
 // each move of the page.
@@ -95,9 +96,17 @@ const ShellPage = {
       if (typeof to === "string" && to.startsWith("/") && !to.startsWith("//")) this.js().navigate(to)
     })
 
+    // The named address is used once: the shell answers with the
+    // desktop's plain address, which takes its place in the history, so a
+    // reconnect, a reload or Back does not open the app again.
     const focus = (href) => {
       const asked = focusOf(href, window.location.origin)
-      if (asked) this.pushEvent("focus_named", asked)
+      if (asked)
+        this.pushEvent("focus_named", asked, (reply) => {
+          const desktop = reply && reply.desktop
+          if (typeof desktop === "string" && desktop.startsWith("/") && !desktop.startsWith("//"))
+            this.js().patch(desktop, {replace: true})
+        })
       const ask = shellAsk(href, window.location.origin)
       if (ask) this.pushEvent("shell_key", ask)
     }

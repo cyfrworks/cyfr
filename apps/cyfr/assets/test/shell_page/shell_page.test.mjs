@@ -28,16 +28,22 @@ function mount() {
   const handlers = {}
   const pushed = []
   const moves = []
+  const patches = []
+  const replies = []
   const hook = Object.create(ShellPage)
   Object.assign(hook, {
     el: {},
     handleEvent: (event, fn) => (handlers[event] = fn),
-    pushEvent: (event, payload) => (event === "page_shown" ? shown.push(payload) : pushed.push({event, payload})),
-    js: () => ({navigate: (to) => moves.push(to)})
+    pushEvent: (event, payload, onReply) => {
+      if (event === "page_shown") return shown.push(payload)
+      pushed.push({event, payload})
+      if (onReply) replies.push(onReply)
+    },
+    js: () => ({navigate: (to) => moves.push(to), patch: (to, opts) => patches.push({to, opts})})
   })
   const shown = []
   hook.mounted()
-  return {hook, handlers, pushed, moves, shown}
+  return {hook, handlers, pushed, moves, shown, patches, replies}
 }
 
 describe("the shell's navigate", () => {
@@ -77,6 +83,25 @@ describe("a desktop address naming a tincture", () => {
     assert.deepEqual(pushed, [])
     windowListeners["phx:page-loading-stop"]({detail: {kind: "redirect", to: ORIGIN + "/?publisher=local&tincture_name=w"}})
     assert.deepEqual(pushed, [{event: "focus_named", payload: {publisher: "local", name: "w"}}])
+  })
+
+  // The named address is used once: the shell's answer names the desktop's
+  // plain address, which replaces it, so a reconnect or Back opens nothing.
+  test("is replaced by the desktop's plain address the shell answers with", () => {
+    at("/a/@alice?publisher=local&tincture_name=palette-app")
+    const {replies, patches} = mount()
+    assert.deepEqual(patches, [])
+    assert.equal(replies.length, 1)
+    replies[0]({desktop: "/a/@alice"})
+    assert.deepEqual(patches, [{to: "/a/@alice", opts: {replace: true}}])
+  })
+
+  test("moves nowhere on an answer that names no address of this origin", () => {
+    at("/a/@alice?publisher=local&tincture_name=palette-app")
+    const {replies, patches} = mount()
+    replies[0]({desktop: "//example.com/"})
+    replies[0]({})
+    assert.deepEqual(patches, [])
   })
 
   test("is no longer heard once the hook is gone", () => {
