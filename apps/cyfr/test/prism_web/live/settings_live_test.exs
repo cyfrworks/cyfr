@@ -1260,7 +1260,7 @@ defmodule PrismWeb.SettingsLiveTest do
 
       # A first session boots the VM: its start holds its allowance and
       # the VM's own, 384 MiB and the own of a guest of the work, 4,800 MiB
-      # (393 MiB, whole), and its guest reads it at 90 MiB.
+      # (433 MiB, whole), and its guest reads it at 90 MiB.
       first = 384 + div(Prima.LocusPool.machine_bytes(4_800 * @mib), @mib)
       record!([used(1, o, subject: "srv_a", mib: 90)], names)
       charged.(first)

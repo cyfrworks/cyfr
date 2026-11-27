@@ -119,7 +119,7 @@ defmodule Prima.LocusPool do
 
   @mib 1024 * 1024
   @floor_bytes 164 * @mib
-  @machine_base_bytes 300 * @mib
+  @machine_base_bytes 340 * @mib
   @machine_per_gib_bytes 20 * @mib
   @kinds %{
     "warm" => :runner,
@@ -209,7 +209,7 @@ defmodule Prima.LocusPool do
 
   @doc """
   A person's VM's own allowance for a guest of `guest_bytes` of memory, the
-  pool's work W in a keeper: 300 MiB, and 20 MiB a GiB of the guest, by the
+  pool's work W in a keeper: 340 MiB, and 20 MiB a GiB of the guest, by the
   guest's whole MiB (20 KiB a MiB). It is what a VM holds above its first
   session: the image suite's measurements of a VMM's anonymous memory and
   the kernel's for it, at guests of 2,560 MiB, 8 GiB and 58 GiB, came within

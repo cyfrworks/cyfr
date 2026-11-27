@@ -69,7 +69,7 @@ defmodule Prima.LocusPoolTest do
   test "the pool's numbers are the plan's" do
     mib = 1024 * 1024
     assert LocusPool.floor_bytes() == 164 * mib
-    assert LocusPool.machine_bytes(8 * 1024 * mib) == 460 * mib
+    assert LocusPool.machine_bytes(8 * 1024 * mib) == 500 * mib
     assert LocusPool.allowance_bytes(:runner) == LocusPool.floor_bytes()
 
     assert {LocusPool.allowance_bytes(:build), LocusPool.allowance_bytes(:session)} ==

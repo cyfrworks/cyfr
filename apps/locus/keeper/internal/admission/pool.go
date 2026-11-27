@@ -93,7 +93,7 @@ func LimitsOf(kind string, work uint64) Limits {
 // MachineBaseBytes and MachinePerGiBBytes make a person's VM's own
 // allowance beside its first session's (MachineBytes).
 const (
-	MachineBaseBytes   uint64 = 300 << 20
+	MachineBaseBytes   uint64 = 340 << 20
 	MachinePerGiBBytes uint64 = 20 << 20
 )
 
