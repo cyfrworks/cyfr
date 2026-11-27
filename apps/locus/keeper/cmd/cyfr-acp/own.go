@@ -11,6 +11,8 @@ import (
 	"reflect"
 	"regexp"
 	"sort"
+
+	"github.com/cyfr/locus/keeper/internal/brainwire"
 )
 
 // The program's own tool calls, as its tool_call updates show them. A call
@@ -26,9 +28,11 @@ import (
 // (profile.stubKinds) can be CYFR's, and only its end says whether it was:
 // such a call is shown, start and end, once it ends unmatched, and one
 // still open when the native turn ends is shown then. A call of any other
-// kind is the program's own, shown from its start while it runs. A call
-// that cannot be told apart from another is shown as the program's own, so
-// none of a person's is ever hidden. Where the program names no server, a
+// kind is the program's own, shown from the update that has it run
+// (in_progress), by when its input shows what it runs, until its end, or
+// else at its end, start and end together. A call that cannot be told
+// apart from another is shown as the program's own, so none of a person's
+// is ever hidden. Where the program names no server, a
 // tool of the person's that shows the same arguments just before a call of
 // CYFR's can be shown in that call's place: that is the activity shown
 // alone, since the gated call goes through the socket whatever is shown.
@@ -39,10 +43,14 @@ import (
 // session closes or the program dies is shown as the program's own first,
 // so nothing that ran is missing from the activity.
 
-// ownCall is one of the program's tool calls, by its call id.
+// ownCall is one of the program's tool calls, by its call id, the `call`
+// its start and end carry. Its detail is the input it last showed, what it
+// runs, and at its end the change it shows, what it did.
 type ownCall struct {
+	id        string
 	name      string
 	seen      int
+	input     json.RawMessage
 	arguments []any
 	// waits is a call of a stub server's kind, shown only at its end;
 	// started one shown from its start.
@@ -85,13 +93,16 @@ func decoded(raw json.RawMessage) (any, bool) {
 	return v, true
 }
 
-func (d *driver) ownUpdate(callID, status, kind, name string, rawInput json.RawMessage) error {
+// ownUpdate reads one tool_call update. A call of the program's own is
+// shown from the first update that has it run (in_progress), by when its
+// input shows what it runs, or else at its end, start and end together.
+func (d *driver) ownUpdate(callID, status, kind, name string, rawInput, content json.RawMessage) error {
 	if callID == "" {
 		return nil
 	}
 	call, seen := d.own[callID]
 	if !seen {
-		call = &ownCall{name: d.ownName(kind, name, rawInput), seen: len(d.own), waits: kind == "" || d.p.stubKinds[kind]}
+		call = &ownCall{id: callID, name: d.ownName(kind, name, rawInput), seen: len(d.own), waits: kind == "" || d.p.stubKinds[kind]}
 		d.own[callID] = call
 	} else if call.waits && !call.cyfr && len(rawInput) > 0 {
 		// A call first announced with less than its input (Cursor's, empty)
@@ -106,9 +117,11 @@ func (d *driver) ownUpdate(callID, status, kind, name string, rawInput json.RawM
 	if server, _, ok := d.p.mcpCall(rawInput); ok && call.waits && !call.cyfr && server != d.server {
 		call.waits, call.arguments = false, nil
 	}
-	if !call.waits && !call.started {
-		call.started = true
-		if err := d.c.Emit(d.event("own").Set("name", call.name).Set("phase", "start")); err != nil {
+	if brainwire.InputDetail(rawInput) != "" {
+		call.input = rawInput
+	}
+	if !call.waits && !call.started && status == "in_progress" {
+		if err := d.startOwn(call); err != nil {
 			return err
 		}
 	}
@@ -117,7 +130,25 @@ func (d *driver) ownUpdate(callID, status, kind, name string, rawInput json.RawM
 		return nil
 	}
 	delete(d.own, callID)
-	return d.showOwn(call)
+	return d.showOwn(call, changes(content))
+}
+
+// changes are the file changes a tool call's content shows, its diffs.
+func changes(content json.RawMessage) []brainwire.Change {
+	var blocks []struct {
+		Type    string `json:"type"`
+		Path    string `json:"path"`
+		OldText string `json:"oldText"`
+		NewText string `json:"newText"`
+	}
+	_ = json.Unmarshal(content, &blocks)
+	var out []brainwire.Change
+	for _, b := range blocks {
+		if b.Type == "diff" {
+			out = append(out, brainwire.Change{Path: b.Path, Old: b.OldText, New: b.NewText})
+		}
+	}
+	return out
 }
 
 // learn keeps the argument objects a waiting call's input shows, each
@@ -178,17 +209,30 @@ func (d *driver) claim(arguments json.RawMessage) {
 	}
 }
 
-func (d *driver) showOwn(call *ownCall) error {
+// startOwn shows a call's start, with what its input shows it runs.
+func (d *driver) startOwn(call *ownCall) error {
+	call.started = true
+	return d.c.Emit(d.event("own").Set("call", brainwire.CallID(call.id)).Set("name", call.name).Set("phase", "start").
+		SetOptional("detail", brainwire.InputDetail(call.input)))
+}
+
+// showOwn shows a call's end, and its start first if it was not shown, the
+// end with the changes it made.
+func (d *driver) showOwn(call *ownCall, made []brainwire.Change) error {
 	if call.cyfr {
 		return nil
 	}
 	if !call.started {
-		call.started = true
-		if err := d.c.Emit(d.event("own").Set("name", call.name).Set("phase", "start")); err != nil {
+		if err := d.startOwn(call); err != nil {
 			return err
 		}
 	}
-	return d.c.Emit(d.event("own").Set("name", call.name).Set("phase", "end"))
+	detail := ""
+	if len(made) > 0 {
+		detail = brainwire.ChangeDetail(made)
+	}
+	return d.c.Emit(d.event("own").Set("call", brainwire.CallID(call.id)).Set("name", call.name).Set("phase", "end").
+		SetOptional("detail", detail))
 }
 
 // flushOwn shows each own call still open, in the order they were first
@@ -204,7 +248,7 @@ func (d *driver) flushOwn() error {
 	}
 	sort.Slice(open, func(i, j int) bool { return open[i].seen < open[j].seen })
 	for _, call := range open {
-		if err := d.showOwn(call); err != nil {
+		if err := d.showOwn(call, nil); err != nil {
 			return err
 		}
 	}

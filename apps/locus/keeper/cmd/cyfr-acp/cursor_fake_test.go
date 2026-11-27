@@ -58,6 +58,12 @@ import (
 //	lookalike   writes a chunk of nearly the failure's form
 //	call        calls CYFR's `files` as Cursor does, after its permission question
 //	theirs      calls a person's server `notes`, its tool `echo`
+//	activity    as the other stand-ins' (fake_test.go), as Cursor shows it (F4):
+//	            each call pending with a generic title and no input, then its
+//	            input, in_progress and its end, ids holding a newline; no
+//	            message ids; and a sub-agent as the tool `task`, its child
+//	            showing nothing, then Cursor's own `cursor/task` request
+//	            (S3, sub-agents)
 //	slow        says a word and waits for a second prompt, which cancels it
 //	servers     replies with the servers' names it was handed
 //	question    asks the person in its reply (fakeQuestion), after its own
@@ -395,6 +401,37 @@ func fakeCursor() int {
 			}
 			update(map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": id, "status": "completed", "rawOutput": map[string]any{"success": true}})
 			chunk(text)
+		case words == "activity":
+			say := func(kind, text string) {
+				update(map[string]any{"sessionUpdate": kind, "content": map[string]any{"type": "text", "text": text}})
+			}
+			say("agent_thought_chunk", "THINK-ONE ")
+			say("agent_message_chunk", "The member ")
+			say("agent_thought_chunk", "THINK-TWO")
+			run := func(id, kind, title string, input map[string]any) {
+				update(map[string]any{"sessionUpdate": "tool_call", "toolCallId": id, "title": title, "kind": kind, "status": "pending", "rawInput": map[string]any{}})
+				update(map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": id, "title": title + "!", "rawInput": input})
+				update(map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": id, "status": "in_progress"})
+			}
+			first, second := "call-a-0\nfc_a_0", "call-b-1\nfc_b_0"
+			run(first, "execute", "Terminal", map[string]any{"command": "echo A"})
+			run(second, "execute", "Terminal", map[string]any{"command": "echo B"})
+			for _, id := range []string{second, first} {
+				update(map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": id, "status": "completed",
+					"rawOutput": map[string]any{"exitCode": 0, "stdout": "out\n", "stderr": ""}})
+			}
+			run("call-e-2\nfc_e_0", "edit", "Edit File", map[string]any{"path": "big.txt"})
+			update(map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": "call-e-2\nfc_e_0", "status": "completed",
+				"content": []any{map[string]any{"type": "diff", "path": "big.txt", "oldText": "", "newText": fakeBigText}}})
+			task := "call-t-3\nfc_t_0"
+			input := map[string]any{"_toolName": "task", "prompt": "CHILD-PROMPT", "description": "read a note"}
+			update(map[string]any{"sessionUpdate": "tool_call", "toolCallId": task, "title": "Task: read a note", "kind": "other", "status": "pending", "rawInput": input})
+			update(map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": task, "status": "in_progress"})
+			update(map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": task, "status": "completed",
+				"rawOutput": map[string]any{"durationMs": 5810, "isBackground": false}})
+			ask("9", "cursor/task", map[string]any{"toolCallId": task, "description": "read a note", "prompt": "CHILD-PROMPT",
+				"subagentType": "unspecified", "model": "default", "agentId": "580229e4-de7e-4f61-b1cf-6004b02e858b", "durationMs": 5810})
+			say("agent_message_chunk", "said its own words.")
 		case words == "slow":
 			chunk("Starting. ")
 			state.Lock()

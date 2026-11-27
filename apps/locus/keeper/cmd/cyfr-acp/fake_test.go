@@ -56,6 +56,13 @@ import (
 //	agyfail:S writes the one chunk agy writes when its model service failed with status S, then end_turn
 //	agyfailthen writes that chunk for UNAVAILABLE, then a word more
 //	agyquoted writes the 503 chunk the probe recorded with words quoted before its close, then end_turn
+//	activity  thinks between the reply's words under one message id, runs two
+//	          commands of one name that end in reverse order and an edit whose
+//	          change is past a detail's bound (fakeBigText), and starts a
+//	          sub-agent: OpenCode passes on its child's words, reasoning and
+//	          tool, each marked `_meta["opencode/child-session"]`, as 2.4.1
+//	          does (S3 F5); Antigravity's child runs apart and shows nothing
+//	          but the call that started it (S3, sub-agents)
 //	question  asks the person in its reply (fakeQuestion), after its own
 //	          tool's permission, as agy 1.5.16 and OpenCode 2.4.1 ask with no
 //	          form capability advertised (S1 F1), and takes the session's
@@ -109,6 +116,10 @@ import (
 const fakeEnv = "CYFR_FAKE_ACP"
 
 const stderrCanary = "FAKE-STDERR-CANARY Antigravity writes this to its stderr"
+
+// fakeBigText is the new text of the stand-ins' `activity` edit, 3,000
+// bytes of three-byte characters: its change is past a detail's bound.
+var fakeBigText = strings.Repeat("€", 1000)
 
 // fakeQuestion is a stand-in's question asked in its reply, with its choices.
 const fakeQuestion = "Which database should the export target?\n\n- [1] PostgreSQL\n- [2] SQLite"
@@ -397,6 +408,63 @@ func fakeACP() int {
 					"error": map[string]any{"type": "provider.transport", "message": "RETRY-CANARY Can't reach the provider"}}}})
 			}
 			reply("reached it")
+		case strings.Contains(words, "activity"):
+			say := func(kind, text string) {
+				update(map[string]any{"sessionUpdate": kind, "messageId": "m_act", "content": map[string]any{"type": "text", "text": text}})
+			}
+			say("agent_thought_chunk", "THINK-ONE ")
+			say("agent_message_chunk", "The member ")
+			say("agent_thought_chunk", "THINK-TWO")
+			run := func(id, command string) map[string]any {
+				call := map[string]any{"sessionUpdate": "tool_call", "toolCallId": id, "name": "shell", "title": "shell", "kind": "execute",
+					"status": "pending", "rawInput": map[string]any{}}
+				update(call)
+				call["sessionUpdate"], call["status"], call["rawInput"] = "tool_call_update", "in_progress", map[string]any{"command": command, "cwd": home}
+				update(call)
+				return call
+			}
+			first, second := run("call_twin_a", "echo A"), run("call_twin_b", "echo B")
+			for _, call := range []map[string]any{second, first} {
+				call["status"] = "completed"
+				update(call)
+			}
+			edit := map[string]any{"sessionUpdate": "tool_call", "toolCallId": "call_edit", "name": "edit", "title": "edit", "kind": "edit",
+				"status": "in_progress", "rawInput": map[string]any{"path": "big.txt"}}
+			update(edit)
+			edit["sessionUpdate"], edit["status"] = "tool_call_update", "completed"
+			edit["content"] = []any{map[string]any{"type": "diff", "path": "big.txt", "oldText": "", "newText": fakeBigText}}
+			update(edit)
+			if oc {
+				task := map[string]any{"sessionUpdate": "tool_call", "toolCallId": "call_task", "name": "subagent", "title": "subagent", "kind": "think",
+					"status": "pending", "rawInput": map[string]any{}}
+				update(task)
+				task["sessionUpdate"], task["status"] = "tool_call_update", "in_progress"
+				task["rawInput"] = map[string]any{"agent": "general", "description": "child", "prompt": "CHILD-PROMPT"}
+				update(task)
+				mark := map[string]any{"opencode/child-session": map[string]any{"id": "ses_child", "parentID": state.session, "depth": 1, "title": "child"}}
+				for _, u := range []map[string]any{
+					{"sessionUpdate": "agent_thought_chunk", "messageId": "m_child", "content": map[string]any{"type": "text", "text": "CHILD-THOUGHT"}},
+					{"sessionUpdate": "tool_call", "toolCallId": "ses_child:call_c", "name": "shell", "title": "child: shell", "kind": "execute",
+						"status": "in_progress", "rawInput": map[string]any{"command": "echo CHILD-RAN"}},
+					{"sessionUpdate": "tool_call_update", "toolCallId": "ses_child:call_c", "status": "completed",
+						"content": []any{map[string]any{"type": "diff", "path": "child.txt", "oldText": "", "newText": "CHILD-CHANGE"}}},
+					{"sessionUpdate": "agent_message_chunk", "messageId": "m_child", "content": map[string]any{"type": "text", "text": "CHILD-WORDS"}},
+				} {
+					u["_meta"] = mark
+					update(u)
+				}
+				task["status"] = "completed"
+				task["content"] = []any{map[string]any{"type": "content", "content": map[string]any{"type": "text", "text": "CHILD-RESULT"}}}
+				update(task)
+			} else {
+				task := map[string]any{"sessionUpdate": "tool_call", "toolCallId": "call_task", "name": "invoke_subagent", "title": "Run invoke_subagent",
+					"kind": "other", "status": "in_progress", "rawInput": map[string]any{"Prompt": "CHILD-PROMPT", "Role": "Reader", "TypeName": "research"}}
+				update(task)
+				task["sessionUpdate"], task["status"] = "tool_call_update", "completed"
+				update(task)
+			}
+			say("agent_message_chunk", "said its own words.")
+			finish(map[string]any{"stopReason": "end_turn", "usage": usage})
 		case strings.Contains(words, "slow"):
 			chunk("Starting. ")
 			select {

@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/cyfr/locus/keeper/internal/brainwire"
 )
@@ -40,7 +41,8 @@ type threadPolicy struct{ sandbox, approvalPolicy string }
 // user's ruling D2): Codex's own sandbox is off, since it would nest a
 // second sandbox inside the box's and its namespaces are not the box's to
 // grant, and it asks for nothing: its commands and patches run as the box
-// lets them, and are shown by name only.
+// lets them, and are shown by name with what each runs or changes
+// (detail), never with their output.
 var accessChoices = []brainwire.Access[threadPolicy]{
 	{Choice: brainwire.Choice{ID: "full-access", Name: "Full access, no approvals"},
 		Native: threadPolicy{sandbox: "danger-full-access", approvalPolicy: "never"}},
@@ -252,12 +254,55 @@ type rpc struct {
 // it does not hold, or of an input that does not read).
 const invalidRequest = -32600
 
-// item is a thread item, as far as the driver reads one.
+// item is a thread item, as far as the driver reads one: an own tool's as
+// far as its detail says what it runs or changed.
 type item struct {
-	Type     string `json:"type"`
-	ID       string `json:"id"`
-	ClientID string `json:"clientId"`
-	Text     string `json:"text"`
+	Type      string          `json:"type"`
+	ID        string          `json:"id"`
+	ClientID  string          `json:"clientId"`
+	Text      string          `json:"text"`
+	Command   string          `json:"command"`
+	Query     string          `json:"query"`
+	Arguments json.RawMessage `json:"arguments"`
+	Changes   []struct {
+		Path string `json:"path"`
+		Diff string `json:"diff"`
+	} `json:"changes"`
+}
+
+// started is what an own tool's start says it does: a command's command
+// line, the paths a patch changes, a search's query, or a server's call's
+// arguments.
+func (i item) started() string {
+	switch {
+	case i.Command != "":
+		return brainwire.Detail(i.Command)
+	case i.Query != "":
+		return brainwire.Detail(i.Query)
+	case len(i.Changes) > 0:
+		paths := make([]string, len(i.Changes))
+		for n, c := range i.Changes {
+			paths[n] = c.Path
+		}
+		return brainwire.Detail(strings.Join(paths, "\n"))
+	}
+	return brainwire.InputDetail(i.Arguments)
+}
+
+// ended is what an own tool's end says it did: a patch's change of each
+// path, as Codex's diff of it.
+func (i item) ended() string {
+	var b strings.Builder
+	for n, c := range i.Changes {
+		if n > 0 {
+			b.WriteByte('\n')
+		}
+		b.WriteString(c.Path + "\n" + c.Diff)
+		if b.Len() > brainwire.MaxDetailBytes {
+			break
+		}
+	}
+	return brainwire.Detail(b.String())
 }
 
 // notice is a notification's parameters, as far as the driver reads them.

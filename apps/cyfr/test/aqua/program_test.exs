@@ -10420,9 +10420,9 @@ defmodule Aqua.ProgramTest do
   end
 
   # An own event of `turn`'s work, of `work` when one is named, or of none
-  # (`:none`).
+  # (`:none`), its call one run of that tool.
   defp own(turn, name, phase, work \\ nil) do
-    %{"t" => "own", "gen" => 0, "name" => name, "phase" => phase}
+    %{"t" => "own", "gen" => 0, "call" => "call_" <> name, "name" => name, "phase" => phase}
     |> then(&if(work == :none, do: &1, else: Map.put(&1, "work", work || turn.id)))
   end
 

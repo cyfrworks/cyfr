@@ -669,8 +669,15 @@ func (d *driver) update(params json.RawMessage) error {
 		Status   string          `json:"status"`
 		ToolKind string          `json:"kind"`
 		RawInput json.RawMessage `json:"rawInput"`
+		Meta     struct {
+			Child json.RawMessage `json:"opencode/child-session"`
+		} `json:"_meta"`
 	}
-	if json.Unmarshal(n.Update, &u) != nil {
+	// A sub-agent's frames are none of the turn's (OpenCode marks each one
+	// it passes on): the tool call that started it is the turn's one row of
+	// it, and its result reaches the person in the member's own words.
+	// Cursor and Antigravity put no frame of a sub-agent's on the stream.
+	if json.Unmarshal(n.Update, &u) != nil || u.Meta.Child != nil {
 		return nil
 	}
 	switch u.Kind {
@@ -700,13 +707,23 @@ func (d *driver) update(params json.RawMessage) error {
 		return d.chunk(d.messageID(u.Message), block.Text)
 	case "agent_thought_chunk":
 		d.output++
-		return d.release()
+		if err := d.release(); err != nil {
+			return err
+		}
+		var block struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		}
+		if json.Unmarshal(u.Content, &block) != nil || block.Type != "text" || block.Text == "" {
+			return nil
+		}
+		return d.c.EmitText(d.event("thought").Set("message", d.messageID(u.Message)), "delta", block.Text)
 	case "tool_call", "tool_call_update":
 		d.output++
 		if err := d.release(); err != nil {
 			return err
 		}
-		return d.ownUpdate(u.CallID, u.Status, u.ToolKind, u.Name, u.RawInput)
+		return d.ownUpdate(u.CallID, u.Status, u.ToolKind, u.Name, u.RawInput, u.Content)
 	}
 	return nil
 }

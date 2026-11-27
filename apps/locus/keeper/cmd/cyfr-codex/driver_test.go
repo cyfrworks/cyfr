@@ -21,6 +21,7 @@ import (
 	"syscall"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/cyfr/locus/keeper/internal/brainwire"
 	"golang.org/x/sys/unix"
@@ -240,6 +241,16 @@ func saidOf(events []map[string]any) string {
 		}
 	}
 	return said
+}
+
+func ofType(events []map[string]any, t string) []map[string]any {
+	var out []map[string]any
+	for _, e := range events {
+		if e["t"] == t {
+			out = append(out, e)
+		}
+	}
+	return out
 }
 
 func TestHelloFirstAndAnEmptyInputEndsIt(t *testing.T) {
@@ -465,6 +476,55 @@ func TestACallOfAnotherThreadIsRefusedToCodexAndNotAsked(t *testing.T) {
 	}
 }
 
+// Wire version 8's activity: each own tool's start and end carry one
+// call, the harness's item id, two commands ending in reverse order each
+// ending under its own; a start says what it runs and a patch's end its
+// diff, cut between characters to a detail's bound; the reasoning summary
+// is thought and never said; and a sub-agent's thread, its words,
+// reasoning and command, emits nothing while the session's call of it
+// starts and ends.
+func TestCodexsActivityIsItsCallsThoughtsAndOwnWords(t *testing.T) {
+	s := startDriver(t)
+	startFresh(s, map[string]any{})
+	work(s, "stp_work", "trn_1")
+	postText(s, "stp_post", "trn_1", "activity")
+	got := s.until("idle")
+	var seen []string
+	details := map[string]any{}
+	for _, e := range ofType(got, "own") {
+		seen = append(seen, fmt.Sprintf("%v:%v:%v", e["call"], e["name"], e["phase"]))
+		details[fmt.Sprintf("%v:%v", e["call"], e["phase"])] = e["detail"]
+	}
+	want := []string{"cmd_a:commandExecution:start", "cmd_b:commandExecution:start", "cmd_b:commandExecution:end", "cmd_a:commandExecution:end",
+		"patch_1:fileChange:start", "patch_1:fileChange:end", "collab_act:collabAgentToolCall:start", "collab_act:collabAgentToolCall:end"}
+	if !reflect.DeepEqual(seen, want) {
+		t.Fatalf("each own tool starts and ends under its item's id, the commands in the order they ended: %v", seen)
+	}
+	// The path leaves the bound inside a character of the diff.
+	whole := "big.md\n" + strings.Repeat("€", 1000)
+	change, _ := details["patch_1:end"].(string)
+	if details["cmd_a:start"] != "echo A" || details["cmd_b:start"] != "echo B" || details["patch_1:start"] != "big.md" ||
+		details["cmd_a:end"] != nil || len(change) > brainwire.MaxDetailBytes || len(change) < brainwire.MaxDetailBytes-3 ||
+		!utf8.ValidString(change) || !strings.HasPrefix(whole, change) {
+		t.Fatalf("a start says what it runs, and a patch's end its diff, cut between characters to the bound: %v", details)
+	}
+	thought := ""
+	for _, e := range ofType(got, "thought") {
+		thought += e["delta"].(string)
+	}
+	if thought != "THINK-ONE THINK-TWO" || strings.Contains(fmt.Sprint(ofType(got, "said"), ofType(got, "text")), "THINK") {
+		t.Fatalf("the reasoning summary arrives as thought and is never said: %q", thought)
+	}
+	for _, canary := range []string{"CHILD-THOUGHT", "CHILD-RAN", "CHILD-WORDS", "c41d", "OUTPUT-CANARY"} {
+		if strings.Contains(s.output(), canary) {
+			t.Fatalf("nothing of the sub-agent's thread, nor a command's output, reaches the wire: %s", canary)
+		}
+	}
+	if said := saidOf(got); said != "The member said its own words." {
+		t.Fatalf("the reply holds only the member's own words: %q", said)
+	}
+}
+
 func TestTheHarnessesOwnToolRunsInItsBoxShownByNameOnly(t *testing.T) {
 	s := startDriver(t)
 	startFresh(s, map[string]any{})
@@ -479,10 +539,8 @@ func TestTheHarnessesOwnToolRunsInItsBoxShownByNameOnly(t *testing.T) {
 	if fmt.Sprint(own) != "[commandExecution:start commandExecution:end]" {
 		t.Fatalf("an own tool is shown starting and ending by name: %v", own)
 	}
-	for _, words := range []string{"secret-of-the-folder", "FOLDER-CANARY"} {
-		if strings.Contains(s.output(), words) {
-			t.Fatalf("nothing of an own tool's command or output reaches the wire: %s", words)
-		}
+	if !strings.Contains(s.output(), `"detail":"/bin/bash -lc 'cat secret-of-the-folder'"`) || strings.Contains(s.output(), "FOLDER-CANARY") {
+		t.Fatalf("an own tool's start says what it runs, and nothing of its output reaches the wire: %s", s.output())
 	}
 }
 

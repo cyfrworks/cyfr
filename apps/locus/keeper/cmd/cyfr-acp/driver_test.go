@@ -15,12 +15,14 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/cyfr/locus/keeper/internal/brainwire"
 	"github.com/cyfr/locus/keeper/internal/toolsock"
@@ -603,22 +605,106 @@ func TestAStubThatNeverListsFailsTheStart(t *testing.T) {
 // its server and tool in a fixed form, never by a title, which may carry a
 // folder's path. A call is CYFR's only by the driver's own record of a
 // call on its socket: one titled as CYFR's, or a person's server named
-// cyfr, is shown as the program's own.
+// cyfr, is shown as the program's own. What a call runs is its detail,
+// from its input, never from its title.
 func TestOwnToolsAreOwnAndCYFRsCallsAreNot(t *testing.T) {
 	s := startDriver(t)
 	startFresh(s, map[string]any{})
 	postText(s, "stp_own", "trn_1", "own")
 	var seen []string
+	details := map[string]any{}
 	for _, e := range ofType(s.until("idle"), "own") {
 		seen = append(seen, e["name"].(string)+":"+e["phase"].(string))
+		if strings.Contains(e["name"].(string), "/home/x") {
+			t.Fatalf("no name carries a title's path: %v", e)
+		}
+		if e["phase"] == "start" {
+			details[e["call"].(string)] = e["detail"]
+		}
 	}
 	var want []string
 	for _, name := range []string{"read", "mcp:mine/reverse_text", "other", "other", "mcp:cyfr/files", "execute", "other", "other"} {
 		want = append(want, name+":start", name+":end")
 	}
-	if !reflect.DeepEqual(seen, want) || strings.Contains(s.output(), "/home/x") || strings.Contains(s.output(), "Run m") {
+	if !reflect.DeepEqual(seen, want) || strings.Contains(s.output(), "Run m") || strings.Contains(s.output(), "File notes.md") {
 		t.Fatalf("each own tool by its kind or its server and tool, none hidden by its title or its server's name: %v", seen)
 	}
+	if details["call_read"] != `{"Path":"/home/x/notes.md"}` || details["call_other"] != nil {
+		t.Fatalf("a call's start says what its input runs, and an empty input says nothing: %v", details)
+	}
+}
+
+// activityHolds reads a stand-in's `activity` turn (fake_test.go,
+// cursor_fake_test.go) as wire version 8 carries it: each own call starts
+// and ends once under one `call`, the twin commands ending in reverse
+// order each with its own and starting with what it runs, the edit's
+// change cut between characters to a detail's bound, the sub-agent's call
+// one row, nothing of its child, the reasoning as `thought` alone, and the
+// reply the member's own words.
+func activityHolds(t *testing.T, s *wireSession, twins [2]string, task string) {
+	t.Helper()
+	got := s.until("idle")
+	calls := map[string][]map[string]any{}
+	var ends []string
+	for _, e := range ofType(got, "own") {
+		call := e["call"].(string)
+		calls[call] = append(calls[call], e)
+		if e["phase"] == "end" {
+			ends = append(ends, call)
+		}
+	}
+	for call, events := range calls {
+		if len(events) != 2 || events[0]["phase"] != "start" || events[1]["phase"] != "end" || events[0]["name"] != events[1]["name"] {
+			t.Fatalf("each own call starts and ends once under its one call, %q: %v", call, events)
+		}
+	}
+	a, b := calls[twins[0]], calls[twins[1]]
+	if len(a) != 2 || len(b) != 2 || a[0]["name"] != b[0]["name"] || a[0]["detail"] != "echo A" || b[0]["detail"] != "echo B" {
+		t.Fatalf("the twin commands are two calls of one name, each starting with what it runs: %v %v", a, b)
+	}
+	if i, j := slices.Index(ends, twins[1]), slices.Index(ends, twins[0]); i < 0 || j < 0 || i > j {
+		t.Fatalf("the twins end in the order they ended, each under its own call: %v", ends)
+	}
+	whole := "big.txt\n+" + fakeBigText
+	var change string
+	for _, events := range calls {
+		if d, _ := events[1]["detail"].(string); strings.HasPrefix(d, "big.txt") {
+			change = d
+		}
+	}
+	if len(change) > brainwire.MaxDetailBytes || len(change) < brainwire.MaxDetailBytes-3 || !utf8.ValidString(change) || !strings.HasPrefix(whole, change) {
+		t.Fatalf("the edit's change is cut between characters to the detail's bound: %d bytes", len(change))
+	}
+	if len(calls[task]) != 2 || len(calls) != 4 {
+		t.Fatalf("the sub-agent's call is one row, and its child's tool none: %v", calls)
+	}
+	thought := ""
+	for _, e := range ofType(got, "thought") {
+		thought += e["delta"].(string)
+	}
+	if thought != "THINK-ONE THINK-TWO" {
+		t.Fatalf("the reasoning arrives as thought: %q", thought)
+	}
+	for _, e := range got {
+		if (e["t"] == "text" || e["t"] == "said") && strings.Contains(fmt.Sprint(e), "THINK") {
+			t.Fatalf("reasoning is never said: %v", e)
+		}
+	}
+	for _, canary := range []string{"CHILD-WORDS", "CHILD-THOUGHT", "CHILD-RAN", "CHILD-CHANGE", "CHILD-RESULT"} {
+		if strings.Contains(s.output(), canary) {
+			t.Fatalf("nothing of the sub-agent's own frames reaches the wire: %s", canary)
+		}
+	}
+	if said := saidOf(got); said != "The member said its own words." {
+		t.Fatalf("the reply holds only the member's own words: %q", said)
+	}
+}
+
+func TestAntigravitysActivityIsItsCallsThoughtsAndOwnWords(t *testing.T) {
+	s := startDriver(t)
+	startFresh(s, map[string]any{})
+	postText(s, "stp_act", "trn_1", "activity")
+	activityHolds(t, s, [2]string{"call_twin_a", "call_twin_b"}, "call_task")
 }
 
 // Usage: counts that read are partial, since the program's title request
@@ -924,21 +1010,22 @@ func TestAnInitializeThatDoesNotReadIsUnreadable(t *testing.T) {
 
 // Updates of kinds the driver does not use, another session's text and a
 // request it has no handler for change nothing on the wire; the request is
-// answered method-not-found.
+// answered method-not-found. The program's reasoning is its thought alone.
 func TestAnUnknownUpdateIsDroppedAndAnUnknownRequestRefused(t *testing.T) {
 	s := startDriver(t)
 	startFresh(s, map[string]any{})
 	postText(s, "stp_strange", "trn_1", "strange")
 	got := s.until("idle")
 	for _, e := range got {
-		if e["t"] != "text" && e["t"] != "said" && e["t"] != "usage" && e["t"] != "idle" {
-			t.Fatalf("nothing but the reply's events: %v", e)
+		if e["t"] != "text" && e["t"] != "said" && e["t"] != "usage" && e["t"] != "idle" &&
+			(e["t"] != "thought" || e["delta"] != "THOUGHT-CANARY") {
+			t.Fatalf("nothing but the reply's events and the thought: %v", e)
 		}
 	}
-	if saidOf(got) != "fs answered -32601" {
+	if saidOf(got) != "fs answered -32601" || len(ofType(got, "thought")) != 1 {
 		t.Fatalf("the request is answered method-not-found: %q", saidOf(got))
 	}
-	for _, canary := range []string{"PLAN-CANARY", "NEW-KIND-CANARY", "THOUGHT-CANARY", "USER-CANARY", "OTHER-SESSION-CANARY"} {
+	for _, canary := range []string{"PLAN-CANARY", "NEW-KIND-CANARY", "USER-CANARY", "OTHER-SESSION-CANARY"} {
 		if strings.Contains(s.output(), canary) {
 			t.Fatalf("a dropped update reached the wire: %s", canary)
 		}
