@@ -353,8 +353,7 @@ compile_cores=$cores; [ "$compile_cores" -le 1024 ] || compile_cores=1024
 # No scheduler busy-waits: on a loaded host, a partition's idle scheduler
 # threads spinning for work compete with the one that has it, and pinned to
 # two CPUs beside six busy loops a partition's throughput fell as low as
-# 1.5% of what it had on them unloaded (about 63% with busy-wait off). A
-# runner VM outside a release makes the same choice (`Locus.Runtime.Release`).
+# 1.5% of what it had on them unloaded (about 63% with busy-wait off).
 # The compile runs alone and takes every core; a partition takes its share.
 erl_common='+SDio 16 +sbwt none +sbwtdcpu none +sbwtdio none'
 partition_flags="+S ${per}:${per} +SDcpu ${per} $erl_common"

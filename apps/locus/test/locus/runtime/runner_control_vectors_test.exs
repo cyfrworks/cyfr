@@ -3,20 +3,19 @@
 
 defmodule Locus.Runtime.RunnerControlVectorsTest do
   @moduledoc """
-  Both ends of the runner control channel against its shared vectors
-  (`tests/fixtures/runner_control.json`): the runner (`Locus.Runtime.Runner`) acts
-  on every valid line the service sends and the service's handle
-  (`Locus.Runtime.RunnerProcess`) hears every valid line the runner sends; each
-  refuses a line of the other direction echoed back to it and every
-  invalid line with the fixture's reason; and each holds a line to the
-  fixture's `max_line_bytes`: a partial line of exactly that many bytes
-  waits for its newline, one byte more is refused.
+  The service's end of the runner control channel against its shared
+  vectors (`tests/fixtures/runner_control.json`, which the runner's crate
+  plays as the runner, `apps/locus/runner/tests/vectors.rs`): the
+  service's handle (`Locus.Runtime.RunnerProcess`) hears every valid line
+  the runner sends, forwards every valid event to the forwarder of its
+  runner's events and none to its owner, refuses a line the service sends
+  echoed back to it and every invalid line, events among them, with the
+  fixture's reason, a protocol failure that retires the runner, and holds a line to
+  the fixture's `max_line_bytes`: a partial line of exactly that many
+  bytes waits for its newline, one byte more is refused.
   """
 
-  # The runner's refusals are log lines, captured from its process.
-  use ExUnit.Case, async: false
-
-  import ExUnit.CaptureLog
+  use ExUnit.Case, async: true
 
   alias Locus.Runtime.RunnerProcess
   alias Locus.Runtime.Test.ScriptedKeeper
@@ -67,81 +66,6 @@ defmodule Locus.Runtime.RunnerControlVectorsTest do
     assert @max_line_bytes == RunnerControl.max_line_bytes()
   end
 
-  describe "the runner" do
-    setup do
-      test = self()
-      port = make_ref()
-
-      runner =
-        start_supervised!(
-          {Locus.Runtime.Runner,
-           settings: %{
-             runner_id: "run_vectors",
-             service_id: "wrk_not_the_assignments",
-             boot: "boot_not_the_assignments",
-             control_fd: nil,
-             watchdog_grace_ms: 500
-           },
-           port: port,
-           supervisor: __MODULE__.Attempts,
-           name: __MODULE__.Runner,
-           halt: fn reason -> send(test, {:halted, reason}) end,
-           stop: fn status -> send(test, {:stopped, status}) end}
-        )
-
-      {:ok, runner: runner, port: port}
-    end
-
-    # Hands the runner `data` as its control port would, and waits until
-    # it has read it.
-    defp feed(%{runner: runner, port: port}, data) do
-      send(runner, {port, {:data, data}})
-      :sys.get_state(runner)
-    end
-
-    test "acts on every line the service sends", ctx do
-      for vector <- valid("service") do
-        log = capture_log(fn -> feed(ctx, line(vector) <> "\n") end)
-        refute log =~ "not a frame", vector["why"]
-        refute log =~ "the service sent a", vector["why"]
-
-        # An assign reaches the assignment's reading, which refuses one
-        # issued to another service; a cancel for no child is ignored.
-        case vector["message"]["type"] do
-          "assign" -> assert_received {:halted, :malformed_assign}
-          "cancel_child" -> refute_received {:halted, _}
-        end
-      end
-    end
-
-    test "refuses a line the runner sends, echoed back to it", ctx do
-      for vector <- valid("runner") do
-        type = vector["message"]["type"]
-        log = capture_log(fn -> feed(ctx, line(vector) <> "\n") end)
-        assert log =~ "the service sent a #{type} frame; ignored", vector["why"]
-      end
-
-      refute_received {:halted, _}
-    end
-
-    test "refuses every invalid line with its reason", ctx do
-      for vector <- @vectors["invalid"] do
-        log = capture_log(fn -> feed(ctx, line(vector) <> "\n") end)
-        assert log =~ "not a frame: #{inspect(reason(vector))}", vector["why"]
-      end
-
-      refute_received {:halted, _}
-    end
-
-    test "holds a partial line to the fixture's bound", ctx do
-      feed(ctx, :binary.copy("x", @max_line_bytes))
-      refute_received {:halted, _}
-
-      capture_log(fn -> feed(ctx, "x") end)
-      assert_received {:halted, :oversize_line}
-    end
-  end
-
   describe "the service's handle" do
     setup do
       keeper = ScriptedKeeper.start!(__MODULE__.Keeper)
@@ -152,9 +76,12 @@ defmodule Locus.Runtime.RunnerControlVectorsTest do
         env: %{"KEEPER" => Atom.to_string(keeper)}
       }
 
+      # The test stands in for the forwarder of the runner's events too, so
+      # what the handle forwards and what it tells its owner are told apart.
       handle =
         start_supervised!(
-          {RunnerProcess, id: "run_vectors", keeper: ScriptedKeeper, spec: spec, owner: self()}
+          {RunnerProcess,
+           id: "run_vectors", keeper: ScriptedKeeper, spec: spec, owner: self(), events: self()}
         )
 
       assert_receive {RunnerProcess, ^handle, :ready}, 5_000
@@ -187,6 +114,33 @@ defmodule Locus.Runtime.RunnerControlVectorsTest do
         :ok = ScriptedKeeper.write(spawn, line(vector) <> "\n")
         assert_receive {RunnerProcess, ^handle, {:error, {:protocol, ^reason}}}, 5_000
       end
+    end
+
+    test "forwards every valid event to the forwarder of its runner's events, and tells its " <>
+           "owner none",
+         %{handle: handle, spawn: spawn} do
+      events = @vectors["events"]["valid"] ++ @vectors["events"]["cut"]
+      assert events != []
+
+      for vector <- events do
+        :ok = ScriptedKeeper.write(spawn, vector["line"])
+        {:ok, event} = RunnerControl.decode(vector["line"])
+        assert_receive {:"$gen_cast", {:event, ^event}}, 5_000
+      end
+
+      refute_received {RunnerProcess, ^handle, {:message, _event}}
+    end
+
+    test "refuses every invalid event line with its reason, a protocol failure as any line " <>
+           "that is not a frame, and forwards none of it",
+         %{handle: handle, spawn: spawn} do
+      for vector <- @vectors["events"]["invalid"] do
+        reason = reason(vector["refusal"])
+        :ok = ScriptedKeeper.write(spawn, line(vector) <> "\n")
+        assert_receive {RunnerProcess, ^handle, {:error, {:protocol, ^reason}}}, 5_000, vector["why"]
+      end
+
+      refute_received {:"$gen_cast", {:event, _event}}
     end
 
     test "holds a partial line to the fixture's bound", %{handle: handle, spawn: spawn} do

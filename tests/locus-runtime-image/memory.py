@@ -91,7 +91,7 @@ PROBE_REF = "formula:local.nested-probe:0.1.0"
 HOG = os.path.join(HERE, "hog.wasm")
 HOG_REF = "catalyst:local.hog:0.1.0"
 HOG_DIGESTS = {
-    "hog.wat": "sha256:e7f4dda000179ab7870ee732f5eb82a986134b945e9296bdf0009979f616abc4",
+    "hog.wat": "sha256:552e815e288d973f5cfe9c5180b1980944cf1c1c3d3861e2a8304aa6647a5fa2",
     "hog.wasm": "sha256:da93712793bd4ae639d3c8d15fcffe160f1a4ba2ab3f5dd0a7a363b6fc3d1a03",
 }
 # What one child holds once every page is touched: all the linear memory

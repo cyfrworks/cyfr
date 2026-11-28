@@ -435,6 +435,139 @@ fn control_an_events_long_strings_are_cut_on_a_character_boundary() {
     }
 }
 
+#[test]
+fn control_an_event_no_line_carries_is_not_written() {
+    let v = fixture("runner_control.json");
+    let unwritten = cases(&v["events"]["unwritten"], "events.unwritten");
+    assert!(!unwritten.is_empty());
+    for case in unwritten {
+        let why = s(&case["why"]);
+        assert!(
+            control::encode(&message_from(&case["message"])).is_err(),
+            "{why}"
+        );
+    }
+}
+
+// A guest shapes an event's strings: a host name, a method, an action, a
+// tool's name. Whatever their length and their characters (control bytes
+// and quotes the line escapes, characters of every width), the runner
+// writes a line its decoder, held to the same vectors as the service's,
+// reads back with each string cut on a character boundary, or writes
+// none: never one the service refuses.
+#[test]
+fn control_any_guest_shaped_event_is_written_as_a_line_its_reader_reads_or_not_at_all() {
+    const PIECES: &[&str] = &[
+        "a",
+        "Z",
+        "0",
+        ".",
+        "-",
+        " ",
+        "\"",
+        "\\",
+        "/",
+        "\u{1}",
+        "\u{1f}",
+        "\u{7f}",
+        "\n",
+        "\t",
+        "é",
+        "€",
+        "𝄞",
+        "\u{2028}",
+        "\u{fffd}",
+        "\u{10ffff}",
+    ];
+    let mut state: u64 = 0x9e37_79b9_7f4a_7c15;
+    let mut next = move |bound: u64| {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        state % bound
+    };
+    let text = |next: &mut dyn FnMut(u64) -> u64| -> String {
+        let pieces = next(700);
+        (0..pieces)
+            .map(|_| PIECES[next(PIECES.len() as u64) as usize])
+            .collect()
+    };
+    let mut written = 0;
+    for round in 0..600 {
+        // Every fifth round's strings are control bytes alone, six bytes
+        // each on the line: an http.request of them spans past the line's
+        // bound, and must not be written.
+        let text = |next: &mut dyn FnMut(u64) -> u64| -> String {
+            if round % 5 == 0 {
+                "\u{1}".repeat(300)
+            } else {
+                text(next)
+            }
+        };
+        let (name, metadata) = match round % 3 {
+            0 => (
+                "http.request",
+                vec![
+                    ("component_ref", control::Meta::Text(text(&mut next))),
+                    ("method", control::Meta::Text(text(&mut next))),
+                    ("hostname", control::Meta::Text(text(&mut next))),
+                    ("status", control::Meta::Integer(100 + next(500))),
+                ],
+            ),
+            1 => (
+                "storage.call",
+                vec![
+                    ("component_ref", control::Meta::Text(text(&mut next))),
+                    ("action", control::Meta::Text(text(&mut next))),
+                    ("status", control::Meta::text("ok")),
+                ],
+            ),
+            _ => (
+                "mcp_tool.call",
+                vec![
+                    ("execution_id", control::Meta::Text(text(&mut next))),
+                    ("tool_action", control::Meta::Text(text(&mut next))),
+                    ("status", control::Meta::text("error")),
+                ],
+            ),
+        };
+        let measurements = if name == "http.request" {
+            vec![("duration_ms", 1), ("system_time", 1_795_770_665_819_204)]
+        } else {
+            vec![("duration_ms", 1)]
+        };
+        let event = control::Event {
+            name,
+            measurements,
+            metadata: metadata.clone(),
+        };
+        let Ok(line) = control::encode(&Message::Event(event)) else {
+            continue;
+        };
+        written += 1;
+        assert!(
+            line.len() <= control::MAX_EVENT_LINE_BYTES + 1,
+            "round {round}"
+        );
+        let Ok(Message::Event(read)) = control::decode(&line) else {
+            panic!("round {round}: the runner wrote a line its reader refuses");
+        };
+        for ((member, sent), (_, held)) in metadata.iter().zip(read.metadata.iter()) {
+            if let (control::Meta::Text(sent), control::Meta::Text(held)) = (sent, held) {
+                assert_eq!(held.as_str(), control::cut(sent), "round {round}: {member}");
+            }
+        }
+    }
+    assert!(
+        written > 300,
+        "only {written} of 600 shaped events were written"
+    );
+    assert!(
+        written < 600,
+        "every shaped event was written, the long ones too"
+    );
+}
+
 fn environment(value: &Value) -> Vec<(OsString, OsString)> {
     value
         .as_object()
@@ -1101,7 +1234,7 @@ fn host_each_callbacks_class_and_timeout_are_the_vectors() {
         .keys()
         .filter(|name| Op::named(name).is_none())
         .collect();
-    assert_eq!(theirs, ["attached_fetch", "runner_exited"]);
+    assert_eq!(theirs, ["attached_fetch", "report_events", "runner_exited"]);
 }
 
 fn host_fields(fields: &Value) -> CallFields {
@@ -1240,6 +1373,50 @@ fn host_every_call_a_runner_makes_crosses_as_the_vectors_write_it() {
     }
     let all: Vec<&str> = Op::all().map(Op::name).collect();
     assert_eq!(made, all, "every callback a runner makes has its call");
+}
+
+// A child's connection crosses as an optional member of its admit_child
+// args: each case's body is the one the runner writes, sealed and signed
+// as the vector does, and its answer reads as what it carries, the child
+// admitted or CYFR's refusal of the connection or of the reused key.
+#[test]
+fn host_every_connection_case_crosses_as_the_vectors_write_it() {
+    let v = fixture("host_api.json");
+    let call_key = key(&v["keys"]["attempt_call_hex"]);
+    let seal_key = key(&v["keys"]["attempt_seal_hex"]);
+    let mut names = Vec::new();
+    for case in cases(&v["connection_cases"], "connection_cases") {
+        let name = s(&case["name"]);
+        names.push(name);
+        let op = Op::named(s(&case["callback"])).expect("a runner's callback");
+        let fields = host_fields(&case["fields"]);
+        let body = s(&case["body"]);
+        let parsed: Value = serde_json::from_str(body).expect("JSON");
+        let written = wire::request_body(op.name(), parsed["args"].as_object().expect("args"));
+        assert_eq!(written.as_str(), body, "{name}");
+        let sealed = auth::seal_call(
+            &seal_key,
+            Direction::Body,
+            &fields,
+            body.as_bytes(),
+            &iv(&case["body_iv_hex"]),
+        );
+        assert_eq!(sealed.expect("sealed"), s(&case["body_sealed"]), "{name}");
+        let header = auth::host_call_header(&call_key, &fields, s(&case["body_sealed"]).as_bytes());
+        assert_eq!(header.expect("signed"), s(&case["header"]), "{name}");
+        let opened = auth::open_call(
+            &seal_key,
+            Direction::Answer,
+            &fields,
+            s(&case["answer_sealed"]).as_bytes(),
+        )
+        .expect("opened");
+        assert_eq!(&opened[..], s(&case["answer"]).as_bytes(), "{name}");
+        let answer: Value = serde_json::from_str(s(&case["answer"])).expect("JSON");
+        let reading = host::answered(op, &opened).unwrap_or_else(|why| panic!("{name}: {why:?}"));
+        assert_eq!(answer_of(&reading_json(&reading)), answer, "{name}");
+    }
+    assert_eq!(names, ["omitted", "named", "reused"]);
 }
 
 /// A host reached through a scripted relay: each try meets the next answer

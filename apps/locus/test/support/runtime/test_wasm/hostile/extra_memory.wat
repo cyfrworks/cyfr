@@ -3,9 +3,9 @@
 ;;
 ;; A reagent that declares a second linear memory beside the one the
 ;; canonical ABI uses, and would write to it and answer its input unchanged.
-;; A run's store holds one linear memory (`Locus.Runtime.Engine.store_limits/1`),
-;; so the engine refuses to instantiate it and the run ends as a
-;; `resource_limit`; nothing of it runs. Built by `build.sh` (README.md).
+;; A run's store holds one linear memory (`apps/locus/runner`), so the
+;; engine refuses to instantiate it, in its own words; nothing of it
+;; runs. Built by `build.sh` (README.md).
 (module
   (memory $io (export "memory") 1)
   (memory $second 1)

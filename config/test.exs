@@ -317,10 +317,8 @@ config :cyfr, :locus_runtime_root, test_worker_root
 # points each at the other's once both are up. Its runners are OS processes
 # of their own, started by the test build's direct launcher (`:direct`),
 # which its test support compiles and this configuration alone names
-# (`Locus.Runtime.Keeper.direct_keeper/0`), and pooled across tests; a
-# runner holds no sys.config, so what it takes from this configuration (the
-# log level, the scheduler counts) the service passes it explicitly
-# (`Locus.Runtime.Release.runner_command/0`).
+# (`Locus.Runtime.Keeper.direct_keeper/0`), and pooled across tests: each
+# the runner program this checkout built (`scripts/runner.sh build`).
 config :locus, :runtime,
   service_id: "wrk_local",
   service_key:

@@ -13,7 +13,8 @@ defmodule Locus.Runtime.Test.ScriptedHost do
   `start!/1` serves one host for the calling test and answers where it is.
   `attempt!/2` mints an attempt on it as CYFR would — its keys, a signed
   assignment, the keys sealed for the worker service — and the
-  `Locus.Runtime.HostClient` a runner of that attempt holds. `script/3` sets what
+  `Locus.Runtime.HostClient` the worker service makes its own calls for
+  that attempt with. `script/3` sets what
   an operation answers: one answer for every call, a list consumed in
   order, or a function of the call's args and verified header. An
   operation with no script answers a harmless default. `requests/1` is
@@ -217,10 +218,11 @@ defmodule Locus.Runtime.Test.ScriptedHost do
   An attempt on this host, as CYFR mints one: its fields, its keys
   (`Prima.WorkerAuth.attempt_keys/2`), a signed assignment (`:assignment`),
   the keys sealed for the worker service (`:sealed_keys`), the input JSON
-  the assignment's digest binds (`:input`) and the `:client` a runner of
-  it holds. Options: `:boot` (default `"boot_test"`), `:runner` (default a
-  fresh id), `:service` (default the host's), `:component_type` (default
-  `:catalyst`), `:component_ref`, `:digest`, `:input` (default
+  the assignment's digest binds (`:input`) and the `:client` the worker
+  service makes its own calls for it with. Options: `:boot` (default
+  `"boot_test"`), `:runner` (default a fresh id), `:service` (default the
+  host's), `:component_type` (default `:catalyst`), `:component_ref`,
+  `:digest`, `:input` (default
   `%{"fixture" => true}`), `:authority` (default `Prima.Authority.zero/0`),
   `:timeout_ms` (default 60 s), `:intercepted` (default `[]`),
   `:athanor_id` (default `"ath_test"`).
@@ -296,9 +298,9 @@ defmodule Locus.Runtime.Test.ScriptedHost do
       input: input_json,
       component_ref: component_ref,
       digest: digest,
-      # As a runner builds its client: at the member the assignment names,
-      # falling back to the address this worker service is configured
-      # with when the assignment names none.
+      # As the worker service builds its client for the attempt: at the
+      # member the assignment names, falling back to the address this
+      # worker service is configured with when the assignment names none.
       client:
         Locus.Runtime.HostClient.new(
           keys,
@@ -341,6 +343,15 @@ defmodule Locus.Runtime.Test.ScriptedHost do
   def default("runner_exited", args, _caller) do
     case Prima.HostAPI.read_memory_end(args) do
       {:ok, _memory} -> {:ok, true}
+      :error -> {:error, :lost}
+    end
+  end
+
+  # A batch of runner events is read whole, as CYFR reads it
+  # (`Opus.Host`): one record off the roster is lost.
+  def default("report_events", args, _caller) do
+    case Prima.HostAPI.read_events(args) do
+      {:ok, _events} -> {:ok, true}
       :error -> {:error, :lost}
     end
   end
@@ -421,7 +432,8 @@ defmodule Locus.Runtime.Test.ScriptedHost do
 
     # A report is plain; a host call's body opens under the attempt's seal
     # key as the call the header names, and its answer seals the same way.
-    defp verify(:runner_exited, root, _standing, header, body, now) do
+    defp verify(report, root, _standing, header, body, now)
+         when report in [:runner_exited, :report_events] do
       with {:ok, report} <- WorkerAuth.verify_report(root, header, body, now),
            do: {:ok, report, body, nil}
     end

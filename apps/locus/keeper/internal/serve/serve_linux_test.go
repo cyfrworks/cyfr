@@ -710,7 +710,7 @@ printf 'echo:%s\n' "$line" >&3
 echo 'to stderr' >&2
 exec 3>&-
 sleep 60`
-	spawnID, uid, rc := k.spawn(t, "1", script, map[string]string{"RUNTIME_ROLE": "runner"}, true)
+	spawnID, uid, rc := k.spawn(t, "1", script, map[string]string{"RUNTIME_RUNNER_ID": "run_spawned"}, true)
 	rc.send(t, frame.StreamControl, []byte(`{"v":1,"type":"assign"}`+"\n"))
 	rc.readUntil(t, func() bool {
 		return rc.ended[frame.StreamControl] && strings.Contains(string(rc.got[frame.StreamStdout]), "env:done\n")
@@ -725,7 +725,7 @@ sleep 60`
 	if !strings.Contains(stdout, "fd3:open\n") {
 		t.Fatalf("fd 3 is not open in the runner:\n%s", stdout)
 	}
-	for _, want := range []string{"RUNTIME_ROLE=runner\n", "HOME=" + k.homes + "/" + strconv.Itoa(uid) + "-", "USER=" + strconv.Itoa(uid) + "\n"} {
+	for _, want := range []string{"RUNTIME_RUNNER_ID=run_spawned\n", "HOME=" + k.homes + "/" + strconv.Itoa(uid) + "-", "USER=" + strconv.Itoa(uid) + "\n"} {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("environment lacks %q:\n%s", want, stdout)
 		}

@@ -418,6 +418,33 @@ defmodule Prima.RunnerControl do
 
   def decode(_line), do: {:error, :malformed}
 
+  @doc """
+  An `event` as one record of a `report_events` batch
+  (`Prima.HostAPI.report_events_args/1`): the frame's `name`,
+  `measurements` and `metadata`, in wire order, written as `encode/1`
+  writes them, its strings cut to their bound. Raises as `encode/1` does.
+  """
+  @spec event_record(event()) :: Jason.OrderedObject.t()
+  def event_record(%{type: :event} = event) do
+    {_name, _sender, fields} = Map.fetch!(@by_type, :event)
+    write_object(fields, Map.delete(event, :type), "")
+  end
+
+  @doc """
+  The `event` one record of a `report_events` batch carries, read by the
+  roster as `decode/1` reads an `event` frame's members, or the first
+  reason it is not one.
+  """
+  @spec read_event(term()) :: {:ok, event()} | {:error, reason()}
+  def read_event(%{} = record) when not is_struct(record) do
+    {_name, _sender, fields} = Map.fetch!(@by_type, :event)
+
+    with {:ok, event} <- read_object(fields, record, ""),
+         do: {:ok, Map.put(event, :type, :event)}
+  end
+
+  def read_event(_record), do: {:error, :malformed}
+
   # ============================================================================
   # Reading
   # ============================================================================

@@ -2,9 +2,9 @@
 ;; Copyright 2026 CYFR Works Inc.
 ;;
 ;; A reagent that declares a funcref table of 20,001 elements, one past the
-;; bound on every table a run's store holds (`Locus.Runtime.Engine.store_limits/1`),
-;; and would answer its input unchanged. The engine refuses to instantiate
-;; it and the run ends as a `resource_limit`. Built by `build.sh`
+;; bound on every table a run's store holds (`apps/locus/runner`), and
+;; would answer its input unchanged. The engine refuses to instantiate it,
+;; in its own words. Built by `build.sh`
 ;; (README.md).
 (module
   (memory $io (export "memory") 1)

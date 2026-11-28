@@ -654,7 +654,7 @@ defmodule Locus.KeeperVectorsTest do
     assert {:ok, %{spawn_id: nil, uid: nil, pid: nil} = handle} =
              Keeper.spawn(name, %{
                argv: argv,
-               env: %{"RUNTIME_ROLE" => "runner"},
+               env: %{"RUNTIME_RUNNER_ID" => "runner_1"},
                place: "pl-1",
                pool: "runner",
                control: true

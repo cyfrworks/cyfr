@@ -1842,3 +1842,1039 @@ fn an_invalid_byte_at_a_streams_front_is_taken_alone_and_the_text_after_it_kept(
         assert_eq!(output, expected, "{guest}");
     }
 }
+
+// ============================================================================
+// A guest's imports called in this process
+// ============================================================================
+
+/// A run's guest in this process, its HTTP imports called as the engine
+/// calls them, over a real relay whose far end is the scripted service end
+/// (`support::relay_fetching`): the calls CYFR was sent, and every frame of
+/// the relay's, are the service end's record.
+struct InProcess {
+    guest: cyfr_runner::imports::Guest,
+    calls: std::sync::Arc<std::sync::Mutex<Vec<support::Call>>>,
+    frames: std::sync::Arc<std::sync::Mutex<Vec<Value>>>,
+    /// The control channel the run's events are written to, held open.
+    _events: tokio::io::DuplexStream,
+}
+
+/// A guest on a node of `limits` whose host calls `script` answers and
+/// whose fetches `fetches` answers.
+async fn in_process(
+    script: support::Script,
+    fetches: support::Fetches,
+    limits: cyfr_runner::authority::Limits,
+) -> InProcess {
+    use std::sync::{Arc, Mutex};
+    let job = Job::new(
+        "catalyst",
+        &format!("{HOSTILE}/attached_header_probe.wasm"),
+        "{}",
+    );
+    let (ours, theirs) = std::os::unix::net::UnixStream::pair().expect("a socket pair");
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let frames = Arc::new(Mutex::new(Vec::new()));
+    let (recorded, seen, served) = (calls.clone(), frames.clone(), job.clone());
+    std::thread::Builder::new()
+        .stack_size(64 * 1024 * 1024)
+        .spawn(move || support::relay_fetching(theirs, served, script, fetches, recorded, seen))
+        .expect("the service end");
+    ours.set_nonblocking(true).expect("a nonblocking socket");
+    let (reader, writer) = tokio::net::UnixStream::from_std(ours)
+        .expect("a socket")
+        .into_split();
+    let relay = cyfr_runner::relay::Relay::start(reader, writer);
+    relay
+        .bind(&job.attempt)
+        .await
+        .expect("the relay carries the attempt");
+    let (events, written) = tokio::io::duplex(1 << 20);
+    let control = cyfr_runner::control::Writer::start(written);
+    let host = Arc::new(cyfr_runner::attempt::Host::new(
+        support::caller(&job),
+        relay.clone(),
+        control.clone(),
+    ));
+    let runner = cyfr_runner::attempt::Runner {
+        engine: cyfr_runner::engine::Engine::new().expect("an engine"),
+        relay,
+        control,
+        runner_id: support::RUNNER.to_owned(),
+        boot: support::BOOT.to_owned(),
+        tree: cyfr_runner::subtree::Tree::unserved(support::ATHANOR, &job.execution_id),
+    };
+    let run = cyfr_runner::imports::Run {
+        host,
+        component_ref: job.reference.clone(),
+        limits,
+        fields: std::collections::BTreeMap::new(),
+        attached: std::collections::BTreeSet::new(),
+        runner,
+        intercepted: Vec::new(),
+    };
+    InProcess {
+        guest: cyfr_runner::imports::Guest::new(Arc::new(run)),
+        calls,
+        frames,
+        _events: events,
+    }
+}
+
+impl InProcess {
+    /// The fetch import's answer to `request`.
+    async fn fetch(&mut self, request: &Value) -> Value {
+        use cyfr_runner::imports::catalyst::cyfr::http::fetch::Host as _;
+        let answer = self
+            .guest
+            .request(request.to_string())
+            .await
+            .expect("the import answers");
+        serde_json::from_str(&answer).expect("a JSON answer")
+    }
+
+    /// The streaming import's answer to `request`.
+    async fn open(&mut self, request: &Value) -> Value {
+        use cyfr_runner::imports::catalyst::cyfr::http::streaming::Host as _;
+        let answer = self
+            .guest
+            .request(request.to_string())
+            .await
+            .expect("the import answers");
+        serde_json::from_str(&answer).expect("a JSON answer")
+    }
+
+    async fn read(&mut self, handle: &str) -> Value {
+        use cyfr_runner::imports::catalyst::cyfr::http::streaming::Host as _;
+        let answer = self
+            .guest
+            .read(handle.to_owned())
+            .await
+            .expect("the import answers");
+        serde_json::from_str(&answer).expect("a JSON answer")
+    }
+
+    async fn close(&mut self, handle: &str) -> Value {
+        use cyfr_runner::imports::catalyst::cyfr::http::streaming::Host as _;
+        let answer = self
+            .guest
+            .close(handle.to_owned())
+            .await
+            .expect("the import answers");
+        serde_json::from_str(&answer).expect("a JSON answer")
+    }
+
+    /// The ops of the calls CYFR was sent so far, in order.
+    fn ops(&self) -> Vec<String> {
+        self.calls
+            .lock()
+            .expect("the calls")
+            .iter()
+            .map(|call| call.op.clone())
+            .collect()
+    }
+
+    /// The args of the calls of `op` CYFR was sent so far.
+    fn calls_of(&self, op: &str) -> Vec<Value> {
+        self.calls
+            .lock()
+            .expect("the calls")
+            .iter()
+            .filter(|call| call.op == op)
+            .map(|call| call.args.clone())
+            .collect()
+    }
+
+    /// The relay's frames of `kind` the runner sent so far.
+    fn frames_of(&self, kind: &str) -> Vec<Value> {
+        self.frames
+            .lock()
+            .expect("the frames")
+            .iter()
+            .filter(|frame| frame["kind"] == kind)
+            .cloned()
+            .collect()
+    }
+}
+
+/// Run `test` on a current-thread runtime on the stack the runner's own
+/// runtime has.
+fn in_a_runtime<F: std::future::Future<Output = ()> + 'static>(
+    test: impl FnOnce() -> F + Send + 'static,
+) {
+    std::thread::Builder::new()
+        .stack_size(cyfr_runner::wire::STACK_BYTES)
+        .spawn(move || {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("a runtime")
+                .block_on(test());
+        })
+        .expect("a test thread")
+        .join()
+        .expect("the test passes");
+}
+
+/// The error envelope a guest is answered with.
+fn refusal(kind: &str, message: &str) -> Value {
+    json!({"error": {"type": kind, "message": message}})
+}
+
+/// An upstream's whole answer, `ok` with status 200, and what the guest
+/// reads of it.
+fn ok() -> Vec<Upstream> {
+    vec![
+        Upstream::Head(200, Vec::new(), b"ok".to_vec()),
+        Upstream::End(None),
+    ]
+}
+
+fn ok_answer() -> Value {
+    json!({"status": 200, "headers": {}, "body": "ok"})
+}
+
+/// The same answer to the attached `fetch`, as CYFR seals it for its call
+/// id.
+fn attached_ok(fetch: &Value, job: &Job) -> Vec<Upstream> {
+    let call_id = fetch["call_id"].as_str().expect("a call id");
+    let head = json!({"status": 200, "headers": []}).to_string();
+    vec![
+        Upstream::Frame(support::seal_frame(
+            job,
+            call_id,
+            0,
+            "head",
+            head.as_bytes(),
+        )),
+        Upstream::Frame(support::seal_frame(job, call_id, 1, "chunk", b"ok")),
+        Upstream::Frame(support::seal_frame(job, call_id, 2, "end", b"")),
+        Upstream::End(None),
+    ]
+}
+
+/// CYFR's answers, each `egress_pin` answered a pin of the host its URL
+/// names, `pin_1`, `pin_2` and on.
+fn pinning_each() -> support::Script {
+    let mut pins = 0;
+    Box::new(move |call, job| match call.op.as_str() {
+        "egress_pin" => {
+            pins += 1;
+            let url = call.args["url"].as_str().expect("a url");
+            let host = cyfr_runner::imports::http::Url::parse(url)
+                .and_then(|url| url.host)
+                .expect("a host");
+            pin(&format!("pin_{pins}"), "https", &host)
+        }
+        _ => standard(call, job),
+    })
+}
+
+// ============================================================================
+// What the runner's own reading refuses
+// ============================================================================
+
+#[test]
+fn a_request_whose_method_or_url_does_not_read_is_refused_in_the_runners_words_and_asks_nothing() {
+    // The guest writes the request, so no member's type is to be trusted:
+    // each answers a typed refusal, and the guest goes on.
+    in_a_runtime(|| async move {
+        let mut guest = in_process(Box::new(standard), support::silent_fetches(), zero()).await;
+        let charges = "https://api.example.test/v1/charges";
+        for (request, message) in [
+            (
+                json!({"method": 1, "url": charges}),
+                words::MALFORMED_REQUEST,
+            ),
+            (
+                json!({"method": null, "url": charges}),
+                words::MALFORMED_REQUEST,
+            ),
+            (json!({"method": "GET", "url": 2}), words::MALFORMED_REQUEST),
+            (
+                json!({"method": "GET", "url": {"href": "https://x.test"}}),
+                words::MALFORMED_REQUEST,
+            ),
+            (
+                json!({"method": "GET", "url": "not-a-url"}),
+                words::NO_HOSTNAME,
+            ),
+            (
+                json!({"method": "GET", "url": "http:///path"}),
+                words::NO_HOSTNAME,
+            ),
+            // The sentence names none of a URL's credentials.
+            (
+                json!({"method": "GET", "url": "http://user:secret@api.example.test/x"}),
+                words::URL_CREDENTIALS,
+            ),
+            (
+                json!({"method": "GET", "url": "http://user@api.example.test/x"}),
+                words::URL_CREDENTIALS,
+            ),
+            (
+                json!({"method": "GET", "url": "http://:@api.example.test/x"}),
+                words::URL_CREDENTIALS,
+            ),
+        ] {
+            assert_eq!(
+                guest.fetch(&request).await,
+                refusal("invalid_request", message),
+                "{request}"
+            );
+        }
+        // Refused before any pin: nothing is asked of CYFR or sent.
+        assert_eq!(guest.ops(), Vec::<String>::new());
+        assert!(guest.frames_of("fetch").is_empty());
+    });
+}
+
+#[test]
+fn a_body_or_multipart_that_does_not_read_is_refused_in_the_runners_words_and_asks_nothing() {
+    in_a_runtime(|| async move {
+        let mut guest = in_process(Box::new(standard), support::silent_fetches(), zero()).await;
+        let speech = "https://api.example.test/v1/audio/speech";
+        let transcriptions = "https://api.example.test/v1/audio/transcriptions";
+        for (request, message) in [
+            (
+                json!({"method": "POST", "url": speech, "body": "not-valid-base64!!!",
+                       "body_encoding": "base64"}),
+                words::BAD_BODY_BASE64.to_owned(),
+            ),
+            (
+                json!({"method": "POST", "url": transcriptions, "body": "some body",
+                       "multipart": [{"name": "model", "value": "whisper-1"}]}),
+                words::BODY_AND_MULTIPART.to_owned(),
+            ),
+            (
+                json!({"method": "POST", "url": transcriptions, "multipart": [
+                    {"name": "file", "filename": "audio.mp3", "content_type": "audio/mpeg",
+                     "data": "not-valid!!!"},
+                    {"name": "model", "value": "whisper-1"}]}),
+                words::bad_part_base64("file"),
+            ),
+            (
+                json!({"method": "POST", "url": transcriptions,
+                       "multipart": [{"value": "whisper-1"}]}),
+                words::MULTIPART_PART.to_owned(),
+            ),
+        ] {
+            assert_eq!(
+                guest.fetch(&request).await,
+                refusal("invalid_request", &message),
+                "{request}"
+            );
+        }
+        assert_eq!(guest.ops(), Vec::<String>::new());
+        assert!(guest.frames_of("fetch").is_empty());
+    });
+}
+
+#[test]
+fn headers_read_as_an_object_or_as_pairs_and_any_other_shape_is_refused_before_the_pin() {
+    in_a_runtime(|| async move {
+        let mut guest = in_process(
+            pinning("api.example.test"),
+            Box::new(|_fetch, _job| ok()),
+            zero(),
+        )
+        .await;
+        let url = "https://api.example.test/x";
+        // Pairs in order, a scalar value as its text; `null` as none.
+        for headers in [
+            json!([["Accept", "a"], ["X-Count", 2], ["accept", "b"]]),
+            Value::Null,
+        ] {
+            let request = json!({"method": "GET", "url": url, "headers": headers});
+            assert_eq!(guest.fetch(&request).await, ok_answer(), "{headers}");
+        }
+        let sent: Vec<Value> = guest
+            .frames_of("fetch")
+            .iter()
+            .map(|fetch| fetch["headers"].clone())
+            .collect();
+        assert_eq!(
+            sent,
+            [
+                json!([["Accept", "a"], ["X-Count", "2"], ["accept", "b"]]),
+                json!([])
+            ]
+        );
+        for headers in [
+            json!([["Authorization"]]),
+            json!([["Authorization", "Bearer a", "extra"]]),
+            json!([{"Authorization": "Bearer a"}]),
+            json!(["Authorization: Bearer a"]),
+            json!([[1, "a"]]),
+            json!([["", "a"]]),
+            json!([["X-Nested", ["a"]]]),
+            json!({"X-Nested": {"a": "b"}}),
+            // Neither an object nor an array: never read as no headers.
+            json!("Authorization: Bearer t"),
+            json!(42),
+            json!(true),
+        ] {
+            let request = json!({"method": "GET", "url": url, "headers": headers});
+            assert_eq!(
+                guest.fetch(&request).await,
+                refusal("invalid_request", words::BAD_HEADERS),
+                "{headers}"
+            );
+        }
+        // CYFR was asked a pin for the two that read, and nothing else.
+        assert_eq!(guest.ops(), ["egress_pin", "egress_pin"]);
+        assert_eq!(guest.frames_of("fetch").len(), 2);
+    });
+}
+
+#[test]
+fn a_connection_that_is_no_text_or_names_no_need_is_refused_unsent_and_unreported() {
+    // Neither is a refusal CYFR records (`Opus.Host.Storage`'s denials take
+    // no `invalid_request`): nothing is reported.
+    in_a_runtime(|| async move {
+        let mut guest = in_process(Box::new(standard), support::silent_fetches(), zero()).await;
+        let url = "https://api.example.test/x";
+        assert_eq!(
+            guest
+                .fetch(&json!({"method": "GET", "url": url, "connection": 7}))
+                .await,
+            refusal("invalid_request", words::BAD_CONNECTION)
+        );
+        let long = "a".repeat(40);
+        for connection in ["Not A Need", "API KEY", "", "1key", long.as_str()] {
+            let request = json!({"method": "GET", "url": url, "connection": connection});
+            assert_eq!(
+                guest.fetch(&request).await,
+                refusal("invalid_request", words::ATTACHED_UNREAD),
+                "{connection}"
+            );
+        }
+        assert_eq!(guest.ops(), Vec::<String>::new());
+        assert!(guest.frames_of("fetch").is_empty());
+    });
+}
+
+#[test]
+fn a_stream_with_multipart_is_refused_before_its_pin() {
+    in_a_runtime(|| async move {
+        let mut guest = in_process(
+            pinning("api.example.test"),
+            support::silent_fetches(),
+            zero(),
+        )
+        .await;
+        let request = json!({"method": "POST",
+            "url": "https://api.example.test/v1/audio/transcriptions", "headers": {}, "body": "",
+            "multipart": [{"name": "model", "value": "whisper-1"}]});
+        assert_eq!(
+            guest.open(&request).await,
+            refusal("invalid_request", words::STREAM_MULTIPART)
+        );
+        assert_eq!(guest.ops(), Vec::<String>::new());
+        assert!(guest.frames_of("fetch").is_empty());
+    });
+}
+
+#[test]
+fn a_request_past_its_envelope_is_too_large_before_it_is_parsed() {
+    // No JSON, and nested past the depth a document is read to: read first,
+    // it would answer invalid_json.
+    use cyfr_runner::imports::http::{Purpose, requested};
+    let read = |request: &str, max_request_size: u64, purpose: Purpose| {
+        let limits = cyfr_runner::authority::Limits {
+            max_request_size,
+            ..zero()
+        };
+        requested(request, &limits, purpose)
+            .err()
+            .map(|refused| (refused.kind, refused.message))
+    };
+    let past = "{".repeat(32_768);
+    for (max, purpose) in [
+        (16, Purpose::Fetch),
+        (64, Purpose::Fetch),
+        (16, Purpose::Stream),
+    ] {
+        assert_eq!(
+            read(&past, max, purpose),
+            Some((
+                "request_too_large".to_owned(),
+                words::REQUEST_TOO_LARGE.to_owned()
+            )),
+            "{max}, {purpose:?}"
+        );
+    }
+    // Within its envelope, the same text is read, and is no JSON.
+    assert_eq!(
+        read(&"{".repeat(100), 16, Purpose::Fetch),
+        Some((
+            "invalid_json".to_owned(),
+            words::REQUEST_NOT_JSON.to_owned()
+        ))
+    );
+}
+
+// ============================================================================
+// What a request is sent as
+// ============================================================================
+
+#[test]
+fn a_base64_body_is_sent_decoded_a_multipart_one_as_form_data_and_each_attached_request_has_its_own_call_id()
+ {
+    use cyfr_runner::wire::{decode_base64, decode_base64url, encode_base64};
+    in_a_runtime(|| async move {
+        let mut guest = in_process(
+            pinning("api.example.test"),
+            Box::new(|fetch, job| match fetch.get("call_id") {
+                Some(_) => attached_ok(fetch, job),
+                None => ok(),
+            }),
+            zero(),
+        )
+        .await;
+        let url = "https://api.example.test/v1/x";
+        let pinned = json!({"method": "POST", "url": url,
+                            "body": encode_base64(b"raw bytes"), "body_encoding": "base64"});
+        let mut attached = pinned.clone();
+        attached["connection"] = json!("api_key");
+        let multipart = json!({"method": "POST", "url": url, "connection": "api_key",
+            "multipart": [{"name": "model", "value": "whisper-1"},
+                          {"name": "file", "filename": "a.txt", "data": encode_base64(b"abc")}]});
+        for request in [&pinned, &attached, &multipart] {
+            assert_eq!(guest.fetch(request).await, ok_answer(), "{request}");
+        }
+        let sent = guest.frames_of("fetch");
+        assert_eq!(sent.len(), 3);
+        let body = |fetch: &Value| {
+            decode_base64(fetch["body"].as_str().expect("a body")).expect("a base64 body")
+        };
+        assert_eq!(body(&sent[0]), b"raw bytes");
+        assert_eq!(body(&sent[1]), b"raw bytes");
+        // The parts encoded as `multipart/form-data`, the boundary in the
+        // one content type.
+        let headers = sent[2]["headers"].as_array().expect("headers");
+        assert_eq!(headers.len(), 1, "{headers:?}");
+        assert_eq!(headers[0][0], "content-type");
+        let boundary = headers[0][1]
+            .as_str()
+            .and_then(|value| value.strip_prefix("multipart/form-data; boundary="))
+            .expect("a multipart content type");
+        assert_eq!(
+            String::from_utf8(body(&sent[2])).expect("a text body"),
+            format!(
+                "--{boundary}\r\ncontent-disposition: form-data; name=\"model\"\r\n\r\n\
+                 whisper-1\r\n--{boundary}\r\ncontent-disposition: form-data; name=\"file\"; \
+                 filename=\"a.txt\"\r\ncontent-type: application/octet-stream\r\n\r\nabc\r\n\
+                 --{boundary}--\r\n"
+            )
+        );
+        // Each attached request carries a call id of its own, sixteen bytes
+        // in base64url as CYFR reads one.
+        let ids: Vec<&str> = sent[1..]
+            .iter()
+            .map(|fetch| fetch["call_id"].as_str().expect("a call id"))
+            .collect();
+        assert_ne!(ids[0], ids[1]);
+        for id in &ids {
+            assert_eq!(
+                (id.len(), decode_base64url(id).map(|bytes| bytes.len())),
+                (22, Some(16)),
+                "{id}"
+            );
+        }
+        // An attached request asks no pin.
+        assert_eq!(guest.ops(), ["egress_pin"]);
+    });
+}
+
+#[test]
+fn an_answer_asked_in_base64_is_answered_with_its_body_encoding() {
+    let mut service = Service::start();
+    let job = fetching(
+        &json!({"method": "GET", "url": "https://api.example.test/v1/speech",
+                               "response_encoding": "base64"}),
+    );
+    service.assign_fetching(
+        &job,
+        pinning("api.example.test"),
+        in_turn(vec![vec![
+            Upstream::Head(
+                200,
+                vec![("content-type", "audio/mpeg".to_owned())],
+                b"binary audio data".to_vec(),
+            ),
+            Upstream::End(None),
+        ]]),
+    );
+    let (output, _, _) = completed(&service, &job);
+    assert_eq!(
+        output,
+        json!({"status": 200, "headers": {"content-type": "audio/mpeg"},
+               "body": cyfr_runner::wire::encode_base64(b"binary audio data"),
+               "body_encoding": "base64"})
+    );
+}
+
+// ============================================================================
+// How a request ends
+// ============================================================================
+
+#[test]
+fn a_connect_names_the_shorter_of_its_limits_and_a_wait_for_the_answer_the_requests() {
+    in_a_runtime(|| async move {
+        for (timeout, code, message) in [
+            ("1s", "connect_timeout", words::connect_timeout(1_000)),
+            ("30s", "timeout", words::request_timeout(30_000)),
+        ] {
+            let limits = cyfr_runner::authority::Limits {
+                timeout: timeout.to_owned(),
+                ..zero()
+            };
+            let mut guest = in_process(
+                pinning("api.example.test"),
+                in_turn(vec![vec![Upstream::End(Some(code))]]),
+                limits,
+            )
+            .await;
+            let request = json!({"method": "GET", "url": "https://api.example.test/x"});
+            assert_eq!(
+                guest.fetch(&request).await,
+                refusal("timeout", &message),
+                "{code}"
+            );
+            // A timeout is no refusal CYFR records.
+            assert_eq!(guest.ops(), ["egress_pin"], "{code}");
+        }
+    });
+}
+
+#[test]
+fn the_relays_metadata_refusal_answers_private_ip_blocked_for_a_fetch_and_a_hop_and_is_reported_once()
+ {
+    // The relay's connection, not the runner, refuses a metadata address
+    // however CYFR pinned it, and ends the fetch the runner sent with its
+    // code.
+    let refused = refusal("private_ip_blocked", words::SERVICE_METADATA);
+    let mut service = Service::start();
+    let job = fetching(&json!({"method": "GET", "url": "https://meta.example.test/latest"}));
+    service.assign_fetching(
+        &job,
+        pinning("meta.example.test"),
+        in_turn(vec![vec![Upstream::End(Some("private_ip_blocked"))]]),
+    );
+    let (output, _, _) = completed(&service, &job);
+    assert_eq!(output, refused);
+    assert_eq!(denials(&service), [refused["error"].clone()]);
+
+    // A redirect's hop, pinned from the pin it came from.
+    let url = "https://api.example.test/latest";
+    let mut service = Service::start();
+    let job = Job::new(
+        "catalyst",
+        &format!("{HOSTILE}/fetch_twice.wasm"),
+        &json!({"method": "GET", "url": url}).to_string(),
+    );
+    service.assign_fetching(
+        &job,
+        pinning("api.example.test"),
+        in_turn(vec![
+            vec![
+                Upstream::Head(302, vec![("location", "/latest".to_owned())], Vec::new()),
+                Upstream::End(None),
+            ],
+            vec![Upstream::End(Some("private_ip_blocked"))],
+        ]),
+    );
+    let (output, _, _) = completed(&service, &job);
+    assert_eq!(output, refused);
+    assert_eq!(
+        service.calls_of("egress_pin")[1].args,
+        json!({"url": url, "purpose": "redirect", "from": "pin_1"})
+    );
+    assert_eq!(denials(&service), [refused["error"].clone()]);
+}
+
+#[test]
+fn each_pin_code_the_relay_ends_a_fetch_with_answers_as_that_refused_pin_and_reports_nothing() {
+    // CYFR decides the send again at the relay's own ask. Its refusal there
+    // is the guest's and recorded by CYFR already; a pin the service could
+    // not take (`unavailable`, `lost`, `elsewhere`, `expired`) is the
+    // runner's own refusal, of a type CYFR records none of.
+    let host = "api.example.test";
+    let cases = [
+        ("pin_domain", "domain_blocked", words::pin_domain(host)),
+        ("pin_denied", "private_ip_blocked", words::pin_denied(host)),
+        (
+            "pin_metadata",
+            "private_ip_blocked",
+            words::pin_metadata(host),
+        ),
+        ("pin_resolution", "dns_error", words::pin_resolution(host)),
+        (
+            "pin_redirect_credentials",
+            "redirect_credentials",
+            words::redirect_refused(host),
+        ),
+        (
+            "pin_malformed",
+            "invalid_request",
+            words::BAD_URL.to_owned(),
+        ),
+        ("pin_unavailable", "dns_error", words::pin_unavailable(host)),
+        ("pin_lost", "dns_error", words::PIN_NOT_CURRENT.to_owned()),
+        ("pin_elsewhere", "dns_error", words::pin_elsewhere(host)),
+        ("pin_expired", "dns_error", words::pin_expired(host)),
+    ];
+    in_a_runtime(move || async move {
+        let ends = cases
+            .iter()
+            .map(|(code, _, _)| vec![Upstream::End(Some(*code))])
+            .collect();
+        let mut guest = in_process(pinning(host), in_turn(ends), zero()).await;
+        let request = json!({"method": "GET", "url": "https://api.example.test/x"});
+        for (code, kind, message) in &cases {
+            assert_eq!(
+                guest.fetch(&request).await,
+                refusal(kind, message),
+                "{code}"
+            );
+        }
+        assert_eq!(guest.ops(), vec!["egress_pin"; cases.len()]);
+        assert_eq!(guest.frames_of("fetch").len(), cases.len());
+    });
+}
+
+#[test]
+fn a_stream_whose_request_fails_before_its_head_reads_request_failed() {
+    for (code, message) in [
+        ("econnrefused", words::http_failed("econnrefused")),
+        ("http_error", words::HTTP_FAILED.to_owned()),
+    ] {
+        let mut service = Service::start();
+        let job = streaming(
+            "stream_until",
+            &json!({"method": "GET", "url": "https://api.example.test/refused"}),
+        );
+        service.assign_fetching(
+            &job,
+            pinning("api.example.test"),
+            in_turn(vec![vec![Upstream::End(Some(code))]]),
+        );
+        let (output, _, _) = completed(&service, &job);
+        assert_eq!(output, refusal("request_failed", &message), "{code}");
+        assert!(denials(&service).is_empty(), "{code}");
+    }
+}
+
+#[test]
+fn a_frame_that_does_not_read_hands_a_fetch_nothing_of_its_answer_and_a_stream_nothing_from_it_on()
+{
+    in_a_runtime(|| async move {
+        let mut guest = in_process(
+            Box::new(standard),
+            Box::new(|fetch, job| {
+                let call_id = fetch["call_id"].as_str().expect("a call id");
+                let sealed = |seq, kind, plain: &[u8]| {
+                    Upstream::Frame(support::seal_frame(job, call_id, seq, kind, plain))
+                };
+                let head = json!({"status": 200, "headers": []}).to_string();
+                vec![
+                    sealed(0, "head", head.as_bytes()),
+                    sealed(1, "chunk", b"data: a\n\n"),
+                    // A chunk's kind byte before what is no sealed frame:
+                    // the answer ends here, and nothing after it is read.
+                    Upstream::Frame(b"cforged".to_vec()),
+                    sealed(2, "chunk", b"data: b\n\n"),
+                    sealed(3, "end", b""),
+                    Upstream::End(None),
+                ]
+            }),
+            zero(),
+        )
+        .await;
+        let request = json!({"method": "POST", "url": "https://api.example.test/v1/chat",
+                             "connection": "api_key", "body": "{}"});
+        assert_eq!(
+            guest.fetch(&request).await,
+            refusal("http_error", words::HTTP_FAILED)
+        );
+        let opened = guest.open(&request).await;
+        let handle = opened["handle"].as_str().expect("a handle").to_owned();
+        let mut data = String::new();
+        let mut error = None;
+        for _ in 0..100 {
+            let read = guest.read(&handle).await;
+            if let Some(refused) = read.get("error") {
+                error = Some(refused.clone());
+                break;
+            }
+            assert_eq!(read["done"], json!(false), "{read}");
+            data.push_str(read["data"].as_str().expect("data"));
+        }
+        assert_eq!(data, "data: a\n\n");
+        assert_eq!(
+            error,
+            Some(json!({"type": "request_failed", "message": words::HTTP_FAILED}))
+        );
+        assert!(guest.calls_of("record_denial").is_empty());
+    });
+}
+
+// ============================================================================
+// A redirect the guest follows
+// ============================================================================
+
+#[test]
+fn a_same_origin_hop_carries_the_requests_credentials() {
+    let url = "https://api.example.test/landing";
+    let credentials = json!({"Authorization": "Bearer sk_test", "Cookie": "session=1",
+                             "x-trace": "t"});
+    let mut service = Service::start();
+    let job = Job::new(
+        "catalyst",
+        &format!("{HOSTILE}/fetch_twice.wasm"),
+        &json!({"method": "GET", "url": url, "headers": credentials}).to_string(),
+    );
+    service.assign_fetching(
+        &job,
+        pinning("api.example.test"),
+        in_turn(vec![
+            vec![
+                Upstream::Head(302, vec![("location", "/landing".to_owned())], Vec::new()),
+                Upstream::End(None),
+            ],
+            vec![
+                Upstream::Head(200, Vec::new(), b"landed".to_vec()),
+                Upstream::End(None),
+            ],
+        ]),
+    );
+    let (output, _, _) = completed(&service, &job);
+    assert_eq!(
+        output,
+        json!({"status": 200, "headers": {}, "body": "landed"})
+    );
+    let pins: Vec<Value> = service
+        .calls_of("egress_pin")
+        .into_iter()
+        .map(|call| call.args)
+        .collect();
+    assert_eq!(
+        pins,
+        [
+            json!({"url": url, "purpose": "fetch"}),
+            json!({"url": url, "purpose": "redirect", "from": "pin_1"}),
+        ]
+    );
+    let sent: Vec<(Value, Value)> = service
+        .frames_of("fetch")
+        .iter()
+        .map(|fetch| (fetch["pin"].clone(), fetch["headers"].clone()))
+        .collect();
+    let headers = json!([
+        ["Authorization", "Bearer sk_test"],
+        ["Cookie", "session=1"],
+        ["x-trace", "t"]
+    ]);
+    assert_eq!(
+        sent,
+        [(json!("pin_1"), headers.clone()), (json!("pin_2"), headers)]
+    );
+}
+
+#[test]
+fn a_hop_cyfr_pins_on_another_origin_than_its_pin_is_refused_unsent_and_the_next_request_there_is_the_guests_own()
+ {
+    in_a_runtime(|| async move {
+        let elsewhere = "https://other.example.test/elsewhere";
+        let mut guest = in_process(
+            pinning_each(),
+            in_turn(vec![
+                vec![
+                    Upstream::Head(302, vec![("location", elsewhere.to_owned())], Vec::new()),
+                    Upstream::End(None),
+                ],
+                vec![
+                    Upstream::Head(200, Vec::new(), b"reached".to_vec()),
+                    Upstream::End(None),
+                ],
+            ]),
+            zero(),
+        )
+        .await;
+        let start = "https://api.example.test/redirect";
+        let credentials = json!({"Authorization": "Bearer sk_test"});
+        let hop = json!({"method": "GET", "url": elsewhere, "headers": credentials});
+        assert_eq!(
+            guest
+                .fetch(&json!({"method": "GET", "url": start, "headers": credentials}))
+                .await,
+            json!({"status": 302, "headers": {"location": elsewhere}, "body": ""})
+        );
+        // CYFR pins the hop on its own origin, which is not its pin's.
+        assert_eq!(
+            guest.fetch(&hop).await,
+            refusal(
+                "redirect_credentials",
+                &words::redirect_refused("other.example.test")
+            )
+        );
+        assert_eq!(guest.frames_of("fetch").len(), 1);
+        // The hop was the redirect's alone: the guest's next request there
+        // is its own, and carries what it sends.
+        assert_eq!(
+            guest.fetch(&hop).await,
+            json!({"status": 200, "headers": {}, "body": "reached"})
+        );
+        assert_eq!(
+            guest.calls_of("egress_pin"),
+            [
+                json!({"url": start, "purpose": "fetch"}),
+                json!({"url": elsewhere, "purpose": "redirect", "from": "pin_1"}),
+                json!({"url": elsewhere, "purpose": "fetch"}),
+            ]
+        );
+        let sent = guest.frames_of("fetch");
+        assert_eq!(
+            (&sent[1]["pin"], &sent[1]["headers"]),
+            (
+                &json!("pin_3"),
+                &json!([["Authorization", "Bearer sk_test"]])
+            )
+        );
+        // No refusal CYFR records (`Opus.Host.Storage`'s denials take no
+        // `redirect_credentials`): nothing is reported.
+        assert_eq!(guest.ops(), ["egress_pin"; 3]);
+    });
+}
+
+#[test]
+fn cyfrs_refusal_of_a_hop_is_redirect_credentials_naming_its_host_unsent_and_unreported() {
+    in_a_runtime(|| async move {
+        let mut pins = 0;
+        let mut guest = in_process(
+            Box::new(move |call, job| match call.op.as_str() {
+                "egress_pin" => {
+                    pins += 1;
+                    if pins == 1 {
+                        pin("pin_1", "https", "api.example.test")
+                    } else {
+                        Reply::Error("redirect_credentials", json!({}))
+                    }
+                }
+                _ => standard(call, job),
+            }),
+            in_turn(vec![vec![
+                Upstream::Head(
+                    302,
+                    vec![("location", "https://login.other.test/session".to_owned())],
+                    Vec::new(),
+                ),
+                Upstream::End(None),
+            ]]),
+            zero(),
+        )
+        .await;
+        let credentials = json!({"Authorization": "Bearer sk_test", "Cookie": "session=1"});
+        let start = json!({"method": "GET", "url": "https://api.example.test/redirect",
+                           "headers": credentials});
+        assert_eq!(guest.fetch(&start).await["status"], json!(302));
+        let hop = json!({"method": "GET", "url": "https://login.other.test/session",
+                         "headers": credentials});
+        assert_eq!(
+            guest.fetch(&hop).await,
+            refusal(
+                "redirect_credentials",
+                &words::redirect_refused("login.other.test")
+            )
+        );
+        assert_eq!(
+            guest.calls_of("egress_pin")[1],
+            json!({"url": "https://login.other.test/session", "purpose": "redirect",
+                   "from": "pin_1"})
+        );
+        assert_eq!(guest.frames_of("fetch").len(), 1);
+        assert_eq!(guest.ops(), ["egress_pin", "egress_pin"]);
+    });
+}
+
+// ============================================================================
+// A stream's handles and its pin
+// ============================================================================
+
+#[test]
+fn a_read_of_a_handle_that_does_not_exist_is_invalid_handle_and_its_close_is_ok() {
+    in_a_runtime(|| async move {
+        let mut guest = in_process(Box::new(standard), support::silent_fetches(), zero()).await;
+        assert_eq!(
+            guest.read("nonexistent-handle").await,
+            refusal(
+                "invalid_handle",
+                &words::unknown_handle("nonexistent-handle")
+            )
+        );
+        for _ in 0..2 {
+            assert_eq!(guest.close("nonexistent-handle").await, json!({"ok": true}));
+        }
+        assert_eq!(guest.ops(), Vec::<String>::new());
+    });
+}
+
+#[test]
+fn a_stream_that_outlives_its_pin_reads_on_to_its_end() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    in_a_runtime(|| async move {
+        let expires = Arc::new(AtomicU64::new(0));
+        let pinned = expires.clone();
+        let script: support::Script = Box::new(move |call, job| match call.op.as_str() {
+            "egress_pin" => {
+                let expires_at = support::now_ms() + 1_000;
+                pinned.store(expires_at, Ordering::SeqCst);
+                Reply::Ok(json!({"id": "pin_1", "ip": "203.0.113.10", "family": 4,
+                                 "scheme": "https", "port": 443, "host": "api.example.test",
+                                 "expires_at": expires_at}))
+            }
+            _ => standard(call, job),
+        });
+        // The rest of the answer comes half a second past the pin's expiry.
+        let fetches = in_turn(vec![vec![
+            Upstream::Head(200, Vec::new(), b"first ".to_vec()),
+            Upstream::Pause(Duration::from_millis(1_500)),
+            Upstream::Chunk(b"last".to_vec()),
+            Upstream::End(None),
+        ]]);
+        let mut guest = in_process(script, fetches, zero()).await;
+        let url = "https://api.example.test/long";
+        let opened = guest.open(&json!({"method": "GET", "url": url})).await;
+        let handle = opened["handle"].as_str().expect("a handle").to_owned();
+        let mut data = String::new();
+        let mut ended_at = None;
+        for _ in 0..200 {
+            let read = guest.read(&handle).await;
+            assert!(read.get("error").is_none(), "{read}");
+            data.push_str(read["data"].as_str().expect("data"));
+            if read["done"] == json!(true) {
+                ended_at = Some(support::now_ms());
+                break;
+            }
+        }
+        assert_eq!(data, "first last");
+        let ended_at = ended_at.expect("the stream ended");
+        let expired = expires.load(Ordering::SeqCst);
+        assert!(
+            ended_at > expired,
+            "ended {ended_at}, its pin expired {expired}"
+        );
+        // The one pin the runner asks for a stream, when it opens.
+        assert_eq!(
+            guest.calls_of("egress_pin"),
+            [json!({"url": url, "purpose": "stream"})]
+        );
+    });
+}
+
+/// The limits of an unbound authority.
+fn zero() -> cyfr_runner::authority::Limits {
+    cyfr_runner::authority::Limits::zero()
+}

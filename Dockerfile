@@ -37,10 +37,9 @@ RUN scripts/cosign.sh install /opt/cosign
 COPY mix.exs mix.lock ./
 COPY --parents apps/*/mix.exs ./
 
-# The deps' precompiled NIFs are fetched into the caches their compiles
-# read (rustler_precompiled's and elixir_make's) before the deps compile,
-# which cannot download them itself
-# (scripts/fetch-prebuilt-binaries.sh says why).
+# The deps' precompiled NIFs are fetched into the cache their compiles
+# read (elixir_make's) before the deps compile, which cannot download them
+# itself (scripts/fetch-prebuilt-binaries.sh says why).
 COPY scripts/fetch-prebuilt-binaries.sh scripts/fetch-prebuilt-binaries.sh
 RUN mix deps.get --only prod && scripts/fetch-prebuilt-binaries.sh && mix deps.compile
 

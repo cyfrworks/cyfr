@@ -10,8 +10,9 @@ defmodule Opus.Telemetry do
   `Cyfr.TelemetryBridge` consume them (`Cyfr.Telemetry.Catalog`) — and are
   distinct from the execution's persistent record (`Opus.Record`).
   `[:cyfr, :opus, :emit]` is for operator metrics. The events a running
-  component's storage, tool and formula calls produce are
-  `Locus.Runtime.Telemetry`'s.
+  component's requests, storage, tool and formula calls produce are its
+  runner's, which the control plane emits as its worker service reports
+  them (`Opus.Host.RunnerEvents`).
 
   ## Events
 

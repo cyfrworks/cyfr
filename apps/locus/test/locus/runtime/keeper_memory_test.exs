@@ -29,7 +29,7 @@ defmodule Locus.Runtime.KeeperMemoryTest do
 
   @stream_attach 3
 
-  @spec_env %{"RUNTIME_ROLE" => "runner", "RUNTIME_RUNNER_ID" => "runner_1"}
+  @spec_env %{"RUNTIME_RUNNER_ID" => "runner_1"}
   @bound 402_653_184
 
   # The keeper's vectors, the one file the keeper and every client of its

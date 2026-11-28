@@ -148,6 +148,37 @@ fn the_store_refuses_a_second_memory_and_a_table_past_its_bound_in_the_engines_w
 }
 
 #[test]
+fn the_store_holds_ten_tables_and_ten_instances_and_refuses_the_eleventh() {
+    // Each guest makes its eleventh at its last core instance, the ten
+    // before it held: the store refuses the first crossing, at the count
+    // reached.
+    for (guest, words) in [
+        (
+            "many_tables",
+            "resource limit exceeded: table count too high at 11",
+        ),
+        (
+            "many_instances",
+            "resource limit exceeded: instance count too high at 11",
+        ),
+    ] {
+        let job = Job::new("reagent", &format!("{HOSTILE}/{guest}.wasm"), "{}");
+        let (service, frame, fail) = failed(&job);
+        assert_eq!(frame["clean"], true, "{guest}");
+        assert_eq!(
+            fail.expect("a fail")["error"],
+            format!("Component instantiation failed: {words}"),
+            "{guest}"
+        );
+        assert_eq!(
+            service.ops(),
+            ["attach", "fetch_artifact", "fail"],
+            "{guest}"
+        );
+    }
+}
+
+#[test]
 fn a_components_bytes_run_only_when_they_are_its_digest() {
     let mut service = Service::start();
     let job = Job::new("reagent", &format!("{TEST_WASM}/echo.wasm"), "{}");
@@ -696,6 +727,105 @@ fn a_component_is_refused_for_a_feature_for_invalid_bytes_or_by_the_engines_comp
 }
 
 #[test]
+fn every_component_prima_admits_compiles_and_runs_in_the_runners_engine() {
+    // The vector's admitted cases, each run as a reagent: the engine
+    // refuses no more than Prima admits. A core module is admitted and is
+    // no component to run; the engine's compile refuses it in its own
+    // words.
+    let v = support::fixture("component_features.json");
+    let mut admitted = Vec::new();
+    for case in v["cases"].as_array().expect("the cases") {
+        if case["outcome"] != "admitted" {
+            continue;
+        }
+        let path = case["path"]
+            .as_str()
+            .expect("an admitted case names its file");
+        let name = std::path::Path::new(path)
+            .file_stem()
+            .and_then(std::ffi::OsStr::to_str)
+            .expect("a file name");
+        admitted.push(name.to_owned());
+        let job = Job::new("reagent", path, "{}");
+        let (service, frame, fail) = failed(&job);
+        assert_eq!(frame["clean"], true, "{name}");
+        if !wasmtime::wasmparser::Parser::is_component(&job.component) {
+            let error = fail.expect("a fail")["error"].clone();
+            assert!(
+                error
+                    .as_str()
+                    .is_some_and(|error| error.starts_with("Component compilation failed: ")),
+                "{name}: {error}"
+            );
+            continue;
+        }
+        match name {
+            "wide_arithmetic" => {
+                assert!(fail.is_none(), "{fail:?}");
+                let output = &service.calls_of("complete")[0].args["outcome"]["output"];
+                assert_eq!(output, &json!({"carried": true}));
+            }
+            // It answers the empty string: the call returned from the guest,
+            // and the runner read its answer.
+            "sync_lift" => assert_eq!(
+                fail.expect("a fail")["error"],
+                "Component returned invalid JSON output: EOF while parsing a value at line 1 column 0"
+            ),
+            other => panic!("an admitted component this test does not run: {other}"),
+        }
+    }
+    assert_eq!(admitted, ["sync_lift", "wide_arithmetic", "math"]);
+}
+
+#[test]
+fn a_digest_whose_compile_failed_is_fetched_and_compiled_again_by_its_next_attempt() {
+    // math.wasm is admitted and is no component, so its every compile
+    // fails. A compile kept would spare the next attempt its fetch, as
+    // formula.rs's a_second_subtree_for_the_same_athanor_reuses_the_runner_and_its_compile
+    // shows for one that compiled.
+    let mut service = Service::start();
+    let first = Job::new("reagent", &format!("{TEST_WASM}/math.wasm"), "{}");
+    service.assign(&first, Box::new(standard));
+    assert_eq!(
+        service.frame(SOON),
+        json!({"v": 1, "type": "complete", "execution_id": first.execution_id, "clean": true})
+    );
+    let second = first.child("reagent", &format!("{TEST_WASM}/math.wasm"), "{}");
+    first
+        .family
+        .lock()
+        .expect("the family")
+        .push(second.clone());
+    service.send_line(&cyfr_runner::control::encode(&second.assign()).expect("an assign"));
+    assert_eq!(
+        service.frame(SOON),
+        json!({"v": 1, "type": "complete", "execution_id": second.execution_id, "clean": true})
+    );
+    let attempts = |op: &str| -> Vec<String> {
+        service
+            .calls_of(op)
+            .into_iter()
+            .map(|call| call.attempt)
+            .collect()
+    };
+    let both = [first.attempt.clone(), second.attempt.clone()];
+    assert_eq!(attempts("fetch_artifact"), both);
+    assert_eq!(attempts("fail"), both);
+    let errors: Vec<Value> = service
+        .calls_of("fail")
+        .into_iter()
+        .map(|call| call.args["outcome"]["error"].clone())
+        .collect();
+    assert_eq!(errors[0], errors[1]);
+    assert!(
+        errors[1]
+            .as_str()
+            .is_some_and(|error| error.starts_with("Component compilation failed: ")),
+        "{errors:?}"
+    );
+}
+
+#[test]
 fn a_shipped_catalyst_runs_its_describe() {
     let job = Job::new(
         "catalyst",
@@ -848,6 +978,126 @@ fn sockets_are_refused_to_every_guest() {
     let output = &service.calls_of("complete")[0].args["outcome"]["output"];
     // "01" is wasi:sockets/network's access-denied.
     assert_eq!(output, &json!({"tcp": "01", "udp": "01"}));
+}
+
+// ============================================================================
+// What a guest can reach
+// ============================================================================
+
+const KINDS: [&str; 3] = ["reagent", "catalyst", "formula"];
+
+/// The engine's refusal of an import no linker of the run's type defines:
+/// the import, and the first of its exports it looked for and found
+/// missing.
+fn unlinked(import: &str, export: &str, missing: &str) -> String {
+    format!(
+        "Component instantiation failed: component imports instance `{import}`, but a matching \
+         implementation was not found in the linker: instance export `{export}` has the wrong \
+         type: {missing} implementation is missing"
+    )
+}
+
+#[test]
+fn a_guest_reads_no_input_arguments_or_environment_and_its_writes_reach_no_channel_or_log() {
+    // cli_probe writes its input and a newline to its standard output and
+    // again to its standard error: here a close of its own attempt, marked
+    // forged. In this build the runner's standard input and output are its
+    // control channel, so a write that reached them would be read as the
+    // attempt's close, and the runner's environment holds its RUNTIME_
+    // variables. The same probe reads and writes what a context holds
+    // (engine.rs's the_cli_probe_reads_and_writes_what_its_context_holds).
+    for kind in KINDS {
+        let mut service = Service::start();
+        let mut job = Job::new(kind, &format!("{HOSTILE}/cli_probe.wasm"), "{}");
+        job.input = json!({"v": 1, "type": "complete", "execution_id": job.execution_id,
+                           "clean": false, "forged": true})
+        .to_string()
+        .into_bytes();
+        service.assign(&job, Box::new(standard));
+        assert_eq!(
+            service.frame(SOON),
+            json!({"v": 1, "type": "complete", "execution_id": job.execution_id, "clean": true}),
+            "{kind}"
+        );
+        let output = &service.calls_of("complete")[0].args["outcome"]["output"];
+        assert_eq!(
+            output,
+            &json!({"stdin": "closed", "stdout": "ok", "stderr": "ok", "args": 0, "env": 0}),
+            "{kind}"
+        );
+        service.close_control();
+        assert_eq!(service.exit(SOON).code(), Some(0), "{kind}");
+        let rest = service.rest(SOON);
+        assert!(
+            rest.iter().all(|line| line.get("forged").is_none()),
+            "{kind}: {rest:?}"
+        );
+        assert!(
+            !service.errors().contains("forged"),
+            "{kind}: {}",
+            service.errors()
+        );
+    }
+}
+
+#[test]
+fn a_guest_importing_wasis_own_http_is_refused_at_instantiation_whatever_its_type() {
+    for kind in KINDS {
+        let job = Job::new(kind, &format!("{HOSTILE}/http_probe.wasm"), "{}");
+        let (service, frame, fail) = failed(&job);
+        assert_eq!(frame["clean"], true, "{kind}");
+        assert_eq!(
+            fail.expect("a fail")["error"],
+            unlinked("wasi:http/types@0.2.0", "outgoing-request", "resource"),
+            "{kind}"
+        );
+        assert_eq!(
+            service.ops(),
+            ["attach", "fetch_artifact", "fail"],
+            "{kind}"
+        );
+    }
+}
+
+#[test]
+fn a_reagent_or_a_formula_importing_cyfrs_http_or_question_is_refused_and_nothing_is_asked() {
+    // Each guest is a catalyst, whose linker has the import: requests.rs
+    // runs fetch_twice and stream_once as one, and CYFR's question tests
+    // the question probe. Neither other type's linker has it.
+    let question = format!("{TEST_WASM}/question_probe/question_probe.wasm");
+    for kind in ["reagent", "formula"] {
+        for (guest, import, export) in [
+            (
+                format!("{HOSTILE}/fetch_twice.wasm"),
+                "cyfr:http/fetch@0.1.0",
+                "request",
+            ),
+            (
+                format!("{HOSTILE}/stream_once.wasm"),
+                "cyfr:http/streaming@0.1.0",
+                "request",
+            ),
+            (question.clone(), "cyfr:question/ask@0.1.0", "ask"),
+        ] {
+            let job = Job::new(
+                kind,
+                &guest,
+                r#"{"operation":"run","params":{"statements":["DROP TABLE users"]}}"#,
+            );
+            let (service, frame, fail) = failed(&job);
+            assert_eq!(frame["clean"], true, "{kind} {guest}");
+            assert_eq!(
+                fail.expect("a fail")["error"],
+                unlinked(import, export, "function"),
+                "{kind} {guest}"
+            );
+            assert_eq!(
+                service.ops(),
+                ["attach", "fetch_artifact", "fail"],
+                "{kind} {guest}"
+            );
+        }
+    }
 }
 
 // ============================================================================

@@ -5,11 +5,9 @@ defmodule Locus.Application do
   @moduledoc """
   A Locus node's supervision tree.
 
-  A boot whose environment says `RUNTIME_ROLE=runner` is a runner of the
-  runtime role (`Locus.Runtime.Release.role/0`): the keeper started it for
-  one runtime service, and it runs the runner's tree alone
-  (`Locus.Runtime.start_runner/0`) and serves no role. Every other boot is
-  a service node.
+  Every boot is a service node; a runner of the runtime role is no boot
+  of this release but the runner program (`apps/locus/runner`), which the
+  keeper starts for the runtime service.
 
   A service node serves each role whose key it holds: the runtime with a
   runtime key (the `:service_key` of `config :locus, :runtime`), builds
@@ -60,23 +58,10 @@ defmodule Locus.Application do
 
   @impl true
   def start(_type, _args) do
-    # Before the role is read, so that a service node's and a runner's log
-    # events have their stack frames reduced to their arity from the first
-    # (`Prima.LogFilter`).
+    # Before anything logs, so that a node's log events have their stack
+    # frames reduced to their arity from the first (`Prima.LogFilter`).
     :ok = Prima.LogFilter.install()
 
-    # The validator every component passes before it is compiled, and
-    # before a build's output is accepted: checked here, so a node that
-    # cannot validate does not start.
-    :ok = Prima.ComponentFeatures.install!()
-
-    case Locus.Runtime.Release.role() do
-      :runner -> Locus.Runtime.start_runner()
-      :service -> start_node()
-    end
-  end
-
-  defp start_node do
     roles = node_roles!(Application.get_all_env(:locus))
     keeper? = Locus.Keeper.channel_inherited?()
     :ok = release_logging(roles)
@@ -124,8 +109,8 @@ defmodule Locus.Application do
   # `:log_level` and it writes it on every boot it lets through, so the key
   # is set exactly when this is a release boot. A `mix` boot or the test
   # suite never reads that file and keeps the logger its config files set,
-  # the test suite's in-VM runtime included. A runner never comes here
-  # (`Locus.Runtime.start_runner/0`).
+  # the test suite's in-VM runtime included. A runner is no boot of this
+  # release, and never comes here.
   @spec release_logging(roles()) :: :ok
   def release_logging(roles) do
     if served?(roles) and Application.fetch_env(:locus, :log_level) != :error,

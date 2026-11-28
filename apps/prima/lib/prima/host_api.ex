@@ -9,7 +9,8 @@ defmodule Prima.HostAPI do
 
   ## A runner's calls
 
-  Every callback but `c:runner_exited/5` answers a runner, for one attempt
+  Every callback but `c:runner_exited/5` and `c:report_events/2` answers a
+  runner, for one attempt
   it runs. The call is signed with that attempt's call key
   (`Prima.WorkerAuth.host_call_header/3`), and its body and answer are
   sealed with the attempt's seal key (`Prima.WorkerAuth.seal_call/5`).
@@ -25,15 +26,19 @@ defmodule Prima.HostAPI do
   execution, attempt and runner a call acts for come from the caller, never
   from its body.
 
-  ## The worker service's report
+  ## The worker service's reports
 
-  `c:runner_exited/5` answers a worker service. The report is signed with
-  that worker service's own dispatch key (`Prima.WorkerAuth.report_header/3`)
-  and verified with `Prima.WorkerAuth.verify_report/4`, so it speaks only
-  for the runners of the worker service it names. Its `args` name the
-  member the runner's attempts were issued by, beside the runner and the
+  `c:runner_exited/5` and `c:report_events/2` answer a worker service.
+  Each report is signed with that worker service's own dispatch key
+  (`Prima.WorkerAuth.report_header/3`) and verified with
+  `Prima.WorkerAuth.verify_report/4`, so it speaks only for the runners of
+  the worker service it names. A `runner_exited`'s `args` name the member
+  the runner's attempts were issued by, beside the runner and the
   attempts, and a member that is not the one named lapses nothing: the
-  attempts belong to the member holding them, as a host call's do.
+  attempts belong to the member holding them, as a host call's do. A
+  `report_events`'s `args` name no member: its operator events are the
+  deployment's, emitted by whichever member answers, and carry nothing
+  that acts on an attempt.
 
   ## Retrying a lost answer
 
@@ -139,7 +144,8 @@ defmodule Prima.HostAPI do
     :attached_fetch,
     :question_ask,
     :question_wait,
-    :runner_exited
+    :runner_exited,
+    :report_events
   ]
 
   @retries %{
@@ -160,8 +166,21 @@ defmodule Prima.HostAPI do
     attached_fetch: :never,
     question_ask: :keyed,
     question_wait: :idempotent,
-    runner_exited: :idempotent
+    runner_exited: :idempotent,
+    report_events: :never
   }
+
+  # A `report_events` batch: at most this many records, each an `event`
+  # frame's members, whose line spans at most
+  # `Prima.RunnerControl.max_event_line_bytes/0`, so the largest batch
+  # fits a host call's body with room for its envelope.
+  @max_report_events 64
+  @max_event_record_bytes Prima.RunnerControl.max_event_line_bytes() + 1
+
+  if @max_report_events * @max_event_record_bytes + 1024 >
+       Prima.Limits.default_max_request_size() do
+    raise CompileError, description: "a report_events batch would not fit a host call's body"
+  end
 
   # The longest a `question_wait` may wait for an answer: the header window
   # less the margin a slow host's answer needs, so the wait ends inside the
@@ -244,6 +263,51 @@ defmodule Prima.HostAPI do
         :error
     end
   end
+
+  @doc """
+  The most operator events one `c:report_events/2` batch carries,
+  #{@max_report_events}, each within an `event` frame's line, so the
+  largest batch fits a host call's body.
+  """
+  @spec max_report_events() :: pos_integer()
+  def max_report_events, do: @max_report_events
+
+  @doc """
+  The args of a `report_events` batch carrying `events`, each an `event`
+  frame's message (`Prima.RunnerControl`): `{"events": [record, ...]}`,
+  each record the frame's `name`, `measurements` and `metadata` in wire
+  order. Raises for no event, more than `max_report_events/0`, or one the
+  roster refuses, since they are the caller's own data.
+  """
+  @spec report_events_args([Prima.RunnerControl.event(), ...]) :: map()
+  def report_events_args(events)
+      when is_list(events) and events != [] and length(events) <= @max_report_events,
+      do: %{"events" => Enum.map(events, &Prima.RunnerControl.event_record/1)}
+
+  @doc """
+  The events a `report_events` batch's args carry, each read by the
+  roster as an `event` frame's members are (`Prima.RunnerControl.read_event/1`),
+  or `:error` for args that are not exactly `events`, a list of one to
+  `max_report_events/0` records each of which reads: the batch is read
+  whole or refused whole.
+  """
+  @spec read_events(term()) :: {:ok, [Prima.RunnerControl.event(), ...]} | :error
+  def read_events(%{"events" => records} = args)
+      when map_size(args) == 1 and is_list(records) and records != [] and
+             length(records) <= @max_report_events do
+    Enum.reduce_while(records, {:ok, []}, fn record, {:ok, read} ->
+      case Prima.RunnerControl.read_event(record) do
+        {:ok, event} -> {:cont, {:ok, [event | read]}}
+        {:error, _reason} -> {:halt, :error}
+      end
+    end)
+    |> case do
+      {:ok, read} -> {:ok, Enum.reverse(read)}
+      :error -> :error
+    end
+  end
+
+  def read_events(_args), do: :error
 
   @doc "Every value a report's `memory` member may carry."
   @spec memory_ends() :: [String.t(), ...]
@@ -648,4 +712,22 @@ defmodule Prima.HostAPI do
               memory :: memory_end()
             ) ::
               :ok | {:error, :unavailable}
+
+  @doc """
+  Report operator events the reporting worker service's runners sent, at
+  most `max_report_events/0` in one batch (`report_events_args/1`), each
+  an `event` frame the service read by `Prima.RunnerControl`'s roster.
+  CYFR reads the batch whole, refusing it whole when any record is off
+  the roster, and emits each event in order as
+  `[:cyfr, :locus, :runtime | name's parts]`, its `system_time`
+  (microseconds since the epoch here) in its own native unit and a status
+  word as its atom. The report acts on no attempt and names no member.
+  It is never sent again (`:never`): a batch whose answer was lost may
+  have been emitted, and an event counted twice misleads more than one
+  missed, so CYFR remembers its nonce and refuses its replay.
+  """
+  @callback report_events(
+              report :: WorkerAuth.dispatch(),
+              events :: [Prima.RunnerControl.event(), ...]
+            ) :: :ok | {:error, :unavailable}
 end

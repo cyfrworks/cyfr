@@ -1237,8 +1237,7 @@ defmodule Opus.HostTest do
       calls = @vectors["calls"]
 
       assert Enum.map(calls, & &1["callback"]) ==
-               Prima.HostAPI.callbacks()
-               |> List.delete(:runner_exited)
+               (Prima.HostAPI.callbacks() -- [:runner_exited, :report_events])
                |> Enum.map(&Atom.to_string/1)
 
       for vector <- calls do

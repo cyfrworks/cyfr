@@ -22,31 +22,4 @@ defmodule Locus.Runtime.GenServerCatchallTest do
       assert Process.whereis(Locus.Runtime.WorkerService) == pid
     end
   end
-
-  describe "AsyncTracker catch-all" do
-    test "survives unexpected message and logs warning" do
-      {:ok, pid} = Locus.Runtime.AsyncTracker.start_link(max_tasks: 5)
-
-      assert capture_log(fn ->
-               send(pid, :unexpected_test_message)
-               :sys.get_state(pid)
-             end) =~ "unexpected message"
-
-      assert Process.alive?(pid)
-      GenServer.stop(pid)
-    end
-
-    test "survives unexpected tuple message" do
-      {:ok, pid} =
-        Locus.Runtime.AsyncTracker.start_link(max_tasks: 5)
-
-      assert capture_log(fn ->
-               send(pid, {:something, :entirely, :unexpected})
-               :sys.get_state(pid)
-             end) =~ "unexpected message"
-
-      assert Process.alive?(pid)
-      GenServer.stop(pid)
-    end
-  end
 end

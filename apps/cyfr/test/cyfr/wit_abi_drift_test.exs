@@ -3,19 +3,18 @@
 
 defmodule Cyfr.WitAbiDriftTest do
   @moduledoc """
-  The guest ABI is written down twice, and this test binds the two together.
+  The guest ABI is written down once, in `wit/`, and this test binds what
+  still copies it by hand to it.
 
   `wit/` is the contract: `Prima.WIT` embeds it at compile time,
   `Locus.Builder` copies it into the build sandbox, and `Prima.CargoToml`
-  points a generated `Cargo.toml` at it — so a component is compiled against
-  those interface names. The host side of the same contract is a set of
-  string keys in `Locus.Runtime`: the import map a component's world is instantiated
-  with, and the export path each type is called through.
-
-  Rename an interface in `wit/` and both sides still compile. Nothing fails
-  until a guest is instantiated and the host cannot satisfy an import it
-  never heard of — at runtime, per component, with a message about a missing
-  function rather than about the rename that caused it.
+  points a generated `Cargo.toml` at it, so a component is compiled against
+  those interface names. The runner's host side is generated from the same
+  files (`bindgen!` in `apps/locus/runner/src/imports/mod.rs`), so its
+  imports and the exports it calls cannot name an interface `wit/` lacks,
+  and the registration gate's exports (`Prima.WIT.expected_exports/1`)
+  come from the same world files. What is still spelled by hand is the
+  catalyst scaffold's WIT dependency table.
 
   This is the same guard `Cyfr.CrossLanguageDriftTest` puts on the Go
   component-ref port and `Emissary.MCP.ClientProtocolDriftTest` puts on the
@@ -25,22 +24,6 @@ defmodule Cyfr.WitAbiDriftTest do
   use ExUnit.Case, async: true
 
   @wit_root Path.expand("../../../../wit", __DIR__)
-  @runtime_lib Path.expand("../../../locus/lib/locus/runtime", __DIR__)
-
-  # Every `cyfr:<package>/<interface>@<version>` string the engine hands to
-  # Wasmex, whether as an import it provides or an export it calls.
-  defp runtime_abi_names do
-    @runtime_lib
-    |> Path.join("**/*.ex")
-    |> Prima.Test.SourceTree.files!()
-    |> Enum.flat_map(fn path ->
-      ~r/"(cyfr:[a-z]+\/[a-z-]+@\d+\.\d+\.\d+)"/
-      |> Regex.scan(File.read!(path))
-      |> Enum.map(fn [_, name] -> name end)
-    end)
-    |> Enum.uniq()
-    |> Enum.sort()
-  end
 
   # What `wit/` actually declares: for each package, its version and the
   # interfaces defined in it — across the world files and their deps.
@@ -67,58 +50,6 @@ defmodule Cyfr.WitAbiDriftTest do
   test "the wit tree is where this test thinks it is" do
     assert File.dir?(@wit_root)
     refute wit_abi_names() == []
-    refute runtime_abi_names() == []
-  end
-
-  test "every ABI name the engine uses is declared in wit/" do
-    declared = wit_abi_names()
-    undeclared = runtime_abi_names() -- declared
-
-    assert undeclared == [],
-           """
-           The runtime names guest interfaces that wit/ does not declare:
-
-           #{Enum.map_join(undeclared, "\n", &"  #{&1}")}
-
-           wit/ declares:
-
-           #{Enum.map_join(declared, "\n", &"  #{&1}")}
-
-           Both sides compile either way — a component built against wit/ and
-           a host offering something else only disagree when a guest is
-           instantiated, as a missing import.
-           """
-  end
-
-  # The reverse is deliberately NOT asserted: wit/ may declare an interface
-  # the engine does not implement yet, which is how a new host function gets
-  # its contract written before its handler exists. Only the engine claiming
-  # something wit/ never declared is a defect.
-  test "the interfaces the engine does implement cover the worlds' imports" do
-    imported =
-      @wit_root
-      |> Path.join("*/world.wit")
-      |> Prima.Test.SourceTree.files!()
-      |> Enum.flat_map(fn path ->
-        ~r/import\s+(cyfr:[a-z]+\/[a-z-]+@\d+\.\d+\.\d+)\s*;/
-        |> Regex.scan(File.read!(path))
-        |> Enum.map(fn [_, name] -> name end)
-      end)
-      |> Enum.uniq()
-      |> Enum.sort()
-
-    refute imported == [], "no imports found in the world files — the regex has drifted"
-
-    missing = imported -- runtime_abi_names()
-
-    assert missing == [],
-           """
-           A world imports host interfaces the engine provides no import map for:
-
-           #{Enum.map_join(missing, "\n", &"  #{&1}")}
-
-           A component built against that world will fail to instantiate.
-           """
   end
 
   # `Prima.CargoToml` hand-writes the catalyst WIT dependency table
@@ -143,29 +74,5 @@ defmodule Cyfr.WitAbiDriftTest do
     assert declared == on_disk,
            "scaffold declares #{inspect(declared)} but wit/catalyst/deps holds " <>
              inspect(on_disk)
-  end
-
-  # The registration gate (`Prima.Wasm.validate/2`) demands
-  # the exports `Prima.WIT.expected_exports/1` derives from the
-  # world files; the engine calls a component through the same names
-  # (`Locus.Runtime.Engine.execute_with_convention/3`). If the two drift, either
-  # registration refuses components the engine could run, or the engine
-  # calls an export registration never verified — both wrong.
-  test "the worlds registration demands are the ones the engine calls" do
-    runtime = File.read!(Path.join(@runtime_lib, "engine.ex"))
-
-    for type <- Prima.ComponentRef.executable_types() do
-      expected = Prima.WIT.expected_exports(type)
-
-      assert expected != [],
-             "Prima.WIT derives no expected exports for #{type} — " <>
-               "the world.wit parse has drifted"
-
-      for name <- expected do
-        assert String.contains?(runtime, ~s("#{name}")),
-               "registration demands #{name} for #{type}, but Locus.Runtime.Engine " <>
-                 "never addresses it — the call convention and the gate have drifted"
-      end
-    end
   end
 end

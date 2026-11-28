@@ -42,8 +42,8 @@ defmodule Cyfr.Test.ScriptedWorker do
   a run's process is alive, and `tainted` from a kill until the killed
   process has gone; it keeps no runner fresh or idle, bounds no runner's
   memory and never refuses one. A run's script is played in a process of
-  its own beside its runner, as the runtime runs a component beside its
-  attempt (`Locus.Runtime.Attempt`): one that has not answered within its
+  its own beside its runner, as a runner runs a component's work beside
+  its attempt's watch: one that has not answered within its
   budget, its timeout and no more than what is left of its deadline when
   it attached, is stopped and its run closed `fail` with
   `"Execution timeout after Nms"` and `abandoned: true`, as the runtime
@@ -51,8 +51,8 @@ defmodule Cyfr.Test.ScriptedWorker do
   that, it ends a runner still running at its assignment's deadline plus
   the runtime's default watchdog grace (`watchdog_grace_ms:` sets
   another) and reports the exit, as the runtime's worker service does
-  (`Locus.Runtime.Runner`): no kill was asked of it, and `expired/0`
-  lists it. Its kill is idempotent as
+  (`Locus.Runtime.WorkerService`'s watch): no kill was asked of it, and
+  `expired/0` lists it. Its kill is idempotent as
   `c:Prima.WorkerAPI.kill/1` says: `:ok` for an execution a runner of this
   boot holds or already ended, whether by a kill or on its own, and
   `{:error, :not_found}` only for one no runner of this boot ever held,

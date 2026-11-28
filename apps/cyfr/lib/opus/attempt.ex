@@ -1690,9 +1690,8 @@ defmodule Opus.Attempt do
 
   # The run's deadline, fixed when the attempt answers its runner's attach:
   # its timeout from then, and no later than its subtree's deadline. The
-  # runner starts its own budget once the attach is answered
-  # (`Locus.Runtime.Attempt`), so this is never later than the moment the
-  # runner ends the run.
+  # runner starts its own budget once the attach is answered, so this is
+  # never later than the moment the runner ends the run.
   defp run_deadline(state) do
     now = System.system_time(:millisecond)
 

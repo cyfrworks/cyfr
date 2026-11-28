@@ -642,7 +642,7 @@ func TestControlIsDecodedAndDefaultsToNone(t *testing.T) {
 		switch {
 		case req.Control:
 			withControl++
-			if req.Pool != "runner" || req.Env["RUNTIME_ROLE"] != "runner" {
+			if req.Pool != "runner" || req.Env["RUNTIME_RUNNER_ID"] != "run_01a09fee-1c2d-7e3f-8a4b-5c6d7e8f9a0b" {
 				t.Fatalf("the runner vector decoded to %+v", req)
 			}
 		case bytes.Contains(raw, []byte(`"control"`)):

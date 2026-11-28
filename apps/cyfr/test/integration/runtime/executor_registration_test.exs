@@ -101,44 +101,4 @@ defmodule Locus.Runtime.ExecutorRegistrationTest do
   defp run(ctx, input, execution_id),
     do:
       Opus.run_root(ctx, :default, @test_ref, input, execution_id: execution_id, type: "reagent")
-
-  describe "killing reaches the process running the component" do
-    test "a linked child that traps exits survives its parent's kill" do
-      # The shape a runner uses: the component process is spawn_link'd from
-      # the runner, and it sets trap_exit so a Wasmex crash becomes a
-      # message instead of killing it. A link-propagated exit is trappable
-      # whatever its reason — :killed included — so killing the runner does
-      # NOT stop the component process. Only a direct
-      # `Process.exit(component, :kill)` is untrappable, which is why the
-      # worker service kills it by name.
-      parent_of_all = self()
-
-      registered =
-        spawn(fn ->
-          runner =
-            spawn_link(fn ->
-              Process.flag(:trap_exit, true)
-              send(parent_of_all, {:runner, self()})
-              # Keep working, exactly as a component call would.
-              Process.sleep(:infinity)
-            end)
-
-          send(parent_of_all, {:registered, self(), runner})
-          Process.sleep(:infinity)
-        end)
-
-      assert_receive {:registered, ^registered, runner}, 5_000
-      assert_receive {:runner, ^runner}, 5_000
-
-      ref = Process.monitor(runner)
-      Process.exit(registered, :kill)
-
-      refute_receive {:DOWN, ^ref, :process, ^runner, _}, 300
-      assert Process.alive?(runner), "the trapping runner outlived the kill of its parent"
-
-      # ...and the direct kill the fix uses does stop it.
-      Process.exit(runner, :kill)
-      assert_receive {:DOWN, ^ref, :process, ^runner, _}, 5_000
-    end
-  end
 end

@@ -181,8 +181,8 @@ same worktree refuses, naming the run that holds it.
   alone.
 - Keep changes focused and match the surrounding code style.
 - Every component is validated by the pinned `wasm-tools`, which the dev
-  and test configurations name at `_tools/wasm-tools`, and the application
-  refuses to start without it: install it once with
+  and test configurations name at `_tools/wasm-tools`, and CYFR refuses to
+  start without it: install it once with
   `scripts/wasm-tools.sh install _tools` (`scripts/test-partitioned.sh`
   installs it when it is missing).
 - A stage fetches the deps itself when `mix.lock` changed: `mix deps.get`,
@@ -191,7 +191,7 @@ same worktree refuses, naming the run that holds it.
   change to `mix.lock`, run `scripts/fetch-prebuilt-binaries.sh` before
   the first compile; and `scripts/fetch-prebuilt-binaries.sh --tailwind`
   before the first `mix assets.deploy` or dev server: neither the deps' precompiled
-  NIFs (wasmex's, exqlite's and lazy_html's) nor the tailwind CLI download
+  NIFs (exqlite's and lazy_html's) nor the tailwind CLI download
   through the deps' own downloads, and the script's header says why.
 - The tests tagged `:requires_cargo_component` build real components, and
   the test helpers exclude them where `cargo-component` is not on `PATH`.
@@ -210,7 +210,13 @@ same worktree refuses, naming the run that holds it.
   check` runs its format check, its lints and its tests, which hold its
   wires to the vector files under `tests/fixtures`; every cargo step is
   `--locked` to its `Cargo.lock`, and the Security workflow's `cargo deny`
-  admits what `apps/locus/runner/deny.toml` allows.
+  admits what `apps/locus/runner/deny.toml` allows. The suites that start
+  runners run them as the program this checkout built, the pair of
+  `scripts/runner.sh build` (the binary and its stamp, the hash of the
+  crate but its tests, `rust-toolchain.toml` and `wit/`), and refuse a runner whose pair
+  is missing or stale: a stage builds it before its tests
+  (`scripts/lib/stage-deps.sh`), and outside a stage `scripts/runner.sh
+  build` does. Without the toolchain every other suite runs.
 - A test waits on an event or a bounded condition (`assert_receive`,
   `Prima.Test.Wait.wait_until/3`), not on a clock. A `Process.sleep` or
   `:timer.sleep` under `apps/*/test` carries its reason on its line or in

@@ -11,8 +11,8 @@ defmodule Locus.Runtime.RunnerProcess do
   to start it with, it spawns the runner from its own process, so the
   keeper's messages reach it, and tells its owner what happens as
   `{Locus.Runtime.RunnerProcess, pid, event}`: `:ready` once the channel is
-  attached, `{:message, message}` for each frame the runner sends
-  (`complete` or `exit`; a clean `complete` whose place the keeper did not
+  attached, `{:message, message}` for each frame the runner sends but an
+  `event` (`child`, `complete` or `exit`; a clean `complete` whose place the keeper did not
   make warm again is `{:message, complete, {:error, {:assign, reason}}}`;
   a frame the runner may not send, or a line that is not one, is
   `{:error, {:protocol, reason}}`), `:closed` once the
@@ -67,6 +67,13 @@ defmodule Locus.Runtime.RunnerProcess do
   `{:message, complete, {:error, {:assign, reason}}}`, the completion and
   the end of a runner no longer one to reuse in one event.
 
+  An `event` frame, one operator event the runner reports, goes to the
+  forwarder of every runner's events (`:events`, default
+  `Locus.Runtime.Events`) and not to the owner: it is no part of the
+  runner's work. A frame that is not one, an event off the runner's
+  roster among them, is a protocol failure like any line that does not
+  decode, and the owner retires the runner.
+
   Guest data never crosses here: control bytes are frames, and the
   runner's own log lines, which the keeper relays, are logged under the
   runner's id. An `assign` carries the attempt's opened keys, so its
@@ -106,7 +113,9 @@ defmodule Locus.Runtime.RunnerProcess do
 
   @doc """
   Start a handle. Options: `:id`, `:keeper`, `:keeper_opts` (the keeper's
-  options, default none), `:spec` (`t:Locus.Runtime.Keeper.spec/0`), `:owner`.
+  options, default none), `:spec` (`t:Locus.Runtime.Keeper.spec/0`),
+  `:owner`, `:events` (the forwarder of its runner's events, default
+  `Locus.Runtime.Events`).
   """
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts)
 
@@ -177,6 +186,7 @@ defmodule Locus.Runtime.RunnerProcess do
        keeper_opts: Keyword.get(opts, :keeper_opts, []),
        spec: Keyword.fetch!(opts, :spec),
        owner: Keyword.fetch!(opts, :owner),
+       events: Keyword.get(opts, :events, Locus.Runtime.Events),
        channel: nil,
        relay: nil,
        binding: nil,
@@ -469,6 +479,11 @@ defmodule Locus.Runtime.RunnerProcess do
       :ok -> notify(state, {:message, message})
       {:error, reason} -> notify(state, {:message, message, {:error, {:assign, reason}}})
     end
+  end
+
+  defp heard(state, %{type: :event} = event) do
+    Locus.Runtime.Events.forward(state.events, event)
+    state
   end
 
   defp heard(state, message), do: notify(state, {:message, message})

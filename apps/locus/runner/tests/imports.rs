@@ -10,6 +10,7 @@ mod support;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use serde_json::{Value, json};
 use tokio::io::AsyncBufReadExt as _;
@@ -26,8 +27,9 @@ use cyfr_runner::imports::catalyst::cyfr::vault::read::Host as _;
 use cyfr_runner::imports::{Ended, Guest, Run};
 use cyfr_runner::relay::Relay;
 use cyfr_runner::wire::MAX_DEPTH;
+use cyfr_runner::words;
 
-use support::{Call, Job, Reply, Script, TEST_WASM};
+use support::{Call, Job, Reply, Script, Service, TEST_WASM};
 
 /// A guest of a run whose host calls the script answers, the calls the
 /// script was sent, and the control lines the run's events were written to.
@@ -316,6 +318,56 @@ fn storage_answers_each_refusal_cyfr_gives_in_its_own_words() {
             assert_eq!(answered, answer);
             // storage is never asked again.
             assert_eq!(under.calls().len(), 1);
+        }
+    });
+}
+
+// The guest error vectors' envelopes (tests/fixtures/guest_error.json's
+// `encode_error`) of a storage type whose message is text: CYFR refuses a
+// storage call so, and the guest is answered exactly the case's envelope.
+#[test]
+fn storage_answers_every_vector_cases_envelope_of_a_storage_type() {
+    run(|| async {
+        let vectors = support::fixture("guest_error.json");
+        let storage: Vec<&Value> = vectors["encode_error"]
+            .as_array()
+            .expect("encode_error")
+            .iter()
+            .filter(|case| {
+                case["type"]
+                    .as_str()
+                    .is_some_and(|kind| kind.starts_with("storage_"))
+                    && case["message"].is_string()
+            })
+            .collect();
+        assert!(!storage.is_empty());
+        for case in storage {
+            let refusal = json!({"type": case["type"], "message": case["message"]});
+            let reply = Mutex::new(Some(Reply::Error("guest_error", refusal)));
+            let mut under = under(
+                answering(move |_call| {
+                    reply
+                        .lock()
+                        .expect("a reply")
+                        .take()
+                        .unwrap_or(Reply::Silent)
+                }),
+                Limits::zero(),
+                &[],
+                &[],
+            )
+            .await;
+            let answered = under
+                .guest
+                .call(r#"{"action":"read","path":"a.txt"}"#.to_owned())
+                .await
+                .expect("an answer");
+            assert_eq!(
+                serde_json::from_str::<Value>(&answered).expect("JSON"),
+                case["answer"],
+                "{}",
+                case["why"]
+            );
         }
     });
 }
@@ -614,6 +666,83 @@ fn an_ask_nobody_answers_is_unavailable_and_one_past_the_bound_invalid() {
             "too large before it is posted"
         );
     });
+}
+
+#[test]
+fn an_ask_answered_in_no_shape_the_wire_knows_is_unavailable_and_asked_no_more() {
+    run(|| async {
+        for shape in [
+            json!({"answer": "maybe"}),
+            json!({"answer": {"none": "bored"}}),
+            json!({"pending": true, "answer": "allowed"}),
+            json!({"retry_after_ms": 0}),
+        ] {
+            let answer = shape.clone();
+            let mut under = under(
+                answering(move |_call| Reply::Ok(answer.clone())),
+                Limits::zero(),
+                &[],
+                &[],
+            )
+            .await;
+            assert_eq!(
+                said(&under.guest.ask(request()).await.expect("an answer")),
+                said(&Answer::None(Unanswered::Unavailable)),
+                "{shape}"
+            );
+            let ops: Vec<String> = under.calls().into_iter().map(|call| call.op).collect();
+            assert_eq!(ops, ["question_ask"], "{shape}");
+        }
+    });
+}
+
+const QUESTION_PROBE: &str =
+    "apps/locus/test/support/runtime/test_wasm/question_probe/question_probe.wasm";
+
+/// The runner's own binary, as its budget stops a catalyst waiting on an
+/// open question: the stop is the attempt's, not the import's.
+#[test]
+fn a_guest_stopped_while_it_waits_on_an_ask_waits_no_more_after_its_close() {
+    let mut service = Service::start();
+    let input = json!({"operation": "run", "params": {"statements": ["DROP TABLE users"]}});
+    let mut job = Job::new("catalyst", QUESTION_PROBE, &input.to_string());
+    job.timeout_ms = 3_000;
+    service.assign(
+        &job,
+        Box::new(|call, job| match call.op.as_str() {
+            "question_ask" => Reply::Ok(json!({"pending": true})),
+            // The question stays open: each wait is answered so 20 ms after
+            // it is asked, and the probe waits as long as it lives.
+            "question_wait" => Reply::Later(Duration::from_millis(20), json!({"pending": true})),
+            _ => support::standard(call, job),
+        }),
+    );
+    let within = Duration::from_secs(60);
+    assert_eq!(
+        service.frame(within),
+        json!({"v": 1, "type": "complete", "execution_id": job.execution_id, "clean": false})
+    );
+    // A guest left running past its close would wait again every 20 ms or
+    // so: this long after it, it would have waited more than a dozen times.
+    std::thread::sleep(Duration::from_millis(300)); // sleep-ok: the window after the close in which no question_wait may come
+    let ops = service.ops();
+    let closed = ops
+        .iter()
+        .position(|op| op == "fail")
+        .expect("the attempt closed");
+    let waits: Vec<usize> = (0..ops.len())
+        .filter(|at| ops[*at] == "question_wait")
+        .collect();
+    assert!(!waits.is_empty(), "it waited on its question: {ops:?}");
+    assert!(
+        waits.iter().all(|at| *at < closed),
+        "a question_wait after the close: {ops:?}"
+    );
+    assert_eq!(
+        service.calls_of("fail")[0].args["outcome"]["error"],
+        words::timeout(3_000)
+    );
+    assert_eq!(service.exit_after_close(within).code(), Some(0));
 }
 
 #[test]

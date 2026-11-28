@@ -4,21 +4,22 @@
 # hostile guests
 
 Components written in WebAssembly text that push against what the engine
-lets one run hold (`Locus.Runtime.Engine.store_limits/1`), what its vault
+lets one run hold (the runner's store, `apps/locus/runner`), what its vault
 hands it, what a request naming a connection may carry or what reaches a
-guest of the credential CYFR attaches for it, that trap, or that use a feature the runtime refuses
+guest of the credential CYFR attaches for it, what WASI hands it, that
+trap, or that use a feature the runtime refuses
 (`Prima.ComponentFeatures`). Each `.wat` says what it does. The validator's
-own defaults leave the last five guests' features off, so the check answers
+own defaults leave the features of `stackful_lift`, `async_cancel`,
+`error_context`, `thread_index` and `legacy_try` off, so the check answers
 each of them as invalid WebAssembly rather than as a refused feature's
 (`tests/fixtures/component_features.json`, which `Prima.ComponentFeaturesTest`
-plays). The tests that run them are `Locus.Runtime.StoreLimitsTest`, `Locus.Runtime.TrapTest`,
-`Locus.Runtime.ComponentFeaturesTest`, `Locus.Runtime.WasiCapabilitiesTest` and `Locus.Runtime.VaultDenialTest`
-in this suite,
-`Locus.Runtime.MemoryBoundTest`, `Locus.Runtime.SecretAuditTest`,
-`Locus.Runtime.AttachedFetchTest`, `Cyfr.FormulaHostCallsTest`,
-`Opus.Schedules.SchedulerTest`, `CyfrWeb.WebhookFlowIntegrationTest`,
-`Aqua.LaunchTest` and `Compendium.ComponentFeaturesAdmissionTest` in
-CYFR's, the runner crate's (`apps/locus/runner/tests/`, `stream_*`, `fetch_twice` and `fetch_garbage` among them), and the worker image's `tests/locus-runtime-image/runners.py` and
+plays). The tests that run them are the runner crate's
+(`apps/locus/runner/tests/`); `Locus.Runtime.MemoryBoundTest`,
+`Locus.Runtime.SecretAuditTest`, `Locus.Runtime.AttachedFetchTest`,
+`Cyfr.FormulaHostCallsTest`, `Opus.Schedules.SchedulerTest`,
+`CyfrWeb.WebhookFlowIntegrationTest`, `Aqua.LaunchTest` and
+`Compendium.ComponentFeaturesAdmissionTest` in CYFR's; and the worker
+image's `tests/locus-runtime-image/runners.py` and
 `tests/locus-runtime-image/canary.py`.
 
 | Guest | World | Does |
@@ -57,6 +58,10 @@ CYFR's, the runner crate's (`apps/locus/runner/tests/`, `stream_*`, `fetch_twice
 | `fetch_garbage` | catalyst | hands its fetch the text `{"method":`, which is no JSON, and answers the fetch's answer |
 | `stream_twice` | catalyst | opens a stream, reads it twice and answers the second read |
 | `stream_until` | catalyst | opens a stream and reads it until a read hands data, an error or the end, and answers that read |
+| `cli_probe` | reagent, catalyst, formula | reads its standard input, writes its input to its standard output and error, and answers what each did and how many arguments and environment variables it has |
+| `http_probe` | reagent, catalyst, formula | imports `wasi:http/outgoing-handler` and the types it names; refused at instantiation, no type being given `wasi:http` |
+| `many_tables` | reagent | defines eleven tables over three core instances, one past the store's bound, the eleventh in the last |
+| `many_instances` | reagent | makes eleven core instances, one past the store's bound |
 
 ## Rebuilding
 
@@ -69,9 +74,7 @@ component; a `.wat` that is a whole component is parsed as it stands. The
 component records the version of the tool that made it, so another version
 gives other bytes. `build.sh --check` compares a fresh build with what is
 checked in, and `scripts/check-test-wasm.sh` runs it. Rebuild whenever a
-`.wat` changes or the pin moves, and record what the build prints below:
-`Locus.Runtime.StoreLimitsTest` holds each file to its digest, so a source
-changed without a rebuild fails.
+`.wat` changes or the pin moves, and record what the build prints below.
 
 ```sh
 apps/locus/test/support/runtime/test_wasm/hostile/build.sh           # build and write
@@ -79,11 +82,11 @@ apps/locus/test/support/runtime/test_wasm/hostile/build.sh --check   # compare o
 ```
 
 ```text
-extra_memory.wat           sha256:4f77c1473bee65d056d60911c661e41eca27ba08644869da6bb0b55f3e5cf62e
+extra_memory.wat           sha256:59e086c06dbc58bd7d69f701199be3e919b4a6d9326ec74591ebdc78bac4f70b
 extra_memory.wasm          sha256:7a05d3fda1ed26681605591e2a6e86bc9010f1364842cf7c6fc3d185fc3ab4d7
-wide_table.wat             sha256:4f824339d5fdd1f86bd8cecc419518ba38b43982331b2231606fe3760c051937
+wide_table.wat             sha256:6d567932221d5fed5f88d171ad96a95fdcb1ec2a380deea05d9edb6fad982a9e
 wide_table.wasm            sha256:2b594ca2dcb47a3ed1854ca7c6ad4c37ec5d72b66dd78dffc8453c7d2c465972
-grower.wat                 sha256:4653562e719e9cf0afeeeb492eb5258d0f398b175877ca30b0ba0abf762f577c
+grower.wat                 sha256:6e29941d73bf742beb7e2f1c9948a601fea4b14751e517c9a065b2dd9d17ef86
 grower.wasm                sha256:5d01278ec5d17784df8ecdde6f95689f3db6bf804b0781e888c57e35e6e83666
 vault_probe.wat            sha256:4b110e1e10e335a559a97e1ad7067dd94f868c204603e53fbcb2158ac2e63f31
 vault_probe.wasm           sha256:72a15e0ab85a585bc79772e6b3a73f86d5d7724c5cfb08260e146bc4e7b67278
@@ -105,7 +108,7 @@ externref_table.wat        sha256:f730a802a33e7ce0bb6b0aa070662d9b4818138b6fec33
 externref_table.wasm       sha256:63c8f0725b2704e0ca504d9f6a69414999bb8c722b98d30a3df47d5709e09b62
 wide_arithmetic.wat        sha256:24d8a77f677b3b1bfb332edcb5cced1e056bdadee724b747502f58058fea7db2
 wide_arithmetic.wasm       sha256:0d77f0ef7217f2449c83a0d08d7bb0ad2f1de42fecc334b657f1ba927e6a677b
-socket_probe.wat           sha256:e113d384df5ea66d0c6ff53282665d641f33644f375187794ca8ede37368bcfb
+socket_probe.wat           sha256:65e28595026f1f1c9fe2b7c520d1ec8ca6a6d58ad7871c7d920233f1870b8536
 socket_probe.wasm          sha256:d3e535bfe8f5a0b94c1f3414729139a734e76dd4c45de6da0d828f0db80dc31d
 stackful_lift.wat          sha256:684a82ff8ceb5b2eb829b4c3dbfb13362a4b6737e7b797cb995eeec11e6257f1
 stackful_lift.wasm         sha256:49a875f253c1c30e489ce59f0fe73bb2b42f0403de132c3264e7ee535c02ba21
@@ -147,4 +150,12 @@ stream_twice.wat           sha256:79fb683d2a1670350c5f80fddd874b63eb7e45e056c8a4
 stream_twice.wasm          sha256:451be323de707ba2a913d320a2b99103b623e1699acbe460d5fd3122abc6428f
 stream_until.wat           sha256:2c3d7e80e5b4ea81b67d75c1e2fd68d7770851359b95c489c619fd14705b5a3d
 stream_until.wasm          sha256:5c6d6471e2f48e7eee3a5a3f54be528d023084ad16ae7565b11fa6969bc261fc
+cli_probe.wat              sha256:3f51e54b8ff16cebd470b0a8e9c9abe327ff92757a390c12b78798ab0e9880c6
+cli_probe.wasm             sha256:ac4d34de4f678b832a27c0dd0742c124f6d6974789db3c7d984fa25422a7f01b
+http_probe.wat             sha256:03c9d95c6fed72549242cdd21485c631b235110782df8732156996df1528c7f9
+http_probe.wasm            sha256:2165bbe089008df70179480225fd6d29d67516d007df7a46fa34485ff9e55761
+many_tables.wat            sha256:8a6448ac9fac65592ce3b02c8ac07ceea24ed389cc3c3f5344b79343bdcad105
+many_tables.wasm           sha256:ba7ddd71d39968a164bc3b8178565601f865f4f02dc231f96c882afef3463bd1
+many_instances.wat         sha256:59677aabb4f588901701ccc0d1ed73226bd2b36cdb8abf69aedc1e0292b0e933
+many_instances.wasm        sha256:93a008197df90a1250c4b8bcb573139799673db18671323e80de9298734b2030
 ```

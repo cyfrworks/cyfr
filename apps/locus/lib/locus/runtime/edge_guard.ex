@@ -3,17 +3,15 @@
 
 defmodule Locus.Runtime.EdgeGuard do
   @moduledoc """
-  Egress checks over a consent edge, shared by the runner's HTTP host
-  handlers.
-
-  An execution's capability is the `%Prima.Authority.Blob.Edge{}` it runs
-  under plus the node's `%Prima.Limits{}`. This module is the runner's home
-  for matching a concrete request against that edge's egress — domains,
-  schemes and methods — and for the envelope, request and response size
-  checks against the limits. The address a request connects to, and so the
-  edge's private-address grant, is CYFR's to decide when it pins the
-  request (`c:Prima.HostAPI.egress_pin/3`); storage grants are checked by
-  CYFR when the attempt asks for a storage operation
+  The relay's checks of a runner's request against its attempt's consent
+  edge and the node's limits (`Locus.Runtime.Relay`), made before the
+  service connects: the method, scheme and domain against the edge's
+  egress, and the request's and an emitted event's size against the
+  limits. The runner is untrusted, so whatever it asked is checked again
+  here. The address a request connects to, and so the edge's
+  private-address grant, is CYFR's to decide when it pins the request
+  (`c:Prima.HostAPI.egress_pin/3`); storage grants are checked by CYFR
+  when the attempt asks for a storage operation
   (`c:Prima.HostAPI.storage/3`).
 
   ## Semantics
@@ -23,11 +21,9 @@ defmodule Locus.Runtime.EdgeGuard do
   denies. Schemes are always explicit in blobs — there is no "no scheme
   restriction" value. Domains match as `Prima.Network.domain_allowed?/2`
   matches them, the matcher CYFR's pin applies to the same edge: `"*"`,
-  `"*.example.com"` by whole label, and exact names, case-folded. The
-  engine's domain check is its own, made before it asks for the pin.
-
-  Denial messages are part of the guest-visible contract: components and
-  tests pin them, so they must not drift.
+  `"*.example.com"` by whole label, and exact names, case-folded.
+  `tests/fixtures/host_api.json`'s `edge_checks`, `request_sizes` and
+  `method_bytes` hold these checks, which a Go service makes the same.
   """
 
   alias Prima.Authority.Blob.Edge
@@ -103,66 +99,18 @@ defmodule Locus.Runtime.EdgeGuard do
   # ============================================================================
 
   @doc """
-  The ENVELOPE ceiling for a host-function call: the bound on the raw JSON
-  string, checked before `Jason.decode/1` ever sees it.
-
-  Bounds the encoded request before parsing. `max_request_size` separately limits the decoded payload.
-
-  Generous on purpose: a payload at the consented ceiling must always fit,
-  base64 overhead (4/3), JSON escaping and the scaffolding included. This
-  refuses the blob, not the legitimate request. A `max_request_size` of 0
-  is a ceiling like any other, as the decoded checks below hold it
-  (`check_request_size/2`, `check_event_size/2`): no payload, so the
-  envelope holds the framing alone.
-  """
-  @spec check_envelope_size(Limits.t(), binary()) :: :ok | {:error, :request_too_large}
-  def check_envelope_size(%Limits{max_request_size: max}, json)
-      when is_binary(json) and is_integer(max) and max >= 0 do
-    if byte_size(json) <= max * 2 + envelope_overhead(),
-      do: :ok,
-      else: {:error, :request_too_large}
-  end
-
-  @doc "Slack allowed above the consented payload ceiling for framing."
-  @spec envelope_overhead() :: pos_integer()
-  def envelope_overhead, do: 4096
-
-  @doc """
   Check an HTTP request against the node's `max_request_size`. Returns `:ok`
   or `{:error, :request_too_large, message}`.
 
-  Counts what the host will actually hold and put on the wire: the body (or
-  the multipart parts) **plus the URL and headers**, so a guest cannot move
-  megabytes into header values — into host memory and out to the upstream —
-  past the consented ceiling.
+  Counts what the host will actually hold and put on the wire: the body
+  **plus the URL and headers**, so a guest cannot move megabytes into
+  header values — into host memory and out to the upstream — past the
+  consented ceiling.
   """
   @spec check_request_size(Limits.t(), map()) ::
           :ok | {:error, :request_too_large, String.t()}
-  def check_request_size(%Limits{} = limits, %{multipart: parts} = request)
-      when is_list(parts) do
-    payload = Enum.reduce(parts, 0, fn part, acc -> acc + multipart_part_size(part) end)
-
-    refuse_over(limits, payload + metadata_size(request), "Multipart request")
-  end
-
   def check_request_size(%Limits{} = limits, %{body: body} = request) do
     refuse_over(limits, byte_size(body || "") + metadata_size(request), "Request")
-  end
-
-  @doc """
-  Check a response's size in bytes against the node's `max_response_size`:
-  the count is known at the abort without assembling the body. Returns
-  `:ok` or `{:error, :response_too_large, message}`.
-  """
-  @spec check_response_bytes(Limits.t(), non_neg_integer()) ::
-          :ok | {:error, :response_too_large, String.t()}
-  def check_response_bytes(%Limits{} = limits, size) when is_integer(size) and size >= 0 do
-    if size > limits.max_response_size do
-      {:error, :response_too_large,
-       "Response body (#{size} bytes) exceeds limit (#{limits.max_response_size} bytes)"}
-    else
-      :ok
-    end
   end
 
   # ============================================================================
@@ -222,8 +170,4 @@ defmodule Locus.Runtime.EdgeGuard do
 
   defp string_size(s) when is_binary(s), do: byte_size(s)
   defp string_size(s), do: s |> to_string() |> byte_size()
-
-  defp multipart_part_size(%{data: data}) when is_binary(data), do: byte_size(data)
-  defp multipart_part_size(%{value: value}) when is_binary(value), do: byte_size(value)
-  defp multipart_part_size(_), do: 0
 end

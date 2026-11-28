@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
+# Lay down the runner's pair this run's runner-build job built for the
+# caller's architecture, the WASM runner's release binary and its stamp,
+# at _build/runner/release, where scripts/runner.sh pair finds them, and
+# check the stamp against the checkout. The test build's keeper runs its
+# runners as that binary and refuses one whose stamp is not the
+# checkout's (Locus.DirectLauncher.Runner). The caller checks the
+# repository out first and needs runner-build.
+name: The runner's pair
+description: Download the runner-build job's binary and stamp for one architecture and check them against the checkout
+inputs:
+  arch:
+    description: The runner-build job's architecture, amd64 or arm64
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Fetch the runner's pair
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      with:
+        name: runner-${{ inputs.arch }}
+        path: ${{ runner.temp }}/runner-pair
+    # The archive keeps the binary's mode, which an artifact does not.
+    - name: Lay the pair down and check its stamp
+      shell: bash
+      run: |
+        set -euo pipefail
+        mkdir -p _build/runner/release
+        tar -C _build/runner/release -xf "$RUNNER_TEMP/runner-pair/runner.tar"
+        scripts/runner.sh pair

@@ -51,6 +51,7 @@ var retries = map[string]string{
 	"storage": "never", "admit_child": "keyed", "tool_call": "never", "record_denial": "never",
 	"release_child": "idempotent", "egress_pin": "idempotent", "attached_fetch": "never",
 	"question_ask": "keyed", "question_wait": "idempotent", "runner_exited": "idempotent",
+	"report_events": "never",
 }
 
 // Retries is each callback's retry class, a fresh map each call.

@@ -93,6 +93,10 @@ defmodule Locus.Runtime.WorkerServicePoolTest do
       {DynamicSupervisor, name: Locus.Runtime.RunnerPool.Runners, strategy: :one_for_one}
     )
 
+    # The forwarder of the runners' events, which the service serves as it
+    # starts.
+    start_supervised!(Locus.Runtime.Events)
+
     start_supervised!(
       {Locus.Runtime.RunnerPool,
        settings: settings,

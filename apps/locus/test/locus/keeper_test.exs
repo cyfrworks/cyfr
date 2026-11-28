@@ -585,7 +585,7 @@ defmodule Locus.KeeperTest do
         key: key,
         secret: secret,
         assign: assign,
-        env: %{"RUNTIME_ROLE" => "runner", "RUNTIME_PLANT" => secret}
+        env: %{"RUNTIME_PLANT" => secret}
       }
     end
 

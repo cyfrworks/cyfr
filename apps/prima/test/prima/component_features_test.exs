@@ -8,17 +8,16 @@ defmodule Prima.ComponentFeaturesTest do
   component passes it, and it fails closed. A validator not installed,
   answering other than valid or invalid, or past its deadline refuses the
   component; it reads the component on its standard input with no
-  environment, and nothing of the component is written anywhere. Which
-  component each refused
-  feature refuses is `Locus.Runtime.ComponentFeaturesTest`'s, beside the
-  hostile guests.
+  environment, and nothing of the component is written anywhere.
 
   The shared vectors (`tests/fixtures/component_features.json`) hold the
   refused features and their families to the module's, each refusal's
   sentence to `Prima.Refusal.message/1`'s, and every case to what
   `check/1` answers with the pinned validator; each feature's guest is
   valid with its feature on and every other refused one off, and invalid
-  with its feature off.
+  with its feature off; and a refusal for a feature is logged naming the
+  feature's family. The runner crate's tests (`apps/locus/runner/tests`)
+  hold its engine to the same cases.
 
   Each test that installs another validator puts the configured one back.
   """
@@ -242,6 +241,32 @@ defmodule Prima.ComponentFeaturesTest do
       assert Enum.sort(features) == Enum.sort(ComponentFeatures.refused())
       assert Enum.any?(cases, &Map.has_key?(&1, "hex"))
       assert Enum.count(cases, &(&1["outcome"] == "admitted")) >= 3
+    end
+
+    test "a refusal for a feature is logged naming the family of the feature its guest uses" do
+      families =
+        for %{"outcome" => "component_feature_refused", "feature" => feature} = vector <-
+              @vectors["cases"] do
+          bytes = case_bytes(vector)
+          digest = Prima.Digest.sha256(bytes)
+
+          {family, _features} =
+            Enum.find(@vectors["families"], fn {_family, features} -> feature in features end)
+
+          log =
+            capture_log(fn ->
+              assert ComponentFeatures.check(bytes) ==
+                       {:error, {:component_feature_refused, digest}}
+            end)
+
+          assert log =~
+                   "[Prima.ComponentFeatures] #{digest} refused: it uses the #{family} feature",
+                 vector["why"]
+
+          family
+        end
+
+      assert Enum.sort(Enum.uniq(families)) == Enum.sort(Map.keys(@vectors["families"]))
     end
 
     test "each feature's guest uses its feature and no other refused one", %{validator: validator} do

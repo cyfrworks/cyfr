@@ -1,5 +1,5 @@
 {
-  "comment": "The vectors pinning Prima.HostAPI as it crosses HTTP (Prima.WorkerWire): every call a runner makes and the report a worker service makes, sealed and signed with the keys of tests/fixtures/worker_auth.json, whose values keys repeats (root_hex is the root every other key derives from). Every consumer reproduces each call from its fields: body is the request body Prima.WorkerWire.request_body/2 writes, sealed as body_sealed in the body direction under the attempt seal key with body_iv_hex (Prima.WorkerAuth.seal_call/5); header is the host-call header over body_sealed, the bytes posted, under the attempt call key; answer is the answer written for it, sealed as answer_sealed in the answer direction with answer_iv_hex. Every body and answer carries v, the wire version, as its first member; a body whose v is absent or not version is unknown_version after it is opened and before its op is read, and an answer without it, or at another, is a lost answer. refusals are the plain answers each call may be given instead, with why. pre_body_refusals are headers a listener refuses before it reads a body, at now, for the member at standing, each answered at status with the refusal error names, in the order Prima.WorkerAuth documents: a version token other than v1, a header that does not parse, a timestamp outside window_ms, a MAC that is not the call key's, another generation, another member at the same generation, and a nonce the storage call (never retried) already presented for its attempt within the window. body_refusals are opened bodies posted at the renew route, refused with error. report is a worker service's runner_exited, plain under its dispatch key, answered plain; its cross_member names another member than the verifying one and is refused with error. Its memory carries memory, the memory limit its runner was ended at (cap, machine or either, absent for none), and is answered as the report is; its memory_refusals carry a memory that is none of those three, or no string, each refused with error. retry_identity is one admit_child body sent twice, each time sealed and signed afresh under a new timestamp and nonce: the body, and so its child_key, is the same. connection_cases are admit_child calls under one attempt, in order, each answered as CYFR answers it for an attempt whose edge to the reference binds no named account: omitted names no connection and is admitted, its answer holding the child's assignment and in it the child's authority as the host answers it; named names the account Work, which the edge does not bind, and is refused connection_not_granted, setup required, with no default used in its place; reused repeats omitted's child_key naming Work, and is refused invalid_request before anything is answered from that key's child, since a key names one child and the connection it was admitted with. egress_pin_cases are egress_pin calls by name, answered with a Prima.PinnedTarget (id, ip, family, scheme, port, host, expires_at) or refused as Prima.PinnedTarget.refusals/0 names; a redirect names the pin its hop came from as from. egress_policy_cases are egress_pin calls in the order one attempt makes them, under an authority whose egress.domains is domains, each answered as an egress_pin case is; expect names whether the URL's host matches domains (domain_allowed, Prima.Network.domain_allowed?/2) and, for a redirect, whether its URL has the origin of the URL whose pin it names as from (same_origin, Prima.Network.same_origin?/2: scheme, host and effective port). A pin is answered only where both hold; a first request outside domains is domain, which CYFR records once as domain_blocked, and a hop to another origin is redirect_credentials. attached_fetch is the one call whose success is no single answer: posted with a Prima.AttachedRequest naming the runner's call_id, it is refused before admission by an ordinary sealed answer, a guest_error whose call_id is the request's (its refusals, each sealed with answer_iv_hex as answer_sealed), and admitted it is answered with frames, so the call carries no answer and the frames are frame_cases. A frame is a 4-byte big-endian length, one kind byte in clear (h head, c chunk, e end, x error) and the sealed value: Prima.MacEnvelope's seal of the plaintext under the attempt seal key, label cyfr-locus/v1/runtime/frame-answer, fields call_id, seq and kind (Prima.WorkerAuth.seal_frame/7). Each case's frames are read in order by a reader for call_id, one frame at a time; sealed_for says what a frame was sealed as (its call_id, seq, kind, iv_hex and plaintext_b64), tampered_from what a changed frame was sealed as before it changed, and expect the frames read (a head's status and headers, a chunk's body_b64, an end, an error's type and message) and the refusal that ends the answer, or null. egress_pin_internal_purposes are egress_pin calls naming a purpose CYFR alone takes (attached), each refused malformed. framing_headers and override_headers are the lowercase names, in order, of the headers a guest request, ordinary or attached, may not set and an attach rule may not name: those that route or frame a request (Prima.Network.framing_headers/0) and those that override its method or target or claim a forwarded origin, a proxy hop or a client address (Prima.Network.override_headers/0); override_prefixes are the lowercase prefixes (Prima.Network.override_prefixes/0) any name starting with which is one of the latter too. An attached request setting one, in any case, is refused invalid_request naming it as spelled. credential_headers are the lowercase names, in order, of the headers that carry a credential (Prima.Network.credential_headers/0): an attached request naming one, in any case, is refused credential_header_refused. A catalyst's ask (question_ask, question_wait): question_ask's body pins ask_no, a positive integer the runner takes once for each call of the guest's ask, and the request's action, summary and operation; question_wait's pins ask_no and max_wait_ms, at most Prima.HostAPI.max_question_wait_ms/0. Each answer is a success: {answer}, {pending: true}, or for question_ask {retry_after_ms}, a positive integer, an answer being \"allowed\", \"denied\" or {\"none\": \"unattended\" | \"invalid\" | \"unavailable\"} (Prima.HostAPI.answer_to_wire/1); each is refused lost for an attempt that is not live. question_cases holds them in the order one attempt asks: request_digests are a request's digest, SHA-256 as lowercase hexadecimal over its action, summary and operation, each prefixed with its UTF-8 byte length as an unsigned 32-bit big-endian integer (Opus.Host.Question.request_digest/3), and cases are calls, each answered as CYFR answers it: opened admits an ask whose question opens; keyed_replay is opened's body under a fresh header, answered the same wait; changed is opened's number with another request, invalid; paced is past its root's allowance and paced_admitted the same body sent again, admitted; unattended and invalid are asks answered at once; and the waits are one that timed out, pending, and one of each final answer. answer_outcomes are what a host call's caller makes of what reaches it, try by try: each case's callback is posted once per entry of answers, which is in order what each try met, a status of null for no answer at all (a transport failure, an answer later than the callback's timeouts_ms or past max_answer_bytes), or a status with its answer (JSON sealed to that try's call in the answer direction) or its plain body. outcome is the call's: answer (the last answer, read at this version, is the call's, CYFR's own refusals lost and unavailable included), lost, uncertain or too_large, and posted how many times it was posted; an answer's reading is what the call reads it as: its ok value, refused (a refusal by name: lost, unavailable, replayed, malformed, bad_mac, claim_expired or not_found, and for egress_pin a pin's refusal too), guest_error (its type and message, both text, and its remediation when that is an object), setup_required (its payload, an object) or failed (its message, text). Any other refusal, or one of those without what it carries, is no answer. A member given twice is its first, and an integer of any size is kept whole. A reading's ok_json is its ok value as JSON text, for a value nested deeper than a reader of this file need take: any depth is read. A try that meets no answer, a 200 that does not open or is no answer at this version, or any other status is lost, and is asked once more unless the callback's class in retries is never, when the call is uncertain at once; a second loss is lost. A 413 is final too_large, and a refusal naming unknown_version, plain at any version or sealed, is final lost: neither is asked again. Locus.Runtime.HostClient's test and the Rust runner's crate play every case. pin_answer_refusals is a pin as an egress_pin answer's ok carries it, which Prima.PinnedTarget.read/1 reads, `reads` more pins it reads, their addresses as inet:parse_strict_address/1 reads them (a zone only on an fe80:: or ff02:: address), and `refusals` pins it refuses, each `why`: a reader takes each of `reads` as a pin and none of `refusals`, and a runner answers its guest's request on a refused one as a failed pin and sends no fetch. pin_answer_refusals' reads and refusals hold, besides, a zone's every reading (one beginning with 0 a decimal up to 65535, any other any text, only after fe80 or ff02 with a second group of 0) and a family or port that is no integer, which a pin never carries (Prima.PinnedTarget.valid?/1 holds family to an integer). frame_splits are streams of answer frames split unopened (Prima.WorkerAuth.split_frames/1): the frames, each its kind byte and sealed value, and the bytes after them, or frame_too_large for a length past max_frame_bytes as soon as it is in, malformed for one below two; frame_body_bytes are frames' body bytes, counted from a chunk's sealed length alone (frame_body_bytes/1). frames_content_types are an answer's content-type values and whether they say it carries frames (Prima.WorkerWire.frames_content_type?/1: one of them, cut at ; and trimmed, is the frames' type in any case). answer_bounds are answers of body_bytes at status as a caller keeps them against max_answer_bytes (Locus.Runtime.HostClient.post_call/5): within the bound whole; past it a 200 is no answer at all (arrived false) and any other status keeps its status with no body. domain_cases are hosts matched against egress domain patterns (Prima.Network.domain_allowed?/2), case folded as String.downcase/1 folds them; header_rules are header names and whether each routes, frames or overrides a request (framing_or_override_header?/1) or carries a credential (credential_header?/1); host_headers are the Host header a request to a scheme, host and port carries (host_header/1). attached_requests are attached requests and the args they are posted with (Prima.AttachedRequest.to_args/1), written as Jason writes them. pin_expiry are a pin's expiry and a time, and whether the pin has expired then (Prima.PinnedTarget.expired?/2: past its expiry); pin_requests are egress_pin args and whether they read (read_request/1). edge_checks and request_sizes are the relay's own checks of a runner's request against its attempt's edge and limits (Locus.Runtime.EdgeGuard, the Elixir service's, which a Go service makes the same): whether the method is one of the egress methods, both upcased as String.upcase/1 upcases them, whether the scheme is one of its schemes exactly, whether the host is within its domains, and whether the body, URL and every header's name and value together are within max_request_size. pin_purposes and pin_refusal_names are the purposes a runner asks a pin for and the refusals an egress_pin answer names (Prima.PinnedTarget.purposes/0, refusals/0); a pin's address reads with no sign in it, and an ip that is no IP literal is refused whatever family the pin declares, 0 and -0 among them. urls are texts each read as Prima.Network.parse_url/1 reads them, every part of the URL (scheme, userinfo, host, port, path, query, fragment; the port the scheme's default where the text names none), or null for one it refuses. domain_bytes are hosts and patterns of bytes that are no UTF-8, in hexadecimal, each matched as domain_allowed?/2 matches it; method_bytes are a method and the one method an edge allows, in hexadecimal, checked as Locus.Runtime.EdgeGuard.check_method/2 checks them, both upcased as String.upcase/1 upcases them. A Go reader matches nothing on bytes that are no UTF-8, a host, a pattern or a method, where Elixir's casing walks them its own way: a case Prima matches on such bytes is marked go, Go's own refusal (go's allowed, false), each side's test asserting its own answer; no egress authority carries such a pattern, since its JSON is UTF-8. upcase_special are the characters String.upcase/1 upcases otherwise than one character's simple uppercase would (Unicode's SpecialCasing), each with what it upcases to, in hexadecimal: the table both ends hold.",
+  "comment": "The vectors pinning Prima.HostAPI as it crosses HTTP (Prima.WorkerWire): every call a runner makes and the report a worker service makes, sealed and signed with the keys of tests/fixtures/worker_auth.json, whose values keys repeats (root_hex is the root every other key derives from). Every consumer reproduces each call from its fields: body is the request body Prima.WorkerWire.request_body/2 writes, sealed as body_sealed in the body direction under the attempt seal key with body_iv_hex (Prima.WorkerAuth.seal_call/5); header is the host-call header over body_sealed, the bytes posted, under the attempt call key; answer is the answer written for it, sealed as answer_sealed in the answer direction with answer_iv_hex. Every body and answer carries v, the wire version, as its first member; a body whose v is absent or not version is unknown_version after it is opened and before its op is read, and an answer without it, or at another, is a lost answer. refusals are the plain answers each call may be given instead, with why. pre_body_refusals are headers a listener refuses before it reads a body, at now, for the member at standing, each answered at status with the refusal error names, in the order Prima.WorkerAuth documents: a version token other than v1, a header that does not parse, a timestamp outside window_ms, a MAC that is not the call key's, another generation, another member at the same generation, and a nonce the storage call (never retried) already presented for its attempt within the window. body_refusals are opened bodies posted at the renew route, refused with error. report is a worker service's runner_exited, plain under its dispatch key, answered plain; its cross_member names another member than the verifying one and is refused with error. Its memory carries memory, the memory limit its runner was ended at (cap, machine or either, absent for none), and is answered as the report is; its memory_refusals carry a memory that is none of those three, or no string, each refused with error. events_report is a worker service's report_events, plain under its dispatch key and answered plain, whose header names no attempt: its body carries one batch of operator events (Prima.HostAPI.report_events_args/1), each record an event frame's name, measurements and metadata (tests/fixtures/runner_control.json's events), at most Prima.HostAPI.max_report_events/0; its emitted are what CYFR emits for each record in order, the event's name, its measurements with system_time in nanoseconds since the epoch (the record's microseconds times 1,000, which a reader turns to its own native unit) and its metadata, the members atoms names emitted as the atoms of their words and every other member as the record carries it; the same header and body sent again is refused with replay_error, since a batch is never sent again (retries never) and CYFR remembers its nonce for its worker service and boot; and its off_roster carries one record off the roster and is refused whole with error, nothing of it emitted. retry_identity is one admit_child body sent twice, each time sealed and signed afresh under a new timestamp and nonce: the body, and so its child_key, is the same. connection_cases are admit_child calls under one attempt, in order, each answered as CYFR answers it for an attempt whose edge to the reference binds no named account: omitted names no connection and is admitted, its answer holding the child's assignment and in it the child's authority as the host answers it; named names the account Work, which the edge does not bind, and is refused connection_not_granted, setup required, with no default used in its place; reused repeats omitted's child_key naming Work, and is refused invalid_request before anything is answered from that key's child, since a key names one child and the connection it was admitted with. egress_pin_cases are egress_pin calls by name, answered with a Prima.PinnedTarget (id, ip, family, scheme, port, host, expires_at) or refused as Prima.PinnedTarget.refusals/0 names; a redirect names the pin its hop came from as from. egress_policy_cases are egress_pin calls in the order one attempt makes them, under an authority whose egress.domains is domains, each answered as an egress_pin case is; expect names whether the URL's host matches domains (domain_allowed, Prima.Network.domain_allowed?/2) and, for a redirect, whether its URL has the origin of the URL whose pin it names as from (same_origin, Prima.Network.same_origin?/2: scheme, host and effective port). A pin is answered only where both hold; a first request outside domains is domain, which CYFR records once as domain_blocked, and a hop to another origin is redirect_credentials. attached_fetch is the one call whose success is no single answer: posted with a Prima.AttachedRequest naming the runner's call_id, it is refused before admission by an ordinary sealed answer, a guest_error whose call_id is the request's (its refusals, each sealed with answer_iv_hex as answer_sealed), and admitted it is answered with frames, so the call carries no answer and the frames are frame_cases. A frame is a 4-byte big-endian length, one kind byte in clear (h head, c chunk, e end, x error) and the sealed value: Prima.MacEnvelope's seal of the plaintext under the attempt seal key, label cyfr-locus/v1/runtime/frame-answer, fields call_id, seq and kind (Prima.WorkerAuth.seal_frame/7). Each case's frames are read in order by a reader for call_id, one frame at a time; sealed_for says what a frame was sealed as (its call_id, seq, kind, iv_hex and plaintext_b64), tampered_from what a changed frame was sealed as before it changed, and expect the frames read (a head's status and headers, a chunk's body_b64, an end, an error's type and message) and the refusal that ends the answer, or null. egress_pin_internal_purposes are egress_pin calls naming a purpose CYFR alone takes (attached), each refused malformed. framing_headers and override_headers are the lowercase names, in order, of the headers a guest request, ordinary or attached, may not set and an attach rule may not name: those that route or frame a request (Prima.Network.framing_headers/0) and those that override its method or target or claim a forwarded origin, a proxy hop or a client address (Prima.Network.override_headers/0); override_prefixes are the lowercase prefixes (Prima.Network.override_prefixes/0) any name starting with which is one of the latter too. An attached request setting one, in any case, is refused invalid_request naming it as spelled. credential_headers are the lowercase names, in order, of the headers that carry a credential (Prima.Network.credential_headers/0): an attached request naming one, in any case, is refused credential_header_refused. A catalyst's ask (question_ask, question_wait): question_ask's body pins ask_no, a positive integer the runner takes once for each call of the guest's ask, and the request's action, summary and operation; question_wait's pins ask_no and max_wait_ms, at most Prima.HostAPI.max_question_wait_ms/0. Each answer is a success: {answer}, {pending: true}, or for question_ask {retry_after_ms}, a positive integer, an answer being \"allowed\", \"denied\" or {\"none\": \"unattended\" | \"invalid\" | \"unavailable\"} (Prima.HostAPI.answer_to_wire/1); each is refused lost for an attempt that is not live. question_cases holds them in the order one attempt asks: request_digests are a request's digest, SHA-256 as lowercase hexadecimal over its action, summary and operation, each prefixed with its UTF-8 byte length as an unsigned 32-bit big-endian integer (Opus.Host.Question.request_digest/3), and cases are calls, each answered as CYFR answers it: opened admits an ask whose question opens; keyed_replay is opened's body under a fresh header, answered the same wait; changed is opened's number with another request, invalid; paced is past its root's allowance and paced_admitted the same body sent again, admitted; unattended and invalid are asks answered at once; and the waits are one that timed out, pending, and one of each final answer. answer_outcomes are what a host call's caller makes of what reaches it, try by try: each case's callback is posted once per entry of answers, which is in order what each try met, a status of null for no answer at all (a transport failure, an answer later than the callback's timeouts_ms or past max_answer_bytes), or a status with its answer (JSON sealed to that try's call in the answer direction) or its plain body. outcome is the call's: answer (the last answer, read at this version, is the call's, CYFR's own refusals lost and unavailable included), lost, uncertain or too_large, and posted how many times it was posted; an answer's reading is what the call reads it as: its ok value, refused (a refusal by name: lost, unavailable, replayed, malformed, bad_mac, claim_expired or not_found, and for egress_pin a pin's refusal too), guest_error (its type and message, both text, and its remediation when that is an object), setup_required (its payload, an object) or failed (its message, text). Any other refusal, or one of those without what it carries, is no answer. A member given twice is its first, and an integer of any size is kept whole. A reading's ok_json is its ok value as JSON text, for a value nested deeper than a reader of this file need take: any depth is read. A try that meets no answer, a 200 that does not open or is no answer at this version, or any other status is lost, and is asked once more unless the callback's class in retries is never, when the call is uncertain at once; a second loss is lost. A 413 is final too_large, and a refusal naming unknown_version, plain at any version or sealed, is final lost: neither is asked again. Locus.Runtime.HostClient's test and the Rust runner's crate play every case. pin_answer_refusals is a pin as an egress_pin answer's ok carries it, which Prima.PinnedTarget.read/1 reads, `reads` more pins it reads, their addresses as inet:parse_strict_address/1 reads them (a zone only on an fe80:: or ff02:: address), and `refusals` pins it refuses, each `why`: a reader takes each of `reads` as a pin and none of `refusals`, and a runner answers its guest's request on a refused one as a failed pin and sends no fetch. pin_answer_refusals' reads and refusals hold, besides, a zone's every reading (one beginning with 0 a decimal up to 65535, any other any text, only after fe80 or ff02 with a second group of 0) and a family or port that is no integer, which a pin never carries (Prima.PinnedTarget.valid?/1 holds family to an integer). frame_splits are streams of answer frames split unopened (Prima.WorkerAuth.split_frames/1): the frames, each its kind byte and sealed value, and the bytes after them, or frame_too_large for a length past max_frame_bytes as soon as it is in, malformed for one below two; frame_body_bytes are frames' body bytes, counted from a chunk's sealed length alone (frame_body_bytes/1). frames_content_types are an answer's content-type values and whether they say it carries frames (Prima.WorkerWire.frames_content_type?/1: one of them, cut at ; and trimmed, is the frames' type in any case). answer_bounds are answers of body_bytes at status as a caller keeps them against max_answer_bytes (Locus.Runtime.HostClient.post_call/5): within the bound whole; past it a 200 is no answer at all (arrived false) and any other status keeps its status with no body. domain_cases are hosts matched against egress domain patterns (Prima.Network.domain_allowed?/2), case folded as String.downcase/1 folds them; header_rules are header names and whether each routes, frames or overrides a request (framing_or_override_header?/1) or carries a credential (credential_header?/1); host_headers are the Host header a request to a scheme, host and port carries (host_header/1). attached_requests are attached requests and the args they are posted with (Prima.AttachedRequest.to_args/1), written as Jason writes them. pin_expiry are a pin's expiry and a time, and whether the pin has expired then (Prima.PinnedTarget.expired?/2: past its expiry); pin_requests are egress_pin args and whether they read (read_request/1). edge_checks and request_sizes are the relay's own checks of a runner's request against its attempt's edge and limits (Locus.Runtime.EdgeGuard, the Elixir service's, which a Go service makes the same): whether the method is one of the egress methods, both upcased as String.upcase/1 upcases them, whether the scheme is one of its schemes exactly, whether the host is within its domains, and whether the body, URL and every header's name and value together are within max_request_size. pin_purposes and pin_refusal_names are the purposes a runner asks a pin for and the refusals an egress_pin answer names (Prima.PinnedTarget.purposes/0, refusals/0); a pin's address reads with no sign in it, and an ip that is no IP literal is refused whatever family the pin declares, 0 and -0 among them. urls are texts each read as Prima.Network.parse_url/1 reads them, every part of the URL (scheme, userinfo, host, port, path, query, fragment; the port the scheme's default where the text names none), or null for one it refuses. domain_bytes are hosts and patterns of bytes that are no UTF-8, in hexadecimal, each matched as domain_allowed?/2 matches it; method_bytes are a method and the one method an edge allows, in hexadecimal, checked as Locus.Runtime.EdgeGuard.check_method/2 checks them, both upcased as String.upcase/1 upcases them. A Go reader matches nothing on bytes that are no UTF-8, a host, a pattern or a method, where Elixir's casing walks them its own way: a case Prima matches on such bytes is marked go, Go's own refusal (go's allowed, false), each side's test asserting its own answer; no egress authority carries such a pattern, since its JSON is UTF-8. upcase_special are the characters String.upcase/1 upcases otherwise than one character's simple uppercase would (Unicode's SpecialCasing), each with what it upcases to, in hexadecimal: the table both ends hold.",
   "version": 3,
   "auth_header": "x-cyfr-auth",
   "routes": {
@@ -20,7 +20,8 @@
     "attached_fetch": "/host/v1/attached_fetch",
     "question_ask": "/host/v1/question_ask",
     "question_wait": "/host/v1/question_wait",
-    "runner_exited": "/host/v1/runner_exited"
+    "runner_exited": "/host/v1/runner_exited",
+    "report_events": "/host/v1/report_events"
   },
   "retries": {
     "attach": "idempotent",
@@ -40,7 +41,8 @@
     "attached_fetch": "never",
     "question_ask": "keyed",
     "question_wait": "idempotent",
-    "runner_exited": "idempotent"
+    "runner_exited": "idempotent",
+    "report_events": "never"
   },
   "timeouts_ms": {
     "attach": 30000,
@@ -60,7 +62,8 @@
     "attached_fetch": 30000,
     "question_ask": 30000,
     "question_wait": 30000,
-    "runner_exited": 30000
+    "runner_exited": 30000,
+    "report_events": 30000
   },
   "max_body_bytes": 1048576,
   "max_answer_bytes": 5242880,
@@ -924,6 +927,197 @@
         "error": "lost"
       }
     ]
+  },
+  "events_report": {
+    "why": "one batch of the nine operator events a runner reports, a record of each, as a worker service forwards them",
+    "fields": {
+      "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
+      "nonce": "n_host_events",
+      "service": "wrk_4f3c2a1e9d8b7c6a",
+      "ts": 1789305250102
+    },
+    "body": "{\"v\":3,\"op\":\"report_events\",\"args\":{\"events\":[{\"name\":\"engine.authority_entered\",\"measurements\":{},\"metadata\":{\"execution_id\":\"exec_01a09fee-07cc-791f-a598-e7f90608c9e2\",\"reference\":\"catalyst:local.http:1.1.5\"}},{\"name\":\"http.request\",\"measurements\":{\"duration_ms\":42,\"system_time\":1795770665819204},\"metadata\":{\"component_ref\":\"catalyst:local.http\",\"method\":\"GET\",\"hostname\":\"api.example.com\",\"status\":200}},{\"name\":\"storage.call\",\"measurements\":{\"duration_ms\":3},\"metadata\":{\"component_ref\":\"formula:local.daily-report\",\"action\":\"write\",\"status\":\"error\"}},{\"name\":\"mcp_tool.call\",\"measurements\":{\"duration_ms\":120},\"metadata\":{\"execution_id\":\"exec_01a09fee-07cc-791f-a598-e7f90608c9e2\",\"tool_action\":\"café.lire\",\"status\":\"ok\"}},{\"name\":\"formula.spawn\",\"measurements\":{\"system_time\":1795770665819204},\"metadata\":{\"parent_execution_id\":\"exec_01a09fee-07cc-791f-a598-e7f90608c9e2\",\"task_id\":\"task_01a09fee-0000-7000-8000-00000000000c\",\"component_ref\":\"catalyst:local.http\"}},{\"name\":\"formula.await\",\"measurements\":{\"duration_ms\":15},\"metadata\":{\"task_id\":\"task_01a09fee-0000-7000-8000-00000000000c\",\"status\":\"completed\"}},{\"name\":\"formula.await_all\",\"measurements\":{\"duration_ms\":900},\"metadata\":{\"parent_execution_id\":\"exec_01a09fee-07cc-791f-a598-e7f90608c9e2\",\"count\":4,\"timed_out\":1}},{\"name\":\"formula.cancel\",\"measurements\":{\"system_time\":1795770665819204},\"metadata\":{\"parent_execution_id\":\"exec_01a09fee-07cc-791f-a598-e7f90608c9e2\",\"task_id\":\"task_01a09fee-0000-7000-8000-00000000000c\"}},{\"name\":\"formula.await_any\",\"measurements\":{\"duration_ms\":7},\"metadata\":{\"parent_execution_id\":\"exec_01a09fee-07cc-791f-a598-e7f90608c9e2\",\"winner_task_id\":\"task_01a09fee-0000-7000-8000-00000000000c\"}}]}}",
+    "header": "v1 kind=report service=wrk_4f3c2a1e9d8b7c6a boot=boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d ts=1789305250102 nonce=n_host_events body=5a5e4e60e15ffb6250e3af88bfab5d5f5758ede6e389642587157f2b40d6a063 mac=rRtcNSBLiQZ0GSNloQAEjktKBH-pyrcVbLt6IJI2Asg",
+    "answer": "{\"v\":3,\"ok\":true}",
+    "emitted": [
+      {
+        "atoms": [],
+        "event": [
+          "cyfr",
+          "locus",
+          "runtime",
+          "engine",
+          "authority_entered"
+        ],
+        "measurements": {},
+        "metadata": {
+          "execution_id": "exec_01a09fee-07cc-791f-a598-e7f90608c9e2",
+          "reference": "catalyst:local.http:1.1.5"
+        }
+      },
+      {
+        "atoms": [],
+        "event": [
+          "cyfr",
+          "locus",
+          "runtime",
+          "http",
+          "request"
+        ],
+        "measurements": {
+          "duration_ms": 42,
+          "system_time": 1795770665819204000
+        },
+        "metadata": {
+          "component_ref": "catalyst:local.http",
+          "hostname": "api.example.com",
+          "method": "GET",
+          "status": 200
+        }
+      },
+      {
+        "atoms": [
+          "status"
+        ],
+        "event": [
+          "cyfr",
+          "locus",
+          "runtime",
+          "storage",
+          "call"
+        ],
+        "measurements": {
+          "duration_ms": 3
+        },
+        "metadata": {
+          "action": "write",
+          "component_ref": "formula:local.daily-report",
+          "status": "error"
+        }
+      },
+      {
+        "atoms": [
+          "status"
+        ],
+        "event": [
+          "cyfr",
+          "locus",
+          "runtime",
+          "mcp_tool",
+          "call"
+        ],
+        "measurements": {
+          "duration_ms": 120
+        },
+        "metadata": {
+          "execution_id": "exec_01a09fee-07cc-791f-a598-e7f90608c9e2",
+          "status": "ok",
+          "tool_action": "café.lire"
+        }
+      },
+      {
+        "atoms": [],
+        "event": [
+          "cyfr",
+          "locus",
+          "runtime",
+          "formula",
+          "spawn"
+        ],
+        "measurements": {
+          "system_time": 1795770665819204000
+        },
+        "metadata": {
+          "component_ref": "catalyst:local.http",
+          "parent_execution_id": "exec_01a09fee-07cc-791f-a598-e7f90608c9e2",
+          "task_id": "task_01a09fee-0000-7000-8000-00000000000c"
+        }
+      },
+      {
+        "atoms": [
+          "status"
+        ],
+        "event": [
+          "cyfr",
+          "locus",
+          "runtime",
+          "formula",
+          "await"
+        ],
+        "measurements": {
+          "duration_ms": 15
+        },
+        "metadata": {
+          "status": "completed",
+          "task_id": "task_01a09fee-0000-7000-8000-00000000000c"
+        }
+      },
+      {
+        "atoms": [],
+        "event": [
+          "cyfr",
+          "locus",
+          "runtime",
+          "formula",
+          "await_all"
+        ],
+        "measurements": {
+          "duration_ms": 900
+        },
+        "metadata": {
+          "count": 4,
+          "parent_execution_id": "exec_01a09fee-07cc-791f-a598-e7f90608c9e2",
+          "timed_out": 1
+        }
+      },
+      {
+        "atoms": [],
+        "event": [
+          "cyfr",
+          "locus",
+          "runtime",
+          "formula",
+          "cancel"
+        ],
+        "measurements": {
+          "system_time": 1795770665819204000
+        },
+        "metadata": {
+          "parent_execution_id": "exec_01a09fee-07cc-791f-a598-e7f90608c9e2",
+          "task_id": "task_01a09fee-0000-7000-8000-00000000000c"
+        }
+      },
+      {
+        "atoms": [],
+        "event": [
+          "cyfr",
+          "locus",
+          "runtime",
+          "formula",
+          "await_any"
+        ],
+        "measurements": {
+          "duration_ms": 7
+        },
+        "metadata": {
+          "parent_execution_id": "exec_01a09fee-07cc-791f-a598-e7f90608c9e2",
+          "winner_task_id": "task_01a09fee-0000-7000-8000-00000000000c"
+        }
+      }
+    ],
+    "replay_error": "lost",
+    "off_roster": {
+      "why": "engine.authority_entered carrying authority, the member the roster dropped",
+      "fields": {
+        "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
+        "nonce": "n_host_events_off_roster",
+        "service": "wrk_4f3c2a1e9d8b7c6a",
+        "ts": 1789305250102
+      },
+      "body": "{\"v\":3,\"op\":\"report_events\",\"args\":{\"events\":[{\"measurements\":{},\"metadata\":{\"authority\":\"{}\",\"execution_id\":\"exec_01a09fee-07cc-791f-a598-e7f90608c9e2\",\"reference\":\"catalyst:local.http:1.1.5\"},\"name\":\"engine.authority_entered\"},{\"measurements\":{\"duration_ms\":42,\"system_time\":1795770665819204},\"metadata\":{\"component_ref\":\"catalyst:local.http\",\"hostname\":\"api.example.com\",\"method\":\"GET\",\"status\":200},\"name\":\"http.request\"},{\"measurements\":{\"duration_ms\":3},\"metadata\":{\"action\":\"write\",\"component_ref\":\"formula:local.daily-report\",\"status\":\"error\"},\"name\":\"storage.call\"},{\"measurements\":{\"duration_ms\":120},\"metadata\":{\"execution_id\":\"exec_01a09fee-07cc-791f-a598-e7f90608c9e2\",\"status\":\"ok\",\"tool_action\":\"café.lire\"},\"name\":\"mcp_tool.call\"},{\"measurements\":{\"system_time\":1795770665819204},\"metadata\":{\"component_ref\":\"catalyst:local.http\",\"parent_execution_id\":\"exec_01a09fee-07cc-791f-a598-e7f90608c9e2\",\"task_id\":\"task_01a09fee-0000-7000-8000-00000000000c\"},\"name\":\"formula.spawn\"},{\"measurements\":{\"duration_ms\":15},\"metadata\":{\"status\":\"completed\",\"task_id\":\"task_01a09fee-0000-7000-8000-00000000000c\"},\"name\":\"formula.await\"},{\"measurements\":{\"duration_ms\":900},\"metadata\":{\"count\":4,\"parent_execution_id\":\"exec_01a09fee-07cc-791f-a598-e7f90608c9e2\",\"timed_out\":1},\"name\":\"formula.await_all\"},{\"measurements\":{\"system_time\":1795770665819204},\"metadata\":{\"parent_execution_id\":\"exec_01a09fee-07cc-791f-a598-e7f90608c9e2\",\"task_id\":\"task_01a09fee-0000-7000-8000-00000000000c\"},\"name\":\"formula.cancel\"},{\"measurements\":{\"duration_ms\":7},\"metadata\":{\"parent_execution_id\":\"exec_01a09fee-07cc-791f-a598-e7f90608c9e2\",\"winner_task_id\":\"task_01a09fee-0000-7000-8000-00000000000c\"},\"name\":\"formula.await_any\"}]}}",
+      "header": "v1 kind=report service=wrk_4f3c2a1e9d8b7c6a boot=boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d ts=1789305250102 nonce=n_host_events_off_roster body=17569b4dc15a801508d0b3d38c592130f951d559f236dd5fcc8521b208ced363 mac=i9D-_WqzRcFNXbdAR_1rouEcjH6JmbITY3Z-drLfCp8",
+      "error": "malformed"
+    }
   },
   "retry_identity": {
     "first": {

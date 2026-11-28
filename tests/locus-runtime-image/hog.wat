@@ -7,9 +7,8 @@
 ;; runner's memory bound, each within its own.
 ;;
 ;; The engine gives a run one linear memory of at most the node's
-;; consented `max_memory_bytes` (`Locus.Runtime.Engine.store_limits/1`), 64 MiB
-;; under the zero authority a child of the scripted control plane runs
-;; under. `run`, in order:
+;; consented `max_memory_bytes` (the runner's store limits), 64 MiB under
+;; the zero authority a child of the scripted control plane runs under. `run`, in order:
 ;;
 ;;   1. emits `{"type":"hog.ready"}` (`cyfr:emit/events`, a `push_deltas`
 ;;      host call), which the control plane holds until the test lets this

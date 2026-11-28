@@ -37,10 +37,9 @@ end
 # asks which port it was given.
 #
 # The service runs its runners as OS processes of their own (the direct
-# launcher's runner face), the warm floor's one kept ahead. Runner
-# code a test runs in this VM (the runtime, the handlers,
-# `Locus.Runtime.Runner`) runs on the engine the suite starts here
-# (`Locus.Runtime.Test.Engine`).
+# launcher's runner face), the warm floor's one kept ahead: each the
+# runner program this checkout built (`scripts/runner.sh build`), whose
+# pair the keeper refuses when it is missing or stale.
 root = Locus.Runtime.Test.ScriptedHost.root()
 {:ok, worker_key} = Prima.WorkerAuth.worker_key(root, Locus.Runtime.Test.ScriptedHost.service())
 
@@ -92,11 +91,5 @@ case Application.ensure_all_started(:locus) do
 end
 
 for count <- counts, do: {:ok, _pid} = Supervisor.start_child(Locus.Supervisor, count)
-
-:ok = Locus.Runtime.Test.Engine.start!()
-
-# The validator the runtime and the builder check components with, as the
-# application installs it when it starts, which the suite's VM does not.
-:ok = Prima.ComponentFeatures.install!()
 
 ExUnit.start(assert_receive_timeout: Prima.Test.Wait.receive_ms())

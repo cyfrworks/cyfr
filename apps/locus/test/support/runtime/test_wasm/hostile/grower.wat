@@ -7,9 +7,9 @@
 ;; `{"pages": P, "table": T}`, the size of each once the engine refused it.
 ;; A run's store bounds its memory at the node's consented
 ;; `max_memory_bytes` and each table at 20,000 elements
-;; (`Locus.Runtime.Engine.store_limits/1`), so P is that bound in pages and T is
-;; 20,000: growth past either is refused by the engine, and the run goes
-;; on. Built by `build.sh` (README.md).
+;; (the runner's store, `apps/locus/runner`), so P is that bound in pages
+;; and T is 20,000: growth past either is refused by the engine, and the
+;; run goes on. Built by `build.sh` (README.md).
 (module
   (memory $io (export "memory") 1)
   (table $t 1 funcref)

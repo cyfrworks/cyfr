@@ -4,17 +4,17 @@
 defmodule Cyfr.Telemetry.EmitterDriftTest do
   @moduledoc """
   Telemetry does not cross a process boundary, so an event is heard only
-  in the VM that emits it, and `Cyfr.Telemetry.Catalog` says which VM that
-  is. Every consumer but `:operator` attaches in the control plane's VM:
-  an event one of them consumes (the audit trail and the console bridge
-  among them) is emitted by a module the control plane's release holds:
-  the host's own (`apps/cyfr/lib`) or one of the two applications below it
-  (`apps/arca/lib`, `apps/sanctum/lib`), which start in the same VM. An
-  event emitted under `apps/locus/lib/locus/runtime` runs in a runner, the OS
-  process that runs a guest, and is rostered as the worker's
-  (`emitter: :worker`), for the operator alone; one rostered so is emitted
-  there and nowhere in the control plane. Nothing else emits an event: the
-  contracts run in both VMs, and no one listens in the rest of Locus's.
+  in the VM that emits it, and every consumer of `Cyfr.Telemetry.Catalog`
+  attaches in the control plane's VM, the operator's own attach among
+  them. So every event is emitted by a module the control plane's release
+  holds: the host's own (`apps/cyfr/lib`) or one of the two applications
+  below it (`apps/arca/lib`, `apps/sanctum/lib`), which start in the same
+  VM. Nothing else emits one: the contracts run in both VMs, Locus's nodes
+  have no one listening, and a runner is a program of its own. The
+  runner's operator events are `Prima.RunnerControl`'s roster: the
+  catalog's `[:cyfr, :locus, :runtime, …]` events are exactly it, each
+  for the operator alone, and the control plane emits each as a runner's
+  worker service reports it (`Opus.Host.RunnerEvents`).
 
   An event is emitted by a file whose code passes it to `:telemetry.execute`
   or `:telemetry.span`, as a literal list or a module attribute holding
@@ -37,6 +37,7 @@ defmodule Cyfr.Telemetry.EmitterDriftTest do
   @moduletag :sqlite
 
   alias Cyfr.Telemetry.Catalog
+  alias Prima.RunnerControl
 
   # apps/cyfr/test/cyfr/telemetry -> umbrella root
   @root Path.expand("../../../../..", __DIR__)
@@ -46,7 +47,6 @@ defmodule Cyfr.Telemetry.EmitterDriftTest do
   @control_plane ["apps/cyfr/lib", "apps/arca/lib", "apps/sanctum/lib"]
   # Where a planted control-plane emission goes, when a case needs one.
   @host "apps/cyfr/lib"
-  @worker "apps/locus/lib/locus/runtime"
   @emitting [:execute, :span]
 
   # ---------------------------------------------------------------------------
@@ -61,62 +61,60 @@ defmodule Cyfr.Telemetry.EmitterDriftTest do
       |> Enum.map(&Map.get(emitted, &1, MapSet.new()))
       |> Enum.reduce(MapSet.new(), &MapSet.union/2)
 
-    worker = Map.get(emitted, @worker, MapSet.new())
-    rostered = for {event, entry} <- catalog, Map.get(entry, :emitter) == :worker, do: event
-
     unheard =
       for {event, %{consumers: consumers}} <- catalog,
           consumers -- [:operator] != [],
           not MapSet.member?(control_plane, event),
           do: {:consumed_in_the_control_plane_but_emitted_elsewhere, event}
 
-    unrostered =
-      for event <- worker,
-          Map.get(Map.get(catalog, event, %{}), :emitter) != :worker,
-          do: {:emitted_in_a_runner_but_not_rostered_as_the_workers, event}
+    runners = for {[:cyfr, :locus, :runtime | _] = event, _entry} <- catalog, do: event
+    roster = Enum.map(RunnerControl.event_roster(), &runner_event/1)
 
-    rostered_wrongly =
-      Enum.flat_map(rostered, fn event ->
+    off_roster =
+      for event <- runners -- roster, do: {:a_runner_event_off_its_control_channel_roster, event}
+
+    uncatalogued =
+      for event <- roster -- runners, do: {:a_runner_event_of_the_roster_not_catalogued, event}
+
+    runner_events =
+      Enum.flat_map(runners -- (runners -- roster), fn event ->
         consumers = catalog |> Map.fetch!(event) |> Map.fetch!(:consumers)
 
         [
           if(consumers -- [:operator] != [],
-            do: {:rostered_as_the_workers_with_a_control_plane_consumer, event}
+            do: {:a_runner_event_with_a_consumer_but_the_operator, event}
           ),
-          if(not MapSet.member?(worker, event),
-            do: {:rostered_as_the_workers_but_not_emitted_in_a_runner, event}
-          ),
-          if(MapSet.member?(control_plane, event),
-            do: {:rostered_as_the_workers_but_emitted_by_the_control_plane, event}
+          if(not MapSet.member?(control_plane, event),
+            do: {:a_runner_event_the_control_plane_does_not_emit, event}
           )
         ]
       end)
 
     elsewhere =
       for {lib, events} <- emitted,
-          lib not in [@worker | @control_plane],
+          lib not in @control_plane,
           event <- events,
-          do: {:emitted_outside_the_control_plane_and_a_runner, lib, event}
+          do: {:emitted_outside_the_control_plane, lib, event}
 
-    Enum.reject(unheard ++ unrostered ++ rostered_wrongly ++ elsewhere, &is_nil/1)
+    Enum.reject(unheard ++ off_roster ++ uncatalogued ++ runner_events ++ elsewhere, &is_nil/1)
   end
+
+  # The event a runner's roster name (`"http.request"`) is emitted as.
+  defp runner_event(%{name: name}),
+    do: [:cyfr, :locus, :runtime | Enum.map(String.split(name, "."), &String.to_atom/1)]
 
   # ---------------------------------------------------------------------------
   # Reading what code emits
   # ---------------------------------------------------------------------------
 
-  # Each app's lib, the runtime's tree keyed apart from the rest of
-  # Locus's: the runtime's code runs in a runner, and the rest in a node.
+  # Each app's lib and the events its code emits.
   defp emitted_by_tree do
-    worker = Path.join(@root, @worker) <> "/"
-
     for lib <- Prima.Test.SourceTree.app_libs(@root),
         path <- @root |> Path.join(lib) |> Path.join("**/*.ex") |> Path.wildcard(),
-        reduce: Map.new(Prima.Test.SourceTree.app_libs(@root) ++ [@worker], &{&1, MapSet.new()}) do
+        reduce: Map.new(Prima.Test.SourceTree.app_libs(@root), &{&1, MapSet.new()}) do
       emitted ->
-        key = if String.starts_with?(path, worker), do: @worker, else: lib
         events = emitted_by_quoted(Prima.Test.SourceTree.quoted(path), path)
-        Map.update!(emitted, key, &MapSet.union(&1, events))
+        Map.update!(emitted, lib, &MapSet.union(&1, events))
     end
   end
 
@@ -219,21 +217,25 @@ defmodule Cyfr.Telemetry.EmitterDriftTest do
     assert unbounded == []
   end
 
-  test "what a runner emits is the worker's roster, and the audit hears none of it",
+  test "the runner's events are its control channel's roster, emitted by the control plane " <>
+         "for the operator alone, and the audit hears none of them",
        %{tree: emitted} do
-    assert MapSet.to_list(emitted[@worker]) |> Enum.sort() == Catalog.emitted_by(:worker)
-    assert Catalog.emitted_by(:worker) -- Catalog.consumed_by(:operator) == []
+    roster = Enum.map(RunnerControl.event_roster(), &runner_event/1)
+    catalogued = for {[:cyfr, :locus, :runtime | _] = event, _entry} <- Catalog.all(), do: event
+
+    assert Enum.sort(catalogued) == Enum.sort(roster)
+    assert roster -- Catalog.consumed_by(:operator) == []
+    assert Enum.map(RunnerControl.event_roster(), &Opus.Host.RunnerEvents.event(&1.name)) == roster
+    assert Enum.all?(roster, &MapSet.member?(emitted["apps/cyfr/lib"], &1))
 
     for event <- Catalog.consumed_by(:audit) ++ Catalog.consumed_by(:bridge) do
       assert Enum.any?(@control_plane, &MapSet.member?(emitted[&1], event)), inspect(event)
-      refute MapSet.member?(emitted[@worker], event), inspect(event)
+      refute event in roster, inspect(event)
     end
 
-    # The credential trail is the control plane's, and nothing in a runner
-    # emits a secret event.
+    # The credential trail is the control plane's.
     assert [:cyfr, :opus, :secret, :dispensed] in Catalog.consumed_by(:audit)
     assert [:cyfr, :opus, :secret, :denied] in Catalog.consumed_by(:audit)
-    refute Enum.any?(emitted[@worker], &match?([:cyfr, :opus, :secret | _], &1))
   end
 
   # ---------------------------------------------------------------------------
@@ -335,12 +337,12 @@ defmodule Cyfr.Telemetry.EmitterDriftTest do
     end
   end
 
-  test "a credential read audited in the runner that reads it is refused both ways", %{tree: tree} do
-    # A runner's vault import emitting the credential read the control
-    # plane's audit consumes: the audit attaches in the control plane's VM,
-    # so it never hears the event.
-    runner = """
-    defmodule Locus.Runtime.Engine do
+  test "a credential read audited in Locus is refused both ways", %{tree: tree} do
+    # A Locus module emitting the credential read the control plane's
+    # audit consumes: the audit attaches in the control plane's VM, so it
+    # never hears the event.
+    planted = """
+    defmodule Locus.Runtime.Planted do
       def get(name) do
         :telemetry.execute([:cyfr, :opus, :secret, :accessed], %{}, %{secret_name: name})
       end
@@ -353,12 +355,12 @@ defmodule Cyfr.Telemetry.EmitterDriftTest do
       |> Map.put([:cyfr, :opus, :secret, :accessed], %{consumers: [:audit]})
 
     emitted =
-      Map.update!(tree, @worker, &MapSet.union(&1, emitted_by_source(runner)))
+      Map.update!(tree, "apps/locus/lib", &MapSet.union(&1, emitted_by_source(planted)))
 
     assert {:consumed_in_the_control_plane_but_emitted_elsewhere,
             [:cyfr, :opus, :secret, :accessed]} in violations(catalog, emitted)
 
-    assert {:emitted_in_a_runner_but_not_rostered_as_the_workers,
+    assert {:emitted_outside_the_control_plane, "apps/locus/lib",
             [:cyfr, :opus, :secret, :accessed]} in violations(catalog, emitted)
   end
 
@@ -374,49 +376,32 @@ defmodule Cyfr.Telemetry.EmitterDriftTest do
            ]
   end
 
-  test "a bridged event emitted only in a runner is refused", %{tree: tree} do
-    event = [:cyfr, :locus, :runtime, :planted, :bridged]
-    catalog = Map.put(Catalog.all(), event, %{consumers: [:bridge]})
-    emitted = Map.update!(tree, @worker, &MapSet.put(&1, event))
-
-    assert {:consumed_in_the_control_plane_but_emitted_elsewhere, event} in violations(
-             catalog,
-             emitted
-           )
-
-    assert {:emitted_in_a_runner_but_not_rostered_as_the_workers, event} in violations(
-             catalog,
-             emitted
-           )
-  end
-
-  test "a runner's event missing from the worker's roster, or rostered and unheard, is refused",
+  test "a runner event off the roster, one of the roster not catalogued, heard beyond the " <>
+         "operator or not emitted by the control plane, is refused",
        %{tree: tree} do
+    planted = [:cyfr, :locus, :runtime, :planted, :call]
+    off = Map.put(Catalog.all(), planted, %{consumers: [:operator], note: "planted"})
+
+    assert violations(off, Map.update!(tree, @host, &MapSet.put(&1, planted))) == [
+             {:a_runner_event_off_its_control_channel_roster, planted}
+           ]
+
     event = [:cyfr, :locus, :runtime, :formula, :spawn]
 
-    unrostered = Map.update!(Catalog.all(), event, &Map.delete(&1, :emitter))
-
-    assert violations(unrostered, tree) == [
-             {:emitted_in_a_runner_but_not_rostered_as_the_workers, event}
+    assert violations(Map.delete(Catalog.all(), event), tree) == [
+             {:a_runner_event_of_the_roster_not_catalogued, event}
            ]
 
     audited = Map.update!(Catalog.all(), event, &%{&1 | consumers: [:audit]})
 
-    assert {:rostered_as_the_workers_with_a_control_plane_consumer, event} in violations(
-             audited,
-             tree
-           )
-
-    gone = Map.update!(tree, @worker, &MapSet.delete(&1, event))
-
-    assert violations(Catalog.all(), gone) == [
-             {:rostered_as_the_workers_but_not_emitted_in_a_runner, event}
+    assert violations(audited, tree) == [
+             {:a_runner_event_with_a_consumer_but_the_operator, event}
            ]
 
-    both = Map.update!(tree, @host, &MapSet.put(&1, event))
+    gone = Map.update!(tree, @host, &MapSet.delete(&1, event))
 
-    assert violations(Catalog.all(), both) == [
-             {:rostered_as_the_workers_but_emitted_by_the_control_plane, event}
+    assert violations(Catalog.all(), gone) == [
+             {:a_runner_event_the_control_plane_does_not_emit, event}
            ]
   end
 
@@ -427,7 +412,7 @@ defmodule Cyfr.Telemetry.EmitterDriftTest do
       emitted = Map.update!(tree, lib, &MapSet.put(&1, event))
 
       assert violations(Catalog.all(), emitted) == [
-               {:emitted_outside_the_control_plane_and_a_runner, lib, event}
+               {:emitted_outside_the_control_plane, lib, event}
              ]
     end
   end

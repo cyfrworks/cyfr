@@ -437,6 +437,63 @@ fn a_cancelled_child_with_a_fetch_outstanding_closes_abandoned_and_its_sibling_c
 }
 
 #[test]
+fn a_cancel_naming_the_root_or_no_child_of_the_subtree_is_ignored_and_it_completes_clean() {
+    let mut service = Service::start();
+    let root = Job::new("reagent", &format!("{TEST_WASM}/echo.wasm"), r#"{"n":1}"#);
+    let go = Arc::new(Mutex::new(false));
+    let held = go.clone();
+    service.assign(
+        &root,
+        Box::new(move |call, job| match call.op.as_str() {
+            // The root's bytes are held until both cancels are sent: the
+            // subtree runs as they arrive.
+            "fetch_artifact" => {
+                let held = held.clone();
+                Reply::When(
+                    Box::new(move || *held.lock().expect("go")),
+                    Value::String(cyfr_runner::wire::encode_base64(&job.component)),
+                )
+            }
+            _ => standard(call, job),
+        }),
+    );
+    support::eventually(|| !service.calls_of("fetch_artifact").is_empty());
+    let elsewhere = "exec_test-elsewhere";
+    for execution_id in [elsewhere, root.execution_id.as_str()] {
+        let cancel = control::Message::CancelChild {
+            execution_id: execution_id.to_owned(),
+        };
+        service.send_line(&control::encode(&cancel).expect("a cancel_child frame"));
+    }
+    *go.lock().expect("go") = true;
+    assert_eq!(
+        service.frame(SOON),
+        json!({"v": 1, "type": "complete", "execution_id": root.execution_id, "clean": true})
+    );
+    assert_eq!(
+        calls(&service, "complete", &root)[0].args["outcome"]["output"],
+        json!({"n": 1})
+    );
+    assert_eq!(service.exit_after_close(SOON).code(), Some(0));
+    // The root's cancel was read while the subtree ran, so the one before
+    // it on the channel was too.
+    let log = service.errors();
+    assert!(
+        log.contains(&format!(
+            "cancel_child names the subtree's root {}; ignored",
+            root.execution_id
+        )),
+        "{log}"
+    );
+    assert!(
+        log.contains(&format!(
+            "cancel_child names no child here ({elsewhere}); ignored"
+        )),
+        "{log}"
+    );
+}
+
+#[test]
 fn a_formula_stopped_while_its_child_runs_stops_the_child_which_closes_abandoned() {
     let mut service = Service::start();
     let mut job = formula(&[("call", run("run", "reagent:local.spin:0.1.0", json!({})))]);
@@ -868,6 +925,100 @@ fn tool_calls_and_tasks_answer_cyfrs_results_and_refusals_as_they_are() {
 }
 
 #[test]
+fn each_call_spawn_and_cancel_is_an_event_naming_the_formula_and_its_action_or_task() {
+    let mut service = Service::start();
+    let tool = |action: &str| json!({"tool": "component", "action": action});
+    let job = formula(&[
+        (
+            "call",
+            run("run", "reagent:local.echo:0.1.0", json!({"n": 1})),
+        ),
+        (
+            "call",
+            run("run", "reagent:local.echo:0.1.0", json!({"n": 2})),
+        ),
+        ("call", tool("search")),
+        ("call", tool("denied")),
+        ("spawn", run("run", "reagent:local.spin:0.1.0", json!({}))),
+        ("cancel", json!("task_1")),
+    ]);
+    // CYFR refuses the second admission.
+    let mut admissions = VecDeque::from([
+        Some(echo(&job, r#"{"n":1}"#)),
+        None,
+        Some(spin(&job, 60_000)),
+    ]);
+    service.assign(
+        &job,
+        Box::new(move |call, job| match call.op.as_str() {
+            "admit_child" => match admissions.pop_front().flatten() {
+                Some(child) => Reply::Ok(job.admitted(&child)),
+                None => Reply::Error(
+                    "guest_error",
+                    json!({"type": "tool_denied", "message": "Denied by edge_only"}),
+                ),
+            },
+            "tool_call" => match call.args["args"]["action"].as_str() {
+                Some("search") => Reply::Ok(json!({"hits": []})),
+                _ => Reply::Error(
+                    "guest_error",
+                    json!({"type": "tool_denied", "message": "Not granted"}),
+                ),
+            },
+            _ => standard(call, job),
+        }),
+    );
+    let ended = ended(&service, SOON);
+    assert_eq!(ended.last["type"], "complete", "{}", ended.last);
+    assert_eq!(
+        answers(&service, &job),
+        [
+            json!({"status": "completed", "output": {"n": 1}}),
+            error("tool_denied", "Denied by edge_only"),
+            json!({"status": "completed", "output": {"hits": []}}),
+            error("tool_denied", "Not granted"),
+            json!({"task_id": "task_1"}),
+            json!({"cancelled": true, "task_id": "task_1"}),
+        ]
+    );
+    let named: Vec<(Value, Value)> = ended
+        .events
+        .iter()
+        .filter(|event| {
+            ["mcp_tool.call", "formula.spawn", "formula.cancel"]
+                .contains(&event["name"].as_str().unwrap_or(""))
+        })
+        .map(|event| (event["name"].clone(), event["metadata"].clone()))
+        .collect();
+    let id = &job.execution_id;
+    let called = |action: &str, status: &str| {
+        (
+            json!("mcp_tool.call"),
+            json!({"execution_id": id, "tool_action": action, "status": status}),
+        )
+    };
+    // The cancelled task's child never answers: its call is no event.
+    assert_eq!(
+        named,
+        [
+            called("execution.run", "ok"),
+            called("execution.run", "error"),
+            called("component.search", "ok"),
+            called("component.denied", "error"),
+            (
+                json!("formula.spawn"),
+                json!({"parent_execution_id": id, "task_id": "task_1",
+                       "component_ref": "execution.run"})
+            ),
+            (
+                json!("formula.cancel"),
+                json!({"parent_execution_id": id, "task_id": "task_1"})
+            ),
+        ]
+    );
+}
+
+#[test]
 fn a_task_is_awaited_polled_and_cancelled_and_one_given_up_on_is_stopped() {
     let mut service = Service::start();
     let mut job = formula(&[
@@ -952,6 +1103,159 @@ fn a_task_is_awaited_polled_and_cancelled_and_one_given_up_on_is_stopped() {
             "formula.await",
             "formula.await_all"
         ]
+    );
+}
+
+#[test]
+fn a_formula_allowed_no_tasks_is_refused_every_spawn_and_asks_nothing() {
+    let mut service = Service::start();
+    let job = formula(&[
+        ("spawn", json!({"tool": "component", "action": "search"})),
+        ("spawn", run("run", "reagent:local.echo:0.1.0", json!({}))),
+    ])
+    .bound(json!({"max_concurrent_tasks": 0}));
+    service.assign(&job, Box::new(standard));
+    let ended = ended(&service, SOON);
+    assert_eq!(ended.last["clean"], json!(true), "{}", ended.last);
+    let refused = error("resource_limit", words::TASKS_EXCEEDED);
+    assert_eq!(answers(&service, &job), [refused.clone(), refused]);
+    // Neither is a tool call nor an admission.
+    assert_eq!(service.ops(), ["attach", "fetch_artifact", "complete"]);
+    assert!(
+        ended
+            .events
+            .iter()
+            .all(|event| event["name"] != "formula.spawn"),
+        "{:?}",
+        ended.events
+    );
+}
+
+#[test]
+fn an_await_all_past_its_deadline_answers_a_running_task_timed_out_and_the_ended_as_they_ended() {
+    let mut service = Service::start();
+    let tool = |action: &str| json!({"tool": "component", "action": action});
+    let mut job = formula(&[
+        ("spawn", tool("search")),
+        ("spawn", tool("denied")),
+        ("spawn", run("run", "reagent:local.spin:0.1.0", json!({}))),
+        // Answered once both spawned calls have their results: the
+        // await-all finds them ended and the child still running.
+        ("call", tool("wait")),
+        (
+            "await-all",
+            json!({"task_ids": ["task_1", "task_2", "task_3"]}),
+        ),
+    ]);
+    job = job.bound(json!({"max_concurrent_tasks": 4, "batch_timeout": "500ms"}));
+    job.intercepted = vec!["execution.run".to_owned()];
+    let spinner = spin(&job, 60_000);
+    let ended_both = Arc::new(Mutex::new(false));
+    let seen = ended_both.clone();
+    let mut admitted = admitting(vec![spinner.clone()]);
+    service.assign(
+        &job,
+        Box::new(move |call, job| {
+            if call.op != "tool_call" {
+                return admitted(call, job);
+            }
+            match call.args["args"]["action"].as_str() {
+                Some("search") => Reply::Ok(json!({"hits": []})),
+                Some("denied") => Reply::Error(
+                    "guest_error",
+                    json!({"type": "tool_denied", "message": "Not granted"}),
+                ),
+                _ => {
+                    let seen = seen.clone();
+                    Reply::When(Box::new(move || *seen.lock().expect("seen")), json!(true))
+                }
+            }
+        }),
+    );
+    // Each spawned call queues its event in the same step that hands its
+    // result on.
+    let mut spawned_calls = 0;
+    while spawned_calls < 2 {
+        if service.line(SOON)["name"] == "mcp_tool.call" {
+            spawned_calls += 1;
+        }
+    }
+    *ended_both.lock().expect("seen") = true;
+    let ended = ended(&service, SOON);
+    assert_eq!(ended.last["type"], "complete", "{}", ended.last);
+    assert_eq!(ended.last["clean"], json!(false), "{}", ended.last);
+    assert_eq!(
+        answers(&service, &job),
+        [
+            json!({"task_id": "task_1"}),
+            json!({"task_id": "task_2"}),
+            json!({"task_id": "task_3"}),
+            json!({"status": "completed", "output": true}),
+            json!({"results": [
+                {"status": "completed", "output": {"hits": []}, "task_id": "task_1"},
+                {"status": "error", "error": {"type": "tool_denied", "message": "Not granted"},
+                 "task_id": "task_2"},
+                {"status": "error", "error": {"type": "timeout", "message": words::TASK_TIMED_OUT},
+                 "task_id": "task_3"}],
+                   "count": 3}),
+        ]
+    );
+    let awaited: Vec<&Value> = ended
+        .events
+        .iter()
+        .filter(|event| event["name"] == "formula.await_all")
+        .map(|event| &event["metadata"])
+        .collect();
+    assert_eq!(
+        awaited,
+        [&json!({"parent_execution_id": job.execution_id, "count": 3, "timed_out": 1})]
+    );
+    // The task it gave up on is stopped: its child closes abandoned.
+    let fail = calls(&service, "fail", &spinner);
+    assert_eq!(fail.len(), 1, "{:?}", service.ops());
+    assert_eq!(fail[0].args["outcome"]["abandoned"], json!(true));
+    assert_eq!(fail[0].args["outcome"]["error"], words::CANCELLED);
+}
+
+#[test]
+fn an_await_any_over_several_tasks_answers_the_one_that_ended_and_names_the_others_pending() {
+    let mut service = Service::start();
+    let job = formula(&[
+        ("spawn", run("run", "reagent:local.spin:0.1.0", json!({}))),
+        (
+            "spawn",
+            run("run", "reagent:local.echo:0.1.0", json!({"n": 2})),
+        ),
+        ("spawn", run("run", "reagent:local.spin:0.1.0", json!({}))),
+        (
+            "await-any",
+            json!({"task_ids": ["task_1", "task_2", "task_3"]}),
+        ),
+    ]);
+    let children = vec![
+        spin(&job, 60_000),
+        echo(&job, r#"{"n":2}"#),
+        spin(&job, 60_000),
+    ];
+    service.assign(&job, admitting(children));
+    let ended = ended(&service, SOON);
+    assert_eq!(ended.last["type"], "complete", "{}", ended.last);
+    // The first listed is still running: the one that ended answers, the
+    // others in the guest's order.
+    assert_eq!(
+        answers(&service, &job)[3],
+        json!({"result": {"status": "completed", "output": {"n": 2}, "task_id": "task_2"},
+               "task_id": "task_2", "pending": ["task_1", "task_3"]})
+    );
+    let any: Vec<&Value> = ended
+        .events
+        .iter()
+        .filter(|event| event["name"] == "formula.await_any")
+        .map(|event| &event["metadata"])
+        .collect();
+    assert_eq!(
+        any,
+        [&json!({"parent_execution_id": job.execution_id, "winner_task_id": "task_2"})]
     );
 }
 
@@ -1306,6 +1610,43 @@ fn a_child_reads_its_own_vault_fields_and_not_its_formulas() {
     let answers = answers(&service, &job);
     assert_eq!(read(&answers[0]), json!("OEEE"), "{answers:?}");
     assert_eq!(read(&answers[1]), json!("EEEE"), "{answers:?}");
+}
+
+#[test]
+fn the_runners_log_never_carries_a_vault_value_or_a_name_the_contract_bounds_out() {
+    let mut service = Service::start();
+    let job = formula(&[(
+        "call",
+        run("run", "catalyst:local.vault-probe:0.1.0", json!({})),
+    )]);
+    let value = "sk-probe-7c1d0e";
+    let mut child = job.child("catalyst", &format!("{HOSTILE}/vault_probe.wasm"), "{}");
+    child.secrets = json!({ "PROBE_KEY": value });
+    service.assign(&job, admitting(vec![child]));
+    let ended = ended(&service, SOON);
+    assert_eq!(ended.last["clean"], json!(true), "{}", ended.last);
+    // The value was handed over; the other three names were refused.
+    assert_eq!(
+        answers(&service, &job)[0]["output"]["data"]["read"],
+        json!("OEEE")
+    );
+    assert_eq!(service.exit_after_close(SOON).code(), Some(0));
+    let log = service.errors();
+    // Each refusal is logged by its reason.
+    assert!(
+        log.contains("was refused a vault field (secret_denied)"),
+        "{log}"
+    );
+    assert!(
+        log.contains("asked its vault for a name that is no field name"),
+        "{log}"
+    );
+    // The over-long name is 257 `N`s, and the control-byte name carries a
+    // newline, written as it is or escaped.
+    let long = "N".repeat(32);
+    for kept_out in [value, long.as_str(), "PROBE\nKEY", r"PROBE\nKEY"] {
+        assert!(!log.contains(kept_out), "{kept_out:?} is in the log: {log}");
+    }
 }
 
 #[test]
@@ -1777,4 +2118,53 @@ fn a_call_answered_past_the_depth_bound_leaves_the_runner_not_clean() {
         words::answer_too_deep("tool_call")
     );
     assert_eq!(frames.last["clean"], json!(false), "{}", frames.last);
+}
+
+// The guest error vectors' setup refusals (tests/fixtures/guest_error.json's
+// `setup_required`): CYFR refuses a formula's call with the case's message
+// and remediation, and the formula is answered the case's envelope, the
+// remediation handed on as CYFR gave it.
+#[test]
+fn a_call_refused_with_a_setup_remediation_answers_every_vector_cases_envelope() {
+    let vectors = support::fixture("guest_error.json");
+    let cases = vectors["setup_required"]
+        .as_array()
+        .expect("setup_required");
+    assert!(!cases.is_empty());
+    let refusals: Vec<Value> = cases
+        .iter()
+        .map(|case| {
+            json!({"type": "setup_required", "message": case["message"],
+                   "remediation": case["remediation"]})
+        })
+        .collect();
+    let steps: Vec<(&str, Value)> = (0..cases.len())
+        .map(|n| {
+            (
+                "call",
+                json!({"tool": "component", "action": format!("setup_{n}"), "args": {}}),
+            )
+        })
+        .collect();
+    let mut service = Service::start();
+    let job = formula(&steps);
+    service.assign(
+        &job,
+        Box::new(move |call: &support::Call, job: &Job| {
+            let action = call.args["args"]["action"].as_str().unwrap_or("");
+            match action
+                .strip_prefix("setup_")
+                .and_then(|n| n.parse::<usize>().ok())
+            {
+                Some(n) if call.op == "tool_call" => {
+                    Reply::Error("guest_error", refusals[n].clone())
+                }
+                _ => standard(call, job),
+            }
+        }),
+    );
+    let ended = ended(&service, SOON);
+    assert_eq!(ended.last["type"], "complete", "{}", ended.last);
+    let expected: Vec<Value> = cases.iter().map(|case| case["answer"].clone()).collect();
+    assert_eq!(answers(&service, &job), expected);
 }

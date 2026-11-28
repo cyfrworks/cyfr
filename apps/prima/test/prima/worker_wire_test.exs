@@ -273,6 +273,8 @@ defmodule Prima.WorkerWireTest do
       assert writes_back(HostAPI, @host["report"]["body"]) == :runner_exited
       assert writes_back(HostAPI, @host["report"]["cross_member"]["body"]) == :runner_exited
       assert {:ok, true} = answers_back(@host["report"]["answer"])
+      assert writes_back(HostAPI, @host["events_report"]["body"]) == :report_events
+      assert {:ok, true} = answers_back(@host["events_report"]["answer"])
     end
 
     test "every request's body and answer read and write back to their bytes" do

@@ -5,7 +5,8 @@
 //! read: the refused features and their sentences
 //! (`component_features.json`), the authority an assignment carries
 //! (`authority_wire.json`), and the validator's version beside the one
-//! Prima's admission runs (`scripts/wasm-tools.sh`).
+//! Prima's admission runs (`scripts/wasm-tools.sh`); and the probe that
+//! reads a run's WASI context, run in one that holds what a run's lacks.
 
 mod support;
 
@@ -203,4 +204,66 @@ async fn a_kept_compile_leaves_when_its_time_passes_with_no_lookup() {
         "gone once they pass, with no lookup"
     );
     assert!(engine.kept(&digest).is_none());
+}
+
+/// A store's data of this test's own: the WASI context it is handed.
+struct Context {
+    wasi: wasmtime_wasi::WasiCtx,
+    table: wasmtime::component::ResourceTable,
+}
+
+impl wasmtime_wasi::WasiView for Context {
+    fn ctx(&mut self) -> wasmtime_wasi::WasiCtxView<'_> {
+        wasmtime_wasi::WasiCtxView {
+            ctx: &mut self.wasi,
+            table: &mut self.table,
+        }
+    }
+}
+
+#[tokio::test]
+async fn the_cli_probe_reads_and_writes_what_its_context_holds() {
+    // A run answers the probe that it read nothing, wrote nowhere and has
+    // no arguments or environment (process.rs's
+    // a_guest_reads_no_input_arguments_or_environment_and_its_writes_reach_no_channel_or_log).
+    // Handed a context that holds each, the same probe reads and writes
+    // them: those answers are its run's context, not the probe's.
+    use wasmtime_wasi::p2::pipe::{MemoryInputPipe, MemoryOutputPipe};
+    let engine = wasmtime::Engine::new(&engine::config()).expect("the engine");
+    let mut linker = wasmtime::component::Linker::new(&engine);
+    wasmtime_wasi::p2::add_to_linker_async(&mut linker).expect("WASI");
+    let (stdout, stderr) = (MemoryOutputPipe::new(4096), MemoryOutputPipe::new(4096));
+    let wasi = wasmtime_wasi::WasiCtxBuilder::new()
+        .stdin(MemoryInputPipe::new("piped"))
+        .stdout(stdout.clone())
+        .stderr(stderr.clone())
+        .args(&["probe", "--flag"])
+        .env("PROBE", "set")
+        .build();
+    let mut store = wasmtime::Store::new(
+        &engine,
+        Context {
+            wasi,
+            table: wasmtime::component::ResourceTable::new(),
+        },
+    );
+    // No epoch ticks here: one tick away is never reached.
+    store.set_epoch_deadline(1);
+    let bytes = support::bytes(&format!("{}/cli_probe.wasm", support::HOSTILE));
+    let component = wasmtime::component::Component::new(&engine, bytes).expect("a compile");
+    let reagent =
+        cyfr_runner::imports::reagent::Reagent::instantiate_async(&mut store, &component, &linker)
+            .await
+            .expect("an instance");
+    let output = reagent
+        .cyfr_reagent_compute()
+        .call_compute(&mut store, r#"{"written":true}"#)
+        .await
+        .expect("an answer");
+    assert_eq!(
+        serde_json::from_str::<Value>(&output).expect("JSON"),
+        serde_json::json!({"stdin": 5, "stdout": "ok", "stderr": "ok", "args": 2, "env": 1})
+    );
+    assert_eq!(&stdout.contents()[..], b"{\"written\":true}\n");
+    assert_eq!(&stderr.contents()[..], b"{\"written\":true}\n");
 }

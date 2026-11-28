@@ -19,7 +19,8 @@ defmodule Prima.RunnerControlTest do
   The `events` section is the runner's `event` frame: its roster is
   `RunnerControl.event_roster/0`, name by name and member by member in
   wire order; every valid event encodes to exactly its line and decodes
-  back; every invalid line is refused with its refusal; and every cut
+  back; every invalid line is refused with its refusal; every unwritten
+  event is one the encoder refuses, no line carrying it; and every cut
   event encodes with each long metadata string cut to its bound on a
   character boundary, which the line decodes back to.
   """
@@ -354,6 +355,16 @@ defmodule Prima.RunnerControlTest do
             do: value
 
       assert inside != [], "a string whose cut falls inside a character"
+    end
+
+    test "every unwritten event is refused by the encoder: no line carries it" do
+      cases = @vectors["events"]["unwritten"]
+      assert cases != []
+
+      for vector <- cases do
+        message = event_message(vector["message"])
+        assert_raise ArgumentError, fn -> RunnerControl.encode(message) end
+      end
     end
   end
 
