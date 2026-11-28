@@ -291,13 +291,7 @@ defmodule Opus do
   (`:everyone`).
   """
   @spec memory(Sanctum.Context.t(), :mine | :everyone) ::
-          {:ok,
-           %{
-             machines: [Opus.Memory.machine()],
-             days: [Opus.Memory.day()],
-             unanswered: [Opus.Memory.unanswered()]
-           }}
-          | {:error, term()}
+          {:ok, Opus.Memory.read()} | {:error, term()}
   defdelegate memory(ctx, scope), to: Opus.Memory, as: :read
 
   @doc """

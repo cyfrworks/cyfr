@@ -3106,6 +3106,7 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :work, :bigint, null: false
       add :floor, :bigint, null: false
       add :used, :bigint, null: false
+      add :wall, :string, null: false
       add :heard_at, :utc_datetime_usec, null: false
     end
   end

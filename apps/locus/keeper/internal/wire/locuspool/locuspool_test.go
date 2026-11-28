@@ -307,6 +307,8 @@ func TestNoAnswerCarriesAReportPrimaRefuses(t *testing.T) {
 		"an empty boot":                   func(r *Report) { r.Boot = "" },
 		"a boot in capitals":              func(r *Report) { r.Boot = strings.ToUpper(r.Boot) },
 		"a budget past 2^53 - 1":          func(r *Report) { r.Budget = past },
+		"no wall":                         func(r *Report) { r.Wall = "" },
+		"a wall no keeper gives":          func(r *Report) { r.Wall = "vm" },
 		"a next past 2^53 - 1":            func(r *Report) { r.Next = past },
 		"257 counters":                    func(r *Report) { r.Counters = ascending(r.Counters[0], ReportCounters+1) },
 		"a rev of 0":                      func(r *Report) { r.Counters[0].Rev = 0 },

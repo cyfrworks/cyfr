@@ -84,6 +84,8 @@ ALLOWANCE_MS = _POOL["allowance_ms"]
 # are signed in, and each place's kind by the role whose places they are.
 POOL_WIRE = _POOL["wire"]
 ROLE_KINDS = {"runtime": {"warm", "run"}, "builds": {"build"}, "backends": {"program", "terminal"}}
+# A report's wall values (Prima.LocusPool.t:wall/0): the keeper's own decision at its start.
+POOL_WALLS = ("given", "no_room", "lacking")
 
 
 def machine_bytes(guest):
@@ -139,6 +141,8 @@ def pool_reports(base, service, own_key):
             sys.exit(f"FAIL: {service}'s report page after {after} is not in ascending rev within its bound: {revs}")
         if not re.fullmatch(r"[0-9a-f]{32}", report["boot"]):
             sys.exit(f"FAIL: {service}'s report names no keeper boot: {report['boot']!r}")
+        if report.get("wall") not in POOL_WALLS:
+            sys.exit(f"FAIL: {service}'s report names no wall the keeper gives: {report.get('wall')!r}")
         boots.add(report["boot"])
         counters.extend(page)
         if "next" not in report:

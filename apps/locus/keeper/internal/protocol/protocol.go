@@ -157,11 +157,16 @@
 // role's counters whose `rev` is past `after`, by rev, at most
 // admission.ReportCounters of them, with `next`, the last one's rev, when
 // more follow; another role's counters are never in it. Beside them it
-// carries the keeper's `boot`, an id minted at each start, and the machine's
+// carries the keeper's `boot`, an id minted at each start, the machine's
 // `budget`, `work` (W), `floor` (F where kept, else 0) and `used`, every
-// charge outside the floor. Each change of a counter takes its role's next
-// rev, from 1 at each boot, which is why every report carries the boot. A
-// counter goes 48 hours after its last change, never while it holds bytes.
+// charge outside the floor, and its `wall`: the keeper's own decision at
+// its start of whether it gives each person a VM of their own, WallGiven,
+// or spaces on the shared kernel, WallNoRoom where a first session in a VM
+// does not fit and WallLacking for anything else it lacks (package serve's
+// wallOf). Nothing a client sends sets it. Each change of a counter takes
+// its role's next rev, from 1 at each boot, which is why every report
+// carries the boot. A counter goes 48 hours after its last change, never
+// while it holds bytes.
 //
 // A spawn with `"control": true` also gets a control channel: the keeper
 // makes an AF_UNIX stream socketpair, installs one end as the command's file
@@ -385,6 +390,15 @@ const (
 	TypePacksPut     = "packs_put"
 	TypePacks        = "packs"
 	TypeGiveWay      = "give_way"
+)
+
+// A `report`'s `wall` values: the keeper gives each person a VM of their
+// own, or spaces because a first session in a VM does not fit its work
+// pool, or spaces because it lacks anything else the wall needs.
+const (
+	WallGiven   = "given"
+	WallNoRoom  = "no_room"
+	WallLacking = "lacking"
 )
 
 // A `packs` reply's states.
@@ -1465,14 +1479,15 @@ type Reported struct {
 }
 
 // Report is a page of one role's counters, past a rev, beside the keeper's
-// boot and the machine's numbers. Next, the last counter's rev, is set
-// only when more follow; every rev is at least 1.
+// boot, the machine's numbers and its wall. Next, the last counter's rev,
+// is set only when more follow; every rev is at least 1.
 type Report struct {
 	Boot     string    `json:"boot"`
 	Budget   uint64    `json:"budget"`
 	Work     uint64    `json:"work"`
 	Floor    uint64    `json:"floor"`
 	Used     uint64    `json:"used"`
+	Wall     string    `json:"wall"`
 	Counters []Counter `json:"counters"`
 	Next     uint64    `json:"next,omitempty"`
 }

@@ -21,7 +21,7 @@ defmodule Arca.MemoryRecord do
   both as CYFR read them when it stored the counter and kept after the
   row is gone. An endpoint (`memory_endpoints`) is the host's own row: the
   boot it last answered for, the rev the next ask follows (`after`) and
-  the machine's numbers its last answer carried.
+  the machine's numbers and wall its last answer carried.
 
   ## Storing a page
 
@@ -50,7 +50,7 @@ defmodule Arca.MemoryRecord do
   a purged day again. Any other replaces the stored counter of its key only with a
   higher `rev`; a lower or equal one changes nothing. Every counter of
   the page moves `after`, dropped or not, and the endpoint's row takes
-  the machine's numbers and the database's time it was heard at.
+  the machine's numbers, its wall and the database's time it was heard at.
 
   ## Reading
 
@@ -118,6 +118,7 @@ defmodule Arca.MemoryRecord do
           work: non_neg_integer(),
           floor: non_neg_integer(),
           used: non_neg_integer(),
+          wall: Prima.LocusPool.wall(),
           heard_at: DateTime.t(),
           answering: boolean()
         }
@@ -302,11 +303,12 @@ defmodule Arca.MemoryRecord do
       work: report.work,
       floor: report.floor,
       used: report.used,
+      wall: report.wall,
       heard_at: now
     }
 
     Arca.Repo.insert_all(MemoryEndpoint, [row],
-      on_conflict: {:replace, ~w(boot after budget work floor used heard_at)a},
+      on_conflict: {:replace, ~w(boot after budget work floor used wall heard_at)a},
       conflict_target: [:endpoint]
     )
   end

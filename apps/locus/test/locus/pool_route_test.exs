@@ -59,6 +59,7 @@ defmodule Locus.PoolRouteTest do
       work: 5_066_719_232,
       floor: 171_966_464,
       used: 268_435_456,
+      wall: :given,
       next: nil,
       counters: [
         %{
