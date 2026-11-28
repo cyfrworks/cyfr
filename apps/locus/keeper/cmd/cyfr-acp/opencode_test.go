@@ -258,8 +258,15 @@ func TestOpenCodeCallsInsideItsExecuteAreAsks(t *testing.T) {
 	}
 }
 
-// OpenCode's notices that it retries its provider are not work: nothing of
-// them reaches the wire, so CYFR's silence clock runs through them.
+// OpenCode names each model step's message: its words before its own tool
+// and after it are two messages under its two ids (aroundHolds).
+func TestOpenCodesWordsAroundItsToolAreTwoMessages(t *testing.T) {
+	s := startOpenCode(t, "")
+	freshOpenCode(s, map[string]any{})
+	postText(s, "stp_around", "trn_1", "around")
+	aroundHolds(t, s)
+}
+
 // A sub-agent's frames, each marked as its child session's, are none of the
 // turn's: its words, reasoning and tool emit nothing, and the call that
 // started it starts and ends (#1237, S3 F5).
@@ -270,6 +277,8 @@ func TestOpenCodesActivityIsItsCallsThoughtsAndOwnWords(t *testing.T) {
 	activityHolds(t, s, [2]string{"call_twin_a", "call_twin_b"}, "call_task")
 }
 
+// OpenCode's notices that it retries its provider are not work: nothing of
+// them reaches the wire, so CYFR's silence clock runs through them.
 func TestOpenCodeRetryNoticesAreNotWork(t *testing.T) {
 	s := startOpenCode(t, "")
 	freshOpenCode(s, map[string]any{})

@@ -35,8 +35,11 @@
 // error saying CYFR's tools did not reach it. The program's permission questions are each answered allow;
 // none stands in for an ask. The program's own tools are shown as `own`
 // (own.go), each run under its tool call's id with what its input runs and
-// the diffs its end shows, and its thought chunks as `thought`. A
-// sub-agent's frames are none of the member's: OpenCode's, each marked
+// the diffs its end shows, and its thought chunks as `thought`. Its
+// message chunks are said whole under the message id it gives them; where
+// it gives none (Cursor, Antigravity), a tool call ends the message under
+// way, and what it says after is a message of its own. A sub-agent's
+// frames are none of the member's: OpenCode's, each marked
 // `_meta["opencode/child-session"]`, are dropped, and Cursor and
 // Antigravity put none on the stream, so only the call that started it is
 // shown.

@@ -702,6 +702,40 @@ func activityHolds(t *testing.T, s *wireSession, twins [2]string, task string) {
 	}
 }
 
+// aroundHolds holds the reply to "around": what the program said before
+// its own tool and what it said after are two messages, each streamed and
+// said under an id of its own, and two chunks with no tool between them
+// are one.
+func aroundHolds(t *testing.T, s *wireSession) {
+	t.Helper()
+	got := s.until("idle")
+	var said []string
+	ids := map[string]string{}
+	for _, e := range ofType(got, "said") {
+		said = append(said, e["text"].(string))
+		ids[e["text"].(string)] = e["message"].(string)
+	}
+	if !reflect.DeepEqual(said, []string{"Before the tool.", "After it."}) || ids["Before the tool."] == ids["After it."] {
+		t.Fatalf("the words before the tool and after it are two messages, each under its own id: %v", ofType(got, "said"))
+	}
+	streamed := map[string]string{}
+	for _, e := range ofType(got, "text") {
+		streamed[e["message"].(string)] += e["delta"].(string)
+	}
+	if want := map[string]string{ids["Before the tool."]: "Before the tool.", ids["After it."]: "After it."}; !reflect.DeepEqual(streamed, want) {
+		t.Fatalf("each message streams under the id it is said under: %v", streamed)
+	}
+}
+
+// Antigravity names no message: its words before its own tool and after it
+// are two messages (aroundHolds).
+func TestAntigravitysWordsAroundItsToolAreTwoMessages(t *testing.T) {
+	s := startDriver(t)
+	startFresh(s, map[string]any{})
+	postText(s, "stp_around", "trn_1", "around")
+	aroundHolds(t, s)
+}
+
 func TestAntigravitysActivityIsItsCallsThoughtsAndOwnWords(t *testing.T) {
 	s := startDriver(t)
 	startFresh(s, map[string]any{})

@@ -280,6 +280,16 @@ func TestCursorsActivityIsItsCallsThoughtsAndOwnWords(t *testing.T) {
 	activityHolds(t, s, [2]string{"call-a-0\nfc_a_0", "call-b-1\nfc_b_0"}, "call-t-3\nfc_t_0")
 }
 
+// Cursor names no message: its words before its own tool and after it are
+// two messages (aroundHolds), as the walk's "…and verify it.Wrote and
+// verified…" was not.
+func TestCursorsWordsAroundItsToolAreTwoMessages(t *testing.T) {
+	s := startCursor(t, "")
+	freshCursor(s)
+	postText(s, "stp_around", "trn_1", "around")
+	aroundHolds(t, s)
+}
+
 func TestCursorTakesNoMessageMidTurnAndReportsNoUsage(t *testing.T) {
 	s := startCursor(t, "")
 	freshCursor(s)

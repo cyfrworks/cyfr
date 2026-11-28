@@ -58,6 +58,8 @@ import (
 //	lookalike   writes a chunk of nearly the failure's form
 //	call        calls CYFR's `files` as Cursor does, after its permission question
 //	theirs      calls a person's server `notes`, its tool `echo`
+//	around      says words in two chunks, runs a tool of its own, then says
+//	            more, every chunk with no message id (F4)
 //	activity    as the other stand-ins' (fake_test.go), as Cursor shows it (F4):
 //	            each call pending with a generic title and no input, then its
 //	            input, in_progress and its end, ids holding a newline; no
@@ -331,6 +333,11 @@ func fakeCursor() int {
 		case words == "thoughtfirst":
 			update(map[string]any{"sessionUpdate": "agent_thought_chunk", "content": map[string]any{"type": "text", "text": "thinking"}})
 			chunk(failure)
+		case words == "around":
+			chunk("Before ")
+			chunk("the tool.")
+			ownCall("call-r-0\nfc_r_0", "read")
+			chunk("After it.")
 		case words == "callfirst":
 			ownCall("call_read", "read")
 			chunk(failure)

@@ -42,7 +42,7 @@
 // another ends the driver before anything starts. Codex's own tools run
 // in its box and are shown by name, each run under its item's id with what
 // it runs and a patch's diff, never a command's output, and its reasoning
-// summary as `thought`; nothing of a sub-agent's thread is passed on, only
+// summary, which every turn asks for, as `thought`; nothing of a sub-agent's thread is passed on, only
 // the session's own call of it. The driver keeps no account of
 // calls: which post a native turn answers is Codex's own naming of the
 // posts' uuids in that turn, which `idle` passes on, and a turn's usage
