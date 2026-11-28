@@ -1228,10 +1228,13 @@ defmodule PrismWeb.SettingsLiveTest do
     # The ledger check (plan native-locus §23): where each person's work
     # runs in a VM of their own, the keeper charges the VM once, by its
     # reading, its sessions inside it nothing of their own, and counts only
-    # their readings, the guest's, by subject, never added to the VM's. The
-    # page shows the report's numbers as they are: in use is the VM's
-    # charge, the work listed its sessions', and the VM's own memory is the
-    # part the rows do not account for, under no name.
+    # their readings, the guest's, by subject, never added to the VM's.
+    # While a start is under way the VM is charged at least its reading at
+    # that start's admission and the allowance of every start since, so two
+    # starts in a VM hold what the same two hold on the host. The page
+    # shows the report's numbers as they are: in use is the VM's charge,
+    # the work listed its sessions', and the VM's own memory is the part
+    # the rows do not account for, under no name.
     test "a person's VM is in use as one charge, its sessions listed by their own readings" do
       ops = test_user()
       {:ok, _} = Sanctum.TestContext.ensure_platform(ops.user_id)

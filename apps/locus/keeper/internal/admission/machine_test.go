@@ -6,6 +6,7 @@ package admission
 import (
 	"slices"
 	"testing"
+	"time"
 )
 
 // inVM is a session of athanor's placed in its VM m.
@@ -203,22 +204,6 @@ func TestARefusalCountsAPersonsVMAsTheirsThroughTheirSessions(t *testing.T) {
 	}
 }
 
-// A session placed in a VM whose spawn runs on the host after all is
-// charged by itself from then on, and leaves the VM at rest.
-func TestADetachedSessionIsChargedByItself(t *testing.T) {
-	l := New(4096*mib, false)
-	m := NewMachine("backends", "ath_a", testGuest, nil)
-	a := inVM(m, "p1")
-	admitted(t, l.Place(a, at(0)), a)
-	l.Detach(a, at(1))
-	if a.Machine != nil || l.Sessions(m) != 0 {
-		t.Fatal("the session is still the VM's")
-	}
-	if got := l.charge(a, at(1)); got != 384*mib {
-		t.Fatalf("the detached session is charged %d, want its allowance", got)
-	}
-}
-
 // The start that boots a person's VM needs room for its allowance and the
 // VM's own together: in a pool that holds one but not both it waits, and
 // is refused at once where no pool of W could hold both; a start in a VM
@@ -291,5 +276,134 @@ func TestAVMPlacedAloneNeedsItsOwnAndCountsToItsPersonsCeiling(t *testing.T) {
 	capped.AthanorMax = own + 100*mib
 	if ev := l2.Place(capped, at(0)); len(ev.Admitted) != 0 {
 		t.Fatalf("a session past its person's ceiling beside their VM was admitted: %+v", ev)
+	}
+}
+
+// Each start under way in a VM holds its allowance above the VM's reading
+// at its own admission (@Fable3's, 4742 fail 3): a later start admitted
+// while an earlier one's allowance time runs, the earlier grown past its
+// own, holds its 384 MiB above what the VM read then.
+func TestALaterStartHoldsTheReadingAtItsOwnAdmission(t *testing.T) {
+	l := New(8192*mib, false)
+	m := NewMachine("backends", "ath_a", testGuest, nil)
+	z := inVM(m, "p0")
+	spawned(t, l, z, 0, 50*mib)
+	l.Spawned(m, at(0))
+	l.Read(m, 450*mib, false, at(20))
+	l.Drop(z, at(20))
+	a := inVM(m, "p1")
+	admitted(t, l.Place(a, at(30)), a)
+	l.Spawned(a, at(30))
+	l.Read(m, 1450*mib, false, at(35))
+	l.Read(a, 1000*mib, false, at(35))
+	b := inVM(m, "p2")
+	admitted(t, l.Place(b, at(35)), b)
+	if got, want := used(l, 35.5), uint64((1450+384)*mib); got < want {
+		t.Fatalf("B's start holds %d MiB over the VM's reading at its admission, want its allowance, 384 (used %d MiB, want at least %d)",
+			(got-1450*mib)/mib, got/mib, want/mib)
+	}
+}
+
+// The same two starts on the host hold A's reading and B's allowance: in
+// the VM they hold that beside the VM's own reading at rest.
+func TestTheSameStartsOnTheHostHoldAsInTheVM(t *testing.T) {
+	l := New(8192*mib, false)
+	a := session("ath_a", "p1")
+	admitted(t, l.Place(a, at(30)), a)
+	l.Spawned(a, at(30))
+	l.Read(a, 1000*mib, false, at(35))
+	b := session("ath_a", "p2")
+	admitted(t, l.Place(b, at(35)), b)
+	if got, want := used(l, 35.5), uint64((1000+384)*mib); got != want {
+		t.Fatalf("on the host the two hold %d MiB, want %d", got/mib, want/mib)
+	}
+}
+
+// At a full pool another person's start is not admitted into the room a
+// later start in a VM holds (@Fable3's, 4742 fail 3).
+func TestAnotherPersonIsNotAdmittedIntoALaterStartsRoom(t *testing.T) {
+	l := New((1450+384+300)*mib, false)
+	m := NewMachine("backends", "ath_a", testGuest, nil)
+	z := inVM(m, "p0")
+	spawned(t, l, z, 0, 50*mib)
+	l.Spawned(m, at(0))
+	l.Read(m, 450*mib, false, at(20))
+	l.Drop(z, at(20))
+	a := inVM(m, "p1")
+	admitted(t, l.Place(a, at(30)), a)
+	l.Spawned(a, at(30))
+	l.Read(m, 1450*mib, false, at(35))
+	l.Read(a, 1000*mib, false, at(35))
+	b := inVM(m, "p2")
+	admitted(t, l.Place(b, at(35)), b)
+	c := session("ath_c", "p3")
+	if ev := l.Place(c, at(35.2)); len(ev.Admitted) != 0 {
+		t.Fatalf("another person's start was admitted into the room of a start still under way: free was %d MiB before it", free(l, 35.1)/mib)
+	}
+}
+
+// A VM's reading that is lesser, or stale, never takes its charge under the
+// last one (R8 of 4742 fail 5): a VM read at 1,000 MiB and then at 200 MiB,
+// lesser, is charged 1,000.
+func TestAVMsLesserReadingStaysAtItsLastCharge(t *testing.T) {
+	l := New(8192*mib, false)
+	m := NewMachine("backends", "ath_a", testGuest, nil)
+	a := inVM(m, "p1")
+	spawned(t, l, a, 0, 50*mib)
+	l.Spawned(m, at(0))
+	l.Read(m, 1000*mib, false, at(20))
+	l.Read(m, 200*mib, true, at(21))
+	if got := l.charge(m, at(21)); got != 1000*mib {
+		t.Fatalf("a VM read lesser is charged %d MiB, want its last charge, 1000", got/mib)
+	}
+	if got := l.charge(m, at(30)); got != 1000*mib {
+		t.Fatalf("a VM whose reading is stale is charged %d MiB, want its last charge, 1000", got/mib)
+	}
+}
+
+// A refusal counts the person's own VM at rest, which holds no session, as
+// theirs, by its last session's kind, not under others: a start of theirs
+// refused at their ceiling is told their VM holds what it holds.
+func TestARefusalCountsThePersonsVMAtRestAsTheirs(t *testing.T) {
+	l := New(8192*mib, false)
+	m := NewMachine("backends", "ath_a", testGuest, nil)
+	z := inVM(m, "p0")
+	spawned(t, l, z, 0, 50*mib)
+	l.Spawned(m, at(0))
+	l.Read(m, 600*mib, false, at(20))
+	l.Drop(z, at(20))
+	b := inVM(m, "p1")
+	b.AthanorMax = 800 * mib
+	if ev := l.Place(b, at(21)); len(ev.Admitted) != 0 {
+		t.Fatalf("a start past its person's ceiling was admitted: %+v", ev)
+	}
+	ev := l.Tick(at(21).Add(RoomWait + time.Second))
+	if len(ev.Refused) != 1 {
+		t.Fatalf("the start past its ceiling was not refused: %+v", ev)
+	}
+	h := ev.Refused[0].Held
+	if len(h.Mine) != 1 || h.Mine[0].Bytes != 600*mib || h.Mine[0].Kind != "program" || h.Others != 0 {
+		t.Fatalf("the refusal holds %+v and others %d MiB, want the person's VM at rest, 600 MiB, as theirs", h.Mine, h.Others/mib)
+	}
+}
+
+// A VM placed alone for a folder's operation, before any session of its,
+// is named in a refusal by a program's kind, a kind a refusal's holdings
+// may carry (Prima.LocusPool.read_held refuses any other).
+func TestARefusalNamesAVMPlacedAloneAsAProgram(t *testing.T) {
+	l := New(8192*mib, false)
+	m := NewMachine("backends", "ath_a", testGuest, nil)
+	admitted(t, l.Place(m, at(0)), m)
+	b := inVM(m, "p1")
+	b.AthanorMax = MachineBytes(testGuest)
+	if ev := l.Place(b, at(1)); len(ev.Admitted) != 0 {
+		t.Fatalf("a start past its person's ceiling was admitted: %+v", ev)
+	}
+	ev := l.Tick(at(1).Add(RoomWait + time.Second))
+	if len(ev.Refused) != 1 {
+		t.Fatalf("the start past its ceiling was not refused: %+v", ev)
+	}
+	if h := ev.Refused[0].Held; len(h.Mine) != 1 || h.Mine[0].Kind != "program" {
+		t.Fatalf("the refusal holds %+v, want the person's VM placed alone as a program's", h.Mine)
 	}
 }

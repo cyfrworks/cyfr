@@ -35,9 +35,9 @@ import (
 )
 
 // A person's machine (plan V2). Where the keeper gives the VM wall (wall),
-// every disk is an image and each person's kept sessions run in a VM of
-// their own, which boots at their first session the keeper admits: the
-// person's disk is its one writable drive, the guard's machine route its
+// every disk is an image and every session of a person runs in a VM of
+// their own, a scratch one too, which boots at their first session the
+// keeper admits: the person's disk is its one writable drive, the guard's machine route its
 // one card, and the guest's keeper, under the guest's own guard, makes each
 // session's space and route inside it as this keeper makes a space on the
 // host. This keeper is the guest's keeper's one client: over the VM's
@@ -106,8 +106,10 @@ type guestVM interface {
 	Done() <-chan struct{}
 	HowEnded() vm.Ended
 	KilledFor() (cgroup.Cause, error)
-	// Status is how the VMM ended, once Done has closed.
+	// Status is how the VMM ended, and Left what its end could not clear,
+	// its uid's processes, its folder or its group, once Done has closed.
 	Status() (unix.WaitStatus, error)
+	Left() error
 	// Group is the VMM's group while it runs, which the guard's loss kills;
 	// Used is its reading, the host's one charge for the VM.
 	Group() *cgroup.Group
@@ -224,8 +226,10 @@ type machine struct {
 	// reading says a read of its VMM's group is out.
 	reading atomic.Bool
 	// ending says its end has begun: no session joins it; done closes at
+	// its release. left is what its VMM's end could not clear, which holds
 	// its release.
 	ending bool
+	left   error
 	done   chan struct{}
 }
 
@@ -249,6 +253,14 @@ func (s *server) machineFor(r *role, athanor string) *machine {
 // place names any more and never booted goes with it.
 func (s *server) unplaced(m *machine) {
 	m.places--
+	s.forgetUnbooted(m)
+}
+
+// forgetUnbooted lets m go, with s.mu held, where no place names it and no
+// VM of it runs or boots: its place leaves the ledger and the person's map,
+// so nothing of it is charged or found again. A boot that ends with its
+// places gone lets it go so (bootMachine).
+func (s *server) forgetUnbooted(m *machine) {
 	if m.places > 0 || m.vm != nil || m.booting {
 		return
 	}
@@ -269,13 +281,20 @@ func (s *server) unplaced(m *machine) {
 // needs it (a session, or a folder's reset or retirement, which its log
 // line names), and answers the code that is refused with: the device not
 // made, the VMM not started, its route not made or its relay unheard
-// (CodeUnavailable, or CodeGuardUnavailable for the route).
+// (CodeUnavailable, or CodeGuardUnavailable for the route). Only a VM a
+// place names is booted, a folder operation's hold among them
+// (holdMachine): one whose places went, while its boot was asked or waited
+// for the last VM's release, is not, and one whose places went as it
+// booted and failed is let go (forgetUnbooted).
 func (s *server) bootMachine(m *machine, at keptAt, r *role, what string) string {
 	m.bootMu.Lock()
 	defer m.bootMu.Unlock()
+	// named says a place of the person's names m now; s.mu is held.
+	named := func() bool { return s.vms[m.athanor] == m && m.places > 0 }
 	s.mu.Lock()
 	running, ending := m.vm != nil, m.ending
-	if !running && !ending {
+	unplaced := !named()
+	if !running && !ending && !unplaced {
 		m.booting = true
 	}
 	prev := m.prev
@@ -285,10 +304,14 @@ func (s *server) bootMachine(m *machine, at keptAt, r *role, what string) string
 		return protocol.CodeUnavailable
 	case running:
 		return ""
+	case unplaced:
+		s.log.Warn("the VM of a person's disk of uid %d is not booted: no place of theirs names it now", at.uid)
+		return protocol.CodeUnavailable
 	}
 	defer func() {
 		s.mu.Lock()
 		m.booting = false
+		s.forgetUnbooted(m)
 		s.mu.Unlock()
 	}()
 	if prev != nil {
@@ -298,6 +321,13 @@ func (s *server) bootMachine(m *machine, at keptAt, r *role, what string) string
 			s.log.Warn("the VM of a person's disk of uid %d did not boot: their last VM was not yet released", at.uid)
 			return protocol.CodeUnavailable
 		}
+	}
+	s.mu.Lock()
+	unplaced = !named()
+	s.mu.Unlock()
+	if unplaced {
+		s.log.Warn("the VM of a person's disk of uid %d is not booted: no place of theirs names it now", at.uid)
+		return protocol.CodeUnavailable
 	}
 	// The image is given its VM only as its uid's alone: the stage's bind
 	// of a file follows a link at its source.
@@ -341,11 +371,19 @@ func (s *server) bootMachine(m *machine, at keptAt, r *role, what string) string
 		}
 		return protocol.CodeUnavailable
 	}
+	// The guard's loss kills the VMs it finds routed over its connection
+	// (machineRoutes), and m.vm is set under the same lock: one that came
+	// after the route's look and before this is seen here.
 	s.mu.Lock()
 	m.vm, m.idleSince = g, now()
 	s.ledger.Spawned(m.entry, now())
+	lost := m.route == nil || s.lostRoutes[m.route.Conn]
 	s.mu.Unlock()
 	go s.watchMachine(m)
+	if lost {
+		s.loseMachine(m, "the guard's connection its route was made over ended as it booted")
+		return protocol.CodeGuardUnavailable
+	}
 	if _, code := s.machineLink(m); code != "" {
 		s.loseMachine(m, "its relay did not greet it")
 		return code
@@ -460,6 +498,12 @@ func (s *server) machineEnded(m *machine) {
 	s.mu.Unlock()
 	memory := memoryOf(m.vm.KilledFor())
 	s.log.Warn("a person's VM ended (%s; its VMM %s): its %d sessions end with it", m.vm.HowEnded(), vmmEnd(m.vm), len(sessions))
+	if left := m.vm.Left(); left != nil {
+		s.mu.Lock()
+		m.left = left
+		s.mu.Unlock()
+		s.log.Error("a person's VM is not released, its place still charged and their next VM refused until the keeper starts again: its end left %v", left)
+	}
 	if l != nil {
 		l.end(memory)
 	}
@@ -497,14 +541,16 @@ func memoryOf(cause cgroup.Cause, err error) *string {
 	return &memory
 }
 
-// finishMachine releases an ended m once its route is withdrawn on the
-// guard's word and every session of it has gone: its place leaves the
+// finishMachine releases an ended m once its VMM's end cleared all it held
+// (m.left), its route is withdrawn on the guard's word and every session of
+// it has gone: its place leaves the
 // ledger, and the person's next session boots a VM again. One whose route
-// is not yet withdrawn is released by the sweep that withdraws it.
+// is not yet withdrawn is released by the sweep that withdraws it
+// (retryClears lets m.route go, then finishMachines).
 func (s *server) finishMachine(m *machine) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !m.ending || m.route != nil || len(m.sessions) > 0 {
+	if !m.ending || m.left != nil || m.route != nil || len(m.sessions) > 0 {
 		return
 	}
 	select {
@@ -591,19 +637,44 @@ var errNarrowing = errors.New("the person's VM's route still allows a released s
 // errRouteLost is a change after which the VM has no route.
 var errRouteLost = errors.New("the person's VM's route is lost")
 
-// reroute changes m's route to its live sessions' union, with without
-// left out, and answers whether the guard holds it: a change refused while
-// the old reach stands is errRefused's (the old reach stands); a route
-// withdrawn or gone ends the VM (errRouteLost).
-func (s *server) reroute(m *machine, without *spawn) error {
+// reroute takes leave out of m's sessions, where one is given, and changes
+// m's route to the union of the sessions left, in one step under m.reachMu:
+// no release or start of the person's between the two computes a union
+// that still holds a session gone. It answers whether the guard holds the
+// change: one refused while the old reach stands is the guard's error, and
+// a narrowing so refused is asked again at each sweep (m.narrowing); a
+// route withdrawn or gone ends the VM (errRouteLost).
+func (s *server) reroute(m *machine, leave *spawn) error {
 	m.reachMu.Lock()
 	defer m.reachMu.Unlock()
+	if leave == nil {
+		return s.routeToSessions(m)
+	}
 	s.mu.Lock()
-	var live []*spawn
-	for _, sp := range m.sessions {
-		if sp != without {
-			live = append(live, sp)
+	delete(m.sessions, leave.id)
+	if len(m.sessions) == 0 {
+		m.idleSince = now()
+	}
+	s.mu.Unlock()
+	err := s.routeToSessions(m)
+	if err != nil && !errors.Is(err, errRouteLost) {
+		s.mu.Lock()
+		if !m.ending && m.narrowing.IsZero() {
+			m.narrowing = now()
 		}
+		s.mu.Unlock()
+	}
+	return err
+}
+
+// routeToSessions changes m's route to its sessions' union, with
+// m.reachMu held: a change refused while the old reach stands is the
+// guard's error; a route withdrawn or gone ends the VM (errRouteLost).
+func (s *server) routeToSessions(m *machine) error {
+	s.mu.Lock()
+	live := make([]*spawn, 0, len(m.sessions))
+	for _, sp := range m.sessions {
+		live = append(live, sp)
 	}
 	reach, addrs := unionOf(live)
 	same := reach == m.reach && slices.Equal(addrs, m.addrs)
@@ -640,9 +711,12 @@ func (s *server) reroute(m *machine, without *spawn) error {
 }
 
 // joinMachine makes sp one of m's sessions and widens m's route to hold it,
-// answering the code sp is refused with: m's route still narrowing, its
-// hosts past the guard's bound, or the guard refusing the change.
+// in one step under m.reachMu, answering the code sp is refused with: m's
+// route still narrowing, its hosts past the guard's bound, or the guard
+// refusing the change, which takes sp out again before the lock is let go.
 func (s *server) joinMachine(m *machine, sp *spawn) string {
+	m.reachMu.Lock()
+	defer m.reachMu.Unlock()
 	s.mu.Lock()
 	switch {
 	case m.ending:
@@ -655,7 +729,7 @@ func (s *server) joinMachine(m *machine, sp *spawn) string {
 	}
 	m.sessions[sp.id] = sp
 	s.mu.Unlock()
-	if err := s.reroute(m, nil); err != nil {
+	if err := s.routeToSessions(m); err != nil {
 		s.mu.Lock()
 		delete(m.sessions, sp.id)
 		s.mu.Unlock()
@@ -669,21 +743,10 @@ func (s *server) joinMachine(m *machine, sp *spawn) string {
 }
 
 // leaveMachine takes sp out of its VM at its release, and narrows the VM's
-// route to the sessions left: a narrowing the guard refuses while the old
-// reach stands is asked again at each sweep (retryNarrowing).
+// route to the sessions left (reroute).
 func (s *server) leaveMachine(sp *spawn) {
 	m := sp.machine
-	err := s.reroute(m, sp)
-	s.mu.Lock()
-	delete(m.sessions, sp.id)
-	if len(m.sessions) == 0 {
-		m.idleSince = now()
-	}
-	if err != nil && !errors.Is(err, errRouteLost) && !m.ending && m.narrowing.IsZero() {
-		m.narrowing = now()
-	}
-	s.mu.Unlock()
-	if err != nil && !errors.Is(err, errRouteLost) {
+	if err := s.reroute(m, sp); err != nil && !errors.Is(err, errRouteLost) {
 		s.log.Warn("a person's VM's route still allows a released session's hosts, and is narrowed again at each sweep: %v", err)
 	}
 	s.finishMachine(m)
@@ -719,11 +782,40 @@ func (s *server) retryNarrowing() {
 	}
 }
 
-// startMachineSpawn starts a kept spawn of an image disk in its person's
-// VM, booting it where none runs: the VM's route widened to hold it, its
-// place and home made in the guest, its packs put there where the guest
-// holds none, its spawn there, and its standard streams joined to its
-// role's attach socket. It answers as startSpawn does.
+// startScratchInMachine starts a spawn of no kept home whose place is in
+// its person's VM there, as every session of theirs runs: the person's
+// disk is the VM's drive, so where they have none, their programs all
+// scratch, its record and its image are made first, as a home's first make
+// makes them, with no home. The guest's keeper runs the session in its own
+// pool, its home on the guest's own tmpfs, and scrubs it at the release
+// (vm.GuestPersonPoolSpec). It answers as startSpawn does.
+func (s *server) startScratchInMachine(c *client, req *protocol.Request, athanor, reach string, e egress, limits admission.Limits) (*spawn, string) {
+	unlock := s.lockDisk(athanor)
+	d, code := s.recordDisk("spawn "+req.ID, athanor, "")
+	switch {
+	case code != "":
+	case d.Form != home.FormImage:
+		s.log.Warn("spawn %s refused: its person's disk is of the directory form, which this machine retires at its start, and its retirement has not finished", req.ID)
+		code = protocol.CodeUnavailable
+	default:
+		if err := s.cfg.Kept.EnsureImage(athanor, d.UID, s.startTool); err != nil {
+			s.log.Error("spawn %s: its person's disk: %v", req.ID, err)
+			code = protocol.CodeInternal
+		}
+	}
+	unlock()
+	if code != "" {
+		return nil, code
+	}
+	at := keptAt{athanor: athanor, disk: s.cfg.Kept.DiskPath(athanor), uid: d.UID, image: true}
+	return s.startMachineSpawn(c, req, at, reach, e, limits)
+}
+
+// startMachineSpawn starts a spawn of an image disk's person in their VM,
+// booting it where none runs: the VM's route widened to hold it, its place
+// made in the guest and its home where it is kept, its packs put there
+// where the guest holds none, its spawn there, and its standard streams
+// joined to its role's attach socket. It answers as startSpawn does.
 func (s *server) startMachineSpawn(c *client, req *protocol.Request, at keptAt, reach string, e egress, limits admission.Limits) (*spawn, string) {
 	sp, code := s.startInMachine(c, req, at, reach, e, limits)
 	if sp != nil && code != "" {
@@ -750,7 +842,7 @@ func (s *server) startInMachine(c *client, req *protocol.Request, at keptAt, rea
 	if code := s.bootMachine(m, at, c.role, "a session"); code != "" {
 		return nil, code
 	}
-	sp := &spawn{id: randomHex(16), client: c, kept: true, machine: m, account: KeptAccount(at.uid), keptHome: req.Home,
+	sp := &spawn{id: randomHex(16), client: c, kept: req.HomeMode == protocol.HomeKept, machine: m, account: KeptAccount(at.uid), keptHome: req.Home,
 		home: at.path, work: at.work, disk: at.disk, reach: reach, egress: e, limits: limits,
 		retired: make(chan struct{}), guestEnded: make(chan struct{}), announced: make(chan struct{}),
 		guestEvents: make(chan []byte, 4)}
@@ -768,14 +860,8 @@ func (s *server) startInMachine(c *client, req *protocol.Request, at keptAt, rea
 	if code := s.guestStart(l, sp, req, at); code != "" {
 		return sp, code
 	}
-	// The VM's route is lost meanwhile only by the guard's end, which ends
-	// the VM; a session whose VM ended is refused here and retired.
-	s.mu.Lock()
-	ending := m.ending
-	s.mu.Unlock()
-	if ending {
-		return sp, protocol.CodeGuardUnavailable
-	}
+	// A VM that ends from here ends sp as one of its sessions
+	// (machineEnded): its exit, SIGKILL, follows its spawned.
 	if !s.hold(sp) {
 		return sp, protocol.CodeInternal
 	}
@@ -816,15 +902,17 @@ func (s *server) guestStart(l *guestLink, sp *spawn, req *protocol.Request, at k
 	sp.guestPlace = place
 	s.mu.Unlock()
 	drop := func() { _ = l.ctl.Send(protocol.Request{V: protocol.Version, Type: protocol.TypeDrop, Place: place}) }
-	answer, err = l.ask(protocol.Request{V: protocol.Version, Type: protocol.TypeHomeMake, ID: randomHex(16), Home: req.Home,
-		Athanor: at.athanor}, l.guestWait)
-	if err != nil {
-		return s.guestLost(l, sp, "making its home", err)
-	}
-	if answer.Type != "home_made" {
-		drop()
-		s.log.Warn("spawn %s refused: its VM's keeper refused its home: %s", sp.id, answer.Code)
-		return guestCode(answer.Code)
+	if req.HomeMode == protocol.HomeKept {
+		answer, err = l.ask(protocol.Request{V: protocol.Version, Type: protocol.TypeHomeMake, ID: randomHex(16), Home: req.Home,
+			Athanor: at.athanor}, l.guestWait)
+		if err != nil {
+			return s.guestLost(l, sp, "making its home", err)
+		}
+		if answer.Type != "home_made" {
+			drop()
+			s.log.Warn("spawn %s refused: its VM's keeper refused its home: %s", sp.id, answer.Code)
+			return guestCode(answer.Code)
+		}
 	}
 	var packs *protocol.SpawnPacks
 	if req.Packs != nil {
@@ -848,7 +936,7 @@ func (s *server) guestStart(l *guestLink, sp *spawn, req *protocol.Request, at k
 	token := randomHex(32)
 	spawnReq := protocol.Request{V: protocol.Version, Type: protocol.TypeSpawn, ID: randomHex(16), Place: place,
 		Pool: vm.GuestPool, Argv: req.Argv, Env: req.Env, Rlimits: req.Rlimits, Control: req.Control,
-		Attach: &protocol.Attach{Path: vm.GuestAttachPath, Token: token}, HomeMode: protocol.HomeKept, Home: req.Home,
+		Attach: &protocol.Attach{Path: vm.GuestAttachPath, Token: token}, HomeMode: req.HomeMode, Home: req.Home,
 		HomeMaxBytes: req.HomeMaxBytes, Pty: req.Pty, Hosts: req.Hosts, Packs: packs}
 	wait := l.expectSpawn(spawnReq.ID, sp)
 	if err := l.ctl.Send(spawnReq); err != nil {
@@ -944,7 +1032,8 @@ func (s *server) measureInMachine(c *client, req *protocol.Request, at keptAt) {
 		s.loseMachine(m, fmt.Sprintf("its guest did not answer home_measure %s: %v", req.ID, err))
 		s.send(c, protocol.NewError(req.ID, "", protocol.CodeUnavailable))
 	case answer.Type == "home_measured":
-		s.send(c, protocol.NewHomeMeasured(req.ID, answer.Bytes))
+		// A home is inside its image: the guest's word is held to it.
+		s.send(c, protocol.NewHomeMeasured(req.ID, min(answer.Bytes, home.ImageBytes)))
 	default:
 		s.log.Warn("home_measure %s refused: its VM's keeper refused it: %s", req.ID, answer.Code)
 		s.send(c, protocol.NewError(req.ID, "", guestCode(answer.Code)))
@@ -1247,8 +1336,10 @@ func (s *server) followGuest(sp *spawn) {
 }
 
 // guestExit sends sp's one `exited`, once its `spawned` has gone: a spawn
-// refused once made has its exit settled as none before.
+// refused once made has its exit settled as none before. What its guest
+// said of the end is read first (exitOf).
 func (s *server) guestExit(sp *spawn, code *int, signal, memory *string) {
+	code, signal, memory = exitOf(code, signal, memory)
 	select {
 	case <-sp.announced:
 	case <-sp.retired:
@@ -1261,6 +1352,26 @@ func (s *server) guestExit(sp *spawn, code *int, signal, memory *string) {
 		}
 		s.send(sp.client, protocol.NewExited(sp.id, code, signal, memory))
 	})
+}
+
+// exitOf is the end a guest said of a session, as the host takes it: an
+// exit code an exit can have, or a signal's name the host knows, exactly
+// one of them, else SIGKILL, the end of a session whose guest said nothing
+// the host can read; and a memory word of an exited's own, else none. So a
+// guest's line puts nothing in a session's exit, its kill counters or a
+// report that its own keeper could not have.
+func exitOf(code *int, signal, memory *string) (*int, *string, *string) {
+	if memory != nil && *memory != protocol.MemoryCap && *memory != protocol.MemoryMachine && *memory != protocol.MemoryEither {
+		memory = nil
+	}
+	switch {
+	case signal == nil && code != nil && *code >= 0 && *code <= 255:
+		return code, nil, memory
+	case code == nil && signal != nil && unix.SignalNum(*signal) != 0:
+		return nil, signal, memory
+	}
+	killed := unix.SignalName(unix.SIGKILL)
+	return nil, &killed, memory
 }
 
 // retireGuest ends a session in a VM once: its guest asked to release it,
@@ -1293,6 +1404,9 @@ func (s *server) retireGuest(sp *spawn, grace time.Duration, notify bool) {
 				}
 			}
 			sp.drainSplice()
+			// A spawn its guest never made, or refused, has no guest to
+			// release it: its follower ends here.
+			sp.guestReleased()
 			if notify {
 				// A spawn its guest never made is owed no exit.
 				sp.exitOnce.Do(func() {})
@@ -1343,12 +1457,15 @@ func (s *server) readGuest(sp *spawn, clock func() time.Time) {
 	if err != nil || answer.Type != "measured" {
 		return
 	}
+	// The guest's word is held to its own memory: no number it sends
+	// enters the ledger, a counter or a report beyond what it holds.
+	bytes := min(answer.Bytes, s.machineGuest())
 	at := clock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if p := sp.client.places[sp.place]; p != nil && p.spawn == sp {
-		p.reading, p.readAt = protocol.Reading{Bytes: answer.Bytes, Lesser: answer.Lesser}, at
-		s.ledger.Read(p.entry, answer.Bytes, answer.Lesser, at)
+		p.reading, p.readAt = protocol.Reading{Bytes: bytes, Lesser: answer.Lesser}, at
+		s.ledger.Read(p.entry, bytes, answer.Lesser, at)
 	}
 }
 

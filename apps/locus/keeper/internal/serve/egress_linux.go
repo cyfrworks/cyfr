@@ -181,12 +181,21 @@ func receiveRoute(route *os.File) ([]*os.File, error) {
 	return []*os.File{os.NewFile(uintptr(fds[0]), "netns"), os.NewFile(uintptr(fds[1]), "names-udp"), os.NewFile(uintptr(fds[2]), "names-tcp")}, nil
 }
 
+// unclearedRoute is a withdrawn route the guard has not yet said cleared,
+// and where its holder holds it, which lets it go once the guard does.
+type unclearedRoute struct {
+	route guard.Route
+	held  **guard.Route
+}
+
 // withdrawRoute has the guard withdraw a space's route, held in held under
-// its id, once its processes are gone: a retiring spawn's, or an ended
-// role process's. The route stays the keeper's until the guard says
-// cleared, or its connection has ended (the guard's own rule withdraws
-// every route made over it): one the guard refuses is asked again at each
-// sweep (retryClears), and nothing counts it cleared before.
+// its id, once its processes are gone: a retiring spawn's, an ended role
+// process's or an ended VM's. The route stays the keeper's, held in held,
+// until the guard says cleared, or its connection has ended (the guard's
+// own rule withdraws every route made over it): one the guard refuses is
+// asked again at each sweep (retryClears), which lets held go once it is
+// cleared, and nothing counts it cleared before. A person's VM is released
+// only once its route is let go (finishMachine), by the sweep's clear too.
 func (s *server) withdrawRoute(id string, held **guard.Route) {
 	s.mu.Lock()
 	r := *held
@@ -200,9 +209,9 @@ func (s *server) withdrawRoute(id string, held **guard.Route) {
 			s.log.Warn("space %s: its route is not yet withdrawn, and is asked again: %v", id, err)
 			s.mu.Lock()
 			if s.uncleared == nil {
-				s.uncleared = map[string]guard.Route{}
+				s.uncleared = map[string]unclearedRoute{}
 			}
-			s.uncleared[id] = *r
+			s.uncleared[id] = unclearedRoute{route: *r, held: held}
 			s.mu.Unlock()
 			return
 		}
@@ -213,26 +222,30 @@ func (s *server) withdrawRoute(id string, held **guard.Route) {
 }
 
 // retryClears asks the guard again for every route it has not yet said
-// cleared, and forgets one only once it has, or once its connection ended.
+// cleared, and forgets one only once it has, or once its connection ended:
+// then its holder's hold on it is let go too.
 func (s *server) retryClears() {
 	s.mu.Lock()
-	todo := make(map[string]guard.Route, len(s.uncleared))
-	for id, r := range s.uncleared {
-		todo[id] = r
+	todo := make(map[string]unclearedRoute, len(s.uncleared))
+	for id, u := range s.uncleared {
+		todo[id] = u
 	}
 	s.mu.Unlock()
-	for id, r := range todo {
+	for id, u := range todo {
 		s.mu.Lock()
-		gone := s.lostRoutes[r.Conn]
+		gone := s.lostRoutes[u.route.Conn]
 		s.mu.Unlock()
 		if !gone {
-			if err := s.guard.Clear(id, r); err != nil && !errors.Is(err, guard.ErrConnectionGone) {
+			if err := s.guard.Clear(id, u.route); err != nil && !errors.Is(err, guard.ErrConnectionGone) {
 				s.log.Warn("spawn %s: its route is still not withdrawn: %v", id, err)
 				continue
 			}
 		}
 		s.mu.Lock()
 		delete(s.uncleared, id)
+		if held := *u.held; held != nil && *held == u.route {
+			*u.held = nil
+		}
 		s.mu.Unlock()
 	}
 }

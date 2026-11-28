@@ -658,30 +658,65 @@ func TestLimitReadsTheContainersOwn(t *testing.T) {
 }
 
 // A role's groups an earlier keeper left, with the group of a spawn or of a
-// person's VM still inside, are ended and removed before the role's are
-// made again: here plain folders stand in for groups the kernel emptied.
+// person's VM still inside and its processes still running, are killed,
+// then removed before the role's are made again: here plain folders stand
+// in for groups, and the kernel's part, emptying a group once it is killed
+// and taking its files with it, is the test's.
 func TestARolesGroupsAnEarlierKeeperLeftAreEndedAndRemoved(t *testing.T) {
 	root := t.TempDir()
 	tree, err := (&Manager{root: root}).NewTree()
 	if err != nil {
 		t.Fatal(err)
 	}
-	left := filepath.Join(root, "work", "rest", "backends", "keeper-40001", boundLeaf)
-	if err := os.MkdirAll(left, 0o755); err != nil {
+	group := filepath.Join(root, "work", "rest", "backends", "keeper-40001")
+	if err := os.MkdirAll(filepath.Join(group, boundLeaf), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(filepath.Dir(left), "cgroup.events"), []byte("populated 0\nfrozen 0\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(group, "cgroup.events"), []byte("populated 1\nfrozen 0\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// A cgroup's own files go with it; a test folder's file would keep it.
-	if err := os.Remove(filepath.Join(filepath.Dir(left), "cgroup.events")); err != nil {
-		t.Fatal(err)
-	}
+	killed := make(chan struct{})
+	go func() {
+		defer close(killed)
+		deadline := time.Now().Add(20 * time.Second)
+		for time.Now().Before(deadline) {
+			if _, err := os.Stat(filepath.Join(group, "cgroup.kill")); err == nil {
+				_ = os.Remove(filepath.Join(group, "cgroup.kill"))
+				_ = os.Remove(filepath.Join(group, "cgroup.events"))
+				return
+			}
+			time.Sleep(time.Millisecond) // sleep-ok: the kernel's part, polling for the kill's write
+		}
+	}()
 	m, _, err := tree.Role("backends", 0, false)
+	<-killed
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(m.Dir(), "keeper-40001")); !os.IsNotExist(err) {
 		t.Fatalf("the group an earlier keeper left is still there: %v", err)
+	}
+}
+
+// A group an earlier keeper left whose processes outlive its kill refuses
+// the role: nothing of the role is made beside processes no keeper holds.
+func TestARoleBesideAGroupThatOutlivesItsKillIsRefused(t *testing.T) {
+	root := t.TempDir()
+	tree, err := (&Manager{root: root}).NewTree()
+	if err != nil {
+		t.Fatal(err)
+	}
+	group := filepath.Join(root, "work", "rest", "backends", "keeper-40001")
+	if err := os.MkdirAll(filepath.Join(group, boundLeaf), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(group, "cgroup.events"), []byte("populated 1\nfrozen 0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := tree.Role("backends", 0, false); err == nil || !strings.Contains(err.Error(), "still holds processes after its kill") {
+		t.Fatalf("a role beside a group that outlived its kill: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(group, "cgroup.kill")); err != nil {
+		t.Fatalf("the group was never killed: %v", err)
 	}
 }

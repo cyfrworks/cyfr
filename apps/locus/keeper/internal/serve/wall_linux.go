@@ -19,24 +19,32 @@ import (
 )
 
 // The wall (plan D18). A keeper gives each person a VM of their own where
-// it keeps homes, its kept role runs, it was given KVM (vm.KVM, the KVM
-// device, whose group is not root's, as every VMM holds it) and the tun
-// device a VM's card needs (tunPath), each read by its numbers, as
-// docker-compose.yml gives /dev/null at their paths where the machine has
-// none, and the image carries
-// the guest (vm.Firecracker, vm.Kernel), its guard routes a person's VM
-// (the hello's machines member, guard.Client.Machines), and a first
-// session in a VM fits
-// rest beside the floor: a session's allowance and the VM's own, which
-// follows the guest's size, rest (machineGuest). It decides
-// once, at its start, from its own W and F; elsewhere the same spaces run
-// on the shared kernel, as they do without KVM.
+// it keeps homes, its kept role runs, it holds the two devices a VMM opens,
+// KVM (vm.KVM) and tun (tunDevice), the image carries the guest
+// (vm.Firecracker, vm.Kernel), its guard routes a person's VM (the hello's
+// machines member, guard.Client.Machines), and a first session in a VM
+// fits rest beside the floor: a session's allowance and the VM's own,
+// which follows the guest's size, rest (machineGuest). Each device is read
+// by its numbers, as docker-compose.yml gives /dev/null at a path whose
+// device the machine lacks, by the bits a VMM's own open needs, and opened:
+// a VMM opens KVM through its group, which is never root's, and tun as
+// anyone. It decides once, at its start, from its own W and F, and the
+// decision is whole before any disk is touched (giveWall); elsewhere the
+// same spaces run on the shared kernel, as they do without KVM.
 
-// Seams of the wall's decision: the devices and files it reads.
+// Seams of the wall's decision: the devices and files it reads, and how a
+// device is opened.
 var (
 	kvmPath    = vm.KVM
 	tunPath    = tunDevice
 	guestFiles = []string{vm.Firecracker, vm.Kernel}
+	openDevice = func(path string) error {
+		fd, err := unix.Open(path, unix.O_RDWR|unix.O_CLOEXEC, 0)
+		if err == nil {
+			_ = unix.Close(fd)
+		}
+		return err
+	}
 )
 
 // tunDevice is the tun device's path, where the stage binds it from into
@@ -56,13 +64,14 @@ func (s *server) wallOf() (bool, string) {
 	for _, r := range s.roles {
 		kept = kept || r.spec.Kept
 	}
-	switch {
-	case s.cfg.Kept == nil || !kept:
+	if s.cfg.Kept == nil || !kept {
 		return false, "no role of it keeps homes"
-	case !kvmGiven(kvmPath):
-		return false, "the container was given no " + vm.KVM
-	case !deviceIs(tunPath, tunMinor):
-		return false, "the container was given no " + tunDevice
+	}
+	if why := deviceHeld(kvmPath, vm.KVM, kvmMinor, true); why != "" {
+		return false, why
+	}
+	if why := deviceHeld(tunPath, tunDevice, tunMinor, false); why != "" {
+		return false, why
 	}
 	for _, f := range guestFiles {
 		if _, err := os.Stat(f); err != nil {
@@ -82,27 +91,31 @@ func (s *server) wallOf() (bool, string) {
 	return true, ""
 }
 
-// kvmGiven says path is the KVM device and its group is not root's.
-func kvmGiven(path string) bool {
-	if !deviceIs(path, kvmMinor) {
-		return false
-	}
-	info, err := os.Stat(path)
-	if err != nil {
-		return false
-	}
-	st, ok := info.Sys().(*syscall.Stat_t)
-	return ok && st.Gid != 0
-}
-
-// deviceIs says path is the misc character device of minor.
-func deviceIs(path string, minor uint32) bool {
+// deviceHeld says why the device named name, at path, is not one a VMM can
+// open, "" where it is: the misc device of minor, read and written through
+// its group, which is not root's, where byGroup (KVM), or by anyone (tun),
+// and open to this keeper.
+func deviceHeld(path, name string, minor uint32, byGroup bool) string {
 	info, err := os.Stat(path)
 	if err != nil || info.Mode()&os.ModeCharDevice == 0 {
-		return false
+		return "the container was given no " + name
 	}
 	st, ok := info.Sys().(*syscall.Stat_t)
-	return ok && unix.Major(st.Rdev) == miscMajor && unix.Minor(st.Rdev) == minor
+	if !ok || unix.Major(st.Rdev) != miscMajor || unix.Minor(st.Rdev) != minor {
+		return "the container was given no " + name
+	}
+	switch {
+	case byGroup && st.Gid == 0:
+		return name + "'s group is root's, which no VMM holds"
+	case byGroup && info.Mode().Perm()&0o060 != 0o060:
+		return name + " is not read and written by its group, as a VMM opens it"
+	case !byGroup && info.Mode().Perm()&0o006 != 0o006:
+		return name + " is not read and written by everyone, as a VMM opens it"
+	}
+	if err := openDevice(path); err != nil {
+		return name + " does not open here: " + err.Error()
+	}
+	return ""
 }
 
 // giveWall applies the decision at the keeper's start, before any role
@@ -113,7 +126,7 @@ func deviceIs(path string, minor uint32) bool {
 // finish leaves that disk refusing every session of it (startKeptSpawn).
 func (s *server) giveWall() {
 	wall, why := s.wallOf()
-	s.wall, s.imageDisks = wall, wall
+	s.wall, s.imageDisks, s.wallWhy = wall, wall, why
 	if !wall {
 		s.log.Info("each person's work runs in its own space on this machine: %s", why)
 		return

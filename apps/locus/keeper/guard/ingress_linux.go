@@ -151,11 +151,18 @@ const (
 // modulesHint names what a kernel needs for a machine's route's ingress.
 const modulesHint = "it needs the kernel's modules sch_ingress, cls_flower and act_gact"
 
-// probeMachines tries, on a veth pair of the guard's own that it removes
-// after, what a machine's route's end is given (wholeIPv4Only), and answers
-// "" where this kernel gives all of it, or why the guard routes no machine.
-// A pair an earlier guard left is removed first.
+// probeMachines tries what a machine's route needs here: the tun device a
+// machine's tap is made through (makeTap), opened, and, on a veth pair of
+// the guard's own that it removes after, what a machine's route's end is
+// given (wholeIPv4Only). It answers "" where the guard has all of it, or
+// why the guard routes no machine. A pair an earlier guard left is removed
+// first.
 func probeMachines() string {
+	fd, err := unix.Open(tunDevice, unix.O_RDWR|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return "the guard routes no machine: it could not open " + tunDevice + ", which a machine's tap is made through: " + err.Error()
+	}
+	_ = unix.Close(fd)
 	_ = removeLink(probeName)
 	peer := rtattr(ifinfomsg(), unix.IFLA_IFNAME, cstring(probePeer))
 	info := rtattr(nil, unix.IFLA_INFO_KIND, cstring("veth"))

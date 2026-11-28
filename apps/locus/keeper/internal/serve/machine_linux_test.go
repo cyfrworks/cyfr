@@ -25,6 +25,7 @@ import (
 	"github.com/cyfr/locus/keeper/internal/packview"
 	"github.com/cyfr/locus/keeper/internal/protocol"
 	"github.com/cyfr/locus/keeper/internal/vm"
+	"golang.org/x/sys/unix"
 )
 
 // A person's sessions run in their own VM, booted at their first: one VM
@@ -388,9 +389,16 @@ func TestAGuestThatDoesNotAnswerEndsItsVM(t *testing.T) {
 	}
 	vmEventually(t, "the VM's end", k.guest.booted()[0].ended)
 
+	// The second keeper's session starts under the bound a loaded runner
+	// keeps; only its release is held to the short one, its link's.
+	guestWait = 30 * time.Second
 	k2 := newVMKeeper(t)
 	k2.disk(t, "ath_a", "vlt_a1")
 	id, _ := k2.session(t, "s1", "ath_a", "vlt_a1", nil)
+	m := k2.machineOfAthanor("ath_a")
+	k2.s.mu.Lock()
+	m.link.guestWait = 200 * time.Millisecond
+	k2.s.mu.Unlock()
 	k2.guest.answer = func(_ *fakeVM, req map[string]any) ([]any, bool) {
 		return nil, req["type"] == protocol.TypeRelease
 	}
@@ -556,9 +564,10 @@ func putPacks(t *testing.T, k *vmKeeper, athanor string, files map[string]string
 	return digest
 }
 
-// The wall is given where the keeper keeps homes, was given KVM and the
-// image's guest, and a first session in a VM fits beside the floor; a
-// keeper given any less gives spaces, and says why.
+// The wall is given where the keeper keeps homes, holds the two devices a
+// VMM opens, its image carries the guest, its guard routes a VM and a first
+// session in a VM fits beside the floor; a keeper given any less gives
+// spaces, and says why.
 func TestTheWallIsGivenOnlyWhereAFirstSessionInAVMFits(t *testing.T) {
 	dev := t.TempDir()
 	files := []string{filepath.Join(dev, "firecracker"), filepath.Join(dev, "vmlinux")}
@@ -567,12 +576,9 @@ func TestTheWallIsGivenOnlyWhereAFirstSessionInAVMFits(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	savedKVM, savedTun, savedFiles := kvmPath, tunPath, guestFiles
-	t.Cleanup(func() { kvmPath, tunPath, guestFiles = savedKVM, savedTun, savedFiles })
-	// /dev/full is a character device whose group is root's, as no VMM may
-	// hold; /dev/null, which docker-compose.yml gives at a device's path
-	// where the machine has none, is a character device but no KVM nor tun.
+	wallSeams(t)
 	guestFiles = files
+	openDevice = func(string) error { return nil }
 	// The least rest, by whole MiB, that holds a first session and its VM's
 	// own allowance, which follows the guest's size, that same rest.
 	fits := admission.Allowance(admission.Session) + admission.MachineBaseBytes
@@ -584,28 +590,36 @@ func TestTheWallIsGivenOnlyWhereAFirstSessionInAVMFits(t *testing.T) {
 		s.roles = []*role{{spec: RoleSpec{Name: "backends", Kept: true}}}
 		return s
 	}
-	for _, absent := range []string{"/dev/full", "/dev/null"} {
+	// /dev/full and /dev/null are character devices, neither KVM nor tun:
+	// docker-compose.yml gives /dev/null at a device's path where the
+	// machine has none.
+	for _, absent := range []string{"/dev/full", "/dev/null", filepath.Join(dev, "absent")} {
 		kvmPath = absent
 		if wall, why := base().wallOf(); wall || why != "the container was given no /dev/kvm" {
 			t.Fatalf("%s at the KVM device's path gave the wall %t (%s)", absent, wall, why)
 		}
 	}
-	kvmPath = "/dev/full"
-	if wall, why := base().wallOf(); wall || !strings.Contains(why, "/dev/kvm") {
-		t.Fatalf("a device of root's group gave the wall %t (%s)", wall, why)
+	usableDevices(t)
+	kvmPath = vm.KVM
+	for _, absent := range []string{"/dev/null", vm.KVM} {
+		tunPath = absent
+		if wall, why := base().wallOf(); wall || why != "the container was given no /dev/net/tun" {
+			t.Fatalf("%s at the tun device's path gave the wall %t (%s)", absent, wall, why)
+		}
 	}
-	if _, err := os.Stat("/dev/kvm"); err != nil || !kvmGiven("/dev/kvm") {
-		t.Skip("this host gives no /dev/kvm whose group is not root's")
+	tunPath = tunDevice
+	for _, refused := range []string{vm.KVM, tunDevice} {
+		openDevice = func(path string) error {
+			if path == refused {
+				return unix.EPERM
+			}
+			return nil
+		}
+		if wall, why := base().wallOf(); wall || why != refused+" does not open here: operation not permitted" {
+			t.Fatalf("a %s the keeper cannot open gave the wall %t (%s)", refused, wall, why)
+		}
 	}
-	kvmPath = "/dev/kvm"
-	if _, err := os.Stat("/dev/net/tun"); err != nil || !deviceIs("/dev/net/tun", tunMinor) {
-		t.Skip("this host gives no /dev/net/tun")
-	}
-	tunPath = "/dev/null"
-	if wall, why := base().wallOf(); wall || why != "the container was given no /dev/net/tun" {
-		t.Fatalf("/dev/null at the tun device's path gave the wall %t (%s)", wall, why)
-	}
-	tunPath = "/dev/net/tun"
+	openDevice = func(string) error { return nil }
 	if wall, why := base().wallOf(); !wall {
 		t.Fatalf("a keeper with everything a VM needs gave no wall: %s", why)
 	}
@@ -627,6 +641,28 @@ func TestTheWallIsGivenOnlyWhereAFirstSessionInAVMFits(t *testing.T) {
 	guestFiles = []string{filepath.Join(dev, "absent")}
 	if wall, why := base().wallOf(); wall || !strings.Contains(why, "no guest") {
 		t.Fatalf("an image with no guest gave the wall %t (%s)", wall, why)
+	}
+}
+
+// wallSeams restores the wall's seams after the test.
+func wallSeams(t *testing.T) {
+	t.Helper()
+	savedKVM, savedTun, savedFiles, savedOpen := kvmPath, tunPath, guestFiles, openDevice
+	t.Cleanup(func() { kvmPath, tunPath, guestFiles, openDevice = savedKVM, savedTun, savedFiles, savedOpen })
+}
+
+// usableDevices skips a test on a host whose own /dev/kvm or /dev/net/tun a
+// VMM could not open by their numbers and modes; opens are the test's.
+func usableDevices(t *testing.T) {
+	t.Helper()
+	saved := openDevice
+	openDevice = func(string) error { return nil }
+	defer func() { openDevice = saved }()
+	if why := deviceHeld(vm.KVM, vm.KVM, kvmMinor, true); why != "" {
+		t.Skipf("this host: %s", why)
+	}
+	if why := deviceHeld(tunDevice, tunDevice, tunMinor, false); why != "" {
+		t.Skipf("this host: %s", why)
 	}
 }
 

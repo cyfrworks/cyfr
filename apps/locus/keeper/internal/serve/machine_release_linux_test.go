@@ -1,0 +1,158 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 CYFR Works Inc.
+
+package serve
+
+import (
+	"testing"
+	"time"
+
+	"github.com/cyfr/locus/keeper/guard"
+	"github.com/cyfr/locus/keeper/internal/cgroup"
+	"github.com/cyfr/locus/keeper/internal/protocol"
+	"github.com/cyfr/locus/keeper/internal/vm"
+)
+
+// A VM's release waits for its route's withdrawal on the guard's word, and
+// a clear the guard refuses at the VM's end is asked again at each sweep:
+// the sweep that clears it releases the VM, and the person's next VM boots
+// then, never before and never four minutes later.
+
+// released says m has been released.
+func released(m *machine) bool {
+	select {
+	case <-m.done:
+		return true
+	default:
+		return false
+	}
+}
+
+// sweepRoutes is the part of a sweep with a guard that settles VMs'
+// routes (sweep).
+func sweepRoutes(s *server) {
+	s.retryClears()
+	s.retryNarrowing()
+	s.finishMachines()
+	s.endIdleMachines()
+}
+
+// @Opus2's (4521 fail 2): a VM killed at rest whose clear is refused once.
+func TestAVMWhoseClearWasRefusedOnceIsReleasedBySweeps(t *testing.T) {
+	k := newVMKeeper(t)
+	k.disk(t, "ath_a", "vlt_a1")
+	id, _ := k.session(t, "s1", "ath_a", "vlt_a1", nil)
+	ms := int64(0)
+	k.s.handle(k.c, &protocol.Request{V: protocol.Version, Type: protocol.TypeRelease, SpawnID: id, GraceMs: &ms})
+	k.expect(t, "released")
+	m := k.machineOfAthanor("ath_a")
+	k.guard.mu.Lock()
+	k.guard.refuseClears = 1
+	k.guard.mu.Unlock()
+	k.guest.booted()[0].Kill()
+	vmEventually(t, "the VM's clear asked", func() bool {
+		for _, c := range k.guard.taken() {
+			if c.op == guard.TypeClear && c.spawnID == m.id {
+				return true
+			}
+		}
+		return false
+	})
+	for i := 0; i < 5; i++ {
+		sweepRoutes(k.s)
+	}
+	select {
+	case <-m.done:
+	case <-time.After(3 * time.Second):
+		k.s.mu.Lock()
+		held, ending, used := m.route != nil, k.s.vmsEnding[m], k.s.ledger.Report("backends", 0, now()).Used
+		k.s.mu.Unlock()
+		t.Fatalf("the VM was never released after its route's clear succeeded on a sweep (route held %t, still ending %t, pool used %d)", held, ending, used)
+	}
+}
+
+// @Fable3's (4742 fail 2): a VM whose VMM exits under a session, its clear
+// refused once: released, and nothing of it charged, once a sweep clears.
+func TestAVMWhoseClearWasRefusedOnceIsReleasedByALaterSweep(t *testing.T) {
+	k := newVMKeeper(t)
+	k.disk(t, "ath_a", "vlt_a1", "vlt_a2")
+	k.session(t, "s1", "ath_a", "vlt_a1", nil)
+	m := k.machineOfAthanor("ath_a")
+	k.guard.mu.Lock()
+	k.guard.refuseClears = 1
+	k.guard.mu.Unlock()
+	k.guest.booted()[0].end(vm.EndOwnExit, cgroup.NotKilled)
+	k.expect(t, "exited")
+	k.expect(t, "released")
+	vmEventually(t, "the refused clear's record", func() bool {
+		k.s.mu.Lock()
+		defer k.s.mu.Unlock()
+		_, held := k.s.uncleared[m.id]
+		return held
+	})
+	for i := 0; i < 3; i++ {
+		k.s.retryClears()
+		k.s.finishMachines()
+	}
+	k.s.mu.Lock()
+	_, uncleared := k.s.uncleared[m.id]
+	used := k.s.ledger.Report("backends", 0, now()).Used
+	k.s.mu.Unlock()
+	if uncleared {
+		t.Fatal("the guard never cleared the route: the test's premise does not hold")
+	}
+	if !released(m) || used != 0 {
+		t.Fatalf("a VM whose route the guard cleared at a later sweep is not released: released %t, the pool still holds %d bytes of it", released(m), used)
+	}
+}
+
+// A VM whose clear the guard refused is not released before a sweep clears
+// it, its charge held; the person's next start waits for that release, and
+// boots its VM at the sweep that gives it.
+func TestTheNextVMBootsAtTheLastOnesReleaseAndNotBefore(t *testing.T) {
+	k := newVMKeeper(t)
+	k.disk(t, "ath_a", "vlt_a1", "vlt_a2")
+	k.session(t, "s1", "ath_a", "vlt_a1", nil)
+	m := k.machineOfAthanor("ath_a")
+	k.guard.mu.Lock()
+	k.guard.refuseClears = 1
+	k.guard.mu.Unlock()
+	k.guest.booted()[0].end(vm.EndOwnExit, cgroup.NotKilled)
+	k.expect(t, "exited")
+	k.expect(t, "released")
+	vmEventually(t, "the refused clear's record", func() bool {
+		k.s.mu.Lock()
+		defer k.s.mu.Unlock()
+		_, held := k.s.uncleared[m.id]
+		return held
+	})
+	k.s.finishMachines()
+	k.s.mu.Lock()
+	used := k.s.ledger.Report("backends", 0, now()).Used
+	k.s.mu.Unlock()
+	if released(m) || used == 0 {
+		t.Fatalf("a VM whose route the guard has not cleared was released %t, the pool holding %d bytes of it", released(m), used)
+	}
+	k.place(t, "p-s2", "ath_a")
+	next := k.machineOfAthanor("ath_a")
+	if next == m || next.prev != m {
+		t.Fatal("the person's next place names the VM still ending, or one that does not follow it")
+	}
+	go k.s.handleSpawn(k.c, k.spawnReq("s2", "p-s2", "vlt_a2", nil))
+	vmEventually(t, "the next VM's boot waiting", func() bool {
+		k.s.mu.Lock()
+		defer k.s.mu.Unlock()
+		return next.booting
+	})
+	time.Sleep(200 * time.Millisecond) // sleep-ok: a boot that did not wait for the last VM's release would have begun
+	if n := len(k.guest.booted()); n != 1 {
+		t.Fatalf("the person's next VM booted beside the last one still ending: %d VMs", n)
+	}
+	sweepRoutes(k.s)
+	if got := k.expect(t, "spawned"); got["id"] != "s2" {
+		t.Fatalf("the next start answered %v", got)
+	}
+	if !released(m) || len(k.guest.booted()) != 2 {
+		t.Fatalf("the next start: the last VM released %t, %d VMs booted", released(m), len(k.guest.booted()))
+	}
+}

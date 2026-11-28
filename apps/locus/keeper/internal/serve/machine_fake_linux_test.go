@@ -57,6 +57,12 @@ type fakeVM struct {
 	// was asked within.
 	unacked bool
 	asked   time.Duration
+	// keepControls leaves its control connections standing at its end, as
+	// a connection whose end is not yet seen; group is its VMM's group.
+	keepControls bool
+	group        *cgroup.Group
+	// left is what its end could not clear.
+	left error
 }
 
 func (f *fakeVM) ConnectWithin(left time.Duration) (guestControl, error) {
@@ -89,6 +95,9 @@ func (f *fakeVM) end(how vm.Ended, cause cgroup.Cause) {
 		f.mu.Lock()
 		f.how, f.cause = how, cause
 		controls := append([]net.Conn{}, f.controls...)
+		if f.keepControls {
+			controls = nil
+		}
 		f.mu.Unlock()
 		for _, c := range controls {
 			_ = c.Close()
@@ -121,12 +130,21 @@ func (f *fakeVM) HowEnded() vm.Ended {
 	return f.how
 }
 func (f *fakeVM) Status() (unix.WaitStatus, error) { return 0, nil }
+func (f *fakeVM) Left() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.left
+}
 func (f *fakeVM) KilledFor() (cgroup.Cause, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.cause, nil
 }
-func (f *fakeVM) Group() *cgroup.Group { return nil }
+func (f *fakeVM) Group() *cgroup.Group {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.group
+}
 func (f *fakeVM) Used() (cgroup.Use, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
