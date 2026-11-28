@@ -7,6 +7,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -14,9 +16,11 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/cyfr/codex/internal/access"
@@ -376,7 +380,7 @@ func prepareMachine(ctx context.Context, args []string, out, errOut io.Writer) (
 	// Only a new login cures this, with a terminal or without, so it is
 	// said before anything is installed or written.
 	if loginIsMissing(ctx) {
-		return true, fmt.Errorf("%s. Then run `cyfr init` again", loginAgain)
+		return true, fmt.Errorf("%s. Then run `%s` again", loginAgain, commandSaid(append([]string{"init"}, args...)))
 	}
 	if !askTerminal() {
 		return false, nil
@@ -424,7 +428,7 @@ func prepareMachine(ctx context.Context, args []string, out, errOut io.Writer) (
 			return false, nil
 		}
 	}
-	return continueWithGroup(ctx, "init", append([]string{"init"}, args...), account.Username, out, errOut)
+	return continueWithGroup(ctx, append([]string{"init"}, args...), account.Username, out, errOut)
 }
 
 // dockerDesktopPage is where Docker offers Docker Desktop's installer for
@@ -514,25 +518,50 @@ func needsDocker(c *cobra.Command) bool {
 // withDockerGroup is the first step of every command that reaches Docker
 // (needsDocker), in a terminal older than the account's docker group: the
 // command again, as it was given, through sg, so no person has to refresh
-// the terminal and every step of its run reaches Docker. It runs nothing
-// when Docker already answers this account, a rootless Docker included,
-// and answers true when that run did the work; with no sg to run it with
-// it says to log in again (continueWithGroup).
+// the terminal and every step of its run reaches Docker. It asks Docker
+// nothing unless this process lacks the group /etc/group gives its
+// account (staleGroup, two reads of id), so a terminal that holds the
+// group, or an account outside it, pays no Docker call; only then does it
+// ask whether Docker answers this process all the same, a rootless Docker
+// included, within groupProbe. It answers true when the second run did the
+// work; with no sg to run it with it says to log in again
+// (continueWithGroup). A ctx that ends in the step ends the command: an
+// interruption, never carried into its run.
 func withDockerGroup(ctx context.Context, c *cobra.Command, args []string, out, errOut io.Writer) (bool, error) {
-	if !machine.supported() || machine.reachable(ctx) {
+	if !machine.supported() {
 		return false, nil
 	}
 	account, err := user.Current()
 	if err != nil {
 		return false, err
 	}
-	path := strings.TrimPrefix(c.CommandPath(), c.Root().Name()+" ")
-	again := strings.Join(append([]string{path}, args...), " ")
-	argv := append(strings.Fields(path), continuationArgs(c)...)
-	if len(args) > 0 {
-		argv = append(append(argv, "--"), args...)
+	if !staleGroup(ctx, account.Username) {
+		return false, stepInterrupted(ctx)
 	}
-	return continueWithGroup(ctx, again, argv, account.Username, out, errOut)
+	probe, stop := context.WithTimeout(ctx, groupProbe)
+	answers := machine.reachable(probe)
+	stop()
+	if err := stepInterrupted(ctx); err != nil || answers {
+		return false, err
+	}
+	argv := append(strings.Fields(strings.TrimPrefix(c.CommandPath(), c.Root().Name()+" ")), continuationArgs(c)...)
+	if slices.ContainsFunc(args, func(a string) bool { return strings.HasPrefix(a, "-") }) {
+		argv = append(argv, "--")
+	}
+	argv = append(argv, args...)
+	return continueWithGroup(ctx, argv, account.Username, out, errOut)
+}
+
+// groupProbe bounds the one question the group step asks Docker.
+var groupProbe = 10 * time.Second
+
+// stepInterrupted is the interruption of a step whose ctx ended, none
+// while it runs.
+func stepInterrupted(ctx context.Context) error {
+	if ctx.Err() != nil {
+		return interruption{errQuestionInterrupted}
+	}
+	return nil
 }
 
 // loginAgain is said where only a new login gives this account the docker
@@ -639,39 +668,142 @@ func staleGroup(ctx context.Context, account string) bool {
 
 // continueWithGroup runs cyfr again with argv, the command's words and
 // the flags and arguments the person gave, through sg with the docker
-// group, keeping this process's terminal, environment and directory;
-// subcommand names it in what it says, such as "access status". It
+// group (groupRun), with this process's terminal and directory. It
 // answers false, having run nothing, when /etc/group does not list the
 // account in the group, and when this process already has it: sg would
-// give it nothing, and its child would land here again. With no sg it runs nothing and says why Docker does not answer:
-// to log in again (loginAgain) only where its socket refused this process.
-func continueWithGroup(ctx context.Context, subcommand string, argv []string, account string, out, errOut io.Writer) (bool, error) {
+// give it nothing, and its child would land here again. With no sg, or a
+// program path sg's string cannot carry as it is (groupRun), it runs
+// nothing and says why Docker does not answer: to log in again
+// (loginAgain) only where its socket refused this process, naming the
+// command to run again as the person gave it (commandSaid). A signal that
+// ends this process's ctx (Main: SIGINT, SIGTERM, SIGHUP) is passed to the
+// second run, so a stop from outside stops the work, and this process
+// exits as the second run did: with its status, or with 128 and the number
+// of the signal that killed it, as a shell reports one.
+func continueWithGroup(ctx context.Context, argv []string, account string, out, errOut io.Writer) (bool, error) {
 	if !staleGroup(ctx, account) {
 		return false, nil
 	}
-	if _, err := os.Stat(sgProgram); err != nil {
+	again := "Then run `" + commandSaid(argv) + "` again"
+	self, err := os.Executable()
+	if err != nil {
+		return true, fmt.Errorf("cyfr could not find its own program to go on with the docker group (%v). Run `newgrp docker`, or log out and in again. %s", err, again)
+	}
+	cmd, err := groupRun(sgProgram, self, argv, os.Environ())
+	if err != nil {
 		why, _ := dockerSentence(seeDocker(ctx, true))
 		if why == "" {
 			return false, nil
 		}
-		return true, fmt.Errorf("%s. Then run `cyfr %s` again", why, subcommand)
+		return true, fmt.Errorf("%s. %s", why, again)
 	}
-	self, err := os.Executable()
-	if err != nil {
-		return true, fmt.Errorf("cyfr %s could not find its own program to go on with the docker group (%v). Run `newgrp docker`, or log out and in again, then run `cyfr %s` again", subcommand, err, subcommand)
-	}
-	cmd := exec.Command(sgProgram, dockerGroup, "-c", shellQuote(append([]string{self}, argv...)))
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, out, errOut
-	err = cmd.Run()
+	if err := cmd.Start(); err != nil {
+		return true, fmt.Errorf("cyfr could not go on with the docker group (%v). Run `newgrp docker`, or log out and in again. %s", err, again)
+	}
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = cmd.Process.Signal(syscall.SIGTERM)
+		case <-done:
+		}
+	}()
+	err = cmd.Wait()
+	close(done)
 	var exit *exec.ExitError
 	switch {
 	case errors.As(err, &exit):
+		if status, ok := exit.Sys().(syscall.WaitStatus); ok && status.Signaled() {
+			return true, handedOver{128 + int(status.Signal())}
+		}
 		return true, handedOver{exit.ExitCode()}
 	case err != nil:
-		return true, fmt.Errorf("cyfr %s could not go on with the docker group (%v). Run `newgrp docker`, or log out and in again, then run `cyfr %s` again", subcommand, err, subcommand)
+		return true, fmt.Errorf("cyfr could not go on with the docker group (%v). Run `newgrp docker`, or log out and in again. %s", err, again)
 	}
 	return true, nil
 }
+
+// groupWord is the one word sg's string carries after this program's
+// path, and groupRunVar the variable the second run reads its arguments
+// from: sg hands its string to the account's login shell, whatever that
+// is (dash, bash, fish, tcsh), and no value of the person's travels where
+// a shell reads it.
+const (
+	groupWord   = "--continue-with-docker-group"
+	groupRunVar = "CYFR_DOCKER_GROUP_RUN"
+)
+
+// plainPath is the program path sg's string carries as it is: characters
+// every shell reads alike, unquoted.
+var plainPath = regexp.MustCompile(`^/[A-Za-z0-9/._+-]*$`)
+
+// groupRun is self run again with argv through sg with the docker group,
+// for continueWithGroup and setup's work alike, in environ: sg's string is
+// `exec <self> --continue-with-docker-group`, and argv travels in
+// groupRunVar, JSON in unpadded URL-safe base64, which no shell reads and
+// no value breaks out of. A self outside plainPath is refused: the caller
+// runs nothing through sg. sg is setuid, so glibc drops its unsafe
+// variables (TMPDIR, LD_LIBRARY_PATH, TZDIR, LOCALDOMAIN and the rest)
+// from the second run's environment, which keeps every other one: there
+// os.TempDir is /tmp. The account's login shell runs its own startup files
+// first.
+func groupRun(sg, self string, argv, environ []string) (*exec.Cmd, error) {
+	if !plainPath.MatchString(self) {
+		return nil, fmt.Errorf("the program's path %q is not one sg's command line carries as it is", self)
+	}
+	if _, err := os.Stat(sg); err != nil {
+		return nil, err
+	}
+	data, err := json.Marshal(argv)
+	if err != nil {
+		return nil, err
+	}
+	cmd := exec.Command(sg, dockerGroup, "-c", "exec "+self+" "+groupWord)
+	cmd.Env = append(slices.DeleteFunc(slices.Clone(environ), func(e string) bool { return strings.HasPrefix(e, groupRunVar+"=") }),
+		groupRunVar+"="+base64.RawURLEncoding.EncodeToString(data))
+	return cmd, nil
+}
+
+// takeGroupRun is the command line of a second run groupRun started:
+// args, this process's own, are groupWord alone, and the arguments are
+// groupRunVar's. The variable is removed from the environment first,
+// whatever the arguments, so nothing this process starts inherits it.
+func takeGroupRun(args []string) ([]string, bool, error) {
+	value, set := os.LookupEnv(groupRunVar)
+	os.Unsetenv(groupRunVar)
+	if len(args) != 1 || args[0] != groupWord {
+		return nil, false, nil
+	}
+	if !set {
+		return nil, true, errors.New("cyfr was asked to go on with the docker group, but was given no command to go on with")
+	}
+	data, err := base64.RawURLEncoding.DecodeString(value)
+	var argv []string
+	if err == nil {
+		err = json.Unmarshal(data, &argv)
+	}
+	if err != nil {
+		return nil, true, fmt.Errorf("cyfr was asked to go on with the docker group, but the command it was given is unreadable (%v)", err)
+	}
+	return argv, true, nil
+}
+
+// commandSaid is the command a person runs again: cyfr and argv, each
+// word quoted for a shell where it needs it.
+func commandSaid(argv []string) string {
+	words := []string{"cyfr"}
+	for _, w := range argv {
+		if w == "" || !plainWord.MatchString(w) {
+			w = shellQuote([]string{w})
+		}
+		words = append(words, w)
+	}
+	return strings.Join(words, " ")
+}
+
+// plainWord is a word a shell reads as it is.
+var plainWord = regexp.MustCompile(`^[A-Za-z0-9@%+=:,./_-]+$`)
 
 // shellQuote joins argv as one command line for sh -c: each word in single
 // quotes, a single quote within it closed, escaped and reopened, so sh
@@ -685,13 +817,19 @@ func shellQuote(argv []string) string {
 }
 
 // continuationArgs are the arguments of the run a continuation starts:
-// each flag the person gave, as --name=value.
+// each flag the person gave, as --name=value, or --name for a switch
+// given on.
 func continuationArgs(c *cobra.Command) []string {
 	var args []string
 	c.Flags().VisitAll(func(f *pflag.Flag) {
-		if f.Changed {
-			args = append(args, "--"+f.Name+"="+f.Value.String())
+		if !f.Changed {
+			return
 		}
+		if f.Value.Type() == "bool" && f.Value.String() == "true" {
+			args = append(args, "--"+f.Name)
+			return
+		}
+		args = append(args, "--"+f.Name+"="+f.Value.String())
 	})
 	return args
 }

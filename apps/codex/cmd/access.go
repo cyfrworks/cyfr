@@ -849,11 +849,18 @@ func joinStands(join joined, host string) string {
 // certificates and whether Serve is open.
 func printTailscale(ctx context.Context, e stackEngine, out io.Writer) {
 	st, err := e.Status(ctx)
-	if err != nil || len(st.Health) == 0 {
+	if err != nil {
+		return
+	}
+	lines := st.Health
+	if st.Unobserved != nil {
+		lines = []string{"Docker did not answer: " + st.Unobserved.Error()}
+	}
+	if len(lines) == 0 {
 		return
 	}
 	fmt.Fprintln(out, "Tailscale now:")
-	for _, line := range st.Health {
+	for _, line := range lines {
 		fmt.Fprintln(out, "  "+line)
 	}
 }

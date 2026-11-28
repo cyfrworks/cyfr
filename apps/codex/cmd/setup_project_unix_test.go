@@ -506,7 +506,7 @@ func TestNoSgOverAnotherComputersDockerIsNoMissingLogin(t *testing.T) {
 		}
 		return nil
 	}
-	_, err := continueWithGroup(t.Context(), "init", nil, "ada", io.Discard, io.Discard)
+	_, err := continueWithGroup(t.Context(), []string{"init"}, "ada", io.Discard, io.Discard)
 	if err == nil || strings.Contains(err.Error(), loginAgain) || !strings.Contains(err.Error(), "another computer") {
 		t.Fatalf("continuing with the group said %v", err)
 	}

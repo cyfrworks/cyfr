@@ -6,6 +6,7 @@ package cmd
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -104,6 +105,18 @@ func TestMain(m *testing.M) {
 	}
 	if status, ok := runStandIn(); ok {
 		os.Exit(status)
+	}
+	// A second run through the docker group takes its command line as
+	// Main does (takeGroupRun).
+	if len(os.Args) == 2 && os.Args[1] == groupWord {
+		args, _, err := takeGroupRun(os.Args[1:])
+		if os.Getenv(fakeGroupDump) != "" {
+			_, left := os.LookupEnv(groupRunVar)
+			out, _ := json.Marshal(map[string]any{"args": args, "error": fmt.Sprint(err), "left": left})
+			fmt.Println(string(out))
+			os.Exit(0)
+		}
+		os.Args = append(os.Args[:1], args...)
 	}
 	// The program a handover started (TestUpdateHandsOverForReal), which
 	// carries the handover scenario's environment on.
