@@ -261,10 +261,14 @@ type Container struct {
 // none, its words, the project's containers, an unfinished operation, the
 // latest receipt, and the health of the mode's proxy.
 type Status struct {
-	Head       Head
-	HeadErr    error
-	Words      Words
+	Head    Head
+	HeadErr error
+	Words   Words
+	// Containers are the stack's containers Docker listed; Unobserved is
+	// why Docker did not list them, when it did not answer, which leaves
+	// Containers saying nothing of what runs.
 	Containers []Container
+	Unobserved error
 	Unfinished *Receipt
 	Last       *Receipt
 	Health     []string

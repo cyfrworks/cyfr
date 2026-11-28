@@ -433,17 +433,17 @@ Re-running in an existing project is safe: docker-compose.yml, Caddyfile and .en
 		var o initOptions
 		o.force, _ = cmd.Flags().GetBool("force")
 		o.noPull, _ = cmd.Flags().GetBool("no-pull")
-		o.continuation = continuationArgs(cmd)
+		o.continuation = continued(cmd, nil)
 		return runInit(ctx, o, cmd.OutOrStdout(), cmd.ErrOrStderr())
 	},
 }
 
-// initOptions are cyfr init's flags. continuation is the flags given, for
+// initOptions are cyfr init's flags. continuation is init as given, for
 // the init run that continues once the requirements are installed
 // (prepareMachine).
 type initOptions struct {
 	force, noPull bool
-	continuation  []string
+	continuation  continuation
 	// project is the compose project's name where the caller chose it,
 	// setup's work in a folder it entered; otherwise the working
 	// directory's name.
@@ -941,9 +941,10 @@ func readAnswer(r *bufio.Reader, def string) (string, bool) {
 }
 
 var upCmd = &cobra.Command{
-	Use:     "up",
-	Short:   "Start the CYFR stack (cyfr, locus, locus-guard; the proxy of tailnet or public access)",
-	GroupID: "server",
+	Use:         "up",
+	Annotations: map[string]string{dockerAnnotation: "yes"},
+	Short:       "Start the CYFR stack (cyfr, locus, locus-guard; the proxy of tailnet or public access)",
+	GroupID:     "server",
 	Long: `Start the CYFR stack with Docker Compose in detached mode, as .env says CYFR is reached. Requires a docker-compose.yml in the current directory (run 'cyfr init' first).
 
 The stack is cyfr (the one endpoint: Prism, API, MCP, tinctures), locus (the one Locus: its runtime role runs components, its builds role compiles components and tinctures, and its backends role runs the stdio/npx MCP servers an athanor adds on Prism's "MCP Servers" page, each backend under a uid and a memory bound of its own; cyfr tells it what to run), locus-guard (Locus's egress guard), and the proxy of the way CYFR is reached: tailscale for tailnet access (Tailscale Serve, HTTPS at the machine's tailnet name) and caddy for public access (TLS on :80/:443).
@@ -957,14 +958,10 @@ Exit status 3: cyfr started, but on this machine only, because the tailnet machi
 		if ctx == nil {
 			ctx = context.Background()
 		}
-		// Before the docker group step and the access settings: a missing
-		// .env reads as empty, so the first refusal would blame the access
-		// settings rather than the directory.
+		// Before the access settings: a missing .env reads as empty, so the
+		// first refusal would blame them rather than the directory.
 		if !access.HasComposeFile(".") {
 			return fmt.Errorf("There is no CYFR in this directory, so nothing was started: it holds no compose file (%s). Run 'cyfr up' in CYFR's directory, the one that holds its docker-compose.yml, or 'cyfr init' here to make one", strings.Join(access.ComposeMainFiles, ", "))
-		}
-		if continued, err := withDockerGroup(ctx, continuationArgs(cmd), cmd.OutOrStdout(), cmd.ErrOrStderr()); continued || err != nil {
-			return err
 		}
 		return runUp(ctx, cmd.OutOrStdout())
 	},
@@ -1233,11 +1230,12 @@ func stackLog(ctx context.Context, e stackEngine, head access.Head) (access.Resu
 }
 
 var downCmd = &cobra.Command{
-	Use:     "down",
-	Short:   "Stop the CYFR stack",
-	GroupID: "server",
-	Long:    "Stop the CYFR stack and remove its containers, keeping its networks. Every service of the project, the proxy of tailnet or public access included, whatever .env selects now, is checked stopped before it reports. It takes the stack's lock first, so it never runs inside another cyfr command's start or change, and finishes a change an interrupted command left. The stack is the working directory's, started from its compose file and named after the directory, so a directory that holds no compose file is refused: nothing of a CYFR started elsewhere is stopped from here.",
-	Example: "  cyfr down",
+	Use:         "down",
+	Annotations: map[string]string{dockerAnnotation: "yes"},
+	Short:       "Stop the CYFR stack",
+	GroupID:     "server",
+	Long:        "Stop the CYFR stack and remove its containers, keeping its networks. Every service of the project, the proxy of tailnet or public access included, whatever .env selects now, is checked stopped before it reports. It takes the stack's lock first, so it never runs inside another cyfr command's start or change, and finishes a change an interrupted command left. The stack is the working directory's, started from its compose file and named after the directory, so a directory that holds no compose file is refused: nothing of a CYFR started elsewhere is stopped from here.",
+	Example:     "  cyfr down",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
 		if ctx == nil {
