@@ -127,6 +127,17 @@ defmodule Opus.Memory do
   @typedoc "An endpoint that has not answered within `Prima.LocusPool.fresh_ms/0`, and when it last did."
   @type unanswered :: %{endpoint: String.t(), heard_at: DateTime.t()}
 
+  @typedoc """
+  What `read/2` answers: the machines, the days, the endpoints that have
+  not answered, and the wall of the machine the programs run on.
+  """
+  @type read :: %{
+          machines: [machine()],
+          days: [day()],
+          unanswered: [unanswered()],
+          programs_wall: Prima.LocusPool.wall() | :unknown | nil
+        }
+
   @type day :: %{
           day: Date.t(),
           person: person(),
@@ -154,15 +165,7 @@ defmodule Opus.Memory do
   the platform administrator, `{:error, :unavailable}` when the store
   cannot say.
   """
-  @spec read(Sanctum.Context.t(), :mine | :everyone) ::
-          {:ok,
-           %{
-             machines: [machine()],
-             days: [day()],
-             unanswered: [unanswered()],
-             programs_wall: Prima.LocusPool.wall() | :unknown | nil
-           }}
-          | {:error, term()}
+  @spec read(Sanctum.Context.t(), :mine | :everyone) :: {:ok, read()} | {:error, term()}
   def read(%Sanctum.Context{scope: :athanor, athanor_id: athanor_id}, :mine)
       when is_binary(athanor_id) and athanor_id != "" do
     actor = Prima.Actor.in_athanor(athanor_id)
