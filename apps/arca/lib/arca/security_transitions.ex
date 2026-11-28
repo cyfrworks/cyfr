@@ -31,12 +31,13 @@ defmodule Arca.SecurityTransitions do
   anything the retirement took, and it revokes again every frame
   credential, paired client and device certificate the person still
   holds: a frame opened or a client paired under the old standing never
-  outlives a change of it.
+  outlives a change of it. A paired client its person removed stays
+  removed through every transition (`Arca.PairedClients.revoke_all/1`).
 
   A declared restore (`restore/1`) consumes the marker `cyfr restore`
   writes (`mark_restore/1`): it raises every person's and athanor's
-  standing, retires every session, suspends every key, webhook and paired
-  client, revokes every device certificate and every open
+  standing, retires every session, suspends every key, webhook and active
+  paired client, revokes every device certificate and every open
   invitation to become a person here (`Arca.Invitations`), blocks every
   profile and stored credential, revokes every share, drops every
   standing allow, once binding and pending confirmation, and settles
@@ -507,7 +508,8 @@ defmodule Arca.SecurityTransitions do
   end
 
   # A transition revokes a person's paired clients in every athanor, and
-  # every client of an athanor it archives (`Arca.PairedClients.revoke_all/1`).
+  # every client of an athanor it archives, a removed one left removed
+  # (`Arca.PairedClients.revoke_all/1`).
   defp revoke_paired(user_id, athanor_ids) do
     PairedClients.revoke_all(
       from(p in PairedClient, where: p.user_id == ^user_id or p.athanor_id in ^athanor_ids)
@@ -540,7 +542,9 @@ defmodule Arca.SecurityTransitions do
         where: f.state != "revoked" and (f.user_id == ^user_id or f.athanor_id in ^athanor_ids)
       ),
       from(p in PairedClient,
-        where: p.standing != "revoked" and (p.user_id == ^user_id or p.athanor_id in ^athanor_ids)
+        where:
+          p.standing not in ["revoked", "removed"] and
+            (p.user_id == ^user_id or p.athanor_id in ^athanor_ids)
       ),
       from(c in DeviceCertificate,
         where: c.state != "revoked" and (c.user_id == ^user_id or c.athanor_id in ^athanor_ids)
@@ -724,7 +728,8 @@ defmodule Arca.SecurityTransitions do
   write intents `uncertain`, a turn `uncertain` with its open steps, and
   every open component question `ended`, announced to no one, since
   every session is gone. Rows
-  already suspended, blocked, revoked or tombstoned keep their state. It
+  already suspended, blocked, revoked, removed or tombstoned keep their
+  state, so a device its person removed stays out after the restore. It
   then deletes the marker it read, so a retry after commit finds no
   marker and moves nothing, and a crash before commit leaves the marker
   for the next boot. A suspended paired client stays suspended: its

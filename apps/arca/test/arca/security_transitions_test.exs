@@ -1039,6 +1039,31 @@ defmodule Arca.SecurityTransitionsTest do
       assert paired_standing(peer_theirs) == "active"
     end
 
+    # A device its person removed stays out: no denial, archive or allow
+    # moves it to revoked, from where a hello would pair it again.
+    test "a removed client stays removed through a denial, the archive it makes and an allow" do
+      {user, own} = owner!()
+      {peer, theirs} = owner!()
+
+      mine_theirs = paired!(theirs.id, user.id, "removed")
+      # A client of another person in the athanor the denial archives.
+      guest_own = paired!(own.id, peer.id, "removed")
+      revoked = paired!(own.id, user.id)
+
+      assert {:ok, denied} =
+               SecurityTransitions.deny_user(server(), user.id, slot: :none, verify: admit())
+
+      assert denied.revoked_paired_client_ids == [revoked]
+
+      assert {:ok, allowed} =
+               SecurityTransitions.allow_user(server(), user.id, slot: :none, verify: admit())
+
+      assert allowed.revoked_paired_client_ids == []
+      assert paired_standing(mine_theirs) == "removed"
+      assert paired_standing(guest_own) == "removed"
+      assert paired_standing(revoked) == "revoked"
+    end
+
     test "an allow revokes a client that outlived the denial and restores none" do
       {user, own} = owner!()
       paired = paired!(own.id, user.id)

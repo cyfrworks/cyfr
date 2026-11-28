@@ -296,7 +296,7 @@ At sign-in the home mints a request bound to the browser that asked; a key of th
 
 ### 9.3 Devices and fresh confirmation
 
-Who a person is, which devices they connected and whether a change needs a fresh confirmation are three separate facts, and no client holds a rank. Everyday work, a grant and an approval need only the session. Which changes need a fresh confirmation is one table of Sanctum's (`Sanctum.Pairing`), and the deciding home decides each (§5.4). A home admits a device by its first hello over the device channel, verified against the account's log, and issues it a certificate of its own, which no other home reads. One device key, bound to one account at one account directory, is admitted at each home on its own; its shell refuses a home whose account directory is another.
+Who a person is, which devices they connected and whether a change needs a fresh confirmation are three separate facts, and no client holds a rank. Everyday work, a grant and an approval need only the session. Which changes need a fresh confirmation is one table of Sanctum's (`Sanctum.Pairing`), and the deciding home decides each (§5.4). A home admits a device by its first hello over the device channel, verified against the account's log, and issues it a certificate of its own, which no other home reads. One device key, bound to one account at one account directory, is admitted at each home on its own; its shell refuses a home whose account directory is another. A device its person removes from a home stays out of that home until they allow it again there, through every standing change; removing its key from the account, at the account pages, ends it at every home.
 
 ### 9.4 Communication
 

@@ -527,6 +527,7 @@ defmodule Arca.SecurityTransitionsRestoreTest do
       webhook: webhook!(own.id, alice.id, profile),
       paired: paired,
       revoked_paired: paired!(own.id, alice.id, "revoked"),
+      removed_paired: paired!(own.id, alice.id, "removed"),
       certificate: certificate!(own.id, alice.id, paired, "active"),
       revoked_certificate: certificate!(own.id, alice.id, paired, "revoked"),
       passkey: passkey!(own.id, alice.id, "active"),
@@ -663,6 +664,9 @@ defmodule Arca.SecurityTransitionsRestoreTest do
       assert get(Schemas.Webhook, fixture.webhook).suspended == true
       assert get(Schemas.PairedClient, fixture.paired).standing == "suspended"
       assert get(Schemas.PairedClient, fixture.revoked_paired).standing == "revoked"
+      # A device its person removed stays removed: a restore suspends
+      # active rows alone.
+      assert get(Schemas.PairedClient, fixture.removed_paired).standing == "removed"
       assert get(Schemas.PairedClient, fixture.passkey).standing == "suspended"
       assert get(Schemas.PairedClient, fixture.revoked_passkey).standing == "revoked"
       assert change.suspended_api_key_ids == [fixture.key]

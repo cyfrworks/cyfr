@@ -6,7 +6,8 @@ defmodule Arca.PairedClientsTest do
   The paired client rows: recorded active, with a known source (a
   device's carrying its public key), once per credential in an athanor,
   and only by a member that owns its slot; listed and revoked in the
-  actor's own athanor, with `revoked` terminal; revoked by person, across
+  actor's own athanor, with `revoked` terminal, and a device's removed
+  until it is allowed again, revoked; revoked by person, across
   athanors only for the platform's own actor. Standing alone decides: no
   row carries a rank. A suspended row, a declared restore's, is listed only
   when its standing is asked for, and re-enabled only from `suspended`,
@@ -462,6 +463,35 @@ defmodule Arca.PairedClientsTest do
       row = actor |> record!() |> suspend!()
       assert {:ok, %{standing: "revoked"}} = PairedClients.revoke(actor, row.id)
       assert standing(row.id) == "revoked"
+    end
+
+    test "remove/2 removes a device's row alone, which revoke/2 keeps and allow_again/2 revokes",
+         %{actor: actor} do
+      device =
+        record!(actor, %{
+          source_kind: "device_cert",
+          device_public_key: :crypto.strong_rand_bytes(32)
+        })
+
+      session = record!(actor)
+      other = Prima.Actor.in_athanor("ath_pcl_other")
+
+      assert {:error, :not_found} = PairedClients.remove(actor, session.id)
+      assert {:error, :not_found} = PairedClients.remove(other, device.id)
+      assert {:error, :not_found} = PairedClients.allow_again(actor, device.id)
+
+      assert {:ok, %{standing: "removed", revoked_session_hashes: []} = removed} =
+               PairedClients.remove(actor, device.id)
+
+      assert {:ok, ^removed} = PairedClients.remove(actor, device.id)
+      assert {:ok, %{standing: "removed"}} = PairedClients.revoke(actor, device.id)
+      assert standing(device.id) == "removed"
+
+      assert {:error, :not_found} = PairedClients.allow_again(other, device.id)
+      assert {:ok, %{standing: "revoked"}} = PairedClients.allow_again(actor, device.id)
+      assert standing(device.id) == "revoked"
+      assert {:error, :not_found} = PairedClients.allow_again(actor, device.id)
+      assert standing(session.id) == "active"
     end
 
     test "a member that lost its slot may still revoke", %{actor: actor, slot: slot} do

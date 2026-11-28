@@ -39,8 +39,11 @@ defmodule Sanctum.DeviceUnlock do
   (`Sanctum.DeviceCerts.issue/2`), under the issuance fence. A device
   whose key already stands here as an active client of the person is
   answered a new certificate for that client instead, so a hello asked
-  again pairs nothing twice. A capability that admits nobody writes
-  nothing. `admit/2` answers the paired client's id, its certificate and
+  again pairs nothing twice. A device whose person removed it here (their
+  newest client of that key is `removed`, `Sanctum.Pairing.remove/2`) is
+  refused `:removed_here` and paired by nothing, until they allow it
+  again (`Sanctum.Pairing.allow_again/2`). A capability that admits
+  nobody writes nothing. `admit/2` answers the paired client's id, its certificate and
   its standing; from then on the device connects with that certificate
   (`Sanctum.DeviceCerts`).
 
@@ -175,7 +178,8 @@ defmodule Sanctum.DeviceUnlock do
   `t:admitted/0`. Refusals: `Sanctum.SignIn.answer/3`'s, among them
   `:answer_refused`, `:identity_stale`, `:identity_gone`, `:stale_head`,
   `{:door, reason}`, `:setup_closed`, and
-  `:unavailable`.
+  `:unavailable`; and `:removed_here` for a device its person removed
+  from this CYFR.
   """
   @spec admit(String.t(), Prima.SignIn.DeviceAnswer.t() | map()) ::
           {:ok, admitted()} | {:error, term()}
@@ -205,7 +209,9 @@ defmodule Sanctum.DeviceUnlock do
   # the person's athanor under the client id the channel reserved, with
   # the holder and name its hello reported (`t:device/0`), and its first
   # certificate, in one transaction; or, where the key already stands as
-  # an active client of theirs there, a new certificate for that client.
+  # an active client of theirs there, a new certificate for that client;
+  # or, where their newest client of that key there is removed, nothing,
+  # refused `:removed_here`.
   @spec pair(map(), device(), Key.t(), String.t()) :: :ok | {:error, term()}
   def pair(
         %{id: user_id},
@@ -216,11 +222,14 @@ defmodule Sanctum.DeviceUnlock do
     with {:ok, athanor_id} <- athanor(user_id) do
       actor = Prima.Actor.in_athanor(athanor_id)
 
-      case standing_client(actor, user_id, kid) do
-        {:ok, %{} = client} ->
+      case newest_client(actor, user_id, kid) do
+        {:ok, %{standing: "removed"}} ->
+          {:error, :removed_here}
+
+        {:ok, %{standing: "active"} = client} ->
           issued(Sanctum.DeviceCerts.issue(client, head))
 
-        {:ok, nil} ->
+        {:ok, _none_standing} ->
           actor
           |> Arca.PairedClients.enroll(
             %{
@@ -255,6 +264,23 @@ defmodule Sanctum.DeviceUnlock do
       {:ok, %{id: athanor_id}} -> {:ok, athanor_id}
       {:error, :not_found} -> {:error, :not_standing}
       {:error, _unanswered} -> {:error, :unavailable}
+    end
+  end
+
+  # The person's newest device client in the athanor that is this key, at
+  # any standing, or nil for none. Only a hello makes a client of a key,
+  # and none while one of that key is active or the newest is removed, so
+  # an active client is the newest.
+  defp newest_client(actor, user_id, kid) do
+    case Arca.PairedClients.list(actor, user_id: user_id, standing: :all) do
+      {:ok, rows} ->
+        {:ok,
+         rows
+         |> Enum.filter(&(&1.source_kind == "device_cert" and &1.kid == kid))
+         |> List.last()}
+
+      {:error, _unanswered} ->
+        {:error, :unavailable}
     end
   end
 

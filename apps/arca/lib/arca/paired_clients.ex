@@ -31,15 +31,19 @@ defmodule Arca.PairedClients do
 
   ## Standing
 
-  `active`, `suspended` or `revoked`, and nothing leaves `revoked`.
-  `revoke/2` ends one row; a standing transition revokes a person's rows,
-  and every row of an athanor it archives, in its own transaction
-  (`Arca.SecurityTransitions`). Each revocation raises `updated_at`, which
-  is when the row was retired, and revokes the client's device
-  certificates (`Arca.DeviceCertificates`), voids the pending
-  confirmations it confirmed (`Arca.PendingConfirmations`) and deletes the
-  sessions its unlock created (`Arca.SessionStorage`) in the same
-  transaction.
+  `active`, `suspended`, `revoked` or `removed`, and nothing leaves
+  `revoked`. `revoke/2` ends one row; `remove/2` ends a device's row as
+  `removed`, which keeps the device out here: its person's next hello by
+  that key is refused until `allow_again/2` makes the row `revoked`. A
+  standing transition revokes a person's rows, and every row of an
+  athanor it archives, in its own transaction
+  (`Arca.SecurityTransitions`), and leaves every `removed` row as it is,
+  as the walk of a retired account key does (`revoke_bound!/2`). Each
+  revocation and removal raises `updated_at`, which is when the row was
+  retired, and revokes the client's device certificates
+  (`Arca.DeviceCertificates`), voids the pending confirmations it
+  confirmed (`Arca.PendingConfirmations`) and deletes the sessions its
+  unlock created (`Arca.SessionStorage`) in the same transaction.
 
   A declared restore suspends every active row (`Arca.SecurityTransitions`):
   a suspended client stands for nothing, is listed only when its standing
@@ -52,8 +56,9 @@ defmodule Arca.PairedClients do
   Recording a client widens what may be confirmed, so `record/2` runs in
   a locking transaction that checks the member still owns its slot
   (`Arca.ControlPlane.verify_held/1`) before it writes: a stale owner
-  writes nothing. A revocation only narrows, and is never refused for
-  ownership.
+  writes nothing. A revocation or a removal only narrows, and is never
+  refused for ownership; allowing a removed row again records no client,
+  since the device's next hello enrolls its new row (`enroll/3`).
 
   Every function takes the actor first. An athanor actor reads and writes
   its own athanor's rows; `list/2` also takes the platform system actor,
@@ -87,19 +92,23 @@ defmodule Arca.PairedClients do
         }
 
   @typedoc """
-  A row `revoke/2` answers: the row, and the token hashes of the sessions
-  its revocation ended.
+  A row `revoke/2` and `remove/2` answer: the row, and the token hashes of
+  the sessions its retirement ended.
   """
   @type revoked :: %{
           required(:revoked_session_hashes) => [binary()],
           optional(atom()) => term()
         }
 
+  @typedoc "A standing `list/2` narrows by."
+  @type standing :: :active | :suspended | :revoked | :removed
+
   @typedoc """
   What `list/2` narrows by: `user_id` (one person's clients) and
-  `standing` (`:active`, the default, `:suspended`, `:revoked` or `:all`).
+  `standing` (a `t:standing/0`, `:active` the default, a list of them, or
+  `:all`).
   """
-  @type filters :: [user_id: String.t(), standing: :active | :suspended | :revoked | :all]
+  @type filters :: [user_id: String.t(), standing: standing() | [standing()] | :all]
 
   @doc """
   The paired clients of the actor's athanor, oldest first, narrowed by
@@ -264,49 +273,84 @@ defmodule Arca.PairedClients do
   certificates, the confirmations it confirmed and the sessions its unlock
   or its sign-ins created, whose token hashes the row answers as
   `revoked_session_hashes` for the caller to drop from every memo;
-  revoking a revoked row answers it as it is, with none.
+  revoking a revoked or removed row answers it as it is, with none.
   """
   @spec revoke(Prima.Actor.t(), String.t()) ::
           {:ok, revoked()}
           | {:error, :not_found | :no_athanor | :database_error}
   def revoke(%Prima.Actor{athanor_id: athanor_id} = actor, id)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(id) do
-    Arca.Repo.Errors.with_db_rescue("Arca.PairedClients.revoke", fn ->
-      Arca.Repo.locking_transaction(fn ->
-        PairedClient
-        |> QueryHelpers.where_tenant(actor)
-        |> where([p], p.id == ^id)
-        |> QueryHelpers.for_update()
-        |> Arca.Repo.one()
-        |> case do
-          nil ->
-            {:error, :not_found}
+    locked(actor, id, "Arca.PairedClients.revoke", fn
+      %PairedClient{standing: standing} = row when standing in ["revoked", "removed"] ->
+        {:ok, Map.put(row, :revoked_session_hashes, [])}
 
-          %PairedClient{standing: "revoked"} = row ->
-            {:ok, Map.put(row, :revoked_session_hashes, [])}
-
-          row ->
-            retire(row)
-        end
-      end)
-      |> case do
-        {:ok, {:ok, row}} -> {:ok, row}
-        {:ok, {:error, reason}} -> {:error, reason}
-        {:error, reason} -> {:error, reason}
-      end
+      row ->
+        retire(row, "revoked")
     end)
-    |> Arca.Data.project()
   end
 
   def revoke(%Prima.Actor{}, _id), do: {:error, :no_athanor}
 
+  @doc """
+  Remove the device row `id` from the actor's athanor: the row becomes
+  `removed`, with what `revoke/2` retires, and the hashes it answers the
+  same way; removing a revoked or removed row answers it as it is, with
+  none. Only a device's row (`device_cert`) is removed; any other is
+  `:not_found`.
+  """
+  @spec remove(Prima.Actor.t(), String.t()) ::
+          {:ok, revoked()}
+          | {:error, :not_found | :no_athanor | :database_error}
+  def remove(%Prima.Actor{athanor_id: athanor_id} = actor, id)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(id) do
+    locked(actor, id, "Arca.PairedClients.remove", fn
+      %PairedClient{source_kind: "device_cert", standing: standing} = row
+      when standing in ["revoked", "removed"] ->
+        {:ok, Map.put(row, :revoked_session_hashes, [])}
+
+      %PairedClient{source_kind: "device_cert"} = row ->
+        retire(row, "removed")
+
+      _not_a_device ->
+        {:error, :not_found}
+    end)
+  end
+
+  def remove(%Prima.Actor{}, _id), do: {:error, :no_athanor}
+
+  @doc """
+  Allow the removed row `id` in the actor's athanor again: it becomes
+  `revoked`, so its device's next hello pairs it anew. Its retirement
+  took everything that stood on it, and this restores none of it. A row
+  that is not `removed` is `:not_found`.
+  """
+  @spec allow_again(Prima.Actor.t(), String.t()) ::
+          {:ok, row()} | {:error, :not_found | :no_athanor | :database_error}
+  def allow_again(%Prima.Actor{athanor_id: athanor_id} = actor, id)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(id) do
+    locked(actor, id, "Arca.PairedClients.allow_again", fn
+      %PairedClient{standing: "removed"} = row ->
+        row
+        |> Ecto.Changeset.change(standing: "revoked", updated_at: Arca.ServerMetaStorage.now!())
+        |> Arca.Repo.update()
+
+      _not_removed ->
+        {:error, :not_found}
+    end)
+  end
+
+  def allow_again(%Prima.Actor{}, _id), do: {:error, :no_athanor}
+
   @doc false
   @spec revoke_all(Ecto.Queryable.t()) :: [String.t()]
-  # Revoke every active row `query` names, in the caller's transaction or
-  # its own statement, answering the ids it revoked, sorted. The one
-  # revocation statement: `Arca.SecurityTransitions` runs it inside a
-  # standing transition's transaction, and retires the certificates and
-  # confirmations of the ids it answers there.
+  # Revoke every row `query` names that is neither revoked nor removed, in
+  # the caller's transaction or its own statement, answering the ids it
+  # revoked, sorted. The one revocation statement:
+  # `Arca.SecurityTransitions` runs it inside a standing transition's
+  # transaction, and retires the certificates and confirmations of the
+  # ids it answers there. A removed row keeps its standing through every
+  # one, so a device its person removed stays out after their denial, an
+  # archive or a retired key.
   # arca:unscoped-ok the caller's query carries its own scope: an athanor or a person.
   # arca:db-raise-ok a transaction step: its callers rescue around it, so a raise rolls a transition back.
   def revoke_all(query) do
@@ -314,7 +358,7 @@ defmodule Arca.PairedClients do
 
     {_count, ids} =
       Arca.Repo.update_all(
-        from(p in query, where: p.standing != "revoked", select: p.id),
+        from(p in query, where: p.standing not in ["revoked", "removed"], select: p.id),
         set: [standing: "revoked", updated_at: now]
       )
 
@@ -531,21 +575,53 @@ defmodule Arca.PairedClients do
     do: where(query, [p], p.user_id == ^user_id)
 
   defp by_standing(query, :all), do: query
-  defp by_standing(query, :active), do: where(query, [p], p.standing == "active")
-  defp by_standing(query, :suspended), do: where(query, [p], p.standing == "suspended")
-  defp by_standing(query, :revoked), do: where(query, [p], p.standing == "revoked")
 
-  # arca:unscoped-ok the row was read and locked under the actor's athanor (`revoke/2`).
-  defp retire(%PairedClient{} = row) do
-    with {:ok, revoked} <-
+  defp by_standing(query, standings) when is_list(standings) do
+    names = Enum.map(standings, &standing_name/1)
+    where(query, [p], p.standing in ^names)
+  end
+
+  defp by_standing(query, standing), do: by_standing(query, [standing])
+
+  defp standing_name(standing) when standing in [:active, :suspended, :revoked, :removed],
+    do: Atom.to_string(standing)
+
+  # The row `id` of the actor's athanor, read and locked in a locking
+  # transaction, handed to `change`, which answers `{:ok, row}` or
+  # `{:error, reason}`; a row the athanor does not hold is `:not_found`.
+  defp locked(actor, id, label, change) do
+    Arca.Repo.Errors.with_db_rescue(label, fn ->
+      Arca.Repo.locking_transaction(fn ->
+        PairedClient
+        |> QueryHelpers.where_tenant(actor)
+        |> where([p], p.id == ^id)
+        |> QueryHelpers.for_update()
+        |> Arca.Repo.one()
+        |> case do
+          nil -> {:error, :not_found}
+          row -> change.(row)
+        end
+      end)
+      |> case do
+        {:ok, {:ok, row}} -> {:ok, row}
+        {:ok, {:error, reason}} -> {:error, reason}
+        {:error, reason} -> {:error, reason}
+      end
+    end)
+    |> Arca.Data.project()
+  end
+
+  # arca:unscoped-ok the row was read and locked under the actor's athanor (`locked/4`).
+  defp retire(%PairedClient{} = row, standing) do
+    with {:ok, retired} <-
            row
            |> Ecto.Changeset.change(
-             standing: "revoked",
+             standing: standing,
              updated_at: Arca.ServerMetaStorage.now!()
            )
            |> Arca.Repo.update() do
-      dependents = retire_dependents!([revoked.id])
-      {:ok, Map.put(revoked, :revoked_session_hashes, dependents.session_hashes)}
+      dependents = retire_dependents!([retired.id])
+      {:ok, Map.put(retired, :revoked_session_hashes, dependents.session_hashes)}
     end
   end
 end

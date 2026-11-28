@@ -32,6 +32,7 @@ defmodule Sanctum.PairingTest do
     :vault_unlock,
     :home_transfer,
     :pairing_revocation,
+    :pairing_readmission,
     :restore_reenable,
     :program_definition,
     :question_always_any,
@@ -130,13 +131,53 @@ defmodule Sanctum.PairingTest do
     }
   end
 
-  defp revoke!(session_ctx, client_id) do
+  defp remove!(session_ctx, client_id) do
     session_ctx
     |> Sanctum.TestContext.confirmed(
       :pairing_revocation,
       Sanctum.TestContext.pairing_revocation(session_ctx, client_id)
     )
-    |> Pairing.revoke(client_id)
+    |> Pairing.remove(client_id)
+  end
+
+  # A change the person asks under their session, confirmed by `by`,
+  # another device of their account here, as a device confirms over its
+  # channel (`confirmation.request`, then `confirmation.confirm` with its
+  # answer); then made again naming the record. The person keeps the
+  # account their devices are keys of.
+  defp device_confirmed!(session_ctx, by, change) do
+    {:error, {:confirmation_required, %{id: id}}} = change.(session_ctx)
+    ref = Prima.Confirmation.ref(id)
+    device_ctx = Devices.connected!(by)
+
+    {:ok, %{request: encoded}} =
+      Sanctum.Gate.call_external("confirmation", device_ctx, %{
+        "action" => "request",
+        "ref" => ref
+      })
+
+    {:ok, request} = Prima.SignIn.decode(encoded)
+    answer = request |> Devices.answer(by.key) |> Prima.SignIn.DeviceAnswer.encode()
+
+    {:ok, %{state: "confirmed"}} =
+      Sanctum.Gate.call_external("confirmation", device_ctx, %{
+        "action" => "confirm",
+        "ref" => ref,
+        "answer" => answer
+      })
+
+    change.(%{session_ctx | confirmation_id: id})
+  end
+
+  # Whole rows of the person's clients, oldest first: which client, what
+  # it stands on and its standing.
+  defp standings(user_id) do
+    from(c in Arca.Schemas.PairedClient,
+      where: c.user_id == ^user_id,
+      order_by: [asc: c.inserted_at, asc: c.id],
+      select: {c.id, c.source_kind, c.standing}
+    )
+    |> Arca.Repo.all()
   end
 
   describe "the action table" do
@@ -181,7 +222,7 @@ defmodule Sanctum.PairingTest do
       ctx = Devices.connected!(device)
       assert Pairing.can_confirm?(ctx)
 
-      {:ok, _row} = revoke!(session_ctx, device.client_id)
+      {:ok, _row} = remove!(session_ctx, device.client_id)
       refute Pairing.can_confirm?(ctx)
     end
   end
@@ -232,10 +273,10 @@ defmodule Sanctum.PairingTest do
       end
     end
 
-    test "a revoked client renews nothing", %{device: device, session_ctx: session_ctx} do
+    test "a removed client renews nothing", %{device: device, session_ctx: session_ctx} do
       challenge = challenge(device, :renew)
       ctx = renewing!(device, challenge)
-      {:ok, _} = revoke!(session_ctx, device.client_id)
+      {:ok, _} = remove!(session_ctx, device.client_id)
 
       assert Pairing.renew(ctx, renewal(device, challenge)) == {:error, :revoked}
     end
@@ -254,12 +295,12 @@ defmodule Sanctum.PairingTest do
     end
   end
 
-  describe "revoke/2" do
-    test "ends the person's own client with its certificates", %{
+  describe "remove/2" do
+    test "ends the person's own device with its certificates, as removed", %{
       device: device,
       session_ctx: session_ctx
     } do
-      assert {:ok, %{standing: "revoked"}} = revoke!(session_ctx, device.client_id)
+      assert {:ok, %{standing: "removed"}} = remove!(session_ctx, device.client_id)
 
       assert Arca.Repo.all(
                from(c in DeviceCertificate,
@@ -274,7 +315,7 @@ defmodule Sanctum.PairingTest do
       session_ctx: session_ctx
     } do
       assert {:error, {:confirmation_required, %{id: id}}} =
-               Pairing.revoke(session_ctx, device.client_id)
+               Pairing.remove(session_ctx, device.client_id)
 
       {:ok, record} =
         Arca.PendingConfirmations.get(Context.actor(session_ctx), Prima.Confirmation.ref(id))
@@ -285,12 +326,12 @@ defmodule Sanctum.PairingTest do
       assert Jason.decode!(record.preview) == %{
                "home" => home,
                "athanor" => athanor.name,
-               "operation" => "pairing.revoke",
+               "operation" => "pairing.remove",
                "resource" => "Test device"
              }
     end
 
-    # A name the preview cannot hold names nothing, and the revocation is
+    # A name the preview cannot hold names nothing, and the removal is
     # asked all the same.
     test "names nothing for a client whose name the preview cannot hold", %{
       device: device,
@@ -303,7 +344,7 @@ defmodule Sanctum.PairingTest do
         )
 
       assert {:error, {:confirmation_required, %{id: id}}} =
-               Pairing.revoke(session_ctx, device.client_id)
+               Pairing.remove(session_ctx, device.client_id)
 
       {:ok, record} =
         Arca.PendingConfirmations.get(Context.actor(session_ctx), Prima.Confirmation.ref(id))
@@ -314,13 +355,130 @@ defmodule Sanctum.PairingTest do
       assert Jason.decode!(record.preview) == %{
                "home" => home,
                "athanor" => athanor.name,
-               "operation" => "pairing.revoke"
+               "operation" => "pairing.remove"
              }
     end
 
     test "cannot reach a client that is not the person's", %{session_ctx: session_ctx} do
       assert {:error, {:not_found, "paired client", "pcl_nobody"}} =
-               Pairing.revoke(session_ctx, "pcl_nobody")
+               Pairing.remove(session_ctx, "pcl_nobody")
+    end
+
+    # A passkey is shared by every browser that syncs it: removing it here
+    # signs it out, and signing in with it again brings it back.
+    test "signs a passkey out, revoked, never removed", %{
+      account: account,
+      device: device,
+      session_ctx: session_ctx
+    } do
+      {pub, _priv} = :crypto.generate_key(:eddsa, :ed25519)
+
+      {:ok, passkey} =
+        Arca.PairedClients.record_passkey(Context.actor(session_ctx), %{
+          user_id: device.user.id,
+          kid: Prima.Identity.Key.kid(pub),
+          head: DirectoryServer.head(account)
+        })
+
+      assert {:ok, %{standing: "revoked"}} = remove!(session_ctx, passkey.id)
+
+      assert standings(device.user.id) == [
+               {device.client_id, "device_cert", "active"},
+               {passkey.id, "passkey", "revoked"}
+             ]
+    end
+  end
+
+  describe "a device removed here" do
+    # The person's outcome: a device they removed does not come back at its
+    # next unlock, its hello's answer refused here until they allow it
+    # again, and then its next hello pairs it as a new client.
+    # Each change is confirmed by another device of the same account, so
+    # the person stays the one the device's own hello names.
+    test "is refused removed_here at its next hello, and pairs anew once allowed again", %{
+      account: account,
+      dir: dir,
+      device: device,
+      session_ctx: session_ctx
+    } do
+      account = DirectoryServer.add_device!(dir.dir, account)
+      other = Devices.admitted!(account, List.last(account.devices))
+
+      assert {:ok, %{standing: "removed"}} =
+               device_confirmed!(session_ctx, other, &Pairing.remove(&1, device.client_id))
+
+      {client_id, request} = Devices.hello!(account, device.key)
+
+      assert {:error, :removed_here} =
+               Sanctum.DeviceUnlock.admit(client_id, Devices.answer(request, device.key))
+
+      assert standings(device.user.id) == [
+               {device.client_id, "device_cert", "removed"},
+               {other.client_id, "device_cert", "active"}
+             ]
+
+      assert {:ok, %{id: id, standing: "revoked"}} =
+               device_confirmed!(session_ctx, other, &Pairing.allow_again(&1, device.client_id))
+
+      assert id == device.client_id
+
+      again = Devices.admitted!(account, device.key)
+      assert again.client_id not in [device.client_id, other.client_id]
+
+      assert standings(device.user.id) == [
+               {device.client_id, "device_cert", "revoked"},
+               {other.client_id, "device_cert", "active"},
+               {again.client_id, "device_cert", "active"}
+             ]
+    end
+
+    test "is listed as removed beside the active ones", %{
+      account: account,
+      dir: dir,
+      device: device,
+      session_ctx: session_ctx
+    } do
+      account = DirectoryServer.add_device!(dir.dir, account)
+      other = Devices.admitted!(account, List.last(account.devices))
+      {:ok, _removed} = remove!(session_ctx, device.client_id)
+
+      assert {:ok, listed} = Pairing.list(session_ctx)
+
+      assert Enum.map(listed, &{&1.client_id, &1.standing, is_nil(&1.certificate_expires_at)}) ==
+               [{device.client_id, "removed", true}, {other.client_id, "active", false}]
+    end
+
+    test "is allowed again only under a fresh confirmation, and only while removed", %{
+      device: device,
+      session_ctx: session_ctx
+    } do
+      assert {:error, {:not_found, "removed device", id}} =
+               Pairing.allow_again(session_ctx, device.client_id)
+
+      assert id == device.client_id
+
+      {:ok, _removed} = remove!(session_ctx, device.client_id)
+
+      assert {:error, {:confirmation_required, %{id: confirmation}}} =
+               Pairing.allow_again(session_ctx, device.client_id)
+
+      {:ok, record} =
+        Arca.PendingConfirmations.get(
+          Context.actor(session_ctx),
+          Prima.Confirmation.ref(confirmation)
+        )
+
+      {:ok, home} = Prima.Identity.Encoding.canonical_home(Sanctum.origin())
+      {:ok, athanor} = Sanctum.Tenancy.Athanors.get(session_ctx.athanor_id)
+
+      assert Jason.decode!(record.preview) == %{
+               "home" => home,
+               "athanor" => athanor.name,
+               "operation" => "pairing.allow_again",
+               "resource" => "Test device"
+             }
+
+      assert standings(device.user.id) == [{device.client_id, "device_cert", "removed"}]
     end
   end
 

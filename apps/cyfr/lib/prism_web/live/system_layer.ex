@@ -126,7 +126,8 @@ defmodule PrismWeb.SystemLayer do
       share is made, and shows a refusal's sentence and stays open
       otherwise;
     * pairing — `pairing.list` and `pairing.waiting` when it opens, and
-      `pairing.revoke`;
+      `pairing.remove` and `pairing.allow_again`, each a sensitive change
+      the layer confirms like any other;
     * a frame's request — the call the prompt names (`tool` and `args`),
       dispatched as the layer's own change once the person approves it,
       with the preview CYFR built of exactly that call drawn first and
@@ -1712,11 +1713,13 @@ defmodule PrismWeb.SystemLayer do
     end
   end
 
-  def handle_event("pairing_revoke", %{"id" => id, "client" => client_id}, socket)
-      when is_binary(client_id) do
+  def handle_event(event, %{"id" => id, "client" => client_id}, socket)
+      when event in ["pairing_remove", "pairing_allow_again"] and is_binary(client_id) do
+    change = if event == "pairing_remove", do: :pairing_remove, else: :pairing_allow_again
+
     CyfrWeb.ContextGuard.guard(socket, fn socket ->
       case open(socket, id, [:pairing]) do
-        {:ok, prompt} -> {:noreply, pairing_revoke(socket, prompt, client_id)}
+        {:ok, prompt} -> {:noreply, pairing_change(socket, prompt, {change, client_id})}
         :none -> {:noreply, socket}
       end
     end)
@@ -2298,8 +2301,7 @@ defmodule PrismWeb.SystemLayer do
       %{prompt_id: prompt_id, repeat: repeat} ->
         case socket.assigns.current do
           %{id: ^prompt_id, kind: :pairing} = prompt ->
-            {:pairing_revoke, client_id} = repeat
-            pairing_revoke(socket, prompt, client_id)
+            pairing_change(socket, prompt, repeat)
 
           %{id: ^prompt_id, kind: :share} = prompt ->
             {:share_create, args} = repeat
@@ -2598,14 +2600,17 @@ defmodule PrismWeb.SystemLayer do
     end
   end
 
-  defp pairing_revoke(socket, prompt, client_id) do
-    case layer_call(socket, prompt, {:pairing_revoke, client_id}, "pairing/revoke", %{
-           "client_id" => client_id
-         }) do
+  # A device removed from this CYFR or allowed again, each confirmed
+  # afresh, then the list read again.
+  defp pairing_change(socket, prompt, {change, client_id} = repeat)
+       when change in [:pairing_remove, :pairing_allow_again] do
+    tool = if change == :pairing_remove, do: "pairing/remove", else: "pairing/allow_again"
+
+    case layer_call(socket, prompt, repeat, tool, %{"client_id" => client_id}) do
       {:asked, socket} ->
         socket
 
-      {:done, {:ok, _revoked}, socket} ->
+      {:done, {:ok, _changed}, socket} ->
         socket
         |> assign(:pairing, %{pairing_of(socket, prompt) | clients: clients(socket)})
         |> assign(:error, nil)
@@ -3623,8 +3628,9 @@ defmodule PrismWeb.SystemLayer do
 
   defp description(%{kind: :pairing}),
     do:
-      "Sign a device out of this CYFR, which needs a fresh confirmation. Its key stays on " <>
-        "your account: removing it there ends the device everywhere."
+      "Remove a device from this CYFR, or allow a removed one again, each with a fresh " <>
+        "confirmation. Its key stays on your account: removing it there ends the device " <>
+        "everywhere."
 
   defp description(%{kind: :request}),
     do:

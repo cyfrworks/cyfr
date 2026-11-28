@@ -318,7 +318,7 @@ defmodule Emissary.Web.DeviceChannelTest do
       state = proven(device)
 
       {:ok, _row} =
-        Sanctum.TestContext.confirming(session_ctx, &Sanctum.Pairing.revoke(&1, device.client_id))
+        Sanctum.TestContext.confirming(session_ctx, &Sanctum.Pairing.remove(&1, device.client_id))
 
       {answer, decision} =
         assert_refused_answering(
@@ -352,7 +352,7 @@ defmodule Emissary.Web.DeviceChannelTest do
       {token, _timer} = state.keepalive
 
       {:ok, _row} =
-        Sanctum.TestContext.confirming(session_ctx, &Sanctum.Pairing.revoke(&1, device.client_id))
+        Sanctum.TestContext.confirming(session_ctx, &Sanctum.Pairing.remove(&1, device.client_id))
 
       assert_refused(
         DeviceChannel.handle_info({DeviceChannel, :keepalive, token}, state),
@@ -470,7 +470,7 @@ defmodule Emissary.Web.DeviceChannelTest do
       {:ok, _row} =
         Sanctum.TestContext.confirming(
           session_ctx,
-          &Sanctum.Pairing.revoke(&1, revoked.client_id)
+          &Sanctum.Pairing.remove(&1, revoked.client_id)
         )
 
       {1, _} =
@@ -495,7 +495,7 @@ defmodule Emissary.Web.DeviceChannelTest do
       device = pair!(session_ctx)
 
       {:ok, _row} =
-        Sanctum.TestContext.confirming(session_ctx, &Sanctum.Pairing.revoke(&1, device.client_id))
+        Sanctum.TestContext.confirming(session_ctx, &Sanctum.Pairing.remove(&1, device.client_id))
 
       {state, challenge} = renewing(device)
 
@@ -1247,7 +1247,7 @@ defmodule Emissary.Web.DeviceChannelTest do
       {token, _timer} = state.keepalive
 
       {:ok, _row} =
-        Sanctum.TestContext.confirming(session_ctx, &Sanctum.Pairing.revoke(&1, device.client_id))
+        Sanctum.TestContext.confirming(session_ctx, &Sanctum.Pairing.remove(&1, device.client_id))
 
       assert {:stop, :normal, {4403, "forbidden"}, frames, state} =
                DeviceChannel.handle_info({DeviceChannel, :keepalive, token}, state)
@@ -1324,7 +1324,7 @@ defmodule Emissary.Web.DeviceChannelTest do
       assert {:ok, _row} =
                Sanctum.TestContext.confirming(
                  session_ctx,
-                 &Sanctum.Pairing.revoke(&1, device.client_id)
+                 &Sanctum.Pairing.remove(&1, device.client_id)
                )
 
       frames = frames_until_close(socket, deadline, [])
@@ -1360,7 +1360,7 @@ defmodule Emissary.Web.DeviceChannelTest do
 
       deadline = two_second_deadline()
       {grant_id, _grant, state} = open_stream!(state, "s1")
-      assert_received {:revoked_after_admission, {:ok, %{standing: "revoked"}}}
+      assert_received {:revoked_after_admission, {:ok, %{standing: "removed"}}}
 
       assert {:error, :revoked} = Sanctum.DeviceCerts.verify_request(state.cert, state.client)
 
@@ -1420,7 +1420,7 @@ defmodule Emissary.Web.DeviceChannelTest do
           Jason.encode!(intent_message("s1", "streams.open", %{"stream" => "prompt.changes"}))
         )
 
-      assert_receive {:revoked_after_socket_admission, {:ok, %{standing: "revoked"}},
+      assert_receive {:revoked_after_socket_admission, {:ok, %{standing: "removed"}},
                       committed_at},
                      2_000
 
@@ -1436,7 +1436,7 @@ defmodule Emissary.Web.DeviceChannelTest do
                  standing: :all
                )
 
-      assert Enum.any?(clients, &(&1.id == device.client_id and &1.standing == "revoked"))
+      assert Enum.any?(clients, &(&1.id == device.client_id and &1.standing == "removed"))
       frames = frames_until_close(socket, deadline, [])
       assert List.last(frames) == {8, <<4403::16, "forbidden">>}
     end
@@ -1449,7 +1449,7 @@ defmodule Emissary.Web.DeviceChannelTest do
       user_id = user.id
 
       {:ok, _row} =
-        Sanctum.TestContext.confirming(session_ctx, &Sanctum.Pairing.revoke(&1, device.client_id))
+        Sanctum.TestContext.confirming(session_ctx, &Sanctum.Pairing.remove(&1, device.client_id))
 
       # The ping is 30 s away; a standing change reaches an open stream
       # within 2 s (the caller bound, `Sanctum.Caller.fresh?/1`). The
@@ -1681,6 +1681,47 @@ defmodule Emissary.Web.DeviceChannelTest do
       assert Arca.Repo.all(Arca.Schemas.PairedClient) == []
     end
 
+    # A device its person removed from this CYFR does not come back at its
+    # next unlock: its answer is told it was removed here, as the
+    # protocol's vector says it, and the channel closes 4403 with nothing
+    # paired.
+    test "a device its person removed here is told so at its next hello and closes 4403",
+         %{account: account, key: key} do
+      %{device: device, session_ctx: session_ctx} = enrolled(%{account: account, key: key})
+
+      # Confirmed on the device itself, over its channel, so the person
+      # keeps the account its key is on.
+      {:error, {:confirmation_required, %{id: id}}} =
+        Sanctum.Pairing.remove(session_ctx, device.client_id)
+
+      _state = confirmed!(proven(device), Prima.Confirmation.ref(id), device)
+
+      {:ok, %{standing: "removed"}} =
+        Sanctum.Pairing.remove(%{session_ctx | confirmation_id: id}, device.client_id)
+
+      {state, request} = asked(hello_message(account, key, nil))
+      result = send_frame(state, answer_message(request, key))
+
+      assert_told(result, 4403, "forbidden", Prima.Refusal.message(:removed_here))
+
+      {:stop, :normal, _close, [{:text, json}], _state} = result
+
+      vector =
+        Enum.find(
+          vectors()["messages"],
+          &(&1["message"]["type"] == "refused" and &1["message"]["error"]["class"] == "forbidden")
+        )
+
+      assert Jason.decode!(json) == vector["message"]
+
+      assert Arca.Repo.all(
+               from(c in Arca.Schemas.PairedClient,
+                 where: c.user_id == ^session_ctx.user_id,
+                 select: {c.id, c.standing}
+               )
+             ) == [{device.client_id, "removed"}]
+    end
+
     test "a person the door does not admit closes 4403",
          %{account: account, key: key, dir: dir} do
       {asked, request} = asked(hello_message(account, key, {:setup, @token}))
@@ -1842,7 +1883,7 @@ defmodule Emissary.Web.DeviceChannelTest do
         answer!(state, intent_message("p1", "confirmation.pending", %{}))
 
       assert entry["ref"] == away_ref
-      assert entry["operation"] == "pairing.revoke"
+      assert entry["operation"] == "pairing.remove"
       refute inspect(entry) =~ ordinary
 
       # The ordinary record is not read by its ref either.
@@ -1857,7 +1898,7 @@ defmodule Emissary.Web.DeviceChannelTest do
       # The revocation is proven on the device, and spent.
       _state = confirmed!(state, away_ref, device)
 
-      assert {:ok, %{standing: "revoked"}} =
+      assert {:ok, %{standing: "removed"}} =
                revoke(%{session_ctx | confirmation_id: away_id}, away.client_id)
     end
   end
@@ -1902,7 +1943,7 @@ defmodule Emissary.Web.DeviceChannelTest do
   defp revoke(ctx, client_id),
     do:
       Sanctum.Gate.call_external("pairing", ctx, %{
-        "action" => "revoke",
+        "action" => "remove",
         "client_id" => client_id
       })
 
@@ -2663,7 +2704,7 @@ defmodule Emissary.Web.DeviceChannelTest do
 
     case Process.delete(key) do
       {ctx, client_id} ->
-        answer = Sanctum.TestContext.confirming(ctx, &Sanctum.Pairing.revoke(&1, client_id))
+        answer = Sanctum.TestContext.confirming(ctx, &Sanctum.Pairing.remove(&1, client_id))
         send(self(), {:revoked_after_admission, answer})
 
       nil ->
@@ -2685,7 +2726,7 @@ defmodule Emissary.Web.DeviceChannelTest do
       ) do
     unless Process.get(marker) do
       Process.put(marker, true)
-      answer = Sanctum.TestContext.confirming(ctx, &Sanctum.Pairing.revoke(&1, client_id))
+      answer = Sanctum.TestContext.confirming(ctx, &Sanctum.Pairing.remove(&1, client_id))
       send(owner, {:revoked_after_socket_admission, answer, System.monotonic_time(:millisecond)})
     end
   end
