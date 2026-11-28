@@ -254,3 +254,44 @@ func TestARetriedClearIsForItsOwnBootsRoute(t *testing.T) {
 		t.Fatal("a clear retried for a boot that did not start let the running VM's hold on its route go")
 	}
 }
+
+// A boot whose route the guard refuses, after an earlier boot's clear was
+// refused, owes no clear of its own: the earlier boot's is owed under the
+// id it was admitted under, and no sweep asks a clear under the later id
+// (5788's note).
+func TestAnOwedClearKeepsTheIDItWasOwedUnder(t *testing.T) {
+	k := newVMKeeper(t)
+	k.disk(t, "ath_a", "vlt_a1", "vlt_a2")
+	k.place(t, "p-s1", "ath_a")
+	k.place(t, "p-s2", "ath_a")
+	m := k.machineOfAthanor("ath_a")
+	k.guest.mu.Lock()
+	k.guest.refuseBoot = errors.New("the VMM's space did not start")
+	k.guest.mu.Unlock()
+	k.guard.mu.Lock()
+	k.guard.refuseClears = 1
+	k.guard.mu.Unlock()
+	k.s.handleSpawn(k.c, k.spawnReq("s1", "p-s1", "vlt_a1", nil))
+	if got := k.next(t); got["type"] != "error" {
+		t.Fatalf("a start whose VM did not start answered %v", got)
+	}
+	k.s.mu.Lock()
+	first := m.id
+	k.s.mu.Unlock()
+	k.guard.mu.Lock()
+	k.guard.refuse = true
+	k.guard.mu.Unlock()
+	k.s.handleSpawn(k.c, k.spawnReq("s2", "p-s2", "vlt_a2", nil))
+	if got := k.next(t); got["type"] != "error" || got["code"] != protocol.CodeGuardUnavailable {
+		t.Fatalf("a start whose route the guard refused answered %v", got)
+	}
+	k.s.mu.Lock()
+	var owed []string
+	for id := range k.s.uncleared {
+		owed = append(owed, id)
+	}
+	k.s.mu.Unlock()
+	if len(owed) != 1 || owed[0] != first {
+		t.Fatalf("the clears owed are %v, want the first boot's alone, %s", owed, first)
+	}
+}

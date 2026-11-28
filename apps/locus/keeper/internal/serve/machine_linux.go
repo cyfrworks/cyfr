@@ -205,11 +205,14 @@ type machine struct {
 	vm      guestVM
 	bootID  string
 	booting bool
-	// route is its route at the guard, held until withdrawn; reach and
-	// addrs are what it allows now, the union of its live sessions'.
-	route *guard.Route
-	reach string
-	addrs []netip.Addr
+	// route is its route at the guard, held until withdrawn, routeID the id
+	// it was admitted under, which its withdrawal names, a later boot's id
+	// aside; reach and addrs are what it allows now, the union of its live
+	// sessions'.
+	route   *guard.Route
+	routeID string
+	reach   string
+	addrs   []netip.Addr
 	// reachMu orders the changes of its route.
 	reachMu sync.Mutex
 	// narrowing is since when a narrowing of its route has been refused,
@@ -361,7 +364,7 @@ func (s *server) bootMachine(m *machine, at keptAt, r *role, what string) string
 			s.mu.Lock()
 			defer s.mu.Unlock()
 			route := mr.Route
-			m.route = &route
+			m.route, m.routeID = &route, m.id
 			if s.lostRoutes[mr.Conn] || !s.guard.Live(mr.Route) {
 				routeCode = protocol.CodeGuardUnavailable
 				return vm.Network{}, errors.New("the guard's connection ended as the VM's route was admitted")
@@ -371,7 +374,7 @@ func (s *server) bootMachine(m *machine, at keptAt, r *role, what string) string
 	if err != nil {
 		// A start that failed after its route was made holds it here: it
 		// is withdrawn now, as at the VM's end.
-		s.withdrawRoute(m.id, &m.route)
+		s.withdrawRoute(m.routeID, &m.route)
 		s.log.Error("the VM of a person's disk of uid %d did not start: %v", at.uid, err)
 		if routeCode != "" {
 			return routeCode
@@ -517,7 +520,7 @@ func (s *server) machineEnded(m *machine) {
 	for _, sp := range sessions {
 		sp.gone(memory)
 	}
-	s.withdrawRoute(m.id, &m.route)
+	s.withdrawRoute(m.routeID, &m.route)
 	s.finishMachine(m)
 }
 
