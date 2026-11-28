@@ -82,7 +82,9 @@ defmodule Prima.LocusPool do
   rev after the one asked for, `next` naming the last when more follow,
   beside the machine's numbers: the keeper's `boot`, its `budget`, `work`
   (W), `floor` (F, where kept) and `used`, every charge outside the floor,
-  the sum a refusal's `free` is taken from. The keeper's boot id is minted
+  the sum a refusal's `free` is taken from; and its `wall` (`t:wall/0`),
+  whether the keeper gives each person a VM of their own, as its own start
+  decided and nothing else may say. The keeper's boot id is minted
   at its start, random: a restart of the keeper starts every counter and
   rev again under another boot; a restart of a role process keeps them.
 
@@ -146,6 +148,8 @@ defmodule Prima.LocusPool do
   @services [:runtime, :builds, :backends]
   @max_request_bytes 1_024
   @boot ~r/\A[0-9a-f]{32}\z/
+  @walls %{"given" => :given, "no_room" => :no_room, "lacking" => :lacking}
+  @wall_names Map.new(@walls, fn {name, wall} -> {wall, name} end)
   @max_integer 9_007_199_254_740_991
 
   @typedoc "What a place's kind is charged and bounded as."
@@ -186,9 +190,19 @@ defmodule Prima.LocusPool do
         }
 
   @typedoc """
+  What a keeper's start decided of the wall: `:given`, each person's
+  sessions in a VM of their own; `:no_room`, spaces on the shared kernel
+  because a first session in a VM does not fit the work pool beside the
+  floor; `:lacking`, spaces because the keeper lacks anything else the wall
+  needs (the devices, the image's guest, the guard's route, a role that
+  keeps homes). On the wire `"given"`, `"no_room"` and `"lacking"`.
+  """
+  @type wall :: :given | :no_room | :lacking
+
+  @typedoc """
   A role's report: the keeper's boot id, the machine's budget, work, floor
-  and used bytes, the role's counters after the rev asked for, and the
-  last rev of the page when more follow.
+  and used bytes, its wall, the role's counters after the rev asked for,
+  and the last rev of the page when more follow.
   """
   @type report :: %{
           boot: String.t(),
@@ -196,6 +210,7 @@ defmodule Prima.LocusPool do
           work: non_neg_integer(),
           floor: non_neg_integer(),
           used: non_neg_integer(),
+          wall: wall(),
           counters: [counter()],
           next: pos_integer() | nil
         }
@@ -461,7 +476,7 @@ defmodule Prima.LocusPool do
 
   @doc """
   `report` as every wire carries it: exactly `boot`, `budget`, `work`,
-  `floor`, `used`, `counters` and, when more follow, `next`; each counter
+  `floor`, `used`, `wall`, `counters` and, when more follow, `next`; each counter
   exactly its members, `day` as `YYYY-MM-DD`, and `athanor` and `subject`
   only where it has them.
   """
@@ -470,6 +485,7 @@ defmodule Prima.LocusPool do
     report
     |> Map.take([:boot, :budget, :work, :floor, :used])
     |> Map.new(fn {k, v} -> {Atom.to_string(k), v} end)
+    |> Map.put("wall", Map.fetch!(@wall_names, report.wall))
     |> Map.put("counters", Enum.map(counters, &counter_wire/1))
     |> put_present("next", next)
   end
@@ -492,7 +508,8 @@ defmodule Prima.LocusPool do
   `report` read strictly from its wire form (`encode_report/1`): exactly
   its members, every number a whole number from 0 to 2^53 - 1 (a `rev` and
   `next` from 1), `boot` 32 lowercase hexadecimal digits, at most
-  `report_counters/0` counters in ascending `rev`, each `day` a date, each
+  `report_counters/0` counters in ascending `rev`, `wall` one of its three
+  names (`t:wall/0`), each `day` a date, each
   `kind` a place's kind (`kinds/0`), an `athanor` of the athanor grammar
   and a `subject` of the keeper's id grammar where present, none null;
   `:error` otherwise.
@@ -501,9 +518,10 @@ defmodule Prima.LocusPool do
   def read_report(%{} = report) do
     members = Map.keys(report) -- ["next"]
 
-    with true <- Enum.sort(members) == ~w(boot budget counters floor used work),
+    with true <- Enum.sort(members) == ~w(boot budget counters floor used wall work),
          true <- is_binary(report["boot"]) and Regex.match?(@boot, report["boot"]),
          true <- Enum.all?(~w(budget work floor used), &whole?(report[&1])),
+         {:ok, wall} <- Map.fetch(@walls, report["wall"]),
          {:ok, next} <- read_next(report),
          {:ok, counters} <- read_counters(report["counters"]) do
       {:ok,
@@ -513,6 +531,7 @@ defmodule Prima.LocusPool do
          work: report["work"],
          floor: report["floor"],
          used: report["used"],
+         wall: wall,
          counters: counters,
          next: next
        }}

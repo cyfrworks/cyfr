@@ -13,8 +13,9 @@ defmodule Arca.Schemas.Message do
   turn's own rows carry its agent, so what anyone else wrote into a turn
   is told apart by it. A request to a crew member names it in `addressee`
   and is `pending` until a reply answers it: then `answered`, with the
-  reply's id in `resolved_by`, or `expired` when the person stopped its
-  room's work before an answer came. A reply names the request it answers in
+  reply's id in `resolved_by`, or `expired` when the person's stop ended
+  it before an answer came, a stop of its room's work or of the member's
+  thread working it. A reply names the request it answers in
   `reply_to`, its `outcome` (`outcomes/0`) and, in `addressee`, who the
   request came from.
 

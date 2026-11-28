@@ -137,6 +137,10 @@ type driver struct {
 	ending   *ending
 	message  string
 	text     strings.Builder
+	// broken says a tool call started since the message under way last
+	// said anything, in a message the driver named (the program named
+	// none): its next text begins a paragraph (chunk).
+	broken bool
 	// output counts what the native turn said or called, and held is its
 	// first message chunk while it may be the program's report of a failed
 	// turn (profile's failure), with its message id: shown once anything
@@ -712,17 +716,7 @@ func (d *driver) update(params json.RawMessage) error {
 		return d.chunk(d.messageID(u.Message), block.Text)
 	case "agent_thought_chunk":
 		d.output++
-		if err := d.release(); err != nil {
-			return err
-		}
-		var block struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		}
-		if json.Unmarshal(u.Content, &block) != nil || block.Type != "text" || block.Text == "" {
-			return nil
-		}
-		return d.c.EmitText(d.event("thought").Set("message", d.messageID(u.Message)), "delta", block.Text)
+		return d.release()
 	case "tool_call", "tool_call_update":
 		// An update of a call the turn's end ended is no work of this turn:
 		// it changes nothing, held text included.
@@ -732,6 +726,13 @@ func (d *driver) update(params json.RawMessage) error {
 		d.output++
 		if err := d.release(); err != nil {
 			return err
+		}
+		// A program that names no message gives no end to one: the words
+		// it says after a tool call starts stay in the message under way,
+		// a paragraph of their own. An update of a call already started
+		// breaks nothing.
+		if _, started := d.own[u.CallID]; !started && u.CallID != "" && d.ownMessage(d.message) {
+			d.broken = true
 		}
 		return d.ownUpdate(u.CallID, u.Status, u.ToolKind, u.Name, u.RawInput, u.Content)
 	}
@@ -765,14 +766,30 @@ func (d *driver) messageID(given string) string {
 	return id
 }
 
+// ownMessage says the message id is one the driver named (messageID).
+func (d *driver) ownMessage(id string) bool {
+	return id == d.c.Boot || strings.HasPrefix(id, d.c.Boot+"-")
+}
+
 // chunk is one message chunk's text, said under the message id: a new id
-// says the message under way whole first.
+// says the message under way whole first. Text after a tool call that
+// broke the message begins with the line feeds that make one blank line
+// between it and what came before, in the delta itself, so what streams
+// is what is said.
 func (d *driver) chunk(id, text string) error {
 	if d.message != "" && id != d.message {
 		if err := d.said(); err != nil {
 			return err
 		}
 	}
+	if d.broken && id == d.message {
+		before := d.text.String()
+		feeds := len(before) - len(strings.TrimRight(before, "\n")) + len(text) - len(strings.TrimLeft(text, "\n"))
+		if feeds < 2 {
+			text = strings.Repeat("\n", 2-feeds) + text
+		}
+	}
+	d.broken = false
 	d.message = id
 	d.text.WriteString(text)
 	return d.c.EmitText(d.event("text").Set("message", id), "delta", text)
@@ -795,6 +812,7 @@ func (d *driver) said() error {
 	id, text := d.message, d.text.String()
 	d.message = ""
 	d.text.Reset()
+	d.broken = false
 	return d.c.EmitText(d.event("said").Set("message", id), "text", text)
 }
 
@@ -1009,6 +1027,7 @@ func (d *driver) Close() {
 	d.ending = nil
 	d.message = ""
 	d.text.Reset()
+	d.broken = false
 	d.output = 0
 	d.held, d.heldMessage = "", ""
 	d.own = map[string]*ownCall{}

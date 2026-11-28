@@ -30,7 +30,10 @@ defmodule Aqua.CrewTest do
 
   import Ecto.Query, only: [from: 2]
   import Phoenix.ConnTest, only: [get: 2, response: 2]
-  import Phoenix.LiveViewTest, only: [live_isolated: 3, has_element?: 2]
+
+  import Phoenix.LiveViewTest,
+    only: [live_isolated: 3, has_element?: 2, element: 2, render: 1, render_click: 1]
+
   import Prima.Test.Wait
 
   @endpoint CyfrWeb.Endpoint
@@ -2190,6 +2193,226 @@ defmodule Aqua.CrewTest do
     assert [%{snapshot: %{"outcome" => "cancelled"}}] = replies_of(ctx, turn_id)
   end
 
+  @slot_keys [
+    {Arca.ControlPlane, :standing},
+    {Arca.ControlPlane, :generation},
+    {Arca.ControlPlane, :slot}
+  ]
+
+  # This member holds a real slot, its lease row in the case's sandbox;
+  # each process-wide value it changes is given back after the case,
+  # registered before it changes (`Prima.Test.Env`).
+  defp hold_slot! do
+    node = "node-#{System.unique_integer([:positive])}"
+    for key <- @slot_keys, do: Prima.Test.Env.erase_persistent_term(key)
+    {:ok, slot} = Arca.ControlPlane.take(node, node <> "#boot", 60_000)
+    slot
+  end
+
+  # The slot's lease run out on the database's clock, while this member's
+  # own standing still reads it held: the loss a write's transaction
+  # finds and nothing cached does.
+  defp lapse!(slot) do
+    {1, _} =
+      from(l in Arca.Schemas.CellLease, where: l.node == ^slot.node)
+      |> Arca.Repo.update_all(set: [lease_until: ~U[2000-01-01 00:00:00.000000Z]])
+
+    assert Arca.ControlPlane.held?()
+  end
+
+  describe "the person's Stop in a member's thread" do
+    # What the person's stop says of the work it ended (`Aqua.Tape.stopped/0`).
+    @stopped "the person stopped it"
+
+    # A job of Aqua's running in the planner's thread, its model call held.
+    defp held_job!(ctx, room, task) do
+      request = soul_request!(ctx, room, "planner", task)
+      assert {:ok, %{"applied" => 1}} = drain(ctx)
+      assert_receive {:scripted_probe, _worker, _}, 60_000
+      child = child!(ctx, room, "planner")
+      {request, child, delivered_turn(ctx, child, request.id)}
+    end
+
+    # The member's answer as Aqua's next turn reads it.
+    defp stopped_answer(request),
+      do: "[planner replied to request #{request.id}: cancelled]\n#{@stopped}"
+
+    test "ends the job Aqua handed it: the request ends as the person's stop ends one, the " <>
+           "member's answer lands on the room and opens no turn, and Aqua reads that the " <>
+           "person stopped it",
+         %{ctx: ctx, room: room} do
+      script!([{:hold, self()}, reply("Understood.")])
+      {request, child, turn_id} = held_job!(ctx, room, "take a while")
+
+      assert :ok = Runner.stop_turn(ctx, child.id)
+      assert {:ok, %{status: "cancelled"}} = Tape.turn(ctx, turn_id)
+      assert %{status: "expired"} = row(ctx, request.id)
+
+      assert {:ok, %{"applied" => 1}} = drain(ctx)
+      answer = Enum.find(rows(ctx, room.id), &(&1.reply_to == request.id))
+
+      assert %{sent_by: "planner", outcome: "cancelled", content: @stopped, turn_id: nil} =
+               answer
+
+      assert room_turns(ctx, room) == []
+      assert %{status: "expired"} = row(ctx, request.id)
+
+      # The person's next line opens Aqua's turn, which reads the job's end.
+      assert {:ok, %{turn_id: next}} = Runner.send_message(ctx, room.id, "what happened?")
+      await_status(ctx, next, "completed")
+      assert [%{input: %{"params" => %{"messages" => messages}}}] = member_chats(ctx, "aqua")
+
+      assert Jason.encode!(messages) =~ String.trim(Jason.encode!(stopped_answer(request)), "\"")
+      # Its own request, which the stop ended, is still its request and
+      # none of its speech.
+      refute Jason.encode!(messages) =~ "take a while"
+    end
+
+    test "ends the job queued behind the running one too, each request with its job, and opens " <>
+           "nothing",
+         %{ctx: ctx, room: room} do
+      script!([{:hold, self()}])
+      {first, child, running} = held_job!(ctx, room, "first job")
+      second = soul_request!(ctx, room, "planner", "second job")
+      assert {:ok, %{"applied" => 1}} = drain(ctx)
+      queued = delivered_turn(ctx, child, second.id)
+      assert %{running: true, queued: 1} = Runner.state(child.id, ctx.athanor_id)
+
+      assert :ok = Runner.stop_turn(ctx, child.id)
+
+      for {turn_id, request} <- [{running, first}, {queued, second}] do
+        assert {:ok, %{status: "cancelled"}} = Tape.turn(ctx, turn_id)
+        assert %{status: "expired"} = row(ctx, request.id)
+      end
+
+      assert %{running: false, queued: 0} = Runner.state(child.id, ctx.athanor_id)
+      assert {:ok, %{"applied" => 2}} = drain(ctx)
+      room_rows = rows(ctx, room.id)
+
+      for request <- [first, second] do
+        assert %{outcome: "cancelled", content: @stopped, turn_id: nil} =
+                 Enum.find(room_rows, &(&1.reply_to == request.id))
+
+        assert %{status: "expired"} = row(ctx, request.id)
+      end
+
+      assert room_turns(ctx, room) == []
+    end
+
+    test "a stopped answer steers no running turn of Aqua's", %{ctx: ctx, room: room} do
+      # The first job's answer opens Aqua's turn, held running; the second
+      # job, held too, is the one the person stops.
+      script!([reply("First done."), {:hold, self()}, {:hold, self()}])
+      first = soul_request!(ctx, room, "planner", "first job")
+      assert {:ok, %{"applied" => 1}} = drain(ctx)
+      child = child!(ctx, room, "planner")
+      await_status(ctx, delivered_turn(ctx, child, first.id), "completed")
+      assert {:ok, %{"applied" => 1}} = drain(ctx)
+      assert_receive {:scripted_probe, _, _}, 60_000
+      assert %{running: true, turn_id: live} = Runner.state(room.id, ctx.athanor_id)
+
+      {second, same_child, _} = held_job!(ctx, room, "second job")
+      assert same_child.id == child.id
+      assert :ok = Runner.stop_turn(ctx, child.id)
+      assert %{status: "expired"} = row(ctx, second.id)
+      assert {:ok, %{"applied" => 1}} = drain(ctx)
+
+      assert %{outcome: "cancelled", content: @stopped, turn_id: nil} =
+               Enum.find(rows(ctx, room.id), &(&1.reply_to == second.id))
+
+      assert {:ok, %{} = turn} = Tape.turn(ctx, live)
+      refute Tape.steer_pending?(ctx, turn)
+    end
+
+    test "with the member's lease run out, the stop writes nothing and the runner retires",
+         %{ctx: ctx, room: room} do
+      slot = hold_slot!()
+      script!([{:hold, self()}])
+      {request, child, turn} = held_job!(ctx, room, "take a while")
+      lapse!(slot)
+
+      outcome = Runner.stop_turn(ctx, child.id)
+
+      assert {:ok, landed} = Tape.turn(ctx, turn)
+
+      assert {{:error, :control_plane_lost}, "pending", "running", []} ==
+               {outcome, row(ctx, request.id).status, landed.status, replies_of(ctx, turn)}
+    end
+
+    test "the member's next job reads that the job the person stopped was interrupted, and a " <>
+           "queued job that never ran leaves no such line",
+         %{ctx: ctx, room: room} do
+      script!([{:hold, self()}, reply("Second done.")])
+      {_first, child, running} = held_job!(ctx, room, "first job")
+      queued_request = soul_request!(ctx, room, "planner", "queued job")
+      assert {:ok, %{"applied" => 1}} = drain(ctx)
+      queued = delivered_turn(ctx, child, queued_request.id)
+
+      assert :ok = Runner.stop_turn(ctx, child.id)
+
+      assert [%{turn_id: ^running, content: @stopped}] =
+               Enum.filter(rows(ctx, child.id), &(&1.kind == "turn_aborted"))
+
+      refute Enum.any?(rows(ctx, child.id), &(&1.kind == "turn_aborted" and &1.turn_id == queued))
+
+      next = soul_request!(ctx, room, "planner", "next job")
+      assert {:ok, %{"applied" => _}} = drain(ctx)
+      await_status(ctx, delivered_turn(ctx, child, next.id), "completed")
+      %{input: %{"params" => %{"messages" => messages}}} = List.last(member_chats(ctx, "planner"))
+
+      assert Jason.encode!(messages) =~
+               "[The assistant's work here was interrupted before it finished; tools may have " <>
+                 "partially executed. #{@stopped}]"
+    end
+
+    test "pressed in the member's pane does what the direct stop does", %{ctx: ctx, room: room} do
+      script!([{:hold, self()}])
+      {request, child, turn_id} = held_job!(ctx, room, "take a while")
+      {:ok, session} = Sanctum.TestContext.create_session(ctx)
+
+      conn =
+        Phoenix.ConnTest.build_conn()
+        |> Plug.Test.init_test_session(%{CyfrWeb.SignInResponse.session_key() => session.token})
+
+      {:ok, pane, _html} =
+        live_isolated(conn, PrismWeb.ThreadPaneLive,
+          session: %{"athanor_id" => ctx.athanor_id, "thread_id" => child.id}
+        )
+
+      wait_until(fn -> has_element?(pane, ~s([id$="-crew-stop"] button[phx-click="stop"])) end)
+      render_click(element(pane, ~s([id$="-crew-stop"] button[phx-click="stop"])))
+
+      await_status(ctx, turn_id, "cancelled")
+
+      # The pane open when Stop was pressed draws the line that says the
+      # job was interrupted, as it is told it.
+      assert [aborted] = Enum.filter(rows(ctx, child.id), &(&1.kind == "turn_aborted"))
+
+      wait_until(
+        fn -> render(pane) =~ aborted.id end,
+        10_000,
+        "the open pane to draw #{aborted.id}"
+      )
+
+      assert %{status: "expired"} = row(ctx, request.id)
+      assert {:ok, %{"applied" => 1}} = drain(ctx)
+
+      assert %{outcome: "cancelled", content: @stopped, turn_id: nil} =
+               Enum.find(rows(ctx, room.id), &(&1.reply_to == request.id))
+
+      assert room_turns(ctx, room) == []
+
+      # The room's card reads the request as the person's stop left it.
+      {:ok, room_pane, _html} =
+        live_isolated(conn, PrismWeb.ThreadPaneLive,
+          session: %{"athanor_id" => ctx.athanor_id, "thread_id" => room.id}
+        )
+
+      assert render(room_pane) =~ "Aqua asked planner · stopped"
+      Cyfr.Test.Sandbox.end_views()
+    end
+  end
+
   test "a delivered request carries copies of the request's files, its own, to the member's turn",
        %{ctx: ctx, room: room} do
     script!([reply("I see a square.")])
@@ -2814,6 +3037,116 @@ defmodule Aqua.CrewTest do
       assert %{status: "expired"} = row(ctx, request.id)
       assert work_state(ctx, workspace.id) == "stopped"
       assert reports(ctx) == []
+    end
+
+    test "a member's Stop in a workspace thread with nothing else at work leaves it stopped, " <>
+           "and its quiet period opens no turn of Aqua's",
+         %{ctx: ctx, room: daily} do
+      script!([ask("plan it"), reply("Asked the planner."), {:hold, self()}])
+      workspace = workspace!(ctx, daily)
+      {aqua, request} = asked!(ctx, workspace)
+      assert {:ok, %{"applied" => 1}} = drain(ctx)
+      assert_receive {:scripted_probe, _worker, _}, 60_000
+      child = child!(ctx, workspace, "planner")
+      member = delivered_turn(ctx, child, request.id)
+
+      assert :ok = Runner.stop_turn(ctx, child.id)
+      assert :ok = Runner.stop_turn(ctx, child.id)
+      await_status(ctx, member, "cancelled")
+      assert %{status: "expired"} = row(ctx, request.id)
+      assert work_state(ctx, workspace.id) == "stopped"
+      assert {:ok, %{"applied" => 1}} = drain(ctx)
+
+      assert %{outcome: "cancelled", turn_id: nil} =
+               Enum.find(rows(ctx, workspace.id), &(&1.reply_to == request.id))
+
+      assert work_state(ctx, workspace.id) == "stopped"
+
+      # The quiet period, made as Aqua.NudgeTest makes it: every stamp moved back.
+      past = DateTime.add(DateTime.utc_now(), -(Aqua.Nudge.quiet_seconds() + 60), :second)
+
+      for {schema, fields} <- [
+            {Arca.Schemas.Message, [:inserted_at]},
+            {Arca.Schemas.Turn, [:accepted_at, :ended_at]},
+            {Arca.Schemas.TurnStep, [:started_at, :ended_at]}
+          ],
+          field <- fields do
+        from(r in schema, where: r.athanor_id == ^ctx.athanor_id and not is_nil(field(r, ^field)))
+        |> Arca.Repo.update_all(set: [{field, past}])
+      end
+
+      refute Map.has_key?(Map.get(Aqua.Nudge.tick(), ctx.athanor_id, %{}), "opened")
+      refute Enum.any?(rows(ctx, workspace.id), &(&1.kind == "nudge"))
+      assert Enum.map(room_turns(ctx, workspace), & &1.id) == [aqua]
+    end
+
+    test "a member's Stop while Aqua's own turn runs in the workspace thread leaves it at work " <>
+           "until that turn ends, and stopped after",
+         %{ctx: ctx, room: daily} do
+      # Aqua's turn asks the planner and holds its next model call; the
+      # planner's job holds too; Aqua's answers once let go.
+      script!([ask("plan it"), {:hold, self()}, {:hold, self()}, reply("Asked the planner.")])
+      workspace = workspace!(ctx, daily)
+      assert {:ok, %{"applied" => 1}} = drain(ctx)
+      %{turn_id: aqua} = Enum.find(rows(ctx, workspace.id), &(&1.kind == "opening"))
+      assert_receive {:scripted_probe, aqua_worker, _}, 60_000
+      [request] = Tape.pending_requests(ctx, workspace.id)
+      assert {:ok, %{"applied" => 1}} = drain(ctx)
+      assert_receive {:scripted_probe, _member_worker, _}, 60_000
+      child = child!(ctx, workspace, "planner")
+      member = delivered_turn(ctx, child, request.id)
+
+      assert :ok = Runner.stop_turn(ctx, child.id)
+      await_status(ctx, member, "cancelled")
+      assert %{status: "expired"} = row(ctx, request.id)
+      assert {:ok, %{status: "running"}} = Tape.turn(ctx, aqua)
+      assert work_state(ctx, workspace.id) == "open"
+
+      send(aqua_worker, :continue)
+      await_status(ctx, aqua, "completed")
+      assert work_state(ctx, workspace.id) == "stopped"
+    end
+
+    test "with the member's lease run out, the workspace thread's stop writes nothing",
+         %{ctx: ctx, room: daily} do
+      slot = hold_slot!()
+      script!([ask("plan it"), reply("Asked the planner."), {:hold, self()}])
+      workspace = workspace!(ctx, daily)
+      {_aqua, request} = asked!(ctx, workspace)
+      assert {:ok, %{"applied" => 1}} = drain(ctx)
+      assert_receive {:scripted_probe, _worker, _}, 60_000
+      child = child!(ctx, workspace, "planner")
+      member = delivered_turn(ctx, child, request.id)
+      lapse!(slot)
+
+      outcome = Runner.stop_turn(ctx, workspace.id)
+
+      assert {:ok, landed} = Tape.turn(ctx, member)
+
+      assert {{:error, :control_plane_lost}, "pending", "running", "open"} ==
+               {outcome, row(ctx, request.id).status, landed.status,
+                work_state(ctx, workspace.id)}
+    end
+
+    test "the person's stop of the workspace thread ends its member's running job with no " <>
+           "answer, as it always has",
+         %{ctx: ctx, room: daily} do
+      script!([ask("plan it"), reply("Asked the planner."), {:hold, self()}])
+      workspace = workspace!(ctx, daily)
+      {aqua, request} = asked!(ctx, workspace)
+      assert {:ok, %{"applied" => 1}} = drain(ctx)
+      assert_receive {:scripted_probe, _worker, _}, 60_000
+      child = child!(ctx, workspace, "planner")
+      member = delivered_turn(ctx, child, request.id)
+
+      assert :ok = Runner.stop_turn(ctx, workspace.id)
+      await_status(ctx, member, "cancelled")
+      assert %{status: "expired"} = row(ctx, request.id)
+      assert replies_of(ctx, member) == []
+      assert %{running: false} = Runner.state(child.id, ctx.athanor_id)
+      refute Enum.any?(rows(ctx, workspace.id), &(&1.reply_to == request.id))
+      assert Enum.map(room_turns(ctx, workspace), & &1.id) == [aqua]
+      assert work_state(ctx, workspace.id) == "stopped"
     end
 
     test "after the person's stop, a member's answer on its way lands as a row and opens no " <>

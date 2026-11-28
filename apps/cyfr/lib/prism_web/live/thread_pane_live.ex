@@ -1247,12 +1247,12 @@ defmodule PrismWeb.ThreadPaneLive do
     |> reread_pending()
   end
 
-  # Streamed text, reasoning and the list of calls belong to the running
-  # turn alone: an announcement, a delta or a list for any other turn, or
-  # while none is held, is not kept, nor a list under a fence the pane no
-  # longer holds (`Aqua.Loop.Stream`). A pane that holds no turn, such as
-  # one whose thread runs on another member, learns the running turn from
-  # the fence its loop announces.
+  # Streamed text and the list of calls belong to the running turn alone:
+  # an announcement, a delta or a list for any other turn, or while none
+  # is held, is not kept, nor a list under a fence the pane no longer holds
+  # (`Aqua.Loop.Stream`). A pane that holds no turn, such as one whose
+  # thread runs on another member, learns the running turn from the fence
+  # its loop announces.
   defp handle_thread_event(%{assigns: %{live_turn_id: nil}} = socket, :turn_fence, %{
          turn_id: turn_id,
          fence: fence
@@ -2345,26 +2345,6 @@ defmodule PrismWeb.ThreadPaneLive do
           <% end %>
         </div>
 
-        <%!-- The running turn's reasoning, folded apart from its answer,
-              gone when the turn ends. Once the person opens or closes it
-              the browser's `open` is theirs, kept through every patch. --%>
-        <details
-          :if={Aqua.stream_thoughts(@partials) != []}
-          id={@dom <> "-thinking"}
-          phx-mounted={JS.ignore_attributes(["open"])}
-          data-test="thinking"
-          class="text-xs"
-        >
-          <summary class="min-h-6 cursor-pointer rounded text-gray-400 hover:text-gray-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-300">
-            Thinking
-          </summary>
-          <p
-            :for={thought <- Aqua.stream_thoughts(@partials)}
-            class="mt-1 whitespace-pre-wrap pl-4 text-gray-400 [overflow-wrap:anywhere]"
-            phx-no-format
-          >{thought.text}</p>
-        </details>
-
         <ul :if={Aqua.stream_activity(@partials) != []} class="space-y-1" data-test="tool-activity">
           <li :for={entry <- Aqua.stream_activity(@partials)} class="space-y-1 text-xs">
             <div class="flex items-center gap-2">
@@ -2392,8 +2372,7 @@ defmodule PrismWeb.ThreadPaneLive do
 
         <div
           :if={
-            @running and Aqua.stream_texts(@partials) == [] and Aqua.stream_thoughts(@partials) == [] and
-              Aqua.stream_activity(@partials) == []
+            @running and Aqua.stream_texts(@partials) == [] and Aqua.stream_activity(@partials) == []
           }
           class="flex items-center gap-2 text-xs text-gray-500"
         >
@@ -3111,18 +3090,15 @@ defmodule PrismWeb.ThreadPaneLive do
   # What a row is on the tape, as `Aqua.Tape` announces it: a request to a
   # crew member, a reply to one, or neither.
   defp crew(%{reply_to: id}) when is_binary(id), do: :reply
-
-  defp crew(%{addressee: addressee, status: status})
-       when is_binary(addressee) and status in ["pending", "answered"],
-       do: :request
-
-  defp crew(_row), do: nil
+  defp crew(row), do: if(Aqua.request?(row), do: :request)
 
   # How a request stands as a person reads it: pending, then the outcome
   # of the reply that resolved it; answered, when that reply cannot be
-  # read.
+  # read; stopped, when the person's stop ended it (`expired`), as a
+  # stopped workspace thread reads.
   defp request_state(%{outcome: outcome}) when is_binary(outcome), do: outcome_words(outcome)
   defp request_state(%{status: "answered"}), do: "answered"
+  defp request_state(%{status: "expired"}), do: "stopped"
   defp request_state(_pending), do: "pending"
 
   # A crew job's outcome (`Prima.OutboxRecord.reply_outcomes/0`) as a

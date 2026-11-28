@@ -637,13 +637,13 @@ func TestOwnToolsAreOwnAndCYFRsCallsAreNot(t *testing.T) {
 }
 
 // activityHolds reads a stand-in's `activity` turn (fake_test.go,
-// cursor_fake_test.go) as wire version 8 carries it: each own call starts
-// and ends once under one `call`, the twin commands ending in reverse
-// order each with its own and starting with what it runs, the edit's
-// change cut between characters to a detail's bound, the sub-agent's call
-// one row, nothing of its child, the reasoning as `thought` alone, and the
-// reply the member's own words.
-func activityHolds(t *testing.T, s *wireSession, twins [2]string, task string) {
+// cursor_fake_test.go) as the wire carries it: each own call starts and
+// ends once under one `call`, the twin commands ending in reverse order
+// each with its own and starting with what it runs, the edit's change cut
+// between characters to a detail's bound, the sub-agent's call one row,
+// nothing of its child, nothing of the reasoning, and the reply `reply`,
+// the member's own words.
+func activityHolds(t *testing.T, s *wireSession, twins [2]string, task, reply string) {
 	t.Helper()
 	got := s.until("idle")
 	calls := map[string][]map[string]any{}
@@ -680,33 +680,55 @@ func activityHolds(t *testing.T, s *wireSession, twins [2]string, task string) {
 	if len(calls[task]) != 2 || len(calls) != 4 {
 		t.Fatalf("the sub-agent's call is one row, and its child's tool none: %v", calls)
 	}
-	thought := ""
-	for _, e := range ofType(got, "thought") {
-		thought += e["delta"].(string)
-	}
-	if thought != "THINK-ONE THINK-TWO" {
-		t.Fatalf("the reasoning arrives as thought: %q", thought)
-	}
-	for _, e := range got {
-		if (e["t"] == "text" || e["t"] == "said") && strings.Contains(fmt.Sprint(e), "THINK") {
-			t.Fatalf("reasoning is never said: %v", e)
-		}
-	}
-	for _, canary := range []string{"CHILD-WORDS", "CHILD-THOUGHT", "CHILD-RAN", "CHILD-CHANGE", "CHILD-RESULT"} {
+	for _, canary := range []string{"THINK", "CHILD-WORDS", "CHILD-THOUGHT", "CHILD-RAN", "CHILD-CHANGE", "CHILD-RESULT"} {
 		if strings.Contains(s.output(), canary) {
-			t.Fatalf("nothing of the sub-agent's own frames reaches the wire: %s", canary)
+			t.Fatalf("nothing of the reasoning nor of the sub-agent's own frames reaches the wire: %s", canary)
 		}
 	}
-	if said := saidOf(got); said != "The member said its own words." {
+	if said := saidOf(got); said != reply {
 		t.Fatalf("the reply holds only the member's own words: %q", said)
 	}
 }
 
-func TestAntigravitysActivityIsItsCallsThoughtsAndOwnWords(t *testing.T) {
+// saidHolds holds a turn's speech: the messages it said are `want`, in
+// order, and each streamed, in order, as exactly the text it is said with,
+// so a pane shows what its row stores.
+func saidHolds(t *testing.T, events []map[string]any, want []string) {
+	t.Helper()
+	var said []string
+	streamed := map[string]string{}
+	for _, e := range events {
+		switch e["t"] {
+		case "text":
+			streamed[e["message"].(string)] += e["delta"].(string)
+		case "said":
+			id, text := e["message"].(string), e["text"].(string)
+			if streamed[id] != text {
+				t.Fatalf("a message streams as it is said: streamed %q, said %q", streamed[id], text)
+			}
+			delete(streamed, id)
+			said = append(said, text)
+		}
+	}
+	if !reflect.DeepEqual(said, want) {
+		t.Fatalf("said %q, want %q", said, want)
+	}
+}
+
+// Antigravity names no message: its words before its own tool and after it
+// are one message, the later words a paragraph of their own.
+func TestAntigravitysWordsAroundItsToolAreOneMessageWithABreak(t *testing.T) {
+	s := startDriver(t)
+	startFresh(s, map[string]any{})
+	postText(s, "stp_around", "trn_1", "around")
+	saidHolds(t, s.until("idle"), []string{"Before the tool.\n\nAfter it."})
+}
+
+func TestAntigravitysActivityIsItsCallsAndOwnWords(t *testing.T) {
 	s := startDriver(t)
 	startFresh(s, map[string]any{})
 	postText(s, "stp_act", "trn_1", "activity")
-	activityHolds(t, s, [2]string{"call_twin_a", "call_twin_b"}, "call_task")
+	activityHolds(t, s, [2]string{"call_twin_a", "call_twin_b"}, "call_task", "The member said its own words.")
 }
 
 // Usage: counts that read are partial, since the program's title request
@@ -1012,22 +1034,21 @@ func TestAnInitializeThatDoesNotReadIsUnreadable(t *testing.T) {
 
 // Updates of kinds the driver does not use, another session's text and a
 // request it has no handler for change nothing on the wire; the request is
-// answered method-not-found. The program's reasoning is its thought alone.
+// answered method-not-found.
 func TestAnUnknownUpdateIsDroppedAndAnUnknownRequestRefused(t *testing.T) {
 	s := startDriver(t)
 	startFresh(s, map[string]any{})
 	postText(s, "stp_strange", "trn_1", "strange")
 	got := s.until("idle")
 	for _, e := range got {
-		if e["t"] != "text" && e["t"] != "said" && e["t"] != "usage" && e["t"] != "idle" &&
-			(e["t"] != "thought" || e["delta"] != "THOUGHT-CANARY") {
-			t.Fatalf("nothing but the reply's events and the thought: %v", e)
+		if e["t"] != "text" && e["t"] != "said" && e["t"] != "usage" && e["t"] != "idle" {
+			t.Fatalf("nothing but the reply's events: %v", e)
 		}
 	}
-	if saidOf(got) != "fs answered -32601" || len(ofType(got, "thought")) != 1 {
+	if saidOf(got) != "fs answered -32601" {
 		t.Fatalf("the request is answered method-not-found: %q", saidOf(got))
 	}
-	for _, canary := range []string{"PLAN-CANARY", "NEW-KIND-CANARY", "USER-CANARY", "OTHER-SESSION-CANARY"} {
+	for _, canary := range []string{"PLAN-CANARY", "NEW-KIND-CANARY", "THOUGHT-CANARY", "USER-CANARY", "OTHER-SESSION-CANARY"} {
 		if strings.Contains(s.output(), canary) {
 			t.Fatalf("a dropped update reached the wire: %s", canary)
 		}

@@ -137,13 +137,14 @@ type Counter struct {
 }
 
 // Report is a role's report: its keeper's boot, its budget, work, floor
-// and use, up to ReportCounters counters in ascending rev, and the rev
-// the next page follows, when more follow (0 for none). It mirrors the
-// keeper's own reported reply, which this package does not import: a
-// wire package imports no keeper part.
+// and use, its wall (one of walls), up to ReportCounters counters in
+// ascending rev, and the rev the next page follows, when more follow (0
+// for none). It mirrors the keeper's own reported reply, which this
+// package does not import: a wire package imports no keeper part.
 type Report struct {
 	Boot                      string
 	Budget, Work, Floor, Used uint64
+	Wall                      string
 	Counters                  []Counter
 	Next                      uint64
 }
@@ -159,7 +160,11 @@ var (
 	// locus_pool.json's kinds.
 	kinds   = map[string]bool{"warm": true, "run": true, "build": true, "program": true, "terminal": true}
 	numbers = []string{"rev", "bytes", "mib_ms", "measured_ms", "peak_bytes", "cap", "machine", "either"}
-	members = []string{"boot", "budget", "work", "floor", "used", "counters"}
+	members = []string{"boot", "budget", "work", "floor", "used", "wall", "counters"}
+	// walls are a report's wall values (Prima.LocusPool.t:wall/0): the
+	// keeper gives each person a VM of their own, or spaces for want of
+	// room, or for want of anything else the wall needs.
+	walls = map[string]bool{"given": true, "no_room": true, "lacking": true}
 )
 
 // whole is a JSON number that is a whole number from 0, read as wide as
@@ -168,10 +173,11 @@ func whole(v any) (uint64, bool) { return wirejson.Uint(v, math.MaxUint64) }
 
 // valid is ErrMalformed for a report no answer may carry, as
 // Prima.LocusPool.read_report/1 refuses one, and nil otherwise: boot 32
-// lowercase hexadecimal digits; every number at most 2^53 − 1; at most
-// ReportCounters counters in ascending rev, each rev from 1, its day a
-// date, its kind a place's kind, its athanor and subject, where it has
-// them, of their grammars. ReadReport and Answer both go through it.
+// lowercase hexadecimal digits; wall one of walls; every number at most
+// 2^53 − 1; at most ReportCounters counters in ascending rev, each rev
+// from 1, its day a date, its kind a place's kind, its athanor and
+// subject, where it has them, of their grammars. ReadReport and Answer
+// both go through it.
 func valid(r Report) error {
 	safe := func(ns ...uint64) bool {
 		for _, n := range ns {
@@ -181,7 +187,7 @@ func valid(r Report) error {
 		}
 		return true
 	}
-	if !boot.MatchString(r.Boot) || !safe(r.Budget, r.Work, r.Floor, r.Used, r.Next) || len(r.Counters) > ReportCounters {
+	if !boot.MatchString(r.Boot) || !walls[r.Wall] || !safe(r.Budget, r.Work, r.Floor, r.Used, r.Next) || len(r.Counters) > ReportCounters {
 		return ErrMalformed
 	}
 	for i, c := range r.Counters {
@@ -213,13 +219,14 @@ func ReadReport(v any) (Report, error) {
 		return Report{}, ErrMalformed
 	}
 	var r Report
-	var okBoot, okBudget, okWork, okFloor, okUsed bool
+	var okBoot, okBudget, okWork, okFloor, okUsed, okWall bool
 	r.Boot, okBoot = o["boot"].(string)
+	r.Wall, okWall = o["wall"].(string)
 	r.Budget, okBudget = whole(o["budget"])
 	r.Work, okWork = whole(o["work"])
 	r.Floor, okFloor = whole(o["floor"])
 	r.Used, okUsed = whole(o["used"])
-	if !(okBoot && okBudget && okWork && okFloor && okUsed) {
+	if !(okBoot && okBudget && okWork && okFloor && okUsed && okWall) {
 		return Report{}, ErrMalformed
 	}
 	if next, more := o["next"]; more {
@@ -325,7 +332,8 @@ func Answer(r Report) ([]byte, error) {
 		counters[i] = m
 	}
 	report := map[string]any{
-		"boot": r.Boot, "budget": r.Budget, "work": r.Work, "floor": r.Floor, "used": r.Used, "counters": counters,
+		"boot": r.Boot, "budget": r.Budget, "work": r.Work, "floor": r.Floor, "used": r.Used, "wall": r.Wall,
+		"counters": counters,
 	}
 	if r.Next != 0 {
 		report["next"] = r.Next

@@ -207,7 +207,7 @@ defmodule Aqua.WorkspaceStopTest do
 
     assert :ok = Runner.stop_turn(ctx, workspace.id)
 
-    assert {:ok, %{status: "cancelled", error: "stopped"}} = Tape.turn(ctx, aqua)
+    assert {:ok, %{status: "cancelled", error: "the person stopped it"}} = Tape.turn(ctx, aqua)
     assert_stopped(ctx, workspace)
     assert reports(ctx) == []
   end
@@ -247,7 +247,7 @@ defmodule Aqua.WorkspaceStopTest do
 
     assert :ok = Runner.stop_turn(ctx, workspace.id)
 
-    assert {:ok, %{status: "cancelled", error: "stopped"}} = Tape.turn(ctx, planner)
+    assert {:ok, %{status: "cancelled", error: "the person stopped it"}} = Tape.turn(ctx, planner)
     assert %{status: "expired"} = row(ctx, request.id)
     assert pending(ctx, "crew_reply") == []
     assert_stopped(ctx, workspace)
@@ -362,7 +362,7 @@ defmodule Aqua.WorkspaceStopTest do
 
     assert :ok = Runner.stop_turn(ctx, daily.id)
 
-    assert {:ok, %{status: "cancelled", error: "stopped"}} = Tape.turn(ctx, aqua)
+    assert {:ok, %{status: "cancelled", error: "the person stopped it"}} = Tape.turn(ctx, aqua)
     assert {:ok, %{status: "running"}} = Tape.turn(ctx, planner)
     assert %{running: true, turn_id: ^planner} = Runner.state(child.id, ctx.athanor_id)
     assert %{status: "pending"} = row(ctx, request.id)

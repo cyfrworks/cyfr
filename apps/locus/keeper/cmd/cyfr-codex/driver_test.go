@@ -476,14 +476,13 @@ func TestACallOfAnotherThreadIsRefusedToCodexAndNotAsked(t *testing.T) {
 	}
 }
 
-// Wire version 8's activity: each own tool's start and end carry one
-// call, the harness's item id, two commands ending in reverse order each
-// ending under its own; a start says what it runs and a patch's end its
-// diff, cut between characters to a detail's bound; the reasoning summary
-// is thought and never said; and a sub-agent's thread, its words,
-// reasoning and command, emits nothing while the session's call of it
-// starts and ends.
-func TestCodexsActivityIsItsCallsThoughtsAndOwnWords(t *testing.T) {
+// The wire's activity: each own tool's start and end carry one call, the
+// harness's item id, two commands ending in reverse order each ending
+// under its own; a start says what it runs and a patch's end its diff, cut
+// between characters to a detail's bound; the reasoning summary emits
+// nothing; and a sub-agent's thread, its words, reasoning and command,
+// emits nothing while the session's call of it starts and ends.
+func TestCodexsActivityIsItsCallsAndOwnWords(t *testing.T) {
 	s := startDriver(t)
 	startFresh(s, map[string]any{})
 	work(s, "stp_work", "trn_1")
@@ -508,16 +507,9 @@ func TestCodexsActivityIsItsCallsThoughtsAndOwnWords(t *testing.T) {
 		!utf8.ValidString(change) || !strings.HasPrefix(whole, change) {
 		t.Fatalf("a start says what it runs, and a patch's end its diff, cut between characters to the bound: %v", details)
 	}
-	thought := ""
-	for _, e := range ofType(got, "thought") {
-		thought += e["delta"].(string)
-	}
-	if thought != "THINK-ONE THINK-TWO" || strings.Contains(fmt.Sprint(ofType(got, "said"), ofType(got, "text")), "THINK") {
-		t.Fatalf("the reasoning summary arrives as thought and is never said: %q", thought)
-	}
-	for _, canary := range []string{"CHILD-THOUGHT", "CHILD-RAN", "CHILD-WORDS", "c41d", "OUTPUT-CANARY"} {
+	for _, canary := range []string{"THINK", "CHILD-THOUGHT", "CHILD-RAN", "CHILD-WORDS", "c41d", "OUTPUT-CANARY"} {
 		if strings.Contains(s.output(), canary) {
-			t.Fatalf("nothing of the sub-agent's thread, nor a command's output, reaches the wire: %s", canary)
+			t.Fatalf("nothing of the reasoning, of the sub-agent's thread, nor a command's output, reaches the wire: %s", canary)
 		}
 	}
 	if said := saidOf(got); said != "The member said its own words." {

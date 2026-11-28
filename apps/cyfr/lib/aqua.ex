@@ -164,6 +164,10 @@ defmodule Aqua do
           {:ok, [String.t()]} | :error
   defdelegate attachment_blob_path(thread_id, message_id, ref), to: Attachments, as: :blob_path
 
+  @doc "Whether a row is a request to a crew member (`Aqua.Tape.request?/1`)."
+  @spec request?(Aqua.Tape.row()) :: boolean()
+  defdelegate request?(row), to: Aqua.Tape
+
   @doc """
   A message row's attachment refs, each whose bytes the person deleted
   marked removed (`Aqua.Attachments.as_kept/2`).
@@ -299,11 +303,6 @@ defmodule Aqua do
   @spec stream_texts(Aqua.Loop.Stream.t()) ::
           [%{step_id: String.t(), role: String.t() | nil, text: String.t()}]
   defdelegate stream_texts(stream), to: Aqua.Loop.Stream, as: :texts
-
-  @doc "The reasoning a viewer shows in its fold (`Aqua.Loop.Stream.thoughts/1`)."
-  @spec stream_thoughts(Aqua.Loop.Stream.t()) ::
-          [%{step_id: String.t(), role: String.t() | nil, text: String.t()}]
-  defdelegate stream_thoughts(stream), to: Aqua.Loop.Stream, as: :thoughts
 
   @doc "A stream with the loop's list of calls kept (`Aqua.Loop.Stream.put_activity/2`)."
   @spec stream_put_activity(Aqua.Loop.Stream.t(), map()) :: Aqua.Loop.Stream.t()
