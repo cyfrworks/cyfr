@@ -274,6 +274,12 @@ defmodule CyfrWeb.IngressTest do
         assert upgrade(port, [{"origin", origin}]) == "HTTP/1.1 403 Forbidden", origin
         refute_received {:connected, _info}
       end
+
+      # The refusal is the API's, in its one dialect.
+      assert {"HTTP/1.1 403 Forbidden", body} =
+               answer(ports.proxy, "/live/websocket?vsn=2.0.0", [{"origin", private}])
+
+      assert Jason.decode!(body) == %{"code" => "forbidden", "message" => "Origin not allowed"}
     end
 
     # A browser serialises an http origin on port 80 with no port, and

@@ -40,8 +40,9 @@ defmodule CyfrWeb.Ingress do
   Every socket transport is a WebSocket upgrade (`socket_transports/1`),
   and one whose `Origin` is not its listener's address (`Sanctum.address/1`:
   the private address on the loopback listener, the browser address on the
-  proxy listener) answers 403, so a page at one address opens no socket at
-  the other. An upgrade with no `Origin`, a program's and not a browser's,
+  proxy listener) is refused 403 through `CyfrWeb.ApiError`
+  (`:origin_rejected`, the MCP origin check's refusal), so a page at one
+  address opens no socket at the other. An upgrade with no `Origin`, a program's and not a browser's,
   passes, as Phoenix's own check passes it; the endpoint's `check_origin`
   is off, since it cannot see the listener.
 
@@ -56,7 +57,7 @@ defmodule CyfrWeb.Ingress do
 
   @behaviour Plug
 
-  import Plug.Conn, only: [get_req_header: 2, halt: 1, register_before_send: 2, send_resp: 3]
+  import Plug.Conn, only: [get_req_header: 2, register_before_send: 2]
 
   alias CyfrWeb.Plugs.ApiSecurityHeaders
 
@@ -184,7 +185,7 @@ defmodule CyfrWeb.Ingress do
       |> listener(ingress)
       |> module.call(opts)
     else
-      conn |> send_resp(403, "") |> halt()
+      CyfrWeb.ApiError.halt(conn, 403, :origin_rejected, nil)
     end
   end
 
