@@ -121,10 +121,15 @@ defmodule Sanctum do
   (`:sanctum, :private_address`): the address of its loopback entry,
   which every server has whatever browser address it has.
   `config/runtime.exs` resolves it from the tunnel key's public half
-  (`Cyfr.RuntimeConfig.resolve_link/3`).
+  (`Cyfr.RuntimeConfig.resolve_link/3`), and a release refuses to boot
+  without it, so a running server always has one: it is never `nil`.
   """
   @spec private_address() :: String.t()
-  def private_address, do: Application.fetch_env!(:sanctum, :private_address)
+  def private_address do
+    case Application.fetch_env!(:sanctum, :private_address) do
+      address when is_binary(address) -> address
+    end
+  end
 
   @doc """
   The server's browser address, `https://<CYFR_HOST>` (`:sanctum,
@@ -165,7 +170,12 @@ defmodule Sanctum do
   invitation and the setup link read it.
   """
   @spec shared_address() :: String.t()
-  def shared_address, do: browser_address() || private_address()
+  def shared_address do
+    case browser_address() do
+      nil -> private_address()
+      browser -> browser
+    end
+  end
 
   @doc """
   The address an OAuth provider returns a connect to: the browser
