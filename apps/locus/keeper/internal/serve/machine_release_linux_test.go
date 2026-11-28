@@ -4,6 +4,7 @@
 package serve
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -154,5 +155,60 @@ func TestTheNextVMBootsAtTheLastOnesReleaseAndNotBefore(t *testing.T) {
 	}
 	if !released(m) || len(k.guest.booted()) != 2 {
 		t.Fatalf("the next start: the last VM released %t, %d VMs booted", released(m), len(k.guest.booted()))
+	}
+}
+
+// @Fable3's (5499's first note): a VM's boot fails after its route is made and the guard
+// refuses the clear; the next start's boot fails too and its withdrawal is
+// answered; the third boots. All three are of one machine, so of one route
+// id. What does the next sweep's retry of the first clear do to the running
+// VM's route?
+func TestAStaleClearDoesNotTakeARebootedVMsRoute(t *testing.T) {
+	k := newVMKeeper(t)
+	k.disk(t, "ath_a", "vlt_a1", "vlt_a2", "vlt_a3")
+	for _, id := range []string{"p-s1", "p-s2", "p-s3"} {
+		k.place(t, id, "ath_a")
+	}
+	m := k.machineOfAthanor("ath_a")
+	k.guest.mu.Lock()
+	k.guest.refuseBoot = errors.New("the VMM's space did not start")
+	k.guest.mu.Unlock()
+	k.guard.mu.Lock()
+	k.guard.refuseClears = 1
+	k.guard.mu.Unlock()
+	for _, id := range []string{"s1", "s2"} {
+		k.s.handleSpawn(k.c, k.spawnReq(id, "p-"+id, "vlt_a"+id[1:], nil))
+		if got := k.next(t); got["type"] != "error" {
+			t.Fatalf("start %s of a VM that does not start answered %v", id, got)
+		}
+	}
+	k.s.mu.Lock()
+	_, stale := k.s.uncleared[m.id]
+	heldNow := m.route != nil
+	k.s.mu.Unlock()
+	k.guest.mu.Lock()
+	k.guest.refuseBoot = nil
+	k.guest.mu.Unlock()
+	k.s.handleSpawn(k.c, k.spawnReq("s3", "p-s3", "vlt_a3", nil))
+	k.expect(t, "spawned")
+	same := k.machineOfAthanor("ath_a") == m
+	k.s.mu.Lock()
+	before := m.route != nil
+	k.s.mu.Unlock()
+	k.s.retryClears()
+	k.s.mu.Lock()
+	after := m.route != nil
+	sessions := len(m.sessions)
+	k.s.mu.Unlock()
+	clears := 0
+	for _, c := range k.guard.taken() {
+		if c.op == "clear" && c.spawnID == m.id {
+			clears++
+		}
+	}
+	t.Logf("after two failed boots: a clear still owed %t, the route held %t; the third boot: same machine %t, its route held %t; after the sweep's retry: held %t, %d sessions in the VM, %d clears asked of its id",
+		stale, heldNow, same, before, after, sessions, clears)
+	if same && before && !after {
+		t.Fatalf("the sweep's retry of an earlier boot's clear was asked of the running VM's route id and let the keeper's hold on it go, %d sessions in the VM", sessions)
 	}
 }

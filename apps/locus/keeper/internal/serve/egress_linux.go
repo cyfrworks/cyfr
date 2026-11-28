@@ -182,9 +182,11 @@ func receiveRoute(route *os.File) ([]*os.File, error) {
 }
 
 // unclearedRoute is a withdrawn route the guard has not yet said cleared,
-// and where its holder holds it, which lets it go once the guard does.
+// the hold it was withdrawn from (at) and where its holder holds it, which
+// lets that hold go once the guard does, and never one taken since.
 type unclearedRoute struct {
 	route guard.Route
+	at    *guard.Route
 	held  **guard.Route
 }
 
@@ -211,13 +213,15 @@ func (s *server) withdrawRoute(id string, held **guard.Route) {
 			if s.uncleared == nil {
 				s.uncleared = map[string]unclearedRoute{}
 			}
-			s.uncleared[id] = unclearedRoute{route: *r, held: held}
+			s.uncleared[id] = unclearedRoute{route: *r, at: r, held: held}
 			s.mu.Unlock()
 			return
 		}
 	}
+	// A withdrawal answered leaves nothing to ask again.
 	s.mu.Lock()
 	*held = nil
+	delete(s.uncleared, id)
 	s.mu.Unlock()
 }
 
@@ -243,7 +247,7 @@ func (s *server) retryClears() {
 		}
 		s.mu.Lock()
 		delete(s.uncleared, id)
-		if held := *u.held; held != nil && *held == u.route {
+		if *u.held == u.at {
 			*u.held = nil
 		}
 		s.mu.Unlock()

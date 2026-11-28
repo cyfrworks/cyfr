@@ -183,7 +183,7 @@ type machineRef struct{ m *machine }
 // its own locks guard.
 type machine struct {
 	athanor string
-	// id names its route at the guard, its spawn id there.
+	// id names its route at the guard, its spawn id there: each boot's own.
 	id string
 	// entry is its own place in the ledger (admission.NewMachine), admitted
 	// with the first of its sessions' places to be.
@@ -334,6 +334,12 @@ func (s *server) bootMachine(m *machine, at keptAt, r *role) string {
 	if boot == nil {
 		boot = startVM
 	}
+	// Each boot's route has an id of its own at the guard, so a clear still
+	// owed for an earlier boot's route is asked for that route alone, never
+	// for this one (retryClears).
+	s.mu.Lock()
+	m.id = randomHex(16)
+	s.mu.Unlock()
 	routeCode := ""
 	g, err := boot(vmBoot{Disk: image, KeptRoot: s.keptRoot(), UID: at.uid, MemoryMiB: s.machineMiB(), VCPUs: s.machineVCPUs(r),
 		Groups: r.groups, Start: s.startTool, Route: func(uid int, netns, udp, tcp, nl *os.File) (vm.Network, error) {
