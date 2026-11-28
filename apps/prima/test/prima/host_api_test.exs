@@ -494,7 +494,17 @@ defmodule Prima.HostAPITest do
 
     test "every host of bytes that are no UTF-8 matches as its vector says, each byte kept" do
       for c <- cases!(@vectors["domain_bytes"], 100) do
-        strict!(c, ~w(host_hex patterns_hex allowed))
+        # A case marked go is Go's own refusal of bytes that are no UTF-8,
+        # which Prima matches: Prima's answer is the case's allowed.
+        if Map.has_key?(c, "go") do
+          strict!(c, ~w(host_hex patterns_hex allowed go))
+          inputs = [c["host_hex"] | c["patterns_hex"]] |> Enum.map(&unhex/1)
+          assert c["go"] === %{"allowed" => false} and c["allowed"] === true, inspect(c)
+          refute Enum.all?(inputs, &String.valid?/1), inspect(c)
+        else
+          strict!(c, ~w(host_hex patterns_hex allowed))
+        end
+
         patterns = Enum.map(c["patterns_hex"], &unhex/1)
 
         assert Prima.Network.domain_allowed?(unhex(c["host_hex"]), patterns) === c["allowed"],

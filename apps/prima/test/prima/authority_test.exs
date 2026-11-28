@@ -523,7 +523,8 @@ defmodule Prima.AuthorityTest do
             :ok
 
           ~w(go ms text) ->
-            assert vector["go"] === %{"ms" => nil} and abs(ms) > 9_223_372_036_854_775_807
+            assert vector["go"] === %{"ms" => nil} and
+                     (ms > 9_223_372_036_854_775_807 or ms < -9_223_372_036_854_775_808)
         end
 
         expected = if ms, do: {:ok, ms}, else: :error

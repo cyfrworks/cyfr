@@ -88,8 +88,8 @@ func grammar(text string) (negative bool, digits string, unit uint64, ok bool) {
 // Duration is the milliseconds text spells, as
 // Prima.Limits.parse_duration/1 answers them, and false for text that is
 // no duration. Prima answers an integer of any size; Go holds an int64,
-// so a duration past it is false here: the one difference,
-// authority_wire.json's durations marked go.
+// -2^63 to 2^63 - 1, so a duration outside that range is false here: the
+// one difference, authority_wire.json's seven durations marked go.
 func Duration(text string) (int64, bool) {
 	negative, digits, unit, ok := grammar(text)
 	if !ok {
@@ -103,13 +103,23 @@ func Duration(text string) (int64, bool) {
 		}
 		n = parsed
 	}
-	if n > math.MaxInt64/unit {
+	// The least int64 is -2^63, one further from zero than the greatest.
+	limit := uint64(math.MaxInt64)
+	if negative {
+		limit++
+	}
+	if n > limit/unit {
 		return 0, false
 	}
-	if negative {
-		return -int64(n * unit), true
+	m := n * unit
+	switch {
+	case !negative:
+		return int64(m), true
+	case m == 0:
+		return 0, true
+	default:
+		return -int64(m-1) - 1, true
 	}
-	return int64(n * unit), true
 }
 
 var members = []string{"timeout", "batch_timeout", "max_memory_bytes", "max_request_size",

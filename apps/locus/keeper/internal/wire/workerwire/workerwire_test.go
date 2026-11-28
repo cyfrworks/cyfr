@@ -6,9 +6,9 @@ package workerwire
 import (
 	"encoding/json"
 	"errors"
-	"os"
-	"path/filepath"
 	"testing"
+
+	"github.com/cyfr/locus/keeper/internal/wire/wiretest"
 
 	"github.com/cyfr/locus/keeper/internal/wire/wirejson"
 	"github.com/cyfr/locus/keeper/internal/wire/workerapi"
@@ -25,12 +25,16 @@ type vectors struct {
 		Callback string `json:"callback"`
 		Body     string `json:"body"`
 		Answer   string `json:"answer"`
+		// Held by the listener's and workerauth's tests, not compared here.
+		Fields   json.RawMessage `json:"fields"`
+		Header   json.RawMessage `json:"header"`
+		Refusals json.RawMessage `json:"refusals"`
 	} `json:"requests"`
 	RequestBodies []struct {
 		Why      string          `json:"why"`
 		Body     string          `json:"body"`
-		Callback string          `json:"callback"`
-		Args     json.RawMessage `json:"args"`
+		Callback string          `json:"callback" wire:"optional"`
+		Args     json.RawMessage `json:"args" wire:"optional"`
 		Error    *string         `json:"error"`
 		// Go is the Go reader's own answer where the two ends differ.
 		Go *struct {
@@ -41,36 +45,30 @@ type vectors struct {
 		Why     string          `json:"why"`
 		Answer  string          `json:"answer"`
 		Reading string          `json:"reading"`
-		Ok      json.RawMessage `json:"ok"`
-		Error   string          `json:"error"`
-		Fields  json.RawMessage `json:"fields"`
+		Ok      json.RawMessage `json:"ok" wire:"optional"`
+		Error   string          `json:"error" wire:"optional"`
+		Fields  json.RawMessage `json:"fields" wire:"optional"`
 	} `json:"answers"`
 	AnswerWrites []struct {
 		Why    string          `json:"why"`
 		Write  string          `json:"write"`
-		Ok     json.RawMessage `json:"ok"`
-		Error  string          `json:"error"`
-		Fields json.RawMessage `json:"fields"`
-		Op     string          `json:"op"`
-		Args   json.RawMessage `json:"args"`
+		Ok     json.RawMessage `json:"ok" wire:"optional"`
+		Error  string          `json:"error" wire:"optional"`
+		Fields json.RawMessage `json:"fields" wire:"optional"`
+		Op     string          `json:"op" wire:"optional"`
+		Args   json.RawMessage `json:"args" wire:"optional"`
 		Bytes  string          `json:"bytes"`
 	} `json:"answer_writes"`
 	BaseURLs []struct {
 		Text string  `json:"text"`
-		Base *string `json:"base"`
+		Base *string `json:"base" wire:"null,required"`
 	} `json:"base_urls"`
 }
 
 func load(t *testing.T) vectors {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "..", "..", "tests", "fixtures", "worker_api.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
 	var v vectors
-	if err := json.Unmarshal(data, &v); err != nil {
-		t.Fatal(err)
-	}
+	wiretest.LoadStrict(t, "worker_api.json", &v)
 	return v
 }
 

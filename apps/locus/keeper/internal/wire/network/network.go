@@ -168,10 +168,13 @@ func ParseURL(text string) (URI, bool) {
 }
 
 // Downcase is s lowercased as Elixir's String.downcase/1 does in its
-// default mode: each character's simple lowercase, but İ (U+0130), which
-// Unicode's SpecialCasing lowercases to i and a combining dot above where
-// Go's unicode.ToLower gives a plain i; and a byte that is no UTF-8 kept
-// as it is, as Elixir keeps it, never read as U+FFFD.
+// default mode, for s that is UTF-8: each character's simple lowercase,
+// but İ (U+0130), which Unicode's SpecialCasing lowercases to i and a
+// combining dot above where Go's unicode.ToLower gives a plain i. A byte
+// that is no UTF-8 is kept as it is, never read as U+FFFD; Elixir's own
+// walk differs there (after a byte that begins a cased character it takes
+// the next byte with it, uncased), so nothing is matched on such bytes:
+// DomainAllowed refuses them.
 func Downcase(s string) string {
 	var b strings.Builder
 	for i := 0; i < len(s); {
@@ -195,13 +198,22 @@ func dropTrailingDot(s string) string { return strings.TrimSuffix(s, ".") }
 // (Prima.Network.domain_allowed?/2): "*" matches any host; "*.b" every
 // name below b and neither b nor a name sharing part of a label; any other
 // pattern exactly. Host and pattern compare case-folded, each with one
-// trailing dot dropped; an empty host, or no pattern, matches nothing.
+// trailing dot dropped; an empty host, or no pattern, matches nothing. A
+// host or a pattern that is no UTF-8 matches nothing: Go fails closed
+// where Elixir's casing of such bytes is its own (host_api.json's
+// domain_bytes marked go).
 func DomainAllowed(host string, patterns []string) bool {
+	if !utf8.ValidString(host) {
+		return false
+	}
 	host = Downcase(dropTrailingDot(host))
 	if host == "" {
 		return false
 	}
 	for _, p := range patterns {
+		if !utf8.ValidString(p) {
+			continue
+		}
 		switch {
 		case p == "*":
 			return true

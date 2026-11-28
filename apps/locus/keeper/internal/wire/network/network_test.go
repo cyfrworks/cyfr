@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"reflect"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/cyfr/locus/keeper/internal/wire/wirejson"
 	"github.com/cyfr/locus/keeper/internal/wire/wiretest"
@@ -77,18 +78,39 @@ func unhex(t *testing.T, s string) string {
 // UTF-8, as Elixir compares them: an invalid byte is kept, never read as
 // U+FFFD (the review's 96 cases among them).
 func TestEveryHostOfBytesMatchesAsPrimaMatchesIt(t *testing.T) {
+	marked := 0
+	defer func() {
+		if marked == 0 {
+			t.Error("no host is marked as Go's refusal")
+		}
+	}()
 	for _, raw := range wiretest.Cases(t, host(t).DomainBytes, 100) {
 		var c struct {
 			Host     string   `json:"host_hex"`
 			Patterns []string `json:"patterns_hex"`
 			Allowed  bool     `json:"allowed"`
+			// Go is Go's own answer where it fails closed on bytes that
+			// are no UTF-8 and Elixir matches them.
+			Go *struct {
+				Allowed bool `json:"allowed"`
+			} `json:"go"`
 		}
 		wiretest.Decode(t, raw, &c, []string{"host_hex", "patterns_hex", "allowed"})
-		patterns := make([]string, len(c.Patterns))
+		host, patterns := unhex(t, c.Host), make([]string, len(c.Patterns))
+		valid := utf8.ValidString(host)
 		for i, p := range c.Patterns {
 			patterns[i] = unhex(t, p)
+			valid = valid && utf8.ValidString(patterns[i])
 		}
-		if got := DomainAllowed(unhex(t, c.Host), patterns); got != c.Allowed {
+		want := c.Allowed
+		if c.Go != nil {
+			marked++
+			if !c.Allowed || c.Go.Allowed || valid {
+				t.Fatalf("%s against %v: a go marker is Go's refusal of bytes that are no UTF-8, which Elixir matches", c.Host, c.Patterns)
+			}
+			want = false
+		}
+		if got := DomainAllowed(host, patterns); got != want {
 			t.Errorf("%s against %v: %v", c.Host, c.Patterns, got)
 		}
 	}
