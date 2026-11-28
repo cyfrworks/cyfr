@@ -293,14 +293,16 @@ cd "$ROOT"
 # trap would end it before the removals, so the stop runs in a subshell,
 # whose exit ends only that subshell; the stop's failure still fails the
 # run.
-# The private address cell `$1`'s tunnel key names on port `$2`
-# (apps/codex/internal/link's derivation), whatever its browser address.
+# The private address cell `$1`'s tunnel key names on that cell's own
+# port (apps/codex/internal/link's derivation), whatever its browser
+# address: both read from the cell's deployment file, so another cell's
+# port is never taken for it.
 private_of() {
   python3 -I -c 'import base64, hashlib, sys
 public = bytes.fromhex(sys.argv[1])
-if len(public) != 32: sys.exit(1)
+if len(public) != 32 or not sys.argv[2].isdigit(): sys.exit(1)
 name = base64.b32encode(hashlib.sha256(public).digest()).decode().lower()[:16]
-print("http://h-%s.localhost%s" % (name, "" if sys.argv[2] == "80" else ":" + sys.argv[2]))' "$(cell_value "$1" CYFR_LINK_PUBLIC)" "$2"
+print("http://h-%s.localhost%s" % (name, "" if sys.argv[2] == "80" else ":" + sys.argv[2]))' "$(cell_value "$1" CYFR_LINK_PUBLIC)" "$(cell_port "$1")"
 }
 
 cleanup() {
@@ -393,7 +395,7 @@ curl -fsS -m 10 "http://127.0.0.1:$PORT/api/health" >"$CELL/health.json"
 echo "GET /api/health -> 200 $(cat "$CELL/health.json")"
 
 step "the fresh cell serves its sign-in page at its private address, which says no one is set up yet"
-private="$(private_of "$CELL" "$PORT")" || fail "the cell's .env holds no tunnel key cyfr init minted"
+private="$(private_of "$CELL")" || fail "the cell's .env holds no tunnel key cyfr init minted, or no port"
 private_host="${private#http://}"
 private_host="${private_host%%:*}"
 # Asked for under the loopback's own name, the page is sent to the
@@ -503,7 +505,7 @@ home="$(cell_cyfr "$ADDRESS" rpc 'IO.puts("CYFR_HOME=" <> Sanctum.shared_address
   fail "the cell given cyfr.example.com gives out '$home', not https://cyfr.example.com"
 echo "Sanctum.shared_address() -> $home"
 # The private address its tunnel key names, whatever its browser address.
-private="$(private_of "$ADDRESS" "$PORT")" || fail "the cell's .env holds no tunnel key cyfr init minted"
+private="$(private_of "$ADDRESS")" || fail "the cell's .env holds no tunnel key cyfr init minted, or no port"
 loopback="$(cell_cyfr "$ADDRESS" rpc 'IO.puts("CYFR_PRIVATE=" <> Sanctum.address(:loopback))' | sed -n 's/^CYFR_PRIVATE=//p' | tail -1)"
 [ "$loopback" = "$private" ] ||
   fail "the cell's loopback listener is at '$loopback', not its private address $private"
