@@ -32,7 +32,7 @@ defmodule Aqua.CrewTest do
   import Phoenix.ConnTest, only: [get: 2, response: 2]
 
   import Phoenix.LiveViewTest,
-    only: [live_isolated: 3, has_element?: 2, element: 2, render_click: 1]
+    only: [live_isolated: 3, has_element?: 2, element: 2, render: 1, render_click: 1]
 
   import Prima.Test.Wait
 
@@ -2235,6 +2235,9 @@ defmodule Aqua.CrewTest do
       assert [%{input: %{"params" => %{"messages" => messages}}}] = member_chats(ctx, "aqua")
 
       assert Jason.encode!(messages) =~ String.trim(Jason.encode!(stopped_answer(request)), "\"")
+      # Its own request, which the stop ended, is still its request and
+      # none of its speech.
+      refute Jason.encode!(messages) =~ "take a while"
     end
 
     test "ends the job queued behind the running one too, each request with its job, and opens " <>
@@ -2293,6 +2296,14 @@ defmodule Aqua.CrewTest do
                Enum.find(rows(ctx, room.id), &(&1.reply_to == request.id))
 
       assert room_turns(ctx, room) == []
+
+      # The room's card reads the request as the person's stop left it.
+      {:ok, room_pane, _html} =
+        live_isolated(conn, PrismWeb.ThreadPaneLive,
+          session: %{"athanor_id" => ctx.athanor_id, "thread_id" => room.id}
+        )
+
+      assert render(room_pane) =~ "Aqua asked planner · stopped"
       Cyfr.Test.Sandbox.end_views()
     end
   end
