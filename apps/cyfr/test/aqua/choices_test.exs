@@ -446,25 +446,23 @@ defmodule Aqua.ChoicesTest do
       assert Threads.messages(actor(ctx), today.id) == before
     end
 
-    test "a resend under its client id is the same press; that id on another choice or " <>
-           "another card is refused",
+    test "a resend under its client id is the same press; that id on another choice, or on " <>
+           "another card whose label reads alike, is refused and replays nothing",
          %{ctx: ctx, today: today} do
       turn = turn!(ctx, today)
       card = said!(ctx, today, turn, block(turn.id, "First?", ["- Blue", "- Green"]))
       other = turn!(ctx, today)
-      second = said!(ctx, today, other, block(other.id, "Second?", ["- Red", "- Amber"]))
+      second = said!(ctx, today, other, block(other.id, "Second?", ["- Blue", "- Amber"]))
 
       assert {:ok, %{message_id: id, replayed: false}} = press(ctx, today.id, card, 0, "snd_1")
       assert {:ok, %{message_id: ^id, replayed: true}} = press(ctx, today.id, card, 0, "snd_1")
       assert {:error, :client_id_reused} = press(ctx, today.id, card, 1, "snd_1")
       assert {:error, :client_id_reused} = press(ctx, today.id, second, 0, "snd_1")
 
-      assert [_one] =
-               for(
-                 m <- Threads.messages(actor(ctx), today.id),
-                 Choices.pressed(m) != nil,
-                 do: m
-               )
+      assert [%{id: ^id} = only] =
+               for(m <- Threads.messages(actor(ctx), today.id), Choices.pressed(m) != nil, do: m)
+
+      assert Choices.pressed(only)["row"] == card.id
     end
   end
 end

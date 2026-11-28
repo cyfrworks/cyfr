@@ -694,29 +694,41 @@ defmodule Aqua.Runner do
   # A press (`thread.send`'s `choice`) is the person's answer to Aqua,
   # whatever its label says: the row it names is read again under the
   # person's context, its line is the label as the server reads it, and
-  # its payload the press (`Aqua.Choices.press/2`). A retry of an accepted
-  # press by its `client_id` answers that press again.
+  # its payload the press (`Aqua.Choices.press/2`). A resend under the
+  # press's `client_id` is the same send only when it names the same row
+  # and index; any other send under that id is refused, as a different
+  # send under a taken id is (`Aqua.Tape.accept/3`), even when its label
+  # reads alike.
   defp chosen(ctx, state, text, opts) do
     case Keyword.get(opts, :choice) do
       nil ->
         {:ok, text, opts}
 
       choice ->
-        with {:ok, pressed} <- pressed_again(ctx, state, choice, opts) do
+        with {:ok, pressed} <- pressed(ctx, state, choice, Keyword.get(opts, :client_id)) do
           payload = Map.put(Keyword.get(opts, :payload, %{}), "choice", pressed)
           {:ok, pressed["label"], Keyword.put(opts, :payload, payload)}
         end
     end
   end
 
-  defp pressed_again(ctx, state, choice, opts) do
-    with client_id when is_binary(client_id) <- Keyword.get(opts, :client_id),
-         {:ok, %{message: row}} <- Tape.accepted(ctx, state.id, client_id),
-         %{"row" => row_id, "index" => index} = pressed <- Aqua.Choices.pressed(row),
-         true <- row_id == choice["row"] and index == choice["index"] do
-      {:ok, pressed}
-    else
-      _ -> Aqua.Choices.press(ctx, choice)
+  defp pressed(ctx, _state, choice, nil), do: Aqua.Choices.press(ctx, choice)
+
+  defp pressed(ctx, state, choice, client_id) do
+    case Tape.accepted(ctx, state.id, client_id) do
+      {:ok, %{message: row}} ->
+        with %{} = pressed <- Aqua.Choices.pressed(row),
+             true <- Map.take(pressed, ["row", "index"]) == Map.take(choice, ["row", "index"]) do
+          {:ok, pressed}
+        else
+          _other -> {:error, :client_id_reused}
+        end
+
+      {:error, :not_found} ->
+        Aqua.Choices.press(ctx, choice)
+
+      {:error, _} = refused ->
+        refused
     end
   end
 
