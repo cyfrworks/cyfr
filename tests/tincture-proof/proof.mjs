@@ -36,7 +36,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  BROWSERS, SITE, closeFrame, launch, launchBrowser, openShell, percentiles, readHomes, redact, signedIn, sleep,
+  BROWSERS, SITE, closeFrame, launch, launchBrowser, openApp, percentiles, readHomes, redact, signedIn, sleep,
   startProxy, waitFor,
 } from "../browser/lib.mjs";
 
@@ -63,11 +63,13 @@ const readGame = (frame) => frame.evaluate(() => {
   };
 });
 
-// One open from the picker to the game's ready.
-async function open(page, proxy) {
+// One open to the game's ready: `opener` opens the frame and answers it
+// with when the open was asked for. The first of a page is by the
+// desktop's address (Search's and Aqua's), timed from the shell's
+// connection; each later one is the picker's Launch, timed from the press.
+async function open(page, proxy, opener) {
   const mark = proxy.seen.length;
-  const launchedAt = Date.now();
-  const { frame, attributes } = await launch(page, NAME);
+  const { frame, attributes, launchedAt } = await opener();
   const game = await waitFor(async () => {
     const g = await readGame(frame).catch(() => null);
     return g && (g.readyAt || (g.errors && g.errors.length && Date.now() - launchedAt > 20_000)) ? g : null;
@@ -82,6 +84,16 @@ async function open(page, proxy) {
   };
 }
 
+const byAddress = (page, base, segment) => async () => {
+  const { frame, attributes, connectedAt } = await openApp(page, base, segment, NAME);
+  return { frame, attributes, launchedAt: connectedAt };
+};
+
+const byLaunch = (page) => async () => {
+  const launchedAt = Date.now();
+  return { ...(await launch(page, NAME)), launchedAt };
+};
+
 async function run(name, base, proxy, segment, cookie, opens) {
   const browser = await launchBrowser(name, proxy);
   const record = { version: browser.version() };
@@ -90,9 +102,7 @@ async function run(name, base, proxy, segment, cookie, opens) {
     proxy.seen = [];
     const context = await signedIn(browser, base, cookie);
     const page = await context.newPage();
-    await openShell(page, base, segment, NAME);
-
-    const first = await open(page, proxy);
+    const first = await open(page, proxy, byAddress(page, base, segment));
     const a = first.attributes;
     const sandbox = (a.sandbox || "").split(/\s+/).sort();
     check(JSON.stringify(sandbox) === JSON.stringify(["allow-pointer-lock", "allow-scripts"]),
@@ -130,7 +140,7 @@ async function run(name, base, proxy, segment, cookie, opens) {
 
     const warm = [first];
     for (let i = 1; i < opens; i++) {
-      const next = await open(page, proxy);
+      const next = await open(page, proxy, byLaunch(page));
       warm.push(next);
       await closeFrame(page, next.attributes.id);
     }
@@ -158,8 +168,7 @@ async function run(name, base, proxy, segment, cookie, opens) {
     for (let i = 0; i < opens; i++) {
       const fresh = await signedIn(browser, base, cookie);
       const freshPage = await fresh.newPage();
-      await openShell(freshPage, base, segment, NAME);
-      cold.push(await open(freshPage, proxy));
+      cold.push(await open(freshPage, proxy, byAddress(freshPage, base, segment)));
       await fresh.close();
     }
 

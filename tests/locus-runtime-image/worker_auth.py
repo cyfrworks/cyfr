@@ -353,21 +353,36 @@ def _versioned(decoded):
     return isinstance(v, int) and not isinstance(v, bool) and v == VERSION
 
 
+def _first_member(pairs):
+    """An object of `pairs` as Prima's reader reads one: a member given
+    twice is its first."""
+    members = {}
+    for name, value in pairs:
+        members.setdefault(name, value)
+    return members
+
+
+def wire_json(text):
+    """`text` read as Prima reads a body or an answer (Jason)."""
+    return json.loads(text, object_pairs_hook=_first_member)
+
+
 def read_body(op, body):
     """The args of an opened body posted at `op`'s route, or the refusal
     name: `malformed` for a body that is not a JSON object,
     `unknown_version` for one without `v` or at another version (read
-    before its `op`), and `malformed` for an `op` that is not the route's or
-    `args` that are not an object."""
+    before its `op`), and `malformed` for a member besides `v`, `op` and
+    `args`, an `op` that is not the route's or `args` that are not an
+    object."""
     try:
-        decoded = json.loads(body)
+        decoded = wire_json(body)
     except (ValueError, TypeError):
         return None, "malformed"
     if not isinstance(decoded, dict):
         return None, "malformed"
     if not _versioned(decoded):
         return None, "unknown_version"
-    if decoded.get("op") != op or not isinstance(decoded.get("args"), dict):
+    if set(decoded) != {"v", "op", "args"} or decoded["op"] != op or not isinstance(decoded["args"], dict):
         return None, "malformed"
     return decoded["args"], None
 
@@ -375,16 +390,16 @@ def read_body(op, body):
 def read_answer(text):
     """An answer's `ok` value as `("ok", value)`, its refusal as `("error",
     name, fields)`, or None for an answer the wire counts as lost: not a
-    JSON object, without `v` or at another version, or neither `ok` nor
-    `error`."""
+    JSON object, without `v` or at another version, `ok` beside any other
+    member, or neither `ok` nor `error`."""
     try:
-        decoded = json.loads(text)
+        decoded = wire_json(text)
     except (ValueError, TypeError):
         return None
     if not isinstance(decoded, dict) or not _versioned(decoded):
         return None
-    if "ok" in decoded and set(decoded) == {"v", "ok"}:
-        return ("ok", decoded["ok"])
+    if "ok" in decoded:
+        return ("ok", decoded["ok"]) if set(decoded) == {"v", "ok"} else None
     if isinstance(decoded.get("error"), str):
         return ("error", decoded["error"], {k: v for k, v in decoded.items() if k not in ("v", "error")})
     return None
@@ -1405,6 +1420,16 @@ def check_worker_api(path, primitives):
         _check_answer(request["answer"], what)
         for refusal in request["refusals"]:
             _check_answer(refusal["answer"], f"{what} refusal")
+    assert len(v["request_bodies"]) >= 20 and len(v["answers"]) >= 15, "worker_api: the body and answer cases"
+    for case in v["request_bodies"]:
+        what = f"worker_api body: {case['why']}"
+        op = case.get("callback") or "status"
+        expected = (case["args"], None) if case.get("callback") else (None, case["error"])
+        assert read_body(op, case["body"]) == expected, what
+    for case in v["answers"]:
+        what = f"worker_api answer: {case['why']}"
+        expected = {"ok": lambda c: ("ok", c["ok"]), "error": lambda c: ("error", c["error"], c["fields"]), "lost": lambda c: None}[case["reading"]](case)
+        assert read_answer(case["answer"]) == expected, what
     status = v["status"]
     for vec in status["valid"]:
         assert read_status(vec["wire"]) == vec["wire"], f"status reads: {vec['why']}"

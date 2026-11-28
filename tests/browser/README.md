@@ -51,8 +51,10 @@ tinctures under `tinctures/` publicly in that person's athanor, grants
 `frame-probe` as that person (the fixture's `grant`: a tincture's frame
 opens only under its owner's grant), and runs `frame-facts.mjs` against
 it. The person's layout names no canvas
-(`browser_picker_layout`), so the shell runs none and draws the picker
-the frame experiments launch from; canvases are the canvas proof's
+(`browser_picker_layout`), so the shell runs none and draws the picker;
+the frame experiments open each tincture by the desktop's address that
+names it, as Search does (`openApp`), and launch it again from the picker
+once its frame closed; canvases are the canvas proof's
 (`tests/canvas-proof/`). The tincture, containment and
 canvas proofs (`tests/tincture-proof/`, `tests/hostile-frame-proof/`,
 `tests/canvas-proof/`) use the same shape; [The proofs](#the-proofs) lists

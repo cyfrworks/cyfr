@@ -63,11 +63,22 @@
 #   tests/install-screen-proof/run.sh [--out DIR] [--no-tpm]
 #
 # After the script, this tree's cyfr takes the installed one's place, and
-# after init this tree's server image (scripts/image.sh's) takes the
-# release's in docker-compose.yml and this tree's seed/aqua the release's
-# aqua/, stand-ins for a signed candidate, which
-# results.txt says (lib.sh, candidate_build and candidate_server_use);
-# candidate.txt records the tree's commit and each artifact. Nothing reaches cyfr.run: each guest drops every packet to its
+# cyfr init lays down this tree's scaffold (scripts/scaffold-tarball.sh),
+# which that cyfr, built with the releaseproof tag as the update proofs
+# build theirs, reads from a folder on the guest; after init this tree's
+# server and Locus images (scripts/image.sh's) take the place of the ones
+# that scaffold's docker-compose.yml names. These are stand-ins for a
+# signed candidate, which results.txt says (lib.sh, candidate_build and
+# candidate_server_use); candidate.txt records the tree's commit and each
+# artifact. So a tree that has outgrown the last release's scaffold is
+# still proved, and the proof no longer carries what only a published
+# release shows: cyfr init fetching and verifying a signed scaffold, and
+# pulling the images it names. The person's plain cyfr init is typed: its
+# pulls of the :latest images this tree's docker-compose.yml names find
+# none on ghcr.io, where no release that is not a pre-release has moved
+# :latest, and each only warns. Then, in the terminal that predates the
+# docker group, cyfr down, cyfr up again, cyfr backup and cyfr access
+# status each reach Docker as cyfr up does. Nothing reaches cyfr.run: each guest drops every packet to its
 # addresses, and the box serves its own account service, the directory and
 # registry it names (lib.sh, cyfr_run_guard, account_settings and
 # account_service).
@@ -80,9 +91,10 @@
 # token: the teardown removes it, and scripts/janitor.sh's rule 1 removes
 # a killed run's. The
 # base image is the host's cache and the proof image is shared, each made
-# by tests/install-screen-proof/prepare.sh, and this tree's server image
-# is shared too, made by scripts/image.sh --undated app, all outside the
-# queue before the run; without one the run exits 69, naming its command.
+# by tests/install-screen-proof/prepare.sh, and this tree's server and
+# Locus images are shared too, made by scripts/image.sh --undated app and
+# locus, all outside the queue before the run; without one the run exits
+# 69, naming its command.
 # The guests' overlays are in the Docker volume ${PROOF_RUN_PREFIX}disk.
 #
 # Every name the run gives Docker begins with PROOF_RUN_PREFIX, which
@@ -117,9 +129,8 @@ proof_traps
 
 # The published release the guests install, INSTALL_VERSION, is the one
 # the bare install line takes, read below by the installer's own
-# resolve_version before anything starts. This tree's server image runs
-# under its docker-compose.yml and beside its locus images, so its stack
-# files are this tree's.
+# resolve_version before anything starts; its install script and cyfr
+# are what the guest installs before this tree's cyfr takes its place.
 
 usage() { echo "usage: $0 [--out DIR] [--no-tpm]"; }
 # The guest's TPM: an isolated swtpm of its own, or none (--no-tpm).
@@ -401,6 +412,38 @@ requirements_refused() {
   guest_root 'userdel -r visitor 2>/dev/null; rm -f /tmp/cyfr-visitor; ! id visitor' || fail "the second account was not removed ($GUEST_DIR/root.txt)"
 }
 
+# docker_from_that_terminal: in the terminal cyfr up ran in, older than
+# the account's docker group, each command a person runs next reaches
+# Docker as cyfr up does: cyfr down stops the stack, cyfr up starts it
+# again, cyfr backup makes its snapshot, and cyfr access status lists the
+# containers that run, never that nothing does.
+docker_from_that_terminal() {
+  local name
+  step "cyfr down, cyfr up, cyfr backup and cyfr access status, in the terminal that started before the group"
+  check "that terminal's shell lacks the docker group the account has" guest_ssh \
+    'pid=$(tmux display-message -p -t proof "#{pane_pid}") && gid=$(getent group docker | cut -d: -f3) &&
+      id -nG proof | tr " " "\n" | grep -qx docker && ! sed -n "s/^Groups:[[:space:]]*//p" /proc/$pid/status | tr " " "\n" | grep -qx "$gid"'
+  pane_step down 'cyfr down' 300
+  check "cyfr down exits 0 (it exited $PANE_STATUS)" test "$PANE_STATUS" = 0
+  check "it stopped the stack: no container runs" guest_root '[ -z "$(docker ps -q)" ]'
+  pane_step_end down
+  pane_step up-again 'cyfr up' 900
+  check "cyfr up again exits 0 (it exited $PANE_STATUS)" test "$PANE_STATUS" = 0
+  pane_step_end up-again
+  pane_step backup 'cyfr backup' 600
+  check "cyfr backup exits 0 (it exited $PANE_STATUS)" test "$PANE_STATUS" = 0
+  pane_step_end backup
+  pane_step access-status 'cyfr access status' 120
+  check "cyfr access status exits 0 (it exited $PANE_STATUS)" test "$PANE_STATUS" = 0
+  check "it lists the cyfr container running, and never says nothing runs" \
+    sh -c '! grep -q "Nothing of the stack runs" "$1" && grep -qE "^  cyfr \(cyfr\): running$" "$1"' sh "$GUEST_DIR/transcript-access-status.txt"
+  pane_step_end access-status
+  for name in down up-again backup access-status; do
+    check "none of them says the account may not use Docker or to log in again ($name)" \
+      sh -c '! grep -qE "may not use the Docker daemon|log out and in again" "$1"' sh "$GUEST_DIR/transcript-$name.txt"
+  done
+}
+
 # box_install: on the guest under way, the install script typed into
 # tty1's terminal, cyfr init with its screen, this tree's server in the
 # release's place and the box made its own account service in .env, cyfr
@@ -428,6 +471,7 @@ box_install() {
   pane_step_end script
 
   guest_copy_in "$CANDIDATE_BIN" .local/bin/cyfr || fail "the candidate was not copied into the guest"
+  candidate_scaffold_load
   guest_copy_in "$CANDIDATE_DEB" cyfr-desktop.deb || fail "the candidate app was not copied into the guest"
   guest_root 'apt-get -o Acquire::Retries=3 install -y -qq /home/proof/cyfr-desktop.deb && rm /home/proof/cyfr-desktop.deb' ||
     fail "the candidate app was not installed ($GUEST_DIR/root.txt)"
@@ -458,7 +502,7 @@ box_install() {
   check "no package is left behind, in the account's home or anywhere under /tmp, where root stages ($GUEST_DIR/left-packages.txt)" packages_left_none
   pane_step_end init
 
-  step "this tree's server in the release's place, and the box its own account service in .env"
+  step "this tree's server and Locus images in the scaffold's place, and the box its own account service in .env"
   candidate_server_load
   account_settings
 
@@ -472,6 +516,7 @@ box_install() {
   pane_step_end up
   running=$(guest_root_out "docker inspect -f '{{.Image}}' cyfr")
   check "the cyfr container runs this tree's image ($running)" test "$running" = "$APP_IMAGE_ID"
+  docker_from_that_terminal
   code=$(guest_ssh "curl -s -o /dev/null -w '%{http_code}' http://localhost:4000/" 2>&1)
   check "CYFR answers on its port (HTTP $code)" sh -c '[ "$1" -ge 200 ] && [ "$1" -lt 400 ]' sh "$code"
   check "screenshot ready.png" guest_screenshot ready.png
@@ -542,7 +587,7 @@ sys.exit(0 if handle["identifier"] == holder.get("identifier") == log["identifie
     "$GUEST_DIR/handle-saved.json" "$GUEST_DIR/holder-saved.json" "$GUEST_DIR/log-saved.json"
   check "the box keeps its client at CYFR beside its key" guest_ssh 'grep -q "\"client_id\": *\"pcl_" ~/.cyfr/device/homes.json'
   check "the screen sends CYFR the session cookie Prism opened with" screen_cookie prism
-  check "the home serves that cookie on a page that needs a session" cookie_is in prism
+  check "the home serves that cookie on a page that needs a session$(uncaptured prism)" cookie_is in prism
 
   screen_confirms
   guest_ssh "curl -s -o /dev/null --max-time 10 -w '%{http_code} %{redirect_url}' -H 'Origin: http://127.0.0.1:7340' -d x=y http://127.0.0.1:7340/open" >"$GUEST_DIR/open-forged.txt" 2>&1
@@ -556,7 +601,7 @@ sys.exit(0 if handle["identifier"] == holder.get("identifier") == log["identifie
   shell_page idle
   check "the screen locked itself after five minutes without input, the video playing" grep -q 'CYFR is locked' "$GUEST_DIR/shell-idle.html"
   check "screenshot screen-locked.png" guest_screenshot screen-locked.png
-  check "after the idle lock the home sends that unlock's cookie to sign in" cookie_is out prism
+  check "after the idle lock the home sends that unlock's cookie to sign in$(uncaptured prism)" cookie_is out prism
   if [ "$GUEST_TPM" = swtpm ]; then
     printf '000000\n' | guest_keys || fail "QMP did not type"
     sleep 5
@@ -566,7 +611,7 @@ sys.exit(0 if handle["identifier"] == holder.get("identifier") == log["identifie
   check "screenshot screen-unlocked.png" guest_screenshot screen-unlocked.png
   check "the unlock reached Prism, the shell's page no longer shown" sh -c '! cmp -s "$1" "$2"' sh "$GUEST_DIR/screen-unlocked.png" "$GUEST_DIR/screen-locked.png"
   check "the screen sends CYFR the new unlock's session cookie" screen_cookie unlocked
-  check "the home serves it" cookie_is in unlocked
+  check "the home serves it$(uncaptured unlocked)" cookie_is in unlocked
 
   step "Prism's Lock"
   screen_press Lock || fail "the screen did not press Prism's Lock ($GUEST_DIR/screen-press.txt)"
@@ -574,10 +619,10 @@ sys.exit(0 if handle["identifier"] == holder.get("identifier") == log["identifie
   check "Prism's Lock locked the screen, which says so" grep -q 'Locked\.' "$GUEST_DIR/shell-lock-prism.html"
   screen_ready
   check "screenshot screen-locked-prism.png" guest_screenshot screen-locked-prism.png
-  check "after Prism's Lock the home sends that unlock's cookie to sign in" cookie_is out unlocked
+  check "after Prism's Lock the home sends that unlock's cookie to sign in$(uncaptured unlocked)" cookie_is out unlocked
   screen_unlock
   check "the screen sends CYFR the next unlock's session cookie" screen_cookie relocked
-  check "the home serves it" cookie_is in relocked
+  check "the home serves it$(uncaptured relocked)" cookie_is in relocked
 
   screen_hides_first
   screen_killed
@@ -612,11 +657,11 @@ screen_hides_first() {
   shell_page_until lock-silent 'CYFR is locked' 30
   check "the silent CYFR's lock page says it locked" grep -q 'Locked\.' "$GUEST_DIR/shell-lock-silent.html"
   took=$(cookie_out_within relocked 150)
-  check "that session ended at the home within 60 s, a poll's 5 s aside (in ${took:-more than 150} s)" \
+  check "that session ended at the home within 60 s, a poll's 5 s aside ($(took_said relocked "$took" 150))" \
     sh -c '[ -n "$1" ] && [ "$1" -le 65 ]' sh "$took"
   screen_unlock
   check "the screen sends CYFR the next unlock's session cookie" screen_cookie unsilenced
-  check "the home serves it" cookie_is in unsilenced
+  check "the home serves it$(uncaptured unsilenced)" cookie_is in unsilenced
 }
 
 # A video in the five minutes: the API key the screen just made, read as
@@ -649,6 +694,10 @@ screen_video() {
   sleep 3
   screen_press proof-video last || fail "the screen did not press the canvas's result ($GUEST_DIR/screen-press.txt)"
   check "Prism offers it among the desktops to choose" screen_shows 'Choose your desktop' 15
+  # The chooser lists every desktop, the shipped ones among them, in the
+  # order the registry gives: one below what the screen shows, under its
+  # keyboard, is brought into view as a person scrolls the list to its end.
+  screen_read shows proof-video 2>/dev/null || { guest_chord end || fail "QMP did not send the key"; sleep 2; }
   screen_press proof-video || fail "the screen did not choose the canvas ($GUEST_DIR/screen-press.txt)"
   # A canvas runs once the person grants it.
   check "Prism asks the person to grant it" screen_shows 'Grant proof-video' 15
@@ -678,9 +727,9 @@ screen_confirms() {
   # press of that result opens it.
   printf 'API keys' | guest_keys || fail "QMP did not type"
   sleep 3
-  check "the search lists the API Keys page" screen_shows PAGE 10
-  screen_press 'API Keys' last || fail "the screen did not press API Keys ($GUEST_DIR/screen-press.txt)"
+  screen_press 'API Keys' last || fail "the search listed no API Keys result to press ($GUEST_DIR/screen-press.txt)"
   sleep 8
+  check "the search's API Keys result opens the API Keys page, its Create Key shown" screen_shows 'Create Key' 10
   check "screenshot screen-api-keys.png" guest_screenshot screen-api-keys.png
   # Create Key opens the form; Tab reaches its name, and Enter there
   # submits it, which asks the fresh confirmation.
@@ -820,8 +869,8 @@ screen_killed() {
   step "the shell killed: the launcher starts it again, locked, and its session ends"
   old=$(guest_ssh 'pgrep -f "cyfr [s]creen shell"')
   guest_ssh 'pkill -KILL -f "cyfr [s]creen shell"' || fail "the shell was not killed"
-  took=$(cookie_out_within relocked 75)
-  check "the killed shell's session ended within 60 s (in ${took:-more than 75} s)" sh -c '[ -n "$1" ] && [ "$1" -le 60 ]' sh "$took"
+  took=$(cookie_out_within unsilenced 75)
+  check "the killed shell's session ended within 60 s ($(took_said unsilenced "$took" 75))" sh -c '[ -n "$1" ] && [ "$1" -le 60 ]' sh "$took"
   shell_page_until killed 'CYFR is locked' 30
   new=$(guest_ssh 'pgrep -f "cyfr [s]creen shell"')
   check "the launcher started the shell again (pid $old, then ${new:-none})" sh -c '[ -n "$2" ] && [ "$1" != "$2" ]' sh "$old" "$new"
@@ -845,7 +894,7 @@ screen_severed() {
   step "the shell's connection to CYFR severed past 60 s while Prism's page stays open"
   screen_unlock
   check "the screen sends CYFR the next unlock's session cookie" screen_cookie severed
-  check "the home serves it" cookie_is in severed
+  check "the home serves it$(uncaptured severed)" cookie_is in severed
   ports=$(guest_root_out "ss -tnpH state established '( dport = :4000 )' | grep '\"cyfr\",' | awk '{print \$3}' | sed 's/.*://'" | tr '\n' ' ')
   check "the shell holds its connection to CYFR (local ports $ports)" test -n "${ports// /}"
   cut=$(guest_ssh 'date +%s')
@@ -857,7 +906,7 @@ screen_severed() {
   guest_chord shift || fail "QMP did not send the key"
   check "screenshot screen-severed.png" guest_screenshot screen-severed.png
   took=$(cookie_out_within severed 150)
-  check "the severed shell's session ended within 60 s, a poll's 5 s aside (in ${took:-more than 150} s)" \
+  check "the severed shell's session ended within 60 s, a poll's 5 s aside ($(took_said severed "$took" 150))" \
     sh -c '[ -n "$1" ] && [ "$1" -le 65 ]' sh "$took"
   budget 90 || BUDGET=0
   closes=$((SECONDS + BUDGET))
@@ -970,7 +1019,7 @@ screen_keeps_no_session() {
   step "the session open on the screen is on no disk, and a reboot ends it"
   screen_unlock
   check "the screen sends CYFR that unlock's session cookie" screen_cookie kept
-  check "the home serves it" cookie_is in kept
+  check "the home serves it$(uncaptured kept)" cookie_is in kept
   # The stores are read by the cookie's name (box.py stored), each 5 s
   # for 45 s: a cookie store takes its writes in batches, seconds after
   # the page was sent the cookie.
@@ -983,7 +1032,7 @@ screen_keeps_no_session() {
   shell_page rebooted
   check "after the reboot the screen boots locked" grep -q 'CYFR is locked' "$GUEST_DIR/shell-rebooted.html"
   check "screenshot screen-rebooted.png" guest_screenshot screen-rebooted.png
-  check "the session it had open opens nothing" cookie_is out kept
+  check "the session it had open opens nothing$(uncaptured kept)" cookie_is out kept
 }
 
 clean_install() {
@@ -1126,6 +1175,20 @@ active" ]' sh "$GUEST_DIR/vt-after.txt"
     others=$(sed -n 's/^volume \(.*\):$/\1/p' "$GUEST_DIR/left-before.txt" | sort | comm -23 - <(sort "$GUEST_DIR/stack-volumes.txt"))
     [ -z "$(comm -12 <(uninstall_volume_names) <(printf '%s\n' "$others" | sed '/^$/d'))" ]
   }
+  # Every printed line that removes is one of the two commands the
+  # uninstall gives, each once: the stack's volumes' and the removal of
+  # the AppArmor profile .env names, which cyfr init installed as root
+  # under /etc/apparmor.d. No printed command removes a file or a folder
+  # of the person's.
+  printed_removals_are_the_volumes_and_the_profile() {
+    local profile target
+    profile=$(guest_ssh "sed -n 's/^CYFR_LOCUS_APPARMOR=//p' ~/cyfr/.env | tail -n 1") && [ -n "$profile" ] || return 1
+    target="/etc/apparmor.d/$profile"
+    grep -w rm "$GUEST_DIR/transcript-uninstall.txt" >"$GUEST_DIR/uninstall-removals.txt"
+    [ "$(wc -l <"$GUEST_DIR/uninstall-removals.txt")" = 2 ] &&
+      [ "$(grep -c '^    docker volume rm ' "$GUEST_DIR/uninstall-removals.txt")" = 1 ] &&
+      [ "$(grep -cxF -- "    sudo sh -c 'apparmor_parser -R $target && rm $target'" "$GUEST_DIR/uninstall-removals.txt")" = 1 ]
+  }
   check "cyfr down stops the stack first" guest_ssh 'cd ~/cyfr && cyfr down'
   # The screen's browser writes its profile in the folder until the screen
   # stops, which cyfr down leaves running: it is stopped before the first
@@ -1152,9 +1215,10 @@ active" ]' sh "$GUEST_DIR/vt-after.txt"
   check "cyfr says whose password on the line before sudo's prompt" sh -c 'grep -A1 -xF -- "$1" "$2" | sed -n 2p | grep -qE -- "$3"' sh \
     "$PASSWORD_SENTENCE" "$GUEST_DIR/transcript-uninstall.txt" "$SUDO_PROMPT"
   check "it names the folder by its path" transcript_has uninstall "^  every file in /home/proof/cyfr, CYFR's data among them\$"
-  check "the one command it prints removes exactly the stack's volumes" volume_command_names_the_volumes
+  check "the volumes' command it prints removes exactly the stack's volumes" volume_command_names_the_volumes
   check "it names no volume of another project" volume_command_names_no_other_project
-  check "it prints no command that removes a file or a folder" sh -c '[ -z "$(grep -w rm "$1" | grep -v "^    docker volume rm ")" ]' sh "$GUEST_DIR/transcript-uninstall.txt"
+  check "no printed command removes a file or a folder of the person's: it prints two that remove, the stack's volumes' and the AppArmor profile's .env names" \
+    printed_removals_are_the_volumes_and_the_profile
   check "it names the CYFR app among what it removes, and says it removed it" \
     sh -c 'grep -qx "  the CYFR app, the package cyfr-desktop" "$1" && grep -qx "Removed the CYFR app." "$1"' sh "$GUEST_DIR/transcript-uninstall.txt"
   pane_step_end uninstall
@@ -1165,7 +1229,7 @@ active" ]' sh "$GUEST_DIR/vt-after.txt"
   volumes_seen after-the-uninstall
   check "the folder, the volumes, the settings and the device key are as cyfr down left them" cmp -s "$GUEST_DIR/left-before.txt" "$GUEST_DIR/left-after.txt"
   check "no container and no custom network of CYFR is left" guest_ssh '[ -z "$(docker ps -aq)$(docker network ls -q --filter type=custom)" ]'
-  check "no CYFR image is left" guest_ssh "[ -z \"\$(docker images -q ghcr.io/cyfrworks/cyfr-locus)\" ] && ! docker image inspect $APP_IMAGE >/dev/null 2>&1"
+  check "no CYFR image is left" guest_ssh "! docker image inspect $APP_IMAGE >/dev/null 2>&1 && ! docker image inspect $LOCUS_IMAGE >/dev/null 2>&1"
   check "the program and its link onto PATH are gone" guest_ssh '! ls -d ~/.local/bin/cyfr /usr/local/bin/cyfr 2>/dev/null'
   check "the screen is given back to tty1's login prompt" guest_ssh 'systemctl is-active --quiet getty@tty1 && ! systemctl is-enabled --quiet cyfr-screen && [ ! -e /etc/systemd/system/cyfr-screen.service ]'
   check "the CYFR app's package is removed, its program with it" guest_ssh '[ "$(dpkg-query -W -f "\${db:Status-Status}" cyfr-desktop 2>/dev/null)" != installed ] && [ ! -e /opt/cyfr/CYFR ]'

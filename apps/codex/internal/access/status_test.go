@@ -80,6 +80,29 @@ func TestStatusTakesNoLockAndChangesNothing(t *testing.T) {
 	}
 }
 
+// A Docker that does not answer leaves status saying why, never that
+// nothing runs: the stack's containers run on, unlisted.
+func TestStatusSaysDockerDidNotAnswer(t *testing.T) {
+	h := newHome(t)
+	h.fake.startStack(t, h.head())
+	h.fake.hook = func(_ context.Context, c *fakeCall) *fakeAnswer {
+		if c.Args[0] == "ps" {
+			return &fakeAnswer{Stderr: "permission denied while trying to connect to the docker API at unix:///var/run/docker.sock", Code: 1}
+		}
+		return nil
+	}
+	s, err := h.e.Status(bg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Unobserved == nil || !strings.Contains(s.Unobserved.Error(), "docker ps failed") || s.Containers != nil {
+		t.Errorf("status shows %v, unobserved %v", s.Containers, s.Unobserved)
+	}
+	if s.HeadErr != nil || s.Head.Mode != ModeLocal {
+		t.Errorf("status shows %+v (%v)", s.Head, s.HeadErr)
+	}
+}
+
 func mapsEqual(a, b map[string]string) bool {
 	if len(a) != len(b) {
 		return false
