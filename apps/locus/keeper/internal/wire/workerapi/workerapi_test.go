@@ -49,7 +49,7 @@ type vectors struct {
 func load(t *testing.T) vectors {
 	t.Helper()
 	var v vectors
-	wiretest.LoadStrict(t, "worker_api.json", &v)
+	wiretest.Load(t, "worker_api.json", &v)
 	if v.Version != 3 {
 		t.Fatalf("the vector file's version %d", v.Version)
 	}

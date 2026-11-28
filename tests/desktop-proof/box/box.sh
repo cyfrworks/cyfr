@@ -9,7 +9,7 @@
 # stand-in logind, ../screen/login1.py) and a loop standing in for the
 # screen's launcher. Its folder's CYFR, This box, runs on this machine's
 # Docker, set up by the box's account with `cyfr init` and setup's own
-# start; the CYFR elsewhere, x.test, is a public home behind a TLS front,
+# start; the CYFR elsewhere, x.test, has a domain address behind a TLS front,
 # a release of the same image. Both read their people's accounts at the
 # account service dir.test, a third release. Every press is a person's,
 # where the output shows what is pressed (screen.py: tesseract on grim's

@@ -27,7 +27,7 @@
 # its registry.
 #
 # The install is the shipped stack as `cyfr init` lays it down, nothing
-# overlaid, in local access, with what a person sets in .env: a port of the
+# overlaid, with no browser address, with what a person sets in .env: a port of the
 # run's own (CYFR_PORT, never 4000), builds on, a host of their own added
 # to the private egress list, and the account directory and both
 # registries at an address nothing answers, so nothing of the run reaches

@@ -1,0 +1,1402 @@
+{
+  "comment": "The vectors pinning the runtime role's settings and the release's log settings, every name the Go runtime role will parse (the native Locus plan, §15.1): until then Locus.Config reads them (Locus.Config.from_env/2, with Locus.Runtime.Settings.pool/2 for the pool's), and apps/locus/test/locus/runtime/settings_test.exs holds it to every case; the core's roster test (apps/cyfr/test/cyfr/platform_settings_roster_test.exs) reads the names here where it declared Locus.Config's, and Locus.Config's own stay the builds', the backends' and a runner's. variables are the names in Locus.Config's order, the runtime role's and then the release's log settings: each its setting, what it accepts (a list is every value the setting takes, a sentence what the boot's refusal says it takes), and its default when unset, null for one that is required (required: the runtime's key, without which the node serves no runtime, and the host API's URL). A whole number carries the range it is read in (min and max, each inclusive) and the most characters it is read in (max_length, a sign among them). The host API's URL is read by the grammar worker_api.json's base_urls hold (grammar, Prima.WorkerWire.base_url/1), and the bind as a pin's ip is read (Prima.PinnedTarget.parse_ip/1 in Elixir, pinned.Family in Go), which host_api.json's pin cases hold: four decimal IPv4 fields, none with a leading zero or a sign; an IPv6 address carries a zone after its first % only when its first group is fe80 or ff02, its second 0, and it embeds no IPv4 address, a zone that begins with 0 is a decimal number up to 65535, and any other zone, an empty one among them, any text. The attach directory's default is the run folder KEEPER_RUN_DIR names (default_from), and default where that names none or an empty one; KEEPER_RUN_DIR is read as written, not trimmed, and only where the attach directory takes it, no attach directory being set: there it is refused as the attach directory is, and beside an attach directory set it is not read. environment is the environment every case starts from, and the runtime's key in it is a fixture's. reads are environments each read as its settings, every one of them (the key as its hexadecimal text, the bind as written, the port and the durations as integers, the log's level and format as their names); refusals are environments each refused with its message, each for one cause: a boot with two causes is refused naming one of them. A setting's value is read with the white space around it trimmed, Unicode's white space, and a value of white space alone is unset; that holds for the settings, not for a name the release must not see (a control-plane name, or a LOCUS_ name no role reads), which refuses the boot whatever its value, empty or white space alone among them. No message shows the key.",
+  "variables": [
+    {
+      "accepted": "`wrk_` followed by 1 to 64 letters, digits, `_` or `-`",
+      "default": "wrk_local",
+      "name": "LOCUS_RUNTIME_SERVICE_ID",
+      "setting": "service_id"
+    },
+    {
+      "accepted": "exactly 64 hexadecimal digits (the derived worker key)",
+      "default": null,
+      "name": "LOCUS_RUNTIME_KEY",
+      "required": true,
+      "setting": "service_key"
+    },
+    {
+      "accepted": "an http or https URL with a host and no path",
+      "default": null,
+      "grammar": "worker_api.json base_urls",
+      "name": "LOCUS_RUNTIME_HOST_API_URL",
+      "required": true,
+      "setting": "host_url"
+    },
+    {
+      "accepted": "an IPv4 or IPv6 address",
+      "default": "127.0.0.1",
+      "name": "LOCUS_RUNTIME_BIND",
+      "setting": "bind"
+    },
+    {
+      "accepted": "an integer from 0 to 65535",
+      "default": 4200,
+      "max": 65535,
+      "max_length": 12,
+      "min": 0,
+      "name": "LOCUS_RUNTIME_PORT",
+      "setting": "port"
+    },
+    {
+      "accepted": "a whole number of milliseconds",
+      "default": 900000,
+      "max": 86400000,
+      "max_length": 12,
+      "min": 1,
+      "name": "LOCUS_RUNTIME_IDLE_TTL_MS",
+      "setting": "idle_ttl_ms"
+    },
+    {
+      "accepted": "a whole number of milliseconds",
+      "default": 5000,
+      "max": 600000,
+      "max_length": 12,
+      "min": 1,
+      "name": "LOCUS_RUNTIME_WATCHDOG_GRACE_MS",
+      "setting": "watchdog_grace_ms"
+    },
+    {
+      "accepted": "a whole number of milliseconds",
+      "default": 2000,
+      "max": 600000,
+      "max_length": 12,
+      "min": 1,
+      "name": "LOCUS_RUNTIME_RELEASE_GRACE_MS",
+      "setting": "release_grace_ms"
+    },
+    {
+      "accepted": "a clean absolute directory path",
+      "default": "/run/locus",
+      "default_from": "KEEPER_RUN_DIR",
+      "name": "LOCUS_RUNTIME_ATTACH_DIR",
+      "setting": "attach_dir"
+    },
+    {
+      "accepted": [
+        "error",
+        "info",
+        "debug",
+        "emergency",
+        "alert",
+        "critical",
+        "warning",
+        "notice"
+      ],
+      "default": "info",
+      "name": "LOCUS_LOG_LEVEL",
+      "setting": "log_level"
+    },
+    {
+      "accepted": [
+        "text",
+        "json"
+      ],
+      "default": "text",
+      "name": "LOCUS_LOG_FORMAT",
+      "setting": "log_format"
+    }
+  ],
+  "environment": {
+    "KEEPER_RUN_DIR": "/run/locus/runtime",
+    "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+    "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+  },
+  "reads": [
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "/run/locus/runtime",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "settings": {
+        "attach_dir": "/run/locus/runtime",
+        "bind": "127.0.0.1",
+        "host_url": "http://cyfr-1:4300",
+        "idle_ttl_ms": 900000,
+        "log_format": "text",
+        "log_level": "info",
+        "port": 4200,
+        "release_grace_ms": 2000,
+        "service_id": "wrk_local",
+        "service_key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "watchdog_grace_ms": 5000
+      },
+      "why": "the base environment alone: every setting its default"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "/run/locus/runtime",
+        "LOCUS_LOG_FORMAT": "json",
+        "LOCUS_LOG_LEVEL": "debug",
+        "LOCUS_RUNTIME_ATTACH_DIR": "/var/lib/attach",
+        "LOCUS_RUNTIME_BIND": "::",
+        "LOCUS_RUNTIME_HOST_API_URL": "https://cyfr.example:4300",
+        "LOCUS_RUNTIME_IDLE_TTL_MS": "86400000",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "LOCUS_RUNTIME_PORT": "0",
+        "LOCUS_RUNTIME_RELEASE_GRACE_MS": "600000",
+        "LOCUS_RUNTIME_SERVICE_ID": "wrk_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "LOCUS_RUNTIME_WATCHDOG_GRACE_MS": "1"
+      },
+      "settings": {
+        "attach_dir": "/var/lib/attach",
+        "bind": "::",
+        "host_url": "https://cyfr.example:4300",
+        "idle_ttl_ms": 86400000,
+        "log_format": "json",
+        "log_level": "debug",
+        "port": 0,
+        "release_grace_ms": 600000,
+        "service_id": "wrk_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "service_key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "watchdog_grace_ms": 1
+      },
+      "why": "every setting named"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "/run/locus/runtime",
+        "LOCUS_LOG_FORMAT": " text\t",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "LOCUS_RUNTIME_PORT": " 4300 "
+      },
+      "settings": {
+        "attach_dir": "/run/locus/runtime",
+        "bind": "127.0.0.1",
+        "host_url": "http://cyfr-1:4300",
+        "idle_ttl_ms": 900000,
+        "log_format": "text",
+        "log_level": "info",
+        "port": 4300,
+        "release_grace_ms": 2000,
+        "service_id": "wrk_local",
+        "service_key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "watchdog_grace_ms": 5000
+      },
+      "why": "values with spaces around them, trimmed"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "/run/locus/runtime",
+        "LOCUS_RUNTIME_BIND": "",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_IDLE_TTL_MS": "  ",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "settings": {
+        "attach_dir": "/run/locus/runtime",
+        "bind": "127.0.0.1",
+        "host_url": "http://cyfr-1:4300",
+        "idle_ttl_ms": 900000,
+        "log_format": "text",
+        "log_level": "info",
+        "port": 4200,
+        "release_grace_ms": 2000,
+        "service_id": "wrk_local",
+        "service_key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "watchdog_grace_ms": 5000
+      },
+      "why": "an empty value, unset"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "/run/locus/runtime",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_KEY": "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF"
+      },
+      "settings": {
+        "attach_dir": "/run/locus/runtime",
+        "bind": "127.0.0.1",
+        "host_url": "http://cyfr-1:4300",
+        "idle_ttl_ms": 900000,
+        "log_format": "text",
+        "log_level": "info",
+        "port": 4200,
+        "release_grace_ms": 2000,
+        "service_id": "wrk_local",
+        "service_key": "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF",
+        "watchdog_grace_ms": 5000
+      },
+      "why": "a key of uppercase hexadecimal digits"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "/run/locus/runtime",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "LOCUS_RUNTIME_SERVICE_ID": "wrk_A-z_9"
+      },
+      "settings": {
+        "attach_dir": "/run/locus/runtime",
+        "bind": "127.0.0.1",
+        "host_url": "http://cyfr-1:4300",
+        "idle_ttl_ms": 900000,
+        "log_format": "text",
+        "log_level": "info",
+        "port": 4200,
+        "release_grace_ms": 2000,
+        "service_id": "wrk_A-z_9",
+        "service_key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "watchdog_grace_ms": 5000
+      },
+      "why": "a service id of letters, digits, _ and -"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "/run/locus/runtime",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://172.16.231.2",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "settings": {
+        "attach_dir": "/run/locus/runtime",
+        "bind": "127.0.0.1",
+        "host_url": "http://172.16.231.2",
+        "idle_ttl_ms": 900000,
+        "log_format": "text",
+        "log_level": "info",
+        "port": 4200,
+        "release_grace_ms": 2000,
+        "service_id": "wrk_local",
+        "service_key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "watchdog_grace_ms": 5000
+      },
+      "why": "a plain http host API URL with an address and no port"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "/run/locus/runtime",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300/",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "settings": {
+        "attach_dir": "/run/locus/runtime",
+        "bind": "127.0.0.1",
+        "host_url": "http://cyfr-1:4300/",
+        "idle_ttl_ms": 900000,
+        "log_format": "text",
+        "log_level": "info",
+        "port": 4200,
+        "release_grace_ms": 2000,
+        "service_id": "wrk_local",
+        "service_key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "watchdog_grace_ms": 5000
+      },
+      "why": "a host API URL ending in a slash"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "/run/locus/runtime",
+        "LOCUS_RUNTIME_BIND": "::1",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "settings": {
+        "attach_dir": "/run/locus/runtime",
+        "bind": "::1",
+        "host_url": "http://cyfr-1:4300",
+        "idle_ttl_ms": 900000,
+        "log_format": "text",
+        "log_level": "info",
+        "port": 4200,
+        "release_grace_ms": 2000,
+        "service_id": "wrk_local",
+        "service_key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "watchdog_grace_ms": 5000
+      },
+      "why": "an IPv6 bind"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "/run/locus/runtime",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "LOCUS_RUNTIME_PORT": "04200"
+      },
+      "settings": {
+        "attach_dir": "/run/locus/runtime",
+        "bind": "127.0.0.1",
+        "host_url": "http://cyfr-1:4300",
+        "idle_ttl_ms": 900000,
+        "log_format": "text",
+        "log_level": "info",
+        "port": 4200,
+        "release_grace_ms": 2000,
+        "service_id": "wrk_local",
+        "service_key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "watchdog_grace_ms": 5000
+      },
+      "why": "a port of leading zeros"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "/run/locus/runtime",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "LOCUS_RUNTIME_PORT": "+80"
+      },
+      "settings": {
+        "attach_dir": "/run/locus/runtime",
+        "bind": "127.0.0.1",
+        "host_url": "http://cyfr-1:4300",
+        "idle_ttl_ms": 900000,
+        "log_format": "text",
+        "log_level": "info",
+        "port": 80,
+        "release_grace_ms": 2000,
+        "service_id": "wrk_local",
+        "service_key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "watchdog_grace_ms": 5000
+      },
+      "why": "a port with a plus sign, which the port's reader takes"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "/run/locus/runtime",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "LOCUS_RUNTIME_PORT": "+0"
+      },
+      "settings": {
+        "attach_dir": "/run/locus/runtime",
+        "bind": "127.0.0.1",
+        "host_url": "http://cyfr-1:4300",
+        "idle_ttl_ms": 900000,
+        "log_format": "text",
+        "log_level": "info",
+        "port": 0,
+        "release_grace_ms": 2000,
+        "service_id": "wrk_local",
+        "service_key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "watchdog_grace_ms": 5000
+      },
+      "why": "a port of +0"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "/run/locus/runtime",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "LOCUS_RUNTIME_PORT": "-0"
+      },
+      "settings": {
+        "attach_dir": "/run/locus/runtime",
+        "bind": "127.0.0.1",
+        "host_url": "http://cyfr-1:4300",
+        "idle_ttl_ms": 900000,
+        "log_format": "text",
+        "log_level": "info",
+        "port": 0,
+        "release_grace_ms": 2000,
+        "service_id": "wrk_local",
+        "service_key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "watchdog_grace_ms": 5000
+      },
+      "why": "a port of -0"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "/run/locus/runtime",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "LOCUS_RUNTIME_PORT": "000000004200"
+      },
+      "settings": {
+        "attach_dir": "/run/locus/runtime",
+        "bind": "127.0.0.1",
+        "host_url": "http://cyfr-1:4300",
+        "idle_ttl_ms": 900000,
+        "log_format": "text",
+        "log_level": "info",
+        "port": 4200,
+        "release_grace_ms": 2000,
+        "service_id": "wrk_local",
+        "service_key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "watchdog_grace_ms": 5000
+      },
+      "why": "a port of 12 characters, the most a whole number has"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "/run/locus/runtime",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "LOCUS_RUNTIME_PORT": "+00000004200"
+      },
+      "settings": {
+        "attach_dir": "/run/locus/runtime",
+        "bind": "127.0.0.1",
+        "host_url": "http://cyfr-1:4300",
+        "idle_ttl_ms": 900000,
+        "log_format": "text",
+        "log_level": "info",
+        "port": 4200,
+        "release_grace_ms": 2000,
+        "service_id": "wrk_local",
+        "service_key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "watchdog_grace_ms": 5000
+      },
+      "why": "a port of 12 characters with its sign"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "/run/locus/runtime",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "LOCUS_RUNTIME_PORT": " 4300 "
+      },
+      "settings": {
+        "attach_dir": "/run/locus/runtime",
+        "bind": "127.0.0.1",
+        "host_url": "http://cyfr-1:4300",
+        "idle_ttl_ms": 900000,
+        "log_format": "text",
+        "log_level": "info",
+        "port": 4300,
+        "release_grace_ms": 2000,
+        "service_id": "wrk_local",
+        "service_key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "watchdog_grace_ms": 5000
+      },
+      "why": "a port with no-break spaces around it, trimmed"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "/run/locus/runtime",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "LOCUS_RUNTIME_PORT": " 000000004200 "
+      },
+      "settings": {
+        "attach_dir": "/run/locus/runtime",
+        "bind": "127.0.0.1",
+        "host_url": "http://cyfr-1:4300",
+        "idle_ttl_ms": 900000,
+        "log_format": "text",
+        "log_level": "info",
+        "port": 4200,
+        "release_grace_ms": 2000,
+        "service_id": "wrk_local",
+        "service_key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "watchdog_grace_ms": 5000
+      },
+      "why": "a port of 12 characters with spaces around them: its length counted once it is trimmed"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "/run/locus/runtime",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "LOCUS_RUNTIME_RELEASE_GRACE_MS": "0005"
+      },
+      "settings": {
+        "attach_dir": "/run/locus/runtime",
+        "bind": "127.0.0.1",
+        "host_url": "http://cyfr-1:4300",
+        "idle_ttl_ms": 900000,
+        "log_format": "text",
+        "log_level": "info",
+        "port": 4200,
+        "release_grace_ms": 5,
+        "service_id": "wrk_local",
+        "service_key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "watchdog_grace_ms": 5000
+      },
+      "why": "a duration of leading zeros"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "/run/locus/runtime",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "LOCUS_RUNTIME_RELEASE_GRACE_MS": "000000005000"
+      },
+      "settings": {
+        "attach_dir": "/run/locus/runtime",
+        "bind": "127.0.0.1",
+        "host_url": "http://cyfr-1:4300",
+        "idle_ttl_ms": 900000,
+        "log_format": "text",
+        "log_level": "info",
+        "port": 4200,
+        "release_grace_ms": 5000,
+        "service_id": "wrk_local",
+        "service_key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "watchdog_grace_ms": 5000
+      },
+      "why": "a duration of 12 characters, the most a whole number has"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "/run/locus/runtime",
+        "LOCUS_RUNTIME_BIND": "0.0.0.0",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "settings": {
+        "attach_dir": "/run/locus/runtime",
+        "bind": "0.0.0.0",
+        "host_url": "http://cyfr-1:4300",
+        "idle_ttl_ms": 900000,
+        "log_format": "text",
+        "log_level": "info",
+        "port": 4200,
+        "release_grace_ms": 2000,
+        "service_id": "wrk_local",
+        "service_key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "watchdog_grace_ms": 5000
+      },
+      "why": "the bind of every address"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "/run/locus/runtime",
+        "LOCUS_RUNTIME_BIND": "::ffff:1.2.3.4",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "settings": {
+        "attach_dir": "/run/locus/runtime",
+        "bind": "::ffff:1.2.3.4",
+        "host_url": "http://cyfr-1:4300",
+        "idle_ttl_ms": 900000,
+        "log_format": "text",
+        "log_level": "info",
+        "port": 4200,
+        "release_grace_ms": 2000,
+        "service_id": "wrk_local",
+        "service_key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "watchdog_grace_ms": 5000
+      },
+      "why": "an IPv4 address in IPv6"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "/run/locus/runtime",
+        "LOCUS_RUNTIME_BIND": "fe80::1%lo",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "settings": {
+        "attach_dir": "/run/locus/runtime",
+        "bind": "fe80::1%lo",
+        "host_url": "http://cyfr-1:4300",
+        "idle_ttl_ms": 900000,
+        "log_format": "text",
+        "log_level": "info",
+        "port": 4200,
+        "release_grace_ms": 2000,
+        "service_id": "wrk_local",
+        "service_key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "watchdog_grace_ms": 5000
+      },
+      "why": "an IPv6 bind with a zone by name, read as a pin's address is"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "/run/locus/runtime",
+        "LOCUS_RUNTIME_BIND": "fe80::1%1",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "settings": {
+        "attach_dir": "/run/locus/runtime",
+        "bind": "fe80::1%1",
+        "host_url": "http://cyfr-1:4300",
+        "idle_ttl_ms": 900000,
+        "log_format": "text",
+        "log_level": "info",
+        "port": 4200,
+        "release_grace_ms": 2000,
+        "service_id": "wrk_local",
+        "service_key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "watchdog_grace_ms": 5000
+      },
+      "why": "an IPv6 bind with a zone by number, read as a pin's address is"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "/run/locus/runtime",
+        "LOCUS_RUNTIME_BIND": "fe80::1%",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "settings": {
+        "attach_dir": "/run/locus/runtime",
+        "bind": "fe80::1%",
+        "host_url": "http://cyfr-1:4300",
+        "idle_ttl_ms": 900000,
+        "log_format": "text",
+        "log_level": "info",
+        "port": 4200,
+        "release_grace_ms": 2000,
+        "service_id": "wrk_local",
+        "service_key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "watchdog_grace_ms": 5000
+      },
+      "why": "an IPv6 bind with an empty zone, which a pin's address reads"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "run/locus",
+        "LOCUS_RUNTIME_ATTACH_DIR": "/run/a",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "settings": {
+        "attach_dir": "/run/a",
+        "bind": "127.0.0.1",
+        "host_url": "http://cyfr-1:4300",
+        "idle_ttl_ms": 900000,
+        "log_format": "text",
+        "log_level": "info",
+        "port": 4200,
+        "release_grace_ms": 2000,
+        "service_id": "wrk_local",
+        "service_key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "watchdog_grace_ms": 5000
+      },
+      "why": "a run folder that is no clean path beside an attach directory set: only the attach directory is read"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "/",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "settings": {
+        "attach_dir": "/",
+        "bind": "127.0.0.1",
+        "host_url": "http://cyfr-1:4300",
+        "idle_ttl_ms": 900000,
+        "log_format": "text",
+        "log_level": "info",
+        "port": 4200,
+        "release_grace_ms": 2000,
+        "service_id": "wrk_local",
+        "service_key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "watchdog_grace_ms": 5000
+      },
+      "why": "the root as the run folder"
+    },
+    {
+      "environment": {
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "settings": {
+        "attach_dir": "/run/locus",
+        "bind": "127.0.0.1",
+        "host_url": "http://cyfr-1:4300",
+        "idle_ttl_ms": 900000,
+        "log_format": "text",
+        "log_level": "info",
+        "port": 4200,
+        "release_grace_ms": 2000,
+        "service_id": "wrk_local",
+        "service_key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "watchdog_grace_ms": 5000
+      },
+      "why": "no run folder named: the attach directory is the keeper's default"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "settings": {
+        "attach_dir": "/run/locus",
+        "bind": "127.0.0.1",
+        "host_url": "http://cyfr-1:4300",
+        "idle_ttl_ms": 900000,
+        "log_format": "text",
+        "log_level": "info",
+        "port": 4200,
+        "release_grace_ms": 2000,
+        "service_id": "wrk_local",
+        "service_key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "watchdog_grace_ms": 5000
+      },
+      "why": "an empty run folder: the keeper's default"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "/run/locus/runtime",
+        "LOCUS_LOG_LEVEL": "warning",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "settings": {
+        "attach_dir": "/run/locus/runtime",
+        "bind": "127.0.0.1",
+        "host_url": "http://cyfr-1:4300",
+        "idle_ttl_ms": 900000,
+        "log_format": "text",
+        "log_level": "warning",
+        "port": 4200,
+        "release_grace_ms": 2000,
+        "service_id": "wrk_local",
+        "service_key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "watchdog_grace_ms": 5000
+      },
+      "why": "the warning level"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "/run/locus/runtime",
+        "LOCUS_LOG_LEVEL": "emergency",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "settings": {
+        "attach_dir": "/run/locus/runtime",
+        "bind": "127.0.0.1",
+        "host_url": "http://cyfr-1:4300",
+        "idle_ttl_ms": 900000,
+        "log_format": "text",
+        "log_level": "emergency",
+        "port": 4200,
+        "release_grace_ms": 2000,
+        "service_id": "wrk_local",
+        "service_key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "watchdog_grace_ms": 5000
+      },
+      "why": "the emergency level"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "/run/locus/runtime",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "OTHER_SETTING": "x"
+      },
+      "settings": {
+        "attach_dir": "/run/locus/runtime",
+        "bind": "127.0.0.1",
+        "host_url": "http://cyfr-1:4300",
+        "idle_ttl_ms": 900000,
+        "log_format": "text",
+        "log_level": "info",
+        "port": 4200,
+        "release_grace_ms": 2000,
+        "service_id": "wrk_local",
+        "service_key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "watchdog_grace_ms": 5000
+      },
+      "why": "a name of another prefix, not the release's"
+    }
+  ],
+  "refusals": [
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "/run/locus/runtime",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "LOCUS_RUNTIME_SERVICE_ID": "wrk_"
+      },
+      "message": "LOCUS_RUNTIME_SERVICE_ID must be `wrk_` followed by 1 to 64 letters, digits, `_` or `-`",
+      "why": "a service id of the prefix alone"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "/run/locus/runtime",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "LOCUS_RUNTIME_SERVICE_ID": "wrk_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "message": "LOCUS_RUNTIME_SERVICE_ID must be `wrk_` followed by 1 to 64 letters, digits, `_` or `-`",
+      "why": "a service id of 65 characters past the prefix"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "/run/locus/runtime",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "LOCUS_RUNTIME_SERVICE_ID": "svc_1"
+      },
+      "message": "LOCUS_RUNTIME_SERVICE_ID must be `wrk_` followed by 1 to 64 letters, digits, `_` or `-`",
+      "why": "a service id of another prefix"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "/run/locus/runtime",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "LOCUS_RUNTIME_SERVICE_ID": "wrk_a b"
+      },
+      "message": "LOCUS_RUNTIME_SERVICE_ID must be `wrk_` followed by 1 to 64 letters, digits, `_` or `-`",
+      "why": "a service id with a space"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "/run/locus/runtime",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde"
+      },
+      "message": "LOCUS_RUNTIME_KEY must be exactly 64 hexadecimal digits (the derived worker key)",
+      "why": "a key of 63 hexadecimal digits"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "/run/locus/runtime",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0"
+      },
+      "message": "LOCUS_RUNTIME_KEY must be exactly 64 hexadecimal digits (the derived worker key)",
+      "why": "a key of 65 hexadecimal digits"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "/run/locus/runtime",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdeg"
+      },
+      "message": "LOCUS_RUNTIME_KEY must be exactly 64 hexadecimal digits (the derived worker key)",
+      "why": "a key with a digit that is no hexadecimal"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "/run/locus/runtime",
+        "LOCUS_RUNTIME_HOST_API_URL": "ftp://cyfr-1:4300",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "message": "LOCUS_RUNTIME_HOST_API_URL must be an http or https URL with a host and no path",
+      "why": "a host API URL of another scheme"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "/run/locus/runtime",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300/api",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "message": "LOCUS_RUNTIME_HOST_API_URL must be an http or https URL with a host and no path",
+      "why": "a host API URL with a path"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "/run/locus/runtime",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "message": "LOCUS_RUNTIME_HOST_API_URL must be an http or https URL with a host and no path",
+      "why": "a host API URL without a host"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "/run/locus/runtime",
+        "LOCUS_RUNTIME_HOST_API_URL": "cyfr-1",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "message": "LOCUS_RUNTIME_HOST_API_URL must be an http or https URL with a host and no path",
+      "why": "a host API URL that is no URL"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "/run/locus/runtime",
+        "LOCUS_RUNTIME_BIND": "localhost",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "message": "LOCUS_RUNTIME_BIND must be an IPv4 or IPv6 address",
+      "why": "a bind that is a name"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "/run/locus/runtime",
+        "LOCUS_RUNTIME_BIND": "256.0.0.1",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "message": "LOCUS_RUNTIME_BIND must be an IPv4 or IPv6 address",
+      "why": "a bind past an IPv4 octet"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "/run/locus/runtime",
+        "LOCUS_RUNTIME_BIND": "127.1",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "message": "LOCUS_RUNTIME_BIND must be an IPv4 or IPv6 address",
+      "why": "a bind of two IPv4 fields"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "/run/locus/runtime",
+        "LOCUS_RUNTIME_BIND": "10",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "message": "LOCUS_RUNTIME_BIND must be an IPv4 or IPv6 address",
+      "why": "a bind of one IPv4 field"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "/run/locus/runtime",
+        "LOCUS_RUNTIME_BIND": "0",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "message": "LOCUS_RUNTIME_BIND must be an IPv4 or IPv6 address",
+      "why": "a bind of 0"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "/run/locus/runtime",
+        "LOCUS_RUNTIME_BIND": "4294967295",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "message": "LOCUS_RUNTIME_BIND must be an IPv4 or IPv6 address",
+      "why": "a bind of one 32-bit number"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "/run/locus/runtime",
+        "LOCUS_RUNTIME_BIND": "0x7f.0.0.1",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "message": "LOCUS_RUNTIME_BIND must be an IPv4 or IPv6 address",
+      "why": "a bind with a hexadecimal field"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "/run/locus/runtime",
+        "LOCUS_RUNTIME_BIND": "0177.0.0.1",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "message": "LOCUS_RUNTIME_BIND must be an IPv4 or IPv6 address",
+      "why": "a bind with an octal field"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "/run/locus/runtime",
+        "LOCUS_RUNTIME_BIND": "127.000.000.001",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "message": "LOCUS_RUNTIME_BIND must be an IPv4 or IPv6 address",
+      "why": "a bind with leading zeros"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "/run/locus/runtime",
+        "LOCUS_RUNTIME_BIND": "1.2.3.+4",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "message": "LOCUS_RUNTIME_BIND must be an IPv4 or IPv6 address",
+      "why": "a bind with a signed field"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "/run/locus/runtime",
+        "LOCUS_RUNTIME_BIND": "::1%1",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "message": "LOCUS_RUNTIME_BIND must be an IPv4 or IPv6 address",
+      "why": "a zone on the loopback address, which is no fe80:: or ff02:: one"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "/run/locus/runtime",
+        "LOCUS_RUNTIME_BIND": "2001:db8::1%1",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "message": "LOCUS_RUNTIME_BIND must be an IPv4 or IPv6 address",
+      "why": "a zone on a global address"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "/run/locus/runtime",
+        "LOCUS_RUNTIME_BIND": "fe80:1::1%1",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "message": "LOCUS_RUNTIME_BIND must be an IPv4 or IPv6 address",
+      "why": "a zone on fe80: with a second group that is not 0"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "/run/locus/runtime",
+        "LOCUS_RUNTIME_BIND": "fe80::1%065536",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "message": "LOCUS_RUNTIME_BIND must be an IPv4 or IPv6 address",
+      "why": "a zone that begins with 0 and runs past 65535"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "/run/locus/runtime",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "LOCUS_RUNTIME_PORT": "65536"
+      },
+      "message": "LOCUS_RUNTIME_PORT must be an integer from 0 to 65535",
+      "why": "a port past 65535"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "/run/locus/runtime",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "LOCUS_RUNTIME_PORT": "-1"
+      },
+      "message": "LOCUS_RUNTIME_PORT must be an integer from 0 to 65535",
+      "why": "a negative port"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "/run/locus/runtime",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "LOCUS_RUNTIME_PORT": "http"
+      },
+      "message": "LOCUS_RUNTIME_PORT must be an integer from 0 to 65535",
+      "why": "a port that is no number"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "/run/locus/runtime",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "LOCUS_RUNTIME_PORT": "4200.0"
+      },
+      "message": "LOCUS_RUNTIME_PORT must be an integer from 0 to 65535",
+      "why": "a port with a fraction"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "/run/locus/runtime",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "LOCUS_RUNTIME_PORT": "0000000004200"
+      },
+      "message": "LOCUS_RUNTIME_PORT must be an integer from 0 to 65535",
+      "why": "a port of 13 characters"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "/run/locus/runtime",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "LOCUS_RUNTIME_RELEASE_GRACE_MS": "0000000005000"
+      },
+      "message": "LOCUS_RUNTIME_RELEASE_GRACE_MS=\"0000000005000\" must be a whole number of milliseconds from 1 to 600000.",
+      "why": "a duration of 13 characters"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "/run/locus/runtime",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_IDLE_TTL_MS": "0",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "message": "LOCUS_RUNTIME_IDLE_TTL_MS=\"0\" must be a whole number of milliseconds from 1 to 86400000.",
+      "why": "an idle TTL of zero"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "/run/locus/runtime",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_IDLE_TTL_MS": "86400001",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "message": "LOCUS_RUNTIME_IDLE_TTL_MS=\"86400001\" must be a whole number of milliseconds from 1 to 86400000.",
+      "why": "an idle TTL past a day"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "/run/locus/runtime",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_IDLE_TTL_MS": "1e3",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "message": "LOCUS_RUNTIME_IDLE_TTL_MS=\"1e3\" must be a whole number of milliseconds from 1 to 86400000.",
+      "why": "an idle TTL with an exponent"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "/run/locus/runtime",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_IDLE_TTL_MS": "+1000",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "message": "LOCUS_RUNTIME_IDLE_TTL_MS=\"+1000\" must be a whole number of milliseconds from 1 to 86400000.",
+      "why": "a duration with a plus sign, which a port takes and a duration does not"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "/run/locus/runtime",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "LOCUS_RUNTIME_WATCHDOG_GRACE_MS": "600001"
+      },
+      "message": "LOCUS_RUNTIME_WATCHDOG_GRACE_MS=\"600001\" must be a whole number of milliseconds from 1 to 600000.",
+      "why": "a watchdog grace past ten minutes"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "/run/locus/runtime",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "LOCUS_RUNTIME_RELEASE_GRACE_MS": "soon"
+      },
+      "message": "LOCUS_RUNTIME_RELEASE_GRACE_MS=\"soon\" must be a whole number of milliseconds from 1 to 600000.",
+      "why": "a release grace that is no number"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "/run/locus/runtime",
+        "LOCUS_RUNTIME_ATTACH_DIR": "run/attach",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "message": "LOCUS_RUNTIME_ATTACH_DIR must be a clean absolute directory path",
+      "why": "a relative attach directory"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "/run/locus/runtime",
+        "LOCUS_RUNTIME_ATTACH_DIR": "/run/../attach",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "message": "LOCUS_RUNTIME_ATTACH_DIR must be a clean absolute directory path",
+      "why": "an attach directory with a dot segment"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "/run/locus/runtime",
+        "LOCUS_RUNTIME_ATTACH_DIR": "/run/attach/",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "message": "LOCUS_RUNTIME_ATTACH_DIR must be a clean absolute directory path",
+      "why": "an attach directory ending in a slash"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "/run/locus/runtime",
+        "LOCUS_LOG_LEVEL": "INFO",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "message": "LOCUS_LOG_LEVEL=\"INFO\" is not a Logger level; use one of error, info, debug, emergency, alert, critical, warning, notice.",
+      "why": "a level in capitals"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "/run/locus/runtime",
+        "LOCUS_LOG_LEVEL": "warn",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "message": "LOCUS_LOG_LEVEL=\"warn\" is not a Logger level; use one of error, info, debug, emergency, alert, critical, warning, notice.",
+      "why": "a level Logger no longer has"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "/run/locus/runtime",
+        "LOCUS_LOG_FORMAT": "JSON",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "message": "LOCUS_LOG_FORMAT=\"JSON\" is not a log format; use text or json.",
+      "why": "a format in capitals"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "/run/locus/runtime",
+        "LOCUS_LOG_FORMAT": "logfmt",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "message": "LOCUS_LOG_FORMAT=\"logfmt\" is not a log format; use text or json.",
+      "why": "a format of neither"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "/run/locus/runtime",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "LOCUS_RUNTIME_RUNNERS": "8"
+      },
+      "message": "LOCUS_RUNTIME_RUNNERS is not a variable the locus release reads: remove it, or use the name .env.locus.example gives",
+      "why": "a runtime name the role does not read"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "/run/locus/runtime",
+        "LOCUS_PLANTED": "1",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "message": "LOCUS_PLANTED is not a variable the locus release reads: remove it, or use the name .env.locus.example gives",
+      "why": "a LOCUS_ name of no role"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "/run/locus/runtime",
+        "LOCUS_PLANTED": "",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "message": "LOCUS_PLANTED is not a variable the locus release reads: remove it, or use the name .env.locus.example gives",
+      "why": "a LOCUS_ name of no role, empty"
+    },
+    {
+      "environment": {
+        "CYFR_DATABASE_URL": "ecto://x",
+        "KEEPER_RUN_DIR": "/run/locus/runtime",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "message": "the locus release must not see CYFR_DATABASE_URL: the database, the keyring, the runtime's root and the control plane's builds and backends keys are CYFR's",
+      "why": "the control plane's database URL"
+    },
+    {
+      "environment": {
+        "CYFR_DATABASE_URL": "",
+        "KEEPER_RUN_DIR": "/run/locus/runtime",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "message": "the locus release must not see CYFR_DATABASE_URL: the database, the keyring, the runtime's root and the control plane's builds and backends keys are CYFR's",
+      "why": "the control plane's database URL, empty"
+    },
+    {
+      "environment": {
+        "CYFR_DATABASE_URL": "  ",
+        "KEEPER_RUN_DIR": "/run/locus/runtime",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "message": "the locus release must not see CYFR_DATABASE_URL: the database, the keyring, the runtime's root and the control plane's builds and backends keys are CYFR's",
+      "why": "the control plane's database URL, white space alone"
+    },
+    {
+      "environment": {
+        "CYFR_LOCUS_RUNTIME_ROOT": "abababababababababababababababababababababababababababababababab",
+        "KEEPER_RUN_DIR": "/run/locus/runtime",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "message": "the locus release must not see CYFR_LOCUS_RUNTIME_ROOT: the database, the keyring, the runtime's root and the control plane's builds and backends keys are CYFR's",
+      "why": "the runtime's root"
+    },
+    {
+      "environment": {
+        "CYFR_CRYPTO_KEYRING": "k",
+        "KEEPER_RUN_DIR": "/run/locus/runtime",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "message": "the locus release must not see CYFR_CRYPTO_KEYRING: the database, the keyring, the runtime's root and the control plane's builds and backends keys are CYFR's",
+      "why": "the control plane's keyring"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "  ",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "message": "KEEPER_RUN_DIR must be a clean absolute directory path",
+      "why": "a run folder of white space alone, which is not trimmed"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": " /run/locus ",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "message": "KEEPER_RUN_DIR must be a clean absolute directory path",
+      "why": "a run folder with white space around it, which is not trimmed"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "run/locus",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "message": "KEEPER_RUN_DIR must be a clean absolute directory path",
+      "why": "a relative run folder"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "/run/locus/",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "message": "KEEPER_RUN_DIR must be a clean absolute directory path",
+      "why": "a run folder ending in a slash"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "/run/../locus",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "message": "KEEPER_RUN_DIR must be a clean absolute directory path",
+      "why": "a run folder with a dot-dot segment"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "//run/locus",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "message": "KEEPER_RUN_DIR must be a clean absolute directory path",
+      "why": "a run folder with a double slash"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "/run/./locus",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "message": "KEEPER_RUN_DIR must be a clean absolute directory path",
+      "why": "a run folder with a dot segment"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "/run/locus/runtime",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "message": "LOCUS_RUNTIME_HOST_API_URL is not set",
+      "why": "no host API URL"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "/run/locus/runtime",
+        "LOCUS_RUNTIME_HOST_API_URL": " ",
+        "LOCUS_RUNTIME_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "message": "LOCUS_RUNTIME_HOST_API_URL is not set",
+      "why": "an empty host API URL: none"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "/run/locus/runtime",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300"
+      },
+      "message": "LOCUS_RUNTIME_KEY, LOCUS_BUILDS_KEY and LOCUS_BACKENDS_KEY are all unset; a server serves the runtime with the first, builds with the second and backends with the third (64 hexadecimal digits each: the key `mix cyfr.locus.runtime_key` derives from CYFR_LOCUS_RUNTIME_ROOT, and the same key as CYFR_LOCUS_BUILDS_KEY or CYFR_LOCUS_BACKENDS_KEY on the server).",
+      "why": "no key of any role"
+    },
+    {
+      "environment": {
+        "KEEPER_RUN_DIR": "/run/locus/runtime",
+        "LOCUS_RUNTIME_HOST_API_URL": "http://cyfr-1:4300",
+        "LOCUS_RUNTIME_KEY": ""
+      },
+      "message": "LOCUS_RUNTIME_KEY, LOCUS_BUILDS_KEY and LOCUS_BACKENDS_KEY are all unset; a server serves the runtime with the first, builds with the second and backends with the third (64 hexadecimal digits each: the key `mix cyfr.locus.runtime_key` derives from CYFR_LOCUS_RUNTIME_ROOT, and the same key as CYFR_LOCUS_BUILDS_KEY or CYFR_LOCUS_BACKENDS_KEY on the server).",
+      "why": "an empty key: no key"
+    }
+  ]
+}

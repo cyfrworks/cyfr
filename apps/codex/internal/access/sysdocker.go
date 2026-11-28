@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"time"
 )
@@ -36,7 +37,7 @@ func (c *CallError) Error() string {
 func (c *CallError) Is(target error) bool { return c.Deadline && target == ErrDeadline }
 
 // systemDocker runs the docker binary on this machine. Every call's
-// environment is cyfr's with every variable keptFromDocker names removed,
+// environment is cyfr's with every variable environFiltered names removed,
 // DOCKER_* kept; it runs in the project directory, in a process group of its own,
 // bounded by its deadline (StartDeadline when the call names none).
 // While the engine holds the lock, a Unix call runs under the watchdog,
@@ -95,33 +96,41 @@ func (s *systemDocker) Run(ctx context.Context, c Call) (Result, error) {
 
 // KVMSetting and TunSetting are the .env settings that name the devices a
 // person's computer of their own runs through, which cyfr writes from what
-// the machine has: compose reads them from .env alone (keptFromDocker).
+// the machine has: compose reads them from .env alone (environFiltered).
 const (
 	KVMSetting = "CYFR_LOCUS_KVM"
 	TunSetting = "CYFR_LOCUS_TUN"
 )
 
-// keptFromDocker says the variable name never reaches a docker call's
-// environment, matched without case, as Windows matches names: every
-// COMPOSE_* variable, and the two device settings, which compose would
-// otherwise read from the environment ahead of .env, so a shell could hand
-// the Locus services a device cyfr refuses, or none.
-func keptFromDocker(name string) bool {
-	upper := strings.ToUpper(name)
-	return strings.HasPrefix(upper, "COMPOSE_") || upper == KVMSetting || upper == TunSetting
-}
-
-// sanitizedEnv is env without any variable keptFromDocker names.
+// sanitizedEnv is env without any COMPOSE_* variable, the proxy trust and
+// the device settings, matched without case, as Windows matches names
+// (environFiltered).
 func sanitizedEnv(env []string) []string {
 	out := make([]string, 0, len(env))
 	for _, kv := range env {
 		name, _, _ := strings.Cut(kv, "=")
-		if keptFromDocker(name) {
+		if environFiltered(name) {
 			continue
 		}
 		out = append(out, kv)
 	}
 	return out
+}
+
+// trustKeys are the settings of whose forwarded headers the proxy listener
+// trusts: .env alone states them, so a variable this process was started
+// with never reaches compose's interpolation of them, nor outranks what
+// .env says.
+var trustKeys = []string{"CYFR_TRUSTED_PROXY_CIDRS", "CYFR_TRUSTED_PROXY_HOPS"}
+
+// environFiltered reports whether a variable of this process's environment
+// is kept from every compose call: every COMPOSE_* variable, which would
+// choose the stack's files, project or services, the proxy trust, and the
+// two device settings, which compose would otherwise read ahead of .env, so
+// a shell could hand the Locus services a device cyfr refuses, or none.
+func environFiltered(name string) bool {
+	upper := strings.ToUpper(name)
+	return strings.HasPrefix(upper, "COMPOSE_") || slices.Contains(trustKeys, upper) || upper == KVMSetting || upper == TunSetting
 }
 
 // watchdogArgv is the argv that runs WatchdogMain from this executable.

@@ -32,7 +32,7 @@ import (
 // with no value taken or interpolated from this process's environment.
 //
 // The binding is the one way cyfr itself reaches that CYFR, the same in
-// every access mode (localFolder.transport): the loopback listener, which
+// every kind of browser address (localFolder.transport): the loopback listener, which
 // the folder's cyfr container publishes at 127.0.0.1 and CYFR_PORT, under
 // the configured address's name. That name is what is signed and shown,
 // and is never looked up or connected to. As each connection opens the
@@ -50,7 +50,7 @@ import (
 // has the docker group and Docker Desktop's docker where this one lacks
 // them, and none of this one's settings.
 
-// The engine's route to a CYFR with tailnet access from the computer it
+// The engine's route to a CYFR with a tailnet address from the computer it
 // runs on, for CYFR's own pages alone: its SOCKS5 proxy on loopback, the
 // one way to that name. The engine asks the proxy for each name, and
 // looks none of them up itself.
@@ -61,7 +61,7 @@ const directoryVar = "CYFR_DIRECTORY_URL"
 // localBound is what a connection to a folder's CYFR is bound to: what a
 // reading names of it.
 type localBound struct {
-	Mode      string `json:"mode"`
+	Browser   string `json:"browser"`
 	Address   string `json:"address"`
 	Directory string `json:"directory"`
 	// Port is the one its cyfr container publishes on loopback.
@@ -101,7 +101,7 @@ func readFolder(dir string) (localReading, error) {
 	}
 	return localReading{
 		localBound: localBound{
-			Mode:      head.Mode,
+			Browser:   head.Browser,
 			Address:   address,
 			Directory: cmp.Or(strings.TrimSpace(values[directoryVar]), account.DefaultDirectory),
 			Port:      head.Port,
@@ -154,10 +154,10 @@ func openFolder(work *shell.Work, dir, holder string) (*localFolder, localReadin
 		work: work, begin: beginUnder(work, preparer())}, read, nil
 }
 
-// localRoute is the engine's route to a CYFR of access mode on the
-// computer it runs on: a tailnet one's proxy, none for any other.
-func localRoute(mode string) string {
-	if mode == access.ModeTailnet {
+// localRoute is the engine's route to a CYFR of browser address kind on
+// the computer it runs on: a tailnet one's proxy, none for any other.
+func localRoute(browser string) string {
+	if browser == access.BrowserTailnet {
 		return localProxy
 	}
 	return ""
@@ -175,7 +175,7 @@ func readLocal(work *shell.Work, dir, holder string) (desktop.Local, error) {
 	}
 	client := &http.Client{Transport: f.transport(nil)}
 	l := desktop.Local{Work: work}
-	l.Proxy = localRoute(read.Mode)
+	l.Proxy = localRoute(read.Browser)
 	l.Shell = shell.Config{
 		Address:    read.Address,
 		Client:     client,

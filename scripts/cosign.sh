@@ -58,14 +58,14 @@ usage() { echo "usage: $0 install DIR | version | check image IMAGE | check run 
 # `$1` (NAME=value lines) and the key directory at /run/cosign-check.
 # `check image` starts a container of the image of its own for each
 # command, named under PROOF_RUN_PREFIX, with what a boot needs
-# (CYFR_ACCESS and a fresh CYFR_SECRET_KEY_BASE); `check run` runs
+# (CYFR_BROWSER and a fresh CYFR_SECRET_KEY_BASE); `check run` runs
 # RUNNER... TARGET with each setting as an -e.
 in_target() {
   local envfile=$1 line
   shift
   if [ "$mode" = image ]; then
     docker run --rm --name "${PROOF_RUN_PREFIX:-}cosign-check-$$-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')" \
-      -e CYFR_ACCESS=local -e "CYFR_SECRET_KEY_BASE=$secret" --env-file "$envfile" -v "$key:/run/cosign-check:ro" \
+      -e CYFR_BROWSER=none -e "CYFR_SECRET_KEY_BASE=$secret" --env-file "$envfile" -v "$key:/run/cosign-check:ro" \
       "$target" "$@"
   else
     local -a settings=()

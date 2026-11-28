@@ -596,7 +596,7 @@ var dockerCommands = []struct{ args, again []string }{
 	{[]string{"restore", "--", "-weird"}, []string{"restore", "--", "-weird"}},
 	{[]string{"update", "--yes", "--version", "0.6.0-alpha.12"}, []string{"update", "--version=0.6.0-alpha.12", "--yes"}},
 	{[]string{"uninstall"}, []string{"uninstall"}},
-	{[]string{"access", "local", "--yes"}, []string{"access", "--yes", "local"}},
+	{[]string{"access", "browser", "none", "--yes"}, []string{"access", "browser", "--yes", "none"}},
 	{[]string{"access", "--resume"}, []string{"access", "--resume"}},
 	{[]string{"access", "status"}, []string{"access", "status"}},
 }
@@ -691,7 +691,7 @@ func TestEveryCommandThatStartsTheStackRefusesADeviceThisMachineLacks(t *testing
 							return reachable(ctx)
 						}
 						t.Chdir(t.TempDir())
-						env := "CYFR_ACCESS=local\n" + d.env + "=" + value + "\n"
+						env := "CYFR_BROWSER=none\n" + d.env + "=" + value + "\n"
 						if err := os.WriteFile(".env", []byte(env), 0o600); err != nil {
 							t.Fatal(err)
 						}
@@ -748,7 +748,7 @@ func TestTheCommandsThatStartNothingOrWriteTheDevicesAreNeverRefusedForOne(t *te
 			machine.devices = func() bool { return false }
 			record := sgStandIn(t, "0")
 			t.Chdir(t.TempDir())
-			if err := os.WriteFile(".env", []byte("CYFR_ACCESS=local\n"+deviceLines("/dev/kvm", "/dev/net/tun")), 0o600); err != nil {
+			if err := os.WriteFile(".env", []byte("CYFR_BROWSER=none\n"+deviceLines("/dev/kvm", "/dev/net/tun")), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			err := runCommandLine(t, c.args...)
@@ -772,7 +772,7 @@ func TestLogInSentenceNamesTheFlagsThatMatter(t *testing.T) {
 		{[]string{"update", "--version", "0.6.0-alpha.12"}, "`cyfr update --version=0.6.0-alpha.12`"},
 		{[]string{"restore", "--no-start", "backups/2026"}, "`cyfr restore --no-start backups/2026`"},
 		{[]string{"access", "--resume"}, "`cyfr access --resume`"},
-		{[]string{"access", "tailnet", "--tailscale-auth-key-file", "key"}, "`cyfr access --tailscale-auth-key-file=key tailnet`"},
+		{[]string{"access", "browser", "tailnet", "--tailscale-auth-key-file", "key"}, "`cyfr access browser --tailscale-auth-key-file=key tailnet`"},
 		{[]string{"restore", "backups/my snap"}, "`cyfr restore 'backups/my snap'`"},
 	} {
 		t.Run(strings.Join(c.args, " "), func(t *testing.T) {
@@ -865,12 +865,13 @@ func TestSecondRunIsTheSameCommandInEachLoginShell(t *testing.T) {
 		{"restore", "--", "-weird"},
 		{"restore", ""},
 		{"restore", "snap!1"},
-		{"access", "public", "--domain", `ex'ample.com`, "--acme-email", `a"b$c`},
-		{"access", "tailnet", "--hostname", "", "--tailscale-auth-key-file", "my keys/key"},
+		{"access", "browser", "domain", "--domain", `ex'ample.com`, "--acme-email", `a"b$c`},
+		{"access", "browser", "tailnet", "--hostname", "", "--tailscale-auth-key-file", "my keys/key"},
+		{"access", "browser", "proxy", "--domain", "cyfr.example.com", "--publish", "127.0.0.1:4001"},
 		{"access", "status", "--json"},
 		{"update", "--version", "0.6.0-alpha.12"},
 		{"backup", `--context=a\\b`},
-		{"access", "public", "--acme-email", `a\`, "--domain", "; touch PWNED; #"},
+		{"access", "browser", "domain", "--acme-email", `a\`, "--domain", "; touch PWNED; #"},
 	} {
 		t.Run(strings.Join(line, " "), func(t *testing.T) {
 			s := standInMachine(t)

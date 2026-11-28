@@ -5,8 +5,8 @@
 # release.sh by tests/browser/run.sh, by each browser proof's scripts
 # under tests/ and by the tests of the proofs' shared plumbing.
 #
-# A home is a cell on a `.test` hostname of its own, a public home of that
-# name (CYFR_ACCESS=public), one or several at once, each reached by every
+# A home is a cell on a `.test` hostname of its own, with a domain address
+# of that name (CYFR_BROWSER=domain), one or several at once, each reached by every
 # browser at https://HOST through the harness's proxy (tests/browser/
 # lib.mjs), whose TLS front presents a certificate the run's own authority
 # issued for that name and forwards to the home's proxy listener. A proof
@@ -181,10 +181,10 @@ browser_certificate() {
 }
 
 # A home: a new cell at `$1` (release.sh's `cell_new`, `$3` the PostgreSQL
-# URL of its database), the public home `cyfr access` makes of it for the
-# hostname `$2` (`cell_hostname`), on listener ports picked free, with a
-# certificate for `$2` from the run's authority. Its name is the cell's
-# directory name.
+# URL of its database), the domain address `cyfr access browser domain`
+# gives it for the hostname `$2` (`cell_hostname`), on listener ports picked
+# free, with a certificate for `$2` from the run's authority. Its name is
+# the cell's directory name.
 browser_home() {
   local cell="$1" host="$2" url="${3:-}" name port
   name="$(basename "$cell")"

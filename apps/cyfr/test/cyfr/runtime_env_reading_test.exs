@@ -26,9 +26,10 @@ defmodule Cyfr.RuntimeEnvReadingTest do
   @string_compared_switch ~r/(==|!=)\s*"(true|false|on|off|yes|no|1|0)"|\bin \["(true|false|on|off|yes|no|1|0)"/
 
   # Every setting the access resolver reads.
-  @access_keys ~w(CYFR_ACCESS CYFR_HOST CYFR_TAILNET_NODE_ID CYFR_PUBLIC_URL CADDY_ACME_EMAIL
+  @access_keys ~w(CYFR_BROWSER CYFR_HOST CYFR_TAILNET_NODE_ID CYFR_PUBLIC_URL CADDY_ACME_EMAIL
                  CYFR_PORT CYFR_BIND_ADDRESS CYFR_LOCAL_INGRESS_ASSERTED CYFR_PROXY_BIND_ADDRESS
-                 CYFR_PROXY_PORT CYFR_TRUSTED_PROXY_HOPS CYFR_TRUSTED_PROXY_CIDRS)
+                 CYFR_PROXY_PORT CYFR_PROXY_PUBLISH CYFR_TRUSTED_PROXY_HOPS
+                 CYFR_TRUSTED_PROXY_CIDRS)
 
   # The variables the evaluations set or clear, so a case starts from none of them.
   @controlled @access_keys ++
@@ -48,15 +49,15 @@ defmodule Cyfr.RuntimeEnvReadingTest do
     |> Enum.reject(fn {line, _n} -> String.contains?(line, "env!(key,") end)
   end
 
-  # The environment a boot is evaluated in: a release named cyfr, local access,
-  # a secret, and none of the variables the evaluations set.
+  # The environment a boot is evaluated in: a release named cyfr with no
+  # browser address, a secret, and none of the variables the evaluations set.
   defp base_env do
     @controlled
     |> Map.new(&{&1, nil})
     |> Map.merge(%{
       "CYFR_SECRET_KEY_BASE" => Base.encode64(:crypto.strong_rand_bytes(48)),
       "RELEASE_NAME" => "cyfr",
-      "CYFR_ACCESS" => "local"
+      "CYFR_BROWSER" => "none"
     })
   end
 
@@ -156,20 +157,20 @@ defmodule Cyfr.RuntimeEnvReadingTest do
              Enum.join(offenders, "\n")
   end
 
-  # How the home is reached is one resolution of every access setting
+  # How the server is reached is one resolution of every access setting
   # (`Cyfr.RuntimeConfig.resolve_access/1`), and it gates the boot: a release
-  # without a mode refuses with the sentence that names its fix, and local access
-  # boots.
-  test "the access settings are resolved from the environment, and a release without a mode refuses" do
+  # without a browser kind refuses with the sentence that names its fix, and
+  # one with none boots.
+  test "the access settings are resolved from the environment, and a release without a browser kind refuses" do
     dir = scratch_dir()
 
-    with_env(%{"CYFR_ACCESS" => nil, "RELEASE_ROOT" => dir}, fn ->
+    with_env(%{"CYFR_BROWSER" => nil, "RELEASE_ROOT" => dir}, fn ->
       message = Exception.message(assert_raise(RuntimeError, &read_prod_config!/0))
 
       assert message == "[Cyfr] FATAL: " <> Prima.Refusal.message({:access_missing, %{}})
     end)
 
-    with_env(%{"CYFR_ACCESS" => "local"}, fn ->
+    with_env(%{"CYFR_BROWSER" => "none"}, fn ->
       assert is_list(read_prod_config!()[:cyfr][:mcp_allowed_origins])
     end)
   end

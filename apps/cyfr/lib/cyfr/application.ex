@@ -206,7 +206,7 @@ defmodule Cyfr.Application do
 
   @doc """
   Stop `endpoint` accepting: each socket server it serves on, its loopback
-  listener and, in a tailnet or public home, its proxy listener
+  listener and, with a browser address, its proxy listener
   (`endpoint_servers/1`), is suspended (`suspend_server/1`). With none,
   there is nothing to do and the answer is `:ok`.
 
@@ -559,7 +559,7 @@ defmodule Cyfr.Application do
   # starts before the endpoint and so stops after it: the listeners have
   # closed before the tree stops (`prep_stop/1`), and a delivery already in
   # flight is ended after the endpoint. The endpoint's listeners, the
-  # loopback listener and in a tailnet or public home the proxy listener
+  # loopback listener and with a browser address the proxy listener
   # (`CyfrWeb.Ingress`), drain their open connections for the
   # `thousand_island_options` `shutdown_timeout` in `config/config.exs`.
   defp web do

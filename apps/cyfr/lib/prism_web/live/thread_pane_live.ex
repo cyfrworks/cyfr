@@ -661,7 +661,6 @@ defmodule PrismWeb.ThreadPaneLive do
     |> assign(:turn_user, nil)
     |> assign(:live_turn_id, nil)
     |> assign(:partials, Aqua.stream_new())
-    |> assign(:tool_activity, [])
     |> assign(:token_usage, %{input: 0, output: 0})
     |> assign(:announcement, "")
     # Whether the running turn wrote a reply: its end is announced as one
@@ -683,7 +682,6 @@ defmodule PrismWeb.ThreadPaneLive do
     |> assign(:turn_user, live.turn_user)
     |> assign(:live_turn_id, if(live.running, do: live.turn_id))
     |> assign(:partials, live.partials)
-    |> assign(:tool_activity, live.tool_activity)
     |> assign(:token_usage, live.usage)
     |> assign(:assistant, live.agent || socket.assigns.assistant)
   end
@@ -1202,7 +1200,6 @@ defmodule PrismWeb.ThreadPaneLive do
     |> assign(:paused_reason, nil)
     |> assign(:turn_user, user_id)
     |> assign(:partials, Aqua.stream_new())
-    |> assign(:tool_activity, [])
     |> assign(:token_usage, %{input: 0, output: 0})
   end
 
@@ -1230,7 +1227,6 @@ defmodule PrismWeb.ThreadPaneLive do
     |> assign(:paused_reason, reason)
     |> assign(:live_turn_id, nil)
     |> assign(:partials, Aqua.stream_new())
-    |> assign(:tool_activity, [])
   end
 
   defp handle_thread_event(socket, :turn_finished, _data) do
@@ -1247,36 +1243,52 @@ defmodule PrismWeb.ThreadPaneLive do
     |> assign(:turn_user, nil)
     |> assign(:live_turn_id, nil)
     |> assign(:partials, Aqua.stream_new())
-    |> assign(:tool_activity, [])
     |> assign(:cancel_requested, false)
     |> reread_pending()
   end
 
-  # Streamed text belongs to the running turn alone: an announcement or a
-  # delta for any other turn, or while none runs, is not kept.
+  # Streamed text, reasoning and the list of calls belong to the running
+  # turn alone: an announcement, a delta or a list for any other turn, or
+  # while none is held, is not kept, nor a list under a fence the pane no
+  # longer holds (`Aqua.Loop.Stream`). A pane that holds no turn, such as
+  # one whose thread runs on another member, learns the running turn from
+  # the fence its loop announces.
+  defp handle_thread_event(%{assigns: %{live_turn_id: nil}} = socket, :turn_fence, %{
+         turn_id: turn_id,
+         fence: fence
+       }) do
+    socket
+    |> assign(:live_turn_id, turn_id)
+    |> assign(:partials, Aqua.stream_advance(Aqua.stream_new(), fence))
+  end
+
   defp handle_thread_event(
-         %{assigns: %{running: true, live_turn_id: turn_id}} = socket,
+         %{assigns: %{live_turn_id: turn_id}} = socket,
          :turn_fence,
          %{turn_id: turn_id, fence: fence}
        ),
        do: assign(socket, :partials, Aqua.stream_advance(socket.assigns.partials, fence))
 
   defp handle_thread_event(
-         %{assigns: %{running: true, live_turn_id: turn_id}} = socket,
+         %{assigns: %{live_turn_id: turn_id}} = socket,
          :delta_abandoned,
          %{turn_id: turn_id} = marker
        ),
        do: assign(socket, :partials, Aqua.stream_abandoned(socket.assigns.partials, marker))
 
   defp handle_thread_event(
-         %{assigns: %{running: true, live_turn_id: turn_id}} = socket,
+         %{assigns: %{live_turn_id: turn_id}} = socket,
          :delta,
          %{turn_id: turn_id} = delta
        ),
        do: assign(socket, :partials, Aqua.stream_add(socket.assigns.partials, delta))
 
-  defp handle_thread_event(socket, :tool_activity, list),
-    do: assign(socket, :tool_activity, list)
+  defp handle_thread_event(
+         %{assigns: %{live_turn_id: turn_id}} = socket,
+         :tool_activity,
+         %{turn_id: turn_id} = update
+       ),
+       do: assign(socket, :partials, Aqua.stream_put_activity(socket.assigns.partials, update))
 
   defp handle_thread_event(socket, :usage, usage), do: assign(socket, :token_usage, usage)
 
@@ -2333,13 +2345,40 @@ defmodule PrismWeb.ThreadPaneLive do
           <% end %>
         </div>
 
-        <ul :if={@tool_activity != []} class="space-y-1">
-          <li :for={entry <- @tool_activity} class="flex items-center gap-2 text-xs">
-            <span class="inline-flex items-center px-2 py-0.5 rounded bg-gray-800 text-gray-300 font-mono shrink-0">
-              {entry.tool}
-            </span>
-            <.status_indicator status={if entry.status == :done, do: "completed", else: "running"} />
-            <span :if={entry.preview} class="text-gray-500 truncate">{entry.preview}</span>
+        <%!-- The running turn's reasoning, folded apart from its answer,
+              gone when the turn ends. Once the person opens or closes it
+              the browser's `open` is theirs, kept through every patch. --%>
+        <details
+          :if={Aqua.stream_thoughts(@partials) != []}
+          id={@dom <> "-thinking"}
+          phx-mounted={JS.ignore_attributes(["open"])}
+          data-test="thinking"
+          class="text-xs"
+        >
+          <summary class="min-h-6 cursor-pointer rounded text-gray-400 hover:text-gray-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-300">
+            Thinking
+          </summary>
+          <p
+            :for={thought <- Aqua.stream_thoughts(@partials)}
+            class="mt-1 whitespace-pre-wrap pl-4 text-gray-400 [overflow-wrap:anywhere]"
+            phx-no-format
+          >{thought.text}</p>
+        </details>
+
+        <ul :if={Aqua.stream_activity(@partials) != []} class="space-y-1" data-test="tool-activity">
+          <li :for={entry <- Aqua.stream_activity(@partials)} class="space-y-1 text-xs">
+            <div class="flex items-center gap-2">
+              <span class="inline-flex items-center px-2 py-0.5 rounded bg-gray-800 text-gray-300 font-mono shrink-0">
+                {entry.tool}
+              </span>
+              <.status_indicator status={if entry.status == :done, do: "completed", else: "running"} />
+            </div>
+            <%!-- What the harness said the run does, then what it changed:
+                  its own words, drawn as text, never as markup. --%>
+            <pre
+              :for={detail <- entry.details}
+              class="max-h-32 overflow-auto whitespace-pre-wrap rounded bg-gray-950 px-2 py-1 font-mono text-xs text-gray-400 [overflow-wrap:anywhere]"
+            >{detail}</pre>
           </li>
         </ul>
 
@@ -2352,7 +2391,10 @@ defmodule PrismWeb.ThreadPaneLive do
         />
 
         <div
-          :if={@running and Aqua.stream_texts(@partials) == [] and @tool_activity == []}
+          :if={
+            @running and Aqua.stream_texts(@partials) == [] and Aqua.stream_thoughts(@partials) == [] and
+              Aqua.stream_activity(@partials) == []
+          }
           class="flex items-center gap-2 text-xs text-gray-500"
         >
           <span class="inline-block h-2 w-2 animate-pulse rounded-full bg-blue-400" />

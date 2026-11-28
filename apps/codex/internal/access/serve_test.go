@@ -103,13 +103,13 @@ func TestNodeValidationWaitsForAgreeingReads(t *testing.T) {
 // A restore of another machine's .env: a home served as machine A is switched to
 // local and joins machine B; a restore puts A's .env back. The start
 // keeps Serve closed, answers tailnet_node_mismatch naming B and A, and
-// cyfr runs; `cyfr access tailnet` then previews A → B.
+// cyfr runs; `cyfr access browser tailnet` then previews A → B.
 func TestRestoreOfAnotherMachinesEnv(t *testing.T) {
 	h := newHome(t)
 	h.fake.startStack(t, h.head())
 	a := h.toTailnet(1, testKey, false)
 	snapshot := h.env()
-	if sw, err := h.e.Switch(bg, h.request(id(3), Target{Mode: ModeLocal}, "")); err != nil || sw.Outcome != "ok" {
+	if sw, err := h.e.Switch(bg, h.request(id(3), Target{Browser: BrowserNone}, "")); err != nil || sw.Outcome != "ok" {
 		t.Fatalf("switch to local answered %+v, %v", sw, err)
 	}
 	b := h.join(4, testKey, true)
@@ -137,13 +137,13 @@ func TestRestoreOfAnotherMachinesEnv(t *testing.T) {
 		t.Error("cyfr does not run")
 	}
 
-	// `cyfr access tailnet`: the state volume's machine, B, is taken as
+	// `cyfr access browser tailnet`: the state volume's machine, B, is taken as
 	// joined, and the preview changes the address A → B.
-	p := h.preview(Target{Mode: ModeTailnet}, "")
+	p := h.preview(Target{Browser: BrowserTailnet}, "")
 	if p.Old.NodeID != a.Payload["node_id"] || p.New.NodeID != b.Payload["node_id"] || p.Old.Host != a.Payload["name"] || p.New.Host != b.Payload["name"] {
 		t.Errorf("the correction previews %s (%s) → %s (%s)", p.Old.Host, p.Old.NodeID, p.New.Host, p.New.NodeID)
 	}
-	if sw, err := h.e.Switch(bg, SwitchRequest{ID: id(6), Target: Target{Mode: ModeTailnet}, OldDigest: p.OldDigest, NewDigest: p.NewDigest}); err != nil || sw.Outcome != "ok" {
+	if sw, err := h.e.Switch(bg, SwitchRequest{ID: id(6), Target: Target{Browser: BrowserTailnet}, OldDigest: p.OldDigest, NewDigest: p.NewDigest}); err != nil || sw.Outcome != "ok" {
 		t.Fatalf("the correction answered %+v, %v", sw, err)
 	}
 	if got, _ := os.ReadFile(h.e.servePath()); string(got) != serveOpen(4001) {
@@ -158,7 +158,7 @@ func TestSwitchRefusesAMachineThatChangedSinceItsJoin(t *testing.T) {
 	h := newHome(t)
 	h.fake.startStack(t, h.head())
 	first := h.join(1, testKey, false)
-	r := h.request(id(2), Target{Mode: ModeTailnet}, first.Payload["join_id"])
+	r := h.request(id(2), Target{Browser: BrowserTailnet}, first.Payload["join_id"])
 	h.join(3, testKey, true)
 	rc, err := h.e.Switch(bg, r)
 	if refusalCode(err) != "tailnet_name_changed" || rc.State != "rejected" {
@@ -174,7 +174,7 @@ func TestSwitchRefusesAMachineThatChangedSinceItsJoin(t *testing.T) {
 	h2.fake.st.Containers["home-tailscale-1"] = &fakeContainer{Name: "home-tailscale-1", Service: serveService, State: "running", Volume: stateVolume}
 	h2.fake.st.Volumes[stateVolume].ID = "n0099CNTRL"
 	h2.fake.mu.Unlock()
-	r2 := h2.request(id(2), Target{Mode: ModeTailnet}, j.Payload["join_id"])
+	r2 := h2.request(id(2), Target{Browser: BrowserTailnet}, j.Payload["join_id"])
 	if rc, err := h2.e.Switch(bg, r2); refusalCode(err) != "tailnet_name_changed" || !strings.Contains(rc.Payload["now"], "n0099CNTRL") {
 		t.Errorf("switch to a re-identified machine answered %+v, %v", rc, err)
 	}
@@ -208,13 +208,13 @@ func TestEveryStartPathStartsLocalOnAMismatch(t *testing.T) {
 		h := newHome(t)
 		h.fake.startStack(t, h.head())
 		j := h.join(1, testKey, false)
-		r := h.request(id(2), Target{Mode: ModeTailnet}, j.Payload["join_id"])
+		r := h.request(id(2), Target{Browser: BrowserTailnet}, j.Payload["join_id"])
 		h.fake.st.Volumes[stateVolume].Name = "renamed.tail1234.ts.net"
 		rc, err := h.e.Switch(bg, r)
-		p := h.preview(Target{Mode: ModeLocal}, "")
+		p := h.preview(Target{Browser: BrowserNone}, "")
 		assertLocal(t, h, rc, err, p.Old)
 		if slices.ContainsFunc(h.fake.calls(), func(c fakeCall) bool {
-			return strings.Contains(c.DotEnv, "CYFR_ACCESS=local") && c.Args[0] == "compose" && slices.Contains(c.Args, "up")
+			return strings.Contains(c.DotEnv, "CYFR_BROWSER=none") && c.Args[0] == "compose" && slices.Contains(c.Args, "up")
 		}) {
 			t.Error("the old head was started again")
 		}
@@ -225,7 +225,7 @@ func TestEveryStartPathStartsLocalOnAMismatch(t *testing.T) {
 		h.fake.startStack(t, h.head())
 		h.toTailnet(1, testKey, false)
 		old := h.head()
-		r := h.request(id(3), publicTarget, "")
+		r := h.request(id(3), domainTarget, "")
 		h.killAt("journal:switch:stopped", func(e *Engine) { e.Switch(bg, r) })
 		h.fake.st.Volumes[stateVolume].Name = "renamed.tail1234.ts.net"
 		receipts, err := h.e.Resume(bg)
@@ -238,7 +238,7 @@ func TestEveryStartPathStartsLocalOnAMismatch(t *testing.T) {
 
 // A start whose machine has HTTPS off, or holds no login, keeps Serve
 // closed and answers why; a machine with no login is no longer offered by
-// a preview, so `cyfr access tailnet` joins again.
+// a preview, so `cyfr access browser tailnet` joins again.
 func TestStartChecksTheMachineIsReady(t *testing.T) {
 	h := newHome(t)
 	h.fake.startStack(t, h.head())
@@ -260,7 +260,7 @@ func TestStartChecksTheMachineIsReady(t *testing.T) {
 		t.Errorf("join.json still offers %+v", rec)
 	}
 	h.e.Stop(bg, "down", false)
-	if _, err := h.e.Preview(bg, Target{Mode: ModeTailnet}, ""); refusalCode(err) != "tailnet_not_joined" {
+	if _, err := h.e.Preview(bg, Target{Browser: BrowserTailnet}, ""); refusalCode(err) != "tailnet_not_joined" {
 		t.Errorf("the preview answered %v", err)
 	}
 }
@@ -272,11 +272,11 @@ func TestStartChecksTheMachineIsReady(t *testing.T) {
 // join first.
 func TestTailnetPreviewTakesTheMachineTheHomeHas(t *testing.T) {
 	h := newHome(t)
-	if _, err := h.e.Preview(bg, Target{Mode: ModeTailnet}, ""); refusalCode(err) != "tailnet_not_joined" {
+	if _, err := h.e.Preview(bg, Target{Browser: BrowserTailnet}, ""); refusalCode(err) != "tailnet_not_joined" {
 		t.Errorf("with no machine the preview answered %v", err)
 	}
 	h.join(1, testKey, false)
-	if p := h.preview(Target{Mode: ModeTailnet}, ""); p.New.Host != "cyfr.tail1234.ts.net" || p.New.NodeID != "n0001CNTRL" {
+	if p := h.preview(Target{Browser: BrowserTailnet}, ""); p.New.Host != "cyfr.tail1234.ts.net" || p.New.NodeID != "n0001CNTRL" {
 		t.Errorf("the join record previews %+v", p.New)
 	}
 	h.fake.startStack(t, h.head())
@@ -286,7 +286,7 @@ func TestTailnetPreviewTakesTheMachineTheHomeHas(t *testing.T) {
 	if _, err := h.e.Start(bg, "up"); refusalCode(err) != "tailnet_node_mismatch" {
 		t.Fatalf("start answered %v", err)
 	}
-	p := h.preview(Target{Mode: ModeTailnet}, "")
+	p := h.preview(Target{Browser: BrowserTailnet}, "")
 	if p.Old.Host != "cyfr.tail1234.ts.net" || p.New.Host != "renamed.tail1234.ts.net" {
 		t.Errorf("the renamed machine previews %s → %s", p.Old.Host, p.New.Host)
 	}
@@ -294,7 +294,7 @@ func TestTailnetPreviewTakesTheMachineTheHomeHas(t *testing.T) {
 
 // rolledBackLocal is the sentence of a rollback whose old tailnet head
 // answers on this machine only, its machine another than .env's.
-const rolledBackLocalSentence = "CYFR could not start as anyone on the internet, who still has to sign in, at https://home.example.com (cyfr's health check failed). What it started was stopped and checked stopped, and CYFR was put back as before, your devices on Tailscale, and people you share this machine with, at https://cyfr.tail1234.ts.net, but it answers on this machine only, because this machine's tailnet identity is not the one .env names. Fix what the reason names, then run the command again; run `cyfr access tailnet`, which offers to move CYFR to the machine's tailnet name."
+const rolledBackLocalSentence = "CYFR could not start as anyone on the internet, who still has to sign in, at https://home.example.com (cyfr's health check failed). What it started was stopped and checked stopped, and CYFR was put back as before, your devices on Tailscale, and people you share this machine with, at https://cyfr.tail1234.ts.net, but it answers on this machine only, because this machine's tailnet identity is not the one .env names. Fix what the reason names, then run the command again; run `cyfr access browser tailnet`, which offers to move CYFR to the machine's tailnet name."
 
 // A switch that fails and rolls back to a head that answers on this
 // machine only is still a rollback: Outcome rolled_back, the change, its
@@ -308,16 +308,16 @@ func TestRollbackToAHeadServedLocallyIsARollback(t *testing.T) {
 			h.fake.startStack(t, h.head())
 			h.toTailnet(1, testKey, false)
 			old := h.head()
-			r := h.request(id(3), publicTarget, "")
+			r := h.request(id(3), domainTarget, "")
 			h.fake.st.Volumes[stateVolume].Name = "renamed.tail1234.ts.net"
-			unhealthyWhen(h, "CYFR_ACCESS=public")
+			unhealthyWhen(h, "CYFR_BROWSER=domain")
 			var rc Receipt
 			var err error
 			if kill == "" {
 				rc, err = h.e.Switch(bg, r)
 			} else {
 				h.killAt(kill, func(e *Engine) { e.Switch(bg, r) })
-				unhealthyWhen(h, "CYFR_ACCESS=public")
+				unhealthyWhen(h, "CYFR_BROWSER=domain")
 				receipts, rerr := h.e.Resume(bg)
 				if rerr != nil || len(receipts) != 1 {
 					t.Fatalf("resume answered %+v, %v", receipts, rerr)
@@ -344,7 +344,7 @@ func TestRollbackToAHeadServedLocallyIsARollback(t *testing.T) {
 }
 
 // HTTPS off at a start leaves Serve closed and says to turn HTTPS on and
-// run `cyfr access tailnet` again; following that instruction must work:
+// run `cyfr access browser tailnet` again; following that instruction must work:
 // the preview of tailnet is a reopen of the head .env holds, and its
 // switch validates the machine and opens Serve. Still off, the switch
 // answers started_local with the same refusal.
@@ -357,21 +357,21 @@ func TestHTTPSOffInstructionCanBeFollowed(t *testing.T) {
 	}
 	h.fake.st.Volumes[stateVolume].HTTPS = false
 	rc, err := h.e.Start(bg, "up")
-	if rc.Outcome != "started_local" || refusalCode(err) != "tailnet_https_off" || !strings.Contains(rc.Refusal().Message(), "run `cyfr access tailnet` again") {
+	if rc.Outcome != "started_local" || refusalCode(err) != "tailnet_https_off" || !strings.Contains(rc.Refusal().Message(), "run `cyfr access browser tailnet` again") {
 		t.Fatalf("start answered %+v, %v", rc, err)
 	}
 	head := h.head()
-	p := h.preview(Target{Mode: ModeTailnet}, "")
+	p := h.preview(Target{Browser: BrowserTailnet}, "")
 	if !p.Reopen || p.OldDigest != p.NewDigest || p.NewDigest != head.Digest() || p.Old.Digest() != p.New.Digest() {
 		t.Fatalf("the preview is %+v", p)
 	}
-	still, err := h.e.Switch(bg, SwitchRequest{ID: id(5), Target: Target{Mode: ModeTailnet}, OldDigest: p.OldDigest, NewDigest: p.NewDigest})
+	still, err := h.e.Switch(bg, SwitchRequest{ID: id(5), Target: Target{Browser: BrowserTailnet}, OldDigest: p.OldDigest, NewDigest: p.NewDigest})
 	if refusalCode(err) != "tailnet_https_off" || still.Outcome != "started_local" || still.State != "completed" {
 		t.Fatalf("a reopen with HTTPS still off answered %+v, %v", still, err)
 	}
 
 	h.fake.st.Volumes[stateVolume].HTTPS = true
-	r := SwitchRequest{ID: id(6), Target: Target{Mode: ModeTailnet}, OldDigest: p.OldDigest, NewDigest: p.NewDigest}
+	r := SwitchRequest{ID: id(6), Target: Target{Browser: BrowserTailnet}, OldDigest: p.OldDigest, NewDigest: p.NewDigest}
 	mark := len(h.fake.calls())
 	rc, err = h.e.Switch(bg, r)
 	if err != nil || rc.State != "completed" || rc.Outcome != "ok" || rc.RequestDigest != switchDigest(r) || rc.FinalHead.Digest() != head.Digest() {
@@ -389,12 +389,12 @@ func TestHTTPSOffInstructionCanBeFollowed(t *testing.T) {
 		t.Error("the reopen changed .env")
 	}
 	h.assertConverged(tailnetStack...)
-	if _, err := h.e.Preview(bg, Target{Mode: ModeTailnet}, ""); refusalCode(err) != "tailnet_active" {
+	if _, err := h.e.Preview(bg, Target{Browser: BrowserTailnet}, ""); refusalCode(err) != "tailnet_active" {
 		t.Errorf("once Serve is open the preview answers %v", err)
 	}
 }
 
-// A reopen is for a running home: a stopped tailnet home whose head is
+// A reopen is for a running home: a stopped tailnet server whose head is
 // unchanged previews as access_unchanged, its next start validating the
 // machine and opening Serve; a reopen previewed while the home ran and
 // sent after it stopped is access_stale, and starts nothing.
@@ -408,24 +408,24 @@ func TestReopenIsForARunningHome(t *testing.T) {
 		t.Fatalf("start answered %v", err)
 	}
 	h.fake.st.Volumes[stateVolume].HTTPS = true
-	p := h.preview(Target{Mode: ModeTailnet}, "")
+	p := h.preview(Target{Browser: BrowserTailnet}, "")
 	if !p.Reopen {
 		t.Fatalf("a running home with Serve closed previews %+v", p)
 	}
 	h.e.Stop(bg, "down", true)
-	rc, err := h.e.Switch(bg, SwitchRequest{ID: id(5), Target: Target{Mode: ModeTailnet}, OldDigest: p.OldDigest, NewDigest: p.NewDigest})
+	rc, err := h.e.Switch(bg, SwitchRequest{ID: id(5), Target: Target{Browser: BrowserTailnet}, OldDigest: p.OldDigest, NewDigest: p.NewDigest})
 	if refusalCode(err) != "access_stale" || rc.State != "rejected" {
 		t.Errorf("a reopen of a home stopped since its preview answered %+v, %v", rc, err)
 	}
 	if running := h.fake.runningServices(); len(running) != 0 {
 		t.Errorf("the refused reopen started %v", running)
 	}
-	if _, err := h.e.Preview(bg, Target{Mode: ModeTailnet}, ""); refusalCode(err) != "access_unchanged" {
+	if _, err := h.e.Preview(bg, Target{Browser: BrowserTailnet}, ""); refusalCode(err) != "access_unchanged" {
 		t.Errorf("a stopped home with Serve closed previews %v", err)
 	}
 }
 
-// reopenable is a running tailnet home whose Serve is closed, as a start
+// reopenable is a running tailnet server whose Serve is closed, as a start
 // with HTTPS off leaves it, its HTTPS since turned on: a switch to its
 // own head reopens Serve.
 func reopenable(t *testing.T) *testHome {
@@ -450,7 +450,7 @@ func TestReopenRecoversAtEveryPhase(t *testing.T) {
 	for _, point := range []string{"journal:switch:accepted", "journal:switch:committed", "start:tailnet", "receipt:switch"} {
 		t.Run(point, func(t *testing.T) {
 			h := reopenable(t)
-			r := h.request(id(5), Target{Mode: ModeTailnet}, "")
+			r := h.request(id(5), Target{Browser: BrowserTailnet}, "")
 			if !h.killAt(point, func(e *Engine) { e.Switch(bg, r) }) {
 				t.Fatalf("never reached %s", point)
 			}
@@ -474,7 +474,7 @@ func TestReopenRecoversAtEveryPhase(t *testing.T) {
 // started and no journal written.
 func TestReopenRefusesAHomeThatStopsBeforeItIsAccepted(t *testing.T) {
 	h := reopenable(t)
-	r := h.request(id(5), Target{Mode: ModeTailnet}, "")
+	r := h.request(id(5), Target{Browser: BrowserTailnet}, "")
 	reads := 0
 	h.fake.hook = func(_ context.Context, c *fakeCall) *fakeAnswer {
 		if len(c.Args) > 0 && c.Args[0] == "ps" && slices.Contains(c.Args, "label="+labelProject+"="+h.e.project) {
@@ -540,7 +540,7 @@ func TestReopenClosesServeUnlessTheHomeStillRunsAsTheHeadSays(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			h := reopenable(t)
 			head, env := h.head(), h.env()
-			r := h.request(id(5), Target{Mode: ModeTailnet}, "")
+			r := h.request(id(5), Target{Browser: BrowserTailnet}, "")
 			opened := false
 			h.e.failWrite = func(name, step string) error {
 				if name == h.e.servePath() && step == "sync" && !opened && h.e.serveIsOpen() {

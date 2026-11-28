@@ -67,7 +67,7 @@ func TestEnvWriterChangesOnlyTheHeadsKeys(t *testing.T) {
 	before := strings.Join([]string{
 		"# keep me",
 		"CYFR_SECRET_KEY_BASE=abc",
-		"CYFR_ACCESS=public",
+		"CYFR_BROWSER=domain",
 		`CYFR_HOST="home.example.com"`,
 		"CYFR_PORT='4000'",
 		"CYFR_PUBLIC_URL=https://home.example.com",
@@ -80,7 +80,7 @@ func TestEnvWriterChangesOnlyTheHeadsKeys(t *testing.T) {
 	want := strings.Join([]string{
 		"# keep me",
 		"CYFR_SECRET_KEY_BASE=abc",
-		"CYFR_ACCESS=tailnet",
+		"CYFR_BROWSER=tailnet",
 		`CYFR_HOST=cyfr.tail1234.ts.net`,
 		"CYFR_PORT='4000'",
 		"CYFR_PUBLIC_URL=https://cyfr.tail1234.ts.net",
@@ -88,7 +88,7 @@ func TestEnvWriterChangesOnlyTheHeadsKeys(t *testing.T) {
 		"CYFR_TAILNET_NODE_ID=nAbc123CNTRL",
 		"",
 	}, "\n")
-	d, err := Derive(Target{Mode: ModeTailnet}, Current{Port: 4000}, &Join{Name: "cyfr.tail1234.ts.net", NodeID: "nAbc123CNTRL"})
+	d, err := Derive(Target{Browser: BrowserTailnet}, Current{Port: 4000}, &Join{Name: "cyfr.tail1234.ts.net", NodeID: "nAbc123CNTRL"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,11 +105,11 @@ func TestEnvWriterChangesOnlyTheHeadsKeys(t *testing.T) {
 		t.Errorf(".env became\n%s\nwant\n%s", got, want)
 	}
 
-	// A key .env lacks entirely goes right after CYFR_ACCESS.
-	minimal := "A=1\nCYFR_ACCESS=local\nCYFR_HOST=localhost\nB=2\n"
-	pub, _ := Derive(Target{Mode: ModePublic, Domain: "home.example.com"}, Current{Port: 4000}, nil)
+	// A key .env lacks entirely goes right after CYFR_BROWSER.
+	minimal := "A=1\nCYFR_BROWSER=none\nCYFR_HOST=localhost\nB=2\n"
+	pub, _ := Derive(Target{Browser: BrowserDomain, Domain: "home.example.com"}, Current{Port: 4000}, nil)
 	got := edit(minimal, pub.Head)
-	if want := "A=1\nCYFR_ACCESS=public\nCYFR_HOST=home.example.com\nB=2\nCYFR_PORT=4000\nCYFR_PUBLIC_URL=https://home.example.com\n"; got != want {
+	if want := "A=1\nCYFR_BROWSER=domain\nCYFR_HOST=home.example.com\nB=2\nCYFR_PORT=4000\nCYFR_PUBLIC_URL=https://home.example.com\n"; got != want {
 		t.Errorf("a minimal .env became\n%s\nwant\n%s", got, want)
 	}
 	read, err := readDotenv([]byte(got), noEnv)
@@ -126,7 +126,7 @@ func TestEnvWriterChangesOnlyTheHeadsKeys(t *testing.T) {
 // call: by Start, the head's read and the stack check alike. The project
 // still opens, so recovery can stop the stack.
 func TestComposeSettingsInEnvAreRefused(t *testing.T) {
-	for _, line := range []string{"COMPOSE_PROFILES=public,tailnet", "COMPOSE_PROFILES: public", "  export COMPOSE_FILE = x.yml\nCOMPOSE_PROFILES=public", "COMPOSE_PROJECT_NAME"} {
+	for _, line := range []string{"COMPOSE_PROFILES=domain,tailnet", "COMPOSE_PROFILES: domain", "  export COMPOSE_FILE = x.yml\nCOMPOSE_PROFILES=domain", "COMPOSE_PROJECT_NAME"} {
 		dir := filepath.Join(t.TempDir(), "home")
 		os.Mkdir(dir, 0o755)
 		writeFile(t, filepath.Join(dir, ".env"), append(repoFile(t, ".env.example"), []byte(line+"\n")...))
@@ -175,9 +175,9 @@ func asRefusal(err error, r **Refusal) bool {
 // quoting, and a later assignment overriding an earlier one.
 func TestReadEnvValues(t *testing.T) {
 	path := filepath.Join(t.TempDir(), ".env")
-	writeFile(t, path, []byte("CYFR_PORT=4000\nexport CYFR_HOST = home.example.com\nCYFR_ACCESS: public\nCYFR_PUBLIC_URL=\"https://home.example.com\"\nCYFR_PORT=4100 # later\n"))
+	writeFile(t, path, []byte("CYFR_PORT=4000\nexport CYFR_HOST = home.example.com\nCYFR_BROWSER: domain\nCYFR_PUBLIC_URL=\"https://home.example.com\"\nCYFR_PORT=4100 # later\n"))
 	got, err := ReadEnvValues(path)
-	want := map[string]string{"CYFR_PORT": "4100", "CYFR_HOST": "home.example.com", "CYFR_ACCESS": "public", "CYFR_PUBLIC_URL": "https://home.example.com"}
+	want := map[string]string{"CYFR_PORT": "4100", "CYFR_HOST": "home.example.com", "CYFR_BROWSER": "domain", "CYFR_PUBLIC_URL": "https://home.example.com"}
 	if err != nil || !maps.Equal(got, want) {
 		t.Errorf("ReadEnvValues = %v, %v\nwant %v", got, err, want)
 	}
@@ -195,10 +195,10 @@ func TestCheckEnvFile(t *testing.T) {
 		name, extra, code, sentence string
 	}{
 		{"coherent", "", "", ""},
-		{"colon form", "COMPOSE_PROFILES: public\n", "compose_env_refused", "`.env` sets `COMPOSE_PROFILES`, which Docker Compose would read to choose this stack's files, project or services behind cyfr's back. Nothing started. Remove it; cyfr chooses them from CYFR_ACCESS."},
-		{"export form", "export COMPOSE_FILE=x.yml\nCYFR_ACCESS=sideways\n", "compose_env_refused", ""},
-		{"later assignment", "CYFR_ACCESS=sideways\n", "access_unknown_mode", "CYFR_ACCESS is `sideways`; it must be `local`, `tailnet` or `public`. Run `cyfr access <mode>` to set it with the address it implies."},
-		{"later assignment restores", "CYFR_ACCESS=sideways\nCYFR_ACCESS=local\n", "", ""},
+		{"colon form", "COMPOSE_PROFILES: domain\n", "compose_env_refused", "`.env` sets `COMPOSE_PROFILES`, which Docker Compose would read to choose this stack's files, project or services behind cyfr's back. Nothing started. Remove it; cyfr chooses them from CYFR_BROWSER."},
+		{"export form", "export COMPOSE_FILE=x.yml\nCYFR_BROWSER=sideways\n", "compose_env_refused", ""},
+		{"later assignment", "CYFR_BROWSER=sideways\n", "access_unknown_browser", "CYFR_BROWSER is `sideways`; it must be `none`, `tailnet`, `domain` or `proxy`. Run `cyfr access browser <kind>` to set it with the address it implies."},
+		{"later assignment restores", "CYFR_BROWSER=sideways\nCYFR_BROWSER=none\n", "", ""},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), ".env")

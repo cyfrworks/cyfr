@@ -125,10 +125,10 @@ func TestInitGivesTheDevicesOnlyToAProjectItMakes(t *testing.T) {
 			}
 
 			for env, says := range map[string]bool{
-				"CYFR_ACCESS=local\nCYFR_PORT=4000\n":                                           m.has,
-				"CYFR_ACCESS=local\nCYFR_PORT=4000\n" + deviceLines("", ""):                     m.has,
-				"CYFR_ACCESS=local\nCYFR_PORT=4000\n" + deviceLines("/dev/sda", ""):             m.has,
-				"CYFR_ACCESS=local\nCYFR_PORT=4000\n" + deviceLines("/dev/kvm", "/dev/net/tun"): false,
+				"CYFR_BROWSER=none\nCYFR_PORT=4000\n":                                           m.has,
+				"CYFR_BROWSER=none\nCYFR_PORT=4000\n" + deviceLines("", ""):                     m.has,
+				"CYFR_BROWSER=none\nCYFR_PORT=4000\n" + deviceLines("/dev/sda", ""):             m.has,
+				"CYFR_BROWSER=none\nCYFR_PORT=4000\n" + deviceLines("/dev/kvm", "/dev/net/tun"): false,
 			} {
 				if err := os.WriteFile(".env", []byte(env), 0o600); err != nil {
 					t.Fatal(err)
@@ -205,7 +205,7 @@ func TestInitGivesNoDeviceToAProjectDockerHoldsVolumesOf(t *testing.T) {
 func TestADeviceThisMachineLacksIsNotPassedToDocker(t *testing.T) {
 	devicesHere(t, false)
 	t.Chdir(t.TempDir())
-	if err := os.WriteFile(".env", []byte("CYFR_ACCESS=local\n"+deviceLines("/dev/kvm", "/dev/net/tun")), 0o600); err != nil {
+	if err := os.WriteFile(".env", []byte("CYFR_BROWSER=none\n"+deviceLines("/dev/kvm", "/dev/net/tun")), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	want := kvmEnv + " in .env is not a device this machine has for CYFR, so nothing was started. Run `cyfr update` here, which writes what this machine has, then run `cyfr up` again"
@@ -221,7 +221,7 @@ func TestInitInAProjectThatExistsLeavesTheDevicesToTheUpdate(t *testing.T) {
 	devicesHere(t, true)
 	newInitProject(t)
 	useFakeEngine(t)
-	if err := os.WriteFile(".env", []byte("CYFR_ACCESS=local\nCYFR_PORT=4000\n"), 0o600); err != nil {
+	if err := os.WriteFile(".env", []byte("CYFR_BROWSER=none\nCYFR_PORT=4000\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	out := runInitHere(t)

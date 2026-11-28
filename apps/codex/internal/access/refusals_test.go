@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-// refusalSection is access_modes.json's refusals section, which
+// refusalSection is access.json's refusals section, which
 // `mix cyfr.gen.access_refusals` renders from Prima.Refusal beside
 // refusals_gen.go.
 type refusalSection []struct {
@@ -32,7 +32,7 @@ type refusalSection []struct {
 
 func readRefusalSection(t *testing.T) refusalSection {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "tests", "fixtures", "access_modes.json"))
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "tests", "fixtures", "access.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,7 +43,7 @@ func readRefusalSection(t *testing.T) refusalSection {
 		t.Fatal(err)
 	}
 	if len(file.Refusals) == 0 {
-		t.Fatal("access_modes.json has no refusals section")
+		t.Fatal("access.json has no refusals section")
 	}
 	return file.Refusals
 }
@@ -61,7 +61,7 @@ func TestRefusalRowsAreTheVectorSection(t *testing.T) {
 		want[row.Code] = r
 	}
 	if !reflect.DeepEqual(refusalRows, want) {
-		t.Errorf("refusals_gen.go is not access_modes.json's refusals section: run `mix cyfr.gen.access_refusals`")
+		t.Errorf("refusals_gen.go is not access.json's refusals section: run `mix cyfr.gen.access_refusals`")
 	}
 }
 
@@ -87,8 +87,8 @@ func TestRefusalMessageFallsBack(t *testing.T) {
 	if got := Refuse("access_busy", map[string]string{"pid": "1"}).Message(); got != "access_busy" {
 		t.Errorf("a partial access_busy payload reads %q", got)
 	}
-	if got := Refuse("access_option_outside_mode", map[string]string{"option": "--domain", "mode": "public"}).Message(); got != "access_option_outside_mode" {
-		t.Errorf("an option inside its mode reads %q", got)
+	if got := Refuse("access_option_outside_browser", map[string]string{"option": "--domain", "browser": "domain"}).Message(); got != "access_option_outside_browser" {
+		t.Errorf("an option inside its kind reads %q", got)
 	}
 	missing := Refuse("access_missing", nil)
 	if missing.Message() != missing.Sentence() || missing.Class != "setup_required" {

@@ -58,23 +58,24 @@ defmodule Sanctum.IdentityFreshness do
   out, refused by the address policy, shedding, a 5xx or a 429), or inside
   a transaction, or within 15 seconds of finding it so on this member
   (`Arca.Cache.Keys.identity_unreachable/1`), the answer follows how this
-  home is reached (`Sanctum.access_mode/0`):
+  server reaches (`Sanctum.exposure/0`):
 
-    * `public`: `{:refused, :identity_stale}`: that person's protected
-      work here pauses, distinguishably from a denial and from an absent
-      person, and the bound is named in the log line and the telemetry
+    * `public`, with a browser address at a domain:
+      `{:refused, :identity_stale}`: that person's protected work here
+      pauses, distinguishably from a denial and from an absent person,
+      and the bound is named in the log line and the telemetry
       (`Sanctum.Telemetry.identity_stale/3`). The 300-second default is a
       revocation guarantee and is not lengthened to hide an outage.
-    * `local` and `tailnet`: the cached head, so the people this home
-      holds keep working on the keys it last read; the next reachable
-      moment refreshes it. A removed key keeps working here until then
-      (`ARCHITECTURE.md` §1.3).
+    * `private`, with no browser address or a tailnet one: the cached
+      head, so the people this server holds keep working on the keys it
+      last read; the next reachable moment refreshes it. A removed key
+      keeps working here until then (`ARCHITECTURE.md` §1.3).
 
-  An identifier never read refuses in every mode. A directory that
+  An identifier never read refuses whatever the exposure. A directory that
   answers but serves no log this home can verify (a redirect, a body too
   large or unreadable, its own store's corruption, any other status, a
   log that does not verify or does not hold the cached head) pauses the
-  work in every mode: that is no outage. A store that cannot answer is `{:error,
+  work whatever the exposure: that is no outage. A store that cannot answer is `{:error,
   :unavailable}`, never a verdict.
 
   Inside a transaction nothing is read and nothing written: the
@@ -160,8 +161,8 @@ defmodule Sanctum.IdentityFreshness do
   @doc """
   `identifier`'s head read from its directory now, whatever the cache
   says: for the paths that need a live read. With nothing cached it is
-  read at `opts[:directory]`. Answers as `fresh?/2` does, the access
-  mode deciding for a directory that does not answer.
+  read at `opts[:directory]`. Answers as `fresh?/2` does, the
+  exposure deciding for a directory that does not answer.
   """
   @spec fresh!(String.t(), opts()) :: {:ok, head()} | refusal() | {:error, :unavailable}
   def fresh!(identifier, opts \\ []) when is_binary(identifier) do
@@ -315,7 +316,7 @@ defmodule Sanctum.IdentityFreshness do
 
   # Past the bound the directory is read again, unless this member found it
   # unreachable within the last `@unreachable_ms`, or a caller's
-  # transaction holds the person's lock: then the access mode decides on
+  # transaction holds the person's lock: then the exposure decides on
   # what is cached.
   defp past_bound(head, bound, client_opts) do
     cond do
@@ -501,7 +502,7 @@ defmodule Sanctum.IdentityFreshness do
   end
 
   # Why a refresh did not reach a head: the account gone, a log that does
-  # not hold the cached head, an outage the access mode decides on, or a
+  # not hold the cached head, an outage the exposure decides on, or a
   # log that does not verify, which pauses the work.
   defp unrefreshed(head, bound, why, reason) do
     cond do
@@ -525,7 +526,7 @@ defmodule Sanctum.IdentityFreshness do
   # a 5xx or a 429 (this member's own shed among them). A directory that
   # answered, with a redirect, a body too large or unreadable, its own
   # store's corruption or any other status, served no log this home can
-  # verify, and that pauses the work in every mode.
+  # verify, and that pauses the work whatever the exposure.
   defp outage?(reason) when reason in [:unreachable, :timeout, :egress_refused], do: true
   defp outage?({tag, _seconds}) when tag in [:rate_limited, :capacity, :unavailable], do: true
   defp outage?({:status, status}) when status in 500..599, do: true
@@ -553,18 +554,18 @@ defmodule Sanctum.IdentityFreshness do
     {:refused, :identity_gone}
   end
 
-  # The access mode decides on a cached head this home could not refresh:
-  # a public home pauses the work, a local or tailnet one answers the keys
-  # it last read.
+  # The exposure decides on a cached head this server could not refresh:
+  # a public server pauses the work, a private one answers the keys it
+  # last read.
   defp offline(head, bound, why, reason) do
-    case Sanctum.access_mode() do
+    case Sanctum.exposure() do
       :public ->
         stale(head.identifier, head.directory_url, bound, why, reason)
 
-      mode when mode in [:local, :tailnet] ->
+      :private ->
         Logger.debug(
           "[Sanctum.IdentityFreshness] #{head.identifier}'s directory could not refresh its " <>
-            "head (#{word(reason)}); this #{mode} home answers the keys it last read"
+            "head (#{word(reason)}); this private server answers the keys it last read"
         )
 
         {:ok, head}

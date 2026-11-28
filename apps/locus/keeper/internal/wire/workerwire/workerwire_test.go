@@ -68,7 +68,7 @@ type vectors struct {
 func load(t *testing.T) vectors {
 	t.Helper()
 	var v vectors
-	wiretest.LoadStrict(t, "worker_api.json", &v)
+	wiretest.Load(t, "worker_api.json", &v)
 	return v
 }
 
@@ -138,6 +138,9 @@ func TestEveryRequestBodyReadsAsPrimaReadsIt(t *testing.T) {
 	}
 	if differences == 0 {
 		t.Error("no body states the depth the two ends differ at")
+	}
+	if len(v.Requests) < 3 {
+		t.Fatalf("%d requests", len(v.Requests))
 	}
 	for _, r := range v.Requests {
 		callback, args, err := ReadRequestBody(workerapi.Callbacks(), read(t, []byte(r.Body)))

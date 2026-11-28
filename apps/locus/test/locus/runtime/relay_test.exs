@@ -1369,7 +1369,7 @@ defmodule Locus.Runtime.RelayTest do
       ]
       |> Enum.map_reduce(service, fn {frame, held, over}, service ->
         {bytes, service} = frame_bytes(service, frame)
-        asked = Locus.Runtime.Relay.held(byte_size(held), 1) - byte_size(held) + over
+        asked = RunnerRelay.held(byte_size(held), 1) - byte_size(held) + over
         {{frame.kind, byte_size(bytes), asked}, service}
       end)
       |> elem(0)
@@ -1624,7 +1624,7 @@ defmodule Locus.Runtime.RelayCountTest do
 
       assert_receive {:writing, relay, base64}, 10_000
       assert answering() > baseline
-      assert answering() - baseline >= Relay.held(byte_size(Base.decode64!(base64)), 1)
+      assert answering() - baseline >= RunnerRelay.held(byte_size(Base.decode64!(base64)), 1)
 
       send(relay, :go)
       assert read_granting(attempt.endpoint, ref, 0) == size
@@ -1641,7 +1641,7 @@ defmodule Locus.Runtime.RelayCountTest do
       ahead = Prima.LocusRoles.role!(:runtime).memory.fetch_read_ahead_bytes
       # Beside the read-ahead, the answers' room and one larger read's
       # piece, in one frame.
-      ahead_room = 2 * ahead + Relay.answer_room() + Relay.held(ahead, 1)
+      ahead_room = 2 * ahead + RunnerRelay.answer_room() + RunnerRelay.held(ahead, 1)
 
       for {room, buffer} <- [{nil, ahead}, {ahead_room, ahead}, {ahead_room - 1, 65_536}] do
         {port, _server} = big_upstream!(size)
@@ -2073,7 +2073,7 @@ defmodule Locus.Runtime.RelayCountTest do
 
       assert_receive {:writing, relay, base64}, 10_000
       assert answering() > baseline
-      assert answering() - baseline == Relay.held(byte_size(Base.decode64!(base64)), 1)
+      assert answering() - baseline == RunnerRelay.held(byte_size(Base.decode64!(base64)), 1)
 
       send(relay, :go)
       assert {events, nil} = events(attempt.endpoint, ref)
@@ -2119,7 +2119,7 @@ defmodule Locus.Runtime.RelayCountTest do
 
       assert_receive {:writing, relay, _base64}, 10_000
       assert answering() > baseline
-      assert answering() - baseline == Relay.held(sealed_bytes(attempt, {:ok, answer}), 1)
+      assert answering() - baseline == RunnerRelay.held(sealed_bytes(attempt, {:ok, answer}), 1)
       assert [poster] = holders(relay)
       monitor = Process.monitor(poster)
 

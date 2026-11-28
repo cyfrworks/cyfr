@@ -4,6 +4,8 @@
 package access
 
 import (
+	"bytes"
+	"cmp"
 	"context"
 	"fmt"
 	"maps"
@@ -11,6 +13,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -40,21 +43,72 @@ func (e *Engine) selection(files []string, h Head) []string {
 
 // flatten is `docker compose config` of h over the default file set: the
 // configuration compose would run for h's selection, .env's values
-// inlined.
+// inlined. With proxy it is read again with proxyOverlay over the set.
 func (e *Engine) flatten(ctx context.Context, h Head) ([]byte, error) {
-	return e.readConfig(ctx, h, "config")
+	content, err := e.readConfig(ctx, h, nil, "config")
+	if err != nil || h.Browser != BrowserProxy {
+		return content, err
+	}
+	c, err := parseConfig(content)
+	if err != nil {
+		return nil, err
+	}
+	overlay, err := proxyOverlay(h, cyfrEnv(c)["CYFR_BIND_ADDRESS"])
+	if err != nil {
+		return nil, err
+	}
+	return e.readConfig(ctx, h, overlay, "config")
+}
+
+// proxyOverlay is the compose file, read last, that publishes the proxy
+// listener for proxy, the one kind whose proxy is outside the stack. No
+// other kind publishes it, so only proxy lets anything outside the stack
+// send the proxy listener forwarded headers it trusts.
+//
+//   - It publishes the proxy listener's port at the head's CYFR_PROXY_PUBLISH,
+//     an IPv4 loopback address of this machine.
+//   - The listener binds the loopback listener's own address, bind, on
+//     the stack's default network: Docker publishes a port at the
+//     container's address on that network, and the edge network's,
+//     which the listener binds for Caddy and Tailscale, receives nothing
+//     published. No other container joins the default network. A stack
+//     whose cyfr service names no such address is refused: the
+//     publication would reach no listener.
+//   - CYFR_TRUSTED_PROXY_CIDRS is .env's alone: the stack's default names
+//     Caddy's and Tailscale's addresses, which do not run with proxy, and
+//     would stand in for the trust proxy requires .env to state.
+func proxyOverlay(h Head, bind string) ([]byte, error) {
+	published, err := publishOf(h.Publish, h.Port)
+	if err != nil {
+		return nil, err
+	}
+	if bind == "" {
+		return nil, fmt.Errorf("access: the stack's %s service names no CYFR_BIND_ADDRESS, the address its proxy listener is published at with proxy, so CYFR cannot be reached through your proxy. Nothing started. Give the %s service the shipped docker-compose.yml's CYFR_BIND_ADDRESS", cyfrService, cyfrService)
+	}
+	overlay := map[string]any{"services": map[string]any{cyfrService: map[string]any{
+		"ports": []map[string]any{{
+			"host_ip": published.Address, "published": strconv.Itoa(published.Port),
+			"target": "${CYFR_PROXY_PORT:-4001}", "protocol": "tcp",
+		}},
+		"environment": map[string]string{
+			"CYFR_PROXY_BIND_ADDRESS":  bind,
+			"CYFR_TRUSTED_PROXY_CIDRS": "${CYFR_TRUSTED_PROXY_CIDRS:-}",
+		},
+	}}}
+	return yaml.Marshal(overlay)
 }
 
 // declaredProfiles is DeclaredProfiles: `docker compose config --profiles`
 // over the default file set, under no selection.
 func (e *Engine) declaredProfiles(ctx context.Context) ([]string, error) {
-	out, err := e.readConfig(ctx, Head{}, "config", "--profiles")
+	out, err := e.readConfig(ctx, Head{}, nil, "config", "--profiles")
 	return strings.Fields(string(out)), err
 }
 
-// readConfig is compose's read args over the default file set under h's
+// readConfig is compose's read args over the default file set, and
+// overlay read last from standard input when there is one, under h's
 // selection, its stdout.
-func (e *Engine) readConfig(ctx context.Context, h Head, args ...string) ([]byte, error) {
+func (e *Engine) readConfig(ctx context.Context, h Head, overlay []byte, args ...string) ([]byte, error) {
 	// compose reads COMPOSE_* from .env: no compose call runs over one
 	// that sets any.
 	if _, err := e.readEnv(); err != nil {
@@ -64,7 +118,13 @@ func (e *Engine) readConfig(ctx context.Context, h Head, args ...string) ([]byte
 	if err != nil {
 		return nil, err
 	}
-	res, err := e.docker.Run(ctx, Call{Args: append(e.selection(files, h), args...), Deadline: StopDeadline})
+	call := Call{Deadline: StopDeadline}
+	if overlay != nil {
+		files = append(files, "-")
+		call.Stdin = bytes.NewReader(overlay)
+	}
+	call.Args = append(e.selection(files, h), args...)
+	res, err := e.docker.Run(ctx, call)
 	if err != nil {
 		return nil, fmt.Errorf("access: %s", e.callFailed("docker compose "+strings.Join(args, " "), err, res.Stderr))
 	}
@@ -197,6 +257,8 @@ type config struct {
 		Image       string             `yaml:"image"`
 		Profiles    []string           `yaml:"profiles"`
 		Environment map[string]*string `yaml:"environment"`
+		Ports       []publication      `yaml:"ports"`
+		NetworkMode string             `yaml:"network_mode"`
 	} `yaml:"services"`
 	// Networks are the subnets the stack fixes (heldBy).
 	Networks map[string]struct {
@@ -206,6 +268,96 @@ type config struct {
 			} `yaml:"config"`
 		} `yaml:"ipam"`
 	} `yaml:"networks"`
+}
+
+// publication is one published port of a flattened service, as compose
+// writes it: the container port, the host address and port (an empty one
+// Docker picks), and the protocol.
+type publication struct {
+	Target    int    `yaml:"target"`
+	HostIP    string `yaml:"host_ip"`
+	Published string `yaml:"published"`
+	Protocol  string `yaml:"protocol"`
+}
+
+func (p publication) String() string {
+	host := p.HostIP
+	if host == "" {
+		host = "every address"
+	}
+	published := p.Published
+	if published == "" {
+		published = "a port Docker picks"
+	}
+	return fmt.Sprintf("%d/%s on %s at %s", p.Target, cmp.Or(p.Protocol, "tcp"), host, published)
+}
+
+// checkPublished holds cyfr's final published ports, whatever file put
+// them there, to what b's kind allows, judged by the listener each
+// binding reaches: a binding reaches the listener on its target port. The
+// loopback listener is every kind's; the proxy listener, the one whose
+// forwarded headers are trusted, exists with a browser address alone.
+//
+//   - With proxy, cyfr publishes exactly two bindings: the loopback
+//     listener once on this machine's 127.0.0.1, and the proxy listener
+//     once at CYFR_PROXY_PUBLISH. Nothing else, and neither is missing.
+//     Its two listeners bind one address (proxyOverlay), so they cannot
+//     share a port; if they did, no binding could be told apart, and it
+//     is refused.
+//   - With tailnet and domain, no binding reaches the proxy listener alone.
+//     Where the two listeners share a port number at different addresses,
+//     which the boot allows, the configuration cannot tell which a binding
+//     of that port reaches (Docker publishes at the address of the
+//     container's gateway network, which the flattened file does not
+//     settle): such a binding stands.
+//   - With none there is no proxy listener, and every binding stands.
+//
+// A cyfr service in the host's network is refused whatever the kind:
+// there Docker publishes nothing and every listener is on the host's own
+// addresses, so no publication holds.
+func checkPublished(c config, b Boot) error {
+	if mode := c.Services[cyfrService].NetworkMode; mode == "host" {
+		return fmt.Errorf("access: the stack's cyfr service runs in the host's network (network_mode: host), where Docker publishes no port and CYFR's listeners are on the host's own addresses, so neither is held to its publication. Nothing started. Remove network_mode from the cyfr service")
+	}
+	refused := func(p publication, why string) error {
+		return fmt.Errorf("access: the stack's configuration publishes cyfr's port %s, and %s. Nothing started. Remove that publication from the compose file that adds it", p, why)
+	}
+	loopback := func(p publication) bool { return p.Target == b.Loopback.Port }
+	proxy := func(p publication) bool { return b.Proxy != nil && p.Target == b.Proxy.Port }
+	tcp := func(p publication) bool { return cmp.Or(p.Protocol, "tcp") == "tcp" }
+	ports := c.Services[cyfrService].Ports
+	if b.Published == nil {
+		for _, p := range ports {
+			if proxy(p) && !loopback(p) && tcp(p) {
+				return refused(p, "the proxy listener, whose forwarded headers are trusted, is published only with CYFR_BROWSER=proxy, at CYFR_PROXY_PUBLISH")
+			}
+		}
+		return nil
+	}
+	if b.Proxy.Port == b.Loopback.Port {
+		return fmt.Errorf("access: cyfr's loopback listener and proxy listener both take port %d, so no publication of that port can be told to reach the one and not the other. Nothing started. Give CYFR_PORT and CYFR_PROXY_PORT different ports", b.Loopback.Port)
+	}
+	only := "with proxy cyfr publishes its loopback listener once on 127.0.0.1 and its proxy listener once at CYFR_PROXY_PUBLISH, " + b.Published.Address + ":" + strconv.Itoa(b.Published.Port) + ", and nothing else"
+	var loopbacks, proxies int
+	for _, p := range ports {
+		switch {
+		case !tcp(p):
+			return refused(p, only)
+		case loopback(p) && p.HostIP == "127.0.0.1" && loopbacks == 0:
+			loopbacks++
+		case proxy(p) && p.HostIP == b.Published.Address && p.Published == strconv.Itoa(b.Published.Port) && proxies == 0:
+			proxies++
+		default:
+			return refused(p, only)
+		}
+	}
+	switch {
+	case loopbacks == 0:
+		return fmt.Errorf("access: the stack's configuration does not publish cyfr's loopback listener on this machine's 127.0.0.1, which %s. Nothing started", only)
+	case proxies == 0:
+		return fmt.Errorf("access: the stack's configuration does not publish cyfr's proxy listener at CYFR_PROXY_PUBLISH, %s:%d, so your proxy cannot reach it. Nothing started", b.Published.Address, b.Published.Port)
+	}
+	return nil
 }
 
 var yamlLine = regexp.MustCompile(`line ([0-9]+)`)
@@ -257,11 +409,11 @@ func (e *Engine) servicesOf(ctx context.Context, h Head, content []byte) ([]stri
 }
 
 // everyAccessService is every service the stack's configuration puts in a
-// access mode's profile, whichever head selects it: what a stop of the
-// access services must cover when a head cannot say, and what a start removes when
-// its head does not select it.
+// kind's profile, whichever head selects it: what a stop of the access
+// services must cover when a head cannot say, and what a start removes
+// when its head does not select it.
 func (e *Engine) everyAccessService(ctx context.Context) ([]string, error) {
-	return e.servicesOf(ctx, Head{Profiles: ModeProfiles()}, nil)
+	return e.servicesOf(ctx, Head{Profiles: BrowserProfiles()}, nil)
 }
 
 // otherServices are c's services that are not access services of h.
@@ -291,7 +443,7 @@ func cyfrEnv(c config) map[string]string {
 // checkEffective validates the values cyfr would start with: ResolveBoot
 // with .env's own read as the file and the flattened environment as the
 // process, a release's rules, and the head that answers must be h without
-// its profiles no access mode selects: those choose more of the stack's own
+// its profiles no kind selects: those choose more of the stack's own
 // services (an update's selection of the stack an older release left) and
 // reach no setting of cyfr's.
 func (e *Engine) checkEffective(h Head, content []byte) error {
@@ -315,11 +467,11 @@ func (e *Engine) checkEffective(h Head, content []byte) error {
 		return err
 	}
 	reach := h
-	reach.Profiles = slices.DeleteFunc(slices.Clone(h.Profiles), func(p string) bool { return !slices.Contains(ModeProfiles(), p) })
+	reach.Profiles = slices.DeleteFunc(slices.Clone(h.Profiles), func(p string) bool { return !slices.Contains(BrowserProfiles(), p) })
 	if b.Head.Digest() != reach.Digest() {
 		return fmt.Errorf("access: the stack's configuration starts cyfr reached as %s, not as %s", wordsText(Describe(b.Head)), wordsText(Describe(h)))
 	}
-	return nil
+	return checkPublished(c, b)
 }
 
 // checkStack is CheckStack: the sources, then the effective values of

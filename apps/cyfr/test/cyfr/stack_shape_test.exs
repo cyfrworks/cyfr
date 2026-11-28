@@ -1696,7 +1696,7 @@ defmodule Cyfr.StackShapeTest do
   end
 
   # ==========================================================================
-  # The access modes' networks, proxies and ports
+  # The browser addresses' networks, proxies and ports
   # ==========================================================================
 
   defp compose!, do: YamlElixir.read_from_string!(read!("docker-compose.yml"))
@@ -1772,9 +1772,9 @@ defmodule Cyfr.StackShapeTest do
   # The loopback listener's address is the compose file's to assert, and
   # every access setting reaches cyfr from .env through env_file
   # alone: an `environment:` entry here would be a second, unchecked
-  # source of the home's access settings.
-  @head_keys ~w(CYFR_ACCESS CYFR_HOST CYFR_PORT CYFR_PUBLIC_URL CYFR_TAILNET_NODE_ID
-                CADDY_ACME_EMAIL)
+  # source of the server's access settings.
+  @head_keys ~w(CYFR_BROWSER CYFR_HOST CYFR_PORT CYFR_PUBLIC_URL CYFR_TAILNET_NODE_ID
+                CYFR_PROXY_PUBLISH CADDY_ACME_EMAIL)
 
   test "cyfr asserts its loopback listener's address, and takes its access settings from .env alone" do
     cyfr = compose!()["services"]["cyfr"]
@@ -1834,8 +1834,10 @@ defmodule Cyfr.StackShapeTest do
   end
 
   # What a selection of profiles starts publishes on the host: the
-  # loopback listener on the host's loopback alone in every mode, the
-  # sidecar's SOCKS5 on loopback in tailnet, and Caddy's public 80 and 443.
+  # loopback listener on the host's loopback alone whatever the kind, the
+  # sidecar's SOCKS5 on loopback with `tailnet`, and Caddy's public 80 and
+  # 443 with `domain`. `none` and `proxy` select no profile; `proxy`'s
+  # publication is cyfr's own compose file's, not this one's.
   defp published(parsed, profiles) do
     for {service, definition} <- parsed["services"],
         definition["profiles"] in [nil, []] or
@@ -1844,7 +1846,7 @@ defmodule Cyfr.StackShapeTest do
         do: {service, port}
   end
 
-  test "each mode publishes its loopback listeners, and public 80 and 443" do
+  test "each browser kind publishes its loopback listeners, and domain 80 and 443" do
     parsed = compose!()
     loopback = [{"cyfr", "127.0.0.1:${CYFR_PORT:-4000}:${CYFR_PORT:-4000}"}]
     caddy = [{"caddy", "80:80"}, {"caddy", "443:443"}, {"caddy", "443:443/udp"}]
@@ -1853,12 +1855,12 @@ defmodule Cyfr.StackShapeTest do
     for {profiles, expected} <- [
           {[], loopback},
           {["tailnet"], loopback ++ kiosk},
-          {["public"], loopback ++ caddy}
+          {["domain"], loopback ++ caddy}
         ] do
       assert Enum.sort(published(parsed, profiles)) == Enum.sort(expected), inspect(profiles)
     end
 
-    assert parsed["services"]["caddy"]["profiles"] == ["public"]
+    assert parsed["services"]["caddy"]["profiles"] == ["domain"]
   end
 
   # A probe that runs the binary (`caddy version`) passes in a container
@@ -1873,26 +1875,26 @@ defmodule Cyfr.StackShapeTest do
     refute read!("Caddyfile") =~ ~r/^\s*admin\s+off\b/m
   end
 
-  # The firewall paragraph names defaults for each mode. Read its port
+  # The firewall paragraph names defaults for each kind. Read its port
   # claims and compare them with Compose's own profile selection, so a
   # published binding cannot silently drift away from the operator's guide.
   defp readme_ports(readme) do
     pattern =
-      ~r/^- Firewall: \*\*public\*\* opens (.*?)\. In every mode CYFR publishes `(\d+)\/tcp` on `([^`]+)` only .*?With \*\*tailnet\*\* access, CYFR also publishes SOCKS5 `(\d+)\/tcp` on `([^`]+)` only/m
+      ~r/^- Firewall: \*\*domain\*\* opens (.*?)\. Whatever the kind, CYFR publishes `(\d+)\/tcp` on `([^`]+)` only .*?With \*\*tailnet\*\*, CYFR also publishes SOCKS5 `(\d+)\/tcp` on `([^`]+)` only/m
 
     case Regex.run(pattern, readme) do
-      [_, public, port, address, kiosk_port, kiosk_address] ->
+      [_, domain, port, address, kiosk_port, kiosk_address] ->
         loopback = [{"cyfr", "#{address}:#{port}:#{port}"}]
         kiosk = [{"tailscale", "#{kiosk_address}:#{kiosk_port}:1055"}]
 
         caddy =
           for [port, protocol] <-
-                Regex.scan(~r/`(\d+)\/(tcp|udp)`/, public, capture: :all_but_first) do
+                Regex.scan(~r/`(\d+)\/(tcp|udp)`/, domain, capture: :all_but_first) do
             suffix = if protocol == "tcp", do: "", else: "/#{protocol}"
             {"caddy", "#{port}:#{port}#{suffix}"}
           end
 
-        %{[] => loopback, ["tailnet"] => loopback ++ kiosk, ["public"] => loopback ++ caddy}
+        %{[] => loopback, ["tailnet"] => loopback ++ kiosk, ["domain"] => loopback ++ caddy}
 
       _ ->
         nil
@@ -1904,8 +1906,8 @@ defmodule Cyfr.StackShapeTest do
       nil ->
         false
 
-      modes ->
-        Enum.all?(modes, fn {profiles, expected} ->
+      kinds ->
+        Enum.all?(kinds, fn {profiles, expected} ->
           actual =
             for {service, port} <- published(parsed, profiles) do
               {service, Regex.replace(~r/\$\{[A-Z_]+:-([^}]+)\}/, port, "\\1")}
@@ -1916,7 +1918,7 @@ defmodule Cyfr.StackShapeTest do
     end
   end
 
-  test "README's firewall paragraph agrees with every mode's published ports and finds drift" do
+  test "README's firewall paragraph agrees with every kind's published ports and finds drift" do
     readme = read!("README.md")
     parsed = compose!()
     assert map_size(readme_ports(readme)) == 3
@@ -1953,11 +1955,11 @@ defmodule Cyfr.StackShapeTest do
     dockerfile = read!("Dockerfile")
 
     defaults =
-      Path.join(@root, "tests/fixtures/access_modes.json")
+      Path.join(@root, "tests/fixtures/access.json")
       |> File.read!()
       |> Jason.decode!()
       |> Map.fetch!("boot")
-      |> Enum.find(&(&1["name"] == "local, defaults"))
+      |> Enum.find(&(&1["name"] == "none, defaults"))
 
     ["127.0.0.1" = address, 4000 = port] = defaults["access"]["listeners"]["loopback"]
 
@@ -2056,7 +2058,7 @@ defmodule Cyfr.StackShapeTest do
     refute example =~ ~r/CYFR_LOCUS_RUNTIME_ROOT|CYFR_DATABASE_UR[L]|CYFR_CRYPTO_KEYRIN[G]=/
   end
 
-  test "the compose file's profiles are public and tailnet" do
+  test "the compose file's profiles are domain and tailnet" do
     services = YamlElixir.read_from_string!(read!("docker-compose.yml"))
 
     profiles =
@@ -2065,6 +2067,6 @@ defmodule Cyfr.StackShapeTest do
           uniq: true,
           do: profile
 
-    assert Enum.sort(profiles) == ["public", "tailnet"]
+    assert Enum.sort(profiles) == ["domain", "tailnet"]
   end
 end

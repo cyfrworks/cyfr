@@ -124,7 +124,12 @@ defmodule Prima.EnvValue do
     end
   end
 
-  @doc "An IPv4 or IPv6 address to bind, as `:inet` reads it."
+  @doc """
+  An IPv4 or IPv6 address to bind, read as a pin's address is
+  (`Prima.PinnedTarget.parse_ip/1`): four decimal fields for IPv4, none
+  with a leading zero or a sign, so `127.1`, `10`, `0x7f.0.0.1` and
+  `0177.0.0.1` are refused.
+  """
   @spec bind(getenv(), String.t()) :: {:ok, :inet.ip_address() | nil} | {:error, String.t()}
   def bind(getenv, key) when is_function(getenv, 1) do
     case trimmed(getenv, key) do
@@ -132,9 +137,9 @@ defmodule Prima.EnvValue do
         {:ok, nil}
 
       text ->
-        case :inet.parse_address(String.to_charlist(text)) do
+        case Prima.PinnedTarget.parse_ip(text) do
           {:ok, address} -> {:ok, address}
-          {:error, _} -> {:error, "#{key}=#{inspect(text)} is not an IPv4 or IPv6 address."}
+          :error -> {:error, "#{key}=#{inspect(text)} is not an IPv4 or IPv6 address."}
         end
     end
   end

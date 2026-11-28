@@ -516,10 +516,10 @@ defmodule Cyfr.RuntimeConfigTest do
     end
   end
 
-  describe "resolve_access/1, as tests/fixtures/access_modes.json holds it" do
+  describe "resolve_access/1, as tests/fixtures/access.json holds it" do
     # The access engine (apps/codex/internal/access) reads the same file and
     # agrees with every answer here.
-    @access_vectors Path.expand("../../../../tests/fixtures/access_modes.json", __DIR__)
+    @access_vectors Path.expand("../../../../tests/fixtures/access.json", __DIR__)
 
     defp access_vectors, do: @access_vectors |> File.read!() |> Jason.decode!()
 
@@ -541,18 +541,22 @@ defmodule Cyfr.RuntimeConfigTest do
         end
 
       assert Map.keys(access) |> Enum.sort() ==
-               ~w(assertion canonical check_origins digest head hsts listeners mode origin trust)a
+               ~w(assertion browser canonical check_origins digest exposure head hsts listeners origin trust)a
+
+      assert Map.keys(access.listeners) |> Enum.sort() == ~w(loopback proxy published)a
 
       %{
         "access" => %{
-          "mode" => Atom.to_string(access.mode),
+          "browser" => Atom.to_string(access.browser),
+          "exposure" => Atom.to_string(access.exposure),
           "head" => access.head,
           "canonical" => access.canonical,
           "digest" => access.digest,
           "origin" => access.origin,
           "listeners" => %{
             "loopback" => listener.(access.listeners.loopback),
-            "proxy" => listener.(access.listeners.proxy)
+            "proxy" => listener.(access.listeners.proxy),
+            "published" => listener.(access.listeners.published)
           },
           "trust" => trust,
           "hsts" => Atom.to_string(access.hsts),
@@ -594,10 +598,11 @@ defmodule Cyfr.RuntimeConfigTest do
       # setting, is among the vectors.
       assert Enum.sort(codes) ==
                Enum.sort(~w(access_source_conflict access_assertion_from_file access_missing
-                            access_unknown_mode access_local_mismatch access_tailnet_host_invalid
-                            access_tailnet_node_invalid access_public_host_invalid
-                            access_public_url_mismatch access_key_outside_mode
-                            access_bind_not_loopback access_setting_invalid))
+                            access_unknown_browser access_none_mismatch access_tailnet_host_invalid
+                            access_tailnet_node_invalid access_domain_host_invalid
+                            access_public_url_mismatch access_key_outside_browser
+                            access_bind_not_loopback access_setting_invalid
+                            access_proxy_trust_missing))
     end
 
     test "the canonical bytes and digest of every derived head are these" do
@@ -641,12 +646,12 @@ defmodule Cyfr.RuntimeConfigTest do
       profiles = access_vectors()["profiles"]
       assert profiles != []
 
-      for %{"mode" => mode, "profiles" => expected} = vector <- profiles do
-        assert RuntimeConfig.access_profiles(mode) == expected, inspect(vector)
+      for %{"browser" => browser, "profiles" => expected} = vector <- profiles do
+        assert RuntimeConfig.access_profiles(browser) == expected, inspect(vector)
       end
     end
 
-    test "the names an access mode is written with" do
+    test "the names a browser address is written with" do
       names = access_vectors()["names"]
 
       for {section, check} <- [
@@ -663,8 +668,18 @@ defmodule Cyfr.RuntimeConfigTest do
       end
     end
 
-    test "a dev or test run without a mode is local, and a release without one is refused" do
-      assert {:ok, %{mode: :local, assertion: :absent}} =
+    # The retired access setting is no input: the resolver handed it alone
+    # answers as for no setting (a real boot refuses the name first, by the
+    # roster's rule: runtime_config_wiring_test).
+    test "the retired CYFR_ACCESS is read as no setting" do
+      env = %{"CYFR_ACCESS" => "local"}
+
+      assert {:error, %{code: :access_missing, class: :setup_required, payload: %{}}} =
+               RuntimeConfig.resolve_access(%{file: env, process: env, release?: true})
+    end
+
+    test "a dev or test run without a kind is none, and a release without one is refused" do
+      assert {:ok, %{browser: :none, exposure: :private, assertion: :absent}} =
                RuntimeConfig.resolve_access(%{file: nil, process: %{}, release?: false})
 
       assert {:error, %{code: :access_missing, class: :setup_required, payload: %{}}} =
@@ -673,7 +688,7 @@ defmodule Cyfr.RuntimeConfigTest do
 
     test "with no .env read, the process alone decides and no source rule applies" do
       process = %{
-        "CYFR_ACCESS" => "local",
+        "CYFR_BROWSER" => "none",
         "CYFR_BIND_ADDRESS" => "172.16.230.2",
         "CYFR_LOCAL_INGRESS_ASSERTED" => "true"
       }
@@ -694,29 +709,34 @@ defmodule Cyfr.RuntimeConfigTest do
   end
 
   describe "resolve_access/1's input rules" do
-    defp resolve_local(extra) do
-      RuntimeConfig.resolve_access(%{
-        file: nil,
-        process: Map.merge(%{"CYFR_ACCESS" => "local"}, extra),
-        release?: true
-      })
+    defp resolve(process) do
+      RuntimeConfig.resolve_access(%{file: nil, process: process, release?: true})
     end
 
-    test "a value that is not UTF-8 is refused by its name, never a crash" do
-      public = %{
-        "CYFR_ACCESS" => "public",
-        "CYFR_HOST" => "cyfr.example.com",
-        "CYFR_PUBLIC_URL" => "https://cyfr.example.com"
-      }
+    @domain %{
+      "CYFR_BROWSER" => "domain",
+      "CYFR_HOST" => "cyfr.example.com",
+      "CYFR_PUBLIC_URL" => "https://cyfr.example.com"
+    }
 
-      for key <- ~w(CADDY_ACME_EMAIL CYFR_HOST CYFR_ACCESS CYFR_PORT) do
+    @tailnet %{
+      "CYFR_BROWSER" => "tailnet",
+      "CYFR_HOST" => "cyfr.tail1a2b3c.ts.net",
+      "CYFR_TAILNET_NODE_ID" => "nAbc123XYZ1CNTRL",
+      "CYFR_PUBLIC_URL" => "https://cyfr.tail1a2b3c.ts.net"
+    }
+
+    @proxy %{@domain | "CYFR_BROWSER" => "proxy"}
+
+    test "a value that is not UTF-8 is refused by its name, never a crash" do
+      for key <- ~w(CADDY_ACME_EMAIL CYFR_HOST CYFR_BROWSER CYFR_PORT CYFR_PROXY_PUBLISH) do
         assert {:error,
                 %{
                   code: :access_setting_invalid,
                   class: :invalid_argument,
                   payload: %{key: ^key} = payload
                 }} =
-                 resolve_local(Map.put(public, key, "a" <> <<255>>)),
+                 resolve(Map.put(@domain, key, "a" <> <<255>>)),
                key
 
         refute Map.has_key?(payload, :value), key
@@ -727,9 +747,97 @@ defmodule Cyfr.RuntimeConfigTest do
       assert {:error, %{code: :access_setting_invalid, payload: %{key: "CYFR_HOST"}}} =
                RuntimeConfig.resolve_access(%{
                  file: %{"CYFR_HOST" => <<255>>},
-                 process: %{"CYFR_ACCESS" => "local", "CYFR_HOST" => <<255>>},
+                 process: %{"CYFR_BROWSER" => "none", "CYFR_HOST" => <<255>>},
                  release?: true
                })
+    end
+
+    test "proxy publishes its proxy listener on the loopback; proxy and domain are public, none and tailnet private" do
+      assert {:ok,
+              %{
+                browser: :proxy,
+                exposure: :public,
+                listeners: %{
+                  loopback: {"127.0.0.1", 4000},
+                  proxy: {"127.0.0.1", 4001},
+                  published: {"127.0.0.1", 4001}
+                },
+                trust: {:hops, 1},
+                head: %{"publish" => "127.0.0.1:4001", "profiles" => []}
+              }} = resolve(Map.put(@proxy, "CYFR_TRUSTED_PROXY_HOPS", "1"))
+
+      assert {:ok,
+              %{listeners: %{published: {"127.0.0.2", 4000}}, trust: {:cidrs, ["172.16.230.1"]}}} =
+               resolve(
+                 Map.merge(@proxy, %{
+                   "CYFR_PROXY_PUBLISH" => "127.0.0.2:4000",
+                   "CYFR_TRUSTED_PROXY_CIDRS" => "172.16.230.1"
+                 })
+               )
+
+      # The publication is an IPv4 loopback address alone.
+      for value <- ["[::1]:4002", "0.0.0.0:4002", "localhost:4002", "127.0.0.1"] do
+        assert {:error,
+                %{
+                  code: :access_setting_invalid,
+                  payload: %{key: "CYFR_PROXY_PUBLISH", value: ^value} = payload
+                }} =
+                 resolve(
+                   Map.merge(@proxy, %{
+                     "CYFR_PROXY_PUBLISH" => value,
+                     "CYFR_TRUSTED_PROXY_HOPS" => "1"
+                   })
+                 ),
+               value
+
+        assert map_size(payload) == 2, value
+      end
+
+      for {process, browser, exposure} <- [
+            {%{"CYFR_BROWSER" => "none"}, :none, :private},
+            {@tailnet, :tailnet, :private},
+            {@domain, :domain, :public}
+          ] do
+        assert {:ok,
+                %{browser: ^browser, exposure: ^exposure, listeners: %{published: :none}} = access} =
+                 resolve(process)
+
+        refute Map.has_key?(access.head, "publish"), inspect(browser)
+      end
+    end
+
+    test "proxy refuses a trust left unstated; tailnet and domain take the default hops" do
+      assert {:error, %{code: :access_proxy_trust_missing, class: :setup_required, payload: %{}}} =
+               resolve(@proxy)
+
+      for process <- [@tailnet, @domain] do
+        assert {:ok, %{trust: {:hops, 1}}} = resolve(process), process["CYFR_BROWSER"]
+      end
+    end
+
+    test "CYFR_PROXY_PUBLISH is refused with every other kind, and at the loopback listener's own" do
+      for process <- [%{"CYFR_BROWSER" => "none"}, @tailnet, @domain] do
+        browser = process["CYFR_BROWSER"]
+
+        assert {:error,
+                %{
+                  code: :access_key_outside_browser,
+                  class: :invalid_argument,
+                  payload: %{key: "CYFR_PROXY_PUBLISH", browser: ^browser, needs: "proxy"}
+                }} = resolve(Map.put(process, "CYFR_PROXY_PUBLISH", "127.0.0.1:4001"))
+      end
+
+      assert {:error,
+              %{
+                code: :access_setting_invalid,
+                payload: %{key: "CYFR_PROXY_PUBLISH", value: "127.0.0.1:4000", port: "4000"}
+              }} =
+               resolve(
+                 Map.merge(@proxy, %{
+                   "CYFR_PROXY_PUBLISH" => "127.0.0.1:4000",
+                   "CYFR_TRUSTED_PROXY_HOPS" => "1"
+                 })
+               )
     end
   end
 end

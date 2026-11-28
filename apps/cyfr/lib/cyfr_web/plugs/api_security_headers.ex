@@ -33,8 +33,8 @@ defmodule CyfrWeb.Plugs.ApiSecurityHeaders do
 
   @doc """
   The endpoint's HSTS, the one spelling of the policy, on the response
-  `conn` sends when all three hold: the home's access settings give the endpoint
-  HSTS (`:cyfr, :hsts` is `:endpoint_on_proxy`, a tailnet home's, which
+  `conn` sends when all three hold: the access settings give the endpoint
+  HSTS (`:cyfr, :hsts` is `:endpoint_on_proxy`, with `tailnet` and `proxy`, which
   `config/runtime.exs` writes from `Cyfr.RuntimeConfig.resolve_access/1`),
   the proxy listener accepted the request (`Sanctum.ClientIp.ingress/1`),
   and its `Host` is not a loopback name: `localhost`, a name ending in
@@ -42,9 +42,9 @@ defmodule CyfrWeb.Plugs.ApiSecurityHeaders do
   answered as it is, so the loopback listener's responses never carry it.
 
   `CyfrWeb.Ingress` registers it on every response the proxy listener
-  sends, success, error and refusal alike. A public home's HSTS is
+  sends, success, error and refusal alike. With `domain` the HSTS is
   Caddy's, this value (`Caddyfile`), and `tests/proxy-hsts/run.sh` fails
-  when its value differs from the one here; a local home has none.
+  when its value differs from the one here; with no browser address there is none.
   """
   @spec maybe_hsts(Plug.Conn.t()) :: Plug.Conn.t()
   def maybe_hsts(%Plug.Conn{} = conn) do

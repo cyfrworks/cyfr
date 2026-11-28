@@ -44,8 +44,8 @@ defmodule Sanctum.DirectoryTest do
   # (`Sanctum.origin/0`), restored when the test ends.
   defp serve_at(url), do: put_sanctum_env(:public_url, url)
 
-  # A local home declares no public URL: its origin is the fallback the
-  # runtime builds from its port (`Cyfr.RuntimeConfig`).
+  # A server with no browser address declares no public URL: its origin
+  # is the fallback the runtime builds from its port (`Cyfr.RuntimeConfig`).
   defp serve_locally_at(origin) do
     put_sanctum_env(:public_url, nil)
     put_sanctum_env(:fallback_origin, origin)
@@ -304,7 +304,7 @@ defmodule Sanctum.DirectoryTest do
                Directory.register(%{genesis: Entry.encode(account().genesis), source: source()})
     end
 
-    test "a local home on port 80, whose origin is http://localhost:80, registers a genesis " <>
+    test "a server with no browser address on port 80, whose origin is http://localhost:80, registers a genesis " <>
            "naming http://localhost" do
       serve_locally_at("http://localhost:80")
       assert Sanctum.origin() == "http://localhost:80"

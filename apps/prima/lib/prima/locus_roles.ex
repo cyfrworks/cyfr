@@ -28,8 +28,8 @@ defmodule Prima.LocusRoles do
   `endpoint_subnet` and whose other containers take addresses from
   `endpoint_ip_range` alone, so nothing started first can hold cyfr's.
   Docker publishes the host's loopback port to that address, and the
-  network Locus joins never reaches the endpoint. Its proxy listener, in a
-  tailnet or public home, binds `edge_address` on the network
+  network Locus joins never reaches the endpoint. Its proxy listener, with
+  `tailnet` or `domain`, binds `edge_address` on the network
   `edge_network`, whose subnet is `edge_subnet` and whose dynamic range is
   `edge_ip_range`; the two proxies that forward to it sit there at fixed
   addresses of their own, Caddy at `edge_caddy_address` and Tailscale at
@@ -98,8 +98,9 @@ defmodule Prima.LocusRoles do
   /proc, /tmp, /dev/shm, terminals and group, and its home alone.
 
   `tests/fixtures/locus_roles.json` holds the same table for the image
-  suites, which cannot read this module: `Prima.LocusRolesTest` holds the
-  file to it value by value. `Locus.Application` selects a node's roles
+  suites and the Go runtime role, which cannot read this module:
+  `Prima.LocusRolesTest` holds the file to it value by value, and the Go
+  reader (`internal/wire/locusroles`) holds the runtime row. `Locus.Application` selects a node's roles
   from it, CYFR reaches the builds role beside the backends role at the
   builds role's port (`Cyfr.RuntimeConfig`), and the stack's shape test
   holds every other spelling of a role's facts to it: the Locus image's

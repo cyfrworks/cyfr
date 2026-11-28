@@ -71,7 +71,7 @@ defmodule Sanctum.SignIn do
        `:unavailable`). A sign-in's is read now
        (`Sanctum.IdentityFreshness.fresh!/2`), the entries after the
        cached head walked before anything binds, a directory that does not
-       answer left to the access mode: what it binds lasts, so a key
+       answer left to the exposure: what it binds lasts, so a key
        removed and added again binds the head that lists it again, where
        the walk that retired its older bindings never reaches it, and a
        key just removed signs no one in. A confirmation's is read within

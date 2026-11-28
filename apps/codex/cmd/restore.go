@@ -480,7 +480,7 @@ func (r *restorer) run() error {
 	// the restore: the snapshot's .env names its own node, which the start
 	// validates against the machine before Serve opens.
 	if err := r.engine.ForgetJoin(); err != nil {
-		fmt.Fprintf(r.errOut, "Warning: the record of this machine's last tailnet join could not be removed (%v); `cyfr access tailnet` may offer it again.\n", engineFailure(err))
+		fmt.Fprintf(r.errOut, "Warning: the record of this machine's last tailnet join could not be removed (%v); `cyfr access browser tailnet` may offer it again.\n", engineFailure(err))
 	}
 	if !r.start {
 		fmt.Fprintln(r.out, "The stack is left stopped (--no-start); start it with 'cyfr up'.")

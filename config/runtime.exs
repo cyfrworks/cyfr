@@ -132,14 +132,14 @@ if config_env() != :test do
     names -> raise "[Cyfr] FATAL: " <> roster.refusal(names)
   end
 
-  # How this home is reached (`Cyfr.RuntimeConfig.resolve_access/1`):
-  # CYFR_ACCESS in .env, and every setting it implies, read from the names
+  # How this server is reached (`Cyfr.RuntimeConfig.resolve_access/1`):
+  # CYFR_BROWSER in .env, and every setting it implies, read from the names
   # the .env files assign and the merged environment. A release without a
-  # mode, a setting the mode contradicts, the compose file's assertion
-  # assigned in .env, or a loopback listener bound off the loopback
-  # without it refuses the boot with the sentence that names its fix
-  # (`Prima.Refusal`). A development or test boot without a mode is
-  # `local`: the dev default, which a release never takes.
+  # kind, a setting the kind contradicts, `proxy` without a stated trust,
+  # the compose file's assertion assigned in .env, or a loopback listener
+  # bound off the loopback without it refuses the boot with the sentence
+  # that names its fix (`Prima.Refusal`). A development or test boot
+  # without a kind is `none`: the dev default, which a release never takes.
   access =
     case Cyfr.RuntimeConfig.resolve_access(%{
            file: file_env,
@@ -331,11 +331,11 @@ if config_env() != :test do
   # The access settings' listeners, address, origins, proxy trust and HSTS, in every
   # environment this file configures.
   #
-  # The endpoint serves on its loopback listener in every mode, and in a
-  # tailnet or public home on the proxy listener too, the one its proxy
+  # The endpoint serves on its loopback listener whatever the kind, and
+  # with a browser address on the proxy listener too, the one its proxy
   # forwards to (`CyfrWeb.Ingress`): each at the address and port the
-  # access settings name. Its URL is the home's: `http://localhost:<CYFR_PORT>` in
-  # a local home, `https://<CYFR_HOST>` on 443 otherwise.
+  # access settings name. Its URL is the server's: `http://localhost:<CYFR_PORT>`
+  # with no browser address, `https://<CYFR_HOST>` on 443 otherwise.
   listener = fn {address, port} ->
     {:ok, ip} = :inet.parse_strict_address(String.to_charlist(address))
     [ip: ip, port: port]
@@ -345,7 +345,7 @@ if config_env() != :test do
 
   config :cyfr, CyfrWeb.Endpoint,
     url:
-      if(access.mode == :local,
+      if(access.browser == :none,
         do: [scheme: "http", host: "localhost", port: loopback_port],
         else: [scheme: "https", host: access.head["host"], port: 443]
       ),
@@ -369,26 +369,27 @@ if config_env() != :test do
 
   # The proxies whose forwarded headers the proxy listener trusts, and only
   # it (`Sanctum.ClientIp`): CYFR_TRUSTED_PROXY_CIDRS when set, else
-  # CYFR_TRUSTED_PROXY_HOPS hops (default 1); nothing in a local home.
+  # CYFR_TRUSTED_PROXY_HOPS hops (default 1, and no default with `proxy`);
+  # nothing with no browser address.
   config :sanctum, :proxy_trust, access.trust
 
-  # The endpoint's HSTS on the proxy listener in a tailnet home; Caddy's in
-  # a public one, and none in a local one
+  # The endpoint's HSTS on the proxy listener with `tailnet` and `proxy`;
+  # Caddy's with `domain`, and none with no browser address
   # (`CyfrWeb.Plugs.ApiSecurityHeaders.maybe_hsts/1`).
   config :cyfr, :hsts, access.hsts
 
-  # The home's address (`Sanctum.origin/0`): its public URL in a tailnet or
-  # public home, `https://<CYFR_HOST>`, and in a local home, which has
-  # none, `http://localhost:<CYFR_PORT>`. Every self-reference reads it: a
-  # tincture's frame-ancestors and connect-src, an OAuth `redirect_uri`,
-  # a copied URL. A webhook URL is absolute only where the public URL is
-  # set (`Sanctum.public_url/0`), a path in a local home.
+  # The server's address (`Sanctum.origin/0`): its browser address,
+  # `https://<CYFR_HOST>`, and with none, `http://localhost:<CYFR_PORT>`.
+  # Every self-reference reads it: a tincture's frame-ancestors and
+  # connect-src, an OAuth `redirect_uri`, a copied URL. A webhook URL is
+  # absolute only where the public URL is set (`Sanctum.public_url/0`), a
+  # path with no browser address.
   config :sanctum, :public_url, access.head["public_url"]
   config :sanctum, :fallback_origin, access.origin
 
   # What freshness answers while a directory cannot be read follows the
-  # mode (`Sanctum.IdentityFreshness`).
-  config :sanctum, :access_mode, access.mode
+  # server's exposure (`Sanctum.IdentityFreshness`).
+  config :sanctum, :exposure, access.exposure
 
   if config_env() == :prod do
     secret_key_base =

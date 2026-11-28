@@ -22,7 +22,7 @@ import (
 func TestRedactorRedactsEveryValueButTheHeads(t *testing.T) {
 	t.Setenv("ACCESS_REDACT_FROM_ENV", "interpolated-from-the-environment")
 	env := strings.Join([]string{
-		"CYFR_ACCESS=local",
+		"CYFR_BROWSER=none",
 		"CYFR_HOST=localhost",
 		"CYFR_PORT=4000",
 		"PLAIN=plain-secret-1",
@@ -141,7 +141,7 @@ func TestReceiptsAndJournalsArePersistedRedacted(t *testing.T) {
 			journals = append(journals, string(data))
 		}
 	}
-	r := h.request(id(1), publicTarget, "")
+	r := h.request(id(1), domainTarget, "")
 	rc, err := h.e.Switch(bg, r)
 	if rc.Code == "" || !strings.Contains(strings.Join(journals, ""), `\u003credacted\u003e`) {
 		t.Fatalf("the switch did not fail on the value it gained: %+v %v\n%s", rc, err, journals)
@@ -186,12 +186,12 @@ func TestWatchdogLinesAreRedacted(t *testing.T) {
 // so progress shows, and the rest at Flush.
 func TestCommandRedactorIsTheEnginesPass(t *testing.T) {
 	dir := t.TempDir()
-	writeFile(t, filepath.Join(dir, ".env"), []byte("CYFR_ACCESS=local\nFIRST=first-env-secret\n"))
+	writeFile(t, filepath.Join(dir, ".env"), []byte("CYFR_BROWSER=none\nFIRST=first-env-secret\n"))
 	r := NewRedactor(dir)
 	if got := r.Text("a first-env-secret at localhost"); got != "a <redacted> at localhost" {
 		t.Errorf("the first .env's value reads %q", got)
 	}
-	writeFile(t, filepath.Join(dir, ".env"), []byte("CYFR_ACCESS=local\nSECOND=second-env-secret\n"))
+	writeFile(t, filepath.Join(dir, ".env"), []byte("CYFR_BROWSER=none\nSECOND=second-env-secret\n"))
 	r.Hold("pw", "postgres://u:pw@db/x")
 	if got := r.Text("first-env-secret second-env-secret postgres://u:pw@db/x pw local"); got != "<redacted> <redacted> <redacted> <redacted> local" {
 		t.Errorf("the redactor reads %q", got)
@@ -222,7 +222,7 @@ func TestCommandRedactorIsTheEnginesPass(t *testing.T) {
 func TestRedactedStreamMatchesAcrossWritesAndLines(t *testing.T) {
 	dir := t.TempDir()
 	const long = "long-secret-value-0123456789"
-	writeFile(t, filepath.Join(dir, ".env"), []byte("CYFR_ACCESS=local\nML='q2\nx4'\nSP=' abc '\nLONG="+long+"\n"))
+	writeFile(t, filepath.Join(dir, ".env"), []byte("CYFR_BROWSER=none\nML='q2\nx4'\nSP=' abc '\nLONG="+long+"\n"))
 	r := NewRedactor(dir)
 	const text = "a q2\nx4 b  abc  c " + long + " d\rprogress 50%\r"
 	const want = "a <redacted> b <redacted> c <redacted> d\rprogress 50%\r"
@@ -278,7 +278,7 @@ func TestRedactedStreamMatchesAcrossWritesAndLines(t *testing.T) {
 // length less one, and reads as the whole stream does.
 func TestRedactedStreamPassesProgressWhileOccurrencesOverlap(t *testing.T) {
 	dir := t.TempDir()
-	writeFile(t, filepath.Join(dir, ".env"), []byte("CYFR_ACCESS=local\nSEPARATOR='----'\n"))
+	writeFile(t, filepath.Join(dir, ".env"), []byte("CYFR_BROWSER=none\nSEPARATOR='----'\n"))
 	r := NewRedactor(dir)
 	var out bytes.Buffer
 	w := r.Writer(&out)
@@ -309,7 +309,7 @@ func TestRedactedStreamPassesProgressWhileOccurrencesOverlap(t *testing.T) {
 // once, wherever the writes split it.
 func TestRedactedStreamKeepsTheCoverOfAnOccurrencePassedOn(t *testing.T) {
 	dir := t.TempDir()
-	writeFile(t, filepath.Join(dir, ".env"), []byte("CYFR_ACCESS=local\nPERIODIC=abab\n"))
+	writeFile(t, filepath.Join(dir, ".env"), []byte("CYFR_BROWSER=none\nPERIODIC=abab\n"))
 	r := NewRedactor(dir)
 	const text = "xabababy ababab z"
 	want := r.Text(text)

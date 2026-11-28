@@ -64,7 +64,7 @@ defmodule Cyfr.CrossLanguageDriftTest do
            "#{go} is stale: run `mix cyfr.gen.access_refusals`"
 
     for %{"code" => code, "class" => class, "variants" => variants} <-
-          fixture!("access_modes.json")["refusals"],
+          fixture!("access.json")["refusals"],
         %{"example" => %{"payload" => payload, "sentence" => sentence}} <- variants do
       reason =
         {String.to_existing_atom(code),
@@ -390,6 +390,18 @@ defmodule Cyfr.CrossLanguageDriftTest do
   # directory, so a new version of a component that reads a vector is a new
   # row, which the scan asks for.
   @vector_readers %{
+    "access.json" => [
+      {"apps/codex/internal/access/head_test.go", ~w(derive boot profiles names words)},
+      {"apps/codex/internal/access/refusals_test.go", ~w(refusals)},
+      {"apps/cyfr/test/cyfr/cross_language_drift_test.exs", ~w(refusals)},
+      {"apps/cyfr/test/cyfr/runtime_config_test.exs", ~w(derive boot profiles names)},
+      {"apps/cyfr/test/cyfr/runtime_config_wiring_test.exs", ~w(boot)},
+      {"apps/cyfr/test/cyfr/stack_shape_test.exs", ~w(boot profiles)},
+      {"tests/compose-proof/predicates.sh", ~w(derive profiles words)},
+      {"tests/compose-proof/run.sh", ~w(refusals boot)},
+      {"tests/release-boot/access-test.sh", ~w(boot)},
+      {"tests/release-boot/boot.sh", ~w(boot)}
+    ],
     "account_names.json" => [
       {"apps/prima/test/prima/authority/blob_test.exs", ~w(unicode keys same different)}
     ],
@@ -617,8 +629,10 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"tests/builder-image/stack_test.py", ~w(bounds lines)}
     ],
     "locus_pool.json" => [
+      {"apps/locus/keeper/internal/wire/locuspool/locuspool_test.go", ~w(kinds wire)},
       {"apps/locus/keeper/internal/admission/size_test.go",
        ~w(allowance_bytes allowance_ms cap_bytes counters floor_bytes floor_runners kinds least_cap_bytes machine_bytes processors room_wait_ms stale_ms)},
+      {"apps/locus/test/locus/pool_route_test.exs", ~w(wire)},
       {"apps/prima/test/prima/locus_pool_test.exs",
        ~w(allowance_bytes allowance_ms cap_bytes counters floor_bytes floor_runners kinds least_cap_bytes machine_bytes processors room_wait_ms stale_ms wire)},
       {"tests/imagesuite.py",
@@ -627,6 +641,7 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"tests/locus-backends-image/roles.py", ~w(floor_bytes)}
     ],
     "locus_roles.json" => [
+      {"apps/locus/keeper/internal/wire/locusroles/locusroles_test.go", ~w(roles)},
       {"apps/prima/test/prima/locus_roles_test.exs", ~w(release roles)},
       {"tests/builder-image/stack.py", ~w(release roles)},
       {"tests/compose-proof/run.sh", ~w(release)},
@@ -634,6 +649,11 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"tests/locus-backends-image/roles.py", ~w(roles)},
       {"tests/locus-backends-image/roles_update.py", ~w(roles)},
       {"tests/locus-runtime-image/stack.py", ~w(release roles)}
+    ],
+    "locus_settings.json" => [
+      {"apps/cyfr/test/cyfr/platform_settings_roster_test.exs", ~w(variables)},
+      {"apps/locus/test/locus/runtime/settings_test.exs",
+       ~w(variables environment reads refusals)}
     ],
     "login_directory.json" => [
       {"apps/codex/internal/account/discover_test.go", ~w(path attribute pages)},
@@ -648,18 +668,6 @@ defmodule Cyfr.CrossLanguageDriftTest do
     "model_chat.json" => [
       {"apps/prima/test/prima/model_test.exs",
        ~w(option_kinds valid_describes invalid_describes valid_chat_requests invalid_chat_requests)}
-    ],
-    "access_modes.json" => [
-      {"apps/codex/internal/access/head_test.go", ~w(derive boot profiles names words)},
-      {"apps/codex/internal/access/refusals_test.go", ~w(refusals)},
-      {"apps/cyfr/test/cyfr/cross_language_drift_test.exs", ~w(refusals)},
-      {"apps/cyfr/test/cyfr/runtime_config_test.exs", ~w(derive boot profiles names)},
-      {"apps/cyfr/test/cyfr/runtime_config_wiring_test.exs", ~w(boot)},
-      {"apps/cyfr/test/cyfr/stack_shape_test.exs", ~w(boot profiles)},
-      {"tests/compose-proof/predicates.sh", ~w(derive profiles words)},
-      {"tests/compose-proof/run.sh", ~w(refusals boot)},
-      {"tests/release-boot/access-test.sh", ~w(boot)},
-      {"tests/release-boot/boot.sh", ~w(boot)}
     ],
     "recovery_code.json" => [
       {"apps/codex/internal/account/wire_test.go", ~w(refused spellings valid)},
@@ -719,7 +727,7 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"apps/locus/test/locus/runtime/relay_vectors_test.exs",
        ~w(attempt initial_credit max_calls max_fetches codes exchange refusals)},
       {"apps/prima/test/prima/runner_relay_test.exs",
-       ~w(version attempt max_body_bytes max_frame_bytes initial_credit max_headers max_header_name_bytes max_header_value_bytes max_signed_header_bytes max_attached_frame_bytes ops methods purposes max_path_bytes max_url_bytes max_calls max_fetches codes exchange refusals encode_refusals)},
+       ~w(version attempt max_body_bytes max_frame_bytes initial_credit max_headers max_header_name_bytes max_header_value_bytes max_signed_header_bytes max_attached_frame_bytes ops methods purposes max_path_bytes max_url_bytes max_calls max_fetches codes counted exchange refusals encode_refusals)},
       {"tests/locus-runtime-image/namespace_test.py", ~w(exchange)}
     ],
     "setup-folders.json" => [
@@ -770,6 +778,7 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"apps/locus/keeper/internal/wire/workerwire/workerwire_test.go",
        ~w(version routes max_body_bytes max_report_attempts requests request_bodies answers answer_writes base_urls)},
       {"apps/locus/test/locus/listener_test.exs", ~w(listener nonces window_ms)},
+      {"apps/locus/test/locus/runtime/settings_test.exs", ~w(base_urls)},
       {"apps/locus/test/locus/runtime/worker_listener_test.exs", ~w(requests status starts)},
       {"apps/prima/test/prima/worker_api_test.exs",
        ~w(version routes retries timeouts_ms requests max_body_bytes window_ms keeper_refusals report_refusals)},

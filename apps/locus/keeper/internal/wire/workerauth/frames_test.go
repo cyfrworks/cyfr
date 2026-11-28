@@ -13,7 +13,14 @@ import (
 
 // hostSections are the sections of tests/fixtures/host_api.json this test reads.
 type hostSections struct {
-	FrameCases     json.RawMessage `json:"frame_cases"`
+	FrameCases struct {
+		MaxFrameBytes int `json:"max_frame_bytes"`
+		MaxChunkBytes int `json:"max_chunk_bytes"`
+		// The frames an answer is written in: N3's service's to write.
+		CallID      json.RawMessage `json:"call_id"`
+		OtherCallID json.RawMessage `json:"other_call_id"`
+		Cases       json.RawMessage `json:"cases"`
+	} `json:"frame_cases"`
 	FrameSplits    json.RawMessage `json:"frame_splits"`
 	FrameBodyBytes json.RawMessage `json:"frame_body_bytes"`
 }
@@ -29,13 +36,8 @@ func hostVectors(t *testing.T) hostSections {
 // frame's body is counted from its sealed value's length alone.
 func TestEveryFrameStreamSplitsAndCountsAsPrimaDoes(t *testing.T) {
 	top := hostVectors(t)
-	var bounds struct {
-		MaxFrameBytes int `json:"max_frame_bytes"`
-		MaxChunkBytes int `json:"max_chunk_bytes"`
-	}
-	if err := json.Unmarshal(top.FrameCases, &bounds); err != nil ||
-		bounds.MaxFrameBytes != MaxFrameBytes || bounds.MaxChunkBytes != MaxChunkBytes {
-		t.Fatalf("bounds %+v, %v", bounds, err)
+	if bounds := top.FrameCases; bounds.MaxFrameBytes != MaxFrameBytes || bounds.MaxChunkBytes != MaxChunkBytes {
+		t.Fatalf("bounds %d and %d", bounds.MaxFrameBytes, bounds.MaxChunkBytes)
 	}
 	for _, raw := range wiretest.Cases(t, top.FrameSplits, 10) {
 		var c struct {

@@ -125,7 +125,7 @@ func workInThisProcess(args []string) *workProcess {
 // made and offers no token, whatever else it says.
 func TestALookNamingNoContainerSendsNothing(t *testing.T) {
 	dir := t.TempDir()
-	env := "CYFR_ACCESS=local\nCYFR_PORT=4100\n" + setupTokenVar + "=" + testToken + "\n"
+	env := "CYFR_BROWSER=none\nCYFR_PORT=4100\n" + setupTokenVar + "=" + testToken + "\n"
 	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte(env), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -257,7 +257,7 @@ func begins(w *workProcess) workBegin { return func() (*workProcess, error) { re
 func setUpFolder(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("CYFR_ACCESS=local\nCYFR_PORT=4100\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("CYFR_BROWSER=none\nCYFR_PORT=4100\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return dir
@@ -371,7 +371,7 @@ func TestSetupsWorkGetsNoSettingOfACYFR(t *testing.T) {
 	t.Cleanup(func() { dockerDesktop, machine.system = savedDesktop, savedSystem })
 	dockerDesktop = func(string) (string, string) { return "app", "desktop-bin" }
 	given := []string{
-		"CYFR_ACCESS=public", "CYFR_PORT=4999", "CYFR_SETUP_TOKEN=launchers", "CYFR_DIRECTORY_URL=https://launcher.example",
+		"CYFR_BROWSER=domain", "CYFR_PORT=4999", "CYFR_SETUP_TOKEN=launchers", "CYFR_DIRECTORY_URL=https://launcher.example",
 		"COMPOSE_PROJECT_NAME=other", "LOCUS_RUNTIME_KEY=k", "ELECTRON_RUN_AS_NODE=1", "SOMETHING=else",
 		"HOME=/home/ada", "https_proxy=http://proxy:3128", "LC_ALL=C.UTF-8", "DOCKER_CONFIG=/home/ada/.docker", "Path=the-path",
 	}

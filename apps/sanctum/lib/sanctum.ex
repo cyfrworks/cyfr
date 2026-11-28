@@ -149,23 +149,23 @@ defmodule Sanctum do
   end
 
   @doc """
-  How this home is reached, `:local`, `:tailnet` or `:public`: the access
-  mode `config/runtime.exs` resolves from `CYFR_ACCESS`
-  (`Cyfr.RuntimeConfig.resolve_access/1`); a boot that resolves none, as a
-  test's does, is a local home's (`config/config.exs`). It decides what
-  freshness answers while a directory cannot be read
+  How far this server reaches, `:public` or `:private`: public with a
+  browser address at a domain, through Caddy or the person's own proxy,
+  private with none or a tailnet one. `config/runtime.exs` resolves it
+  from `CYFR_BROWSER` (`Cyfr.RuntimeConfig.resolve_access/1`); a boot that
+  resolves none, as a test's does, is private (`config/config.exs`). It
+  decides what freshness answers while a directory cannot be read
   (`Sanctum.IdentityFreshness`).
   """
-  @spec access_mode() :: :local | :tailnet | :public
-  def access_mode do
-    case Application.fetch_env!(:sanctum, :access_mode) do
-      mode when mode in [:local, :tailnet, :public] ->
-        mode
+  @spec exposure() :: :public | :private
+  def exposure do
+    case Application.fetch_env!(:sanctum, :exposure) do
+      exposure when exposure in [:public, :private] ->
+        exposure
 
       other ->
         raise ArgumentError,
-              "the access mode is none of local, tailnet or public: " <>
-                Prima.LoggerContext.shape(other)
+              "the exposure is neither public nor private: " <> Prima.LoggerContext.shape(other)
     end
   end
 

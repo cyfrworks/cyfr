@@ -20,10 +20,10 @@ type hostSections struct {
 	DomainCases       json.RawMessage `json:"domain_cases"`
 	DomainBytes       json.RawMessage `json:"domain_bytes"`
 	Urls              json.RawMessage `json:"urls"`
-	FramingHeaders    json.RawMessage `json:"framing_headers"`
-	OverrideHeaders   json.RawMessage `json:"override_headers"`
-	OverridePrefixes  json.RawMessage `json:"override_prefixes"`
-	CredentialHeaders json.RawMessage `json:"credential_headers"`
+	FramingHeaders    []string        `json:"framing_headers"`
+	OverrideHeaders   []string        `json:"override_headers"`
+	OverridePrefixes  []string        `json:"override_prefixes"`
+	CredentialHeaders []string        `json:"credential_headers"`
 	HeaderRules       json.RawMessage `json:"header_rules"`
 	HostHeaders       json.RawMessage `json:"host_headers"`
 	AttachedRequests  json.RawMessage `json:"attached_requests"`
@@ -38,7 +38,7 @@ func hostVectors(t *testing.T) hostSections {
 
 // relaySections are the sections of tests/fixtures/runner_relay.json this test reads.
 type relaySections struct {
-	Methods json.RawMessage `json:"methods"`
+	Methods []string `json:"methods"`
 }
 
 func relayVectors(t *testing.T) relaySections {
@@ -124,12 +124,12 @@ func TestEveryURLReadsWholeAsPrimaReadsIt(t *testing.T) {
 			Text string `json:"text"`
 			URL  *struct {
 				Scheme   string      `json:"scheme"`
-				Userinfo *string     `json:"userinfo"`
+				Userinfo *string     `json:"userinfo" wire:"null,required"`
 				Host     string      `json:"host"`
 				Port     json.Number `json:"port"`
-				Path     *string     `json:"path"`
-				Query    *string     `json:"query"`
-				Fragment *string     `json:"fragment"`
+				Path     *string     `json:"path" wire:"null,required"`
+				Query    *string     `json:"query" wire:"null,required"`
+				Fragment *string     `json:"fragment" wire:"null,required"`
 			} `json:"url"`
 		}
 		wiretest.Decode(t, raw, &c, []string{"text", "url"}, "url")
@@ -165,17 +165,12 @@ func show(u URI) string {
 
 func TestEveryHeaderIsRuledAsPrimaRulesIt(t *testing.T) {
 	top := host(t)
-	for name, r := range map[string]struct {
-		raw    json.RawMessage
-		roster []string
-	}{
+	for name, r := range map[string]struct{ want, roster []string }{
 		"framing_headers": {top.FramingHeaders, FramingHeaders()}, "override_headers": {top.OverrideHeaders, OverrideHeaders()},
 		"override_prefixes": {top.OverridePrefixes, OverridePrefixes()}, "credential_headers": {top.CredentialHeaders, CredentialHeaders()},
 	} {
-		var want []string
-		roster := r.roster
-		if err := json.Unmarshal(r.raw, &want); err != nil || len(want) == 0 || !reflect.DeepEqual(want, roster) {
-			t.Errorf("%s: the vector's %v, the package's %v (%v)", name, want, roster, err)
+		if len(r.want) == 0 || !reflect.DeepEqual(r.want, r.roster) {
+			t.Errorf("%s: the vector's %v, the package's %v", name, r.want, r.roster)
 		}
 	}
 	FramingHeaders()[0] = "changed"
@@ -244,10 +239,7 @@ func TestEveryAttachedRequestIsWrittenAsPrimaWritesIt(t *testing.T) {
 // A relay frame's methods are Prima.Destination's, as runner_relay.json
 // holds them, and each call answers a list of its own.
 func TestTheMethodsAreTheRelaysAndADestinations(t *testing.T) {
-	var methods []string
-	if err := json.Unmarshal(relayVectors(t).Methods, &methods); err != nil {
-		t.Fatal(err)
-	}
+	methods := relayVectors(t).Methods
 	if len(methods) == 0 || !reflect.DeepEqual(methods, Methods()) {
 		t.Fatalf("the vector's methods %v, the package's %v", methods, Methods())
 	}

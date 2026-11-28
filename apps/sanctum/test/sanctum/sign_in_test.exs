@@ -47,7 +47,7 @@ defmodule Sanctum.SignInTest do
     Prima.Test.Env.put_app_env(:sanctum, :setup_token, @token)
     Prima.Test.Env.put_app_env(:sanctum, :public_url, @origin)
     Prima.Test.Env.put_app_env(:sanctum, :directory_url, dir.url)
-    Prima.Test.Env.put_app_env(:sanctum, :access_mode, :public)
+    Prima.Test.Env.put_app_env(:sanctum, :exposure, :public)
 
     # The installation holds no person inside this test's transaction: the
     # first person is setup's question.

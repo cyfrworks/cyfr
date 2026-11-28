@@ -224,14 +224,14 @@ defmodule Cyfr.EnvFilesTest do
   # ---------------------------------------------------------------------------
 
   # The release's environment, with `.env` at its RELEASE_ROOT, of a
-  # local home, which a release must name: the variables a case sets are
-  # restored after it.
+  # server with no browser address, which a release must name: the
+  # variables a case sets are restored after it.
   defp with_release_env(dir, fun) do
     env = %{
       "CYFR_SECRET_KEY_BASE" => Base.encode64(:crypto.strong_rand_bytes(48)),
       "RELEASE_NAME" => "cyfr",
       "RELEASE_ROOT" => dir,
-      "CYFR_ACCESS" => "local",
+      "CYFR_BROWSER" => "none",
       "CYFR_DATABASE" => nil,
       "CYFR_COSIGN_KEY" => nil,
       "CYFR_COSIGN_IDENTITY" => nil,

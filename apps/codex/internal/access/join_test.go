@@ -40,7 +40,7 @@ func (h *testHome) join(n int, key string, newNode bool) Receipt {
 func (h *testHome) toTailnet(n int, key string, newNode bool) Receipt {
 	h.t.Helper()
 	rc := h.join(n, key, newNode)
-	r := h.request(id(n+1), Target{Mode: ModeTailnet}, rc.Payload["join_id"])
+	r := h.request(id(n+1), Target{Browser: BrowserTailnet}, rc.Payload["join_id"])
 	if sw, err := h.e.Switch(bg, r); err != nil || sw.Outcome != "ok" {
 		h.t.Fatalf("switch to tailnet answered %+v, %v", sw, err)
 	}
@@ -270,7 +270,7 @@ func TestJoinWaitsForItsApproval(t *testing.T) {
 // HTTPS certificates off: the machine is enrolled and the receipt says
 // so, naming its join; a switch to it starts nothing it cannot serve,
 // since the start checks HTTPS before Serve opens, and rolls back. Once
-// HTTPS is on, `cyfr access tailnet` again uses the machine as it is,
+// HTTPS is on, `cyfr access browser tailnet` again uses the machine as it is,
 // with no second join.
 func TestJoinWithHTTPSOffIsEnrolled(t *testing.T) {
 	h := newHome(t)
@@ -283,8 +283,8 @@ func TestJoinWithHTTPSOffIsEnrolled(t *testing.T) {
 	if !strings.Contains(err.(*Refusal).Message(), "This machine joined your tailnet as `cyfr.tail1234.ts.net`") || rc.Refusal().Message() != err.(*Refusal).Message() {
 		t.Errorf("the sentence reads %q", err.(*Refusal).Message())
 	}
-	p := h.preview(Target{Mode: ModeTailnet}, rc.Payload["join_id"])
-	sw, err := h.e.Switch(bg, SwitchRequest{ID: id(2), Target: Target{Mode: ModeTailnet}, JoinID: rc.Payload["join_id"], OldDigest: p.OldDigest, NewDigest: p.NewDigest})
+	p := h.preview(Target{Browser: BrowserTailnet}, rc.Payload["join_id"])
+	sw, err := h.e.Switch(bg, SwitchRequest{ID: id(2), Target: Target{Browser: BrowserTailnet}, JoinID: rc.Payload["join_id"], OldDigest: p.OldDigest, NewDigest: p.NewDigest})
 	if refusalCode(err) != "access_rolled_back" || !strings.Contains(sw.Payload["reason"], "HTTPS certificates turned off") {
 		t.Fatalf("the switch to an HTTPS-off machine answered %+v, %v", sw, err)
 	}
@@ -293,12 +293,12 @@ func TestJoinWithHTTPSOffIsEnrolled(t *testing.T) {
 	}
 	h.assertConverged(baseStack...)
 
-	// Turn on HTTPS on the DNS page, then run `cyfr access tailnet` again.
+	// Turn on HTTPS on the DNS page, then run `cyfr access browser tailnet` again.
 	h.fake.st.Volumes[stateVolume].HTTPS = true
 	runs := len(slices.DeleteFunc(h.fake.calls(), func(c fakeCall) bool { return c.Args[0] != "run" }))
-	again := h.request(id(3), Target{Mode: ModeTailnet}, "")
+	again := h.request(id(3), Target{Browser: BrowserTailnet}, "")
 	if sw, err := h.e.Switch(bg, again); err != nil || sw.Outcome != "ok" {
-		t.Fatalf("cyfr access tailnet again answered %+v, %v", sw, err)
+		t.Fatalf("cyfr access browser tailnet again answered %+v, %v", sw, err)
 	}
 	if h.head().NodeID != "n0001CNTRL" || len(slices.DeleteFunc(h.fake.calls(), func(c fakeCall) bool { return c.Args[0] != "run" })) != runs {
 		t.Errorf("the machine was not used as it is: %+v", h.head())
@@ -340,13 +340,13 @@ func TestJoinThenSwitchOpensServeAfterValidation(t *testing.T) {
 }
 
 // tailnet_active: a home served on its tailnet refuses a join, and its
-// sentence's procedure works: `cyfr access local`, then `cyfr access
+// sentence's procedure works: `cyfr access browser none`, then `cyfr access
 // tailnet --new-node` gives the home a new machine.
 func TestJoinRefusedWhileTailnetIsActive(t *testing.T) {
 	h := newHome(t)
 	h.fake.startStack(t, h.head())
 	first := h.toTailnet(1, testKey, false)
-	if _, err := h.e.Preview(bg, Target{Mode: ModeTailnet}, ""); refusalCode(err) != "tailnet_active" {
+	if _, err := h.e.Preview(bg, Target{Browser: BrowserTailnet}, ""); refusalCode(err) != "tailnet_active" {
 		t.Errorf("preview of a join answered %v", err)
 	}
 	rc, err := h.e.Join(bg, JoinRequest{ID: id(5), AuthKey: strings.NewReader(testKey)})
@@ -354,8 +354,8 @@ func TestJoinRefusedWhileTailnetIsActive(t *testing.T) {
 		t.Fatalf("join answered %+v, %v", rc, err)
 	}
 	mark := len(h.fake.calls())
-	if sw, err := h.e.Switch(bg, h.request(id(6), Target{Mode: ModeLocal}, "")); err != nil || sw.Outcome != "ok" {
-		t.Fatalf("cyfr access local answered %+v, %v", sw, err)
+	if sw, err := h.e.Switch(bg, h.request(id(6), Target{Browser: BrowserNone}, "")); err != nil || sw.Outcome != "ok" {
+		t.Fatalf("cyfr access browser none answered %+v, %v", sw, err)
 	}
 	if stop := slices.IndexFunc(h.fake.calls()[mark:], func(c fakeCall) bool { return c.Args[0] == "stop" }); stop < 0 || h.fake.calls()[mark+stop].Serve != serveClosed {
 		t.Error("leaving tailnet did not close Serve before the stop")
@@ -400,7 +400,7 @@ func TestAbandonedJoinExpiresAtItsOwnDeadline(t *testing.T) {
 	if refusalCode(err) != "access_busy" || rc.State != "rejected" || !mapsEqual(rc.Payload, map[string]string{"join_id": rec.JoinID, "until": until}) || err.(*Refusal).Message() != busy {
 		t.Errorf("a second join answered %+v, %v", rc, err)
 	}
-	if rc, err := h.e.Switch(bg, h.request(id(3), publicTarget, "")); refusalCode(err) != "access_busy" || rc.State != "rejected" || err.(*Refusal).Message() != busy {
+	if rc, err := h.e.Switch(bg, h.request(id(3), domainTarget, "")); refusalCode(err) != "access_busy" || rc.State != "rejected" || err.(*Refusal).Message() != busy {
 		t.Errorf("a switch answered %+v, %v", rc, err)
 	}
 
@@ -495,7 +495,7 @@ func TestJoinRefusesAnUnsupportedNodeID(t *testing.T) {
 		t.Fatalf("join answered %+v, %v", rc, err)
 	}
 	rec, _ := h.e.readJoin()
-	if _, err := h.e.Preview(bg, Target{Mode: ModeTailnet}, rec.JoinID); refusalCode(err) != "tailnet_node_id_unsupported" {
+	if _, err := h.e.Preview(bg, Target{Browser: BrowserTailnet}, rec.JoinID); refusalCode(err) != "tailnet_node_id_unsupported" {
 		t.Errorf("a switch to it previews as %v", err)
 	}
 }
@@ -582,8 +582,8 @@ func TestJoinStopsTheTailscaleServiceFirst(t *testing.T) {
 // The sentences of a join that ended before its machine joined: given an
 // auth key, and without one.
 const (
-	joinEndedKey   = "Tailscale did not accept the auth key this machine's join was given: it may be wrong, already used or expired. How CYFR is reached was not changed. Check the key, then run `cyfr access tailnet` again."
-	joinEndedNoKey = "The join ended before this machine was approved on your tailnet; no auth key was given, so only its approval link could have joined it. How CYFR is reached was not changed. Run `cyfr access tailnet` again and approve the machine with the link it prints."
+	joinEndedKey   = "Tailscale did not accept the auth key this machine's join was given: it may be wrong, already used or expired. How CYFR is reached was not changed. Check the key, then run `cyfr access browser tailnet` again."
+	joinEndedNoKey = "The join ended before this machine was approved on your tailnet; no auth key was given, so only its approval link could have joined it. How CYFR is reached was not changed. Run `cyfr access browser tailnet` again and approve the machine with the link it prints."
 )
 
 // A join container that ends before its deadline without joining answers
@@ -608,7 +608,7 @@ func TestJoinEndsOrExpires(t *testing.T) {
 	}{
 		{"refused key", refusedKey, "tailnet_join_ended", joinEndedKey, ends},
 		{"no key", "", "tailnet_join_unapproved", joinEndedNoKey, ends},
-		{"deadline", "", "tailnet_join_expired", "The approval link expired before the machine was approved. How CYFR is reached was not changed. Run `cyfr access tailnet` for a new link.", func(h *testHome, n int) {
+		{"deadline", "", "tailnet_join_expired", "The approval link expired before the machine was approved. How CYFR is reached was not changed. Run `cyfr access browser tailnet` for a new link.", func(h *testHome, n int) {
 			if n == 3 {
 				h.clock.advance(JoinDeadline)
 			}
@@ -630,7 +630,7 @@ func TestJoinEndsOrExpires(t *testing.T) {
 			if got := err.(*Refusal).Message(); got != c.sentence || rc.Refusal().Message() != c.sentence {
 				t.Errorf("the sentence reads %q", got)
 			}
-			if _, err := h.e.Preview(bg, Target{Mode: ModeTailnet}, rec.JoinID); refusalCode(err) != c.code {
+			if _, err := h.e.Preview(bg, Target{Browser: BrowserTailnet}, rec.JoinID); refusalCode(err) != c.code {
 				t.Errorf("a switch to it previews as %v", err)
 			}
 			h.assertConverged()

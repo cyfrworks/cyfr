@@ -140,8 +140,8 @@ func (d *stateDocker) Run(ctx context.Context, c access.Call) (access.Result, er
 	return access.Result{}, nil
 }
 
-// interruptedSwitch is a local home whose stack runs, switched to public
-// by `cyfr access public` in the cyfr process over the real engine, killed
+// interruptedSwitch is a server with no browser address whose stack runs, switched to domain
+// by `cyfr access browser domain` in the cyfr process over the real engine, killed
 // at the start of the new head, after the commit: its journal unfinished,
 // as a cyfr that died leaves it. A daemon call in flight when it died has
 // landed meanwhile: the new head's cyfr runs. It answers the docker, the
@@ -165,7 +165,7 @@ func interruptedSwitch(t *testing.T) (*stateDocker, string, string) {
 	project := access.ProjectName(".")
 	docker.save(map[string]stateContainer{project + "-cyfr-1": {Service: "cyfr", State: "running"}})
 
-	stdout, stderr, status := runAsCyfr(t, "real-state-kill", dir, "access", "public", "--domain", "cyfr.example.com", "--yes")
+	stdout, stderr, status := runAsCyfr(t, "real-state-kill", dir, "access", "browser", "domain", "--domain", "cyfr.example.com", "--yes")
 	if status != -1 {
 		t.Fatalf("the switch was not killed inside its start (exit %d):\n%s\n%s", status, stdout, stderr)
 	}
@@ -180,8 +180,8 @@ func interruptedSwitch(t *testing.T) (*stateDocker, string, string) {
 		t.Fatalf("the killed switch's journal names no request id (%v):\n%s", err, data)
 	}
 	id := left.RequestID
-	if mode, _ := projectEnv(t).value("CYFR_ACCESS"); mode != access.ModePublic {
-		t.Fatalf("the killed switch did not commit .env before its start (CYFR_ACCESS is %q)", mode)
+	if mode, _ := projectEnv(t).value("CYFR_BROWSER"); mode != access.BrowserDomain {
+		t.Fatalf("the killed switch did not commit .env before its start (CYFR_BROWSER is %q)", mode)
 	}
 	if running := docker.running(); len(running) != 0 {
 		t.Fatalf("the killed switch left %v running; it stopped the stack before its commit", running)
@@ -231,7 +231,7 @@ func recoveredUp(t *testing.T, docker *stateDocker, id, out string) {
 		t.Fatal(err)
 	}
 	head, err := e.Head()
-	if err != nil || head.Mode != access.ModePublic || head.Host != "cyfr.example.com" {
+	if err != nil || head.Browser != access.BrowserDomain || head.Host != "cyfr.example.com" {
 		t.Errorf(".env holds %+v (%v), want the switch's public head", head, err)
 	}
 	rec, ok, err := e.Receipt(id)

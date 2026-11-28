@@ -144,10 +144,11 @@ defmodule Locus.Runtime.Credentials do
 
   defp bind(nil), do: {:error, {:missing, :bind}}
 
+  # Read as every role's bind is (`Prima.EnvValue.bind/2`).
   defp bind(address) when is_binary(address) do
-    case :inet.parse_address(String.to_charlist(address)) do
+    case Prima.PinnedTarget.parse_ip(address) do
       {:ok, ip} -> {:ok, ip}
-      {:error, _} -> {:error, {:malformed, :bind}}
+      :error -> {:error, {:malformed, :bind}}
     end
   end
 

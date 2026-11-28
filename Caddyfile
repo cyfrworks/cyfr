@@ -1,4 +1,4 @@
-# Reverse proxy for a public CYFR home. See docker-compose.yml.
+# Reverse proxy for a CYFR whose browser address is a domain. See docker-compose.yml.
 #
 #   everything → cyfr:{$CYFR_PROXY_PORT} (the endpoint's proxy listener: Prism, /mcp, /api, /auth, /t),
 #   the port compose passes, its default with it (docker-compose.yml)
@@ -9,9 +9,9 @@
 # obtains one over ACME, registered under CADDY_ACME_EMAIL when it is set
 # and under no email when it is empty.
 #
-# This service runs in the `public` compose profile alone, which `cyfr up`
-# and `cyfr access` select when CYFR_ACCESS=public (`cyfr access public
-# --domain <your domain>` writes it). A local or tailnet home has no Caddy.
+# This service runs in the `domain` compose profile alone, which `cyfr up`
+# and `cyfr access` select when CYFR_BROWSER=domain (`cyfr access browser
+# domain --domain <your domain>` writes it). Any other kind has no Caddy.
 #
 # Client-IP trust: Caddy's default reverse_proxy behavior APPENDS the peer IP
 # to X-Forwarded-For (no explicit directive needed), and cyfr's proxy

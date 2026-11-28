@@ -188,7 +188,7 @@ func sameFields(e macenvelope.Envelope, got macenvelope.Message, raw map[string]
 func load(t *testing.T) vectors {
 	t.Helper()
 	var v vectors
-	wiretest.LoadStrict(t, "worker_auth.json", &v)
+	wiretest.Load(t, "worker_auth.json", &v)
 	return v
 }
 
@@ -213,15 +213,11 @@ func message(t *testing.T, e macenvelope.Envelope, raw map[string]json.RawMessag
 		}
 		if f.Type == macenvelope.Integer {
 			var n uint64
-			if err := json.Unmarshal(r, &n); err != nil {
-				t.Fatalf("%s: %v", f.Name, err)
-			}
+			wiretest.Value(t, r, &n)
 			m[f.Name] = n
 		} else {
 			var s string
-			if err := json.Unmarshal(r, &s); err != nil {
-				t.Fatalf("%s: %v", f.Name, err)
-			}
+			wiretest.Value(t, r, &s)
 			m[f.Name] = s
 		}
 	}
@@ -304,7 +300,7 @@ func TestEveryHeaderAndCanonicalStringReproduces(t *testing.T) {
 	var r struct {
 		MaxSignedHeaderBytes int `json:"max_signed_header_bytes"`
 	}
-	wiretest.LoadStrict(t, "runner_relay.json", &r)
+	wiretest.Load(t, "runner_relay.json", &r)
 	if r.MaxSignedHeaderBytes == 0 || MaxCallHeaderBytes != r.MaxSignedHeaderBytes {
 		t.Errorf("the longest call header is %d bytes; runner_relay.json's %d", MaxCallHeaderBytes, r.MaxSignedHeaderBytes)
 	}

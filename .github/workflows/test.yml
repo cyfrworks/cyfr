@@ -1960,7 +1960,7 @@ jobs:
       # command line built from this tree, its tailscale service the
       # Tailscale stand-in, which certifies no Tailscale binary
       # (tests/tailnet-real/run.sh is the real tailnet's, run by hand).
-      # bind: in each access mode, the loopback listener bound to its fixed
+      # bind: with each browser address kind, the loopback listener bound to its fixed
       # address alone and answering the host's loopback alone, not the edge
       # network, Docker's default bridge or the host's address; the proxy
       # listener answering the edge network in tailnet and public and absent
@@ -2137,7 +2137,7 @@ jobs:
   # started against a fresh database with auto-migration on, from the
   # deployment file the `cyfr init` built from apps/codex writes: it
   # migrates the schema itself and answers the readiness check the image's
-  # HEALTHCHECK runs, a public home answers at the address its name implies,
+  # HEALTHCHECK runs, a server at a domain answers at the address its name implies,
   # and a boot that raises exits non-zero naming why: every boot refusal of
   # the access vectors, and, in a network namespace of its own (a
   # container's, holding the compose stack's address on a dummy interface),

@@ -68,7 +68,7 @@ for p in \
   ':org([^a-z_]|$)' \
   ':project([^a-z_]|$)' \
   'CYFR_PRISM_' \
-  ':4001\b|4001:4001' \
+  '(^|[^1]|(^|[^.])1|(^|[^0])\.1|(^|[^.])0\.1|(^|[^0])\.0\.1|(^|[^.])0\.0\.1|(^|[^7])\.0\.0\.1|(^|[^2])7\.0\.0\.1|(^|[^1])27\.0\.0\.1|[A-Za-z0-9_.:-]127\.0\.0\.1):4001\b|4001:4001' \
   'CYFR_PORTA_' \
   'cyfr-porta' \
   'apps/porta/' \
@@ -280,14 +280,14 @@ for path in files:
         continue
     for n, line in enumerate(data.decode().split("\n"), 1):
         bad |= found(f"{path}:{n}", line, markdown=path.endswith(".md"))
-vector = json.load(open("tests/fixtures/access_modes.json"))
+vector = json.load(open("tests/fixtures/access.json"))
 for words_row in vector["words"]:
     for sentence in words_row["sentences"]:
-        bad |= found("tests/fixtures/access_modes.json words", sentence)
+        bad |= found("tests/fixtures/access.json words", sentence)
 for refusal in vector["refusals"]:
     for variant in refusal["variants"]:
         template = re.sub(r"\{[a-z_]+\}", "", variant["template"])
-        bad |= found(f"tests/fixtures/access_modes.json refusals {refusal['code']}", template)
+        bad |= found(f"tests/fixtures/access.json refusals {refusal['code']}", template)
 sys.exit(1 if bad else 0)
 PY
 exit $fail

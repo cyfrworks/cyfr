@@ -25,7 +25,7 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
   # refresh past its bound, and a session of theirs. Answers its token.
   defp remote_session! do
     n = System.unique_integer([:positive])
-    Prima.Test.Env.put_app_env(:sanctum, :access_mode, :public)
+    Prima.Test.Env.put_app_env(:sanctum, :exposure, :public)
 
     {:ok, user} =
       Sanctum.Test.People.linked(%{

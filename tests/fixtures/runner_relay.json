@@ -1,5 +1,5 @@
 {
-  "comment": "The vectors pinning Prima.RunnerRelay, the relay between a runner and its worker service: the runner's host calls and pinned fetches, carried on a socketpair the keeper makes for every spawn of an isolated pool as the runner's file descriptor 4, beside Prima.RunnerControl on fd 3, and over the attach connection as the keeper's relay stream (5, tests/fixtures/keeper_protocol.json), which the service opens with a zero-length frame. Prima's codec test (apps/prima/test/prima/runner_relay_test.exs) reads them whole. The Rust runner's crate (apps/locus/runner/tests/vectors.rs) reads the runner's half: it encodes every runner frame of `exchange` to exactly its bytes, decodes every service frame, and takes each refusal whose receiver is the runner. The runtime's test (apps/locus/test/locus/runtime/relay_vectors_test.exs) reads them too: the worker service's end (Locus.Runtime.Relay) takes each refusal the service receives, and the runner's end (Locus.Runtime.Relay.Runner) plays `exchange` through its own API up to the first attached fetch's fetch_end, sending every runner frame as exactly its bytes, and takes each refusal the runner receives after the frames before it. A frame is a 4-byte big-endian length and one JSON object of that many bytes. `exchange` is played in order between a runner's channel and a service's, each opened for `attempt`: the sender encodes each frame to exactly `json` behind its length and the receiver decodes it; a `json_fill` is `prefix`, then `repeat` written `times` times, then `suffix`, and `encoded_sha256` is the SHA-256 of the whole frame, length included. Bodies travel in standard base64 with padding, at most max_body_bytes decoded; a fetch starts with initial_credit, and the service sends no chunk past the credit outstanding. Each refusal is decoded by `receiver` after the first `after` frames of `exchange` have passed, and closes the channel with `reason`. Every host_call's header is a real one: the egress_pin call in `exchange` is signed with tests/fixtures/worker_auth.json's attempt call key over its `call` fields and its body is sealed with that attempt's seal key and `body_iv_hex`, and the host_answer's body is that call's answer, a pin, sealed with `answer_iv_hex`, so a service verifies and opens them as it would a runner's (Prima.WorkerAuth.verify_host_call_header_under/3). A fetch is pinned (pin, method, path, headers, body) or attached (call_id, connection, purpose, method, url, headers, body), told apart by the connection it names, and never both: the service posts an attached fetch to CYFR as host_api.json's attached_fetch call, member for member, and relays the answer as attached_frame frames (each frame of the answer, its kind byte and sealed value, unopened, charged to the fetch's credit by those bytes) or one attached_refusal (the call's signed header as posted and CYFR's sealed answer as received), before the fetch_end. The exchange's attached frames open for its first attached fetch's call_id under worker_auth.json's attempt seal key, and its refusal is host_api.json's attached_fetch call refused destination_mismatch, naming the second's. A refusal whose reason names a member carries it as `field`. max_headers, max_header_name_bytes and max_header_value_bytes bound a fetch's headers (Prima.AttachedRequest's bounds); max_signed_header_bytes bounds a signed header (Prima.WorkerAuth.max_host_call_header_bytes/0); max_attached_frame_bytes bounds an attached_frame's decoded bytes (Prima.WorkerAuth.max_frame_bytes/0); ops are the host API callbacks a host_call may name (Prima.RunnerRelay.ops/0). The refusals a runner receives hold each rule a runner's decoder applies to a service's frame, one case for each: the frame's length, its JSON and version, its kind and direction, each member's presence, JSON type, grammar and bound, the order of seq, and what the channel's state takes. encode_refusals are frames a runner's channel refuses to send, after the first `after` frames of `exchange`, before it numbers them or records anything: each `frame` as the encoder takes it (its kind, its attempt and its kind's members, a body in base64), refused for its `member`, the first in the kind's order that is not of its type, grammar or bound (Prima's encoder raises, naming it), or for its `reason`, what the channel's state does not take. methods are the methods a fetch names (Prima.Destination.methods/0), purposes an attached fetch's, max_path_bytes a pinned fetch's path bound and max_url_bytes an attached fetch's URL bound (Prima.AttachedRequest.max_url_bytes/0); an attached fetch's URL is an http or https URL with a host and no user information, as Prima.Network.parse_url/1 reads it. A member given twice is its first. max_calls and max_fetches are the most host calls unanswered and fetches open (each until its fetch_end, read or not) a service carries of one runner; the one past either closes the channel (too_many_calls, too_many_fetches), and a runner refuses its guest rather than send it (Prima.RunnerRelay.max_calls/0, max_fetches/0). codes are every code a service names, each with what it means (Prima.RunnerRelay.fetch_end_codes/0, close_codes/0): a fetch_end's error is one of `fetch_end`, or the transport's own name for a failure after the request was sent, and a close's reason one of `close`; the `pin_` codes end a fetch whose service's own ask for its pin got none, one for each refusal of Prima.PinnedTarget.refusals/0 and for unavailable, lost, elsewhere and expired (Prima.RunnerRelay.pin_code/1). Decoding holds a code to its form alone. call_checks are the service's checks of a runner's host call (Locus.Runtime.Relay; relay: run against the service's relay itself, by the runtime's relay test, apps/locus/test/locus/runtime/relay_test.exs), in the order they are decided, each case played on an attempt of its own whose limits hold max_request_size. A case's call is signed under the attempt's call key, or another for call_key other, over the attempt's own fields, the service's boot and runner, the assignment's member, a fresh nonce and the relay's clock as its ts, with `fields` over them and `ts_ms` added to its ts; its body is `op`'s request body of `args`, or `plaintext`, sealed under the attempt's seal key, or another for seal_key other, over the header's fields with `seal_fields` over them; the header names another sealing of the body for body_hash other, `header` is sent in the header's place, and the frame names `frame_op` where a case gives one. `unanswered` renew calls the relay has posted and CYFR has not answered are read before it, and it is sent `sent` times at successive seqs. Each case closes the channel with `reason`, nothing of the call posted; with none, the call is posted to CYFR as it came, each time it is sent, and CYFR's answer handed to the runner. The relay keeps no nonces (CYFR refuses one it has seen), measures a push_deltas event only when it is text, and reads a member given twice as its first.",
+  "comment": "The vectors pinning Prima.RunnerRelay, the relay between a runner and its worker service: the runner's host calls and pinned fetches, carried on a socketpair the keeper makes for every spawn of an isolated pool as the runner's file descriptor 4, beside Prima.RunnerControl on fd 3, and over the attach connection as the keeper's relay stream (5, tests/fixtures/keeper_protocol.json), which the service opens with a zero-length frame. Prima's codec test (apps/prima/test/prima/runner_relay_test.exs) reads them whole. The Rust runner's crate (apps/locus/runner/tests/vectors.rs) reads the runner's half: it encodes every runner frame of `exchange` to exactly its bytes, decodes every service frame, and takes each refusal whose receiver is the runner. The runtime's test (apps/locus/test/locus/runtime/relay_vectors_test.exs) reads them too: the worker service's end (Locus.Runtime.Relay) takes each refusal the service receives, and the runner's end (Locus.Runtime.Relay.Runner) plays `exchange` through its own API up to the first attached fetch's fetch_end, sending every runner frame as exactly its bytes, and takes each refusal the runner receives after the frames before it. A frame is a 4-byte big-endian length and one JSON object of that many bytes. `exchange` is played in order between a runner's channel and a service's, each opened for `attempt`: the sender encodes each frame to exactly `json` behind its length and the receiver decodes it; a `json_fill` is `prefix`, then `repeat` written `times` times, then `suffix`, and `encoded_sha256` is the SHA-256 of the whole frame, length included. Bodies travel in standard base64 with padding, at most max_body_bytes decoded; a fetch starts with initial_credit, and the service sends no chunk past the credit outstanding. Each refusal is decoded by `receiver` after the first `after` frames of `exchange` have passed, and closes the channel with `reason`. Every host_call's header is a real one: the egress_pin call in `exchange` is signed with tests/fixtures/worker_auth.json's attempt call key over its `call` fields and its body is sealed with that attempt's seal key and `body_iv_hex`, and the host_answer's body is that call's answer, a pin, sealed with `answer_iv_hex`, so a service verifies and opens them as it would a runner's (Prima.WorkerAuth.verify_host_call_header_under/3). A fetch is pinned (pin, method, path, headers, body) or attached (call_id, connection, purpose, method, url, headers, body), told apart by the connection it names, and never both: the service posts an attached fetch to CYFR as host_api.json's attached_fetch call, member for member, and relays the answer as attached_frame frames (each frame of the answer, its kind byte and sealed value, unopened, charged to the fetch's credit by those bytes) or one attached_refusal (the call's signed header as posted and CYFR's sealed answer as received), before the fetch_end. The exchange's attached frames open for its first attached fetch's call_id under worker_auth.json's attempt seal key, and its refusal is host_api.json's attached_fetch call refused destination_mismatch, naming the second's. A refusal whose reason names a member carries it as `field`. max_headers, max_header_name_bytes and max_header_value_bytes bound a fetch's headers (Prima.AttachedRequest's bounds); max_signed_header_bytes bounds a signed header (Prima.WorkerAuth.max_host_call_header_bytes/0); max_attached_frame_bytes bounds an attached_frame's decoded bytes (Prima.WorkerAuth.max_frame_bytes/0); ops are the host API callbacks a host_call may name (Prima.RunnerRelay.ops/0). The refusals a runner receives hold each rule a runner's decoder applies to a service's frame, one case for each: the frame's length, its JSON and version, its kind and direction, each member's presence, JSON type, grammar and bound, the order of seq, and what the channel's state takes. encode_refusals are frames a runner's channel refuses to send, after the first `after` frames of `exchange`, before it numbers them or records anything: each `frame` as the encoder takes it (its kind, its attempt and its kind's members, a body in base64), refused for its `member`, the first in the kind's order that is not of its type, grammar or bound (Prima's encoder raises, naming it), or for its `reason`, what the channel's state does not take. methods are the methods a fetch names (Prima.Destination.methods/0), purposes an attached fetch's, max_path_bytes a pinned fetch's path bound and max_url_bytes an attached fetch's URL bound (Prima.AttachedRequest.max_url_bytes/0); an attached fetch's URL is an http or https URL with a host and no user information, as Prima.Network.parse_url/1 reads it. A member given twice is its first. max_calls and max_fetches are the most host calls unanswered and fetches open (each until its fetch_end, read or not) a service carries of one runner; the one past either closes the channel (too_many_calls, too_many_fetches), and a runner refuses its guest rather than send it (Prima.RunnerRelay.max_calls/0, max_fetches/0). codes are every code a service names, each with what it means (Prima.RunnerRelay.fetch_end_codes/0, close_codes/0): a fetch_end's error is one of `fetch_end`, or the transport's own name for a failure after the request was sent, and a close's reason one of `close`; the `pin_` codes end a fetch whose service's own ask for its pin got none, one for each refusal of Prima.PinnedTarget.refusals/0 and for unavailable, lost, elsewhere and expired (Prima.RunnerRelay.pin_code/1). Decoding holds a code to its form alone. call_checks are the service's checks of a runner's host call (Locus.Runtime.Relay; relay: run against the service's relay itself, by the runtime's relay test, apps/locus/test/locus/runtime/relay_test.exs), in the order they are decided, each case played on an attempt of its own whose limits hold max_request_size. A case's call is signed under the attempt's call key, or another for call_key other, over the attempt's own fields, the service's boot and runner, the assignment's member, a fresh nonce and the relay's clock as its ts, with `fields` over them and `ts_ms` added to its ts; its body is `op`'s request body of `args`, or `plaintext`, sealed under the attempt's seal key, or another for seal_key other, over the header's fields with `seal_fields` over them; the header names another sealing of the body for body_hash other, `header` is sent in the header's place, and the frame names `frame_op` where a case gives one. `unanswered` renew calls the relay has posted and CYFR has not answered are read before it, and it is sent `sent` times at successive seqs. Each case closes the channel with `reason`, nothing of the call posted; with none, the call is posted to CYFR as it came, each time it is sent, and CYFR's answer handed to the runner. The relay keeps no nonces (CYFR refuses one it has seen), measures a push_deltas event only when it is text, and reads a member given twice as its first. counted are what a worker service holds of the frames it writes to a runner, in its one count (Prima.RunnerRelay.held/2, piece_held/1, refusal_held/1 and answer_room/0, the one definition every service reads): a body of `bytes` in `frames` frames holds the bytes, their base64 and each frame's envelope of envelope_bytes (bodies, none for no body); a fetch's piece is written in fetch_chunk frames of at most chunk_bytes body bytes, one frame at least (pieces); CYFR's refusal of an attached fetch is one frame and the call's signed header beside it, twice max_signed_header_bytes (refusals). answer_room is the room a fetch's ask that waits on a runner or an upstream leaves the answers free: the refusal at max_body_bytes. read_ahead_room is the piece's room a read-ahead of read_ahead_bytes (Prima.LocusRoles' runtime fetch_read_ahead_bytes) leaves beside it.",
   "version": 1,
   "attempt": "att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42",
   "max_body_bytes": 5242880,
@@ -2316,6 +2316,117 @@
           ]
         },
         "reason": "request_too_large"
+      }
+    ]
+  },
+  "counted": {
+    "answer_room": 12239056,
+    "bodies": [
+      {
+        "bytes": 0,
+        "frames": 1,
+        "held": 0
+      },
+      {
+        "bytes": 1,
+        "frames": 1,
+        "held": 1029
+      },
+      {
+        "bytes": 2,
+        "frames": 1,
+        "held": 1030
+      },
+      {
+        "bytes": 3,
+        "frames": 1,
+        "held": 1031
+      },
+      {
+        "bytes": 4,
+        "frames": 1,
+        "held": 1036
+      },
+      {
+        "bytes": 5,
+        "frames": 3,
+        "held": 3085
+      },
+      {
+        "bytes": 262144,
+        "frames": 1,
+        "held": 612696
+      },
+      {
+        "bytes": 262145,
+        "frames": 2,
+        "held": 613721
+      },
+      {
+        "bytes": 5242880,
+        "frames": 1,
+        "held": 12234412
+      },
+      {
+        "bytes": 5242880,
+        "frames": 20,
+        "held": 12253868
+      }
+    ],
+    "chunk_bytes": 262144,
+    "envelope_bytes": 1024,
+    "pieces": [
+      {
+        "bytes": 0,
+        "held": 0
+      },
+      {
+        "bytes": 1,
+        "held": 1029
+      },
+      {
+        "bytes": 262143,
+        "held": 612691
+      },
+      {
+        "bytes": 262144,
+        "held": 612696
+      },
+      {
+        "bytes": 262145,
+        "held": 613721
+      },
+      {
+        "bytes": 524288,
+        "held": 1225388
+      },
+      {
+        "bytes": 524289,
+        "held": 1226413
+      },
+      {
+        "bytes": 5242880,
+        "held": 12253868
+      }
+    ],
+    "read_ahead_bytes": 262144,
+    "read_ahead_room": 612696,
+    "refusals": [
+      {
+        "bytes": 0,
+        "held": 4644
+      },
+      {
+        "bytes": 1,
+        "held": 5673
+      },
+      {
+        "bytes": 1024,
+        "held": 8060
+      },
+      {
+        "bytes": 5242880,
+        "held": 12239056
       }
     ]
   }
