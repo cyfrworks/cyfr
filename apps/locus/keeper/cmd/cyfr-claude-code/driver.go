@@ -534,6 +534,11 @@ func (d *driver) controlRequest(l harnessLine) error {
 	if request.Input == nil {
 		request.Input = map[string]any{}
 	}
+	if request.ToolName == questionTool {
+		// The harness's own question is declined: in CYFR the model asks in
+		// its reply, and its model reads why as the tool's error.
+		return d.h.Write(denyLine(l.RequestID, brainwire.QuestionsDeclined))
+	}
 	// An ask is CYFR's only when the harness names CYFR's server as the
 	// one it set; every other tool, a server's of the person's own among
 	// them, is the harness's own. This is the one decision of whose a call

@@ -250,7 +250,7 @@ defmodule Opus.ArchiveFenceTest do
           athanor_id: ctx.athanor_id,
           permissions: [:*],
           scope: :athanor,
-          auth_method: :oidc,
+          auth_method: :session,
           authenticated: true
         )
         |> Sanctum.TestContext.via(:prism)

@@ -708,6 +708,8 @@ defmodule Cyfr.CrossLanguageDriftTest do
     ],
     "runner_relay.json" => [
       {"apps/locus/keeper/internal/wire/network/network_test.go", ~w(methods)},
+      {"apps/locus/keeper/internal/wire/workerauth/workerauth_test.go",
+       ~w(max_signed_header_bytes)},
       {"apps/locus/runner/tests/vectors.rs",
        ~w(version attempt max_body_bytes max_frame_bytes initial_credit max_headers max_header_name_bytes max_header_value_bytes max_signed_header_bytes max_attached_frame_bytes ops methods purposes max_path_bytes max_url_bytes max_calls max_fetches codes exchange refusals encode_refusals)},
       {"apps/locus/test/locus/runtime/relay_vectors_test.exs",
@@ -782,6 +784,8 @@ defmodule Cyfr.CrossLanguageDriftTest do
        ~w(keys root_hex root_text service)},
       {"apps/locus/keeper/internal/wire/assignment/assignment_test.go",
        ~w(assignment assignment_reads assignment_service_reads)},
+      {"apps/locus/keeper/internal/wire/macenvelope/macenvelope_test.go",
+       ~w(attempt boot call keys member sealed_attempt_keys sealed_call)},
       {"apps/locus/keeper/internal/wire/workerauth/workerauth_test.go",
        ~w(attempt boot body_checks call headers keys member open_attempt_keys open_call report request root_hex root_text sealed_attempt_keys sealed_call service verify)},
       {"apps/locus/runner/tests/vectors.rs",

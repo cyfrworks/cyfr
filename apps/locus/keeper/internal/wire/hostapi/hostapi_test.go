@@ -4,7 +4,6 @@
 package hostapi
 
 import (
-	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -160,9 +159,7 @@ func TestEveryAnswerOutcomeIsTheCallersAsTheVectorsSay(t *testing.T) {
 			case a.Status == nil:
 				return call, Sent{}
 			case *a.Status == 200:
-				iv := make([]byte, 12)
-				rand.Read(iv)
-				sealed, err := workerauth.SealCall(seal, workerauth.Answer, call, []byte(a.Answer), iv)
+				sealed, err := workerauth.SealCall(seal, workerauth.Answer, call, []byte(a.Answer))
 				if err != nil {
 					t.Fatal(err)
 				}

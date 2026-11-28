@@ -17,7 +17,7 @@ defmodule Prima.WireJsonTest do
            |> Jason.decode!()
 
   test "every document reads as its value, an integer as an integer and a float as a float" do
-    assert length(@vectors["reads"]) >= 20
+    assert length(@vectors["reads"]) >= 25
 
     for %{"why" => why, "doc_b64" => doc, "value" => value} <- @vectors["reads"] do
       assert {:ok, read} = Jason.decode(Base.decode64!(doc)), why
@@ -39,13 +39,17 @@ defmodule Prima.WireJsonTest do
     end
   end
 
-  test "every value is written as its bytes" do
-    for %{"why" => why, "value" => value, "bytes_b64" => bytes} <- @vectors["writes"] do
-      assert Jason.encode!(value) == Base.decode64!(bytes), why
+  test "every document read is written back as its bytes" do
+    assert length(@vectors["writes"]) >= 14
+
+    for %{"why" => why, "value_json" => json, "bytes_b64" => bytes} <- @vectors["writes"] do
+      assert Jason.encode!(Jason.decode!(json)) == Base.decode64!(bytes), why
     end
   end
 
   test "every base64 text reads as Base reads it, or is refused" do
+    assert length(@vectors["base64url"]) >= 15 and length(@vectors["base64"]) >= 10
+
     for {section, cases, decode} <- [
           {:base64url, @vectors["base64url"], &Base.url_decode64(&1, padding: false)},
           {:base64, @vectors["base64"], &Base.decode64/1}

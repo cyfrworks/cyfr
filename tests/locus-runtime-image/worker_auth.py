@@ -1420,6 +1420,7 @@ def check_worker_api(path, primitives):
         _check_answer(request["answer"], what)
         for refusal in request["refusals"]:
             _check_answer(refusal["answer"], f"{what} refusal")
+    assert len(v["request_bodies"]) >= 20 and len(v["answers"]) >= 15, "worker_api: the body and answer cases"
     for case in v["request_bodies"]:
         what = f"worker_api body: {case['why']}"
         op = case.get("callback") or "status"

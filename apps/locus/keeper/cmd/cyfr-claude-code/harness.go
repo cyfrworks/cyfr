@@ -264,6 +264,24 @@ func allowLine(id string, input any) []byte {
 	return line
 }
 
+// questionTool is the harness's own tool that asks the person a question
+// (2.1.323, probed).
+const questionTool = "AskUserQuestion"
+
+// denyLine refuses a permission with words the harness's model reads as
+// the tool's error.
+func denyLine(id, message string) []byte {
+	line, _ := brainwire.Marshal(map[string]any{
+		"type": "control_response",
+		"response": map[string]any{
+			"subtype":    "success",
+			"request_id": id,
+			"response":   map[string]any{"behavior": "deny", "message": message},
+		},
+	})
+	return line
+}
+
 // unansweredLine refuses a control request the driver does not answer.
 func unansweredLine(id, subtype string) []byte {
 	line, _ := brainwire.Marshal(map[string]any{

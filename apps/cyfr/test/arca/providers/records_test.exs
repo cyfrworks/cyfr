@@ -433,7 +433,7 @@ defmodule Arca.Providers.RecordsTest do
         athanor_id: nil,
         permissions: MapSet.new([:storage_read, :storage_write, :admin]),
         scope: :athanor,
-        auth_method: :oidc,
+        auth_method: :session,
         authenticated: true
       }
 
@@ -649,24 +649,24 @@ defmodule Arca.Providers.RecordsTest do
     end
   end
 
-  describe "retention authorization with OIDC session" do
+  describe "retention authorization with a signed-in session" do
     setup do
-      oidc_ctx = %Context{
-        user_id: "oidc_user",
-        namespace: "oidc_user",
+      session_ctx = %Context{
+        user_id: "session_user",
+        namespace: "session_user",
         athanor_id: "ath_test",
         permissions: MapSet.new([:execute, :read, :write, :storage_read, :storage_write, :admin]),
         scope: :athanor,
-        auth_method: :oidc,
+        auth_method: :session,
         authenticated: true
       }
 
-      {:ok, oidc_ctx: oidc_ctx}
+      {:ok, session_ctx: session_ctx}
     end
 
-    test "can set retention settings", %{oidc_ctx: oidc_ctx} do
+    test "can set retention settings", %{session_ctx: session_ctx} do
       {:ok, result} =
-        Sanctum.Gate.call_external("retention", oidc_ctx, %{
+        Sanctum.Gate.call_external("retention", session_ctx, %{
           "action" => "set",
           "settings" => %{"executions" => 5}
         })
@@ -674,9 +674,9 @@ defmodule Arca.Providers.RecordsTest do
       assert result.updated == true
     end
 
-    test "can run cleanup", %{oidc_ctx: oidc_ctx} do
+    test "can run cleanup", %{session_ctx: session_ctx} do
       {:ok, result} =
-        Sanctum.Gate.call_external("retention", oidc_ctx, %{
+        Sanctum.Gate.call_external("retention", session_ctx, %{
           "action" => "cleanup",
           "cleanup_type" => "executions",
           "dry_run" => true
@@ -712,7 +712,7 @@ defmodule Arca.Providers.RecordsTest do
           athanor_id: "ath_alpha",
           permissions: [:*],
           scope: :athanor,
-          auth_method: :oidc,
+          auth_method: :session,
           namespace: "testns",
           authenticated: true
         )
@@ -738,7 +738,7 @@ defmodule Arca.Providers.RecordsTest do
           athanor_id: "ath_beta",
           permissions: [:*],
           scope: :athanor,
-          auth_method: :oidc,
+          auth_method: :session,
           namespace: "testns",
           authenticated: true
         )

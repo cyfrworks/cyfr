@@ -337,6 +337,8 @@ defmodule Prima.WorkerAuthTest do
     end
 
     test "a body is held to the hash its verified header named" do
+      assert length(@vectors["body_checks"]) >= 3
+
       for c <- @vectors["body_checks"] do
         expected = if c["error"], do: {:error, String.to_existing_atom(c["error"])}, else: :ok
 
@@ -349,7 +351,7 @@ defmodule Prima.WorkerAuthTest do
       %{"refused" => refused, "read" => read, "carried" => carried} =
         @vectors["assignment_service_reads"]
 
-      assert length(refused) >= 12 and length(carried) >= 8 and length(read) >= 3
+      assert length(refused) >= 12 and length(carried) >= 8 and length(read) >= 4
 
       for %{"token" => token, "why" => why} <- refused ++ carried,
           do: assert({:error, :malformed} = Assignment.read(token), why)

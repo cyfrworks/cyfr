@@ -26,7 +26,7 @@ defmodule Emissary.MCP.RouterTenancyTest do
       athanor_id: if(authenticated, do: "ath_test", else: nil),
       permissions: if(authenticated, do: [:*], else: []),
       scope: :athanor,
-      auth_method: if(authenticated, do: :oidc, else: nil),
+      auth_method: if(authenticated, do: :session, else: nil),
       authenticated: authenticated
     )
   end
@@ -101,7 +101,7 @@ defmodule Emissary.MCP.RouterTenancyTest do
           athanor_id: nil,
           permissions: [],
           scope: :athanor,
-          auth_method: :oidc,
+          auth_method: :session,
           authenticated: false
         )
 

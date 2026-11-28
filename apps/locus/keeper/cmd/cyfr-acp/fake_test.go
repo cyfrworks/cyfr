@@ -56,6 +56,12 @@ import (
 //	agyfail:S writes the one chunk agy writes when its model service failed with status S, then end_turn
 //	agyfailthen writes that chunk for UNAVAILABLE, then a word more
 //	agyquoted writes the 503 chunk the probe recorded with words quoted before its close, then end_turn
+//	question  asks the person in its reply (fakeQuestion), after its own
+//	          tool's permission, as agy 1.5.16 and OpenCode 2.4.1 ask with no
+//	          form capability advertised (S1 F1), and takes the session's
+//	          next prompt as the answer, replying "A1: " and its words. It
+//	          keeps the capabilities initialize named and the driver's whole
+//	          answer to the permission in `$HOME/fake-question.json`
 //
 // It writes a canary to its standard error and its tier, which the driver
 // must never pass on. FAKE_SIGNED_OUT answers every session and prompt
@@ -103,6 +109,9 @@ import (
 const fakeEnv = "CYFR_FAKE_ACP"
 
 const stderrCanary = "FAKE-STDERR-CANARY Antigravity writes this to its stderr"
+
+// fakeQuestion is a stand-in's question asked in its reply, with its choices.
+const fakeQuestion = "Which database should the export target?\n\n- [1] PostgreSQL\n- [2] SQLite"
 
 func fakeACP() int {
 	if os.Getenv("FAKE_CURSOR") != "" {
@@ -182,6 +191,7 @@ func fakeACP() int {
 		steered         chan string
 		callOpen        bool
 		unconfirmed     json.RawMessage
+		capabilities    map[string]any
 	}
 	state.current = map[string]string{"model": "fake-neon", "thought_level": "high", "mode": "default"}
 	if oc {
@@ -318,7 +328,27 @@ func fakeACP() int {
 	}
 
 	runTurn := func(words string, params map[string]any) {
+		// A prompt after the session's question is its answer, as agy reads
+		// it (F1).
+		asked := filepath.Join(home, "fake-asked-"+state.session)
+		if _, err := os.Stat(asked); err == nil {
+			_ = os.Remove(asked)
+			reply("A1: " + words)
+			return
+		}
 		switch {
+		case strings.Contains(words, "question"):
+			call := map[string]any{"sessionUpdate": "tool_call", "toolCallId": "call_write", "title": "Write export.sql", "kind": "edit", "status": "pending"}
+			update(call)
+			permission := ask("q2", "session/request_permission", map[string]any{"sessionId": state.session, "toolCall": call,
+				"options": []any{map[string]any{"optionId": "allow", "name": "Allow", "kind": "allow_once"}, map[string]any{"optionId": "deny", "name": "Deny", "kind": "reject_once"}}})
+			update(map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": "call_write", "status": "completed"})
+			_ = os.WriteFile(asked, nil, 0o600)
+			state.Lock()
+			line, _ := json.Marshal(map[string]any{"capabilities": state.capabilities, "permission": permission})
+			state.Unlock()
+			_ = os.WriteFile(filepath.Join(home, "fake-question.json"), line, 0o600)
+			reply(fakeQuestion)
 		case strings.HasPrefix(words, "agyfail:"):
 			// As agy 1.5.16 ends a turn its model service failed, on the
 			// API-key path: one chunk, then end_turn with no usage.
@@ -575,6 +605,11 @@ func fakeACP() int {
 			}
 			str := func(name string) string { s, _ := m.Params[name].(string); return s }
 			signedOut := os.Getenv("FAKE_SIGNED_OUT") != ""
+			if m.Method == "initialize" {
+				state.Lock()
+				state.capabilities, _ = m.Params["clientCapabilities"].(map[string]any)
+				state.Unlock()
+			}
 			switch {
 			case m.Method == "" && len(m.ID) > 0:
 				answersMu.Lock()

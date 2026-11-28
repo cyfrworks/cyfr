@@ -7,17 +7,17 @@
 // macenvelope. Prima's module is the one definition and
 // tests/fixtures/worker_auth.json holds this package to it.
 //
-// The keys, each derived, none stored:
+// A worker service is given its worker key (CYFR derives it from the root
+// over the service's id) and derives from it the two keys it holds:
 //
-//	WorkerKey(root, service)        cyfr-locus/v1/runtime and the service's id
-//	DispatchKey(worker key)         signs WorkerAPI requests and the service's reports
-//	DispatchSealKey(worker key)     seals the keys of an attempt started on the service
-//	AttemptCallKey(root, attempt)   signs the attempt's host calls
-//	AttemptSealKey(root, attempt)   seals the attempt's host call bodies and answers
+//	DispatchKey(worker key)       verifies CYFR's WorkerAPI requests and signs the service's reports
+//	DispatchSealKey(worker key)   opens the keys of an attempt started on the service
 //
-// A worker service holds its dispatch keys and, for each attempt it
-// started, the attempt's two keys, opened from what CYFR sealed for it
-// (OpenAttemptKeys). It verifies CYFR's requests (VerifyRequestHeader),
+// For each attempt it started it holds the attempt's call and seal keys,
+// opened from what CYFR sealed for it (OpenAttemptKeys). What only CYFR
+// does with the root (the assign key, a worker's key, an attempt's keys,
+// a report's verification, a request's signature) is not here; the vector
+// tests make it themselves. It verifies CYFR's requests (VerifyRequestHeader),
 // signs its reports (ReportHeader), and verifies a host call its runner
 // hands it under the attempt's call key before it posts the call
 // (VerifyHostCallHeaderUnder). Each verifier reads the header alone, so a
@@ -85,20 +85,10 @@ var (
 )
 
 // MaxCallHeaderBytes is the most bytes a host call's header spans with a
-// MAC an HMAC-SHA256 can be (43 characters), Prima's
-// max_host_call_header_bytes/0.
+// MAC an HMAC-SHA256 can be (43 characters): Prima's
+// max_host_call_header_bytes/0, runner_relay.json's
+// max_signed_header_bytes.
 var MaxCallHeaderBytes = Call.MaxHeaderBytes() - macenvelope.MaxText + 43
-
-// AssignKey is the key assignments are MAC'd with; only CYFR holds it.
-func AssignKey(root macenvelope.Key) macenvelope.Key {
-	return macenvelope.Derive(root, label+"/assign")
-}
-
-// WorkerKey is the key of the worker service service, derived over its
-// stable id, never its boot.
-func WorkerKey(root macenvelope.Key, service string) (macenvelope.Key, error) {
-	return macenvelope.DeriveFields(root, label, dispatchFields[:1], macenvelope.Message{"service": service})
-}
 
 // DispatchKey signs WorkerAPI requests to a worker service and its reports.
 func DispatchKey(worker macenvelope.Key) macenvelope.Key {
@@ -108,17 +98,6 @@ func DispatchKey(worker macenvelope.Key) macenvelope.Key {
 // DispatchSealKey seals the attempt keys a worker service is started with.
 func DispatchSealKey(worker macenvelope.Key) macenvelope.Key {
 	return macenvelope.Derive(worker, label+"/dseal")
-}
-
-// AttemptCallKey is the key an attempt's runner signs its host calls with.
-func AttemptCallKey(root macenvelope.Key, attempt macenvelope.Message) (macenvelope.Key, error) {
-	return macenvelope.DeriveFields(root, label+"/call", AttemptFields, attempt)
-}
-
-// AttemptSealKey is the key an attempt's host call bodies and answers are
-// sealed with.
-func AttemptSealKey(root macenvelope.Key, attempt macenvelope.Message) (macenvelope.Key, error) {
-	return macenvelope.DeriveFields(root, label+"/seal", AttemptFields, attempt)
 }
 
 // AttemptKeys are an attempt and the two keys of it a worker service
@@ -222,13 +201,14 @@ func SealedBytes(n int) int {
 }
 
 // SealCall seals one half of a host call with the attempt's seal key,
-// bound to the call's header fields.
-func SealCall(sealKey macenvelope.Key, d Direction, call macenvelope.Message, plaintext, iv []byte) (string, error) {
+// bound to the call's header fields, under an iv it draws for this seal
+// alone.
+func SealCall(sealKey macenvelope.Key, d Direction, call macenvelope.Message, plaintext []byte) (string, error) {
 	l, ok := d.label()
 	if !ok {
 		return "", errors.New("no such direction")
 	}
-	return macenvelope.Seal(sealKey, l, Call.Fields, call, plaintext, iv)
+	return macenvelope.Seal(sealKey, l, Call.Fields, call, plaintext)
 }
 
 // OpenCall opens what SealCall sealed, as the same direction of the same
@@ -251,11 +231,6 @@ func HostCallHeader(callKey macenvelope.Key, call macenvelope.Message, body []by
 	return Call.Header(callKey, call, body)
 }
 
-// RequestHeader is the header for a WorkerAPI request of body.
-func RequestHeader(dispatchKey macenvelope.Key, d macenvelope.Message, body []byte) (string, error) {
-	return Request.Header(dispatchKey, d, body)
-}
-
 // ReportHeader is the header for a worker service's report of body.
 func ReportHeader(dispatchKey macenvelope.Key, d macenvelope.Message, body []byte) (string, error) {
 	return Report.Header(dispatchKey, d, body)
@@ -273,7 +248,7 @@ func within(ts any, now int64) bool {
 	return d >= -WindowMs && d <= WindowMs
 }
 
-func verify(e macenvelope.Envelope, key func(macenvelope.Message) (macenvelope.Key, error), header string, now int64) (Verified, error) {
+func verify(e macenvelope.Envelope, key macenvelope.Key, header string, now int64) (Verified, error) {
 	p, err := e.Parse(header)
 	if err != nil {
 		return Verified{}, err
@@ -281,37 +256,23 @@ func verify(e macenvelope.Envelope, key func(macenvelope.Message) (macenvelope.K
 	if !within(p.Message["ts"], now) {
 		return Verified{}, ErrOutsideWindow
 	}
-	k, err := key(p.Message)
-	if err != nil || !e.VerifyHeader(k, p.Message, p.BodyHash, p.MAC) {
+	if !e.VerifyHeader(key, p.Message, p.BodyHash, p.MAC) {
 		return Verified{}, ErrBadMAC
 	}
 	return Verified{Fields: p.Message, BodyHash: p.BodyHash}, nil
-}
-
-func held(k macenvelope.Key) func(macenvelope.Message) (macenvelope.Key, error) {
-	return func(macenvelope.Message) (macenvelope.Key, error) { return k, nil }
 }
 
 // VerifyHostCallHeaderUnder verifies a host call's header under callKey,
 // the attempt's call key as its holder has it, at now (Unix ms). The
 // generation and the member are CYFR's to check, against its standing.
 func VerifyHostCallHeaderUnder(callKey macenvelope.Key, header string, now int64) (Verified, error) {
-	return verify(Call, held(callKey), header, now)
+	return verify(Call, callKey, header, now)
 }
 
 // VerifyRequestHeader verifies a WorkerAPI request's header under the
 // dispatch key the verifying worker service holds.
 func VerifyRequestHeader(dispatchKey macenvelope.Key, header string, now int64) (Verified, error) {
-	return verify(Request, held(dispatchKey), header, now)
-}
-
-// VerifyReportHeader verifies a worker service report's header under the
-// dispatch key of the service it names, derived from root.
-func VerifyReportHeader(root macenvelope.Key, header string, now int64) (Verified, error) {
-	return verify(Report, func(m macenvelope.Message) (macenvelope.Key, error) {
-		w, err := WorkerKey(root, m["service"].(string))
-		return DispatchKey(w), err
-	}, header, now)
+	return verify(Request, dispatchKey, header, now)
 }
 
 // VerifyBody checks body against the hash a verified header named; another

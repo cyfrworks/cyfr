@@ -121,28 +121,30 @@ defmodule Prima.WorkerAPITest do
     assert @vectors["window_ms"] == WorkerAuth.window_ms()
   end
 
-  test "the keeper's refusal of a runner is held as the reason and sentence its vector names" do
+  test "the keeper's refusal of a runner is held as the reason, sentence and held its vector names" do
+    assert length(@vectors["keeper_refusals"]) >= 9
+
     for c <- @vectors["keeper_refusals"] do
       refused =
         case c["code"] do
           "memory_unavailable" -> :memory_unavailable
-          "no_memory" -> {:no_memory, %{}}
+          "no_memory" -> {:no_memory, Map.fetch!(c, "held")}
           nil -> :timeout
           code -> code
         end
 
-      assert %{reason: c["reason"], message: c["message"]} ==
-               refused |> WorkerAPI.keeper_refusal() |> Map.take([:reason, :message]),
-             c["why"]
+      expected =
+        %{reason: c["reason"], message: c["message"]}
+        |> then(&if Map.has_key?(c, "held"), do: Map.put(&1, :held, c["held"]), else: &1)
 
+      assert WorkerAPI.keeper_refusal(refused) == expected, c["why"]
       assert WorkerAPI.valid_refusal_message?(c["message"]), c["why"]
     end
-
-    assert %{held: %{}} = WorkerAPI.keeper_refusal({:no_memory, %{}})
   end
 
   test "a report carries the refusal codes its vector names, and no other" do
     %{"carried" => carried, "not_carried" => not_carried} = @vectors["report_refusals"]
+    assert carried != [] and not_carried != []
     for code <- carried, do: assert(is_binary(WorkerAPI.runner_refusal(code)), code)
     for code <- not_carried, do: assert(WorkerAPI.runner_refusal(code) == nil, code)
   end

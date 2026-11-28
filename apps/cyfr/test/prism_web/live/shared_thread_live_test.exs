@@ -86,7 +86,8 @@ defmodule PrismWeb.SharedThreadLiveTest do
     listen!(bob)
     bob_id = bob.user_id
     thread_id = thread.id
-    alice_pane |> form("#shared-composer", %{"content" => "hi bob"}) |> render_submit()
+    html = alice_pane |> form("#shared-composer", %{"content" => "hi bob"}) |> render_submit()
+    assert html =~ "hi bob"
 
     assert_receive %SharedThreadChanged{kind: :posted, user_id: ^bob_id, thread_id: ^thread_id},
                    5_000
@@ -417,7 +418,7 @@ defmodule PrismWeb.SharedThreadLiveTest do
       athanor_id: Sanctum.Test.People.athanor!(alice.user_id).id,
       permissions: [:*],
       scope: :athanor,
-      auth_method: :oidc,
+      auth_method: :session,
       authenticated: true
     )
   end

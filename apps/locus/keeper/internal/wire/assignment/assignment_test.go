@@ -18,6 +18,10 @@ type tokenCase struct {
 	Token   string          `json:"token"`
 	Payload json.RawMessage `json:"payload"`
 	Reason  string          `json:"reason"`
+	// Go is the Go reader's own answer where the two ends differ.
+	Go *struct {
+		Error string `json:"error"`
+	} `json:"go"`
 }
 
 type vectors struct {
@@ -55,14 +59,25 @@ func load(t *testing.T) vectors {
 func TestEveryAssignmentReadsAsTheServiceReadsIt(t *testing.T) {
 	v := load(t)
 	sr := v.AssignmentServiceReads
-	if len(v.AssignmentReads.Invalid) < 50 || len(v.AssignmentReads.Valid) < 6 || len(sr.Refused) < 12 || len(sr.Read) < 3 || len(sr.Carried) < 8 {
+	if len(v.AssignmentReads.Invalid) < 50 || len(v.AssignmentReads.Valid) < 6 || len(sr.Refused) < 12 || len(sr.Read) < 4 || len(sr.Carried) < 8 {
 		t.Fatalf("%d invalid, %d refused, %d carried", len(v.AssignmentReads.Invalid), len(sr.Refused), len(sr.Carried))
 	}
 	reads := append(append([]tokenCase{{Why: "the signed token", Token: v.Assignment.Token}}, v.AssignmentReads.Valid...), sr.Read...)
+	differences := 0
 	for _, c := range append(reads, sr.Carried...) {
-		if _, err := Read(c.Token); err != nil {
+		_, err := Read(c.Token)
+		switch {
+		case c.Go != nil:
+			differences++
+			if err == nil || err.Error() != c.Go.Error {
+				t.Errorf("%s: %v; Go refuses it %s", c.Why, err, c.Go.Error)
+			}
+		case err != nil:
 			t.Errorf("%s: %v", c.Why, err)
 		}
+	}
+	if differences == 0 {
+		t.Error("no token states the depth the two ends differ at")
 	}
 	for _, c := range v.AssignmentReads.Invalid {
 		if _, err := Read(c.Token); err == nil || err.Error() != c.Reason {

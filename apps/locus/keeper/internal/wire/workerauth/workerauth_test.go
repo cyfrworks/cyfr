@@ -6,12 +6,12 @@ package workerauth
 import (
 	"bytes"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -69,6 +69,10 @@ type vectors struct {
 		CallHex string                     `json:"call_hex"`
 		SealHex string                     `json:"seal_hex"`
 		Error   *string                    `json:"error"`
+		// Go is the Go reader's own answer where the two ends differ.
+		Go *struct {
+			Error string `json:"error"`
+		} `json:"go"`
 	} `json:"open_attempt_keys"`
 	OpenCall []struct {
 		Why       string                     `json:"why"`
@@ -96,6 +100,66 @@ type headerCase struct {
 	Fields   map[string]json.RawMessage `json:"fields"`
 	BodyHash string                     `json:"body_hash"`
 	Error    *string                    `json:"error"`
+}
+
+// What only CYFR does with the root, made here to reproduce the vectors:
+// the service holds none of it.
+func assignKey(root macenvelope.Key) macenvelope.Key {
+	return macenvelope.Derive(root, label+"/assign")
+}
+
+func workerKey(root macenvelope.Key, service string) (macenvelope.Key, error) {
+	return macenvelope.DeriveFields(root, label, dispatchFields[:1], macenvelope.Message{"service": service})
+}
+
+func attemptCallKey(root macenvelope.Key, attempt macenvelope.Message) (macenvelope.Key, error) {
+	return macenvelope.DeriveFields(root, label+"/call", AttemptFields, attempt)
+}
+
+func attemptSealKey(root macenvelope.Key, attempt macenvelope.Message) (macenvelope.Key, error) {
+	return macenvelope.DeriveFields(root, label+"/seal", AttemptFields, attempt)
+}
+
+func requestHeader(dispatchKey macenvelope.Key, d macenvelope.Message, body []byte) (string, error) {
+	return Request.Header(dispatchKey, d, body)
+}
+
+func verifyReportHeader(root macenvelope.Key, header string, now int64) (Verified, error) {
+	p, err := Report.Parse(header)
+	if err != nil {
+		return Verified{}, err
+	}
+	w, err := workerKey(root, p.Message["service"].(string))
+	if err != nil {
+		return Verified{}, err
+	}
+	return verify(Report, DispatchKey(w), header, now)
+}
+
+// sameFields is whether a verified header's fields are the case's, each of
+// its type: an integer field a JSON number of the same value, a string
+// field a JSON string of the same text, and no field more or less.
+func sameFields(e macenvelope.Envelope, got macenvelope.Message, raw map[string]json.RawMessage) bool {
+	if len(got) != len(e.Fields) || len(raw) != len(e.Fields) {
+		return false
+	}
+	for _, f := range e.Fields {
+		r := raw[f.Name]
+		switch f.Type {
+		case macenvelope.Integer:
+			n, isInt := got[f.Name].(uint64)
+			if !isInt || string(r) != strconv.FormatUint(n, 10) {
+				return false
+			}
+		default:
+			s, isText := got[f.Name].(string)
+			var want string
+			if !isText || len(r) == 0 || r[0] != '"' || json.Unmarshal(r, &want) != nil || want != s {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func load(t *testing.T) vectors {
@@ -167,17 +231,17 @@ func hexOf(k macenvelope.Key, t *testing.T, want string) bool {
 func TestEveryKeyDerivesAsTheVectorsSay(t *testing.T) {
 	v := load(t)
 	root := key(t, v.RootHex)
-	worker, err := WorkerKey(root, v.Service)
+	worker, err := workerKey(root, v.Service)
 	if err != nil {
 		t.Fatal(err)
 	}
-	callKey, err := AttemptCallKey(root, message(t, attemptFields(), v.Attempt))
+	callKey, err := attemptCallKey(root, message(t, attemptFields(), v.Attempt))
 	if err != nil {
 		t.Fatal(err)
 	}
-	sealKey, _ := AttemptSealKey(root, message(t, attemptFields(), v.Attempt))
+	sealKey, _ := attemptSealKey(root, message(t, attemptFields(), v.Attempt))
 	for name, k := range map[string]macenvelope.Key{
-		"assign_hex": AssignKey(root), "worker_hex": worker, "dispatch_hex": DispatchKey(worker),
+		"assign_hex": assignKey(root), "worker_hex": worker, "dispatch_hex": DispatchKey(worker),
 		"dispatch_seal_hex": DispatchSealKey(worker), "attempt_call_hex": callKey, "attempt_seal_hex": sealKey,
 	} {
 		if !hexOf(k, t, v.Keys[name]) {
@@ -211,7 +275,7 @@ func TestEveryHeaderAndCanonicalStringReproduces(t *testing.T) {
 		d      dispatchVector
 		e      macenvelope.Envelope
 		header func(macenvelope.Key, macenvelope.Message, []byte) (string, error)
-	}{"request": {v.Request, Request, RequestHeader}, "report": {v.Report, Report, ReportHeader}} {
+	}{"request": {v.Request, Request, requestHeader}, "report": {v.Report, Report, ReportHeader}} {
 		m := v.dispatch(c.d)
 		if got, err := c.header(dk, m, []byte(c.d.Body)); err != nil || got != c.d.Header {
 			t.Errorf("the %s's header: %q, %v", name, got, err)
@@ -220,8 +284,15 @@ func TestEveryHeaderAndCanonicalStringReproduces(t *testing.T) {
 			t.Errorf("the %s's canonical string: %q", name, got)
 		}
 	}
-	if MaxCallHeaderBytes != 2322 {
-		t.Errorf("the longest call header is %d bytes", MaxCallHeaderBytes)
+	relay, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "..", "..", "tests", "fixtures", "runner_relay.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var r struct {
+		MaxSignedHeaderBytes int `json:"max_signed_header_bytes"`
+	}
+	if err := json.Unmarshal(relay, &r); err != nil || r.MaxSignedHeaderBytes == 0 || MaxCallHeaderBytes != r.MaxSignedHeaderBytes {
+		t.Errorf("the longest call header is %d bytes; runner_relay.json's %d (%v)", MaxCallHeaderBytes, r.MaxSignedHeaderBytes, err)
 	}
 }
 
@@ -237,18 +308,22 @@ func TestSealedKeysAndSealedCallsReproduceAndOpen(t *testing.T) {
 	call := v.call(t)
 	sc := v.SealedCall
 	for _, c := range []struct {
-		d             Direction
-		plain, iv, at string
-	}{{Body, v.Call.Body, sc.BodyIV, sc.BodySealed}, {Answer, sc.Answer, sc.AnswerIV, sc.AnswerSealed}} {
-		iv, _ := hex.DecodeString(c.iv)
-		if got, err := SealCall(keys.Seal, c.d, call, []byte(c.plain), iv); err != nil || got != c.at {
-			t.Errorf("%s sealed: %q, %v", c.d, got, err)
-		}
+		d         Direction
+		plain, at string
+	}{{Body, v.Call.Body, sc.BodySealed}, {Answer, sc.Answer, sc.AnswerSealed}} {
 		if got, err := OpenCall(keys.Seal, c.d, call, c.at); err != nil || string(got) != c.plain {
 			t.Errorf("%s opened: %q, %v", c.d, got, err)
 		}
 		if SealedBytes(len(c.plain)) != len(c.at) {
 			t.Errorf("%s: %d bytes sealed, %d counted", c.d, len(c.at), SealedBytes(len(c.plain)))
+		}
+		first, err := SealCall(keys.Seal, c.d, call, []byte(c.plain))
+		second, _ := SealCall(keys.Seal, c.d, call, []byte(c.plain))
+		if err != nil || first == second || len(first) != len(c.at) {
+			t.Errorf("%s: two seals of one plaintext share an iv or a length: %q %q", c.d, first, second)
+		}
+		if got, err := OpenCall(keys.Seal, c.d, call, first); err != nil || string(got) != c.plain {
+			t.Errorf("%s: its own seal opened as %q, %v", c.d, got, err)
 		}
 	}
 }
@@ -265,7 +340,7 @@ func verifier(t *testing.T, v vectors, kind string) (macenvelope.Envelope, func(
 		}
 	case "report":
 		return Report, func(h string, now int64) (Verified, error) {
-			return VerifyReportHeader(key(t, v.RootHex), h, now)
+			return verifyReportHeader(key(t, v.RootHex), h, now)
 		}
 	}
 	t.Fatalf("no kind %q", kind)
@@ -290,9 +365,12 @@ func TestEveryHeaderVerifiesOrIsRefusedAsPrimaAnswers(t *testing.T) {
 			}
 		case err != nil:
 			t.Errorf("%s %s: %v", c.Kind, c.Why, err)
-		case fmt.Sprint(got.Fields) != fmt.Sprint(message(t, e, c.Fields)) || len(got.Fields) != len(c.Fields) || got.BodyHash != c.BodyHash:
-			t.Errorf("%s %s: %v %s, want %v %s", c.Kind, c.Why, got.Fields, got.BodyHash, message(t, e, c.Fields), c.BodyHash)
+		case !sameFields(e, got.Fields, c.Fields) || got.BodyHash != c.BodyHash:
+			t.Errorf("%s %s: %v %s, want %s %s", c.Kind, c.Why, got.Fields, got.BodyHash, c.Fields, c.BodyHash)
 		}
+	}
+	if len(v.BodyChecks) < 3 {
+		t.Fatalf("%d body checks", len(v.BodyChecks))
 	}
 	for _, c := range v.BodyChecks {
 		body, _ := base64.StdEncoding.DecodeString(c.Body)
@@ -309,19 +387,28 @@ func TestEverySealedKeysOpenOrAreRefusedAsPrimaAnswers(t *testing.T) {
 	if len(v.OpenAttemptKeys) < 25 {
 		t.Fatalf("%d cases", len(v.OpenAttemptKeys))
 	}
+	differences := 0
 	for _, c := range v.OpenAttemptKeys {
 		got, err := OpenAttemptKeys(dseal, c.Sealed)
 		switch {
+		case c.Go != nil:
+			differences++
+			if err == nil || err.Error() != c.Go.Error {
+				t.Errorf("%s: %v; Go refuses it %s", c.Why, err, c.Go.Error)
+			}
 		case c.Error != nil:
-			if !errors.Is(err, ErrUnsealable) {
-				t.Errorf("%s: %v, want unsealable", c.Why, err)
+			if err == nil || err.Error() != *c.Error {
+				t.Errorf("%s: %v, want %s", c.Why, err, *c.Error)
 			}
 		case err != nil:
 			t.Errorf("%s: %v", c.Why, err)
-		case fmt.Sprint(got.Attempt) != fmt.Sprint(message(t, attemptFields(), c.Attempt)) ||
+		case !sameFields(attemptFields(), got.Attempt, c.Attempt) ||
 			!got.Call.Equal(key(t, c.CallHex)) || !got.Seal.Equal(key(t, c.SealHex)):
 			t.Errorf("%s: opened as another attempt or keys: %v", c.Why, got.Attempt)
 		}
+	}
+	if differences == 0 {
+		t.Error("no case states the depth the two ends differ at")
 	}
 }
 
@@ -335,8 +422,8 @@ func TestEverySealedCallOpensOrIsRefusedAsPrimaAnswers(t *testing.T) {
 		got, err := OpenCall(seal, Direction(c.Direction), message(t, Call, c.Call), c.Sealed)
 		switch {
 		case c.Error != nil:
-			if !errors.Is(err, ErrUnsealable) {
-				t.Errorf("%s: %q, %v; want unsealable", c.Why, got, err)
+			if err == nil || err.Error() != *c.Error {
+				t.Errorf("%s: %q, %v; want %s", c.Why, got, err, *c.Error)
 			}
 		case err != nil:
 			t.Errorf("%s: %v", c.Why, err)
@@ -363,5 +450,51 @@ func TestNothingSecretIsPrinted(t *testing.T) {
 	_, err := VerifyRequestHeader(key(t, v.Keys["dispatch_hex"]), v.Request.Header, 0)
 	if err == nil || strings.Contains(err.Error(), v.Boot) {
 		t.Errorf("a refusal: %v", err)
+	}
+}
+
+// The zero Key, and the key a failed decode answers, verify, sign, open,
+// seal and derive nothing at any entry point of the service's, even where
+// 32 zero bytes, a real key, would.
+func TestTheZeroKeyGrantsNothing(t *testing.T) {
+	v := load(t)
+	zeroBytes, _ := macenvelope.KeyFromBytes(make([]byte, 32))
+	bad, _ := macenvelope.DecodeRoot("not a root")
+	d := macenvelope.Message{"service": "wrk_x", "boot": "b", "ts": uint64(1000), "nonce": "n"}
+	forged, err := requestHeader(zeroBytes, d, []byte("{}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := VerifyRequestHeader(zeroBytes, forged, 1000); err != nil {
+		t.Fatalf("32 zero bytes are a key: %v", err)
+	}
+	call := v.call(t)
+	callForged, _ := HostCallHeader(zeroBytes, call, []byte("{}"))
+	sealed, _ := SealCall(zeroBytes, Body, call, []byte("secret"))
+	for name, k := range map[string]macenvelope.Key{"the zero Key": {}, "a failed DecodeRoot": bad} {
+		if _, err := VerifyRequestHeader(k, forged, 1000); !errors.Is(err, ErrBadMAC) {
+			t.Errorf("%s verifies a request: %v", name, err)
+		}
+		if _, err := VerifyHostCallHeaderUnder(k, callForged, int64(v.Call.TS)); !errors.Is(err, ErrBadMAC) {
+			t.Errorf("%s verifies a call: %v", name, err)
+		}
+		if got, err := OpenCall(k, Body, call, sealed); !errors.Is(err, ErrUnsealable) {
+			t.Errorf("%s opens a call: %q", name, got)
+		}
+		if _, err := OpenAttemptKeys(k, v.SealedAttemptKeys.Sealed); !errors.Is(err, ErrUnsealable) {
+			t.Errorf("%s opens attempt keys: %v", name, err)
+		}
+		if _, err := SealCall(k, Body, call, []byte("x")); err == nil {
+			t.Errorf("%s seals a call", name)
+		}
+		if _, err := HostCallHeader(k, call, nil); err == nil {
+			t.Errorf("%s signs a call", name)
+		}
+		if _, err := ReportHeader(k, d, nil); err == nil {
+			t.Errorf("%s signs a report", name)
+		}
+		if !DispatchKey(k).Zero() || !DispatchSealKey(k).Zero() {
+			t.Errorf("%s derives a dispatch key", name)
+		}
 	}
 }

@@ -20,6 +20,7 @@ import (
 	"github.com/cyfr/locus/keeper/internal/wire/macenvelope"
 	"github.com/cyfr/locus/keeper/internal/wire/network"
 	"github.com/cyfr/locus/keeper/internal/wire/wirejson"
+	"github.com/cyfr/locus/keeper/internal/wire/workerapi"
 )
 
 const (
@@ -39,15 +40,12 @@ var (
 	ErrMalformed      = errors.New("malformed")
 )
 
-// WorkerCallbacks are Prima.WorkerAPI's callbacks.
-var WorkerCallbacks = []string{"start", "kill", "status"}
-
 // WorkerRoute is the route a WorkerAPI request of callback is posted to.
 func WorkerRoute(callback string) string { return workerPrefix + callback }
 
 // WorkerCallback is the callback a worker route names.
 func WorkerCallback(path string) (string, bool) {
-	for _, c := range WorkerCallbacks {
+	for _, c := range workerapi.Callbacks() {
 		if WorkerRoute(c) == path {
 			return c, true
 		}

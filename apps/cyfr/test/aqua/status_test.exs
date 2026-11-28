@@ -54,7 +54,7 @@ defmodule Aqua.StatusTest do
         provider: "passkey",
         athanor_id: athanor.id,
         permissions: [:*],
-        auth_method: :oidc,
+        auth_method: :session,
         authenticated: true
       )
 
