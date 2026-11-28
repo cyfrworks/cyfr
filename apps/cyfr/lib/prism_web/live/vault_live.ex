@@ -345,6 +345,11 @@ defmodule PrismWeb.VaultLive do
 
       case SystemLayer.call(socket, {:rotate, id}, "vault/rotate", args, form: rotate_form(id)) do
         {:ok, _, socket} ->
+          # What a brain listed under the old value says nothing of the
+          # new one: the next page that shows the catalogue asks again.
+          with %{athanor_id: athanor_id} when is_binary(athanor_id) <- socket.assigns[:context],
+               do: PrismWeb.ModelCatalog.forget(athanor_id)
+
           {:noreply,
            socket
            |> fetch_entries()

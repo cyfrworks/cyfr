@@ -25,9 +25,10 @@ func init() {
 }
 
 var backupCmd = &cobra.Command{
-	Use:     "backup",
-	Short:   "Take a snapshot of the CYFR in this directory into backups/, which cyfr restore puts back",
-	GroupID: "server",
+	Use:         "backup",
+	Annotations: map[string]string{dockerAnnotation: "yes"},
+	Short:       "Take a snapshot of the CYFR in this directory into backups/, which cyfr restore puts back",
+	GroupID:     "server",
 	Long: `Take a snapshot of the CYFR in this directory into backups/<UTC timestamp>/, the one cyfr update takes before it changes anything, which 'cyfr restore backups/<timestamp>' puts back.
 
 The snapshot holds the database, the local storage root, the managed scaffold files this directory holds (the guides, the WIT definitions, the seccomp profiles and the shipped Aqua files), the keyring, .env and docker-compose.yml, then snapshot.json, written last. A snapshot holds the keyring and the database: keep it as you keep the data. Storage on S3 is not in it.

@@ -28,9 +28,10 @@ func init() {
 }
 
 var uninstallCmd = &cobra.Command{
-	Use:     "uninstall",
-	Short:   "Take CYFR's stack and this program off this machine: it stops CYFR as cyfr down does and removes nothing else from your folder",
-	GroupID: "server",
+	Use:         "uninstall",
+	Annotations: map[string]string{dockerAnnotation: "yes"},
+	Short:       "Take CYFR's stack and this program off this machine: it stops CYFR as cyfr down does and removes nothing else from your folder",
+	GroupID:     "server",
 	Long: `Take the CYFR in this directory off this machine, with this program. It stops CYFR as cyfr down does and removes nothing else from your folder.
 
 cyfr uninstall shows what it removes and what it leaves, then asks once (--yes answers; with no terminal and no --yes it removes nothing; answered no, it removes nothing and exits 0). It stops the stack as cyfr down does, then removes:

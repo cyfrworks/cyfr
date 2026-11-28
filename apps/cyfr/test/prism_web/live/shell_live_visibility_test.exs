@@ -4,10 +4,11 @@
 defmodule PrismWeb.ShellLiveVisibilityTest do
   @moduledoc """
   Whether a tincture is public is read through `Sanctum.Consent.profiles/2`,
-  and a read that cannot answer renders a third state — "unavailable",
-  with no toggle — never "private". A store that is down, or a profile row
-  that cannot be decoded, says nothing about whether the tincture is
-  published. A tincture's copied URL is at the home's own address.
+  and a read that cannot answer renders a third state — "unavailable" —
+  never "private". A store that is down, or a profile row that cannot be
+  decoded, says nothing about whether the tincture is published. No
+  control offers to make an app public; a public app's address, at the
+  home's own origin, is offered to copy, and a private app's never.
   """
 
   use PrismWeb.ConnCase, async: false
@@ -19,7 +20,6 @@ defmodule PrismWeb.ShellLiveVisibilityTest do
   alias Sanctum.Test.ConsentFixtures
 
   @tincture "visibility-dash"
-  @source "tincture:local.visibility-dash"
 
   setup %{conn: conn} do
     conn = log_in_user(conn, test_user())
@@ -52,21 +52,21 @@ defmodule PrismWeb.ShellLiveVisibilityTest do
     {:ok, conn: conn, ctx: ctx}
   end
 
-  defp public_profile!(ctx, status \\ :active) do
+  defp public_profile!(ctx, status \\ :active, publisher \\ "local") do
     policy = "{}"
 
     :ok =
       ConsentFixtures.seed_head!(
         ctx,
         %{
-          id: "prof_vis_public",
+          id: "prof_vis_public_#{publisher}",
           kind: :public,
-          source_ref: @source,
+          source_ref: "tincture:#{publisher}.#{@tincture}",
           label: "public",
           status: status
         },
         %{
-          id: "cons_vis_public",
+          id: "cons_vis_public_#{publisher}",
           revision: 1,
           scope: :pinned,
           pinned_version: "1.0.0",
@@ -87,19 +87,18 @@ defmodule PrismWeb.ShellLiveVisibilityTest do
     end
   end
 
-  # The toggle's own `disabled` attribute — not the `disabled:` style
-  # variants its class carries either way.
-  defp toggle_disabled?(html) do
-    [tag] = Regex.run(~r/<button[^>]*phx-click="toggle_visibility"[^>]*>/s, html)
-    tag |> String.replace(~r/class="[^"]*"/, "") |> String.match?(~r/\sdisabled[\s>=]/)
-  end
+  # No page makes an app public, so the picker offers no step toward one.
+  defp offers_publishing?(html), do: html =~ ~r/Make Public|Make Private|toggle_visibility/
 
-  test "a tincture with no public profile reads private, with its toggle", %{conn: conn} do
+  defp copies_url?(html), do: html =~ "Copy URL"
+
+  test "a tincture with no public profile reads private, with nothing offering to publish it",
+       %{conn: conn} do
     {_view, html} = mount_desktop(conn)
 
     assert visibility(html) == "private"
-    assert html =~ "Make Public"
-    refute toggle_disabled?(html)
+    refute offers_publishing?(html)
+    refute copies_url?(html)
   end
 
   test "an active public profile reads public", %{conn: conn, ctx: ctx} do
@@ -108,8 +107,8 @@ defmodule PrismWeb.ShellLiveVisibilityTest do
     {_view, html} = mount_desktop(conn)
 
     assert visibility(html) == "public"
-    assert html =~ "Make Private"
-    refute toggle_disabled?(html)
+    refute offers_publishing?(html)
+    assert copies_url?(html)
   end
 
   @tag :capture_log
@@ -122,12 +121,8 @@ defmodule PrismWeb.ShellLiveVisibilityTest do
     html = render(view)
 
     assert visibility(html) == "unavailable"
-    refute html =~ "Make Public"
-    assert toggle_disabled?(html)
-
-    flash = render_click(view, "toggle_visibility", %{"tincture" => "iframe_#{@tincture}"})
-    assert flash =~ "can&#39;t be read right now"
-    assert flash =~ "This app&#39;s visibility"
+    refute offers_publishing?(html)
+    refute copies_url?(html)
   end
 
   test "a public profile row that cannot be decoded reads unavailable", %{conn: conn, ctx: ctx} do
@@ -136,7 +131,7 @@ defmodule PrismWeb.ShellLiveVisibilityTest do
     {1, _} =
       Arca.Repo.update_all(
         from(p in Arca.Schemas.Profile,
-          where: p.athanor_id == ^ctx.athanor_id and p.id == "prof_vis_public"
+          where: p.athanor_id == ^ctx.athanor_id and p.id == "prof_vis_public_local"
         ),
         set: [kind: "sideways"]
       )
@@ -144,7 +139,6 @@ defmodule PrismWeb.ShellLiveVisibilityTest do
     {_view, html} = mount_desktop(conn)
 
     assert visibility(html) == "unavailable"
-    assert toggle_disabled?(html)
   end
 
   # What a person reads of an app on the desktop says app, never tincture.
@@ -173,9 +167,6 @@ defmodule PrismWeb.ShellLiveVisibilityTest do
     refute html =~
              ~r/[Tt]incture( \d| not|s installed|s registered)|this tincture|Refresh tinctures|(Previous|Next) tincture/
 
-    flash = render_click(view, "toggle_visibility", %{"tincture" => "iframe_#{@tincture}"})
-    assert flash =~ "on this app&#39;s owner profile."
-
     flash = render_click(view, "open_report", %{"tincture" => "iframe_none"})
     assert flash =~ "App not found; refresh and try again."
 
@@ -201,8 +192,9 @@ defmodule PrismWeb.ShellLiveVisibilityTest do
 
   # The address a person copies to share a public tincture is the home's
   # own (`Sanctum.origin/0`), its public URL in a tailnet or public home,
-  # never the endpoint's own listener address.
-  test "a tincture's copied URL is at the home's own address", %{conn: conn} do
+  # never the endpoint's own listener address; a private one copies nothing.
+  test "a public tincture's copied URL is at the home's own address, a private one's is none",
+       %{conn: conn, ctx: ctx} do
     original = Application.fetch_env(:sanctum, :public_url)
 
     on_exit(fn ->
@@ -216,10 +208,43 @@ defmodule PrismWeb.ShellLiveVisibilityTest do
     Application.put_env(:sanctum, :public_url, home)
 
     {view, _html} = mount_desktop(conn)
-    render_click(view, "copy_url", %{"tincture" => "iframe_#{@tincture}"})
+    render_click(view, "copy_url", %{"publisher" => "local", "name" => @tincture})
+    refute_push_event(view, "clipboard", %{})
+
+    public_profile!(ctx)
+    {view, _html} = mount_desktop(conn)
+    render_click(view, "copy_url", %{"publisher" => "local", "name" => @tincture})
 
     assert_push_event(view, "clipboard", %{text: url})
     assert String.starts_with?(url, home <> "/")
     assert String.ends_with?(url, "/local/#{@tincture}")
+  end
+
+  # Two publishers' apps of one name share a card id: the address copied is
+  # the pressed app's, by its publisher and name, and only the public one's.
+  test "the copied URL is the pressed app's when two publishers' apps share a name",
+       %{conn: conn, ctx: ctx} do
+    Arca.Test.UnitFixtures.tenant_component!(ctx, "tincture", "acme", @tincture, "1.0.0",
+      manifest: %{
+        "name" => @tincture,
+        "type" => "tincture",
+        "version" => "1.0.0",
+        "publisher" => "acme",
+        "tincture" => %{"entry" => "index.html"}
+      },
+      files: [{"index.html", "<html><body>acme</body></html>"}]
+    )
+
+    public_profile!(ctx, :active, "acme")
+    Prism.TinctureRegistry.reload_athanor(ctx.athanor_id)
+
+    {view, _html} = mount_desktop(conn)
+
+    render_click(view, "copy_url", %{"publisher" => "local", "name" => @tincture})
+    refute_push_event(view, "clipboard", %{})
+
+    render_click(view, "copy_url", %{"publisher" => "acme", "name" => @tincture})
+    assert_push_event(view, "clipboard", %{text: url})
+    assert String.ends_with?(url, "/acme/#{@tincture}")
   end
 end

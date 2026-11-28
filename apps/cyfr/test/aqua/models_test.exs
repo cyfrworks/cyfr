@@ -38,6 +38,36 @@ defmodule Aqua.ModelsTest do
     assert {:error, :forbidden} = Aqua.models(Context.enter_guest(local))
   end
 
+  test "a models run reads as its list, the provider's refusal, or no answer about the key" do
+    envelope = &{:ok, %{result: &1}}
+
+    assert Aqua.Models.listed(
+             envelope.(%{
+               "status" => 200,
+               "data" => %{"models" => [%{"id" => "m-1"}, %{"id" => ""}]}
+             })
+           ) == {:ok, ["m-1"]}
+
+    assert Aqua.Models.listed(envelope.(%{"status" => 200, "data" => %{"models" => []}})) ==
+             {:ok, []}
+
+    # The catalyst's own error ended the run: its sentence is all that is kept.
+    assert Aqua.Models.listed({:error, "invalid x-api-key"}) == {:refused, "invalid x-api-key"}
+
+    assert Aqua.Models.listed({:error, %{"message" => "invalid x-api-key"}}) ==
+             {:refused, "invalid x-api-key"}
+
+    # No run, and an answer that is no list, refused nothing.
+    assert Aqua.Models.listed({:error, :connection_not_granted}) ==
+             {:error, Prima.Refusal.message(:connection_not_granted)}
+
+    assert Aqua.Models.listed(envelope.(%{"status" => 200, "data" => %{}})) ==
+             {:error, "the catalyst answered no model list"}
+
+    assert {:error, "the catalyst answered something that is not the envelope" <> _} =
+             Aqua.Models.listed(envelope.(%{"ran" => true}))
+  end
+
   test "an athanor whose component index is behind answers unavailable, not an empty listing" do
     n = System.unique_integer([:positive])
     user = "local|idp|models-#{n}"

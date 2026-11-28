@@ -368,10 +368,39 @@ func TestAccessStatusTakesNoLock(t *testing.T) {
 		t.Errorf("status took the lock")
 	}
 
+	s.status = access.Status{Head: head, Words: access.Describe(head), Unobserved: errors.New("docker ps failed (docker exited with status 1: this user may not use the Docker daemon)")}
+	out.Reset()
+	if err := runAccessStatus(context.Background(), &out); err != nil || strings.Contains(out.String(), "Nothing of the stack runs.") ||
+		!strings.Contains(out.String(), "\nDocker did not answer: docker ps failed (docker exited with status 1: this user may not use the Docker daemon)\n") {
+		t.Errorf("status with Docker not answering answered %v:\n%s", err, out.String())
+	}
+
 	s.status = access.Status{HeadErr: access.Refuse("access_missing", nil)}
 	out.Reset()
 	if err := runAccessStatus(context.Background(), &out); err != nil || !strings.Contains(out.String(), access.Refuse("access_missing", nil).Message()) {
 		t.Errorf("status of a .env without CYFR_ACCESS answered %v:\n%s", err, out.String())
+	}
+}
+
+// After a tailnet change, the tailnet machine as it stands now is said, and
+// so is a Docker that did not answer the read of it.
+func TestTailscaleNowSaysDockerDidNotAnswer(t *testing.T) {
+	s := newAccessProject(t)
+	s.status = access.Status{Unobserved: errors.New("docker ps failed (context deadline exceeded)")}
+	e, err := openEngine(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	printTailscale(context.Background(), e, &out)
+	if got, want := out.String(), "Tailscale now:\n  Docker did not answer: docker ps failed (context deadline exceeded)\n"; got != want {
+		t.Errorf("said %q, want %q", got, want)
+	}
+	s.status = access.Status{Health: []string{"Tailscale: not running"}}
+	out.Reset()
+	printTailscale(context.Background(), e, &out)
+	if got, want := out.String(), "Tailscale now:\n  Tailscale: not running\n"; got != want {
+		t.Errorf("said %q, want %q", got, want)
 	}
 }
 

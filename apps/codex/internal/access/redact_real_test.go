@@ -206,7 +206,7 @@ func receiptTexts(rc Receipt) []string {
 }
 
 func statusTexts(s Status) []string {
-	texts := append([]string{fmt.Sprintf("%+v", s), string(s.Head.Canonical())}, errTexts(s.HeadErr)...)
+	texts := append([]string{fmt.Sprintf("%+v", s), string(s.Head.Canonical())}, append(errTexts(s.HeadErr), errTexts(s.Unobserved)...)...)
 	for _, rc := range []*Receipt{s.Unfinished, s.Last} {
 		if rc != nil {
 			texts = append(texts, receiptTexts(*rc)...)
@@ -484,7 +484,7 @@ func TestRealComposeNoEnvSecretLeavesTheEngine(t *testing.T) {
 		t.Setenv("DOCKER_HOST", "unix:///nonexistent")
 		reads(e, l)
 		s, err := e.Status(bg)
-		if err != nil || !slices.ContainsFunc(s.Health, func(h string) bool { return strings.Contains(h, "the Docker daemon is not reachable") }) {
+		if err != nil || s.Unobserved == nil || !strings.Contains(s.Unobserved.Error(), "the Docker daemon is not reachable") {
 			t.Errorf("Status answered %+v, %v", s, err)
 		}
 		operate(e, l, "Start", func() (Receipt, error) { return e.doStart(bg, "up", HealthDeadline) })
@@ -507,7 +507,7 @@ func TestRealComposeNoEnvSecretLeavesTheEngine(t *testing.T) {
 		}
 		t.Setenv("DOCKER_HOST", "unix://"+sock)
 		s, err := e.Status(bg)
-		if err != nil || !slices.ContainsFunc(s.Health, func(h string) bool { return strings.Contains(h, "this user may not use the Docker daemon") }) {
+		if err != nil || s.Unobserved == nil || !strings.Contains(s.Unobserved.Error(), "this user may not use the Docker daemon") {
 			t.Errorf("Status answered %+v, %v", s, err)
 		}
 		l.out("Status", statusTexts(s)...)

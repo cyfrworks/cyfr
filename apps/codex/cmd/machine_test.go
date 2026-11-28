@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cyfr/codex/internal/access"
 	"github.com/cyfr/codex/internal/version"
@@ -170,7 +171,13 @@ const (
 const (
 	fakeSgRecord = "CYFR_CMD_TEST_FAKE_SG"
 	fakeSgStatus = "CYFR_CMD_TEST_FAKE_SG_STATUS"
+	fakeSgWaits  = "CYFR_CMD_TEST_FAKE_SG_WAITS"
 )
+
+// fakeGroupDump marks a run of this test binary as a second run groupRun
+// started: it prints, as JSON, the command line takeGroupRun read and
+// whether groupRunVar was left in its environment, and runs nothing.
+const fakeGroupDump = "CYFR_CMD_TEST_GROUP_DUMP"
 
 // fakeDockerAnswers marks a run of this test binary as the docker
 // dockerStandIn put on PATH: it answers from FAKE_DOCKER_DIR as the update
@@ -216,6 +223,16 @@ func runStandIn() (status int, ok bool) {
 			lines.WriteString(a + "\n")
 		}
 		if os.WriteFile(os.Getenv(fakeSgRecord), []byte(lines.String()), 0o600) != nil {
+			return 3, true
+		}
+		// The command line the second run was given (groupRun), as it was
+		// handed over.
+		if run, ok := os.LookupEnv(groupRunVar); ok && os.WriteFile(os.Getenv(fakeSgRecord)+".run", []byte(run), 0o600) != nil {
+			return 3, true
+		}
+		// A second run a signal stops: it waits for one, and dies of it.
+		if os.Getenv(fakeSgWaits) != "" {
+			time.Sleep(time.Minute) // sleep-ok: the stand-in second run waits for the signal that ends it
 			return 3, true
 		}
 		status, err := strconv.Atoi(os.Getenv(fakeSgStatus))

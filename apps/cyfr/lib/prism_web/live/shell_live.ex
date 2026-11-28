@@ -507,17 +507,24 @@ defmodule PrismWeb.ShellLive do
 
   # `ui.tincture.focus` and the palette move the page to the desktop with
   # `?publisher=&tincture_name=` (`PrismWeb.DesktopLive`), which this view's
-  # hook reads from the page's address and hands here as `focus_named`. The picker is index-addressed, so the pair is resolved
-  # against the list the shell holds; a pair matching nothing leaves the
-  # current selection alone rather than snapping the person to the first
-  # card.
+  # hook reads from the page's address and hands here as `focus_named`, once
+  # (`handle_event/3`'s answer). The pair is resolved against the list the shell holds, and the tincture it
+  # names is focused in the picker and opened, by the launch a person's own
+  # pick makes, so it opens over a canvas as without one and passes every
+  # check that launch passes. A pair matching nothing opens nothing and
+  # leaves the current selection alone rather than snapping the person to
+  # the first card.
   defp focus_named(socket, publisher, name) when is_binary(publisher) and is_binary(name) do
     case Enum.find_index(
            socket.assigns.tinctures,
            &(&1.publisher == publisher and &1.name == name)
          ) do
-      nil -> socket
-      idx -> focus_tincture(socket, idx)
+      nil ->
+        socket
+
+      idx ->
+        socket = focus_tincture(socket, idx)
+        launch_tincture(socket, Enum.at(socket.assigns.tinctures, idx).id)
     end
   end
 
@@ -528,8 +535,13 @@ defmodule PrismWeb.ShellLive do
   # ============================================================================
 
   @impl true
-  def handle_event("focus_named", %{"publisher" => publisher, "name" => name}, socket),
-    do: {:noreply, focus_named(socket, publisher, name)}
+  # The named address is used once: whatever it opened, or nothing, the
+  # answer names the desktop's plain address, which the hook puts in its
+  # place, so a reconnect, a reload or Back finds nothing to open again.
+  def handle_event("focus_named", %{"publisher" => publisher, "name" => name}, socket) do
+    desktop = PrismWeb.DesktopLive.path(socket.assigns.athanor_route)
+    {:reply, %{desktop: desktop}, focus_named(socket, publisher, name)}
+  end
 
   # Whether a Dashboard page is drawn over the desktop now, as the
   # desktop's own hook reads the page's address after each move.
@@ -611,54 +623,24 @@ defmodule PrismWeb.ShellLive do
     end
   end
 
-  def handle_event("copy_url", %{"tincture" => tincture_id}, socket) do
-    tincture = Enum.find(socket.assigns.tinctures, &(&1.id == tincture_id))
+  # Only a public app has an address to share: the home's own origin
+  # (`Sanctum.origin/0`) plus its path. A private one copies nothing. The
+  # card is the one pressed, by its publisher and name: two publishers'
+  # apps of one name share a card id.
+  def handle_event("copy_url", %{"publisher" => publisher, "name" => name}, socket) do
+    case Enum.find(socket.assigns.tinctures, &(&1.publisher == publisher and &1.name == name)) do
+      %{public: true} = tincture ->
+        url =
+          Cyfr.RuntimeConfig.origin() <>
+            Prima.TinctureUrl.path(tincture.athanor_segment, tincture.publisher, tincture.name)
 
-    if tincture do
-      # The public address: the home's own origin (`Sanctum.origin/0`) plus
-      # the tincture's path.
-      url =
-        Cyfr.RuntimeConfig.origin() <>
-          Prima.TinctureUrl.path(tincture.athanor_segment, tincture.publisher, tincture.name)
+        {:noreply,
+         socket
+         |> push_event("clipboard", %{text: url})
+         |> put_flash(:info, "URL copied to clipboard")}
 
-      {:noreply,
-       socket
-       |> push_event("clipboard", %{text: url})
-       |> put_flash(:info, "URL copied to clipboard")}
-    else
-      {:noreply, socket}
-    end
-  end
-
-  def handle_event("toggle_visibility", %{"tincture" => tincture_id}, socket) do
-    tincture = Enum.find(socket.assigns.tinctures, &(&1.id == tincture_id))
-
-    if tincture do
-      ctx = socket.assigns.context
-
-      with :ok <- Sanctum.Context.authorize(ctx, :execute) do
-        # Public-ness is a published profile, not a toggle: publishing is
-        # the proof-bound profile.publish walk, unpublishing revokes the
-        # public profile. Until the sheet drives publish here, say so.
-        message =
-          case tincture.public do
-            true ->
-              "Unpublish by revoking the public profile (profile.revoke)."
-
-            false ->
-              "Publish through the consent walk: profile.publish on this " <>
-                "app's owner profile."
-
-            :unknown ->
-              "This app's visibility can't be read right now. Try again shortly."
-          end
-
-        {:noreply, put_flash(socket, :info, message)}
-      else
-        _ -> {:noreply, socket}
-      end
-    else
-      {:noreply, socket}
+      _private_or_none ->
+        {:noreply, socket}
     end
   end
 
@@ -4142,21 +4124,10 @@ defmodule PrismWeb.ShellLive do
           Launch
         </button>
         <button
-          phx-click="toggle_visibility"
-          phx-value-tincture={@tincture.id}
-          disabled={@tincture.public == :unknown}
-          title={if @tincture.public == :unknown, do: "Visibility can't be read right now"}
-          class="rounded-lg border border-border-default bg-surface-raised px-3 py-1.5 text-xs text-text-secondary transition-colors hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          {case @tincture.public do
-            true -> "Make Private"
-            false -> "Make Public"
-            :unknown -> "Visibility unavailable"
-          end}
-        </button>
-        <button
+          :if={@tincture.public == true}
           phx-click="copy_url"
-          phx-value-tincture={@tincture.id}
+          phx-value-publisher={@tincture.publisher}
+          phx-value-name={@tincture.name}
           class="rounded-lg border border-border-default bg-surface-raised px-3 py-1.5 text-xs text-text-secondary transition-colors hover:text-text-primary"
           title="Copy public URL"
         >
