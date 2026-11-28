@@ -332,14 +332,14 @@
     { "v": 9, "type": "error", "id": "pl-1", "code": "bad_request" },
     { "v": 9, "type": "measured", "id": "25", "kind": "program", "athanor": "ath_01a09fee-2c3d-7e4f-8a5b-6c7d8e9f0a1b", "subject": "mcp_01a09fee-2c3d-7e4f-8a5b-6c7d8e9f0a1c", "bytes": 268435456, "lesser": false, "age_ms": 412 },
     { "v": 9, "type": "measured", "id": "25", "kind": "warm", "bytes": 201326592, "lesser": true, "age_ms": 0 },
-    { "v": 9, "type": "reported", "id": "rp-1", "report": { "boot": "5f0c3a9e1b7d4c2a8e6f0b3d5a7c9e1f", "budget": 6174015488, "work": 5066719232, "floor": 171966464, "used": 671088640, "counters": [
+    { "v": 9, "type": "reported", "id": "rp-1", "report": { "boot": "5f0c3a9e1b7d4c2a8e6f0b3d5a7c9e1f", "budget": 6174015488, "work": 5066719232, "floor": 171966464, "used": 671088640, "wall": "given", "counters": [
       { "rev": 7, "day": "2026-11-27", "athanor": "ath_01a09fee-2c3d-7e4f-8a5b-6c7d8e9f0a1b", "kind": "program", "subject": "mcp_01a09fee-2c3d-7e4f-8a5b-6c7d8e9f0a1c", "bytes": 268435456, "mib_ms": 512000, "measured_ms": 2000, "peak_bytes": 301989888, "cap": 0, "machine": 1, "either": 0 },
       { "rev": 9, "day": "2026-11-26", "athanor": "ath_01a09fee-2c3d-7e4f-8a5b-6c7d8e9f0a1b", "kind": "terminal", "subject": "mcp_01a09fee-2c3d-7e4f-8a5b-6c7d8e9f0a1c", "bytes": 0, "mib_ms": 0, "measured_ms": 0, "peak_bytes": 0, "cap": 1, "machine": 0, "either": 0 }
     ], "next": 9 } },
-    { "v": 9, "type": "reported", "id": "rp-2", "report": { "boot": "5f0c3a9e1b7d4c2a8e6f0b3d5a7c9e1f", "budget": 0, "work": 0, "floor": 0, "used": 0, "counters": [
+    { "v": 9, "type": "reported", "id": "rp-2", "report": { "boot": "5f0c3a9e1b7d4c2a8e6f0b3d5a7c9e1f", "budget": 0, "work": 0, "floor": 0, "used": 0, "wall": "lacking", "counters": [
       { "rev": 1, "day": "2026-11-27", "kind": "warm", "bytes": 201326592, "mib_ms": 384, "measured_ms": 2, "peak_bytes": 201326592, "cap": 0, "machine": 0, "either": 0 }
     ] } },
-    { "v": 9, "type": "reported", "id": "rp-3", "report": { "boot": "5f0c3a9e1b7d4c2a8e6f0b3d5a7c9e1f", "budget": 6174015488, "work": 5066719232, "floor": 0, "used": 0, "counters": [] } },
+    { "v": 9, "type": "reported", "id": "rp-3", "report": { "boot": "5f0c3a9e1b7d4c2a8e6f0b3d5a7c9e1f", "budget": 6174015488, "work": 5066719232, "floor": 0, "used": 0, "wall": "no_room", "counters": [] } },
     { "v": 9, "type": "error", "id": "25", "code": "unmeasured" },
     { "v": 9, "type": "exited", "spawn_id": "00112233445566778899aabbccddeeff", "code": null, "signal": "SIGKILL", "memory": "either" },
     { "v": 9, "type": "placed", "id": "pl-5", "memory_bytes": 2533359616 },

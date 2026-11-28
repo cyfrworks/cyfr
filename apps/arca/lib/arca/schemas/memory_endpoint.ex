@@ -5,7 +5,7 @@ defmodule Arca.Schemas.MemoryEndpoint do
   @moduledoc """
   One endpoint CYFR asks for who used what (`Arca.MemoryRecord`), the
   host's own row: the keeper's boot it last answered for, the rev the next
-  ask follows and the machine's numbers that answer carried.
+  ask follows and the machine's numbers and wall that answer carried.
   """
 
   use Ecto.Schema
@@ -21,6 +21,8 @@ defmodule Arca.Schemas.MemoryEndpoint do
     field :work, :integer
     field :floor, :integer
     field :used, :integer
+    # The keeper's wall, as its report names it (Prima.LocusPool.t:wall/0).
+    field :wall, Ecto.Enum, values: [:given, :no_room, :lacking]
     field :heard_at, :utc_datetime_usec
   end
 end

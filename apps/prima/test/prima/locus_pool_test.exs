@@ -302,12 +302,14 @@ defmodule Prima.LocusPoolTest do
       "work" => 0,
       "floor" => 0,
       "used" => 0,
+      "wall" => "lacking",
       "counters" => [@counter]
     }
 
     test "reads exactly its members and writes them back, its optional ones absent" do
       assert {:ok, read} = LocusPool.read_report(@report)
       assert read.next == nil
+      assert read.wall == :lacking
 
       assert [%{day: ~D[2026-11-27], athanor: "ath_one", subject: "mcp_one", either: 1}] =
                read.counters
@@ -331,6 +333,9 @@ defmodule Prima.LocusPoolTest do
 
       for bad <- [
             Map.delete(@report, "used"),
+            Map.delete(@report, "wall"),
+            %{@report | "wall" => nil},
+            %{@report | "wall" => "vm"},
             Map.put(@report, "role", "builds"),
             Map.put(@report, "next", 0),
             Map.put(@report, "next", nil),

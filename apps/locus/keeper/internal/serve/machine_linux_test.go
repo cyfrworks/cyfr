@@ -595,16 +595,16 @@ func TestTheWallIsGivenOnlyWhereAFirstSessionInAVMFits(t *testing.T) {
 	// machine has none.
 	for _, absent := range []string{"/dev/full", "/dev/null", filepath.Join(dev, "absent")} {
 		kvmPath = absent
-		if wall, why := base().wallOf(); wall || why != "the container was given no /dev/kvm" {
-			t.Fatalf("%s at the KVM device's path gave the wall %t (%s)", absent, wall, why)
+		if wall, why := base().wallOf(); wall != protocol.WallLacking || why != "the container was given no /dev/kvm" {
+			t.Fatalf("%s at the KVM device's path gave the wall %q (%s)", absent, wall, why)
 		}
 	}
 	usableDevices(t)
 	kvmPath = vm.KVM
 	for _, absent := range []string{"/dev/null", vm.KVM} {
 		tunPath = absent
-		if wall, why := base().wallOf(); wall || why != "the container was given no /dev/net/tun" {
-			t.Fatalf("%s at the tun device's path gave the wall %t (%s)", absent, wall, why)
+		if wall, why := base().wallOf(); wall != protocol.WallLacking || why != "the container was given no /dev/net/tun" {
+			t.Fatalf("%s at the tun device's path gave the wall %q (%s)", absent, wall, why)
 		}
 	}
 	tunPath = tunDevice
@@ -615,32 +615,32 @@ func TestTheWallIsGivenOnlyWhereAFirstSessionInAVMFits(t *testing.T) {
 			}
 			return nil
 		}
-		if wall, why := base().wallOf(); wall || why != refused+" does not open here: operation not permitted" {
-			t.Fatalf("a %s the keeper cannot open gave the wall %t (%s)", refused, wall, why)
+		if wall, why := base().wallOf(); wall != protocol.WallLacking || why != refused+" does not open here: operation not permitted" {
+			t.Fatalf("a %s the keeper cannot open gave the wall %q (%s)", refused, wall, why)
 		}
 	}
 	openDevice = func(string) error { return nil }
-	if wall, why := base().wallOf(); !wall {
+	if wall, why := base().wallOf(); wall != protocol.WallGiven || why != "" {
 		t.Fatalf("a keeper with everything a VM needs gave no wall: %s", why)
 	}
 	s := base()
 	s.guard = &fakeRouteGuard{machines: "the guard routes no machine: this kernel cannot hold a machine's route to whole IPv4 packets"}
-	if wall, why := s.wallOf(); wall || why != s.guard.Machines() {
-		t.Fatalf("a guard that routes no VM gave the wall %t (%s)", wall, why)
+	if wall, why := s.wallOf(); wall != protocol.WallLacking || why != s.guard.Machines() {
+		t.Fatalf("a guard that routes no VM gave the wall %q (%s)", wall, why)
 	}
 	s = base()
 	s.rest = fits - 1<<20
-	if wall, why := s.wallOf(); wall || !strings.Contains(why, "does not fit") {
-		t.Fatalf("a first session that does not fit gave the wall %t (%s)", wall, why)
+	if wall, why := s.wallOf(); wall != protocol.WallNoRoom || !strings.Contains(why, "does not fit") {
+		t.Fatalf("a first session that does not fit gave the wall %q (%s)", wall, why)
 	}
 	s = base()
 	s.roles[0].spec.Kept = false
-	if wall, _ := s.wallOf(); wall {
-		t.Fatal("a keeper whose roles keep no homes gave the wall")
+	if wall, why := s.wallOf(); wall != protocol.WallLacking || why != "no role of it keeps homes" {
+		t.Fatalf("a keeper whose roles keep no homes gave the wall %q (%s)", wall, why)
 	}
 	guestFiles = []string{filepath.Join(dev, "absent")}
-	if wall, why := base().wallOf(); wall || !strings.Contains(why, "no guest") {
-		t.Fatalf("an image with no guest gave the wall %t (%s)", wall, why)
+	if wall, why := base().wallOf(); wall != protocol.WallLacking || !strings.Contains(why, "no guest") {
+		t.Fatalf("an image with no guest gave the wall %q (%s)", wall, why)
 	}
 }
 

@@ -397,16 +397,16 @@ func TestSharedRepliesMatchTheEncoders(t *testing.T) {
 		NewError("pl-1", "", CodeBadRequest),
 		NewMeasured("25", Whose{Kind: KindProgram, Athanor: "ath_01a09fee-2c3d-7e4f-8a5b-6c7d8e9f0a1b", Subject: "mcp_01a09fee-2c3d-7e4f-8a5b-6c7d8e9f0a1c"}, Reading{Bytes: 256 << 20}, 412),
 		NewMeasured("25", Whose{Kind: KindWarm}, Reading{Bytes: 192 << 20, Lesser: true}, 0),
-		NewReported("rp-1", Report{Boot: "5f0c3a9e1b7d4c2a8e6f0b3d5a7c9e1f", Budget: 5888 << 20, Work: 4832 << 20, Floor: 164 << 20, Used: 640 << 20,
+		NewReported("rp-1", Report{Boot: "5f0c3a9e1b7d4c2a8e6f0b3d5a7c9e1f", Budget: 5888 << 20, Work: 4832 << 20, Floor: 164 << 20, Used: 640 << 20, Wall: WallGiven,
 			Counters: []Counter{
 				{Rev: 7, Day: "2026-11-27", Athanor: "ath_01a09fee-2c3d-7e4f-8a5b-6c7d8e9f0a1b", Kind: KindProgram, Subject: "mcp_01a09fee-2c3d-7e4f-8a5b-6c7d8e9f0a1c",
 					Bytes: 256 << 20, MiBMs: 512_000, MeasuredMs: 2000, PeakBytes: 288 << 20, Machine: 1},
 				{Rev: 9, Day: "2026-11-26", Athanor: "ath_01a09fee-2c3d-7e4f-8a5b-6c7d8e9f0a1b", Kind: KindTerminal, Subject: "mcp_01a09fee-2c3d-7e4f-8a5b-6c7d8e9f0a1c", Cap: 1},
 			},
 			Next: 9}),
-		NewReported("rp-2", Report{Boot: "5f0c3a9e1b7d4c2a8e6f0b3d5a7c9e1f",
+		NewReported("rp-2", Report{Boot: "5f0c3a9e1b7d4c2a8e6f0b3d5a7c9e1f", Wall: WallLacking,
 			Counters: []Counter{{Rev: 1, Day: "2026-11-27", Kind: KindWarm, Bytes: 192 << 20, MiBMs: 384, MeasuredMs: 2, PeakBytes: 192 << 20}}}),
-		NewReported("rp-3", Report{Boot: "5f0c3a9e1b7d4c2a8e6f0b3d5a7c9e1f", Budget: 5888 << 20, Work: 4832 << 20}),
+		NewReported("rp-3", Report{Boot: "5f0c3a9e1b7d4c2a8e6f0b3d5a7c9e1f", Budget: 5888 << 20, Work: 4832 << 20, Wall: WallNoRoom}),
 		NewError("25", "", CodeUnmeasured),
 		NewExited("00112233445566778899aabbccddeeff", nil, &signal, &byEither),
 		NewPlaced("pl-5", 2416<<20),
@@ -481,7 +481,7 @@ func TestAPageOfCountersFitsALine(t *testing.T) {
 			Bytes: most, MiBMs: most, MeasuredMs: most, PeakBytes: most, Cap: most, Machine: most, Either: most}
 	}
 	line, err := Encode(NewReported(strings.Repeat("i", 64), Report{Boot: strings.Repeat("b", 32), Budget: most, Work: most, Floor: most,
-		Used: most, Counters: page, Next: MaxRev}))
+		Used: most, Wall: WallLacking, Counters: page, Next: MaxRev}))
 	if err != nil {
 		t.Fatal(err)
 	}

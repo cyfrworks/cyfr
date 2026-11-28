@@ -58,6 +58,17 @@ import (
 //	lookalike   writes a chunk of nearly the failure's form
 //	call        calls CYFR's `files` as Cursor does, after its permission question
 //	theirs      calls a person's server `notes`, its tool `echo`
+//	around      says words in two chunks, runs a tool of its own, then says
+//	            more, every chunk with no message id (F4); its variants:
+//	aroundquestion  asks a question, runs a tool, then says more
+//	aroundchoices   writes a choices block whose options come after a tool
+//	aroundupdate    says words, starts a call, says more, completes that
+//	                call, then ends the sentence
+//	aroundtwo       says words, runs two tools, then says more
+//	aroundline      says words ending in a line feed, runs a tool, then more
+//	aroundend       says words, then runs a tool, and says nothing after
+//	aroundchild     says words around a frame of a sub-agent's
+//	aroundnamed     says words around a tool under a message id of its own
 //	activity    as the other stand-ins' (fake_test.go), as Cursor shows it (F4):
 //	            each call pending with a generic title and no input, then its
 //	            input, in_progress and its end, ids holding a newline; no
@@ -331,6 +342,49 @@ func fakeCursor() int {
 		case words == "thoughtfirst":
 			update(map[string]any{"sessionUpdate": "agent_thought_chunk", "content": map[string]any{"type": "text", "text": "thinking"}})
 			chunk(failure)
+		case words == "around":
+			chunk("Before ")
+			chunk("the tool.")
+			ownCall("call-r-0\nfc_r_0", "read")
+			chunk("After it.")
+		case words == "aroundquestion":
+			chunk("Which database should I use?")
+			ownCall("call-q-0\nfc_q_0", "read")
+			chunk("I checked the defaults.")
+		case words == "aroundchoices":
+			chunk("```choices trn_0193a6a0-7f00-7000-8000-00000000000a\nWhich database?\n")
+			ownCall("call-c-0\nfc_c_0", "read")
+			chunk("- SQLite\n```")
+		case words == "aroundupdate":
+			chunk("Before.")
+			update(map[string]any{"sessionUpdate": "tool_call", "toolCallId": "call-u-0\nfc_u_0", "kind": "read", "status": "in_progress"})
+			chunk("Which database ")
+			update(map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": "call-u-0\nfc_u_0", "status": "completed"})
+			chunk("should I use?")
+		case words == "aroundtwo":
+			chunk("Before.")
+			ownCall("call-a-0\nfc_a_0", "read")
+			ownCall("call-b-0\nfc_b_0", "read")
+			chunk("After.")
+		case words == "aroundline":
+			chunk("Before.\n")
+			ownCall("call-l-0\nfc_l_0", "read")
+			chunk("After.")
+		case words == "aroundend":
+			chunk("Before.")
+			ownCall("call-e-0\nfc_e_0", "read")
+		case words == "aroundchild":
+			chunk("Before ")
+			update(map[string]any{"sessionUpdate": "tool_call", "toolCallId": "call-k-0", "kind": "read", "status": "in_progress",
+				"_meta": map[string]any{"opencode/child-session": map[string]any{"id": "child"}}})
+			chunk("and after.")
+		case words == "aroundnamed":
+			named := func(text string) {
+				update(map[string]any{"sessionUpdate": "agent_message_chunk", "messageId": "msg_native", "content": map[string]any{"type": "text", "text": text}})
+			}
+			named("Before ")
+			ownCall("call-n-0\nfc_n_0", "read")
+			named("and after.")
 		case words == "callfirst":
 			ownCall("call_read", "read")
 			chunk(failure)

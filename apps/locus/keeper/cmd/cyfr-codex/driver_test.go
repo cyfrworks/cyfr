@@ -525,6 +525,78 @@ func TestCodexsActivityIsItsCallsThoughtsAndOwnWords(t *testing.T) {
 	}
 }
 
+// The stand-in reasons as Codex 0.169.0 did on the walk at effort high: a
+// turn whose thread was never asked for a summary has a reasoning item
+// with an empty summary and no summary text, and one asked `summary`
+// "auto" streams it. Spoken to directly, since the driver always asks.
+func TestTheStandInGivesNoReasoningSummaryUnlessAskedForOne(t *testing.T) {
+	deltas := func(summary string) (string, []any) {
+		t.Setenv("HOME", t.TempDir())
+		t.Setenv("CODEX_HOME", "")
+		t.Setenv(fakeEnv, "1")
+		cmd := exec.Command(os.Args[0], appServer)
+		in, _ := cmd.StdinPipe()
+		out, _ := cmd.StdoutPipe()
+		if err := cmd.Start(); err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = cmd.Process.Kill(); _ = cmd.Wait() }()
+		lines := bufio.NewScanner(out)
+		lines.Buffer(make([]byte, 64<<10), 4<<20)
+		answer := func(id string) map[string]any {
+			for lines.Scan() {
+				var m map[string]any
+				if json.Unmarshal(lines.Bytes(), &m) == nil && m["id"] == id {
+					return m
+				}
+			}
+			t.Fatalf("no answer to %s", id)
+			return nil
+		}
+		_, _ = in.Write(append(initializeLine("1"), '\n'))
+		answer("1")
+		_, _ = in.Write(append(threadStart("2", "", nil, brainwire.Config{}, accessChoices[0].Native), '\n'))
+		thread := answer("2")["result"].(map[string]any)["thread"].(map[string]any)["id"].(string)
+		params := map[string]any{"threadId": thread, "input": []any{map[string]any{"type": "text", "text": "activity"}}}
+		if summary != "" {
+			params["summary"] = summary
+		}
+		_, _ = in.Write(append(request("3", "turn/start", params), '\n'))
+		text := ""
+		var completed []any
+		for lines.Scan() {
+			var m struct {
+				Method string `json:"method"`
+				Params struct {
+					ThreadID string `json:"threadId"`
+					Delta    string `json:"delta"`
+					Item     struct {
+						Type    string `json:"type"`
+						Summary []any  `json:"summary"`
+					} `json:"item"`
+				} `json:"params"`
+			}
+			_ = json.Unmarshal(lines.Bytes(), &m)
+			switch {
+			case m.Method == "item/reasoning/summaryTextDelta" && m.Params.ThreadID == thread:
+				text += m.Params.Delta
+			case m.Method == "item/completed" && m.Params.Item.Type == "reasoning":
+				completed = m.Params.Item.Summary
+			case m.Method == "turn/completed":
+				return text, completed
+			}
+		}
+		t.Fatal("the turn never completed")
+		return "", nil
+	}
+	if text, summary := deltas(""); text != "" || len(summary) != 0 {
+		t.Fatalf("a thread never asked for a summary reasons with none: %q %v", text, summary)
+	}
+	if text, summary := deltas("auto"); text != "THINK-ONE THINK-TWO" || len(summary) != 1 {
+		t.Fatalf("a turn asked for a summary streams it: %q %v", text, summary)
+	}
+}
+
 func TestTheHarnessesOwnToolRunsInItsBoxShownByNameOnly(t *testing.T) {
 	s := startDriver(t)
 	startFresh(s, map[string]any{})
@@ -835,7 +907,8 @@ func sent(s *wireSession, id, turn string) map[string]any {
 }
 
 // A start that names no model and no effort leaves both to Codex: the
-// thread's start names no model, and the turn's no effort.
+// thread's start names no model, and the turn's no effort. Every turn asks
+// for the reasoning's summary, which Codex otherwise leaves off.
 func TestAStartNamingNoModelOrEffortSendsNeither(t *testing.T) {
 	s := startDriver(t)
 	session := startFresh(s, map[string]any{})
@@ -843,7 +916,7 @@ func TestAStartNamingNoModelOrEffortSendsNeither(t *testing.T) {
 	want := map[string]any{
 		"thread": map[string]any{"approvalPolicy": "never", "sandbox": "danger-full-access", "developerInstructions": "be brief",
 			"dynamicTools": []any{map[string]any{"type": "function", "name": "files", "description": "Read the athanor's files", "inputSchema": map[string]any{"type": "object"}}}},
-		"turn": map[string]any{"threadId": session, "clientUserMessageId": brainwire.PostUUID("stp_post"),
+		"turn": map[string]any{"threadId": session, "clientUserMessageId": brainwire.PostUUID("stp_post"), "summary": "auto",
 			"input": []any{map[string]any{"type": "text", "text": "params", "text_elements": []any{}}}},
 	}
 	if got := sent(s, "stp_post", "trn_1"); !reflect.DeepEqual(got, want) {

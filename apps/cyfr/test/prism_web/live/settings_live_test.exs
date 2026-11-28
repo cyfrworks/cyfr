@@ -1071,7 +1071,7 @@ defmodule PrismWeb.SettingsLiveTest do
     @mib 1_048_576
     @boot String.duplicate("f", 32)
 
-    defp record!(counters, names, endpoint \\ "wrk_page", after_rev \\ 0) do
+    defp record!(counters, names, endpoint \\ "wrk_page", after_rev \\ 0, wall \\ :given) do
       {:ok, claim} =
         Arca.JobClaims.claim("memory", Arca.JobClaims.cell_key(), "boot_page", 60_000)
 
@@ -1081,6 +1081,7 @@ defmodule PrismWeb.SettingsLiveTest do
         work: 4_800 * @mib,
         floor: 164 * @mib,
         used: 1_000 * @mib,
+        wall: wall,
         counters: counters,
         next: nil
       }
@@ -1577,6 +1578,97 @@ defmodule PrismWeb.SettingsLiveTest do
       after
         Arca.Repo.query!("ALTER TABLE memory_endpoints_unavailable RENAME TO memory_endpoints")
       end
+    end
+
+    # Each line of the section where each person's programs run, as a person reads it.
+    defp wall_lines(view) do
+      view
+      |> render()
+      |> LazyHTML.from_fragment()
+      |> LazyHTML.query(~s([data-test="programs-wall"] p))
+      |> Enum.map(&(&1 |> LazyHTML.text() |> String.split() |> Enum.join(" ")))
+    end
+
+    @spaces "Each person's programs run in a space of their own on this machine, not in a small " <>
+              "computer of their own"
+
+    test "where each person's programs run is the sentence of the wall the programs' keeper reported" do
+      ops = test_user()
+      {:ok, _} = Sanctum.TestContext.ensure_platform(ops.user_id)
+
+      for {wall, lines} <- [
+            given: [
+              "Each person's programs run in a small computer of their own on this machine."
+            ],
+            lacking: [
+              @spaces <> ".",
+              "On a machine that can run virtual machines, cyfr update turns that on, and says " <>
+                "first what it removes. If it has and this still shows, the locus log says why " <>
+                "where it starts."
+            ],
+            no_room: [@spaces <> ": the machine has too little memory for one beside CYFR."]
+          ] do
+        record!([], %{}, Opus.Programs.local(), 0, wall)
+        {view, html} = build_conn() |> log_in_user(ops) |> mount_athanor("/settings")
+        assert wall_lines(view) == lines, inspect(wall)
+
+        # Above the invitations, the decision it is read for.
+        [before, _after] = String.split(render(view), ~s(data-test="invite-cyfr"), parts: 2)
+        assert before =~ ~s(data-test="programs-wall"), inspect(wall)
+        refute Enum.join(wall_lines(view), " ") =~ ~r/\b(VM|KVM|namespace|wall|keeper|guest)\b/i
+        assert html =~ ~s(data-test="programs-wall")
+      end
+    end
+
+    @unknown [
+      "CYFR has not heard from this machine yet. Until it has, take each person's programs " <>
+        "to run in a space of their own here, not in a small computer of their own."
+    ]
+
+    test "a programs service that has stopped answering, or never has, is not yet known, never the wall" do
+      ops = test_user()
+      {:ok, _} = Sanctum.TestContext.ensure_platform(ops.user_id)
+      record!([], %{}, Opus.Programs.local(), 0, :given)
+      record!([], %{}, "wrk_page", 0, :given)
+
+      Arca.Repo.update_all(
+        from(e in Arca.Schemas.MemoryEndpoint, where: e.endpoint == ^Opus.Programs.local()),
+        set: [heard_at: DateTime.add(DateTime.utc_now(), -3_600, :second)]
+      )
+
+      {view, _html} = build_conn() |> log_in_user(ops) |> mount_athanor("/settings")
+      assert wall_lines(view) == @unknown
+
+      Arca.Repo.delete_all(Arca.Schemas.MemoryEndpoint)
+
+      start_supervised!(%{
+        id: :programs_box,
+        start:
+          {Agent, :start_link, [fn -> nil end, [name: Opus.Programs.via(Opus.Programs.local())]]}
+      })
+
+      send(view.pid, :memory)
+      assert wall_lines(view) == @unknown
+    end
+
+    test "with no programs service, and to a person who is not the administrator, nothing is said of it" do
+      ops = test_user()
+      {:ok, _} = Sanctum.TestContext.ensure_platform(ops.user_id)
+      record!([], %{}, "wrk_page", 0, :given)
+
+      {view, _html} = build_conn() |> log_in_user(ops) |> mount_athanor("/settings")
+
+      assert view
+             |> render()
+             |> LazyHTML.from_fragment()
+             |> LazyHTML.query("#memory-use")
+             |> Enum.count() == 1
+
+      refute has_element?(view, ~s([data-test="programs-wall"]))
+
+      record!([], %{}, Opus.Programs.local(), 0, :given)
+      {view, _html} = build_conn() |> log_in_user(test_user()) |> mount_athanor("/settings")
+      refute has_element?(view, ~s([data-test="programs-wall"]))
     end
 
     test "a service that has not answered is said as the service it is, never as a machine" do

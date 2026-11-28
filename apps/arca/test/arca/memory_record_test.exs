@@ -51,6 +51,7 @@ defmodule Arca.MemoryRecordTest do
       work: 6_000,
       floor: 164,
       used: 1_000,
+      wall: Keyword.get(opts, :wall, :lacking),
       counters: counters,
       next: Keyword.get(opts, :next)
     }
@@ -92,8 +93,15 @@ defmodule Arca.MemoryRecordTest do
                %{athanor_id: "ath_b", kind: "run", shown: "run", subject: nil, rev: 4}
              ] = Enum.sort_by(all(), & &1.athanor_id)
 
-      assert %{boot: @boot, after: 4, budget: 8_000, work: 6_000, floor: 164, used: 1_000} =
-               endpoint()
+      assert %{
+               boot: @boot,
+               after: 4,
+               budget: 8_000,
+               work: 6_000,
+               floor: 164,
+               used: 1_000,
+               wall: :lacking
+             } = endpoint()
     end
 
     test "a higher rev replaces a counter, and a lower or equal one adds nothing", %{claim: claim} do

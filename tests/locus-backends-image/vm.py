@@ -441,9 +441,23 @@ def wall_stack(name, image):
 
 
 def up_wall(stack, work=WORK):
-    """Starts the stack at the pool's work `work`, and waits for the keeper to say it gives the wall."""
+    """Starts the stack at the pool's work `work`, waits for the keeper to say it gives the wall, and holds its pool
+    report to the same: the wall CYFR reads is the one the keeper's start decided."""
     stack.up(work_bytes=work)
     eventually(lambda: WALL_SAID in stack.logs(), "the keeper to say it gives the wall", timeout_s=30)
+    expect(reported_wall(stack) == "given", "the keeper's pool report names the wall its start gave")
+
+
+def reported_wall(stack):
+    """The wall the backends role's pool report names, once the route answers."""
+    def answered():
+        try:
+            status, answer = imagesuite.pool_ask(stack.base, "backends", stack.key)
+        except OSError:
+            return None
+        return answer if status == 200 else None
+
+    return eventually(answered, "the pool route to answer", timeout_s=30)["report"]["wall"]
 
 
 def synced(stack, owners):
@@ -628,6 +642,7 @@ def disk_and_boot(image):
         stack.up(work_bytes=WORK)
         eventually(lambda: SPACES_SAID in stack.logs(), "the keeper without the devices to say it gives spaces",
                    timeout_s=30)
+        expect(reported_wall(stack) == "lacking", "the keeper without the devices reports it lacks the wall")
         c = synced(stack, [(owner, [vm_probe()])])
         status, answer = c.open(owner, "probe", key="spaces", home_id=row_of(owner))
         expect(status != 200, "without the devices the person's next session is refused", [status, answer])
