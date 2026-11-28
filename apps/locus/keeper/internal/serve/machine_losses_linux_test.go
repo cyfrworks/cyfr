@@ -4,8 +4,11 @@
 package serve
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -177,4 +180,83 @@ func TestAVMsGroupThatOutlivesItsKillAtTheGuardsLossEndsTheKeeper(t *testing.T) 
 	case <-time.After(20 * time.Second):
 		t.Fatal("a VM's group that outlived its kill at the guard's loss left the keeper running")
 	}
+}
+
+// A VM whose VMM's end left something it could not clear, a process of its
+// uid, its folder or its group, is not released: its place stays charged
+// and the person's next VM waits for it (vm.Machine.Left).
+func TestAVMWhoseEndLeftSomethingIsNotReleased(t *testing.T) {
+	k := newVMKeeper(t)
+	k.disk(t, "ath_a", "vlt_a1")
+	k.session(t, "s1", "ath_a", "vlt_a1", nil)
+	m := k.machineOfAthanor("ath_a")
+	f := k.guest.booted()[0]
+	f.mu.Lock()
+	f.left = errors.New("its group still holds pid 4194305")
+	f.mu.Unlock()
+	f.end(vm.EndOwnExit, cgroup.NotKilled)
+	k.expect(t, "released")
+	sweepRoutes(k.s)
+	if released(m) || k.usedNow() == 0 {
+		t.Fatalf("a VM whose end left its group was released %t, the pool holding %d of it", released(m), k.usedNow())
+	}
+}
+
+// A spawn the guest refuses leaves no follower behind: the goroutine that
+// follows its guest ends with its retirement.
+func TestAGuestRefusedSpawnLeavesNoFollower(t *testing.T) {
+	k := newVMKeeper(t)
+	k.disk(t, "ath_a", "vlt_a1")
+	k.session(t, "s0", "ath_a", "vlt_a1", nil)
+	k.guest.mu.Lock()
+	k.guest.answer = func(_ *fakeVM, req map[string]any) ([]any, bool) {
+		if req["type"] != protocol.TypeSpawn {
+			return nil, false
+		}
+		id, _ := req["id"].(string)
+		return []any{protocol.NewError(id, "", protocol.CodeExecFailed)}, true
+	}
+	k.guest.mu.Unlock()
+	before := runtime.NumGoroutine()
+	for i := 0; i < 10; i++ {
+		id := fmt.Sprintf("r%d", i)
+		k.place(t, "p-"+id, "ath_a")
+		k.s.handleSpawn(k.c, k.spawnReq(id, "p-"+id, "vlt_a1", nil))
+		if m := k.expect(t, "error"); m["code"] != protocol.CodeExecFailed {
+			t.Fatalf("a spawn the guest refused answered %v", m)
+		}
+	}
+	vmEventually(t, "the refused spawns' followers' end", func() bool { return runtime.NumGoroutine() < before+5 })
+}
+
+// The guard's connection lost after a VM's route was looked at and before
+// its VM was set kills that VM as the guard's loss kills every VM routed
+// over it (4521's first note): the start is refused, and the VM ends.
+func TestTheGuardsLossAsAVMBootsKillsIt(t *testing.T) {
+	k := newVMKeeper(t)
+	k.disk(t, "ath_a", "vlt_a1")
+	k.guard.mu.Lock()
+	k.guard.afterLive = func() { go k.s.guardLost(k.guard.conn) }
+	k.guard.mu.Unlock()
+	boot := k.s.bootVM
+	k.s.bootVM = func(b vmBoot) (guestVM, error) {
+		g, err := boot(b)
+		// The guard's loss is taken before the VM is set.
+		vmEventually(t, "the guard's loss", func() bool {
+			k.s.mu.Lock()
+			defer k.s.mu.Unlock()
+			return k.s.lostRoutes[k.guard.conn]
+		})
+		return g, err
+	}
+	k.place(t, "p-s1", "ath_a")
+	k.s.handleSpawn(k.c, k.spawnReq("s1", "p-s1", "vlt_a1", nil))
+	if m := k.next(t); m["type"] != "error" || m["code"] != protocol.CodeGuardUnavailable {
+		t.Fatalf("a start whose VM booted as the guard's connection ended answered %v", m)
+	}
+	booted := k.guest.booted()
+	if len(booted) != 1 {
+		t.Fatalf("%d VMs booted", len(booted))
+	}
+	vmEventually(t, "the VM's end", booted[0].ended)
 }

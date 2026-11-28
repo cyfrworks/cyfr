@@ -35,8 +35,11 @@ type Entry struct {
 	// of no kind, counted in no counter, admitted with its first session.
 	vm bool
 	// own is, for a VM's place, its own allowance (MachineBytes of its
-	// guest's size), which its first session's start holds beside its own.
-	own uint64
+	// guest's size), which its first session's start holds beside its own;
+	// kind its last session's kind, which a refusal names it by once it
+	// holds none.
+	own  uint64
+	kind string
 	// base is, for a session in a VM, the VM's reading at the session's
 	// admission: while its allowance's time runs, the VM is charged at
 	// least that and the allowances of its sessions still starting.
@@ -350,7 +353,7 @@ func (l *Ledger) admit(e *Entry, now time.Time) {
 			m.admitted, m.admittedAt, m.assignedAt = true, now, now
 			l.admitted = append(l.admitted, m)
 		}
-		e.base = m.reading
+		e.base, m.kind = m.reading, e.Kind
 	}
 	e.admitted, e.admittedAt = true, now
 	l.admitted = append(l.admitted, e)
@@ -560,14 +563,16 @@ func (l *Ledger) giveWay(in map[*Entry]bool, now time.Time, second bool) []*Entr
 }
 
 // held is the account of the pool a refusal of e carries. A VM is no
-// holding of its own: each session in it holds its reading and its even
-// share of what the VM's charge holds beyond its sessions' readings, so
-// the VM's sessions together hold its charge.
+// holding of its own while it holds a session: each session in it holds its
+// reading and its even share of what the VM's charge holds beyond its
+// sessions' readings, so the VM's sessions together hold its charge. A VM
+// at rest or ending with no session left holds its charge itself, as its
+// person's, by its last session's kind.
 func (l *Ledger) held(e *Entry, in map[*Entry]bool, now time.Time) Held {
 	h := Held{Need: l.need(e, in), Free: l.free(in, now), Mine: []Holding{}}
 	var mine uint64
 	for _, o := range l.admitted {
-		if in[o] || o == e || o.vm {
+		if in[o] || o == e || o.vm && l.sessionsIn(o) > 0 {
 			continue
 		}
 		c := l.charge(o, now)
@@ -575,7 +580,11 @@ func (l *Ledger) held(e *Entry, in map[*Entry]bool, now time.Time) Held {
 			c = l.shareOf(o, now)
 		}
 		if e.Athanor != "" && o.Athanor == e.Athanor {
-			holding := Holding{Kind: o.Kind, Bytes: c}
+			kind := o.Kind
+			if o.vm {
+				kind = o.kind
+			}
+			holding := Holding{Kind: kind, Bytes: c}
 			if o.Role == e.Role {
 				holding.Subject = o.Subject
 			}

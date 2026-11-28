@@ -61,6 +61,8 @@ type fakeVM struct {
 	// a connection whose end is not yet seen; group is its VMM's group.
 	keepControls bool
 	group        *cgroup.Group
+	// left is what its end could not clear.
+	left error
 }
 
 func (f *fakeVM) ConnectWithin(left time.Duration) (guestControl, error) {
@@ -128,6 +130,11 @@ func (f *fakeVM) HowEnded() vm.Ended {
 	return f.how
 }
 func (f *fakeVM) Status() (unix.WaitStatus, error) { return 0, nil }
+func (f *fakeVM) Left() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.left
+}
 func (f *fakeVM) KilledFor() (cgroup.Cause, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

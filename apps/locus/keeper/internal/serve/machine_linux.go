@@ -106,8 +106,10 @@ type guestVM interface {
 	Done() <-chan struct{}
 	HowEnded() vm.Ended
 	KilledFor() (cgroup.Cause, error)
-	// Status is how the VMM ended, once Done has closed.
+	// Status is how the VMM ended, and Left what its end could not clear,
+	// its uid's processes, its folder or its group, once Done has closed.
 	Status() (unix.WaitStatus, error)
+	Left() error
 	// Group is the VMM's group while it runs, which the guard's loss kills;
 	// Used is its reading, the host's one charge for the VM.
 	Group() *cgroup.Group
@@ -220,8 +222,10 @@ type machine struct {
 	// reading says a read of its VMM's group is out.
 	reading atomic.Bool
 	// ending says its end has begun: no session joins it; done closes at
+	// its release. left is what its VMM's end could not clear, which holds
 	// its release.
 	ending bool
+	left   error
 	done   chan struct{}
 }
 
@@ -359,11 +363,19 @@ func (s *server) bootMachine(m *machine, at keptAt, r *role) string {
 		}
 		return protocol.CodeUnavailable
 	}
+	// The guard's loss kills the VMs it finds routed over its connection
+	// (machineRoutes), and m.vm is set under the same lock: one that came
+	// after the route's look and before this is seen here.
 	s.mu.Lock()
 	m.vm, m.idleSince = g, now()
 	s.ledger.Spawned(m.entry, now())
+	lost := m.route == nil || s.lostRoutes[m.route.Conn]
 	s.mu.Unlock()
 	go s.watchMachine(m)
+	if lost {
+		s.loseMachine(m, "the guard's connection its route was made over ended as it booted")
+		return protocol.CodeGuardUnavailable
+	}
 	if _, code := s.machineLink(m); code != "" {
 		s.loseMachine(m, "its relay did not greet it")
 		return code
@@ -478,6 +490,12 @@ func (s *server) machineEnded(m *machine) {
 	s.mu.Unlock()
 	memory := memoryOf(m.vm.KilledFor())
 	s.log.Warn("a person's VM ended (%s; its VMM %s): its %d sessions end with it", m.vm.HowEnded(), vmmEnd(m.vm), len(sessions))
+	if left := m.vm.Left(); left != nil {
+		s.mu.Lock()
+		m.left = left
+		s.mu.Unlock()
+		s.log.Error("a person's VM is not released, its place still charged and their next VM refused until the keeper starts again: its end left %v", left)
+	}
 	if l != nil {
 		l.end(memory)
 	}
@@ -515,15 +533,16 @@ func memoryOf(cause cgroup.Cause, err error) *string {
 	return &memory
 }
 
-// finishMachine releases an ended m once its route is withdrawn on the
-// guard's word and every session of it has gone: its place leaves the
+// finishMachine releases an ended m once its VMM's end cleared all it held
+// (m.left), its route is withdrawn on the guard's word and every session of
+// it has gone: its place leaves the
 // ledger, and the person's next session boots a VM again. One whose route
 // is not yet withdrawn is released by the sweep that withdraws it
 // (retryClears lets m.route go, then finishMachines).
 func (s *server) finishMachine(m *machine) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !m.ending || m.route != nil || len(m.sessions) > 0 {
+	if !m.ending || m.left != nil || m.route != nil || len(m.sessions) > 0 {
 		return
 	}
 	select {
@@ -1278,6 +1297,9 @@ func (s *server) retireGuest(sp *spawn, grace time.Duration, notify bool) {
 				}
 			}
 			sp.drainSplice()
+			// A spawn its guest never made, or refused, has no guest to
+			// release it: its follower ends here.
+			sp.guestReleased()
 			if notify {
 				// A spawn its guest never made is owed no exit.
 				sp.exitOnce.Do(func() {})

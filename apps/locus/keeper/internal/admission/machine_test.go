@@ -6,6 +6,7 @@ package admission
 import (
 	"slices"
 	"testing"
+	"time"
 )
 
 // inVM is a session of athanor's placed in its VM m.
@@ -317,5 +318,31 @@ func TestAVMsLesserReadingStaysAtItsLastCharge(t *testing.T) {
 	}
 	if got := l.charge(m, at(30)); got != 1000*mib {
 		t.Fatalf("a VM whose reading is stale is charged %d MiB, want its last charge, 1000", got/mib)
+	}
+}
+
+// A refusal counts the person's own VM at rest, which holds no session, as
+// theirs, by its last session's kind, not under others: a start of theirs
+// refused at their ceiling is told their VM holds what it holds.
+func TestARefusalCountsThePersonsVMAtRestAsTheirs(t *testing.T) {
+	l := New(8192*mib, false)
+	m := NewMachine("backends", "ath_a", testGuest, nil)
+	z := inVM(m, "p0")
+	spawned(t, l, z, 0, 50*mib)
+	l.Spawned(m, at(0))
+	l.Read(m, 600*mib, false, at(20))
+	l.Drop(z, at(20))
+	b := inVM(m, "p1")
+	b.AthanorMax = 800 * mib
+	if ev := l.Place(b, at(21)); len(ev.Admitted) != 0 {
+		t.Fatalf("a start past its person's ceiling was admitted: %+v", ev)
+	}
+	ev := l.Tick(at(21).Add(RoomWait + time.Second))
+	if len(ev.Refused) != 1 {
+		t.Fatalf("the start past its ceiling was not refused: %+v", ev)
+	}
+	h := ev.Refused[0].Held
+	if len(h.Mine) != 1 || h.Mine[0].Bytes != 600*mib || h.Mine[0].Kind != "program" || h.Others != 0 {
+		t.Fatalf("the refusal holds %+v and others %d MiB, want the person's VM at rest, 600 MiB, as theirs", h.Mine, h.Others/mib)
 	}
 }

@@ -389,9 +389,16 @@ func TestAGuestThatDoesNotAnswerEndsItsVM(t *testing.T) {
 	}
 	vmEventually(t, "the VM's end", k.guest.booted()[0].ended)
 
+	// The second keeper's session starts under the bound a loaded runner
+	// keeps; only its release is held to the short one, its link's.
+	guestWait = 30 * time.Second
 	k2 := newVMKeeper(t)
 	k2.disk(t, "ath_a", "vlt_a1")
 	id, _ := k2.session(t, "s1", "ath_a", "vlt_a1", nil)
+	m := k2.machineOfAthanor("ath_a")
+	k2.s.mu.Lock()
+	m.link.guestWait = 200 * time.Millisecond
+	k2.s.mu.Unlock()
 	k2.guest.answer = func(_ *fakeVM, req map[string]any) ([]any, bool) {
 		return nil, req["type"] == protocol.TypeRelease
 	}

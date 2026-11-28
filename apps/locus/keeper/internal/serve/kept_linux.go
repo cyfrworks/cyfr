@@ -351,7 +351,7 @@ func (s *server) startKeptSpawn(c *client, req *protocol.Request, reach string, 
 	case at.image && s.wall:
 		return s.startMachineSpawn(c, req, at, reach, e, limits)
 	case at.image:
-		s.log.Warn("spawn %s refused: kept home %s is on a disk image, which runs only in its person's VM, and this machine runs none: give the container /dev/kvm again", req.ID, req.Home)
+		s.log.Warn("spawn %s refused: kept home %s is on a disk image, which runs only in its person's VM, and this machine runs none: %s", req.ID, req.Home, s.wallWhy)
 		return nil, protocol.CodeUnavailable
 	case s.wall:
 		s.log.Warn("spawn %s refused: kept home %s is on a disk of the directory form, which this machine retires at its start, and its retirement has not finished", req.ID, req.Home)
@@ -758,10 +758,13 @@ func (s *server) handleHome(c *client, req *protocol.Request) {
 		s.send(c, protocol.NewError(req.ID, "", code))
 	case at.image && s.wall && req.Type == protocol.TypeHomeMeasure:
 		s.measureInMachine(c, req, at)
-	case at.image:
+	case at.image && s.wall:
 		// An image's homes are inside it, which the host never walks: only
 		// its person's VM measures, resets or retires one.
-		s.log.Warn("%s %s refused: kept home %s is on a disk image, which only its person's VM reaches, and this machine runs none", req.Type, req.ID, req.Home)
+		s.log.Warn("%s %s refused: kept home %s is on a disk image, and this keeper does not yet reset or retire a home through its person's VM", req.Type, req.ID, req.Home)
+		s.send(c, protocol.NewError(req.ID, "", protocol.CodeUnavailable))
+	case at.image:
+		s.log.Warn("%s %s refused: kept home %s is on a disk image, which only its person's VM reaches, and this machine runs none: %s", req.Type, req.ID, req.Home, s.wallWhy)
 		s.send(c, protocol.NewError(req.ID, "", protocol.CodeUnavailable))
 	case req.Type == protocol.TypeHomeMeasure:
 		uidLock := s.keptLock(at.uid)

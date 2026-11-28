@@ -126,7 +126,7 @@ func deviceHeld(path, name string, minor uint32, byGroup bool) string {
 // finish leaves that disk refusing every session of it (startKeptSpawn).
 func (s *server) giveWall() {
 	wall, why := s.wallOf()
-	s.wall, s.imageDisks = wall, wall
+	s.wall, s.imageDisks, s.wallWhy = wall, wall, why
 	if !wall {
 		s.log.Info("each person's work runs in its own space on this machine: %s", why)
 		return
