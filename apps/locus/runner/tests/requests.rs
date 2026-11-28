@@ -919,6 +919,38 @@ fn a_stream_dropped_with_its_store_still_reports_and_an_attached_one_lost_leaves
 }
 
 #[tokio::test]
+async fn guests_calls_take_no_more_than_their_share_and_the_runners_own_still_find_a_place() {
+    use cyfr_runner::host::{Op, Post as _};
+    use cyfr_runner::relay::{MAX_CALLS, MAX_GUEST_CALLS, Relay};
+    let attempt = "att_shares";
+    let (_ours, theirs) = tokio::io::duplex(1 << 20);
+    let (reader, writer) = tokio::io::split(theirs);
+    let relay = Relay::start(reader, writer);
+    relay.bind(attempt).await.expect("bound");
+    let tool = Op::named("tool_call").expect("a callback");
+    let fail = Op::named("fail").expect("a callback");
+    assert!(tool.guest() && !fail.guest());
+    let mut held = Vec::new();
+    for _ in 0..MAX_GUEST_CALLS {
+        held.push(relay.poster(attempt).place(tool).await.expect("a place"));
+    }
+    // A guest's next call waits for its share; the runner's own calls take
+    // every place past it.
+    let mut guest = relay.poster(attempt);
+    let waiting = tokio::time::timeout(Duration::from_millis(200), guest.place(tool)).await;
+    assert!(waiting.is_err(), "a guest's place past {MAX_GUEST_CALLS}");
+    for _ in MAX_GUEST_CALLS..MAX_CALLS {
+        let place = tokio::time::timeout(SOON, relay.poster(attempt).place(fail)).await;
+        held.push(
+            place
+                .expect("the runner's call has a place")
+                .expect("a place"),
+        );
+    }
+    drop(held);
+}
+
+#[tokio::test]
 async fn a_host_call_past_the_relays_places_waits_unsigned_and_one_whose_caller_left_is_never_sent()
 {
     // Item 3, at the relay's end: a service that answers nothing.
@@ -935,7 +967,7 @@ async fn a_host_call_past_the_relays_places_waits_unsigned_and_one_whose_caller_
     let mut answers = Vec::new();
     for _ in 0..MAX_CALLS {
         let mut poster = relay.poster(attempt);
-        let place = poster.place().await.expect("a place");
+        let place = poster.place(op).await.expect("a place");
         answers.push(tokio::spawn(async move {
             poster
                 .post(op, "v1 header".to_owned(), b"body".to_vec(), place)
@@ -944,7 +976,7 @@ async fn a_host_call_past_the_relays_places_waits_unsigned_and_one_whose_caller_
     }
     // The one past them has no place: nothing of it is signed or sent.
     let mut late = relay.poster(attempt);
-    let waiting = tokio::time::timeout(Duration::from_millis(200), late.place()).await;
+    let waiting = tokio::time::timeout(Duration::from_millis(200), late.place(op)).await;
     assert!(waiting.is_err(), "a place past {MAX_CALLS}");
     let frames = |bytes: &[u8]| {
         let mut at = 0;
@@ -971,7 +1003,7 @@ async fn a_host_call_past_the_relays_places_waits_unsigned_and_one_whose_caller_
     // one: nothing more is sent.
     let gone = tokio::spawn(async move {
         let mut late = late;
-        let _ = late.place().await;
+        let _ = late.place(op).await;
         unreachable!("the waiter is stopped before a place opens");
     });
     tokio::task::yield_now().await;
@@ -1677,7 +1709,7 @@ async fn a_host_call_is_signed_only_once_it_has_its_place() {
         signed_at: Option<u64>,
     }
     impl Post for Slow {
-        async fn place(&mut self) -> Option<Place> {
+        async fn place(&mut self, _op: cyfr_runner::host::Op) -> Option<Place> {
             tokio::time::sleep(Duration::from_millis(300)).await;
             self.placed_at = support::now_ms();
             Some(Place::free())
