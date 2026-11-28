@@ -46,6 +46,10 @@ defmodule Locus.Config do
   pool row is written only when its variable is set, so
   `Locus.Runtime.Settings`' defaults stand for the rest.
 
+  `tests/fixtures/locus_settings.json` holds the runtime's rows and the
+  log's, their defaults, ranges, reads and refusals, for every language
+  that reads them (`Locus.Runtime.SettingsTest` holds this module to it).
+
   A runner is no node: it reads the `RUNTIME_*` rows (`runner/1`), which
   its service writes for it outside every prefix the keeper refuses in a
   spawn (`Locus.Runtime.Settings.runner_environment/1`), and nothing else

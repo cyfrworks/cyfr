@@ -98,8 +98,9 @@ defmodule Prima.LocusRoles do
   /proc, /tmp, /dev/shm, terminals and group, and its home alone.
 
   `tests/fixtures/locus_roles.json` holds the same table for the image
-  suites, which cannot read this module: `Prima.LocusRolesTest` holds the
-  file to it value by value. `Locus.Application` selects a node's roles
+  suites and the Go runtime role, which cannot read this module:
+  `Prima.LocusRolesTest` holds the file to it value by value, and the Go
+  reader (`internal/wire/locusroles`) holds the runtime row. `Locus.Application` selects a node's roles
   from it, CYFR reaches the builds role beside the backends role at the
   builds role's port (`Cyfr.RuntimeConfig`), and the stack's shape test
   holds every other spelling of a role's facts to it: the Locus image's

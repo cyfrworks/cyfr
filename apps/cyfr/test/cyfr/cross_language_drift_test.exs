@@ -624,6 +624,7 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"tests/locus-backends-image/roles.py", ~w(floor_bytes)}
     ],
     "locus_roles.json" => [
+      {"apps/locus/keeper/internal/wire/locusroles/locusroles_test.go", ~w(roles)},
       {"apps/prima/test/prima/locus_roles_test.exs", ~w(release roles)},
       {"tests/builder-image/stack.py", ~w(release roles)},
       {"tests/compose-proof/run.sh", ~w(release)},
@@ -631,6 +632,11 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"tests/locus-backends-image/roles.py", ~w(roles)},
       {"tests/locus-backends-image/roles_update.py", ~w(roles)},
       {"tests/locus-runtime-image/stack.py", ~w(release roles)}
+    ],
+    "locus_settings.json" => [
+      {"apps/cyfr/test/cyfr/platform_settings_roster_test.exs", ~w(variables)},
+      {"apps/locus/test/locus/runtime/settings_test.exs",
+       ~w(variables environment reads refusals)}
     ],
     "login_directory.json" => [
       {"apps/codex/internal/account/discover_test.go", ~w(path attribute pages)},
@@ -716,7 +722,7 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"apps/locus/test/locus/runtime/relay_vectors_test.exs",
        ~w(attempt initial_credit max_calls max_fetches codes exchange refusals)},
       {"apps/prima/test/prima/runner_relay_test.exs",
-       ~w(version attempt max_body_bytes max_frame_bytes initial_credit max_headers max_header_name_bytes max_header_value_bytes max_signed_header_bytes max_attached_frame_bytes ops methods purposes max_path_bytes max_url_bytes max_calls max_fetches codes exchange refusals encode_refusals)},
+       ~w(version attempt max_body_bytes max_frame_bytes initial_credit max_headers max_header_name_bytes max_header_value_bytes max_signed_header_bytes max_attached_frame_bytes ops methods purposes max_path_bytes max_url_bytes max_calls max_fetches codes counted exchange refusals encode_refusals)},
       {"tests/locus-runtime-image/namespace_test.py", ~w(exchange)}
     ],
     "setup-folders.json" => [

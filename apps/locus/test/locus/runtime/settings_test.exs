@@ -11,8 +11,11 @@ defmodule Locus.Runtime.SettingsTest do
   `RUNTIME_*` names alone, as `tests/fixtures/runner_control.json`'s
   `environment` writes it, and every environment of that section reads
   as its runner or is refused as it says, through `Locus.Config.runner/1`;
-  and the module reads no variable by name. `Locus.Config`'s suite holds
-  how the rest of the environment is read.
+  the runtime role's settings and the release's log settings read and
+  refuse every case of `tests/fixtures/locus_settings.json`, every
+  variable's default and range edge with them, as the Go runtime role
+  will; and the module reads no variable by name. `Locus.Config`'s suite
+  holds how the rest of the environment is read.
   """
 
   # `pool!/0` reads the application environment, which one test alters.
@@ -26,6 +29,10 @@ defmodule Locus.Runtime.SettingsTest do
                |> File.read!()
                |> Jason.decode!()
                |> Map.fetch!("environment")
+
+  @settings Path.expand("../../../../../tests/fixtures/locus_settings.json", __DIR__)
+            |> File.read!()
+            |> Jason.decode!()
 
   describe "a runner's environment, as runner_control.json's environment holds it" do
     test "the service writes exactly the vector's environment for its settings" do
@@ -220,6 +227,98 @@ defmodule Locus.Runtime.SettingsTest do
                      end
       after
         Locus.Runtime.Test.Env.restore(previous, [:idle_ttl_ms])
+      end
+    end
+  end
+
+  # What the runtime role reads from `env`: its settings and the log's,
+  # every one, or the message its boot is refused with.
+  defp runtime_settings(env) do
+    case Locus.Config.from_env(&Map.get(env, &1), Map.keys(env)) do
+      {:ok, settings} ->
+        runtime = Keyword.fetch!(settings, :runtime)
+        {:ok, pool} = Settings.pool(runtime, env)
+
+        {:ok,
+         %{
+           "service_id" => runtime[:service_id],
+           "service_key" => runtime[:service_key],
+           "host_url" => runtime[:host_url],
+           "bind" => runtime[:bind],
+           "port" => runtime[:port],
+           "idle_ttl_ms" => pool.idle_ttl_ms,
+           "watchdog_grace_ms" => pool.watchdog_grace_ms,
+           "release_grace_ms" => pool.release_grace_ms,
+           "attach_dir" => pool.attach_dir,
+           "log_level" => Atom.to_string(settings[:log_level]),
+           "log_format" => Atom.to_string(settings[:log_format])
+         }}
+
+      {:error, message} ->
+        {:error, message}
+    end
+  end
+
+  describe "the runtime role's settings, as locus_settings.json holds them" do
+    test "the fixture's variables are the runtime role's and the release's log settings, in order" do
+      names = Enum.map(@settings["variables"], & &1["name"])
+      assert names === Locus.Config.variables(:runtime) ++ Locus.Config.variables(:release)
+    end
+
+    test "every variable left unset takes the fixture's default" do
+      {:ok, unset} = runtime_settings(@settings["environment"])
+
+      for %{"name" => name, "setting" => setting, "default" => default} = variable <-
+            @settings["variables"],
+          not Map.get(variable, "required", false) do
+        expected =
+          case setting do
+            "attach_dir" -> @settings["environment"]["KEEPER_RUN_DIR"]
+            _ -> default
+          end
+
+        assert unset[setting] === expected, name
+      end
+
+      run_dir = Map.delete(@settings["environment"], "KEEPER_RUN_DIR")
+      attach = Enum.find(@settings["variables"], &(&1["setting"] == "attach_dir"))
+      assert {:ok, %{"attach_dir" => dir}} = runtime_settings(run_dir)
+      assert dir === attach["default"] and attach["default_from"] === "KEEPER_RUN_DIR"
+    end
+
+    test "every range reads to its edges and is refused one past either, naming its variable" do
+      ranged = for %{"min" => _} = variable <- @settings["variables"], do: variable
+      assert length(ranged) == 4
+
+      for %{"name" => name, "setting" => setting, "min" => min, "max" => max} <- ranged do
+        for value <- [min, max] do
+          env = Map.put(@settings["environment"], name, Integer.to_string(value))
+          assert {:ok, %{^setting => ^value}} = runtime_settings(env), "#{name}=#{value}"
+        end
+
+        for value <- [min - 1, max + 1] do
+          env = Map.put(@settings["environment"], name, Integer.to_string(value))
+          assert {:error, message} = runtime_settings(env), "#{name}=#{value}"
+          assert String.starts_with?(message, name), message
+        end
+      end
+    end
+
+    test "every environment of reads reads as its settings" do
+      assert length(@settings["reads"]) >= 12
+
+      for %{"why" => why, "environment" => env, "settings" => settings} <- @settings["reads"] do
+        assert runtime_settings(env) === {:ok, settings}, why
+      end
+    end
+
+    test "every environment of refusals refuses the boot with its message, which shows no key" do
+      assert length(@settings["refusals"]) >= 30
+      key = @settings["environment"]["LOCUS_RUNTIME_KEY"]
+
+      for %{"why" => why, "environment" => env, "message" => message} <- @settings["refusals"] do
+        assert runtime_settings(env) === {:error, message}, why
+        refute message =~ String.slice(key, 0, 16), why
       end
     end
   end

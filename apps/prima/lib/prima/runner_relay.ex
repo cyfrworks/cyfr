@@ -109,6 +109,19 @@ defmodule Prima.RunnerRelay do
   A body travels in standard base64 with padding and is at most
   `max_body_bytes/0` decoded, `Prima.HostAPI.max_answer_bytes/0`.
 
+  ## What a service holds
+
+  A worker service counts what it holds for its runners in one count,
+  and these are its figures for a frame it writes, one definition for
+  every service that speaks this channel: a body of `bytes` in `frames`
+  frames holds the bytes, their base64 and each frame's envelope of
+  `envelope_bytes/0` (`held/2`); a fetch's piece is written in
+  `fetch_chunk` frames of at most `chunk_bytes/0` body bytes
+  (`piece_held/1`); CYFR's refusal of an attached fetch is one frame with
+  its signed header beside it (`refusal_held/1`). `answer_room/0` is the
+  largest of those, a refusal at the answer bound: the room a fetch's ask
+  that waits on a runner or an upstream leaves free for the answers.
+
   ## Flow control
 
   The service sends a fetch's answer body only against credit the runner
@@ -192,6 +205,15 @@ defmodule Prima.RunnerRelay do
 
   @max_calls 64
   @max_fetches 16
+
+  # A frame's own bytes beside its body's base64, at their longest: the
+  # length, the members' names and values (an attempt id of 256
+  # characters, each escaped, and a sequence and an `re` of 16 digits) and
+  # the base64's padding.
+  @envelope_bytes 1024
+  # The most body bytes one `fetch_chunk` a service sends carries: a slice
+  # of the credit, so no one chunk holds the channel's writer for long.
+  @chunk_bytes 262_144
 
   # Why a service's ask for a fetch's pin got none: a refusal CYFR
   # answered, or the service's own reading of the answer.
@@ -476,6 +498,58 @@ defmodule Prima.RunnerRelay do
   @doc "The most fetches a service carries of a runner open at once, each until its `fetch_end`."
   @spec max_fetches() :: pos_integer()
   def max_fetches, do: @max_fetches
+
+  @doc "The most bytes a frame's envelope takes beside its body's base64."
+  @spec envelope_bytes() :: pos_integer()
+  def envelope_bytes, do: @envelope_bytes
+
+  @doc "The most body bytes one `fetch_chunk` a service sends carries."
+  @spec chunk_bytes() :: pos_integer()
+  def chunk_bytes, do: @chunk_bytes
+
+  @doc """
+  What a service holds of `bytes` of a body it writes to a runner in
+  `frames` frames: the bytes, their base64 in the frames and each frame's
+  envelope. No body holds nothing.
+  """
+  @spec held(non_neg_integer(), pos_integer()) :: non_neg_integer()
+  def held(0, _frames), do: 0
+
+  def held(bytes, frames)
+      when is_integer(bytes) and bytes > 0 and is_integer(frames) and frames > 0,
+      do: bytes + 4 * div(bytes + 2, 3) + frames * @envelope_bytes
+
+  @doc """
+  What a service holds of a fetch's piece of `bytes`, written in
+  `fetch_chunk` frames of at most `chunk_bytes/0` body bytes each, one
+  frame at least.
+  """
+  @spec piece_held(non_neg_integer()) :: non_neg_integer()
+  def piece_held(bytes) when is_integer(bytes) and bytes >= 0,
+    do: held(bytes, max(div(bytes + @chunk_bytes - 1, @chunk_bytes), 1))
+
+  @doc """
+  What a service holds of CYFR's refusal of an attached fetch, `bytes`
+  long: its one frame, and the call's signed header beside it, at most
+  `Prima.WorkerAuth.max_host_call_header_bytes/0` and as long again
+  escaped.
+  """
+  @spec refusal_held(non_neg_integer()) :: non_neg_integer()
+  def refusal_held(bytes) when is_integer(bytes) and bytes >= 0,
+    do: held(bytes, 1) + 2 * @max_signed_header_bytes
+
+  @doc """
+  The room a fetch's ask leaves free in a service's count, for the
+  answers: the largest one ask a service makes of it, CYFR's refusal of
+  an attached fetch at the host answer bound
+  (`Prima.HostAPI.max_answer_bytes/0`, `refusal_held/1`). Every other ask
+  is at most this. A fetch's asks are those that wait on the runner's
+  credit or on the upstream before they give their room back: a pinned
+  fetch's piece, an attached fetch's frame and a pinned fetch's
+  read-ahead.
+  """
+  @spec answer_room() :: pos_integer()
+  def answer_room, do: refusal_held(HostAPI.max_answer_bytes())
 
   @doc "The channel as `side` opens it, carrying the assigned `attempt`."
   @spec new(side(), String.t()) :: t()

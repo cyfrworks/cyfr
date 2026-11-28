@@ -29,6 +29,15 @@ defmodule Cyfr.PlatformSettingsRosterTest do
 
   @root Path.expand("../../../..", __DIR__)
 
+  # The runtime role's names and the release's log names, as their vector
+  # holds them for every language that reads them: the Go runtime role
+  # will parse them, and Locus.Config's other roles' names stay its own.
+  @locus_settings Path.join(@root, "tests/fixtures/locus_settings.json")
+                  |> File.read!()
+                  |> Jason.decode!()
+                  |> Map.fetch!("variables")
+                  |> Enum.map(& &1["name"])
+
   # ---------------------------------------------------------------------------
   # The rules, as functions of the entries
   # ---------------------------------------------------------------------------
@@ -241,11 +250,16 @@ defmodule Cyfr.PlatformSettingsRosterTest do
         spelled(~w(config/runtime.exs apps/cyfr/lib/cyfr/runtime_config.ex)) ++
           Roster.variables() ++
           Roster.deployment() ++
-          Locus.Config.variables()
+          locus_variables()
       )
 
     interpolated |> Enum.uniq() |> Enum.reject(&MapSet.member?(read, &1)) |> Enum.sort()
   end
+
+  # Every name the locus release reads: the fixture's, and Locus.Config's
+  # for the roles that are not the runtime's.
+  defp locus_variables,
+    do: Enum.flat_map([:builds, :backends, :runner], &Locus.Config.variables/1) ++ @locus_settings
 
   defp spelled(files) do
     for file <- files,
@@ -760,7 +774,7 @@ defmodule Cyfr.PlatformSettingsRosterTest do
           Roster.variables() ++
             Roster.deployment() ++
             Roster.compose_only() ++
-            Locus.Config.variables()
+            locus_variables()
         )
 
       undeclared = Enum.reject(documented(".env.example"), &MapSet.member?(declared, &1))

@@ -111,6 +111,30 @@ defmodule Prima.RunnerRelayTest do
     assert div(RunnerRelay.max_body_bytes() + 2, 3) * 4 + 65_536 < RunnerRelay.max_frame_bytes()
   end
 
+  test "what a service holds of the frames it writes is the fixture's counted" do
+    counted = @vectors["counted"]
+    %{"bodies" => bodies, "pieces" => pieces, "refusals" => refusals} = counted
+    assert length(bodies) >= 8 and length(pieces) >= 6 and length(refusals) >= 3
+
+    assert RunnerRelay.envelope_bytes() === counted["envelope_bytes"]
+    assert RunnerRelay.chunk_bytes() === counted["chunk_bytes"]
+    assert RunnerRelay.answer_room() === counted["answer_room"]
+
+    assert Prima.LocusRoles.role!(:runtime).memory.fetch_read_ahead_bytes ===
+             counted["read_ahead_bytes"]
+
+    assert RunnerRelay.piece_held(counted["read_ahead_bytes"]) === counted["read_ahead_room"]
+
+    for %{"bytes" => bytes, "frames" => frames, "held" => held} <- bodies,
+        do: assert(RunnerRelay.held(bytes, frames) === held, "#{bytes} bytes in #{frames}")
+
+    for %{"bytes" => bytes, "held" => held} <- pieces,
+        do: assert(RunnerRelay.piece_held(bytes) === held, "a piece of #{bytes} bytes")
+
+    for %{"bytes" => bytes, "held" => held} <- refusals,
+        do: assert(RunnerRelay.refusal_held(bytes) === held, "a refusal of #{bytes} bytes")
+  end
+
   test "the caps and the codes are the fixture's" do
     assert RunnerRelay.max_calls() == @vectors["max_calls"]
     assert RunnerRelay.max_fetches() == @vectors["max_fetches"]
