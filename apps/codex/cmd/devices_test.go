@@ -421,9 +421,14 @@ func TestADeclinedUpdateStillEmptiesADeviceThisMachineDoesNotHave(t *testing.T) 
 				t.Fatal("the test's premise: cyfr up is refused for .env's devices")
 			}
 
+			// The app's offer empties nothing, even run at a terminal.
+			askWith(t, true, strings.NewReader(""))
 			var out bytes.Buffer
 			if err := runHomeUpdate(context.Background(), &out, &out, updateOptions{offer: true}); err != nil {
 				t.Fatalf("the app's offer answered %v:\n%s", err, out.String())
+			}
+			if got := read(t, filepath.Join(s.project, ".env")); got != scenarioEnv+c.env {
+				t.Fatalf("the app's offer changed .env to %q:\n%s", got, out.String())
 			}
 			askWith(t, false, strings.NewReader(""))
 			out.Reset()
