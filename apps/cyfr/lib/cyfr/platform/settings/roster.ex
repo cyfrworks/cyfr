@@ -209,7 +209,7 @@ defmodule Cyfr.Platform.Settings.Roster do
     {"CYFR_PROXY_PORT",
      "The proxy listener's port (default 4001), which the stack publishes only with `proxy`, at `CYFR_PROXY_PUBLISH`."},
     {"CYFR_PROXY_PUBLISH",
-     "Where the stack publishes the proxy listener with a `proxy` browser address, for your own proxy to forward to: an IPv4 loopback address of this machine and a port (default `127.0.0.1:4001`), which `cyfr access browser proxy --publish` writes; any other kind refuses it, and so does an address off the IPv4 loopback (an IPv6 one included: Docker's IPv6 publication does not reach the listener) or the loopback listener's own `127.0.0.1` on `CYFR_PORT`."},
+     "Where the stack publishes the proxy listener with a `proxy` browser address, for your own proxy to forward to: an IPv4 loopback address of this machine and a port (default `127.0.0.1:4001`), which `cyfr access browser proxy --publish` writes; any other kind refuses it, and so does an address off the IPv4 loopback (an IPv6 one included: Docker's IPv6 publication does not reach the listener) or the loopback listener's own `127.0.0.1` on `CYFR_PORT`. A stated limit: every program on this machine that can connect to that publication is trusted as your proxy: CYFR sees Docker's gateway as the peer, so it cannot tell your proxy from any other local program, and believes the forwarded headers any of them sends."},
     {"CYFR_PUBLIC_URL",
      "CYFR's browser address, exactly `https://<CYFR_HOST>`, which `cyfr access browser` writes with the kind; with none CYFR has no such setting, and its address is `http://localhost:<CYFR_PORT>`. Webhook URLs are absolute when it is set and bare paths when it is not."},
     {"CYFR_REGISTRY_URL",

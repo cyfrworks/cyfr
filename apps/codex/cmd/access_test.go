@@ -1042,7 +1042,8 @@ func TestAccessBrowserProxy(t *testing.T) {
 	reached := "by whoever your own proxy lets through, who still has to sign in, at https://cyfr.example.com, through your proxy, which forwards to http://127.0.0.1:4001"
 	want := "CYFR will be reached " + reached + ".\n" +
 		"Done. CYFR is reached " + reached + ".\n" +
-		addressShown(t, "https://cyfr.example.com")
+		addressShown(t, "https://cyfr.example.com") +
+		"Every program on this machine that can connect to 127.0.0.1:4001 is trusted as your proxy: CYFR sees Docker's gateway as the peer, so it cannot tell your proxy from any other local program, and believes the forwarded headers any of them sends.\n"
 	if !strings.HasPrefix(out.String(), want) {
 		t.Errorf("cyfr access browser proxy printed:\n%s\nwant it to begin:\n%s", out.String(), want)
 	}

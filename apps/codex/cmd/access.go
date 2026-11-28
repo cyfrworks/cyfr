@@ -805,6 +805,9 @@ func runAccess(ctx context.Context, browser string, o accessOptions, yes bool, o
 			printTailscale(ctx, e, out)
 		}
 		printAddress(out, p.NewWords.Address)
+		if p.New.Browser == access.BrowserProxy {
+			fmt.Fprintln(out, proxyTrustLimit(p.New.Publish))
+		}
 	}
 	// .env holds the new head now, CYFR started as it says or on this
 	// machine only: a CYFR no one is set up on is set up at the new
@@ -830,6 +833,13 @@ var lookupDomain = func(ctx context.Context, domain string) error {
 	defer cancel()
 	_, err := net.DefaultResolver.LookupHost(ctx, domain)
 	return err
+}
+
+// proxyTrustLimit is the limit of a proxy browser address, said when one is
+// taken: the publication is on this machine's loopback, where CYFR cannot
+// tell the person's proxy from any other program that connects to it.
+func proxyTrustLimit(publish string) string {
+	return "Every program on this machine that can connect to " + publish + " is trusted as your proxy: CYFR sees Docker's gateway as the peer, so it cannot tell your proxy from any other local program, and believes the forwarded headers any of them sends."
 }
 
 // printAddress prints the address a change gave CYFR and its QR code, for
