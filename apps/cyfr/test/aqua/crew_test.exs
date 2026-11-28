@@ -2382,6 +2382,17 @@ defmodule Aqua.CrewTest do
       render_click(element(pane, ~s([id$="-crew-stop"] button[phx-click="stop"])))
 
       await_status(ctx, turn_id, "cancelled")
+
+      # The pane open when Stop was pressed draws the line that says the
+      # job was interrupted, as it is told it.
+      assert [aborted] = Enum.filter(rows(ctx, child.id), &(&1.kind == "turn_aborted"))
+
+      wait_until(
+        fn -> render(pane) =~ aborted.id end,
+        10_000,
+        "the open pane to draw #{aborted.id}"
+      )
+
       assert %{status: "expired"} = row(ctx, request.id)
       assert {:ok, %{"applied" => 1}} = drain(ctx)
 

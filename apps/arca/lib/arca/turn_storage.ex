@@ -837,11 +837,13 @@ defmodule Arca.TurnStorage do
   the cancelled turns' error. The member's slot is judged last, so a
   member that lost it while the stop ran writes none of it (`{:error,
   :not_owner}`). Answers the cancelled turns with the steps
-  their holders' runtime stops after the commit (`cancel_open!/4`); a
+  their holders' runtime stops after the commit (`cancel_open!/4`), and
+  the rows that say a crew member's job was interrupted, which the
+  caller announces after it (`aborted`, none for a workspace thread); a
   thread that is neither, a daily thread, is `{:error, :not_a_workspace}`.
   """
   @spec stop_work(Prima.Actor.t(), String.t(), map()) ::
-          {:ok, %{cancelled: [map()]}} | {:error, term()}
+          {:ok, %{cancelled: [map()], aborted: [map()]}} | {:error, term()}
   def stop_work(%Prima.Actor{athanor_id: athanor_id} = actor, workspace_id, attrs)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(workspace_id) and
              is_map(attrs) do
@@ -856,32 +858,19 @@ defmodule Arca.TurnStorage do
   defp stop_round(%Prima.Actor{athanor_id: athanor_id} = actor, workspace_id, attrs, tries) do
     chosen = Arca.Repo.all(work_turns(athanor_id, workspace_id))
 
+    # This member's slot is judged last, as an admission judges it: a
+    # member that lost it while the stop ran writes none of the stop.
     stop = fn ->
-      cancelled = stopped!(actor, workspace_id, attrs, chosen)
-      slot_held!()
-      cancelled
+      stopped = stopped!(actor, workspace_id, attrs, chosen)
+      Arca.ControlPlane.verify_member!()
+      stopped
     end
 
     case Arca.Repo.locking_transaction(stop) do
-      {:ok, cancelled} -> {:ok, %{cancelled: cancelled}}
+      {:ok, {cancelled, aborted}} -> {:ok, %{cancelled: cancelled, aborted: aborted}}
       {:error, :turns_moved} when tries > 1 -> stop_round(actor, workspace_id, attrs, tries - 1)
       {:error, :turns_moved} -> {:error, :thread_in_use}
       {:error, _} = refused -> refused
-    end
-  end
-
-  # This member's slot, judged last in a stop's transaction as a
-  # delivery's receipt judges it (`claimed!/1`): read where this member
-  # stands now and verified live on the database's clock, whose lease row
-  # a takeover then waits on. A member that lost it while the stop ran
-  # writes none of the stop (`{:error, :not_owner}`).
-  # arca:db-raise-ok inside the caller's transaction
-  defp slot_held! do
-    with {:ok, slot} <- Arca.ControlPlane.member_slot(),
-         :ok <- Arca.ControlPlane.verify_held(slot) do
-      :ok
-    else
-      _lost -> Arca.Repo.rollback(:not_owner)
     end
   end
 
@@ -938,22 +927,23 @@ defmodule Arca.TurnStorage do
     cancelled = cancel_open!(actor, member.id, attrs, :reply)
     ended = MapSet.new(cancelled, & &1.turn_id)
 
-    for %Turn{status: status, id: id} <- open,
-        status in @held,
-        MapSet.member?(ended, id),
-        do:
-          aborted_row!(
-            actor,
-            athanor_id,
-            turn!(athanor_id, id),
-            Map.get(attrs, :error, "cancelled")
-          )
+    aborted =
+      for %Turn{status: status, id: id} <- open,
+          status in @held,
+          MapSet.member?(ended, id),
+          do:
+            aborted_row!(
+              actor,
+              athanor_id,
+              turn!(athanor_id, id),
+              Map.get(attrs, :error, "cancelled")
+            )
 
     with true <- cancelled != [] or expired > 0,
          %Thread{} = workspace <- work_of(athanor_id, member),
          do: settle_work!(athanor_id, ended_as!(athanor_id, workspace, "stopped"))
 
-    cancelled
+    {cancelled, aborted}
   end
 
   # arca:db-raise-ok inside the caller's transaction
@@ -984,7 +974,7 @@ defmodule Arca.TurnStorage do
           settle_work!(athanor_id, ended_as!(athanor_id, workspace, "stopped"))
         end
 
-        cancelled
+        {cancelled, []}
 
       %Thread{} ->
         Arca.Repo.rollback(:not_a_workspace)

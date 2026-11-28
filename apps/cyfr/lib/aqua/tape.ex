@@ -901,7 +901,7 @@ defmodule Aqua.Tape do
   list is announced after the commit.
   """
   @spec stop_work(Context.t(), String.t()) ::
-          {:ok, %{cancelled: [map()]}} | {:error, term()}
+          {:ok, %{cancelled: [map()], aborted: [map()]}} | {:error, term()}
   def stop_work(%Context{} = ctx, thread_id) do
     actor = Sanctum.Context.actor(ctx)
 
@@ -913,11 +913,14 @@ defmodule Aqua.Tape do
 
     open = open_jobs(ctx, [thread_id | children])
 
-    with {:ok, %{cancelled: cancelled}} = stopped <-
+    with {:ok, %{cancelled: cancelled, aborted: aborted}} = stopped <-
            TurnStorage.stop_work(actor, thread_id, standing(%{error: stopped()}, :retiring)) do
-      # What a turn's own end does after its commit (`finish/4`), for each
-      # turn the stop ended, and the deliveries it left nothing to land
-      # woken to say so.
+      # Each row that says a member's job was interrupted, told to the
+      # thread's viewers as `append_aborted/3` tells one; then what a
+      # turn's own end does after its commit (`finish/4`), for each turn
+      # the stop ended, and the deliveries it left nothing to land woken
+      # to say so.
+      Enum.each(aborted, &broadcast(ctx, &1.thread_id, :message, &1))
       Enum.each(cancelled, &Opus.end_turn_programs(ctx.athanor_id, &1.turn_id))
       announce_lists(ctx, thread_id, nil)
       Activity.cancelled(ctx, open, cancelled)
