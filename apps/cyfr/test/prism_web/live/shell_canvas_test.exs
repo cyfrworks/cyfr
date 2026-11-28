@@ -2762,6 +2762,108 @@ defmodule PrismWeb.ShellCanvasTest do
     end
   end
 
+  # Search and Aqua's show name an app by the desktop's address
+  # (`?publisher=&tincture_name=`), which the desktop's hook hands the shell
+  # as `focus_named`: the app opens, by the launch the picker's own Launch
+  # makes, on a canvas desktop as without one, and only an app the person's
+  # own listing holds.
+  describe "an app the desktop's address names" do
+    defp named!(view, name, publisher \\ "local"),
+      do: render_hook(view, "focus_named", %{"publisher" => publisher, "name" => name})
+
+    defp launched(view, name) do
+      Enum.find(opened(view), &match?(%{key: {:full, _}, reference: %{name: ^name}}, &1))
+    end
+
+    test "opens over a canvas desktop, which draws no picker",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      tincture!(ctx, "app-dash")
+      two_canvases!(ctx, user, athanor)
+      view = shell!(conn)
+      refute render(view) =~ ~s(id="shell-picker")
+
+      named!(view, "app-dash")
+
+      assert %{state: :live, visible: true, placement: :full} = launched(view, "app-dash")
+      assert %{state: :frozen, visible: false} = canvas(view)
+    end
+
+    test "opens on a desktop with no canvas, focused in the picker",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      tincture!(ctx, "app-dash")
+      tincture!(ctx, "clock")
+      layout!(user, athanor, [])
+      view = shell!(conn)
+
+      named!(view, "clock")
+
+      assert %{state: :live, visible: true, placement: :full} = launched(view, "clock")
+      assert Enum.at(assigns(view).tinctures, assigns(view).focused_index).name == "clock"
+      assert launched(view, "app-dash") == nil
+    end
+
+    test "an app not granted yet is refused and asks for its grant, as a Launch of it does",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      lay!(
+        ctx,
+        "app-dash",
+        "1.0.0",
+        %{"entry" => "index.html"},
+        [{"index.html", "<html><head></head><body>app-dash</body></html>"}],
+        granted: false
+      )
+
+      two_canvases!(ctx, user, athanor)
+      view = shell!(conn)
+
+      named!(view, "app-dash")
+
+      assert %{state: :refused, refusal: :ungranted} = launched(view, "app-dash")
+      settle!(view, fn -> assigns(view).grant_prompts != %{} end)
+    end
+
+    # The named address is used once: the answer names the desktop's plain
+    # address, which the hook puts in its place, whatever the shell did.
+    test "is answered with the desktop's plain address, opened or not",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      tincture!(ctx, "app-dash")
+      two_canvases!(ctx, user, athanor)
+      view = shell!(conn)
+      desktop = athanor_path("", athanor)
+
+      named!(view, "app-dash")
+      assert_reply(view, %{desktop: ^desktop})
+      assert %{state: :live} = launched(view, "app-dash")
+
+      named!(view, "nobody")
+      assert_reply(view, %{desktop: ^desktop})
+    end
+
+    test "an app the person's listing does not hold opens nothing: another person's, another publisher's, or none",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      {:ok, other} =
+        Sanctum.Tenancy.Athanors.create(%{
+          name: "elsewhere",
+          slug: "elsewhere-#{System.unique_integer([:positive])}",
+          owner_user_id: "user_elsewhere",
+          created_by: "user_elsewhere"
+        })
+
+      tincture!(%{ctx | athanor_id: other.id}, "their-dash")
+      tincture!(ctx, "app-dash")
+      two_canvases!(ctx, user, athanor)
+      view = shell!(conn)
+      before = opened(view)
+
+      named!(view, "their-dash")
+      named!(view, "app-dash", "acme")
+      named!(view, "nobody")
+
+      assert opened(view) == before
+      assert %{state: :live, visible: true} = canvas(view)
+    end
+  end
+
   describe "a canvas's grant" do
     # A catalyst installed in the athanor, which no frame opens, with no
     # grant of the person's yet, and `manifest`'s declarations. Answers its

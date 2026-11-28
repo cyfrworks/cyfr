@@ -632,7 +632,8 @@ defmodule Compendium.Scaffold do
     // A secret is typed into the shell, never the page: cyfr.credential("name")
     // resolves with {saved} once the shell's prompt closes.
     // At a public tincture's address the same calls run with no credential,
-    // under its public profile.
+    // under its public profile. No page in Prism, the CYFR app or the command
+    // line makes an app public yet.
 
     cyfr.ready()
     """
@@ -910,7 +911,8 @@ defmodule Compendium.Scaffold do
     // A secret is typed into the shell, never the page: cyfr.credential("name")
     // resolves with {saved} once the shell's prompt closes.
     // At a public tincture's address the same calls run with no credential,
-    // under its public profile.
+    // under its public profile. No page in Prism, the CYFR app or the command
+    // line makes an app public yet.
 
     cyfr.ready();
     """
