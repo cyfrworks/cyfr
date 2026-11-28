@@ -688,10 +688,10 @@ defmodule Arca.PairedClientsRaceTest do
   end
 
   # This member's slot, taken on a real connection so every connection
-  # reads the lease; given back after the case.
+  # reads the lease; the lease row and the process-wide standing are given
+  # back after the case, the claim switch by `Prima.Test.Env`.
   defp hold_slot! do
     saved = Map.new(@slot_keys, &{&1, :persistent_term.get(&1, :absent)})
-    claim = Application.get_env(:arca, :control_plane_claim_enabled)
     node = "node-pcl-race-#{System.unique_integer([:positive])}"
 
     on_exit(fn ->
@@ -702,13 +702,9 @@ defmodule Arca.PairedClientsRaceTest do
           do: :persistent_term.erase(key),
           else: :persistent_term.put(key, value)
       end
-
-      if is_nil(claim),
-        do: Application.delete_env(:arca, :control_plane_claim_enabled),
-        else: Application.put_env(:arca, :control_plane_claim_enabled, claim)
     end)
 
-    Application.put_env(:arca, :control_plane_claim_enabled, true)
+    Prima.Test.Env.put_app_env(:arca, :control_plane_claim_enabled, true)
     {:ok, _slot} = unboxed(fn -> ControlPlane.take(node, node <> "#boot", 60_000) end)
   end
 

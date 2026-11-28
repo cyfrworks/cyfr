@@ -673,6 +673,7 @@ defmodule Arca.PairedClients do
 
   # A device's removal ends what stands on every row of its key there, so
   # no certificate of that key outlives it, whatever rows the key has.
+  # arca:unscoped-ok the rows are the actor's athanor's, scoped by `of_device_key/3`.
   defp removed(actor, %PairedClient{} = row) do
     with {:ok, retired} <- retire(row, "removed") do
       others =
