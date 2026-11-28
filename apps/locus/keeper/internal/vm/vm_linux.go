@@ -602,8 +602,14 @@ func (m *Machine) remove() {
 }
 
 // runRetire runs `cyfr-locus retire` as uid, started by start, which ends
-// every process of the uid and removes path, its folder.
+// every process of the uid and removes path, its folder. A uid or gid
+// outside 0 to 2^31-1 is no id it runs as: it is refused here, where its
+// conversion to the kernel's form is (the kept range and the machines'
+// already hold them inside it).
 func runRetire(start proc.Start, uid, gid int, path string) error {
+	if uid < 0 || uid >= 1<<31 || gid < 0 || gid >= 1<<31 {
+		return fmt.Errorf("retiring the VMM's uid: %d:%d is not a uid and gid", uid, gid)
+	}
 	self, err := os.Executable()
 	if err != nil {
 		return err
