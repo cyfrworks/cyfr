@@ -49,6 +49,7 @@ defmodule CyfrWeb do
       Plugs.MCPOrigin,
       Plugs.MCPRateLimit,
       Plugs.ParserErrors,
+      Plugs.PrivateName,
       Plugs.RawBodyReader,
       Plugs.ScrubTinctureCredentials,
       Plugs.TinctureRateLimit,

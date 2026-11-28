@@ -333,6 +333,7 @@
         "attachment_throttle" => ["CyfrWeb.Plugs.AuthRateLimit"],
         "auth_browser" => [
           "CyfrWeb.Plugs.FrameRequest",
+          "CyfrWeb.Plugs.PrivateName",
           ":accepts",
           ":fetch_session",
           ":fetch_live_flash",
@@ -342,6 +343,7 @@
         ],
         "browser" => [
           "CyfrWeb.Plugs.FrameRequest",
+          "CyfrWeb.Plugs.PrivateName",
           ":accepts",
           ":fetch_session",
           ":fetch_live_flash",

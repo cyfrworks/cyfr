@@ -1886,6 +1886,9 @@ defmodule Cyfr.Boundaries do
       build_tincture_context: 2,
       # The sign-in page names the directory (`PrismWeb.LoginLive`).
       directory_url: 0,
+      # A page asked for under another host is sent to the private address
+      # (`CyfrWeb.Plugs.PrivateName`).
+      private_address: 0,
       registry_base_url: 1,
       # The one address a copied URL and the setup notice name.
       shared_address: 0,

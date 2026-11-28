@@ -152,12 +152,18 @@ defmodule CyfrWeb.Endpoint do
   # accepted it (`CyfrWeb.Ingress`), and one no listener tagged comes in at
   # no address. A test build's request that `Phoenix.ConnTest` hands the
   # endpoint straight, past every listener, came in by the loopback
-  # listener unless the test tagged it itself (`Prima.TestSeam.value/2`):
-  # a release never reads this.
+  # listener unless the test tagged it itself, and at the private name
+  # where it names the host `Phoenix.ConnTest` gives every request
+  # (`Prima.TestSeam.value/2`): a release never reads this.
   defp untagged(conn) do
     Prima.TestSeam.value(conn, fn ->
-      if Sanctum.ClientIp.ingress(conn) == nil,
-        do: Sanctum.ClientIp.put_ingress(conn, :loopback),
+      conn =
+        if Sanctum.ClientIp.ingress(conn) == nil,
+          do: Sanctum.ClientIp.put_ingress(conn, :loopback),
+          else: conn
+
+      if Sanctum.ClientIp.ingress(conn) == :loopback and conn.host == "www.example.com",
+        do: %{conn | host: URI.parse(Sanctum.private_address()).host},
         else: conn
     end)
   end

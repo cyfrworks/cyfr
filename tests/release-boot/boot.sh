@@ -293,6 +293,16 @@ cd "$ROOT"
 # trap would end it before the removals, so the stop runs in a subshell,
 # whose exit ends only that subshell; the stop's failure still fails the
 # run.
+# The private address cell `$1`'s tunnel key names on port `$2`
+# (apps/codex/internal/link's derivation), whatever its browser address.
+private_of() {
+  python3 -I -c 'import base64, hashlib, sys
+public = bytes.fromhex(sys.argv[1])
+if len(public) != 32: sys.exit(1)
+name = base64.b32encode(hashlib.sha256(public).digest()).decode().lower()[:16]
+print("http://h-%s.localhost%s" % (name, "" if sys.argv[2] == "80" else ":" + sys.argv[2]))' "$(cell_value "$1" CYFR_LINK_PUBLIC)" "$2"
+}
+
 cleanup() {
   local code=$?
   # The cell started last is the one a failed step was asking.
@@ -382,11 +392,18 @@ grep -E "== (Running|Migrated)" "$CELL/boot.log"
 curl -fsS -m 10 "http://127.0.0.1:$PORT/api/health" >"$CELL/health.json"
 echo "GET /api/health -> 200 $(cat "$CELL/health.json")"
 
-step "the fresh cell serves its sign-in page, which says no one is set up yet"
-status="$(curl -sS -m 10 -o "$CELL/login.html" -w '%{http_code}' "http://127.0.0.1:$PORT/login")" || status=""
-[ "$status" = 200 ] || fail "GET /login answered ${status:-nothing}, not 200"
+step "the fresh cell serves its sign-in page at its private address, which says no one is set up yet"
+private="$(private_of "$CELL" "$PORT")" || fail "the cell's .env holds no tunnel key cyfr init minted"
+private_host="${private#http://}"
+private_host="${private_host%%:*}"
+# Asked for under the loopback's own name, the page is sent to the
+# private address (CyfrWeb.Plugs.PrivateName).
+sent="$(curl -sS -m 10 -o /dev/null -w '%{http_code} %{redirect_url}' "http://127.0.0.1:$PORT/login")" || sent=""
+[ "$sent" = "302 $private/login" ] || fail "GET http://127.0.0.1:$PORT/login answered '${sent:-nothing}', not 302 to $private/login"
+status="$(curl -sS -m 10 --resolve "$private_host:$PORT:127.0.0.1" -o "$CELL/login.html" -w '%{http_code}' "$private/login")" || status=""
+[ "$status" = 200 ] || fail "GET $private/login answered ${status:-nothing}, not 200"
 grep -q 'data-test="not-set-up"' "$CELL/login.html" || fail "the sign-in page does not say no one is set up yet"
-echo "GET /login -> 200, the sign-in page saying no one is set up yet"
+echo "GET /login -> 302 to $private/login -> 200, the sign-in page saying no one is set up yet"
 
 # The cell's live slots as `cyfr update` reads them, by the expression it
 # runs: the one `CYFR_LIVE_SLOTS=` line, holding this release and the
@@ -485,14 +502,8 @@ home="$(cell_cyfr "$ADDRESS" rpc 'IO.puts("CYFR_HOME=" <> Sanctum.shared_address
 [ "$home" = "https://cyfr.example.com" ] ||
   fail "the cell given cyfr.example.com gives out '$home', not https://cyfr.example.com"
 echo "Sanctum.shared_address() -> $home"
-# The private address its tunnel key names (apps/codex/internal/link's
-# derivation), whatever its browser address.
-private="$(python3 -I -c 'import base64, hashlib, sys
-public = bytes.fromhex(sys.argv[1])
-if len(public) != 32: sys.exit(1)
-name = base64.b32encode(hashlib.sha256(public).digest()).decode().lower()[:16]
-print("http://h-%s.localhost%s" % (name, "" if sys.argv[2] == "80" else ":" + sys.argv[2]))' "$(cell_value "$ADDRESS" CYFR_LINK_PUBLIC)" "$PORT")" ||
-  fail "the cell's .env holds no tunnel key cyfr init minted"
+# The private address its tunnel key names, whatever its browser address.
+private="$(private_of "$ADDRESS" "$PORT")" || fail "the cell's .env holds no tunnel key cyfr init minted"
 loopback="$(cell_cyfr "$ADDRESS" rpc 'IO.puts("CYFR_PRIVATE=" <> Sanctum.address(:loopback))' | sed -n 's/^CYFR_PRIVATE=//p' | tail -1)"
 [ "$loopback" = "$private" ] ||
   fail "the cell's loopback listener is at '$loopback', not its private address $private"
