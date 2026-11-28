@@ -20,7 +20,6 @@ defmodule PrismWeb.ShellLiveVisibilityTest do
   alias Sanctum.Test.ConsentFixtures
 
   @tincture "visibility-dash"
-  @source "tincture:local.visibility-dash"
 
   setup %{conn: conn} do
     conn = log_in_user(conn, test_user())
@@ -53,21 +52,21 @@ defmodule PrismWeb.ShellLiveVisibilityTest do
     {:ok, conn: conn, ctx: ctx}
   end
 
-  defp public_profile!(ctx, status \\ :active) do
+  defp public_profile!(ctx, status \\ :active, publisher \\ "local") do
     policy = "{}"
 
     :ok =
       ConsentFixtures.seed_head!(
         ctx,
         %{
-          id: "prof_vis_public",
+          id: "prof_vis_public_#{publisher}",
           kind: :public,
-          source_ref: @source,
+          source_ref: "tincture:#{publisher}.#{@tincture}",
           label: "public",
           status: status
         },
         %{
-          id: "cons_vis_public",
+          id: "cons_vis_public_#{publisher}",
           revision: 1,
           scope: :pinned,
           pinned_version: "1.0.0",
@@ -132,7 +131,7 @@ defmodule PrismWeb.ShellLiveVisibilityTest do
     {1, _} =
       Arca.Repo.update_all(
         from(p in Arca.Schemas.Profile,
-          where: p.athanor_id == ^ctx.athanor_id and p.id == "prof_vis_public"
+          where: p.athanor_id == ^ctx.athanor_id and p.id == "prof_vis_public_local"
         ),
         set: [kind: "sideways"]
       )
@@ -209,15 +208,43 @@ defmodule PrismWeb.ShellLiveVisibilityTest do
     Application.put_env(:sanctum, :public_url, home)
 
     {view, _html} = mount_desktop(conn)
-    render_click(view, "copy_url", %{"tincture" => "iframe_#{@tincture}"})
+    render_click(view, "copy_url", %{"publisher" => "local", "name" => @tincture})
     refute_push_event(view, "clipboard", %{})
 
     public_profile!(ctx)
     {view, _html} = mount_desktop(conn)
-    render_click(view, "copy_url", %{"tincture" => "iframe_#{@tincture}"})
+    render_click(view, "copy_url", %{"publisher" => "local", "name" => @tincture})
 
     assert_push_event(view, "clipboard", %{text: url})
     assert String.starts_with?(url, home <> "/")
     assert String.ends_with?(url, "/local/#{@tincture}")
+  end
+
+  # Two publishers' apps of one name share a card id: the address copied is
+  # the pressed app's, by its publisher and name, and only the public one's.
+  test "the copied URL is the pressed app's when two publishers' apps share a name",
+       %{conn: conn, ctx: ctx} do
+    Arca.Test.UnitFixtures.tenant_component!(ctx, "tincture", "acme", @tincture, "1.0.0",
+      manifest: %{
+        "name" => @tincture,
+        "type" => "tincture",
+        "version" => "1.0.0",
+        "publisher" => "acme",
+        "tincture" => %{"entry" => "index.html"}
+      },
+      files: [{"index.html", "<html><body>acme</body></html>"}]
+    )
+
+    public_profile!(ctx, :active, "acme")
+    Prism.TinctureRegistry.reload_athanor(ctx.athanor_id)
+
+    {view, _html} = mount_desktop(conn)
+
+    render_click(view, "copy_url", %{"publisher" => "local", "name" => @tincture})
+    refute_push_event(view, "clipboard", %{})
+
+    render_click(view, "copy_url", %{"publisher" => "acme", "name" => @tincture})
+    assert_push_event(view, "clipboard", %{text: url})
+    assert String.ends_with?(url, "/acme/#{@tincture}")
   end
 end

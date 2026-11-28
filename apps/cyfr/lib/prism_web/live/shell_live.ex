@@ -624,9 +624,11 @@ defmodule PrismWeb.ShellLive do
   end
 
   # Only a public app has an address to share: the home's own origin
-  # (`Sanctum.origin/0`) plus its path. A private one copies nothing.
-  def handle_event("copy_url", %{"tincture" => tincture_id}, socket) do
-    case Enum.find(socket.assigns.tinctures, &(&1.id == tincture_id)) do
+  # (`Sanctum.origin/0`) plus its path. A private one copies nothing. The
+  # card is the one pressed, by its publisher and name: two publishers'
+  # apps of one name share a card id.
+  def handle_event("copy_url", %{"publisher" => publisher, "name" => name}, socket) do
+    case Enum.find(socket.assigns.tinctures, &(&1.publisher == publisher and &1.name == name)) do
       %{public: true} = tincture ->
         url =
           Cyfr.RuntimeConfig.origin() <>
@@ -4124,7 +4126,8 @@ defmodule PrismWeb.ShellLive do
         <button
           :if={@tincture.public == true}
           phx-click="copy_url"
-          phx-value-tincture={@tincture.id}
+          phx-value-publisher={@tincture.publisher}
+          phx-value-name={@tincture.name}
           class="rounded-lg border border-border-default bg-surface-raised px-3 py-1.5 text-xs text-text-secondary transition-colors hover:text-text-primary"
           title="Copy public URL"
         >

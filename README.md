@@ -146,7 +146,7 @@ Around the desktop:
 - **`lite` / `dev`** — a per-person preference in Settings, not an edition. `dev` adds the developer views — **Executions**, **Activities**, **Enforcements**, **Components**, **Builds**, **Registry**, **Reports** — in a sidebar with live indicators; the ops surface stays reachable in `lite`, it just isn't the face. `lite` is everyone's default but the administrator's, who starts in `dev`.
 - **⌘⇧K** — the command palette, also from the drawer's Search… row.
 
-Tinctures are private: they open inside Prism, for the people signed in to your CYFR. No page in Prism, the CYFR app or the command line makes an app public yet. The `profile` tool's publish walk ([integration-guide.md](integration-guide.md)) does, under a person's own signed-in session, which none of them hands to a program; an API key cannot finish it. A public app is served at `<address>/t/@<namespace>/<publisher>/<name>` to anyone, and revoking its public profile makes it private again.
+Tinctures are private by default: they open inside Prism, for the people signed in to your CYFR. No page in Prism, the CYFR app or the command line makes an app public yet. The `profile` tool's publish walk ([integration-guide.md](integration-guide.md)) does, under a person's own signed-in session, which none of them hands to a program; an API key cannot finish it. A public app is served at `<address>/t/@<namespace>/<publisher>/<name>` to anyone, and revoking its last active public profile makes it private again.
 
 ## Project Layout
 
@@ -343,7 +343,7 @@ cyfr.ready();
 
 The [Tincture Guide](tincture-guide.md) is the full reference.
 
-Vanilla tinctures are simple static frontends; the React template gives you Vite + TypeScript out of the box. Tinctures are private. If you make file changes outside the normal build flow, run `cyfr register` to rescan local components.
+Vanilla tinctures are simple static frontends; the React template gives you Vite + TypeScript out of the box. If you make file changes outside the normal build flow, run `cyfr register` to rescan local components.
 
 ### Fork a Component
 
