@@ -97,7 +97,13 @@ func TestAnEndedVMsChargeIsFrozenUntilItsRelease(t *testing.T) {
 	k.guard.mu.Lock()
 	k.guard.refuseClears = 1
 	k.guard.mu.Unlock()
-	k.guest.booted()[0].Kill()
+	// The VM's end alone tells its session, so its charge is frozen before
+	// the session's release takes its start out.
+	f := k.guest.booted()[0]
+	f.mu.Lock()
+	f.keepControls = true
+	f.mu.Unlock()
+	f.Kill()
 	k.expect(t, "released")
 	vmEventually(t, "the refused clear's record", func() bool {
 		k.s.mu.Lock()

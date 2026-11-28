@@ -254,27 +254,52 @@ func TestTwoReleasesAtOnceLeaveTheRouteAtNone(t *testing.T) {
 }
 
 // A start whose widening the guard refuses is taken out of the VM's
-// sessions before the route's lock is let go: the next start's union holds
-// the live session's hosts and its own, never the refused one's.
+// sessions before the route's lock is let go: a start that waited for the
+// lock meanwhile widens to the live session's hosts and its own, never the
+// refused one's, which its own retirement would take out only later.
 func TestARefusedWideningLeavesNoHostOfItsSession(t *testing.T) {
 	fakeResolver(t, map[string][]string{"a.example.com": {"203.0.113.1"}, "b.example.com": {"203.0.113.2"}, "c.example.com": {"203.0.113.3"}})
-	k := newVMKeeper(t)
-	k.disk(t, "ath_a", "vlt_a1", "vlt_a2", "vlt_a3")
-	k.session(t, "s1", "ath_a", "vlt_a1", []string{"a.example.com"})
-	m := k.machineOfAthanor("ath_a")
-	k.guard.mu.Lock()
-	k.guard.changes = []error{errors.New("the guard refuses this change")}
-	k.guard.mu.Unlock()
-	k.place(t, "p-s2", "ath_a")
-	k.s.handleSpawn(k.c, k.spawnReq("s2", "p-s2", "vlt_a2", []string{"b.example.com"}))
-	if r := k.next(t); r["type"] != "error" || r["code"] != protocol.CodeGuardUnavailable {
-		t.Fatalf("a start whose widening the guard refused answered %v", r)
-	}
-	// A spawn refused once made is released, as on the host.
-	k.expect(t, "released")
-	k.session(t, "s3", "ath_a", "vlt_a3", []string{"c.example.com"})
-	changes := k.routeChanges()
-	if last := changes[len(changes)-1]; last != "hosts[203.0.113.1 203.0.113.3]" || sessionsOf(k, m) != 2 {
-		t.Fatalf("after a refused widening the route's last change is %s with %d sessions in the VM", last, sessionsOf(k, m))
+	const tries = 20
+	for i := 0; i < tries; i++ {
+		k := newVMKeeper(t)
+		k.disk(t, "ath_a", "vlt_a1", "vlt_a2", "vlt_a3")
+		k.session(t, "s1", "ath_a", "vlt_a1", []string{"a.example.com"})
+		k.place(t, "p-s2", "ath_a")
+		k.place(t, "p-s3", "ath_a")
+		g := gate(k)
+		k.guard.mu.Lock()
+		k.guard.changes = []error{errors.New("the guard refuses this change")}
+		k.guard.mu.Unlock()
+		go k.s.handleSpawn(k.c, k.spawnReq("s2", "p-s2", "vlt_a2", []string{"b.example.com"}))
+		select {
+		case <-g.held:
+		case <-time.After(20 * time.Second):
+			t.Fatal("the refused start's widening never reached the guard")
+		}
+		go k.s.handleSpawn(k.c, k.spawnReq("s3", "p-s3", "vlt_a3", []string{"c.example.com"}))
+		vmEventually(t, "the second start's spawn", func() bool {
+			k.s.mu.Lock()
+			defer k.s.mu.Unlock()
+			p := k.c.places["p-s3"]
+			return p != nil && p.spawn != nil
+		})
+		time.Sleep(100 * time.Millisecond) // sleep-ok: the second start reaches the route's lock, which the first holds at the guard
+		close(g.release)
+		for spawned, released := false, false; !spawned || !released; {
+			switch l := k.next(t); {
+			case l["type"] == "spawned" && l["id"] == "s3":
+				spawned = true
+			case l["type"] == "released":
+				released = true
+			case l["type"] == "error" && l["id"] == "s2":
+			default:
+				t.Fatalf("try %d: the keeper sent %v", i, l)
+			}
+		}
+		for _, c := range k.routeChanges() {
+			if strings.Contains(c, "203.0.113.3") && strings.Contains(c, "203.0.113.2") {
+				t.Fatalf("try %d: a start's widening held the refused start's host: %v", i, k.routeChanges())
+			}
+		}
 	}
 }
