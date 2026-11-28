@@ -144,10 +144,11 @@ type driver struct {
 	output            int
 	held, heldMessage string
 	own               map[string]*ownCall
-	// flushed and flushedOrder are the ids of the session's calls a turn's
-	// end ended, the oldest first (own.go's flushedEnd).
-	flushed      map[string]bool
-	flushedOrder []string
+	// flushed holds the ids of the session's calls a turn's end ended, each
+	// with the count flushedAt had when it was last remembered (own.go's
+	// flushedEnd).
+	flushed   map[string]uint64
+	flushedAt uint64
 	// unclaimed are the arguments of the turn's socket calls no tool_call
 	// update was matched to yet (own.go).
 	unclaimed []any
@@ -1012,5 +1013,5 @@ func (d *driver) Close() {
 	d.held, d.heldMessage = "", ""
 	d.own = map[string]*ownCall{}
 	d.unclaimed = nil
-	d.flushed, d.flushedOrder = nil, nil
+	d.flushed, d.flushedAt = nil, 0
 }

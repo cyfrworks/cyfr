@@ -28,21 +28,30 @@ import (
 // nothing of the arguments the gate withheld reaches the wire (review
 // #1865).
 func TestACallOfCYFRsIsNoOwnRowWhateverTheGateDid(t *testing.T) {
-	arguments := `{"payload":"GATE-CANARY` + strings.Repeat("x", brainwire.MaxLineBytes) + `"}`
+	// Past one line, so the gate refuses it; a call the socket never sees
+	// needs no more than its canary.
+	refused := `{"payload":"GATE-CANARY` + strings.Repeat("x", brainwire.MaxLineBytes) + `"}`
+	unseen := `{"payload":"GATE-CANARY"}`
 	for _, c := range []struct {
 		name    string
 		p       *profile
-		updates []string
+		updates func(arguments string) []string
 	}{
-		{"antigravity's server tool", antigravity, []string{
-			`{"sessionUpdate":"tool_call","toolCallId":"c1","name":"mcp_cyfr_files","kind":"other","title":"Run mcp_cyfr_files","status":"in_progress","rawInput":` +
-				strings.TrimSuffix(arguments, "}") + `,"toolSummary":"Read it"}}`}},
-		{"antigravity's call_mcp_tool", antigravity, []string{
-			`{"sessionUpdate":"tool_call","toolCallId":"c1","name":"call_mcp_tool","kind":"execute","title":"MCP Tool files","status":"in_progress","rawInput":{"ServerName":"cyfr","ToolName":"files","Arguments":` + arguments + `}}`}},
-		{"cursor's server call", cursor, []string{
-			`{"sessionUpdate":"tool_call","toolCallId":"c1\nfc_1","title":"MCP: tool","kind":"other","status":"pending","rawInput":{}}`,
-			`{"sessionUpdate":"tool_call_update","toolCallId":"c1\nfc_1","title":"cyfr: files","rawInput":{"providerIdentifier":"cyfr","toolName":"files","args":` + arguments + `}}`,
-			`{"sessionUpdate":"tool_call_update","toolCallId":"c1\nfc_1","status":"in_progress"}`}},
+		{"antigravity's server tool", antigravity, func(arguments string) []string {
+			return []string{
+				`{"sessionUpdate":"tool_call","toolCallId":"c1","name":"mcp_cyfr_files","kind":"other","title":"Run mcp_cyfr_files","status":"in_progress","rawInput":` +
+					strings.TrimSuffix(arguments, "}") + `,"toolSummary":"Read it"}}`}
+		}},
+		{"antigravity's call_mcp_tool", antigravity, func(arguments string) []string {
+			return []string{
+				`{"sessionUpdate":"tool_call","toolCallId":"c1","name":"call_mcp_tool","kind":"execute","title":"MCP Tool files","status":"in_progress","rawInput":{"ServerName":"cyfr","ToolName":"files","Arguments":` + arguments + `}}`}
+		}},
+		{"cursor's server call", cursor, func(arguments string) []string {
+			return []string{
+				`{"sessionUpdate":"tool_call","toolCallId":"c1\nfc_1","title":"MCP: tool","kind":"other","status":"pending","rawInput":{}}`,
+				`{"sessionUpdate":"tool_call_update","toolCallId":"c1\nfc_1","title":"cyfr: files","rawInput":{"providerIdentifier":"cyfr","toolName":"files","args":` + arguments + `}}`,
+				`{"sessionUpdate":"tool_call_update","toolCallId":"c1\nfc_1","status":"in_progress"}`}
+		}},
 	} {
 		for _, gate := range []string{"refused", "unseen"} {
 			t.Run(c.name+", "+gate, func(t *testing.T) {
@@ -57,7 +66,11 @@ func TestACallOfCYFRsIsNoOwnRowWhateverTheGateDid(t *testing.T) {
 						t.Fatal(err)
 					}
 				}
-				for _, u := range c.updates {
+				arguments := unseen
+				if gate == "refused" {
+					arguments = refused
+				}
+				for _, u := range c.updates(arguments) {
 					update(u)
 				}
 				if gate == "refused" {
@@ -218,5 +231,70 @@ func TestALateUpdateReleasesNoHeldFailure(t *testing.T) {
 	if !strings.Contains(wire.String(), `"type":"overloaded"`) || strings.Contains(wire.String(), "agent executor error") ||
 		strings.Contains(wire.String(), `"t":"own"`) {
 		t.Fatalf("the late update changed nothing, and the turn ends overloaded: %s", wire.String())
+	}
+}
+
+// A frame that does not say what tool it is, kind other with no name and
+// no server, gets no detail of any kind: not its command, not its path,
+// not its input. Here a refused argument sits in each profile's command
+// and path members (review #2221).
+func TestAFrameThatNamesNoToolShowsNoCommandOrPath(t *testing.T) {
+	for _, p := range []*profile{antigravity, cursor} {
+		for _, key := range []string{p.commandInput, p.subjectInput} {
+			t.Run(p.name+"/"+key, func(t *testing.T) {
+				var wire bytes.Buffer
+				d := testDriver(t, p, &wire)
+				d.turn = &nativeTurn{work: "trn_1"}
+				d.sock = &toolSocket{held: map[string]net.Conn{}}
+				arguments := fmt.Sprintf(`{%q:"FIELD-CANARY","pad":%q}`, key, strings.Repeat("x", brainwire.MaxLineBytes))
+				sessionUpdate(t, d, `{"sessionUpdate":"tool_call","toolCallId":"mcp","kind":"other","status":"in_progress","rawInput":`+arguments+`}`)
+				peer, server := net.Pipe()
+				answered := make(chan []byte, 1)
+				go func() { raw, _ := io.ReadAll(peer); answered <- raw }()
+				err := d.socketRequest(d.sock, server, toolsock.Request{Op: "call", Name: "files", Arguments: json.RawMessage(arguments)})
+				server.Close()
+				if answer := <-answered; err != nil || !bytes.Contains(answer, []byte("past what CYFR takes")) {
+					t.Fatalf("the gate refuses the call: %s %v", answer, err)
+				}
+				sessionUpdate(t, d, `{"sessionUpdate":"tool_call_update","toolCallId":"mcp","status":"failed"}`)
+				if strings.Contains(wire.String(), "FIELD-CANARY") || strings.Count(wire.String(), `"t":"own"`) != 2 || strings.Contains(wire.String(), `"detail"`) {
+					t.Fatalf("a frame naming no tool is a row with no detail of any kind: %.300s", wire.String())
+				}
+			})
+		}
+	}
+}
+
+// Forgetting a call the turn's end ended forgets it everywhere: an id the
+// turn's end ended, ended by the program, then ended by a turn's end again,
+// keeps one place among the remembered, so a thousandth distinct one does
+// not push it out (review #2221).
+func TestAReflushedCallKeepsOnePlace(t *testing.T) {
+	var wire bytes.Buffer
+	d := testDriver(t, antigravity, &wire)
+	d.turn = &nativeTurn{work: "trn_1"}
+	update := func(id, status, kind string) {
+		sessionUpdate(t, d, fmt.Sprintf(`{"sessionUpdate":%q,"toolCallId":%q,"name":"read_file","kind":"read","status":%q}`, kind, id, status))
+	}
+	flush := func() {
+		if err := d.flushOwn(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	update("same", "pending", "tool_call")
+	flush()
+	update("same", "completed", "tool_call_update")
+	for i := 0; i < flushedKept-2; i++ {
+		update(fmt.Sprint(i), "pending", "tool_call")
+	}
+	flush()
+	update("same", "pending", "tool_call")
+	flush()
+	update("new", "pending", "tool_call")
+	flush()
+	wire.Reset()
+	update("same", "completed", "tool_call_update")
+	if wire.Len() != 0 {
+		t.Fatalf("the reflushed call is still remembered with %d distinct calls: %s", flushedKept, wire.String())
 	}
 }

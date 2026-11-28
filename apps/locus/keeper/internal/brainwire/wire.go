@@ -363,10 +363,10 @@ func Detail(text string) string {
 // InputDetail is a tool's detail from its input, what the run does: its
 // command, the string at the member `command` names where the program
 // puts one, else what it acts on, the string at `subject` (a path), or
-// else, when `whole` (a call its frames name: no frame that does not say
-// what tool it is shows its input), the input as compact JSON; none for an
-// input that is no object or an empty one.
-func InputDetail(input json.RawMessage, command, subject string, whole bool) string {
+// else the input as compact JSON; none for an input that is no object or
+// an empty one. A driver asks it only of a call whose frames say what tool
+// it is.
+func InputDetail(input json.RawMessage, command, subject string) string {
 	var m map[string]json.RawMessage
 	if json.Unmarshal(input, &m) != nil || len(m) == 0 {
 		return ""
@@ -376,9 +376,6 @@ func InputDetail(input json.RawMessage, command, subject string, whole bool) str
 		if key != "" && json.Unmarshal(m[key], &s) == nil && s != "" {
 			return Detail(s)
 		}
-	}
-	if !whole {
-		return ""
 	}
 	var b bytes.Buffer
 	if json.Compact(&b, input) != nil {

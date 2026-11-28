@@ -141,10 +141,10 @@ func (d *driver) ownUpdate(callID, status, kind, name string, rawInput, content 
 	if !call.ours && d.cyfrs(name, rawInput) {
 		call.ours, call.input = true, nil
 	}
-	if !call.named && d.named(name, rawInput) {
+	if !call.named && d.named(name, kind, rawInput) {
 		call.named = true
 	}
-	if !call.ours && brainwire.InputDetail(rawInput, d.p.commandInput, d.p.subjectInput, true) != "" {
+	if !call.ours && brainwire.InputDetail(rawInput, d.p.commandInput, d.p.subjectInput) != "" {
 		call.input = rawInput
 	}
 	if !call.waits && !call.ours && !call.started && status == "in_progress" {
@@ -172,11 +172,12 @@ func (d *driver) cyfrs(name string, rawInput json.RawMessage) bool {
 	return d.p.toolPrefix != nil && strings.HasPrefix(name, d.p.toolPrefix(d.server))
 }
 
-// named says an update says what tool its call is: its name, the server
-// and tool its input names, or the tool's name where its program puts one
-// in its input (profile.nameInput).
-func (d *driver) named(name string, rawInput json.RawMessage) bool {
-	if name != "" {
+// named says an update says what tool its call is: its name, an ACP kind
+// that names one (any but other), the server and tool its input names, or
+// the tool's name where its program puts one in its input
+// (profile.nameInput).
+func (d *driver) named(name, kind string, rawInput json.RawMessage) bool {
+	if name != "" || (acpKinds[kind] && kind != "other") {
 		return true
 	}
 	if _, _, ok := d.p.mcpCall(rawInput); ok {
@@ -190,16 +191,20 @@ func (d *driver) named(name string, rawInput json.RawMessage) bool {
 	return json.Unmarshal(rawInput, &input) == nil && json.Unmarshal(input[d.p.nameInput], &tool) == nil && tool != ""
 }
 
-// inputDetail is what a call's input says it runs, as its program puts it:
-// its whole input only for a call some update named.
+// inputDetail is what a call's input says it runs, as its program puts it,
+// for a call some update named: a call no frame says what tool it is has
+// no detail of any kind, its command, its path and its input alike.
 func (d *driver) inputDetail(call *ownCall) string {
-	return brainwire.InputDetail(call.input, d.p.commandInput, d.p.subjectInput, call.named)
+	if !call.named {
+		return ""
+	}
+	return brainwire.InputDetail(call.input, d.p.commandInput, d.p.subjectInput)
 }
 
 // late says an update is of a call the turn's end ended, and so shows and
 // changes nothing; its own end forgets the call.
 func (d *driver) late(callID, status string) bool {
-	if !d.flushed[callID] {
+	if _, ok := d.flushed[callID]; !ok {
 		return false
 	}
 	if status == "completed" || status == "failed" {
@@ -208,28 +213,25 @@ func (d *driver) late(callID, status string) bool {
 	return true
 }
 
-// flushedEnd remembers that the turn's end ended the call `id`.
+// flushedEnd remembers that the turn's end ended the call `id`, as the
+// latest so remembered. The one structure holds each id once, by when it
+// was last remembered: forgetting it forgets it everywhere, and at the
+// bound the one remembered longest ago is forgotten.
 func (d *driver) flushedEnd(id string) {
 	if d.flushed == nil {
-		d.flushed = map[string]bool{}
+		d.flushed = map[string]uint64{}
 	}
-	if len(d.flushedOrder) >= flushedKept {
-		// The calls their own end forgot leave the order first, then the
-		// oldest remembered.
-		kept := d.flushedOrder[:0]
-		for _, old := range d.flushedOrder {
-			if d.flushed[old] {
-				kept = append(kept, old)
+	if _, ok := d.flushed[id]; !ok && len(d.flushed) >= flushedKept {
+		oldest, at := "", ^uint64(0)
+		for other, when := range d.flushed {
+			if when < at {
+				oldest, at = other, when
 			}
 		}
-		for len(kept) >= flushedKept {
-			delete(d.flushed, kept[0])
-			kept = kept[1:]
-		}
-		d.flushedOrder = kept
+		delete(d.flushed, oldest)
 	}
-	d.flushed[id] = true
-	d.flushedOrder = append(d.flushedOrder, id)
+	d.flushedAt++
+	d.flushed[id] = d.flushedAt
 }
 
 // changes are the file changes a tool call's content shows, its diffs.

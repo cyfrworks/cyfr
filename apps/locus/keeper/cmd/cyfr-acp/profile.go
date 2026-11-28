@@ -99,8 +99,8 @@ type profile struct {
 	// where the program puts the command it runs and the path it acts on,
 	// what its start's detail says (brainwire.InputDetail). nameInput,
 	// where it is set, is the member where it puts the tool's name, for a
-	// call whose update has no name: a call no update names has no whole
-	// input as its detail.
+	// call whose update has no name: a call no update names has no detail
+	// (own.go's named).
 	commandInput, subjectInput, nameInput string
 	// sessionFiles are the files that hold one session's content, each a
 	// way down from the home, or from the folder the program is told to

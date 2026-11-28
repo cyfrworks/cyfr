@@ -46,7 +46,10 @@ jobs:
   keeper:
     name: vet + test (cyfr-locus)
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # A bound on a hung job, not on a slow one: the job passed in 9:04 to
+    # 9:20 on main, where cmd/cyfr-acp's race-built stand-ins alone take
+    # about four minutes.
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: apps/locus/keeper
