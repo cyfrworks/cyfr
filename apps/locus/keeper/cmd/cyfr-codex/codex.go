@@ -286,7 +286,7 @@ func (i item) started() string {
 		}
 		return brainwire.Detail(strings.Join(paths, "\n"))
 	}
-	return brainwire.InputDetail(i.Arguments, "", "")
+	return brainwire.InputDetail(i.Arguments, "", "", true)
 }
 
 // ended is what an own tool's end says it did: a patch's change of each

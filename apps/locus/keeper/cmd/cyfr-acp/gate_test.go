@@ -8,6 +8,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"strings"
@@ -99,5 +100,123 @@ func TestACallLeftPendingAtATurnsEndIsShownOnce(t *testing.T) {
 	if len(first) != 2 || first[0]["phase"] != "start" || first[1]["phase"] != "end" || first[0]["call"] != "call_pending" ||
 		len(ofType(second, "own")) != 0 || saidOf(second) != "I will target PostgreSQL." {
 		t.Fatalf("the call is shown once, ended at the first turn's end, and its late updates emit nothing: %v then %v", first, second)
+	}
+}
+
+// A frame that does not say what tool it is gets no detail: the input as
+// compact JSON is the detail only of a call the frame names (its name, its
+// server and tool, or where its program names its tool in its input), so
+// the reviewer's frame (#1865), kind other with nothing naming it, whose
+// arguments the gate refused, is a row with no detail and its arguments
+// reach the wire nowhere (#2111).
+func TestAFrameThatNamesNoToolHasNoDetail(t *testing.T) {
+	arguments := `{"payload":"GATE-CANARY` + strings.Repeat("x", brainwire.MaxLineBytes) + `"}`
+	var wire bytes.Buffer
+	d := newDriver(antigravity, nil, brainwire.NewConn("test", &wire, io.Discard), t.TempDir())
+	d.h, d.session, d.server, d.turn = &brainwire.Process{}, "ses", "cyfr", &nativeTurn{work: "trn_1"}
+	d.sock = &toolSocket{held: map[string]net.Conn{}}
+	update := func(u string) {
+		t.Helper()
+		if err := d.Line([]byte(`{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"ses","update":` + u + `}}`)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	update(`{"sessionUpdate":"tool_call","kind":"other","toolCallId":"mcp","status":"in_progress","rawInput":{"Arguments":` + arguments + `,"toolSummary":"synthetic MCP call"}}`)
+	peer, server := net.Pipe()
+	answered := make(chan []byte, 1)
+	go func() { raw, _ := io.ReadAll(peer); answered <- raw }()
+	err := d.socketRequest(d.sock, server, toolsock.Request{Op: "call", Name: "files", Arguments: json.RawMessage(arguments)})
+	server.Close()
+	if answer := <-answered; err != nil || !bytes.Contains(answer, []byte("past what CYFR takes")) {
+		t.Fatalf("the gate refuses the call: %s %v", answer, err)
+	}
+	update(`{"sessionUpdate":"tool_call_update","toolCallId":"mcp","status":"failed"}`)
+	var own []map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(wire.String()), "\n") {
+		var e map[string]any
+		if json.Unmarshal([]byte(line), &e) == nil && e["t"] == "own" {
+			own = append(own, e)
+		}
+	}
+	if strings.Contains(wire.String(), "GATE-CANARY") || len(own) != 2 || own[0]["detail"] != nil || own[1]["detail"] != nil {
+		t.Fatalf("a frame naming no tool is a row with no detail, and nothing of its arguments reaches the wire: %v %.200s", own, wire.String())
+	}
+}
+
+// testDriver is a driver whose session runs, writing its events to wire.
+func testDriver(t *testing.T, p *profile, wire *bytes.Buffer) *driver {
+	d := newDriver(p, nil, brainwire.NewConn("test", wire, io.Discard), t.TempDir())
+	d.h, d.session, d.server, d.listed = &brainwire.Process{}, "ses", "cyfr", true
+	return d
+}
+
+func sessionUpdate(t *testing.T, d *driver, u string) {
+	t.Helper()
+	if err := d.Line([]byte(`{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"ses","update":` + u + `}}`)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Only a call the turn's end ended is remembered: a thousand calls the
+// program ended later, its late completion still shows nothing, and an id
+// the program ended is a new call when it comes again (review #2126).
+func TestOnlyACallTheTurnsEndEndedIsRemembered(t *testing.T) {
+	var wire bytes.Buffer
+	d := testDriver(t, antigravity, &wire)
+	d.turn = &nativeTurn{work: "trn_1"}
+	sessionUpdate(t, d, `{"sessionUpdate":"tool_call","toolCallId":"left","name":"ask_question","kind":"other","status":"pending","rawInput":{"q":1}}`)
+	if err := d.flushOwn(); err != nil {
+		t.Fatal(err)
+	}
+	complete := func(id, kind string) {
+		sessionUpdate(t, d, fmt.Sprintf(`{"sessionUpdate":%q,"toolCallId":%q,"name":"read_file","kind":"read","status":"completed","rawInput":{"Path":"n.txt"}}`, kind, id))
+	}
+	for i := 0; i < 1000; i++ {
+		complete(fmt.Sprint(i), "tool_call")
+	}
+	wire.Reset()
+	sessionUpdate(t, d, `{"sessionUpdate":"tool_call_update","toolCallId":"left","status":"in_progress"}`)
+	complete("left", "tool_call_update")
+	if wire.Len() != 0 {
+		t.Fatalf("a call the turn's end ended shows nothing more, a thousand ended calls later: %s", wire.String())
+	}
+	complete("7", "tool_call")
+	if strings.Count(wire.String(), `"call":"7"`) != 2 {
+		t.Fatalf("an id the program ended is a new call when it comes again: %s", wire.String())
+	}
+	wire.Reset()
+	complete("left", "tool_call")
+	if strings.Count(wire.String(), `"call":"left"`) != 2 {
+		t.Fatalf("its own end forgot the call the turn's end ended, so its id is new again: %s", wire.String())
+	}
+}
+
+// An update of a call the turn's end ended changes nothing, held text
+// included: Antigravity's recorded overload, followed by such an update,
+// still ends its turn as the typed error S0c reads it as (review #2126).
+func TestALateUpdateReleasesNoHeldFailure(t *testing.T) {
+	var wire bytes.Buffer
+	d := testDriver(t, antigravity, &wire)
+	settle := func(id int, work string) {
+		p := &prompt{id: id}
+		d.turn = &nativeTurn{work: work, posts: []string{}, open: []*prompt{p}}
+		d.prompts[fmt.Sprint(id)] = p
+	}
+	settle(1, "trn_1")
+	sessionUpdate(t, d, `{"sessionUpdate":"tool_call","toolCallId":"left","name":"ask_question","kind":"other","status":"pending"}`)
+	if err := d.Line([]byte(`{"jsonrpc":"2.0","id":1,"result":{"stopReason":"end_turn"}}`)); err != nil {
+		t.Fatal(err)
+	}
+	wire.Reset()
+	settle(2, "trn_2")
+	chunk, _ := json.Marshal(map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": agyRecorded503}})
+	sessionUpdate(t, d, string(chunk))
+	sessionUpdate(t, d, `{"sessionUpdate":"tool_call_update","toolCallId":"left","status":"completed"}`)
+	if err := d.Line([]byte(`{"jsonrpc":"2.0","id":2,"result":{"stopReason":"end_turn"}}`)); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(wire.String(), `"type":"overloaded"`) || strings.Contains(wire.String(), "agent executor error") ||
+		strings.Contains(wire.String(), `"t":"own"`) {
+		t.Fatalf("the late update changed nothing, and the turn ends overloaded: %s", wire.String())
 	}
 }

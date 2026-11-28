@@ -611,7 +611,7 @@ func (d *driver) streamEvent(raw json.RawMessage) error {
 // whole files (`tool_use_result`), so an end says nothing more.
 func (d *driver) startOwn(id, name string, input json.RawMessage) error {
 	return d.c.Emit(brainwire.NewEvent("own").Set("gen", d.gen).SetOptional("work", d.turnWork).Set("call", brainwire.CallID(id)).
-		Set("name", name).Set("phase", "start").SetOptional("detail", brainwire.InputDetail(input, "command", "file_path")))
+		Set("name", name).Set("phase", "start").SetOptional("detail", brainwire.InputDetail(input, "command", "file_path", true)))
 }
 
 // messageID is a native message's id, or the driver's own name for one

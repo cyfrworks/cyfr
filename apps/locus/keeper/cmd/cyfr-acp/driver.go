@@ -144,10 +144,10 @@ type driver struct {
 	output            int
 	held, heldMessage string
 	own               map[string]*ownCall
-	// endedCalls and endedOrder are the ids of the session's calls already
-	// ended, the oldest first (own.go's end).
-	endedCalls map[string]bool
-	endedOrder []string
+	// flushed and flushedOrder are the ids of the session's calls a turn's
+	// end ended, the oldest first (own.go's flushedEnd).
+	flushed      map[string]bool
+	flushedOrder []string
 	// unclaimed are the arguments of the turn's socket calls no tool_call
 	// update was matched to yet (own.go).
 	unclaimed []any
@@ -723,6 +723,11 @@ func (d *driver) update(params json.RawMessage) error {
 		}
 		return d.c.EmitText(d.event("thought").Set("message", d.messageID(u.Message)), "delta", block.Text)
 	case "tool_call", "tool_call_update":
+		// An update of a call the turn's end ended is no work of this turn:
+		// it changes nothing, held text included.
+		if d.late(u.CallID, u.Status) {
+			return nil
+		}
 		d.output++
 		if err := d.release(); err != nil {
 			return err
@@ -1007,5 +1012,5 @@ func (d *driver) Close() {
 	d.held, d.heldMessage = "", ""
 	d.own = map[string]*ownCall{}
 	d.unclaimed = nil
-	d.endedCalls, d.endedOrder = nil, nil
+	d.flushed, d.flushedOrder = nil, nil
 }

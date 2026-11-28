@@ -97,8 +97,11 @@ type profile struct {
 	toolPrefix func(server string) string
 	// commandInput and subjectInput are the members of a call's rawInput
 	// where the program puts the command it runs and the path it acts on,
-	// what its start's detail says (brainwire.InputDetail).
-	commandInput, subjectInput string
+	// what its start's detail says (brainwire.InputDetail). nameInput,
+	// where it is set, is the member where it puts the tool's name, for a
+	// call whose update has no name: a call no update names has no whole
+	// input as its detail.
+	commandInput, subjectInput, nameInput string
 	// sessionFiles are the files that hold one session's content, each a
 	// way down from the home, or from the folder the program is told to
 	// keep its files in, which internal/homepath walks following no link;
@@ -524,9 +527,11 @@ var cursor = &profile{
 	},
 	stubKinds: map[string]bool{"other": true},
 	// Seen in Cursor 2026.11.22-e9042b2 (S3 F4): a command's {command}, a
-	// read's and an edit's {path}.
+	// read's and an edit's {path}; its sub-agent's {_toolName: "task", …}
+	// (S3, sub-agents).
 	commandInput: "command",
 	subjectInput: "path",
+	nameInput:    "_toolName",
 	mcpCall: func(rawInput json.RawMessage) (string, string, bool) {
 		var input struct {
 			Server string `json:"providerIdentifier"`

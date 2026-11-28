@@ -47,13 +47,17 @@ import (
 // call of CYFR's keeps nothing but its id once matched, until its end, and
 // the turn's end drops the rest. A call still open when the turn ends, the
 // session closes or the program dies is shown as the program's own first,
-// so nothing that ran is missing from the activity. One call id has one
-// start and one end, ever: an update of a call already ended (Antigravity
-// completes in the next prompt a call left pending at a turn's end) shows
-// nothing, by the ids of the session's last endedKept ended calls.
+// so nothing that ran is missing from the activity. Such a call, ended by
+// the turn's end and not by the program, is shown once: Antigravity can
+// complete in the next prompt a call it left pending (S1 F1), and an update
+// of a call the turn's end ended changes nothing, held text included
+// (driver.go's update), until its own end, which forgets it. A call the
+// program ended is not remembered, so an id used again is a new call.
 
-// endedKept bounds the ids of ended calls a session keeps.
-const endedKept = brainwire.MaxList
+// flushedKept bounds the calls a session remembers as ended by a turn's
+// end, the oldest forgotten first: a late update of one forgotten shows it
+// again, a start and an end of its own.
+const flushedKept = brainwire.MaxList
 
 // ownCall is one of the program's tool calls, by its call id, the `call`
 // its start and end carry. Its detail is the input it last showed, what it
@@ -70,6 +74,9 @@ type ownCall struct {
 	// cyfr is a call matched to one on the socket; ours one that is CYFR's
 	// by what it is (cyfrs), matched or not. Neither is ever shown.
 	cyfr, ours bool
+	// named is a call some update of which says what tool it is (named):
+	// only its whole input can be its detail.
+	named bool
 }
 
 // acpKinds are the tool kinds ACP names; any other is shown as other.
@@ -114,9 +121,6 @@ func (d *driver) ownUpdate(callID, status, kind, name string, rawInput, content 
 	if callID == "" {
 		return nil
 	}
-	if d.endedCalls[callID] {
-		return nil
-	}
 	call, seen := d.own[callID]
 	if !seen {
 		call = &ownCall{id: callID, name: d.ownName(kind, name, rawInput), seen: len(d.own), waits: kind == "" || d.p.stubKinds[kind]}
@@ -137,7 +141,10 @@ func (d *driver) ownUpdate(callID, status, kind, name string, rawInput, content 
 	if !call.ours && d.cyfrs(name, rawInput) {
 		call.ours, call.input = true, nil
 	}
-	if !call.ours && d.inputDetail(rawInput) != "" {
+	if !call.named && d.named(name, rawInput) {
+		call.named = true
+	}
+	if !call.ours && brainwire.InputDetail(rawInput, d.p.commandInput, d.p.subjectInput, true) != "" {
 		call.input = rawInput
 	}
 	if !call.waits && !call.ours && !call.started && status == "in_progress" {
@@ -165,25 +172,64 @@ func (d *driver) cyfrs(name string, rawInput json.RawMessage) bool {
 	return d.p.toolPrefix != nil && strings.HasPrefix(name, d.p.toolPrefix(d.server))
 }
 
-// inputDetail is what a call's input says it runs, as its program puts it.
-func (d *driver) inputDetail(rawInput json.RawMessage) string {
-	return brainwire.InputDetail(rawInput, d.p.commandInput, d.p.subjectInput)
+// named says an update says what tool its call is: its name, the server
+// and tool its input names, or the tool's name where its program puts one
+// in its input (profile.nameInput).
+func (d *driver) named(name string, rawInput json.RawMessage) bool {
+	if name != "" {
+		return true
+	}
+	if _, _, ok := d.p.mcpCall(rawInput); ok {
+		return true
+	}
+	if d.p.nameInput == "" {
+		return false
+	}
+	var input map[string]json.RawMessage
+	var tool string
+	return json.Unmarshal(rawInput, &input) == nil && json.Unmarshal(input[d.p.nameInput], &tool) == nil && tool != ""
 }
 
-// end records that the call `id` ended: nothing of it is shown again.
-func (d *driver) end(id string) {
-	if d.endedCalls[id] {
-		return
+// inputDetail is what a call's input says it runs, as its program puts it:
+// its whole input only for a call some update named.
+func (d *driver) inputDetail(call *ownCall) string {
+	return brainwire.InputDetail(call.input, d.p.commandInput, d.p.subjectInput, call.named)
+}
+
+// late says an update is of a call the turn's end ended, and so shows and
+// changes nothing; its own end forgets the call.
+func (d *driver) late(callID, status string) bool {
+	if !d.flushed[callID] {
+		return false
 	}
-	if d.endedCalls == nil {
-		d.endedCalls = map[string]bool{}
+	if status == "completed" || status == "failed" {
+		delete(d.flushed, callID)
 	}
-	if len(d.endedOrder) >= endedKept {
-		delete(d.endedCalls, d.endedOrder[0])
-		d.endedOrder = d.endedOrder[1:]
+	return true
+}
+
+// flushedEnd remembers that the turn's end ended the call `id`.
+func (d *driver) flushedEnd(id string) {
+	if d.flushed == nil {
+		d.flushed = map[string]bool{}
 	}
-	d.endedCalls[id] = true
-	d.endedOrder = append(d.endedOrder, id)
+	if len(d.flushedOrder) >= flushedKept {
+		// The calls their own end forgot leave the order first, then the
+		// oldest remembered.
+		kept := d.flushedOrder[:0]
+		for _, old := range d.flushedOrder {
+			if d.flushed[old] {
+				kept = append(kept, old)
+			}
+		}
+		for len(kept) >= flushedKept {
+			delete(d.flushed, kept[0])
+			kept = kept[1:]
+		}
+		d.flushedOrder = kept
+	}
+	d.flushed[id] = true
+	d.flushedOrder = append(d.flushedOrder, id)
 }
 
 // changes are the file changes a tool call's content shows, its diffs.
@@ -266,13 +312,12 @@ func (d *driver) claim(arguments json.RawMessage) {
 func (d *driver) startOwn(call *ownCall) error {
 	call.started = true
 	return d.c.Emit(d.event("own").Set("call", brainwire.CallID(call.id)).Set("name", call.name).Set("phase", "start").
-		SetOptional("detail", d.inputDetail(call.input)))
+		SetOptional("detail", d.inputDetail(call)))
 }
 
 // showOwn shows a call's end, and its start first if it was not shown, the
 // end with the changes it made.
 func (d *driver) showOwn(call *ownCall, made []brainwire.Change) error {
-	d.end(call.id)
 	if call.cyfr || call.ours {
 		return nil
 	}
@@ -302,6 +347,7 @@ func (d *driver) flushOwn() error {
 	}
 	sort.Slice(open, func(i, j int) bool { return open[i].seen < open[j].seen })
 	for _, call := range open {
+		d.flushedEnd(call.id)
 		if err := d.showOwn(call, nil); err != nil {
 			return err
 		}
