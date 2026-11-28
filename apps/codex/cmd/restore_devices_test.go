@@ -30,7 +30,7 @@ func TestRestoreKeepsTheDevicesThisMachinesStackRanWith(t *testing.T) {
 	}{
 		"ran with them, has them":           {both, both, true, both, ""},
 		"ran without them, has them":        {both, "", true, deviceLines("", ""), devicesUpdateGives},
-		"ran with them, has them no longer": {both, both, false, deviceLines("", ""), devicesGone},
+		"ran with them, has them no longer": {both, both, false, deviceLines("", ""), devicesGone("restore")},
 		"ran without them, has none":        {both, "", false, deviceLines("", ""), ""},
 		"a snapshot with no device line":    {"", both, true, "", devicesUpdateGives},
 		"a snapshot of a machine with none": {deviceLines("", ""), both, true, both, ""},
@@ -51,7 +51,7 @@ func TestRestoreKeepsTheDevicesThisMachinesStackRanWith(t *testing.T) {
 			}
 			lines := strings.SplitN(out, "\n", 3)
 			said := ""
-			if strings.Contains(out, devicesUpdateGives) || strings.Contains(out, devicesGone) {
+			if strings.Contains(out, devicesUpdateGives) || strings.Contains(out, devicesGone("restore")) {
 				said = lines[1]
 			}
 			if !strings.HasPrefix(lines[0], "Restoring the snapshot of release ") || said != c.says {

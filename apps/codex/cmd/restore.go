@@ -704,7 +704,7 @@ func (r *restorer) restoreDevices() error {
 	case passes(have) && !passes(restored):
 		fmt.Fprintln(r.out, devicesUpdateGives)
 	case passes(before) && !passes(have):
-		fmt.Fprintln(r.out, devicesGone)
+		fmt.Fprintln(r.out, devicesGone("restore"))
 	}
 	return nil
 }

@@ -66,7 +66,7 @@ var updateCmd = &cobra.Command{
 
 The program: when the newest release is newer than this one, cyfr update installs it. The newest is the newest published release that is not a pre-release and, while none is published, the newest pre-release. A Homebrew cask install is updated through brew. Where the CYFR app is installed, whichever cyfr runs this, the app is updated by its own installer: its installer for this machine is downloaded and verified against the release's checksums.txt signed by the release workflow for that tag, then the elevation it needs is asked for, then the running app is closed (on the box's own screen, the screen's service is stopped), then the system's installer replaces it (apt for the DEB, the whole signed app for macOS, Windows Installer for the MSI), then the release its own cyfr answers is checked, and the app is opened again as it was. A cyfr installed any other way replaces its own file, once the release's archive for this platform verifies the same way; both downloads verify before anything changes. A refusal at any step leaves the app working at its release and the CYFR in the directory untouched. It then goes on as the new program. --version names the exact release to install instead, a pre-release or an older release included; a Homebrew install takes only its tap's release. A development build is not replaced. In a directory that holds no compose file the update stops here.
 
-The CYFR in the directory: after steps 1 and 2 below, cyfr update shows what changes and asks to make the change (--yes makes it without asking; with no terminal and no --yes it shows the change and makes none; answered no, it changes nothing and exits 0). A CYFR whose docker-compose.yml names this release already is not switched again, with no stop and no snapshot: its devices are written to .env as step 6 writes them, said first as step 2 says them, and where that first gives the Locus services both devices the update shows it and asks first, as it asks of a change; its stack is started as 'cyfr up' starts it and waited for whole, as step 6 waits, so an update run again after one whose services did not come up waits again; and a CYFR on a newer release than this cyfr, by its compose file's tags or by the release its cyfr reports (steps 3 and 4), is refused before the snapshot, since its database may not run under older code. A CYFR whose database another schema built is refused before the question and before the stack's lock, so the refusal changes nothing (step 2): a release runs only on a database its own schema built, the schema fingerprint its manifest carries, and there is no upgrade path between schemas. The change is one ceremony that changes nothing until the old stack is stopped and a snapshot of it is taken:
+The CYFR in the directory: first, at a terminal or with --yes, where .env names at CYFR_LOCUS_KVM or CYFR_LOCUS_TUN a device this machine does not have, cyfr update empties both and says so, before anything else and whatever it is then answered or refused, since every start of the stack refuses such a line; taking the devices away removes nothing. Then, after steps 1 and 2 below, cyfr update shows what changes and asks to make the change (--yes makes it without asking; with no terminal and no --yes it shows the change and makes none; answered no, it changes nothing and exits 0). A CYFR whose docker-compose.yml names this release already is not switched again, with no stop and no snapshot: its devices are written to .env as step 6 writes them, said first as step 2 says them, and where that first gives the Locus services both devices the update shows it and asks first, as it asks of a change; its stack is started as 'cyfr up' starts it and waited for whole, as step 6 waits, so an update run again after one whose services did not come up waits again; and a CYFR on a newer release than this cyfr, by its compose file's tags or by the release its cyfr reports (steps 3 and 4), is refused before the snapshot, since its database may not run under older code. A CYFR whose database another schema built is refused before the question and before the stack's lock, so the refusal changes nothing (step 2): a release runs only on a database its own schema built, the schema fingerprint its manifest carries, and there is no upgrade path between schemas. The change is one ceremony that changes nothing until the old stack is stopped and a snapshot of it is taken:
 
 1. Fetch the release's signed manifest (release.json) and verify it; a manifest that does not verify, one without a schema fingerprint (any release's before the fingerprint was carried), or no network access to it, refuses.
 2. Read docker-compose.yml, which the release's own replaces at the switch (step 6). It must hold the bundled stack: a service named cyfr and a service, under any name, whose image is ghcr.io/cyfrworks/cyfr-locus; one without either refuses, naming 'cyfr init --force'. The offer names each managed image that changes, by its repository, and each image line that names no managed image (ghcr.io/cyfrworks/cyfr, ghcr.io/cyfrworks/cyfr-locus, the bundled Caddy or the bundled Tailscale), which the release's file does not keep, and, where this machine has both devices and .env does not name both (step 6), that the first start that runs each person's programs in a computer of their own removes the folder each program keeps, with its sign-in, or, where .env names both and this machine no longer has them, that a program whose folder was made in a person's own computer does not start until it has them again. Then read the schema fingerprint and the release of the cyfr that runs this CYFR, through the running cyfr or, when cyfr is stopped, offline in a one-off container of its image that mounts nothing, skips its entrypoint, has no network and never pulls, and refuse a fingerprint other than the manifest's, a release newer than this one or an answer that does not read. Then compare docker-compose.yml with the one that release shipped, read from its verified scaffold, the image lines aside: a file you changed is said before anything stops, its differing lines (at most 12, no value of an environment line), that going on writes the release's file and the snapshot keeps yours, and, in a sentence of its own, each managed service whose volumes differ, since the stack would start without the data the folders you mount there hold. The update then asks 'Replace docker-compose.yml with release <version>'s and update this CYFR?', the answer defaulting to no; --yes does not answer it, and with no terminal to ask on the update refuses with the same words. Nothing of your file is merged into the release's.
@@ -269,6 +269,14 @@ func runUpdate(ctx context.Context, out, errOut io.Writer, o updateOptions) erro
 		}
 	case o.continueAs == "":
 		finished, err := updateProgram(ctx, out, o)
+		if err != nil && ctx.Err() == nil {
+			// A refusal of the program step leaves no device setting the
+			// stack refuses to start with (emptyStrayDevices), as the home
+			// step's own refusals do; an interrupt changes nothing.
+			if _, emptyErr := emptyStrayDevices(out, o, machineDevices()); emptyErr != nil {
+				return errors.Join(err, emptyErr)
+			}
+		}
 		if finished || err != nil {
 			return err
 		}
@@ -301,11 +309,19 @@ func runUpdate(ctx context.Context, out, errOut io.Writer, o updateOptions) erro
 // never cut short: an interrupt during it is reported once the start has
 // answered.
 func runHomeUpdate(ctx context.Context, out, errOut io.Writer, o updateOptions) error {
+	// The machine's devices are read once, for the whole update. Before
+	// any refusal and before the question, a device setting the stack would
+	// be refused with is emptied, and said (emptyStrayDevices).
+	have := machineDevices()
+	emptied, err := emptyStrayDevices(out, o, have)
+	if err != nil {
+		return err
+	}
 	v := version.Version
 	if !release.IsVersion(v) {
 		return errors.New("This cyfr is a development build, which has no signed release to install; run 'cyfr update' with a released cyfr")
 	}
-	u := &updater{ctx: ctx, command: "update", version: v, out: out, errOut: errOut, devices: machineDevices()}
+	u := &updater{ctx: ctx, command: "update", version: v, out: out, errOut: errOut, devices: have, emptied: emptied}
 	if err := u.fetchManifest(); err != nil {
 		return err
 	}
@@ -374,7 +390,7 @@ func (u *updater) upOnRelease(offered bool) error {
 	if !offered {
 		fmt.Fprintf(u.out, "This CYFR is on release %s already, so there is nothing to switch; cyfr update starts it and waits for every service of its stack.\n", u.version)
 		if _, off := u.devicesTurn(); off {
-			fmt.Fprintln(u.out, devicesGone)
+			fmt.Fprintln(u.out, devicesGone("update"))
 		}
 	}
 	if err := refuseUndeclaredRestore(); err != nil {
@@ -484,6 +500,10 @@ type updater struct {
 	// gave them when the update began (machineDevices): the ones its offer
 	// shows and its confirmation holds, never read again at the write.
 	devices map[string]string
+	// emptied says the update emptied device settings this machine does
+	// not have before it asked anything (emptyStrayDevices), so an update
+	// that ends unmade changed that and nothing else.
+	emptied bool
 	// offlineEnv are the settings each offline eval sets in its one-off
 	// container: a restore's lifts its own bar (restoreBarrier).
 	offlineEnv []string
@@ -693,7 +713,7 @@ func (u *updater) change() (text, edits, none string, err error) {
 	case on:
 		fmt.Fprintln(&b, devicesSignInAgain)
 	case off:
-		fmt.Fprintln(&b, devicesGone)
+		fmt.Fprintln(&b, devicesGone("update"))
 	}
 	fmt.Fprintf(&b, "Before it stops anything it checks that this CYFR's database was built from release %s's schema, since there is no upgrade path between schemas; once it has started the release, only the snapshot takes CYFR back. Read the release notes first: %s/tag/%s\n", u.version, releasesPage, u.version)
 	return b.String(), edits, "", nil
@@ -731,6 +751,9 @@ type shownChange struct {
 	Change       string `json:"change,omitempty"`
 	Confirmation string `json:"confirmation,omitempty"`
 	Current      string `json:"current,omitempty"`
+	// OnRelease says the change is to a CYFR on this release already,
+	// which switches nothing: its devices alone (change).
+	OnRelease bool `json:"on_release,omitempty"`
 }
 
 // showChange prints the change as --offer answers it, making none, a
@@ -741,7 +764,7 @@ func (u *updater) showChange() error {
 	if err != nil {
 		return err
 	}
-	shown := shownChange{Change: text + edits, Current: none}
+	shown := shownChange{Change: text + edits, Current: none, OnRelease: none == "" && u.compose.onRelease()}
 	if none == "" {
 		if shown.Confirmation, err = u.confirmation(); err != nil {
 			return err
@@ -794,14 +817,14 @@ func (u *updater) offer(yes bool, confirmed string) (bool, error) {
 		// compose file: that is asked at a terminal or refused.
 		fmt.Fprint(u.out, edits)
 		if !askTerminal() {
-			return true, fmt.Errorf("Nothing changed: docker-compose.yml is not the file release %s shipped, and there is no terminal to ask on whether to replace it; --yes does not answer this question. Run 'cyfr update' at a terminal", u.leaving)
+			return true, fmt.Errorf("%s: docker-compose.yml is not the file release %s shipped, and there is no terminal to ask on whether to replace it; --yes does not answer this question. Run 'cyfr update' at a terminal", u.nothingChanged(), u.leaving)
 		}
 		question = fmt.Sprintf("Replace docker-compose.yml with release %s's and update this CYFR? (yes/no)", u.version)
 	} else if yes {
 		return false, nil
 	}
 	if !askTerminal() {
-		return true, errors.New("Nothing changed: there is no terminal to confirm the update on. Run it again with --yes to make it, or at a terminal")
+		return true, fmt.Errorf("%s: there is no terminal to confirm the update on. Run it again with --yes to make it, or at a terminal", u.nothingChanged())
 	}
 	// The question ends with an interrupt as the steps before the stop do,
 	// and exits as an interrupted question does.
@@ -811,9 +834,9 @@ func (u *updater) offer(yes bool, confirmed string) (bool, error) {
 	}
 	if a = strings.ToLower(a); a != "yes" && a != "y" {
 		if u.compose.onRelease() {
-			fmt.Fprintln(u.out, "Nothing changed. Run cyfr update again when you want each person's programs in a computer of their own.")
+			fmt.Fprintf(u.out, "%s. Run cyfr update again when you want each person's programs in a computer of their own.\n", u.nothingChanged())
 		} else {
-			fmt.Fprintln(u.out, "Nothing changed. Run cyfr update again when you want this release.")
+			fmt.Fprintf(u.out, "%s. Run cyfr update again when you want this release.\n", u.nothingChanged())
 		}
 		return true, nil
 	}
@@ -3367,4 +3390,14 @@ func (u *updater) devicesTurn() (on, off bool) {
 		return false, false
 	}
 	return passes(u.devices) && !passes(values), passes(values) && !passes(u.devices)
+}
+
+// nothingChanged opens what an update that ends unmade says: nothing
+// changed, or, where it emptied device settings first (emptyStrayDevices),
+// nothing else.
+func (u *updater) nothingChanged() string {
+	if u.emptied {
+		return "Nothing else changed"
+	}
+	return "Nothing changed"
 }

@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -14,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/cyfr/codex/internal/access"
+	"github.com/cyfr/codex/internal/release"
 )
 
 const (
@@ -291,31 +293,39 @@ func TestUpdateWritesTheDevicesThisMachineHas(t *testing.T) {
 // shows, and on a home on its release before its question; the update
 // that takes them away, since the machine no longer has them, that a
 // program kept in a person's own computer does not start, said and not
-// asked. No other update says either.
+// asked. No other update says either. At a terminal or with --yes, a
+// device setting this machine does not have is emptied first, both
+// together, and said at once, whatever the update is then answered: the
+// app's offer empties nothing.
 func TestUpdateSaysWhatItDoesToTheDevices(t *testing.T) {
 	const on, off, neither = "on", "off", ""
+	strayKVM := kvmEnv + " in .env was not a device this machine has for CYFR, so cyfr emptied it.\n"
+	strayTun := tunEnv + " in .env was not a device this machine has for CYFR, so cyfr emptied it.\n"
 	for name, c := range map[string]struct {
 		has  bool
 		env  string
 		says string
+		// emptied is what the update says at once as it empties the
+		// device settings, before anything else.
+		emptied string
 	}{
-		"none named, both here":         {true, "", on},
-		"tun named, both here":          {true, deviceLines("", "/dev/net/tun"), on},
-		"another path named, both here": {true, deviceLines("/dev/sda", "/dev/net/tun"), on},
-		"both named, both here":         {true, deviceLines("/dev/kvm", "/dev/net/tun"), neither},
-		"none named, none here":         {false, "", neither},
-		"tun named, none here":          {false, deviceLines("", "/dev/net/tun"), neither},
-		"both named, none here":         {false, deviceLines("/dev/kvm", "/dev/net/tun"), off},
+		"none named, both here":         {true, "", on, ""},
+		"tun named, both here":          {true, deviceLines("", "/dev/net/tun"), on, ""},
+		"another path named, both here": {true, deviceLines("/dev/sda", "/dev/net/tun"), on, strayKVM},
+		"both named, both here":         {true, deviceLines("/dev/kvm", "/dev/net/tun"), neither, ""},
+		"none named, none here":         {false, "", neither, ""},
+		"tun named, none here":          {false, deviceLines("", "/dev/net/tun"), neither, strayTun},
+		"both named, none here":         {false, deviceLines("/dev/kvm", "/dev/net/tun"), off, devicesGone("update") + "\n"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			devicesHere(t, c.has)
 			said := func(out string) string {
 				switch {
-				case strings.Contains(out, devicesSignInAgain+"\n") && !strings.Contains(out, devicesGone):
+				case strings.Contains(out, devicesSignInAgain+"\n") && !strings.Contains(out, devicesGone("update")):
 					return on
-				case strings.Contains(out, devicesGone+"\n") && !strings.Contains(out, devicesSignInAgain):
+				case strings.Contains(out, devicesGone("update")+"\n") && !strings.Contains(out, devicesSignInAgain):
 					return off
-				case !strings.Contains(out, devicesGone) && !strings.Contains(out, devicesSignInAgain):
+				case !strings.Contains(out, devicesGone("update")) && !strings.Contains(out, devicesSignInAgain):
 					return neither
 				}
 				return "both"
@@ -325,17 +335,23 @@ func TestUpdateSaysWhatItDoesToTheDevices(t *testing.T) {
 			s.edit(".env", scenarioEnv+c.env)
 			askWith(t, true, strings.NewReader("no\n"))
 			var out bytes.Buffer
-			if err := runHomeUpdate(context.Background(), &out, &out, updateOptions{}); err != nil || !strings.HasSuffix(out.String(), "Update this CYFR? (yes/no) [no]: Nothing changed. Run cyfr update again when you want this release.\n") {
+			closing, left := "Nothing changed", scenarioEnv+c.env
+			if c.emptied != "" {
+				closing, left = "Nothing else changed", scenarioEnv+deviceLines("", "")
+			}
+			if err := runHomeUpdate(context.Background(), &out, &out, updateOptions{}); err != nil || !strings.HasPrefix(out.String(), c.emptied) ||
+				!strings.HasSuffix(out.String(), "Update this CYFR? (yes/no) [no]: "+closing+". Run cyfr update again when you want this release.\n") {
 				t.Fatalf("a declined update answered %v:\n%s", err, out.String())
 			}
 			if got := said(out.String()); got != c.says {
 				t.Errorf("the offer says %q of the devices, want %q:\n%s", got, c.says, out.String())
 			}
 			s.onlyReadTheSchema()
-			if got := read(t, filepath.Join(s.project, ".env")); got != scenarioEnv+c.env {
-				t.Errorf("a declined update left .env as %q", got)
+			if got := read(t, filepath.Join(s.project, ".env")); got != left {
+				t.Errorf("a declined update left .env as %q, want %q", got, left)
 			}
 
+			s.edit(".env", scenarioEnv+c.env)
 			out.Reset()
 			if err := runHomeUpdate(context.Background(), &out, &out, updateOptions{offer: true}); err != nil {
 				t.Fatalf("the app's offer answered %v:\n%s", err, out.String())
@@ -351,9 +367,9 @@ func TestUpdateSaysWhatItDoesToTheDevices(t *testing.T) {
 				t.Fatalf("an update on its release answered %v:\n%s", err, got)
 			}
 			first := "This CYFR is on release 0.9.0 already, so there is nothing to switch; cyfr update starts it and waits for every service of its stack.\n"
-			want := "Verifying the manifest of release 0.9.0...\n" + map[string]string{
+			want := c.emptied + "Verifying the manifest of release 0.9.0...\n" + map[string]string{
 				on:      "This CYFR is on release 0.9.0 already, so there is nothing to switch; cyfr update writes this machine's devices to .env, starts it and waits for every service of its stack.\n" + devicesSignInAgain + "\n",
-				off:     first + devicesGone + "\n",
+				off:     first,
 				neither: first,
 			}[c.says] + "Starting release 0.9.0...\n"
 			if !strings.HasPrefix(got, want) {
@@ -372,6 +388,110 @@ func offered(t *testing.T, out string) shownChange {
 		t.Fatalf("the app's offer is %q (%v)", out, err)
 	}
 	return shown
+}
+
+// cyfr update makes the device settings true whatever it is then asked or
+// refused: at a terminal or with --yes it empties a device setting this
+// machine does not have, both together, and says so at once, before the
+// change and its question. On a machine that lost the devices .env passes,
+// it says that from this update on programs run in spaces; for a value cyfr
+// never writes, on a machine that has both, that it emptied it, and then
+// asks to give them as any update does. Declined, it changed that and
+// nothing else, and cyfr up starts. With no terminal and no --yes, and for
+// the CYFR app's offer, it changes nothing.
+func TestADeclinedUpdateStillEmptiesADeviceThisMachineDoesNotHave(t *testing.T) {
+	for name, c := range map[string]struct {
+		has          bool
+		compose      func(*testing.T) []byte
+		env, said    string
+		asks, closes string
+	}{
+		"a machine that lost the devices, at the switch": {false, shippedCompose, deviceLines("/dev/kvm", "/dev/net/tun"),
+			devicesGone("update") + "\n", "Update this CYFR? (yes/no) [no]: ",
+			"Nothing else changed. Run cyfr update again when you want this release.\n"},
+		"a value cyfr does not write, on its release": {true, func(t *testing.T) []byte { return switched(shippedCompose(t)) }, deviceLines("/dev/null", ""),
+			kvmEnv + " in .env was not a device this machine has for CYFR, so cyfr emptied it.\n", devicesSignInAgain + "\nUpdate this CYFR? (yes/no) [no]: ",
+			"Nothing else changed. Run cyfr update again when you want each person's programs in a computer of their own.\n"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			devicesHere(t, c.has)
+			s := newUpdateScenario(t, c.compose(t), nil)
+			s.edit(".env", scenarioEnv+c.env)
+			if err := refuseDevices("cyfr up"); err == nil {
+				t.Fatal("the test's premise: cyfr up is refused for .env's devices")
+			}
+
+			var out bytes.Buffer
+			if err := runHomeUpdate(context.Background(), &out, &out, updateOptions{offer: true}); err != nil {
+				t.Fatalf("the app's offer answered %v:\n%s", err, out.String())
+			}
+			askWith(t, false, strings.NewReader(""))
+			out.Reset()
+			err := runHomeUpdate(context.Background(), &out, &out, updateOptions{})
+			if got := read(t, filepath.Join(s.project, ".env")); got != scenarioEnv+c.env || strings.Contains(out.String(), "emptied") {
+				t.Fatalf("the app's offer, or an update with no terminal and no --yes (%v), changed .env to %q:\n%s", err, got, out.String())
+			}
+
+			askWith(t, true, strings.NewReader("no\n"))
+			out.Reset()
+			if err := runHomeUpdate(context.Background(), &out, &out, updateOptions{}); err != nil {
+				t.Fatalf("a declined update answered %v:\n%s", err, out.String())
+			}
+			said := out.String()
+			if !strings.HasPrefix(said, c.said) || strings.Count(said, c.said) != 1 || !strings.HasSuffix(said, c.asks+c.closes) {
+				t.Errorf("a declined update said:\n%s\nwant it to begin %q, once, and end %q", said, c.said, c.asks+c.closes)
+			}
+			devicesAre(t, "", "")
+			if err := refuseDevices("cyfr up"); err != nil {
+				t.Errorf("after the declined update cyfr up is refused: %v", err)
+			}
+		})
+	}
+}
+
+// An update refused before its question empties them too, said first: by
+// the home step's own refusal, here its release's manifest, and by the
+// program step's, here the newest release unread.
+func TestAnUpdateRefusedBeforeItsQuestionStillEmptiesADeviceThisMachineDoesNotHave(t *testing.T) {
+	for name, refuse := range map[string]func(t *testing.T) error{
+		"the manifest": func(t *testing.T) error {
+			fetchManifest = func(context.Context, string) (*release.Manifest, error) {
+				return nil, errors.New("dial tcp: lookup github.com: no such host")
+			}
+			var out bytes.Buffer
+			err := runHomeUpdate(context.Background(), &out, &out, updateOptions{yes: true})
+			if !strings.HasPrefix(out.String(), devicesGone("update")+"\n") {
+				t.Errorf("the update said:\n%s\nwant it to begin %q", out.String(), devicesGone("update"))
+			}
+			return err
+		},
+		"the program step": func(t *testing.T) error {
+			saved := latestRelease
+			t.Cleanup(func() { latestRelease = saved })
+			latestRelease = func(context.Context) (string, error) {
+				return "", errors.New("dial tcp: lookup api.github.com: no such host")
+			}
+			var out bytes.Buffer
+			err := runUpdate(context.Background(), &out, &out, updateOptions{yes: true})
+			if !strings.Contains(out.String(), devicesGone("update")+"\n") {
+				t.Errorf("the update said:\n%s\nwant it to say %q", out.String(), devicesGone("update"))
+			}
+			return err
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			devicesHere(t, false)
+			s := newUpdateScenario(t, shippedCompose(t), nil)
+			s.edit(".env", scenarioEnv+deviceLines("/dev/kvm", "/dev/net/tun"))
+			if err := refuse(t); err == nil {
+				t.Fatal("the test's premise: the update is refused")
+			}
+			devicesAre(t, "", "")
+			if err := refuseDevices("cyfr up"); err != nil {
+				t.Errorf("after the refused update cyfr up is refused: %v", err)
+			}
+		})
+	}
 }
 
 // An update on its release that would first give the devices asks before
@@ -481,6 +601,9 @@ func TestTheAppsConfirmedUpdateHoldsToTheDevicesItShowed(t *testing.T) {
 				shown := offered(t, out.String())
 				if shown.Confirmation == "" || !strings.Contains(shown.Change, devicesSignInAgain+"\n") {
 					t.Fatalf("the app's offer shows %+v, want a change that says what giving the devices removes", shown)
+				}
+				if shown.OnRelease != (release == "on its release") {
+					t.Fatalf("the app's offer says it is on its release: %t, at its %s", shown.OnRelease, release)
 				}
 				change(t, s)
 				before := read(t, filepath.Join(s.project, ".env"))
