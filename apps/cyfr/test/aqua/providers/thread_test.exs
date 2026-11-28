@@ -248,6 +248,25 @@ defmodule Aqua.Providers.ThreadTest do
     end
   end
 
+  describe "who a send addresses" do
+    test "a send names no agent: its declaration has none, and the gate refuses one", %{
+      ctx: ctx,
+      thread: thread
+    } do
+      refute Map.has_key?(action_schema(Tool.definition(), "send")["properties"], "agent")
+
+      assert {:refused, {:invalid_argument, _}} =
+               admission(ctx, "thread", %{
+                 "action" => "send",
+                 "thread" => thread.id,
+                 "message" => "plan it",
+                 "agent" => "planner"
+               })
+
+      assert Threads.messages(Sanctum.Context.actor(ctx), thread.id) == []
+    end
+  end
+
   describe "shape" do
     test "events replays messages by seq, not execution events", %{ctx: ctx, thread: thread} do
       {:ok, a} =
@@ -510,7 +529,7 @@ defmodule Aqua.Providers.ThreadTest do
       thread: thread
     } do
       assert {:ok, %{accepted: true, message_id: id, thread: landed}} =
-               call(ctx, %{"action" => "send", "message" => "good morning", "agent" => "aqua"})
+               call(ctx, %{"action" => "send", "message" => "good morning"})
 
       assert landed == thread.id
       assert {:ok, %{thread_id: ^landed}} = Threads.get_message(Sanctum.Context.actor(ctx), id)
@@ -529,8 +548,7 @@ defmodule Aqua.Providers.ThreadTest do
                call(ctx, %{
                  "action" => "send",
                  "thread" => past.id,
-                 "message" => "now",
-                 "agent" => "aqua"
+                 "message" => "now"
                })
 
       assert landed == thread.id
@@ -560,7 +578,6 @@ defmodule Aqua.Providers.ThreadTest do
                  "action" => "send",
                  "thread" => past.id,
                  "message" => "with a file",
-                 "agent" => "aqua",
                  "id" => message_id,
                  "attachments" => [ref]
                })
@@ -590,7 +607,6 @@ defmodule Aqua.Providers.ThreadTest do
                call(ctx, %{
                  "action" => "send",
                  "message" => "with a file",
-                 "agent" => "aqua",
                  "id" => message_id,
                  "attachments" => [ref]
                })
@@ -613,7 +629,6 @@ defmodule Aqua.Providers.ThreadTest do
                  "action" => "send",
                  "thread" => thread.id,
                  "message" => "with a file",
-                 "agent" => "aqua",
                  "id" => message_id,
                  "attachments" => [ref]
                })
@@ -627,21 +642,20 @@ defmodule Aqua.Providers.ThreadTest do
       assert Base.decode64!(data) == "today's bytes"
     end
 
-    test "a send naming a crew member's thread goes to that thread, never to today's", %{
+    test "a send naming a crew member's thread is refused there, never taken by today's", %{
       ctx: ctx,
       thread: thread
     } do
       actor = Sanctum.Context.actor(ctx)
       {:ok, crew} = Threads.crew_thread(actor, thread.id, "planner")
 
-      # The athanor has no crew member of that name, which only the crew
-      # thread's own admission asks: today's thread would take the line.
+      # A crew member's thread admits no line of the person's; today's
+      # thread would take one that missed it.
       assert {:error, :not_addressable} =
                call(ctx, %{
                  "action" => "send",
                  "thread" => crew.id,
-                 "message" => "hello",
-                 "agent" => "aqua"
+                 "message" => "hello"
                })
 
       assert Threads.messages(actor, thread.id) == []
@@ -661,8 +675,7 @@ defmodule Aqua.Providers.ThreadTest do
                call(other, %{
                  "action" => "send",
                  "thread" => thread.id,
-                 "message" => "hello",
-                 "agent" => "aqua"
+                 "message" => "hello"
                })
 
       assert id == thread.id
@@ -713,7 +726,6 @@ defmodule Aqua.Providers.ThreadTest do
                  "action" => "send",
                  "thread" => thread.id,
                  "message" => "here is a file",
-                 "agent" => "aqua",
                  "id" => message_id,
                  "attachments" => [ref],
                  "client_id" => "c-1"
@@ -759,7 +771,6 @@ defmodule Aqua.Providers.ThreadTest do
                  "action" => "send",
                  "thread" => thread.id,
                  "message" => "with a file",
-                 "agent" => "aqua",
                  "id" => message_id,
                  "attachments" => [ref],
                  "client_id" => "c-sent"
@@ -809,7 +820,6 @@ defmodule Aqua.Providers.ThreadTest do
                  "action" => "send",
                  "thread" => thread.id,
                  "message" => "about the shared thread",
-                 "agent" => "aqua",
                  "room" => %{"shared_thread_id" => beside.id, "title" => "Beside"}
                })
 
@@ -823,7 +833,6 @@ defmodule Aqua.Providers.ThreadTest do
                  "action" => "send",
                  "thread" => thread.id,
                  "message" => "still sent",
-                 "agent" => "aqua",
                  "room" => %{"shared_thread_id" => "sth_elsewhere"}
                })
     end
@@ -875,13 +884,18 @@ defmodule Aqua.Providers.ThreadTest do
   describe "post" do
     # A running turn with its root, as the loop starts one; its chain's
     # calls carry the lineage the gate stamps.
-    defp running!(ctx, thread) do
+    # A running turn of `agent` in `thread`: Aqua's, by default, opened by
+    # the person's line; a crew member's opened by Aqua's request.
+    defp running!(ctx, thread, agent \\ "aqua") do
       alias Aqua.Tape
+
+      sent_by = if agent == "aqua", do: "person", else: "aqua"
+      author = if agent == "aqua", do: ctx.user_id, else: "aqua"
 
       {:ok, %{turn: turn}} =
         Tape.accept(ctx, thread.id, %{
-          message: %{author: ctx.user_id, sent_by: "person", content: "draw the moon"},
-          turn: %{agent: "aqua", requested_by: ctx.user_id}
+          message: %{author: author, sent_by: sent_by, content: "draw the moon"},
+          turn: %{agent: agent, requested_by: ctx.user_id}
         })
 
       {:ok, %{execution: execution, attempt: attempt}} =
@@ -1162,6 +1176,26 @@ defmodule Aqua.Providers.ThreadTest do
       end
 
       assert read_threads(ctx, turn) == []
+    end
+
+    # The person speaks to Aqua alone, and a member still reads the room it
+    # works under, as every turn reads a room (#593).
+    test "a member's turn in its own thread searches and reads the room it works under",
+         %{ctx: ctx, thread: daily} do
+      said = say!(ctx, daily, "the room's lantern plan")
+      {:ok, crew} = Threads.crew_thread(Sanctum.Context.actor(ctx), daily.id, "coder")
+      turn = running!(ctx, crew, "coder")
+
+      assert {:ok, %{results: [found]}} =
+               in_turn(ctx, turn, %{"action" => "search", "q" => "lantern plan"})
+
+      assert {found.message, found.thread} == {said.id, daily.id}
+
+      assert {:ok, %{messages: read}} =
+               in_turn(ctx, turn, %{"action" => "events", "thread" => daily.id})
+
+      assert Enum.any?(read, &(&1.id == said.id and &1.content =~ "the room's lantern plan"))
+      assert daily.id in read_threads(ctx, turn)
     end
 
     test "a turn reads a daily or workspace thread's posts, fifty at most, after a seq",

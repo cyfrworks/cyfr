@@ -21,9 +21,8 @@ defmodule Aqua.Crew do
   brain is not installed or has no key bound, or whose brain is a
   program with no row of its name that stands as a brain's, is left
   out, and every way a job reaches a member holds it to the same
-  readiness (`ready/2`): `crew.ask` and a person's `@name` are
-  refused `{:crew_unready, member, reason}` before anything is written,
-  and a request whose member became unready while it waited is answered
+  readiness (`ready/2`): `crew.ask` is refused `{:crew_unready, member,
+  reason}` before anything is written, and a request whose member became unready while it waited is answered
   `failed` with that reason when its delivery comes (an outage of the
   reads waits for the next drain instead).
 
@@ -36,8 +35,8 @@ defmodule Aqua.Crew do
   `pending`) and its `crew_request` outbox record in one transaction and
   answers the request's id. The job's `title`, when one is given, is kept
   in the request row's payload, where the job's activity reads it
-  (`Aqua.Crew.Activity`). The soul's turn goes on. A person's `@name` in
-  a room is the same request, written by the room's runner.
+  (`Aqua.Crew.Activity`). The soul's turn goes on. A job reaches a member
+  in no other way: a person speaks to the soul, who hands the job over.
 
   ## Delivery
 
@@ -64,9 +63,9 @@ defmodule Aqua.Crew do
       a view of the room that read its crew threads when the request
       landed, before the member's thread was made, reads them again.
     * A reply lands on the request's room, sent by the member and
-      addressed to the request's sender, and answers every request the
-      record names. To the soul it opens or steers the soul's turn; to
-      the person it is room content and wakes nothing.
+      addressed to the soul, and answers every request the record names.
+      It opens or steers the soul's turn, for a request row the person
+      sent as for the soul's own.
 
   The same consumer delivers what a workspace thread sends
   (`Aqua.Providers.Workspace`):
@@ -357,7 +356,7 @@ defmodule Aqua.Crew do
   reads ready (`Aqua.Models.model_status/2`), else `{:error,
   {:crew_unready, member, t:unready/0}}`, the refusal the person reads
   (`Prima.Refusal`); `:not_addressable` for a name that is no crew
-  member. The one readiness rule a hand-off, a mention and a delivery all
+  member. The one readiness rule a hand-off and a delivery both
   apply, and the index's.
   """
   @spec ready(Context.t(), String.t()) :: :ok | {:error, term()}

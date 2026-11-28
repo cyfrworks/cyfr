@@ -297,15 +297,12 @@ defmodule Aqua.Providers.Thread do
           [
             Arg.new("thread", :string,
               description:
-                "send: a workspace thread or a crew member's thread; with none, or a daily thread, the send joins today's daily thread"
+                "send: a workspace thread; with none, or a daily thread, the send joins today's daily thread"
             ),
             Arg.new("message", :string,
               description:
                 "send: the text to say (at most 32 KiB of text); a send that is no press says a line or carries files",
               max: 32768
-            ),
-            Arg.new("agent", :string,
-              description: "send: the agent to address when the text names none"
             ),
             Arg.new(
               "attachments",
@@ -594,7 +591,7 @@ defmodule Aqua.Providers.Thread do
         )
       ],
       description:
-        "Talk to an agent: find today's thread or list threads, send a message, follow the reply, stop a turn, archive a thread (a daily or workspace thread goes behind the list's Archived filter until new work there, nothing else changing; a crew member's thread is retired, which stops its work there), and say one of your own private lines aloud into a shared thread you sit in; a running turn posts into its own thread, with files and links. A send with no thread joins today's daily thread and starts a turn of the athanor's assistant, or with @<name> asks that crew member, who works in a thread of its own under it and replies there; a send in a crew member's thread speaks to that member. A send may carry a pre-minted id with files attached under it, a model, an agent, the sender's own client id, and the shared thread open beside it. Wraps the same runner and the same verbs the console drives, with the same gates — this is not a second way to run an agent.",
+        "Talk to an agent: find today's thread or list threads, send a message, follow the reply, stop a turn, archive a thread (a daily or workspace thread goes behind the list's Archived filter until new work there, nothing else changing; a crew member's thread is retired, which stops its work there), and say one of your own private lines aloud into a shared thread you sit in; a running turn posts into its own thread, with files and links. A send with no thread joins today's daily thread and starts a turn of the athanor's assistant, which hands a job to a crew member when one is named or fits; the member works in a thread of its own under it, which can be read and not sent to, and its reply returns to the assistant. A send may carry a pre-minted id with files attached under it, a model, the sender's own client id, and the shared thread open beside it. Wraps the same runner and the same verbs the console drives, with the same gates — this is not a second way to run an agent.",
       title: "Threads"
     )
   end
@@ -602,8 +599,8 @@ defmodule Aqua.Providers.Thread do
   @doc false
   def crew_definition do
     alias Prima.{Arg, Operation}
-    # In a chain only: the soul's turn hands a job to a crew member, and a
-    # person's own ask is an `@name` in `thread.send`. The answer is the
+    # In a chain only: the soul's turn hands a job to a crew member, the
+    # one way a job reaches one. The answer is the
     # request's id and the roster the athanor's own files hold, so
     # neither carries a thread's posts.
     Operation.tool(
@@ -865,7 +862,7 @@ defmodule Aqua.Providers.Thread do
   end
 
   # The whole send envelope: the text, a pre-minted id and the refs
-  # attached under it, the agent and model, the sender's client id, and
+  # attached under it, the model, the sender's client id, and
   # the shared thread open beside it — read server-side under the
   # sender's seat into the text the turn reads beside the task
   # (`Aqua.Loop.Turn`), never stored; and a press of Aqua's question,
@@ -887,7 +884,6 @@ defmodule Aqua.Providers.Thread do
       [id: message_id, attachments: attachments]
       |> put_opt(:client_id, args["client_id"])
       |> put_opt(:model, args["model"])
-      |> put_opt(:agent, args["agent"])
       |> put_opt(:room, args["room"])
       |> put_opt(:choice, args["choice"])
 

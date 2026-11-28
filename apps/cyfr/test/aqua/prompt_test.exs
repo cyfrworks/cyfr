@@ -211,6 +211,38 @@ defmodule Aqua.PromptTest do
       end
     end
 
+    # The person speaks to the soul alone: a member they name for a job
+    # is the soul's to hand it to, said in the crew index, which only the
+    # soul's prompt carries.
+    test "the crew index says to hand a job to the member the person names, and only the soul's carries it",
+         %{ctx: ctx} do
+      naming =
+        "When the person names a member for a job, hand it to that member with `crew.ask`, " <>
+          "and do not do it yourself."
+
+      soul =
+        Prompt.compose(ctx,
+          agent: agent(%{"crew.ask" => "auto"}),
+          authority: nil,
+          crew: [%{"name" => "builder", "brain" => "claude", "description" => "", "avoid" => ""}]
+        ).instructions
+
+      assert [_, crew] = String.split(soul, "\n\n---\n\n## Crew\n\n", parts: 2)
+
+      assert String.starts_with?(
+               crew,
+               "Hand a job to one of these with `crew.ask` when it is what the member is good " <>
+                 "at. " <> naming <> " Each works it"
+             )
+
+      member = %{"name" => "builder", "prompt" => nil}
+
+      for own_tools? <- [true, false] do
+        refute Prompt.compose(ctx, agent: member, own_tools?: own_tools?, authority: nil).text =~
+                 "When the person names a member"
+      end
+    end
+
     test "no crew and no open request is no section", %{ctx: ctx} do
       prompt = Prompt.compose(ctx, agent: agent(), authority: nil).text
       refute prompt =~ "## Crew"

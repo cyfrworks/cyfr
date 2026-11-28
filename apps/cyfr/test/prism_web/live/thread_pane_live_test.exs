@@ -3057,6 +3057,39 @@ defmodule PrismWeb.ThreadPaneLiveTest do
   end
 
   describe "the crew" do
+    test "a member's thread reads as it stands, offers no composer, and refuses a line sent there",
+         %{conn: conn, athanor: athanor, here: here, thread: room} do
+      actor = Sanctum.Context.actor(here)
+      {:ok, child} = Threads.crew_thread(actor, room.id, "explorer")
+
+      {:ok, said} =
+        Threads.append(actor, child.id, %{
+          author: Prima.Author.agent(),
+          sent_by: "explorer",
+          kind: "text",
+          content: "Reading the plan."
+        })
+
+      pane = open_pane(conn, athanor, child)
+      assert render(pane) =~ "Reading the plan."
+      refute has_element?(pane, ~s([id$="-composer"]))
+      refute has_element?(pane, "textarea")
+
+      # A line that still reaches the pane, from a page drawn before, is
+      # refused where every send is taken, and writes nothing.
+      render_click(pane, "submit", %{"message" => "go on"})
+
+      assert :sys.get_state(pane.pid).socket.assigns.flash["error"] ==
+               "A crew member's thread can be read, not written in — ask Aqua in your own thread."
+
+      assert [%{id: only}] = Threads.messages(actor, child.id)
+      assert only == said.id
+
+      # The room it works under keeps its composer.
+      assert has_element?(open_pane(conn, athanor, room), ~s([id$="-composer"]))
+      Cyfr.Test.Sandbox.end_views()
+    end
+
     test "a room shows a request with the reply under it, by the member's name and its outcome",
          %{conn: conn, athanor: athanor, here: here, thread: room} do
       {:ok, child} = Threads.crew_thread(Sanctum.Context.actor(here), room.id, "explorer")

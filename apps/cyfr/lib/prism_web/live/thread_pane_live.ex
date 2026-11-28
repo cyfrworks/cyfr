@@ -58,8 +58,10 @@ defmodule PrismWeb.ThreadPaneLive do
   A reply whose request is not on screen stands on its own. A room lists
   the threads of the crew members its roster holds (`Aqua.roster/1`): a
   member taken out of the crew keeps its thread, which the list leaves
-  out. A member's thread names its member, leads back to its room and,
-  while it stands, can be archived (`thread.archive`). The pane opens
+  out. A member's thread names its member and leads back to its room; it
+  has no composer, since the person speaks to Aqua, who hands the member
+  its jobs, and offers only Stop while a turn runs there and, while it
+  stands, archiving (`thread.archive`). The pane opens
   none of them: it asks its host to open the thread, `{:open_thread,
   id}`. Any thread it shows is deleted from its menu (`thread.delete`), a
   room with its crew threads, once the person says yes to what goes and
@@ -299,6 +301,10 @@ defmodule PrismWeb.ThreadPaneLive do
   # A daily or a workspace thread: one the person archives.
   defp room?(%{kind: kind}), do: kind in ["daily", "workspace"]
   defp room?(_none), do: false
+
+  # A crew member's thread, which the person reads and never writes in.
+  defp crew?(%{kind: "crew"}), do: true
+  defp crew?(_thread), do: false
 
   # Everything the pane knows of one thread — its rows, the runner's live
   # state and the subscription that keeps them current — replacing what it
@@ -1352,7 +1358,6 @@ defmodule PrismWeb.ThreadPaneLive do
         message_id: message_id,
         text: message,
         attachments: refs,
-        agent: socket.assigns.assistant && socket.assigns.assistant["name"],
         model: socket.assigns.model_override,
         room: Keyword.get(room, :room)
       }
@@ -1461,7 +1466,6 @@ defmodule PrismWeb.ThreadPaneLive do
       "client_id" => envelope.client_id,
       "attachments" => envelope.attachments,
       "model" => envelope.model,
-      "agent" => envelope.agent,
       "room" => envelope.room
     }
     |> Map.reject(fn {_k, v} -> is_nil(v) end)
@@ -1507,7 +1511,6 @@ defmodule PrismWeb.ThreadPaneLive do
          message_id: message_id,
          text: text,
          attachments: attachments,
-         agent: if(is_binary(params["agent"]), do: params["agent"]),
          model: if(is_binary(params["model"]), do: params["model"]),
          room: room
        }}
@@ -1541,10 +1544,11 @@ defmodule PrismWeb.ThreadPaneLive do
         put_flash(socket, :error, "This crew member's thread is retired.")
 
       :not_addressable ->
-        put_flash(socket, :error, "Only this thread's crew member can be addressed here.")
-
-      :no_agent ->
-        put_flash(socket, :error, "This athanor has no assistant — see Aqua.")
+        put_flash(
+          socket,
+          :error,
+          "A crew member's thread can be read, not written in — ask Aqua in your own thread."
+        )
 
       :storage_full ->
         put_flash(socket, :error, "This athanor's storage is full.")
@@ -2452,7 +2456,7 @@ defmodule PrismWeb.ThreadPaneLive do
       </div>
 
       <label
-        :if={reads_room?(@room)}
+        :if={reads_room?(@room) and not crew?(@thread)}
         id={@dom <> "-read-room"}
         title="Each message you send here carries what the thread beside it shows — read for you, never kept"
         class="flex cursor-pointer items-center gap-2 border-t border-gray-800 px-3 py-1 text-xs text-gray-500"
@@ -2466,7 +2470,16 @@ defmodule PrismWeb.ThreadPaneLive do
         <span class="truncate">Read {PrismWeb.RoomFeed.label(@room)} with each message</span>
       </label>
 
+      <div
+        :if={crew?(@thread) and (@running or @paused)}
+        id={@dom <> "-crew-stop"}
+        class="flex justify-end border-t border-border-default px-3 pt-2.5 pb-3"
+      >
+        <.stop_button cancel_requested={@cancel_requested} />
+      </div>
+
       <form
+        :if={not crew?(@thread)}
         id={@dom <> "-composer"}
         phx-submit="submit"
         phx-change="validate_upload"
@@ -2521,18 +2534,25 @@ defmodule PrismWeb.ThreadPaneLive do
           >
             Send
           </button>
-          <button
-            :if={@running or @paused}
-            type="button"
-            phx-click="stop"
-            title="Stop this turn; what waits behind it is dropped"
-            class="self-end rounded-md bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-500"
-          >
-            {if @cancel_requested, do: "Cancelling…", else: "Stop"}
-          </button>
+          <.stop_button :if={@running or @paused} cancel_requested={@cancel_requested} />
         </div>
       </form>
     </section>
+    """
+  end
+
+  attr :cancel_requested, :boolean, required: true
+
+  defp stop_button(assigns) do
+    ~H"""
+    <button
+      type="button"
+      phx-click="stop"
+      title="Stop this turn; what waits behind it is dropped"
+      class="self-end rounded-md bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-500"
+    >
+      {if @cancel_requested, do: "Cancelling…", else: "Stop"}
+    </button>
     """
   end
 

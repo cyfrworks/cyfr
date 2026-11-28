@@ -27,18 +27,20 @@ func init() {
 
 var aquaCmd = &cobra.Command{
 	Use:     "aqua",
-	Short:   "The athanor's Aqua — its soul, crew and scrolls",
+	Short:   "The athanor's Aqua — its soul, rules, crew and scrolls",
 	GroupID: "admin",
 	Long: `The athanor has one assistant, Aqua. This command manages what it is made of:
 
   the soul      aqua.md — who Aqua is (name "aqua"); edited, never created or deleted
+  the rules     aqua/rules.md — the athanor's rules, read by Aqua and every crew member
+                before each turn; edited in Files, never deleted
   the crew      who Aqua hands jobs to, each on a brain of its own — aqua/crew/<name>.md
   the scrolls   how a job is done, for Aqua and its crew — kept in packs, aqua/scrolls/<pack>/
   the guides    the read-only documentation guides
 
-"list" shows all of it; "get" reads the soul, a crew member or a guide; "skills" reads
-the scrolls; "status" says which files are shipped, edited or yours. Aqua's page
-in CYFR restores the shipped set.`,
+"list" shows all of it but the rules; "get" reads the soul, a crew member or a guide;
+"skills" reads the scrolls; "status" says which files are shipped, edited or yours.
+Aqua's page in CYFR restores the shipped set.`,
 }
 
 var aquaListCmd = &cobra.Command{

@@ -164,6 +164,65 @@ defmodule Aqua.CrewTest do
     row
   end
 
+  # A request as `crew.ask` writes it, through the tape, which tells the
+  # room's viewers and wakes the delivery.
+  defp handed!(ctx, room, member, task) do
+    {:ok, %{message: row}} =
+      Tape.accept(ctx, room.id, %{
+        message: %{
+          author: Prima.Author.agent(),
+          sent_by: "aqua",
+          addressee: member,
+          status: "pending",
+          content: task
+        },
+        request: %{
+          member: member,
+          task: task,
+          options: %{},
+          person_id: ctx.user_id,
+          origin: :interactive
+        }
+      })
+
+    row
+  end
+
+  # A request row the person sent a member themselves: no send writes
+  # one, but one still pending in an athanor is delivered as any request
+  # is, and answered to Aqua.
+  defp person_request!(ctx, room, member, task, message \\ & &1) do
+    soul_request!(ctx, room, member, task, %{}, fn row ->
+      message.(%{row | author: ctx.user_id, sent_by: "person"})
+    end)
+  end
+
+  # A turn the person opened with a post in a member's own thread: no
+  # send opens one, but one still open is run by the thread's runner as
+  # any accepted turn is.
+  defp direct_turn!(ctx, child, text) do
+    {:ok, %{turn: turn}} =
+      Tape.accept(ctx, child.id, %{
+        message: %{author: ctx.user_id, sent_by: "person", addressee: child.agent, content: text},
+        turn: %{agent: child.agent, requested_by: ctx.user_id}
+      })
+
+    {:ok, _pid} = Runner.ensure(child.id, ctx.athanor_id)
+    turn.id
+  end
+
+  # A person's request row to the planner that carries files, stored under
+  # its id first: the one kind of request a file rides on.
+  defp filed_request!(ctx, room, task, message_id, refs) do
+    person_request!(
+      ctx,
+      room,
+      "planner",
+      task,
+      &Map.merge(&1, %{id: message_id, payload: %{"attachments" => refs}})
+    )
+  end
+
   defp replies_of(ctx, turn_id) do
     {:ok, records} = Arca.Outbox.pending(actor(ctx), "crew_delivery", "crew_reply")
     Enum.filter(records, &(&1.source_id == turn_id))
@@ -292,29 +351,17 @@ defmodule Aqua.CrewTest do
     assert sent =~ ~r/count\\*":\s*2\b/
   end
 
-  test "a person's line in a member's own thread is held to its readiness before it is written",
+  test "a member's own thread admits no line of the person's, and writes nothing",
        %{ctx: ctx, room: room} do
     {:ok, child} = Threads.crew_thread(actor(ctx), room.id, "planner")
 
-    # The planner's brain leaves the athanor after its thread was made.
-    {:ok, planner} = Compendium.AquaAgent.get(ctx, "planner")
-
-    :ok =
-      Arca.put(
-        actor(ctx),
-        Compendium.AquaPath.crew_file("planner"),
-        Compendium.AquaAgent.serialize(%{planner | catalyst_ref: "catalyst:local.nowhere"})
-      )
-
-    {:ok, _} = Compendium.AgentIndex.sync(ctx)
-
-    for text <- ["@planner continue", "continue"] do
-      assert {:error, {:crew_unready, "planner", :not_installed}} =
-               Runner.send_message(ctx, child.id, text)
+    for text <- ["@planner continue", "continue", "@aqua continue"] do
+      assert {:error, :not_addressable} = Runner.send_message(ctx, child.id, text)
     end
 
     assert rows(ctx, child.id) == []
     assert {:ok, []} = Tape.open_turns(ctx, child.id)
+    assert pending_records(ctx) == []
   end
 
   # A key has no default model: a member on a connected key that names no
@@ -340,7 +387,7 @@ defmodule Aqua.CrewTest do
     refute "planner" in Enum.map(index, & &1["name"])
 
     refusal = {:crew_unready, "planner", :no_model}
-    assert {:error, ^refusal} = Runner.send_message(ctx, room.id, "@planner plan this")
+    assert {:error, ^refusal} = Crew.ready(ctx, "planner")
 
     assert Prima.Refusal.message(refusal) ==
              "planner has no model chosen yet — choose one on its card on the Aqua page"
@@ -357,18 +404,11 @@ defmodule Aqua.CrewTest do
     {"openai-codex", :program_missing, "program is not installed here"}
   ]
 
-  test "a person's @name of a member that is not ready is refused with why, and writes nothing",
-       %{ctx: ctx, room: room} do
+  test "a hand-off to a member that is not ready is refused with why", %{ctx: ctx} do
     for {member, reason, words} <- @unready do
-      assert {:error, {:crew_unready, ^member, ^reason} = refusal} =
-               Runner.send_message(ctx, room.id, "@#{member} look into this")
-
+      assert {:error, {:crew_unready, ^member, ^reason} = refusal} = Crew.ready(ctx, member)
       assert Aqua.Ops.render_refusal(refusal) =~ words
     end
-
-    assert rows(ctx, room.id) == []
-    assert Threads.children(actor(ctx), room.id) == []
-    assert pending_records(ctx) == []
   end
 
   # A catalyst that needs nothing of the person waits on their grant
@@ -412,8 +452,7 @@ defmodule Aqua.CrewTest do
           {"openai-codex", :program_unfit, "program is not one a crew member can run on"},
           {"claude-code", :program_missing, "install it from its card on the Aqua page"}
         ] do
-      assert {:error, {:crew_unready, ^member, ^reason} = refusal} =
-               Runner.send_message(ctx, room.id, "@#{member} look into this")
+      assert {:error, {:crew_unready, ^member, ^reason} = refusal} = Crew.ready(ctx, member)
 
       assert Aqua.Ops.render_refusal(refusal) =~ words
     end
@@ -527,11 +566,9 @@ defmodule Aqua.CrewTest do
              }
            ]
 
-    # A person's @name is held to the same readiness, refused with what to
-    # do before anything is written.
+    # A hand-off is held to the same readiness, refused with what to do.
     for {member, {reason, words}} <- unready do
-      assert {:error, {:crew_unready, ^member, ^reason} = refusal} =
-               Runner.send_message(ctx, room.id, "@#{member} look into this")
+      assert {:error, {:crew_unready, ^member, ^reason} = refusal} = Crew.ready(ctx, member)
 
       assert Aqua.Ops.render_refusal(refusal) =~ words
     end
@@ -541,18 +578,18 @@ defmodule Aqua.CrewTest do
 
   # A member holds no consent of its own: its brain's model changed, it
   # takes a person's job at once, under the crew's one grant.
-  # A person's @name of `member` in `room`, delivered, its turn run to its
-  # end and its reply delivered back: the turn.
+  # Aqua's request of `member` in `room`, delivered, its turn run to its
+  # end and its reply delivered back, which opens Aqua's turn there: the
+  # member's turn, once Aqua's has ended, whatever it ended with.
   defp job!(ctx, room, member, text) do
-    assert {:ok, %{admitted: :request, message_id: request}} =
-             Runner.send_message(ctx, room.id, "@#{member} " <> text)
-
+    %{id: request} = soul_request!(ctx, room, member, text)
     assert {:ok, %{"applied" => 1}} = drain(ctx)
     child = child!(ctx, room, member)
     wait_until(fn -> delivered_turn(ctx, child, request) end, 30_000)
     turn_id = delivered_turn(ctx, child, request)
     await_status(ctx, turn_id, "completed")
     assert {:ok, %{"applied" => 1}} = drain(ctx)
+    wait_until(fn -> match?({:ok, []}, Tape.open_turns(ctx, room.id)) end, 45_000)
     elem(Tape.turn(ctx, turn_id), 1)
   end
 
@@ -590,7 +627,9 @@ defmodule Aqua.CrewTest do
     ScriptedWorker.fresh_limits!(ctx, [@gemini])
 
     start_supervised!(
-      {ScriptedWorker, ref: [@model, @gemini], script: [reply("Planned."), reply("Found.")]}
+      {ScriptedWorker,
+       ref: [@model, @gemini],
+       script: [reply("Planned."), reply("Aqua has the plan."), reply("Found.")]}
     )
 
     planned = job!(ctx, room, "planner", "plan it")
@@ -625,7 +664,7 @@ defmodule Aqua.CrewTest do
   # ready the moment it is connected, with nothing asked of Aqua.
   test "a member's brain reads a key to connect or ready by its own setup alone, and " <>
          "connecting it asks nothing of Aqua",
-       %{ctx: ctx, room: room} do
+       %{ctx: ctx} do
     :ok =
       Arca.put(
         actor(ctx),
@@ -639,8 +678,7 @@ defmodule Aqua.CrewTest do
     {:ok, %{consent_id: aqua}} = Opus.authority_for(ctx, :default, "agent:local.aqua")
     assert {:needs_key, _resolved} = Aqua.Models.model_status(ctx, roster)["scout"]
 
-    assert {:error, {:crew_unready, "scout", :no_key}} =
-             Runner.send_message(ctx, room.id, "@scout look into this")
+    assert {:error, {:crew_unready, "scout", :no_key}} = Crew.ready(ctx, "scout")
 
     Sanctum.Test.ConsentFixtures.bind_key!(ctx, @gemini, %{"GEMINI_API_KEY" => "g-test"})
 
@@ -721,7 +759,7 @@ defmodule Aqua.CrewTest do
   # machine walk grants it, and a member on it is refused with the brain's
   # own state.
   test "a brain installed that nobody connected is made usable by no machine walk",
-       %{ctx: ctx, room: room} do
+       %{ctx: ctx} do
     Arca.Test.UnitFixtures.chat_catalyst!(ctx, "drift")
     made = "catalyst:local.drift"
 
@@ -732,9 +770,6 @@ defmodule Aqua.CrewTest do
 
     keeper!(ctx, made)
     assert {:error, {:crew_unready, "keeper", :no_grant}} = Crew.ready(ctx, "keeper")
-
-    assert {:error, {:crew_unready, "keeper", :no_grant}} =
-             Runner.send_message(ctx, room.id, "@keeper keep it")
   end
 
   # A brain's key bound again, after the person granted Aqua themselves,
@@ -790,8 +825,7 @@ defmodule Aqua.CrewTest do
         assert {@model, :revoked} in skipped
       end
 
-      assert {:error, {:crew_unready, "planner", :no_key} = refusal} =
-               Runner.send_message(ctx, room.id, "@planner plan it")
+      assert {:error, {:crew_unready, "planner", :no_key} = refusal} = Crew.ready(ctx, "planner")
 
       assert Aqua.Ops.render_refusal(refusal) == "planner's " <> line
 
@@ -983,8 +1017,7 @@ defmodule Aqua.CrewTest do
              Opus.authority_for(other, {:id, our_brain.profile_id}, @model)
 
     # Here the same member's job is refused for want of this athanor's grant.
-    assert {:ok, %{admitted: :request, message_id: request}} =
-             Runner.send_message(ctx, room.id, "@planner plan it")
+    %{id: request} = soul_request!(ctx, room, "planner", "plan it")
 
     assert {:ok, %{"applied" => 1}} = drain(ctx)
     child = child!(ctx, room, "planner")
@@ -1006,8 +1039,7 @@ defmodule Aqua.CrewTest do
     {:ok, _} = Compendium.AgentIndex.sync(ctx)
     script!([reply("Looked.")])
 
-    assert {:ok, _accepted} = Runner.send_message(ctx, room.id, "@planner look into this")
-    request = Enum.find(rows(ctx, room.id), &(&1.addressee == "planner"))
+    request = soul_request!(ctx, room, "planner", "look into this")
     assert {:ok, %{"applied" => 1}} = drain(ctx)
     child = child!(ctx, room, "planner")
     wait_until(fn -> delivered_turn(ctx, child, request.id) end, 30_000)
@@ -1090,53 +1122,74 @@ defmodule Aqua.CrewTest do
     assert pending_records(ctx) == []
   end
 
-  test "a person's @name is a request their member answers in its own thread, and the reply lands under it, waking nobody",
+  test "a person's @name in a room is words to Aqua: it opens Aqua's turn and writes no request",
        %{ctx: ctx, room: room} do
-    script!([reply("Plan: read, then write.")])
+    script!([reply("I will hand it to planner.")])
 
-    assert {:ok, %{admitted: :request, turn_id: nil, message_id: request_id}} =
+    assert {:ok, %{admitted: :turn, turn_id: turn_id, message_id: line}} =
              Runner.send_message(ctx, room.id, "@planner plan the move")
 
-    assert %{addressee: "planner", sent_by: "person", status: "pending"} = row(ctx, request_id)
+    assert {:ok, %{agent: "aqua", sent_by: "person"}} = Tape.turn(ctx, turn_id)
+
+    assert %{addressee: "aqua", status: nil, content: "@planner plan the move"} =
+             row(ctx, line)
+
+    await_status(ctx, turn_id, "completed")
+    refute Enum.any?(rows(ctx, room.id), &(&1.addressee == "planner"))
+    assert Threads.children(actor(ctx), room.id) == []
+    assert pending_records(ctx) == []
+  end
+
+  test "a person's own request row still pending is delivered to its member, and its reply, " <>
+         "queued, opens Aqua's turn",
+       %{ctx: ctx, room: room} do
+    script!([reply("Plan: read, then write."), reply("planner has a plan for you.")])
+    request = person_request!(ctx, room, "planner", "plan the move")
 
     assert {:ok, %{"applied" => 1}} = drain(ctx)
     child = child!(ctx, room, "planner")
     assert %{kind: "crew", parent_id: parent} = child
     assert parent == room.id
 
-    turn_id = delivered_turn(ctx, child, request_id)
+    turn_id = delivered_turn(ctx, child, request.id)
     await_status(ctx, turn_id, "completed")
 
-    assert {:ok, %{sent_by: "person", asking_thread_id: asking, request_id: ^request_id}} =
+    assert {:ok, %{sent_by: "person", asking_thread_id: asking, request_id: request_id}} =
              Tape.turn(ctx, turn_id)
 
-    assert asking == room.id
+    assert {asking, request_id} == {room.id, request.id}
 
+    # The reply waits on its record, as one queued before it was delivered.
+    assert [%{snapshot: %{"member" => "planner"}}] = replies_of(ctx, turn_id)
     assert {:ok, %{"applied" => 1}} = drain(ctx)
-    reply = Enum.find(rows(ctx, room.id), &(&1.reply_to == request_id))
+    reply = Enum.find(rows(ctx, room.id), &(&1.reply_to == request.id))
 
     assert %{
              sent_by: "planner",
-             addressee: "person",
+             addressee: "aqua",
              outcome: "done",
              content: "Plan: read, then write."
            } = reply
 
-    assert %{status: "answered", resolved_by: resolved_by} = row(ctx, request_id)
+    assert %{status: "answered", resolved_by: resolved_by} = row(ctx, request.id)
     assert resolved_by == reply.id
     assert_receive %ThreadEvent{kind: :reply, data: %{id: reply_id}}, 5_000
     assert reply_id == reply.id
 
-    # Room content: the person's own request's answer opens no turn.
-    assert room_turns(ctx, room) == []
+    # The reply is Aqua's turn, the person's request's as the soul's are.
+    assert [%{agent: "aqua", sent_by: "planner", message_id: opened, id: aqua}] =
+             room_turns(ctx, room)
+
+    assert opened == reply.id
+    await_status(ctx, aqua, "completed")
     assert pending_records(ctx) == []
   end
 
   # Aqua's list changed past the crew's grant: the member's turn is
   # refused before it asks its model, said in its own thread, and its
-  # reply answers the person's request failed in the same words, which say
+  # reply answers Aqua's request failed in the same words, which say
   # where to grant it and to ask the member again.
-  test "with Aqua's list changed past its grant, a person's @name is answered failed with " <>
+  test "with Aqua's list changed past its grant, Aqua's request is answered failed with " <>
          "where to grant it, as the member's thread says",
        %{ctx: ctx, room: room} do
     script!([reply("Never.")])
@@ -1147,8 +1200,7 @@ defmodule Aqua.CrewTest do
       "What Aqua and its crew members may use changed since you granted it. planner did " <>
         "not do this job: grant it again on your Aqua page, then ask planner for it again."
 
-    assert {:ok, %{admitted: :request, message_id: request_id}} =
-             Runner.send_message(ctx, room.id, "@planner plan the move")
+    %{id: request_id} = soul_request!(ctx, room, "planner", "plan the move")
 
     assert {:ok, %{"applied" => 1}} = drain(ctx)
     child = child!(ctx, room, "planner")
@@ -1159,7 +1211,7 @@ defmodule Aqua.CrewTest do
 
     assert {:ok, %{"applied" => 1}} = drain(ctx)
     reply = Enum.find(rows(ctx, room.id), &(&1.reply_to == request_id))
-    assert %{sent_by: "planner", addressee: "person", outcome: "failed", content: ^said} = reply
+    assert %{sent_by: "planner", addressee: "aqua", outcome: "failed", content: ^said} = reply
     assert ScriptedWorker.calls() == []
   end
 
@@ -1170,9 +1222,7 @@ defmodule Aqua.CrewTest do
        %{ctx: ctx, room: room} do
     script!([reply("Plan: read, then write.")])
 
-    assert {:ok, %{admitted: :request, message_id: request_id}} =
-             Runner.send_message(ctx, room.id, "@planner plan the move")
-
+    %{id: request_id} = handed!(ctx, room, "planner", "plan the move")
     assert_receive %ThreadEvent{kind: :request, data: %{id: ^request_id, status: "pending"}}
 
     {:ok, session} = Sanctum.TestContext.create_session(ctx)
@@ -1298,12 +1348,12 @@ defmodule Aqua.CrewTest do
 
   # A member has no prompt: CYFR briefs it, the scroll list follows in the
   # runtime context, and the job is the turn's message, never its prompt.
-  test "a member with no prompt is briefed by CYFR, handed its job apart, and its reply goes back to whoever asked",
+  test "a member with no prompt is briefed by CYFR, handed its job apart, and its reply goes back to Aqua",
        %{ctx: ctx, room: room} do
     script!([reply("Plan: read, then write.")])
 
-    assert {:ok, %{admitted: :request, message_id: request_id}} =
-             Runner.send_message(ctx, room.id, "@planner plan the move with the planner scroll")
+    %{id: request_id} =
+      soul_request!(ctx, room, "planner", "plan the move with the planner scroll")
 
     assert {:ok, %{"applied" => 1}} = drain(ctx)
     child = child!(ctx, room, "planner")
@@ -1332,7 +1382,7 @@ defmodule Aqua.CrewTest do
 
     assert {:ok, %{"applied" => 1}} = drain(ctx)
 
-    assert %{sent_by: "planner", addressee: "person", outcome: "done"} =
+    assert %{sent_by: "planner", addressee: "aqua", outcome: "done"} =
              Enum.find(rows(ctx, room.id), &(&1.reply_to == request_id))
   end
 
@@ -1341,8 +1391,7 @@ defmodule Aqua.CrewTest do
   test "a member whose requests offer its provider's search is told so", %{ctx: ctx, room: room} do
     script!([reply("Found it.")], provider_tools: ["web_search"])
 
-    assert {:ok, %{message_id: request_id}} =
-             Runner.send_message(ctx, room.id, "@planner find the fares")
+    %{id: request_id} = soul_request!(ctx, room, "planner", "find the fares")
 
     assert {:ok, %{"applied" => 1}} = drain(ctx)
     child = child!(ctx, room, "planner")
@@ -1703,7 +1752,7 @@ defmodule Aqua.CrewTest do
       reply("the soul's")
     ])
 
-    {:ok, %{message_id: first}} = Runner.send_message(ctx, room.id, "@planner first")
+    %{id: first} = person_request!(ctx, room, "planner", "first")
     assert {:ok, %{"applied" => 1}} = drain(ctx)
     assert_receive {:scripted_probe, worker, _}, 60_000
 
@@ -1711,7 +1760,7 @@ defmodule Aqua.CrewTest do
     opened = delivered_turn(ctx, child, first)
 
     soul = soul_request!(ctx, room, "planner", "from the soul")
-    {:ok, %{message_id: also}} = Runner.send_message(ctx, room.id, "@planner also")
+    %{id: also} = person_request!(ctx, room, "planner", "also")
     assert {:ok, %{"applied" => 2}} = drain(ctx)
 
     queued = delivered_turn(ctx, child, soul.id)
@@ -1738,7 +1787,7 @@ defmodule Aqua.CrewTest do
 
   test "another person, athanor, origin or job cannot join Aqua's running member job",
        %{ctx: ctx, room: room} do
-    script!([{:hold, self()}, reply("first"), reply("from the API"), reply("second")])
+    script!([{:hold, self()}, reply("first"), reply("second")])
     first = soul_request!(ctx, room, "planner", "first job")
     assert {:ok, %{"applied" => 1}} = drain(ctx)
     assert_receive {:scripted_probe, worker, _}, 60_000
@@ -1758,11 +1807,8 @@ defmodule Aqua.CrewTest do
                "another person"
              )
 
-    assert {:ok, %{admitted: :turn, turn_id: api}} =
+    assert {:error, :not_addressable} =
              Runner.send_message(%{ctx | origin: :programmatic}, child.id, "from the API")
-
-    assert api != running
-    assert {:ok, %{status: "accepted", origin: "programmatic"}} = Tape.turn(ctx, api)
 
     second = soul_request!(ctx, room, "planner", "second job")
     assert {:ok, %{"applied" => 1}} = drain(ctx)
@@ -1770,17 +1816,17 @@ defmodule Aqua.CrewTest do
     assert queued != running
     assert {:ok, %{status: "accepted", request_id: request_id}} = Tape.turn(ctx, queued)
     assert request_id == second.id
-    assert %{running: true, queued: 2} = Runner.state(child.id, ctx.athanor_id)
+    assert %{running: true, queued: 1} = Runner.state(child.id, ctx.athanor_id)
 
     send(worker, :continue)
-    for id <- [running, api, queued], do: await_status(ctx, id, "completed")
+    for id <- [running, queued], do: await_status(ctx, id, "completed")
   end
 
   test "a busy child thread leaves the request pending, and the next tick delivers it",
        %{ctx: ctx, room: room} do
     # The soul's request holds the member's thread while its model request
-    # waits; the person's requests, another sender's, queue behind it until
-    # the queue is full. Every model call here is a plain answer.
+    # waits; its later requests, each a job of its own, queue behind it
+    # until the queue is full. Every model call here is a plain answer.
     script!([{:hold, self()} | for(n <- 1..16, do: reply("answer #{n}"))])
 
     held = soul_request!(ctx, room, "planner", "hold the floor")
@@ -1789,12 +1835,7 @@ defmodule Aqua.CrewTest do
     child = child!(ctx, room, "planner")
 
     asks =
-      for n <- 1..9 do
-        {:ok, %{admitted: :request, message_id: id}} =
-          Runner.send_message(ctx, room.id, "@planner wait #{n}")
-
-        id
-      end
+      for n <- 1..9, do: soul_request!(ctx, room, "planner", "wait #{n}").id
 
     {waiting, [last]} = Enum.split(asks, 8)
     assert {:ok, %{"pending" => 1}} = drain(ctx)
@@ -1831,8 +1872,9 @@ defmodule Aqua.CrewTest do
     script!([reply("for the soul"), reply("for the planner")])
     {:ok, %{turn_id: soul_turn}} = Runner.send_message(ctx, room.id, "hello")
     await_status(ctx, soul_turn, "completed")
-    {:ok, child} = Threads.crew_thread(actor(ctx), room.id, "planner")
-    {:ok, %{turn_id: member_turn}} = Runner.send_message(ctx, child.id, "plan it")
+    request = soul_request!(ctx, room, "planner", "plan it")
+    assert {:ok, %{"applied" => 1}} = drain(ctx)
+    member_turn = delivered_turn(ctx, child!(ctx, room, "planner"), request.id)
     await_status(ctx, member_turn, "completed")
 
     family =
@@ -1915,15 +1957,15 @@ defmodule Aqua.CrewTest do
     assert content =~ "The browser was not found."
   end
 
-  describe "a delivery that steers a turn a direct post opened" do
+  describe "a person's request row that steers a turn they opened in the member's thread" do
     test "gives the running turn its reply address, and the turn's end answers it",
          %{ctx: ctx, room: room} do
       script!([{:probe, self()}, reply("started"), reply("started, and more")])
       {:ok, child} = Threads.crew_thread(actor(ctx), room.id, "planner")
-      {:ok, %{turn_id: direct}} = Runner.send_message(ctx, child.id, "start on the plan")
+      direct = direct_turn!(ctx, child, "start on the plan")
       assert_receive {:scripted_probe, worker, _}, 60_000
 
-      {:ok, %{message_id: request}} = Runner.send_message(ctx, room.id, "@planner and more")
+      %{id: request} = person_request!(ctx, room, "planner", "and more")
       assert {:ok, %{"applied" => 1}} = drain(ctx)
       assert delivered_turn(ctx, child, request) == direct
 
@@ -1953,11 +1995,11 @@ defmodule Aqua.CrewTest do
       )
 
       {:ok, child} = Threads.crew_thread(actor(ctx), room.id, "planner")
-      {:ok, %{turn_id: direct}} = Runner.send_message(ctx, child.id, "fetch the plan")
+      direct = direct_turn!(ctx, child, "fetch the plan")
       await_status(ctx, direct, "paused")
       assert {:ok, %{paused_reason: "uncertain"}} = Tape.turn(ctx, direct)
 
-      {:ok, %{message_id: request}} = Runner.send_message(ctx, room.id, "@planner and more")
+      %{id: request} = person_request!(ctx, room, "planner", "and more")
       assert {:ok, %{"applied" => _}} = drain(ctx)
       assert delivered_turn(ctx, child, request) == direct
       await_status(ctx, direct, "completed")
@@ -2157,11 +2199,7 @@ defmodule Aqua.CrewTest do
         %{"filename" => "square.png", "media_type" => "image/png", "bytes" => "PNGBYTES"}
       ])
 
-    {:ok, %{admitted: :request}} =
-      Runner.send_message(ctx, room.id, "@planner what is this?",
-        id: message_id,
-        attachments: refs
-      )
+    _request = filed_request!(ctx, room, "what is this?", message_id, refs)
 
     assert {:ok, %{"applied" => 1}} = drain(ctx)
     child = child!(ctx, room, "planner")
@@ -2221,11 +2259,7 @@ defmodule Aqua.CrewTest do
     png = %{"filename" => "square.png", "media_type" => "image/png", "bytes" => "PNGBYTES"}
     {:ok, refs} = Aqua.Attachments.store(ctx, room.id, message_id, [png])
 
-    {:ok, %{admitted: :request}} =
-      Runner.send_message(ctx, room.id, "@planner what is this?",
-        id: message_id,
-        attachments: refs
-      )
+    _request = filed_request!(ctx, room, "what is this?", message_id, refs)
 
     # The earlier try made the member's thread and copied, then died
     # before the row.
@@ -2249,11 +2283,7 @@ defmodule Aqua.CrewTest do
     png = %{"filename" => "square.png", "media_type" => "image/png", "bytes" => "PNGBYTES"}
     {:ok, [ref] = refs} = Aqua.Attachments.store(ctx, room.id, message_id, [png])
 
-    {:ok, %{admitted: :request}} =
-      Runner.send_message(ctx, room.id, "@planner what is this?",
-        id: message_id,
-        attachments: refs
-      )
+    _request = filed_request!(ctx, room, "what is this?", message_id, refs)
 
     {:ok, path} = Aqua.Attachments.blob_path(room.id, message_id, ref)
     # The person deletes the request's folder from Files before it is delivered.
@@ -2274,11 +2304,7 @@ defmodule Aqua.CrewTest do
     png = %{"filename" => "square.png", "media_type" => "image/png", "bytes" => "PNGBYTES"}
     {:ok, refs} = Aqua.Attachments.store(ctx, room.id, message_id, [png])
 
-    {:ok, %{admitted: :request}} =
-      Runner.send_message(ctx, room.id, "@planner what is this?",
-        id: message_id,
-        attachments: refs
-      )
+    _request = filed_request!(ctx, room, "what is this?", message_id, refs)
 
     Prima.Test.Env.with_app_env(:arca, :storage_adapter, __MODULE__.ReadOutage, fn ->
       assert {:ok, outcome} = drain(ctx)
@@ -2300,11 +2326,7 @@ defmodule Aqua.CrewTest do
     png = %{"filename" => "square.png", "media_type" => "image/png", "bytes" => "PNGBYTES"}
     {:ok, refs} = Aqua.Attachments.store(ctx, room.id, message_id, [png])
 
-    {:ok, %{admitted: :request}} =
-      Runner.send_message(ctx, room.id, "@planner what is this?",
-        id: message_id,
-        attachments: refs
-      )
+    _request = filed_request!(ctx, room, "what is this?", message_id, refs)
 
     Cyfr.Test.Settings.put("athanor_storage_bytes", 1)
     Arca.Usage.invalidate(actor(ctx))
@@ -2323,11 +2345,7 @@ defmodule Aqua.CrewTest do
     png = %{"filename" => "square.png", "media_type" => "image/png", "bytes" => "PNGBYTES"}
     {:ok, refs} = Aqua.Attachments.store(ctx, room.id, message_id, [png])
 
-    {:ok, %{admitted: :request}} =
-      Runner.send_message(ctx, room.id, "@planner what is this?",
-        id: message_id,
-        attachments: refs
-      )
+    _request = filed_request!(ctx, room, "what is this?", message_id, refs)
 
     assert {:ok, _} = Tape.delete_thread(ctx, room.id)
     assert {:ok, outcome} = drain(ctx)
@@ -2461,8 +2479,7 @@ defmodule Aqua.CrewTest do
     message_id = Prima.UUID7.generate_id("msg")
     {:ok, refs} = Aqua.Attachments.store(ctx, room.id, message_id, files)
 
-    {:ok, %{admitted: :request}} =
-      Runner.send_message(ctx, room.id, "@planner read these", id: message_id, attachments: refs)
+    _request = filed_request!(ctx, room, "read these", message_id, refs)
 
     assert {:ok, %{"applied" => 1}} = drain(ctx)
     child = child!(ctx, room, "planner")
@@ -2552,7 +2569,7 @@ defmodule Aqua.CrewTest do
     {:ok, old} = Threads.crew_thread(actor(ctx), room.id, "planner")
     {:ok, _} = Tape.retire(ctx, old.id)
 
-    assert {:error, :thread_retired} = Runner.send_message(ctx, old.id, "still there?")
+    assert {:error, :not_addressable} = Runner.send_message(ctx, old.id, "still there?")
 
     request = soul_request!(ctx, room, "planner", "anew")
     assert {:ok, %{"applied" => 1}} = drain(ctx)
