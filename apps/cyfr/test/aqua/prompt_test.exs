@@ -12,6 +12,15 @@ defmodule Aqua.PromptTest do
   # (`Aqua.Reader.deliver/2`).
   @mark "cyfr-PROMPTTESTMARK2Q"
 
+  # What the soul alone is told after CYFR's part (`Aqua.Prompt`).
+  @buttons "\n\n---\n\n## Choices as buttons\n\nWhen you ask the person to decide, you may " <>
+             "offer the choices as buttons: end that reply with a block and nothing after it: " <>
+             "a line of three backticks, `choices`, a space and this turn's id; the question " <>
+             "on one line, at most 200 characters; each choice on a line of its own after " <>
+             "`- `, one to eight, each different and at most 100 characters; optionally a " <>
+             "line `file: ` and the path of a file in Files the person should open first; and " <>
+             "a line of three backticks. Neither the question nor a choice holds « or »."
+
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
     :ok = Sanctum.TestContext.shipped!(Sanctum.TestContext.athanor_id())
@@ -157,7 +166,8 @@ defmodule Aqua.PromptTest do
         "A member's reply that asks the person waits on a decision: answer it yourself with " <>
           "`crew.ask` to that member when you know the answer, or else give the person your " <>
           "recommendation in one line and end your turn, and when they answer, hand their " <>
-          "words to that member with `crew.ask`, as they are."
+          "words to that member with `crew.ask`, as they are. When the person must decide a " <>
+          "member's question, ask them yourself, and you may offer its choices as your own."
 
       soul =
         Prompt.compose(ctx,
@@ -174,6 +184,30 @@ defmodule Aqua.PromptTest do
       for own_tools? <- [true, false] do
         refute Prompt.compose(ctx, agent: member, own_tools?: own_tools?, authority: nil).text =~
                  "A member's reply that asks the person"
+      end
+    end
+
+    # A card in the person's thread is Aqua's question, so the block is
+    # told to the soul alone, on every turn of its own.
+    test "the soul alone is told how to offer its choices as buttons, on a daily and a " <>
+           "workspace turn, with a crew or none",
+         %{ctx: ctx} do
+      buttons = @buttons <> "\n\n---\n\n## Runtime Context"
+
+      builder = [%{"name" => "builder", "brain" => "claude", "description" => "", "avoid" => ""}]
+      workspace = %{kind: :workspace, title: "Export", ask: "Export the notes.", notes: nil}
+
+      for crew <- [[], builder], where <- [nil, workspace] do
+        assert Prompt.compose(ctx, agent: agent(), authority: nil, crew: crew, where: where).text =~
+                 buttons
+      end
+
+      for own_tools? <- [true, false] do
+        refute Prompt.compose(ctx,
+                 agent: %{"name" => "builder", "prompt" => nil},
+                 own_tools?: own_tools?,
+                 authority: nil
+               ).text =~ "## Choices as buttons"
       end
     end
 
@@ -275,13 +309,7 @@ defmodule Aqua.PromptTest do
                 "a component that needs one is set up through `request_setup`.\n" <>
                 "- When you need the person to decide, ask in your reply: the question in one " <>
                 "sentence and the choices as a short list. Finish or stop what you started " <>
-                "first, since your turn ends with that reply. " <>
-                "To offer the choices as buttons, end that reply with a block and nothing " <>
-                "after it: a line of three backticks, `choices`, a space and this turn's id; the " <>
-                "question on one line, at most 200 characters; each choice on a line of its own " <>
-                "after `- `, one to eight, each different and at most 100 characters; optionally " <>
-                "a line `file: ` and the path of a file in Files the person should open first; " <>
-                "and a line of three backticks.\n" <>
+                "first, since your turn ends with that reply.\n" <>
                 "- Never send, submit, buy or publish anything on a site, accept terms " <>
                 "or change an account without the person's word for that one act: nothing but " <>
                 "this instruction stops you. Read the `cyfr:browser` scroll before you use the " <>
@@ -395,7 +423,7 @@ defmodule Aqua.PromptTest do
                crew <> "\n\n" <> part_one <> @program
 
       assert opening(ctx, [agent: agent()] ++ loader) ==
-               "You are Aqua.\n\n---\n\n" <> part_one <> @program
+               "You are Aqua.\n\n---\n\n" <> part_one <> @program <> @buttons
 
       for agent <- [member("coder"), agent()] do
         text = Prompt.compose(ctx, [agent: agent] ++ loader).text
@@ -422,10 +450,10 @@ defmodule Aqua.PromptTest do
     # of the member it runs on.
     test "the soul opens with its own prompt, then CYFR's part for its brain", %{ctx: ctx} do
       assert opening(ctx, agent: agent(), own_tools?: true, search?: true, authority: nil) ==
-               "You are Aqua.\n\n---\n\n" <> @part_one <> @program <> @search
+               "You are Aqua.\n\n---\n\n" <> @part_one <> @program <> @search <> @buttons
 
       assert opening(ctx, agent: agent(), authority: nil) ==
-               "You are Aqua.\n\n---\n\n" <> @part_one
+               "You are Aqua.\n\n---\n\n" <> @part_one <> @buttons
 
       refute Prompt.compose(ctx, agent: agent(), authority: nil).text =~ "folder"
 

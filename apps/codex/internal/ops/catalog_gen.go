@@ -4863,7 +4863,7 @@ type ThreadSendArgs struct {
 	Id Field[string] `json:"id,omitzero"`
 	// send: a model override for this turn
 	Model Field[string] `json:"model,omitzero"`
-	// send: a press of a question's choice (row, index): the message row the question is in and the choice's place, from 0; the send says that choice's label, read on the server, to Aqua, and is refused once the question is no longer open
+	// send: a press of a choice on Aqua's question (row, index): the message row the question is in and the choice's place, from 0; the send says that choice's label, read on the server, to Aqua, and names nothing else but the thread and a client_id
 	Choice Field[ThreadSendArgsChoice] `json:"choice,omitzero"`
 	// send: the shared thread the sender has open beside this thread (shared_thread_id, title); its newest lines are read under the sender's seat for this one turn, never stored
 	Room Field[ThreadSendArgsRoom] `json:"room,omitzero"`

@@ -339,7 +339,7 @@ defmodule Aqua.Providers.Thread do
                  Arg.new("index", :integer, required: true, min: 0)
                ]},
               description:
-                "send: a press of a question's choice (row, index): the message row the question is in and the choice's place, from 0; the send says that choice's label, read on the server, to Aqua, and is refused once the question is no longer open"
+                "send: a press of a choice on Aqua's question (row, index): the message row the question is in and the choice's place, from 0; the send says that choice's label, read on the server, to Aqua, and names nothing else but the thread and a client_id"
             ),
             Arg.new(
               "room",
@@ -717,6 +717,20 @@ defmodule Aqua.Providers.Thread do
   # :interactive` declaration on every action, enforced by the registry
   # before the handler runs.
 
+  # What a press may name beside its choice: the thread, its line (the
+  # label, which the server reads again) and the sender's client id. A
+  # send with no choice names what it will.
+  @press ~w(action thread message client_id choice)
+
+  defp press_only?(%{"choice" => %{}} = args),
+    do:
+      args
+      |> Map.reject(fn {_, v} -> v in [nil, []] end)
+      |> Map.keys()
+      |> Enum.all?(&(&1 in @press))
+
+  defp press_only?(_args), do: true
+
   # `today` and `list` name no thread — they are how a headless client
   # gets an id in the first place, which is what makes this the same
   # surface the console has rather than one that assumes it.
@@ -806,36 +820,45 @@ defmodule Aqua.Providers.Thread do
   # attached under it, the agent and model, the sender's client id, and
   # the shared thread open beside it — read server-side under the
   # sender's seat into the text the turn reads beside the task
-  # (`Aqua.Loop.Turn`), never stored; and a press of a question's choice,
-  # which names only its row and index and is read again where the
-  # thread's sends are taken (`Aqua.Choices.press/3`). The gate has cast
-  # every argument against the declaration, so only an empty send is
-  # refused here.
+  # (`Aqua.Loop.Turn`), never stored; and a press of Aqua's question,
+  # which names only its row and index, is read again where the thread's
+  # sends are taken (`Aqua.Choices.press/2`), and carries nothing the card
+  # did not show. The gate has cast every argument against the
+  # declaration, so only an empty send and a press with more than its
+  # choice are refused here.
   defp act("send", ctx, id, args) do
     text = args["message"]
     attachments = args["attachments"] || []
 
-    if String.trim(text) == "" and attachments == [] do
-      {:error, {:invalid_argument, "send requires a non-empty 'message'"}}
-    else
-      message_id =
-        case args["id"] do
-          mid when is_binary(mid) and mid != "" -> mid
-          _ -> Prima.UUID7.generate_id("msg")
+    cond do
+      not press_only?(args) ->
+        {:error, {:invalid_argument, "A press carries only its choice."}}
+
+      String.trim(text) == "" and attachments == [] ->
+        {:error, {:invalid_argument, "send requires a non-empty 'message'"}}
+
+      true ->
+        message_id =
+          case args["id"] do
+            mid when is_binary(mid) and mid != "" -> mid
+            _ -> Prima.UUID7.generate_id("msg")
+          end
+
+        opts =
+          [id: message_id, attachments: attachments]
+          |> put_opt(:client_id, args["client_id"])
+          |> put_opt(:model, args["model"])
+          |> put_opt(:agent, args["agent"])
+          |> put_opt(:room, args["room"])
+          |> put_opt(:choice, args["choice"])
+
+        case Runner.send_message(ctx, id, text, opts) do
+          {:ok, accepted} ->
+            {:ok, accepted |> Map.merge(waiting(ctx, id)) |> Map.put(:thread, id)}
+
+          {:error, reason} ->
+            {:error, refusal(reason, id)}
         end
-
-      opts =
-        [id: message_id, attachments: attachments]
-        |> put_opt(:client_id, args["client_id"])
-        |> put_opt(:model, args["model"])
-        |> put_opt(:agent, args["agent"])
-        |> put_opt(:room, args["room"])
-        |> put_opt(:choice, args["choice"])
-
-      case Runner.send_message(ctx, id, text, opts) do
-        {:ok, accepted} -> {:ok, accepted |> Map.merge(waiting(ctx, id)) |> Map.put(:thread, id)}
-        {:error, reason} -> {:error, refusal(reason, id)}
-      end
     end
   end
 
@@ -1115,7 +1138,8 @@ defmodule Aqua.Providers.Thread do
   defp translate(:files_need_thread, _id),
     do: {:invalid_argument, "A send with files names the thread they were attached to."}
 
-  defp translate(:choice_closed, _id), do: {:conflict, "This question is no longer open."}
+  defp translate(:no_choice, _id),
+    do: {:invalid_argument, "No question of Aqua's offers that choice."}
 
   defp translate(:unavailable, _id), do: {:unavailable, "Threads"}
   defp translate(:database_error, _id), do: {:unavailable, "Storage"}

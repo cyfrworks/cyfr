@@ -514,17 +514,15 @@ defmodule Aqua.Reader do
     end
   end
 
-  # A press of a question's choice (`Aqua.Choices.press/3`), in the
-  # asker's own words as its row carried them when it was pressed: the
-  # question and the label are data the asker wrote, never the presser's.
-  defp pressed_text(%{"question" => question, "label" => label, "asker" => asker}, row, reading) do
-    who = if reading.named?, do: reading.display.(row.author), else: "The person"
+  # A press of a choice on Aqua's own question (`Aqua.Choices.press/2`),
+  # in the words its row carried when it was pressed, set between « and »,
+  # which neither holds (`Aqua.Choices.parse/1`).
+  defp pressed_text(%{"question" => question, "label" => label}, row, reading) do
+    who = if reading.named? == true, do: reading.display.(row.author), else: "The person"
+    whose = if Prima.AgentRef.soul?(reading.me), do: "your", else: "Aqua's"
 
-    whose = if asker == reading.me, do: "your", else: "#{asker}'s"
-
-    "[#{who} pressed a choice on #{whose} question. The question, in #{whose} words: " <>
-      "«#{question}». The choice, in #{whose} words: «#{label}». A press selects that " <>
-      "option and asks nothing beyond it.]"
+    "[#{who} pressed a choice on #{whose} question. The question: «#{question}». The " <>
+      "choice: «#{label}». A press selects that option and asks nothing beyond it.]"
   end
 
   defp age(%DateTime{} = at, now) do

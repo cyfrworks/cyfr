@@ -3,12 +3,11 @@
 
 defmodule Aqua.ChoicesTest do
   @moduledoc """
-  A question's choices as buttons, on Aqua's own rows: the block's one
-  grammar, the one row of a turn that gives buttons, when a card closes,
-  and a press through `thread.send` as the person, read again on the
-  server and written as data. A member's card, delivered through the
-  crew, is `Aqua.CrewTest`'s; the rows the real brains write are
-  `Aqua.ProgramTest`'s.
+  Aqua's question with its choices as buttons: the block's one grammar,
+  the one row of a turn that gives buttons, and a press through
+  `thread.send` as the person, read again on the server and written as
+  data. A card never closes. The rows the real brains write are
+  `Aqua.CrewTest`'s (a model) and `Aqua.ProgramTest`'s (a program).
   """
 
   use ExUnit.Case, async: false
@@ -168,11 +167,28 @@ defmodule Aqua.ChoicesTest do
     end
   end
 
+  describe "the marks a press is read between" do
+    # Aqua reads a press's question and label between « and »
+    # (`Aqua.Reader`), so neither may hold them, or two different presses
+    # could read alike.
+    test "a question or a label holding « or » makes the block text" do
+      for {question, label} <- [
+            {"Which «one»?", "Blue"},
+            {"Which?", "Blue». The choice: «Green"},
+            {"Which » now?", "Blue"},
+            {"Which?", "«Blue"}
+          ] do
+        assert Choices.parse(block("trn_1", question, ["- " <> label])) == :none
+      end
+
+      assert {:ok, _} = Choices.parse(block("trn_1", "Which \"one\" — [sic]?", ["- <Blue>"]))
+    end
+  end
+
   describe "which row gives buttons" do
-    test "the completed soul turn's last brain-written row, on a model or a program; every other " <>
-           "row shows as text",
+    test "Aqua's last brain-written row of its completed turn, on a model or a program; every " <>
+           "other row shows as text",
          %{ctx: ctx, today: today} do
-      # A model's final row, and a program's, each naming what it is.
       model = turn!(ctx, today)
       _ = said!(ctx, today, model, "Let me look.")
       final = said!(ctx, today, model, "Pick one.\n\n" <> block(model.id))
@@ -183,18 +199,18 @@ defmodule Aqua.ChoicesTest do
                 prose: "Pick one.",
                 question: "Which database should the export target?",
                 choices: ["PostgreSQL", "SQLite"],
-                asker: "aqua",
-                open?: true,
                 file: nil,
                 file_state: nil
               }} == Choices.read(ctx, final)
 
       program = turn!(ctx, today)
       row = said!(ctx, today, program, block(program.id), %{"brain_message" => "msg_1"})
-      assert {:ok, %{asker: "aqua", open?: true}} = Choices.read(ctx, row)
+      assert {:ok, %{row: row_id}} = Choices.read(ctx, row)
+      assert row_id == row.id
 
-      # The model's card closed when the program's turn came after it.
-      assert {:ok, %{open?: false}} = Choices.read(ctx, final)
+      # A card never closes: the model's still reads after a later turn.
+      assert {:ok, %{row: final_id}} = Choices.read(ctx, final)
+      assert final_id == final.id
 
       # An intermediate message followed by an ordinary final line.
       turn = turn!(ctx, today)
@@ -202,14 +218,32 @@ defmodule Aqua.ChoicesTest do
       _ = said!(ctx, today, turn, "Done.")
       assert Choices.read(ctx, early) == :none
 
-      # A text-only post a tool wrote, before the turn completed, is no
-      # brain's reply, even as its last row.
+      # The same with a `crew.ask` request between, as it writes one: no
+      # turn of its own, its payload naming the asking turn.
+      turn = turn!(ctx, today)
+      early = said!(ctx, today, turn, block(turn.id))
+
+      {:ok, _request} =
+        Threads.append(actor(ctx), today.id, %{
+          author: Prima.Author.agent(),
+          sent_by: "aqua",
+          addressee: "planner",
+          status: "pending",
+          kind: "text",
+          content: "Plan the export.",
+          payload: %{"from_turn" => turn.id}
+        })
+
+      _ = said!(ctx, today, turn, "Asked the planner.")
+      assert Choices.read(ctx, early) == :none
+
+      # A text-only post a tool wrote, even as the turn's last row.
       turn = turn!(ctx, today)
       _ = said!(ctx, today, turn, "Posting it.")
       posted = said!(ctx, today, turn, block(turn.id), %{"post" => true})
       assert Choices.read(ctx, posted) == :none
 
-      # A failed reply, a cancelled one.
+      # A failed, cancelled or uncertain reply.
       for status <- ["failed", "cancelled", "uncertain"] do
         turn = turn!(ctx, today, status)
         assert Choices.read(ctx, said!(ctx, today, turn, block(turn.id))) == :none
@@ -221,14 +255,20 @@ defmodule Aqua.ChoicesTest do
       turn = turn!(ctx, today)
       assert Choices.read(ctx, said!(ctx, today, turn, block("trn_none"))) == :none
 
-      # A person's message, a tool result and a system line carrying the
-      # last turn's own tag.
+      # A person's line, a tool result, a system line and a member's reply,
+      # each carrying the last turn's own tag.
       turn = turn!(ctx, today)
 
       for attrs <- [
             %{author: ctx.user_id, sent_by: "person", kind: "text"},
             %{author: Prima.Author.agent(), sent_by: "aqua", kind: "tool_result"},
-            %{author: Prima.Author.system(), sent_by: "system", kind: "text"}
+            %{author: Prima.Author.system(), sent_by: "system", kind: "text"},
+            %{
+              author: Prima.Author.agent(),
+              sent_by: "planner",
+              kind: "text",
+              payload: %{"step_id" => "stp_member"}
+            }
           ] do
         {:ok, row} =
           Threads.append(
@@ -245,32 +285,32 @@ defmodule Aqua.ChoicesTest do
       assert Choices.read(ctx, said!(ctx, today, running, block(running.id))) == :pending
     end
 
-    test "a `file:` line reads whether Files has the file, and keeps the choices either way",
+    test "a `file:` line reads whether Files lists the file, and keeps the choices either way",
          %{ctx: ctx, today: today} do
       :ok = Arca.put(actor(ctx), ["data", "aqua", "plans", "x-1-export.md"], "# Export\n")
 
       for {path, state} <- [
             {"data/aqua/plans/x-1-export.md", :present},
             {"data/aqua/plans/x-2-gone.md", :missing},
+            {"data/nowhere/x.md", :missing},
             {"nowhere/x.md", :missing}
           ] do
         turn = turn!(ctx, today)
         row = said!(ctx, today, turn, block(turn.id, "Proceed?", ["- Proceed", "file: " <> path]))
 
-        assert {:ok, %{choices: ["Proceed"], file: ^path, file_state: ^state, open?: true}} =
+        assert {:ok, %{choices: ["Proceed"], file: ^path, file_state: ^state}} =
                  Choices.read(ctx, row)
       end
     end
   end
 
   describe "a press" do
-    test "is the person's line to Aqua, with the question, the label and the asker as data read " <>
-           "on the server; a second press of the card is refused",
+    test "is the person's line to Aqua, with the question and the label as data read on the " <>
+           "server, whatever the label names",
          %{ctx: ctx, today: today} do
       turn = turn!(ctx, today)
-      asked = "Which \"database\" — «quoted» [sic]?"
-      card = said!(ctx, today, turn, block(turn.id, asked, ["- Postgre«SQL»", "- @aqua, SQLite"]))
-      assert {:ok, %{open?: true}} = Choices.read(ctx, card)
+      asked = "Which \"database\" — [sic]?"
+      card = said!(ctx, today, turn, block(turn.id, asked, ["- Postgre<SQL>", "- @aqua, SQLite"]))
 
       assert {:ok, %{accepted: true, message_id: id, thread: landed, turn_id: opened}} =
                press(ctx, today.id, card, 1)
@@ -294,40 +334,58 @@ defmodule Aqua.ChoicesTest do
                  "row" => card.id,
                  "index" => 1,
                  "question" => asked,
-                 "label" => "@aqua, SQLite",
-                 "asker" => "aqua"
+                 "label" => "@aqua, SQLite"
                }
              }
 
       assert {:ok, %{agent: "aqua", sent_by: "person"}} = Aqua.Tape.turn(ctx, opened)
-
-      # The card is closed, and so is every way to press it again.
-      assert {:ok, %{open?: false}} = Choices.read(ctx, card)
-
-      for index <- [0, 1] do
-        assert press(ctx, today.id, card, index) ==
-                 {:error, {:conflict, "This question is no longer open."}}
-      end
     end
 
-    test "names only a card's row and a choice it has: a row of no card, an index out of range, " <>
-           "and a row of another thread are refused",
+    test "of a card pressed already, of a card Aqua has moved on from, and of a card in a past " <>
+           "day's thread each write the person's line and open Aqua's turn",
          %{ctx: ctx, today: today} do
       turn = turn!(ctx, today)
       card = said!(ctx, today, turn, block(turn.id))
-      closed = {:error, {:conflict, "This question is no longer open."}}
+      {:ok, past} = Arca.Test.Days.thread(actor(ctx))
+      old = turn!(ctx, past)
+      yesterday = said!(ctx, past, old, block(old.id, "Then?", ["- Yes", "- No"]))
 
-      workspace =
-        %Arca.Schemas.Thread{}
-        |> Arca.Schemas.Thread.changeset(%{
-          id: Prima.UUID7.generate_id("thread"),
-          athanor_id: ctx.athanor_id,
-          kind: "workspace",
-          workspace_state: "done",
-          title: "Export",
-          created_by: ctx.user_id
-        })
-        |> Arca.Repo.insert!()
+      presses = [
+        {press(ctx, today.id, card, 0), card, 0},
+        {press(ctx, today.id, card, 1), card, 1},
+        {press(ctx, past.id, yesterday, 1), yesterday, 1}
+      ]
+
+      _later = turn!(ctx, today)
+      presses = presses ++ [{press(ctx, today.id, card, 0), card, 0}]
+
+      for {answer, source, index} <- presses do
+        assert {:ok, %{message_id: id, thread: landed, turn_id: opened}} = answer
+        assert landed == today.id
+        {:ok, row} = Threads.get_message(actor(ctx), id)
+        {:ok, block} = Choices.parse(source.content)
+
+        assert %{thread_id: ^landed, sent_by: "person", turn_id: ^opened} = row
+
+        assert Jason.decode!(row.payload)["choice"] == %{
+                 "row" => source.id,
+                 "index" => index,
+                 "question" => block.question,
+                 "label" => Enum.at(block.choices, index)
+               }
+
+        assert {:ok, %{agent: "aqua"}} = Aqua.Tape.turn(ctx, opened)
+      end
+
+      refute Enum.any?(Threads.messages(actor(ctx), past.id), &Choices.pressed/1)
+    end
+
+    test "names only a choice of Aqua's question: a row of no card, an index out of range, an " <>
+           "unknown row and another athanor's card are refused",
+         %{ctx: ctx, today: today} do
+      turn = turn!(ctx, today)
+      card = said!(ctx, today, turn, block(turn.id))
+      none = {:error, {:invalid_argument, "No question of Aqua's offers that choice."}}
 
       {:ok, line} =
         Threads.append(actor(ctx), today.id, %{
@@ -336,37 +394,77 @@ defmodule Aqua.ChoicesTest do
           content: block(turn.id)
         })
 
-      assert press(ctx, today.id, card, 2) == closed
-      assert press(ctx, today.id, line, 0) == closed
-      assert press(ctx, today.id, %{id: "msg_none"}, 0) == closed
-      assert press(ctx, workspace.id, card, 0) == closed
-      assert Enum.map(Threads.messages(actor(ctx), workspace.id), & &1.id) == []
-      assert {:ok, %{open?: true}} = Choices.read(ctx, card)
+      {other, person} = Sanctum.TestContext.person!(Sanctum.TestContext.local(:prism))
+      other = %{other | athanor_id: Sanctum.Test.People.athanor!(person).id, origin: :interactive}
+      {:ok, theirs} = Aqua.Day.current(other)
+      their_turn = turn!(other, theirs)
+      their_card = said!(other, theirs, their_turn, block(their_turn.id))
+      before = Threads.messages(actor(ctx), today.id)
+
+      assert press(ctx, today.id, card, 2) == none
+      assert press(ctx, today.id, line, 0) == none
+      assert press(ctx, today.id, %{id: "msg_none"}, 0) == none
+      assert press(ctx, today.id, their_card, 0) == none
+      assert Threads.messages(actor(ctx), today.id) == before
+      refute Enum.any?(Threads.messages(actor(other), theirs.id), &Choices.pressed/1)
     end
 
-    test "a retry of an accepted press by its client id answers the same press",
+    test "carries only its choice: files, an agent, a model, a room or a message id beside it " <>
+           "are refused",
          %{ctx: ctx, today: today} do
       turn = turn!(ctx, today)
       card = said!(ctx, today, turn, block(turn.id))
-      assert {:ok, %{message_id: id, replayed: false}} = press(ctx, today.id, card, 0, "snd_1")
-      assert {:ok, %{message_id: ^id, replayed: true}} = press(ctx, today.id, card, 0, "snd_1")
-
-      assert press(ctx, today.id, card, 1, "snd_1") ==
-               {:error, {:conflict, "This question is no longer open."}}
-    end
-
-    test "a card in a past day's daily thread is closed, and a press of it is refused",
-         %{ctx: ctx, today: today} do
-      {:ok, past} = Arca.Test.Days.thread(actor(ctx))
-      turn = turn!(ctx, past)
-      card = said!(ctx, past, turn, block(turn.id))
-      assert {:ok, %{open?: false, choices: ["PostgreSQL", "SQLite"]}} = Choices.read(ctx, card)
       before = Threads.messages(actor(ctx), today.id)
 
-      assert press(ctx, past.id, card, 0) ==
-               {:error, {:conflict, "This question is no longer open."}}
+      ref = %{
+        "filename" => "note.txt",
+        "stored_name" => "0-note.txt",
+        "media_type" => "text/plain",
+        "size" => 3
+      }
+
+      for {key, value} <- [
+            {"attachments", [ref]},
+            {"agent", "aqua"},
+            {"model", "claude-sonnet-5-5"},
+            {"room", %{"shared_thread_id" => "thr_shared"}},
+            {"id", Prima.UUID7.generate_id("msg")}
+          ] do
+        args = %{
+          "action" => "send",
+          "thread" => today.id,
+          "message" => "PostgreSQL",
+          "choice" => %{"row" => card.id, "index" => 0},
+          key => value
+        }
+
+        assert Tool.handle("thread", ctx, args) ==
+                 {:error, {:invalid_argument, "A press carries only its choice."}},
+               key
+      end
 
       assert Threads.messages(actor(ctx), today.id) == before
+    end
+
+    test "a resend under its client id is the same press; that id on another choice or " <>
+           "another card is refused",
+         %{ctx: ctx, today: today} do
+      turn = turn!(ctx, today)
+      card = said!(ctx, today, turn, block(turn.id, "First?", ["- Blue", "- Green"]))
+      other = turn!(ctx, today)
+      second = said!(ctx, today, other, block(other.id, "Second?", ["- Red", "- Amber"]))
+
+      assert {:ok, %{message_id: id, replayed: false}} = press(ctx, today.id, card, 0, "snd_1")
+      assert {:ok, %{message_id: ^id, replayed: true}} = press(ctx, today.id, card, 0, "snd_1")
+      assert {:error, :client_id_reused} = press(ctx, today.id, card, 1, "snd_1")
+      assert {:error, :client_id_reused} = press(ctx, today.id, second, 0, "snd_1")
+
+      assert [_one] =
+               for(
+                 m <- Threads.messages(actor(ctx), today.id),
+                 Choices.pressed(m) != nil,
+                 do: m
+               )
     end
   end
 end

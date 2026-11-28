@@ -432,70 +432,35 @@ defmodule PrismWeb.ThreadPaneLive do
 
   defp hold_card(socket, _row), do: socket
 
-  # A reply's question as buttons (`Aqua.Choices.read/2`): a row that gives
-  # them carries its card, and the pane holds each row whose card it draws
-  # or may yet draw, a row of a turn still open, by id.
+  # Aqua's question as buttons (`Aqua.Choices.read/2`): a row that gives
+  # them carries its card, read once, since a card never changes once its
+  # turn is over. A row of a turn still open may yet be one: the pane holds
+  # it by id and reads it again when a turn ends.
   defp read_choices(rows, ctx) do
-    Enum.map_reduce(rows, %{}, fn row, held ->
+    Enum.map_reduce(rows, %{}, fn row, pending ->
       case Aqua.Choices.read(ctx, row) do
-        {:ok, card} -> {Map.put(row, :card, card), Map.put(held, row.id, %{row: row, card: card})}
-        :pending -> {row, Map.put(held, row.id, %{row: row, card: :pending})}
-        :none -> {row, held}
+        {:ok, card} -> {Map.put(row, :card, card), pending}
+        :pending -> {row, Map.put(pending, row.id, row)}
+        :none -> {row, pending}
       end
     end)
   end
 
   defp hold_choice(socket, row) do
-    {[row], held} = read_choices([row], socket.assigns.context)
-    {row, assign(socket, :choices, Map.merge(socket.assigns.choices, held))}
+    {[row], pending} = read_choices([row], socket.assigns.context)
+    {row, assign(socket, :choices, Map.merge(socket.assigns.choices, pending))}
   end
 
-  # Each card held, read again: a row lands that may close one, a turn
-  # ends whose last row may be one, or a press was answered. The stream
-  # draws a row once, so a changed one is put back, a reply beneath its
-  # request. A card that cannot be read now keeps what it shows.
-  defp reread_choices(socket) do
-    ctx = socket.assigns.context
+  # The rows still pending, read again as a turn ends: one that is a card
+  # now is drawn again with it (the stream draws a row once), and one its
+  # turn left as text is let go.
+  defp reread_pending(socket) do
+    {cards, pending} = read_choices(Map.values(socket.assigns.choices), socket.assigns.context)
 
-    Enum.reduce(socket.assigns.choices, socket, fn {id, %{row: row, card: was}}, socket ->
-      case Aqua.Choices.read(ctx, row) do
-        ^was ->
-          socket
-
-        :none when was == :pending ->
-          assign(socket, :choices, Map.delete(socket.assigns.choices, id))
-
-        :none ->
-          socket
-
-        :pending ->
-          socket
-
-        {:ok, card} ->
-          socket
-          |> assign(:choices, Map.put(socket.assigns.choices, id, %{row: row, card: card}))
-          |> redraw(Map.put(row, :card, card))
-      end
-    end)
+    cards
+    |> Enum.filter(&Map.has_key?(&1, :card))
+    |> Enum.reduce(assign(socket, :choices, pending), &stream_insert(&2, :messages, &1))
   end
-
-  defp redraw(socket, %{reply_to: request_id} = reply) when is_binary(request_id) do
-    case socket.assigns.requests[request_id] do
-      %{replies: replies} = request ->
-        if Enum.any?(replies, &(&1.id == reply.id)),
-          do:
-            put_request(socket, %{
-              request
-              | replies: Enum.map(replies, &if(&1.id == reply.id, do: reply, else: &1))
-            }),
-          else: stream_insert(socket, :messages, reply)
-
-      nil ->
-        stream_insert(socket, :messages, reply)
-    end
-  end
-
-  defp redraw(socket, row), do: stream_insert(socket, :messages, row)
 
   # The outcome of the reply that resolved a request, read among the rows
   # shown or, past them, by its id; nil while it is pending, or when that
@@ -812,15 +777,14 @@ defmodule PrismWeb.ThreadPaneLive do
     end
   end
 
-  # A press of a card's choice is the person's answer to Aqua: the row and
-  # the index are all the send names of it, and the server reads the
-  # question again and says whether it is still open (`Aqua.Choices`). The
-  # label goes as the line's text only because a send carries one.
-  def handle_event("choose", %{"row" => row_id, "index" => index}, socket) do
+  # A press of a choice on Aqua's question is the person's answer to Aqua:
+  # the row and the index are all the send names of it, and the server
+  # reads the question and the label again (`Aqua.Choices`). The label
+  # goes as the line's text only because a send carries one.
+  def handle_event("choose", %{"row" => row_id, "index" => index, "label" => label}, socket)
+      when is_binary(row_id) and is_binary(label) and label != "" do
     with %{id: thread_id} <- socket.assigns.thread,
-         %{card: %{choices: choices}} <- socket.assigns.choices[row_id],
-         {at, ""} <- Integer.parse(to_string(index)),
-         label when is_binary(label) <- Enum.at(choices, at) do
+         {at, ""} <- Integer.parse(to_string(index)) do
       args = %{
         "thread" => thread_id,
         "message" => label,
@@ -830,13 +794,10 @@ defmodule PrismWeb.ThreadPaneLive do
 
       case PrismWeb.Ops.call_tool(socket.assigns.context, "thread/send", args) do
         {:ok, answer} ->
-          {:noreply, socket |> reread_choices() |> joined(answer[:thread])}
+          {:noreply, joined(socket, answer[:thread])}
 
         {:error, reason} ->
-          {:noreply,
-           socket
-           |> reread_choices()
-           |> put_flash(:error, PrismWeb.Ops.error_message(reason))}
+          {:noreply, put_flash(socket, :error, PrismWeb.Ops.error_message(reason))}
       end
     else
       _ -> {:noreply, socket}
@@ -1182,7 +1143,6 @@ defmodule PrismWeb.ThreadPaneLive do
   defp handle_thread_event(socket, :message, row) do
     if result = result(row), do: tell_host(socket, {:result, row.thread_id, result})
     if answer?(row), do: tell_host(socket, {:answer, row.thread_id, post(row)})
-    socket = reread_choices(socket)
     {row, socket} = hold_choice(socket, row)
 
     socket
@@ -1201,13 +1161,12 @@ defmodule PrismWeb.ThreadPaneLive do
     request =
       row |> Map.merge(%{replies: replies, outcome: nil}) |> as_stored(socket.assigns.context)
 
-    socket |> read_children() |> put_request(request) |> reread_choices()
+    socket |> read_children() |> put_request(request)
   end
 
   # A reply answers every request its payload names, as its write did, and
   # is shown beneath the one it replies to when that one is shown.
   defp handle_thread_event(socket, :reply, row) do
-    {row, socket} = socket |> reread_choices() |> hold_choice(row)
     requests = socket.assigns.requests
     answered = Enum.uniq([row.reply_to | List.wrap(Threads.payload(row)["answers"])])
 
@@ -1281,7 +1240,7 @@ defmodule PrismWeb.ThreadPaneLive do
     |> assign(:partials, Aqua.stream_new())
     |> assign(:tool_activity, [])
     |> assign(:cancel_requested, false)
-    |> reread_choices()
+    |> reread_pending()
   end
 
   # Streamed text belongs to the running turn alone: an announcement or a
@@ -2329,6 +2288,7 @@ defmodule PrismWeb.ThreadPaneLive do
                 <% true -> %>
                   <div class="group/aloud">
                     <.message_bubble
+                      :if={shown_content(msg) != "" or is_nil(Map.get(msg, :card))}
                       id={@dom <> "-msg-" <> msg.id}
                       role={role_of(msg)}
                       content={shown_content(msg)}
@@ -2341,6 +2301,7 @@ defmodule PrismWeb.ThreadPaneLive do
                       :if={Map.get(msg, :card)}
                       id={@dom <> "-choices-" <> msg.id}
                       card={msg.card}
+                      author={msg.card.prose == "" && author_label(msg, @members, @context)}
                       athanor_route={@athanor_route}
                     />
                     <%!-- A line you may paste onto the shared thread beside
@@ -2935,17 +2896,11 @@ defmodule PrismWeb.ThreadPaneLive do
       <.message_bubble
         id={@dom <> "-msg-" <> @reply.id}
         role="assistant"
-        content={shown_content(@reply)}
+        content={@reply.content}
         author={"#{agent_name(@reply.sent_by)} · #{outcome_words(@reply.outcome)}"}
         attachments={attachments(@reply)}
         attachment_href={&attachment_path(@athanor_route, @reply.id, &1)}
         links={@payload["links"] || []}
-      />
-      <.choices_card
-        :if={Map.get(@reply, :card)}
-        id={@dom <> "-choices-" <> @reply.id}
-        card={@reply.card}
-        athanor_route={@athanor_route}
       />
       <button
         :if={@payload["truncated"] == true and is_binary(@payload["from_thread"])}
@@ -3010,14 +2965,20 @@ defmodule PrismWeb.ThreadPaneLive do
 
   attr :id, :string, required: true
   attr :card, :map, required: true
+  attr :author, :any, default: nil
   attr :athanor_route, :any, required: true
 
-  # A question's choices, one button each, pressable while the card is
-  # open and greyed once it is not; and its file, opened while Files has
-  # it.
+  # Aqua's question in plain text, as a press records it, and one button
+  # for each of its choices, which stays as it is after a press; a button
+  # pressed waits in the browser for the server's answer, so a double
+  # click is one press. And its file, while Files lists it.
   defp choices_card(assigns) do
     ~H"""
-    <div id={@id} data-open={to_string(@card.open?)} class="mt-1 space-y-1 px-1 text-xs">
+    <div id={@id} class="mt-1 space-y-1 px-1 text-xs">
+      <span :if={@author} class="text-xs text-gray-500">{@author}</span>
+      <p id={@id <> "-question"} class="whitespace-pre-wrap text-sm text-gray-200">
+        {@card.question}
+      </p>
       <div class="flex flex-wrap items-center gap-2">
         <button
           :for={{label, at} <- Enum.with_index(@card.choices)}
@@ -3026,7 +2987,8 @@ defmodule PrismWeb.ThreadPaneLive do
           phx-click="choose"
           phx-value-row={@card.row}
           phx-value-index={at}
-          disabled={not @card.open?}
+          phx-value-label={label}
+          phx-disable-with={label}
           class="min-h-6 rounded bg-blue-600 hover:bg-blue-500 px-3 py-1 font-medium text-white disabled:cursor-not-allowed disabled:opacity-40"
         >
           {label}
@@ -3037,13 +2999,11 @@ defmodule PrismWeb.ThreadPaneLive do
         <%= case @card.file_state do %>
           <% :present -> %>
             <a
-              id={@id <> "-open"}
+              id={@id <> "-download"}
               href={file_href(@athanor_route, @card.file)}
-              target="_blank"
-              rel="noopener"
               class="min-h-6 text-blue-400 hover:text-blue-300"
             >
-              Open
+              Download
             </a>
           <% :missing -> %>
             <span id={@id <> "-missing"} class="text-gray-500">This file is not in Files</span>
@@ -3057,10 +3017,10 @@ defmodule PrismWeb.ThreadPaneLive do
     """
   end
 
-  # A card's reply shows its words before the block and its question; a
-  # press shows what was chosen; any other row its text.
-  defp shown_content(%{card: %{prose: prose, question: question}}),
-    do: Enum.join(Enum.reject([prose, question], &(&1 == "")), "\n\n")
+  # A card's reply shows its words before the block, which the card
+  # follows with its question; a press shows what was chosen; any other
+  # row its text.
+  defp shown_content(%{card: %{prose: prose}}), do: prose
 
   defp shown_content(%{kind: "text", sent_by: "person"} = row) do
     case Threads.payload(row)["choice"] do
@@ -3071,8 +3031,7 @@ defmodule PrismWeb.ThreadPaneLive do
 
   defp shown_content(row), do: row.content
 
-  # A file of the athanor's as the download route serves it, which shows
-  # a text file in the browser.
+  # A file of the athanor's as Files downloads it.
   defp file_href(route, path) do
     encoded =
       path

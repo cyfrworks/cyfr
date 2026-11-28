@@ -290,7 +290,7 @@ defmodule Aqua.Runner do
   room the sender had open, `%{"athanor_id", "thread_id", ...}`),
   `:agents` (the roster, read here when absent), `:choice` (a press of a
   question's choice, `%{"row", "index"}`: a turn of Aqua's whatever the
-  text names, its line the label as `Aqua.Choices.press/3` reads it).
+  text names, its line the label as `Aqua.Choices.press/2` reads it).
 
   The crew's delivery consumer (`Aqua.Crew`) sends with `:sent_by` (the
   sender's name; `"person"` when absent), `:request` (the request row a
@@ -692,11 +692,10 @@ defmodule Aqua.Runner do
   # ---------------------------------------------------------------------------
 
   # A press (`thread.send`'s `choice`) is the person's answer to Aqua,
-  # whatever its label says: the row it names is read again here, where
-  # the thread's sends are taken one at a time, so of two presses of one
-  # card the second finds the first. Its line is the label as the server
-  # reads it, and its payload the press (`Aqua.Choices.press/3`). A retry
-  # of an accepted press by its `client_id` answers that press again.
+  # whatever its label says: the row it names is read again under the
+  # person's context, its line is the label as the server reads it, and
+  # its payload the press (`Aqua.Choices.press/2`). A retry of an accepted
+  # press by its `client_id` answers that press again.
   defp chosen(ctx, state, text, opts) do
     case Keyword.get(opts, :choice) do
       nil ->
@@ -717,7 +716,7 @@ defmodule Aqua.Runner do
          true <- row_id == choice["row"] and index == choice["index"] do
       {:ok, pressed}
     else
-      _ -> Aqua.Choices.press(ctx, state.id, choice)
+      _ -> Aqua.Choices.press(ctx, choice)
     end
   end
 
