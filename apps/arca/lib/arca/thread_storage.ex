@@ -1923,8 +1923,8 @@ defmodule Arca.ThreadStorage do
   @doc """
   Whether a message is a request to a crew member: it names its
   addressee and stands `pending`, `answered` or `expired`
-  (`Arca.Schemas.Message`). Every other row names its addressee too, with
-  no status.
+  (`Arca.Schemas.Message`). Any other message that names an addressee has
+  no status, and an opening, which has one, names none.
   """
   @spec request?(map()) :: boolean()
   def request?(%{addressee: addressee, status: status}),
