@@ -694,21 +694,39 @@ defmodule Aqua.Runner do
   # A press (`thread.send`'s `choice`) is the person's answer to Aqua,
   # whatever its label says: the row it names is read again under the
   # person's context, its line is the label as the server reads it, and
-  # its payload the press (`Aqua.Choices.press/2`). A resend under the
-  # press's `client_id` is the same send only when it names the same row
-  # and index; any other send under that id is refused, as a different
-  # send under a taken id is (`Aqua.Tape.accept/3`), even when its label
-  # reads alike.
+  # its payload the press (`Aqua.Choices.press/2`); it lands only in a
+  # room, where the card is. A resend under the press's `client_id` is
+  # the same send only when it names the same row and index; any other
+  # send under that id, a press or not, is refused, as a different send
+  # under a taken id is (`Aqua.Tape.accept/3`), even when its words read
+  # alike.
   defp chosen(ctx, state, text, opts) do
     case Keyword.get(opts, :choice) do
       nil ->
-        {:ok, text, opts}
+        with :ok <- not_a_press(ctx, state, Keyword.get(opts, :client_id)),
+             do: {:ok, text, opts}
+
+      _choice when state.thread.kind not in ["daily", "workspace"] ->
+        {:error, :no_choice}
 
       choice ->
         with {:ok, pressed} <- pressed(ctx, state, choice, Keyword.get(opts, :client_id)) do
           payload = Map.put(Keyword.get(opts, :payload, %{}), "choice", pressed)
           {:ok, pressed["label"], Keyword.put(opts, :payload, payload)}
         end
+    end
+  end
+
+  # A send that is no press under a press's client id is another send.
+  defp not_a_press(_ctx, _state, nil), do: :ok
+
+  defp not_a_press(ctx, state, client_id) do
+    case Tape.accepted(ctx, state.id, client_id) do
+      {:ok, %{message: row}} ->
+        if Aqua.Choices.pressed(row), do: {:error, :client_id_reused}, else: :ok
+
+      _not_taken ->
+        :ok
     end
   end
 

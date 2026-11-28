@@ -45,8 +45,9 @@ defmodule Aqua.Choices do
 
   `press/2` reads again the row a press names, by the rules above, under
   the presser's own context, and answers what the press row carries: the
-  row, the index, and the question and the label as the row reads now.
-  Nothing but the row and the index comes from the presser.
+  row, the index, and the question and the label as the row reads now;
+  `room/2` answers the room its card is in, where the press lands. Nothing
+  but the row and the index comes from the presser.
   """
 
   alias Aqua.Tape
@@ -197,6 +198,22 @@ defmodule Aqua.Choices do
   end
 
   def press(_ctx, _choice), do: {:error, :no_choice}
+
+  @doc """
+  The room the card a press names is in, read as `press/2` reads the
+  press: where the press lands is the card's alone (`thread.send`).
+  """
+  @spec room(Context.t(), map()) :: {:ok, map()} | {:error, :no_choice | :unavailable}
+  def room(%Context{} = ctx, choice) do
+    with {:ok, %{"row" => row_id}} <- press(ctx, choice),
+         {:ok, row} <- message(ctx, row_id),
+         {:ok, room} <- thread(ctx, row.thread_id) do
+      {:ok, room}
+    else
+      {:error, _} = refused -> refused
+      _ -> {:error, :no_choice}
+    end
+  end
 
   @doc "The press a person's row carries, or nil (`press/2`)."
   @spec pressed(map()) :: pressed() | nil

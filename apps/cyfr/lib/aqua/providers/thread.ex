@@ -300,8 +300,8 @@ defmodule Aqua.Providers.Thread do
                 "send: a workspace thread or a crew member's thread; with none, or a daily thread, the send joins today's daily thread"
             ),
             Arg.new("message", :string,
-              required: true,
-              description: "send: the text to say (at most 32 KiB of text)",
+              description:
+                "send: the text to say (at most 32 KiB of text); every send but a press names one",
               max: 32768
             ),
             Arg.new("agent", :string,
@@ -339,7 +339,7 @@ defmodule Aqua.Providers.Thread do
                  Arg.new("index", :integer, required: true, min: 0)
                ]},
               description:
-                "send: a press of a choice on Aqua's question (row, index): the message row the question is in and the choice's place, from 0; the send says that choice's label, read on the server, to Aqua, and names nothing else but the thread and a client_id"
+                "send: a press of a choice on Aqua's question (row, index): the message row the question is in and the choice's place, from 0. A press names nothing else but a client_id: it lands where the question is, a daily thread's question in today's daily thread, and says the choice's label, read on the server, to Aqua"
             ),
             Arg.new(
               "room",
@@ -717,20 +717,6 @@ defmodule Aqua.Providers.Thread do
   # :interactive` declaration on every action, enforced by the registry
   # before the handler runs.
 
-  # What a press may name beside its choice: the thread, its line (the
-  # label, which the server reads again) and the sender's client id. A
-  # send with no choice names what it will.
-  @press ~w(action thread message client_id choice)
-
-  defp press_only?(%{"choice" => %{}} = args),
-    do:
-      args
-      |> Map.reject(fn {_, v} -> v in [nil, []] end)
-      |> Map.keys()
-      |> Enum.all?(&(&1 in @press))
-
-  defp press_only?(_args), do: true
-
   # `today` and `list` name no thread — they are how a headless client
   # gets an id in the first place, which is what makes this the same
   # surface the console has rather than one that assumes it.
@@ -763,17 +749,37 @@ defmodule Aqua.Providers.Thread do
   # refused and leaves nothing behind: no row, no new day's thread, and
   # none of the files this caller stored under the message, so a message
   # never names files another thread holds.
+  # A press of Aqua's question names its choice and a client id, and
+  # nothing else: no argument the card did not show, and no destination.
+  # It is checked before anything is written, today's thread included, and
+  # it lands where its card is (`press_lands/2`).
+  defp dispatch(ctx, %{"action" => "send", "choice" => %{} = choice} = args) do
+    with :ok <- press_only(args),
+         {:ok, id} <- press_lands(ctx, choice, args["client_id"]) do
+      act("send", ctx, id, args)
+    else
+      {:error, {:invalid_argument, _} = refused} -> {:error, refused}
+      {:error, reason} -> {:error, refusal(reason, nil)}
+    end
+  end
+
+  # A send that is no press says something, a line or files, checked
+  # before a thread is chosen, so an empty one makes no thread.
   defp dispatch(ctx, %{"action" => "send"} = args) do
-    case sends_to(ctx, args["thread"], args["attachments"] || []) do
-      {:ok, id} ->
-        act("send", ctx, id, args)
+    if String.trim(args["message"] || "") == "" and (args["attachments"] || []) == [] do
+      {:error, {:invalid_argument, "send requires a non-empty 'message'"}}
+    else
+      case sends_to(ctx, args["thread"], args["attachments"] || []) do
+        {:ok, id} ->
+          act("send", ctx, id, args)
 
-      {:error, :day_turned} ->
-        _ = discard_files(ctx, args)
-        {:error, refusal(:day_turned, args["thread"])}
+        {:error, :day_turned} ->
+          _ = discard_files(ctx, args)
+          {:error, refusal(:day_turned, args["thread"])}
 
-      {:error, reason} ->
-        {:error, refusal(reason, args["thread"])}
+        {:error, reason} ->
+          {:error, refusal(reason, args["thread"])}
+      end
     end
   end
 
@@ -784,6 +790,42 @@ defmodule Aqua.Providers.Thread do
 
   defp dispatch(_ctx, _args),
     do: {:error, {:invalid_argument, "thread requires an 'action' and a 'thread'"}}
+
+  # What a press may name: its choice and the sender's client id. An
+  # argument supplied counts, however empty.
+  @press ~w(action choice client_id)
+
+  defp press_only(args) do
+    if args |> Map.reject(fn {_, v} -> is_nil(v) end) |> Map.keys() |> Enum.all?(&(&1 in @press)),
+      do: :ok,
+      else: {:error, {:invalid_argument, "A press carries only its choice."}}
+  end
+
+  # Where a press lands, from its card alone: the workspace thread the card
+  # is in, or today's daily thread for a card in a daily thread of any day,
+  # as a line typed there lands. A daily card's press already accepted
+  # under its client id lands again where it did, found across the daily
+  # threads (`Arca.ThreadStorage.daily_message/2`), so the day's turning
+  # never splits one press in two: the runner there answers its receipt,
+  # or refuses another send under that id.
+  defp press_lands(ctx, choice, client_id) do
+    with {:ok, room} <- Aqua.Choices.room(ctx, choice) do
+      case room do
+        %{kind: "daily"} -> pressed_in(ctx, client_id)
+        %{id: id} -> {:ok, id}
+      end
+    end
+  end
+
+  defp pressed_in(ctx, client_id) when is_binary(client_id) do
+    case Arca.ThreadStorage.daily_message(Sanctum.Context.actor(ctx), client_id) do
+      {:ok, %{thread_id: id}} -> {:ok, id}
+      {:error, :not_found} -> today_id(ctx)
+      {:error, _} -> {:error, :unavailable}
+    end
+  end
+
+  defp pressed_in(ctx, _none), do: today_id(ctx)
 
   defp sends_to(ctx, id, files) when is_binary(id) and id != "" do
     case Arca.ThreadStorage.get(Sanctum.Context.actor(ctx), id) do
@@ -824,41 +866,31 @@ defmodule Aqua.Providers.Thread do
   # which names only its row and index, is read again where the thread's
   # sends are taken (`Aqua.Choices.press/2`), and carries nothing the card
   # did not show. The gate has cast every argument against the
-  # declaration, so only an empty send and a press with more than its
-  # choice are refused here.
+  # declaration, and an empty send was refused before a thread was chosen.
   defp act("send", ctx, id, args) do
-    text = args["message"]
+    text = args["message"] || ""
     attachments = args["attachments"] || []
 
-    cond do
-      not press_only?(args) ->
-        {:error, {:invalid_argument, "A press carries only its choice."}}
+    message_id =
+      case args["id"] do
+        mid when is_binary(mid) and mid != "" -> mid
+        _ -> Prima.UUID7.generate_id("msg")
+      end
 
-      String.trim(text) == "" and attachments == [] ->
-        {:error, {:invalid_argument, "send requires a non-empty 'message'"}}
+    opts =
+      [id: message_id, attachments: attachments]
+      |> put_opt(:client_id, args["client_id"])
+      |> put_opt(:model, args["model"])
+      |> put_opt(:agent, args["agent"])
+      |> put_opt(:room, args["room"])
+      |> put_opt(:choice, args["choice"])
 
-      true ->
-        message_id =
-          case args["id"] do
-            mid when is_binary(mid) and mid != "" -> mid
-            _ -> Prima.UUID7.generate_id("msg")
-          end
+    case Runner.send_message(ctx, id, text, opts) do
+      {:ok, accepted} ->
+        {:ok, accepted |> Map.merge(waiting(ctx, id)) |> Map.put(:thread, id)}
 
-        opts =
-          [id: message_id, attachments: attachments]
-          |> put_opt(:client_id, args["client_id"])
-          |> put_opt(:model, args["model"])
-          |> put_opt(:agent, args["agent"])
-          |> put_opt(:room, args["room"])
-          |> put_opt(:choice, args["choice"])
-
-        case Runner.send_message(ctx, id, text, opts) do
-          {:ok, accepted} ->
-            {:ok, accepted |> Map.merge(waiting(ctx, id)) |> Map.put(:thread, id)}
-
-          {:error, reason} ->
-            {:error, refusal(reason, id)}
-        end
+      {:error, reason} ->
+        {:error, refusal(reason, id)}
     end
   end
 

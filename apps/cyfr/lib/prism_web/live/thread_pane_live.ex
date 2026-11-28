@@ -778,16 +778,14 @@ defmodule PrismWeb.ThreadPaneLive do
   end
 
   # A press of a choice on Aqua's question is the person's answer to Aqua:
-  # the row and the index are all the send names of it, and the server
-  # reads the question and the label again (`Aqua.Choices`). The label
-  # goes as the line's text only because a send carries one.
-  def handle_event("choose", %{"row" => row_id, "index" => index, "label" => label}, socket)
-      when is_binary(row_id) and is_binary(label) and label != "" do
-    with %{id: thread_id} <- socket.assigns.thread,
-         {at, ""} <- Integer.parse(to_string(index)) do
+  # the row and the index are all the send names, and the server reads the
+  # question and the label again and lands it where the card is
+  # (`Aqua.Choices`), today's daily thread for a daily card, which the pane
+  # then shows.
+  def handle_event("choose", %{"row" => row_id, "index" => index}, socket)
+      when is_binary(row_id) do
+    with {at, ""} <- Integer.parse(to_string(index)) do
       args = %{
-        "thread" => thread_id,
-        "message" => label,
         "choice" => %{"row" => row_id, "index" => at},
         "client_id" => Prima.UUID7.generate_id("snd")
       }
@@ -2987,7 +2985,6 @@ defmodule PrismWeb.ThreadPaneLive do
           phx-click="choose"
           phx-value-row={@card.row}
           phx-value-index={at}
-          phx-value-label={label}
           phx-disable-with={label}
           class="min-h-6 rounded bg-blue-600 hover:bg-blue-500 px-3 py-1 font-medium text-white disabled:cursor-not-allowed disabled:opacity-40"
         >

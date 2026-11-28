@@ -72,16 +72,12 @@ defmodule Aqua.ChoicesTest do
     row
   end
 
-  defp press(ctx, thread_id, row, index, client_id \\ nil) do
+  # A press as a client sends one: its choice, and a client id.
+  defp press(ctx, row, index, client_id \\ nil) do
     Tool.handle(
       "thread",
       ctx,
-      %{
-        "action" => "send",
-        "thread" => thread_id,
-        "message" => "anything the browser says",
-        "choice" => %{"row" => row.id, "index" => index}
-      }
+      %{"action" => "send", "choice" => %{"row" => row.id, "index" => index}}
       |> then(&if(client_id, do: Map.put(&1, "client_id", client_id), else: &1))
     )
   end
@@ -313,7 +309,7 @@ defmodule Aqua.ChoicesTest do
       card = said!(ctx, today, turn, block(turn.id, asked, ["- Postgre<SQL>", "- @aqua, SQLite"]))
 
       assert {:ok, %{accepted: true, message_id: id, thread: landed, turn_id: opened}} =
-               press(ctx, today.id, card, 1)
+               press(ctx, card, 1)
 
       assert landed == today.id
       {:ok, row} = Threads.get_message(actor(ctx), id)
@@ -351,13 +347,13 @@ defmodule Aqua.ChoicesTest do
       yesterday = said!(ctx, past, old, block(old.id, "Then?", ["- Yes", "- No"]))
 
       presses = [
-        {press(ctx, today.id, card, 0), card, 0},
-        {press(ctx, today.id, card, 1), card, 1},
-        {press(ctx, past.id, yesterday, 1), yesterday, 1}
+        {press(ctx, card, 0), card, 0},
+        {press(ctx, card, 1), card, 1},
+        {press(ctx, yesterday, 1), yesterday, 1}
       ]
 
       _later = turn!(ctx, today)
-      presses = presses ++ [{press(ctx, today.id, card, 0), card, 0}]
+      presses = presses ++ [{press(ctx, card, 0), card, 0}]
 
       for {answer, source, index} <- presses do
         assert {:ok, %{message_id: id, thread: landed, turn_id: opened}} = answer
@@ -401,20 +397,30 @@ defmodule Aqua.ChoicesTest do
       their_card = said!(other, theirs, their_turn, block(their_turn.id))
       before = Threads.messages(actor(ctx), today.id)
 
-      assert press(ctx, today.id, card, 2) == none
-      assert press(ctx, today.id, line, 0) == none
-      assert press(ctx, today.id, %{id: "msg_none"}, 0) == none
-      assert press(ctx, today.id, their_card, 0) == none
+      assert press(ctx, card, 2) == none
+      assert press(ctx, line, 0) == none
+      assert press(ctx, %{id: "msg_none"}, 0) == none
+      assert press(ctx, their_card, 0) == none
       assert Threads.messages(actor(ctx), today.id) == before
       refute Enum.any?(Threads.messages(actor(other), theirs.id), &Choices.pressed/1)
     end
 
-    test "carries only its choice: files, an agent, a model, a room or a message id beside it " <>
-           "are refused",
+    test "carries only its choice: a destination, a line, files, an empty file list, an " <>
+           "agent, a model, a room or a message id beside it is refused before anything is written",
          %{ctx: ctx, today: today} do
-      turn = turn!(ctx, today)
-      card = said!(ctx, today, turn, block(turn.id))
-      before = Threads.messages(actor(ctx), today.id)
+      {:ok, past} = Arca.Test.Days.thread(actor(ctx))
+      old = turn!(ctx, past)
+      card = said!(ctx, past, old, block(old.id))
+      {:ok, child} = Aqua.Tape.crew_thread(ctx, today.id, "builder")
+
+      # Today's thread made anew by the first press of a day: none is made
+      # for a refused one.
+      {1, _} =
+        Arca.Repo.update_all(from(t in Arca.Schemas.Thread, where: t.id == ^today.id),
+          set: [day: Date.add(Aqua.Day.today(ctx), -1)]
+        )
+
+      before = {Threads.list(actor(ctx)), Arca.Repo.aggregate(Arca.Schemas.Message, :count)}
 
       ref = %{
         "filename" => "note.txt",
@@ -424,7 +430,11 @@ defmodule Aqua.ChoicesTest do
       }
 
       for {key, value} <- [
+            {"thread", child.id},
+            {"thread", today.id},
+            {"message", "PostgreSQL"},
             {"attachments", [ref]},
+            {"attachments", []},
             {"agent", "aqua"},
             {"model", "claude-sonnet-5-5"},
             {"room", %{"shared_thread_id" => "thr_shared"}},
@@ -432,18 +442,102 @@ defmodule Aqua.ChoicesTest do
           ] do
         args = %{
           "action" => "send",
-          "thread" => today.id,
-          "message" => "PostgreSQL",
           "choice" => %{"row" => card.id, "index" => 0},
           key => value
         }
 
-        assert Tool.handle("thread", ctx, args) ==
-                 {:error, {:invalid_argument, "A press carries only its choice."}},
-               key
+        refused = {:error, {:invalid_argument, "A press carries only its choice."}}
+        assert Tool.handle("thread", ctx, args) == refused, inspect({key, value})
+        assert Sanctum.Gate.call_external("thread", ctx, args) == refused
       end
 
-      assert Threads.messages(actor(ctx), today.id) == before
+      assert {Threads.list(actor(ctx)), Arca.Repo.aggregate(Arca.Schemas.Message, :count)} ==
+               before
+    end
+
+    test "lands where its card is: a workspace card in its workspace, a daily card in today's " <>
+           "thread; the declaration takes a press of its choice and a client id alone",
+         %{ctx: ctx, today: today} do
+      workspace =
+        %Arca.Schemas.Thread{}
+        |> Arca.Schemas.Thread.changeset(%{
+          id: Prima.UUID7.generate_id("thread"),
+          athanor_id: ctx.athanor_id,
+          kind: "workspace",
+          workspace_state: "done",
+          title: "Export",
+          created_by: ctx.user_id
+        })
+        |> Arca.Repo.insert!()
+
+      turn = turn!(ctx, workspace)
+      card = said!(ctx, workspace, turn, block(turn.id))
+      assert {:ok, %{thread: landed, turn_id: opened}} = press(ctx, card, 0)
+      assert landed == workspace.id
+      assert {:ok, %{agent: "aqua", thread_id: ^landed}} = Aqua.Tape.turn(ctx, opened)
+
+      daily = turn!(ctx, today)
+      today_card = said!(ctx, today, daily, block(daily.id))
+
+      today_id = today.id
+
+      assert {:ok, %{thread: ^today_id}} =
+               Sanctum.Gate.call_external("thread", ctx, %{
+                 "action" => "send",
+                 "choice" => %{"row" => today_card.id, "index" => 1},
+                 "client_id" => "snd_gate"
+               })
+
+      # A send that is no press still names its line.
+      assert {:error, {:invalid_argument, "send requires a non-empty 'message'"}} =
+               Tool.handle("thread", ctx, %{"action" => "send", "thread" => today.id})
+    end
+
+    test "a press retried across midnight answers its first receipt and writes once",
+         %{ctx: ctx, today: today} do
+      turn = turn!(ctx, today)
+      card = said!(ctx, today, turn, block(turn.id))
+
+      assert {:ok, %{replayed: false, message_id: id, thread: landed}} =
+               press(ctx, card, 0, "snd_boundary")
+
+      # The day turns: the thread it landed in is yesterday's now.
+      {1, _} =
+        Arca.Repo.update_all(from(t in Arca.Schemas.Thread, where: t.id == ^today.id),
+          set: [day: Date.add(Aqua.Day.today(ctx), -1)]
+        )
+
+      assert {:ok, %{replayed: true, message_id: ^id, thread: ^landed}} =
+               press(ctx, card, 0, "snd_boundary")
+
+      assert [_one] =
+               Arca.Repo.all(
+                 from(m in Arca.Schemas.Message,
+                   where: m.athanor_id == ^ctx.athanor_id and m.client_id == "snd_boundary"
+                 )
+               )
+    end
+
+    test "a plain send under a press's client id is another send, refused, nothing replayed",
+         %{ctx: ctx, today: today} do
+      turn = turn!(ctx, today)
+      card = said!(ctx, today, turn, block(turn.id))
+      assert {:ok, %{replayed: false}} = press(ctx, card, 0, "snd_same")
+
+      assert {:error, :client_id_reused} =
+               Tool.handle("thread", ctx, %{
+                 "action" => "send",
+                 "thread" => today.id,
+                 "client_id" => "snd_same",
+                 "message" => "PostgreSQL"
+               })
+
+      assert [%{content: "PostgreSQL"}] =
+               for(
+                 m <- Threads.messages(actor(ctx), today.id),
+                 m.sent_by == "person" and m.content == "PostgreSQL",
+                 do: m
+               )
     end
 
     test "a resend under its client id is the same press; that id on another choice, or on " <>
@@ -454,10 +548,10 @@ defmodule Aqua.ChoicesTest do
       other = turn!(ctx, today)
       second = said!(ctx, today, other, block(other.id, "Second?", ["- Blue", "- Amber"]))
 
-      assert {:ok, %{message_id: id, replayed: false}} = press(ctx, today.id, card, 0, "snd_1")
-      assert {:ok, %{message_id: ^id, replayed: true}} = press(ctx, today.id, card, 0, "snd_1")
-      assert {:error, :client_id_reused} = press(ctx, today.id, card, 1, "snd_1")
-      assert {:error, :client_id_reused} = press(ctx, today.id, second, 0, "snd_1")
+      assert {:ok, %{message_id: id, replayed: false}} = press(ctx, card, 0, "snd_1")
+      assert {:ok, %{message_id: ^id, replayed: true}} = press(ctx, card, 0, "snd_1")
+      assert {:error, :client_id_reused} = press(ctx, card, 1, "snd_1")
+      assert {:error, :client_id_reused} = press(ctx, second, 0, "snd_1")
 
       assert [%{id: ^id} = only] =
                for(m <- Threads.messages(actor(ctx), today.id), Choices.pressed(m) != nil, do: m)

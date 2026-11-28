@@ -4851,8 +4851,8 @@ func (args ThreadSearchArgs) MarshalJSON() ([]byte, error) {
 type ThreadSendArgs struct {
 	// send: a workspace thread or a crew member's thread; with none, or a daily thread, the send joins today's daily thread
 	Thread Field[string] `json:"thread,omitzero"`
-	// send: the text to say (at most 32 KiB of text)
-	Message string `json:"message"`
+	// send: the text to say (at most 32 KiB of text); every send but a press names one
+	Message Field[string] `json:"message,omitzero"`
 	// send: the agent to address when the text names none
 	Agent Field[string] `json:"agent,omitzero"`
 	// send: the refs `attach` answered for this message id
@@ -4863,7 +4863,7 @@ type ThreadSendArgs struct {
 	Id Field[string] `json:"id,omitzero"`
 	// send: a model override for this turn
 	Model Field[string] `json:"model,omitzero"`
-	// send: a press of a choice on Aqua's question (row, index): the message row the question is in and the choice's place, from 0; the send says that choice's label, read on the server, to Aqua, and names nothing else but the thread and a client_id
+	// send: a press of a choice on Aqua's question (row, index): the message row the question is in and the choice's place, from 0. A press names nothing else but a client_id: it lands where the question is, a daily thread's question in today's daily thread, and says the choice's label, read on the server, to Aqua
 	Choice Field[ThreadSendArgsChoice] `json:"choice,omitzero"`
 	// send: the shared thread the sender has open beside this thread (shared_thread_id, title); its newest lines are read under the sender's seat for this one turn, never stored
 	Room Field[ThreadSendArgsRoom] `json:"room,omitzero"`
