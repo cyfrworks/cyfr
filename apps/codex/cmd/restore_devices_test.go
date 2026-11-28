@@ -78,3 +78,34 @@ func TestARefusedRestorePutsTheDevicesBackAsTheyWere(t *testing.T) {
 	}
 	r.configAsBefore(compose, before)
 }
+
+// A restore cut short once it put .env in place leaves it barred with this
+// machine's devices in it, not the snapshot's: the same restore run again,
+// which reads that .env as the one this machine's stack ran with, still
+// never first gives them.
+func TestARestoreRunAgainStillNeverFirstGivesTheDevices(t *testing.T) {
+	r := newRestoreScenario(t, shippedCompose(t), nil, nil)
+	devicesHere(t, true)
+	if err := os.WriteFile(filepath.Join(r.dir, ".env"), append(r.env, deviceLines("/dev/kvm", "/dev/net/tun")...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r.answer("write.kill", "3 x")
+	if out, err := r.restore(true); err == nil || !strings.Contains(err.Error(), "Putting the snapshot back failed") {
+		t.Fatalf("restore answered %v\n%s", err, out)
+	}
+	r.barred()
+	devicesAre(t, "", "")
+	for _, name := range []string{"write.kill", "write.count"} {
+		os.Remove(filepath.Join(r.fake, name))
+	}
+	out, err := r.restore(true)
+	if err != nil {
+		t.Fatalf("the restore run again: %v\n%s", err, out)
+	}
+	if got, want := read(t, filepath.Join(r.project, ".env")), string(r.env)+deviceLines("", ""); got != want {
+		t.Errorf("the restore run again left .env as %q, want %q", got, want)
+	}
+	if !strings.Contains(out, devicesUpdateGives+"\n") {
+		t.Errorf("the restore run again did not say cyfr update turns them on:\n%s", out)
+	}
+}
