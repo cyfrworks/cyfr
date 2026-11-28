@@ -37,6 +37,26 @@ defmodule Aqua.PromptTest do
       end
     end
 
+    # The files catalyst holds its own grant of `data/`: a turn whose own
+    # grant names no path, offered a files action, is told it reaches
+    # `data/` through the files tool, never that it has no file access.
+    test "a turn granted no storage but offered a files action is told the files tool reaches data/",
+         %{ctx: ctx} do
+      reached = "File paths: data/ for user storage, reached through CYFR's files tool."
+
+      for tools <- [["files.write"], ["files.read"]] do
+        prompt = Prompt.compose(ctx, agent: Map.put(agent(), "tools", tools), authority: nil).text
+        assert prompt =~ reached
+        refute prompt =~ "no file access"
+      end
+
+      for tools <- [["http.get"], nil] do
+        prompt = Prompt.compose(ctx, agent: Map.put(agent(), "tools", tools), authority: nil).text
+        assert prompt =~ "File paths: none — this turn has no file access."
+        refute prompt =~ reached
+      end
+    end
+
     test "a granted scope is named, an ungranted one is not", %{ctx: ctx} do
       prompt =
         Prompt.compose(ctx,
@@ -205,8 +225,8 @@ defmodule Aqua.PromptTest do
     test "the facts name the turn's id, and tell a schedule's or a webhook's turn nobody answers",
          %{ctx: ctx} do
       nobody =
-        "Nobody is here to answer in this turn: decide yourself, and say in your reply " <>
-          "what you assumed."
+        "Nobody is here to answer in this turn: where your instructions tell you to ask and " <>
+          "wait, decide yourself and go on, and say in your reply what you assumed."
 
       for {origin, said} <- [
             interactive: "",
@@ -286,6 +306,7 @@ defmodule Aqua.PromptTest do
 
     @program "\n- Your own tools work in your folder, the program's folder this athanor " <>
                "keeps for you: read, edit and run there as you would anywhere.\n" <>
+               "- Your folder is your workbench, and the person does not see it.\n" <>
                "- The athanor's files, components and stored state are reached through " <>
                "CYFR's tools only. A call CYFR refuses comes back with a sentence that says " <>
                "so; carry on with what does not depend on it.\n" <>
@@ -406,6 +427,41 @@ defmodule Aqua.PromptTest do
                "## Crew member"
     end
 
+    # A program's folder is its workbench, which the person does not see;
+    # where it is offered `files.write`, what the person should see
+    # goes under `data/` through CYFR's files tool. A model's brain has no
+    # folder and is told neither.
+    test "a program is told its folder is its workbench, and where to write what the person sees",
+         %{ctx: ctx} do
+      workbench = "\n- Your folder is your workbench, and the person does not see it."
+
+      write =
+        " What they should see, keep or open, write with CYFR's files tool under `data/`."
+
+      writes = ["files.read", "files.write"]
+      reads = ["files.read"]
+
+      for agent <- [agent(), member("coder")] do
+        assert opening(ctx,
+                 agent: Map.put(agent, "tools", writes),
+                 own_tools?: true,
+                 authority: nil
+               ) =~ workbench <> write <> "\n- The athanor's files"
+
+        held =
+          opening(ctx, agent: Map.put(agent, "tools", reads), own_tools?: true, authority: nil)
+
+        assert held =~ workbench <> "\n- The athanor's files"
+        refute held =~ write
+
+        for tools <- [writes, reads] do
+          text = Prompt.compose(ctx, agent: Map.put(agent, "tools", tools), authority: nil).text
+          refute text =~ "workbench"
+          refute text =~ write
+        end
+      end
+    end
+
     test "the briefing comes before the runtime context, the scroll list in it", %{ctx: ctx} do
       [opening, context] =
         String.split(
@@ -433,6 +489,71 @@ defmodule Aqua.PromptTest do
     assert prompt =~ "## Aqua Shell Control"
     assert prompt =~ "call the `ui` tool"
     refute prompt =~ "Actions that need approval"
+  end
+
+  describe "planning" do
+    # Asked for a plan, a brain that can write files writes it to a file of
+    # its own under the turn's id and asks whether to proceed; one that
+    # cannot gives it in its reply. Every brain is told, a model's and a
+    # program's, the soul and a member alike.
+    @plan_file "\n\n---\n\n## Plans\n\nWhen you are asked for a plan, or the work is large " <>
+                 "enough to owe one, write the plan with `files.write` to " <>
+                 "`data/aqua/plans/<turn id>-<n>-<short-name>.md`: `<turn id>` is this " <>
+                 "turn's id, `<n>` counts the plans you write in this turn from 1, and " <>
+                 "`<short-name>` is a few words of your own in lower case, joined by hyphens. " <>
+                 "Then ask whether to proceed, naming the file, and change nothing else " <>
+                 "before the answer. When the answer asks for changes, write the revision as " <>
+                 "a new plan of this turn, keeping its short name, and ask again."
+
+    @plan_reply "\n\n---\n\n## Plans\n\nWhen you are asked for a plan, or the work is large " <>
+                  "enough to owe one, give the plan in your reply and ask whether to proceed, " <>
+                  "and change nothing before the answer. When the answer asks for changes, " <>
+                  "give the revision and ask again."
+
+    test "a brain that can write files plans in a file of the turn's own; one that cannot, " <>
+           "in its reply",
+         %{ctx: ctx} do
+      member = %{"name" => "builder", "prompt" => nil}
+
+      for agent <- [agent(), member], own_tools? <- [true, false] do
+        with_file =
+          Prompt.compose(ctx,
+            agent: Map.put(agent, "tools", ["files.write"]),
+            own_tools?: own_tools?,
+            authority: nil
+          )
+
+        assert with_file.instructions =~ @plan_file
+        refute with_file.instructions =~ @plan_reply
+
+        for tools <- [nil, ["files.read"]] do
+          in_reply =
+            Prompt.compose(ctx,
+              agent: Map.put(agent, "tools", tools),
+              own_tools?: own_tools?,
+              authority: nil
+            )
+
+          assert in_reply.instructions =~ @plan_reply
+          refute in_reply.instructions =~ "data/aqua/plans"
+        end
+      end
+    end
+
+    # The path's prefix is the turn's own id, in the facts, so two turns'
+    # plans of one short name never share a path.
+    test "two turns' prompts name different turns for the plan's path", %{ctx: ctx} do
+      writes = Map.put(agent(), "tools", ["files.write"])
+
+      [first, second] =
+        for id <- ["trn_one", "trn_two"],
+            do: Prompt.compose(ctx, agent: writes, authority: nil, turn_id: id)
+
+      assert first.instructions == second.instructions
+      assert first.instructions =~ "`data/aqua/plans/<turn id>-<n>-<short-name>.md`"
+      assert first.facts =~ "This turn's id is `trn_one`."
+      assert second.facts =~ "This turn's id is `trn_two`."
+    end
   end
 
   describe "the athanor's rules file" do

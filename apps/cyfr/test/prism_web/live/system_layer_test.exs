@@ -1555,7 +1555,7 @@ defmodule PrismWeb.SystemLayerTest do
       id = open_prompt(view)
       assert "connect-" <> _ = id
       html = render(view)
-      assert html =~ "Connect your connect.test account"
+      assert html =~ "Paste your connect.test API key"
       assert html =~ "One more prompt is waiting."
 
       # Prefilled from the need: the name, its hosts and paths; the need
@@ -2974,7 +2974,7 @@ defmodule PrismWeb.SystemLayerTest do
     end
 
     # A catalyst taking a required key and an optional one the person can
-    # connect from the sheet ("Connect your <provider> account"), asking
+    # connect from the sheet ("Paste your <provider> API key"), asking
     # for `methods` on both domains.
     defp connectable!(local, name, version, methods, extra \\ %{}) do
       attach = fn header -> %{"in" => "header", "name" => header, "template" => "{value}"} end
