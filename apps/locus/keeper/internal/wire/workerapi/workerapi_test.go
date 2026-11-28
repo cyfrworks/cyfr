@@ -6,10 +6,10 @@ package workerapi
 import (
 	"bytes"
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"reflect"
 	"testing"
+
+	"github.com/cyfr/locus/keeper/internal/wire/wiretest"
 
 	"github.com/cyfr/locus/keeper/internal/wire/wirejson"
 )
@@ -22,7 +22,8 @@ type vectors struct {
 	Retries    map[string]string `json:"retries"`
 	TimeoutsMs map[string]int    `json:"timeouts_ms"`
 	Status     struct {
-		Valid []struct {
+		Comment json.RawMessage `json:"comment"`
+		Valid   []struct {
 			Why  string          `json:"why"`
 			Wire json.RawMessage `json:"wire"`
 		} `json:"valid"`
@@ -33,11 +34,11 @@ type vectors struct {
 	} `json:"status"`
 	KeeperRefusals []struct {
 		Why        string          `json:"why"`
-		Code       *string         `json:"code"`
+		Code       *string         `json:"code" wire:"null,required"`
 		Reason     string          `json:"reason"`
 		Message    string          `json:"message"`
-		Held       json.RawMessage `json:"held"`
-		ElixirOnly bool            `json:"elixir_only"`
+		Held       json.RawMessage `json:"held" wire:"optional"`
+		ElixirOnly bool            `json:"elixir_only" wire:"optional"`
 	} `json:"keeper_refusals"`
 	ReportRefusals struct {
 		Carried    []string `json:"carried"`
@@ -47,21 +48,18 @@ type vectors struct {
 
 func load(t *testing.T) vectors {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "..", "..", "tests", "fixtures", "worker_api.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
 	var v vectors
-	if err := json.Unmarshal(data, &v); err != nil || v.Version != 3 {
-		t.Fatalf("the vector file: %v, version %d", err, v.Version)
+	wiretest.LoadStrict(t, "worker_api.json", &v)
+	if v.Version != 3 {
+		t.Fatalf("the vector file's version %d", v.Version)
 	}
 	return v
 }
 
 func TestEveryCallbacksRetryAndTimeoutAreTheVectors(t *testing.T) {
 	v := load(t)
-	if len(v.Retries) != len(Callbacks()) || !reflect.DeepEqual(v.Retries, Retry) || !reflect.DeepEqual(v.TimeoutsMs, TimeoutMs) {
-		t.Fatalf("the vector's retries %v and timeouts %v, the package's %v and %v", v.Retries, v.TimeoutsMs, Retry, TimeoutMs)
+	if len(v.Retries) != len(Callbacks()) || !reflect.DeepEqual(v.Retries, Retry()) || !reflect.DeepEqual(v.TimeoutsMs, TimeoutMs()) {
+		t.Fatalf("the vector's retries %v and timeouts %v, the package's %v and %v", v.Retries, v.TimeoutsMs, Retry(), TimeoutMs())
 	}
 	for _, c := range Callbacks() {
 		if v.Routes[c] != "/worker/v1/"+c {
@@ -191,8 +189,8 @@ func TestTheKeepersRefusalsAreHeldInTheVectorsWords(t *testing.T) {
 	if held == 0 {
 		t.Error("no refusal carries the keeper's held")
 	}
-	if !reflect.DeepEqual(v.ReportRefusals.Carried, ReportRefusals) || len(v.ReportRefusals.NotCarried) == 0 {
-		t.Errorf("a report carries %v, the vector's %v", ReportRefusals, v.ReportRefusals.Carried)
+	if !reflect.DeepEqual(v.ReportRefusals.Carried, ReportRefusals()) || len(v.ReportRefusals.NotCarried) == 0 {
+		t.Errorf("a report carries %v, the vector's %v", ReportRefusals(), v.ReportRefusals.Carried)
 	}
 	for _, c := range v.ReportRefusals.NotCarried {
 		if Reported(c) {

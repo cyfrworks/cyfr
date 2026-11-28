@@ -264,12 +264,18 @@ defmodule Locus.Runtime.HostClientTest do
     assert length(cases) >= 40
 
     # One case for every class the callbacks' retries name.
-    classes =
-      for %{"callback" => callback} <- cases, uniq: true, do: @host_api["retries"][callback]
+    classes = cases |> Enum.map(&@host_api["retries"][Map.fetch!(&1, "callback")]) |> Enum.uniq()
 
     assert Enum.sort(classes) == ~w(batch idempotent keyed never outcome)
 
-    for %{"why" => why, "callback" => callback, "answers" => answers} = vector <- cases do
+    for vector <- cases do
+      assert %{"why" => why, "callback" => callback, "answers" => answers} = vector
+      assert %{"outcome" => outcome, "posted" => posted} = vector
+      assert is_binary(outcome) and is_integer(posted), why
+      # A case is these members and, for an answer, its reading: none more.
+      assert Map.keys(vector) -- ~w(why callback answers outcome posted reading) == [], why
+      assert Map.has_key?(vector, "reading") == (outcome == "answer"), why
+
       ScriptedHost.script(host, callback, Enum.map(answers, &scripted/1))
       before = length(ScriptedHost.requests(host, callback))
 
@@ -361,6 +367,38 @@ defmodule Locus.Runtime.HostClientTest do
 
       assert {:error, :too_large} = HostClient.renew(attempt.client, [attempt.attempt])
       assert [_once] = ScriptedHost.requests(host, "renew")
+    end
+  end
+
+  test "each answer bound of the vectors: an answer is kept to the answer bound as its status says",
+       %{host: host, attempt: attempt} do
+    json = Jason.encode!(Prima.WorkerWire.request_body(:renew, %{"attempts" => []}))
+
+    assert length(@host_api["answer_bounds"]) >= 6
+
+    for c <- @host_api["answer_bounds"] do
+      assert Map.keys(c) |> Enum.sort() === ~w(arrived body_bytes kept_bytes status why),
+             inspect(c)
+
+      # A lost answer keeps nothing: its kept bytes are 0.
+      assert c["arrived"] or c["kept_bytes"] === 0, c["why"]
+
+      ScriptedHost.script(
+        host,
+        "renew",
+        {:raw, c["status"], String.duplicate("x", c["body_bytes"])}
+      )
+
+      fields = call_fields(attempt)
+      {:ok, sealed} = Prima.WorkerAuth.seal_call(attempt.keys.seal, :body, fields, json)
+      {:ok, header} = Prima.WorkerAuth.host_call_header(attempt.keys.call, fields, sealed)
+
+      expected =
+        if c["arrived"],
+          do: {:ok, c["status"], String.duplicate("x", c["kept_bytes"])},
+          else: :error
+
+      assert HostClient.post_call(host.url, :renew, header, sealed) === expected, c["why"]
     end
   end
 
