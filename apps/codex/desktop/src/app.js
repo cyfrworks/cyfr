@@ -162,6 +162,7 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
   let state = initial(accountRoad, screen, app.commandLine.hasSwitch("updated"))
   let child = null
   let frame = null // the app's one window, holding the rail and the content
+  let keyboardHeld = null // the part of frame that last held the keyboard, "rail" or "content" (keyboardBack)
   let rail = null // the rail's view
   let railURL = "" // its address, as the last ready gave it
   let menuOpen = null // the row menu shown, or its Forget's dialog: {menu, asked}
@@ -516,6 +517,8 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
     const f = new BaseWindow({width: 1280, height: 860, show: false, title: "CYFR", autoHideMenuBar: true, backgroundColor: "#071013",
       ...(screen ? {frame: false} : {})})
     frame = f
+    keyboardHeld = null
+    f.on("focus", keyboardBack)
     f.on("resize", layout)
     f.on("closed", () => {
       if (frame === f) frame = null
@@ -539,6 +542,19 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
       retired.add(f)
       f.destroy()
     }
+  }
+
+  // As the app's window gains focus it gives the keyboard back to the part
+  // that last held it, and to the content's page where none has, as in a
+  // fresh window: a BaseWindow gives none of its views the keyboard, where
+  // a BrowserWindow gives its own page. Without it a page whose document
+  // committed before the compositor activated its window, as the chooser's
+  // move on to the device's lock page does in the fresh window every lock
+  // on the box's screen opens, took no key typed to it until a press
+  // inside it; a person on a row of the rail keeps their place.
+  function keyboardBack() {
+    const part = keyboardHeld === "rail" && rail ? rail : content
+    if (part && !part.webContents.isDestroyed()) part.webContents.focus()
   }
 
   // Where the content is: the window's content area beside the rail.
@@ -649,6 +665,7 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
     if (!rail) {
       rail = new WebContentsView({webPreferences: {...SECURE, session: appSession()}})
       confine(rail.webContents, "rail")
+      rail.webContents.on("focus", () => { keyboardHeld = "rail" })
       // A lost rail is shown again; one that failed to load is tried again
       // at the next ready.
       ends(rail.webContents, {failed: () => {}, lost: () => rail?.webContents.reload()})
@@ -702,6 +719,9 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
     }
     content = v
     const contents = v.webContents
+    contents.on("focus", () => {
+      if (content === v) keyboardHeld = "content"
+    })
     ends(contents, {failed: (code, url) => heard({type: "load-failed", code, url}), lost: () => heard({type: "lost"})})
     confine(contents, "content")
     // The window handler opens only the device's two loopback confirmation
