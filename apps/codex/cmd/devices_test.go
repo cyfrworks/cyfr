@@ -346,7 +346,17 @@ func TestUpdateSaysWhatItDoesToTheDevices(t *testing.T) {
 			if got := said(out.String()); got != c.says {
 				t.Errorf("the offer says %q of the devices, want %q:\n%s", got, c.says, out.String())
 			}
-			s.onlyReadTheSchema()
+			if c.emptied == "" {
+				s.onlyReadTheSchema()
+			} else {
+				// The emptying took the stack's lock, and nothing else ran
+				// but the offer's reads.
+				if log := s.log(); !slices.Equal(log, append([]string{"ENGINE lock update"}, s.offerReads()...)) {
+					t.Errorf("the update ran:\n%s", strings.Join(log, "\n"))
+				}
+				s.composeUnchanged()
+				s.noBackups()
+			}
 			if got := read(t, filepath.Join(s.project, ".env")); got != left {
 				t.Errorf("a declined update left .env as %q, want %q", got, left)
 			}
@@ -451,6 +461,27 @@ func TestADeclinedUpdateStillEmptiesADeviceThisMachineDoesNotHave(t *testing.T) 
 				t.Errorf("after the declined update cyfr up is refused: %v", err)
 			}
 		})
+	}
+}
+
+// The emptying is a change to the stack, made under its lock: while another
+// cyfr command holds it the update is refused with the lock's sentence,
+// says nothing of the devices and leaves .env as it was.
+func TestAnUpdateEmptiesNoDeviceWhileAnotherCommandHoldsTheLock(t *testing.T) {
+	devicesHere(t, false)
+	s := newUpdateScenario(t, shippedCompose(t), nil)
+	env := scenarioEnv + deviceLines("/dev/kvm", "/dev/net/tun")
+	s.edit(".env", env)
+	s.engine.mu.Lock()
+	s.engine.holder = "up"
+	s.engine.mu.Unlock()
+	var out bytes.Buffer
+	err := runHomeUpdate(context.Background(), &out, &out, updateOptions{yes: true})
+	if err == nil || !strings.Contains(err.Error(), "Another cyfr command holds CYFR's lock (`up`)") || !strings.Contains(err.Error(), "Nothing was changed") {
+		t.Errorf("the update answered %v", err)
+	}
+	if got := read(t, filepath.Join(s.project, ".env")); got != env || out.Len() != 0 {
+		t.Errorf("the update changed .env to %q and said:\n%s", got, out.String())
 	}
 }
 

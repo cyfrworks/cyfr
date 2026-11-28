@@ -178,6 +178,24 @@ func emptyStrayDevices(out io.Writer, o updateOptions, have map[string]string) (
 		// The update refuses a .env that does not read with its own sentence.
 		return false, nil
 	}
+	if len(strayDevices(values, have)) == 0 {
+		return false, nil
+	}
+	// The devices are written under the stack's lock, as the switch and an
+	// update on its release write them, and .env is read again under it: a
+	// command that holds the lock refuses the update here, nothing changed.
+	e, err := openEngine(".")
+	if err != nil {
+		return false, engineFailure(err)
+	}
+	unlock, err := e.Lock("update")
+	if err != nil {
+		return false, engineFailure(err)
+	}
+	defer unlock()
+	if values, err = access.ReadEnvValues(".env"); err != nil {
+		return false, nil
+	}
 	stray := strayDevices(values, have)
 	if len(stray) == 0 {
 		return false, nil
