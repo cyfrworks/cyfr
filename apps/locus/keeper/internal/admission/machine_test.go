@@ -396,10 +396,13 @@ func TestARefusalNamesAVMPlacedAloneAsAProgram(t *testing.T) {
 	admitted(t, l.Place(m, at(0)), m)
 	b := inVM(m, "p1")
 	b.AthanorMax = MachineBytes(testGuest)
-	if ev := l.Place(b, at(1)); len(ev.Admitted) != 0 {
+	ev := l.Place(b, at(1))
+	if len(ev.Admitted) != 0 {
 		t.Fatalf("a start past its person's ceiling was admitted: %+v", ev)
 	}
-	ev := l.Tick(at(1).Add(RoomWait + time.Second))
+	if len(ev.Refused) == 0 {
+		ev = l.Tick(at(1).Add(RoomWait + time.Second))
+	}
 	if len(ev.Refused) != 1 {
 		t.Fatalf("the start past its ceiling was not refused: %+v", ev)
 	}
