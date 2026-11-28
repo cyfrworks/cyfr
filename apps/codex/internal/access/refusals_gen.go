@@ -30,6 +30,12 @@ var refusalRows = map[string]refusalRow{
 			{Fixed: map[string]string{}, Slots: []string{"address"}, Template: "CYFR is already reached that way, at {address}. Nothing was changed."},
 		},
 	},
+	"access_origin_pinned": {
+		Class: "conflict",
+		Variants: []refusalVariant{
+			{Fixed: map[string]string{}, Slots: []string{"pinned", "origin"}, Template: "This CYFR serves its own account service at {pinned}, and an account service keeps its address for good. This change would move it to {origin}. Nothing was changed."},
+		},
+	},
 	"access_invalid": {
 		Class: "invalid_argument",
 		Variants: []refusalVariant{

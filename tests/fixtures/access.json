@@ -3892,6 +3892,27 @@
       ]
     },
     {
+      "code": "access_origin_pinned",
+      "class": "conflict",
+      "variants": [
+        {
+          "fixed": {},
+          "slots": [
+            "pinned",
+            "origin"
+          ],
+          "template": "This CYFR serves its own account service at {pinned}, and an account service keeps its address for good. This change would move it to {origin}. Nothing was changed.",
+          "example": {
+            "payload": {
+              "origin": "x-origin",
+              "pinned": "x-pinned"
+            },
+            "sentence": "This CYFR serves its own account service at x-pinned, and an account service keeps its address for good. This change would move it to x-origin. Nothing was changed."
+          }
+        }
+      ]
+    },
+    {
       "code": "access_invalid",
       "class": "invalid_argument",
       "variants": [
