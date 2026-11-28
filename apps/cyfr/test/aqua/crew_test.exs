@@ -2922,6 +2922,27 @@ defmodule Aqua.CrewTest do
       assert reports(ctx) == []
     end
 
+    test "the person's stop of the workspace thread ends its member's running job with no " <>
+           "answer, as it always has",
+         %{ctx: ctx, room: daily} do
+      script!([ask("plan it"), reply("Asked the planner."), {:hold, self()}])
+      workspace = workspace!(ctx, daily)
+      {aqua, request} = asked!(ctx, workspace)
+      assert {:ok, %{"applied" => 1}} = drain(ctx)
+      assert_receive {:scripted_probe, _worker, _}, 60_000
+      child = child!(ctx, workspace, "planner")
+      member = delivered_turn(ctx, child, request.id)
+
+      assert :ok = Runner.stop_turn(ctx, workspace.id)
+      await_status(ctx, member, "cancelled")
+      assert %{status: "expired"} = row(ctx, request.id)
+      assert replies_of(ctx, member) == []
+      assert %{running: false} = Runner.state(child.id, ctx.athanor_id)
+      refute Enum.any?(rows(ctx, workspace.id), &(&1.reply_to == request.id))
+      assert Enum.map(room_turns(ctx, workspace), & &1.id) == [aqua]
+      assert work_state(ctx, workspace.id) == "stopped"
+    end
+
     test "after the person's stop, a member's answer on its way lands as a row and opens no " <>
            "turn of Aqua's",
          %{ctx: ctx, room: daily} do
