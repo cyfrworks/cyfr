@@ -4064,7 +4064,6 @@ defmodule PrismWeb.ThreadPaneLiveTest do
       do: %{tool: tool, sentence: "Used a tool", status: status, details: details}
 
     @rows ~s([data-test="tool-activity"])
-    @fold ~s([data-test="thinking"])
 
     test "a list of an ended turn, of another turn or of an earlier holder of the running one " <>
            "shows no rows; the running turn's own does",
@@ -4186,9 +4185,8 @@ defmodule PrismWeb.ThreadPaneLiveTest do
       refute has_element?(pane, @rows, "Bash")
     end
 
-    test "reasoning folds under Thinking apart from the answer it shares a message with, " <>
-           "outlives the answer's row while the turn goes on, and goes with the rows at its " <>
-           "end while the final answer stays",
+    test "a running turn shows its answer and its rows and no fold of reasoning, and at its " <>
+           "end the rows go while the final answer stays",
          %{conn: conn, athanor: athanor, here: here, user: user} do
       Sanctum.TestContext.ready!(athanor.id)
       Cyfr.Test.Sandbox.stop_work_on_exit()
@@ -4199,53 +4197,44 @@ defmodule PrismWeb.ThreadPaneLiveTest do
       told = told(pane, today)
       runs(told, user, turn.id)
 
-      piece = fn seq, text ->
+      answer = fn seq, text ->
         %{
           turn_id: turn.id,
           fence: 1,
           source: turn.id,
           step_id: "msg_1",
+          ordinal: 0,
           role: nil,
           seq: {0, seq},
           text: text
         }
       end
 
-      reasoning = &Map.put(piece.(&1, &2), :kind, :thought)
-      answer = &Map.put(piece.(&1, &2), :ordinal, 0)
-
       told.(:delta, answer.(1, "The answer "))
-      told.(:delta, reasoning.(2, "weighing"))
-      told.(:delta, answer.(3, "is 42."))
-      told.(:delta, reasoning.(4, " it"))
+      told.(:delta, answer.(2, "is 42."))
       told.(:tool_activity, listed(turn.id, 1, [ran("Read", :done, ["notes.md"])]))
 
       streaming = ~s([id$="-streaming-msg_1"])
-      assert has_element?(pane, @fold <> " summary", "Thinking")
-      assert pane |> element(@fold <> " p") |> render() =~ "weighing it"
-      refute pane |> element(@fold) |> render() =~ "answer"
       assert pane |> element(streaming) |> render() =~ "The answer is 42."
-      refute pane |> element(streaming) |> render() =~ "weighing"
+      assert has_element?(pane, @rows, "notes.md")
+      refute has_element?(pane, "details")
 
-      # The answer's row lands in place of what streamed; the fold stays.
+      # The answer's row lands in place of what streamed.
       row = brain_said!(here, today, turn, "The answer is 42.", %{"brain_message" => "msg_1"})
       # An answer's Markdown is drawn in the browser from its raw text.
       answered = ~s([id$="-msg-#{row.id}"][data-raw-content="The answer is 42."])
       Prima.Test.Wait.wait_until(fn -> not has_element?(pane, streaming) end)
       assert has_element?(pane, answered)
-      assert has_element?(pane, @fold, "weighing it")
       assert has_element?(pane, @rows, "notes.md")
 
       turn_status!(turn, "completed")
       turn_finished(pane, athanor, today)
-      Prima.Test.Wait.wait_until(fn -> not has_element?(pane, @fold) end)
-      refute has_element?(pane, @rows)
+      Prima.Test.Wait.wait_until(fn -> not has_element?(pane, @rows) end)
       assert has_element?(pane, answered)
 
       # Opened again, the thread holds the answer and nothing of the work.
       again = open_pane(conn, athanor, today)
       assert has_element?(again, answered)
-      refute has_element?(again, @fold)
       refute has_element?(again, @rows)
     end
   end

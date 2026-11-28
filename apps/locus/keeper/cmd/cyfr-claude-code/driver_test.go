@@ -958,14 +958,13 @@ func TestASubagentsLinesAreNotTheReply(t *testing.T) {
 	}
 }
 
-// Wire version 8's activity: each own tool's start and end carry one
-// call, its tool use's id, two commands whose results come in reverse
-// order each ending under its own; a start says its command, else the
-// file it acts on, else its input, cut between characters to a detail's
-// bound; the thinking is thought and
-// never said; and a subagent's lines, its reasoning, words and tool, emit
-// nothing while the Task that started it starts and ends.
-func TestClaudeCodesActivityIsItsCallsThoughtsAndOwnWords(t *testing.T) {
+// The wire's activity: each own tool's start and end carry one call, its
+// tool use's id, two commands whose results come in reverse order each
+// ending under its own; a start says its command, else the file it acts
+// on, else its input, cut between characters to a detail's bound; the
+// thinking emits nothing; and a subagent's lines, its reasoning, words and
+// tool, emit nothing while the Task that started it starts and ends.
+func TestClaudeCodesActivityIsItsCallsAndOwnWords(t *testing.T) {
 	s := startDriver(t)
 	startFresh(s, map[string]any{})
 	work(s, "stp_work", []any{})
@@ -973,20 +972,14 @@ func TestClaudeCodesActivityIsItsCallsThoughtsAndOwnWords(t *testing.T) {
 	got := s.until("idle")
 	var seen []string
 	details := map[string]any{}
-	thought, said := "", ""
+	said := ""
 	for _, e := range got {
 		switch e["t"] {
 		case "own":
 			seen = append(seen, fmt.Sprintf("%v:%v:%v", e["call"], e["name"], e["phase"]))
 			details[fmt.Sprintf("%v:%v", e["call"], e["phase"])] = e["detail"]
-		case "thought":
-			thought += e["delta"].(string)
 		case "said":
 			said += e["text"].(string)
-		case "text":
-			if strings.Contains(e["delta"].(string), "THINK") {
-				t.Fatalf("reasoning is never said: %v", e)
-			}
 		}
 	}
 	want := []string{"toolu_a:Bash:start", "toolu_b:Bash:start", "toolu_edit:Edit:start", "toolu_grep:Grep:start", "toolu_b:Bash:end",
@@ -1001,12 +994,12 @@ func TestClaudeCodesActivityIsItsCallsThoughtsAndOwnWords(t *testing.T) {
 		!utf8.ValidString(grep) || !strings.HasPrefix(whole, grep) {
 		t.Fatalf("a start says its command, else the file it acts on, else its input cut between characters to the bound, and an end nothing: %v", details)
 	}
-	if thought != "THINK-ONE THINK-TWO" || said != "The member said its own words." {
-		t.Fatalf("the thinking is thought, and the reply only the member's own words: %q %q", thought, said)
+	if said != "The member said its own words." {
+		t.Fatalf("the reply holds only the member's own words: %q", said)
 	}
-	for _, canary := range []string{"CHILD-THOUGHT", "CHILD-WORDS", "CHILD-RAN", "CHILD-RESULT", "OUTPUT-CANARY", "toolu_child"} {
+	for _, canary := range []string{"THINK", "CHILD-THOUGHT", "CHILD-WORDS", "CHILD-RAN", "CHILD-RESULT", "OUTPUT-CANARY", "toolu_child"} {
 		if strings.Contains(s.output(), canary) {
-			t.Fatalf("nothing of the subagent's lines, nor a tool's result, reaches the wire: %s", canary)
+			t.Fatalf("nothing of the thinking, of the subagent's lines, nor a tool's result, reaches the wire: %s", canary)
 		}
 	}
 }
