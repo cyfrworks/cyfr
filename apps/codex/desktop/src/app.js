@@ -39,6 +39,9 @@ export const RESTART_WAIT_MS = 5_000
 const END_WAITS_MS = 5000
 // The rail's width, at the window's left.
 const RAIL = 72
+// The input events by which a person acts in a page (Electron's
+// input-event types): a press, a touch or a key, never the page's own focus.
+const PERSON_INPUT = new Set(["mouseDown", "touchStart", "gestureTapDown", "rawKeyDown", "keyDown"])
 // How many times a clear goes over a kept storage. A closing page's
 // scripts write until its process has gone, also after a clear that began
 // once its view was destroyed, and no header rule sees those writes: the
@@ -551,10 +554,15 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
   // committed before the compositor activated its window, as the chooser's
   // move on to the device's lock page does in the fresh window every lock
   // on the box's screen opens, took no key typed to it until a press
-  // inside it; a person on a row of the rail keeps their place.
+  // inside it. A person on a row of the rail keeps their place there: the
+  // rail is the part that last held the keyboard only when they pressed or
+  // typed in it (openRail).
   function keyboardBack() {
     const part = keyboardHeld === "rail" && rail ? rail : content
     if (part && !part.webContents.isDestroyed()) part.webContents.focus()
+  }
+  function keyboardToContent() {
+    if (content && !content.webContents.isDestroyed()) content.webContents.focus()
   }
 
   // Where the content is: the window's content area beside the rail.
@@ -665,7 +673,17 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
     if (!rail) {
       rail = new WebContentsView({webPreferences: {...SECURE, session: appSession()}})
       confine(rail.webContents, "rail")
-      rail.webContents.on("focus", () => { keyboardHeld = "rail" })
+      // The rail holds the keyboard only by a person's press or key in it;
+      // one it takes by itself, its page loading after the content's, is
+      // given back to the content. Its focus is told before the press that
+      // gave it, so it is read once that press has been told.
+      const r = rail
+      r.webContents.on("input-event", (_event, input) => {
+        if (rail === r && PERSON_INPUT.has(input.type)) keyboardHeld = "rail"
+      })
+      r.webContents.on("focus", () => setTimeout(() => {
+        if (rail === r && keyboardHeld !== "rail") keyboardToContent()
+      }, 0))
       // A lost rail is shown again; one that failed to load is tried again
       // at the next ready.
       ends(rail.webContents, {failed: () => {}, lost: () => rail?.webContents.reload()})
