@@ -3,7 +3,7 @@
 
 defmodule Opus.Brain.Wire do
   @moduledoc """
-  The brain wire, version 7, the holder's side (`Opus.Brain`): one JSON
+  The brain wire, version 8, the holder's side (`Opus.Brain`): one JSON
   object per line over a brain driver's `run` session, commands from the
   holder and events from the driver. `tests/fixtures/brain_wire.json` binds
   this module and every driver's side (`apps/locus/keeper/internal/brainwire`,
@@ -21,10 +21,12 @@ defmodule Opus.Brain.Wire do
   read.
   """
 
-  @version 7
+  @version 8
   @max_line_bytes 1_048_576
   @max_id_bytes 256
   @max_list 1_000
+  # What an own tool's `detail` holds at most: what its run does or did.
+  @max_detail_bytes 2_048
   @tool_name_bytes 1..128
   # What every harness carries of a tool whole (`carried?/1`): Claude Code
   # keeps a description's first 16,384 characters, counted as JavaScript
@@ -56,7 +58,7 @@ defmodule Opus.Brain.Wire do
     "image" => ~w(image/jpeg image/png image/gif image/webp),
     "document" => ~w(application/pdf)
   }
-  @native ~w(text said own ask usage idle error)
+  @native ~w(text thought said own ask usage idle error)
   # What a driver's `ending` may say of its end, its own finding and never
   # the program's words (`endings/0`).
   @endings ~w(unanswered servers_unlisted refused outdated unsupported ended unrunnable
@@ -98,12 +100,22 @@ defmodule Opus.Brain.Wire do
     "text" =>
       {~w(t gen message delta), ~w(work),
        %{"gen" => :count, "work" => :id, "message" => :id, "delta" => :string}},
+    "thought" =>
+      {~w(t gen message delta), ~w(work),
+       %{"gen" => :count, "work" => :id, "message" => :id, "delta" => :string}},
     "said" =>
       {~w(t gen message text), ~w(work),
        %{"gen" => :count, "work" => :id, "message" => :id, "text" => :string}},
     "own" =>
-      {~w(t gen name phase), ~w(work),
-       %{"gen" => :count, "work" => :id, "name" => :string, "phase" => :phase}},
+      {~w(t gen call name phase), ~w(work detail),
+       %{
+         "gen" => :count,
+         "work" => :id,
+         "call" => :id,
+         "name" => :string,
+         "phase" => :phase,
+         "detail" => :detail
+       }},
     "ask" =>
       {~w(t gen ask name arguments), ~w(work),
        %{"gen" => :count, "work" => :id, "ask" => :id, "name" => :string, "arguments" => :object}},
@@ -151,6 +163,10 @@ defmodule Opus.Brain.Wire do
   @doc "The most entries one list may hold."
   @spec max_list() :: pos_integer()
   def max_list, do: @max_list
+
+  @doc "The most bytes an own tool's `detail` may hold."
+  @spec max_detail_bytes() :: pos_integer()
+  def max_detail_bytes, do: @max_detail_bytes
 
   @doc """
   The messages of one direction, `:commands` or `:events`, each as its
@@ -424,6 +440,7 @@ defmodule Opus.Brain.Wire do
 
   defp of_type?(:id, value), do: id?(value)
   defp of_type?(:string, value), do: is_binary(value)
+  defp of_type?(:detail, value), do: is_binary(value) and byte_size(value) <= @max_detail_bytes
   defp of_type?(:count, value), do: is_integer(value) and value >= 0
   defp of_type?(:boolean, value), do: is_boolean(value)
   defp of_type?(:object, value), do: is_map(value)

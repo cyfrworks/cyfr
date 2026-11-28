@@ -674,7 +674,12 @@ func (d *driver) notification(method string, params json.RawMessage) error {
 			d.holds(n.TurnID, n.Item.ClientID)
 		case ownTools[n.Item.Type]:
 			d.own[n.Item.ID] = n.Item.Type
-			return d.c.Emit(brainwire.NewEvent("own").Set("gen", d.gen).SetOptional("work", work).Set("name", n.Item.Type).Set("phase", "start"))
+			return d.c.Emit(brainwire.NewEvent("own").Set("gen", d.gen).SetOptional("work", work).Set("call", brainwire.CallID(n.Item.ID)).
+				Set("name", n.Item.Type).Set("phase", "start").SetOptional("detail", n.Item.started()))
+		}
+	case "item/reasoning/summaryTextDelta":
+		if n.Delta != "" {
+			return d.c.EmitText(brainwire.NewEvent("thought").Set("gen", d.gen).SetOptional("work", work).Set("message", d.messageID(n.ItemID)), "delta", n.Delta)
 		}
 	case "item/agentMessage/delta":
 		if n.Delta != "" {
@@ -689,7 +694,8 @@ func (d *driver) notification(method string, params json.RawMessage) error {
 		default:
 			if name, ok := d.own[n.Item.ID]; ok {
 				delete(d.own, n.Item.ID)
-				return d.c.Emit(brainwire.NewEvent("own").Set("gen", d.gen).SetOptional("work", work).Set("name", name).Set("phase", "end"))
+				return d.c.Emit(brainwire.NewEvent("own").Set("gen", d.gen).SetOptional("work", work).Set("call", brainwire.CallID(n.Item.ID)).
+					Set("name", name).Set("phase", "end").SetOptional("detail", n.Item.ended()))
 			}
 		}
 	case "thread/tokenUsage/updated":

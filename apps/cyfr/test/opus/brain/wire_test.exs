@@ -26,6 +26,7 @@ defmodule Opus.Brain.WireTest do
     assert v["max_line_bytes"] == Wire.max_line_bytes()
     assert v["max_id_bytes"] == Wire.max_id_bytes()
     assert v["max_list"] == Wire.max_list()
+    assert v["max_detail_bytes"] == Wire.max_detail_bytes()
 
     assert v["config"] ==
              Map.new(Wire.config(), fn {key, type} -> {key, Atom.to_string(type)} end)
