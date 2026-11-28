@@ -831,20 +831,29 @@ defmodule Aqua.RunnerTest do
 
     user = ctx.user_id
 
-    for {room, agent, member} <- [{thread, "aqua", "Aqua"}, {child, "planner", "Planner"}] do
+    revoked = "You revoked your grant of what Aqua and its crew members may use. "
+
+    # Aqua's turn is the person's message to send again; a member's, even
+    # one the person's line opened, is its job to ask for again, since its
+    # thread takes no message.
+    for {room, agent, member, then, said} <- [
+          {thread, "aqua", "Aqua", :message,
+           revoked <>
+             "Your message was not answered: grant it again here when it is asked, or on " <>
+             "your Aqua page, then send your message again."},
+          {child, "planner", "Planner", :ask,
+           revoked <>
+             "Planner did not do this job: grant it again on your Aqua page, then ask " <>
+             "Planner for it again."}
+        ] do
       {:ok, %{turn: turn, message: message}} =
         Tape.accept(ctx, room.id, %{
           message: %{author: ctx.user_id, sent_by: "person", content: "go"},
           turn: %{agent: agent, requested_by: ctx.user_id}
         })
 
-      assert {:failed, {:grant_revoked, ^member, :message}} =
+      assert {:failed, {:grant_revoked, ^member, ^then}} =
                Aqua.Loop.run(ctx: ctx, turn_id: turn.id)
-
-      said =
-        "You revoked your grant of what Aqua and its crew members may use. Your message was " <>
-          "not answered: grant it again here when it is asked, or on your Aqua page, then send " <>
-          "your message again."
 
       assert {:ok, %{status: "failed", error: ^said, root_execution_id: nil, profile_id: nil}} =
                Tape.turn(ctx, turn.id)
@@ -854,12 +863,19 @@ defmodule Aqua.RunnerTest do
       room_id = room.id
       message_id = message.id
 
-      assert_receive %ThreadEvent{
-                       thread_id: ^room_id,
-                       kind: :consent_required,
-                       data: %{ref: "agent:local.aqua", user_id: ^user, message_id: ^message_id}
-                     },
-                     5_000
+      # Only Aqua's thread offers the message again once the grant is
+      # given; a member's thread takes no message to offer. The refusal is
+      # announced before the loop answers, so it is in the mailbox by now.
+      if then == :message do
+        assert_receive %ThreadEvent{
+                         thread_id: ^room_id,
+                         kind: :consent_required,
+                         data: %{ref: "agent:local.aqua", user_id: ^user, message_id: ^message_id}
+                       },
+                       5_000
+      else
+        refute_received %ThreadEvent{thread_id: ^room_id, kind: :consent_required}
+      end
     end
 
     assert ScriptedWorker.calls() == ran
