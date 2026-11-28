@@ -766,7 +766,7 @@ defmodule Cyfr.RuntimeConfigTest do
                )
 
       # The publication is an IPv4 loopback address alone.
-      for value <- ["[::1]:4001", "0.0.0.0:4001", "localhost:4001", "127.0.0.1"] do
+      for value <- ["[::1]:4002", "0.0.0.0:4002", "localhost:4002", "127.0.0.1"] do
         assert {:error,
                 %{
                   code: :access_setting_invalid,

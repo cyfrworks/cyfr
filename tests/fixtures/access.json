@@ -724,7 +724,7 @@
       "target": {
         "browser": "proxy",
         "domain": "cyfr.example.com",
-        "publish": "192.0.2.1:4001"
+        "publish": "192.0.2.1:4002"
       },
       "current": {
         "port": 4000,
@@ -735,9 +735,9 @@
         "class": "invalid_argument",
         "payload": {
           "key": "CYFR_PROXY_PUBLISH",
-          "value": "192.0.2.1:4001"
+          "value": "192.0.2.1:4002"
         },
-        "sentence": "`CYFR_PROXY_PUBLISH` is `192.0.2.1:4001`, which is not an IPv4 loopback address and a port, as 127.0.0.1:4001. Nothing started. Correct it, or remove it to take the default."
+        "sentence": "`CYFR_PROXY_PUBLISH` is `192.0.2.1:4002`, which is not an IPv4 loopback address and a port, as 127.0.0.1:4001. Nothing started. Correct it, or remove it to take the default."
       }
     },
     {
@@ -2951,14 +2951,14 @@
           "CYFR_BROWSER": "proxy",
           "CYFR_HOST": "cyfr.example.com",
           "CYFR_PUBLIC_URL": "https://cyfr.example.com",
-          "CYFR_PROXY_PUBLISH": "[::1]:4001",
+          "CYFR_PROXY_PUBLISH": "[::1]:4002",
           "CYFR_TRUSTED_PROXY_HOPS": "2"
         },
         "process": {
           "CYFR_BROWSER": "proxy",
           "CYFR_HOST": "cyfr.example.com",
           "CYFR_PUBLIC_URL": "https://cyfr.example.com",
-          "CYFR_PROXY_PUBLISH": "[::1]:4001",
+          "CYFR_PROXY_PUBLISH": "[::1]:4002",
           "CYFR_TRUSTED_PROXY_HOPS": "2"
         },
         "release?": true
@@ -2968,9 +2968,9 @@
         "code": "access_setting_invalid",
         "payload": {
           "key": "CYFR_PROXY_PUBLISH",
-          "value": "[::1]:4001"
+          "value": "[::1]:4002"
         },
-        "sentence": "`CYFR_PROXY_PUBLISH` is `[::1]:4001`, which is not an IPv4 loopback address and a port, as 127.0.0.1:4001. Nothing started. Correct it, or remove it to take the default."
+        "sentence": "`CYFR_PROXY_PUBLISH` is `[::1]:4002`, which is not an IPv4 loopback address and a port, as 127.0.0.1:4001. Nothing started. Correct it, or remove it to take the default."
       }
     },
     {
@@ -3156,14 +3156,14 @@
           "CYFR_BROWSER": "proxy",
           "CYFR_HOST": "cyfr.example.com",
           "CYFR_PUBLIC_URL": "https://cyfr.example.com",
-          "CYFR_PROXY_PUBLISH": "0.0.0.0:4001",
+          "CYFR_PROXY_PUBLISH": "0.0.0.0:4002",
           "CYFR_TRUSTED_PROXY_HOPS": "1"
         },
         "process": {
           "CYFR_BROWSER": "proxy",
           "CYFR_HOST": "cyfr.example.com",
           "CYFR_PUBLIC_URL": "https://cyfr.example.com",
-          "CYFR_PROXY_PUBLISH": "0.0.0.0:4001",
+          "CYFR_PROXY_PUBLISH": "0.0.0.0:4002",
           "CYFR_TRUSTED_PROXY_HOPS": "1"
         },
         "release?": true
@@ -3173,9 +3173,9 @@
         "code": "access_setting_invalid",
         "payload": {
           "key": "CYFR_PROXY_PUBLISH",
-          "value": "0.0.0.0:4001"
+          "value": "0.0.0.0:4002"
         },
-        "sentence": "`CYFR_PROXY_PUBLISH` is `0.0.0.0:4001`, which is not an IPv4 loopback address and a port, as 127.0.0.1:4001. Nothing started. Correct it, or remove it to take the default."
+        "sentence": "`CYFR_PROXY_PUBLISH` is `0.0.0.0:4002`, which is not an IPv4 loopback address and a port, as 127.0.0.1:4001. Nothing started. Correct it, or remove it to take the default."
       }
     },
     {
@@ -3214,14 +3214,14 @@
           "CYFR_BROWSER": "proxy",
           "CYFR_HOST": "cyfr.example.com",
           "CYFR_PUBLIC_URL": "https://cyfr.example.com",
-          "CYFR_PROXY_PUBLISH": "localhost:4001",
+          "CYFR_PROXY_PUBLISH": "localhost:4002",
           "CYFR_TRUSTED_PROXY_HOPS": "1"
         },
         "process": {
           "CYFR_BROWSER": "proxy",
           "CYFR_HOST": "cyfr.example.com",
           "CYFR_PUBLIC_URL": "https://cyfr.example.com",
-          "CYFR_PROXY_PUBLISH": "localhost:4001",
+          "CYFR_PROXY_PUBLISH": "localhost:4002",
           "CYFR_TRUSTED_PROXY_HOPS": "1"
         },
         "release?": true
@@ -3231,9 +3231,9 @@
         "code": "access_setting_invalid",
         "payload": {
           "key": "CYFR_PROXY_PUBLISH",
-          "value": "localhost:4001"
+          "value": "localhost:4002"
         },
-        "sentence": "`CYFR_PROXY_PUBLISH` is `localhost:4001`, which is not an IPv4 loopback address and a port, as 127.0.0.1:4001. Nothing started. Correct it, or remove it to take the default."
+        "sentence": "`CYFR_PROXY_PUBLISH` is `localhost:4002`, which is not an IPv4 loopback address and a port, as 127.0.0.1:4001. Nothing started. Correct it, or remove it to take the default."
       }
     },
     {
@@ -3243,14 +3243,14 @@
           "CYFR_BROWSER": "proxy",
           "CYFR_HOST": "cyfr.example.com",
           "CYFR_PUBLIC_URL": "https://cyfr.example.com",
-          "CYFR_PROXY_PUBLISH": "[127.0.0.1]:4001",
+          "CYFR_PROXY_PUBLISH": "[127.0.0.1]:4002",
           "CYFR_TRUSTED_PROXY_HOPS": "1"
         },
         "process": {
           "CYFR_BROWSER": "proxy",
           "CYFR_HOST": "cyfr.example.com",
           "CYFR_PUBLIC_URL": "https://cyfr.example.com",
-          "CYFR_PROXY_PUBLISH": "[127.0.0.1]:4001",
+          "CYFR_PROXY_PUBLISH": "[127.0.0.1]:4002",
           "CYFR_TRUSTED_PROXY_HOPS": "1"
         },
         "release?": true
@@ -3260,9 +3260,9 @@
         "code": "access_setting_invalid",
         "payload": {
           "key": "CYFR_PROXY_PUBLISH",
-          "value": "[127.0.0.1]:4001"
+          "value": "[127.0.0.1]:4002"
         },
-        "sentence": "`CYFR_PROXY_PUBLISH` is `[127.0.0.1]:4001`, which is not an IPv4 loopback address and a port, as 127.0.0.1:4001. Nothing started. Correct it, or remove it to take the default."
+        "sentence": "`CYFR_PROXY_PUBLISH` is `[127.0.0.1]:4002`, which is not an IPv4 loopback address and a port, as 127.0.0.1:4001. Nothing started. Correct it, or remove it to take the default."
       }
     },
     {
@@ -3496,13 +3496,13 @@
           "CYFR_BROWSER": "proxy",
           "CYFR_HOST": "cyfr.example.com",
           "CYFR_PUBLIC_URL": "https://cyfr.example.com",
-          "CYFR_PROXY_PUBLISH": "0.0.0.0:4001"
+          "CYFR_PROXY_PUBLISH": "0.0.0.0:4002"
         },
         "process": {
           "CYFR_BROWSER": "proxy",
           "CYFR_HOST": "cyfr.example.com",
           "CYFR_PUBLIC_URL": "https://cyfr.example.com",
-          "CYFR_PROXY_PUBLISH": "0.0.0.0:4001"
+          "CYFR_PROXY_PUBLISH": "0.0.0.0:4002"
         },
         "release?": true
       },
@@ -3511,9 +3511,9 @@
         "code": "access_setting_invalid",
         "payload": {
           "key": "CYFR_PROXY_PUBLISH",
-          "value": "0.0.0.0:4001"
+          "value": "0.0.0.0:4002"
         },
-        "sentence": "`CYFR_PROXY_PUBLISH` is `0.0.0.0:4001`, which is not an IPv4 loopback address and a port, as 127.0.0.1:4001. Nothing started. Correct it, or remove it to take the default."
+        "sentence": "`CYFR_PROXY_PUBLISH` is `0.0.0.0:4002`, which is not an IPv4 loopback address and a port, as 127.0.0.1:4001. Nothing started. Correct it, or remove it to take the default."
       }
     },
     {

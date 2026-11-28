@@ -47,9 +47,9 @@ defmodule Prima.RefusalTest do
         port: "4001"
       }}, :invalid_argument,
      "`CYFR_PROXY_PORT` is `4001` on `0.0.0.0`, and the loopback listener takes CYFR_PORT `4001` on `127.0.0.1`: the proxy listener's port must differ from the loopback listener's on the same address. Nothing started. Set CYFR_PROXY_PORT to another port."},
-    {{:access_setting_invalid, %{key: "CYFR_PROXY_PUBLISH", value: "0.0.0.0:4001"}},
+    {{:access_setting_invalid, %{key: "CYFR_PROXY_PUBLISH", value: "0.0.0.0:4002"}},
      :invalid_argument,
-     "`CYFR_PROXY_PUBLISH` is `0.0.0.0:4001`, which is not an IPv4 loopback address and a port, as 127.0.0.1:4001. Nothing started. Correct it, or remove it to take the default."},
+     "`CYFR_PROXY_PUBLISH` is `0.0.0.0:4002`, which is not an IPv4 loopback address and a port, as 127.0.0.1:4001. Nothing started. Correct it, or remove it to take the default."},
     {{:access_setting_invalid,
       %{key: "CYFR_PROXY_PUBLISH", value: "127.0.0.1:4000", port: "4000"}}, :invalid_argument,
      "`CYFR_PROXY_PUBLISH` is `127.0.0.1:4000`, where the loopback listener is published already (127.0.0.1 on CYFR_PORT `4000`). Nothing started. Publish the proxy listener at another port."},

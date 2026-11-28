@@ -50,7 +50,7 @@ func TestProxyOverlay(t *testing.T) {
 		}
 	}
 	// A publication the boot would refuse is refused here too.
-	for _, publish := range []string{"", "192.0.2.1:4001", "127.0.0.1:4000", "localhost:4001", "[::1]:4001"} {
+	for _, publish := range []string{"", "192.0.2.1:4002", "127.0.0.1:4000", "localhost:4002", "[::1]:4002"} {
 		h := Head{Browser: BrowserProxy, Port: 4000, Publish: publish}
 		if _, err := proxyOverlay(h, "172.16.230.2"); refusalCode(err) != "access_setting_invalid" {
 			t.Errorf("the overlay of publication %q answered %v", publish, err)
