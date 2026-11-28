@@ -1378,27 +1378,16 @@ defmodule Locus.DirectLauncher.Runner do
     end
   end
 
-  # The checkout's built runner when its stamp is the checkout's, read
-  # once a VM: the suite runs one build of it throughout. One missing or
-  # stale is the spawn's refusal, its sentence the script's.
+  # The checkout's built runner when its stamp is the checkout's, read at
+  # each spawn. One missing or stale is the spawn's refusal, its sentence
+  # the script's.
   defp pair do
-    case :persistent_term.get({__MODULE__, :pair}, nil) do
-      nil ->
-        case System.cmd("/bin/bash", [Path.join(@root, "scripts/runner.sh"), "pair"],
-               env: Locus.Test.ProcessFamily.without_cyfr(),
-               stderr_to_stdout: true
-             ) do
-          {path, 0} ->
-            program = String.trim(path)
-            :persistent_term.put({__MODULE__, :pair}, program)
-            {:ok, program}
-
-          {why, _status} ->
-            {:error, {:runner_pair, String.trim(why)}}
-        end
-
-      program ->
-        {:ok, program}
+    case System.cmd("/bin/bash", [Path.join(@root, "scripts/runner.sh"), "pair"],
+           env: Locus.Test.ProcessFamily.without_cyfr(),
+           stderr_to_stdout: true
+         ) do
+      {path, 0} -> {:ok, String.trim(path)}
+      {why, _status} -> {:error, {:runner_pair, String.trim(why)}}
     end
   end
 

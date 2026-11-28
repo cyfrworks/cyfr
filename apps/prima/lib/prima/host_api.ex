@@ -194,6 +194,13 @@ defmodule Prima.HostAPI do
   @spec callbacks() :: [atom()]
   def callbacks, do: @callbacks
 
+  @doc """
+  The callbacks a worker service makes as its own reports, signed under
+  its dispatch key and naming no attempt: no runner makes either.
+  """
+  @spec reports() :: [atom()]
+  def reports, do: [:runner_exited, :report_events]
+
   @doc "What a client may do when `callback`'s answer is lost (`t:retry/0`)."
   @spec retry(atom()) :: retry()
   def retry(callback) when is_map_key(@retries, callback), do: Map.fetch!(@retries, callback)

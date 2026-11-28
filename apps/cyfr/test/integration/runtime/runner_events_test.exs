@@ -37,8 +37,7 @@ defmodule Locus.Runtime.RunnerEventsTest do
     test_path =
       Path.join(System.tmp_dir!(), "runner_events_#{System.unique_integer([:positive])}")
 
-    previous = Application.get_env(:arca, :base_path)
-    Application.put_env(:arca, :base_path, test_path)
+    Prima.Test.Env.put_app_env(:arca, :base_path, test_path)
 
     unique = System.unique_integer([:positive])
 
@@ -61,10 +60,6 @@ defmodule Locus.Runtime.RunnerEventsTest do
       :telemetry.detach(id)
       Prima.Test.Slots.clear_unreaped(Opus.Slots, ctx.athanor_id)
       File.rm_rf!(test_path)
-
-      if previous,
-        do: Application.put_env(:arca, :base_path, previous),
-        else: Application.delete_env(:arca, :base_path)
     end)
 
     Cyfr.Test.Sandbox.stop_work_on_exit()

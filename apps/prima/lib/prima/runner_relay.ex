@@ -281,10 +281,10 @@ defmodule Prima.RunnerRelay do
   ]
   @close_by_reason Map.new(@close_codes, fn {code, _why} -> {String.to_atom(code), code} end)
 
-  # A worker service reports `runner_exited` itself, and posts an
-  # `attached_fetch` for the runner's attached `fetch`: neither is a
+  # A worker service makes its reports itself (`HostAPI.reports/0`), and
+  # posts an `attached_fetch` for the runner's attached `fetch`: none is a
   # runner's host call.
-  @ops HostAPI.callbacks() -- [:runner_exited, :attached_fetch]
+  @ops HostAPI.callbacks() -- [:attached_fetch | HostAPI.reports()]
   @op_by_name Map.new(@ops, &{Atom.to_string(&1), &1})
   @methods Prima.Destination.methods()
 

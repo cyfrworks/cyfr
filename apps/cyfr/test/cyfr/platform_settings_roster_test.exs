@@ -259,7 +259,7 @@ defmodule Cyfr.PlatformSettingsRosterTest do
   # Every name the locus release reads: the fixture's, and Locus.Config's
   # for the roles that are not the runtime's.
   defp locus_variables,
-    do: Enum.flat_map([:builds, :backends, :runner], &Locus.Config.variables/1) ++ @locus_settings
+    do: Enum.flat_map([:builds, :backends], &Locus.Config.variables/1) ++ @locus_settings
 
   defp spelled(files) do
     for file <- files,

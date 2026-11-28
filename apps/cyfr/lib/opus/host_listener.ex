@@ -137,7 +137,7 @@ defmodule Opus.HostListener do
 
   # The worker service's reports: each signed with its dispatch key, plain,
   # naming no attempt of its own.
-  @reports [:runner_exited, :report_events]
+  @reports HostAPI.reports()
 
   @typedoc """
   How the listener is started: the address to bind, the port (0 for any
