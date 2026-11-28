@@ -4,6 +4,7 @@
 package admission
 
 import (
+	"math/bits"
 	"slices"
 	"time"
 )
@@ -24,6 +25,26 @@ type Entry struct {
 	AthanorMax uint64
 	// Ref is the keeper's own handle of the place.
 	Ref any
+	// Machine is the place of the person's VM a session runs in (NewMachine),
+	// whose one charge holds it: the session is charged nothing of its own,
+	// and its readings, the guest's, are counted under its subject alone.
+	// nil for a place on the host.
+	Machine *Entry
+
+	// vm says the place is a person's VM's own (NewMachine): the keeper's,
+	// of no kind, counted in no counter, admitted with its first session.
+	vm bool
+	// own is, for a VM's place, its own allowance (MachineBytes of its
+	// guest's size), which its first session's start holds beside its own;
+	// kind its last session's kind, which a refusal names it by once it
+	// holds none.
+	own  uint64
+	kind string
+	// base is, for a session in a VM, the VM's reading at the session's
+	// admission: while its allowance's time runs, the VM is charged at
+	// least that and the allowances of its sessions still starting.
+	base       uint64
+	admittedAt time.Time
 
 	admitted  bool
 	ending    bool
@@ -48,7 +69,34 @@ type Entry struct {
 // Admitted says the place was given room.
 func (e *Entry) Admitted() bool { return e.admitted }
 
+// NewMachine is the place of athanor's VM, which role's sessions of that
+// athanor run in: each such session's place names it as its Machine before
+// it is placed. It is no role's kind and is in no counter: the host is
+// charged once for the VM, by its reading, and its sessions' readings are
+// subjects under it, never added to it. It is admitted with the first of
+// its sessions that is, its own allowance, MachineBytes of guest, its
+// guest's memory, beside that session's, charged from then until
+// AllowanceFor after its Spawned, the VMM's start; Drop takes it out at the
+// VM's release.
+func NewMachine(role, athanor string, guest uint64, ref any) *Entry {
+	return &Entry{Role: role, Athanor: athanor, Ref: ref, vm: true, own: MachineBytes(guest)}
+}
+
+// IsMachine says the place is a person's VM's own.
+func (e *Entry) IsMachine() bool { return e.vm }
+
 func (e *Entry) class() Class { return Kinds[e.Kind] }
+
+// startNeed is the room e's start needs: its class's allowance, and the
+// VM's own beside it for a session whose VM is not yet admitted, the start
+// that boots it.
+func (e *Entry) startNeed() uint64 {
+	need := Allowance(e.class())
+	if e.Machine != nil && !e.Machine.admitted {
+		need += e.Machine.own
+	}
+	return need
+}
 
 // fresh says it is a runner of the floor's role never given work: warm
 // and no athanor's.
@@ -130,6 +178,12 @@ func (l *Ledger) charge(e *Entry, now time.Time) uint64 {
 	if e.ending {
 		return e.frozen
 	}
+	switch {
+	case e.vm:
+		return l.machineCharge(e, now)
+	case e.Machine != nil:
+		return 0
+	}
 	allowance := Allowance(e.class())
 	if e.spawnedAt.IsZero() || now.Before(e.spawnedAt.Add(AllowanceFor)) {
 		return max(e.reading, allowance)
@@ -138,6 +192,57 @@ func (l *Ledger) charge(e *Entry, now time.Time) uint64 {
 		return max(e.reading, allowance, e.last)
 	}
 	return e.reading
+}
+
+// machineCharge is a VM's charge at now: the larger of its reading and
+// what its starts under way hold. Each start holds its allowance above the
+// VM's reading at its own admission (its base), with the allowances of
+// every start of the VM admitted with or after it, so two starts in a VM
+// hold what the same two hold on the host; the VM's own start holds its
+// own allowance above nothing, with every session's start beside it, from
+// its admission until AllowanceFor after its VMM's start. A start is under
+// way from its admission until AllowanceFor after its Spawned. A reading
+// that is lesser, or none for StaleAfter, is never under its last charge.
+func (l *Ledger) machineCharge(m *Entry, now time.Time) uint64 {
+	var starting []*Entry
+	for _, e := range l.admitted {
+		if e.Machine == m && (e.spawnedAt.IsZero() || now.Before(e.spawnedAt.Add(AllowanceFor))) {
+			starting = append(starting, e)
+		}
+	}
+	// since is the allowances of the starts admitted at or after at.
+	since := func(at time.Time) uint64 {
+		var sum uint64
+		for _, e := range starting {
+			if !e.admittedAt.Before(at) {
+				sum += Allowance(e.class())
+			}
+		}
+		return sum
+	}
+	var held uint64
+	if m.spawnedAt.IsZero() || now.Before(m.spawnedAt.Add(AllowanceFor)) {
+		held = m.own + since(m.admittedAt)
+	}
+	for _, e := range starting {
+		held = max(held, e.base+since(e.admittedAt))
+	}
+	reading := m.reading
+	if m.lesser || m.readAt.IsZero() || now.Sub(m.readAt) >= StaleAfter {
+		reading = max(reading, m.last)
+	}
+	return max(reading, held)
+}
+
+// sessionsIn is how many places are admitted in the VM m.
+func (l *Ledger) sessionsIn(m *Entry) int {
+	n := 0
+	for _, e := range l.admitted {
+		if e.Machine == m {
+			n++
+		}
+	}
+	return n
 }
 
 // inFloor is the floor's runners: the oldest fresh runners admitted, up
@@ -184,28 +289,29 @@ func (l *Ledger) need(e *Entry, in map[*Entry]bool) uint64 {
 	if l.fillsFloor(e, in) {
 		return 0
 	}
-	return Allowance(e.class())
+	return e.startNeed()
 }
 
-// sessions is the charge of the athanor's sessions.
+// sessions is the charge of the athanor's sessions: those on the host, and
+// its VM's, which holds every one of its sessions there.
 func (l *Ledger) sessions(athanor string, now time.Time) uint64 {
 	var sum uint64
 	for _, e := range l.admitted {
-		if e.class() == Session && e.Athanor == athanor {
+		if e.Athanor == athanor && (e.vm || e.class() == Session && e.Machine == nil) {
 			sum += l.charge(e, now)
 		}
 	}
 	return sum
 }
 
-// fitsWork says e's allowance fits what W leaves now.
+// fitsWork says e's start fits what W leaves now.
 func (l *Ledger) fitsWork(e *Entry, in map[*Entry]bool, now time.Time) bool {
-	return Allowance(e.class()) <= l.free(in, now)
+	return e.startNeed() <= l.free(in, now)
 }
 
-// withinCeiling says e's allowance fits its athanor's own ceiling now.
+// withinCeiling says e's start fits its athanor's own ceiling now.
 func (l *Ledger) withinCeiling(e *Entry, now time.Time) bool {
-	return e.AthanorMax == 0 || l.sessions(e.Athanor, now)+Allowance(e.class()) <= e.AthanorMax
+	return e.AthanorMax == 0 || l.sessions(e.Athanor, now)+e.startNeed() <= e.AthanorMax
 }
 
 // everFits says e could fit in a pool holding nothing else.
@@ -213,7 +319,7 @@ func (l *Ledger) everFits(e *Entry) bool {
 	if l.floorKept && e.fresh() {
 		return l.work >= FloorBytes
 	}
-	need := Allowance(e.class())
+	need := e.startNeed()
 	return need <= sub(l.work, l.floor()) && (e.AthanorMax == 0 || need <= e.AthanorMax)
 }
 
@@ -229,7 +335,7 @@ func (l *Ledger) Place(e *Entry, now time.Time) Events {
 		return Events{Refused: []Refusal{{Entry: e, Held: l.held(e, l.inFloor(), now)}}}
 	}
 	if l.fillsFloor(e, l.inFloor()) {
-		l.admit(e)
+		l.admit(e, now)
 		ev := l.step(now, false)
 		ev.Admitted = append([]*Entry{e}, ev.Admitted...)
 		return ev
@@ -238,19 +344,40 @@ func (l *Ledger) Place(e *Entry, now time.Time) Events {
 	return l.step(now, false)
 }
 
-func (l *Ledger) admit(e *Entry) {
-	e.admitted = true
+// admit gives e room, at now: a session whose VM is not yet admitted
+// admits it with it, in the same step, and one in a VM takes the VM's
+// reading as its base.
+func (l *Ledger) admit(e *Entry, now time.Time) {
+	if m := e.Machine; m != nil {
+		if !m.admitted {
+			m.admitted, m.admittedAt, m.assignedAt = true, now, now
+			l.admitted = append(l.admitted, m)
+		}
+		e.base, m.kind = m.reading, e.Kind
+	}
+	e.admitted, e.admittedAt = true, now
 	l.admitted = append(l.admitted, e)
 }
 
 // Drop takes e out, waiting or admitted, at its drop or its release, its
 // bytes out of their counter with it, and admits what then fits.
+// A session in a VM leaves it at rest from now when it was the VM's last,
+// which then may be asked to give way. A VM is dropped at its release,
+// after every session in it.
 func (l *Ledger) Drop(e *Entry, now time.Time) Events {
 	l.waiting = slices.DeleteFunc(l.waiting, func(o *Entry) bool { return o == e })
+	was := e.admitted
 	l.admitted = slices.DeleteFunc(l.admitted, func(o *Entry) bool { return o == e })
 	l.counters.withdraw(e, now)
+	if m := e.Machine; m != nil && was && l.sessionsIn(m) == 0 {
+		m.assignedAt, m.asked = now, false
+	}
 	return l.step(now, false)
 }
+
+// Sessions is how many places are admitted in the VM m: none is a VM at
+// rest.
+func (l *Ledger) Sessions(m *Entry) int { return l.sessionsIn(m) }
 
 // Spawned starts e's allowance's time.
 func (l *Ledger) Spawned(e *Entry, now time.Time) { e.spawnedAt = now }
@@ -258,7 +385,13 @@ func (l *Ledger) Spawned(e *Entry, now time.Time) { e.spawnedAt = now }
 // Read stores e's reading and counts it: the time since its last reading
 // is measured where it is within ReadingGap, and a first reading measures
 // none.
+// A VM's reading is its charge's alone, in no counter.
 func (l *Ledger) Read(e *Entry, bytes uint64, lesser bool, now time.Time) {
+	if e.vm {
+		e.reading, e.lesser, e.readAt = bytes, lesser, now
+		e.last = l.charge(e, now)
+		return
+	}
 	var gap time.Duration
 	if !e.readAt.IsZero() {
 		if since := now.Sub(e.readAt); since > 0 && since <= ReadingGap {
@@ -348,7 +481,7 @@ func (l *Ledger) step(now time.Time, second bool) Events {
 			kept = append(kept, e)
 			continue
 		}
-		l.admit(e)
+		l.admit(e, now)
 		ev.Admitted = append(ev.Admitted, e)
 	}
 	l.waiting = kept
@@ -373,10 +506,12 @@ func (l *Ledger) step(now time.Time, second bool) Events {
 	return ev
 }
 
-// giveWay asks, of the idle runners not yet asked, enough to cover what
-// the waiting starts need beyond what is free and what those already asked
-// will give: kept ones oldest first, then fresh ones above the floor. A
-// second with less than a program's allowance free asks alike.
+// giveWay asks, of the idle work not yet asked, enough to cover what the
+// waiting starts need beyond what is free and what those already asked
+// will give: kept runners and VMs at rest, which hold no session, oldest at
+// rest first, then fresh runners above the floor. A VM a waiting start
+// would run in is not asked: that start needs it. A second with less than a
+// program's allowance free asks alike.
 func (l *Ledger) giveWay(in map[*Entry]bool, now time.Time, second bool) []*Entry {
 	var need uint64
 	for _, e := range l.waiting {
@@ -396,11 +531,17 @@ func (l *Ledger) giveWay(in map[*Entry]bool, now time.Time, second bool) []*Entr
 		return nil
 	}
 	short := need - free
+	needed := map[*Entry]bool{}
+	for _, e := range l.waiting {
+		if e.Machine != nil {
+			needed[e.Machine] = true
+		}
+	}
 	var kept, fresh []*Entry
 	for _, e := range l.admitted {
 		switch {
 		case e.ending || in[e]:
-		case e.kept():
+		case e.kept(), e.vm && !needed[e] && l.sessionsIn(e) == 0:
 			kept = append(kept, e)
 		case e.fresh():
 			fresh = append(fresh, e)
@@ -421,17 +562,29 @@ func (l *Ledger) giveWay(in map[*Entry]bool, now time.Time, second bool) []*Entr
 	return asked
 }
 
-// held is the account of the pool a refusal of e carries.
+// held is the account of the pool a refusal of e carries. A VM is no
+// holding of its own while it holds a session: each session in it holds its
+// reading and its even share of what the VM's charge holds beyond its
+// sessions' readings, so the VM's sessions together hold its charge. A VM
+// at rest or ending with no session left holds its charge itself, as its
+// person's, by its last session's kind.
 func (l *Ledger) held(e *Entry, in map[*Entry]bool, now time.Time) Held {
 	h := Held{Need: l.need(e, in), Free: l.free(in, now), Mine: []Holding{}}
 	var mine uint64
 	for _, o := range l.admitted {
-		if in[o] || o == e {
+		if in[o] || o == e || o.vm && l.sessionsIn(o) > 0 {
 			continue
 		}
 		c := l.charge(o, now)
+		if o.Machine != nil {
+			c = l.shareOf(o, now)
+		}
 		if e.Athanor != "" && o.Athanor == e.Athanor {
-			holding := Holding{Kind: o.Kind, Bytes: c}
+			kind := o.Kind
+			if o.vm {
+				kind = o.kind
+			}
+			holding := Holding{Kind: kind, Bytes: c}
 			if o.Role == e.Role {
 				holding.Subject = o.Subject
 			}
@@ -439,6 +592,36 @@ func (l *Ledger) held(e *Entry, in map[*Entry]bool, now time.Time) Held {
 			mine += c
 		}
 	}
-	h.Others = l.used(in, now) - mine
+	h.Others = sub(l.used(in, now), mine)
 	return h
+}
+
+// shareOf is what the session o holds of its VM's charge: its own reading
+// and an even share of the rest, the first of the VM's sessions taking
+// what does not divide; or, where their readings pass the charge, its part
+// of the charge by its reading. The VM's sessions together hold its charge.
+func (l *Ledger) shareOf(o *Entry, now time.Time) uint64 {
+	var readings uint64
+	var in []*Entry
+	for _, e := range l.admitted {
+		if e.Machine == o.Machine {
+			readings += e.reading
+			in = append(in, e)
+		}
+	}
+	total := l.charge(o.Machine, now)
+	n := uint64(len(in))
+	parts := make([]uint64, len(in))
+	var given uint64
+	for i, e := range in {
+		if readings <= total {
+			parts[i] = e.reading + (total-readings)/n
+		} else {
+			hi, lo := bits.Mul64(e.reading, total)
+			parts[i], _ = bits.Div64(hi, lo, readings)
+		}
+		given += parts[i]
+	}
+	parts[0] += total - given
+	return parts[slices.Index(in, o)]
 }

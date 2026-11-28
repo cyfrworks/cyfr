@@ -263,6 +263,7 @@ func TestParseArgsKeptHomes(t *testing.T) {
 		"/var/lib/locus/kept:1-70000",           // too many
 		"/var/lib/locus/kept",                   // no range
 		"/var/lib/locus/kept:10010-10020",       // holds a role's uid
+		"/var/lib/locus/kept:30456-30500",       // overlaps the machines' uids
 	} {
 		args := strings.Replace(theRoles, "/var/lib/locus/kept:40001-49999", kept, 1) + " -- run"
 		if _, err := ParseArgs(strings.Fields(args)); err == nil {
@@ -364,5 +365,22 @@ func TestPoolAccountsNamesEveryPooledUidAndGid(t *testing.T) {
 	got := PoolAccounts(map[int]Account{20001: {UID: 20001, GID: 20001}, 20002: {UID: 20002, GID: 30002}})
 	if !got.UIDs[20001] || !got.UIDs[20002] || !got.GIDs[20001] || !got.GIDs[30002] || got.GIDs[20002] || len(got.UIDs) != 2 {
 		t.Fatalf("accounts %+v", got)
+	}
+}
+
+// --resolver names the resolver a routed spawn's hosts are asked of: an
+// IPv4 address and port in their one form, or nothing, the namespace's own.
+func TestParseArgsResolver(t *testing.T) {
+	cfg, err := ParseArgs(strings.Fields(theRoles + " --resolver 169.254.0.53:53 -- run"))
+	if err != nil || cfg.Resolver != "169.254.0.53:53" {
+		t.Fatalf("%q, %v", cfg.Resolver, err)
+	}
+	if cfg, err := ParseArgs(strings.Fields(theRoles + " -- run")); err != nil || cfg.Resolver != "" {
+		t.Fatalf("with none given: %q, %v", cfg.Resolver, err)
+	}
+	for _, bad := range []string{"169.254.0.53", "169.254.0.53:0", "[::1]:53", "169.254.000.53:53", "resolver:53"} {
+		if _, err := ParseArgs(strings.Fields(theRoles + " --resolver " + bad + " -- run")); err == nil {
+			t.Errorf("--resolver %s was taken", bad)
+		}
 	}
 }

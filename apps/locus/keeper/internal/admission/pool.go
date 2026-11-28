@@ -89,3 +89,18 @@ func LimitsOf(kind string, work uint64) Limits {
 	}
 	return Limits{MemoryBytes: memory, Processors: Processors[c]}
 }
+
+// MachineBaseBytes and MachinePerGiBBytes make a person's VM's own
+// allowance beside its first session's (MachineBytes).
+const (
+	MachineBaseBytes   uint64 = 340 << 20
+	MachinePerGiBBytes uint64 = 20 << 20
+)
+
+// MachineBytes is a person's VM's own allowance for a guest of guest bytes
+// (Prima.LocusPool's machine_bytes/1, which holds the measurements):
+// MachineBaseBytes, and MachinePerGiBBytes a GiB of the guest, by the
+// guest's whole MiB, so no guest's size overflows it.
+func MachineBytes(guest uint64) uint64 {
+	return MachineBaseBytes + MachinePerGiBBytes/1024*(guest>>20)
+}

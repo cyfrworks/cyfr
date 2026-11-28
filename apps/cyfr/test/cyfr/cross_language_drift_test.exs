@@ -409,9 +409,9 @@ defmodule Cyfr.CrossLanguageDriftTest do
     ],
     "brain_wire.json" => [
       {"apps/cyfr/test/opus/brain/wire_test.exs",
-       ~w(version max_line_bytes max_id_bytes max_list config counts accountings stops phases accounts error_types media_types native commands events read refuse)},
+       ~w(version max_line_bytes max_id_bytes max_list max_detail_bytes config counts accountings stops phases accounts error_types media_types native commands events read refuse)},
       {"apps/locus/keeper/internal/brainwire/wire_test.go",
-       ~w(version max_line_bytes max_id_bytes max_list config counts accountings stops phases accounts error_types blocks media_types native commands events uuid read refuse)},
+       ~w(version max_line_bytes max_id_bytes max_list max_detail_bytes config counts accountings stops phases accounts error_types blocks media_types native commands events uuid read refuse)},
       {"tests/locus-backends-image/brain_antigravity.py", ~w(version events refuse)},
       {"tests/locus-backends-image/brain_claude_code.py", ~w(version events refuse)},
       {"tests/locus-backends-image/brain_openai_codex.py", ~w(version events refuse)},
@@ -617,11 +617,12 @@ defmodule Cyfr.CrossLanguageDriftTest do
     ],
     "locus_pool.json" => [
       {"apps/locus/keeper/internal/admission/size_test.go",
-       ~w(allowance_bytes allowance_ms cap_bytes counters floor_bytes floor_runners kinds least_cap_bytes processors room_wait_ms stale_ms)},
+       ~w(allowance_bytes allowance_ms cap_bytes counters floor_bytes floor_runners kinds least_cap_bytes machine_bytes processors room_wait_ms stale_ms)},
       {"apps/prima/test/prima/locus_pool_test.exs",
-       ~w(allowance_bytes allowance_ms cap_bytes counters floor_bytes floor_runners kinds least_cap_bytes processors room_wait_ms stale_ms wire)},
+       ~w(allowance_bytes allowance_ms cap_bytes counters floor_bytes floor_runners kinds least_cap_bytes machine_bytes processors room_wait_ms stale_ms wire)},
       {"tests/imagesuite.py",
-       ~w(allowance_ms cap_bytes counters floor_runners kinds least_cap_bytes wire)},
+       ~w(allowance_ms cap_bytes counters floor_runners kinds least_cap_bytes machine_bytes wire)},
+      {"tests/imagesuite_test.py", ~w(machine_bytes)},
       {"tests/locus-backends-image/roles.py", ~w(floor_bytes)}
     ],
     "locus_roles.json" => [

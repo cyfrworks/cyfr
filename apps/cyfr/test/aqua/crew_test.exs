@@ -2758,4 +2758,105 @@ defmodule Aqua.CrewTest do
       outcome -> {:ok, outcome}
     end
   end
+
+  describe "Aqua's question as buttons" do
+    # A card is Aqua's alone: the last row its brain wrote in a completed
+    # turn whose id its block carries (`Aqua.Choices`), here as the model
+    # writer writes it.
+    defp block(tag),
+      do:
+        "```choices #{tag}\nWhich database should the export target?\n- PostgreSQL\n- SQLite\n```"
+
+    defp said_and_asked(text, call_id, args),
+      do: %{
+        "content" => [
+          %{"type" => "text", "text" => text},
+          %{"type" => "tool_call", "id" => call_id, "name" => "crew", "arguments" => args}
+        ],
+        "stop_reason" => "tool_call",
+        "usage" => %{"input_tokens" => 4, "output_tokens" => 2}
+      }
+
+    test "Aqua's final row written by its model gives buttons; an earlier row with a crew " <>
+           "request and an ordinary final line after it does not, nor does a member's block",
+         %{ctx: ctx} do
+      script!([{:hold, self()}])
+      {:ok, today} = Aqua.Day.current(ctx)
+      actor = actor(ctx)
+
+      assert {:ok, %{admitted: :turn, turn_id: asked}} =
+               Runner.send_message(ctx, today.id, "export the notes")
+
+      # The turn says a block, asks the planner in the same response, and
+      # ends on an ordinary line.
+      assert_receive {:scripted_probe, player, _execution}, 30_000
+
+      :ok =
+        ScriptedWorker.script([
+          said_and_asked("First, this:\n\n" <> block(asked), "ask-1", %{
+            "action" => "ask",
+            "member" => "planner",
+            "task" => "Plan the export."
+          }),
+          reply("Asked the planner."),
+          {:hold, self()}
+        ])
+
+      send(player, :continue)
+      await_status(ctx, asked, "completed")
+
+      assert [early, last] =
+               Enum.filter(
+                 rows(ctx, today.id),
+                 &(&1.turn_id == asked and &1.sent_by == "aqua" and &1.kind == "text")
+               )
+
+      assert %{content: "Asked the planner."} = last
+
+      assert %{addressee: "planner", turn_id: nil} =
+               request = Enum.find(rows(ctx, today.id), &(&1.addressee == "planner"))
+
+      assert request.seq > early.seq and request.seq < last.seq
+      assert Aqua.Choices.read(ctx, early) == :none
+
+      # The planner answers with a block of its own: text in the room, and
+      # its reply opens Aqua's next turn.
+      assert {:ok, %{"applied" => 1}} = drain(ctx)
+      job = delivered_turn(ctx, child!(ctx, today, "planner"), request.id)
+      assert_receive {:scripted_probe, player, _execution}, 30_000
+      :ok = ScriptedWorker.script([reply("Which?\n\n" <> block(job)), {:hold, self()}])
+      send(player, :continue)
+      await_status(ctx, job, "completed")
+      assert {:ok, %{"applied" => 1}} = drain(ctx)
+
+      %{turn_id: woken} =
+        member = Enum.find(rows(ctx, today.id), &(&1.reply_to == request.id))
+
+      assert Aqua.Choices.read(ctx, member) == :none
+
+      # Aqua asks the person itself, with its own block.
+      assert_receive {:scripted_probe, player, _execution}, 30_000
+      :ok = ScriptedWorker.script([reply("The planner asks which database.\n\n" <> block(woken))])
+      send(player, :continue)
+      await_status(ctx, woken, "completed")
+
+      [final] =
+        Enum.filter(
+          Threads.messages(actor, today.id),
+          &(&1.turn_id == woken and &1.sent_by == "aqua" and &1.kind == "text")
+        )
+
+      assert is_binary(Tape.payload(final)["step_id"])
+
+      assert {:ok,
+              %{
+                row: final.id,
+                prose: "The planner asks which database.",
+                question: "Which database should the export target?",
+                choices: ["PostgreSQL", "SQLite"],
+                file: nil,
+                file_state: nil
+              }} == Aqua.Choices.read(ctx, final)
+    end
+  end
 end

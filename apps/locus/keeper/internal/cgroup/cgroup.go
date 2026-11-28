@@ -436,7 +436,9 @@ func ServiceCPU(cpu uint64) uint64 { return min(CPUPeriod/2, cpu/2) }
 // groups are made, directly in work for the floor's role and in rest for
 // every other. A bound of cpu is split between the two (ServiceCPU). It
 // answers the Manager of its spawns' groups and its leaf. Groups of that
-// name an earlier keeper left are removed first, empty as they must be.
+// name an earlier keeper left are removed first: every group of a spawn or
+// a VM it left in them is ended (cgroup.kill) and removed, so nothing of
+// an earlier keeper's runs while this one admits.
 func (t *Tree) Role(name string, cpu uint64, floor bool) (*Manager, *Group, error) {
 	if !ValidRoleName(name) {
 		return nil, nil, fmt.Errorf("role group %q", name)
@@ -447,6 +449,9 @@ func (t *Tree) Role(name string, cpu uint64, floor bool) (*Manager, *Group, erro
 	}
 	work := filepath.Join(t.root, prefix)
 	leaf := &Group{name: serviceGroup + "/" + name, path: filepath.Join(t.root, serviceGroup, name)}
+	if err := endLeft(work); err != nil {
+		return nil, nil, fmt.Errorf("ending the groups an earlier keeper left in role %s's: %w", name, err)
+	}
 	for _, d := range []string{leaf.path, work} {
 		if err := os.Remove(d); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return nil, nil, fmt.Errorf("removing the group an earlier keeper left: %w", err)
@@ -471,6 +476,43 @@ func (t *Tree) Role(name string, cpu uint64, floor bool) (*Manager, *Group, erro
 		}
 	}
 	return &Manager{root: work, prefix: prefix}, leaf, nil
+}
+
+// endLeft ends and removes every group under dir an earlier keeper left:
+// each child's processes by the kernel's group kill, until its events say
+// it is empty or the bound passes, then its groups from the innermost out.
+func endLeft(dir string) error {
+	children, err := os.ReadDir(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	for _, c := range children {
+		if !c.IsDir() {
+			continue
+		}
+		child := filepath.Join(dir, c.Name())
+		populated := func() bool {
+			events, err := os.ReadFile(filepath.Join(child, "cgroup.events"))
+			return err == nil && !slices.Contains(strings.Split(string(events), "\n"), "populated 0")
+		}
+		for attempt := 0; attempt < removeAttempts && populated(); attempt++ {
+			_ = os.WriteFile(filepath.Join(child, "cgroup.kill"), []byte("1"), 0o644)
+			time.Sleep(removeInterval)
+		}
+		if populated() {
+			return fmt.Errorf("group %s still holds processes after its kill", child)
+		}
+		if err := endLeft(child); err != nil {
+			return err
+		}
+		if err := removeEmpty(child); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Bound writes work's memory bound and rest's, once every group of the

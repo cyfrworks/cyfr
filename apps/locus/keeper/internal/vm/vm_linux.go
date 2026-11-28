@@ -14,7 +14,6 @@ import (
 	"net/http"
 	"net/netip"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -28,6 +27,7 @@ import (
 	"github.com/cyfr/locus/keeper/internal/cgroup"
 	"github.com/cyfr/locus/keeper/internal/home"
 	"github.com/cyfr/locus/keeper/internal/pool"
+	"github.com/cyfr/locus/keeper/internal/proc"
 	"github.com/cyfr/locus/keeper/internal/procfs"
 	"github.com/cyfr/locus/keeper/internal/protocol"
 	"github.com/cyfr/locus/keeper/internal/retire"
@@ -48,6 +48,8 @@ var stageWait = 10 * time.Second
 
 // Bounds of a machine's start and end.
 const (
+	// sendWait bounds one line's write on a control connection.
+	sendWait = 10 * time.Second
 	// apiWait bounds the VMM's API socket's appearing.
 	apiWait = 2 * time.Second
 	// ReadyWait bounds a cold boot to the relay's Hello: P12's boots took
@@ -71,6 +73,18 @@ const (
 // machineLimits are the VMM's resource limits: a few threads and
 // descriptors, and no file of its own past its sockets.
 var machineLimits = protocol.Limits{Nofile: 256, Nproc: 64, Core: 0, Fsize: 1 << 20}
+
+// limitsOf are the limits of cfg's VMM: machineLimits, but a person's VM,
+// which writes its disk's image, may write it to the image's own size
+// (home.ImageBytes) and no further; past its limit the kernel would end
+// the VMM with SIGXFSZ at the guest's first write there.
+func limitsOf(cfg Config) protocol.Limits {
+	l := machineLimits
+	if cfg.Disk != "" {
+		l.Fsize = home.ImageBytes
+	}
+	return l
+}
 
 // Config is one machine.
 type Config struct {
@@ -96,8 +110,9 @@ type Config struct {
 	Console io.Writer
 	// Disk is a person's disk image (home.FormImage), their VM's one
 	// writable drive, directly under KeptRoot, the kept homes' root, which
-	// the VMM's space is given covered but for it. "" for guest-check's
-	// machine, which has neither.
+	// every VMM's space is given covered, but for its own person's image.
+	// Disk is "" for guest-check's machine, which has none; KeptRoot is
+	// every machine's.
 	Disk, KeptRoot string
 	// UID is the uid a person's VM runs under: their disk's (home.Disk),
 	// whose alone the image is, so it is the VMM's two walls, its mount
@@ -112,6 +127,10 @@ type Config struct {
 	// address. nil for a machine with no network, whose space is a relay
 	// space whose relay leads nowhere.
 	Route func(uid int, netns, udp, tcp, nl *os.File) (Network, error)
+	// Start starts the VMM's stage and, at its end, the retirement of its
+	// uid: the keeper's own start, whose reaper reaps them (package proc),
+	// or proc.Own in a process that reaps nothing else.
+	Start proc.Start
 }
 
 // Network is a person's VM's route: the guest's address and its gateway,
@@ -131,7 +150,7 @@ type Machine struct {
 	allotted bool
 	gid      int
 	group    *cgroup.Group
-	cmd      *exec.Cmd
+	stage    proc.Process
 	// done closes when the VMM's stage, which ends as the VMM ends, has
 	// exited and been reaped, and its waiter has cleared what the machine
 	// held (remove): on any end, the VMM's own exit among them.
@@ -158,6 +177,8 @@ type Machine struct {
 	leftOver  error
 	leftProcs []int
 	cpuUsec   uint64
+	killedFor cgroup.Cause
+	killedErr error
 }
 
 // machineUIDs is MachineUIDs' allotment in this keeper, and given the uids
@@ -234,7 +255,7 @@ func Start(cfg Config) (*Machine, error) {
 			if cfg.Device != nil {
 				_ = cfg.Device.Close()
 			}
-		} else if m.cmd == nil || m.cmd.Process == nil {
+		} else if m.stage == nil {
 			// No stage ran, so no waiter clears the machine.
 			m.remove()
 		} else {
@@ -251,8 +272,8 @@ func start(cfg Config) (*Machine, error) {
 	if err := syscall.Stat(KVM, &st); err != nil {
 		return nil, ErrNoKVM
 	}
-	if cfg.Groups == nil || cfg.VCPUs < 1 || cfg.MemoryMiB < 128 || cfg.Device == nil {
-		return nil, errors.New("vm: a machine needs its groups, a processor, 128 MiB and a device")
+	if cfg.Groups == nil || cfg.VCPUs < 1 || cfg.MemoryMiB < 128 || cfg.Device == nil || cfg.Start == nil {
+		return nil, errors.New("vm: a machine needs its groups, a processor, 128 MiB, a device and a start")
 	}
 	if st.Gid == 0 {
 		return nil, errors.New("vm: " + KVM + "'s group is root's, and a VMM holds no group but KVM's")
@@ -281,10 +302,10 @@ func start(cfg Config) (*Machine, error) {
 		return m, err
 	}
 	m.dir = filepath.Join(Root, m.id)
-	m.clear = func() error { return runRetire(m.uid, m.gid, m.dir) }
+	m.clear = func() error { return runRetire(cfg.Start, m.uid, m.gid, m.dir) }
 	spec := stage.Spec{UID: m.uid, GID: m.gid, User: MachineUser, HomeRoot: Root, Home: m.dir,
 		Argv:   []string{Firecracker, "--api-sock", m.api(), "--id", m.id, "--level", "Warning"},
-		Limits: machineLimits, Reach: pool.ReachRelay, Cgroup: m.group.Path(), Machine: cfg.Device.Path,
+		Limits: limitsOf(cfg), Reach: pool.ReachRelay, Cgroup: m.group.Path(), Machine: cfg.Device.Path,
 		Disk: cfg.Disk, KeptRoot: cfg.KeptRoot}
 	if cfg.Route != nil {
 		spec.Reach = pool.ReachRouted
@@ -378,27 +399,23 @@ func (m *Machine) startStage(self string, spec stage.Spec, cfg Config) error {
 			_, _ = io.Copy(console, r)
 		}()
 	}
-	m.cmd = exec.Command(self, "stage")
-	m.cmd.Args = []string{"cyfr-locus", "stage"}
-	m.cmd.Env = []string{}
-	m.cmd.Dir = "/"
-	m.cmd.Stdin, m.cmd.Stdout, m.cmd.Stderr = null, out, out
-	// The stage's descriptors: its spec and status pipes, no control
-	// channel, and its relay (package stage).
-	m.cmd.ExtraFiles = []*os.File{specR, statusW, nil, relay}
-	m.cmd.SysProcAttr = stage.SpaceAttr()
-	if err := m.cmd.Start(); err != nil {
+	// The stage's descriptors: its stdio, its spec and status pipes, no
+	// control channel, and its relay (package stage).
+	p, err := cfg.Start(self, []string{"cyfr-locus", "stage"}, []string{},
+		[]uintptr{null.Fd(), out.Fd(), out.Fd(), specR.Fd(), statusW.Fd(), ^uintptr(0), relay.Fd()}, "/", stage.SpaceAttr())
+	if err != nil {
 		if m.console != nil {
 			_ = out.Close()
 			<-m.console
 		}
 		return fmt.Errorf("vm: starting the VMM's stage: %w", err)
 	}
+	m.stage = p
 	go m.wait()
-	if err := stage.MapIDs(m.cmd.Process.Pid, spec.UID, spec.GID); err != nil {
+	if err := stage.MapIDs(p.Pid(), spec.UID, spec.GID); err != nil {
 		return fmt.Errorf("vm: the VMM's ids: %w", err)
 	}
-	if err := m.group.Add(m.cmd.Process.Pid); err != nil {
+	if err := m.group.Add(p.Pid()); err != nil {
 		return fmt.Errorf("vm: the VMM's group: %w", err)
 	}
 	_ = specW.SetWriteDeadline(time.Now().Add(stageWait))
@@ -458,7 +475,7 @@ func (m *Machine) route(conn *os.File, fn func(uid int, netns, udp, tcp, nl *os.
 // machine held, whoever ended it, and records an end that neither End nor
 // Kill began as the VMM's own exit, before Done closes.
 func (m *Machine) wait() {
-	_ = m.cmd.Wait()
+	<-m.stage.Done()
 	m.mu.Lock()
 	m.exited = true
 	if !m.asked {
@@ -493,8 +510,9 @@ func (m *Machine) Group() *cgroup.Group { return m.group }
 // Done closes when the VMM has exited and been reaped.
 func (m *Machine) Done() <-chan struct{} { return m.done }
 
-// State is the VMM's end, once Done has closed.
-func (m *Machine) State() *os.ProcessState { return m.cmd.ProcessState }
+// Status is how the VMM's stage ended, which is how the VMM did, once Done
+// has closed (proc.Process.Status).
+func (m *Machine) Status() (unix.WaitStatus, error) { return m.stage.Status() }
 
 // Started is when the guest was booted.
 func (m *Machine) Started() time.Time { return m.started }
@@ -510,6 +528,14 @@ func (m *Machine) LeftProcs() []int { return m.leftProcs }
 // CPUUsec is the processor time the machine's group used, guest included,
 // once the machine has ended.
 func (m *Machine) CPUUsec() uint64 { return m.cpuUsec }
+
+// KilledFor is what the kernel killed processes of the machine's group for,
+// as its counters said at its end (cgroup.KilledFor), once the machine has
+// ended.
+func (m *Machine) KilledFor() (cgroup.Cause, error) { return m.killedFor, m.killedErr }
+
+// PID is the VMM's process.
+func (m *Machine) PID() int { return m.stage.Pid() }
 
 // HowEnded is how the machine ended, once Done has closed.
 func (m *Machine) HowEnded() Ended {
@@ -527,7 +553,7 @@ func (m *Machine) Kill() {
 	}
 	m.asked = true
 	m.mu.Unlock()
-	_ = m.cmd.Process.Kill()
+	m.stage.Kill(false)
 	<-m.done
 }
 
@@ -551,6 +577,8 @@ func (m *Machine) remove() {
 	}
 	if m.group != nil {
 		m.cpuUsec = groupCPUUsec(m.group)
+		// Read while its counters stand: what the kernel killed for.
+		m.killedFor, m.killedErr = m.group.KilledFor()
 		procs, err := m.group.Procs()
 		switch {
 		case err != nil:
@@ -573,9 +601,15 @@ func (m *Machine) remove() {
 	}
 }
 
-// runRetire runs `cyfr-locus retire` as uid, which ends every process of
-// the uid and removes path, its folder.
-func runRetire(uid, gid int, path string) error {
+// runRetire runs `cyfr-locus retire` as uid, started by start, which ends
+// every process of the uid and removes path, its folder. A uid or gid
+// outside 0 to 2^31-1 is no id it runs as: it is refused here, where its
+// conversion to the kernel's form is (the kept range and the machines'
+// already hold them inside it).
+func runRetire(start proc.Start, uid, gid int, path string) error {
+	if uid < 0 || uid >= 1<<31 || gid < 0 || gid >= 1<<31 {
+		return fmt.Errorf("retiring the VMM's uid: %d:%d is not a uid and gid", uid, gid)
+	}
 	self, err := os.Executable()
 	if err != nil {
 		return err
@@ -589,32 +623,34 @@ func runRetire(uid, gid int, path string) error {
 		return err
 	}
 	defer specW.Close()
-	cmd := exec.Command(self, "retire")
-	cmd.Args = []string{"cyfr-locus", "retire"}
-	cmd.Env = []string{}
-	cmd.Dir = "/"
-	cmd.Stderr = os.Stderr
-	cmd.ExtraFiles = []*os.File{specR}
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Setsid:     true,
-		Credential: &syscall.Credential{Uid: uint32(uid), Gid: uint32(gid), Groups: []uint32{}},
-		Pdeathsig:  syscall.SIGKILL,
-	}
-	if err := cmd.Start(); err != nil {
+	null, err := os.Open(os.DevNull)
+	if err != nil {
 		_ = specR.Close()
+		return err
+	}
+	p, err := start(self, []string{"cyfr-locus", "retire"}, []string{},
+		[]uintptr{null.Fd(), null.Fd(), 2, specR.Fd()}, "/", &syscall.SysProcAttr{
+			Setsid:     true,
+			Credential: &syscall.Credential{Uid: uint32(uid), Gid: uint32(gid), Groups: []uint32{}},
+			Pdeathsig:  syscall.SIGKILL,
+		})
+	_ = specR.Close()
+	_ = null.Close()
+	if err != nil {
 		return fmt.Errorf("retiring the VMM's uid: %w", err)
 	}
-	_ = specR.Close()
 	_ = specW.SetWriteDeadline(time.Now().Add(stageWait))
 	_, _ = specW.Write(spec)
 	_ = specW.Close()
-	exited := make(chan error, 1)
-	go func() { exited <- cmd.Wait() }()
 	select {
-	case err = <-exited:
+	case <-p.Done():
 	case <-time.After(retireWait):
-		_ = cmd.Process.Kill()
-		err = <-exited
+		p.Kill(false)
+		<-p.Done()
+	}
+	ws, err := p.Status()
+	if err == nil {
+		err = proc.Ended(ws)
 	}
 	if err != nil {
 		return fmt.Errorf("retiring the VMM's uid %d and its folder: %w", uid, err)
@@ -843,6 +879,8 @@ type Control struct {
 	Hello Hello
 	conn  net.Conn
 	lines *protocol.LineReader
+	// sendMu keeps each line whole when several senders share it.
+	sendMu sync.Mutex
 }
 
 // ErrLineTooLong is a line from the guest past protocol.MaxLineBytes.
@@ -851,7 +889,13 @@ var ErrLineTooLong = fmt.Errorf("vm: the guest sent a line longer than %d bytes"
 // Connect opens the control connection within ReadyWait of the boot and
 // reads the relay's Hello.
 func (m *Machine) Connect() (*Control, error) {
-	left := ReadyWait - time.Since(m.started)
+	return m.ConnectWithin(ReadyWait - time.Since(m.started))
+}
+
+// ConnectWithin opens a control connection and reads the relay's Hello,
+// all within left: a running machine's next connection once the relay that
+// served its last has ended and its keeper has started it again.
+func (m *Machine) ConnectWithin(left time.Duration) (*Control, error) {
 	conn, err := m.Dial(ControlPort, left)
 	if err != nil {
 		return nil, err
@@ -871,12 +915,16 @@ func (m *Machine) Connect() (*Control, error) {
 	return c, nil
 }
 
-// Send writes one keeper protocol line.
+// Send writes one keeper protocol line, within sendWait: a guest that stops
+// reading holds no sender past it.
 func (c *Control) Send(v any) error {
 	b, err := json.Marshal(v)
 	if err != nil {
 		return err
 	}
+	c.sendMu.Lock()
+	defer c.sendMu.Unlock()
+	_ = c.conn.SetWriteDeadline(time.Now().Add(sendWait))
 	_, err = c.conn.Write(append(b, '\n'))
 	return err
 }

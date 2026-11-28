@@ -1225,6 +1225,85 @@ defmodule PrismWeb.SettingsLiveTest do
       assert use_line.() == "In use: 600.0 MB of 4.7 GB."
     end
 
+    # The ledger check (plan native-locus §23): where each person's work
+    # runs in a VM of their own, the keeper charges the VM once, by its
+    # reading, its sessions inside it nothing of their own, and counts only
+    # their readings, the guest's, by subject, never added to the VM's.
+    # While a start is under way the VM is charged at least its reading at
+    # that start's admission and the allowance of every start since, so two
+    # starts in a VM hold what the same two hold on the host. The page
+    # shows the report's numbers as they are: in use is the VM's charge,
+    # the work listed its sessions', and the VM's own memory is the part
+    # the rows do not account for, under no name.
+    test "a person's VM is in use as one charge, its sessions listed by their own readings" do
+      ops = test_user()
+      {:ok, _} = Sanctum.TestContext.ensure_platform(ops.user_id)
+      o = own_athanor_id(ops)
+
+      names = %{
+        {o, "srv_a"} => %{name: "claude", shown: "program"},
+        {o, "srv_b"} => %{name: "codex", shown: "program"}
+      }
+
+      use_line = fn view ->
+        view
+        |> element(~s(#memory-use [data-test="memory-in-use"]))
+        |> render()
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.text()
+        |> String.trim()
+      end
+
+      charged = fn used ->
+        Arca.Repo.update_all(
+          from(e in Arca.Schemas.MemoryEndpoint, where: e.endpoint == "wrk_page"),
+          set: [used: used * @mib, floor: 0]
+        )
+      end
+
+      # A first session boots the VM: its start holds its allowance and
+      # the VM's own, 384 MiB and the own of a guest of the work, 4,800 MiB
+      # (433 MiB, whole), and its guest reads it at 90 MiB.
+      first = 384 + div(Prima.LocusPool.machine_bytes(4_800 * @mib), @mib)
+      record!([used(1, o, subject: "srv_a", mib: 90)], names)
+      charged.(first)
+      {view, _html} = build_conn() |> log_in_user(ops) |> mount_athanor("/settings")
+
+      assert use_line.(view) ==
+               "In use: #{first}.0 MB of 4.7 GB, of which the work listed below uses 90.0 MB now."
+
+      assert cells(view, ~s(#memory-use [data-test="memory-machine"] table)) == [
+               ["@#{ops_name(o)}", "program", "claude", "90.0 MB"]
+             ]
+
+      # A second session joins: the charge is the VM's reading, 520 MiB,
+      # and the two sessions' readings sum to less, never on top of it.
+      record!(
+        [used(2, o, subject: "srv_a", mib: 140), used(3, o, subject: "srv_b", mib: 60)],
+        names,
+        "wrk_page",
+        1
+      )
+
+      charged.(520)
+      send(view.pid, :memory)
+
+      assert use_line.(view) ==
+               "In use: 520.0 MB of 4.7 GB, of which the work listed below uses 200.0 MB now."
+
+      # The VM's release: nothing is in use, as before its boot.
+      record!(
+        [used(4, o, subject: "srv_a", mib: 0), used(5, o, subject: "srv_b", mib: 0)],
+        names,
+        "wrk_page",
+        3
+      )
+
+      charged.(0)
+      send(view.pid, :memory)
+      assert use_line.(view) == "In use: 0 B of 4.7 GB."
+    end
+
     test "a program marked mcp reads as an mcp program, its terminal as a terminal" do
       ops = test_user()
       {:ok, _} = Sanctum.TestContext.ensure_platform(ops.user_id)

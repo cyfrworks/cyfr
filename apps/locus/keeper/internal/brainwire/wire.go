@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 CYFR Works Inc.
 
-// Package brainwire is the brain wire, version 7, a driver's side, for
+// Package brainwire is the brain wire, version 8, a driver's side, for
 // every brain driver (cmd/cyfr-claude-code, cmd/cyfr-codex, cmd/cyfr-acp):
 // tests/fixtures/brain_wire.json defines it (its "comment") and binds this
 // package and the holder (Opus.Brain.Wire) to the same lines. Commands come
@@ -29,10 +29,12 @@ import (
 )
 
 const (
-	Version      = 7
+	Version      = 8
 	MaxLineBytes = 1 << 20
 	MaxIDBytes   = 256
 	MaxList      = 1000
+	// MaxDetailBytes bounds an own tool's detail (Detail).
+	MaxDetailBytes = 2048
 	// SignedIn and SignedOut are what an event may say of the account: what
 	// the driver read positively in its harness's own account answer.
 	SignedIn  = "signed_in"
@@ -67,6 +69,7 @@ type fieldType int
 const (
 	tID fieldType = iota
 	tString
+	tDetail
 	tCount
 	tBoolean
 	tObject
@@ -115,7 +118,7 @@ var mediaTypes = map[string][]string{
 	"image":    {"image/jpeg", "image/png", "image/gif", "image/webp"},
 	"document": {"application/pdf"},
 }
-var nativeEvents = []string{"text", "said", "own", "ask", "usage", "idle", "error"}
+var nativeEvents = []string{"text", "thought", "said", "own", "ask", "usage", "idle", "error"}
 
 // Commands are the messages the holder writes.
 var Commands = map[string]Spec{
@@ -144,10 +147,12 @@ var Events = map[string]Spec{
 		map[string]fieldType{"id": tID, "reason": tString, "account": tSignedOut}},
 	"text": {[]string{"t", "gen", "message", "delta"}, []string{"work"},
 		map[string]fieldType{"gen": tCount, "work": tID, "message": tID, "delta": tString}},
+	"thought": {[]string{"t", "gen", "message", "delta"}, []string{"work"},
+		map[string]fieldType{"gen": tCount, "work": tID, "message": tID, "delta": tString}},
 	"said": {[]string{"t", "gen", "message", "text"}, []string{"work"},
 		map[string]fieldType{"gen": tCount, "work": tID, "message": tID, "text": tString}},
-	"own": {[]string{"t", "gen", "name", "phase"}, []string{"work"},
-		map[string]fieldType{"gen": tCount, "work": tID, "name": tString, "phase": tPhase}},
+	"own": {[]string{"t", "gen", "call", "name", "phase"}, []string{"work", "detail"},
+		map[string]fieldType{"gen": tCount, "work": tID, "call": tID, "name": tString, "phase": tPhase, "detail": tDetail}},
 	"ask": {[]string{"t", "gen", "ask", "name", "arguments"}, []string{"work"},
 		map[string]fieldType{"gen": tCount, "work": tID, "ask": tID, "name": tString, "arguments": tObject}},
 	"usage": {[]string{"t", "gen", "accounting"}, []string{"work", "result", "total", "models"},
@@ -256,6 +261,9 @@ func ofType(ft fieldType, raw json.RawMessage) bool {
 	case tString:
 		var s string
 		return isString(raw) && json.Unmarshal(raw, &s) == nil
+	case tDetail:
+		var s string
+		return isString(raw) && json.Unmarshal(raw, &s) == nil && len(s) <= MaxDetailBytes
 	case tCount:
 		return IsCount(raw)
 	case tBoolean:
@@ -325,6 +333,98 @@ func ofType(ft fieldType, raw json.RawMessage) bool {
 // IsID is an id the wire takes: a non-empty string of at most
 // MaxIDBytes bytes.
 func IsID(s string) bool { return s != "" && len(s) <= MaxIDBytes }
+
+// CallID is an own tool's `call` for the harness's id of that run: the id
+// as written when the wire takes it, a newline in it included, or else one
+// derived from it, the same for the same id.
+func CallID(native string) string {
+	if IsID(native) {
+		return native
+	}
+	sum := sha256.Sum256([]byte(native))
+	return "call-" + hex.EncodeToString(sum[:16])
+}
+
+// Detail is what an own tool's `detail` carries of text: the text, cut
+// between two characters to at most MaxDetailBytes bytes. Text that is
+// not UTF-8 reads with each stray byte as U+FFFD first.
+func Detail(text string) string {
+	text = strings.ToValidUTF8(text, "\uFFFD")
+	if len(text) <= MaxDetailBytes {
+		return text
+	}
+	cut := MaxDetailBytes
+	for cut > 0 && !utf8.RuneStart(text[cut]) {
+		cut--
+	}
+	return text[:cut]
+}
+
+// InputDetail is a tool's detail from its input, what the run does: its
+// command, the string at the member `command` names where the program
+// puts one, else what it acts on, the string at `subject` (a path), or
+// else the input as compact JSON; none for an input that is no object or
+// an empty one. A driver asks it only of a call whose frames say what tool
+// it is.
+func InputDetail(input json.RawMessage, command, subject string) string {
+	var m map[string]json.RawMessage
+	if json.Unmarshal(input, &m) != nil || len(m) == 0 {
+		return ""
+	}
+	for _, key := range []string{command, subject} {
+		var s string
+		if key != "" && json.Unmarshal(m[key], &s) == nil && s != "" {
+			return Detail(s)
+		}
+	}
+	var b bytes.Buffer
+	if json.Compact(&b, input) != nil {
+		return ""
+	}
+	return Detail(b.String())
+}
+
+// Change is one file's change as a harness shows it: its path and its text
+// before and after.
+type Change struct{ Path, Old, New string }
+
+// ChangeDetail is a tool's detail from the changes it made, what the run
+// did: each change's path, then its lines that differ, the old with `-`
+// and the new with `+`, the lines both texts open and close with left out.
+func ChangeDetail(changes []Change) string {
+	var b strings.Builder
+	for i, c := range changes {
+		if i > 0 {
+			b.WriteByte('\n')
+		}
+		b.WriteString(c.Path)
+		old, now := textLines(c.Old), textLines(c.New)
+		for len(old) > 0 && len(now) > 0 && old[0] == now[0] {
+			old, now = old[1:], now[1:]
+		}
+		for len(old) > 0 && len(now) > 0 && old[len(old)-1] == now[len(now)-1] {
+			old, now = old[:len(old)-1], now[:len(now)-1]
+		}
+		for _, line := range old {
+			b.WriteString("\n-" + line)
+		}
+		for _, line := range now {
+			b.WriteString("\n+" + line)
+		}
+		if b.Len() > MaxDetailBytes {
+			break
+		}
+	}
+	return Detail(b.String())
+}
+
+// textLines are a text's lines, a last newline ending the last of them.
+func textLines(text string) []string {
+	if text == "" {
+		return nil
+	}
+	return strings.Split(strings.TrimSuffix(text, "\n"), "\n")
+}
 
 func isString(raw json.RawMessage) bool { return len(raw) > 0 && raw[0] == '"' }
 

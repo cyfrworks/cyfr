@@ -14,8 +14,9 @@ import (
 )
 
 // A person's machine's space mounts its own proc and holds no IPv6 in its
-// network namespace, on the links it has and the ones it gets later; any
-// other space's proc leaves IPv6 as the namespace has it. As root in a
+// network namespace, on the links it has and the ones it gets later, and
+// reassembles no IPv4 fragment; any other space's proc leaves both as the
+// namespace has them. As root in a
 // user, mount, network and process namespace of the test's own, as a
 // stage's first process builds its space: keeper-ci's real-kernel step,
 // under the Locus profile, which refuses the same write through /proc/sys.
@@ -71,6 +72,14 @@ func ipv6Space(t *testing.T, machine bool) {
 		v, err := os.ReadFile("/proc/sys/net/ipv6/conf/" + conf + "/disable_ipv6")
 		if err != nil || strings.TrimSpace(string(v)) != want {
 			t.Fatalf("machine %t: %s's disable_ipv6 reads %q (%v), not %s", machine, conf, strings.TrimSpace(string(v)), err, want)
+		}
+	}
+	// A machine's namespace reassembles no IPv4 fragment; any other keeps
+	// the kernel's own marks.
+	for _, mark := range []string{"ipfrag_low_thresh", "ipfrag_high_thresh"} {
+		v, err := os.ReadFile("/proc/sys/net/ipv4/" + mark)
+		if err != nil || (strings.TrimSpace(string(v)) == "0") != machine {
+			t.Fatalf("machine %t: %s reads %q (%v)", machine, mark, strings.TrimSpace(string(v)), err)
 		}
 	}
 }

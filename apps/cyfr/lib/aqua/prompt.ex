@@ -102,6 +102,18 @@ defmodule Aqua.Prompt do
   @typedoc "A composed prompt: the instructions, the turn's facts, and the two joined as `text`."
   @type composed :: %{instructions: String.t(), facts: String.t(), text: String.t()}
 
+  # Said to the soul alone, on every turn of its own: the person's thread
+  # is between them and Aqua, so a card in it is Aqua's question
+  # (`Aqua.Choices`).
+  @buttons "\n\n---\n\n## Choices as buttons\n\n" <>
+             "When you ask the person to decide, you may offer the choices as buttons: end " <>
+             "that reply with a block and nothing after it: a line of three backticks, " <>
+             "`choices`, a space and this turn's id; the question on one line, at most 200 " <>
+             "characters; each choice on a line of its own after `- `, one to eight, each " <>
+             "different and at most 100 characters; optionally a line `file: ` and the path " <>
+             "of a file in Files the person should open first; and a line of three " <>
+             "backticks. Neither the question nor a choice holds « or »."
+
   @doc """
   Compose the system prompt for a turn.
 
@@ -132,7 +144,8 @@ defmodule Aqua.Prompt do
           [
             String.trim_trailing(prompt),
             "\n\n---\n\n",
-            briefing(own_tools?, search?, loader?, writes?)
+            briefing(own_tools?, search?, loader?, writes?),
+            @buttons
           ]
 
         %{"prompt" => nil} ->
@@ -426,7 +439,8 @@ defmodule Aqua.Prompt do
         "person waits on a decision: answer it yourself with `crew.ask` to that member when " <>
         "you know the answer, or else give the person your recommendation in one line and " <>
         "end your turn, and when they answer, hand their words to that member with " <>
-        "`crew.ask`, as they are. A schedule's line that opens " <>
+        "`crew.ask`, as they are. When the person must decide a member's question, ask them " <>
+        "yourself, and you may offer its choices as your own. A schedule's line that opens " <>
         "with \"<member> set this schedule:\" is that member's wake: hand it to that member " <>
         "with `crew.ask`, its text as the task.\n",
       Enum.map(members, fn member ->

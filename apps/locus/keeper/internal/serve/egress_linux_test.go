@@ -79,6 +79,8 @@ type fakeRouteGuard struct {
 	refuse bool
 	hold   chan struct{}
 	before func(spawnID string)
+	// machines is why it routes no person's VM, as a hello would say.
+	machines string
 	// refuseClears refuses that many clears before it answers one; dead
 	// says no connection is live.
 	refuseClears int
@@ -87,6 +89,11 @@ type fakeRouteGuard struct {
 	// check would; beforeClear runs as a clear arrives, before it answers.
 	afterLive   func()
 	beforeClear func(spawnID string)
+	// changes answers each change in turn, nil to accept it, an error to
+	// refuse it (a guard.ErrRouteWithdrawn among them); past its end every
+	// change is accepted. A machine's admit makes no route of the fake's
+	// names: its VM is a stand-in too.
+	changes []error
 }
 
 type routeCall struct {
@@ -97,6 +104,7 @@ type routeCall struct {
 	port    uint16
 	private bool
 	conn    uint64
+	uid     int
 }
 
 func (g *fakeRouteGuard) Admit(spawnID, reach string, addrs []netip.Addr, netns, udp, tcp *os.File) (guard.Route, error) {
@@ -137,6 +145,38 @@ func (g *fakeRouteGuard) admit(call routeCall, netns, udp, tcp *os.File) (guard.
 	g.routes[spawnID] = a
 	g.mu.Unlock()
 	return guard.Route{Conn: conn}, nil
+}
+
+func (g *fakeRouteGuard) AdmitMachine(spawnID string, uid int, reach string, addrs []netip.Addr, netns, udp, tcp, nl *os.File) (guard.Machine, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.calls = append(g.calls, routeCall{op: guard.TypeAdmit, spawnID: spawnID, reach: reach, addrs: addrs, conn: g.conn, uid: uid})
+	if g.refuse {
+		return guard.Machine{}, errors.New("refused")
+	}
+	return guard.Machine{Route: guard.Route{Conn: g.conn}, Inner: netip.MustParseAddr("10.213.0.2"),
+		Gateway: netip.MustParseAddr("10.213.0.1")}, nil
+}
+
+func (g *fakeRouteGuard) Change(spawnID string, r guard.Route, reach string, addrs []netip.Addr) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.calls = append(g.calls, routeCall{op: guard.TypeChange, spawnID: spawnID, reach: reach, addrs: addrs, conn: r.Conn})
+	if g.dead || r.Conn != g.conn {
+		return guard.ErrConnectionGone
+	}
+	if len(g.changes) > 0 {
+		err := g.changes[0]
+		g.changes = g.changes[1:]
+		return err
+	}
+	return nil
+}
+
+func (g *fakeRouteGuard) Machines() string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.machines
 }
 
 func (g *fakeRouteGuard) Live(r guard.Route) bool {
@@ -614,5 +654,38 @@ func TestBootProvesTheGuard(t *testing.T) {
 	err := k.s.proveGuard(spec)
 	if err == nil || !strings.Contains(err.Error(), missing) {
 		t.Fatalf("a missing guard: %v", err)
+	}
+}
+
+// A keeper given a resolver asks a spawn's hosts of it alone: its question
+// reaches that address.
+func TestAGivenResolverIsAskedTheHosts(t *testing.T) {
+	pc, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pc.Close()
+	asked := make(chan []byte, 8)
+	go func() {
+		buf := make([]byte, 512)
+		for {
+			n, _, err := pc.ReadFrom(buf)
+			if err != nil {
+				return
+			}
+			asked <- append([]byte{}, buf[:n]...)
+		}
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_, _ = resolverAt(pc.LocalAddr().String())(ctx, "registry.example.org")
+	select {
+	case q := <-asked:
+		// A DNS question names its labels by their lengths.
+		if !strings.Contains(string(q), "\x08registry\x07example\x03org") {
+			t.Fatalf("the resolver was asked %q", q)
+		}
+	default:
+		t.Fatal("the given resolver was asked nothing")
 	}
 }

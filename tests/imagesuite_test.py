@@ -841,5 +841,16 @@ class PoolWire(unittest.TestCase):
         self.assertNotEqual(header.split("mac=")[1], other.split("mac=")[1])
 
 
+class MachineBytes(unittest.TestCase):
+    """The suite's reading of a person's VM's own allowance is held to every case of the one vector
+    (tests/fixtures/locus_pool.json's machine_bytes) Prima.LocusPool.machine_bytes/1 and the keeper read."""
+
+    def test_every_case_of_the_vector(self):
+        cases = imagesuite._POOL["machine_bytes"]["cases"]
+        self.assertTrue(cases)
+        for guest, want in cases:
+            self.assertEqual(imagesuite.machine_bytes(guest), want, f"a guest of {guest} bytes")
+
+
 if __name__ == "__main__":
     unittest.main()

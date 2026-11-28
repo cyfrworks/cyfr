@@ -341,10 +341,20 @@ func (s *server) startKeptSpawn(c *client, req *protocol.Request, reach string, 
 	if !known {
 		return nil, protocol.CodeUnknownPool
 	}
-	// An image is mounted by its person's VM alone: here, with no VM to
-	// run its session, it is refused by name, and nothing of it is touched.
-	if at.image {
-		s.log.Warn("spawn %s refused: kept home %s is on a disk image, which runs only in its person's VM, and this machine runs none: give the container /dev/kvm again", req.ID, req.Home)
+	// An image is mounted by its person's VM alone: on a keeper that gives
+	// the wall its sessions run there, and here, with no VM to run its
+	// session, it is refused by name, and nothing of it is touched. A
+	// directory disk left on a keeper that gives the wall, whose
+	// retirement at the start did not finish, runs nowhere: no session of
+	// any person runs outside a VM there.
+	switch {
+	case at.image && s.wall:
+		return s.startMachineSpawn(c, req, at, reach, e, limits)
+	case at.image:
+		s.log.Warn("spawn %s refused: kept home %s is on a disk image, which runs only in its person's VM, and this machine runs none: %s", req.ID, req.Home, s.wallWhy)
+		return nil, protocol.CodeUnavailable
+	case s.wall:
+		s.log.Warn("spawn %s refused: kept home %s is on a disk of the directory form, which this machine retires at its start, and its retirement has not finished", req.ID, req.Home)
 		return nil, protocol.CodeUnavailable
 	}
 	s.mu.Lock()
@@ -746,10 +756,15 @@ func (s *server) handleHome(c *client, req *protocol.Request) {
 		s.send(c, protocol.NewHomeRetired(req.ID))
 	case code != "":
 		s.send(c, protocol.NewError(req.ID, "", code))
-	case at.image:
+	case at.image && s.wall && req.Type == protocol.TypeHomeMeasure:
+		s.measureInMachine(c, req, at)
+	case at.image && s.wall:
 		// An image's homes are inside it, which the host never walks: only
 		// its person's VM measures, resets or retires one.
-		s.log.Warn("%s %s refused: kept home %s is on a disk image, which only its person's VM reaches, and this machine runs none", req.Type, req.ID, req.Home)
+		s.log.Warn("%s %s refused: kept home %s is on a disk image, and this keeper does not yet reset or retire a home through its person's VM", req.Type, req.ID, req.Home)
+		s.send(c, protocol.NewError(req.ID, "", protocol.CodeUnavailable))
+	case at.image:
+		s.log.Warn("%s %s refused: kept home %s is on a disk image, which only its person's VM reaches, and this machine runs none: %s", req.Type, req.ID, req.Home, s.wallWhy)
 		s.send(c, protocol.NewError(req.ID, "", protocol.CodeUnavailable))
 	case req.Type == protocol.TypeHomeMeasure:
 		uidLock := s.keptLock(at.uid)
@@ -804,49 +819,17 @@ func (s *server) makeHome(c *client, req *protocol.Request) {
 		return
 	}
 	unlockDisk := s.lockDisk(req.Athanor)
-	s.mu.Lock()
-	var d home.Disk
-	recorded := s.disks[req.Athanor] != nil
-	if recorded {
-		d = *s.disks[req.Athanor]
-	}
-	s.mu.Unlock()
-	if !recorded {
-		uid, ok, err := s.drawKept(func() (map[int]bool, error) { return s.cfg.Kept.Taken("/proc") })
-		if err != nil {
-			unlockDisk()
-			s.log.Error("home_make %s: reading the kept homes' root and /proc: %v", req.ID, err)
-			s.send(c, protocol.NewError(req.ID, "", protocol.CodeUnavailable))
-			return
-		}
-		if !ok {
-			unlockDisk()
-			s.log.Warn("home_make %s refused: every kept uid is taken", req.ID)
-			s.send(c, protocol.NewError(req.ID, "", protocol.CodeCapacity))
-			return
-		}
-		defer s.unmakeKept(uid)
-		d = home.Disk{Athanor: req.Athanor, Form: s.diskForm(), UID: uid, Homes: []string{}}
-	}
-	if recorded && !d.Holds(req.Home) && len(d.Homes) >= home.MaxDiskHomes {
+	d, code := s.recordDisk("home_make "+req.ID, req.Athanor, req.Home)
+	if code != "" {
 		unlockDisk()
-		s.log.Warn("home_make %s refused: the disk of kept home %s holds %d homes, its most", req.ID, req.Home, len(d.Homes))
-		s.send(c, protocol.NewError(req.ID, "", protocol.CodeCapacity))
+		s.send(c, protocol.NewError(req.ID, "", code))
 		return
-	}
-	if !recorded || !d.Holds(req.Home) {
-		if err := s.putDisk(d.With(req.Home)); err != nil {
-			unlockDisk()
-			s.log.Error("home_make %s: recording kept home %s on its disk: %v", req.ID, req.Home, err)
-			s.send(c, protocol.NewError(req.ID, "", protocol.CodeInternal))
-			return
-		}
 	}
 	// An image's homes are made inside it, by its person's VM's keeper at
 	// their first session: the host makes the image, after its record, and
 	// again where a keeper that died between the two left none.
 	if d.Form == home.FormImage {
-		err := s.cfg.Kept.EnsureImage(req.Athanor, d.UID)
+		err := s.cfg.Kept.EnsureImage(req.Athanor, d.UID, s.startTool)
 		unlockDisk()
 		if err != nil {
 			s.log.Error("home_make %s: %v", req.ID, err)
@@ -867,6 +850,60 @@ func (s *server) makeHome(c *client, req *protocol.Request) {
 		return
 	}
 	s.send(c, protocol.NewHomeMade(req.ID, d.UID))
+}
+
+// keptTaken reads which kept uids are taken (home.Kept.Taken of /proc), a
+// variable the tests of a keeper running as one uid replace.
+var keptTaken = func(k *home.Kept) (map[int]bool, error) { return k.Taken("/proc") }
+
+// recordDisk is athanor's disk, its record written first where none is,
+// holding homeID where one is given, with the disk's lock held (lockDisk):
+// a new disk draws its uid (drawKept) and takes this keeper's form
+// (diskForm). It answers the code a refusal sends, logged as what's: the
+// kept uids unreadable or every one taken, a disk that holds its most
+// homes, or a record not written.
+func (s *server) recordDisk(what, athanor, homeID string) (home.Disk, string) {
+	s.mu.Lock()
+	var d home.Disk
+	recorded := s.disks[athanor] != nil
+	if recorded {
+		d = *s.disks[athanor]
+	}
+	s.mu.Unlock()
+	if !recorded {
+		uid, ok, err := s.drawKept(func() (map[int]bool, error) { return keptTaken(s.cfg.Kept) })
+		if err != nil {
+			s.log.Error("%s: reading the kept homes' root and /proc: %v", what, err)
+			return d, protocol.CodeUnavailable
+		}
+		if !ok {
+			s.log.Warn("%s refused: every kept uid is taken", what)
+			return d, protocol.CodeCapacity
+		}
+		// Once its record is written the record holds the uid.
+		defer s.unmakeKept(uid)
+		d = home.Disk{Athanor: athanor, Form: s.diskForm(), UID: uid, Homes: []string{}}
+	}
+	if homeID == "" {
+		if !recorded {
+			if err := s.putDisk(d); err != nil {
+				s.log.Error("%s: recording the person's disk: %v", what, err)
+				return d, protocol.CodeInternal
+			}
+		}
+		return d, ""
+	}
+	if recorded && !d.Holds(homeID) && len(d.Homes) >= home.MaxDiskHomes {
+		s.log.Warn("%s refused: the disk of kept home %s holds %d homes, its most", what, homeID, len(d.Homes))
+		return d, protocol.CodeCapacity
+	}
+	if !recorded || !d.Holds(homeID) {
+		if err := s.putDisk(d.With(homeID)); err != nil {
+			s.log.Error("%s: recording kept home %s on its disk: %v", what, homeID, err)
+			return d, protocol.CodeInternal
+		}
+	}
+	return d.With(homeID), ""
 }
 
 // retireHome ends every session of the home at, by its group, as a release
