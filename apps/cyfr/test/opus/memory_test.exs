@@ -555,6 +555,21 @@ defmodule Opus.MemoryTest do
                Opus.Memory.read(admin, :everyone)
     end
 
+    test "the programs' wall is never another endpoint's: a runtime answering given beside programs lacking reads lacking",
+         %{admin: admin, alice: alice, claim: claim} do
+      Opus.Memory.poll(
+        [
+          endpoint("wrk_local", :runtime, once(report([], wall: :given))),
+          endpoint("local", :backends, once(report([], wall: :lacking)))
+        ],
+        claim,
+        :none
+      )
+
+      assert {:ok, %{programs_wall: :lacking}} = Opus.Memory.read(admin, :everyone)
+      assert {:ok, %{programs_wall: :lacking}} = Opus.Memory.read(alice.ctx, :mine)
+    end
+
     test "with no programs service nothing is said of the programs' wall, and a programs service never heard is not yet known",
          %{admin: admin, claim: claim} do
       Opus.Memory.poll(

@@ -325,14 +325,13 @@ func (s *server) handleMeasure(c *client, req *protocol.Request) {
 
 // handleReport answers the asking role's counters past the report's after,
 // a page of them, beside the keeper's boot, the machine's numbers and the
-// wall its start decided (giveWall): a
-// role sees only its own counters, kept by its name across its process's
-// restarts.
+// wall its start decided (giveWall): a role sees only its own counters,
+// kept by its name across its process's restarts.
 func (s *server) handleReport(c *client, req *protocol.Request) {
 	after, _ := req.After.Rev()
 	s.mu.Lock()
 	r := s.ledger.Report(c.role.spec.Name, after, now())
-	boot, budget, wall := s.boot, s.budget, s.wallGiven
+	boot, budget, wall := s.boot, s.budget, s.wallClass
 	s.mu.Unlock()
 	report := protocol.Report{Boot: boot, Budget: budget, Work: r.Work, Floor: r.Floor, Used: r.Used, Wall: wall, Next: r.Next,
 		Counters: make([]protocol.Counter, 0, len(r.Counters))}

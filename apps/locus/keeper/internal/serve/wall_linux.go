@@ -128,10 +128,10 @@ func deviceHeld(path, name string, minor uint32, byGroup bool) string {
 // VM. Nothing turns one form into the other. A retirement that does not
 // finish leaves that disk refusing every session of it (startKeptSpawn).
 func (s *server) giveWall() {
-	given, why := s.wallOf()
+	class, why := s.wallOf()
 	// The one place the report's wall is set: handleReport copies it.
-	wall := given == protocol.WallGiven
-	s.wall, s.wallGiven, s.imageDisks, s.wallWhy = wall, given, wall, why
+	wall := class == protocol.WallGiven
+	s.wall, s.wallClass, s.imageDisks, s.wallWhy = wall, class, wall, why
 	if !wall {
 		s.log.Info("each person's work runs in its own space on this machine: %s", why)
 		return
