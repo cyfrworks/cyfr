@@ -591,7 +591,7 @@ defmodule Aqua.Providers.Thread do
         )
       ],
       description:
-        "Talk to an agent: find today's thread or list threads, send a message, follow the reply, stop a turn, archive a thread (a daily or workspace thread goes behind the list's Archived filter until new work there, nothing else changing; a crew member's thread is retired, which stops its work there), and say one of your own private lines aloud into a shared thread you sit in; a running turn posts into its own thread, with files and links. A send with no thread joins today's daily thread and starts a turn of the athanor's assistant, which hands a job to a crew member when one is named or fits; the member works in a thread of its own under it, which can be read and not sent to, and its reply returns to the assistant. A send may carry a pre-minted id with files attached under it, a model, the sender's own client id, and the shared thread open beside it. Wraps the same runner and the same verbs the console drives, with the same gates — this is not a second way to run an agent.",
+        "Talk to an agent: find today's thread or list threads, send a message, follow the reply, stop a turn, archive a thread (a daily or workspace thread goes behind the list's Archived filter until new work there, nothing else changing; a crew member's thread is retired, which stops its work there), and say one of your own private lines aloud into a shared thread you sit in; a running turn posts into its own thread, with files and links. A send with no thread joins today's daily thread and is addressed to the athanor's assistant, which hands a job to a crew member when one is named or fits; the member works in a thread of its own under it, which can be read and not sent to, and what the member replies goes to the assistant. A send may carry a pre-minted id with files attached under it, a model, the sender's own client id, and the shared thread open beside it. Wraps the same runner and the same verbs the console drives, with the same gates — this is not a second way to run an agent.",
       title: "Threads"
     )
   end
@@ -764,7 +764,7 @@ defmodule Aqua.Providers.Thread do
   # another day, joins the daily thread its client id was accepted in, or
   # else the one current when it is accepted (`daily_lands/2`). Its files
   # are stored under the thread they were attached to, so a send that
-  # carries files names that thread: a crew member's, or a daily thread
+  # carries files names that thread: a workspace thread, or a daily thread
   # that is still today's. One whose day has turned since is refused and
   # leaves nothing behind: no row, no new day's thread, and none of the
   # files this caller stored under the message, so a message never names

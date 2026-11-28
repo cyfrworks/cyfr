@@ -808,6 +808,11 @@ defmodule PrismWeb.ThreadPaneLive do
     end
   end
 
+  # A member's thread takes no line, so it offers no model for the next
+  # one: a pick sent from it is dropped.
+  def handle_event("select_model", _params, %{assigns: %{thread: %{kind: "crew"}}} = socket),
+    do: {:noreply, socket}
+
   def handle_event("select_model", %{"model" => model}, socket) do
     {:noreply, assign(socket, :model_override, if(model == "", do: nil, else: model))}
   end
@@ -1999,7 +2004,7 @@ defmodule PrismWeb.ThreadPaneLive do
         <div class="aqua-panel-menu-row">
           <span>Model</span>
           <%= cond do %>
-            <% @models_loaded and @models_by_provider != %{} -> %>
+            <% @models_loaded and @models_by_provider != %{} and not crew?(@thread) -> %>
               <.model_override
                 label={model_label(@assistant, @token_usage)}
                 models_by_provider={@models_by_provider}

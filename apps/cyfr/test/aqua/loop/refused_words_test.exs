@@ -16,7 +16,6 @@ defmodule Aqua.Loop.RefusedWordsTest do
     person = %{agent: "aqua", origin: "interactive", sent_by: "person", request_id: nil}
 
     assert Turn.again(person) == :message
-    assert Turn.again(%{person | request_id: "msg_req"}) == :ask
 
     # A page's call runs under the origin of the turn that put the page,
     # opened by the agent: the row has no action for it.

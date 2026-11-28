@@ -1913,7 +1913,7 @@ defmodule Aqua.RunnerTest do
 
       request =
         case unquote(operation) do
-          :send -> {:send, ctx, "@aqua late", [agents: [%{"name" => "aqua"}]]}
+          :send -> {:send, ctx, "@aqua late", []}
           :stop -> {:stop, ctx}
           :restart_for_consent -> {:restart_for_consent, ctx, %{}}
         end

@@ -742,7 +742,6 @@ defmodule Aqua.Loop.Turn do
   or a crew member's reply to Aqua.
   """
   @spec again(map()) :: :message | :ask | :none
-  def again(%{request_id: request}) when is_binary(request), do: :ask
   def again(%{agent: agent}) when is_binary(agent) and agent != @soul_name, do: :ask
   def again(%{origin: "interactive", sent_by: "person"}), do: :message
   def again(_turn), do: :none

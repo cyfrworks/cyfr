@@ -63,9 +63,9 @@ defmodule Aqua.Crew do
       a view of the room that read its crew threads when the request
       landed, before the member's thread was made, reads them again.
     * A reply lands on the request's room, sent by the member and
-      addressed to the soul, and answers every request the record names.
-      It opens or steers the soul's turn, for a request row the person
-      sent as for the soul's own.
+      addressed to the soul, whoever sent the request, and answers every
+      request the record names. Where it opens or steers the soul's turn
+      is the room's runner's to decide (`Aqua.Runner`).
 
   The same consumer delivers what a workspace thread sends
   (`Aqua.Providers.Workspace`):
@@ -195,7 +195,7 @@ defmodule Aqua.Crew do
          {:ok, title} <- parse_title(args["title"], "crew.ask"),
          {:ok, scrolls} <- scrolls(ctx, args["scrolls"], "crew.ask"),
          {:ok, options} <- options(args["options"]),
-         {:ok, files?} <- files_flag(args["files"]),
+         {:ok, files?} <- files_flag(Map.fetch(args, "files")),
          {:ok, turn} <- Tape.calling_turn(ctx, args),
          {:ok, thread} <- Tape.thread(ctx, turn.thread_id),
          {:ok, roster} <- Aqua.AgentConfig.roster(ctx),
@@ -581,8 +581,10 @@ defmodule Aqua.Crew do
   defp with_scrolls(payload, []), do: payload
   defp with_scrolls(payload, scrolls), do: Map.put(payload, "scrolls", scrolls)
 
-  defp files_flag(nil), do: {:ok, false}
-  defp files_flag(files) when is_boolean(files), do: {:ok, files}
+  # Absent is no files; a `files` that is present is true or false, and
+  # anything else, null among them, is refused before a write.
+  defp files_flag(:error), do: {:ok, false}
+  defp files_flag({:ok, files}) when is_boolean(files), do: {:ok, files}
 
   defp files_flag(_files),
     do: {:error, {:invalid_argument, "crew.ask takes 'files' as true or false"}}

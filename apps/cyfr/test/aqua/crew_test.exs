@@ -2675,6 +2675,31 @@ defmodule Aqua.CrewTest do
       end
     end
 
+    # The handler is held to the contract whatever reaches it past the
+    # declaration: a `files` that is present and null is refused on a turn
+    # of Aqua's that could ask, and no request is written.
+    test "a null files from a turn of Aqua's that could ask is refused and writes no request",
+         %{ctx: ctx, room: room} do
+      script!([{:probe, self()}, reply("Ready.")])
+      {:ok, %{turn_id: id}} = Runner.send_message(ctx, room.id, "start")
+      assert_receive {:scripted_probe, worker, _}, 30_000
+      {:ok, turn} = Tape.turn(ctx, id)
+
+      lineage = %{"thread_id" => room.id, "root_execution_id" => turn.root_execution_id}
+      asked = %{"member" => "planner", "task" => "read"}
+
+      assert {:error, {:invalid_argument, "crew.ask takes 'files' as true or false"}} =
+               Crew.ask(ctx, asked |> Map.merge(lineage) |> Map.put("files", nil))
+
+      refute Enum.any?(rows(ctx, room.id), &(&1.addressee == "planner"))
+      assert pending_records(ctx) == []
+
+      # The same ask with files absent, on the same turn, is written.
+      assert {:ok, %{request: _}} = Crew.ask(ctx, Map.merge(asked, lineage))
+      send(worker, :continue)
+      await_status(ctx, id, "completed")
+    end
+
     test "false and absent pass nothing and ask as before; true on a line with no file passes " <>
            "none and says so",
          %{ctx: ctx, room: room} do
@@ -2754,7 +2779,7 @@ defmodule Aqua.CrewTest do
     } do
       before = rows(ctx, room.id)
 
-      for files <- ["yes", 1, [], %{}] do
+      for files <- [nil, "yes", 1, [], %{}] do
         assert {:error, {:invalid_argument, "crew.ask takes 'files' as true or false"}} =
                  Crew.ask(ctx, %{"member" => "planner", "task" => "look", "files" => files})
       end

@@ -46,7 +46,7 @@ Aqua's page in CYFR restores the shipped set.`,
 var aquaListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List the soul, crew, guides and scrolls",
-	Long:  "List everything the athanor's Aqua is made of: the soul, its crew and the guides, then the scrolls it has learned.",
+	Long:  "List the soul, its crew and the guides, then the scrolls Aqua has learned; the rules file is edited in Files and not listed here.",
 	Example: `  cyfr aqua list
   cyfr aqua list --json`,
 	Args: cobra.NoArgs,
