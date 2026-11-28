@@ -123,18 +123,24 @@ func TestConcurrentReleasesLeaveNoReleasedSessionsHosts(t *testing.T) {
 	}
 }
 
-// gatedGuard is the tests' guard, its first change held at a gate.
+// gatedGuard is the tests' guard, its first change held at a gate and
+// every later one answered meanwhile.
 type gatedGuard struct {
 	*fakeRouteGuard
-	once          sync.Once
+	gate          sync.Mutex
+	gated         bool
 	held, release chan struct{}
 }
 
 func (g *gatedGuard) Change(spawnID string, r guard.Route, reach string, addrs []netip.Addr) error {
-	g.once.Do(func() {
+	g.gate.Lock()
+	first := !g.gated
+	g.gated = true
+	g.gate.Unlock()
+	if first {
 		close(g.held)
 		<-g.release
-	})
+	}
 	return g.fakeRouteGuard.Change(spawnID, r, reach, addrs)
 }
 
@@ -264,6 +270,8 @@ func TestARefusedWideningLeavesNoHostOfItsSession(t *testing.T) {
 	if r := k.next(t); r["type"] != "error" || r["code"] != protocol.CodeGuardUnavailable {
 		t.Fatalf("a start whose widening the guard refused answered %v", r)
 	}
+	// A spawn refused once made is released, as on the host.
+	k.expect(t, "released")
 	k.session(t, "s3", "ath_a", "vlt_a3", []string{"c.example.com"})
 	changes := k.routeChanges()
 	if last := changes[len(changes)-1]; last != "hosts[203.0.113.1 203.0.113.3]" || sessionsOf(k, m) != 2 {
