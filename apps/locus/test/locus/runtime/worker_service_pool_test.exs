@@ -628,6 +628,23 @@ defmodule Locus.Runtime.WorkerServicePoolTest do
       assert held == [root.attempt]
     end
 
+    test "an exit naming nothing open, as a runner refusing its reuse sends, is reported holding " <>
+           "what the service assigned it, and the runner is never handed out again",
+         context do
+      {root, runner} = started!(context)
+      id = runner_id(root)
+      write(runner, %{type: :exit, runner: id, open: []})
+
+      assert [%{args: %{"attempts" => [attempt], "runner" => ^id}}] = reports(context)
+      assert attempt == root.attempt
+
+      wait_until(fn ->
+        Locus.Runtime.RunnerPool
+        |> Runners.runners()
+        |> Enum.all?(&(&1.id != id or &1.state == :tainted))
+      end)
+    end
+
     test "a child's cancel then the runner's unclean completion is reported, naming the child",
          context do
       {root, runner} = started!(context)
