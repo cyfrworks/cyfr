@@ -578,7 +578,6 @@ defmodule Aqua.ChoicesTest do
         Tool.handle("thread", ctx, %{
           "action" => "send",
           "message" => text,
-          "agent" => "aqua",
           "client_id" => client_id
         })
 
@@ -681,8 +680,7 @@ defmodule Aqua.ChoicesTest do
                  "action" => "send",
                  "thread" => today.id,
                  "id" => mid,
-                 "attachments" => refs,
-                 "agent" => "aqua"
+                 "attachments" => refs
                })
 
       refused =

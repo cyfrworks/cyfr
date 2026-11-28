@@ -626,6 +626,7 @@ defmodule Aqua.ProgramTest do
                 "yourself with `crew.ask` to that member when you know the answer"
     @naming "When the person names a member for a job, hand it to that member with " <>
               "`crew.ask`, and do not do it yourself."
+    @files "With `files` true, the files of the message you are answering go with the job."
     @question "Which database should the export target?\n\n- PostgreSQL\n- SQLite"
 
     test "Aqua's question is its reply, and the person's answer resumes its session",
@@ -638,6 +639,7 @@ defmodule Aqua.ProgramTest do
       assert start["system"] =~ @ask
       assert start["system"] =~ @handling
       assert start["system"] =~ @naming
+      assert start["system"] =~ @files
       post = sent()
       [input] = inputs(ctx, turn)
       assert post == with_facts(posted(input, turn, "export the notes"))

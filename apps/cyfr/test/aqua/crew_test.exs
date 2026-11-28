@@ -2578,6 +2578,192 @@ defmodule Aqua.CrewTest do
     await_status(ctx, delivered_turn(ctx, new, request.id), "completed")
   end
 
+  describe "Aqua passes on the files of the message it answers" do
+    @png %{"filename" => "square.png", "media_type" => "image/png", "bytes" => "PNGBYTES"}
+
+    # A person's line in `thread` that carries `files`, stored under its
+    # own id first, as the pane sends one: the turn it opened.
+    defp filed_line!(ctx, thread, text, files) do
+      message_id = Prima.UUID7.generate_id("msg")
+      {:ok, refs} = Aqua.Attachments.store(ctx, thread.id, message_id, files)
+
+      {:ok, %{turn_id: turn_id}} =
+        Runner.send_message(ctx, thread.id, text, id: message_id, attachments: refs)
+
+      {message_id, refs, turn_id}
+    end
+
+    # What a request row's payload holds beside the identity its row is
+    # recorded under.
+    defp asked(request), do: Map.drop(Tape.payload(request), ["origin", "person_id"])
+
+    defp ask_call(id, args),
+      do: call(id, "crew", Map.merge(%{"action" => "ask", "member" => "planner"}, args))
+
+    # What each `crew.ask` of the turn answered, in order.
+    defp answers(ctx, thread, turn_id) do
+      for %{kind: "tool_result", turn_id: ^turn_id, content: content} <- rows(ctx, thread.id),
+          %{"request" => _} = answer <- [Jason.decode!(content)],
+          do: answer
+    end
+
+    defp opened_room!(_ctx, daily, "daily"), do: daily
+
+    defp opened_room!(ctx, _daily, "workspace") do
+      %Arca.Schemas.Thread{}
+      |> Arca.Schemas.Thread.changeset(%{
+        id: Prima.UUID7.generate_id("thread"),
+        athanor_id: ctx.athanor_id,
+        kind: "workspace",
+        workspace_state: "open",
+        title: "Squares",
+        created_by: ctx.user_id
+      })
+      |> Arca.Repo.insert!()
+    end
+
+    for kind <- ["daily", "workspace"] do
+      test "with files true, the #{kind} thread's line's file reaches the member, who reads " <>
+             "its bytes in its own thread",
+           %{ctx: ctx, room: daily} do
+        thread = opened_room!(ctx, daily, unquote(kind))
+
+        script!([
+          ask_call("c1", %{"task" => "what is this?", "files" => true}),
+          reply("Asked the planner."),
+          reply("A square."),
+          reply("The planner sees a square.")
+        ])
+
+        {message_id, [ref], soul} = filed_line!(ctx, thread, "planner, look at this", [@png])
+        await_status(ctx, soul, "completed")
+
+        request = Enum.find(rows(ctx, thread.id), &(&1.addressee == "planner"))
+
+        assert asked(request) == %{
+                 "from_turn" => soul,
+                 "files" => [%{"message_id" => message_id, "stored_name" => ref["stored_name"]}]
+               }
+
+        assert [%{"request" => id, "files" => 1}] = answers(ctx, thread, soul)
+        assert id == request.id
+
+        assert {:ok, %{"applied" => 1}} = drain(ctx)
+        child = child!(ctx, thread, "planner")
+        await_status(ctx, delivered_turn(ctx, child, request.id), "completed")
+
+        delivered =
+          Enum.find(rows(ctx, child.id), &(Tape.payload(&1)["request_id"] == request.id))
+
+        assert [%{"filename" => "square.png", "media_type" => "image/png"}] = refs_of(delivered)
+        data = Base.encode64("PNGBYTES")
+
+        assert [%{"data" => ^data}] =
+                 Aqua.Attachments.load(
+                   ctx,
+                   child.id,
+                   Aqua.Attachments.attachments_of([delivered])
+                 )
+
+        # The person's own line keeps its file.
+        assert [%{"data" => ^data}] =
+                 Aqua.Attachments.load(
+                   ctx,
+                   thread.id,
+                   Aqua.Attachments.attachments_of([row(ctx, message_id)])
+                 )
+      end
+    end
+
+    test "false and absent pass nothing and ask as before; true on a line with no file passes " <>
+           "none and says so",
+         %{ctx: ctx, room: room} do
+      script!([
+        %{
+          "content" => [
+            %{
+              "type" => "tool_call",
+              "id" => "c1",
+              "name" => "crew",
+              "arguments" => %{"action" => "ask", "member" => "planner", "task" => "one"}
+            },
+            %{
+              "type" => "tool_call",
+              "id" => "c2",
+              "name" => "crew",
+              "arguments" => %{
+                "action" => "ask",
+                "member" => "planner",
+                "task" => "two",
+                "files" => false
+              }
+            },
+            %{
+              "type" => "tool_call",
+              "id" => "c3",
+              "name" => "crew",
+              "arguments" => %{
+                "action" => "ask",
+                "member" => "planner",
+                "task" => "three",
+                "files" => true
+              }
+            }
+          ],
+          "stop_reason" => "tool_call",
+          "usage" => %{"input_tokens" => 4, "output_tokens" => 2}
+        },
+        reply("Asked three times.")
+      ])
+
+      {_id, _refs, with_file} = filed_line!(ctx, room, "a square", [@png])
+      await_status(ctx, with_file, "completed")
+
+      requests = for %{addressee: "planner", status: "pending"} = r <- rows(ctx, room.id), do: r
+      assert Enum.map(requests, & &1.content) == ["one", "two", "three"]
+
+      # None passed on a file: the first two named none, and the line the
+      # third answered is the person's with a file, so three's carries it.
+      [one, two, three] = requests
+      assert asked(one) == %{"from_turn" => with_file}
+      assert asked(two) == %{"from_turn" => with_file}
+      assert [_file] = Tape.payload(three)["files"]
+
+      assert [first, second, third] = answers(ctx, room, with_file)
+      refute Map.has_key?(first, "files")
+      refute Map.has_key?(second, "files")
+      assert third["files"] == 1
+
+      # A line with no file: true passes none, and the answer says none went.
+      :ok =
+        ScriptedWorker.script([
+          ask_call("c4", %{"task" => "four", "files" => true}),
+          reply("Asked.")
+        ])
+
+      {:ok, %{turn_id: bare}} = Runner.send_message(ctx, room.id, "and this")
+      await_status(ctx, bare, "completed")
+      four = Enum.find(rows(ctx, room.id), &(&1.content == "four"))
+      assert asked(four) == %{"from_turn" => bare}
+      assert [%{"files" => 0}] = answers(ctx, room, bare)
+    end
+
+    test "a files that is not true or false is refused and writes nothing", %{
+      ctx: ctx,
+      room: room
+    } do
+      before = rows(ctx, room.id)
+
+      for files <- ["yes", 1, [], %{}] do
+        assert {:error, {:invalid_argument, "crew.ask takes 'files' as true or false"}} =
+                 Crew.ask(ctx, %{"member" => "planner", "task" => "look", "files" => files})
+      end
+
+      assert rows(ctx, room.id) == before
+      assert pending_records(ctx) == []
+    end
+  end
+
   describe "a workspace thread's deliveries" do
     test "after the person's stop, a request waiting for its delivery opens no turn in the " <>
            "member's thread and writes no reply",

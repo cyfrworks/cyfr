@@ -434,7 +434,8 @@ defmodule Aqua.Prompt do
     [
       "\n\n---\n\n## Crew\n\nHand a job to one of these with `crew.ask` when it is what the " <>
         "member is good at. When the person names a member for a job, hand it to that member " <>
-        "with `crew.ask`, and do not do it yourself. Each works it in a thread of its own " <>
+        "with `crew.ask`, and do not do it yourself. With `files` true, the files of the " <>
+        "message you are answering go with the job. Each works it in a thread of its own " <>
         "under this one, with every tool you hold, and replies here when it is done, failed or stopped, or when it " <>
         "needs the person; nothing waits for the reply. A member's reply that asks the " <>
         "person waits on a decision: answer it yourself with `crew.ask` to that member when " <>

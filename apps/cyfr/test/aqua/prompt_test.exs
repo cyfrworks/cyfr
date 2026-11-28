@@ -220,6 +220,8 @@ defmodule Aqua.PromptTest do
         "When the person names a member for a job, hand it to that member with `crew.ask`, " <>
           "and do not do it yourself."
 
+      files = "With `files` true, the files of the message you are answering go with the job."
+
       soul =
         Prompt.compose(ctx,
           agent: agent(%{"crew.ask" => "auto"}),
@@ -232,7 +234,7 @@ defmodule Aqua.PromptTest do
       assert String.starts_with?(
                crew,
                "Hand a job to one of these with `crew.ask` when it is what the member is good " <>
-                 "at. " <> naming <> " Each works it"
+                 "at. " <> naming <> " " <> files <> " Each works it"
              )
 
       member = %{"name" => "builder", "prompt" => nil}

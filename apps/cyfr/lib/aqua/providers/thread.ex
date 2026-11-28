@@ -631,6 +631,10 @@ defmodule Aqua.Providers.Thread do
             ),
             Arg.new("options", {:map, Arg.new(nil, :json)},
               description: "ask: options for the member's brain, those it declares"
+            ),
+            Arg.new("files", :boolean,
+              description:
+                "ask: true to pass on with the job every file of the message this turn answers, which the member finds in its own thread; the answer says how many went"
             )
           ],
           kind: :write,

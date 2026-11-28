@@ -176,11 +176,15 @@ defmodule Aqua.Crew do
   absent or blank), `args["scrolls"]` (the scrolls the member is to
   follow, read now and kept in the request, `scrolls/3`) and
   `args["options"]` (the brain's options for the job, merged over the
-  member's own). A member's access is its own, set
-  by the person on its card: options that name it are refused before
-  anything is written. Answers the
-  request's id; `{:error, :not_addressable}` when the calling turn is not
-  the soul's in a room or the member is not of the crew.
+  member's own) and `args["files"]` (true passes on every file of the
+  message the calling turn opened on, read as the person behind the turn
+  in the turn's own thread; the request keeps their references, and its
+  delivery copies them, `deliver_request/5`). A member's access is its
+  own, set by the person on its card: options that name it are refused
+  before anything is written. Answers the request's id, and with
+  `files` true how many files went with it; `{:error,
+  :not_addressable}` when the calling turn is not the soul's in a room or
+  the member is not of the crew.
   """
   @spec ask(Context.t(), map()) :: {:ok, map()} | {:error, term()}
   def ask(%Context{} = ctx, %{"member" => member, "task" => task} = args)
@@ -191,11 +195,13 @@ defmodule Aqua.Crew do
          {:ok, title} <- parse_title(args["title"], "crew.ask"),
          {:ok, scrolls} <- scrolls(ctx, args["scrolls"], "crew.ask"),
          {:ok, options} <- options(args["options"]),
+         {:ok, files?} <- files_flag(args["files"]),
          {:ok, turn} <- Tape.calling_turn(ctx, args),
          {:ok, thread} <- Tape.thread(ctx, turn.thread_id),
          {:ok, roster} <- Aqua.AgentConfig.roster(ctx),
          :ok <- Admission.request(thread, turn.agent, member, roster),
          :ok <- asker_ready(ctx, turn, roster, member),
+         {:ok, files} <- opening_files(ctx, turn, files?),
          {:ok, origin} <- Prima.Origin.from_wire(turn.origin),
          {:ok, %{message: row}} <-
            Tape.accept(ctx, thread.id, %{
@@ -205,7 +211,11 @@ defmodule Aqua.Crew do
                addressee: member,
                status: "pending",
                content: task,
-               payload: %{"from_turn" => turn.id} |> titled(title) |> with_scrolls(scrolls)
+               payload:
+                 %{"from_turn" => turn.id}
+                 |> titled(title)
+                 |> with_scrolls(scrolls)
+                 |> with_files(files)
              },
              request: %{
                member: member,
@@ -221,7 +231,8 @@ defmodule Aqua.Crew do
          member: member,
          status: "pending",
          note: "The reply arrives on this thread as a message of its own; nothing waits for it."
-       }}
+       }
+       |> counted(files)}
     end
   end
 
@@ -570,6 +581,50 @@ defmodule Aqua.Crew do
   defp with_scrolls(payload, []), do: payload
   defp with_scrolls(payload, scrolls), do: Map.put(payload, "scrolls", scrolls)
 
+  defp files_flag(nil), do: {:ok, false}
+  defp files_flag(files) when is_boolean(files), do: {:ok, files}
+
+  defp files_flag(_files),
+    do: {:error, {:invalid_argument, "crew.ask takes 'files' as true or false"}}
+
+  # The files of the message the calling turn opened on, as references to
+  # where they are stored: read as the person behind the turn, in the
+  # turn's own thread. A message with none passes none. `nil` when the
+  # ask asked for none, which keeps the request as it is without them.
+  defp opening_files(_ctx, _turn, false), do: {:ok, nil}
+
+  defp opening_files(ctx, %{message_id: id, thread_id: thread_id} = turn, true)
+       when is_binary(id) do
+    with {:ok, person} <- asker(ctx, turn) do
+      case Tape.message(person, id) do
+        {:ok, %{thread_id: ^thread_id} = row} ->
+          {:ok,
+           for(
+             ref <- Aqua.Attachments.refs_of(row),
+             do: %{"message_id" => row.id, "stored_name" => ref["stored_name"]}
+           )}
+
+        {:ok, _another_threads} ->
+          {:ok, []}
+
+        {:error, :not_found} ->
+          {:ok, []}
+
+        {:error, _} = refused ->
+          refused
+      end
+    end
+  end
+
+  defp opening_files(_ctx, _turn, true), do: {:ok, []}
+
+  defp with_files(payload, nil), do: payload
+  defp with_files(payload, []), do: payload
+  defp with_files(payload, files), do: Map.put(payload, "files", files)
+
+  defp counted(answer, nil), do: answer
+  defp counted(answer, files), do: Map.put(answer, :files, length(files))
+
   # A brain option is a named value of one of the kinds a brain declares
   # (`Prima.Model`); which names and values the member's brain takes is
   # checked when the job's turn opens (`Aqua.Loop.Turn`).
@@ -885,7 +940,7 @@ defmodule Aqua.Crew do
   defp deliver_request(ctx, record, request, child, held) do
     id = request_copy_id(record)
     snapshot = record.snapshot
-    files = for ref <- Tape.payload(request)["attachments"] || [], do: carried_ref(request, ref)
+    files = request_files(request)
 
     with :ok <- place_copy(ctx, record, child.id, id),
          {:ok, files} <- ctx |> Aqua.Attachments.carried(request.thread_id, files) |> kept(),
@@ -925,8 +980,19 @@ defmodule Aqua.Crew do
   defp kept({:error, :not_a_post}), do: {:error, :attachment_missing}
   defp kept(answer), do: answer
 
-  defp carried_ref(request, ref),
-    do: %{"message_id" => request.id, "stored_name" => ref["stored_name"]}
+  # Where a request's files are stored: a person's request held its own,
+  # under its id; Aqua's names the files of the message its turn answered
+  # (`files`, `ask/2`), each under that message. Both are of the request's
+  # thread, which the copy holds them to (`Aqua.Attachments.carried/3`).
+  defp request_files(request) do
+    payload = Tape.payload(request)
+    own = for ref <- payload["attachments"] || [], do: carried_ref(request.id, ref)
+    named = for ref <- payload["files"] || [], do: carried_ref(ref["message_id"], ref)
+    own ++ named
+  end
+
+  defp carried_ref(message_id, ref),
+    do: %{"message_id" => message_id, "stored_name" => ref["stored_name"]}
 
   # A copy that no retry makes: the athanor's storage is full, a file of
   # the request is gone, or the request's thread with it.
