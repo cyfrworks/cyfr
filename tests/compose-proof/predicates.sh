@@ -371,3 +371,42 @@ if actual != expected:
     sys.exit(print(f"the published ports are {actual!r}, not {expected!r}") or 1)
 PY
 }
+
+# The devices of a person's computer of their own, end to end: `$1` and
+# `$2` this machine's /dev/kvm and /dev/net/tun as `stat -L -c '%F %t %T %g
+# %a'` reads them (empty where it has none), `$3` and `$4` the
+# CYFR_LOCUS_KVM and CYFR_LOCUS_TUN `cyfr init` wrote, and `$5` the locus
+# service's log. The machine has both as a VM needs them where KVM's is the
+# misc character device 10:232, read and written by its group, which is
+# not root's, and tun's 10:200, read and written by everyone, read here
+# apart from cyfr's own reader; `.env` names both where it has both and
+# neither where it lacks either; and every start line of the keeper says
+# what that gives: a computer of each person's own where both are named,
+# and its own space for want of /dev/kvm where neither is.
+keeper_wall_holds() {
+  python3 -I - "$@" <<'PY'
+import sys
+kvm, tun, env_kvm, env_tun, log = sys.argv[1:6]
+def device(stat, minor, by_group):
+    fields = stat.split()
+    if len(fields) != 7 or " ".join(fields[:3]) != "character special file":
+        return False
+    major, minor_of, gid, mode = int(fields[3], 16), int(fields[4], 16), int(fields[5]), int(fields[6], 8)
+    if (major, minor_of) != (10, minor):
+        return False
+    return gid != 0 and mode & 0o060 == 0o060 if by_group else mode & 0o006 == 0o006
+has = device(kvm, 232, True) and device(tun, 200, False)
+want_env = ("/dev/kvm", "/dev/net/tun") if has else ("", "")
+problems = []
+if (env_kvm, env_tun) != want_env:
+    problems.append(f"cyfr init wrote CYFR_LOCUS_KVM={env_kvm!r} and CYFR_LOCUS_TUN={env_tun!r} on a machine whose devices read {kvm!r} and {tun!r}, not {want_env!r}")
+said = [line[line.index("each person's work runs in"):] for line in log.splitlines() if "each person's work runs in" in line]
+want_line = ("each person's work runs in a separate small computer on this machine: a VM of their own, booted at their first session" if has
+             else "each person's work runs in its own space on this machine: the container was given no /dev/kvm")
+if not said:
+    problems.append("the keeper said no start line")
+problems += [f"the keeper said {line!r}, not {want_line!r}" for line in said if line != want_line]
+if problems:
+    sys.exit(print("; ".join(problems)) or 1)
+PY
+}
