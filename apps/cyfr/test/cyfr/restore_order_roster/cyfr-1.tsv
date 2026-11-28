@@ -36,5 +36,3 @@ apps/cyfr/test/sanctum/provisioning_test.exs	3	pending
 apps/cyfr/test/sanctum/tenancy/archive_test.exs	4	pending
 apps/cyfr/test/sanctum/tincture_access_test.exs	1	pending
 apps/cyfr/test/sanctum/vault/oauth_grant_test.exs	2	pending
-apps/cyfr/test/sanctum/vault/oauth_redirect_uri_test.exs	3	pending
-apps/cyfr/test/sanctum/webhook_test.exs	2	pending

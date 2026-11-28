@@ -6,7 +6,7 @@
 # file evaluates to a function of the argument list; each command prints
 # nothing and answers one line, `FIXTURE=` and a JSON object.
 #
-#   person SUB
+#   person SUB [ENTRY]
 #       The person of the account SUB names, made as the product makes a
 #       device-first person, and signed in again by the same door. The
 #       account is built here as the box's Set up CYFR builds one: a genesis
@@ -58,9 +58,12 @@
 #       account's device key and the head this CYFR holds
 #       (`Sanctum.Session.create/2`): a device-first person's own browser
 #       session is the device unlock's, which lives 60 s and which only the
-#       device's open channel slides. Answers the person, the athanor the
-#       session is focused on, the route segment of that athanor and the
-#       session token.
+#       device's open channel slides. It is made at the address of ENTRY,
+#       `loopback` (the private address) or `proxy` (the browser address),
+#       and is spent at that listener alone; without ENTRY, at the
+#       listener this fixture's session commands act at. Answers the
+#       person, the athanor the session is focused on, the route segment of
+#       that athanor and the session token.
 #
 #   device_confirm REF [digest|ref|key]
 #       The confirmation REF given by the person's own device, as its
@@ -137,7 +140,7 @@
 #   session_thread_read SESSION_TOKEN THREAD_ID
 #       The same read under the session SESSION_TOKEN, by its own actor, as
 #       a request of that session reads: the session established as a
-#       request establishes it (`Sanctum.Caller.establish/1`). Answers the
+#       request establishes it (`Sanctum.Caller.establish/2`). Answers the
 #       session's person and the contents.
 #
 #   console SESSION_TOKEN TOOL ARGUMENTS_JSON
@@ -155,11 +158,18 @@
 #       (`tests/locus-backends-image/e2e.py`). Answers the entry's id and
 #       name.
 #
+# Every command given a SESSION_TOKEN establishes it at the proxy listener
+# where the server has a browser address, the one a browser proof's homes
+# are reached at, and at the loopback listener where it has none.
+#
 # A step that does not answer `{:ok, _}` raises, and the rpc exits non-zero
 # naming it.
 
 fn args ->
   answer = fn map -> "FIXTURE=" <> Jason.encode!(map) end
+
+  # The listener a session command acts at (above).
+  here = if Sanctum.browser_address(), do: :proxy, else: :loopback
 
   # The person's context as a session reaches it: its athanor filled in as
   # the person's own.
@@ -553,12 +563,14 @@ fn args ->
         )
 
       proof = Proof.sign(challenge, seed)
+
       connection = %{
         client_id: client_id,
         certificate: certificate,
         source: base.client_ip,
         entry: :loopback
       }
+
       {Sanctum.DeviceCerts.verify_connect(connection, proof, challenge), proof}
     end
 
@@ -751,7 +763,7 @@ fn args ->
   # `refused?`, the two wrong answers are given first and their refusals
   # kept: another person's device's, and one over a changed record.
   confirmed_call = fn token, tool, arguments, refused? ->
-    {:ok, ctx} = Sanctum.Caller.establish({:session, token}, entry: :loopback)
+    {:ok, ctx} = Sanctum.Caller.establish({:session, token}, entry: here)
 
     case PrismWeb.Ops.call_tool(ctx, tool, arguments) do
       {:error, {:confirmation_required, %{id: id}}} ->
@@ -793,13 +805,19 @@ fn args ->
     ["confirmed", token, tool, arguments | refused] when refused in [[], ["refused"]] ->
       answer.(confirmed_call.(token, tool, Jason.decode!(arguments), refused == ["refused"]))
 
-    ["person", sub] ->
+    ["person", sub | at] when at in [[], ["loopback"], ["proxy"]] ->
       {person, account} = admitted.(sub)
       ctx = person_ctx.(person.id)
 
+      entry =
+        case at do
+          [] -> here
+          [name] -> String.to_existing_atom(name)
+        end
+
       {:ok, session} =
         Sanctum.Session.create(ctx,
-          address: Sanctum.private_address(),
+          address: Sanctum.address(entry),
           kid: account.key.kid,
           head: account.head_hash
         )
@@ -879,7 +897,7 @@ fn args ->
       })
 
     ["grant", token, name | version] when length(version) <= 1 ->
-      {:ok, console} = Sanctum.Caller.establish({:session, token}, entry: :loopback)
+      {:ok, console} = Sanctum.Caller.establish({:session, token}, entry: here)
       ctx = %{console | origin: :interactive}
       ref = "tincture:local." <> name
       pinned = ref <> ":" <> List.first(version, "1.0.0")
@@ -938,7 +956,7 @@ fn args ->
       # What the console does when the person runs a tool: the session
       # established as a request establishes it, then the console's adapter
       # onto the operation catalog, through the one gate.
-      {:ok, ctx} = Sanctum.Caller.establish({:session, token}, entry: :loopback)
+      {:ok, ctx} = Sanctum.Caller.establish({:session, token}, entry: here)
 
       case PrismWeb.Ops.call_tool(ctx, tool, Jason.decode!(arguments)) do
         {:ok, result} -> answer.(%{ok: result})
@@ -986,7 +1004,7 @@ fn args ->
       answer.(%{contents: Enum.map(messages, & &1.content)})
 
     ["session_thread_read", token, thread_id] ->
-      {:ok, ctx} = Sanctum.Caller.establish({:session, token}, entry: :loopback)
+      {:ok, ctx} = Sanctum.Caller.establish({:session, token}, entry: here)
       messages = Arca.ThreadStorage.messages(Sanctum.Context.actor(ctx), thread_id)
       answer.(%{user_id: ctx.user_id, contents: Enum.map(messages, & &1.content)})
   end

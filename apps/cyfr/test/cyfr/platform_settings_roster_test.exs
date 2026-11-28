@@ -1076,9 +1076,22 @@ defmodule Cyfr.PlatformSettingsRosterTest do
     end
 
     test "a .env file may carry the server's names alone" do
-      with_env_file(["CYFR_MCP_RATE_LIMIT_MAX=240", "CYFR_CPU_LIMIT=2"], fn ->
-        assert {"mcp_rate_limit_max", 240} in read_prod_config!()[:cyfr][:deployment_pinned]
-      end)
+      link = Jason.decode!(File.read!(Path.join(@root, "tests/fixtures/link.json")))["names"]
+      [%{"key" => key, "public" => public, "address" => address} | _] = link
+
+      with_env_file(
+        [
+          "CYFR_MCP_RATE_LIMIT_MAX=240",
+          "CYFR_CPU_LIMIT=2",
+          "CYFR_LINK_KEY=" <> key,
+          "CYFR_LINK_PUBLIC=" <> public
+        ],
+        fn ->
+          config = read_prod_config!()
+          assert {"mcp_rate_limit_max", 240} in config[:cyfr][:deployment_pinned]
+          assert config[:sanctum][:private_address] == address
+        end
+      )
 
       with_env_file(["CYFR_RETIRED_KNOB=1"], fn ->
         assert refusal!() =~ "CYFR_RETIRED_KNOB is not a variable this server reads"

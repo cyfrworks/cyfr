@@ -108,6 +108,9 @@ segment="$(field "$person" segment)"
 token="$(field "$person" token)"
 cookie="$(browser_cookie "$CELL" "$token")"
 browser_picker_layout "$CELL" "$token"
+# The command line's own session, made at the private address the
+# loopback listener serves, as `cyfr` on this machine reaches it.
+cli_token="$(field "$(server_fixture "$CELL" person grant-proof loopback)" token)"
 
 step "grant-probe 1.0.0, asking for two hosts, a folder and a key it can go without"
 published="$(grant_fixture publish "$user_id" "$HERE/tinctures/$NAME" "$NAME" 1.0.0 base)"
@@ -163,7 +166,7 @@ answer_ask() {
       # The command line's preview of exactly the decisions the proof
       # names, over /mcp with the person's session as its credential.
       decisions="$(python3 -c "import json, sys; print(json.dumps({'action': 'preview', 'decisions': json.load(open(sys.argv[1]))['decisions']}))" "$ask")"
-      ANSWER="$(CYFR_TOKEN="$token" HOME="$WORK/cli-home" "$WORK/cyfr" call profile "$decisions" \
+      ANSWER="$(CYFR_TOKEN="$cli_token" HOME="$WORK/cli-home" "$WORK/cyfr" call profile "$decisions" \
         --url "http://127.0.0.1:$PORT_HOME" --json 2>"$OUT/cli-$id.err" || true)"
       [ -n "$ANSWER" ] || ANSWER="{\"error\":$(python3 -c "import json, sys; print(json.dumps(open(sys.argv[1]).read()))" "$OUT/cli-$id.err")}"
       ;;

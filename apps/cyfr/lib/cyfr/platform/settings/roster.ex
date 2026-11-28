@@ -175,6 +175,8 @@ defmodule Cyfr.Platform.Settings.Roster do
     {"CYFR_HOST_API_PORT", "The host API's port (default 4300)."},
     {"CYFR_HOST_API_URL",
      "The address a worker service reaches this server's host API at, carried by every assignment the server issues; unset, a worker uses its own `LOCUS_RUNTIME_HOST_API_URL`, and a cluster refuses to boot without it."},
+    {"CYFR_LINK_KEY",
+     "The private half of this CYFR's tunnel key and its pre-shared key, `privkey:<64 hex>,psk:<64 hex>`, which `cyfr init` mints beside `CYFR_LINK_PUBLIC`: a secret for the link service, whose form alone the server checks, refusing to start on a value of any other form."},
     {"CYFR_LINK_PUBLIC",
      "The public half of this CYFR's tunnel key, 64 lowercase hexadecimal digits, which `cyfr init` writes with the key it mints: its private address, `http://h-<16 characters>.localhost:<CYFR_PORT>`, the address this computer reaches CYFR at whatever its browser address, is derived from it. A release refuses to start without it or with a value of another form; a development or test boot without it takes a fixed development key's."},
     {"CYFR_LIVE_SALT",
@@ -262,8 +264,6 @@ defmodule Cyfr.Platform.Settings.Roster do
   @compose_only [
     {"CYFR_CPU_LIMIT",
      "The cyfr container's CPU limit (default 4): the control plane's own share of the host, since components run in Locus's runtime role under `LOCUS_RUNTIME_CPU_LIMIT`."},
-    {"CYFR_LINK_KEY",
-     "The private half of this CYFR's tunnel key and its pre-shared key, `privkey:<64 hex>,psk:<64 hex>`, which `cyfr init` mints beside `CYFR_LINK_PUBLIC`; a secret, which no release reads."},
     {"CYFR_LOCUS_APPARMOR",
      "The AppArmor profile the Locus container runs under on a host with AppArmor, by its name, `cyfr-locus-` and 12 hex digits of its content's hash: `cyfr init` and `cyfr update` write the profile built into `cyfr` here and load it, and a host without AppArmor ignores it."},
     {"LOCUS_BUILDS_CPU_LIMIT",

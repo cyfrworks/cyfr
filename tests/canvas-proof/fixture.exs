@@ -123,11 +123,14 @@
 # A step that does not answer `{:ok, _}` raises, and the rpc exits non-zero
 # naming it.
 
+# Its homes are a browser proof's, whose people's sessions are made at the
+# browser address (tests/release-boot/fixture.exs `person`): each is
+# established at the proxy listener.
 fn args ->
   answer = fn map -> "CANVAS=" <> Jason.encode!(map) end
 
   establish = fn token ->
-    {:ok, ctx} = Sanctum.Caller.establish({:session, token}, entry: :loopback)
+    {:ok, ctx} = Sanctum.Caller.establish({:session, token}, entry: :proxy)
     ctx
   end
 

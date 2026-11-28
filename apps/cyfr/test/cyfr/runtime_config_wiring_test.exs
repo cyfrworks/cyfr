@@ -52,6 +52,7 @@ defmodule Cyfr.RuntimeConfigWiringTest do
       "CYFR_SECRET_KEY_BASE" => Base.encode64(:crypto.strong_rand_bytes(48)),
       "RELEASE_NAME" => "cyfr",
       "CYFR_BROWSER" => "none",
+      "CYFR_LINK_KEY" => @link["key"],
       "CYFR_LINK_PUBLIC" => @link["public"]
     })
   end
@@ -564,6 +565,14 @@ defmodule Cyfr.RuntimeConfigWiringTest do
           assert message == "[Cyfr] FATAL: " <> Prima.Refusal.message({code, %{}}), inspect(key)
         end)
       end
+
+      # The private half, the link service's, is refused in any other form.
+      with_env(Map.put(none, "CYFR_LINK_KEY", String.upcase(@link["key"])), fn ->
+        message = Exception.message(assert_raise(RuntimeError, &read_prod_config!/0))
+
+        assert message ==
+                 "[Cyfr] FATAL: " <> Prima.Refusal.message({:access_link_key_invalid, %{}})
+      end)
 
       # A refused access setting is answered first.
       with_env(%{"CYFR_BROWSER" => nil, "CYFR_LINK_PUBLIC" => nil, "RELEASE_ROOT" => dir}, fn ->

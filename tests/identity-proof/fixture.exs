@@ -36,6 +36,9 @@
 #       confirmation. `{tombstoned}`, or `{refused}` with whatever answered
 #       otherwise, a first call that asked for no confirmation among it.
 
+# Its homes are a browser proof's, whose people's sessions are made at the
+# browser address (tests/release-boot/fixture.exs `person`): each is
+# established at the proxy listener.
 fn args ->
   import Ecto.Query, only: [from: 2]
 
@@ -111,7 +114,7 @@ fn args ->
       identifier |> Sanctum.IdentityFreshness.fresh?() |> head_answer.() |> answer.()
 
     ["tombstone", identifier, token] ->
-      {:ok, ctx} = Sanctum.Caller.establish({:session, token}, entry: :loopback)
+      {:ok, ctx} = Sanctum.Caller.establish({:session, token}, entry: :proxy)
       tombstone = %{"action" => "tombstone", "identifier" => identifier}
       call = fn ctx -> Sanctum.Gate.call_external("directory", ctx, tombstone) end
 

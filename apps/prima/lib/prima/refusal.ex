@@ -241,6 +241,11 @@ defmodule Prima.Refusal do
        "CYFR_LINK_PUBLIC is not set in .env, so this CYFR has no private address. Nothing " <>
          "started. `cyfr init` writes it with the tunnel key it mints for a new CYFR; a CYFR " <>
          "installed by an earlier build is not carried across."},
+    access_link_key_invalid:
+      {:invalid_argument,
+       "CYFR_LINK_KEY in .env is not a tunnel key, which is `privkey:` and 64 lowercase " <>
+         "hexadecimal digits, a comma, then `psk:` and 64 more that are not all zeros, as " <>
+         "`cyfr init` writes it. Nothing started."},
     access_link_invalid:
       {:invalid_argument,
        "CYFR_LINK_PUBLIC in .env is not a tunnel public key: it is 64 lowercase hexadecimal " <>

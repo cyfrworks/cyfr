@@ -748,6 +748,30 @@ defmodule Cyfr.RuntimeConfigTest do
         assert address == first["address"]
       end
     end
+
+    test "a tunnel key passes in the one form cyfr init writes, and unset passes" do
+      for %{"key" => key} <- link_vectors()["names"],
+          do: assert(RuntimeConfig.check_link_key(key) == :ok)
+
+      for absent <- [nil, "", "  "], do: assert(RuntimeConfig.check_link_key(absent) == :ok)
+
+      [%{"key" => key} | _] = link_vectors()["names"]
+      ["privkey:" <> private, "psk:" <> psk] = String.split(key, ",")
+
+      for {value, why} <- [
+            {String.upcase(key), "uppercase"},
+            {"privkey:" <> private, "no pre-shared key"},
+            {"psk:#{psk},privkey:#{private}", "the halves swapped"},
+            {"privkey:#{private},psk:" <> String.duplicate("0", 64), "a zero pre-shared key"},
+            {"privkey:#{binary_part(private, 0, 62)},psk:#{psk}", "62 digits"},
+            {"nodekey:#{private},psk:#{psk}", "a public key's prefix"},
+            {"privkey:#{private}, psk:#{psk}", "a space after the comma"}
+          ] do
+        assert {:error, %{code: :access_link_key_invalid, class: :invalid_argument, payload: %{}}} =
+                 RuntimeConfig.check_link_key(value),
+               why
+      end
+    end
   end
 
   describe "resolve_access/1's input rules" do

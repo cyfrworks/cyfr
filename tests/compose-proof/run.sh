@@ -56,8 +56,11 @@
 #          resolves (Sanctum.ClientIp, read from a probe in the running
 #          node), which is the peer on the loopback listener and on the
 #          proxy listener from an untrusted peer, and the client the proxy
-#          names through it; and through the proxy an anonymous MCP
-#          request is refused 401 with the auth error and a page request
+#          names through it, each listener's probes carrying a session
+#          made at its own address, and the private address's session
+#          refused 401 at the proxy listener; and through the proxy an
+#          anonymous MCP request is refused 401 with the auth error and a
+#          page request
 #          sent to /login, with every forged forwarding and identity
 #          header as without. In tailnet the
 #          endpoint's HSTS is on the proxy listener's success, error and
@@ -1518,6 +1521,20 @@ sign_in() {
   ok "compose-proof-modes is signed in; /mcp speaks $MCP_VERSION"
 }
 
+# The person modes signs in again at the browser address the last switch
+# gave: the session the proxy listener's probes carry, as sign_in's is the
+# private address's, which the loopback listener's alone carry.
+browser_sign_in() {
+  local signed_in token
+  signed_in="$(cyfr_fixture person compose-proof-modes proxy)"
+  token="$(jget "$signed_in" token)"
+  [ -n "$token" ] && [ "$token" != null ] || fail "the release fixture signed nobody in at the browser address: '$signed_in'"
+  (umask 077 && printf '%s\n' "$token" >"$WORK/browser.token")
+  docker cp "$ROOT/tests/browser/session.exs" "$cyfr_id:/tmp/session.exs" >/dev/null
+  BROWSER_COOKIE="$(cyfr_rpc "{answer, _} = Code.eval_file(\"/tmp/session.exs\"); IO.puts(answer.([\"$token\"]))" | sed -n 's/^COOKIE=//p' | tail -1)"
+  [ -n "$BROWSER_COOKIE" ] || fail "the release minted no session cookie at the browser address"
+}
+
 # Forged forwarding and identity headers change neither the answer nor
 # the address cyfr resolves, for the probe `$2` (a request that takes a
 # mark and extra headers) on the path named `$1`: the address is not the
@@ -1580,7 +1597,7 @@ probe_edge() {
   local m="$1" args=() h
   shift
   for h in "$@"; do args+=(-H "$h"); done
-  from_network edge -H "x-proof-mark: $m" -H "authorization: Bearer $(cat "$WORK/session.token")" -H 'content-type: application/json' \
+  from_network edge -H "x-proof-mark: $m" -H "authorization: Bearer $(cat "${PROBE_TOKEN:-$WORK/browser.token}")" -H 'content-type: application/json' \
     -H 'accept: application/json, text/event-stream' -H "mcp-protocol-version: $MCP_VERSION" -H 'mcp-method: tools/list' \
     ${args[@]+"${args[@]}"} --data-binary "$(mcp_list_body)" "http://cyfr:$PROBE_PORT/mcp"
 }
@@ -1588,7 +1605,7 @@ probe_caddy() {
   local m="$1" args=() h
   shift
   for h in "$@"; do args+=(-H "$h"); done
-  from_network edge -H "x-proof-mark: $m" -H "host: $(env_value CYFR_HOST)" -H "authorization: Bearer $(cat "$WORK/session.token")" \
+  from_network edge -H "x-proof-mark: $m" -H "host: $(env_value CYFR_HOST)" -H "authorization: Bearer $(cat "$WORK/browser.token")" \
     -H 'content-type: application/json' -H 'accept: application/json, text/event-stream' -H "mcp-protocol-version: $MCP_VERSION" \
     -H 'mcp-method: tools/list' ${args[@]+"${args[@]}"} --data-binary "$(mcp_list_body)" "http://caddy:80/mcp"
 }
@@ -1596,7 +1613,7 @@ probe_serve() {
   local m="$1" args=() h
   shift
   for h in "$@"; do args+=(--header "$h"); done
-  tailnet_fetch --method POST --header "x-proof-mark: $m" --header "authorization: Bearer $(cat "$WORK/session.token")" \
+  tailnet_fetch --method POST --header "x-proof-mark: $m" --header "authorization: Bearer $(cat "$WORK/browser.token")" \
     --header 'content-type: application/json' --header 'accept: application/json, text/event-stream' \
     --header "mcp-protocol-version: $MCP_VERSION" --header 'mcp-method: tools/list' --body "$(mcp_list_body)" \
     ${args[@]+"${args[@]}"} "https://$(env_value CYFR_HOST)/mcp"
@@ -1605,9 +1622,14 @@ probe_serve() {
 # The forged-header checks of kind `$1`, on both listeners and through its
 # proxy.
 forged_checks() {
-  local kind="$1"
+  local kind="$1" answer
   probe_attach
   PROBE_PORT="$(proxy_port)"
+  browser_sign_in
+  answer="$(PROBE_TOKEN="$WORK/session.token" probe_edge "$(mark)")"
+  [ "$(status_of "$answer")" = 401 ] ||
+    fail "$kind, the proxy listener answered the private address's session $(status_of "$answer"), not 401"
+  ok "$kind: the private address's session is refused 401 at the proxy listener"
   forged "$kind, the loopback listener" probe_loopback
   # Each probe from a container runs a container of its own, whose address
   # its answer names (IP=).
@@ -1763,7 +1785,7 @@ tsnet_checks() {
   done
   ok "the LiveView socket at https://$name upgrades for its own origin (101) and refuses another (403)"
   unsigned="$(fetched "$(tailnet_fetch "https://$name/")")"
-  signed="$(fetched "$(tailnet_fetch --header "cookie: _cyfr_key=$COOKIE" "https://$name/")")"
+  signed="$(fetched "$(tailnet_fetch --header "cookie: _cyfr_key=$BROWSER_COOKIE" "https://$name/")")"
   why="$(cookie_holds "$unsigned" "$signed" "$SEGMENT")" || fail "at https://$name the session cookie is not the fixture person's: $why"
   ok "the session cookie is honoured at https://$name: without it / sends to /login, with it / is $SEGMENT's desktop"
 }
