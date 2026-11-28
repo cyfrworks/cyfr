@@ -349,7 +349,7 @@ func ResolveBoot(in BootInput) (Boot, error) {
 	return b, nil
 }
 
-// ResolveLink answers what Cyfr.RuntimeConfig.resolve_link/2 answers for
+// ResolveLink answers what Cyfr.RuntimeConfig.resolve_link/3 answers for
 // CYFR_LINK_PUBLIC's text and the server's port, which the boot asks once
 // its access settings are coherent: the server's private address, or the
 // refusal of a boot whose tunnel key is missing (access_link_missing) or

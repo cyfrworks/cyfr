@@ -121,7 +121,7 @@ defmodule Sanctum do
   (`:sanctum, :private_address`): the address of its loopback entry,
   which every server has whatever browser address it has.
   `config/runtime.exs` resolves it from the tunnel key's public half
-  (`Cyfr.RuntimeConfig.resolve_link/2`).
+  (`Cyfr.RuntimeConfig.resolve_link/3`).
   """
   @spec private_address() :: String.t()
   def private_address, do: Application.fetch_env!(:sanctum, :private_address)

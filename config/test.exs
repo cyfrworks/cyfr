@@ -36,7 +36,7 @@ config :arca, decision_log_budget_ms: 5_000
 
 # The server's private address on the endpoint's port above, the first
 # tunnel key of tests/fixtures/link.json's, which `config/runtime.exs`
-# resolves for every other boot (`Cyfr.RuntimeConfig.resolve_link/2`), and
+# resolves for every other boot (`Cyfr.RuntimeConfig.resolve_link/3`), and
 # no browser address: a test that needs one sets `:browser_address`.
 config :sanctum, :private_address, "http://h-xeypbemm44chehc5.localhost:4002"
 

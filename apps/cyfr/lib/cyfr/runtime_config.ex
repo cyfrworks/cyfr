@@ -734,7 +734,7 @@ defmodule Cyfr.RuntimeConfig do
 
   Exposure is `:public` for `domain` and `proxy`, `:private` for `none`
   and `tailnet`. The browser address is `CYFR_PUBLIC_URL`, and `nil` for
-  `none`; the private address every server has is `resolve_link/2`'s.
+  `none`; the private address every server has is `resolve_link/3`'s.
   """
   @spec resolve_access(access_input()) :: {:ok, access()} | {:error, access_refusal()}
   def resolve_access(%{file: file, process: process, release?: release?})

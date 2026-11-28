@@ -6,7 +6,7 @@
 // person reads for it, its two addresses (the private address its tunnel
 // key names and the browser address the head holds), and the coherence
 // check of a deployment's settings that the release applies at boot
-// (Cyfr.RuntimeConfig.resolve_access/1, then resolve_link/2).
+// (Cyfr.RuntimeConfig.resolve_access/1, then resolve_link/3).
 // tests/fixtures/access.json binds this package and the release to one
 // answer.
 package access
