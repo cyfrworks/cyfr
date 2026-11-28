@@ -262,8 +262,8 @@ defmodule Locus.Runtime.RelayTest do
               for <<size::32, json::binary-size(size)>> <- sent, do: Jason.decode!(json)["seq"]
 
             answers = answers!(channel, length(seqs), why)
-            assert Enum.sort(for %{re: re} <- answers, do: re) == Enum.sort(seqs), why
-            assert Enum.all?(answers, &(&1.status == 200)), why
+            assert Enum.sort(for %{re: re} <- answers, do: re) === Enum.sort(seqs), why
+            assert Enum.all?(answers, &(&1.status === 200)), why
 
             assert ScriptedHost.requests(host) |> Enum.map(&posted/1) |> Enum.frequencies() ==
                      Enum.frequencies(

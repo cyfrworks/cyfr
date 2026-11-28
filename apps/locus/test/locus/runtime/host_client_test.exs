@@ -386,7 +386,7 @@ defmodule Locus.Runtime.HostClientTest do
           do: {:ok, c["status"], String.duplicate("x", c["kept_bytes"])},
           else: :error
 
-      assert HostClient.post_call(host.url, :renew, header, sealed) == expected, c["why"]
+      assert HostClient.post_call(host.url, :renew, header, sealed) === expected, c["why"]
     end
   end
 

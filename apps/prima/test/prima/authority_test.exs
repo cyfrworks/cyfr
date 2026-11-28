@@ -510,7 +510,7 @@ defmodule Prima.AuthorityTest do
         assert (case Prima.Limits.parse_duration(text) do
                   {:ok, read} -> {:ok, read}
                   {:error, _sentence} -> :error
-                end) == expected,
+                end) === expected,
                inspect(text)
       end
     end
@@ -525,11 +525,11 @@ defmodule Prima.AuthorityTest do
 
             assert Map.new(~w(domains methods schemes private_ips)a, fn k ->
                      {Atom.to_string(k), Map.get(read, k) || []}
-                   end) == egress,
+                   end) === egress,
                    vector["why"]
 
           {:error, _reason} ->
-            assert egress == nil, vector["why"]
+            assert egress === nil, vector["why"]
         end
       end
     end

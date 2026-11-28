@@ -64,9 +64,9 @@ defmodule Locus.Runtime.EdgeGuardTest do
 
       for c <- @host_api["edge_checks"] do
         {:ok, edge} = Prima.Authority.Blob.parse_edge(%{"egress" => c["egress"]})
-        assert EdgeGuard.check_method(edge, c["method"]) == :ok == c["method_allowed"], c["why"]
-        assert EdgeGuard.check_scheme(edge, c["scheme"]) == :ok == c["scheme_allowed"], c["why"]
-        assert EdgeGuard.check_domain(edge, c["host"]) == :ok == c["domain_allowed"], c["why"]
+        assert EdgeGuard.check_method(edge, c["method"]) == :ok === c["method_allowed"], c["why"]
+        assert EdgeGuard.check_scheme(edge, c["scheme"]) == :ok === c["scheme_allowed"], c["why"]
+        assert EdgeGuard.check_domain(edge, c["host"]) == :ok === c["domain_allowed"], c["why"]
       end
     end
 
@@ -91,7 +91,7 @@ defmodule Locus.Runtime.EdgeGuardTest do
           body: Base.decode64!(c["body_b64"])
         }
 
-        assert EdgeGuard.check_request_size(limits, request) == :ok == c["within"], c["why"]
+        assert EdgeGuard.check_request_size(limits, request) == :ok === c["within"], c["why"]
       end
     end
   end

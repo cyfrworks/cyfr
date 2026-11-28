@@ -451,7 +451,7 @@ defmodule Prima.HostAPITest do
             do: {:error, String.to_existing_atom(c["error"])},
             else: {:ok, Enum.map(c["frames_hex"], &unhex/1), unhex(c["rest_hex"])}
 
-        assert WorkerAuth.split_frames(unhex(c["stream_hex"])) == expected, c["why"]
+        assert WorkerAuth.split_frames(unhex(c["stream_hex"])) === expected, c["why"]
       end
     end
 
@@ -459,7 +459,7 @@ defmodule Prima.HostAPITest do
       assert length(@vectors["frame_body_bytes"]) >= 10
 
       for c <- @vectors["frame_body_bytes"] do
-        assert WorkerAuth.frame_body_bytes(unhex(c["frame_hex"])) == c["bytes"], c["why"]
+        assert WorkerAuth.frame_body_bytes(unhex(c["frame_hex"])) === c["bytes"], c["why"]
       end
     end
 
@@ -467,7 +467,7 @@ defmodule Prima.HostAPITest do
       assert length(@vectors["frames_content_types"]) >= 10
 
       for %{"content_types" => types, "frames" => frames} <- @vectors["frames_content_types"] do
-        assert WorkerWire.frames_content_type?(types) == frames, inspect(types)
+        assert WorkerWire.frames_content_type?(types) === frames, inspect(types)
       end
     end
 
@@ -475,7 +475,7 @@ defmodule Prima.HostAPITest do
       assert length(@vectors["domain_cases"]) >= 20
 
       for c <- @vectors["domain_cases"] do
-        assert Prima.Network.domain_allowed?(c["host"], c["patterns"]) == c["allowed"], c["why"]
+        assert Prima.Network.domain_allowed?(c["host"], c["patterns"]) === c["allowed"], c["why"]
       end
     end
 
@@ -483,10 +483,10 @@ defmodule Prima.HostAPITest do
       assert length(@vectors["header_rules"]) >= 25
 
       for c <- @vectors["header_rules"] do
-        assert Prima.Network.framing_or_override_header?(c["name"]) == c["framing_or_override"],
+        assert Prima.Network.framing_or_override_header?(c["name"]) === c["framing_or_override"],
                c["name"]
 
-        assert Prima.Network.credential_header?(c["name"]) == c["credential"], c["name"]
+        assert Prima.Network.credential_header?(c["name"]) === c["credential"], c["name"]
       end
     end
 
@@ -495,7 +495,7 @@ defmodule Prima.HostAPITest do
 
       for %{"scheme" => scheme, "host" => host, "port" => port, "header" => header} <-
             @vectors["host_headers"] do
-        assert Prima.Network.host_header(%URI{scheme: scheme, host: host, port: port}) == header
+        assert Prima.Network.host_header(%URI{scheme: scheme, host: host, port: port}) === header
       end
     end
 
@@ -513,7 +513,7 @@ defmodule Prima.HostAPITest do
           purpose: String.to_existing_atom(r["purpose"])
         }
 
-        assert Jason.encode!(Prima.AttachedRequest.to_args(request)) == args, c["why"]
+        assert Jason.encode!(Prima.AttachedRequest.to_args(request)) === args, c["why"]
         assert {:ok, ^request} = Prima.AttachedRequest.read(Jason.decode!(args))
       end
     end
@@ -532,10 +532,11 @@ defmodule Prima.HostAPITest do
       assert length(@vectors["pin_expiry"]) >= 6 and length(@vectors["pin_requests"]) >= 15
 
       for %{"expires_at" => at, "now" => now, "expired" => expired} <- @vectors["pin_expiry"],
-          do: assert(Prima.PinnedTarget.expired?(%{pin | expires_at: at}, now) == expired)
+          do: assert(Prima.PinnedTarget.expired?(%{pin | expires_at: at}, now) === expired)
 
       for c <- @vectors["pin_requests"] do
-        assert match?({:ok, _}, Prima.PinnedTarget.read_request(c["args"])) == c["read"], c["why"]
+        assert match?({:ok, _}, Prima.PinnedTarget.read_request(c["args"])) === c["read"],
+               c["why"]
       end
     end
   end
