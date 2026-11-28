@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cyfr/locus/keeper/internal/home"
 	"github.com/cyfr/locus/keeper/internal/logx"
@@ -208,4 +209,58 @@ func TestAnUndecodableGuestLineReachesTheLogCut(t *testing.T) {
 	if _, err := parseAnswer([]byte(`{"type":"placed","id":"x","pid":1` + strings.Repeat("9", 1<<20) + `}`)); err == nil || len(err.Error()) > 300 {
 		t.Fatalf("an undecodable line answered %d bytes: %.120q", len(fmt.Sprint(err)), err)
 	}
+}
+
+// The budget of a guest's lines that answer no request: what a healthy
+// guest sends never comes near it, its 32 sessions each exiting, released
+// and refused a release every second for a minute, and a guest that floods
+// valid lines at the line bound overdraws it at its second.
+func TestAGuestsUnansweredLinesAreHeldToABudget(t *testing.T) {
+	at := time.Unix(0, 0)
+	healthy := &guestLink{}
+	exited := len(`{"v":9,"type":"exited","spawn_id":"0123456789abcdef0123456789abcdef","code":0,"signal":null,"memory":null}`) + 1
+	released := len(`{"v":9,"type":"released","spawn_id":"0123456789abcdef0123456789abcdef"}`) + 1
+	refused := len(`{"v":9,"type":"error","spawn_id":"0123456789abcdef0123456789abcdef","code":"unknown_spawn"}`) + 1
+	for second := 0; second < 60; second++ {
+		for session := 0; session < 32; session++ {
+			for _, n := range []int{exited, released, refused} {
+				if !healthy.spend(n, at.Add(time.Duration(second)*time.Second)) {
+					t.Fatalf("a healthy guest's lines overdrew the budget at second %d", second)
+				}
+			}
+		}
+	}
+	if healthy.budget < unansweredBurst*0.9 {
+		t.Fatalf("a healthy guest's busiest minute left %.0f of the budget's %.0f bytes", healthy.budget, unansweredBurst)
+	}
+	flood := &guestLink{}
+	line := protocol.MaxLineBytes + 1
+	if !flood.spend(line, at) {
+		t.Fatal("one line at the bound overdrew the budget")
+	}
+	if flood.spend(line, at.Add(9*time.Millisecond)) {
+		t.Fatal("a second line at the bound 9 ms later, as a flood at 115 MiB/s sends it, did not overdraw the budget")
+	}
+}
+
+// A guest that sends lines answering no request past its budget ends its
+// VM, as one that stops answering does.
+func TestAGuestPastItsUnansweredBudgetEndsItsVM(t *testing.T) {
+	k := newVMKeeper(t)
+	k.disk(t, "ath_a", "vlt_a1")
+	k.session(t, "s1", "ath_a", "vlt_a1", nil)
+	f := k.guest.booted()[0]
+	f.mu.Lock()
+	control := f.controls[0]
+	f.mu.Unlock()
+	junk := []byte(`{"v":9,"type":"error","code":"` + strings.Repeat("x", protocol.MaxLineBytes-64) + `"}` + "\n")
+	go func() {
+		for i := 0; i < 4; i++ {
+			if _, err := control.Write(junk); err != nil {
+				return
+			}
+		}
+	}()
+	vmEventually(t, "the VM's end past its guest's budget", f.ended)
+	k.expect(t, "exited")
 }

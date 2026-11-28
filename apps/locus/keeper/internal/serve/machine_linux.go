@@ -1509,6 +1509,10 @@ type guestLink struct {
 	ended   chan struct{}
 	endOnce sync.Once
 	memory  *string
+	// budget is the bytes left to lines that answer no request, as at
+	// budgetAt; the reader alone reads and writes them (spend).
+	budget   float64
+	budgetAt time.Time
 	// guestWait and endWait are the bounds the link was made under
 	// (guestWait, vmEndWait).
 	guestWait, endWait time.Duration
@@ -1601,7 +1605,10 @@ func (l *guestLink) read() {
 			}
 			break
 		}
-		l.dispatch(line)
+		if !l.dispatch(line) && !l.spend(len(line)+1, time.Now()) {
+			l.s.loseMachine(l.m, fmt.Sprintf("its guest sent more lines that answer no request than its budget holds, %d bytes and %d a second", int(unansweredBurst), int(unansweredRate)))
+			break
+		}
 	}
 	l.s.mu.Lock()
 	if l.m.link == l {
@@ -1619,11 +1626,12 @@ func (l *guestLink) read() {
 	l.end(memory)
 }
 
-// dispatch hands one guest line to the request or the session it names.
-func (l *guestLink) dispatch(line []byte) {
+// dispatch hands one guest line to the request or the session it names,
+// and answers whether it was the answer a request waited for.
+func (l *guestLink) dispatch(line []byte) bool {
 	a, err := parseAnswer(line)
 	if err != nil {
-		return
+		return false
 	}
 	l.mu.Lock()
 	if sp := l.pending[a.ID]; sp != nil && a.ID != "" && a.SpawnID != "" {
@@ -1649,12 +1657,38 @@ func (l *guestLink) dispatch(line []byte) {
 	switch {
 	case ch != nil:
 		ch <- line
+		return true
 	case sp != nil && (a.Type == "exited" || a.Type == "released"):
 		select {
 		case sp.guestEvents <- bytes.Clone(line):
 		default:
 		}
 	}
+	return false
+}
+
+// A guest's lines that answer no request (its sessions' exits and
+// releases, refusals of a spawn it no longer holds, and any line it should
+// not send) are held to a budget of bytes: a burst of one line at its bound,
+// refilled at unansweredRate. A healthy guest's are a few hundred bytes
+// each, its 32 sessions' at their busiest some tens of KiB a second; a guest
+// past the budget is in no known state, and its VM ends as one that stops
+// answering does. Variables its tests shorten.
+var (
+	unansweredBurst = float64(protocol.MaxLineBytes + 1)
+	unansweredRate  = float64(64 << 10)
+)
+
+// spend charges n bytes of a line that answered no request to l's budget,
+// at now, and answers whether the budget holds them.
+func (l *guestLink) spend(n int, now time.Time) bool {
+	if l.budgetAt.IsZero() {
+		l.budget, l.budgetAt = unansweredBurst, now
+	}
+	l.budget = min(unansweredBurst, l.budget+now.Sub(l.budgetAt).Seconds()*unansweredRate)
+	l.budgetAt = now
+	l.budget -= float64(n)
+	return l.budget >= 0
 }
 
 // end ends the link once: every session on it is lost to its guest.
