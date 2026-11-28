@@ -685,12 +685,16 @@ fn an_attached_answer_that_ends_before_its_own_end_hands_the_guest_nothing_of_it
 }
 
 #[test]
-fn cyfrs_lost_refusal_of_an_attached_request_leaves_the_runner_unclean_and_one_naming_no_call_id_reads_as_no_answer()
+fn cyfrs_lost_refusal_of_an_attached_request_leaves_the_runner_unclean_and_its_unavailable_or_one_naming_no_call_id_reads_as_no_answer()
  {
-    // CYFR's `lost`: what it did is unknown, as of a lost host call. A
-    // guest error naming no call id is no answer to this call.
+    // CYFR's `lost`: what it did is unknown, as of a lost host call. Its
+    // `unavailable` (a member that does not hold the control plane) did
+    // nothing, and a guest error naming no call id is no answer to this
+    // call: the guest reads either as a failed request, and the runner is
+    // reused.
     for (answer, clean) in [
         (json!({"v": 3, "error": "lost"}), false),
+        (json!({"v": 3, "error": "unavailable"}), true),
         (
             json!({"v": 3, "error": "guest_error", "type": "connection_not_granted",
                    "message": "No."}),
@@ -2272,14 +2276,19 @@ fn a_url_of_a_scheme_no_edge_admits_is_refused_scheme_blocked_and_recorded_unpin
     in_a_runtime(|| async move {
         let mut guest = in_process(Box::new(standard), support::silent_fetches(), zero()).await;
         for (url, scheme) in [
-            ("ftp://api.example.test/file", "ftp"),
-            ("FTP://api.example.test:21/file", "ftp"),
-            ("ws://api.example.test/socket", "ws"),
-            // A host and no scheme: the scheme it names is none.
-            ("//api.example.test/file", ""),
+            ("ftp://api.example.test/file", Some("ftp")),
+            ("FTP://api.example.test:21/file", Some("ftp")),
+            ("ws://api.example.test/socket", Some("ws")),
+            // A host and no scheme.
+            ("//api.example.test/file", None),
         ] {
-            let sentence =
-                format!("HTTP egress refused: the scheme {scheme} is not in the egress schemes");
+            let only = "and only http and https URLs are fetched";
+            let sentence = match scheme {
+                Some(scheme) => {
+                    format!("HTTP egress refused: the URL's scheme is {scheme}, {only}")
+                }
+                None => format!("HTTP egress refused: the URL has no scheme, {only}"),
+            };
             let request = json!({"method": "GET", "url": url});
             assert_eq!(
                 guest.fetch(&request).await,
@@ -2304,11 +2313,37 @@ fn a_url_of_a_scheme_no_edge_admits_is_refused_scheme_blocked_and_recorded_unpin
 }
 
 #[test]
+fn a_fetch_the_runner_refuses_in_its_own_words_is_answered_the_guest_error_vectors_sentence() {
+    // `tests/fixtures/guest_error.json`'s `fetch_refusals`: each sentence
+    // names what the guest's author changes.
+    let vector = support::fixture("guest_error.json");
+    let cases = vector["fetch_refusals"]
+        .as_array()
+        .expect("the fetch refusals")
+        .clone();
+    assert!(!cases.is_empty());
+    in_a_runtime(move || async move {
+        let mut guest = in_process(Box::new(standard), support::silent_fetches(), zero()).await;
+        for case in &cases {
+            let kind = case["type"].as_str().expect("a type");
+            let message = case["message"].as_str().expect("a message");
+            assert_eq!(
+                guest.fetch(&case["request"]).await,
+                refusal(kind, message),
+                "{}",
+                case["why"]
+            );
+        }
+        assert!(guest.frames_of("fetch").is_empty());
+    });
+}
+
+#[test]
 fn a_stream_request_whose_members_are_of_no_shape_a_request_takes_is_a_stream_error() {
     // A request whose method or URL is no text, or whose body is neither
     // text nor null, is one no request is made of: a fetch is answered
     // invalid_request, and a stream the stream's own error, in the words
-    // `tests/fixtures/guest_error.json` holds.
+    // `tests/fixtures/guest_error.json` holds, a body's naming the body.
     let vector = support::fixture("guest_error.json");
     let streamed = vector["encode_error"]
         .as_array()
@@ -2324,12 +2359,25 @@ fn a_stream_request_whose_members_are_of_no_shape_a_request_takes_is_a_stream_er
             json!({"method": 1, "url": url}),
             json!({"method": null, "url": url}),
             json!({"method": "GET", "url": 2}),
-            json!({"method": "POST", "url": url, "body": 5}),
         ] {
             assert_eq!(guest.open(&request).await, streamed, "{request}");
             assert_eq!(
                 guest.fetch(&request).await,
                 refusal("invalid_request", words::MALFORMED_REQUEST),
+                "{request}"
+            );
+        }
+        let body = "Invalid body: a string, or null for none";
+        for value in [json!(5), json!(false), json!(true), json!({}), json!([])] {
+            let request = json!({"method": "POST", "url": url, "body": value});
+            assert_eq!(
+                guest.open(&request).await,
+                refusal("stream_error", body),
+                "{request}"
+            );
+            assert_eq!(
+                guest.fetch(&request).await,
+                refusal("invalid_request", body),
                 "{request}"
             );
         }
@@ -3460,9 +3508,12 @@ fn an_open_stream_its_guest_has_not_read_is_granted_nothing_and_a_read_exactly_w
             .open(&json!({"method": "GET", "url": "https://api.example.test/events"}))
             .await;
         let handle = opened["handle"].as_str().expect("a handle").to_owned();
-        let re = guest.frames_of("fetch")[0]["seq"].as_u64().expect("a seq");
         let barrier = json!({"method": "GET", "url": "https://api.example.test/barrier"});
         assert_eq!(guest.fetch(&barrier).await, ok_answer());
+        // The service end records each frame before it answers it, and the
+        // barrier's answer came after the stream's fetch on the relay: the
+        // stream's frame is recorded now, not yet when `open` answered.
+        let re = guest.frames_of("fetch")[0]["seq"].as_u64().expect("a seq");
         assert_eq!(support::granted(&guest.frames, re), 0, "nothing was read");
         let read = guest.read(&handle).await;
         let took = read["data"].as_str().expect("data").len() as u64;

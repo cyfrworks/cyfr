@@ -1811,20 +1811,40 @@ fn holding_no_debug_or_error_form_prints_a_token_an_input_a_key_or_a_disclosed_f
 }
 
 #[test]
-fn wire_a_member_named_as_the_parser_names_a_number_is_refused_and_an_integer_is_kept() {
+fn wire_a_member_named_as_the_parser_names_a_number_is_a_member_and_an_integer_is_kept() {
+    // The parser hands the reader a number under this name: a member
+    // really named so is a member, as Prima reads it.
     let private = "$serde_json::private::Number";
-    for document in [
-        format!(r#"{{"{private}":"5"}}"#),
-        format!(r#"{{"v":3,"ok":{{"{private}":"18446744073709551617"}}}}"#),
-        format!(r#"[{{"a":1,"{private}":"5"}}]"#),
+    for (document, at) in [
+        (format!(r#"{{"{private}":"5"}}"#), format!("/{private}")),
+        (
+            format!(r#"{{"v":3,"ok":{{"{private}":"18446744073709551617"}}}}"#),
+            format!("/ok/{private}"),
+        ),
+        (
+            format!(r#"[{{"a":1,"{private}":"5"}}]"#),
+            format!("/0/{private}"),
+        ),
         // Escaped, the name is the same name.
-        r#"{"\u0024serde_json::private::Number":"5"}"#.to_owned(),
+        (
+            r#"{"\u0024serde_json::private::Number":"5"}"#.to_owned(),
+            format!("/{private}"),
+        ),
     ] {
+        let read =
+            wire::parse(document.as_bytes()).unwrap_or_else(|| panic!("{document} is not read"));
         assert!(
-            wire::parse(document.as_bytes()).is_none(),
-            "{document} is read"
+            read.value().pointer(&at).is_some_and(Value::is_string),
+            "{document}"
         );
     }
+    // CYFR's answer carrying one is its answer, not a lost one.
+    let answer = format!(r#"{{"v":3,"ok":{{"{private}":"1"}}}}"#);
+    let op = Op::named("tool_call").expect("a callback");
+    assert!(matches!(
+        host::answered(op, answer.as_bytes()),
+        Ok(Reading::Ok(_))
+    ));
     let whole =
         wire::parse(br#"{"n":18446744073709551617,"m":-18446744073709551617}"#).expect("JSON");
     assert_eq!(whole.value()["n"].to_string(), "18446744073709551617");
@@ -1879,6 +1899,104 @@ fn wire_every_document_reads_as_prima_reads_it_and_every_one_it_refuses_is_refus
         .expect("the test passes");
 }
 
+/// The vector file's value as it is written. serde_json's own `Value`
+/// reads an object whose first member is named
+/// `$serde_json::private::Number`, the name its parser hands a number to a
+/// reader under, as that number; this reads every member's name as bytes,
+/// as the parser spells a real one, so such a member is a member.
+struct Written(Value);
+
+impl<'de> serde::Deserialize<'de> for Written {
+    fn deserialize<D: serde::Deserializer<'de>>(reader: D) -> Result<Written, D::Error> {
+        reader.deserialize_any(WrittenVisitor)
+    }
+}
+
+struct WrittenVisitor;
+
+impl<'de> serde::de::Visitor<'de> for WrittenVisitor {
+    type Value = Written;
+
+    fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("a JSON value")
+    }
+
+    fn visit_bool<E>(self, value: bool) -> Result<Written, E> {
+        Ok(Written(Value::Bool(value)))
+    }
+
+    fn visit_i64<E>(self, value: i64) -> Result<Written, E> {
+        Ok(Written(Value::from(value)))
+    }
+
+    fn visit_u64<E>(self, value: u64) -> Result<Written, E> {
+        Ok(Written(Value::from(value)))
+    }
+
+    fn visit_str<E>(self, value: &str) -> Result<Written, E> {
+        Ok(Written(Value::String(value.to_owned())))
+    }
+
+    fn visit_unit<E>(self) -> Result<Written, E> {
+        Ok(Written(Value::Null))
+    }
+
+    fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut items: A) -> Result<Written, A::Error> {
+        let mut list = Vec::new();
+        while let Some(Written(item)) = items.next_element()? {
+            list.push(item);
+        }
+        Ok(Written(Value::Array(list)))
+    }
+
+    fn visit_map<A: serde::de::MapAccess<'de>>(self, mut members: A) -> Result<Written, A::Error> {
+        use serde::de::Error as _;
+        let mut object = Map::new();
+        while let Some(Name(name)) = members.next_key()? {
+            let Some(name) = name else {
+                let text: String = members.next_value()?;
+                return text
+                    .parse()
+                    .map(|number| Written(Value::Number(number)))
+                    .map_err(A::Error::custom);
+            };
+            let Written(member) = members.next_value()?;
+            object.insert(name, member);
+        }
+        Ok(Written(Value::Object(object)))
+    }
+}
+
+/// A member's name, or none for the name the parser hands a number under,
+/// which reaches `visit_str` where a real name reaches `visit_bytes`.
+struct Name(Option<String>);
+
+impl<'de> serde::Deserialize<'de> for Name {
+    fn deserialize<D: serde::Deserializer<'de>>(reader: D) -> Result<Name, D::Error> {
+        reader.deserialize_bytes(NameVisitor)
+    }
+}
+
+struct NameVisitor;
+
+impl<'de> serde::de::Visitor<'de> for NameVisitor {
+    type Value = Name;
+
+    fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("a member's name")
+    }
+
+    fn visit_str<E>(self, _number: &str) -> Result<Name, E> {
+        Ok(Name(None))
+    }
+
+    fn visit_bytes<E: serde::de::Error>(self, name: &[u8]) -> Result<Name, E> {
+        String::from_utf8(name.to_vec())
+            .map(|name| Name(Some(name)))
+            .map_err(E::custom)
+    }
+}
+
 fn every_document_reads_as_prima_reads_it() {
     // The one reader of every JSON document the runner takes, a guest's
     // bound for CYFR among them (its output, a formula's request, a
@@ -1890,7 +2008,7 @@ fn every_document_reads_as_prima_reads_it() {
         let text = std::fs::read(&path).expect("the vector file");
         let mut reader = serde_json::Deserializer::from_slice(&text);
         reader.disable_recursion_limit();
-        Value::deserialize(&mut reader).expect("the vectors")
+        Written::deserialize(&mut reader).expect("the vectors").0
     };
     let longest = n(&v["max_integer_chars"]) as usize;
     assert_eq!(wire::MAX_INTEGER_CHARS, longest);
@@ -1950,6 +2068,27 @@ fn every_document_reads_as_prima_reads_it() {
             wire::read(&document).err(),
             Some(wire::Unread::Malformed),
             "{why}"
+        );
+        assert!(wire::malformed(&document).is_some(), "{why}: no reason");
+    }
+    // A raw control byte in a member's name, which the scan refuses and
+    // the parser does not, is placed as the parser places one in a value.
+    let control = |line: usize, column: usize| {
+        format!(
+            "control character (\\u0000-\\u001F) found while parsing a string at line {line} \
+             column {column}"
+        )
+    };
+    for (document, line, column) in [
+        (&b"\"a\tb\""[..], 1, 3),
+        (b"{\"a\tb\":1}", 1, 4),
+        (b"{\"x\":1,\n \"a\nb\":1}", 3, 0),
+    ] {
+        assert_eq!(
+            wire::malformed(document),
+            Some(control(line, column)),
+            "{}",
+            String::from_utf8_lossy(document)
         );
     }
 }

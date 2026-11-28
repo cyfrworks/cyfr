@@ -51,9 +51,11 @@ defmodule Locus.Runtime.HostClient do
   sent); a refusal naming `unknown_version` says the host speaks
   another version of the wire, so it is not this engine's host, and the
   call is answered `{:error, :lost}` at once rather than asked again; and
-  a report's refusal naming `unavailable` says the answering member does
-  not hold the control plane and read nothing of it, answered
-  `{:error, :unavailable}`.
+  a `report_events` batch's refusal naming `unavailable` says the
+  answering member does not hold the control plane and read nothing of
+  it, answered `{:error, :unavailable}`, which its forwarder sends again
+  (`Locus.Runtime.Events`); a `runner_exited` so refused is lost, as any
+  other refusal of its class.
 
   Each function answers as the `Prima.HostAPI` callback of the same name.
   An answer that does not arrive within `Prima.HostAPI.request_timeout_ms/1`,
@@ -136,8 +138,6 @@ defmodule Locus.Runtime.HostClient do
   # others name what only a runner's calls meet (an attach's, a
   # fetch_artifact's), whose answers the relay passes on unread.
   @refusals %{"lost" => :lost, "unavailable" => :unavailable}
-
-  @reports HostAPI.reports()
 
   # The refusals only an `egress_pin` answer names.
   @pin_refusals Map.new(PinnedTarget.refusals(), &{Atom.to_string(&1), &1})
@@ -491,15 +491,16 @@ defmodule Locus.Runtime.HostClient do
   # attempt's work instead of being asked again. The refusal is plain,
   # since a listener that cannot read the header cannot seal to it, and is
   # read whatever version it carries, since it is the other version's
-  # answer. A report's `unavailable` at this version is the answering
+  # answer. A batch's `unavailable` at this version is the answering
   # member's word that it does not hold the control plane and read
-  # nothing of the report: an answer, never asked again.
+  # nothing of the batch: an answer, never asked again, since the batch's
+  # forwarder keeps it and sends it again.
   defp refused(raw, op) do
     case Jason.decode(raw) do
       {:ok, %{"error" => "unknown_version"}} ->
         other_version(op)
 
-      {:ok, decoded} when op in @reports ->
+      {:ok, decoded} when op == :report_events ->
         case WorkerWire.read_answer(decoded) do
           {:error, "unavailable", _fields} -> {:ok, {:error, :unavailable}}
           _other -> :lost

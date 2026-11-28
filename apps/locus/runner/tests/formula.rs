@@ -1336,8 +1336,11 @@ fn a_call_a_spawn_and_a_stream_each_ask_cyfr_for_the_account_they_name_and_for_n
     let answer = named["answer"].as_str().expect("an answer").to_owned();
     let refused: Value = serde_json::from_str(&answer).expect("JSON");
     let mut service = Service::start();
+    // The first names a need too, which CYFR is asked for as it is named.
+    let mut needing = child_named("run", Some(json!("Work")));
+    needing["args"]["need"] = json!("api_key");
     let job = formula(&[
-        ("call", child_named("run", Some(json!("Work")))),
+        ("call", needing),
         ("spawn", child_named("run", Some(json!("Home")))),
         ("call", child_named("run_stream", Some(json!("Archive")))),
         ("call", child_named("run", None)),
@@ -1356,22 +1359,30 @@ fn a_call_a_spawn_and_a_stream_each_ask_cyfr_for_the_account_they_name_and_for_n
         refused["message"].as_str().expect("a sentence"),
     );
     assert_eq!(answers(&service, &job), vec![denied; 4]);
-    let sent: Vec<(Value, Option<Value>)> = calls(&service, "admit_child", &job)
+    // Each call's args whole but its child key, which is the runner's own.
+    let sent: Vec<Value> = calls(&service, "admit_child", &job)
         .into_iter()
-        .map(|call| {
-            (
-                call.args["guest_fn"].clone(),
-                call.args.get("connection").cloned(),
-            )
+        .map(|mut call| {
+            let args = call.args.as_object_mut().expect("args");
+            assert!(args.remove("child_key").is_some_and(|key| key.is_string()));
+            call.args
         })
         .collect();
+    let admitted = |guest_fn: &str, need: Value, connection: Option<&str>| {
+        let mut args = json!({"guest_fn": guest_fn, "input": {}, "need": need,
+                              "reference": "reagent:local.echo:0.1.0"});
+        if let Some(connection) = connection {
+            args["connection"] = json!(connection);
+        }
+        args
+    };
     assert_eq!(
         sent,
         [
-            (json!("call"), Some(json!("Work"))),
-            (json!("spawn"), Some(json!("Home"))),
-            (json!("spawn"), Some(json!("Archive"))),
-            (json!("call"), None),
+            admitted("call", json!("api_key"), Some("Work")),
+            admitted("spawn", Value::Null, Some("Home")),
+            admitted("spawn", Value::Null, Some("Archive")),
+            admitted("call", Value::Null, None),
         ]
     );
 }

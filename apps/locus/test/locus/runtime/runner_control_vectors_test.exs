@@ -61,6 +61,16 @@ defmodule Locus.Runtime.RunnerControlVectorsTest do
 
   defp atom_keys(value), do: value
 
+  # The runner holds the subtree of the vectors' assign, whose root is the
+  # execution every event vector names: an event is forwarded only for
+  # what its runner holds.
+  defp assign!(handle) do
+    [assign] = for %{"message" => %{"type" => "assign"}} = vector <- valid("service"), do: vector
+    {:ok, %{assignment: token, input: input, keys: keys}} = RunnerControl.decode(line(assign))
+    deadline = System.monotonic_time(:millisecond) + 5_000
+    assert :ok = RunnerProcess.assign(handle, token, input, keys, "http://127.0.0.1:1", deadline)
+  end
+
   test "the vectors hold lines of both directions and the bound both ends read" do
     assert valid("service") != [] and valid("runner") != []
     assert @vectors["invalid"] != []
@@ -122,18 +132,7 @@ defmodule Locus.Runtime.RunnerControlVectorsTest do
          %{handle: handle, spawn: spawn} do
       events = @vectors["events"]["valid"] ++ @vectors["events"]["cut"]
       assert events != []
-
-      # The runner holds the subtree of the vectors' assign, whose root is
-      # the execution every event vector names: an event is forwarded only
-      # for what its runner holds.
-      [assign] =
-        for %{"message" => %{"type" => "assign"}} = vector <- valid("service"), do: vector
-
-      {:ok, %{assignment: token, input: input, keys: keys}} = RunnerControl.decode(line(assign))
-      deadline = System.monotonic_time(:millisecond) + 5_000
-
-      assert :ok =
-               RunnerProcess.assign(handle, token, input, keys, "http://127.0.0.1:1", deadline)
+      assign!(handle)
 
       for vector <- events do
         :ok = ScriptedKeeper.write(spawn, vector["line"])
@@ -147,6 +146,10 @@ defmodule Locus.Runtime.RunnerControlVectorsTest do
     test "refuses every invalid event line with its reason, a protocol failure as any line " <>
            "that is not a frame, and forwards none of it",
          %{handle: handle, spawn: spawn} do
+      # The runner holds a subtree, so an event the handle read of an
+      # invalid line would be forwarded rather than dropped as unheld.
+      assign!(handle)
+
       for vector <- @vectors["events"]["invalid"] do
         reason = reason(vector["refusal"])
         :ok = ScriptedKeeper.write(spawn, line(vector) <> "\n")

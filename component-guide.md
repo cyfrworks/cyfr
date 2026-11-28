@@ -883,7 +883,7 @@ streaming::close(handle);
 | `encoding_error` | A piece of the answer that is not UTF-8 text |
 | `http_error` | CYFR's own failure of an attached stream's upstream |
 
-A stream's request is refused as a fetch's is.
+A stream's request is refused as a fetch's is, at the request and with no handle, but for one whose method or URL is no text, or whose body is neither text nor null, which is `stream_error`.
 Request refusals: `invalid_json|invalid_request|credential_header_refused|domain_blocked|method_blocked|scheme_blocked|rate_limited|private_ip_blocked|dns_error|redirect_credentials|request_too_large`
 
 ### `cyfr:vault/read` — `get(name) -> result<string, string>`
@@ -1623,7 +1623,7 @@ Errors returned by `invoke::call`/`invoke::spawn` as `{"error": {"type": "...", 
 
 ## Before Committing (WASM)
 
-- [ ] `wasm-tools validate` passes with the refused features off (correct exports, no forbidden imports, no async, GC or exceptions)
+- [ ] `wasm-tools validate` passes with the refused features off (correct exports, no forbidden imports, no async, GC, exceptions or threads)
 - [ ] `cyfr-manifest.json` complete: `name`, `type`, `version`, `publisher`, `description`, `schema`, `needs`, `caps`
 - [ ] For an attached key or bundle, `needs.fields` names exactly one field and requests name the need as `connection`; for a disclosed need, the fields match the names the binary passes to `cyfr:vault/read.get`. The person's entry may name its fields otherwise; the grant maps them
 - [ ] Tested with `cyfr run` using representative input

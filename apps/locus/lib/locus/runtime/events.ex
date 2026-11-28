@@ -25,7 +25,9 @@ defmodule Locus.Runtime.Events do
   head of the queue and is sent again a second later. The queue holds at
   most #{1_024} events while CYFR cannot be reached, the oldest dropped
   first, and the forwarder logs once, when a batch reaches CYFR again,
-  how many it dropped.
+  how many it dropped. So a member that never takes a batch is said
+  once as the first batch is kept and once as the queue first drops for
+  room, never a batch, and the batch sent at last is said once.
 
   The worker service tells it which service and boot it posts for, and
   with which credentials (`serve/3`), as it starts; nothing is posted
@@ -84,7 +86,12 @@ defmodule Locus.Runtime.Events do
        sending: nil,
        timer: nil,
        # Events dropped since a batch last reached CYFR.
-       dropped: 0
+       dropped: 0,
+       # Whether the batch at the queue's head is kept, CYFR having taken
+       # none since it was first kept, and whether the queue has dropped
+       # for room since then: each is logged once, as it begins.
+       kept: false,
+       full: false
      }}
   end
 
@@ -137,8 +144,18 @@ defmodule Locus.Runtime.Events do
     end)
   end
 
-  # Past the bound, the oldest event queued goes first.
+  # Past the bound, the oldest event queued goes first. While a batch is
+  # kept, the first drop is logged.
   defp within_bound(%{held: held} = state) when held <= @max_held, do: state
+
+  defp within_bound(%{kept: true, full: false} = state) do
+    Logger.warning(
+      "[Locus.Runtime.Events] the runner events kept for CYFR fill the queue's #{@max_held}: " <>
+        "the oldest are dropped for room, and how many is said once a batch is sent"
+    )
+
+    within_bound(%{state | full: true})
+  end
 
   defp within_bound(state) do
     {_oldest, queue} = :queue.out(state.queue)
@@ -171,14 +188,25 @@ defmodule Locus.Runtime.Events do
   # A batch known not to have been emitted, one that reached no connection
   # or one a member that does not hold the control plane answered
   # `unavailable`, goes back to the queue's head, under the bound, and
-  # goes again a wait after its answer, on the one timer. One that CYFR
+  # goes again a wait after its answer, on the one timer; the first so
+  # kept is logged, and no other until one is sent. One that CYFR
   # emitted, refused, or whose answer was lost, is done: it is never sent
   # again, and one not emitted is logged here, once. Events dropped while
-  # CYFR could not be reached are said once, as a batch reaches it again.
+  # CYFR could not be reached are said once, as a batch reaches it again,
+  # with the end of the keeping.
   defp sent(state, batch, {:error, unemitted}) when unemitted in [:unsent, :unavailable] do
     if state.timer, do: Process.cancel_timer(state.timer)
+
+    unless state.kept do
+      Logger.warning(
+        "[Locus.Runtime.Events] a batch of #{:queue.len(batch)} runner events was not " <>
+          "emitted (#{unemitted_for(unemitted)}); it is kept and sent again until CYFR takes " <>
+          "one, and no other kept batch is logged"
+      )
+    end
+
     queue = :queue.join(batch, state.queue)
-    state = within_bound(%{state | queue: queue, held: :queue.len(queue)})
+    state = within_bound(%{state | queue: queue, held: :queue.len(queue), kept: true})
     %{state | timer: Process.send_after(self(), :flush, state.flush_ms)}
   end
 
@@ -190,20 +218,34 @@ defmodule Locus.Runtime.Events do
       )
     end
 
-    state =
-      if state.dropped > 0 do
+    dropped =
+      if state.dropped > 0,
+        do: "#{state.dropped} runner events were dropped while CYFR could not be reached"
+
+    case {state.kept, dropped} do
+      {true, nil} ->
+        Logger.warning("[Locus.Runtime.Events] a kept batch of runner events was sent at last")
+
+      {true, dropped} ->
         Logger.warning(
-          "[Locus.Runtime.Events] #{state.dropped} runner events were dropped while " <>
-            "CYFR could not be reached"
+          "[Locus.Runtime.Events] a kept batch of runner events was sent at last; " <> dropped
         )
 
-        %{state | dropped: 0}
-      else
-        state
-      end
+      {false, nil} ->
+        :ok
 
+      {false, dropped} ->
+        Logger.warning("[Locus.Runtime.Events] " <> dropped)
+    end
+
+    state = %{state | dropped: 0, kept: false, full: false}
     if state.held >= @max_batch, do: flush(state), else: rearm(state)
   end
+
+  defp unemitted_for(:unsent), do: "no connection to CYFR was made"
+
+  defp unemitted_for(:unavailable),
+    do: "the member that answered does not hold the control plane"
 
   # A post that raises reached CYFR or not: it is answered as a lost
   # answer is, and never sent again.

@@ -46,7 +46,7 @@ use crate::engine::{Engine, Failure, Kind};
 use crate::host::{self, Caller, Op, Outcome, Post, Reading};
 use crate::imports::Run;
 use crate::relay::Relay;
-use crate::wire::{Json, MAX_OUTPUT_DEPTH, Unread, decode_base64, depth, read};
+use crate::wire::{Json, MAX_OUTPUT_DEPTH, Unread, decode_base64, read, scan};
 use crate::words;
 
 /// How often a running attempt renews its lease.
@@ -537,7 +537,7 @@ async fn execute(
     };
     drop(turn);
     match engine.run(kind, &component, imports, &input).await {
-        Ok(output) if depth(output.as_bytes()) > MAX_OUTPUT_DEPTH => {
+        Ok(output) if scan(output.as_bytes()).depth > MAX_OUTPUT_DEPTH => {
             Run_::Failed(words::output_too_deep())
         }
         Ok(output) => match read(output.as_bytes()) {

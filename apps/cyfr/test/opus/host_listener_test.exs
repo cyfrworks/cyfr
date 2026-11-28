@@ -1239,6 +1239,51 @@ defmodule Opus.HostListenerTest do
 
       refute_received {:runner_event, _event, _measurements, _metadata}
     end
+
+    @tag :capture_log
+    test "a handler that raises on a record is detached, and no record of the batch is " <>
+           "emitted twice, to it or to another",
+         %{url: url} do
+      report = @vectors["events_report"]
+      [first, second | _rest] = Enum.map(report["emitted"], &emitted_event/1)
+      test = self()
+      id = "host-listener-raising-#{System.unique_integer([:positive])}"
+
+      :ok =
+        :telemetry.attach_many(id, [first, second], &__MODULE__.raise_on/4, {test, second})
+
+      on_exit(fn -> :telemetry.detach(id) end)
+
+      {header, body} = events_report(report["body"])
+
+      assert {200, Jason.decode!(report["answer"])} ==
+               post(url, WorkerWire.host_route(:report_events), [header], body)
+
+      # The raising handler heard the first record and the second, which it
+      # raised on, and was detached; every record reached the other once.
+      assert_receive {:raising_heard, ^first}
+      assert_receive {:raising_heard, ^second}
+
+      for emitted <- report["emitted"] do
+        event = emitted_event(emitted)
+        assert_receive {:runner_event, ^event, _measurements, _metadata}
+        refute_received {:runner_event, ^event, _measurements, _metadata}
+      end
+
+      refute_received {:raising_heard, _event}
+
+      # The batch is never emitted again: the same post is a replay.
+      assert {401, %{"v" => 3, "error" => report["replay_error"]}} ==
+               post(url, WorkerWire.host_route(:report_events), [header], body)
+
+      refute_received {:runner_event, _event, _measurements, _metadata}
+    end
+  end
+
+  @doc false
+  def raise_on(event, _measurements, _metadata, {test, raise_at}) do
+    send(test, {:raising_heard, event})
+    if event == raise_at, do: raise("a handler that raises")
   end
 
   @doc false

@@ -235,8 +235,8 @@ impl Kind {
 
 /// The refusals CYFR records when the runner reports them
 /// (`Opus.Host.Storage`'s denials): the relay's, and the runner's own of a
-/// method or a size. Every other refusal is the guest's to read and no
-/// one's to record.
+/// scheme, a method or a size. Every other refusal is the guest's to read
+/// and no one's to record.
 pub const RECORDED: [Kind; 7] = [
     Kind::DomainBlocked,
     Kind::MethodBlocked,
@@ -408,10 +408,17 @@ pub fn requested(request: &str, limits: &Limits, purpose: Purpose) -> Result<Ask
         Some(Value::Array(parts)) => Some(parts),
         _ => None,
     };
+    // A body that does not read is refused in words naming the body, a
+    // stream's as its own error.
     let body = match object.get("body") {
         None | Some(Value::Null) => "",
         Some(Value::String(body)) => body.as_str(),
-        Some(_) => return Err(malformed()),
+        Some(_) => {
+            return Err(match purpose {
+                Purpose::Fetch => invalid(words::BAD_BODY),
+                Purpose::Stream => refusal(Kind::StreamError, words::BAD_BODY),
+            });
+        }
     };
     if multipart.is_some() && !body.is_empty() {
         return Err(invalid(words::BODY_AND_MULTIPART));
@@ -422,15 +429,12 @@ pub fn requested(request: &str, limits: &Limits, purpose: Purpose) -> Result<Ask
         Some(Value::String(connection)) => Some(connection.clone()),
         Some(_) => return Err(invalid(words::BAD_CONNECTION)),
     };
-    // No edge's egress names a scheme but http and https: any other is
-    // refused as the scheme it is, before any pin, and recorded.
+    // No edge's egress names a scheme but http and https: any other, or
+    // none, is refused as the scheme it is, before any pin, and recorded.
     match parts.scheme.as_deref() {
         Some("http" | "https") => {}
         other => {
-            return Err(refusal(
-                Kind::SchemeBlocked,
-                words::scheme_blocked(other.unwrap_or("")),
-            ));
+            return Err(refusal(Kind::SchemeBlocked, words::scheme_blocked(other)));
         }
     }
     if multipart.is_some() && purpose == Purpose::Stream {

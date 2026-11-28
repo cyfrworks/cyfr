@@ -101,6 +101,13 @@ fn a_vault_value_and_the_names_the_contract_bounds_out_are_in_nothing_the_runner
     service.close_control();
     assert_eq!(service.exit(SOON).code(), Some(0));
     lines.extend(service.rest(Duration::from_secs(1)));
+    // The service end's thread records the relay's frames: it has recorded
+    // the last of them once it has read the relay's end.
+    support::eventually(|| {
+        service
+            .relay_ended
+            .load(std::sync::atomic::Ordering::SeqCst)
+    });
     // The guest was handed the value: it read the field it was granted.
     let output = &service.calls_of("complete")[0].args["outcome"]["output"];
     assert_eq!(output, &json!({"status": 200, "data": {"read": "OEEE"}}));
@@ -126,7 +133,9 @@ fn a_vault_value_and_the_names_the_contract_bounds_out_are_in_nothing_the_runner
         sent.iter().any(|text| text.contains("PROBE_HIDDEN")),
         "{sent:?}"
     );
-    for needle in [value, long.as_str(), "PROBE\nKEY", "PROBE\\nKEY"] {
+    // An event's string is cut to 256 bytes, so the overlong name is looked
+    // for cut so, which the whole name holds too.
+    for needle in [value, &long[..256], "PROBE\nKEY", "PROBE\\nKEY"] {
         assert!(
             sent.iter().all(|text| !text.contains(needle)),
             "{needle:?} was sent: {sent:?}"

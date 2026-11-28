@@ -290,13 +290,17 @@ defmodule Opus.Host do
 
     encode(answer)
   rescue
+    # A raise may come after some of the batch was emitted, so the batch is
+    # answered lost, which its forwarder never sends again: a record is
+    # emitted once or not at all. A handler's own raise never comes here:
+    # `:telemetry` catches it and detaches the handler.
     exception ->
       Logger.error(
         "[Opus.Host] runner events report raised: " <>
           Prima.LogFilter.format_exception(:error, exception, __STACKTRACE__)
       )
 
-      encode({:error, :unavailable})
+      encode({:error, :lost})
   end
 
   defp reported_events(body) do

@@ -911,14 +911,29 @@ defmodule Locus.Runtime.RelayTest do
 
       {:ok, {_ip, port}} = ThousandIsland.listener_info(server)
       attempt = attempt!(host) |> ScriptedKeeper.relayed!()
-      ScriptedHost.pins(host, %{"api.test" => "127.0.0.1"}, expires_in: 1_000)
+      test = self()
+
+      ScriptedHost.script(host, "egress_pin", fn args, _caller ->
+        {:ok, %{"expires_at" => expires_at}} =
+          answer = ScriptedHost.pin(%{"api.test" => "127.0.0.1"}, args, 1_000)
+
+        send(test, {:expires_at, expires_at})
+        answer
+      end)
+
       pin = pin!(attempt, "http://api.test:#{port}/held", purpose: :stream)
+      assert_received {:expires_at, runners}
 
       assert {:ok, ref} =
                Endpoint.fetch(attempt.endpoint, attempt.attempt, pin.id, "GET", "/held", [], "")
 
       assert_receive {:holding, upstream}, 5_000
-      wait_until(fn -> System.system_time(:millisecond) > pin.expires_at end, 5_000)
+
+      # The relay's own pin, asked as it connected, expires after the
+      # runner's: both are past their expires_at before the rest is sent.
+      assert_received {:expires_at, relays}
+      assert relays >= runners
+      wait_until(fn -> System.system_time(:millisecond) > relays end, 5_000)
       send(upstream, :more)
 
       {events, nil} = events(attempt.endpoint, ref)

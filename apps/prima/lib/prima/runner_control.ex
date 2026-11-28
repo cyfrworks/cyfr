@@ -87,8 +87,9 @@ defmodule Prima.RunnerControl do
       `event` line spans at most `max_event_line_bytes/0` bytes before its
       newline. The runner is untrusted, so an event off the roster is not
       a frame, and its service forwards one only when every execution it
-      names is of the subtree the runner holds or held last, and only
-      within the runner's budget (`event_burst/0`, `events_per_second/0`).
+      names is of the subtree the runner holds or held last, one that
+      names none only while the runner holds a subtree, and only within
+      the runner's budget (`event_burst/0`, `events_per_second/0`).
 
   ## Decoding
 

@@ -105,6 +105,7 @@ pub const NO_HOSTNAME: &str = "Invalid URL: missing hostname";
 pub const URL_CREDENTIALS: &str = "Invalid URL: URL credentials are refused";
 pub const BAD_URL: &str = "Invalid URL";
 pub const BODY_AND_MULTIPART: &str = "Request cannot have both 'body' and 'multipart'";
+pub const BAD_BODY: &str = "Invalid body: a string, or null for none";
 pub const BAD_HEADERS: &str =
     "Invalid headers: an object of names to values, or an array of [name, value] pairs";
 pub const BAD_CONNECTION: &str = "Invalid connection: the name of a need, as a string";
@@ -112,7 +113,7 @@ pub const BAD_BODY_BASE64: &str = "Invalid base64 in request body";
 pub const MULTIPART_PART: &str = "Multipart part must include 'name' and either 'data' or 'value'";
 pub const STREAM_MULTIPART: &str = "Streaming requests do not support 'multipart'";
 /// A stream's request of no shape a request takes: its method or URL no
-/// text, or its body neither text nor null.
+/// text.
 pub const STREAM_UNSERVED: &str = "The streaming request could not be served.";
 pub const UNSENDABLE: &str = "The request cannot be sent: its path or headers are malformed";
 
@@ -200,10 +201,14 @@ pub fn service_domain(host: &str) -> String {
 pub fn unsupported_method(method: &str) -> String {
     format!("Unsupported HTTP method: {method}")
 }
-/// A URL of `scheme`, which no edge's egress names, as CYFR's attached
-/// request words it.
-pub fn scheme_blocked(scheme: &str) -> String {
-    format!("HTTP egress refused: the scheme {scheme} is not in the egress schemes")
+/// A URL of `scheme`, or of none, where the runner fetches http and https
+/// alone: no consent admits another.
+pub fn scheme_blocked(scheme: Option<&str>) -> String {
+    const ONLY: &str = "and only http and https URLs are fetched";
+    match scheme {
+        Some(scheme) => format!("HTTP egress refused: the URL's scheme is {scheme}, {ONLY}"),
+        None => format!("HTTP egress refused: the URL has no scheme, {ONLY}"),
+    }
 }
 pub const RATE_LIMITED: &str = "HTTP egress refused: the consented rate limit is exhausted";
 

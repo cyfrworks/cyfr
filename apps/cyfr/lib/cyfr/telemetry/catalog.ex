@@ -43,10 +43,13 @@ defmodule Cyfr.Telemetry.Catalog do
   A runner's event is its word, bounded by its worker service, which
   CYFR does not check again: the service forwards one only when every
   execution it names (`execution_id`, `parent_execution_id`) is of the
-  subtree the runner holds or held last, and within the runner's budget
+  subtree the runner holds or held last, one that names none
+  (`http.request`, `storage.call`, `formula.await`) only while the runner
+  holds a subtree, and within the runner's budget
   (`Prima.RunnerControl.event_burst/0` at once, regaining
   `Prima.RunnerControl.events_per_second/0` a second), and drops the
-  rest, logging how many as the runner's handle ends. Every other string
+  rest, logging the first as it drops it and how many as each subtree
+  begins and ends and as the runner ends. Every other string
   in its metadata (a reference, a tool's action, a host name) is a
   guest's, cut to `Prima.RunnerControl.max_event_string_bytes/0` bytes,
   and may carry any byte. The forwarder sends them in batches of at most

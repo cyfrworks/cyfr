@@ -9,12 +9,13 @@ defmodule Locus.Runtime.EventsTest do
   batch in flight at a time, none before the service serves; a batch that
   reached no connection, or that a member not holding the control plane
   refused `unavailable`, sent again whole and first a wait after its
-  answer, one whose answer was lost or that CYFR refused never again and
-  logged once; and, while CYFR cannot be reached, at most 1,024 events
-  held, the oldest dropped first and the count said once, when a batch
-  reaches CYFR again. Each test's forwarder posts to the test itself,
-  which answers each post as the case needs, or through the host client
-  to a scripted host.
+  answer, the first so kept logged once and the one sent at last once,
+  one whose answer was lost or that CYFR refused never again and logged
+  once; and, while CYFR cannot be reached, at most 1,024 events held, the
+  oldest dropped first, the first drop for room logged and the count said
+  once, when a batch reaches CYFR again. Each test's forwarder posts to
+  the test itself, which answers each post as the case needs, or through
+  the host client to a scripted host.
   """
 
   use ExUnit.Case, async: true
@@ -151,7 +152,59 @@ defmodule Locus.Runtime.EventsTest do
       end)
 
     assert log =~ "77 runner events were dropped while CYFR could not be reached"
-    assert length(String.split(log, "were dropped")) == 2
+    assert length(String.split(log, "runner events were dropped")) == 2
+  end
+
+  test "a member that answers every batch unavailable is said once as a batch is first kept and " <>
+         "once as the queue drops for room, never a batch; the batch sent at last says how many " <>
+         "were dropped",
+       %{events: events, credentials: credentials} do
+    :ok = Events.serve(events, credentials, @boot)
+    forward(events, 1..2)
+
+    {kept, log} =
+      with_log(fn ->
+        for _try <- 1..5 do
+          answer(posted(1..2), {:error, :unavailable})
+        end
+
+        # 1,100 more arrive while the kept batch is in flight again: the
+        # queue drops the oldest 76 of them for room, then the kept two
+        # as it comes back.
+        in_flight = posted(1..2)
+        forward(events, 3..1_102)
+        answer(in_flight, {:error, :unavailable})
+        answer(posted(79..(79 + @batch - 1)), {:error, :unavailable})
+        answer(posted(79..(79 + @batch - 1)), {:error, :unavailable})
+        posted(79..(79 + @batch - 1))
+      end)
+
+    assert log =~
+             "[Locus.Runtime.Events] a batch of 2 runner events was not emitted (the member " <>
+               "that answered does not hold the control plane); it is kept and sent again"
+
+    assert log =~
+             "[Locus.Runtime.Events] the runner events kept for CYFR fill the queue's 1024: " <>
+               "the oldest are dropped for room"
+
+    # Once each, though eight batches were kept.
+    assert length(String.split(log, "was not emitted")) == 2
+    assert length(String.split(log, "dropped for room")) == 2
+    refute log =~ "was sent at last"
+
+    log =
+      capture_log(fn ->
+        # CYFR takes the kept batch at last, and the next.
+        answer(kept, :ok)
+        answer(posted((79 + @batch)..(79 + 2 * @batch - 1)), :ok)
+      end)
+
+    assert log =~
+             "[Locus.Runtime.Events] a kept batch of runner events was sent at last; 78 runner " <>
+               "events were dropped while CYFR could not be reached"
+
+    assert length(String.split(log, "was sent at last")) == 2
+    refute log =~ "was not emitted"
   end
 
   test "a batch that reached no connection goes again a whole wait after its answer, on one timer",
@@ -213,7 +266,7 @@ defmodule Locus.Runtime.EventsTest do
     end
 
     test "a batch a member that does not hold the control plane refuses, 503 unavailable, is " <>
-           "sent again, whole and first, and logged by no one",
+           "sent again, whole and first, logged once as it is kept and once as it is sent",
          %{host: host, events: events} do
       test = self()
 
@@ -222,6 +275,7 @@ defmodule Locus.Runtime.EventsTest do
           send(test, {:refusing, self()})
           receive do: (:refuse -> {:raw, 503, ~s({"v":3,"error":"unavailable"})})
         end,
+        {:ok, true},
         {:ok, true}
       ])
 
@@ -233,10 +287,22 @@ defmodule Locus.Runtime.EventsTest do
         capture_log(fn ->
           send(refusing, :refuse)
           wait_until(fn -> length(batches(host)) == 2 end, 5_000)
+          # The next batch goes only once the kept one's answer is read.
+          forward(events, 4..4)
+          wait_until(fn -> length(batches(host)) == 3 end, 5_000)
         end)
 
-      assert batches(host) == [[1, 2], [1, 2, 3]]
-      refute log =~ "runner events"
+      assert batches(host) == [[1, 2], [1, 2, 3], [4]]
+
+      assert log =~
+               "[Locus.Runtime.Events] a batch of 2 runner events was not emitted (the member " <>
+                 "that answered does not hold the control plane); it is kept and sent again " <>
+                 "until CYFR takes one"
+
+      assert log =~ "[Locus.Runtime.Events] a kept batch of runner events was sent at last"
+      assert length(String.split(log, "was not emitted")) == 2
+      assert length(String.split(log, "was sent at last")) == 2
+      refute log =~ "runner events were dropped"
       refute log =~ "report_events"
     end
 

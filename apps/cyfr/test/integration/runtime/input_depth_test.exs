@@ -36,6 +36,7 @@ defmodule Opus.InputDepthTest do
 
     ctx = Sanctum.TestContext.local(:api)
     Sanctum.TestContext.ready!(ctx.athanor_id)
+    Cyfr.Test.SeedBundle.isolate!()
 
     {:ok, _component} =
       Arca.Test.UnitFixtures.ship_bytes!(ctx, @echo, %{

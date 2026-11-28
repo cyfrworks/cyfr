@@ -514,7 +514,7 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"apps/cyfr/test/cyfr/docs_drift_test.exs", ~w(envelope fallback fetch_types)},
       {"apps/locus/runner/tests/formula.rs", ~w(setup_required render)},
       {"apps/locus/runner/tests/imports.rs", ~w(encode_error)},
-      {"apps/locus/runner/tests/requests.rs", ~w(fallback encode_error)},
+      {"apps/locus/runner/tests/requests.rs", ~w(fallback encode_error fetch_refusals)},
       {"apps/locus/runner/tests/vectors.rs", ~w(fetch_types invoke_types invoke_passed_on)},
       {"apps/prima/test/prima/wit_response_vectors_test.exs", ~w(envelope fallback)}
     ],

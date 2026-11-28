@@ -299,20 +299,31 @@ defmodule Locus.Runtime.HostClientTest do
              ])
   end
 
-  test "a report a member that does not hold the control plane refuses, 503 unavailable, is " <>
-         "answered unavailable, posted once and logged by no one",
+  test "a batch of events a member that does not hold the control plane refuses, 503 " <>
+         "unavailable, is answered unavailable, posted once and logged by no one; an exit " <>
+         "report so refused is lost, asked once more as its class allows",
        %{host: host} = context do
     unowned = {:raw, 503, ~s({"v":3,"error":"unavailable"})}
 
-    for call <- ~w(runner_exited report_events) do
-      ScriptedHost.script(host, call, unowned)
+    ScriptedHost.script(host, "report_events", unowned)
 
-      log =
-        capture_log(fn -> assert outcome_call(call, context) == {:error, :unavailable}, call end)
+    log =
+      capture_log(fn ->
+        assert outcome_call("report_events", context) == {:error, :unavailable}
+      end)
 
-      assert length(ScriptedHost.requests(host, call)) == 1, call
-      refute log =~ "[Locus.Runtime.HostClient] #{call}", call
-    end
+    assert length(ScriptedHost.requests(host, "report_events")) == 1
+    refute log =~ "[Locus.Runtime.HostClient] report_events"
+
+    # The rule that keeps a batch is the forwarder's alone: an exit
+    # report's 503 is a refusal as any other status's.
+    ScriptedHost.script(host, "runner_exited", unowned)
+
+    log =
+      capture_log(fn -> assert outcome_call("runner_exited", context) == {:error, :lost} end)
+
+    assert length(ScriptedHost.requests(host, "runner_exited")) == 2
+    assert log =~ "[Locus.Runtime.HostClient] runner_exited's answer was lost; calling once more"
 
     # A host call's 503 is the listener's `lost`, a refusal as any other
     # status's: the host call is asked again as its class allows.
