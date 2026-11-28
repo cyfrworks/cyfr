@@ -3708,6 +3708,18 @@
         ";application/vnd.cyfr.frames"
       ],
       "frames": false
+    },
+    {
+      "content_types": [
+        "applİcation/vnd.cyfr.frames"
+      ],
+      "frames": false
+    },
+    {
+      "content_types": [
+        " application/vnd.cyfr.frames　"
+      ],
+      "frames": true
     }
   ],
   "answer_bounds": [
