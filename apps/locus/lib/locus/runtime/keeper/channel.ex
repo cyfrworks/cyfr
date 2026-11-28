@@ -83,13 +83,6 @@ defmodule Locus.Runtime.Keeper.Channel do
 
   @pool "runner"
 
-  # `memory_unavailable` is the keeper's word for any bound it cannot
-  # enforce, the memory's or the CPU's.
-  @memory_unavailable "cyfr-locus cannot bound a runner's memory and CPU in this container, " <>
-                        "so it starts none: start the locus service with the security " <>
-                        "option writable-cgroups=true (Docker Engine 28 or later on a cgroup v2 " <>
-                        "host whose memory and cpu controllers reach the container)"
-
   @impl Locus.Runtime.Keeper
   def child_spec(opts), do: %{id: __MODULE__, start: {__MODULE__, :start_link, [opts]}}
 
@@ -196,23 +189,10 @@ defmodule Locus.Runtime.Keeper.Channel do
       when is_integer(grace_ms) and grace_ms >= 0,
       do: Locus.Keeper.release(client, channel, grace_ms)
 
-  # The keeper's refusals of a spawn: its code, and what an operator makes
-  # of it. `memory_unavailable` names what the deployment lacks; a place
-  # refused for room is `no_memory`, and keeps the keeper's `held`, what
-  # holds the memory, for the start that waited on it.
+  # The keeper's refusals of a spawn, as the worker protocol names them
+  # (`Prima.WorkerAPI.keeper_refusal/1`).
   @impl Locus.Runtime.Keeper
-  def refusal(:memory_unavailable),
-    do: %{reason: "memory_unavailable", message: @memory_unavailable}
-
-  def refusal({:no_memory, held}), do: Map.put(refusal("no_memory"), :held, held)
-
-  def refusal(code) when is_binary(code) do
-    reason = if Regex.match?(~r/\A[a-z][a-z0-9_]{0,63}\z/, code), do: code, else: "refused"
-    %{reason: reason, message: "cyfr-locus refused to start a runner (#{reason})"}
-  end
-
-  def refusal(_reason),
-    do: %{reason: "refused", message: "cyfr-locus refused to start a runner"}
+  defdelegate refusal(reason), to: Prima.WorkerAPI, as: :keeper_refusal
 
   defp client(adapter) do
     GenServer.call(adapter, :client)
@@ -276,7 +256,8 @@ defmodule Locus.Runtime.Keeper.Channel do
   # runner spawned again under its bound ends the run.
   def handle_call({:memory_unavailable, runner}, _from, %{bound_refused: false} = state) do
     Logger.error(
-      "[Locus.Runtime.Keeper.Channel] runner #{runner} was not started: #{@memory_unavailable}"
+      "[Locus.Runtime.Keeper.Channel] runner #{runner} was not started: " <>
+        Prima.WorkerAPI.keeper_refusal(:memory_unavailable).message
     )
 
     {:reply, :ok, %{state | bound_refused: true}}
