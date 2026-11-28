@@ -54,7 +54,9 @@ jobs:
   keeper:
     name: vet + test (cyfr-locus)
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # The module's tests, as this user and again as root on the real
+    # kernel, take about nine and a half minutes together.
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: apps/locus/keeper
