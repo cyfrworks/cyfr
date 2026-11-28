@@ -2192,47 +2192,32 @@ defmodule Aqua.CrewTest do
     assert [%{snapshot: %{"outcome" => "cancelled"}}] = replies_of(ctx, turn_id)
   end
 
-  # Runs `fun` with this member's slot lost while `runner` writes a
-  # request's or an opening's end (an UPDATE of messages that sets
-  # `resolved_at`), inside the stop's own transaction, and the slot given
-  # back after, whatever `fun` answers.
-  defp losing_inside(runner, fun) do
-    handler = {:lose_inside_stop, make_ref()}
-    on_exit(fn -> Arca.ControlPlane.record(:unclaimed) end)
+  @slot_keys [
+    {Arca.ControlPlane, :standing},
+    {Arca.ControlPlane, :generation},
+    {Arca.ControlPlane, :slot}
+  ]
 
-    :ok =
-      :telemetry.attach(
-        handler,
-        [:arca, :repo, :query],
-        &__MODULE__.lose_on_end/4,
-        {runner, self()}
-      )
-
-    try do
-      outcome = fun.()
-      assert_received :slot_lost_inside_stop
-      outcome
-    after
-      :telemetry.detach(handler)
-      Arca.ControlPlane.record(:unclaimed)
-    end
+  # This member holds a real slot, its lease row in the case's sandbox;
+  # each process-wide value it changes is given back after the case,
+  # registered before it changes (`Prima.Test.Env`).
+  defp hold_slot! do
+    node = "node-#{System.unique_integer([:positive])}"
+    for key <- @slot_keys, do: Prima.Test.Env.erase_persistent_term(key)
+    {:ok, slot} = Arca.ControlPlane.take(node, node <> "#boot", 60_000)
+    slot
   end
 
-  @doc false
-  def lose_on_end(
-        _event,
-        _measurements,
-        %{source: "messages", query: "UPDATE " <> query},
-        {runner, test}
-      )
-      when runner == self() do
-    if String.contains?(query, "resolved_at") do
-      :ok = Arca.ControlPlane.record(:lost)
-      send(test, :slot_lost_inside_stop)
-    end
-  end
+  # The slot's lease run out on the database's clock, while this member's
+  # own standing still reads it held: the loss a write's transaction
+  # finds and nothing cached does.
+  defp lapse!(slot) do
+    {1, _} =
+      from(l in Arca.Schemas.CellLease, where: l.node == ^slot.node)
+      |> Arca.Repo.update_all(set: [lease_until: ~U[2000-01-01 00:00:00.000000Z]])
 
-  def lose_on_end(_event, _measurements, _metadata, _config), do: :ok
+    assert Arca.ControlPlane.held?()
+  end
 
   describe "the person's Stop in a member's thread" do
     # What the person's stop says of the work it ended (`Aqua.Tape.stopped/0`).
@@ -2338,18 +2323,45 @@ defmodule Aqua.CrewTest do
       refute Tape.steer_pending?(ctx, turn)
     end
 
-    test "with the member's slot lost inside it, the stop writes nothing and the runner retires",
+    test "with the member's lease run out, the stop writes nothing and the runner retires",
          %{ctx: ctx, room: room} do
+      slot = hold_slot!()
       script!([{:hold, self()}])
       {request, child, turn} = held_job!(ctx, room, "take a while")
-      assert {:ok, runner} = Runner.ensure(child.id, ctx.athanor_id)
+      lapse!(slot)
 
-      outcome = losing_inside(runner, fn -> Runner.stop_turn(ctx, child.id) end)
+      outcome = Runner.stop_turn(ctx, child.id)
 
       assert {:ok, landed} = Tape.turn(ctx, turn)
 
       assert {{:error, :control_plane_lost}, "pending", "running", []} ==
                {outcome, row(ctx, request.id).status, landed.status, replies_of(ctx, turn)}
+    end
+
+    test "the member's next job reads that the job the person stopped was interrupted, and a " <>
+           "queued job that never ran leaves no such line",
+         %{ctx: ctx, room: room} do
+      script!([{:hold, self()}, reply("Second done.")])
+      {_first, child, running} = held_job!(ctx, room, "first job")
+      queued_request = soul_request!(ctx, room, "planner", "queued job")
+      assert {:ok, %{"applied" => 1}} = drain(ctx)
+      queued = delivered_turn(ctx, child, queued_request.id)
+
+      assert :ok = Runner.stop_turn(ctx, child.id)
+
+      assert [%{turn_id: ^running, content: @stopped}] =
+               Enum.filter(rows(ctx, child.id), &(&1.kind == "turn_aborted"))
+
+      refute Enum.any?(rows(ctx, child.id), &(&1.kind == "turn_aborted" and &1.turn_id == queued))
+
+      next = soul_request!(ctx, room, "planner", "next job")
+      assert {:ok, %{"applied" => _}} = drain(ctx)
+      await_status(ctx, delivered_turn(ctx, child, next.id), "completed")
+      %{input: %{"params" => %{"messages" => messages}}} = List.last(member_chats(ctx, "planner"))
+
+      assert Jason.encode!(messages) =~
+               "[The assistant's work here was interrupted before it finished; tools may have " <>
+                 "partially executed. #{@stopped}]"
     end
 
     test "pressed in the member's pane does what the direct stop does", %{ctx: ctx, room: room} do
@@ -3014,8 +3026,77 @@ defmodule Aqua.CrewTest do
       assert reports(ctx) == []
     end
 
-    test "with the member's slot lost inside the workspace thread's stop, it writes nothing",
+    test "a member's Stop in a workspace thread with nothing else at work leaves it stopped, " <>
+           "and its quiet period opens no turn of Aqua's",
          %{ctx: ctx, room: daily} do
+      script!([ask("plan it"), reply("Asked the planner."), {:hold, self()}])
+      workspace = workspace!(ctx, daily)
+      {aqua, request} = asked!(ctx, workspace)
+      assert {:ok, %{"applied" => 1}} = drain(ctx)
+      assert_receive {:scripted_probe, _worker, _}, 60_000
+      child = child!(ctx, workspace, "planner")
+      member = delivered_turn(ctx, child, request.id)
+
+      assert :ok = Runner.stop_turn(ctx, child.id)
+      assert :ok = Runner.stop_turn(ctx, child.id)
+      await_status(ctx, member, "cancelled")
+      assert %{status: "expired"} = row(ctx, request.id)
+      assert work_state(ctx, workspace.id) == "stopped"
+      assert {:ok, %{"applied" => 1}} = drain(ctx)
+
+      assert %{outcome: "cancelled", turn_id: nil} =
+               Enum.find(rows(ctx, workspace.id), &(&1.reply_to == request.id))
+
+      assert work_state(ctx, workspace.id) == "stopped"
+
+      # The quiet period, made as Aqua.NudgeTest makes it: every stamp moved back.
+      past = DateTime.add(DateTime.utc_now(), -(Aqua.Nudge.quiet_seconds() + 60), :second)
+
+      for {schema, fields} <- [
+            {Arca.Schemas.Message, [:inserted_at]},
+            {Arca.Schemas.Turn, [:accepted_at, :ended_at]},
+            {Arca.Schemas.TurnStep, [:started_at, :ended_at]}
+          ],
+          field <- fields do
+        from(r in schema, where: r.athanor_id == ^ctx.athanor_id and not is_nil(field(r, ^field)))
+        |> Arca.Repo.update_all(set: [{field, past}])
+      end
+
+      refute Map.has_key?(Map.get(Aqua.Nudge.tick(), ctx.athanor_id, %{}), "opened")
+      refute Enum.any?(rows(ctx, workspace.id), &(&1.kind == "nudge"))
+      assert Enum.map(room_turns(ctx, workspace), & &1.id) == [aqua]
+    end
+
+    test "a member's Stop while Aqua's own turn runs in the workspace thread leaves it at work " <>
+           "until that turn ends, and stopped after",
+         %{ctx: ctx, room: daily} do
+      # Aqua's turn asks the planner and holds its next model call; the
+      # planner's job holds too; Aqua's answers once let go.
+      script!([ask("plan it"), {:hold, self()}, {:hold, self()}, reply("Asked the planner.")])
+      workspace = workspace!(ctx, daily)
+      assert {:ok, %{"applied" => 1}} = drain(ctx)
+      %{turn_id: aqua} = Enum.find(rows(ctx, workspace.id), &(&1.kind == "opening"))
+      assert_receive {:scripted_probe, aqua_worker, _}, 60_000
+      [request] = Tape.pending_requests(ctx, workspace.id)
+      assert {:ok, %{"applied" => 1}} = drain(ctx)
+      assert_receive {:scripted_probe, _member_worker, _}, 60_000
+      child = child!(ctx, workspace, "planner")
+      member = delivered_turn(ctx, child, request.id)
+
+      assert :ok = Runner.stop_turn(ctx, child.id)
+      await_status(ctx, member, "cancelled")
+      assert %{status: "expired"} = row(ctx, request.id)
+      assert {:ok, %{status: "running"}} = Tape.turn(ctx, aqua)
+      assert work_state(ctx, workspace.id) == "open"
+
+      send(aqua_worker, :continue)
+      await_status(ctx, aqua, "completed")
+      assert work_state(ctx, workspace.id) == "stopped"
+    end
+
+    test "with the member's lease run out, the workspace thread's stop writes nothing",
+         %{ctx: ctx, room: daily} do
+      slot = hold_slot!()
       script!([ask("plan it"), reply("Asked the planner."), {:hold, self()}])
       workspace = workspace!(ctx, daily)
       {_aqua, request} = asked!(ctx, workspace)
@@ -3023,9 +3104,9 @@ defmodule Aqua.CrewTest do
       assert_receive {:scripted_probe, _worker, _}, 60_000
       child = child!(ctx, workspace, "planner")
       member = delivered_turn(ctx, child, request.id)
-      assert {:ok, runner} = Runner.ensure(workspace.id, ctx.athanor_id)
+      lapse!(slot)
 
-      outcome = losing_inside(runner, fn -> Runner.stop_turn(ctx, workspace.id) end)
+      outcome = Runner.stop_turn(ctx, workspace.id)
 
       assert {:ok, landed} = Tape.turn(ctx, member)
 

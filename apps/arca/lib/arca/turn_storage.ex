@@ -899,7 +899,12 @@ defmodule Arca.TurnStorage do
   # A crew member's thread, with its room's row, the one order
   # (`Arca.ThreadStorage.lock_threads!/2`): its open turns' waiting
   # requests expired before the turns end, so the end that settles a
-  # workspace room finds them answered for.
+  # workspace room finds them answered for. Each job that had started
+  # leaves the row that says it was interrupted, covering what it had
+  # dispatched, after its steps are settled, as a loop's own abort leaves
+  # one; a queued job ran nothing and leaves none. A workspace room then
+  # ends as the person's stop ends it (`work_state!/2`): at work while
+  # anything else remains, `stopped` once nothing does.
   # arca:db-raise-ok inside the caller's transaction
   defp member_stopped!(%Prima.Actor{athanor_id: athanor_id} = actor, member, attrs, chosen) do
     _locked =
@@ -911,17 +916,44 @@ defmodule Arca.TurnStorage do
     if Arca.Repo.all(work_turns(athanor_id, member.id)) -- chosen != [],
       do: Arca.Repo.rollback(:turns_moved)
 
-    for turn_id <- chosen,
-        %Turn{asking_thread_id: room, status: status} = turn <- [turn!(athanor_id, turn_id)],
-        is_binary(room) and status in @open do
-      from(m in Message,
-        where: m.athanor_id == ^athanor_id and m.thread_id == ^room,
-        where: m.id in ^requests_of(athanor_id, turn) and m.status == "pending"
-      )
-      |> Arca.Repo.update_all(set: [status: "expired", resolved_at: DateTime.utc_now()])
-    end
+    open =
+      for id <- chosen,
+          %Turn{status: status} = turn <- [turn!(athanor_id, id)],
+          status in @open,
+          do: turn
 
-    cancel_open!(actor, member.id, attrs, :reply)
+    expired =
+      for %Turn{asking_thread_id: room} = turn <- open, is_binary(room), reduce: 0 do
+        count ->
+          {n, _} =
+            from(m in Message,
+              where: m.athanor_id == ^athanor_id and m.thread_id == ^room,
+              where: m.id in ^requests_of(athanor_id, turn) and m.status == "pending"
+            )
+            |> Arca.Repo.update_all(set: [status: "expired", resolved_at: DateTime.utc_now()])
+
+          count + n
+      end
+
+    cancelled = cancel_open!(actor, member.id, attrs, :reply)
+    ended = MapSet.new(cancelled, & &1.turn_id)
+
+    for %Turn{status: status, id: id} <- open,
+        status in @held,
+        MapSet.member?(ended, id),
+        do:
+          aborted_row!(
+            actor,
+            athanor_id,
+            turn!(athanor_id, id),
+            Map.get(attrs, :error, "cancelled")
+          )
+
+    with true <- cancelled != [] or expired > 0,
+         %Thread{} = workspace <- work_of(athanor_id, member),
+         do: settle_work!(athanor_id, ended_as!(athanor_id, workspace, "stopped"))
+
+    cancelled
   end
 
   # arca:db-raise-ok inside the caller's transaction

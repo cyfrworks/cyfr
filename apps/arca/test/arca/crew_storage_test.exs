@@ -368,6 +368,163 @@ defmodule Arca.CrewStorageTest do
       assert %{status: "accepted"} = delivered!(actor, room, child, later)
     end
 
+    test "the person's stop of a member's thread ends only its open jobs, expires only what they " <>
+           "answer that still waits, a steered request with them, and a stop refused writes nothing",
+         %{actor: actor, room: room} do
+      {:ok, child} = Threads.crew_thread(actor, room.id, "planner")
+      earlier = request!(actor, room, "planner", "earlier", "aqua")
+      terminal = delivered!(actor, room, child, earlier)
+
+      assert {:ok, terminal} =
+               TurnStorage.finish(actor, terminal.id, "cancelled", %{fence: terminal.fence})
+
+      opening = request!(actor, room, "planner", "opening", "aqua")
+      turn = start!(actor, delivered!(actor, room, child, opening))
+      steered = request!(actor, room, "planner", "steered", "aqua")
+
+      assert {:ok, _} =
+               TurnStorage.accept_message(actor, child.id, %{
+                 message: %{
+                   author: "aqua",
+                   sent_by: "aqua",
+                   addressee: "planner",
+                   content: steered.content,
+                   payload: %{"request_id" => steered.id}
+                 },
+                 steer_turn_id: turn.id
+               })
+
+      assert {:ok, _} =
+               TurnStorage.accept_message(actor, room.id, %{
+                 message: %{
+                   author: "aqua",
+                   sent_by: "planner",
+                   addressee: "aqua",
+                   reply_to: opening.id,
+                   outcome: "done",
+                   content: "Answered."
+                 },
+                 answers: [opening.id]
+               })
+
+      assert {:ok, %{status: "answered"} = answered} = Threads.get_message(actor, opening.id)
+      assert {:ok, pending} = Threads.get_message(actor, steered.id)
+
+      assert {:error, :not_standing} =
+               TurnStorage.stop_work(actor, child.id, %{
+                 grant: :stored,
+                 verify: fn _ -> {:error, :not_standing} end
+               })
+
+      assert TurnStorage.get(actor, turn.id) == {:ok, turn}
+      assert Threads.get_message(actor, steered.id) == {:ok, pending}
+
+      assert {:ok, %{cancelled: [%{turn_id: id}]}} =
+               TurnStorage.stop_work(actor, child.id, Map.new(Arca.Test.Actor.stored()))
+
+      assert id == turn.id
+
+      assert {:ok, %{status: "expired", resolved_at: at} = expired} =
+               Threads.get_message(actor, steered.id)
+
+      assert expired == %{pending | status: "expired", resolved_at: at}
+      assert Threads.get_message(actor, opening.id) == {:ok, answered}
+      assert Threads.get_message(actor, earlier.id) == {:ok, earlier}
+      assert TurnStorage.get(actor, terminal.id) == {:ok, terminal}
+
+      assert {:ok, %{cancelled: []}} =
+               TurnStorage.stop_work(actor, child.id, Map.new(Arca.Test.Actor.stored()))
+
+      assert Threads.get_message(actor, steered.id) == {:ok, expired}
+
+      assert {:ok, ended} = TurnStorage.get(actor, turn.id)
+      assert ended.status == "cancelled"
+      assert ended.fence == turn.fence + 1
+      assert ended.error == nil
+      assert %DateTime{} = ended.ended_at
+      assert ended.active_ms >= turn.active_ms
+
+      assert Map.drop(ended, [:status, :fence, :ended_at, :active_ms]) ==
+               Map.drop(turn, [:status, :fence, :ended_at, :active_ms])
+    end
+
+    test "a job delivered while the stop chose its turns is ended with its request",
+         %{actor: actor, room: room} do
+      {:ok, child} = Threads.crew_thread(actor, room.id, "planner")
+      first = request!(actor, room, "planner", "already delivered", "aqua")
+      working = start!(actor, delivered!(actor, room, child, first))
+      request = request!(actor, room, "planner", "delivered during scan", "aqua")
+
+      on_stop_scan(fn ->
+        turn = delivered!(actor, room, child, request)
+        send(self(), {:delivered_during_stop, turn.id})
+      end)
+
+      assert {:ok, %{cancelled: cancelled}} =
+               TurnStorage.stop_work(actor, child.id, Map.new(Arca.Test.Actor.stored()))
+
+      assert_received {:delivered_during_stop, id}
+      assert Enum.sort(Enum.map(cancelled, & &1.turn_id)) == Enum.sort([id, working.id])
+      assert {:ok, %{status: "cancelled"}} = TurnStorage.get(actor, id)
+      assert {:ok, %{status: "expired"}} = Threads.get_message(actor, request.id)
+    end
+
+    test "a job that ends while the stop chose its turns keeps its request for its own answer",
+         %{actor: actor, room: room} do
+      {:ok, child} = Threads.crew_thread(actor, room.id, "planner")
+      request = request!(actor, room, "planner", "complete during scan", "aqua")
+      turn = delivered!(actor, room, child, request)
+
+      on_stop_scan(fn ->
+        {:ok, _} =
+          TurnStorage.finish(actor, turn.id, "cancelled", %{fence: turn.fence, error: "server"})
+      end)
+
+      assert {:ok, %{cancelled: []}} = TurnStorage.stop_work(actor, child.id, %{})
+      assert {:ok, %{status: "cancelled", error: "server"}} = TurnStorage.get(actor, turn.id)
+      assert Threads.get_message(actor, request.id) == {:ok, request}
+      assert [%{snapshot: %{"text" => "server", "outcome" => "cancelled"}}] = replies(actor)
+
+      assert {:ok, %{turn: %{status: "accepted"}}} =
+               TurnStorage.accept_message(actor, room.id, %{
+                 message: %{
+                   author: "aqua",
+                   sent_by: "planner",
+                   addressee: "aqua",
+                   reply_to: request.id,
+                   outcome: "cancelled",
+                   content: "server"
+                 },
+                 answers: [request.id],
+                 turn: %{agent: "aqua", requested_by: actor.user_id, origin: :interactive}
+               })
+    end
+
+    # Runs `work` once, in this process, right after the stop reads which
+    # turns are open (its query joins the threads by `parent_id`); the
+    # handler is detached after the case and keeps nothing once it ran.
+    defp on_stop_scan(work) do
+      handler = {:stop_scan, make_ref()}
+      Process.put(handler, work)
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      :ok =
+        :telemetry.attach(handler, [:arca, :repo, :query], &__MODULE__.after_stop_scan/4, handler)
+    end
+
+    def after_stop_scan(
+          _event,
+          _measurements,
+          %{source: "turns", query: "SELECT " <> query},
+          handler
+        ) do
+      if String.contains?(query, ~s("parent_id")) do
+        if work = Process.delete(handler), do: work.()
+      end
+    end
+
+    def after_stop_scan(_event, _measurements, _meta, _handler), do: :ok
+
     test "a reply is recorded under the identity of the request it answers, a damaged child row notwithstanding",
          %{actor: actor, room: room} do
       request = request!(actor, room, "planner", "go")
