@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -224,6 +225,48 @@ func boxProject(t *testing.T, compose, env string) (string, string) {
 		}
 	})
 	return dir, name
+}
+
+// The proxy trust is .env's alone: with .env stating no hops and the
+// command run under an exported CYFR_TRUSTED_PROXY_CIDRS, the real compose
+// configuration cyfr would start with trusts no hop and no listed proxy.
+func TestRealComposeProxyTrustIsEnvsAlone(t *testing.T) {
+	requireCompose(t)
+	e, dir := realHome(t)
+	env := strings.Replace(strings.Replace(string(repoFile(t, ".env.example")), "CYFR_BROWSER=none\n", "CYFR_BROWSER=proxy\n", 1), "CYFR_HOST=localhost\n", "CYFR_HOST=cyfr.example.com\n", 1)
+	env += "CYFR_PUBLIC_URL=https://cyfr.example.com\nCYFR_PROXY_PUBLISH=127.0.0.2:4101\nCYFR_TRUSTED_PROXY_HOPS=0\n"
+	writeFile(t, filepath.Join(dir, ".env"), []byte(env))
+	sys := e.docker.(*systemDocker)
+	sys.watchdog, sys.environ = []string{exeOrSkip(t), "-access.watchdog"}, func() []string {
+		return append(childEnv(), "CYFR_TRUSTED_PROXY_CIDRS=10.0.0.0/8")
+	}
+	unlock, err := e.Lock("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	h, err := e.Head()
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, err := e.flatten(bg, h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := parseConfig(content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := ResolveBoot(BootInput{Process: cyfrEnv(c), Release: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := (Trust{Kind: "hops", Hops: 0}); !reflect.DeepEqual(b.Trust, want) {
+		t.Errorf("cyfr would start trusting %+v, not .env's %+v", b.Trust, want)
+	}
+	if err := e.checkEffective(h, content); err != nil {
+		t.Errorf("the configuration is refused: %v", err)
+	}
 }
 
 // With proxy, real compose flattens the shipped compose file with the

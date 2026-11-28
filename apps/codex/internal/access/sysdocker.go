@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"time"
 )
@@ -93,18 +94,32 @@ func (s *systemDocker) Run(ctx context.Context, c Call) (Result, error) {
 	return Result{ExitCode: code, Stdout: stdout.Bytes(), Stderr: stderr.Bytes()}, err
 }
 
-// sanitizedEnv is env without any COMPOSE_* variable, matched without
-// case, as Windows matches names.
+// sanitizedEnv is env without any COMPOSE_* variable and without the proxy
+// trust, matched without case, as Windows matches names (environFiltered).
 func sanitizedEnv(env []string) []string {
 	out := make([]string, 0, len(env))
 	for _, kv := range env {
 		name, _, _ := strings.Cut(kv, "=")
-		if strings.HasPrefix(strings.ToUpper(name), "COMPOSE_") {
+		if environFiltered(name) {
 			continue
 		}
 		out = append(out, kv)
 	}
 	return out
+}
+
+// trustKeys are the settings of whose forwarded headers the proxy listener
+// trusts: .env alone states them, so a variable this process was started
+// with never reaches compose's interpolation of them, nor outranks what
+// .env says.
+var trustKeys = []string{"CYFR_TRUSTED_PROXY_CIDRS", "CYFR_TRUSTED_PROXY_HOPS"}
+
+// environFiltered reports whether a variable of this process's environment
+// is kept from every compose call: every COMPOSE_* variable, which would
+// choose the stack's files, project or services, and the proxy trust.
+func environFiltered(name string) bool {
+	upper := strings.ToUpper(name)
+	return strings.HasPrefix(upper, "COMPOSE_") || slices.Contains(trustKeys, upper)
 }
 
 // watchdogArgv is the argv that runs WatchdogMain from this executable.
