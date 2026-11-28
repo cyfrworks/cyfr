@@ -9,8 +9,10 @@
 #
 # Usage: scripts/ci/image-boots.sh cyfr|cyfr-locus LOADED
 #
-#   cyfr        the app image with only what a boot needs (CYFR_BROWSER and a
-#               fresh CYFR_SECRET_KEY_BASE), healthy by the image's own
+#   cyfr        the app image with only what a boot needs (CYFR_BROWSER, a
+#               fresh tunnel key's public half, CYFR_LINK_PUBLIC, which names
+#               its private address, and a fresh CYFR_SECRET_KEY_BASE),
+#               healthy by the image's own
 #               HEALTHCHECK (readiness: database, cache and registries up);
 #               then the cosign on its PATH, the one `Compendium.Cosign`
 #               runs, run through the image's entrypoint as its user, is the
@@ -50,7 +52,8 @@ docker network rm "$name-net" >/dev/null 2>&1 || true' EXIT
 case "$kind" in
   cyfr)
     docker run --detach --name "$name" \
-      -e CYFR_BROWSER=none -e "CYFR_SECRET_KEY_BASE=$(openssl rand -hex 48)" \
+      -e CYFR_BROWSER=none -e "CYFR_LINK_PUBLIC=$(openssl rand -hex 32)" \
+      -e "CYFR_SECRET_KEY_BASE=$(openssl rand -hex 48)" \
       "$image" >/dev/null
     ;;
   cyfr-locus)

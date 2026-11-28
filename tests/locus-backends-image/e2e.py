@@ -243,6 +243,9 @@ class CyfrStack(Stack):
         with open(os.path.join(self.project_dir, ".env"), "w", encoding="utf-8") as handle:
             handle.write("\n".join([
                 "CYFR_BROWSER=none",
+                # The tunnel key's public half `cyfr init` mints, which names
+                # cyfr's private address; any 32 bytes are an X25519 key.
+                f"CYFR_LINK_PUBLIC={secrets.token_hex(32)}",
                 f"CYFR_SECRET_KEY_BASE={secrets.token_urlsafe(48)}",
                 f"CYFR_LOCUS_BACKENDS_KEY={self.key.hex()}",
                 f"CYFR_LOCUS_RUNTIME_ROOT={secrets.token_hex(32)}",

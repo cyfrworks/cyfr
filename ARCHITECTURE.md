@@ -251,7 +251,7 @@ One baseline migration is the schema, on both adapters alike, and a database run
 
 ### 6.8 Configuration and settings
 
-Configuration is parsed explicitly, and an invalid security-relevant value is refused. An unreadable settings store refuses the boot. Beside its private address, a server's browser address is a deployment setting its listeners, exposure and proxy trust follow (`Cyfr.RuntimeConfig`): only the machine's own `cyfr` writes it, and the boot refuses a setting that contradicts it.
+Configuration is parsed explicitly, and an invalid security-relevant value is refused. An unreadable settings store refuses the boot. Beside the private address, the browser address is a deployment setting the listeners, exposure and proxy trust follow (`Cyfr.RuntimeConfig`): only the machine's own `cyfr` writes it, and the boot refuses a setting that contradicts it.
 
 ### 6.9 Backup, runtime and budgets
 

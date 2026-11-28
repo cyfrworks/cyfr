@@ -2372,6 +2372,7 @@ defmodule Aqua.CrewTest do
 
       conn =
         Phoenix.ConnTest.build_conn()
+        |> Sanctum.ClientIp.put_ingress(:loopback)
         |> Plug.Test.init_test_session(%{CyfrWeb.SignInResponse.session_key() => session.token})
 
       {:ok, pane, _html} =
