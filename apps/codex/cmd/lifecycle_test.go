@@ -253,7 +253,7 @@ func TestEnvWritesKeepQuotedValuesWhole(t *testing.T) {
 // keys minted, then the local head written.
 func newEnvFromTemplate(t *testing.T) (string, []envChange) {
 	t.Helper()
-	text, changes, _, err := newEnv(writeTemp(t, ".env.example", readShippedTemplate(t)))
+	text, changes, _, err := newEnv(writeTemp(t, ".env.example", readShippedTemplate(t)), noDevices())
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -198,6 +198,15 @@ services:
       - SETUID
       - SETGID
       - KILL
+    # A person's VM, on a machine that can run one: the KVM device its VMM
+    # holds and the tun device of its card, at the paths .env names, which
+    # `cyfr init` and each `cyfr update` write from what the machine has.
+    # Where it has neither, /dev/null stands at both paths, which the keeper
+    # reads as no device: each person's work runs in its own space, and the
+    # keeper's start line says why.
+    devices:
+      - ${CYFR_LOCUS_KVM:-/dev/null}:/dev/kvm
+      - ${CYFR_LOCUS_TUN:-/dev/null}:/dev/net/tun
     # no-new-privileges:true: no process in the container gains a privilege
     # by executing a setuid or file-capability binary.
     # writable-cgroups=true (Docker Engine 28 or later, on a cgroup v2 host)
@@ -386,6 +395,10 @@ services:
       - ALL
     cap_add:
       - NET_ADMIN
+    # The tun device a person's VM's route needs, as the locus service is
+    # given it: /dev/null where the machine has none.
+    devices:
+      - ${CYFR_LOCUS_TUN:-/dev/null}:/dev/net/tun
     security_opt:
       - no-new-privileges:true
       - seccomp=./container.seccomp.json

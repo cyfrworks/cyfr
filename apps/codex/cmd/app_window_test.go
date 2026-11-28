@@ -5,6 +5,7 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -154,6 +155,31 @@ func TestThePageOffersThisComputersOwnCYFRsChangeAsThisReleaseShowsIt(t *testing
 	if p := windowOffer(context.Background(), t.TempDir(), project); p.Step != "" ||
 		!slices.Contains(p.Says, "Your CYFR in "+project+" could not be checked for its update: cyfr update needs docker on PATH to update the stack; nothing was changed") {
 		t.Fatalf("a refused check is offered %+v", p)
+	}
+}
+
+// The page for a CYFR on this release whose update would first give the
+// devices, as --offer answers it (updater.change), starts at the change's
+// own first line, which says there is nothing to switch, then what giving
+// them removes, with its yes: it says nothing of an earlier release.
+func TestThePageForAnUpdateOnItsReleaseSaysNoEarlierRelease(t *testing.T) {
+	newAppScenario(t, "0.10.0", "0.10.0", "0.10.0")
+	project := t.TempDir()
+	first := "This CYFR is on release 0.10.0 already, so there is nothing to switch; cyfr update writes this machine's devices to .env, starts it and waits for every service of its stack."
+	line, _ := json.Marshal(shownChange{Change: first + "\n" + devicesSignInAgain + "\n", Confirmation: "c0ffee", OnRelease: true})
+	standInSelf(t, "printf '%s\\n' '"+strings.ReplaceAll(string(line), "'", `'\''`)+"'\n")
+	p := windowOffer(context.Background(), t.TempDir(), project)
+	if p.Step != "stack" || !reflect.DeepEqual(p.Args, []string{"update", "--version", "0.10.0", "--confirmed", "c0ffee"}) {
+		t.Fatalf("offered %+v", p)
+	}
+	at := slices.Index(p.Says, "Your CYFR in "+project+": "+first)
+	if at < 0 || at+1 >= len(p.Says) || p.Says[at+1] != devicesSignInAgain {
+		t.Errorf("the page does not start the change at its own first line, then what giving the devices removes: %q", p.Says)
+	}
+	for _, said := range p.Says {
+		if strings.Contains(said, "still runs the release it ran before this app was updated") {
+			t.Errorf("the page says the CYFR runs an earlier release, above a change that says it is on release 0.10.0 already: %q", said)
+		}
 	}
 }
 

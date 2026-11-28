@@ -106,7 +106,7 @@ func TestConcurrentReleasesLeaveNoReleasedSessionsHosts(t *testing.T) {
 			go func() {
 				defer wg.Done()
 				<-start
-				k.s.leaveMachine(sp)
+				_ = k.s.reroute(sp.machine, sp)
 			}()
 		}
 		close(start)

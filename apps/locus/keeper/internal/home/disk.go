@@ -97,6 +97,12 @@ type Disk struct {
 	Form    string   `json:"form"`
 	UID     int      `json:"uid"`
 	Homes   []string `json:"homes"`
+	// Unkept says the disk has never held a kept home: an image made for
+	// a scratch session's first spawn, which its keeper retires whole at
+	// its VM's release (package serve). The first home it holds clears it
+	// for good (With); a record without it, any made before it was
+	// written, is never retired so.
+	Unkept bool `json:"unkept,omitempty"`
 }
 
 // Holds reports whether the disk records the home id.
@@ -105,8 +111,10 @@ func (d *Disk) Holds(id string) bool {
 	return found
 }
 
-// With is the disk recording the home id beside its others.
+// With is the disk recording the home id beside its others: one that has
+// held a home is kept from then on (Unkept).
 func (d Disk) With(id string) Disk {
+	d.Unkept = false
 	i, found := slices.BinarySearch(d.Homes, id)
 	if !found {
 		d.Homes = slices.Insert(slices.Clone(d.Homes), i, id)
@@ -248,6 +256,8 @@ func (k Kept) readRecord(a string) (*Disk, error) {
 		return nil, fmt.Errorf("%s records uid %d, outside %d-%d: %w", path, d.UID, k.First, k.Last, ErrBadRecord)
 	case d.Homes == nil || len(d.Homes) > MaxDiskHomes || !slices.IsSorted(d.Homes):
 		return nil, fmt.Errorf("%s records its homes out of order or past %d: %w", path, MaxDiskHomes, ErrBadRecord)
+	case d.Unkept && (d.Form != FormImage || len(d.Homes) > 0):
+		return nil, fmt.Errorf("%s marks a disk that holds homes, or of the directory form, as never kept: %w", path, ErrBadRecord)
 	}
 	for i, id := range d.Homes {
 		if !ValidID(id) || (i > 0 && d.Homes[i-1] == id) {

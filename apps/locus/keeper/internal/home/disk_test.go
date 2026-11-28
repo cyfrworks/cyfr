@@ -146,6 +146,12 @@ func TestARecordTheKeeperCannotTrustIsRefused(t *testing.T) {
 		"an unknown member": func(k Kept, dir string) error {
 			return os.WriteFile(k.recordPath(Person("ath_1")), []byte(`{"athanor":"ath_1","form":"directory","uid":`+itoa(k.First)+`,"homes":[],"x":1}`), RecordMode)
 		},
+		"a never-kept disk that holds a home": func(k Kept, dir string) error {
+			return os.WriteFile(k.recordPath(Person("ath_1")), []byte(`{"athanor":"ath_1","form":"image","uid":`+itoa(k.First)+`,"homes":["vlt_a"],"unkept":true}`), RecordMode)
+		},
+		"a never-kept disk of the directory form": func(k Kept, dir string) error {
+			return os.WriteFile(k.recordPath(Person("ath_1")), []byte(`{"athanor":"ath_1","form":"directory","uid":`+itoa(k.First)+`,"homes":[],"unkept":true}`), RecordMode)
+		},
 		"a home on two disks": func(k Kept, dir string) error {
 			return k.WriteDisk(Disk{Athanor: "ath_2", Form: FormDirectory, UID: k.First + 1, Homes: []string{"vlt_a"}})
 		},
@@ -189,3 +195,36 @@ func TestARecordTheKeeperCannotTrustIsRefused(t *testing.T) {
 }
 
 func itoa(n int) string { return strconv.Itoa(n) }
+
+// A disk made for a scratch session's first spawn is marked as never kept,
+// its record says so as it reads back, and the first home it holds clears
+// the mark for good; a record without the member reads as kept.
+func TestANeverKeptDisksMarkIsItsRecordsAndGoesWithItsFirstHome(t *testing.T) {
+	k := recordsOfMine(t, 4)
+	if _, err := k.LoadDisks(); err != nil {
+		t.Fatal(err)
+	}
+	d := Disk{Athanor: "ath_1", Form: FormImage, UID: k.First, Homes: []string{}, Unkept: true}
+	if err := k.WriteDisk(d); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := k.ReadDisk("ath_1"); err != nil || !got.Unkept {
+		t.Fatalf("a never-kept disk read back as %+v, %v", got, err)
+	}
+	kept := d.With("vlt_a")
+	if kept.Unkept || kept.Without("vlt_a").Unkept {
+		t.Fatal("a disk that held a home is still marked as never kept")
+	}
+	if err := k.WriteDisk(kept.Without("vlt_a")); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := k.ReadDisk("ath_1"); err != nil || got.Unkept {
+		t.Fatalf("a disk whose home went read back as %+v, %v: want kept", got, err)
+	}
+	if err := os.WriteFile(k.recordPath(Person("ath_2")), []byte(`{"athanor":"ath_2","form":"image","uid":`+itoa(k.First+1)+`,"homes":[]}`), RecordMode); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := k.ReadDisk("ath_2"); err != nil || got.Unkept {
+		t.Fatalf("a record with no mark read as %+v, %v: want kept", got, err)
+	}
+}

@@ -648,7 +648,7 @@ func init() {
 
 var accessCmd = &cobra.Command{
 	Use:         "access",
-	Annotations: map[string]string{dockerAnnotation: "yes"},
+	Annotations: map[string]string{dockerAnnotation: "yes", startsAnnotation: "yes"},
 	Short:       "Choose CYFR's browser address, see how it is reached, or finish an interrupted change",
 	GroupID:     "server",
 	Long: `See and change how the CYFR in the current directory is reached.
@@ -672,7 +672,7 @@ var accessCmd = &cobra.Command{
 
 var accessBrowserCmd = &cobra.Command{
 	Use:         "browser <none|tailnet|domain|proxy>",
-	Annotations: map[string]string{dockerAnnotation: "yes"},
+	Annotations: map[string]string{dockerAnnotation: "yes", startsAnnotation: "yes"},
 	Short:       "Choose CYFR's browser address: none, your tailnet, a domain, or a domain your own proxy serves",
 	Long: `Choose the browser address of the CYFR in the current directory, and every setting that follows from it in .env (CYFR_BROWSER, CYFR_HOST, CYFR_PUBLIC_URL, CYFR_TAILNET_NODE_ID, CADDY_ACME_EMAIL, CYFR_PROXY_PUBLISH).
 

@@ -186,8 +186,15 @@ func stackOffer(ctx context.Context, p *desktop.UpdatePlan, project string) {
 		return
 	}
 	p.Step, p.Target = "stack", version.Version
-	p.Says = append(p.Says, fmt.Sprintf("Your CYFR in %s still runs the release it ran before this app was updated, as it does after a cyfr update answered no. Updating it to release %s:", project, version.Version))
-	for _, line := range strings.Split(strings.TrimSpace(shown.Change), "\n") {
+	lines := strings.Split(strings.TrimSpace(shown.Change), "\n")
+	if shown.OnRelease {
+		// A CYFR on this release already switches nothing: the change's own
+		// first line says so, and the page starts there.
+		lines[0] = fmt.Sprintf("Your CYFR in %s: %s", project, strings.TrimSpace(lines[0]))
+	} else {
+		p.Says = append(p.Says, fmt.Sprintf("Your CYFR in %s still runs the release it ran before this app was updated, as it does after a cyfr update answered no. Updating it to release %s:", project, version.Version))
+	}
+	for _, line := range lines {
 		p.Says = append(p.Says, strings.TrimSpace(line))
 	}
 	p.Dir, p.Args = project, []string{"update", "--version", version.Version, "--confirmed", shown.Confirmation}

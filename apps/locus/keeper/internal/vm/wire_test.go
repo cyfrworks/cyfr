@@ -120,3 +120,14 @@ func TestARefusedHelloCarriesTheGuestsLineQuoted(t *testing.T) {
 		t.Fatalf("the refusal is %d bytes: %.120q", len(err.Error()), err)
 	}
 }
+
+// A hello that does not decode, its number past every integer, is refused
+// in a short error, the decoder's words, which quote the guest's literal,
+// quoted and cut (logx.Untrusted).
+func TestAnUndecodableHelloCarriesNoLongLiteral(t *testing.T) {
+	line := `{"v":1` + strings.Repeat("9", 1<<20) + `,"type":"hello"}`
+	_, err := ParseHello([]byte(line))
+	if err == nil || len(err.Error()) > 300 {
+		t.Fatalf("the refusal is %d bytes: %.120q", len(err.Error()), err)
+	}
+}
