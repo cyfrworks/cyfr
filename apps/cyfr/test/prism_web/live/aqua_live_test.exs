@@ -3189,8 +3189,7 @@ defmodule PrismWeb.AquaLiveTest do
       {:ok, room} = Arca.Test.Days.thread(actor)
       {:ok, thread} = Aqua.Tape.crew_thread(ctx, room.id, "mine")
 
-      assert {:ok, %{accepted: true, admitted: :turn, turn_id: turn_id}} =
-               Aqua.Runner.send_message(%{ctx | origin: :interactive}, thread.id, "hello")
+      turn_id = handed!(ctx, room, thread, "hello")
 
       answers!(fake, claude, "Hello from Claude Code.", fn ->
         match?({:ok, %{status: "completed"}}, Aqua.Tape.turn(ctx, turn_id))
@@ -3487,8 +3486,7 @@ defmodule PrismWeb.AquaLiveTest do
         {:ok, room} = Arca.Test.Days.thread(actor)
         {:ok, thread} = Aqua.Tape.crew_thread(ctx, room.id, "mine")
 
-        assert {:ok, %{accepted: true, admitted: :turn, turn_id: turn_id}} =
-                 Aqua.Runner.send_message(%{ctx | origin: :interactive}, thread.id, "hello")
+        turn_id = handed!(ctx, room, thread, "hello")
 
         answers!(fake, to_row, "Hello from #{to}.", fn ->
           match?({:ok, %{status: "completed"}}, Aqua.Tape.turn(ctx, turn_id))
@@ -5325,6 +5323,38 @@ defmodule PrismWeb.AquaLiveTest do
   # The person's post to `member`, in its own thread off a room, answered
   # on the brain `open`, a worker playing the brain's answer, under the
   # crew's grant as the fill mints it.
+  # Aqua's request of the member of `thread` in `room`, as `crew.ask`
+  # writes it, delivered into that thread: the member's turn there.
+  defp handed!(ctx, room, thread, task) do
+    {:ok, %{message: request}} =
+      Aqua.Tape.accept(ctx, room.id, %{
+        message: %{
+          author: Prima.Author.agent(),
+          sent_by: "aqua",
+          addressee: thread.agent,
+          status: "pending",
+          content: task
+        },
+        request: %{
+          member: thread.agent,
+          task: task,
+          options: %{},
+          person_id: ctx.user_id,
+          origin: :interactive
+        }
+      })
+
+    assert {:ok, %{"applied" => 1}} = Aqua.Crew.drain(ctx.athanor_id)
+
+    [%{turn_id: turn_id}] =
+      Enum.filter(
+        Arca.ThreadStorage.messages(Sanctum.Context.actor(ctx), thread.id),
+        &(Aqua.Tape.payload(&1)["request_id"] == request.id)
+      )
+
+    turn_id
+  end
+
   defp answered_on_open!(ctx, member) do
     ref = "catalyst:local.open"
     Cyfr.Test.SeedBundle.lay!(~w(files http))
@@ -5352,8 +5382,7 @@ defmodule PrismWeb.AquaLiveTest do
     {:ok, room} = Arca.Test.Days.thread(actor)
     {:ok, thread} = Aqua.Tape.crew_thread(ctx, room.id, member)
 
-    assert {:ok, %{accepted: true, admitted: :turn, turn_id: turn_id}} =
-             Aqua.Runner.send_message(%{ctx | origin: :interactive}, thread.id, "hello")
+    turn_id = handed!(ctx, room, thread, "hello")
 
     Prima.Test.Wait.wait_until(
       fn ->

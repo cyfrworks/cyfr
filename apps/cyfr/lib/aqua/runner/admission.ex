@@ -15,19 +15,19 @@ defmodule Aqua.Runner.Admission do
   thread (`kind: "daily"` or `"workspace"`), or a crew member's child
   thread (`kind: "crew"`, its `agent` the member):
 
-    * A person's message in a room addresses the soul, or the crew
-      member it names (an `@name`, else an explicit pick): the soul's is
-      a turn, a member's a request to it. In a child thread it addresses
-      the thread's member, and naming anyone else is refused.
+    * A person's message in a room is a turn of the soul, whatever
+      names its text holds: a job reaches a crew member only by the
+      soul's hand-off. A child thread admits no message of the person's.
     * A turn of the soul may address any crew member: that is
       `crew.ask` (`Aqua.Crew`), whose request row this rule admits
-      (`request/3`).
+      (`request/4`).
     * A request delivered into a child thread is a turn of the member
       there, sent by whoever sent the request.
     * A turn of a child thread may address only the thread and request
-      that asked it: its reply lands on the request's thread, addressed
-      to the request's sender, and opens the soul's turn when that sender
-      is the soul, or is room content when it is the person.
+      that asked it: its reply lands on the request's thread and opens
+      the soul's turn. A request row whose sender is the person is
+      answered the same way: no send writes one, but such a row stays
+      pending until its member answers it.
     * A line of the server's is a turn of the soul under the `schedule`
       origin, whatever names its text holds: a line with nobody present
       asks no crew member. A schedule's line (`:schedule`) is sent as the
@@ -45,7 +45,6 @@ defmodule Aqua.Runner.Admission do
   Anything else is refused `:not_addressable`.
   """
 
-  alias Aqua.Roster
   alias Sanctum.Context
   alias Sanctum.Tenancy.{Athanors, Users}
 
@@ -57,11 +56,8 @@ defmodule Aqua.Runner.Admission do
   @person "person"
   @server Prima.Author.system()
 
-  @typedoc """
-  What a send is: a turn of the named agent (opened, or a steer of one),
-  a request to the named crew member, or room content that opens nothing.
-  """
-  @type decision :: {:turn, String.t()} | {:request, String.t()} | :content
+  @typedoc "What a send is: a turn of the named agent, opened or a steer of one."
+  @type decision :: {:turn, String.t()}
 
   @typedoc """
   The thread a send lands in, as the runner read it: its kind, its room
@@ -81,9 +77,8 @@ defmodule Aqua.Runner.Admission do
   @doc """
   Admit `text` from `ctx` into `thread`, or refuse it with the reason the
   sender is told: `:empty`, `:message_too_long`, `:archived`,
-  `:not_member`, `:no_agent`, `:not_addressable`. `opts`:
-  `:attachments`, `:agents` (the sender's roster), `:agent` (an explicit
-  pick), `:last` (the agent of the thread's last turn), `:schedule` (a
+  `:not_member`, `:not_addressable`. `opts`:
+  `:attachments`, `:schedule` (a
   schedule's line) and `:server` (a post of the server's own), each
   admitted only under the `schedule` origin, `:opening`
   (the opening row a workspace thread's delivery starts), `:report` (a
@@ -158,7 +153,7 @@ defmodule Aqua.Runner.Admission do
       cond do
         Keyword.has_key?(opts, :schedule) -> scheduled(thread, sent_by, ctx.origin)
         Keyword.get(opts, :server) == true -> servers(thread, sent_by, @server, ctx.origin)
-        true -> address(thread, sent_by, text, opts)
+        true -> address(thread, sent_by, opts)
       end
 
     case decided do
@@ -167,13 +162,13 @@ defmodule Aqua.Runner.Admission do
     end
   end
 
-  defp address(thread, sent_by, text, opts) do
+  defp address(thread, sent_by, opts) do
     cond do
       opening = Keyword.get(opts, :opening) -> opening(thread, sent_by, opening)
       Keyword.has_key?(opts, :report) -> report(thread, sent_by)
       reply = Keyword.get(opts, :reply) -> reply(thread, sent_by, reply)
       request = Keyword.get(opts, :request) -> delivered(thread, sent_by, request)
-      sent_by == @person -> persons(thread, text, opts)
+      sent_by == @person -> persons(thread)
       true -> {:error, :not_addressable}
     end
   end
@@ -211,18 +206,18 @@ defmodule Aqua.Runner.Admission do
   defp report(_thread, _sent_by), do: {:error, :not_addressable}
 
   # A member's reply: on the thread of the request it answers, which was
-  # addressed to it, to whoever sent that request.
+  # addressed to it, a turn of the soul. A request row the person sent,
+  # which no send writes but which stays pending until answered, is
+  # answered to the soul as well.
   defp reply(
          %{kind: kind, id: thread_id},
          member,
          %{request: %{thread_id: thread_id, addressee: member, sent_by: asker}}
        )
        when kind in @rooms and is_binary(member) and member != @person do
-    cond do
-      asker == @person -> {:ok, :content}
-      Prima.AgentRef.soul?(asker) -> {:ok, {:turn, asker}}
-      true -> {:error, :not_addressable}
-    end
+    if asker == @person or Prima.AgentRef.soul?(asker),
+      do: {:ok, {:turn, Prima.AgentRef.soul_name()}},
+      else: {:error, :not_addressable}
   end
 
   defp reply(_thread, _sent_by, _reply), do: {:error, :not_addressable}
@@ -239,45 +234,8 @@ defmodule Aqua.Runner.Admission do
 
   defp delivered(_thread, _sent_by, _request), do: {:error, :not_addressable}
 
-  # A person in a room: an `@name` in the text wins, then an explicit
-  # pick, then the agent of the previous turn, then the athanor's first
-  # (the roster lists the soul first). The soul's is a turn, a member's a
-  # request.
-  defp persons(%{kind: kind}, text, opts) when kind in @rooms do
-    roster = Keyword.get(opts, :agents, [])
-    {_stripped, mentioned} = Roster.parse_mention(text, roster)
-
-    with {:ok, name} <-
-           pick(roster, mentioned, Keyword.get(opts, :agent), Keyword.get(opts, :last)) do
-      cond do
-        Prima.AgentRef.soul?(name) -> {:ok, {:turn, name}}
-        member?(roster, name) -> {:ok, {:request, name}}
-        true -> {:error, :not_addressable}
-      end
-    end
-  end
-
-  # A person in a child thread speaks to its member, and to nobody else.
-  defp persons(%{kind: "crew", agent: member}, text, opts) when is_binary(member) do
-    roster = Keyword.get(opts, :agents, [])
-
-    case Roster.parse_mention(text, roster) do
-      {_text, nil} -> {:ok, {:turn, member}}
-      {_text, %{"name" => ^member}} -> {:ok, {:turn, member}}
-      {_text, _other} -> {:error, :not_addressable}
-    end
-  end
-
-  defp persons(_thread, _text, _opts), do: {:error, :not_addressable}
-
-  defp pick(roster, mentioned, explicit, last) do
-    cond do
-      match?(%{"name" => n} when is_binary(n), mentioned) -> {:ok, mentioned["name"]}
-      match?(%{"name" => n} when is_binary(n), explicit) -> {:ok, explicit["name"]}
-      is_binary(explicit) and explicit != "" -> {:ok, explicit}
-      is_binary(last) and Prima.AgentRef.soul?(last) -> {:ok, last}
-      match?(%{"name" => n} when is_binary(n), List.first(roster)) -> {:ok, hd(roster)["name"]}
-      true -> {:error, :no_agent}
-    end
-  end
+  # A person in a room speaks to the soul, whatever names the text holds;
+  # a person in a child thread speaks to nobody.
+  defp persons(%{kind: kind}) when kind in @rooms, do: {:ok, {:turn, Prima.AgentRef.soul_name()}}
+  defp persons(_thread), do: {:error, :not_addressable}
 end

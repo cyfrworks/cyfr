@@ -113,7 +113,8 @@ defmodule Sanctum.DeviceCerts do
     * `:client_mismatch` — the certificate names another client, athanor,
       key or account than the paired-client row or the context, or the
       context is not a device context `verify_connect/3` produced.
-    * `:revoked` — the paired client or the certificate was revoked.
+    * `:revoked` — the paired client was revoked or removed, or the
+      certificate revoked.
     * `:not_standing` — no such paired client here, a suspended one, the
       person denied, the athanor archived or not theirs, or the account
       gone.
@@ -687,7 +688,7 @@ defmodule Sanctum.DeviceCerts do
   @doc """
   The paired-client row `client_id` in the athanor `athanor_id`, of the
   person `user_id`: `{:ok, row}` for an active device client,
-  `:revoked` for a revoked one, `:not_standing` for a suspended one (a
+  `:revoked` for a revoked or removed one, `:not_standing` for a suspended one (a
   declared restore's) and for one this CYFR does not hold, and
   `:unavailable` when the store cannot answer.
   """
@@ -719,7 +720,9 @@ defmodule Sanctum.DeviceCerts do
        when is_binary(kid),
        do: {:ok, row}
 
-  defp row_standing(%{standing: "revoked"}), do: {:error, :revoked}
+  defp row_standing(%{standing: standing}) when standing in ["revoked", "removed"],
+    do: {:error, :revoked}
+
   defp row_standing(_suspended_or_no_device), do: {:error, :not_standing}
 
   @doc """

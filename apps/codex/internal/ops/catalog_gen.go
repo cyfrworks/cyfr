@@ -181,9 +181,10 @@ const (
 	OauthDeleteClient       = "delete_client"
 	OauthList               = "list"
 	OauthSetClient          = "set_client"
+	PairingAllowAgain       = "allow_again"
 	PairingList             = "list"
+	PairingRemove           = "remove"
 	PairingRenew            = "renew"
-	PairingRevoke           = "revoke"
 	PairingWaiting          = "waiting"
 	PolicyLogCorrelate      = "correlate"
 	PolicyLogGet            = "get"
@@ -328,7 +329,7 @@ var Actions = map[string][]string{
 	"mcp_servers":         {"create", "delete", "disable", "enable", "get", "list", "open", "refresh", "reset_home", "restart", "test", "update"},
 	"notes":               {"forget", "keep", "list", "pin", "read", "search"},
 	"oauth":               {"delete_client", "list", "set_client"},
-	"pairing":             {"list", "renew", "revoke", "waiting"},
+	"pairing":             {"allow_again", "list", "remove", "renew", "waiting"},
 	"policy_log":          {"correlate", "get", "list"},
 	"profile":             {"commit", "grant", "grants", "list", "plan", "preview", "publish", "revoke"},
 	"question":            {"answer", "answers", "forget", "pending", "set"},
@@ -2570,6 +2571,21 @@ func (args OauthSetClientArgs) MarshalJSON() ([]byte, error) {
 	}{Action: OauthSetClient, fields: fields(args)})
 }
 
+// PairingAllowAgainArgs carries arguments for pairing.allow_again.
+type PairingAllowAgainArgs struct {
+	// The paired client (pcl_…) (renew, remove, allow_again)
+	ClientId string `json:"client_id"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args PairingAllowAgainArgs) MarshalJSON() ([]byte, error) {
+	type fields PairingAllowAgainArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: PairingAllowAgain, fields: fields(args)})
+}
+
 // PairingListArgs carries arguments for pairing.list.
 type PairingListArgs struct {
 }
@@ -2583,9 +2599,24 @@ func (args PairingListArgs) MarshalJSON() ([]byte, error) {
 	}{Action: PairingList, fields: fields(args)})
 }
 
+// PairingRemoveArgs carries arguments for pairing.remove.
+type PairingRemoveArgs struct {
+	// The paired client (pcl_…) (renew, remove, allow_again)
+	ClientId string `json:"client_id"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args PairingRemoveArgs) MarshalJSON() ([]byte, error) {
+	type fields PairingRemoveArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: PairingRemove, fields: fields(args)})
+}
+
 // PairingRenewArgs carries arguments for pairing.renew.
 type PairingRenewArgs struct {
-	// The paired client (pcl_…) (renew, revoke)
+	// The paired client (pcl_…) (renew, remove, allow_again)
 	ClientId string `json:"client_id"`
 	// renew: the device's public key, unpadded base64url
 	DeviceKey string `json:"device_key"`
@@ -2623,21 +2654,6 @@ func (args *PairingRenewArgsProof) UnmarshalJSON(data []byte) error {
 	}
 	*args = PairingRenewArgsProof(value)
 	return nil
-}
-
-// PairingRevokeArgs carries arguments for pairing.revoke.
-type PairingRevokeArgs struct {
-	// The paired client (pcl_…) (renew, revoke)
-	ClientId string `json:"client_id"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args PairingRevokeArgs) MarshalJSON() ([]byte, error) {
-	type fields PairingRevokeArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: PairingRevoke, fields: fields(args)})
 }
 
 // PairingWaitingArgs carries arguments for pairing.waiting.
@@ -4849,12 +4865,10 @@ func (args ThreadSearchArgs) MarshalJSON() ([]byte, error) {
 
 // ThreadSendArgs carries arguments for thread.send.
 type ThreadSendArgs struct {
-	// send: a workspace thread or a crew member's thread; with none, or a daily thread, the send joins today's daily thread
+	// send: a workspace thread; with none, or a daily thread, the send joins today's daily thread
 	Thread Field[string] `json:"thread,omitzero"`
-	// send: the text to say (at most 32 KiB of text)
-	Message string `json:"message"`
-	// send: the agent to address when the text names none
-	Agent Field[string] `json:"agent,omitzero"`
+	// send: the text to say (at most 32 KiB of text); a send that is no press says a line or carries files
+	Message Field[string] `json:"message,omitzero"`
 	// send: the refs `attach` answered for this message id
 	Attachments Field[[]ThreadSendArgsAttachmentsItem] `json:"attachments,omitzero"`
 	// send: the sender's own id for this send, so a retry answers the same message
@@ -4863,6 +4877,8 @@ type ThreadSendArgs struct {
 	Id Field[string] `json:"id,omitzero"`
 	// send: a model override for this turn
 	Model Field[string] `json:"model,omitzero"`
+	// send: a press of a choice on Aqua's question (row, index): the message row the question is in and the choice's place, from 0. A press names nothing else but a client_id: it lands where the question is, a daily thread's question in today's daily thread, and says the choice's label, read on the server, to Aqua
+	Choice Field[ThreadSendArgsChoice] `json:"choice,omitzero"`
 	// send: the shared thread the sender has open beside this thread (shared_thread_id, title); its newest lines are read under the sender's seat for this one turn, never stored
 	Room Field[ThreadSendArgsRoom] `json:"room,omitzero"`
 }
@@ -4891,6 +4907,22 @@ func (args *ThreadSendArgsAttachmentsItem) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	*args = ThreadSendArgsAttachmentsItem(value)
+	return nil
+}
+
+type ThreadSendArgsChoice struct {
+	Row   string `json:"row"`
+	Index int    `json:"index"`
+}
+
+// UnmarshalJSON refuses unknown fields and preserves required presence.
+func (args *ThreadSendArgsChoice) UnmarshalJSON(data []byte) error {
+	type fields ThreadSendArgsChoice
+	var value fields
+	if err := decodeRecord(data, &value); err != nil {
+		return err
+	}
+	*args = ThreadSendArgsChoice(value)
 	return nil
 }
 

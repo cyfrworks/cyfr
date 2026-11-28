@@ -26,13 +26,24 @@ defmodule Sanctum.Pairing do
       person stand; a revoked client is never revived. The certificate is
       issued under the account head this CYFR holds now, under the
       issuance fence.
-    * `revoke/2` — a person ends one of their paired clients, with its
-      certificates and the confirmations it confirmed, in one transaction
-      (`Arca.PairedClients.revoke/2`). A sensitive change
-      (`pairing_revocation`).
-    * `list/1` — the person's paired clients in the athanor in focus, a
-      protected device's with what it reports of its disks
-      (`Sanctum.DeviceUnlock.storage/2`).
+    * `remove/2` — a person removes one of their active paired clients from this
+      CYFR, with its certificates and the confirmations it confirmed, in
+      one transaction: a device's row becomes `removed`
+      (`Arca.PairedClients.remove/2`), so its next hello here is refused
+      until they allow it again, and a passkey's is signed out, revoked
+      (`Arca.PairedClients.revoke/2`), since a passkey is shared by every
+      browser that syncs it and signing in with it again brings it back.
+      A sensitive change (`pairing_revocation`). Its key stays on the
+      account: removing a key from the account, at the account's own
+      pages, ends it everywhere.
+    * `allow_again/2` — a person allows a device they removed back: its
+      row becomes `revoked`, so its next hello pairs it anew
+      (`Arca.PairedClients.allow_again/4`). A sensitive change
+      (`pairing_readmission`), its confirmation consumed in that write's
+      owned transaction.
+    * `list/1` — the person's paired clients in the athanor in focus that
+      stand or were removed here, a protected device's with what it
+      reports of its disks (`Sanctum.DeviceUnlock.storage/2`).
 
   ## After a declared restore
 
@@ -58,6 +69,7 @@ defmodule Sanctum.Pairing do
   | `:vault_unlock` | a fresh confirmation |
   | `:home_transfer` | a fresh confirmation |
   | `:pairing_revocation` | a fresh confirmation |
+  | `:pairing_readmission` | a fresh confirmation |
   | `:restore_reenable` | a fresh confirmation |
   | `:program_definition` | a fresh confirmation |
   | `:question_always_any` | a fresh confirmation |
@@ -111,6 +123,7 @@ defmodule Sanctum.Pairing do
     vault_unlock: :fresh,
     home_transfer: :fresh,
     pairing_revocation: :fresh,
+    pairing_readmission: :fresh,
     restore_reenable: :fresh,
     program_definition: :fresh,
     question_always_any: :fresh,
@@ -128,6 +141,7 @@ defmodule Sanctum.Pairing do
           | :vault_unlock
           | :home_transfer
           | :pairing_revocation
+          | :pairing_readmission
           | :restore_reenable
           | :program_definition
           | :question_always_any
@@ -285,40 +299,48 @@ defmodule Sanctum.Pairing do
   end
 
   @doc """
-  Revoke the paired client `client_id`, one of the context person's in
-  the athanor in focus, with its certificates and the confirmations it
-  confirmed (`Arca.PairedClients.revoke/2`). A sensitive change
+  Remove the paired client `client_id`, one of the context person's in
+  the athanor in focus, from this CYFR, with its certificates and the
+  confirmations it confirmed: a device's row becomes `removed`
+  (`Arca.PairedClients.remove/2`) and a passkey's is signed out
+  (`Arca.PairedClients.revoke/2`). A sensitive change
   (`pairing_revocation`, `Sanctum.Consent.Authz.confirm/3`). Once the
-  revocation commits it is announced as a standing change of the person
+  removal commits it is announced as a standing change of the person
   (`Sanctum.Telemetry.sessions_revoked/3`), so every holder of their
   context, the client's device channel among them, reads the standing
   again at once rather than at its next ping, and the channel refuses the
-  client and closes. Answers the client's row as revoked.
+  client and closes. Answers the client's row as removed or revoked. Only
+  an active client is removed: one that is not, a stale id of a revoked
+  or removed row among them, is `{:not_found, "paired client", id}`, with
+  nothing asked or changed.
 
-  Until a lost device's pairing is revoked, what it cached and the device
-  key it holds are the exposure: that key renews its certificate while the
+  Until a lost device is removed, what it cached and the device key it
+  holds are the exposure: that key renews its certificate while the
   pairing stands (`renew/2`), so a certificate's expiry does not end it.
-  The revocation erases nothing the device already received.
+  The removal erases nothing the device already received.
   """
-  @spec revoke(Context.t(), String.t()) :: {:ok, map()} | {:error, refusal()}
-  def revoke(%Context{} = ctx, client_id) when is_binary(client_id) do
+  @spec remove(Context.t(), String.t()) :: {:ok, map()} | {:error, refusal()}
+  def remove(%Context{} = ctx, client_id) when is_binary(client_id) do
     with :ok <- person_focused(ctx),
-         {:ok, client} <- own_client(ctx, client_id) do
-      revoke_client(ctx, client)
+         {:ok, %{standing: "active"} = client} <- own_client(ctx, client_id) do
+      remove_client(ctx, client)
+    else
+      {:ok, %{}} -> {:error, {:not_found, "paired client", client_id}}
+      {:error, reason} -> {:error, reason}
     end
   end
 
   # The confirmation names the client by the name the person sees for it;
   # a client with none, or with one the preview cannot hold, is named by
-  # nothing rather than by its id, and the revocation goes on.
-  defp revoke_client(ctx, %{id: client_id} = client) do
+  # nothing rather than by its id, and the removal goes on.
+  defp remove_client(ctx, %{id: client_id} = client) do
     with :ok <-
            Authz.confirm(ctx, :pairing_revocation, %{
-             operation: "pairing.revoke",
+             operation: "pairing.remove",
              arguments: %{"client_id" => client_id},
              resource: previewable(Map.get(client, :display_name))
            }) do
-      case Arca.PairedClients.revoke(Context.actor(ctx), client_id) do
+      case retired(Context.actor(ctx), client) do
         {:ok, row} ->
           # The announcement makes each listener revalidate, never drop
           # unread: a holder of the person's context whose own credential
@@ -332,6 +354,9 @@ defmodule Sanctum.Pairing do
 
           {:ok, row}
 
+        {:error, :not_found} ->
+          {:error, {:not_found, "paired client", client_id}}
+
         {:error, :database_error} ->
           {:error, :unavailable}
 
@@ -339,6 +364,54 @@ defmodule Sanctum.Pairing do
           {:error, reason}
       end
     end
+  end
+
+  # A device stays out until its person allows it again; a passkey,
+  # shared by every browser that syncs it, is signed out.
+  defp retired(actor, %{source_kind: "device_cert", id: id}),
+    do: Arca.PairedClients.remove(actor, id)
+
+  defp retired(actor, %{id: id}), do: Arca.PairedClients.revoke(actor, id)
+
+  @doc """
+  Allow the device `client_id`, one the context person removed from this
+  CYFR in the athanor in focus, back: its row becomes `revoked`
+  (`Arca.PairedClients.allow_again/4`), so the device's next hello pairs
+  it anew. A sensitive change (`pairing_readmission`), confirmed by a key
+  of the person's account: the confirmation is checked first
+  (`Sanctum.Consent.Authz.check/3`) and consumed inside the write's owned
+  transaction (`Sanctum.Consent.Authz.consume/2`), so a member that lost
+  its slot changes nothing (`:not_owner`) and a write that rolls back
+  leaves the confirmation unspent. A client that is not one of theirs
+  removed here is `{:not_found, _, _}`. Answers the client's row as
+  revoked.
+  """
+  @spec allow_again(Context.t(), String.t()) :: {:ok, map()} | {:error, refusal()}
+  def allow_again(%Context{} = ctx, client_id) when is_binary(client_id) do
+    with :ok <- person_focused(ctx),
+         {:ok, %{standing: "removed"} = client} <- own_client(ctx, client_id),
+         change = readmission(client),
+         :ok <- Authz.check(ctx, :pairing_readmission, change),
+         {:ok, row} <-
+           Arca.PairedClients.allow_again(Context.actor(ctx), ctx.user_id, client_id,
+             verify: fn _row -> Authz.consume(ctx, {:pairing_readmission, change}) end
+           ) do
+      Authz.consumed(ctx)
+      {:ok, row}
+    else
+      {:ok, %{}} -> {:error, {:not_found, "removed device", client_id}}
+      {:error, :not_found} -> {:error, {:not_found, "removed device", client_id}}
+      {:error, :database_error} -> {:error, :unavailable}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp readmission(%{id: client_id} = client) do
+    %{
+      operation: "pairing.allow_again",
+      arguments: %{"client_id" => client_id},
+      resource: previewable(Map.get(client, :display_name))
+    }
   end
 
   defp previewable(name) do
@@ -361,20 +434,22 @@ defmodule Sanctum.Pairing do
   end
 
   @doc """
-  The context person's active paired clients in the athanor in focus,
-  oldest first, the passkeys of their account that signed in here among
-  them (`Sanctum.SignIn` records them): each with its id, the credential it stands on
-  (`device_cert` or `passkey`), when it was paired or first signed in
-  here, when its current certificate expires (nil for none current, and
-  always for a passkey), whether it is the client `ctx` itself came
-  through, what holds a device's key, its name and its storage.
+  The context person's paired clients in the athanor in focus that are
+  active or that they removed here, oldest first, the passkeys of their
+  account that signed in here among them (`Sanctum.SignIn` records
+  them): each with its id, its standing (`active` or `removed`), the
+  credential it stands on (`device_cert` or `passkey`), when it was
+  paired or first signed in here, when its current certificate expires
+  (nil for none current, and always for a passkey and a removed device),
+  whether it is the client `ctx` itself came through, what holds a
+  device's key, its name and its storage.
   """
   @spec list(Context.t()) :: {:ok, [map()]} | {:error, refusal()}
   def list(%Context{} = ctx) do
     actor = Context.actor(ctx)
 
     with :ok <- person_focused(ctx) do
-      case Arca.PairedClients.list(actor, user_id: ctx.user_id, standing: :active) do
+      case Arca.PairedClients.list(actor, user_id: ctx.user_id, standing: [:active, :removed]) do
         {:ok, rows} -> {:ok, Enum.map(rows, &listed(actor, &1, ctx))}
         {:error, _unanswered} -> {:error, :unavailable}
       end
@@ -390,6 +465,7 @@ defmodule Sanctum.Pairing do
 
     %{
       client_id: row.id,
+      standing: row.standing,
       source: row.source_kind,
       paired_at: row.inserted_at,
       certificate_expires_at: expires_at,

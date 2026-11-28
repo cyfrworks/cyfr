@@ -20,9 +20,14 @@ func TestThePoolsNumbersArePrimasLocusPools(t *testing.T) {
 		t.Fatal(err)
 	}
 	var v struct {
-		Comment        string            `json:"comment"`
-		FloorBytes     uint64            `json:"floor_bytes"`
-		FloorRunners   int               `json:"floor_runners"`
+		Comment      string `json:"comment"`
+		FloorBytes   uint64 `json:"floor_bytes"`
+		FloorRunners int    `json:"floor_runners"`
+		MachineBytes struct {
+			Base   uint64      `json:"base"`
+			PerGiB uint64      `json:"per_gib"`
+			Cases  [][2]uint64 `json:"cases"`
+		} `json:"machine_bytes"`
 		RoomWaitMs     int64             `json:"room_wait_ms"`
 		AllowanceMs    int64             `json:"allowance_ms"`
 		StaleMs        int64             `json:"stale_ms"`
@@ -47,9 +52,18 @@ func TestThePoolsNumbersArePrimasLocusPools(t *testing.T) {
 	}
 	names := map[string]Class{"runner": Runner, "build": Build, "session": Session}
 	ms := func(d time.Duration) int64 { return d.Milliseconds() }
-	if v.FloorBytes != FloorBytes || v.FloorRunners != FloorRunners || v.RoomWaitMs != ms(RoomWait) ||
+	if v.FloorBytes != FloorBytes || v.FloorRunners != FloorRunners || v.MachineBytes.Base != MachineBaseBytes ||
+		v.MachineBytes.PerGiB != MachinePerGiBBytes || v.RoomWaitMs != ms(RoomWait) ||
 		v.AllowanceMs != ms(AllowanceFor) || v.StaleMs != ms(StaleAfter) {
 		t.Fatalf("the vector's numbers %+v differ from the keeper's", v)
+	}
+	if len(v.MachineBytes.Cases) == 0 {
+		t.Fatal("the vector holds no VM's allowance for a guest's size")
+	}
+	for _, c := range v.MachineBytes.Cases {
+		if got := MachineBytes(c[0]); got != c[1] {
+			t.Errorf("a guest of %d bytes: the keeper's VM allowance %d, the vector's %d", c[0], got, c[1])
+		}
 	}
 	if len(v.Kinds) != len(Kinds) {
 		t.Fatalf("the vector's kinds %v, the keeper's %v", v.Kinds, Kinds)

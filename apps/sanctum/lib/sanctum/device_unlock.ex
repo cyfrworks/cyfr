@@ -39,8 +39,11 @@ defmodule Sanctum.DeviceUnlock do
   (`Sanctum.DeviceCerts.issue/2`), under the issuance fence. A device
   whose key already stands here as an active client of the person is
   answered a new certificate for that client instead, so a hello asked
-  again pairs nothing twice. A capability that admits nobody writes
-  nothing. `admit/2` answers the paired client's id, its certificate and
+  again pairs nothing twice, and two at once pair it once. A device whose
+  person removed it here (a client of that key is `removed`,
+  `Sanctum.Pairing.remove/2`) is refused `:removed_here` and paired by
+  nothing, until they allow it again (`Sanctum.Pairing.allow_again/2`). A capability that admits
+  nobody writes nothing. `admit/2` answers the paired client's id, its certificate and
   its standing; from then on the device connects with that certificate
   (`Sanctum.DeviceCerts`).
 
@@ -175,7 +178,8 @@ defmodule Sanctum.DeviceUnlock do
   `t:admitted/0`. Refusals: `Sanctum.SignIn.answer/3`'s, among them
   `:answer_refused`, `:identity_stale`, `:identity_gone`, `:stale_head`,
   `{:door, reason}`, `:setup_closed`, and
-  `:unavailable`.
+  `:unavailable`; and `:removed_here` for a device its person removed
+  from this CYFR.
   """
   @spec admit(String.t(), Prima.SignIn.DeviceAnswer.t() | map()) ::
           {:ok, admitted()} | {:error, term()}
@@ -205,7 +209,10 @@ defmodule Sanctum.DeviceUnlock do
   # the person's athanor under the client id the channel reserved, with
   # the holder and name its hello reported (`t:device/0`), and its first
   # certificate, in one transaction; or, where the key already stands as
-  # an active client of theirs there, a new certificate for that client.
+  # an active client of theirs there, a new certificate for that client;
+  # or, where a client of theirs of that key there is removed, nothing,
+  # refused `:removed_here`. Each is decided under the person's lock
+  # (`Arca.PairedClients.enroll/3`), so two hellos of one key pair it once.
   @spec pair(map(), device(), Key.t(), String.t()) :: :ok | {:error, term()}
   def pair(
         %{id: user_id},
@@ -216,35 +223,35 @@ defmodule Sanctum.DeviceUnlock do
     with {:ok, athanor_id} <- athanor(user_id) do
       actor = Prima.Actor.in_athanor(athanor_id)
 
-      case standing_client(actor, user_id, kid) do
-        {:ok, %{} = client} ->
-          issued(Sanctum.DeviceCerts.issue(client, head))
-
-        {:ok, nil} ->
-          actor
-          |> Arca.PairedClients.enroll(
-            %{
-              id: client_id,
-              user_id: user_id,
-              source_kind: "device_cert",
-              source_id: client_id,
-              device_public_key: pub,
-              holder_kind: holder_kind,
-              display_name: display_name,
-              kid: kid,
-              head: head
-            },
-            also: &Sanctum.DeviceCerts.issue(&1, head)
-          )
-          |> issued()
-
-        {:error, reason} ->
-          {:error, reason}
-      end
+      # The decision is the enrollment's, under the person's lock: a
+      # removed client of the key refuses, an active one is issued a new
+      # certificate, and with neither the device is paired.
+      actor
+      |> Arca.PairedClients.enroll(
+        %{
+          id: client_id,
+          user_id: user_id,
+          source_kind: "device_cert",
+          source_id: client_id,
+          device_public_key: pub,
+          holder_kind: holder_kind,
+          display_name: display_name,
+          kid: kid,
+          head: head
+        },
+        also: &Sanctum.DeviceCerts.issue(&1, head)
+      )
+      |> issued()
     end
   end
 
+  # The enrollment's own refusals in the hello's vocabulary. A member that
+  # lost its slot is a pause, as `Sanctum.DeviceCerts.issue/2` says it, for
+  # a first hello and a returning one alike: the device retries, its key
+  # never refused.
   defp issued({:ok, _issued}), do: :ok
+  defp issued({:error, :removed}), do: {:error, :removed_here}
+  defp issued({:error, :not_owner}), do: {:error, :unavailable}
   defp issued({:error, :conflict}), do: {:error, :answer_refused}
   defp issued({:error, :database_error}), do: {:error, :unavailable}
   defp issued({:error, {:invalid, _errors}}), do: {:error, :unavailable}

@@ -200,8 +200,10 @@ defmodule Emissary.Web.DeviceChannel do
       expired unanswered. An intent, a repeated confirmation among them,
       is answered first with its `id` and an `error` naming the class.
     * `4403` (`forbidden`) — the client's standing ended: its pairing
-      revoked, its person denied, or the athanor archived or not theirs;
-      or a hello's person the door denies or whose account is closed.
+      revoked or removed, its person denied, or the athanor archived or
+      not theirs; or a hello's person the door denies or whose account is
+      closed, or whose device they removed from this CYFR
+      (`removed_here`), which stays out until they allow it again.
     * `4408` (`unauthenticated`) — the certificate expired unrenewed, or
       is not one this home holds now: the glass renews.
     * `1013` — this home could not check the connection now: its store
@@ -1147,7 +1149,7 @@ defmodule Emissary.Web.DeviceChannel do
   end
 
   defp class(reason)
-       when reason in [:revoked, :not_standing, :identity_gone],
+       when reason in [:revoked, :not_standing, :identity_gone, :removed_here],
        do: :forbidden
 
   defp class({:door, :unavailable}), do: :unavailable

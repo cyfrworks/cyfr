@@ -742,7 +742,7 @@ defmodule Aqua.LoopTest do
         reply("tidied")
       ])
 
-      turn = post!(ctx, room, "tidy up")
+      {turn, author, sent_by} = asked!(ctx, daily, name, "tidy up")
       assert %{status: "completed", agent: ^name} = turn
 
       assert step_rows(ctx, turn) == [
@@ -767,7 +767,7 @@ defmodule Aqua.LoopTest do
         )
 
       assert lines(ctx, room.id) == [
-               line("text", ctx.user_id, "person", "tidy up", turn_id),
+               line("text", author, sent_by, "tidy up", turn_id),
                line("tool_call", agent, name, "files", turn_id),
                line("tool_call", agent, name, "notes", turn_id),
                line("tool_result", system, name, list_result, turn_id),
@@ -991,6 +991,45 @@ defmodule Aqua.LoopTest do
   # it, in a filled athanor (`Sanctum.Provisioning.ready/1`): the turn it
   # opened, once that turn has ended.
   defp post!(ctx, room, text), do: ended!(ctx, send!(ctx, room, text))
+
+  # The job `text` for `name`: the soul's is the person's post in the
+  # daily thread, a member's Aqua's request of it there, delivered into
+  # its own thread. The turn it opened, once ended, and the author and
+  # sender of its opening line.
+  defp asked!(ctx, daily, "aqua", text), do: {post!(ctx, daily, text), ctx.user_id, "person"}
+
+  defp asked!(ctx, daily, name, text) do
+    Sanctum.TestContext.ready!(ctx.athanor_id)
+
+    {:ok, %{message: request}} =
+      Tape.accept(ctx, daily.id, %{
+        message: %{
+          author: Prima.Author.agent(),
+          sent_by: "aqua",
+          addressee: name,
+          status: "pending",
+          content: text
+        },
+        request: %{
+          member: name,
+          task: text,
+          options: %{},
+          person_id: ctx.user_id,
+          origin: :interactive
+        }
+      })
+
+    assert {:ok, %{"applied" => 1}} = Aqua.Crew.drain(ctx.athanor_id)
+    [child] = Threads.children(Sanctum.Context.actor(ctx), daily.id)
+
+    [%{turn_id: turn_id}] =
+      Enum.filter(
+        Threads.messages(Sanctum.Context.actor(ctx), child.id),
+        &(Tape.payload(&1)["request_id"] == request.id)
+      )
+
+    {ended!(ctx, turn_id), Prima.Author.agent(), "aqua"}
+  end
 
   defp send!(ctx, room, text) do
     Sanctum.TestContext.ready!(ctx.athanor_id)

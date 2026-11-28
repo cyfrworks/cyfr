@@ -162,7 +162,7 @@ defmodule Aqua.ProgramTest do
   end
 
   describe "a crew member on a program brain" do
-    test "the person's post joins Aqua's running job and the asker gets one final answer",
+    test "the person's post in the member's thread is refused, and Aqua's job ends with one final answer",
          %{ctx: ctx, thread: room, fake: fake} do
       ctx = %{ctx | origin: :interactive}
       actor = Sanctum.Context.actor(ctx)
@@ -198,19 +198,19 @@ defmodule Aqua.ProgramTest do
       say(fake, row, accepted(first))
       committed!(ctx, child, 4)
 
-      assert {:ok, %{admitted: :steer, turn_id: id, message_id: person_post}} =
+      # The person speaks to Aqua: a post in the member's thread joins no
+      # job and writes nothing.
+      assert {:error, :not_addressable} =
                Aqua.Runner.send_message(ctx, child.id, "Include PAPAYA.")
 
-      assert id == turn.id
+      id = turn.id
       assert {:ok, [%{id: ^id}]} = Tape.open_turns(ctx, child.id)
-      second = sent()
-      [_, input] = inputs(ctx, turn)
-      assert input.idempotency_key == "0:post:#{person_post}"
-      assert second == posted(input, turn, "Include PAPAYA.")
+      assert [%{id: only}] = inputs(ctx, turn)
+      assert only == first.id
+      refute Enum.any?(Arca.ThreadStorage.messages(actor, child.id), &(&1.content =~ "PAPAYA"))
 
-      say(fake, row, accepted(input))
-      say(fake, row, said(turn, "msg_1", "Reviewed the plan, including PAPAYA."))
-      say(fake, row, idle(turn, [first.id, input.id]))
+      say(fake, row, said(turn, "msg_1", "Reviewed the plan."))
+      say(fake, row, idle(turn, [first.id]))
 
       Prima.Test.Wait.wait_until(
         fn -> match?({:ok, %{status: "completed"}}, Tape.turn(ctx, id)) end,
@@ -220,7 +220,7 @@ defmodule Aqua.ProgramTest do
 
       assert {:ok, %{"applied" => 1}} = Aqua.Crew.drain(ctx.athanor_id)
 
-      assert [%{content: "Reviewed the plan, including PAPAYA.", outcome: "done"}] =
+      assert [%{content: "Reviewed the plan.", outcome: "done"}] =
                Enum.filter(
                  Arca.ThreadStorage.messages(actor, room.id),
                  &(&1.reply_to == request.id)
@@ -522,7 +522,15 @@ defmodule Aqua.ProgramTest do
                  Aqua.Reader.deliver(
                    Aqua.Prompt.briefing(true, false, true, true),
                    Aqua.Reader.mark(thread.id)
-                 )
+                 ) <>
+                 "\n\n---\n\n## Choices as buttons\n\nWhen you ask the person to decide, you " <>
+                 "may offer the choices as buttons: end that reply with a block and nothing " <>
+                 "after it: a line of three backticks, `choices`, a space and this turn's id; " <>
+                 "the question on one line, at most 200 characters; each choice on a line of " <>
+                 "its own after `- `, one to eight, each different and at most 100 characters; " <>
+                 "optionally a line `file: ` and the path of a file in Files the person should " <>
+                 "open first; and a line of three backticks. Neither the question nor a choice " <>
+                 "holds « or »."
 
       refute opening =~ "## Crew member"
       assert start["config"] == %{"model" => "opus"}
@@ -616,6 +624,9 @@ defmodule Aqua.ProgramTest do
            "sentence and the choices as a short list."
     @handling "A member's reply that asks the person waits on a decision: answer it " <>
                 "yourself with `crew.ask` to that member when you know the answer"
+    @naming "When the person names a member for a job, hand it to that member with " <>
+              "`crew.ask`, and do not do it yourself."
+    @files "With `files` true, the files of the message you are answering go with the job."
     @question "Which database should the export target?\n\n- PostgreSQL\n- SQLite"
 
     test "Aqua's question is its reply, and the person's answer resumes its session",
@@ -627,6 +638,8 @@ defmodule Aqua.ProgramTest do
       %{start: start} = started!(fake, row)
       assert start["system"] =~ @ask
       assert start["system"] =~ @handling
+      assert start["system"] =~ @naming
+      assert start["system"] =~ @files
       post = sent()
       [input] = inputs(ctx, turn)
       assert post == with_facts(posted(input, turn, "export the notes"))
@@ -679,6 +692,7 @@ defmodule Aqua.ProgramTest do
       %{start: start} = started!(fake, row)
       assert start["system"] =~ @ask
       refute start["system"] =~ "A member's reply that asks the person"
+      refute start["system"] =~ "When the person names a member"
       opening = sent()
       assert {:ok, [job]} = Tape.open_turns(ctx, child.id)
       [first] = inputs(ctx, job)
@@ -872,6 +886,41 @@ defmodule Aqua.ProgramTest do
       say(fake, row, accepted(handed))
       say(fake, row, idle(again, [handed.id]))
       await_turn!(ctx, again.id, "completed")
+    end
+
+    test "the soul's final row on a program gives buttons, and its earlier row does not",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      :ok = claude_code!(ctx)
+      brain_row!(ctx, "claude")
+      turn = accept!(ctx, thread, row, "export the notes")
+      loop = run(ctx, turn)
+      started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+      say(fake, row, said(turn, "msg_1", "Let me check.\n\n" <> choices_block(turn.id)))
+      say(fake, row, said(turn, "msg_2", "Pick one.\n\n" <> choices_block(turn.id)))
+      say(fake, row, idle(turn, [input.id]))
+      assert :completed = Task.await(loop, 30_000)
+
+      assert [early, final] =
+               for(
+                 %{kind: "text", sent_by: "aqua"} = m <-
+                   Arca.ThreadStorage.messages(Sanctum.Context.actor(ctx), thread.id),
+                 do: m
+               )
+
+      assert Aqua.Choices.read(ctx, early) == :none
+
+      assert {:ok,
+              %{
+                row: final.id,
+                prose: "Pick one.",
+                question: "Which database should the export target?",
+                choices: ["PostgreSQL", "SQLite"],
+                file: nil,
+                file_state: nil
+              }} == Aqua.Choices.read(ctx, final)
     end
 
     test "a job handed under a schedule's turn is told nobody is there to answer",
@@ -9230,6 +9279,9 @@ defmodule Aqua.ProgramTest do
 
   defp run(ctx, turn), do: Task.async(fn -> Aqua.Loop.run(ctx: ctx, turn_id: turn.id) end)
 
+  defp choices_block(tag),
+    do: "```choices #{tag}\nWhich database should the export target?\n- PostgreSQL\n- SQLite\n```"
+
   # The turn reaches `status`.
   defp await_turn!(ctx, turn_id, status) do
     Prima.Test.Wait.wait_until(
@@ -10422,9 +10474,9 @@ defmodule Aqua.ProgramTest do
   end
 
   # An own event of `turn`'s work, of `work` when one is named, or of none
-  # (`:none`).
+  # (`:none`), its call one run of that tool.
   defp own(turn, name, phase, work \\ nil) do
-    %{"t" => "own", "gen" => 0, "name" => name, "phase" => phase}
+    %{"t" => "own", "gen" => 0, "call" => "call_" <> name, "name" => name, "phase" => phase}
     |> then(&if(work == :none, do: &1, else: Map.put(&1, "work", work || turn.id)))
   end
 

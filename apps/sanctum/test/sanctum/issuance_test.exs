@@ -89,15 +89,15 @@ defmodule Sanctum.IssuanceTest do
     %{user: user, athanor: athanor, session_ctx: session_ctx}
   end
 
-  # Revoking a device is a sensitive change, under the person's session and
-  # a confirmation they proved, as `pairing/revoke` takes it.
+  # Removing a device is a sensitive change, under the person's session and
+  # a confirmation they proved, as `pairing/remove` takes it.
   defp revoke!(session_ctx, client_id) do
     session_ctx
     |> Sanctum.TestContext.confirmed(
       :pairing_revocation,
       Sanctum.TestContext.pairing_revocation(session_ctx, client_id)
     )
-    |> Pairing.revoke(client_id)
+    |> Pairing.remove(client_id)
   end
 
   # A device of the person's account paired here: its key pair, its client
@@ -272,7 +272,7 @@ defmodule Sanctum.IssuanceTest do
       device = pair!(session_ctx)
       ctx = verified!(device)
 
-      assert {:ok, %{standing: "revoked"}} = revoke!(session_ctx, device.client_id)
+      assert {:ok, %{standing: "removed"}} = revoke!(session_ctx, device.client_id)
 
       assert {{:error, :not_standing}, attrs} = mint(ctx)
       refute minted?(attrs)
@@ -289,7 +289,7 @@ defmodule Sanctum.IssuanceTest do
         |> verified!()
         |> Sanctum.TestContext.confirmed(:credential_issuance, key_change(attrs))
 
-      assert {:ok, %{standing: "revoked"}} = revoke!(session_ctx, device.client_id)
+      assert {:ok, %{standing: "removed"}} = revoke!(session_ctx, device.client_id)
 
       # Refused before its confirmation is spent, as the device no longer
       # stands; a revocation landing after that check is the issuance's to
@@ -693,7 +693,7 @@ defmodule Sanctum.IssuanceTest do
   # device under their session before the task goes on.
   defp revoked_in_window(session_ctx, client_id, point, write) do
     in_window(point, write, fn ->
-      assert {:ok, %{standing: "revoked"}} = revoke!(session_ctx, client_id)
+      assert {:ok, %{standing: "removed"}} = revoke!(session_ctx, client_id)
     end)
   end
 
@@ -1157,7 +1157,7 @@ defmodule Sanctum.IssuanceRaceTest do
 
     assert_receive {:issuance_held, holder}, 5_000
 
-    # `pairing/revoke`'s own revocation, committed while the issuance is
+    # `pairing/remove`'s own revocation, committed while the issuance is
     # held inside its transaction.
     assert {:ok, %{standing: "revoked"}} =
              unboxed(fn ->

@@ -35,7 +35,9 @@ defmodule Aqua.SeatTest do
   @regranted " stopped because a grant it was working under, Aqua's or its model's key, " <>
                "changed while it worked. Send a message to go on."
   @aqua_regranted "Aqua" <> @regranted
-  @member_regranted "claude" <> @regranted
+  # A member's job Aqua handed it is asked for again.
+  @member_regranted "claude stopped because a grant it was working under, Aqua's or its " <>
+                      "model's key, changed while it worked. Ask claude for it again."
 
   setup do
     # Deliberate crashes in other tests must not spend this test's restart budget.
@@ -186,11 +188,19 @@ defmodule Aqua.SeatTest do
   end
 
   # What the agent said in the thread in turn `turn_id`.
-  defp answers(ctx, thread, turn_id) do
+  defp answers(ctx, thread, turn_id),
+    do: for(row <- said(ctx, thread, turn_id), do: row.content)
+
+  # What `agent` said in the thread in turn `turn_id`, beside the job Aqua
+  # handed it there.
+  defp answered_by(ctx, thread, turn_id, agent),
+    do: for(%{sent_by: ^agent} = row <- said(ctx, thread, turn_id), do: row.content)
+
+  defp said(ctx, thread, turn_id) do
     agent = Arca.Schemas.Message.agent_author()
 
     for %{author: ^agent, turn_id: ^turn_id} = row <- Threads.messages(actor(ctx), thread.id),
-        do: row.content
+        do: row
   end
 
   # The next read of an agent's pinned bytes, which a turn makes only once
@@ -231,6 +241,38 @@ defmodule Aqua.SeatTest do
   end
 
   # The thread's runner and loop, once the turn's model call is held open.
+  # A job Aqua hands `member` as `crew.ask` writes it, delivered into its
+  # thread `child`: the member's turn there.
+  defp handed!(ctx, room, child, member, task) do
+    {:ok, %{message: request}} =
+      Tape.accept(ctx, room.id, %{
+        message: %{
+          author: Prima.Author.agent(),
+          sent_by: "aqua",
+          addressee: member,
+          status: "pending",
+          content: task
+        },
+        request: %{
+          member: member,
+          task: task,
+          options: %{},
+          person_id: ctx.user_id,
+          origin: :interactive
+        }
+      })
+
+    assert {:ok, %{"applied" => 1}} = Aqua.Crew.drain(ctx.athanor_id)
+
+    [%{turn_id: job}] =
+      Enum.filter(
+        Arca.ThreadStorage.messages(Sanctum.Context.actor(ctx), child.id),
+        &(Tape.payload(&1)["request_id"] == request.id)
+      )
+
+    job
+  end
+
   defp running!(thread) do
     assert_receive {:scripted_probe, call, _}, 60_000
     runner = Aqua.Runner.whereis(thread.id)
@@ -301,7 +343,14 @@ defmodule Aqua.SeatTest do
                Aqua.Reader.deliver(
                  Aqua.Prompt.briefing(false, false, false, true),
                  Aqua.Reader.mark(room.id)
-               )
+               ) <>
+               "\n\n---\n\n## Choices as buttons\n\nWhen you ask the person to decide, you " <>
+               "may offer the choices as buttons: end that reply with a block and nothing after " <>
+               "it: a line of three backticks, `choices`, a space and this turn's id; the " <>
+               "question on one line, at most 200 characters; each choice on a line of its own " <>
+               "after `- `, one to eight, each different and at most 100 characters; optionally " <>
+               "a line `file: ` and the path of a file in Files the person should open first; " <>
+               "and a line of three backticks. Neither the question nor a choice holds « or »."
 
     refute opening =~ "## Crew member"
     refute params["system"] =~ "folder"
@@ -688,7 +737,7 @@ defmodule Aqua.SeatTest do
       script!([{:probe, self()}])
       {:ok, child} = Threads.crew_thread(actor(ctx), room.id, holder)
       :ok = Aqua.Runner.subscribe(child.id, ctx.athanor_id)
-      {:ok, %{turn_id: job}} = Aqua.Runner.send_message(ctx, child.id, "tidy the notes")
+      job = handed!(ctx, room, child, holder, "tidy the notes")
       pids = running!(child)
 
       assert {:ok, %{agent: ^holder, consent_id: claimed, brain_consent_id: brain}} =
@@ -701,7 +750,7 @@ defmodule Aqua.SeatTest do
       dead = take_over!(pids)
       send(dead, :continue)
       assert {:ok, %{status: "failed", error: @member_regranted}} = Tape.turn(ctx, job)
-      assert answers(ctx, child, job) == []
+      assert answered_by(ctx, child, job, holder) == []
       assert [%{authority: %{consent_id: ^brain}}] = chats(ctx, holder)
     end
 
@@ -715,7 +764,7 @@ defmodule Aqua.SeatTest do
       script!([{:probe, self()}])
       {:ok, child} = Threads.crew_thread(actor(ctx), room.id, holder)
       :ok = Aqua.Runner.subscribe(child.id, ctx.athanor_id)
-      {:ok, %{turn_id: job}} = Aqua.Runner.send_message(ctx, child.id, "tidy the notes")
+      job = handed!(ctx, room, child, holder, "tidy the notes")
       pids = running!(child)
 
       assert {:ok, %{agent: ^holder, brain_profile_id: brain, brain_consent_id: pinned}} =
@@ -731,7 +780,7 @@ defmodule Aqua.SeatTest do
       dead = take_over!(pids)
       send(dead, :continue)
       assert {:ok, %{status: "failed", error: @member_regranted}} = Tape.turn(ctx, job)
-      assert answers(ctx, child, job) == []
+      assert answered_by(ctx, child, job, holder) == []
       assert [%{authority: %{profile_id: ^brain, consent_id: ^pinned}}] = chats(ctx, holder)
     end
 

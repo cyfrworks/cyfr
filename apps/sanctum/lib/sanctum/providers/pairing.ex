@@ -6,9 +6,10 @@ defmodule Sanctum.Providers.Pairing do
   The `pairing` tool: a person's paired clients in the athanor in focus,
   the devices of their account a hello paired here (`Sanctum.DeviceUnlock`)
   and the passkeys that signed in here: renew a paired device's
-  certificate; sign one out of this CYFR (`pairing_revocation`), which
-  ends its client here and leaves its key on the account, since only
-  removing a key from the account ends it everywhere; list them; and list
+  certificate; remove one from this CYFR (`pairing_revocation`), which
+  ends its client here, keeps a device out until its person allows it
+  again (`pairing_readmission`) and leaves its key on the account, since
+  only removing a key from the account ends it everywhere; list them; and list
   the passkeys browsers offered for the person's account here, which wait
   for a device of it to add them (`Sanctum.SignIn.waiting/2`). Every
   action is a person's, through an interactive surface (`consent:
@@ -23,9 +24,13 @@ defmodule Sanctum.Providers.Pairing do
       the renewal context the channel obtains for the client that proved
       its key; any other caller, an ordinary device intent among them, is
       refused.
-    * `revoke` answers the client's id and its standing, `revoked`.
-    * `list` answers the person's active paired clients, each with the
-      credential it stands on (`source`: `device_cert`, or `passkey` for a
+    * `remove` answers the client's id and its standing: `removed` for a
+      device, `revoked` for a passkey, which is signed out.
+    * `allow_again` answers a removed device's id and its standing,
+      `revoked`: its next hello pairs it anew.
+    * `list` answers the person's paired clients that are active or that
+      they removed here, each with its `standing` (`active` or
+      `removed`), the credential it stands on (`source`: `device_cert`, or `passkey` for a
       passkey that signed in here), what holds a device's key
       (`holder_kind`) and the name it shows (`display_name`) where it
       reported them, and what it last reported of its disks within the
@@ -66,9 +71,18 @@ defmodule Sanctum.Providers.Pairing do
           planes: [:external],
           consent: :interactive
         ),
-        Operation.new("pairing", "revoke", "Sign a device out of this CYFR", [client_id()],
+        Operation.new("pairing", "remove", "Remove a device from this CYFR", [client_id()],
           reduces_authority: true,
           kind: :destructive,
+          planes: [:external],
+          consent: :interactive
+        ),
+        Operation.new(
+          "pairing",
+          "allow_again",
+          "Allow a device removed from this CYFR again",
+          [client_id()],
+          kind: :write,
           planes: [:external],
           consent: :interactive
         ),
@@ -92,7 +106,7 @@ defmodule Sanctum.Providers.Pairing do
         )
       ],
       description:
-        "Your paired devices in the athanor in focus: renew a device's certificate, sign one out of this CYFR, and list them; and the passkeys browsers offered for your account, waiting for a device of yours to add them.",
+        "Your paired devices in the athanor in focus: renew a device's certificate, remove one from this CYFR or allow a removed one again, and list them; and the passkeys browsers offered for your account, waiting for a device of yours to add them.",
       title: "Paired Devices"
     )
   end
@@ -101,7 +115,7 @@ defmodule Sanctum.Providers.Pairing do
     do:
       Arg.new("client_id", :string,
         required: true,
-        description: "The paired client (pcl_…) (renew, revoke)"
+        description: "The paired client (pcl_…) (renew, remove, allow_again)"
       )
 
   # A `Prima.DeviceCert.Proof` as JSON: the challenge's fields and the
@@ -140,9 +154,17 @@ defmodule Sanctum.Providers.Pairing do
     end
   end
 
-  def handle(%Context{} = ctx, %{"action" => "revoke", "client_id" => client_id})
+  def handle(%Context{} = ctx, %{"action" => "remove", "client_id" => client_id})
       when is_binary(client_id) do
-    case Pairing.revoke(ctx, client_id) do
+    case Pairing.remove(ctx, client_id) do
+      {:ok, row} -> {:ok, %{client_id: row.id, standing: row.standing}}
+      {:error, reason} -> {:error, refusal(reason)}
+    end
+  end
+
+  def handle(%Context{} = ctx, %{"action" => "allow_again", "client_id" => client_id})
+      when is_binary(client_id) do
+    case Pairing.allow_again(ctx, client_id) do
       {:ok, row} -> {:ok, %{client_id: row.id, standing: row.standing}}
       {:error, reason} -> {:error, refusal(reason)}
     end
@@ -162,7 +184,7 @@ defmodule Sanctum.Providers.Pairing do
     end
   end
 
-  def handle(_ctx, %{"action" => "revoke"}),
+  def handle(_ctx, %{"action" => action}) when action in ["remove", "allow_again"],
     do: {:error, {:invalid_argument, "Missing required argument: client_id"}}
 
   def handle(_ctx, %{"action" => action}), do: {:error, {:unknown_action, "pairing.#{action}"}}
@@ -198,6 +220,7 @@ defmodule Sanctum.Providers.Pairing do
   defp listed(client) do
     %{
       client_id: client.client_id,
+      standing: client.standing,
       source: client.source,
       paired_at: Prima.Time.iso8601(client.paired_at),
       certificate_expires_at: Prima.Time.iso8601(client.certificate_expires_at),

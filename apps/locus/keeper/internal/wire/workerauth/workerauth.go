@@ -50,8 +50,13 @@ var (
 
 var label = macenvelope.Label("runtime")
 
-// AttemptFields are an attempt's six fields, in their order.
-var AttemptFields = []macenvelope.Field{
+// AttemptFields are an attempt's six fields, in their order, a fresh list
+// each call.
+func AttemptFields() []macenvelope.Field {
+	return append([]macenvelope.Field(nil), attemptFieldList...)
+}
+
+var attemptFieldList = []macenvelope.Field{
 	{Name: "athanor_id", Type: macenvelope.String},
 	{Name: "execution_id", Type: macenvelope.String},
 	{Name: "attempt", Type: macenvelope.String},
@@ -62,7 +67,7 @@ var AttemptFields = []macenvelope.Field{
 
 // Call is a host call's envelope: the attempt's fields, the boot and the
 // runner presenting it, the member it is addressed to, ts and a nonce.
-var Call = macenvelope.Envelope{Prefix: label, Kind: "call", Fields: append(append([]macenvelope.Field{}, AttemptFields...),
+var Call = macenvelope.Envelope{Prefix: label, Kind: "call", Fields: append(append([]macenvelope.Field{}, attemptFieldList...),
 	macenvelope.Field{Name: "boot", Type: macenvelope.String},
 	macenvelope.Field{Name: "runner", Type: macenvelope.String},
 	macenvelope.Field{Name: "member", Type: macenvelope.String},
@@ -124,7 +129,7 @@ func OpenAttemptKeys(sealKey macenvelope.Key, sealed string) (AttemptKeys, error
 	if !ok {
 		return AttemptKeys{}, ErrUnsealable
 	}
-	plain, err := macenvelope.Open(sealKey, attemptKeysLabel, AttemptFields, attempt, box)
+	plain, err := macenvelope.Open(sealKey, attemptKeysLabel, attemptFieldList, attempt, box)
 	if err != nil || len(plain) != 64 {
 		return AttemptKeys{}, ErrUnsealable
 	}
@@ -143,11 +148,11 @@ func readAttempt(named string) (macenvelope.Message, bool) {
 		return nil, false
 	}
 	wire, err := wirejson.Object(raw)
-	if err != nil || len(wire) != len(AttemptFields) {
+	if err != nil || len(wire) != len(attemptFieldList) {
 		return nil, false
 	}
-	attempt := make(macenvelope.Message, len(AttemptFields))
-	for _, f := range AttemptFields {
+	attempt := make(macenvelope.Message, len(attemptFieldList))
+	for _, f := range attemptFieldList {
 		v, given := wire[f.Name]
 		if !given {
 			return nil, false
@@ -282,4 +287,64 @@ func VerifyBody(bodyHash string, body []byte) error {
 		return ErrBadMAC
 	}
 	return nil
+}
+
+// An attached request's answer is a stream of frames: a 4-byte big-endian
+// length, one kind byte in clear (h head, c chunk, e end, x error) and a
+// sealed value. A worker service carries them unopened.
+const (
+	// MaxFrameBytes is the most a frame spans after its length prefix.
+	MaxFrameBytes = 65_536
+	// MaxChunkBytes is the most body bytes one chunk carries.
+	MaxChunkBytes = 32_768
+)
+
+// ErrFrameTooLarge is a frame whose length is past MaxFrameBytes, known as
+// soon as its length is in.
+var ErrFrameTooLarge = errors.New("frame_too_large")
+
+// SplitFrames is the complete frames at the head of buffer, each its kind
+// byte and sealed value, and the bytes after them, which wait for more; or
+// ErrFrameTooLarge for a length past MaxFrameBytes, and ErrMalformed for
+// one below two bytes. Nothing is opened (Prima.WorkerAuth.split_frames/1).
+func SplitFrames(buffer []byte) (frames [][]byte, rest []byte, err error) {
+	for len(buffer) >= 4 {
+		n := uint64(buffer[0])<<24 | uint64(buffer[1])<<16 | uint64(buffer[2])<<8 | uint64(buffer[3])
+		switch {
+		case n > MaxFrameBytes:
+			return nil, nil, ErrFrameTooLarge
+		case n < 2:
+			return nil, nil, ErrMalformed
+		case uint64(len(buffer)-4) < n:
+			return frames, buffer, nil
+		}
+		frames = append(frames, buffer[4:4+n])
+		buffer = buffer[4+n:]
+	}
+	return frames, buffer, nil
+}
+
+// FrameBodyBytes is the body bytes a frame, its kind byte and sealed
+// value, carries, read from the sealed value's length without opening it:
+// a chunk's plaintext length under the seal's layout (unpadded base64url
+// of the 12-byte IV, the 16-byte tag and the ciphertext); every other
+// kind carries none, nor does a length no seal produces
+// (Prima.WorkerAuth.frame_body_bytes/1).
+func FrameBodyBytes(frame []byte) int {
+	if len(frame) == 0 || frame[0] != 'c' {
+		return 0
+	}
+	n := len(frame) - 1
+	var decoded int
+	switch n % 4 {
+	case 0:
+		decoded = n / 4 * 3
+	case 2:
+		decoded = n/4*3 + 1
+	case 3:
+		decoded = n/4*3 + 2
+	case 1:
+		decoded = 0
+	}
+	return max(decoded-28, 0)
 }

@@ -806,6 +806,7 @@ func channelServer(t *testing.T, kept *home.Kept) (*server, *client, *protocol.L
 	t.Cleanup(func() { ours.Close(); theirs.Close() })
 	s := &server{cfg: Config{Kept: kept}, log: logx.NewWriter(io.Discard, "cyfr-locus", false), ledger: admission.New(testWork, false),
 		keptOps: map[int]*sync.Mutex{}, waiters: map[int]*child{}}
+	reaping(t, s)
 	c := testClient(ours, pool.Spec{Name: "backends", Reach: pool.ReachRouted}, Account{})
 	c.role.spec.Kept = true
 	return s, c, protocol.NewLineReader(theirs)
@@ -973,5 +974,65 @@ func TestAnImageDiskIsRecordedAndMadeWithNoFolder(t *testing.T) {
 	}
 	if d := recorded(); !d.Holds("vlt_a") {
 		t.Fatalf("a refused retirement changed the record: %+v", d)
+	}
+}
+
+// A disk's image is made by mke2fs as the keeper's own child: started by
+// the keeper's start and reaped by its reaper, which takes every child of
+// the keeper's that exits and hands the maker its end, so the making's wait
+// is never taken from it (startTool). None needs root.
+func TestAnImagesMakerIsTheKeepersOwnChild(t *testing.T) {
+	me := os.Getuid()
+	if me != os.Getgid() {
+		t.Skipf("a disk's image is its uid's and its group's, and this test's uid %d is not its gid %d", me, os.Getgid())
+	}
+	kept := &home.Kept{Root: t.TempDir(), First: me, Last: me}
+	if err := os.Mkdir(filepath.Join(kept.Root, home.DisksDir), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	pidFile, goFile := filepath.Join(dir, "pid"), filepath.Join(dir, "go")
+	maker := filepath.Join(dir, "mke2fs")
+	script := "#!/bin/sh\necho $$ > " + pidFile + "\nwhile [ ! -e " + goFile + " ]; do sleep 0.01; done # sleep-ok: the stand-in maker waits for the test's look at it\n"
+	if err := os.WriteFile(maker, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	saved := home.Mke2fs
+	home.Mke2fs = maker
+	t.Cleanup(func() { home.Mke2fs = saved })
+	s, c, replies := channelServer(t, kept)
+	s.imageDisks = true
+	// The person's disk is recorded as this test's uid's: no uid is allotted
+	// to it, which runs the test.
+	if err := s.putDisk(home.Disk{Athanor: "ath_1", Form: home.FormImage, UID: me, Homes: []string{}}); err != nil {
+		t.Fatal(err)
+	}
+	go s.handle(c, &protocol.Request{V: protocol.Version, Type: protocol.TypeHomeMake, ID: "m1", Home: "vlt_a", Athanor: "ath_1"})
+	pid := 0
+	eventually(t, "the maker's start", func() bool {
+		raw, err := os.ReadFile(pidFile)
+		if err == nil {
+			pid, err = strconv.Atoi(strings.TrimSpace(string(raw)))
+		}
+		return err == nil
+	})
+	s.mu.Lock()
+	ours := s.waiters[pid] != nil
+	s.mu.Unlock()
+	if err := os.WriteFile(goFile, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	line, _, err := replies.Next()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ours {
+		t.Fatalf("the image's maker %d is no child the keeper's reaper hands its end to", pid)
+	}
+	if want := fmt.Sprintf(`{"v":9,"type":"home_made","id":"m1","uid":%d}`, me); string(line) != want {
+		t.Fatalf("the make answered %s, want %s", line, want)
+	}
+	if _, err := os.Lstat(kept.ImagePath("ath_1")); err != nil {
+		t.Fatalf("the image: %v", err)
 	}
 }

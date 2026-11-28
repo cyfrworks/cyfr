@@ -405,7 +405,7 @@ defmodule Sanctum.TestContext do
   end
 
   @doc """
-  The change `Sanctum.Pairing.revoke/2` confirms for the context person's
+  The change `Sanctum.Pairing.remove/2` confirms for the context person's
   paired client `client_id`: the client named as the person sees it, read
   from the store.
   """
@@ -414,7 +414,7 @@ defmodule Sanctum.TestContext do
       Arca.PairedClients.list(Context.actor(ctx), user_id: ctx.user_id, standing: :all)
 
     %{
-      operation: "pairing.revoke",
+      operation: "pairing.remove",
       arguments: %{"client_id" => client_id},
       resource:
         Enum.find_value(rows, fn row ->

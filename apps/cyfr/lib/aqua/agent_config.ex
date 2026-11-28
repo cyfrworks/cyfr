@@ -54,9 +54,9 @@ defmodule Aqua.AgentConfig do
 
   @doc """
   `roster/1`, with why the soul's file was refused when it was (nil
-  otherwise): the one read admission needs to send a post that names no
-  one to the soul even then, whose turn says why it cannot answer, rather
-  than to the first crew member (`Aqua.Roster.roster/1`).
+  otherwise): the roster still names the soul then, since every post of
+  the person's goes to it and its turn says why it cannot answer
+  (`Aqua.Roster.roster/1`).
   """
   @spec roster_and_soul(Context.t()) ::
           {:ok, [map()], term() | nil} | {:error, {:unavailable, String.t()}}

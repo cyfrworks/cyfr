@@ -58,8 +58,10 @@ defmodule PrismWeb.ThreadPaneLive do
   A reply whose request is not on screen stands on its own. A room lists
   the threads of the crew members its roster holds (`Aqua.roster/1`): a
   member taken out of the crew keeps its thread, which the list leaves
-  out. A member's thread names its member, leads back to its room and,
-  while it stands, can be archived (`thread.archive`). The pane opens
+  out. A member's thread names its member and leads back to its room; it
+  has no composer, since the person speaks to Aqua, who hands the member
+  its jobs, and offers only Stop while a turn runs there and, while it
+  stands, archiving (`thread.archive`). The pane opens
   none of them: it asks its host to open the thread, `{:open_thread,
   id}`. Any thread it shows is deleted from its menu (`thread.delete`), a
   room with its crew threads, once the person says yes to what goes and
@@ -300,6 +302,10 @@ defmodule PrismWeb.ThreadPaneLive do
   defp room?(%{kind: kind}), do: kind in ["daily", "workspace"]
   defp room?(_none), do: false
 
+  # A crew member's thread, which the person reads and never writes in.
+  defp crew?(%{kind: "crew"}), do: true
+  defp crew?(_thread), do: false
+
   # Everything the pane knows of one thread — its rows, the runner's live
   # state and the subscription that keeps them current — replacing what it
   # knew of the last: the tape, the cards, the draft and the turn's state
@@ -318,6 +324,7 @@ defmodule PrismWeb.ThreadPaneLive do
       |> assign(:seen, thread && thread.read_seq)
       |> assign(:any_messages, false)
       |> assign(:cards, %{})
+      |> assign(:choices, %{})
       |> assign(:proposals, %{})
       |> assign(:works, %{})
       |> reset_live()
@@ -345,6 +352,7 @@ defmodule PrismWeb.ThreadPaneLive do
           end
 
         rows = with_proposals(rows, ctx, thread.id)
+        {rows, choices} = read_choices(rows, ctx)
 
         {shown, requests} = file_replies(rows, ctx)
 
@@ -359,6 +367,7 @@ defmodule PrismWeb.ThreadPaneLive do
 
         socket
         |> hold_cards(rows)
+        |> assign(:choices, choices)
         |> stream(:messages, shown, reset: true)
         |> assign(:requests, requests)
         |> assign(:any_messages, rows != [])
@@ -428,6 +437,36 @@ defmodule PrismWeb.ThreadPaneLive do
   end
 
   defp hold_card(socket, _row), do: socket
+
+  # Aqua's question as buttons (`Aqua.Choices.read/2`): a row that gives
+  # them carries its card, read once, since a card never changes once its
+  # turn is over. A row of a turn still open may yet be one: the pane holds
+  # it by id and reads it again when a turn ends.
+  defp read_choices(rows, ctx) do
+    Enum.map_reduce(rows, %{}, fn row, pending ->
+      case Aqua.Choices.read(ctx, row) do
+        {:ok, card} -> {Map.put(row, :card, card), pending}
+        :pending -> {row, Map.put(pending, row.id, row)}
+        :none -> {row, pending}
+      end
+    end)
+  end
+
+  defp hold_choice(socket, row) do
+    {[row], pending} = read_choices([row], socket.assigns.context)
+    {row, assign(socket, :choices, Map.merge(socket.assigns.choices, pending))}
+  end
+
+  # The rows still pending, read again as a turn ends: one that is a card
+  # now is drawn again with it (the stream draws a row once), and one its
+  # turn left as text is let go.
+  defp reread_pending(socket) do
+    {cards, pending} = read_choices(Map.values(socket.assigns.choices), socket.assigns.context)
+
+    cards
+    |> Enum.filter(&Map.has_key?(&1, :card))
+    |> Enum.reduce(assign(socket, :choices, pending), &stream_insert(&2, :messages, &1))
+  end
 
   # The outcome of the reply that resolved a request, read among the rows
   # shown or, past them, by its id; nil while it is pending, or when that
@@ -743,6 +782,36 @@ defmodule PrismWeb.ThreadPaneLive do
          )}
     end
   end
+
+  # A press of a choice on Aqua's question is the person's answer to Aqua:
+  # the row and the index are all the send names, and the server reads the
+  # question and the label again and lands it where the card is
+  # (`Aqua.Choices`), today's daily thread for a daily card, which the pane
+  # then shows.
+  def handle_event("choose", %{"row" => row_id, "index" => index}, socket)
+      when is_binary(row_id) do
+    with {at, ""} <- Integer.parse(to_string(index)) do
+      args = %{
+        "choice" => %{"row" => row_id, "index" => at},
+        "client_id" => Prima.UUID7.generate_id("snd")
+      }
+
+      case PrismWeb.Ops.call_tool(socket.assigns.context, "thread/send", args) do
+        {:ok, answer} ->
+          {:noreply, joined(socket, answer[:thread])}
+
+        {:error, reason} ->
+          {:noreply, put_flash(socket, :error, PrismWeb.Ops.error_message(reason))}
+      end
+    else
+      _ -> {:noreply, socket}
+    end
+  end
+
+  # A member's thread takes no line, so it offers no model for the next
+  # one: a pick sent from it is dropped.
+  def handle_event("select_model", _params, %{assigns: %{thread: %{kind: "crew"}}} = socket),
+    do: {:noreply, socket}
 
   def handle_event("select_model", %{"model" => model}, socket) do
     {:noreply, assign(socket, :model_override, if(model == "", do: nil, else: model))}
@@ -1083,6 +1152,7 @@ defmodule PrismWeb.ThreadPaneLive do
   defp handle_thread_event(socket, :message, row) do
     if result = result(row), do: tell_host(socket, {:result, row.thread_id, result})
     if answer?(row), do: tell_host(socket, {:answer, row.thread_id, post(row)})
+    {row, socket} = hold_choice(socket, row)
 
     socket
     |> hold_card(row)
@@ -1179,6 +1249,7 @@ defmodule PrismWeb.ThreadPaneLive do
     |> assign(:partials, Aqua.stream_new())
     |> assign(:tool_activity, [])
     |> assign(:cancel_requested, false)
+    |> reread_pending()
   end
 
   # Streamed text belongs to the running turn alone: an announcement or a
@@ -1292,7 +1363,6 @@ defmodule PrismWeb.ThreadPaneLive do
         message_id: message_id,
         text: message,
         attachments: refs,
-        agent: socket.assigns.assistant && socket.assigns.assistant["name"],
         model: socket.assigns.model_override,
         room: Keyword.get(room, :room)
       }
@@ -1401,7 +1471,6 @@ defmodule PrismWeb.ThreadPaneLive do
       "client_id" => envelope.client_id,
       "attachments" => envelope.attachments,
       "model" => envelope.model,
-      "agent" => envelope.agent,
       "room" => envelope.room
     }
     |> Map.reject(fn {_k, v} -> is_nil(v) end)
@@ -1447,7 +1516,6 @@ defmodule PrismWeb.ThreadPaneLive do
          message_id: message_id,
          text: text,
          attachments: attachments,
-         agent: if(is_binary(params["agent"]), do: params["agent"]),
          model: if(is_binary(params["model"]), do: params["model"]),
          room: room
        }}
@@ -1481,10 +1549,11 @@ defmodule PrismWeb.ThreadPaneLive do
         put_flash(socket, :error, "This crew member's thread is retired.")
 
       :not_addressable ->
-        put_flash(socket, :error, "Only this thread's crew member can be addressed here.")
-
-      :no_agent ->
-        put_flash(socket, :error, "This athanor has no assistant — see Aqua.")
+        put_flash(
+          socket,
+          :error,
+          "A crew member's thread can be read, not written in — ask Aqua in your own thread."
+        )
 
       :storage_full ->
         put_flash(socket, :error, "This athanor's storage is full.")
@@ -1935,7 +2004,7 @@ defmodule PrismWeb.ThreadPaneLive do
         <div class="aqua-panel-menu-row">
           <span>Model</span>
           <%= cond do %>
-            <% @models_loaded and @models_by_provider != %{} -> %>
+            <% @models_loaded and @models_by_provider != %{} and not crew?(@thread) -> %>
               <.model_override
                 label={model_label(@assistant, @token_usage)}
                 models_by_provider={@models_by_provider}
@@ -2226,13 +2295,21 @@ defmodule PrismWeb.ThreadPaneLive do
                 <% true -> %>
                   <div class="group/aloud">
                     <.message_bubble
+                      :if={shown_content(msg) != "" or is_nil(Map.get(msg, :card))}
                       id={@dom <> "-msg-" <> msg.id}
                       role={role_of(msg)}
-                      content={msg.content}
+                      content={shown_content(msg)}
                       author={author_label(msg, @members, @context)}
                       attachments={attachments(msg)}
                       attachment_href={&attachment_path(@athanor_route, msg.id, &1)}
                       links={Threads.payload(msg)["links"] || []}
+                    />
+                    <.choices_card
+                      :if={Map.get(msg, :card)}
+                      id={@dom <> "-choices-" <> msg.id}
+                      card={msg.card}
+                      author={msg.card.prose == "" && author_label(msg, @members, @context)}
+                      athanor_route={@athanor_route}
                     />
                     <%!-- A line you may paste onto the shared thread beside
                         the pane: yours, or your assistant's in your own
@@ -2384,7 +2461,7 @@ defmodule PrismWeb.ThreadPaneLive do
       </div>
 
       <label
-        :if={reads_room?(@room)}
+        :if={reads_room?(@room) and not crew?(@thread)}
         id={@dom <> "-read-room"}
         title="Each message you send here carries what the thread beside it shows — read for you, never kept"
         class="flex cursor-pointer items-center gap-2 border-t border-gray-800 px-3 py-1 text-xs text-gray-500"
@@ -2398,7 +2475,16 @@ defmodule PrismWeb.ThreadPaneLive do
         <span class="truncate">Read {PrismWeb.RoomFeed.label(@room)} with each message</span>
       </label>
 
+      <div
+        :if={crew?(@thread) and (@running or @paused)}
+        id={@dom <> "-crew-stop"}
+        class="flex justify-end border-t border-border-default px-3 pt-2.5 pb-3"
+      >
+        <.stop_button cancel_requested={@cancel_requested} />
+      </div>
+
       <form
+        :if={not crew?(@thread)}
         id={@dom <> "-composer"}
         phx-submit="submit"
         phx-change="validate_upload"
@@ -2453,18 +2539,25 @@ defmodule PrismWeb.ThreadPaneLive do
           >
             Send
           </button>
-          <button
-            :if={@running or @paused}
-            type="button"
-            phx-click="stop"
-            title="Stop this turn; what waits behind it is dropped"
-            class="self-end rounded-md bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-500"
-          >
-            {if @cancel_requested, do: "Cancelling…", else: "Stop"}
-          </button>
+          <.stop_button :if={@running or @paused} cancel_requested={@cancel_requested} />
         </div>
       </form>
     </section>
+    """
+  end
+
+  attr :cancel_requested, :boolean, required: true
+
+  defp stop_button(assigns) do
+    ~H"""
+    <button
+      type="button"
+      phx-click="stop"
+      title="Stop this turn; what waits behind it is dropped"
+      class="self-end rounded-md bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-500"
+    >
+      {if @cancel_requested, do: "Cancelling…", else: "Stop"}
+    </button>
     """
   end
 
@@ -2891,6 +2984,83 @@ defmodule PrismWeb.ThreadPaneLive do
       </div>
     </div>
     """
+  end
+
+  attr :id, :string, required: true
+  attr :card, :map, required: true
+  attr :author, :any, default: nil
+  attr :athanor_route, :any, required: true
+
+  # Aqua's question in plain text, as a press records it, and one button
+  # for each of its choices, which stays as it is after a press; a button
+  # pressed waits in the browser for the server's answer, so a double
+  # click is one press. And its file, while Files lists it.
+  defp choices_card(assigns) do
+    ~H"""
+    <div id={@id} class="mt-1 space-y-1 px-1 text-xs">
+      <span :if={@author} class="text-xs text-gray-500">{@author}</span>
+      <p id={@id <> "-question"} class="whitespace-pre-wrap text-sm text-gray-200">
+        {@card.question}
+      </p>
+      <div class="flex flex-wrap items-center gap-2">
+        <button
+          :for={{label, at} <- Enum.with_index(@card.choices)}
+          id={@id <> "-" <> Integer.to_string(at)}
+          type="button"
+          phx-click="choose"
+          phx-value-row={@card.row}
+          phx-value-index={at}
+          phx-disable-with={label}
+          class="min-h-6 rounded bg-blue-600 hover:bg-blue-500 px-3 py-1 font-medium text-white disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          {label}
+        </button>
+      </div>
+      <div :if={@card.file} id={@id <> "-file"} class="flex flex-wrap items-center gap-2">
+        <span class="font-mono text-gray-400">{@card.file}</span>
+        <%= case @card.file_state do %>
+          <% :present -> %>
+            <a
+              id={@id <> "-download"}
+              href={file_href(@athanor_route, @card.file)}
+              class="min-h-6 text-blue-400 hover:text-blue-300"
+            >
+              Download
+            </a>
+          <% :missing -> %>
+            <span id={@id <> "-missing"} class="text-gray-500">This file is not in Files</span>
+          <% _unavailable -> %>
+            <span id={@id <> "-unread"} class="text-gray-500">
+              Files could not be read just now
+            </span>
+        <% end %>
+      </div>
+    </div>
+    """
+  end
+
+  # A card's reply shows its words before the block, which the card
+  # follows with its question; a press shows what was chosen; any other
+  # row its text.
+  defp shown_content(%{card: %{prose: prose}}), do: prose
+
+  defp shown_content(%{kind: "text", sent_by: "person"} = row) do
+    case Threads.payload(row)["choice"] do
+      %{"label" => label} when is_binary(label) -> "You chose «#{label}»"
+      _ -> row.content
+    end
+  end
+
+  defp shown_content(row), do: row.content
+
+  # A file of the athanor's as Files downloads it.
+  defp file_href(route, path) do
+    encoded =
+      path
+      |> String.split("/")
+      |> Enum.map_join("/", fn segment -> URI.encode(segment, &URI.char_unreserved?/1) end)
+
+    PrismWeb.Focus.path(route, "/files/download/" <> encoded)
   end
 
   defp role_align_row("user"), do: "justify-end"

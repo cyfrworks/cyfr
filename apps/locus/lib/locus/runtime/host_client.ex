@@ -948,14 +948,8 @@ defmodule Locus.Runtime.HostClient do
     send(caller, {ref, :done, ended})
   end
 
-  defp frames?(%Req.Response{} = resp) do
-    resp
-    |> Req.Response.get_header("content-type")
-    |> Enum.any?(fn type ->
-      type |> String.split(";") |> hd() |> String.trim() |> String.downcase() ==
-        WorkerWire.attached_frames_content_type()
-    end)
-  end
+  defp frames?(%Req.Response{} = resp),
+    do: resp |> Req.Response.get_header("content-type") |> WorkerWire.frames_content_type?()
 
   defp attached_answer(%{ref: ref} = state) do
     receive do

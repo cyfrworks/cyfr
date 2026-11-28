@@ -12,6 +12,15 @@ defmodule Aqua.PromptTest do
   # (`Aqua.Reader.deliver/2`).
   @mark "cyfr-PROMPTTESTMARK2Q"
 
+  # What the soul alone is told after CYFR's part (`Aqua.Prompt`).
+  @buttons "\n\n---\n\n## Choices as buttons\n\nWhen you ask the person to decide, you may " <>
+             "offer the choices as buttons: end that reply with a block and nothing after it: " <>
+             "a line of three backticks, `choices`, a space and this turn's id; the question " <>
+             "on one line, at most 200 characters; each choice on a line of its own after " <>
+             "`- `, one to eight, each different and at most 100 characters; optionally a " <>
+             "line `file: ` and the path of a file in Files the person should open first; and " <>
+             "a line of three backticks. Neither the question nor a choice holds « or »."
+
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
     :ok = Sanctum.TestContext.shipped!(Sanctum.TestContext.athanor_id())
@@ -157,7 +166,8 @@ defmodule Aqua.PromptTest do
         "A member's reply that asks the person waits on a decision: answer it yourself with " <>
           "`crew.ask` to that member when you know the answer, or else give the person your " <>
           "recommendation in one line and end your turn, and when they answer, hand their " <>
-          "words to that member with `crew.ask`, as they are."
+          "words to that member with `crew.ask`, as they are. When the person must decide a " <>
+          "member's question, ask them yourself, and you may offer its choices as your own."
 
       soul =
         Prompt.compose(ctx,
@@ -174,6 +184,64 @@ defmodule Aqua.PromptTest do
       for own_tools? <- [true, false] do
         refute Prompt.compose(ctx, agent: member, own_tools?: own_tools?, authority: nil).text =~
                  "A member's reply that asks the person"
+      end
+    end
+
+    # A card in the person's thread is Aqua's question, so the block is
+    # told to the soul alone, on every turn of its own.
+    test "the soul alone is told how to offer its choices as buttons, on a daily and a " <>
+           "workspace turn, with a crew or none",
+         %{ctx: ctx} do
+      buttons = @buttons <> "\n\n---\n\n## Runtime Context"
+
+      builder = [%{"name" => "builder", "brain" => "claude", "description" => "", "avoid" => ""}]
+      workspace = %{kind: :workspace, title: "Export", ask: "Export the notes.", notes: nil}
+
+      for crew <- [[], builder], where <- [nil, workspace] do
+        assert Prompt.compose(ctx, agent: agent(), authority: nil, crew: crew, where: where).text =~
+                 buttons
+      end
+
+      for own_tools? <- [true, false] do
+        refute Prompt.compose(ctx,
+                 agent: %{"name" => "builder", "prompt" => nil},
+                 own_tools?: own_tools?,
+                 authority: nil
+               ).text =~ "## Choices as buttons"
+      end
+    end
+
+    # The person speaks to the soul alone: a member they name for a job
+    # is the soul's to hand it to, said in the crew index, which only the
+    # soul's prompt carries.
+    test "the crew index says to hand a job to the member the person names, and only the soul's carries it",
+         %{ctx: ctx} do
+      naming =
+        "When the person names a member for a job, hand it to that member with `crew.ask`, " <>
+          "and do not do it yourself."
+
+      files = "With `files` true, the files of the message you are answering go with the job."
+
+      soul =
+        Prompt.compose(ctx,
+          agent: agent(%{"crew.ask" => "auto"}),
+          authority: nil,
+          crew: [%{"name" => "builder", "brain" => "claude", "description" => "", "avoid" => ""}]
+        ).instructions
+
+      assert [_, crew] = String.split(soul, "\n\n---\n\n## Crew\n\n", parts: 2)
+
+      assert String.starts_with?(
+               crew,
+               "Hand a job to one of these with `crew.ask` when it is what the member is good " <>
+                 "at. " <> naming <> " " <> files <> " Each works it"
+             )
+
+      member = %{"name" => "builder", "prompt" => nil}
+
+      for own_tools? <- [true, false] do
+        refute Prompt.compose(ctx, agent: member, own_tools?: own_tools?, authority: nil).text =~
+                 "When the person names a member"
       end
     end
 
@@ -389,7 +457,7 @@ defmodule Aqua.PromptTest do
                crew <> "\n\n" <> part_one <> @program
 
       assert opening(ctx, [agent: agent()] ++ loader) ==
-               "You are Aqua.\n\n---\n\n" <> part_one <> @program
+               "You are Aqua.\n\n---\n\n" <> part_one <> @program <> @buttons
 
       for agent <- [member("coder"), agent()] do
         text = Prompt.compose(ctx, [agent: agent] ++ loader).text
@@ -416,10 +484,10 @@ defmodule Aqua.PromptTest do
     # of the member it runs on.
     test "the soul opens with its own prompt, then CYFR's part for its brain", %{ctx: ctx} do
       assert opening(ctx, agent: agent(), own_tools?: true, search?: true, authority: nil) ==
-               "You are Aqua.\n\n---\n\n" <> @part_one <> @program <> @search
+               "You are Aqua.\n\n---\n\n" <> @part_one <> @program <> @search <> @buttons
 
       assert opening(ctx, agent: agent(), authority: nil) ==
-               "You are Aqua.\n\n---\n\n" <> @part_one
+               "You are Aqua.\n\n---\n\n" <> @part_one <> @buttons
 
       refute Prompt.compose(ctx, agent: agent(), authority: nil).text =~ "folder"
 

@@ -4,14 +4,18 @@
 defmodule PrismWeb.SystemLayer.Pairing do
   @moduledoc """
   The pairing prompt's body, which only the system layer draws: the
-  person's Devices, one list, in the athanor in focus, each with its
-  control that signs it out of this CYFR (`pairing.revoke`, listed by
+  person's Devices, one list, in the athanor in focus (listed by
   `Sanctum.Pairing.list/1`): a protected device with what holds its key
   and what it last reported of its disks, a report a person reads and
   never a decision, and each passkey of their account that signed in here
-  as **Passkey**. This CYFR owns only its own bindings, so the list says
-  that signing one out leaves its key on the account, and that removing
-  the key from the account ends it everywhere.
+  as **Passkey**. Each that stands has its control that removes it from
+  this CYFR (`pairing.remove`): **Remove from this CYFR** for a device,
+  which then stays out until **Allow again** (`pairing.allow_again`)
+  beside it, and **Sign out this passkey** for a passkey. This CYFR owns
+  only its own bindings, so the list names the two removals apart:
+  removing from this CYFR leaves the key on the account, and removing the
+  key from the account, at the account's own page that **Keys on your
+  account** in Settings links to, ends it everywhere.
 
   A device comes here by its first connection (`Sanctum.DeviceUnlock`),
   once it is a key of the person's account; nothing is paired from this
@@ -37,7 +41,8 @@ defmodule PrismWeb.SystemLayer.Pairing do
 
   @doc """
   The passkeys waiting to be added, and the paired clients, each with its
-  control that signs it out of this CYFR.
+  control that removes it from this CYFR, or allows a removed device
+  again.
   """
   def devices(assigns) do
     assigns =
@@ -86,8 +91,12 @@ defmodule PrismWeb.SystemLayer.Pairing do
           <p class="text-sm text-gray-300" data-test="pairing-none">No device is paired yet.</p>
         <% {:ok, clients} -> %>
           <p class="text-xs text-gray-300" data-test="pairing-account">
-            Signing a device or passkey out ends it at this CYFR alone: it stays on your account.
-            Removing its key from your account ends it everywhere.
+            Removing a device from this CYFR keeps that device's key out of this CYFR alone,
+            until you allow it again. It signs no one out of your account: the key stays on
+            it, and on that device your passkey still signs you in here. A device that was
+            offline is first told this CYFR no longer takes it, and at its next unlock that
+            it was removed here. Removing its key from your account ends it everywhere: Keys
+            on your account, in Settings, links to your account page, where you do that.
           </p>
           <ul class="divide-y divide-gray-800 text-sm" data-test="pairing-clients">
             <li
@@ -122,15 +131,28 @@ defmodule PrismWeb.SystemLayer.Pairing do
                 </p>
               </div>
               <button
+                :if={client.standing == "removed"}
                 type="button"
-                phx-click="pairing_revoke"
+                phx-click="pairing_allow_again"
                 phx-target={@myself}
                 phx-value-id={@prompt_id}
                 phx-value-client={client.client_id}
-                data-test="pairing-revoke"
+                data-test="pairing-allow-again"
                 class={@button_class}
               >
-                {sign_out(client)}
+                Allow again
+              </button>
+              <button
+                :if={client.standing != "removed"}
+                type="button"
+                phx-click="pairing_remove"
+                phx-target={@myself}
+                phx-value-id={@prompt_id}
+                phx-value-client={client.client_id}
+                data-test="pairing-remove"
+                class={@button_class}
+              >
+                {remove(client)}
               </button>
             </li>
           </ul>
@@ -165,14 +187,20 @@ defmodule PrismWeb.SystemLayer.Pairing do
   defp added(%{source: "passkey"}), do: "Signed in"
   defp added(_client), do: "Paired"
 
-  defp sign_out(%{source: "passkey"}), do: "Sign out this passkey"
-  defp sign_out(_device), do: "Sign out this device"
+  defp remove(%{source: "passkey"}), do: "Sign out this passkey"
+  defp remove(_device), do: "Remove from this CYFR"
 
-  # What signing a passkey out ends: its sessions here, never the key.
+  # What signing a passkey out ends: its sessions here, never the key; and
+  # what keeps a removed device out.
   defp scope(%{source: "passkey"}),
     do:
       "Signing it out ends its sessions at this CYFR. It stays a passkey of your account, " <>
         "and signing in with it again brings it back."
+
+  defp scope(%{standing: "removed"}),
+    do:
+      "Removed from this CYFR: its key cannot connect here until you allow it again. " <>
+        "Your passkey still signs you in here on that device."
 
   defp scope(_device), do: nil
 

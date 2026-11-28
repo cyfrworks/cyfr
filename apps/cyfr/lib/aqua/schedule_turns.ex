@@ -112,7 +112,6 @@ defmodule Aqua.ScheduleTurns do
     :not_member,
     :no_origin,
     :not_addressable,
-    :no_agent,
     :empty,
     :message_too_long
   ]

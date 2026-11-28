@@ -1605,6 +1605,7 @@ Errors returned by `invoke::call`/`invoke::spawn` as `{"error": {"type": "...", 
 |------------|-------|
 | `invalid_json` | Request not valid JSON |
 | `invalid_request` | Missing required fields (`tool`, `action`, `args`) |
+| `request_too_large` | The request is past what the node's `max_request_size` allows |
 | `setup_required` | A need with no live vault entry bound — includes `remediation` field |
 | `connection_not_granted` | The call named an account (`connection`) that the formula's edge to the dependency does not bind; the default is never used in its place. Granting that account on the edge is the fix |
 | `dispatch_error` | The dispatched call itself failed (bad reference, refused by the host, sub-component error) |

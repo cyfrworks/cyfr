@@ -1141,3 +1141,43 @@ func TestAPathsBoundIsTheStores(t *testing.T) {
 		}
 	}
 }
+
+// A keeper streams a generation it holds as a put's stream, which another
+// keeper's store, a person's VM's, takes whole: the same files, the
+// executable bit kept, each read only.
+func TestAHeldGenerationStreamsAsItsOwnPut(t *testing.T) {
+	role := &Owner{}
+	s := newStore(t)
+	files := []file{
+		{path: "pstack/skills/poteto-mode/SKILL.md", data: []byte("# poteto\n")},
+		{path: "pstack/skills/poteto-mode/scripts/watch-pr", data: []byte("#!/bin/sh\necho hi\n"), exec: true},
+		{path: "taste/README.md", data: bytes.Repeat([]byte("x"), 3*partBytes+17)},
+	}
+	d := digestOf("one")
+	if state, _, err := putAll(s, role, "ath_1", "lt_1", d, streamOf(t, files)); err != nil || state != Held {
+		t.Fatalf("put: %q %v", state, err)
+	}
+	var out bytes.Buffer
+	if err := Stream(s.Path("ath_1", d), &out); err != nil {
+		t.Fatal(err)
+	}
+	guest := newStore(t)
+	if state, _, err := putAll(guest, &Owner{}, "ath_1", "lt_2", d, out.Bytes()); err != nil || state != Held {
+		t.Fatalf("the stream's put: %q %v", state, err)
+	}
+	if got, want := tree(t, guest.Path("ath_1", d)), tree(t, s.Path("ath_1", d)); fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("the streamed generation is\n%v\nwant\n%v", got, want)
+	}
+	// An empty generation streams as a set of no pack.
+	e := digestOf("empty")
+	if state, _, err := putAll(s, role, "ath_1", "lt_3", e, streamOf(t, nil)); err != nil || state != Held {
+		t.Fatalf("an empty put: %q %v", state, err)
+	}
+	out.Reset()
+	if err := Stream(s.Path("ath_1", e), &out); err != nil {
+		t.Fatal(err)
+	}
+	if state, _, err := putAll(guest, &Owner{}, "ath_1", "lt_4", e, out.Bytes()); err != nil || state != Held {
+		t.Fatalf("an empty stream's put: %q %v", state, err)
+	}
+}

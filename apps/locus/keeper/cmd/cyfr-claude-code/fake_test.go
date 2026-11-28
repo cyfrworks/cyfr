@@ -41,6 +41,10 @@ import (
 //	together  waits for the next post, then answers both in one result,
 //	       whose singular `user_message_uuid` names the first alone
 //	subagent  streams and says words of a subagent's, runs its tool, then replies
+//	activity  thinks (streamed and in its message), runs two Bash commands
+//	       whose results come in reverse order, an Edit, and a Grep whose
+//	       input is past a detail's bound, and runs Task, whose subagent's lines
+//	       think, speak and run a tool of its own, then replies
 //	around replies in one message of text, a call of CYFR's, and text
 //	handed replies with the initialize request it was started with, as JSON
 //	theirs calls `theirs` of each server of the person's own it still holds,
@@ -313,6 +317,47 @@ func fakeClaude() int {
 				map[string]any{"type": "text", "text": "both answered"}}}})
 			write(map[string]any{"type": "result", "subtype": "success", "is_error": false, "num_turns": 1, "uuid": "result-both",
 				"user_message_uuid": uuid, "user_message_uuids": []string{uuid, next[0]}, "model_usage_since_last_result": modelUsage})
+		case strings.Contains(words, "activity"):
+			main := func(line map[string]any) {
+				line["parent_tool_use_id"] = nil
+				write(line)
+			}
+			child := func(line map[string]any) {
+				line["parent_tool_use_id"] = "toolu_task"
+				write(line)
+			}
+			delta := func(kind, field, text string) map[string]any {
+				return map[string]any{"type": "stream_event", "event": map[string]any{"type": "content_block_delta", "delta": map[string]any{"type": kind, field: text}}}
+			}
+			main(map[string]any{"type": "stream_event", "event": map[string]any{"type": "message_start", "message": map[string]any{"id": "msg_act"}}})
+			main(delta("thinking_delta", "thinking", "THINK-ONE "))
+			main(delta("thinking_delta", "thinking", "THINK-TWO"))
+			main(delta("signature_delta", "signature", "fakesig"))
+			edit := map[string]any{"file_path": "big.txt", "old_string": "", "new_string": strings.Repeat("€", 1000)}
+			main(map[string]any{"type": "assistant", "message": map[string]any{"id": "msg_act", "content": []any{
+				map[string]any{"type": "thinking", "thinking": "THINK-ONE THINK-TWO", "signature": "fakesig"},
+				map[string]any{"type": "tool_use", "id": "toolu_a", "name": "Bash", "input": map[string]any{"command": "echo A"}},
+				map[string]any{"type": "tool_use", "id": "toolu_b", "name": "Bash", "input": map[string]any{"command": "echo B"}},
+				map[string]any{"type": "tool_use", "id": "toolu_edit", "name": "Edit", "input": edit},
+				map[string]any{"type": "tool_use", "id": "toolu_grep", "name": "Grep", "input": map[string]any{"pattern": strings.Repeat("€", 1000)}}}}})
+			for _, id := range []string{"toolu_b", "toolu_a", "toolu_edit", "toolu_grep"} {
+				main(map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": []any{
+					map[string]any{"type": "tool_result", "tool_use_id": id, "content": "OUTPUT-CANARY"}}}})
+			}
+			main(map[string]any{"type": "assistant", "message": map[string]any{"id": "msg_task", "content": []any{
+				map[string]any{"type": "tool_use", "id": "toolu_task", "name": "Task", "input": map[string]any{"description": "read a note", "prompt": "CHILD-PROMPT"}}}}})
+			child(map[string]any{"type": "stream_event", "event": map[string]any{"type": "message_start", "message": map[string]any{"id": "msg_child"}}})
+			child(delta("thinking_delta", "thinking", "CHILD-THOUGHT"))
+			child(delta("text_delta", "text", "CHILD-WORDS"))
+			child(map[string]any{"type": "assistant", "message": map[string]any{"id": "msg_child", "content": []any{
+				map[string]any{"type": "thinking", "thinking": "CHILD-THOUGHT", "signature": "fakesig"},
+				map[string]any{"type": "text", "text": "CHILD-WORDS"},
+				map[string]any{"type": "tool_use", "id": "toolu_child", "name": "Bash", "input": map[string]any{"command": "echo CHILD-RAN"}}}}})
+			child(map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": []any{
+				map[string]any{"type": "tool_result", "tool_use_id": "toolu_child", "content": "CHILD-RESULT"}}}})
+			main(map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": []any{
+				map[string]any{"type": "tool_result", "tool_use_id": "toolu_task", "content": "CHILD-RESULT"}}}})
+			reply(uuids, "The member said its own words.")
 		case strings.Contains(words, "subagent"):
 			task := "toolu_task"
 			write(map[string]any{"type": "stream_event", "parent_tool_use_id": task, "event": map[string]any{"type": "content_block_delta",

@@ -8,30 +8,27 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/cyfr/locus/keeper/internal/wire/wiretest"
 )
 
 type base64Case struct {
 	Text  string  `json:"text"`
-	Bytes *string `json:"bytes_hex"`
+	Bytes *string `json:"bytes_hex" wire:"null,required"`
 }
 
 // Every base64 text reads as Elixir's Base reads it, by
 // tests/fixtures/wire_json.json, which Prima's test holds Base to.
 func TestEveryBase64TextReadsAsPrimasDecoderReadsIt(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "..", "..", "tests", "fixtures", "wire_json.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
 	var v struct {
 		Base64URL []base64Case `json:"base64url"`
 		Base64    []base64Case `json:"base64"`
 	}
-	if err := json.Unmarshal(data, &v); err != nil || len(v.Base64URL) < 10 || len(v.Base64) < 10 {
-		t.Fatalf("the vector file: %v", err)
+	wiretest.LoadStrict(t, "wire_json.json", &v)
+	if len(v.Base64URL) < 10 || len(v.Base64) < 10 {
+		t.Fatalf("%d and %d base64 texts", len(v.Base64URL), len(v.Base64))
 	}
 	for section, c := range map[string]struct {
 		cases  []base64Case
@@ -186,10 +183,6 @@ func TestTheZeroKeyIsNoKey(t *testing.T) {
 // worker_auth.json's sealed call halves and sealed attempt keys. Only this
 // test gives seal an iv.
 func TestPrimasSealsReproduce(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "..", "..", "tests", "fixtures", "worker_auth.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
 	var v struct {
 		Attempt map[string]json.RawMessage `json:"attempt"`
 		Boot    string                     `json:"boot"`
@@ -200,6 +193,9 @@ func TestPrimasSealsReproduce(t *testing.T) {
 			Nonce  string `json:"nonce"`
 			Runner string `json:"runner"`
 			TS     uint64 `json:"ts"`
+			// Held by workerauth's test, not compared here.
+			Canonical json.RawMessage `json:"canonical"`
+			Header    json.RawMessage `json:"header"`
 		} `json:"call"`
 		SealedAttemptKeys struct {
 			IV     string `json:"iv_hex"`
@@ -213,8 +209,9 @@ func TestPrimasSealsReproduce(t *testing.T) {
 			BodySealed   string `json:"body_sealed"`
 		} `json:"sealed_call"`
 	}
-	if err := json.Unmarshal(data, &v); err != nil || v.SealedCall.BodySealed == "" || v.SealedAttemptKeys.Sealed == "" {
-		t.Fatalf("the vector file: %v", err)
+	wiretest.LoadStrict(t, "worker_auth.json", &v)
+	if v.SealedCall.BodySealed == "" || v.SealedAttemptKeys.Sealed == "" {
+		t.Fatal("the sealed call and attempt keys")
 	}
 	attemptFields := []Field{{"athanor_id", String, ""}, {"execution_id", String, ""}, {"attempt", String, ""},
 		{"fence", Integer, ""}, {"generation", Integer, ""}, {"service", String, ""}}

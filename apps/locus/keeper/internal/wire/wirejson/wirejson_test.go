@@ -9,45 +9,55 @@ import (
 	"errors"
 	"math"
 	"math/big"
-	"os"
-	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/cyfr/locus/keeper/internal/wire/wiretest"
 )
 
-type wireCase struct {
-	Why       string          `json:"why"`
-	Doc       string          `json:"doc_b64"`
-	Value     json.RawMessage `json:"value"`
-	ValueJSON string          `json:"value_json"`
-	Bytes     string          `json:"bytes_b64"`
-	// Go is the Go reader's own answer where the two ends differ, as the
-	// vector states it.
-	Go string `json:"go"`
+// A read document, its value, and Go's own answer where the two ends
+// differ, as the vector states it.
+type readCase struct {
+	Why   string          `json:"why"`
+	Doc   string          `json:"doc_b64"`
+	Value json.RawMessage `json:"value"`
+	Go    string          `json:"go" wire:"optional"`
+}
+
+// A refused document.
+type refusedCase struct {
+	Why string `json:"why"`
+	Doc string `json:"doc_b64"`
+}
+
+// A value written, its bytes, and Go's own answer where the two ends
+// differ.
+type writeCase struct {
+	Why       string `json:"why"`
+	ValueJSON string `json:"value_json"`
+	Bytes     string `json:"bytes_b64"`
+	Go        string `json:"go" wire:"optional"`
 }
 
 // wireVectors is tests/fixtures/wire_json.json, which Prima's test holds
 // Jason and Elixir's Base to; its base64 sections are package
 // macenvelope's.
 type wireVectors struct {
-	Version         int        `json:"version"`
-	MaxIntegerChars int        `json:"max_integer_chars"`
-	Reads           []wireCase `json:"reads"`
-	Refused         []wireCase `json:"refused"`
-	Writes          []wireCase `json:"writes"`
+	Version         int           `json:"version"`
+	MaxIntegerChars int           `json:"max_integer_chars"`
+	Reads           []readCase    `json:"reads"`
+	Refused         []refusedCase `json:"refused"`
+	Writes          []writeCase   `json:"writes"`
 }
 
 func vectors(t *testing.T) wireVectors {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "..", "..", "tests", "fixtures", "wire_json.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
 	var v wireVectors
-	if err := json.Unmarshal(data, &v); err != nil || v.Version != 1 {
-		t.Fatalf("the vector file: %v, version %d", err, v.Version)
+	wiretest.LoadStrict(t, "wire_json.json", &v)
+	if v.Version != 1 {
+		t.Fatalf("the vector file's version %d", v.Version)
 	}
 	return v
 }

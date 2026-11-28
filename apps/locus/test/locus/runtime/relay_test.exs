@@ -7,10 +7,10 @@ defmodule Locus.Runtime.RelayTest do
   to a scripted host: the service's end verifies each host call a runner
   hands it under the attempt's keys and posts it unchanged, naming the
   service's runner id; it refuses, closing the channel, a frame for an
-  attempt the channel does not carry, a header naming another runner or
-  signed under another attempt's key, a `take_rate` of the runner's own,
-  a fetch naming a pin CYFR never granted to the frame's attempt and a
-  frame past the relay's bound. A child CYFR admits is carried, with pins
+  attempt the channel does not carry, each call
+  `tests/fixtures/runner_relay.json`'s `call_checks` refuse, in the order
+  they are decided, a fetch naming a pin CYFR never granted to the
+  frame's attempt and a frame past the relay's bound. A child CYFR admits is carried, with pins
   of its own. A granted pin serves one fetch, and only before its
   `expires_at`: a fetch naming it again closes the channel. A fetch
   through a granted pin is checked again against the attempt's edge and
@@ -47,6 +47,13 @@ defmodule Locus.Runtime.RelayTest do
   import RelayFixtures
 
   @ref RelayFixtures.component_ref()
+
+  @call_checks Path.expand("../../../../../tests/fixtures/runner_relay.json", __DIR__)
+               |> File.read!()
+               |> Jason.decode!()
+               |> Map.fetch!("call_checks")
+  @call_cases Map.fetch!(@call_checks, "cases")
+  @call_request_bound Map.fetch!(@call_checks, "max_request_size")
 
   setup do
     host = ScriptedHost.start!()
@@ -103,6 +110,77 @@ defmodule Locus.Runtime.RelayTest do
     %{kind: :host_call, attempt: attempt.attempt, op: op, header: header, body: sealed}
   end
 
+  # A case of runner_relay.json's call_checks as a runner sends it, and
+  # the plaintext its body seals: the
+  # header signed under the attempt's call key (another for `call_key`
+  # other) over the attempt's own fields with the case's `fields` over
+  # them, its ts `ts_ms` from now; the body `op`'s request body of `args`
+  # (or `plaintext`), sealed under the attempt's seal key (another for
+  # `seal_key` other) over the header's fields with `seal_fields` over
+  # them; the header naming another sealing of it for `body_hash` other,
+  # or the case's `header` text in its place; the frame naming `frame_op`
+  # where the case gives one.
+  defp checked_call(attempt, check) do
+    {:ok, assignment} = Assignment.read(attempt.assignment)
+    other = &(check[&1] == "other")
+    call_key = if other.("call_key"), do: :crypto.strong_rand_bytes(32), else: attempt.keys.call
+    seal_key = if other.("seal_key"), do: :crypto.strong_rand_bytes(32), else: attempt.keys.seal
+    op = String.to_existing_atom(check["op"])
+
+    fields =
+      attempt.keys.attempt
+      |> Map.merge(%{
+        boot: attempt.boot,
+        runner: attempt.runner,
+        member: assignment.member,
+        ts: System.system_time(:millisecond) + Map.get(check, "ts_ms", 0),
+        nonce: Base.url_encode64(:crypto.strong_rand_bytes(12), padding: false)
+      })
+      |> Map.merge(atoms(check["fields"]))
+
+    sealed_under = Map.merge(fields, atoms(check["seal_fields"]))
+    plaintext = check["plaintext"] || Jason.encode!(WorkerWire.request_body(op, check["args"]))
+    {:ok, body} = WorkerAuth.seal_call(seal_key, :body, sealed_under, plaintext)
+
+    {:ok, named} =
+      if other.("body_hash"),
+        do: WorkerAuth.seal_call(seal_key, :body, sealed_under, plaintext),
+        else: {:ok, body}
+
+    {:ok, header} = WorkerAuth.host_call_header(call_key, fields, named)
+
+    {%{
+       kind: :host_call,
+       attempt: attempt.attempt,
+       op: String.to_existing_atom(check["frame_op"] || check["op"]),
+       header: check["header"] || header,
+       body: body
+     }, plaintext}
+  end
+
+  defp atoms(nil), do: %{}
+
+  defp atoms(fields),
+    do: Map.new(fields, fn {name, value} -> {String.to_existing_atom(name), value} end)
+
+  # `count` frames the service writes the runner, read on the runner's
+  # `channel`, which sent the calls they answer.
+  defp answers!(channel, count, why, read \\ []) do
+    if length(read) >= count do
+      read
+    else
+      assert_receive {:to_runner, bytes}, 5_000, why
+      {:ok, frames, "", channel} = RunnerRelay.decode(channel, bytes)
+      assert Enum.all?(frames, &(&1.kind == :host_answer)), why
+      answers!(channel, count, why, read ++ frames)
+    end
+  end
+
+  # A request the host saw, as its operation, args, header and body, or as
+  # it refused it.
+  defp posted(%{op: op, args: args, header: header, body: body}), do: {op, args, header, body}
+  defp posted(refused), do: refused
+
   defp frame_bytes(channel, frame) do
     {:ok, bytes, channel} = RunnerRelay.encode(channel, frame)
     {IO.iodata_to_binary(bytes), channel}
@@ -150,55 +228,99 @@ defmodule Locus.Runtime.RelayTest do
       assert ScriptedHost.requests(host) == []
     end
 
-    test "a header naming another runner than the service's closes the channel", %{host: host} do
-      attempt = attempt!(host)
-      relay = service_end!(host, attempt, "runner_the_service_started")
-      frame = signed_call(attempt, :renew, %{"attempts" => [attempt.attempt]})
-      {bytes, _} = frame_bytes(RunnerRelay.new(:runner, attempt.attempt), frame)
+    # Each case is played on a host and a relay of its own, its attempt
+    # bound to the section's max_request_size: the calls `unanswered`
+    # before it and the case's own, sent `sent` times, go in as one
+    # delivery, so the relay reads the case's call with every call before
+    # it posted and none answered.
+    test "decides every call check of the vectors as the vectors decide it" do
+      assert length(@call_cases) == 44
+      limits = EdgeFixtures.limits(max_request_size: @call_request_bound)
 
-      assert_closes(relay, bytes, attempt, :runner_mismatch)
-      assert ScriptedHost.requests(host) == []
-    end
+      for check <- @call_cases do
+        # A case is its members and no other: a marker or member a case
+        # does not take fails here.
+        assert Map.keys(check) --
+                 ~w(why relay op args reason fields ts_ms call_key seal_key seal_fields plaintext header body_hash frame_op unanswered sent) ==
+                 [],
+               inspect(check)
 
-    test "a header signed under another attempt's key, or naming another boot, closes it", %{
-      host: host
-    } do
-      attempt = attempt!(host)
-      stranger = attempt!(host)
+        %{"why" => why, "relay" => true, "op" => op, "args" => args, "reason" => reason} = check
+        host = ScriptedHost.start!()
 
-      for {frame, reason} <- [
-            {signed_call(attempt, :renew, %{"attempts" => []}, %{}, %{
-               stranger.keys
-               | attempt: attempt.keys.attempt
-             }), :bad_mac},
-            {signed_call(attempt, :renew, %{"attempts" => []}, %{boot: "boot_elsewhere"}),
-             :boot_mismatch}
-          ] do
+        # Each op the cases post is answered with a value naming it, which
+        # the runner is handed as CYFR sealed it.
+        for posted <- ~w(renew push_deltas),
+            do:
+              ScriptedHost.script(host, posted, fn _args, _caller -> {:ok, %{"op" => posted}} end)
+
+        attempt = attempt!(host, limits: limits)
         relay = service_end!(host, attempt)
-        {bytes, _} = frame_bytes(RunnerRelay.new(:runner, attempt.attempt), frame)
-        assert_closes(relay, bytes, attempt, reason)
+        unanswered = Map.get(check, "unanswered", 0)
+        renew = Jason.encode!(WorkerWire.request_body(:renew, %{"attempts" => []}))
+
+        before =
+          for _ <- 1..unanswered//1,
+              do:
+                {signed_call(attempt, :renew, %{"attempts" => []}),
+                 {"renew", %{"attempts" => []}, renew}}
+
+        {frame, plaintext} = checked_call(attempt, check)
+        own = {frame, {op, args, plaintext}}
+        frames = before ++ List.duplicate(own, Map.get(check, "sent", 1))
+
+        {sent, channel} =
+          Enum.map_reduce(frames, RunnerRelay.new(:runner, attempt.attempt), fn {f, _}, ch ->
+            frame_bytes(ch, f)
+          end)
+
+        bytes = IO.iodata_to_binary(sent)
+
+        case reason do
+          nil ->
+            Locus.Runtime.Relay.deliver(relay, bytes)
+
+            seqs =
+              for <<size::32, json::binary-size(size)>> <- sent, do: Jason.decode!(json)["seq"]
+
+            by_seq = Map.new(Enum.zip(seqs, frames))
+            answers = answers!(channel, length(seqs), why)
+            assert Enum.sort(for %{re: re} <- answers, do: re) === Enum.sort(seqs), why
+
+            # Each answer is CYFR's, as the host sealed it for its call.
+            for %{re: re, status: status, body: body} <- answers do
+              {%{header: header}, {posted_op, _args, _plain}} = Map.fetch!(by_seq, re)
+              assert status === 200, why
+              now = System.system_time(:millisecond)
+
+              {:ok, fields, _hash} =
+                WorkerAuth.verify_host_call_header_under(attempt.keys.call, header, now)
+
+              {:ok, opened} = WorkerAuth.open_call(attempt.keys.seal, :answer, fields, body)
+              assert Jason.decode!(opened) === %{"v" => 3, "ok" => %{"op" => posted_op}}, why
+            end
+
+            # Each call reached CYFR whole: its op, args, header and body as
+            # the runner wrote them.
+            assert ScriptedHost.requests(host) |> Enum.map(&posted/1) |> Enum.sort() ===
+                     frames
+                     |> Enum.map(fn {f, {o, a, plain}} -> {o, a, f.header, plain} end)
+                     |> Enum.sort(),
+                   why
+
+          reason ->
+            assert_closes(relay, bytes, attempt, String.to_existing_atom(reason))
+
+            # Nothing of the case's own call reached CYFR, refused or not;
+            # whatever reached it is a call before it, by its header.
+            earlier = MapSet.new(before, fn {f, _} -> f.header end)
+
+            for request <- ScriptedHost.requests(host) do
+              assert %{header: header} = request, why
+              assert MapSet.member?(earlier, header) and header != frame.header, why
+            end
+        end
       end
-
-      assert ScriptedHost.requests(host) == []
-    end
-
-    test "a runner's own take_rate is refused: the rate is the service's to take", %{host: host} do
-      attempt = attempt!(host)
-      relay = service_end!(host, attempt)
-      frame = signed_call(attempt, :take_rate, %{"bucket" => "http:" <> @ref})
-      {bytes, _} = frame_bytes(RunnerRelay.new(:runner, attempt.attempt), frame)
-
-      assert_closes(relay, bytes, attempt, :take_rate)
-      assert ScriptedHost.requests(host, "take_rate") == []
-    end
-
-    test "a body that is not the frame's operation closes the channel", %{host: host} do
-      attempt = attempt!(host)
-      relay = service_end!(host, attempt)
-      frame = %{signed_call(attempt, :renew, %{"attempts" => []}) | op: :attach}
-      {bytes, _} = frame_bytes(RunnerRelay.new(:runner, attempt.attempt), frame)
-
-      assert_closes(relay, bytes, attempt, :malformed_call)
     end
 
     test "a frame past the relay's bound closes the channel as soon as its length is in", %{

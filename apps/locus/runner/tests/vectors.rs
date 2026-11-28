@@ -898,6 +898,39 @@ fn auth_a_host_calls_canonical_string_and_header_are_the_vectors() {
 }
 
 #[test]
+fn auth_attempt_keys_sealed_for_a_runner_open_as_their_attempt_and_its_two_keys() {
+    let v = fixture("worker_auth.json");
+    let sealed = s(&v["sealed_attempt_keys"]["sealed"]);
+    let seal_key = key(&v["keys"]["dispatch_seal_hex"]);
+    let opened = auth::open_attempt_keys(&seal_key, sealed).expect("the keys open");
+    assert_eq!(opened.attempt, attempt(&v["attempt"]));
+    assert!(*opened.call == *key(&v["keys"]["attempt_call_hex"]));
+    assert!(*opened.seal == *key(&v["keys"]["attempt_seal_hex"]));
+    // Under another key, naming another attempt, or with more than two
+    // parts, nothing opens.
+    let refused = |key: &[u8; 32], sealed: &str| auth::open_attempt_keys(key, sealed).is_err();
+    assert!(refused(&key(&v["keys"]["attempt_seal_hex"]), sealed));
+    let (named, boxed) = sealed.split_once('.').expect("two parts");
+    let mut other: Value =
+        serde_json::from_slice(&wire::decode_base64url(named).expect("base64url")).expect("JSON");
+    other["fence"] = Value::from(3);
+    let renamed = format!(
+        "{}.{boxed}",
+        wire::encode_base64url(other.to_string().as_bytes())
+    );
+    assert!(refused(&seal_key, &renamed));
+    assert!(refused(&seal_key, &format!("{sealed}.x")));
+    let mut extra = other.clone();
+    extra["fence"] = Value::from(2);
+    extra["more"] = Value::from(1);
+    let widened = format!(
+        "{}.{boxed}",
+        wire::encode_base64url(extra.to_string().as_bytes())
+    );
+    assert!(refused(&seal_key, &widened));
+}
+
+#[test]
 fn auth_a_sealed_body_and_answer_reproduce_and_open_only_as_themselves() {
     let v = fixture("worker_auth.json");
     let sealed = &v["sealed_call"];
@@ -1255,7 +1288,7 @@ fn header_fields(header: &str) -> CallFields {
 }
 
 impl Post for Scripted {
-    async fn place(&mut self) -> Option<Place> {
+    async fn place(&mut self, _op: cyfr_runner::host::Op) -> Option<Place> {
         Some(Place::free())
     }
 
@@ -1382,7 +1415,7 @@ async fn every_answer_outcome() {
 struct Silent(usize);
 
 impl Post for Silent {
-    async fn place(&mut self) -> Option<Place> {
+    async fn place(&mut self, _op: cyfr_runner::host::Op) -> Option<Place> {
         Some(Place::free())
     }
 
@@ -1798,6 +1831,8 @@ fn requests_a_pin_is_read_as_prima_reads_one() {
     let v = fixture("host_api.json");
     let cases = &v["pin_answer_refusals"];
     assert!(read_pin(&cases["pin"]).is_some());
+    assert!(cases_of(&cases["reads"]).len() >= 13, "the pins read");
+    assert!(cases_of(&cases["refusals"]).len() >= 36, "the pins refused");
     for case in cases_of(&cases["reads"]) {
         assert!(read_pin(&case["pin"]).is_some(), "{}", case["why"]);
     }
@@ -1808,4 +1843,21 @@ fn requests_a_pin_is_read_as_prima_reads_one() {
 
 fn cases_of(value: &Value) -> &Vec<Value> {
     value.as_array().expect("a list of cases")
+}
+
+// ============================================================================
+// guest_error.json: a formula's invoke
+// ============================================================================
+
+#[test]
+fn formula_every_type_its_invoke_answers_itself_is_an_invoke_type() {
+    let types = fixture("guest_error.json");
+    let invoke: Vec<&str> = cases(&types["invoke_types"], "invoke_types")
+        .iter()
+        .map(s)
+        .collect();
+    // Every error the runner makes itself is made of one of these.
+    for kind in cyfr_runner::imports::formula::Kind::ALL {
+        assert!(invoke.contains(&kind.name()), "{kind:?} is no invoke type");
+    }
 }

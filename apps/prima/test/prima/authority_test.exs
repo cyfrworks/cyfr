@@ -491,8 +491,71 @@ defmodule Prima.AuthorityTest do
       cases = @wire["refused"]
       assert cases != []
 
+      # Each case is its why and authority, and a case a worker service
+      # carries unread says so with true, the one marker a refused case
+      # takes: it is refused in the vault's projection, the one part the
+      # service does not read.
       for vector <- cases do
+        assert (Map.keys(vector) -- ["unread_by_service"]) |> Enum.sort() === ~w(authority why),
+               inspect(vector)
+
         assert {:error, _reason} = Authority.from_wire(vector["authority"]), vector["why"]
+
+        if Map.has_key?(vector, "unread_by_service") do
+          assert vector["unread_by_service"] === true, vector["why"]
+          assert vector["why"] =~ "projection", vector["why"]
+        end
+      end
+
+      assert Enum.count(cases, &Map.has_key?(&1, "unread_by_service")) == 2
+    end
+
+    test "every duration reads to its milliseconds, or is no duration" do
+      assert length(@wire["durations"]) >= 40
+
+      # A case is its text and milliseconds; one marked go, Go's own answer
+      # where Go holds no integer past an int64, is a duration Prima reads.
+      for vector <- @wire["durations"] do
+        assert %{"text" => text, "ms" => ms} = vector
+
+        case Map.keys(vector) |> Enum.sort() do
+          ~w(ms text) ->
+            :ok
+
+          ~w(go ms text) ->
+            assert vector["go"] === %{"ms" => nil} and
+                     (ms > 9_223_372_036_854_775_807 or ms < -9_223_372_036_854_775_808)
+        end
+
+        expected = if ms, do: {:ok, ms}, else: :error
+
+        assert (case Prima.Limits.parse_duration(text) do
+                  {:ok, read} -> {:ok, read}
+                  {:error, _sentence} -> :error
+                end) === expected,
+               inspect(text)
+      end
+    end
+
+    test "every egress reads as its lists, as written, or is refused" do
+      assert length(@wire["egress"]) >= 10
+
+      for vector <- @wire["egress"] do
+        assert %{"authority" => authority, "egress" => egress} = vector
+        assert map_size(vector) == 3 and is_binary(vector["why"]), inspect(vector)
+
+        case Authority.from_wire(authority) do
+          {:ok, %Authority{resources: edge}} ->
+            read = edge.egress || %{}
+
+            assert Map.new(~w(domains methods schemes private_ips)a, fn k ->
+                     {Atom.to_string(k), Map.get(read, k) || []}
+                   end) === egress,
+                   vector["why"]
+
+          {:error, _reason} ->
+            assert egress === nil, vector["why"]
+        end
       end
     end
   end
