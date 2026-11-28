@@ -716,17 +716,7 @@ func (d *driver) update(params json.RawMessage) error {
 		return d.chunk(d.messageID(u.Message), block.Text)
 	case "agent_thought_chunk":
 		d.output++
-		if err := d.release(); err != nil {
-			return err
-		}
-		var block struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		}
-		if json.Unmarshal(u.Content, &block) != nil || block.Type != "text" || block.Text == "" {
-			return nil
-		}
-		return d.c.EmitText(d.event("thought").Set("message", d.messageID(u.Message)), "delta", block.Text)
+		return d.release()
 	case "tool_call", "tool_call_update":
 		// An update of a call the turn's end ended is no work of this turn:
 		// it changes nothing, held text included.

@@ -4,8 +4,8 @@
 defmodule Aqua.Loop.Stream do
   @moduledoc """
   What a running turn shows live and never stores: a chat step's answer
-  as it streams, a program's reasoning and the turn's list of calls,
-  forwarded to the thread's viewers, and what a viewer keeps of them.
+  as it streams and the turn's list of calls, forwarded to the thread's
+  viewers, and what a viewer keeps of them.
 
   **Forwarding.** `open/3` subscribes a forwarder to the catalyst's
   execution before the call starts; each `text.delta` the execution streams
@@ -17,8 +17,7 @@ defmodule Aqua.Loop.Stream do
       for the soul;
     * `step_id`, and `ordinal` — the step's place among its source's model
       steps, so a retry's step outranks the one it replaced;
-    * `seq` — the event's `{durable, n}` position; `text`;
-    * `kind` — `:thought` for a program's reasoning, absent for an answer.
+    * `seq` — the event's `{durable, n}` position; `text`.
 
   A delta at or before the last one forwarded is dropped, and a forwarder
   whose loop is gone forwards nothing more. Nothing else a catalyst streams
@@ -37,8 +36,7 @@ defmodule Aqua.Loop.Stream do
   a delta (`announce/4`) whose step is the program's native message: its
   `said` row, whose payload names that message as `brain_message`, settles
   it as a step's text row does, and the attendant abandons a message that
-  will land no row. Its `thought` events are announced as deltas of kind
-  `:thought` (`announce_thought/4`), which no row settles.
+  will land no row.
 
   The loop announces the turn's list of calls as `:tool_activity`,
   `%{turn_id:, fence:, entries:}`, the whole list each time it changes.
@@ -46,13 +44,11 @@ defmodule Aqua.Loop.Stream do
   **Keeping.** A viewer holds a `t()` for the running turn: `advance/2` for
   each fence announced, `add/2` for each delta, `landed/2` for each row,
   `abandoned/2` for each abandoned step, `put_activity/2` for each list,
-  and `texts/1`, `thoughts/1` and `activity/1` to show. It keeps one
-  answer per source and never lets a stale delta in: one under another
-  fence, one older than the highest step its source has streamed, and one
-  for a step that landed or was abandoned are all dropped. A thought is
-  kept apart from the answers, one for each message, and stays until the
-  turn ends or its fence moves, whatever lands. A list under another fence
-  is dropped, and a higher fence starts over with none.
+  and `texts/1` and `activity/1` to show. It keeps one answer per source
+  and never lets a stale delta in: one under another fence, one older than
+  the highest step its source has streamed, and one for a step that
+  landed or was abandoned are all dropped. A list under another fence is
+  dropped, and a higher fence starts over with none.
   """
 
   alias Aqua.Tape
@@ -62,15 +58,14 @@ defmodule Aqua.Loop.Stream do
   @subscribe_timeout_ms 5_000
   @close_timeout_ms 5_000
 
-  defstruct fence: nil, entries: %{}, ordinals: %{}, landed: %{}, thoughts: %{}, activity: []
+  defstruct fence: nil, entries: %{}, ordinals: %{}, landed: %{}, activity: []
 
-  @typedoc "What a viewer keeps of the running turn's live answers, reasoning and calls."
+  @typedoc "What a viewer keeps of the running turn's live answers and calls."
   @type t :: %__MODULE__{
           fence: pos_integer() | nil,
           entries: %{String.t() => entry()},
           ordinals: %{String.t() => non_neg_integer()},
           landed: %{String.t() => true},
-          thoughts: %{{String.t(), String.t()} => thought()},
           activity: [activity_entry()]
         }
 
@@ -85,14 +80,6 @@ defmodule Aqua.Loop.Stream do
           status: :running | :done,
           details: [String.t()]
         }
-
-  @typep thought :: %{
-           step_id: String.t(),
-           role: String.t() | nil,
-           seq: {non_neg_integer(), non_neg_integer()},
-           text: String.t(),
-           began: integer()
-         }
 
   @typep entry :: %{
            step_id: String.t(),
@@ -113,16 +100,6 @@ defmodule Aqua.Loop.Stream do
           role: String.t() | nil
         }
 
-  @typedoc "A message's reasoning, which takes no ordinal: no row settles it."
-  @type thought_attrs :: %{
-          thread_id: String.t(),
-          turn_id: String.t(),
-          fence: pos_integer(),
-          source: String.t(),
-          step_id: String.t(),
-          role: String.t() | nil
-        }
-
   @doc "Announce the fence `turn`'s streamed answers are kept under."
   @spec announce_fence(Context.t(), Tape.turn()) :: :ok
   def announce_fence(%Context{} = ctx, turn),
@@ -132,22 +109,6 @@ defmodule Aqua.Loop.Stream do
   @spec announce(Context.t(), attrs(), {non_neg_integer(), non_neg_integer()}, String.t()) :: :ok
   def announce(%Context{} = ctx, attrs, seq, text),
     do: Tape.announce(ctx, attrs.thread_id, :delta, delta(attrs, seq, text))
-
-  @doc "Announce reasoning `text`, streamed at `seq` for the message `attrs` names."
-  @spec announce_thought(
-          Context.t(),
-          thought_attrs(),
-          {non_neg_integer(), non_neg_integer()},
-          String.t()
-        ) :: :ok
-  def announce_thought(%Context{} = ctx, attrs, seq, text),
-    do:
-      Tape.announce(
-        ctx,
-        attrs.thread_id,
-        :delta,
-        Map.put(delta(attrs, seq, text), :kind, :thought)
-      )
 
   @doc "Announce that the step `attrs` names lands no text row: what it streamed is withdrawn."
   @spec abandon(Context.t(), attrs()) :: :ok
@@ -233,29 +194,6 @@ defmodule Aqua.Loop.Stream do
   leaves, so an earlier step's delayed delta never returns.
   """
   @spec add(t(), map()) :: t()
-  def add(%__MODULE__{fence: fence} = kept, %{fence: fence, kind: :thought} = delta)
-      when is_integer(fence) do
-    %{source: source, step_id: step_id, seq: seq, text: text} = delta
-    key = {source, step_id}
-
-    case Map.fetch(kept.thoughts, key) do
-      {:ok, %{seq: last} = thought} when seq > last ->
-        put_thought(kept, key, %{thought | seq: seq, text: thought.text <> text})
-
-      {:ok, _replayed} ->
-        kept
-
-      :error ->
-        put_thought(kept, key, %{
-          step_id: step_id,
-          role: Map.get(delta, :role),
-          seq: seq,
-          text: text,
-          began: System.unique_integer([:monotonic])
-        })
-    end
-  end
-
   def add(%__MODULE__{fence: fence} = kept, %{fence: fence} = delta) when is_integer(fence) do
     %{source: source, step_id: step_id, ordinal: ordinal, seq: seq, text: text} = delta
     highest = Map.get(kept.ordinals, source, -1)
@@ -326,15 +264,6 @@ defmodule Aqua.Loop.Stream do
     |> Enum.map(&Map.take(&1, [:step_id, :role, :text]))
   end
 
-  @doc "The reasoning streamed so far, one for each message, in the order they began."
-  @spec thoughts(t()) :: [%{step_id: String.t(), role: String.t() | nil, text: String.t()}]
-  def thoughts(%__MODULE__{thoughts: thoughts}) do
-    thoughts
-    |> Map.values()
-    |> Enum.sort_by(& &1.began)
-    |> Enum.map(&Map.take(&1, [:step_id, :role, :text]))
-  end
-
   @doc """
   What is kept once the loop announced its list of calls: the list, when
   it is the kept fence's; one under any other fence is dropped.
@@ -349,9 +278,6 @@ defmodule Aqua.Loop.Stream do
   @doc "The turn's calls, in the order they started."
   @spec activity(t()) :: [activity_entry()]
   def activity(%__MODULE__{activity: activity}), do: activity
-
-  defp put_thought(kept, key, thought),
-    do: %{kept | thoughts: Map.put(kept.thoughts, key, thought)}
 
   defp put_entry(kept, source, entry), do: %{kept | entries: Map.put(kept.entries, source, entry)}
 

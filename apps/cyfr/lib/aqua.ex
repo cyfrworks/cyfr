@@ -300,11 +300,6 @@ defmodule Aqua do
           [%{step_id: String.t(), role: String.t() | nil, text: String.t()}]
   defdelegate stream_texts(stream), to: Aqua.Loop.Stream, as: :texts
 
-  @doc "The reasoning a viewer shows in its fold (`Aqua.Loop.Stream.thoughts/1`)."
-  @spec stream_thoughts(Aqua.Loop.Stream.t()) ::
-          [%{step_id: String.t(), role: String.t() | nil, text: String.t()}]
-  defdelegate stream_thoughts(stream), to: Aqua.Loop.Stream, as: :thoughts
-
   @doc "A stream with the loop's list of calls kept (`Aqua.Loop.Stream.put_activity/2`)."
   @spec stream_put_activity(Aqua.Loop.Stream.t(), map()) :: Aqua.Loop.Stream.t()
   defdelegate stream_put_activity(stream, update), to: Aqua.Loop.Stream, as: :put_activity

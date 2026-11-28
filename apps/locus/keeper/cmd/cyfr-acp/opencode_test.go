@@ -270,7 +270,7 @@ func TestOpenCodesWordsAroundItsToolAreItsTwoMessages(t *testing.T) {
 // A sub-agent's frames, each marked as its child session's, are none of the
 // turn's: its words, reasoning and tool emit nothing, and the call that
 // started it starts and ends (#1237, S3 F5).
-func TestOpenCodesActivityIsItsCallsThoughtsAndOwnWords(t *testing.T) {
+func TestOpenCodesActivityIsItsCallsAndOwnWords(t *testing.T) {
 	s := startOpenCode(t, "")
 	freshOpenCode(s, map[string]any{})
 	postText(s, "stp_act", "trn_1", "activity")

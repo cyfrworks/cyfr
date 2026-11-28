@@ -273,7 +273,7 @@ func TestCursorsCallIsAnAskAndAPersonsIsTheirOwn(t *testing.T) {
 // Cursor's calls carry their ids as Cursor writes them, a newline in each,
 // and its sub-agent is the one call of its tool `task`, whose own request
 // after it is answered method-not-found (S3, sub-agents).
-func TestCursorsActivityIsItsCallsThoughtsAndOwnWords(t *testing.T) {
+func TestCursorsActivityIsItsCallsAndOwnWords(t *testing.T) {
 	s := startCursor(t, "")
 	freshCursor(s)
 	postText(s, "stp_act", "trn_1", "activity")

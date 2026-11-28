@@ -2556,45 +2556,6 @@ defmodule Aqua.ProgramTest do
       say(fake, row, idle(turn, [input.id]))
       assert :completed = Task.await(loop, 30_000)
     end
-
-    test "the program's reasoning streams apart from its text, as thought of the open work " <>
-           "only, and no row lands it",
-         %{ctx: ctx, thread: thread, row: row, fake: fake} do
-      watch!(ctx, thread)
-      turn = accept!(ctx, thread, row, "think it over")
-      loop = run(ctx, turn)
-      started!(fake, row)
-      _post = sent()
-      [input] = inputs(ctx, turn)
-      say(fake, row, accepted(input))
-      say(fake, row, thought(turn, "msg_other", "for other work", "trn_other"))
-      say(fake, row, thought(turn, "msg_none", "for no work", :none))
-      say(fake, row, text(turn, "msg_1", "The answer "))
-      {:ok, %{fence: fence}} = Tape.turn(ctx, turn.id)
-      assert delta!() == streamed(turn, fence, "msg_1", 0, {0, 7}, "The answer ")
-      say(fake, row, thought(turn, "msg_1", "weighing"))
-
-      reasoned =
-        turn
-        |> streamed(fence, "msg_1", 0, {0, 8}, "weighing")
-        |> Map.delete(:ordinal)
-        |> Map.put(:kind, :thought)
-
-      assert delta!() == reasoned
-      say(fake, row, text(turn, "msg_1", "is 42."))
-      assert delta!() == streamed(turn, fence, "msg_1", 0, {0, 9}, "is 42.")
-      say(fake, row, said(turn, "msg_1", "The answer is 42."))
-      say(fake, row, idle(turn, [input.id]))
-      assert :completed = Task.await(loop, 30_000)
-
-      assert said_rows(ctx, thread, turn) == [
-               {Arca.Schemas.Message.agent_author(), "aqua", "text", "The answer is 42.",
-                %{"brain_message" => "msg_1"}}
-             ]
-
-      refute_received %Cyfr.Bus.ThreadEvent{kind: :delta}
-      refute_received %Cyfr.Bus.ThreadEvent{kind: :delta_abandoned}
-    end
   end
 
   describe "the program's asks" do
@@ -10672,11 +10633,6 @@ defmodule Aqua.ProgramTest do
     |> Map.put("call", call)
     |> then(&if(detail, do: Map.put(&1, "detail", detail), else: &1))
   end
-
-  # A thought event of `turn`'s work, of `work` when one is named, or of
-  # none (`:none`).
-  defp thought(turn, message, delta, work \\ nil),
-    do: %{text(turn, message, delta, work) | "t" => "thought"}
 
   # The next list of what runs the turn announced.
   defp activity! do
