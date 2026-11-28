@@ -396,6 +396,7 @@ RESET_BOOT_SAID = "booted for a folder's reset, its VMM pid"
 GIVE_WAY_SAID = "a person's VM ends: it held no session, and a start needs its room"
 RELEASED_SAID = "a person's VM is released: its group is empty, its route withdrawn and its device let go"
 SESSION_RELEASED_SAID = "released in its person's VM"
+UNKEPT_RETIRED_SAID = "which held no kept home, is retired with its VM"
 # The guard's connection ended (serve's guardLost): the VMs routed over it are killed, each group found empty, and
 # then, the role's route having gone too, the keeper says it ends.
 VMS_KILLED_SAID = re.compile(r"egress: the guard's connection (\d+) ended; (\d+) people's VMs are killed")
@@ -848,6 +849,28 @@ def scratch_in_vm(image):
         for target, what in targets.items():
             expect(codes.get(target) in REFUSED, f"the scratch session is refused {what}, {target}, at once", codes)
 
+        # A disk that has never held a kept home goes with its VM (the keeper's retireUnkept): the VMM killed, the
+        # VM's release retires its record and its image, and the person's next first session makes both again within
+        # the role's bound.
+        said = stack.logs().count(RELEASED_SAID)
+        killed = run("docker", "exec", "-u", "0", stack.container, "kill", "-KILL",
+                     str(next(pid for pid, u in vmms(stack).items() if u == record["uid"])), check=False)
+        expect(killed.returncode == 0, "the scratch-only person's VMM is killed", killed.stderr)
+        eventually(lambda: stack.logs().count(RELEASED_SAID) > said, "the scratch-only person's VM's release")
+        eventually(lambda: imagesuite.read_word(stack.observe(f"test -e {record_path} || test -e {image_of(alone)} && "
+                                                              "echo present || echo absent"), ("present", "absent"),
+                                                "the probe of the disk's record and image") == "absent",
+                   "the never-kept disk's retirement with its VM, its record and its image gone")
+        expect(UNKEPT_RETIRED_SAID in stack.logs(), "the keeper says the never-kept disk is retired with its VM")
+        began = time.monotonic()
+        again = scratch_boot(alone, "b")
+        again_s = time.monotonic() - began
+        expect(again != guest and again_s < 15 and disk_record(stack, alone)["uid"] > 0,
+               "the person's next first session makes their disk again and boots a new VM within the role's 15 s",
+               f"{again_s:.1f} s")
+        print(f"after its retirement, the scratch-only person's next first session answered in {again_s:.1f} s",
+              flush=True)
+
         status, answer, _ = c.sync(both, [vm_probe(), scratch], lease_ms=60_000)
         expect(status == 200, f"{both['athanor']}'s programs are synced", answer)
         kept = boot_id(c, both, "k")
@@ -858,6 +881,20 @@ def scratch_in_vm(image):
                and len(theirs) == 1,
                "beside the person's kept session their scratch session runs in the same VM, its place needing no "
                "second", [kept, first_boot, theirs, vmms(stack)])
+
+        # The disk's work folder is its kept programs' alone: a scratch session of the same person, in the same VM,
+        # neither reads nor writes it, nor sees the kept homes' root it lies under.
+        wrote = sh(c, both, "echo kept > /work/kept-marker && cat /work/kept-marker && echo written", "k")
+        expect(wrote["stdout"] == "kept\nwritten\n", "the kept session writes in the disk's work folder", wrote)
+        tried = scratch_sh(c, both, "cat /work/kept-marker 2>&1 && echo read; touch /work/scratch-marker 2>&1 && "
+                                    f"echo wrote; ls {KEPT_ROOT} 2>&1 && echo listed; true", "first")
+        steps = tried["stdout"].splitlines()
+        expect(tried["status"] == 0 and not {"read", "wrote", "listed"} & set(steps) and "kept" not in steps,
+               "a scratch session neither reads nor writes the disk's work folder, nor lists the kept homes' root",
+               tried)
+        looked_back = sh(c, both, "ls /work", "k")
+        expect("scratch-marker" not in looked_back["stdout"].split(), "nothing a scratch session did is in the work "
+               "folder", looked_back)
 
         marked = scratch_sh(c, both, f"id -u; echo \"$HOME\"; {STATFS}; head -c {MARKER_BYTES} /dev/urandom > "
                                      f"\"$HOME/marker\" && echo marked > /tmp/marker && {STATFS}", "first")
