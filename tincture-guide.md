@@ -23,7 +23,7 @@ A frame hidden behind another is **suspended** unless it declares `frame.backgro
 
 ### Private and Public
 
-A tincture is private unless it has an active public consent profile. Publish one with `profile.publish` (the proof-bound consent walk) and unpublish by revoking it with `profile.revoke`; `tincture_visibility.get` reports the current answer. The manifest's `tincture.public` is a metadata hint only. A canvas is never public: it is the person's own data page, so no public profile is staged for one and the public route serves none. `profile.publish` refuses to stage one (`invalid_argument`), and its address answers not found, as a private tincture's does.
+A tincture is private unless it has an active public consent profile. The `profile` tool's publish walk (`publish`, `preview`, `commit`) makes one under a person's own signed-in session ([integration guide](integration-guide.md)), never an API key, and `profile.revoke` revokes one: the tincture stays public until its last active one is revoked; `tincture_visibility.get` reports the current answer. No page in Prism, the CYFR app or the command line makes an app public yet. The manifest's `tincture.public` is a metadata hint only. A canvas is never public: it is the person's own data page, so no public profile is staged for one and the public route serves none. `profile.publish` refuses to stage one (`invalid_argument`), and its address answers not found, as a private tincture's does.
 
 | | Private | Public |
 |---|---|---|
@@ -625,11 +625,11 @@ RECOMMENDED:
 
 | `code` | When | Fix |
 |--------|------|-----|
-| `no_frame` | the page is not a frame the shell opened, or the handshake never came | open the tincture from the shell, or publish it and use its public address |
+| `no_frame` | the page is not a frame the shell opened, or the handshake never came | open the tincture from the shell |
 | `forbidden` (`frame_suspended`) | the frame is hidden and does not declare `frame.background` | act when shown, or declare `background` |
 | `forbidden` (`frame_moved`) | the version or its owner profile's grant changed since the frame opened | open the tincture again |
 | `forbidden` (undeclared) | the component, action or stream is not in the declaration | declare it and publish a new version |
-| `consent_required` | the tincture has no grant for the route that names what its version declares: none at all, one waiting for the person, or one made before the version declared more | grant it when the shell asks, or publish its public one |
+| `consent_required` | the tincture has no grant for the route that names what its version declares: none at all, one waiting for the person, or one made before the version declared more | grant it when the shell asks |
 | `rate_limited` | the frame's request rate or open streams are over their bound | wait the seconds it names; invoke on events, not per frame |
 | `invalid_argument` | a request that does not match the wire | pass a reference, an operation name and an object |
 | `unavailable` | the server could not answer | retry |
@@ -646,4 +646,4 @@ RECOMMENDED:
 - [ ] A `package.json` ships with its `package-lock.json`, regenerated after every dependency change
 - [ ] Built tinctures: `vite.config.js` keeps `base: "./"`, and `cyfr build compile t:local.<name>:<version>` succeeds before registering
 - [ ] No secret, key or token in any file of the version
-- [ ] Public tinctures: the page works at its address with no session
+- [ ] Public tinctures: the page works at its address with no session ([Private and Public](#private-and-public) says what makes one public)

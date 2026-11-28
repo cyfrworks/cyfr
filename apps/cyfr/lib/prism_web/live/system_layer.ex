@@ -850,7 +850,7 @@ defmodule PrismWeb.SystemLayer do
   # The grant's walk as the sheet holds it now (`walk/2`).
   def update(%{walk: walk}, socket), do: {:ok, walk(socket, walk)}
 
-  # The sheet's "Connect your <provider> account": a credential entry in
+  # The sheet's "Paste your <provider> API key": a credential entry in
   # front of the grant that asked for it (`connect/2`).
   def update(%{connect: request}, socket) do
     {:noreply, socket} = CyfrWeb.ContextGuard.guard(socket, &{:noreply, connect(&1, request)})
@@ -3533,7 +3533,7 @@ defmodule PrismWeb.SystemLayer do
   defp title(%{kind: :grant, subject: %{ref: ref}}), do: "Grant #{component_name(ref)}"
 
   defp title(%{kind: :credential_entry, subject: %{return: _return, provider: provider}}),
-    do: "Connect your #{provider} account"
+    do: "Paste your #{provider} API key"
 
   defp title(%{kind: :credential_entry, subject: %{name: name}}),
     do: "Enter a credential for #{name}"
