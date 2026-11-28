@@ -432,7 +432,26 @@ struct Ran {
 
 /// Serve subtrees from `lines` and `control` until the runner ends,
 /// answering its exit status.
+///
+/// The loop and every attempt's watch (its budget, lease, stop and close)
+/// run on the thread that awaits this, in a `LocalSet` of its own; each
+/// attempt's component work is a task on the runtime's workers.
 pub async fn serve<R>(
+    environment: Environment,
+    engine: Arc<Engine>,
+    lines: Lines<R>,
+    control: Writer,
+    relay_at: Option<RelayAt>,
+) -> u8
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    tokio::task::LocalSet::new()
+        .run_until(serving(environment, engine, lines, control, relay_at))
+        .await
+}
+
+async fn serving<R>(
     environment: Environment,
     engine: Arc<Engine>,
     mut lines: Lines<R>,

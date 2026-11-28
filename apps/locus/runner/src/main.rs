@@ -110,9 +110,9 @@ fn run(
         }
     };
     // Each attempt's budget, lease and close run on this thread with the
-    // loop (`cyfr_runner::subtree`); its component's work on the workers.
-    let local = tokio::task::LocalSet::new();
-    let status = runtime.block_on(local.run_until(async move {
+    // loop (`cyfr_runner::subtree::serve`); its component's work on the
+    // workers.
+    let status = runtime.block_on(async move {
         let relay_at = match relay {
             Some(Ok(stream)) => match nonblocking(stream) {
                 Some(stream) => Some(RelayAt::Stream(stream)),
@@ -142,7 +142,7 @@ fn run(
                 serve(environment, engine, Lines::new(reader), control, relay_at).await
             }
         }
-    }));
+    });
     // Standard input is read on a blocking thread, which a shutdown would
     // wait on for a line that may never come.
     runtime.shutdown_background();
