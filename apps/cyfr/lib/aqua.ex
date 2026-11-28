@@ -164,6 +164,10 @@ defmodule Aqua do
           {:ok, [String.t()]} | :error
   defdelegate attachment_blob_path(thread_id, message_id, ref), to: Attachments, as: :blob_path
 
+  @doc "Whether a row is a request to a crew member (`Aqua.Tape.request?/1`)."
+  @spec request?(Aqua.Tape.row()) :: boolean()
+  defdelegate request?(row), to: Aqua.Tape
+
   @doc """
   A message row's attachment refs, each whose bytes the person deleted
   marked removed (`Aqua.Attachments.as_kept/2`).

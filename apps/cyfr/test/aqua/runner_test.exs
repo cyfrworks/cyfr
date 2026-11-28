@@ -2807,7 +2807,10 @@ defmodule Aqua.RunnerTest do
       :ok = Registry.unregister(Opus.Browser.Registry, browser)
 
       assert {status, body} ==
-               Aqua.PageCalls.answered(%{content: "stopped", payload: %{"skipped" => true}})
+               Aqua.PageCalls.answered(%{
+                 content: "the person stopped it",
+                 payload: %{"skipped" => true}
+               })
 
       assert {:ok, %{status: "cancelled"}} = Tape.turn(ctx, id)
       assert thread_state(ctx, ws.id) == "stopped"

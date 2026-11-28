@@ -33,6 +33,7 @@ defmodule Aqua.FacadeTest do
     program_listing: 2,
     providers: 1,
     put_reading: 2,
+    request?: 1,
     room_excerpt: 2,
     roster: 1,
     stale_consent_refs: 1,

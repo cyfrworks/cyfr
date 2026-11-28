@@ -336,7 +336,7 @@ defmodule Arca.Execution do
       # this transaction takes and before its event: the cached standing
       # its caller passed is never the authority, and a takeover that
       # committed while this transaction waited refuses it here.
-      slot_held!()
+      Arca.ControlPlane.verify_member!()
 
       event =
         Arca.ExecutionEvents.append!(
@@ -352,20 +352,6 @@ defmodule Arca.Execution do
       }
     end)
     |> duplicate_child_key()
-  end
-
-  # The slot this member believes it holds, verified on the database inside
-  # the admission's transaction (`Arca.ControlPlane.verify_held/1`, a
-  # shared lock on the lease row until the transaction ends): a member
-  # that holds none admits nothing.
-  # arca:db-raise-ok inside the caller's transaction
-  defp slot_held! do
-    with {:ok, slot} <- Arca.ControlPlane.member_slot(),
-         :ok <- Arca.ControlPlane.verify_held(slot) do
-      :ok
-    else
-      _not_held -> Arca.Repo.rollback(:not_owner)
-    end
   end
 
   # The attempt that owns `parent_id` now, read in the admission's

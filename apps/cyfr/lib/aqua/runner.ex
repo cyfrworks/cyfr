@@ -392,7 +392,9 @@ defmodule Aqua.Runner do
   stops all of the thread's work, its crew members' included, in one
   transaction (`Aqua.Tape.stop_work/2`): the thread's runner stops what
   it holds of it and refuses a page's calls queued there, and the crew
-  threads' runners stop theirs after (`stop_cancelled/1`).
+  threads' runners stop theirs after (`stop_cancelled/1`). In a crew
+  member's thread it ends the jobs it stops there as that stop does:
+  the requests they answer end with them, so their replies wake nobody.
   """
   @spec stop_turn(Context.t(), String.t()) :: :ok | {:error, term()}
   def stop_turn(%Context{} = ctx, thread_id) do
@@ -609,11 +611,11 @@ defmodule Aqua.Runner do
 
   defp handle_owned_call({:stop, ctx}, _from, state) do
     case Admission.standing(ctx, state.athanor_id) do
-      :ok when state.thread.kind == "workspace" ->
+      :ok when state.thread.kind in ["workspace", "crew"] ->
         stop_work(state, ctx)
 
       :ok ->
-        case cancel_work(state, "stopped", :person) do
+        case cancel_work(state, Tape.stopped(), :person) do
           {:ok, state} -> {:reply, {:ok, []}, state}
           {:error, reason, state} -> {:stop, :normal, {:error, reason}, retire_runtime(state)}
         end
@@ -861,6 +863,11 @@ defmodule Aqua.Runner do
     attrs = crew_attrs(%{message: message(ctx, text, opts, name), steer_turn_id: turn_id}, opts)
 
     case Tape.accept(ctx, state.id, attrs) do
+      # A crew member's answer to a request the person's stop ended: a
+      # row that joins no turn (`Arca.TurnStorage.accept_message/3`).
+      {:ok, %{message: row, turn: nil, replayed: replayed}} ->
+        {:reply, {:ok, result(row, nil, replayed, :content)}, touch(state)}
+
       {:ok, %{message: row, replayed: replayed}} ->
         {:reply, {:ok, result(row, turn_id, replayed, :steer)}, touch(acknowledge(state, ctx))}
 
@@ -1445,20 +1452,28 @@ defmodule Aqua.Runner do
   # Cutting turns short
   # ---------------------------------------------------------------------------
 
-  # A workspace thread's work stopped in storage first, all of it at once
-  # (`Aqua.Tape.stop_work/2`); then what this runner holds of it, and a
-  # page's calls queued here, which the stop refuses. Answers the turns of
-  # the crew threads under it, whose runners the caller stops.
+  # A workspace thread's or a crew member's thread's work stopped in
+  # storage first, all of it at once (`Aqua.Tape.stop_work/2`); then what
+  # this runner holds of it, and a page's calls queued here, which the
+  # stop refuses. Answers the turns of the crew threads under it, whose
+  # runners the caller stops.
   defp stop_work(state, ctx) do
     with {:ok, %{cancelled: cancelled}} <- Tape.stop_work(ctx, state.id),
          {own, elsewhere} = Enum.split_with(cancelled, &(&1.thread_id == state.id)),
          {:ok, stopped} <- stop_entries(state, own) do
-      {:reply, {:ok, elsewhere}, drop_pages(stopped, "stopped")}
+      {:reply, {:ok, elsewhere}, drop_pages(stopped, Tape.stopped())}
     else
-      # A runtime that could not stop what it held retires; a stop storage
-      # refused leaves the runner as it was.
-      {:error, reason, held} -> {:stop, :normal, {:error, reason}, retire_runtime(held)}
-      {:error, reason} -> {:reply, {:error, reason}, state}
+      # A runtime that could not stop what it held retires, as does one
+      # whose member lost its slot while the stop ran, which wrote none of
+      # it; any other stop storage refused leaves the runner as it was.
+      {:error, reason, held} ->
+        {:stop, :normal, {:error, reason}, retire_runtime(held)}
+
+      {:error, :not_owner} ->
+        {:stop, :normal, {:error, :control_plane_lost}, retire_runtime(state)}
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
     end
   end
 

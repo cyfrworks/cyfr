@@ -3090,18 +3090,15 @@ defmodule PrismWeb.ThreadPaneLive do
   # What a row is on the tape, as `Aqua.Tape` announces it: a request to a
   # crew member, a reply to one, or neither.
   defp crew(%{reply_to: id}) when is_binary(id), do: :reply
-
-  defp crew(%{addressee: addressee, status: status})
-       when is_binary(addressee) and status in ["pending", "answered"],
-       do: :request
-
-  defp crew(_row), do: nil
+  defp crew(row), do: if(Aqua.request?(row), do: :request)
 
   # How a request stands as a person reads it: pending, then the outcome
   # of the reply that resolved it; answered, when that reply cannot be
-  # read.
+  # read; stopped, when the person's stop ended it (`expired`), as a
+  # stopped workspace thread reads.
   defp request_state(%{outcome: outcome}) when is_binary(outcome), do: outcome_words(outcome)
   defp request_state(%{status: "answered"}), do: "answered"
+  defp request_state(%{status: "expired"}), do: "stopped"
   defp request_state(_pending), do: "pending"
 
   # A crew job's outcome (`Prima.OutboxRecord.reply_outcomes/0`) as a
