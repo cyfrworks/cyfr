@@ -1863,6 +1863,15 @@
         "reason": null
       },
       {
+        "why": "a push_deltas whose deltas is no list is posted: the relay measures a list's events alone",
+        "relay": true,
+        "op": "push_deltas",
+        "args": {
+          "deltas": "none"
+        },
+        "reason": null
+      },
+      {
         "why": "a header 20,000 ms behind the relay's clock, within the window, is posted",
         "relay": true,
         "op": "renew",
@@ -1991,6 +2000,17 @@
         },
         "call_key": "other",
         "reason": "bad_mac"
+      },
+      {
+        "why": "a header outside the window and signed under another key is outside_window, the window checked before the MAC",
+        "relay": true,
+        "op": "renew",
+        "args": {
+          "attempts": []
+        },
+        "ts_ms": -60000,
+        "call_key": "other",
+        "reason": "outside_window"
       },
       {
         "why": "a header signed under another key and naming another boot is bad_mac, the header verified first",

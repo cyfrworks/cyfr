@@ -50,8 +50,13 @@ var (
 
 var label = macenvelope.Label("runtime")
 
-// AttemptFields are an attempt's six fields, in their order.
-var AttemptFields = []macenvelope.Field{
+// AttemptFields are an attempt's six fields, in their order, a fresh list
+// each call.
+func AttemptFields() []macenvelope.Field {
+	return append([]macenvelope.Field(nil), attemptFieldList...)
+}
+
+var attemptFieldList = []macenvelope.Field{
 	{Name: "athanor_id", Type: macenvelope.String},
 	{Name: "execution_id", Type: macenvelope.String},
 	{Name: "attempt", Type: macenvelope.String},
@@ -62,7 +67,7 @@ var AttemptFields = []macenvelope.Field{
 
 // Call is a host call's envelope: the attempt's fields, the boot and the
 // runner presenting it, the member it is addressed to, ts and a nonce.
-var Call = macenvelope.Envelope{Prefix: label, Kind: "call", Fields: append(append([]macenvelope.Field{}, AttemptFields...),
+var Call = macenvelope.Envelope{Prefix: label, Kind: "call", Fields: append(append([]macenvelope.Field{}, attemptFieldList...),
 	macenvelope.Field{Name: "boot", Type: macenvelope.String},
 	macenvelope.Field{Name: "runner", Type: macenvelope.String},
 	macenvelope.Field{Name: "member", Type: macenvelope.String},
@@ -124,7 +129,7 @@ func OpenAttemptKeys(sealKey macenvelope.Key, sealed string) (AttemptKeys, error
 	if !ok {
 		return AttemptKeys{}, ErrUnsealable
 	}
-	plain, err := macenvelope.Open(sealKey, attemptKeysLabel, AttemptFields, attempt, box)
+	plain, err := macenvelope.Open(sealKey, attemptKeysLabel, attemptFieldList, attempt, box)
 	if err != nil || len(plain) != 64 {
 		return AttemptKeys{}, ErrUnsealable
 	}
@@ -143,11 +148,11 @@ func readAttempt(named string) (macenvelope.Message, bool) {
 		return nil, false
 	}
 	wire, err := wirejson.Object(raw)
-	if err != nil || len(wire) != len(AttemptFields) {
+	if err != nil || len(wire) != len(attemptFieldList) {
 		return nil, false
 	}
-	attempt := make(macenvelope.Message, len(AttemptFields))
-	for _, f := range AttemptFields {
+	attempt := make(macenvelope.Message, len(attemptFieldList))
+	for _, f := range attemptFieldList {
 		v, given := wire[f.Name]
 		if !given {
 			return nil, false

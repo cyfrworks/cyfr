@@ -60,8 +60,12 @@ type Component struct {
 }
 
 // Assignment is an assignment as its token carries it; times are Unix
-// milliseconds, and an absent optional member is empty.
+// milliseconds, and an absent optional member is empty. The actor, and
+// the authority's parts the service does not read, are kept only in
+// Token, which is what is passed on: never a re-encoding of them.
 type Assignment struct {
+	// Token is the token read, as it was given.
+	Token             string
 	Generation        uint64
 	Service, Boot     string
 	Member            string
@@ -74,16 +78,13 @@ type Assignment struct {
 	RootExecutionID   string
 	Step              *Step
 	AthanorID         string
-	// Actor and AuthorityWire are carried as read, JSON objects.
-	Actor         map[string]any
-	AuthorityWire map[string]any
-	Authority     authority.Authority
-	Component     Component
-	InputDigest   string
-	TimeoutMs     uint64
-	Deadline      uint64
-	LeaseUntil    uint64
-	Intercepted   []string
+	Authority         authority.Authority
+	Component         Component
+	InputDigest       string
+	TimeoutMs         uint64
+	Deadline          uint64
+	LeaseUntil        uint64
+	Intercepted       []string
 }
 
 var members = map[string]bool{
@@ -142,6 +143,7 @@ func Read(token string) (Assignment, error) {
 	if !ok {
 		return Assignment{}, ErrMalformed
 	}
+	a.Token = token
 	return a, nil
 }
 
@@ -217,14 +219,14 @@ func decode(wire map[string]any) (Assignment, bool) {
 			return Assignment{}, false
 		}
 	}
-	var isObject bool
-	if a.Actor, isObject = wire["actor"].(map[string]any); !isObject {
+	if _, isObject := wire["actor"].(map[string]any); !isObject {
 		return Assignment{}, false
 	}
-	if a.AuthorityWire, isObject = wire["authority"].(map[string]any); !isObject {
+	wireAuthority, isObject := wire["authority"].(map[string]any)
+	if !isObject {
 		return Assignment{}, false
 	}
-	auth, err := authority.Read(a.AuthorityWire)
+	auth, err := authority.Read(wireAuthority)
 	if err != nil {
 		return Assignment{}, false
 	}

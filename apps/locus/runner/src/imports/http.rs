@@ -1044,8 +1044,9 @@ pub fn read_pin(pin: &Value) -> Option<Pin> {
     })
 }
 
-/// The family of an IP literal as Erlang's `inet:parse_strict_address/1`
-/// reads one (`Prima.PinnedTarget`): a dotted quad of four decimal octets
+/// The family of an IP literal as `Prima.PinnedTarget` reads one, which is
+/// Erlang's `inet:parse_strict_address/1` with no sign in the address (Rust's
+/// parsers take none either): a dotted quad of four decimal octets
 /// without leading zeros, or an IPv6 address. An IPv6 address may carry a
 /// zone after its first `%` only when its first group is `fe80` or `ff02`,
 /// its second group is 0, and it embeds no IPv4 address; a zone that

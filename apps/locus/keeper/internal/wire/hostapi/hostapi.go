@@ -11,6 +11,7 @@
 package hostapi
 
 import (
+	"errors"
 	"strings"
 	"unicode"
 
@@ -37,9 +38,14 @@ const (
 	hostPrefix        = "/host/v1/"
 )
 
-// Retry is what a caller may do when each callback's answer is lost:
-// ask again (idempotent, outcome, batch, keyed) or never.
-var Retry = map[string]string{
+// ErrUnknownCallback is a call of a callback the host API has not: it
+// has no route and is never tried.
+var ErrUnknownCallback = errors.New("unknown_callback")
+
+// retries is what a caller may do when each callback's answer is lost:
+// ask again (idempotent, outcome, batch, keyed) or never. Its names are
+// the host API's callbacks.
+var retries = map[string]string{
 	"attach": "idempotent", "renew": "idempotent", "complete": "outcome", "fail": "outcome",
 	"push_deltas": "batch", "oauth_token": "never", "take_rate": "never", "fetch_artifact": "idempotent",
 	"storage": "never", "admit_child": "keyed", "tool_call": "never", "record_denial": "never",
@@ -47,8 +53,24 @@ var Retry = map[string]string{
 	"question_ask": "keyed", "question_wait": "idempotent", "runner_exited": "idempotent",
 }
 
-// Route is the route a host call of callback is posted to on CYFR.
-func Route(callback string) string { return hostPrefix + callback }
+// Retries is each callback's retry class, a fresh map each call.
+func Retries() map[string]string {
+	out := make(map[string]string, len(retries))
+	for callback, class := range retries {
+		out[callback] = class
+	}
+	return out
+}
+
+// Route is the route a host call of callback is posted to on CYFR, and ok
+// false for a callback the host API has not, which has none
+// (Prima.WorkerWire.host_route/1 refuses its name).
+func Route(callback string) (route string, ok bool) {
+	if _, known := retries[callback]; !known {
+		return "", false
+	}
+	return hostPrefix + callback, true
+}
 
 // Frames is whether an answer of these content-type values carries
 // frames: one of them, cut at its first ; and trimmed of Unicode
@@ -65,12 +87,14 @@ func Frames(contentTypes []string) bool {
 	return false
 }
 
-// Outcome is what a call came to.
+// Outcome is what a call came to. The zero Outcome is none of them: a
+// Result no call made says nothing came of it.
 type Outcome int
 
 const (
+	_ Outcome = iota
 	// Answered is an answer CYFR gave, read at this version: the call's.
-	Answered Outcome = iota
+	Answered
 	// Lost is a call whose effect is unknown, asked again where it may be.
 	Lost
 	// Uncertain is a call lost and never asked again.
@@ -141,7 +165,7 @@ func read(callback string, plain []byte) (r Reading, ok, final bool) {
 	case "unknown_version":
 		return Reading{}, false, true
 	}
-	if named(name, refusals) || (callback == "egress_pin" && named(name, pinned.Refusals)) {
+	if named(name, refusals) || (callback == "egress_pin" && named(name, pinned.Refusals())) {
 		return Reading{Kind: "refused", Name: name}, true, false
 	}
 	return Reading{}, false, false
@@ -173,21 +197,26 @@ type Result struct {
 // at any version or sealed, is Lost, an answer read at this version is
 // Answered, and anything else is lost: asked once more unless the
 // callback's class is never, when the call is Uncertain at once; a second
-// loss is Lost.
-func Call(callback string, seal macenvelope.Key, try Try) Result {
+// loss is Lost. A callback the host API has not is ErrUnknownCallback,
+// before any try.
+func Call(callback string, seal macenvelope.Key, try Try) (Result, error) {
+	class, known := retries[callback]
+	if !known {
+		return Result{}, ErrUnknownCallback
+	}
 	posted := 0
 	for {
 		call, sent := try()
 		posted++
 		r, outcome, lost := meet(callback, seal, call, sent)
 		if !lost {
-			return Result{Outcome: outcome, Reading: r, Posted: posted}
+			return Result{Outcome: outcome, Reading: r, Posted: posted}, nil
 		}
-		if Retry[callback] == "never" {
-			return Result{Outcome: Uncertain, Posted: posted}
+		if class == "never" {
+			return Result{Outcome: Uncertain, Posted: posted}, nil
 		}
 		if posted == 2 {
-			return Result{Outcome: Lost, Posted: posted}
+			return Result{Outcome: Lost, Posted: posted}, nil
 		}
 	}
 }

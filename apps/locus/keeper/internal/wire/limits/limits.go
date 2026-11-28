@@ -9,13 +9,15 @@ package limits
 
 import (
 	"errors"
+	"math"
+	"strconv"
 	"strings"
 
 	"github.com/cyfr/locus/keeper/internal/wire/wirejson"
 )
 
 // Horizon is 2^53 − 1, the largest integer every JSON reader holds
-// exactly: a duration's milliseconds are held to it on either side.
+// exactly: the most a count of a node's limits is.
 const Horizon = wirejson.MaxSafeInteger
 
 // ErrRefused is limits Prima.Limits.new/1 refuses.
@@ -40,65 +42,74 @@ type RateLimit struct {
 
 // Zero is the limits of an unbound authority (Prima.Authority's zero
 // limits).
-var Zero = Limits{
+func Zero() Limits { return zero }
+
+var zero = Limits{
 	Timeout: "30s", BatchTimeout: "30s", MaxMemoryBytes: 67_108_864,
 	MaxRequestSize: 1_048_576, MaxResponseSize: 5_242_880, MaxConcurrentTasks: 1,
 	RateLimit: RateLimit{Requests: 100, Window: "1m"},
 }
 
-// Duration reads text as Prima.Limits.parse_duration/1 does: an integer
-// followed by one of ms, s, m or h, the suffixes tried in that order and
-// exactly one taken off, or a bare integer of seconds; an integer is an
-// optional sign and ASCII digits, of any size. It answers the
-// milliseconds held to Horizon on either side, and false for text that is
-// no duration.
-func Duration(text string) (int64, bool) {
+// units are a duration's suffixes, tried in this order, and the
+// milliseconds of each.
+var units = []struct {
+	suffix string
+	unit   uint64
+}{{"ms", 1}, {"s", 1000}, {"m", 60_000}, {"h", 3_600_000}}
+
+// grammar reads text as Prima.Limits.parse_duration/1 reads it: an
+// integer followed by one of ms, s, m or h, the suffixes tried in that
+// order and exactly one taken off, or a bare integer of seconds; an
+// integer is an optional sign and ASCII digits, of any size. It answers
+// the sign, the digits without leading zeros ("" for zero) and the unit's
+// milliseconds, and false for text that is no duration.
+func grammar(text string) (negative bool, digits string, unit uint64, ok bool) {
 	number, unit := text, uint64(1000)
-	for _, s := range []struct {
-		suffix string
-		unit   uint64
-	}{{"ms", 1}, {"s", 1000}, {"m", 60_000}, {"h", 3_600_000}} {
-		if strings.HasSuffix(text, s.suffix) {
-			number, unit = strings.TrimSuffix(text, s.suffix), s.unit
+	for _, u := range units {
+		if strings.HasSuffix(text, u.suffix) {
+			number, unit = strings.TrimSuffix(text, u.suffix), u.unit
 			break
 		}
 	}
-	negative := false
 	if number != "" && (number[0] == '-' || number[0] == '+') {
 		negative, number = number[0] == '-', number[1:]
 	}
 	if number == "" {
-		return 0, false
+		return false, "", 0, false
 	}
 	for i := 0; i < len(number); i++ {
 		if number[i] < '0' || number[i] > '9' {
-			return 0, false
+			return false, "", 0, false
 		}
 	}
-	significant := strings.TrimLeft(number, "0")
-	magnitude := uint64(Horizon)
-	if len(significant) <= 16 {
-		var n uint64
-		for i := 0; i < len(significant); i++ {
-			n = n*10 + uint64(significant[i]-'0')
-		}
-		if n <= Horizon/unit {
-			magnitude = n * unit
-		}
-		if magnitude > Horizon {
-			magnitude = Horizon
-		}
-	}
-	if negative {
-		return -int64(magnitude), true
-	}
-	return int64(magnitude), true
+	return negative, strings.TrimLeft(number, "0"), unit, true
 }
 
-// TimeoutMs is the node's timeout in milliseconds.
-func (l Limits) TimeoutMs() int64 {
-	ms, _ := Duration(l.Timeout)
-	return ms
+// Duration is the milliseconds text spells, as
+// Prima.Limits.parse_duration/1 answers them, and false for text that is
+// no duration. Prima answers an integer of any size; Go holds an int64,
+// so a duration past it is false here: the one difference,
+// authority_wire.json's durations marked go.
+func Duration(text string) (int64, bool) {
+	negative, digits, unit, ok := grammar(text)
+	if !ok {
+		return 0, false
+	}
+	var n uint64
+	if digits != "" {
+		parsed, err := strconv.ParseUint(digits, 10, 64)
+		if err != nil {
+			return 0, false
+		}
+		n = parsed
+	}
+	if n > math.MaxInt64/unit {
+		return 0, false
+	}
+	if negative {
+		return -int64(n * unit), true
+	}
+	return int64(n * unit), true
 }
 
 var members = []string{"timeout", "batch_timeout", "max_memory_bytes", "max_request_size",
@@ -119,13 +130,15 @@ func Read(v any) (Limits, error) {
 		}
 	}
 	count := func(v any) (uint64, bool) { return wirejson.Uint(v, Horizon) }
+	// A duration of any size reads, as Prima reads it: its grammar and
+	// sign decide, not whether its milliseconds fit an int64.
 	duration := func(v any, positive bool) (string, bool) {
 		s, isText := v.(string)
 		if !isText {
 			return "", false
 		}
-		ms, read := Duration(s)
-		return s, read && ms >= 0 && (!positive || ms > 0)
+		negative, digits, _, read := grammar(s)
+		return s, read && (!negative || digits == "") && (!positive || digits != "")
 	}
 	var l Limits
 	var okT, okB, okM, okQ, okR, okC bool

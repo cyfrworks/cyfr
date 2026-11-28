@@ -1,5 +1,5 @@
 {
-  "comment": "The vectors pinning the authority a runner reads from its assignment: Prima.Authority.from_wire/1 of `authority`, the map an assignment carries (Prima.Authority.to_wire/1 with every nil member omitted), and what a reader takes from it, the limits governing the execution (Prima.Limits.to_map/1 of Prima.Authority.limits/1: its bound node's, or the zero limits unbound) and the fields CYFR attaches and never hands the component (Prima.Authority.attached_fields/1: the field-map keys of the projection of every entry the vault binds, the default's and each named account's; a selection (via) or provided configuration projects none), a sorted list. Each `refused` authority is one from_wire/1 refuses in a part a runner reads: the cursor, the bound node's limits, or the projection of the resources' vault or of one of its named accounts. Generated with Prima's constructors (Prima.Authority.root/3 and its child constructors over a parsed Prima.Authority.Blob). Read by apps/prima/test/prima/authority_test.exs and by the Rust runner's crate. A refused case marked unread_by_service is refused in a part a runner reads that a worker service carries unread (the vault's projection): the worker service reads its cursor, its bound node's limits and its resources' egress, and refuses what Prima refuses there. durations are texts read as Prima.Limits.parse_duration/1 reads them, to their milliseconds or null: ms, s, m and h tried in that order and exactly one taken off, or a bare integer of seconds, an integer being an optional sign and ASCII digits of any size. egress are authorities whose resources' egress varies, each read as from_wire/1 reads it to its four lists (an absent or null list none), or null for one it refuses.",
+  "comment": "The vectors pinning the authority a runner reads from its assignment: Prima.Authority.from_wire/1 of `authority`, the map an assignment carries (Prima.Authority.to_wire/1 with every nil member omitted), and what a reader takes from it, the limits governing the execution (Prima.Limits.to_map/1 of Prima.Authority.limits/1: its bound node's, or the zero limits unbound) and the fields CYFR attaches and never hands the component (Prima.Authority.attached_fields/1: the field-map keys of the projection of every entry the vault binds, the default's and each named account's; a selection (via) or provided configuration projects none), a sorted list. Each `refused` authority is one from_wire/1 refuses in a part a runner reads: the cursor, the bound node's limits, or the projection of the resources' vault or of one of its named accounts. Generated with Prima's constructors (Prima.Authority.root/3 and its child constructors over a parsed Prima.Authority.Blob). Read by apps/prima/test/prima/authority_test.exs and by the Rust runner's crate. A refused case marked unread_by_service is refused in a part a runner reads that a worker service carries unread (the vault's projection): the worker service reads its cursor, its bound node's limits and its resources' egress, and refuses what Prima refuses there. durations are texts read as Prima.Limits.parse_duration/1 reads them, to their milliseconds or null: ms, s, m and h tried in that order and exactly one taken off, or a bare integer of seconds, an integer being an optional sign and ASCII digits of any size. egress are authorities whose resources' egress varies, each read as from_wire/1 reads it to its four lists (an absent or null list none), or null for one it refuses. A duration marked go is one past an int64 of milliseconds, which Prima reads and Go does not hold: go's ms, null, is the Go reader's answer, each side's test asserting its own. A bound cursor's members besides bound are read past, on either side.",
   "version": 1,
   "read": [
     {
@@ -3577,6 +3577,9 @@
       "text": "٥s"
     },
     {
+      "go": {
+        "ms": null
+      },
       "ms": 359999999999999999996400000,
       "text": "99999999999999999999h"
     },
@@ -3589,18 +3592,30 @@
       "text": "9007199254740992ms"
     },
     {
+      "go": {
+        "ms": null
+      },
       "ms": 35999999999999996400000,
       "text": "9999999999999999h"
     },
     {
+      "go": {
+        "ms": null
+      },
       "ms": -35999999999999996400000,
       "text": "-9999999999999999h"
     },
     {
+      "go": {
+        "ms": null
+      },
       "ms": 18446744073711600000,
       "text": "5124095576031h"
     },
     {
+      "go": {
+        "ms": null
+      },
       "ms": 18446744073709551616000,
       "text": "18446744073709551616"
     },
@@ -3611,6 +3626,21 @@
     {
       "ms": null,
       "text": "1hms"
+    },
+    {
+      "ms": 9007199254740993,
+      "text": "9007199254740993ms"
+    },
+    {
+      "ms": 9223372036854775807,
+      "text": "9223372036854775807ms"
+    },
+    {
+      "go": {
+        "ms": null
+      },
+      "ms": 9223372036854775808,
+      "text": "9223372036854775808ms"
     }
   ],
   "egress": [
@@ -5066,6 +5096,149 @@
       },
       "egress": null,
       "why": "a member no egress has"
+    },
+    {
+      "why": "a bound cursor with a member more than its node, read past",
+      "authority": {
+        "activation": {
+          "catalyst:supabase.com.database": "sha256:act-catalyst",
+          "formula:local.daily-report": "sha256:act-formula"
+        },
+        "budget": {
+          "id": "bgt_AAAAAAAAAAHKmY6r"
+        },
+        "chain": [
+          "formula:local.daily-report"
+        ],
+        "consent_id": "cns_01a09fee-0000-7000-8000-000000000002",
+        "cursor": {
+          "bound": "formula:local.daily-report",
+          "note": "example"
+        },
+        "depth": 0,
+        "invoke_mode": "open_inert",
+        "policy": {
+          "canonical": "jcs-1",
+          "nodes": {
+            "catalyst:supabase.com.database": {
+              "edges": {},
+              "limits": {
+                "batch_timeout": "2m",
+                "max_concurrent_tasks": 4,
+                "max_memory_bytes": 33554432,
+                "max_request_size": 524288,
+                "max_response_size": 2097152,
+                "rate_limit": {
+                  "requests": 20,
+                  "window": "10s"
+                },
+                "timeout": "45s"
+              }
+            },
+            "formula:local.daily-report": {
+              "edges": {
+                "@ingress": {
+                  "egress": {
+                    "domains": [
+                      "prod.supabase.co"
+                    ],
+                    "methods": [],
+                    "private_ips": [],
+                    "schemes": [
+                      "https"
+                    ]
+                  },
+                  "vault": {
+                    "attach": {
+                      "in": "header",
+                      "name": "Authorization",
+                      "template": "Bearer {value}"
+                    },
+                    "binding_digest": "sha256:bind-source",
+                    "binding_key": "formula:local.daily-report|@ingress|default",
+                    "destination": {
+                      "hosts": [
+                        "prod.supabase.co"
+                      ],
+                      "scheme": "https"
+                    },
+                    "entry_id": "ent_source",
+                    "projection": {
+                      "fields": {
+                        "anon_key": "anon key",
+                        "url": "url"
+                      },
+                      "scopes": []
+                    },
+                    "scope": "athanor"
+                  }
+                }
+              },
+              "limits": {
+                "batch_timeout": "5m",
+                "max_concurrent_tasks": 30,
+                "max_memory_bytes": 67108864,
+                "max_request_size": 1048576,
+                "max_response_size": 5242880,
+                "rate_limit": {
+                  "requests": 100,
+                  "window": "1m"
+                },
+                "timeout": "15m"
+              }
+            }
+          }
+        },
+        "profile_id": "prof_01a09fee-0000-7000-8000-000000000001",
+        "profile_kind": "owner",
+        "resources": {
+          "egress": {
+            "domains": [
+              "prod.supabase.co"
+            ],
+            "methods": [],
+            "private_ips": [],
+            "schemes": [
+              "https"
+            ]
+          },
+          "vault": {
+            "attach": {
+              "in": "header",
+              "name": "Authorization",
+              "template": "Bearer {value}"
+            },
+            "binding_digest": "sha256:bind-source",
+            "binding_key": "formula:local.daily-report|@ingress|default",
+            "destination": {
+              "hosts": [
+                "prod.supabase.co"
+              ],
+              "scheme": "https"
+            },
+            "entry_id": "ent_source",
+            "projection": {
+              "fields": {
+                "anon_key": "anon key",
+                "url": "url"
+              },
+              "scopes": []
+            },
+            "scope": "athanor"
+          }
+        },
+        "source_ref": "formula:local.daily-report"
+      },
+      "egress": {
+        "domains": [
+          "prod.supabase.co"
+        ],
+        "methods": [],
+        "schemes": [
+          "https"
+        ],
+        "private_ips": []
+      }
     }
   ]
 }

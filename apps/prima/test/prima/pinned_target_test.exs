@@ -110,12 +110,20 @@ defmodule Prima.PinnedTargetTest do
   test "the pin_answer_refusals of tests/fixtures/host_api.json read as the vectors say" do
     %{"pin" => pin, "reads" => reads, "refusals" => refusals} = @vectors["pin_answer_refusals"]
     assert {:ok, %PinnedTarget{}} = PinnedTarget.read(pin)
+    assert length(reads) >= 13 and length(refusals) >= 36
 
-    for %{"why" => why, "pin" => read} <- reads,
-        do: assert({:ok, %PinnedTarget{}} = PinnedTarget.read(read), why)
+    # Each case is exactly its why and its pin: none is skipped.
+    for c <- reads do
+      assert %{"why" => why, "pin" => read} = c
+      assert map_size(c) == 2, why
+      assert {:ok, %PinnedTarget{}} = PinnedTarget.read(read), why
+    end
 
-    for %{"why" => why, "pin" => refused} <- refusals,
-        do: assert(PinnedTarget.read(refused) == :error, why)
+    for c <- refusals do
+      assert %{"why" => why, "pin" => refused} = c
+      assert map_size(c) == 2, why
+      assert PinnedTarget.read(refused) === :error, why
+    end
   end
 
   test "a request is a URL with a host and a purpose, and a redirect names its pin" do

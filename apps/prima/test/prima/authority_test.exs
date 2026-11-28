@@ -491,20 +491,41 @@ defmodule Prima.AuthorityTest do
       cases = @wire["refused"]
       assert cases != []
 
+      # Each case is its why and authority, and a case a worker service
+      # carries unread says so with true, the one marker a refused case
+      # takes: it is refused in the vault's projection, the one part the
+      # service does not read.
       for vector <- cases do
+        assert (Map.keys(vector) -- ["unread_by_service"]) |> Enum.sort() === ~w(authority why),
+               inspect(vector)
+
         assert {:error, _reason} = Authority.from_wire(vector["authority"]), vector["why"]
+
+        if Map.has_key?(vector, "unread_by_service") do
+          assert vector["unread_by_service"] === true, vector["why"]
+          assert vector["why"] =~ "projection", vector["why"]
+        end
       end
 
-      # A case a worker service carries unread is refused in the vault's
-      # projection, the one part it does not read.
-      for %{"unread_by_service" => true} = vector <- cases,
-          do: assert(vector["why"] =~ "projection", vector["why"])
+      assert Enum.count(cases, &Map.has_key?(&1, "unread_by_service")) == 2
     end
 
     test "every duration reads to its milliseconds, or is no duration" do
-      assert length(@wire["durations"]) >= 30
+      assert length(@wire["durations"]) >= 40
 
-      for %{"text" => text, "ms" => ms} <- @wire["durations"] do
+      # A case is its text and milliseconds; one marked go, Go's own answer
+      # where Go holds no integer past an int64, is a duration Prima reads.
+      for vector <- @wire["durations"] do
+        assert %{"text" => text, "ms" => ms} = vector
+
+        case Map.keys(vector) |> Enum.sort() do
+          ~w(ms text) ->
+            :ok
+
+          ~w(go ms text) ->
+            assert vector["go"] === %{"ms" => nil} and abs(ms) > 9_223_372_036_854_775_807
+        end
+
         expected = if ms, do: {:ok, ms}, else: :error
 
         assert (case Prima.Limits.parse_duration(text) do
@@ -518,7 +539,10 @@ defmodule Prima.AuthorityTest do
     test "every egress reads as its lists, as written, or is refused" do
       assert length(@wire["egress"]) >= 10
 
-      for %{"authority" => authority, "egress" => egress} = vector <- @wire["egress"] do
+      for vector <- @wire["egress"] do
+        assert %{"authority" => authority, "egress" => egress} = vector
+        assert map_size(vector) == 3 and is_binary(vector["why"]), inspect(vector)
+
         case Authority.from_wire(authority) do
           {:ok, %Authority{resources: edge}} ->
             read = edge.egress || %{}
