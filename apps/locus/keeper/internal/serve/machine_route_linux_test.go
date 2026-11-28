@@ -254,52 +254,60 @@ func TestTwoReleasesAtOnceLeaveTheRouteAtNone(t *testing.T) {
 }
 
 // A start whose widening the guard refuses is taken out of the VM's
-// sessions before the route's lock is let go: a start that waited for the
-// lock meanwhile widens to the live session's hosts and its own, never the
-// refused one's, which its own retirement would take out only later.
-func TestARefusedWideningLeavesNoHostOfItsSession(t *testing.T) {
-	fakeResolver(t, map[string][]string{"a.example.com": {"203.0.113.1"}, "b.example.com": {"203.0.113.2"}, "c.example.com": {"203.0.113.3"}})
-	const tries = 20
-	for i := 0; i < tries; i++ {
-		k := newVMKeeper(t)
-		k.disk(t, "ath_a", "vlt_a1", "vlt_a2", "vlt_a3")
-		k.session(t, "s1", "ath_a", "vlt_a1", []string{"a.example.com"})
-		k.place(t, "p-s2", "ath_a")
-		k.place(t, "p-s3", "ath_a")
-		g := gate(k)
-		k.guard.mu.Lock()
-		k.guard.changes = []error{errors.New("the guard refuses this change")}
-		k.guard.mu.Unlock()
-		go k.s.handleSpawn(k.c, k.spawnReq("s2", "p-s2", "vlt_a2", []string{"b.example.com"}))
-		select {
-		case <-g.held:
-		case <-time.After(20 * time.Second):
-			t.Fatal("the refused start's widening never reached the guard")
-		}
-		go k.s.handleSpawn(k.c, k.spawnReq("s3", "p-s3", "vlt_a3", []string{"c.example.com"}))
-		vmEventually(t, "the second start's spawn", func() bool {
-			k.s.mu.Lock()
-			defer k.s.mu.Unlock()
-			p := k.c.places["p-s3"]
-			return p != nil && p.spawn != nil
-		})
-		time.Sleep(100 * time.Millisecond) // sleep-ok: the second start reaches the route's lock, which the first holds at the guard
-		close(g.release)
-		for spawned, released := false, false; !spawned || !released; {
-			switch l := k.next(t); {
-			case l["type"] == "spawned" && l["id"] == "s3":
-				spawned = true
-			case l["type"] == "released":
-				released = true
-			case l["type"] == "error" && l["id"] == "s2":
-			default:
-				t.Fatalf("try %d: the keeper sent %v", i, l)
+// sessions before the route's lock is let go (ruling 2's second half,
+// 5444's gap). The test holds the keeper's lock as the guard refuses: a
+// start that takes its session out under the route's lock waits for the
+// keeper's lock with the route's lock held, so the route's lock is never
+// free while the refused session is still a session; one that lets the
+// route's lock go first leaves it free with the session still in.
+func TestARefusedWideningLeavesTheSessionsBeforeTheLockIsLetGo(t *testing.T) {
+	fakeResolver(t, map[string][]string{"a.example.com": {"203.0.113.1"}, "b.example.com": {"203.0.113.2"}})
+	k := newVMKeeper(t)
+	k.disk(t, "ath_a", "vlt_a1", "vlt_a2")
+	k.session(t, "s1", "ath_a", "vlt_a1", []string{"a.example.com"})
+	m := k.machineOfAthanor("ath_a")
+	k.place(t, "p-s2", "ath_a")
+	g := gate(k)
+	k.guard.mu.Lock()
+	k.guard.changes = []error{errors.New("the guard refuses this change")}
+	k.guard.mu.Unlock()
+	go k.s.handleSpawn(k.c, k.spawnReq("s2", "p-s2", "vlt_a2", []string{"b.example.com"}))
+	select {
+	case <-g.held:
+	case <-time.After(20 * time.Second):
+		t.Fatal("the refused start's widening never reached the guard")
+	}
+	refused := func() bool {
+		for _, sp := range m.sessions {
+			if sp.keptHome == "vlt_a2" {
+				return true
 			}
 		}
-		for _, c := range k.routeChanges() {
-			if strings.Contains(c, "203.0.113.3") && strings.Contains(c, "203.0.113.2") {
-				t.Fatalf("try %d: a start's widening held the refused start's host: %v", i, k.routeChanges())
+		return false
+	}
+	k.s.mu.Lock()
+	close(g.release)
+	for i := 0; i < 200; i++ {
+		if m.reachMu.TryLock() {
+			still := refused()
+			m.reachMu.Unlock()
+			if still {
+				k.s.mu.Unlock()
+				t.Fatal("the route's lock was let go with the refused start's session still among the VM's sessions")
 			}
+			break
 		}
+		time.Sleep(time.Millisecond) // sleep-ok: a bounded look at the route's lock while the keeper's is held
+	}
+	k.s.mu.Unlock()
+	if r := k.next(t); r["type"] != "error" || r["code"] != protocol.CodeGuardUnavailable {
+		t.Fatalf("a start whose widening the guard refused answered %v", r)
+	}
+	k.expect(t, "released")
+	k.s.mu.Lock()
+	still := refused()
+	k.s.mu.Unlock()
+	if still {
+		t.Fatal("the refused start's session is still among the VM's sessions")
 	}
 }
