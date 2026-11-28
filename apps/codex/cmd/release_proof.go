@@ -3,11 +3,13 @@
 
 //go:build releaseproof
 
-// The Compose proof's update cases (tests/compose-proof/run.sh) and the
-// native app's update proof (tests/desktop-proof/native/update.sh) build
-// cyfr with this tag: a candidate has no release on GitHub, so `cyfr
-// update` reads each release's manifest, scaffold and app installer from a
-// folder fixed at the build, never from the network. The release refuses every binary built
+// The Compose proof's update cases (tests/compose-proof/run.sh), the
+// update proofs (tests/update-proof/run.sh,
+// tests/desktop-proof/native/update.sh) and the install proof
+// (tests/install-screen-proof) build cyfr with this tag: a candidate has
+// no release on GitHub, so `cyfr update` reads each release's manifest,
+// scaffold and app installer, and `cyfr init` its release's scaffold, from
+// a folder fixed at the build, never from the network. The release refuses every binary built
 // with a tag or holding this file (scripts/ci/release-binary-check.sh, a
 // post hook of each build in .goreleaser.yml), and a build without the tag
 // fetches every release verified (release_proof_off_test.go).
@@ -96,5 +98,14 @@ func init() {
 			return nil, err
 		}
 		return r, nil
+	}
+	// cyfr init lays the scaffold down as scaffold.Download does a fetched
+	// one, keeping every file that exists.
+	downloadScaffold = func(version string) error {
+		r, err := fetchScaffold(version)
+		if err != nil {
+			return err
+		}
+		return r.Write(false)
 	}
 }

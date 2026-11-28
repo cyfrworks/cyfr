@@ -638,9 +638,10 @@ func init() {
 }
 
 var accessCmd = &cobra.Command{
-	Use:     "access <local|tailnet|public>",
-	Short:   "Choose how CYFR is reached: this computer only, your tailnet, or a public domain",
-	GroupID: "server",
+	Use:         "access <local|tailnet|public>",
+	Annotations: map[string]string{dockerAnnotation: "yes"},
+	Short:       "Choose how CYFR is reached: this computer only, your tailnet, or a public domain",
+	GroupID:     "server",
 	Long: `Change how the CYFR in the current directory is reached, and every setting that follows from it in .env (CYFR_ACCESS, CYFR_HOST, CYFR_PUBLIC_URL, CYFR_TAILNET_NODE_ID, CADDY_ACME_EMAIL).
 
   local    this computer only, at http://localhost:<CYFR_PORT>
@@ -848,11 +849,18 @@ func joinStands(join joined, host string) string {
 // certificates and whether Serve is open.
 func printTailscale(ctx context.Context, e stackEngine, out io.Writer) {
 	st, err := e.Status(ctx)
-	if err != nil || len(st.Health) == 0 {
+	if err != nil {
+		return
+	}
+	lines := st.Health
+	if st.Unobserved != nil {
+		lines = []string{"Docker did not answer: " + st.Unobserved.Error()}
+	}
+	if len(lines) == 0 {
 		return
 	}
 	fmt.Fprintln(out, "Tailscale now:")
-	for _, line := range st.Health {
+	for _, line := range lines {
 		fmt.Fprintln(out, "  "+line)
 	}
 }
@@ -936,9 +944,12 @@ func runAccessStatus(ctx context.Context, out io.Writer) error {
 		fmt.Fprintln(out, "CYFR is reached as .env says:")
 		printWords(out, st.Words)
 	}
-	if len(st.Containers) == 0 {
+	switch {
+	case st.Unobserved != nil:
+		fmt.Fprintln(out, "Docker did not answer: "+st.Unobserved.Error())
+	case len(st.Containers) == 0:
 		fmt.Fprintln(out, "Nothing of the stack runs.")
-	} else {
+	default:
 		fmt.Fprintln(out, "Containers:")
 		for _, c := range st.Containers {
 			fmt.Fprintf(out, "  %s (%s): %s\n", c.Service, c.Name, c.State)
