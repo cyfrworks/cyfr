@@ -28,6 +28,7 @@ import (
 	"github.com/cyfr/locus/keeper/internal/cgroup"
 	"github.com/cyfr/locus/keeper/internal/frame"
 	"github.com/cyfr/locus/keeper/internal/home"
+	"github.com/cyfr/locus/keeper/internal/logx"
 	"github.com/cyfr/locus/keeper/internal/packview"
 	"github.com/cyfr/locus/keeper/internal/proc"
 	"github.com/cyfr/locus/keeper/internal/protocol"
@@ -865,7 +866,7 @@ func (s *server) startInMachine(c *client, req *protocol.Request, at keptAt, rea
 	if !s.hold(sp) {
 		return sp, protocol.CodeInternal
 	}
-	s.log.Info("spawn %s: in the VM of kept uid %d, its spawn %s there", sp.id, at.uid, sp.guest)
+	s.log.Info("spawn %s: in the VM of kept uid %d, its spawn %s there", sp.id, at.uid, logx.Untrusted(sp.guest))
 	s.send(c, protocol.NewSpawned(req.ID, sp.id, at.uid, sp.guestPID))
 	close(sp.announced)
 	return sp, ""
@@ -895,7 +896,7 @@ func (s *server) guestStart(l *guestLink, sp *spawn, req *protocol.Request, at k
 		return s.guestLost(l, sp, "placing", err)
 	}
 	if answer.Type != "placed" {
-		s.log.Warn("spawn %s refused: its VM's keeper refused its place: %s", sp.id, answer.Code)
+		s.log.Warn("spawn %s refused: its VM's keeper refused its place: %s", sp.id, logx.Untrusted(answer.Code))
 		return protocol.CodeUnavailable
 	}
 	s.mu.Lock()
@@ -910,7 +911,7 @@ func (s *server) guestStart(l *guestLink, sp *spawn, req *protocol.Request, at k
 		}
 		if answer.Type != "home_made" {
 			drop()
-			s.log.Warn("spawn %s refused: its VM's keeper refused its home: %s", sp.id, answer.Code)
+			s.log.Warn("spawn %s refused: its VM's keeper refused its home: %s", sp.id, logx.Untrusted(answer.Code))
 			return guestCode(answer.Code)
 		}
 	}
@@ -961,7 +962,7 @@ func (s *server) guestStart(l *guestLink, sp *spawn, req *protocol.Request, at k
 		if guestEnd != nil {
 			_ = guestEnd.Close()
 		}
-		s.log.Warn("spawn %s refused: its VM's keeper refused its spawn: %s", sp.id, answer.Code)
+		s.log.Warn("spawn %s refused: its VM's keeper refused its spawn: %s", sp.id, logx.Untrusted(answer.Code))
 		return guestCode(answer.Code)
 	}
 	s.mu.Lock()
@@ -1035,7 +1036,7 @@ func (s *server) measureInMachine(c *client, req *protocol.Request, at keptAt) {
 		// A home is inside its image: the guest's word is held to it.
 		s.send(c, protocol.NewHomeMeasured(req.ID, min(answer.Bytes, home.ImageBytes)))
 	default:
-		s.log.Warn("home_measure %s refused: its VM's keeper refused it: %s", req.ID, answer.Code)
+		s.log.Warn("home_measure %s refused: its VM's keeper refused it: %s", req.ID, logx.Untrusted(answer.Code))
 		s.send(c, protocol.NewError(req.ID, "", guestCode(answer.Code)))
 	}
 }
@@ -1073,7 +1074,7 @@ func (s *server) guestPacks(l *guestLink, sp *spawn, packs *protocol.SpawnPacks,
 			return s.guestLost(l, sp, "holding its packs", err)
 		}
 		if answer.Type != "packs" {
-			s.log.Warn("spawn %s refused: its VM's keeper refused its packs' hold: %s", sp.id, answer.Code)
+			s.log.Warn("spawn %s refused: its VM's keeper refused its packs' hold: %s", sp.id, logx.Untrusted(answer.Code))
 			return protocol.CodeUnavailable
 		}
 		if answer.State == protocol.PacksHeld {
@@ -1121,7 +1122,7 @@ func (s *server) putGuestPacks(l *guestLink, sp *spawn, packs *protocol.SpawnPac
 			return s.guestLost(l, sp, "putting its packs", aerr), false
 		}
 		if answer.Type != "packs" {
-			s.log.Warn("spawn %s refused: its VM's keeper refused its packs at part %d: %s", sp.id, seq, answer.Code)
+			s.log.Warn("spawn %s refused: its VM's keeper refused its packs at part %d: %s", sp.id, seq, logx.Untrusted(answer.Code))
 			return protocol.CodeUnavailable, seq == 0 && answer.Code == protocol.CodePacksBusy
 		}
 		if last {

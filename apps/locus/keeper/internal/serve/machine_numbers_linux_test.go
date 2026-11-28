@@ -4,10 +4,14 @@
 package serve
 
 import (
+	"bytes"
 	"fmt"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/cyfr/locus/keeper/internal/home"
+	"github.com/cyfr/locus/keeper/internal/logx"
 	"github.com/cyfr/locus/keeper/internal/protocol"
 )
 
@@ -127,5 +131,39 @@ func TestAGuestsExitIsReadAsAnExitCanBe(t *testing.T) {
 		ms := int64(0)
 		k.s.handle(k.c, &protocol.Request{V: protocol.Version, Type: protocol.TypeRelease, SpawnID: spawnID, GraceMs: &ms})
 		k.expect(t, "released")
+	}
+}
+
+// A guest's words reach the keeper's log quoted and bounded, never raw
+// (5444's note): a refusal whose code holds a newline and a forged line
+// leaves one line of the keeper's, its code quoted in it.
+func TestAGuestsWordsReachTheLogQuoted(t *testing.T) {
+	k := newVMKeeper(t)
+	var log bytes.Buffer
+	k.s.log = logx.NewWriter(&log, "cyfr-locus", false)
+	k.disk(t, "ath_a", "vlt_a1")
+	forged := "capacity\n[cyfr-locus] error: the VM of another person ended"
+	k.guest.mu.Lock()
+	k.guest.answer = func(_ *fakeVM, req map[string]any) ([]any, bool) {
+		if req["type"] != protocol.TypePlace {
+			return nil, false
+		}
+		id, _ := req["id"].(string)
+		return []any{map[string]any{"v": protocol.Version, "type": "error", "id": id, "code": forged}}, true
+	}
+	k.guest.mu.Unlock()
+	k.place(t, "p-s1", "ath_a")
+	k.s.handleSpawn(k.c, k.spawnReq("s1", "p-s1", "vlt_a1", nil))
+	if m := k.next(t); m["type"] != "error" {
+		t.Fatalf("a spawn whose place the guest refused answered %v", m)
+	}
+	said := log.String()
+	for _, line := range strings.Split(said, "\n") {
+		if strings.HasPrefix(line, "[cyfr-locus] error: the VM of another person ended") {
+			t.Fatalf("a guest's code forged a line of the keeper's log:\n%s", said)
+		}
+	}
+	if !strings.Contains(said, strconv.Quote(forged)) {
+		t.Fatalf("the guest's code is not in the log quoted:\n%s", said)
 	}
 }
