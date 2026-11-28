@@ -211,19 +211,30 @@ defmodule Prima.PinnedTarget do
   def expired?(%__MODULE__{expires_at: expires_at}, now) when is_integer(now),
     do: now > expires_at
 
-  # An address as Erlang's strict parser reads one, but with no sign in
-  # it: the parser reads a field's sign (`1.2.3.+4`), which no address
-  # CYFR writes (`:inet.ntoa/1`) carries and no other reader takes. A zone
-  # after the address is its own text.
-  defp family_of(ip) when is_binary(ip) do
-    with false <- signed?(ip),
-         {:ok, address} <- :inet.parse_strict_address(String.to_charlist(ip)) do
-      case address do
-        {_, _, _, _} -> {:ok, 4}
-        {_, _, _, _, _, _, _, _} -> {:ok, 6}
-      end
+  @doc """
+  The address `text` spells, read as a pin's `ip` is: as Erlang's strict
+  parser reads one (`:inet.parse_strict_address/1`), but with no sign in
+  it. The parser reads a field's sign (`1.2.3.+4`), which no address CYFR
+  writes (`:inet.ntoa/1`) carries and no other reader takes. A zone after
+  the address is its own text. A Locus role's bind is read by it
+  (`Prima.EnvValue.bind/2`).
+  """
+  @spec parse_ip(String.t()) :: {:ok, :inet.ip_address()} | :error
+  def parse_ip(text) when is_binary(text) do
+    with true <- String.valid?(text),
+         false <- signed?(text),
+         {:ok, address} <- :inet.parse_strict_address(String.to_charlist(text)) do
+      {:ok, address}
     else
       _ -> :error
+    end
+  end
+
+  defp family_of(ip) when is_binary(ip) do
+    case parse_ip(ip) do
+      {:ok, {_, _, _, _}} -> {:ok, 4}
+      {:ok, {_, _, _, _, _, _, _, _}} -> {:ok, 6}
+      :error -> :error
     end
   end
 

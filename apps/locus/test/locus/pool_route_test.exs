@@ -135,10 +135,13 @@ defmodule Locus.PoolRouteTest do
         LocusPool.header(signer, LocusPool.pool_key(signer, @key), ts, body)
       end)
 
+    length = Keyword.get(opts, :content_length)
+
     :post
     |> conn(LocusPool.route(), body)
     |> put_req_header("content-type", "application/json")
     |> then(&if(header, do: put_req_header(&1, "x-cyfr-auth", header), else: &1))
+    |> then(&if(length, do: put_req_header(&1, "content-length", "#{length}"), else: &1))
   end
 
   defp post_conn(service, keeper, body, opts) do
@@ -324,8 +327,8 @@ defmodule Locus.PoolRouteTest do
     [header: LocusPool.header(:runtime, pool_key, ts, LocusPool.request_body(1))]
   end
 
-  # A refusal of Locus.PoolRoute as the vectors spell it.
-  defp refusal_text({:too_large, _how}), do: "too_large"
+  # A refusal of Locus.PoolRoute as the vectors spell it: a body past the
+  # bound by how the route found it, declared or read.
   defp refusal_text({stage, reason}), do: "#{stage} #{reason}"
   defp refusal_text(:unavailable), do: "unavailable"
 
@@ -336,11 +339,11 @@ defmodule Locus.PoolRouteTest do
 
     for c <- cases do
       assert (Map.keys(c) -- ["header_text"]) |> Enum.sort() ===
-               ~w(answer body closed error header http keeper refusal status why),
+               ~w(answer body closed content_length error header http keeper refusal status unread why),
              inspect(c)
 
       assert c["http"] === true, c["why"]
-      opts = signing(c, c["body"])
+      opts = signing(c, c["body"]) ++ [content_length: c["content_length"]]
 
       keeper =
         case c["keeper"] do
@@ -362,7 +365,7 @@ defmodule Locus.PoolRouteTest do
 
       case c["refusal"] do
         nil ->
-          assert {c["error"], conn.resp_body} === {nil, c["answer"]}, c["why"]
+          assert {c["error"], conn.resp_body, c["unread"]} === {nil, c["answer"], nil}, c["why"]
 
         refusal ->
           assert Jason.decode!(conn.resp_body) === %{"v" => 3, "error" => c["error"]}, c["why"]
@@ -382,8 +385,12 @@ defmodule Locus.PoolRouteTest do
           served =
             Locus.PoolRoute.serve(request(:runtime, c["body"], opts), :runtime, @key, ask, now)
 
-          assert {:refused, _conn, route_refusal} = served, c["why"]
+          assert {:refused, served_conn, route_refusal} = served, c["why"]
           assert refusal_text(route_refusal) === refusal, c["why"]
+
+          # What the route left of the body when it refused.
+          assert {:ok, rest, _conn} = Plug.Conn.read_body(served_conn), c["why"]
+          assert byte_size(rest) === c["unread"], c["why"]
       end
     end
   end

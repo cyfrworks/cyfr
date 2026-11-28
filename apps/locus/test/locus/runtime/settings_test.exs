@@ -21,6 +21,7 @@ defmodule Locus.Runtime.SettingsTest do
   # `pool!/0` reads the application environment, which one test alters.
   use ExUnit.Case, async: false
 
+  alias Locus.Runtime.Credentials
   alias Locus.Runtime.Settings
 
   # Read as this module compiles, so a checkout without the file fails
@@ -33,6 +34,11 @@ defmodule Locus.Runtime.SettingsTest do
   @settings Path.expand("../../../../../tests/fixtures/locus_settings.json", __DIR__)
             |> File.read!()
             |> Jason.decode!()
+
+  # The base URLs the host API's URL is read as (Prima.WorkerWire.base_url/1).
+  @worker_api Path.expand("../../../../../tests/fixtures/worker_api.json", __DIR__)
+              |> File.read!()
+              |> Jason.decode!()
 
   describe "a runner's environment, as runner_control.json's environment holds it" do
     test "the service writes exactly the vector's environment for its settings" do
@@ -260,17 +266,43 @@ defmodule Locus.Runtime.SettingsTest do
   end
 
   describe "the runtime role's settings, as locus_settings.json holds them" do
+    # Every row of the fixture is matched inside its loop, so a row without
+    # a member fails instead of being passed over.
+
     test "the fixture's variables are the runtime role's and the release's log settings, in order" do
       names = Enum.map(@settings["variables"], & &1["name"])
       assert names === Locus.Config.variables(:runtime) ++ Locus.Config.variables(:release)
     end
 
+    test "every variable's setting is one a read reads, and a required one has no default" do
+      env = @settings["environment"]
+      {:ok, read} = runtime_settings(env)
+
+      settings =
+        for variable <- @settings["variables"] do
+          assert %{"name" => name, "setting" => setting, "default" => default} = variable
+          assert Map.has_key?(read, setting), name
+
+          if Map.get(variable, "required", false) do
+            assert variable["required"] === true and default === nil, name
+            assert read[setting] === env[name], name
+            assert {:error, message} = runtime_settings(Map.delete(env, name)), name
+            assert message =~ name, message
+          end
+
+          setting
+        end
+
+      assert Enum.sort(settings) === read |> Map.keys() |> Enum.sort()
+      assert Enum.count(@settings["variables"], &Map.get(&1, "required", false)) == 2
+    end
+
     test "every variable left unset takes the fixture's default" do
       {:ok, unset} = runtime_settings(@settings["environment"])
 
-      for %{"name" => name, "setting" => setting, "default" => default} = variable <-
-            @settings["variables"],
-          not Map.get(variable, "required", false) do
+      for variable <- @settings["variables"], not Map.get(variable, "required", false) do
+        assert %{"name" => name, "setting" => setting, "default" => default} = variable
+
         expected =
           case setting do
             "attach_dir" -> @settings["environment"]["KEEPER_RUN_DIR"]
@@ -286,11 +318,37 @@ defmodule Locus.Runtime.SettingsTest do
       assert dir === attach["default"] and attach["default_from"] === "KEEPER_RUN_DIR"
     end
 
+    test "every variable's accepted is what its reader takes and what its refusal says it takes" do
+      env = @settings["environment"]
+
+      for variable <- @settings["variables"] do
+        assert %{"name" => name, "setting" => setting, "accepted" => accepted} = variable
+        assert {:error, message} = runtime_settings(Map.put(env, name, "x y")), name
+        assert String.starts_with?(message, name), message
+
+        case accepted do
+          sentence when is_binary(sentence) ->
+            assert message =~ sentence, message
+
+          values when is_list(values) ->
+            for value <- values do
+              assert {:ok, %{^setting => ^value}} = runtime_settings(Map.put(env, name, value))
+              assert message =~ value, message
+            end
+        end
+      end
+
+      levels = Enum.find(@settings["variables"], &(&1["setting"] == "log_level"))["accepted"]
+      assert Enum.sort(levels) === Logger.levels() |> Enum.map(&Atom.to_string/1) |> Enum.sort()
+    end
+
     test "every range reads to its edges and is refused one past either, naming its variable" do
       ranged = for %{"min" => _} = variable <- @settings["variables"], do: variable
       assert length(ranged) == 4
 
-      for %{"name" => name, "setting" => setting, "min" => min, "max" => max} <- ranged do
+      for variable <- ranged do
+        assert %{"name" => name, "setting" => setting, "min" => min, "max" => max} = variable
+
         for value <- [min, max] do
           env = Map.put(@settings["environment"], name, Integer.to_string(value))
           assert {:ok, %{^setting => ^value}} = runtime_settings(env), "#{name}=#{value}"
@@ -304,19 +362,60 @@ defmodule Locus.Runtime.SettingsTest do
       end
     end
 
-    test "every environment of reads reads as its settings" do
-      assert length(@settings["reads"]) >= 12
+    test "every whole number reads in its most characters and is refused in one more" do
+      bounded = for %{"max_length" => _} = variable <- @settings["variables"], do: variable
+      assert length(bounded) == 4
 
-      for %{"why" => why, "environment" => env, "settings" => settings} <- @settings["reads"] do
+      for variable <- bounded do
+        assert %{"name" => name, "setting" => setting, "default" => default, "max_length" => most} =
+                 variable
+
+        text = &String.pad_leading(Integer.to_string(default), &1, "0")
+        env = &Map.put(@settings["environment"], name, &1)
+        assert {:ok, %{^setting => ^default}} = runtime_settings(env.(text.(most))), name
+        assert {:error, message} = runtime_settings(env.(text.(most + 1))), name
+        assert String.starts_with?(message, name), message
+      end
+    end
+
+    test "the host API's URL reads by the grammar worker_api.json's base_urls hold, kept as written" do
+      variable = Enum.find(@settings["variables"], &(&1["setting"] == "host_url"))
+      assert variable["grammar"] === "worker_api.json base_urls"
+      cases = @worker_api["base_urls"]
+      assert length(cases) >= 30
+
+      for row <- cases do
+        assert %{"text" => text, "base" => base} = row
+        env = Map.put(@settings["environment"], variable["name"], text)
+
+        case base do
+          nil ->
+            assert {:error, _message} = runtime_settings(env), inspect(text)
+
+          base ->
+            # The setting as written; the credentials hold its base.
+            assert {:ok, %{"host_url" => ^text}} = runtime_settings(env), inspect(text)
+            assert {:ok, settings} = Locus.Config.from_env(&Map.get(env, &1), Map.keys(env))
+            assert {:ok, %{host_url: ^base}} = Credentials.load(settings[:runtime]), inspect(text)
+        end
+      end
+    end
+
+    test "every environment of reads reads as its settings" do
+      assert length(@settings["reads"]) >= 25
+
+      for row <- @settings["reads"] do
+        assert %{"why" => why, "environment" => env, "settings" => settings} = row
         assert runtime_settings(env) === {:ok, settings}, why
       end
     end
 
     test "every environment of refusals refuses the boot with its message, which shows no key" do
-      assert length(@settings["refusals"]) >= 30
+      assert length(@settings["refusals"]) >= 55
       key = @settings["environment"]["LOCUS_RUNTIME_KEY"]
 
-      for %{"why" => why, "environment" => env, "message" => message} <- @settings["refusals"] do
+      for row <- @settings["refusals"] do
+        assert %{"why" => why, "environment" => env, "message" => message} = row
         assert runtime_settings(env) === {:error, message}, why
         refute message =~ String.slice(key, 0, 16), why
       end

@@ -2,22 +2,25 @@
 // Copyright 2026 CYFR Works Inc.
 
 // Package locuspool is Prima.LocusPool's pool wire in Go, as the runtime
-// service serves it: the route every Locus service answers its role's
-// report on, CYFR's signed request, the report the role's keeper gives,
-// and the answer written for CYFR. Prima's module is the one definition,
-// and tests/fixtures/locus_pool.json's wire holds this package to it.
+// service serves it: the route the runtime answers its role's report on,
+// CYFR's signed request, the report the role's keeper gives, and the
+// answer written for CYFR. Prima's module is the one definition, and
+// tests/fixtures/locus_pool.json's wire holds this package to it. The
+// builds and backends services serve the same wire from Elixir until they
+// are rewritten, as their rows of the role table stay Elixir's.
 //
 // A request is POST Route, its body {"v": 1, "after": rev} within
 // MaxRequestBytes, signed in macenvelope.AuthHeader as Prima.MacEnvelope
-// signs: the prefix cyfr-locus/v1/<service>/pool, the kind pool, the field
+// signs: the prefix cyfr-locus/v1/runtime/pool, the kind pool, the field
 // ts within WindowMs of the listener's clock, and the body's hash, under
-// the service's pool key, derived over the same label from the key the
-// service holds. No nonce is kept: the call reads only. The answer is
+// the runtime's pool key, derived over the same label from the key the
+// runtime holds. No nonce is kept: the call reads only. The answer is
 // {"v": 1, "report": report}, plain.
 package locuspool
 
 import (
 	"errors"
+	"math"
 	"regexp"
 	"time"
 
@@ -50,53 +53,32 @@ var (
 	// before anything else of it.
 	ErrVersion = errors.New("version")
 	// ErrMalformed is a request body, a report or a counter that does
-	// not read.
+	// not read, or a report no answer may carry.
 	ErrMalformed = errors.New("malformed")
-	// ErrUnknownService is a service that serves no pool wire.
-	ErrUnknownService = errors.New("unknown_service")
 )
 
-// Services are the services that serve the pool wire, a fresh list each
-// call.
-func Services() []string { return []string{"runtime", "builds", "backends"} }
-
-func known(service string) bool {
-	for _, s := range Services() {
-		if s == service {
-			return true
-		}
-	}
-	return false
-}
-
-func envelope(service string) macenvelope.Envelope {
+func envelope() macenvelope.Envelope {
 	return macenvelope.Envelope{
-		Prefix: macenvelope.Label(service) + "/pool",
+		Prefix: macenvelope.Label("runtime") + "/pool",
 		Kind:   "pool",
 		Fields: []macenvelope.Field{{Name: "ts", Type: macenvelope.Integer}},
 	}
 }
 
-// HeldPoolKey is service's pool key, derived from the key that service
-// holds over its pool label (Prima.LocusPool.held_pool_key/2): a worker
-// service's own key, for the runtime.
-func HeldPoolKey(service string, held macenvelope.Key) (macenvelope.Key, error) {
-	if !known(service) {
-		return macenvelope.Key{}, ErrUnknownService
-	}
-	return macenvelope.Derive(held, envelope(service).Prefix), nil
+// HeldPoolKey is the runtime's pool key, derived over its pool label from
+// the key the runtime service holds, its own worker key
+// (Prima.LocusPool.held_pool_key/2).
+func HeldPoolKey(held macenvelope.Key) macenvelope.Key {
+	return macenvelope.Derive(held, envelope().Prefix)
 }
 
 // VerifyHeader is the body hash a request's header names, once the header
-// is a v1 header of service's pool envelope, its ts within WindowMs of now
-// (Unix ms) and its MAC that of poolKey; otherwise the first of
+// is a v1 header of the runtime's pool envelope, its ts within WindowMs of
+// now (Unix ms) and its MAC that of poolKey; otherwise the first of
 // macenvelope.ErrUnknownVersion, macenvelope.ErrMalformed,
 // ErrOutsideWindow and ErrBadMAC. The zero Key verifies nothing.
-func VerifyHeader(service string, poolKey macenvelope.Key, header string, now int64) (string, error) {
-	if !known(service) {
-		return "", ErrUnknownService
-	}
-	e := envelope(service)
+func VerifyHeader(poolKey macenvelope.Key, header string, now int64) (string, error) {
+	e := envelope()
 	p, err := e.Parse(header)
 	if err != nil {
 		return "", err
@@ -156,7 +138,9 @@ type Counter struct {
 
 // Report is a role's report: its keeper's boot, its budget, work, floor
 // and use, up to ReportCounters counters in ascending rev, and the rev
-// the next page follows, when more follow (0 for none).
+// the next page follows, when more follow (0 for none). It mirrors the
+// keeper's own reported reply, which this package does not import: a
+// wire package imports no keeper part.
 type Report struct {
 	Boot                      string
 	Budget, Work, Floor, Used uint64
@@ -171,20 +155,51 @@ var (
 	athanor = regexp.MustCompile(`\A[\x21-\x7e]{1,256}\z`)
 	// subject is the keeper's id grammar (Prima.KeeperProtocol.id?/1).
 	subject = regexp.MustCompile(`\A[A-Za-z0-9._:-]{1,64}\z`)
+	// kinds are a place's kinds (Prima.LocusPool.kinds/0), held to
+	// locus_pool.json's kinds.
 	kinds   = map[string]bool{"warm": true, "run": true, "build": true, "program": true, "terminal": true}
 	numbers = []string{"rev", "bytes", "mib_ms", "measured_ms", "peak_bytes", "cap", "machine", "either"}
 	members = []string{"boot", "budget", "work", "floor", "used", "counters"}
 )
 
-func whole(v any) (uint64, bool) { return wirejson.Uint(v, wirejson.MaxSafeInteger) }
+// whole is a JSON number that is a whole number from 0, read as wide as
+// it comes: valid holds its bound.
+func whole(v any) (uint64, bool) { return wirejson.Uint(v, math.MaxUint64) }
+
+// valid is ErrMalformed for a report no answer may carry, as
+// Prima.LocusPool.read_report/1 refuses one, and nil otherwise: boot 32
+// lowercase hexadecimal digits; every number at most 2^53 − 1; at most
+// ReportCounters counters in ascending rev, each rev from 1, its day a
+// date, its kind a place's kind, its athanor and subject, where it has
+// them, of their grammars. ReadReport and Answer both go through it.
+func valid(r Report) error {
+	safe := func(ns ...uint64) bool {
+		for _, n := range ns {
+			if n > wirejson.MaxSafeInteger {
+				return false
+			}
+		}
+		return true
+	}
+	if !boot.MatchString(r.Boot) || !safe(r.Budget, r.Work, r.Floor, r.Used, r.Next) || len(r.Counters) > ReportCounters {
+		return ErrMalformed
+	}
+	for i, c := range r.Counters {
+		if c.Rev < 1 || (i > 0 && c.Rev <= r.Counters[i-1].Rev) ||
+			!safe(c.Rev, c.Bytes, c.MibMs, c.MeasuredMs, c.PeakBytes, c.Cap, c.Machine, c.Either) ||
+			!isDay(c.Day) || !kinds[c.Kind] ||
+			(c.Athanor != "" && !athanor.MatchString(c.Athanor)) || (c.Subject != "" && !subject.MatchString(c.Subject)) {
+			return ErrMalformed
+		}
+	}
+	return nil
+}
 
 // ReadReport reads a report from its wire form strictly
 // (Prima.LocusPool.read_report/1): exactly its members, next only where
-// more follow; every number a whole number from 0 to 2^53 − 1, a rev and
-// next from 1; boot 32 lowercase hexadecimal digits; at most
-// ReportCounters counters in ascending rev, each exactly its members, its
-// day a date, its kind a place's kind, an athanor and a subject of their
-// grammars where present; none null.
+// more follow and from 1; every number a whole number; each counter
+// exactly its members, an athanor and a subject only where it has them,
+// neither empty; none null; then valid.
 func ReadReport(v any) (Report, error) {
 	o, ok := v.(map[string]any)
 	if !ok {
@@ -204,7 +219,7 @@ func ReadReport(v any) (Report, error) {
 	r.Work, okWork = whole(o["work"])
 	r.Floor, okFloor = whole(o["floor"])
 	r.Used, okUsed = whole(o["used"])
-	if !(okBoot && boot.MatchString(r.Boot) && okBudget && okWork && okFloor && okUsed) {
+	if !(okBoot && okBudget && okWork && okFloor && okUsed) {
 		return Report{}, ErrMalformed
 	}
 	if next, more := o["next"]; more {
@@ -220,10 +235,13 @@ func ReadReport(v any) (Report, error) {
 	}
 	for _, item := range counters {
 		c, err := readCounter(item)
-		if err != nil || (len(r.Counters) > 0 && c.Rev <= r.Counters[len(r.Counters)-1].Rev) {
+		if err != nil {
 			return Report{}, ErrMalformed
 		}
 		r.Counters = append(r.Counters, c)
+	}
+	if err := valid(r); err != nil {
+		return Report{}, err
 	}
 	return r, nil
 }
@@ -255,7 +273,7 @@ func readCounter(v any) (Counter, error) {
 	var okDay, okKind bool
 	c.Day, okDay = o["day"].(string)
 	c.Kind, okKind = o["kind"].(string)
-	if c.Rev < 1 || !okDay || !isDay(c.Day) || !okKind || !kinds[c.Kind] {
+	if !okDay || !okKind {
 		return Counter{}, ErrMalformed
 	}
 	for name, field := range map[string]*string{"athanor": &c.Athanor, "subject": &c.Subject} {
@@ -263,12 +281,9 @@ func readCounter(v any) (Counter, error) {
 		if !has {
 			continue
 		}
+		// An empty one is no grammar's; valid takes empty for none.
 		text, isText := value.(string)
-		grammar := athanor
-		if name == "subject" {
-			grammar = subject
-		}
-		if !isText || !grammar.MatchString(text) {
+		if !isText || text == "" {
 			return Counter{}, ErrMalformed
 		}
 		*field = text
@@ -288,11 +303,11 @@ func isDay(text string) bool {
 
 // Answer is the answer carrying r (Prima.LocusPool.answer/1): v, then the
 // report, its members by name, next only where more follow, each counter's
-// athanor and subject only where it has them. A report of more than
-// ReportCounters counters is ErrMalformed: no answer carries one.
+// athanor and subject only where it has them. A report valid refuses is
+// ErrMalformed: no answer carries one Prima would not read.
 func Answer(r Report) ([]byte, error) {
-	if len(r.Counters) > ReportCounters {
-		return nil, ErrMalformed
+	if err := valid(r); err != nil {
+		return nil, err
 	}
 	counters := make([]any, len(r.Counters))
 	for i, c := range r.Counters {

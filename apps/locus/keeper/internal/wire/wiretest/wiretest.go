@@ -24,11 +24,17 @@
 // member may be absent but one tagged wire:"required"; null is allowed
 // where a field is tagged wire:"null" or is raw JSON. Decode gives a
 // case's own members these rules by its arguments in place of tags.
+//
+// What a test compares is decoded from the bytes the walk held, section
+// by section, never from the whole file again, and a member name given
+// twice in one object, anywhere in a vector file, fails its load: Prima's
+// reader takes the first, encoding/json the last.
 package wiretest
 
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -41,9 +47,10 @@ import (
 
 // Load decodes the named vector file, read from a wire package's
 // directory, into v, a pointer to a struct of the sections its test reads:
-// each section v names is present and held to its field's type at every
-// level. A section v does not name is passed over, for a file holds the
-// sections of many readers.
+// each section v names is present, held to its field's type at every
+// level, and decoded from its own bytes. A section v does not name is
+// passed over, for a file holds the sections of many readers, but no
+// object anywhere in the file names a member twice.
 func Load(t testing.TB, file string, v any) {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "..", "..", "tests", "fixtures", file))
@@ -51,10 +58,14 @@ func Load(t testing.TB, file string, v any) {
 		t.Fatal(err)
 	}
 	st := structOf(t, "Load", v)
+	if why := repeated(data); why != "" {
+		t.Fatalf("%s: %s", file, why)
+	}
 	var top map[string]json.RawMessage
 	if err := json.Unmarshal(data, &top); err != nil || top == nil {
 		t.Fatalf("%s is no object: %v", file, err)
 	}
+	target := reflect.ValueOf(v).Elem()
 	for _, f := range named(st) {
 		name := jsonName(f)
 		raw, present := top[name]
@@ -64,8 +75,61 @@ func Load(t testing.TB, file string, v any) {
 		if why := walk(raw, f.Type, tagged(f).null); why != "" {
 			t.Fatalf("%s's %s: %s", file, name, why)
 		}
+		decode(t, raw, target.FieldByIndex(f.Index).Addr().Interface())
 	}
-	decode(t, data, v)
+}
+
+// repeated is why data names a member twice in one object, at any level,
+// or "".
+func repeated(data []byte) string {
+	type object struct {
+		seen    map[string]bool
+		wantKey bool
+	}
+	// open holds, for each list or object the tokens are inside, its
+	// object, or nil for a list.
+	var open []*object
+	ended := func() {
+		if n := len(open); n > 0 && open[n-1] != nil {
+			open[n-1].wantKey = true
+		}
+	}
+	d := json.NewDecoder(bytes.NewReader(data))
+	d.UseNumber()
+	for {
+		tok, err := d.Token()
+		if err == io.EOF {
+			return ""
+		}
+		if err != nil {
+			return "no JSON: " + err.Error()
+		}
+		if n := len(open); n > 0 && open[n-1] != nil && open[n-1].wantKey {
+			if tok == json.Delim('}') {
+				open = open[:n-1]
+				ended()
+				continue
+			}
+			name, _ := tok.(string)
+			if open[n-1].seen[name] {
+				return "a member named twice in one object, " + strconv.Quote(name)
+			}
+			open[n-1].seen[name] = true
+			open[n-1].wantKey = false
+			continue
+		}
+		switch tok {
+		case json.Delim('{'):
+			open = append(open, &object{seen: map[string]bool{}, wantKey: true})
+			continue
+		case json.Delim('['):
+			open = append(open, nil)
+			continue
+		case json.Delim(']'):
+			open = open[:len(open)-1]
+		}
+		ended()
+	}
 }
 
 // Cases are the items of a list section, at least least of them.
@@ -155,7 +219,10 @@ func named(st reflect.Type) []reflect.StructField {
 		f := st.Field(i)
 		switch name := jsonName(f); {
 		case f.Anonymous && name == "" && f.Type.Kind() == reflect.Struct:
-			out = append(out, named(f.Type)...)
+			for _, inner := range named(f.Type) {
+				inner.Index = append(append([]int{}, f.Index...), inner.Index...)
+				out = append(out, inner)
+			}
 		case name != "" && name != "-":
 			out = append(out, f)
 		}

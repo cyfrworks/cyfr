@@ -10,9 +10,10 @@
 // image's: no Go role reads them.
 package locusroles
 
-// Role is one row of the role table, as locus_roles.json spells it: a
-// member that is null for a role is a nil pointer, and every row writes
-// every member (wire:"null,required", which the vectors' reader holds).
+// Role is the runtime role's row of the role table, as locus_roles.json
+// spells it: a member the runtime does not have is null there and a nil
+// pointer here. The other roles' rows are Elixir's; Role does not read
+// them.
 type Role struct {
 	// Name is the role's name, and Key the variable whose key starts it.
 	Name string `json:"name"`
@@ -43,14 +44,14 @@ type Role struct {
 	// The kept folders of a role whose programs keep theirs, and the
 	// machines' folder of a role whose sessions run in a person's
 	// machine: none for the runtime.
-	KeptRoot     *string `json:"kept_root" wire:"null,required"`
-	KeptVolume   *string `json:"kept_volume" wire:"null,required"`
-	KeptFirstUID *int    `json:"kept_first_uid" wire:"null,required"`
-	KeptLastUID  *int    `json:"kept_last_uid" wire:"null,required"`
-	KeptGroup    *string `json:"kept_group" wire:"null,required"`
-	KeptGID      *int    `json:"kept_gid" wire:"null,required"`
-	GuestRoot    *string `json:"guest_root" wire:"null,required"`
-	GuestVolume  *string `json:"guest_volume" wire:"null,required"`
+	KeptRoot     *string `json:"kept_root"`
+	KeptVolume   *string `json:"kept_volume"`
+	KeptFirstUID *int    `json:"kept_first_uid"`
+	KeptLastUID  *int    `json:"kept_last_uid"`
+	KeptGroup    *string `json:"kept_group"`
+	KeptGID      *int    `json:"kept_gid"`
+	GuestRoot    *string `json:"guest_root"`
+	GuestVolume  *string `json:"guest_volume"`
 	// Memory is what the role's process holds of its own.
 	Memory Memory `json:"memory"`
 }
@@ -61,7 +62,7 @@ type Role struct {
 // the larger read a fetch takes with its count's room, the most of a
 // fetch's head the HTTP client reads, the freed segments its VM keeps).
 type Memory struct {
-	Unread              *uint64 `json:"unread" wire:"null,required"`
+	Unread              *uint64 `json:"unread"`
 	Answering           uint64  `json:"answering"`
 	FetchReadBytes      uint64  `json:"fetch_read_bytes"`
 	FetchReadAheadBytes uint64  `json:"fetch_read_ahead_bytes"`

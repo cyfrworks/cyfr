@@ -139,6 +139,9 @@ func TestEveryRequestBodyReadsAsPrimaReadsIt(t *testing.T) {
 	if differences == 0 {
 		t.Error("no body states the depth the two ends differ at")
 	}
+	if len(v.Requests) < 3 {
+		t.Fatalf("%d requests", len(v.Requests))
+	}
 	for _, r := range v.Requests {
 		callback, args, err := ReadRequestBody(workerapi.Callbacks(), read(t, []byte(r.Body)))
 		if err != nil || callback != r.Callback || written(t, RequestBody(callback, args)) != r.Body {

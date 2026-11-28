@@ -25,19 +25,22 @@ type headerCase struct {
 
 // listenerCase is a request of the runtime's pool route over HTTP, which
 // today's Elixir listener runs (Locus.PoolRouteTest) and the Go listener
-// runs from N3: here, its refusal's status and error.
+// runs from N3: here, its refusal's status and error, and what of its
+// body is left unread.
 type listenerCase struct {
-	Why        string  `json:"why"`
-	HTTP       bool    `json:"http"`
-	Header     string  `json:"header"`
-	HeaderText string  `json:"header_text" wire:"optional"`
-	Body       string  `json:"body"`
-	Keeper     string  `json:"keeper"`
-	Status     int     `json:"status"`
-	Error      *string `json:"error" wire:"null,required"`
-	Answer     *string `json:"answer" wire:"null,required"`
-	Refusal    *string `json:"refusal" wire:"null,required"`
-	Closed     bool    `json:"closed"`
+	Why           string  `json:"why"`
+	HTTP          bool    `json:"http"`
+	Header        string  `json:"header"`
+	HeaderText    string  `json:"header_text" wire:"optional"`
+	Body          string  `json:"body"`
+	ContentLength *int    `json:"content_length" wire:"null,required"`
+	Keeper        string  `json:"keeper"`
+	Status        int     `json:"status"`
+	Error         *string `json:"error" wire:"null,required"`
+	Answer        *string `json:"answer" wire:"null,required"`
+	Refusal       *string `json:"refusal" wire:"null,required"`
+	Unread        *int    `json:"unread" wire:"null,required"`
+	Closed        bool    `json:"closed"`
 }
 
 type service struct {
@@ -84,13 +87,23 @@ type wireSection struct {
 	Listener []listenerCase `json:"listener"`
 }
 
+type vectors struct {
+	// Kinds are a place's kinds, each with its class, which the keeper's
+	// admission reads.
+	Kinds map[string]string `json:"kinds"`
+	Wire  wireSection       `json:"wire"`
+}
+
+func loadAll(t *testing.T) vectors {
+	t.Helper()
+	var v vectors
+	wiretest.Load(t, "locus_pool.json", &v)
+	return v
+}
+
 func load(t *testing.T) wireSection {
 	t.Helper()
-	var v struct {
-		Wire wireSection `json:"wire"`
-	}
-	wiretest.Load(t, "locus_pool.json", &v)
-	return v.Wire
+	return loadAll(t).Wire
 }
 
 func key(t *testing.T, text string) macenvelope.Key {
@@ -106,19 +119,10 @@ func key(t *testing.T, text string) macenvelope.Key {
 	return k
 }
 
-// poolKey is a service's pool key from the key the vectors give it: the
-// builds service's through its request key, which is all it holds.
-func poolKey(t *testing.T, w wireSection, name string) macenvelope.Key {
+// poolKey is the runtime's pool key from the key the vectors give it.
+func poolKey(t *testing.T, w wireSection) macenvelope.Key {
 	t.Helper()
-	held := key(t, w.KeyHex)
-	if text := w.Services[name].RequestKeyHex; text != "" {
-		held = key(t, text)
-	}
-	k, err := HeldPoolKey(name, held)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return k
+	return HeldPoolKey(key(t, w.KeyHex))
 }
 
 func TestThePoolWiresFiguresAreTheVectors(t *testing.T) {
@@ -129,37 +133,66 @@ func TestThePoolWiresFiguresAreTheVectors(t *testing.T) {
 	}
 }
 
-// Each service's pool key derives from the key it holds over its own
-// label, and its header verifies under that key alone: a header of one
-// service is refused by the two others, all three given the same key.
-func TestEachServicesPoolKeyAndHeaderAreItsOwn(t *testing.T) {
+// The runtime's pool key derives from the key it holds over its own label,
+// and its header verifies under that key, naming the hash of the wire's
+// body; the builds and backends services' headers, signed under their own
+// pool keys from the same key, are bad_mac under the runtime's. The wire's
+// answer is the one Answer writes for its report, byte for byte.
+func TestTheRuntimesPoolKeyHeaderBodyAndAnswerAreTheVectors(t *testing.T) {
 	w := load(t)
-	if len(w.Services) != len(Services()) {
+	if len(w.Services) != 3 {
 		t.Fatalf("%d services", len(w.Services))
 	}
-	for _, name := range Services() {
-		v, ok := w.Services[name]
+	runtime, ok := w.Services["runtime"]
+	if !ok {
+		t.Fatal("no runtime")
+	}
+	pool := poolKey(t, w)
+	if !pool.Equal(key(t, runtime.PoolKeyHex)) || envelope().Prefix != runtime.Label {
+		t.Error("the runtime's pool key or label")
+	}
+	hash, err := VerifyHeader(pool, runtime.Header, w.TS)
+	if err != nil {
+		t.Fatalf("the runtime's header: %v", err)
+	}
+	if err := VerifyBody(hash, []byte(w.Body)); err != nil {
+		t.Errorf("the wire's body is not the one the runtime's header hashed: %v", err)
+	}
+	for _, other := range []string{"builds", "backends"} {
+		v, ok := w.Services[other]
 		if !ok {
-			t.Fatalf("no %s", name)
+			t.Fatalf("no %s", other)
 		}
-		if !poolKey(t, w, name).Equal(key(t, v.PoolKeyHex)) || envelope(name).Prefix != v.Label {
-			t.Errorf("%s: its pool key or label", name)
-		}
-		for _, other := range Services() {
-			_, err := VerifyHeader(other, poolKey(t, w, other), v.Header, w.TS)
-			switch {
-			case other == name && err != nil:
-				t.Errorf("%s's header at %s: %v", name, other, err)
-			case other != name && !errors.Is(err, ErrBadMAC):
-				t.Errorf("%s's header at %s: %v, want bad_mac", name, other, err)
-			}
+		if _, err := VerifyHeader(pool, v.Header, w.TS); !errors.Is(err, ErrBadMAC) {
+			t.Errorf("%s's header under the runtime's key: %v, want bad_mac", other, err)
 		}
 	}
-	if _, err := HeldPoolKey("other", key(t, w.KeyHex)); !errors.Is(err, ErrUnknownService) {
-		t.Errorf("another service: %v", err)
-	}
-	if _, err := VerifyHeader("runtime", macenvelope.Key{}, w.Services["runtime"].Header, w.TS); !errors.Is(err, ErrBadMAC) {
+	if _, err := VerifyHeader(macenvelope.Key{}, runtime.Header, w.TS); !errors.Is(err, ErrBadMAC) {
 		t.Errorf("the zero Key verifies: %v", err)
+	}
+	answer, err := wirejson.Read([]byte(w.Answer))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := ReadReport(answer.(map[string]any)["report"])
+	if err != nil {
+		t.Fatalf("the wire's answer's report: %v", err)
+	}
+	if written, err := Answer(r); err != nil || string(written) != w.Answer {
+		t.Errorf("the wire's answer written %s, %v\nwant %s", written, err, w.Answer)
+	}
+}
+
+// The kinds a counter may have are the vector's, every kind its class's.
+func TestEveryKindIsTheVectors(t *testing.T) {
+	v := loadAll(t)
+	if len(v.Kinds) != len(kinds) {
+		t.Errorf("the vector's kinds %v, the package's %v", v.Kinds, kinds)
+	}
+	for kind := range v.Kinds {
+		if !kinds[kind] {
+			t.Errorf("%s is no kind of the package's", kind)
+		}
 	}
 }
 
@@ -168,7 +201,7 @@ func TestEachServicesPoolKeyAndHeaderAreItsOwn(t *testing.T) {
 // malformed, outside_window (the window inclusive), bad_mac.
 func TestEveryHeaderVerifiesOrIsRefusedAsPrimaAnswers(t *testing.T) {
 	w := load(t)
-	pool := poolKey(t, w, "runtime")
+	pool := poolKey(t, w)
 	cases := append(append(append([]headerCase{}, w.Headers.Accepted...), w.Headers.Refused...), w.Verify...)
 	if len(w.Headers.Accepted) < 4 || len(w.Headers.Refused) < 30 || len(w.Verify) < 10 {
 		t.Fatalf("%d accepted, %d refused, %d verified", len(w.Headers.Accepted), len(w.Headers.Refused), len(w.Verify))
@@ -177,7 +210,7 @@ func TestEveryHeaderVerifiesOrIsRefusedAsPrimaAnswers(t *testing.T) {
 		if (c.BodyHash == nil) == (c.Error == nil) {
 			t.Fatalf("%s: a case names its body hash or its error, one of them", c.Why)
 		}
-		hash, err := VerifyHeader("runtime", pool, c.Header, c.Now)
+		hash, err := VerifyHeader(pool, c.Header, c.Now)
 		switch {
 		case c.Error != nil && (err == nil || err.Error() != *c.Error):
 			t.Errorf("%s: %q, %v; want %s", c.Why, hash, err, *c.Error)
@@ -254,9 +287,63 @@ func TestEveryReportReadsAndIsAnsweredAsPrimaDoes(t *testing.T) {
 	if read < 6 {
 		t.Errorf("%d reports read", read)
 	}
-	if _, err := Answer(Report{Boot: strings.Repeat("0", 32), Counters: make([]Counter, ReportCounters+1)}); !errors.Is(err, ErrMalformed) {
-		t.Errorf("a report of 257 counters answered: %v", err)
+}
+
+// Answer writes no report Prima would refuse to read: each change below,
+// to a report the vectors read, is ErrMalformed, as is the zero Report.
+func TestNoAnswerCarriesAReportPrimaRefuses(t *testing.T) {
+	w := load(t)
+	answer, _ := wirejson.Read([]byte(w.Answer))
+	base, err := ReadReport(answer.(map[string]any)["report"])
+	if err != nil || len(base.Counters) == 0 || base.Counters[0].Athanor == "" || base.Counters[0].Subject == "" {
+		t.Fatalf("the wire's report %+v, %v", base, err)
 	}
+	if _, err := Answer(base); err != nil {
+		t.Fatalf("the wire's report: %v", err)
+	}
+	past := uint64(wirejson.MaxSafeInteger) + 1
+	for why, change := range map[string]func(r *Report){
+		"the zero Report":                 func(r *Report) { *r = Report{} },
+		"an empty boot":                   func(r *Report) { r.Boot = "" },
+		"a boot in capitals":              func(r *Report) { r.Boot = strings.ToUpper(r.Boot) },
+		"a budget past 2^53 - 1":          func(r *Report) { r.Budget = past },
+		"a next past 2^53 - 1":            func(r *Report) { r.Next = past },
+		"257 counters":                    func(r *Report) { r.Counters = ascending(r.Counters[0], ReportCounters+1) },
+		"a rev of 0":                      func(r *Report) { r.Counters[0].Rev = 0 },
+		"a counter's bytes past 2^53 - 1": func(r *Report) { r.Counters[0].Bytes = past },
+		"a day that is no date":           func(r *Report) { r.Counters[0].Day = "2026-13-01" },
+		"no day":                          func(r *Report) { r.Counters[0].Day = "" },
+		"a kind no place has":             func(r *Report) { r.Counters[0].Kind = "vm" },
+		"an athanor of another grammar":   func(r *Report) { r.Counters[0].Athanor = "athanor one" },
+		"a subject of another grammar":    func(r *Report) { r.Counters[0].Subject = "a b" },
+		"counters in descending rev":      func(r *Report) { r.Counters = reversed(ascending(r.Counters[0], 2)) },
+		"a rev given twice":               func(r *Report) { r.Counters = []Counter{r.Counters[0], r.Counters[0]} },
+	} {
+		r := base
+		r.Counters = append([]Counter{}, base.Counters...)
+		change(&r)
+		if written, err := Answer(r); !errors.Is(err, ErrMalformed) {
+			t.Errorf("%s: answered %s, %v", why, written, err)
+		}
+	}
+}
+
+// ascending are n copies of c, their revs 1 to n.
+func ascending(c Counter, n int) []Counter {
+	out := make([]Counter, n)
+	for i := range out {
+		out[i] = c
+		out[i].Rev = uint64(i + 1)
+	}
+	return out
+}
+
+func reversed(cs []Counter) []Counter {
+	out := make([]Counter, len(cs))
+	for i, c := range cs {
+		out[len(cs)-1-i] = c
+	}
+	return out
 }
 
 // Every listener case's refusal is answered with its status and error, as
@@ -277,15 +364,28 @@ func TestEveryPoolRefusalIsAnsweredWithItsStatus(t *testing.T) {
 			t.Fatalf("%s: a listener case is marked http", c.Why)
 		}
 		if c.Refusal == nil {
-			if c.Status != 200 || c.Error != nil || c.Answer == nil {
+			if c.Status != 200 || c.Error != nil || c.Answer == nil || c.Unread != nil {
 				t.Errorf("%s: an answered case is 200 with its answer", c.Why)
 			}
 			continue
 		}
+		// What a refusal leaves of the body: all of it where it closes
+		// before reading, but one byte where it read past the bound.
+		switch body := len(c.Body); {
+		case c.Unread == nil || *c.Unread < 0 || *c.Unread > body:
+			t.Errorf("%s: unread %v of %d bytes", c.Why, c.Unread, body)
+		case *c.Refusal == "too_large declared" && (c.ContentLength == nil || *c.ContentLength <= MaxRequestBytes || *c.Unread != body):
+			t.Errorf("%s: a declared length past the bound refuses before the body is read", c.Why)
+		case *c.Refusal == "too_large read" && (c.ContentLength != nil || *c.Unread != body-MaxRequestBytes):
+			t.Errorf("%s: a body past the bound is read to the bound", c.Why)
+		}
 		stage, reason, _ := strings.Cut(*c.Refusal, " ")
 		r := Refusal{Stage: stages[stage], Reason: reasons[reason]}
-		if stage == "bad_body" && reason == "malformed" {
+		switch {
+		case stage == "bad_body" && reason == "malformed":
 			r.Reason = ErrMalformed
+		case stage == "too_large" && reason != "declared" && reason != "read":
+			t.Errorf("%s: a body past the bound is refused declared or read, not %q", c.Why, reason)
 		}
 		status, code, ok := r.Status()
 		if !ok || c.Error == nil || status != c.Status || code != *c.Error || c.Answer != nil {

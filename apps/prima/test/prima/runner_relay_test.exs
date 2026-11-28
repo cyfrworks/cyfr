@@ -125,14 +125,22 @@ defmodule Prima.RunnerRelayTest do
 
     assert RunnerRelay.piece_held(counted["read_ahead_bytes"]) === counted["read_ahead_room"]
 
-    for %{"bytes" => bytes, "frames" => frames, "held" => held} <- bodies,
-        do: assert(RunnerRelay.held(bytes, frames) === held, "#{bytes} bytes in #{frames}")
+    # Each row matched inside its loop, so a row without a member fails
+    # instead of being passed over.
+    for row <- bodies do
+      assert %{"bytes" => bytes, "frames" => frames, "held" => held} = row
+      assert RunnerRelay.held(bytes, frames) === held, "#{bytes} bytes in #{frames}"
+    end
 
-    for %{"bytes" => bytes, "held" => held} <- pieces,
-        do: assert(RunnerRelay.piece_held(bytes) === held, "a piece of #{bytes} bytes")
+    for row <- pieces do
+      assert %{"bytes" => bytes, "held" => held} = row
+      assert RunnerRelay.piece_held(bytes) === held, "a piece of #{bytes} bytes"
+    end
 
-    for %{"bytes" => bytes, "held" => held} <- refusals,
-        do: assert(RunnerRelay.refusal_held(bytes) === held, "a refusal of #{bytes} bytes")
+    for row <- refusals do
+      assert %{"bytes" => bytes, "held" => held} = row
+      assert RunnerRelay.refusal_held(bytes) === held, "a refusal of #{bytes} bytes"
+    end
   end
 
   test "the caps and the codes are the fixture's" do

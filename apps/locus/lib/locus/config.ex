@@ -44,7 +44,12 @@ defmodule Locus.Config do
 
   An unset runtime identity or listener row takes the default above; a
   pool row is written only when its variable is set, so
-  `Locus.Runtime.Settings`' defaults stand for the rest.
+  `Locus.Runtime.Settings`' defaults stand for the rest. Every role's
+  bind is read as a pin's address is (`Prima.PinnedTarget.parse_ip/1`,
+  through `Prima.EnvValue.bind/2`), and each of the runtime's whole
+  numbers in at most 12 characters, a port's sign among them. With no attach directory set, the run folder
+  `KEEPER_RUN_DIR` names is read as written and refused at the boot as
+  an attach directory is.
 
   `tests/fixtures/locus_settings.json` holds the runtime's rows and the
   log's, their defaults, ranges, reads and refusals, for every language
@@ -335,17 +340,36 @@ defmodule Locus.Config do
          ],
          :ok <- credentials_refusal(credentials),
          {:ok, pool} <- runtime_pool(getenv),
-         {:ok, _pool} <- runtime_named(Locus.Runtime.Settings.pool(pool, %{})) do
+         {:ok, _pool} <- runtime_pool_refusal(pool, getenv) do
       {:ok, credentials ++ pool}
     end
   end
 
   defp runtime_port(port) when is_integer(port), do: {:ok, port}
 
+  # At most 12 characters, as every whole number a role reads
+  # (`Prima.EnvValue.whole_number/4`), its sign among them.
   defp runtime_port(text) when is_binary(text) do
-    case Integer.parse(text) do
+    case byte_size(text) <= 12 and Integer.parse(text) do
       {port, ""} -> {:ok, port}
       _ -> runtime_named({:error, {:malformed, :port}})
+    end
+  end
+
+  # The pool's settings as `Locus.Runtime.Settings.pool/2` reads them, the
+  # run folder among them: an attach directory left unset is the folder
+  # KEEPER_RUN_DIR names, as written, refused here as a set one is.
+  defp runtime_pool_refusal(pool, getenv) do
+    run_dir_env = Locus.Keeper.run_dir_env()
+    run_dir = getenv.(run_dir_env)
+    system = if is_binary(run_dir), do: %{run_dir_env => run_dir}, else: %{}
+
+    case {Locus.Runtime.Settings.pool(pool, system), Keyword.has_key?(pool, :attach_dir)} do
+      {{:error, {:malformed, :attach_dir}}, false} ->
+        {:error, "#{run_dir_env} must be #{Locus.Runtime.Settings.expected(:attach_dir)}"}
+
+      {answer, _set} ->
+        runtime_named(answer)
     end
   end
 

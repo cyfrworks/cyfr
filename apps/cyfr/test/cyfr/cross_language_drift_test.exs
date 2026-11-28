@@ -617,7 +617,7 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"tests/builder-image/stack_test.py", ~w(bounds lines)}
     ],
     "locus_pool.json" => [
-      {"apps/locus/keeper/internal/wire/locuspool/locuspool_test.go", ~w(wire)},
+      {"apps/locus/keeper/internal/wire/locuspool/locuspool_test.go", ~w(kinds wire)},
       {"apps/locus/keeper/internal/admission/size_test.go",
        ~w(allowance_bytes allowance_ms cap_bytes counters floor_bytes floor_runners kinds least_cap_bytes machine_bytes processors room_wait_ms stale_ms)},
       {"apps/locus/test/locus/pool_route_test.exs", ~w(wire)},
@@ -778,6 +778,7 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"apps/locus/keeper/internal/wire/workerwire/workerwire_test.go",
        ~w(version routes max_body_bytes max_report_attempts requests request_bodies answers answer_writes base_urls)},
       {"apps/locus/test/locus/listener_test.exs", ~w(listener nonces window_ms)},
+      {"apps/locus/test/locus/runtime/settings_test.exs", ~w(base_urls)},
       {"apps/locus/test/locus/runtime/worker_listener_test.exs", ~w(requests status starts)},
       {"apps/prima/test/prima/worker_api_test.exs",
        ~w(version routes retries timeouts_ms requests max_body_bytes window_ms keeper_refusals report_refusals)},
