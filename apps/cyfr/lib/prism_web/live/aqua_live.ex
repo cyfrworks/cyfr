@@ -107,13 +107,12 @@ defmodule PrismWeb.AquaLive do
       # one that refused the key, and any other.
       |> assign(:model_refused, %{})
       |> assign(:model_errors, %{})
-      # The page's asks, counted: the count the catalogue out was asked at
-      # (the earliest, while one is out), the count each brain a grant
-      # here asks was asked at, by its identity, and the count the answer
-      # held for a provider was asked at. An answer asked before the one
-      # held never replaces it.
+      # The page's asks, numbered: each ask, a catalogue's or a grant's
+      # of one brain, carries its number and its answer comes back with
+      # it; `answered_at` is the number of the ask whose answer the page
+      # last applied for a provider, and only an answer to a later ask
+      # replaces it.
       |> assign(:asks, 0)
-      |> assign(:catalogue_asked, nil)
       |> assign(:answered_at, %{})
       |> assign(:models_loaded, false)
       # The grant prompt this page asked its system layer for: its id and
@@ -320,8 +319,8 @@ defmodule PrismWeb.AquaLive do
   end
 
   # The catalogue, async, for the focus it was read under.
-  def handle_info({:list_models_result, tag, result}, socket),
-    do: CyfrWeb.ContextGuard.deliver(socket, tag, &models_loaded(&1, result))
+  def handle_info({:list_models_result, tag, ask, result}, socket),
+    do: CyfrWeb.ContextGuard.deliver(socket, tag, &models_loaded(&1, ask, result))
 
   def handle_info({:task_timeout, :models}, socket) do
     {:noreply, assign(socket, :models_loaded, true)}
@@ -406,7 +405,7 @@ defmodule PrismWeb.AquaLive do
   defp picked(socket, nil, _answer, _ref, _at), do: socket
 
   defp picked(socket, provider, answer, ref, at) do
-    if at < Map.get(socket.assigns.answered_at, provider, 0) do
+    if at <= Map.get(socket.assigns.answered_at, provider, 0) do
       socket
     else
       {models, refused, errors} =
@@ -485,35 +484,38 @@ defmodule PrismWeb.AquaLive do
 
   defp admin_next?(_ctx), do: false
 
-  # Shape: %{"models" => %{provider => [ids]}, "refs" => %{...}}. A
-  # provider whose held answer was asked after this catalogue keeps it: a
-  # catalogue none of this page's asks is waiting on was asked before
-  # every one of them.
-  defp models_loaded(socket, {:ok, result}) do
+  # Shape: %{"models" => %{provider => [ids]}, "refs" => %{...}}. The
+  # catalogue asked at `ask` is applied provider by provider: one whose
+  # held answer came from that ask or a later one keeps it, so of two
+  # catalogues out at once, or a catalogue and a grant's answer, the one
+  # asked last stands whichever arrives last.
+  defp models_loaded(socket, ask, {:ok, result}) do
     parsed = PrismWeb.ModelCatalog.parse(result)
-    asked = socket.assigns.catalogue_asked || 0
-    newer = for {provider, at} <- socket.assigns.answered_at, at > asked, do: provider
+    at = socket.assigns.answered_at
+    parts = [models_by_provider: parsed.models, catalyst_refs: parsed.refs] ++
+      [model_errors: parsed.errors, model_refused: parsed.refused]
 
-    kept = fn socket, key, read ->
-      assign(
-        socket,
-        key,
-        read |> Map.drop(newer) |> Map.merge(Map.take(socket.assigns[key], newer))
-      )
-    end
+    named =
+      Enum.flat_map(parts, fn {key, read} -> Map.keys(read) ++ Map.keys(socket.assigns[key]) end)
+
+    later = for provider <- Enum.uniq(named), Map.get(at, provider, 0) >= ask, do: provider
+
+    socket =
+      Enum.reduce(parts, socket, fn {key, read}, socket ->
+        held = Map.take(socket.assigns[key], later)
+        assign(socket, key, read |> Map.drop(later) |> Map.merge(held))
+      end)
+
+    applied = Map.new(Enum.uniq(named) -- later, &{&1, ask})
 
     {:noreply,
      socket
-     |> kept.(:models_by_provider, parsed.models)
-     |> kept.(:catalyst_refs, parsed.refs)
-     |> kept.(:model_errors, parsed.errors)
-     |> kept.(:model_refused, parsed.refused)
-     |> assign(:catalogue_asked, nil)
+     |> update(:answered_at, &Map.merge(&1, applied))
      |> assign(:models_loaded, true)}
   end
 
-  defp models_loaded(socket, {:error, _reason}),
-    do: {:noreply, socket |> assign(:catalogue_asked, nil) |> assign(:models_loaded, true)}
+  defp models_loaded(socket, _ask, {:error, _reason}),
+    do: {:noreply, assign(socket, :models_loaded, true)}
 
   defp installed(socket, ref, result) do
     socket =
@@ -847,18 +849,15 @@ defmodule PrismWeb.AquaLive do
     socket
   end
 
-  # The catalogue asked, at the count of its ask; one already out keeps
-  # its earlier count, since their answers arrive unnamed.
+  # The catalogue asked, under the number of its ask.
   defp load_models(socket) do
-    socket =
-      if socket.assigns.catalogue_asked,
-        do: socket,
-        else: socket |> asked() |> then(&assign(&1, :catalogue_asked, &1.assigns.asks))
+    socket = asked(socket)
 
-    case PrismWeb.ModelCatalog.load(socket.assigns.context) do
+    case PrismWeb.ModelCatalog.load(socket.assigns.context, socket.assigns.asks) do
       :ok -> socket
-      :unavailable -> socket |> assign(:catalogue_asked, nil) |> assign(:models_loaded, true)
+      :unavailable -> assign(socket, :models_loaded, true)
     end
+  end
   end
 
   # The sentence for a consent that no longer answers, named by its source;
@@ -1119,19 +1118,17 @@ defmodule PrismWeb.AquaLive do
               >
                 {answer_line(brain.provider, brain.answer)}
               </span>
-              <%!-- Only a key the provider refused, and only the person's
-                    own, is theirs to replace. --%>
+              <%!-- The listing's failure keeps a sentence and not its
+                    cause, so the row does not say the key is wrong; only
+                    the person's own key is theirs to replace. --%>
               <span
                 :if={(brain_state(brain) == :not_connected and brain.need) && !brain.shared}
                 data-test="setup-replace-key"
               >
-                <.link
+                If the key is wrong, <.link
                   navigate={PrismWeb.Focus.path(@athanor, "/vault")}
                   class="text-blue-400 hover:underline"
-                >
-                  Replace the key in the Vault
-                </.link>
-                with its Rotate button.
+                >replace it in the Vault</.link> with its Rotate button.
               </span>
             </li>
             <%!-- A program brain runs in the program row of its name,

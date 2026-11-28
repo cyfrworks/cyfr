@@ -1561,9 +1561,16 @@ defmodule PrismWeb.AquaLiveTest do
                %{
                  standing: ["not connected"],
                  answer: ["keyed answered: invalid x-api-key"],
-                 replace: ["Replace the key in the Vault with its Rotate button."],
+                 replace: ["If the key is wrong, replace it in the Vault with its Rotate button."],
                  done: ["false"]
                }
+
+      # The link is the Vault's, on the words that name it.
+      assert Map.merge(%{providers: {:ok, [brain]}}, refused)
+             |> setup_html()
+             |> LazyHTML.from_fragment()
+             |> LazyHTML.query(~s([data-test="setup-replace-key"] a[href="/a/home/vault"]))
+             |> LazyHTML.text() == "replace it in the Vault"
 
       # A key someone shared is not the person's to replace, and while it
       # is asked the row says only that.
@@ -1672,8 +1679,11 @@ defmodule PrismWeb.AquaLiveTest do
       Cyfr.Test.Sandbox.end_views()
     end
 
-    test "a catalogue asked before a brain's latest answer does not replace it, and one asked " <>
-           "after does",
+    # Each ask carries its number and its answer comes back with it, so
+    # of two answers for a brain the one asked last stands, whichever
+    # arrives last.
+    test "an answer asked before the one the page holds for a brain does not replace it, " <>
+           "whichever arrives last, and one asked after does",
          %{conn: conn, ctx: ctx} do
       ref = "catalyst:local.ordering"
       publish_brain!(ctx, "ordering", %{})
@@ -1683,24 +1693,37 @@ defmodule PrismWeb.AquaLiveTest do
       settled(fn -> standing(view, "ordering") == ["connected"] end, "the first catalogue")
       socket = :sys.get_state(view.pid).socket
       tag = CyfrWeb.ContextGuard.capture(socket.assigns.context)
+      asked = socket.assigns.asks
 
+      listed = %{"models" => %{"ordering" => ["previous-model"]}, "refs" => %{"ordering" => ref}}
+
+      refused = %{
+        "refs" => %{"ordering" => ref},
+        "refused" => %{"ordering" => "invalid x-api-key"}
+      }
+
+      catalogue = &send(view.pid, {:list_models_result, tag, &1, {:ok, &2}})
+
+      # A grant's answer, then the page's first catalogue arriving again.
       send(view.pid, {:setup_answer, tag, ref, {:refused, "invalid x-api-key"}})
       assert standing(view, "ordering") == ["not connected"]
-
-      old = %{"models" => %{"ordering" => ["previous-model"]}, "refs" => %{"ordering" => ref}}
-      send(view.pid, {:list_models_result, tag, {:ok, old}})
+      catalogue.(asked, listed)
       assert standing(view, "ordering") == ["not connected"]
       assert elem(picker(view), 0) == %{}
 
-      # The page asks again, as a load does: that catalogue is newer.
-      send(view.pid, {:refresh, :setup})
-      send(view.pid, :load)
+      # Two catalogues out at once: A asked under the working key, the key
+      # rotated, B asked; B's refusal arrives first and A's list after it.
+      catalogue.(asked + 11, refused)
+      assert standing(view, "ordering") == ["not connected"]
+      catalogue.(asked + 10, listed)
+      assert standing(view, "ordering") == ["not connected"]
+      assert answer(view, "ordering") == ["ordering answered: invalid x-api-key"]
+      assert elem(picker(view), 0) == %{}
 
-      Prima.Test.Wait.wait_until(
-        fn -> standing(view, "ordering") == ["connected"] end,
-        10_000,
-        "the catalogue asked after the refusal"
-      )
+      # One asked after them replaces what the page holds.
+      catalogue.(asked + 12, listed)
+      assert standing(view, "ordering") == ["connected"]
+      assert elem(picker(view), 0) == %{"ordering" => ["previous-model"]}
 
       Cyfr.Test.Sandbox.end_views()
     end
