@@ -522,7 +522,10 @@ defmodule Cyfr.Cluster.Fixtures do
   @doc "What the asset credential `credential` opens on this member: its athanor, or the refusal."
   @spec open_asset(String.t()) :: {:ok, String.t()} | {:error, term()}
   def open_asset(credential) do
-    case Sanctum.TinctureAuth.verify_asset_credential(credential, client_ip: "127.0.0.1") do
+    case Sanctum.TinctureAuth.verify_asset_credential(credential,
+           client_ip: "127.0.0.1",
+           entry: :loopback
+         ) do
       {:ok, authority} -> {:ok, authority.athanor_id}
       other -> other
     end

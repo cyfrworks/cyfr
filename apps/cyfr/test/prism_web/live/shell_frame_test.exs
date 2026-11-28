@@ -179,7 +179,7 @@ defmodule PrismWeb.ShellFrameTest do
     bearer
   end
 
-  defp verify(bearer), do: Sanctum.TinctureAuth.verify_frame_credential(bearer)
+  defp verify(bearer), do: Sanctum.TinctureAuth.verify_frame_credential(bearer, entry: :loopback)
 
   defp ended!(view) do
     ref = Process.monitor(view.pid)
@@ -342,7 +342,7 @@ defmodule PrismWeb.ShellFrameTest do
       refute render(view) =~ bearer
 
       assert {:ok, %{frame_id: ^frame_id, id: id}} =
-               Sanctum.TinctureAuth.verify_frame_credential(bearer)
+               Sanctum.TinctureAuth.verify_frame_credential(bearer, entry: :loopback)
 
       assert id == row.id
 
@@ -356,7 +356,9 @@ defmodule PrismWeb.ShellFrameTest do
       # The view ends: every credential it minted is revoked.
       GenServer.stop(view.pid, :normal)
       assert row(frame_id).state == "revoked"
-      assert {:error, :revoked} = Sanctum.TinctureAuth.verify_frame_credential(bearer)
+
+      assert {:error, :revoked} =
+               Sanctum.TinctureAuth.verify_frame_credential(bearer, entry: :loopback)
     end
 
     test "the archived-athanor notice ends the view and revokes every credential it minted",

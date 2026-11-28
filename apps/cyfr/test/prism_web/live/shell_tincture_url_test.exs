@@ -163,7 +163,7 @@ defmodule PrismWeb.ShellTinctureUrlTest do
     assert path == ["local", @tincture, "1.0.0", "index.html"]
 
     assert {:ok, %{athanor_id: athanor_id, version_digest: ^release_digest}} =
-             Sanctum.TinctureAuth.verify_asset_credential(credential)
+             Sanctum.TinctureAuth.verify_asset_credential(credential, entry: :loopback)
 
     assert athanor_id == athanor.id
 

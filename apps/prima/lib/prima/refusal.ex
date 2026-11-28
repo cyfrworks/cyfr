@@ -241,11 +241,6 @@ defmodule Prima.Refusal do
        "CYFR_LINK_PUBLIC is not set in .env, so this CYFR has no private address. Nothing " <>
          "started. `cyfr init` writes it with the tunnel key it mints for a new CYFR; a CYFR " <>
          "installed by an earlier build is not carried across."},
-    access_link_key_invalid:
-      {:invalid_argument,
-       "CYFR_LINK_KEY in .env is not a tunnel key, which is `privkey:` and 64 lowercase " <>
-         "hexadecimal digits, a comma, then `psk:` and 64 more that are not all zeros, as " <>
-         "`cyfr init` writes it. Nothing started."},
     access_link_invalid:
       {:invalid_argument,
        "CYFR_LINK_PUBLIC in .env is not a tunnel public key: it is 64 lowercase hexadecimal " <>
@@ -1858,7 +1853,7 @@ defmodule Prima.Refusal do
          {:conflict,
           "This CYFR serves its own account service, which keeps its address for good: it was " <>
             "first served at #{pinned}, and these settings give #{origin}. Nothing started. " <>
-            "Put back the settings that give #{pinned}."}
+            "Put back the settings that give #{pinned}#{put_back(pinned)}."}
 
   defp row({:access_invalid, %{input: input, kind: kind, rule: rule}})
        when is_binary(input) and is_map_key(@access_input_kinds, kind) and is_binary(rule),
@@ -2206,4 +2201,20 @@ defmodule Prima.Refusal do
 
   # A sentence carried on after a colon: its first letter in lower case.
   defp lower_first(<<first::utf8, rest::binary>>), do: String.downcase(<<first::utf8>>) <> rest
+
+  # The command that gives a pinned account service's origin back, by the
+  # kind of address it is: a tailnet name, a domain, or the private
+  # address of a server with no browser address.
+  defp put_back("https://" <> host) do
+    if String.ends_with?(host, ".ts.net"),
+      do: ": run `cyfr access browser tailnet` on the machine of that name",
+      else:
+        ": run `cyfr access browser domain --domain #{host}`, or `cyfr access browser " <>
+          "proxy --domain #{host}` behind a proxy of your own"
+  end
+
+  defp put_back("http://" <> _private),
+    do: ": run `cyfr access browser none`, with CYFR_PORT as it was"
+
+  defp put_back(_origin), do: ""
 end

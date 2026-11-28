@@ -501,7 +501,7 @@ defmodule PrismWeb.CanvasLiveTest do
     column = by_key(view, {:app, "main", "tincture:local.slot-dash"})
     canvas = by_key(view, {:canvas, "main"})
     bearer = bearer!(view, column.id)
-    assert {:ok, _} = Sanctum.TinctureAuth.verify_frame_credential(bearer)
+    assert {:ok, _} = Sanctum.TinctureAuth.verify_frame_credential(bearer, entry: :loopback)
 
     render_hook(view, "frame_verb", %{
       "input" => System.unique_integer([:positive, :monotonic]),
@@ -517,7 +517,10 @@ defmodule PrismWeb.CanvasLiveTest do
              by_key(view, {:app, "main", "tincture:local.icon-dash"})
 
     assert %{state: :frozen, visible: false} = by_key(view, column.key)
-    assert {:error, :suspended} = Sanctum.TinctureAuth.verify_frame_credential(bearer)
+
+    assert {:error, :suspended} =
+             Sanctum.TinctureAuth.verify_frame_credential(bearer, entry: :loopback)
+
     assert %{state: :frozen} = by_key(view, {:app, "main", "tincture:local.tile-dash"})
     assert %{state: :frozen} = by_key(view, {:canvas, "main"})
     column_id = column.id
@@ -525,7 +528,7 @@ defmodule PrismWeb.CanvasLiveTest do
 
     render_click(view, "close_active_tincture", %{})
     assert %{state: :live, visible: true} = by_key(view, column.key)
-    assert {:ok, _} = Sanctum.TinctureAuth.verify_frame_credential(bearer)
+    assert {:ok, _} = Sanctum.TinctureAuth.verify_frame_credential(bearer, entry: :loopback)
     assert_push_event(view, "frame_state", %{frame: ^column_id, state: "live"})
   end
 

@@ -35,6 +35,33 @@ defmodule CyfrWeb.SignInResponseTest do
              "That sign-in expired. Please try again."
   end
 
+  test "a passkey ticket completes only at the entry its sign-in page came in by" do
+    binding = "csrf-of-the-signing-browser"
+
+    complete = fn entry ->
+      ticket = Base.url_encode64(:crypto.strong_rand_bytes(24), padding: false)
+
+      Arca.Cache.put(
+        {:login_passkey_ticket, ticket},
+        %{session_token: "tok-entry", browser_binding: binding, entry: :loopback},
+        60_000
+      )
+
+      build_conn()
+      |> Sanctum.ClientIp.put_ingress(entry)
+      |> init_test_session(%{"_csrf_token" => binding})
+      |> get("/auth/passkey/complete/" <> ticket)
+    end
+
+    refused = complete.(:proxy)
+    assert redirected_to(refused) == "/login"
+    assert get_session(refused, SignInResponse.session_key()) == nil
+
+    completed = complete.(:loopback)
+    assert redirected_to(completed) == "/"
+    assert get_session(completed, SignInResponse.session_key()) == "tok-entry"
+  end
+
   describe "respond/3 — a proceed" do
     test "a ticket's token becomes the session and the console root is the landing" do
       conn =

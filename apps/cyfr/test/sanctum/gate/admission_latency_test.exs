@@ -677,7 +677,7 @@ defmodule Sanctum.Gate.AdmissionLatencyTest do
 
     {:ok, session} = Sanctum.Session.create(ctx, address: Sanctum.private_address())
     {:ok, dead} = Sanctum.Session.create(ctx, address: Sanctum.private_address())
-    Sanctum.Session.destroy(dead.token)
+    Sanctum.Session.destroy(dead.token, :loopback)
 
     guest = Sanctum.Context.enter_guest(ctx)
 

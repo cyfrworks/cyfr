@@ -17,11 +17,13 @@ defmodule Arca.SessionStorageTest do
     :crypto.hash(:sha256, "test_token_#{suffix}_#{:rand.uniform(100_000)}")
   end
 
+  @address "http://h-xeypbemm44chehc5.localhost:4002"
+
   defp session_attrs(overrides \\ %{}) do
     Map.merge(
       %{
         user_id: "user_1",
-        address: "http://h-xeypbemm44chehc5.localhost:4002",
+        address: @address,
         email: "user@example.com",
         provider: "github",
         permissions: "[\"execute\",\"component:read\"]",
@@ -260,12 +262,12 @@ defmodule Arca.SessionStorageTest do
     end
   end
 
-  describe "delete_session/1" do
+  describe "delete_session/2" do
     test "deletes a session" do
       hash = make_token_hash("delete")
       :ok = SessionStorage.create_session(hash, session_attrs(), Arca.Test.Actor.issuance())
 
-      assert {:ok, :removed} = SessionStorage.delete_session(hash)
+      assert {:ok, :removed} = SessionStorage.delete_session(hash, @address)
       assert {:error, :not_found} = SessionStorage.get_session(hash)
     end
 
@@ -273,9 +275,19 @@ defmodule Arca.SessionStorageTest do
       hash = make_token_hash("delete_twice")
       :ok = SessionStorage.create_session(hash, session_attrs(), Arca.Test.Actor.issuance())
 
-      assert {:ok, :removed} = SessionStorage.delete_session(hash)
-      assert {:ok, :absent} = SessionStorage.delete_session(hash)
-      assert {:ok, :absent} = SessionStorage.delete_session(make_token_hash("delete_missing"))
+      assert {:ok, :removed} = SessionStorage.delete_session(hash, @address)
+      assert {:ok, :absent} = SessionStorage.delete_session(hash, @address)
+
+      assert {:ok, :absent} =
+               SessionStorage.delete_session(make_token_hash("delete_missing"), @address)
+    end
+
+    test "leaves a session made at another address standing" do
+      hash = make_token_hash("delete_elsewhere")
+      :ok = SessionStorage.create_session(hash, session_attrs(), Arca.Test.Actor.issuance())
+
+      assert {:ok, :absent} = SessionStorage.delete_session(hash, "https://cyfr.example")
+      assert {:ok, %{address: @address}} = SessionStorage.get_session(hash)
     end
   end
 

@@ -12,7 +12,9 @@ defmodule PrismWeb.PasskeyController do
   The ticket is taken in one operation, so of two requests presenting it
   only one finds it, and it is spent whichever way the check goes. It is
   bound to the browser that started the sign-in, through the session's
-  forgery token, so a ticket handed to another browser signs no one in.
+  forgery token, so a ticket handed to another browser signs no one in,
+  and to the entry its page came in by (`Sanctum.ClientIp.ingress/1`), so
+  one presented at the server's other address sets no cookie there.
   """
 
   use PrismWeb, :controller
@@ -26,19 +28,33 @@ defmodule PrismWeb.PasskeyController do
       when is_binary(ticket) and byte_size(ticket) > 0 and byte_size(ticket) <= 64 do
     case Arca.Cache.take({:login_passkey_ticket, ticket}) do
       {:ok, %{session_token: token} = payload} when is_binary(token) ->
-        if same_browser?(conn, payload) do
-          SignInResponse.respond(conn, :proceed, session: {:token, token})
-        else
-          Logger.warning(
-            "[PasskeyController] passkey ticket presented by a different browser than the " <>
-              "one that signed in — refusing"
-          )
+        cond do
+          not same_browser?(conn, payload) ->
+            Logger.warning(
+              "[PasskeyController] passkey ticket presented by a different browser than the " <>
+                "one that signed in — refusing"
+            )
 
-          refused(
-            conn,
-            403,
-            "That sign-in was started in a different browser. Please sign in again."
-          )
+            refused(
+              conn,
+              403,
+              "That sign-in was started in a different browser. Please sign in again."
+            )
+
+          not same_entry?(conn, payload) ->
+            Logger.warning(
+              "[PasskeyController] passkey ticket presented at another entry than the one " <>
+                "that signed in — refusing"
+            )
+
+            refused(
+              conn,
+              403,
+              "That sign-in was started at another address of this CYFR. Please sign in again."
+            )
+
+          true ->
+            SignInResponse.respond(conn, :proceed, session: {:token, token})
         end
 
       _missing ->
@@ -59,6 +75,11 @@ defmodule PrismWeb.PasskeyController do
   end
 
   defp same_browser?(_conn, _payload), do: false
+
+  defp same_entry?(conn, %{entry: entry}) when entry in [:loopback, :proxy],
+    do: Sanctum.ClientIp.ingress(conn) == entry
+
+  defp same_entry?(_conn, _payload), do: false
 
   # A sign-in refused here is the request's refused decision, recorded
   # once under its sentence with no person or athanor

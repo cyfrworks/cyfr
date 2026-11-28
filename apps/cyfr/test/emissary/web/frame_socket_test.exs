@@ -939,6 +939,23 @@ defmodule Emissary.Web.FrameSocketTest do
     refute other.frame_id == mine.frame_id
   end
 
+  test "a frame credential minted under a session at the private address subscribes nothing " <>
+         "on a stream that came in at the browser address",
+       %{source: source} do
+    Prima.Test.Env.put_app_env(:sanctum, :browser_address, "https://cyfr.example")
+    frame = canvas_frame!(source)
+    socket = Socket.connect({:canvas, frame.frame_id})
+    Socket.update(socket, &%{&1 | entry: :proxy})
+
+    Socket.subscribe(socket, 1, frame.bearer, "mcp_servers.changes")
+    assert %{"type" => "ended"} = answer(socket, 1)
+    assert Socket.state(socket).subs == %{}
+
+    other = Socket.connect({:canvas, frame.frame_id})
+    Socket.subscribe(other, 1, frame.bearer, "mcp_servers.changes")
+    assert %{"type" => "subscribed"} = answer(other, 1)
+  end
+
   test "a canvas path takes only its own frame's credential, and only a canvas's",
        %{source: source} do
     mine = canvas_frame!(source)
@@ -1119,7 +1136,8 @@ defmodule Emissary.Web.FrameSocketTest do
 
     wait_until(
       fn ->
-        TinctureAuth.verify_frame_credential(frame.bearer) == {:error, :expired_credential}
+        TinctureAuth.verify_frame_credential(frame.bearer, entry: :loopback) ==
+          {:error, :expired_credential}
       end,
       5_000
     )

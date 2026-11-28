@@ -542,7 +542,12 @@ defmodule Sanctum.IssuanceTest do
       assert id == key_ctx.api_key_id
 
       # A session's issuance refuses a retired session.
-      {:ok, :removed} = Sanctum.Session.destroy_by_hash(session_ctx.session_token_hash)
+      {:ok, :removed} =
+        Sanctum.Session.destroy_by_hash(
+          session_ctx.session_token_hash,
+          session_ctx.session_address
+        )
+
       assert {{:error, :unauthenticated}, retired} = mint(session_ctx)
       refute minted?(retired)
     end
@@ -651,7 +656,7 @@ defmodule Sanctum.IssuanceTest do
       })
 
     assert claims.source_kind == :session
-    assert {:ok, _standing} = Sanctum.Caller.derived_standing(claims)
+    assert {:ok, _standing} = Sanctum.Caller.derived_standing(claims, entry: :loopback)
 
     # The same credential naming another person's athanor, active and at
     # its current generation: the administrator's mark reaches no other
@@ -659,11 +664,14 @@ defmodule Sanctum.IssuanceTest do
     elsewhere = person!().athanor
 
     assert {:error, :not_member} =
-             Sanctum.Caller.derived_standing(%{
-               claims
-               | athanor_id: elsewhere.id,
-                 athanor_generation: elsewhere.security_generation
-             })
+             Sanctum.Caller.derived_standing(
+               %{
+                 claims
+                 | athanor_id: elsewhere.id,
+                   athanor_generation: elsewhere.security_generation
+               },
+               entry: :loopback
+             )
   end
 
   # ---------------------------------------------------------------------------

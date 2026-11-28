@@ -867,8 +867,9 @@ defmodule Cyfr.RuntimeConfig do
   @development_link_public "6b6b937aca103230d149eb148efbcfb59e6d1f05bb04dc648ac3e92339eae74a"
 
   @doc """
-  The server's private address, `http://<private name>.localhost:<port>`,
-  from `CYFR_LINK_PUBLIC` as the boot read it (`nil` when unset or blank),
+  The server's private address, `http://<private name>.localhost:<port>`
+  (with no port on port 80, as a browser serialises that origin), from
+  `CYFR_LINK_PUBLIC` as the boot read it (`nil` when unset or blank),
   the server's port and whether this is a release: `{:ok, address}`, or a
   `Prima.Refusal` row as `resolve_access/1` answers one. The key is the
   64 lowercase hexadecimal digits of the public half of the tunnel key
@@ -904,30 +905,11 @@ defmodule Cyfr.RuntimeConfig do
     end
   end
 
-  @doc """
-  Whether `text`, `CYFR_LINK_KEY` as the boot read it, is a tunnel key in
-  the one form `cyfr init` writes, `privkey:<64 hex>,psk:<64 hex>`, or is
-  unset: `:ok`, or the `Prima.Refusal` row `access_link_key_invalid`. The
-  key is the link service's; the server checks its form alone, so a
-  mangled .env is refused at the boot and never handed on.
-  """
-  @spec check_link_key(String.t() | nil) :: :ok | {:error, access_refusal()}
-  def check_link_key(text) do
-    case blank_to_nil(text) do
-      nil ->
-        :ok
-
-      key ->
-        if Regex.match?(~r/\Aprivkey:[0-9a-f]{64},psk:[0-9a-f]{64}\z/, key) and
-             not String.ends_with?(key, ",psk:" <> String.duplicate("0", 64)),
-           do: :ok,
-           else:
-             {:error, %{code: :access_link_key_invalid, class: :invalid_argument, payload: %{}}}
-    end
+  # The origin as a browser serialises it: http's default port is left out.
+  defp private_address(public, port) do
+    name = private_name(Base.decode16!(public, case: :lower))
+    if port == 80, do: "http://#{name}.localhost", else: "http://#{name}.localhost:#{port}"
   end
-
-  defp private_address(public, port),
-    do: "http://#{private_name(Base.decode16!(public, case: :lower))}.localhost:#{port}"
 
   # Every value either map holds for a name the resolver reads is UTF-8,
   # or the first name in byte order that holds one that is not is refused.

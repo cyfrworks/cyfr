@@ -70,7 +70,7 @@ defmodule CyfrWeb.EndpointDevicesTest do
       {"metrics, off", answer(404, fn -> get(build_conn(), "/metrics") end), 404},
       {"multipart", answer(415, fn -> post(multipart, "/hooks/none", "--b--") end), 415},
       {"an unreadable body", answer(400, fn -> post(json, "/hooks/none", "{") end), 400},
-      {"a socket refused before dispatch", answer(411, fn -> post(json, "/live/longpoll") end),
+      {"a socket refused before dispatch", answer(411, fn -> post(json, "/live/websocket") end),
        411}
     ]
 

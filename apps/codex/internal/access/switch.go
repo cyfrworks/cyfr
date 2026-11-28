@@ -167,6 +167,18 @@ func (st envState) pinnedBeforeJoin() *Refusal {
 	return Refuse("access_origin_pinned", map[string]string{"pinned": st.head.shared(st.link), "origin": unjoinedTailnet})
 }
 
+// pinnedNewNode refuses a new node to a server that serves its own
+// account service: the join replaces this machine's tailnet identity, and
+// the name the new node is given, which only its join tells, moves the
+// address the server gives out. It is asked before the join changes
+// anything.
+func (st envState) pinnedNewNode() *Refusal {
+	if !st.writer() {
+		return nil
+	}
+	return Refuse("access_origin_pinned", map[string]string{"pinned": st.head.shared(st.link), "origin": unjoinedTailnet})
+}
+
 // writer reports whether .env's coherent head is a server's that serves
 // its own account service (CYFR_DIRECTORY_SERVE=writer).
 func (st envState) writer() bool {

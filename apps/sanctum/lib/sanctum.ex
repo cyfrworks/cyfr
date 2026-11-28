@@ -313,12 +313,15 @@ defmodule Sanctum do
 
   @doc """
   The base URL of a registry host (a name or address with an optional
-  port): `http://` for a loopback host (`loopback_host?/1`), a registry on
-  this machine, and `https://` for every other.
+  port): `http://` for a registry on this machine, at `localhost` or a
+  loopback host (`loopback_host?/1`), and `https://` for every other. A
+  registry is another service, never this server, so `localhost` names
+  this machine's loopback here.
   """
   @spec registry_base_url(String.t()) :: String.t()
   def registry_base_url(host) when is_binary(host) do
-    if loopback_host?(host), do: "http://" <> host, else: "https://" <> host
+    local? = match?(%URI{host: "localhost"}, URI.parse("//" <> host))
+    if local? or loopback_host?(host), do: "http://" <> host, else: "https://" <> host
   end
 
   @doc """

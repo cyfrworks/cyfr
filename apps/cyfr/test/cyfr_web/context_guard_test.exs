@@ -503,6 +503,47 @@ defmodule CyfrWeb.ContextGuardTest do
     end
   end
 
+  describe "a nested view's entry" do
+    # A child as `Phoenix.LiveView.Channel` joins one: its parent's entry
+    # in its signed session, and, once connected, its own transport's
+    # connect info, which carries that transport's listener tag.
+    defp child(session, tag, connected?) do
+      socket = %Socket{
+        id: "phx-nested-entry",
+        endpoint: CyfrWeb.Endpoint,
+        parent_pid: self(),
+        transport_pid: if(connected?, do: self()),
+        assigns: %{__changed__: %{}, flash: %{}},
+        private: %{
+          connect_info: %{x_headers: [{"x-cyfr-ingress", tag}]},
+          lifecycle: %Phoenix.LiveView.Lifecycle{},
+          live_temp: %{}
+        }
+      }
+
+      ContextGuard.on_mount(:protected, %{}, session, socket)
+    end
+
+    test "a connected child whose transport is at another entry than its parent's is refused",
+         %{conn: conn} do
+      {_conn, token, _hash} = signed_in(conn, test_user())
+      session = %{to_string(session_key()) => token, "entry" => :loopback}
+
+      assert {:halt, %Socket{redirected: {:redirect, %{to: to}}}} =
+               child(session, "proxy", true)
+
+      assert to =~ "/login"
+
+      # At its parent's entry it stands, connected or rendered with its
+      # parent's request.
+      assert {:cont, %Socket{assigns: %{request_entry: :loopback}}} =
+               child(session, "loopback", true)
+
+      assert {:cont, %Socket{assigns: %{request_entry: :loopback}}} =
+               child(session, "proxy", false)
+    end
+  end
+
   test "no socket, nested or not, holds the raw session token", %{conn: conn} do
     user = test_user()
     {conn, token, _hash} = signed_in(conn, user)

@@ -1,5 +1,5 @@
 {
-  "about": "A server's tunnel key and the private name and address it gives. `cyfr init` mints the key: `key` is CYFR_LINK_KEY, the private half and the pre-shared key in the text forms the link service reads (`privkey:` and `psk:`, each 64 lowercase hexadecimal digits, joined by a comma), and `public` is CYFR_LINK_PUBLIC, the X25519 public half. The name is `h-` and the first 16 characters of the lowercase, unpadded base32 (RFC 4648) of the SHA-256 of the public half's 32 bytes; the address is `http://<name>.localhost:<port>`. Cyfr.RuntimeConfig (Elixir) and apps/codex/internal/link (Go) each derive every row; `refused` holds CYFR_LINK_PUBLIC values the boot refuses as not a public key.",
+  "about": "A server's tunnel key and the private name and address it gives. `cyfr init` mints the key: `key` is CYFR_LINK_KEY, the private half and the pre-shared key in the text forms the link service reads (`privkey:` and `psk:`, each 64 lowercase hexadecimal digits, joined by a comma), and `public` is CYFR_LINK_PUBLIC, the X25519 public half. The name is `h-` and the first 16 characters of the lowercase, unpadded base32 (RFC 4648) of the SHA-256 of the public half's 32 bytes; the address is `http://<name>.localhost:<port>`, the origin as a browser serialises it, with no port on port 80, http's default. Cyfr.RuntimeConfig (Elixir) and apps/codex/internal/link (Go) each derive every row; `refused` holds CYFR_LINK_PUBLIC values the boot refuses as not a public key.",
   "names": [
     {
       "why": "the private key is the clamped sha256 of \"cyfr link vector 1\", the pre-shared key sha256 of \"cyfr psk vector 1\"",
@@ -24,6 +24,14 @@
       "name": "h-kmb7nuzlttehja4m",
       "port": 65535,
       "address": "http://h-kmb7nuzlttehja4m.localhost:65535"
+    },
+    {
+      "why": "the first row's key on port 80, http's default, which the address leaves out as a browser's origin does",
+      "key": "privkey:b09562be8a0bfee65eaeef5555dad1576019560663ae4616a0cef7b3c5e8c872,psk:6a681bf4064665498645f666e39f9c3917071baecf8685b0923468fd769c47bc",
+      "public": "6b6b937aca103230d149eb148efbcfb59e6d1f05bb04dc648ac3e92339eae74a",
+      "name": "h-xeypbemm44chehc5",
+      "port": 80,
+      "address": "http://h-xeypbemm44chehc5.localhost"
     }
   ],
   "refused": [

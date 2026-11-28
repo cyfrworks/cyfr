@@ -838,7 +838,9 @@ defmodule Compendium.CanvasTest do
     test "the refusals of the credential's spend are the operation's", %{ctx: ctx} do
       v1 = write!(ctx)
       trial = trial!(ctx, v1)
-      {:ok, framed} = Sanctum.Caller.establish({:frame_credential, trial.bearer})
+
+      {:ok, framed} =
+        Sanctum.Caller.establish({:frame_credential, trial.bearer}, entry: :loopback)
 
       assert {:error, %Prima.Refusal{class: :forbidden, reason: :not_primary, message: message}} =
                activate(framed, v1, trial.frame)

@@ -174,17 +174,6 @@ if config_env() != :test do
         raise "[Cyfr] FATAL: " <> Prima.Refusal.message({code, payload})
     end
 
-  # The tunnel key's private half and pre-shared key, the link service's
-  # alone: the server checks its form and holds nothing of it
-  # (`Cyfr.RuntimeConfig.check_link_key/1`).
-  case Cyfr.RuntimeConfig.check_link_key(sourced["CYFR_LINK_KEY"]) do
-    :ok ->
-      :ok
-
-    {:error, %{code: code, payload: payload}} ->
-      raise "[Cyfr] FATAL: " <> Prima.Refusal.message({code, payload})
-  end
-
   # Every platform setting whose variable is set: read by the strict
   # reader, validated by the roster's validator (a set value that does
   # not pass refuses the boot naming it), and recorded as this member's

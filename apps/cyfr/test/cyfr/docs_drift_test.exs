@@ -60,7 +60,8 @@ defmodule Cyfr.DocsDriftTest do
 
   # The names the roster spells that no release reads: those other
   # programs own (`Roster.foreign/0`), which their owners document, and
-  # those compose reads alone (`Roster.compose_only/0`).
+  # those a deployment's `.env` carries for compose or `cyfr init` alone
+  # (`Roster.compose_only/0`).
   defp spelled_not_read do
     MapSet.new(Enum.map(Roster.foreign(), &elem(&1, 0)) ++ Roster.compose_only())
   end
@@ -1422,8 +1423,9 @@ defmodule Cyfr.DocsDriftTest do
 
   # The compose-only class and the deployment list are the roster's
   # (`Cyfr.Platform.Settings.Roster`), which derives the first from
-  # docker-compose.yml and holds it there; this reads them from their owner.
-  test "every name a shipped example documents is read by a release or by compose" do
+  # docker-compose.yml and .env.example and holds it there; this reads them
+  # from their owner.
+  test "every name a shipped example documents is read by a release or rostered as no release's" do
     read =
       MapSet.union(
         spelled_by_readers(),
@@ -1437,8 +1439,8 @@ defmodule Cyfr.DocsDriftTest do
           do: {example, name}
 
     assert unread == [],
-           "these examples document names no release reads and compose does not " <>
-             "interpolate: #{inspect(unread)}"
+           "these examples document names no release reads and the roster does not " <>
+             "declare: #{inspect(unread)}"
   end
 
   # ==========================================================================

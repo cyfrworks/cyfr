@@ -491,7 +491,7 @@ private="$(python3 -I -c 'import base64, hashlib, sys
 public = bytes.fromhex(sys.argv[1])
 if len(public) != 32: sys.exit(1)
 name = base64.b32encode(hashlib.sha256(public).digest()).decode().lower()[:16]
-print("http://h-%s.localhost:%s" % (name, sys.argv[2]))' "$(cell_value "$ADDRESS" CYFR_LINK_PUBLIC)" "$PORT")" ||
+print("http://h-%s.localhost%s" % (name, "" if sys.argv[2] == "80" else ":" + sys.argv[2]))' "$(cell_value "$ADDRESS" CYFR_LINK_PUBLIC)" "$PORT")" ||
   fail "the cell's .env holds no tunnel key cyfr init minted"
 loopback="$(cell_cyfr "$ADDRESS" rpc 'IO.puts("CYFR_PRIVATE=" <> Sanctum.address(:loopback))' | sed -n 's/^CYFR_PRIVATE=//p' | tail -1)"
 [ "$loopback" = "$private" ] ||

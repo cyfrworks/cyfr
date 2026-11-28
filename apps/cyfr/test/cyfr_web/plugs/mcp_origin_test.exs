@@ -13,6 +13,7 @@ defmodule CyfrWeb.Plugs.MCPOriginTest do
   alias CyfrWeb.Plugs.MCPOrigin
 
   @browser "https://cyfr.tail1a2b3c.ts.net"
+  @link Path.expand("../../../../../tests/fixtures/link.json", __DIR__)
 
   setup do
     Prima.Test.Env.put_app_env(:sanctum, :browser_address, @browser)
@@ -44,6 +45,18 @@ defmodule CyfrWeb.Plugs.MCPOriginTest do
         ] do
       assert call(origin, :loopback).status == 403, origin
     end
+  end
+
+  # A browser serialises an http origin on port 80 with no port, and the
+  # private address the boot resolves for port 80 is that origin.
+  test "the loopback listener on port 80 allows the origin its page sends" do
+    %{"public" => public} = hd(Jason.decode!(File.read!(@link))["names"])
+    assert {:ok, private} = Cyfr.RuntimeConfig.resolve_link(public, 80, true)
+    Prima.Test.Env.put_app_env(:sanctum, :private_address, private)
+
+    origin = "http://" <> URI.parse(private).host
+    refute call(origin, :loopback).halted
+    assert call(origin <> ":80", :loopback).status == 403
   end
 
   test "the proxy listener allows the browser address alone" do

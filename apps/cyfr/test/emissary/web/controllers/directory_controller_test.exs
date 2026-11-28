@@ -618,10 +618,14 @@ defmodule Emissary.Web.DirectoryControllerTest do
       alice = account("https://dir-a.test:#{port}")
       bob = account("https://dir-b.test:#{port}")
 
-      # One endpoint answers under both names, as two nodes sharing one
-      # store would: each genesis is registered while it serves the
-      # directory that genesis names.
+      # One endpoint answers under both names, as two nodes would: each
+      # genesis is registered while it serves the directory that genesis
+      # names, as a node that has pinned no origin yet.
       for someone <- [alice, bob] do
+        Arca.Repo.delete_all(
+          from(m in Arca.Schemas.ServerMeta, where: m.key == "directory_origin")
+        )
+
         serve_at(someone.directory)
         assert {:ok, _} = Client.register(someone.genesis, opts)
       end
@@ -638,6 +642,10 @@ defmodule Emissary.Web.DirectoryControllerTest do
       # While this node serves one of the two directories, its own log is
       # read where it is kept, with no request, and the other at its own.
       for {here, there, host} <- [{alice, bob, "dir-b.test"}, {bob, alice, "dir-a.test"}] do
+        Arca.Repo.delete_all(
+          from(m in Arca.Schemas.ServerMeta, where: m.key == "directory_origin")
+        )
+
         serve_at(here.directory)
         assert {:ok, %{length: 1}} = Client.log(here.identifier, here.directory, opts)
         assert {:ok, %{length: 1}} = Client.log(there.identifier, there.directory, opts)

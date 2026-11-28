@@ -448,7 +448,9 @@ func previewTarget(ctx context.Context, e stackEngine, target access.Target, id 
 			return access.Preview{}, joined{}, alreadyJoined(p.New.Host, o)
 		}
 		return p, joined{}, nil
-	case err != nil && !notJoined && (!o.newNode || r == nil || r.Code == "tailnet_active"):
+	case err != nil && !notJoined && (!o.newNode || r == nil || r.Code == "tailnet_active" || r.Code == "access_origin_pinned"):
+		// A pin's refusal stands for a new node too: the name its join
+		// would be given moves the address it keeps, so nothing joins.
 		return access.Preview{}, joined{}, engineFailure(err)
 	}
 	// The machine a new node replaces is the engine's own read of this

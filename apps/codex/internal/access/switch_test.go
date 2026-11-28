@@ -122,6 +122,36 @@ func TestSwitchFenceRefusesAStalePreview(t *testing.T) {
 	}
 }
 
+// A start the boot refused says the boot's own refusal in its rolled-back
+// sentence, read before the container that logged it is stopped: an
+// account service's origin, which only the database holds, is refused
+// there, and the person reads why and that CYFR was put back.
+func TestAFailedStartSaysTheRefusalItsBootLogged(t *testing.T) {
+	h := newHome(t)
+	h.fake.startStack(t, h.head())
+	fatal := "[Cyfr] FATAL: This CYFR serves its own account service, which keeps its address for good: it was first served at " + testPrivate + ", and these settings give https://home.example.com. Nothing started."
+	h.fake.hook = func(_ context.Context, c *fakeCall) *fakeAnswer {
+		h.fake.mu.Lock()
+		defer h.fake.mu.Unlock()
+		domain := envNow(h.dir, "CYFR_BROWSER=domain")
+		if slices.Contains(c.Args, "logs") && domain {
+			return &fakeAnswer{Stdout: "starting\n" + fatal + "\n"}
+		}
+		h.fake.st.Health = "healthy"
+		if domain {
+			h.fake.st.Health = "unhealthy"
+		}
+		return nil
+	}
+	rc, err := h.e.Switch(bg, h.request(id(1), Target{Browser: BrowserDomain, Domain: "home.example.com"}, ""))
+	if refusalCode(err) != "access_rolled_back" || rc.Outcome != "rolled_back" {
+		t.Fatalf("switch answered %+v, %v", rc, err)
+	}
+	if !strings.Contains(err.(*Refusal).Message(), "health check failed: "+fatal) || !strings.Contains(err.(*Refusal).Message(), "CYFR was put back") {
+		t.Errorf("the sentence reads %q", err.(*Refusal).Message())
+	}
+}
+
 // A failed start: the target's proxy starts, cyfr's health fails.
 // The target's proxy and cyfr are stopped and verified stopped before
 // .env is restored or the old head starts; the receipt says rolled back,

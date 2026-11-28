@@ -2118,7 +2118,7 @@ defmodule Cyfr.Boundaries do
     ],
     "Sanctum.Session" => [
       cleanup: 0,
-      destroy: 1,
+      destroy: 2,
       load_by_hash: 1,
       retire_elsewhere: 0,
       token_hash: 1

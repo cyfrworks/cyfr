@@ -296,6 +296,24 @@ func TestAccessTailnetJoinsFirstUnlessJoined(t *testing.T) {
 	}
 }
 
+// A preview's pin refusal stands for --new-node too: the name a new node
+// would be given moves the address a server that serves its own account
+// service keeps, so the refusal is said and nothing joins.
+func TestANewNodeTakesThePinRefusalBeforeAnyJoin(t *testing.T) {
+	s := newAccessProject(t)
+	s.joined[""] = access.Join{Name: "cyfr.tail1234.ts.net", NodeID: "nTESTNODE1CNTRL"}
+	pinned := access.Refuse("access_origin_pinned", map[string]string{"pinned": "https://cyfr.example.com", "origin": "https://<machine>.<tailnet>.ts.net"})
+	s.previewErr = pinned
+	var out bytes.Buffer
+	err := runAccess(context.Background(), access.BrowserTailnet, accessOptions{newNode: true}, true, &out)
+	if err == nil || !strings.Contains(err.Error(), pinned.Message()) {
+		t.Errorf("--new-node past a pin refusal answered %v\n%s", err, out.String())
+	}
+	if len(s.joins) != 0 || len(s.switches) != 0 {
+		t.Errorf("a pin refusal joined (%+v) or switched (%+v)", s.joins, s.switches)
+	}
+}
+
 // Every refusal is its sentence, word for word the generated one, and a
 // failure: from the switch's receipt, the preview, the lock, the
 // engine's open and the join; a tailnet option for another kind and a

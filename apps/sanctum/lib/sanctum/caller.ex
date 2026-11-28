@@ -230,6 +230,7 @@ defmodule Sanctum.Caller do
   def establish({:frame_credential, bearer}, opts) when is_binary(bearer) do
     case Sanctum.TinctureAuth.verify_frame_credential(bearer,
            client_ip: Keyword.get(opts, :client_ip),
+           entry: Keyword.get(opts, :entry),
            held: Keyword.get(opts, :held, false)
          ) do
       {:ok, authority} ->
@@ -475,8 +476,10 @@ defmodule Sanctum.Caller do
     * the athanor exists, is active, at the generation read, and is the
       person's own (its `owner_user_id`) — an athanor archived and
       reopened is a new generation;
-    * a session source still exists for this person and has not
-      expired; a key source is unrevoked, the athanor's, the person's,
+    * a session source still exists for this person, has not expired,
+      and was made at the address of `entry:`, the listener the use came
+      in by, so a credential derived from a session at one address stands
+      at no other; a key source is unrevoked, the athanor's, the person's,
       and its allowlist admits `client_ip:`.
 
   A session source of a remote person stands, as the session itself does
@@ -508,7 +511,8 @@ defmodule Sanctum.Caller do
     }
 
     case Arca.CredentialBindings.check(Prima.Actor.system(), binding,
-           verify: &derived_policy(&1, claims, Keyword.get(opts, :client_ip))
+           verify:
+             &derived_policy(&1, claims, Keyword.get(opts, :client_ip), Keyword.get(opts, :entry))
          ) do
       {:ok, standing} ->
         derived_identity(claims, standing)
@@ -545,11 +549,11 @@ defmodule Sanctum.Caller do
 
   defp source_row(%{source_kind: :api_key, source_id: id}), do: {:api_key, id}
 
-  defp derived_policy(rows, claims, client_ip) do
+  defp derived_policy(rows, claims, client_ip, entry) do
     with :ok <- derived_person(rows.user, claims),
          :ok <- derived_athanor(rows.athanor, claims),
          :ok <- derived_focus(rows.athanor, claims),
-         {:ok, expires_at} <- derived_source(rows.source, rows.now, claims, client_ip) do
+         {:ok, expires_at} <- derived_source(rows.source, rows.now, claims, {client_ip, entry}) do
       {:ok, %{now: rows.now, source_expires_at: expires_at}}
     end
   end
@@ -580,11 +584,12 @@ defmodule Sanctum.Caller do
          %{
            user_id: user_id
          },
-         _client_ip
+         {_client_ip, entry}
        ) do
-    if DateTime.compare(row.expires_at, now) == :gt,
-      do: {:ok, row.expires_at},
-      else: {:error, :not_standing}
+    if DateTime.compare(row.expires_at, now) == :gt and is_binary(row.address) and
+         row.address == Sanctum.address(entry),
+       do: {:ok, row.expires_at},
+       else: {:error, :not_standing}
   end
 
   defp derived_source(
@@ -596,7 +601,7 @@ defmodule Sanctum.Caller do
          },
          _now,
          %{athanor_id: athanor_id, user_id: user_id},
-         client_ip
+         {client_ip, _entry}
        ) do
     case Sanctum.ApiKey.decode_allowlist(row.ip_allowlist) do
       :corrupt -> {:error, :ip_not_allowed}

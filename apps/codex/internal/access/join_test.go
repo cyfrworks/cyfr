@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -182,6 +183,33 @@ func TestANewNodeWithoutTheContainerProfileKeepsTheEnrolledNode(t *testing.T) {
 	before := homeState(t, h)
 	rc, err := h.e.Join(bg, JoinRequest{ID: id(2), NewNode: true, AuthKey: strings.NewReader(testKey + "\n")})
 	refusedForTheProfile(t, h, before, rc, err)
+	if rec, _ := h.e.readJoin(); rec == nil || rec.State != "joined" || rec.NodeID != "n0001CNTRL" {
+		t.Errorf("join.json is %+v after the refusal", rec)
+	}
+}
+
+// A new node asked of a home that serves its own account service is
+// refused before anything changes: the name it would be given moves the
+// address the service keeps, so no docker call is made, the identity's
+// state volume stands and the join record still names the enrolled node.
+func TestANewNodeForAWriterIsRefusedBeforeTheJoin(t *testing.T) {
+	h := newHome(t)
+	h.join(1, testKey, false)
+	writeFile(t, filepath.Join(h.dir, ".env"), []byte(h.env()+"CYFR_DIRECTORY_SERVE=writer\n"))
+	h.fake.mu.Lock()
+	calls, volumes := len(h.fake.st.Calls), fmt.Sprint(h.fake.st.Volumes)
+	h.fake.mu.Unlock()
+
+	rc, err := h.e.Join(bg, JoinRequest{ID: id(2), NewNode: true, AuthKey: strings.NewReader(testKey + "\n")})
+	if refusalCode(err) != "access_origin_pinned" || rc.Payload["origin"] != unjoinedTailnet {
+		t.Fatalf("a new node for a writer answered %+v, %v", rc, err)
+	}
+	h.fake.mu.Lock()
+	after, left := len(h.fake.st.Calls), fmt.Sprint(h.fake.st.Volumes)
+	h.fake.mu.Unlock()
+	if after != calls || left != volumes {
+		t.Errorf("the refused join called docker (%d calls, %d before) or changed the volumes: %s, before %s", after, calls, left, volumes)
+	}
 	if rec, _ := h.e.readJoin(); rec == nil || rec.State != "joined" || rec.NodeID != "n0001CNTRL" {
 		t.Errorf("join.json is %+v after the refusal", rec)
 	}

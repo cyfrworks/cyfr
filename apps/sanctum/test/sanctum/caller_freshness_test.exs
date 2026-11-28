@@ -572,7 +572,7 @@ defmodule Sanctum.CallerFreshnessTest do
   end
 
   defp use_frame(bearer),
-    do: Caller.establish({:frame_credential, bearer}, client_ip: "127.0.0.1")
+    do: Caller.establish({:frame_credential, bearer}, client_ip: "127.0.0.1", entry: :loopback)
 
   describe "a frame credential a session minted" do
     setup do
@@ -592,7 +592,10 @@ defmodule Sanctum.CallerFreshnessTest do
           assert {:error, :identity_stale} = use_frame(bearer)
 
           assert {:error, :identity_stale} =
-                   Sanctum.TinctureAuth.verify_frame_credential(bearer, client_ip: "127.0.0.1")
+                   Sanctum.TinctureAuth.verify_frame_credential(bearer,
+                     client_ip: "127.0.0.1",
+                     entry: :loopback
+                   )
         end)
 
       assert log =~ "freshness bound"

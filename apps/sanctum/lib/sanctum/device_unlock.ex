@@ -330,7 +330,8 @@ defmodule Sanctum.DeviceUnlock do
   `unlock` challenge reserving one session id, `%{challenge}`; with
   `"proof"` alone, `%{ticket, session_id, expires_at}`, the ticket's
   deadline in ms. Refusals: `:not_a_device`, `:no_holder`,
-  `:proof_refused`, `:session_retired` (a lock or the channel's end retired
+  `:proof_refused` (a proof at another entry than its challenge's among
+  them), `:session_retired` (a lock or the channel's end retired
   the reserved session before the proof), `:invalid_request`,
   `:not_standing` and `:unavailable`.
   """
@@ -355,13 +356,20 @@ defmodule Sanctum.DeviceUnlock do
          {:ok, challenge} <-
            fresh(:unlock, ctx, client, now, session_id: Prima.UUID7.generate_id("ses")),
          :ok <- reserve(ctx, challenge.session_id, challenge.expires_at) do
-      hold({:device_unlock, ctx.client_id}, challenge, %{challenge: challenge}, now)
+      hold(
+        {:device_unlock, ctx.client_id},
+        challenge,
+        %{challenge: challenge, entry: ctx.entry},
+        now
+      )
+
       {:ok, %{challenge: challenge}}
     end
   end
 
   defp ticket(ctx, proof) do
     with {:ok, held} <- take_proven({:device_unlock, ctx.client_id}, proof),
+         :ok <- answered_at(held, ctx.entry),
          {:ok, expectation} <- Sanctum.Issuance.expectation(ctx, []),
          {:ok, now} <- db_now_ms(),
          session_id = held.challenge.session_id,
@@ -391,6 +399,12 @@ defmodule Sanctum.DeviceUnlock do
        }}
     end
   end
+
+  # A proof is taken at the entry its challenge was issued at, whose
+  # address the reservation holds, so the ticket's entry and the session
+  # it activates name one address.
+  defp answered_at(%{entry: entry}, entry) when entry in [:loopback, :proxy], do: :ok
+  defp answered_at(_held, _entry), do: {:error, :proof_refused}
 
   # The session the challenge names, reserved as a row no token loads and
   # expiring with the challenge: what a lock retires.

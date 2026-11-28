@@ -213,7 +213,7 @@ defmodule PrismWeb.LoginLive do
   end
 
   defp answered(socket, {:ok, %{purpose: :sign_in, session_token: token}}) do
-    ticket = mint_ticket(token, socket.assigns.browser_binding)
+    ticket = mint_ticket(token, socket.assigns.browser_binding, socket.assigns.entry)
     redirect(socket, to: ~p"/auth/passkey/complete/#{ticket}")
   end
 
@@ -460,15 +460,16 @@ defmodule PrismWeb.LoginLive do
     end
   end
 
-  # A one-time ticket bound to this browser, which sets the session's
-  # cookie (`PrismWeb.PasskeyController`). Without the binding the ticket
-  # would be a bearer credential for a whole session.
-  defp mint_ticket(token, browser_binding) do
+  # A one-time ticket bound to this browser and to the entry the page came
+  # in by, which sets the session's cookie (`PrismWeb.PasskeyController`).
+  # Without the binding the ticket would be a bearer credential for a
+  # whole session.
+  defp mint_ticket(token, browser_binding, entry) do
     ticket = Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
 
     Arca.Cache.put(
       {:login_passkey_ticket, ticket},
-      %{session_token: token, browser_binding: browser_binding},
+      %{session_token: token, browser_binding: browser_binding, entry: entry},
       @ticket_ttl_ms
     )
 

@@ -60,8 +60,12 @@ func (p Public) Name() string {
 
 // Address is the server's private address on port:
 // http://<private name>.localhost:<port>, the address its own machine
-// reaches it at whatever browser address it has.
+// reaches it at whatever browser address it has. It is the origin as a
+// browser serialises it, so on port 80, http's default, it has no port.
 func (p Public) Address(port int) string {
+	if port == 80 {
+		return "http://" + p.Name() + ".localhost"
+	}
 	return "http://" + p.Name() + ".localhost:" + strconv.Itoa(port)
 }
 

@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -72,6 +73,9 @@ func (e *Engine) startHead(ctx context.Context, h Head, j *journal, full bool, h
 		}
 	}
 	if why := e.waitHealthy(ctx, health); why != "" {
+		if fatal := e.bootRefusal(ctx, h); fatal != "" {
+			why += ": " + fatal
+		}
 		return started{why: why, content: content}
 	}
 	if h.Browser == BrowserTailnet {
@@ -93,6 +97,38 @@ func (e *Engine) startHead(ctx context.Context, h Head, j *journal, full bool, h
 		}
 	}
 	return started{ok: true, content: content}
+}
+
+// bootFatalMarker matches the start of the line a refused boot prints,
+// whichever service and part refused (`[Cyfr] FATAL:`, `[Arca] FATAL:` for
+// a database another schema built, `[Locus] FATAL:`), its sentence after
+// it.
+var bootFatalMarker = regexp.MustCompile(`\[[A-Z][A-Za-z.]*\] FATAL:`)
+
+// BootFatal is the last refusal a boot printed in log, from its marker
+// to the line's end, "" when log holds none.
+func BootFatal(log string) string {
+	fatal := ""
+	for _, line := range strings.Split(log, "\n") {
+		if loc := bootFatalMarker.FindStringIndex(line); loc != nil {
+			fatal = strings.TrimSpace(line[loc[0]:])
+		}
+	}
+	return fatal
+}
+
+// bootRefusal is the refusal cyfr's boot under h last logged, "" when its
+// log holds none or cannot be read: a setting only the release reads, such
+// as an account service's origin it keeps, is refused there, and the
+// health a start waits for says no more than that cyfr stopped. Read
+// before anything is stopped, while the container that refused still
+// holds its log.
+func (e *Engine) bootRefusal(ctx context.Context, h Head) string {
+	res, err := e.docker.Run(ctx, Call{Args: e.composeArgs(h, "logs", "--no-color", "--no-log-prefix", "--tail", "200", cyfrService), Deadline: probeDeadline})
+	if err != nil {
+		return ""
+	}
+	return e.redactor().text(BootFatal(string(res.Stdout) + "\n" + string(res.Stderr)))
 }
 
 // removeUnselected stops and removes, verified, every running access

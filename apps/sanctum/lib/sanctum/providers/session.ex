@@ -196,9 +196,11 @@ defmodule Sanctum.Providers.Session do
   end
 
   # Revoke the Sanctum session authenticated by this request.
-  def handle(%Context{session_token_hash: hash}, %{"action" => "logout"})
-      when is_binary(hash) do
-    case Sanctum.Session.destroy_by_hash(hash) do
+  def handle(%Context{session_token_hash: hash, session_address: address}, %{
+        "action" => "logout"
+      })
+      when is_binary(hash) and is_binary(address) do
+    case Sanctum.Session.destroy_by_hash(hash, address) do
       {:ok, _gone} ->
         {:ok, %{message: "Logged out successfully"}}
 

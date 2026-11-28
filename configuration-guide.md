@@ -54,7 +54,6 @@ value is literal throughout, an open `$(` included.
 | `CYFR_HOST_API_BIND` | The address the host API binds for the workers' host calls and exit reports (default `127.0.0.1` for a bare server; compose binds the server's own address on the locus network, so the host API is reachable from that network alone). |
 | `CYFR_HOST_API_PORT` | The host API's port (default 4300). |
 | `CYFR_HOST_API_URL` | The address a worker service reaches this server's host API at, carried by every assignment the server issues; unset, a worker uses its own `LOCUS_RUNTIME_HOST_API_URL`, and a cluster refuses to boot without it. |
-| `CYFR_LINK_KEY` | The private half of this CYFR's tunnel key and its pre-shared key, `privkey:<64 hex>,psk:<64 hex>`, which `cyfr init` mints beside `CYFR_LINK_PUBLIC`: a secret for the link service, whose form alone the server checks, refusing to start on a value of any other form. |
 | `CYFR_LINK_PUBLIC` | The public half of this CYFR's tunnel key, 64 lowercase hexadecimal digits, which `cyfr init` writes with the key it mints: its private address, `http://h-<16 characters>.localhost:<CYFR_PORT>`, the address this computer reaches CYFR at whatever its browser address, is derived from it. A release refuses to start without it or with a value of another form; a development or test boot without it takes a fixed development key's. |
 | `CYFR_LIVE_SALT` | The LiveView socket's signing salt; unset, derived from `CYFR_SECRET_KEY_BASE`. Set it only to keep sessions across a key-base rotation. |
 | `CYFR_LOCAL_INGRESS_ASSERTED` | The compose file's assertion that the loopback listener's own address on the stack's `default` network is reached from this machine's loopback alone, which lets `CYFR_BIND_ADDRESS` name it: `true`, its one value, set by `docker-compose.yml` in the cyfr service's environment. It counts only from the process environment, `.env` may not set it, and a bare release must not set it. |
@@ -172,11 +171,14 @@ refused, naming the variable or key and the form it must take.
 
 ## Compose-only variables
 
-`docker-compose.yml` reads these from `.env`; no release reads them.
+No release reads these: `docker-compose.yml` reads the containers'
+limits and devices from `.env`, and `cyfr init` writes the tunnel key's
+private half there beside its public half.
 
 | Variable | What it sets |
 |---|---|
 | `CYFR_CPU_LIMIT` | The cyfr container's CPU limit (default 4): the control plane's own share of the host, since components run in Locus's runtime role under `LOCUS_RUNTIME_CPU_LIMIT`. |
+| `CYFR_LINK_KEY` | The private half of this CYFR's tunnel key and its pre-shared key, `privkey:<64 hex>,psk:<64 hex>`, which `cyfr init` mints beside `CYFR_LINK_PUBLIC`: a secret, which no release reads. |
 | `CYFR_LOCUS_APPARMOR` | The AppArmor profile the Locus container runs under on a host with AppArmor, by its name, `cyfr-locus-` and 12 hex digits of its content's hash: `cyfr init` and `cyfr update` write the profile built into `cyfr` here and load it, and a host without AppArmor ignores it. |
 | `CYFR_LOCUS_KVM` | The KVM device a person's VM runs on, `/dev/kvm`, or empty, written with `CYFR_LOCUS_TUN`: both set where this machine has both devices, both empty where it lacks either. No setting: `cyfr init` writes them for a CYFR it makes, `cyfr update` from what the machine has, saying first what giving them the first time removes, and `cyfr restore` as this machine ran them; `cyfr up`, `cyfr backup` and `cyfr access` refuse a device the machine does not have. Empty, the Locus container is given `/dev/null` at `/dev/kvm`, and each person's work runs in its own space. |
 | `CYFR_LOCUS_TUN` | The tun device of a person's VM's card, `/dev/net/tun`, or empty, written and checked with `CYFR_LOCUS_KVM`. Empty, the Locus and guard containers are given `/dev/null` at `/dev/net/tun`, and each person's work runs in its own space. |

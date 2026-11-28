@@ -118,7 +118,9 @@ defmodule Mix.Tasks.Cyfr.Gen.ConfigurationGuide do
 
     ## Compose-only variables
 
-    `docker-compose.yml` reads these from `.env`; no release reads them.
+    No release reads these: `docker-compose.yml` reads the containers'
+    limits and devices from `.env`, and `cyfr init` writes the tunnel key's
+    private half there beside its public half.
 
     | Variable | What it sets |
     |---|---|

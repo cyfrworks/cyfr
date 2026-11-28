@@ -759,9 +759,7 @@ defmodule CyfrWeb.EndpointParsersTest.UnauthenticatedBodyTest do
   answer sent with the body unread ends its HTTP/1 connection, a refusal
   and an answer that left a body unparsed alike; a body read whole keeps
   it. Every WebSocket transport names its frame bound, and `/live`'s takes
-  the Files editor's worst-case save whole and refuses a longer frame; a
-  long-poll POST is held to the same bound, a batch carrying that save
-  taken whole. The attachment allowance after `/mcp`'s rate limit and
+  the Files editor's worst-case save whole and refuses a longer frame. The attachment allowance after `/mcp`'s rate limit and
   authentication is `CyfrWeb.EndpointParsersTest.MCPTransportTest`'s.
   """
 
@@ -966,32 +964,22 @@ defmodule CyfrWeb.EndpointParsersTest.UnauthenticatedBodyTest do
       {"/live", live} = List.keyfind(bounds, "/live", 0)
 
       # Above the editor's save of a file it opens inline, every byte
-      # encoded as three, under the adapter's 10 MB default it replaces, and
-      # under the 8,000,000 bytes Phoenix's long-poll transport reads at
-      # most, since a long-poll POST is held to it too.
+      # encoded as three, and under the adapter's 10 MB default it replaces.
       assert live > 3 * Arca.Files.max_inline_read()
-      assert live < 8_000_000
+      assert live < 10_000_000
     end
 
-    test "every socket transport the endpoint mounts names the most a POST to it may " <>
-           "declare, and takes no body at all but a POST of declared length, refused " <>
-           "before any byte is read" do
+    test "every socket transport the endpoint mounts takes no body but a POST of declared " <>
+           "length within a host call's body, refused before any byte is read" do
       transports = CyfrWeb.Endpoint.socket_transports()
+      cap = Prima.HostAPI.max_body_bytes()
 
       # Derived from the mounts (`__sockets__/0`): these are the ones the
-      # endpoint declares, and a new mount or transport joins the sweep.
-      # A long-poll POST carries what its mount's WebSocket frames would, and
-      # is held to that frame bound; a POST to a WebSocket's path carries no
-      # message, and is held to a host call's body.
-      for transport <- [
-            {:websocket, ["live", "websocket"], Prima.HostAPI.max_body_bytes()},
-            {:longpoll, ["live", "longpoll"], live_frame_bound()},
-            {:websocket, ["device", "websocket"], Prima.HostAPI.max_body_bytes()}
-          ] do
-        assert transport in transports
-      end
+      # endpoint declares, and a new mount joins the sweep. Each is a
+      # WebSocket, whose upgrade carries no message in its body.
+      assert Enum.sort(transports) == [["device", "websocket"], ["live", "websocket"]]
 
-      for {_transport, path_info, cap} <- transports do
+      for path_info <- transports do
         url = "/" <> Enum.join(path_info, "/") <> "?vsn=2.0.0"
 
         for {method, framing, status} <- [
@@ -1008,86 +996,6 @@ defmodule CyfrWeb.EndpointParsersTest.UnauthenticatedBodyTest do
           assert {"connection", "close"} in headers
         end
       end
-    end
-  end
-
-  describe "the long-poll transport" do
-    # A transport token is handed to anyone who opens a session.
-    defp longpoll_token do
-      opened = :get |> Plug.Test.conn("/live/longpoll?vsn=2.0.0") |> call()
-      %{"token" => token} = Jason.decode!(opened.resp_body)
-
-      {:ok, {:v1, _id, pid, _topic}} =
-        Phoenix.Token.verify(
-          CyfrWeb.Endpoint,
-          Atom.to_string(CyfrWeb.Endpoint.config(:pubsub_server)),
-          token,
-          max_age: 1_209_600
-        )
-
-      on_exit(fn ->
-        DynamicSupervisor.terminate_child(Phoenix.Transports.LongPoll.Supervisor, pid)
-      end)
-
-      token
-    end
-
-    defp call(conn), do: CyfrWeb.Endpoint.call(conn, CyfrWeb.Endpoint.init([]))
-
-    defp heartbeat(pad) do
-      Jason.encode!([nil, "1", "phoenix", "heartbeat", %{"pad" => pad}])
-    end
-
-    test "reads no message past /live's bound from a caller holding the token anyone may take" do
-      token = longpoll_token()
-      body = heartbeat(:binary.copy("x", live_frame_bound()))
-
-      {status, headers} =
-        :post
-        |> request("/live/longpoll?vsn=2.0.0", body, "application/json")
-        |> put_req_header("x-phoenix-longpoll-token", token)
-        |> declared(byte_size(body))
-        |> answer()
-
-      assert status == 413
-      assert bytes_read() == 0
-      assert {"connection", "close"} in headers
-    end
-
-    test "takes a batch carrying the Files editor's save of a file it opens inline, every " <>
-           "byte encoded as three, whole" do
-      token = longpoll_token()
-
-      # The client posts up to 100 queued messages in one body, a line each.
-      batch = Enum.join([editor_save() | List.duplicate(heartbeat("x"), 99)], "\n")
-      assert byte_size(batch) <= live_frame_bound()
-
-      {status, headers} =
-        :post
-        |> request("/live/longpoll?vsn=2.0.0", batch, "application/x-ndjson")
-        |> put_req_header("x-phoenix-longpoll-token", token)
-        |> declared(byte_size(batch))
-        |> answer()
-
-      assert status == 200
-      assert bytes_read() == byte_size(batch)
-      refute List.keymember?(headers, "connection", 0)
-    end
-
-    test "reads a small message whole, and keeps the connection" do
-      token = longpoll_token()
-      body = heartbeat("x")
-
-      {status, headers} =
-        :post
-        |> request("/live/longpoll?vsn=2.0.0", body, "application/json")
-        |> put_req_header("x-phoenix-longpoll-token", token)
-        |> declared(byte_size(body))
-        |> answer()
-
-      assert status == 200
-      assert bytes_read() == byte_size(body)
-      refute List.keymember?(headers, "connection", 0)
     end
   end
 
@@ -1254,10 +1162,10 @@ defmodule CyfrWeb.EndpointParsersTest.UnauthenticatedBodyTest do
 
     defp server_frame(_partial), do: :more
 
-    test "a long-poll POST past /live's bound, or of undeclared length, is answered from " <>
-           "its headers alone, and its connection ends without its body",
+    test "a POST to /live's WebSocket path past a host call's body, or of undeclared " <>
+           "length, is answered from its headers alone, and its connection ends without its body",
          %{port: port} do
-      cap = live_frame_bound()
+      cap = Prima.HostAPI.max_body_bytes()
 
       for {framing, status} <- [
             {"content-length: #{cap + 1}\r\n", 413},
@@ -1268,7 +1176,7 @@ defmodule CyfrWeb.EndpointParsersTest.UnauthenticatedBodyTest do
         :ok =
           :gen_tcp.send(
             socket,
-            head("POST", "/live/longpoll?vsn=2.0.0", "application/json", framing)
+            head("POST", "/live/websocket?vsn=2.0.0", "application/json", framing)
           )
 
         response = closed(socket)

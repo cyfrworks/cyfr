@@ -63,6 +63,8 @@ defmodule CyfrWeb.ContextGuard do
 
   import Phoenix.Component, only: [assign: 3]
 
+  require Prima.TestSeam
+
   alias Cyfr.Bus.{AthanorArchived, CallerInvalidated, Session}
   alias Phoenix.LiveView
   alias Phoenix.LiveView.Socket
@@ -128,10 +130,7 @@ defmodule CyfrWeb.ContextGuard do
   def on_mount(:protected, _params, session, socket) do
     token = session[to_string(@session_key)]
 
-    # A nested view comes in by its parent's request or socket, so it takes
-    # the entry its parent hands it in the session the server signs for it
-    # (`"entry"`, from the parent's `:request_entry`); a root view reads its
-    # listener's tag.
+    # A view acts at its listener's entry (`mounted_entry/2`).
     socket = assign(socket, :request_entry, mounted_entry(socket, session))
 
     # The mount slides the session when it is due, on Sanctum's own task
@@ -422,22 +421,46 @@ defmodule CyfrWeb.ContextGuard do
   # Bare contexts
   # ---------------------------------------------------------------------------
 
-  # A nested view's entry is its parent's, handed in its signed session: a
-  # nested static render reads no connect info, and a nested view added
-  # while connected reads only what its parent's socket carries.
+  # A root view's entry is its listener's tag. A nested view is handed its
+  # parent's in the session the server signs for it (`"entry"`, from the
+  # parent's `:request_entry`): its static render runs inside its parent's
+  # request and reads no connect info, so it takes that one; connected, it
+  # runs on a transport of its own, whose tag is its entry, and a child
+  # whose transport is at another entry than its parent's has none, and is
+  # refused.
   defp mounted_entry(%Socket{parent_pid: nil} = socket, _session), do: entry(socket)
 
-  defp mounted_entry(%Socket{}, %{"entry" => entry}) when entry in [:loopback, :proxy],
-    do: entry
+  defp mounted_entry(%Socket{} = socket, %{"entry" => signed})
+       when signed in [:loopback, :proxy] do
+    cond do
+      not LiveView.connected?(socket) -> signed
+      transport_entry(socket, signed) == signed -> signed
+      true -> nil
+    end
+  end
 
   defp mounted_entry(%Socket{}, _session), do: nil
+
+  # `Phoenix.LiveViewTest` joins a nested view with no connect info at all,
+  # where every transport carries its listener's tag: a test build reads
+  # such a child as at its parent's entry. A release never reads this.
+  defp transport_entry(socket, signed) do
+    case entry(socket) do
+      nil -> Prima.TestSeam.value(nil, fn -> untagged_child(socket, signed) end)
+      tagged -> tagged
+    end
+  end
+
+  defp untagged_child(socket, signed),
+    do: if(LiveView.get_connect_info(socket, :x_headers) == nil, do: signed)
 
   @doc """
   The listener a root LiveView's request came in by (`Sanctum.ClientIp`),
   read from its connect info's `x-cyfr-ingress` header: the static
   render's request and the live socket both carry the listener's own tag.
-  A nested view takes its parent's (`on_mount/4`): the parent hands its
-  `:request_entry` assign to the child's session as `"entry"`.
+  A nested view's entry is its parent's, which the parent hands it in its
+  session as `"entry"`, and once connected also its own transport's
+  (`on_mount/4`).
   """
   @spec entry(Socket.t()) :: Sanctum.entry() | nil
   def entry(%Socket{} = socket),

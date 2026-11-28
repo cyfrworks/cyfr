@@ -393,14 +393,14 @@ defmodule Sanctum.SessionTest do
       {:ok, _} = Session.load(session.token)
 
       # Destroy it
-      assert {:ok, :removed} = Session.destroy(session.token)
+      assert {:ok, :removed} = Session.destroy(session.token, :loopback)
 
       # Session should no longer exist
       assert {:error, :invalid_session} = Session.load(session.token)
     end
 
     test "destroying non-existent session succeeds", %{ctx: _ctx} do
-      assert {:ok, :absent} = Session.destroy("nonexistent_token")
+      assert {:ok, :absent} = Session.destroy("nonexistent_token", :loopback)
     end
   end
 

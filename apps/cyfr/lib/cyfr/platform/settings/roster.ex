@@ -22,7 +22,8 @@ defmodule Cyfr.Platform.Settings.Roster do
   downward.
 
   Two more classes complete the inventory. `compose_only/0` is the names
-  `docker-compose.yml` interpolates that no release reads. `foreign/0` is
+  a deployment's `.env` carries that no release reads: those
+  `docker-compose.yml` interpolates, and the tunnel key's private half. `foreign/0` is
   the `CYFR_*` names other programs own (the CLI, the installer, the test
   harness), which a shell may export beside a server. `unknown/2` is the
   refusal: a `CYFR_*` name in the boot's `.env` files that none of the
@@ -175,8 +176,6 @@ defmodule Cyfr.Platform.Settings.Roster do
     {"CYFR_HOST_API_PORT", "The host API's port (default 4300)."},
     {"CYFR_HOST_API_URL",
      "The address a worker service reaches this server's host API at, carried by every assignment the server issues; unset, a worker uses its own `LOCUS_RUNTIME_HOST_API_URL`, and a cluster refuses to boot without it."},
-    {"CYFR_LINK_KEY",
-     "The private half of this CYFR's tunnel key and its pre-shared key, `privkey:<64 hex>,psk:<64 hex>`, which `cyfr init` mints beside `CYFR_LINK_PUBLIC`: a secret for the link service, whose form alone the server checks, refusing to start on a value of any other form."},
     {"CYFR_LINK_PUBLIC",
      "The public half of this CYFR's tunnel key, 64 lowercase hexadecimal digits, which `cyfr init` writes with the key it mints: its private address, `http://h-<16 characters>.localhost:<CYFR_PORT>`, the address this computer reaches CYFR at whatever its browser address, is derived from it. A release refuses to start without it or with a value of another form; a development or test boot without it takes a fixed development key's."},
     {"CYFR_LIVE_SALT",
@@ -257,14 +256,17 @@ defmodule Cyfr.Platform.Settings.Roster do
      "The OTLP endpoint traces go to (default `http://localhost:4318`). Not under the prefix; listed so every name the boot reads is documented in one place."}
   ]
 
-  # The `${…}` names docker-compose.yml interpolates that no release reads:
-  # cyfr's CPU limit, the Locus pool's numbers and each role's processors,
-  # which cyfr-locus writes into its groups, Locus's AppArmor profile, and
-  # the two devices a person's VM needs, where the machine has them,
-  # each with the sentence `configuration-guide.md` gives it.
+  # The names a deployment's `.env` carries that no release reads: the
+  # `${…}` names docker-compose.yml interpolates (cyfr's CPU limit, the
+  # Locus pool's numbers and each role's processors, which cyfr-locus
+  # writes into its groups, Locus's AppArmor profile, and the two devices a
+  # person's VM needs, where the machine has them), and the tunnel key's
+  # private half, each with the sentence `configuration-guide.md` gives it.
   @compose_only [
     {"CYFR_CPU_LIMIT",
      "The cyfr container's CPU limit (default 4): the control plane's own share of the host, since components run in Locus's runtime role under `LOCUS_RUNTIME_CPU_LIMIT`."},
+    {"CYFR_LINK_KEY",
+     "The private half of this CYFR's tunnel key and its pre-shared key, `privkey:<64 hex>,psk:<64 hex>`, which `cyfr init` mints beside `CYFR_LINK_PUBLIC`: a secret, which no release reads."},
     {"CYFR_LOCUS_APPARMOR",
      "The AppArmor profile the Locus container runs under on a host with AppArmor, by its name, `cyfr-locus-` and 12 hex digits of its content's hash: `cyfr init` and `cyfr update` write the profile built into `cyfr` here and load it, and a host without AppArmor ignores it."},
     {"CYFR_LOCUS_KVM",
@@ -923,8 +925,9 @@ defmodule Cyfr.Platform.Settings.Roster do
   def deployment_docs, do: @deployment
 
   @doc """
-  The names `docker-compose.yml` interpolates that no release reads: the
-  containers' CPU and memory limits.
+  The names a deployment's `.env` carries that no release reads: those
+  `docker-compose.yml` interpolates (the containers' limits and devices)
+  and the tunnel key's private half, `CYFR_LINK_KEY`.
   """
   @spec compose_only() :: [String.t()]
   def compose_only, do: Enum.map(@compose_only, &elem(&1, 0))

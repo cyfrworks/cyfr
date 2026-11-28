@@ -197,6 +197,28 @@ defmodule Sanctum.DeviceUnlockTest do
       assert session_row(answer.session_id).address == Sanctum.private_address()
     end
 
+    test "a proof answers its challenge only at the entry the challenge was issued at", %{
+      device: device,
+      ctx: ctx
+    } do
+      Prima.Test.Env.put_app_env(:sanctum, :browser_address, "https://cyfr.example")
+      {_public, private} = device.key
+      {:ok, %{challenge: challenge}} = DeviceUnlock.unlock(ctx, %{})
+      proof = signed(challenge, private)
+
+      assert {:error, :proof_refused} =
+               DeviceUnlock.unlock(%{ctx | entry: :proxy}, %{"proof" => proof})
+
+      # Taken by that refusal: its own entry issues no ticket for it either,
+      # and the session it reserved at the private address stays reserved.
+      assert {:error, :proof_refused} = DeviceUnlock.unlock(ctx, %{"proof" => proof})
+
+      assert %Session{provider: "unlock_reserved", address: address} =
+               session_row(challenge.session_id)
+
+      assert address == Sanctum.private_address()
+    end
+
     test "a ticket that is not one, or another's, redeems nothing", %{device: device, ctx: ctx} do
       _answer = unlocked!(ctx, device.key)
 

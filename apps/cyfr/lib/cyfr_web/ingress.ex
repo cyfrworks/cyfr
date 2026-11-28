@@ -37,14 +37,13 @@ defmodule CyfrWeb.Ingress do
   before the endpoint's `call/2`, and so before `socket_dispatch` hands
   the request to a socket transport.
 
-  A request to a socket transport's path (`socket_transports/1`)
-  that carries an `Origin` is then refused 403 unless that origin is the
-  address of its listener (`Sanctum.address/1`): the private address on
-  the loopback listener, the browser address on the proxy listener. A
-  page at one address opens no socket at the other. One with no `Origin`,
-  a program's and not a browser's, passes, as Phoenix's own check passes
-  it; the endpoint's `check_origin` is off, since it cannot see the
-  listener.
+  Every socket transport is a WebSocket upgrade (`socket_transports/1`),
+  and one whose `Origin` is not its listener's address (`Sanctum.address/1`:
+  the private address on the loopback listener, the browser address on the
+  proxy listener) answers 403, so a page at one address opens no socket at
+  the other. An upgrade with no `Origin`, a program's and not a browser's,
+  passes, as Phoenix's own check passes it; the endpoint's `check_origin`
+  is off, since it cannot see the listener.
 
   On the proxy listener it then sets the request's scheme and port to
   `https` and 443: the proxy terminated the TLS the client spoke, so a URL
@@ -127,27 +126,26 @@ defmodule CyfrWeb.Ingress do
   end
 
   @doc """
-  Each socket transport `endpoint` mounts, with the routed path
-  (`path_info`) Phoenix dispatches it on, a mount's path joined with each
-  enabled transport's `:path` (the endpoint's `__sockets__/0`), and the
-  most bytes a POST to it may declare. A long-poll POST carries the messages its
-  mount's WebSocket frames would, so it is held to that frame bound
-  (`:max_frame_size`), or to a host call's body
-  (`Prima.HostAPI.max_body_bytes/0`) when the mount names none; a POST to
-  a WebSocket's path carries no message and is held to a host call's body.
+  The routed path (`path_info`) of each socket transport `endpoint`
+  mounts (its `__sockets__/0`): a mount's path joined with its WebSocket's
+  `:path`. Every one is a WebSocket. A long-poll transport resumes its
+  socket by a token from any listener, with no `Origin` a page at its own
+  address sends, so a mount that enables one is refused here, at the
+  endpoint's start.
   """
-  @spec socket_transports(module()) :: [{:websocket | :longpoll, [String.t()], pos_integer()}]
+  @spec socket_transports(module()) :: [[String.t()]]
   def socket_transports(endpoint) do
     for {path, _socket, opts} <- endpoint.__sockets__(),
-        {transport, default, transport_path} <- [
-          {:websocket, true, "/websocket"},
-          {:longpoll, false, "/longpoll"}
-        ],
-        config = transport_config(opts, transport, default),
+        config = transport_config(opts, :websocket, true),
         config != false do
-      {transport,
-       String.split(path <> Keyword.get(config, :path, transport_path), "/", trim: true),
-       post_bound(transport, opts)}
+      if transport_config(opts, :longpoll, false) != false,
+        do:
+          raise(
+            ArgumentError,
+            "the socket #{path} enables long-poll: every socket is a WebSocket"
+          )
+
+      String.split(path <> Keyword.get(config, :path, "/websocket"), "/", trim: true)
     end
   end
 
@@ -158,18 +156,6 @@ defmodule CyfrWeb.Ingress do
     end
   end
 
-  defp post_bound(:longpoll, opts) do
-    case transport_config(opts, :websocket, true) do
-      config when is_list(config) ->
-        Keyword.get(config, :max_frame_size, Prima.HostAPI.max_body_bytes())
-
-      false ->
-        Prima.HostAPI.max_body_bytes()
-    end
-  end
-
-  defp post_bound(:websocket, _opts), do: Prima.HostAPI.max_body_bytes()
-
   @impl Plug
   def init({ingress, plug, endpoint}) when ingress in [:loopback, :proxy] do
     {module, opts} =
@@ -178,7 +164,7 @@ defmodule CyfrWeb.Ingress do
         module -> {module, []}
       end
 
-    sockets = for {_transport, path, _bound} <- socket_transports(endpoint), do: path
+    sockets = socket_transports(endpoint)
 
     {ingress, module, module.init(opts), sockets}
   end
@@ -196,8 +182,8 @@ defmodule CyfrWeb.Ingress do
     end
   end
 
-  # A socket transport's request from a page at another address than its
-  # listener's: the origin is compared with the entry's address alone.
+  # A socket's upgrade from a page at another address than its listener's:
+  # the origin is compared with the entry's address alone.
   defp socket_origin?(conn, ingress, sockets) do
     with true <- conn.path_info in sockets,
          [origin | _] <- get_req_header(conn, "origin") do

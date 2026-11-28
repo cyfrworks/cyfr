@@ -221,7 +221,7 @@ All requests go to a single endpoint:
 
 ```
 POST /mcp HTTP/1.1
-Host: localhost:4000
+Host: h-<16 characters>.localhost:4000
 Content-Type: application/json
 Accept: application/json, text/event-stream
 MCP-Protocol-Version: 2026-07-28
@@ -503,7 +503,9 @@ const result = await runComponent(
 Keys live in environment variables, never in source code.
 
 ```javascript
-const CYFR_URL = process.env.CYFR_URL || "http://localhost:4000/mcp";
+// CYFR's address with /mcp: on its own machine, the private address
+// `cyfr access status` prints, http://h-<16 characters>.localhost:4000/mcp.
+const CYFR_URL = process.env.CYFR_URL;
 const CYFR_KEY = process.env.CYFR_SECRET_KEY; // cyfr_sk_...
 const PROTOCOL_VERSION = "2026-07-28";
 
@@ -624,7 +626,9 @@ jobs:
 import requests
 import os
 
-CYFR_URL = os.environ.get("CYFR_URL", "http://localhost:4000/mcp")
+# CYFR's address with /mcp: on its own machine, the private address
+# `cyfr access status` prints, http://h-<16 characters>.localhost:4000/mcp.
+CYFR_URL = os.environ["CYFR_URL"]
 CYFR_KEY = os.environ["CYFR_SECRET_KEY"]  # cyfr_sk_...
 PROTOCOL_VERSION = "2026-07-28"
 
@@ -738,7 +742,7 @@ Use `execution.run_stream` instead of `execution.run`. It returns as soon as the
 Connect to the SSE endpoint to receive events as the formula executes:
 
 ```bash
-curl -N -H "Authorization: Bearer $CYFR_TOKEN" http://localhost:4000/api/executions/exec_abc123/events
+curl -N -H "Authorization: Bearer $CYFR_TOKEN" http://h-<16 characters>.localhost:4000/api/executions/exec_abc123/events
 ```
 
 Events use standard SSE format with `event:` set to the event type. An execution's lifecycle (`execution.started`, `execution.completed`, `execution.failed`, `execution.cancelled`, `execution.lapsed`, `execution.result_lost`) is durable — each is a numbered row, and its `id` is that number. What a formula streams while it runs (`emit`) is a delta under the last durable event: its `id` is `<durable>.<n>`, and deltas are not replayed after a server restart.

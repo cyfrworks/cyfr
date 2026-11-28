@@ -566,13 +566,14 @@ defmodule Cyfr.RuntimeConfigWiringTest do
         end)
       end
 
-      # The private half, the link service's, is refused in any other form.
-      with_env(Map.put(none, "CYFR_LINK_KEY", String.upcase(@link["key"])), fn ->
-        message = Exception.message(assert_raise(RuntimeError, &read_prod_config!/0))
-
-        assert message ==
-                 "[Cyfr] FATAL: " <> Prima.Refusal.message({:access_link_key_invalid, %{}})
-      end)
+      # The private half is not the server's: whatever it holds, the boot
+      # starts and keeps nothing of it.
+      for key <- [@link["key"], String.upcase(@link["key"]), "not a key"] do
+        with_env(Map.put(none, "CYFR_LINK_KEY", key), fn ->
+          config = read_prod_config!()
+          refute inspect(config, limit: :infinity, printable_limit: :infinity) =~ key
+        end)
+      end
 
       # A refused access setting is answered first.
       with_env(%{"CYFR_BROWSER" => nil, "CYFR_LINK_PUBLIC" => nil, "RELEASE_ROOT" => dir}, fn ->

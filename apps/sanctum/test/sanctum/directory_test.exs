@@ -276,7 +276,8 @@ defmodule Sanctum.DirectoryTest do
                "This CYFR serves its own account service, which keeps its address for good: " <>
                  "it was first served at #{@directory}, and these settings give " <>
                  "https://elsewhere.example. Nothing started. Put back the settings that give " <>
-                 "#{@directory}."
+                 "#{@directory}: run `cyfr access browser domain --domain dir.example`, or " <>
+                 "`cyfr access browser proxy --domain dir.example` behind a proxy of your own."
     end
 
     test "a boot whose browser address is removed, leaving the private address, is refused" do
@@ -311,6 +312,25 @@ defmodule Sanctum.DirectoryTest do
         )
 
       assert moved(@directory, "https://elsewhere.example") == Directory.hold_origin()
+    end
+
+    test "a node the live setting makes the writer pins its address before its first write, " <>
+           "and a boot at another address is refused" do
+      Sanctum.Test.Settings.put("directory_serve", "off")
+      assert :ok = Directory.hold_origin()
+      assert pinned() == {:error, :not_found}
+
+      Sanctum.Test.Settings.put("directory_serve", "writer")
+      alice = account()
+
+      assert {:ok, %{result: :created}} =
+               Directory.register(%{genesis: Entry.encode(alice.genesis), source: source()})
+
+      assert pinned() == {:ok, @directory}
+
+      serve_at("https://elsewhere.example")
+      assert moved(@directory, "https://elsewhere.example") == Directory.hold_origin()
+      assert pinned() == {:ok, @directory}
     end
 
     test "a node that does not serve as the writer pins nothing" do
@@ -377,22 +397,22 @@ defmodule Sanctum.DirectoryTest do
         "https://dir.example/directory"
       ])
 
-      # The served directory is read from the node's origin as it stands.
+      # A node that wrote serves the origin it pinned then, however its
+      # address moves after: a genesis at the new one is served no write.
       serve_at("https://elsewhere.example")
-      register!(account(directory: "https://elsewhere.example"))
+      elsewhere = account(directory: "https://elsewhere.example")
 
-      assert {:error, :wrong_directory} =
-               Directory.register(%{genesis: Entry.encode(account().genesis), source: source()})
+      assert {:error, :not_served} =
+               Directory.register(%{genesis: Entry.encode(elsewhere.genesis), source: source()})
     end
 
     test "a server with no browser address on port 80, whose private address is " <>
-           "http://#{@private_name}:80, registers a genesis naming http://#{@private_name}" do
-      serve_locally_at("http://#{@private_name}:80")
-      assert Sanctum.shared_address() == "http://#{@private_name}:80"
-
-      # A genesis cannot name the address as configured: its directory is
-      # in the one spelling, which drops the scheme's default port.
-      refute Prima.Identity.Encoding.directory_url?("http://#{@private_name}:80")
+           "http://#{@private_name}, registers a genesis naming it" do
+      # The private address on port 80 is its origin as a browser spells
+      # it (`Cyfr.RuntimeConfig.resolve_link/3`), the one spelling a
+      # genesis names its directory in.
+      serve_locally_at("http://#{@private_name}")
+      assert Prima.Identity.Encoding.directory_url?(Sanctum.shared_address())
 
       register!(account(directory: "http://#{@private_name}"))
     end
@@ -400,7 +420,7 @@ defmodule Sanctum.DirectoryTest do
     test "serves its origin with the scheme's default port dropped, and still refuses another " <>
            "scheme, host, port or path, storing nothing" do
       for {serve, origin, served, others} <- [
-            {&serve_locally_at/1, "http://#{@private_name}:80", "http://#{@private_name}",
+            {&serve_locally_at/1, "http://#{@private_name}", "http://#{@private_name}",
              [
                "https://#{@private_name}",
                "http://elsewhere.example",
@@ -416,6 +436,11 @@ defmodule Sanctum.DirectoryTest do
                "https://dir.example/directory"
              ]}
           ] do
+        # Each case a node of its own, which has pinned nothing yet.
+        Arca.Repo.delete_all(
+          from(m in Arca.Schemas.ServerMeta, where: m.key == "directory_origin")
+        )
+
         serve.(origin)
         genesis = Entry.encode(account(directory: served).genesis)
 

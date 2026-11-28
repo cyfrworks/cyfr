@@ -8,7 +8,7 @@ defmodule Cyfr.GracefulStopTest do
   ports, its loopback listener's and, with a browser address, its
   proxy listener's, before the supervision tree stops. A new connection, a tab the
   LiveView drainer tells to reconnect included, is refused by the member
-  that is stopping, and so is a LiveView connect over either transport on
+  that is stopping, and so is a LiveView connect on
   a connection already open, while a request already open finishes within
   the drain. The suspension fails safe: a server that cannot be suspended
   is logged and one that does not answer holds the stop no longer than its
@@ -65,7 +65,7 @@ defmodule Cyfr.GracefulStopTest do
     @moduledoc false
     use Phoenix.Endpoint, otp_app: :cyfr
 
-    socket "/live", CyfrWeb.LiveSocket, websocket: true, longpoll: true
+    socket "/live", CyfrWeb.LiveSocket, websocket: true
 
     plug :answer
 
@@ -112,11 +112,10 @@ defmodule Cyfr.GracefulStopTest do
     end
   end
 
-  # The LiveView client's two ways in: a long-poll session's first GET,
-  # and a WebSocket upgrade. `vsn` is the protocol the client speaks. The
-  # long-poll transport answers every poll 200 and puts its own status in
-  # the JSON body: 410 with a token opens a session, 403 refuses it.
-  @longpoll "GET /live/longpoll?vsn=2.0.0 HTTP/1.1\r\nhost: localhost\r\n\r\n"
+  # A page's request, which leaves its keep-alive connection open, and the
+  # LiveView client's one way in, a WebSocket upgrade. `vsn` is the
+  # protocol the client speaks.
+  @page "GET / HTTP/1.1\r\nhost: localhost\r\n\r\n"
   @websocket "GET /live/websocket?vsn=2.0.0 HTTP/1.1\r\nhost: localhost\r\n" <>
                "connection: upgrade\r\nupgrade: websocket\r\n" <>
                "sec-websocket-key: dGhlIHNhbXBsZSBub25jZQ==\r\nsec-websocket-version: 13\r\n\r\n"
@@ -132,22 +131,6 @@ defmodule Cyfr.GracefulStopTest do
     |> put_req_header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
     |> put_req_header("sec-websocket-version", "13")
     |> get("/live/websocket?vsn=2.0.0")
-  end
-
-  defp longpoll_session, do: get(build_conn(), "/live/longpoll?vsn=2.0.0")
-
-  # The long-poll sessions running on this node: an admitted long-poll
-  # connect starts one, which the test stops rather than leave it to its
-  # idle timeout.
-  defp longpoll_sessions do
-    for {_, pid, _, _} <- DynamicSupervisor.which_children(Phoenix.Transports.LongPoll.Supervisor),
-        is_pid(pid),
-        do: pid
-  end
-
-  defp stop_sessions_since(before) do
-    for pid <- longpoll_sessions() -- before,
-        do: DynamicSupervisor.terminate_child(Phoenix.Transports.LongPoll.Supervisor, pid)
   end
 
   defp await(condition, deadline_ms \\ 5_000) do
@@ -423,24 +406,17 @@ defmodule Cyfr.GracefulStopTest do
       start_supervised!(Endpoint)
       [server] = App.endpoint_servers(Endpoint)
       port = port(server)
-      sessions = longpoll_sessions()
-      on_exit(fn -> stop_sessions_since(sessions) end)
 
       # A keep-alive connection, open before the stop, that the LiveView
-      # client could fall back to long polling over.
+      # client could upgrade over.
       {:ok, open} = connect(port)
-      :ok = :gen_tcp.send(open, @longpoll)
-      assert {"HTTP/1.1 200 OK", body} = recv_response(open)
-      assert %{"status" => 410, "token" => _} = Jason.decode!(body)
+      :ok = :gen_tcp.send(open, @page)
+      assert {"HTTP/1.1 200 OK", "ok"} = recv_response(open)
 
       # The stop's first two steps, in `prep_stop/1`'s order.
       :ok = LiveSocket.drain()
       assert App.suspend_endpoint(Endpoint) == :ok
       assert {:error, :econnrefused} = connect(port)
-
-      :ok = :gen_tcp.send(open, @longpoll)
-      assert {"HTTP/1.1 200 OK", body} = recv_response(open)
-      assert Jason.decode!(body) == %{"status" => 403}
 
       :ok = :gen_tcp.send(open, @websocket)
       assert {"HTTP/1.1 403 Forbidden", ""} = recv_response(open)
@@ -484,15 +460,12 @@ defmodule Cyfr.GracefulStopTest do
     test "refuse a LiveView connect over a connection already open to either once the node drains" do
       start_supervised!(Endpoint)
       ports = Enum.map(App.endpoint_servers(Endpoint), &port/1)
-      sessions = longpoll_sessions()
-      on_exit(fn -> stop_sessions_since(sessions) end)
 
       open =
         for port <- ports do
           {:ok, socket} = connect(port)
-          :ok = :gen_tcp.send(socket, @longpoll)
-          assert {"HTTP/1.1 200 OK", body} = recv_response(socket)
-          assert %{"status" => 410, "token" => _} = Jason.decode!(body)
+          :ok = :gen_tcp.send(socket, @page)
+          assert {"HTTP/1.1 200 OK", "ok"} = recv_response(socket)
           socket
         end
 
@@ -500,10 +473,6 @@ defmodule Cyfr.GracefulStopTest do
       assert App.suspend_endpoint(Endpoint) == :ok
 
       for socket <- open do
-        :ok = :gen_tcp.send(socket, @longpoll)
-        assert {"HTTP/1.1 200 OK", body} = recv_response(socket)
-        assert Jason.decode!(body) == %{"status" => 403}
-
         :ok = :gen_tcp.send(socket, @websocket)
         assert {"HTTP/1.1 403 Forbidden", ""} = recv_response(socket)
       end
@@ -511,21 +480,12 @@ defmodule Cyfr.GracefulStopTest do
   end
 
   describe "the LiveView socket" do
-    setup do
-      sessions = longpoll_sessions()
-      on_exit(fn -> stop_sessions_since(sessions) end)
-    end
-
-    test "admits a connect over either transport while the node is not draining" do
+    test "admits a connect while the node is not draining" do
       refute LiveSocket.draining?()
 
       conn = websocket_upgrade()
       assert conn.state == :upgraded
       assert_received {_ref, :upgrade, {:websocket, {CyfrWeb.LiveSocket, _state, _opts}}}
-
-      conn = longpoll_session()
-      assert conn.status == 200
-      assert %{"status" => 410, "token" => _} = Jason.decode!(conn.resp_body)
     end
 
     test "is served again once the drain mark is cleared, as the application's start clears it" do
@@ -536,7 +496,7 @@ defmodule Cyfr.GracefulStopTest do
       :ok = LiveSocket.undrain()
     end
 
-    test "refuses a connect over either transport once the node drains" do
+    test "refuses a connect once the node drains" do
       :ok = LiveSocket.drain()
       assert LiveSocket.draining?()
 
@@ -544,12 +504,6 @@ defmodule Cyfr.GracefulStopTest do
       assert conn.state == :sent
       assert conn.status == 403
       refute_received {_ref, :upgrade, _}
-
-      sessions = longpoll_sessions()
-      conn = longpoll_session()
-      assert conn.status == 200
-      assert Jason.decode!(conn.resp_body) == %{"status" => 403}
-      assert longpoll_sessions() -- sessions == []
     end
   end
 

@@ -33,10 +33,8 @@ defmodule Sanctum.Directory do
   (`hold_origin/0`), and before that the server's shared address
   (`Sanctum.shared_address/0`), its browser address when it has one and
   otherwise its private address. Its routes are mounted at the root,
-  `/directory/v1`, never under a path a proxy adds. The address as
-  configured need not be in the one spelling a genesis names its
-  directory in (a server on port 80 is `http://h-….localhost:80`, named
-  `http://h-….localhost`), so it is compared in that spelling
+  `/directory/v1`, never under a path a proxy adds. It is compared in
+  the one spelling a genesis names its directory in
   (`Prima.Identity.Encoding.canonical_home/1`), byte for byte with the
   decoded genesis's directory. A genesis naming anything
   else, such as another host, this host on another port or scheme, or
@@ -364,8 +362,8 @@ defmodule Sanctum.Directory do
   @doc """
   The origin this node serves its directory at, in the one spelling a
   genesis names it (`Prima.Identity.Encoding.canonical_home/1`): the one
-  pinned at its first boot as a writer (`hold_origin/0`), and before any
-  is pinned, the server's shared address (`Sanctum.shared_address/0`).
+  pinned when it first acted as the writer (`hold_origin/0`), and before
+  any is pinned, the server's shared address (`Sanctum.shared_address/0`).
   `{:error, :no_home}` for an address that is no home however it is
   spelled, `{:error, :unavailable}` when the store cannot answer.
   """
@@ -379,16 +377,19 @@ defmodule Sanctum.Directory do
   end
 
   @doc """
-  Hold the directory's origin at boot, before the endpoint serves
-  anything: an account service keeps the address it was first served at
-  for good, since every log it registered names it. A boot that finds an
-  origin pinned compares the shared address with it, whatever this boot
-  serves, and answers `{:error, {:directory_origin_moved, %{pinned,
-  origin}}}` when they differ (a `Prima.Refusal` row the boot raises);
-  one that finds none pins the shared address when this node serves as
-  the writer. A restore brings the pinned origin back with the database,
-  so the boot after it compares against that. `{:error, :unavailable}`
-  when the store or the setting cannot answer.
+  Hold the directory's origin: an account service keeps the address it
+  was first served at for good, since every log it registered names it.
+  The boot holds it before the endpoint serves anything, and every write
+  holds it before it is admitted, so a node the live setting made the
+  writer pins its address before its first write, as one that boots as
+  the writer does before it serves. An origin pinned is compared with the
+  shared address, whatever this node serves, answering
+  `{:error, {:directory_origin_moved, %{pinned, origin}}}` when they
+  differ (a `Prima.Refusal` row the boot raises); with none pinned, the
+  shared address is pinned when this node serves as the writer, here and
+  nowhere else. A restore brings the pinned origin back with the
+  database, so the boot after it compares against that.
+  `{:error, :unavailable}` when the store or the setting cannot answer.
   """
   @spec hold_origin() ::
           :ok
@@ -456,8 +457,23 @@ defmodule Sanctum.Directory do
     case mode() do
       {:ok, :off} -> {:error, :not_served}
       {:ok, :mirror} when need == :write -> {:error, :read_only}
+      {:ok, :writer} when need == :write -> pinned_for_write()
       {:ok, _mode} -> :ok
       {:error, _reason} = refused -> refused
+    end
+  end
+
+  # A write is admitted only once the origin it is served at is pinned
+  # (`hold_origin/0`). A pin this running node's address no longer matches
+  # comes only from a boot that refused to start, so it serves no write;
+  # an address that is no home pins nothing and is refused every genesis
+  # (`served_here/1`).
+  defp pinned_for_write do
+    case hold_origin() do
+      :ok -> :ok
+      {:error, :no_home} -> :ok
+      {:error, :unavailable} -> {:error, :unavailable}
+      {:error, {:directory_origin_moved, _}} -> {:error, :not_served}
     end
   end
 

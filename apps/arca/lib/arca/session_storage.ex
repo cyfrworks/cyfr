@@ -521,17 +521,19 @@ defmodule Arca.SessionStorage do
   end
 
   @doc """
-  Delete a session by token_hash. Answers `{:ok, :removed}` when this
-  delete removed its row and `{:ok, :absent}` when there was none to
-  remove: either way no session row of that hash stands once it answers.
-  A store that cannot answer is `{:error, :database_error}`, which says
-  nothing about the row.
+  Delete the session of token_hash made at `address`. Answers
+  `{:ok, :removed}` when this delete removed its row and `{:ok, :absent}`
+  when there was none to remove: either way no session row of that hash
+  stands at that address once it answers, and one made at another address
+  stands as it was. A store that cannot answer is
+  `{:error, :database_error}`, which says nothing about the row.
   """
-  @spec delete_session(binary()) :: {:ok, :removed | :absent} | {:error, :database_error}
+  @spec delete_session(binary(), String.t()) ::
+          {:ok, :removed | :absent} | {:error, :database_error}
   # arca:unscoped-ok signing out is addressed by the token being retired.
-  def delete_session(token_hash) do
+  def delete_session(token_hash, address) when is_binary(address) do
     Arca.Repo.Errors.with_db_rescue("Arca.SessionStorage.delete_session", fn ->
-      query = from(s in Session, where: s.token_hash == ^token_hash)
+      query = from(s in Session, where: s.token_hash == ^token_hash and s.address == ^address)
 
       case Arca.Repo.delete_all(query) do
         {0, _} -> {:ok, :absent}

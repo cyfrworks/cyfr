@@ -90,22 +90,19 @@ defmodule CyfrWeb.Endpoint do
   # legitimately: the Files editor's save of a file it opens inline
   # (`Arca.Files.max_inline_read/0`), submitted as a form, which LiveView
   # encodes with `URLSearchParams`, so a byte outside its unreserved set
-  # takes three. The long-poll client posts up to 100 queued messages in
-  # one body, so the margin is a host call's body
-  # (`Prima.HostAPI.max_body_bytes/0`): the save's own envelope, under a
-  # kilobyte, and whatever else rides in its batch. A WebSocket frame and a
-  # long-poll POST are held to the same bound (`socket_transports/0`), which
-  # sits under the 8,000,000 bytes Phoenix's long-poll transport reads at
-  # most. The socket takes its first messages before anyone is signed in,
+  # takes three, with a host call's body as the margin
+  # (`Prima.HostAPI.max_body_bytes/0`): the save's own envelope is under a
+  # kilobyte. The socket takes its first messages before anyone is signed in,
   # so the bound is the editor's worst case and no more, moving with the
   # inline-read limit.
   @live_max_message_bytes Arca.Files.max_inline_read() * 3 + Prima.HostAPI.max_body_bytes()
 
   # The socket refuses every connect once a graceful stop begins
-  # (`CyfrWeb.LiveSocket.drain/0`), on either transport.
+  # (`CyfrWeb.LiveSocket.drain/0`). Like every socket here it is a
+  # WebSocket alone (`CyfrWeb.Ingress.socket_transports/1`).
   socket "/live", CyfrWeb.LiveSocket,
     websocket: [connect_info: @live_connect_info, max_frame_size: @live_max_message_bytes],
-    longpoll: [connect_info: @live_connect_info]
+    longpoll: false
 
   # A paired glass's device channel: the device protocol over a raw
   # WebSocket at `/device/websocket`. It carries the caller's address and
@@ -127,13 +124,12 @@ defmodule CyfrWeb.Endpoint do
   # A socket transport takes its request from `socket_dispatch`, the
   # plug `use Phoenix.Endpoint` declares ahead of every plug here; the
   # request carries its listener's tag already, set by the listener's plug
-  # before this function runs (`CyfrWeb.Ingress`). The long-poll transport
-  # reads a POST's body itself, up to 8 MB and under no cap of these
-  # parsers, from whoever holds a transport token, which it hands to
-  # anyone who asks. So a request to a socket transport's path
-  # is bounded before that dispatch: a POST declares its length, within
-  # the transport's bound (`socket_transports/0`), and any other request
-  # carries no body. Every other one is refused before any byte of its
+  # before this function runs (`CyfrWeb.Ingress`). A socket's upgrade
+  # carries no message in its body, so a request to a socket transport's
+  # path (`socket_transports/0`) is bounded before that dispatch: a POST
+  # declares its length, within a host call's body
+  # (`Prima.HostAPI.max_body_bytes/0`), and any other request carries no
+  # body. Every other one is refused before any byte of its
   # body is read, 413 (411 for a POST whose length is undeclared), and its
   # HTTP/1 connection ends.
   #
@@ -167,11 +163,11 @@ defmodule CyfrWeb.Endpoint do
   end
 
   @doc """
-  Each socket transport the endpoint mounts, with the routed path it is
-  dispatched on and the most bytes a POST to it may declare
-  (`CyfrWeb.Ingress.socket_transports/1`, the one reading of them).
+  The routed path of each socket transport the endpoint mounts, every one
+  a WebSocket (`CyfrWeb.Ingress.socket_transports/1`, the one reading of
+  them).
   """
-  @spec socket_transports() :: [{:websocket | :longpoll, [String.t()], pos_integer()}]
+  @spec socket_transports() :: [[String.t()]]
   def socket_transports, do: CyfrWeb.Ingress.socket_transports(__MODULE__)
 
   # First, so every answer carries it, a refusal raised while parsing
@@ -272,10 +268,9 @@ defmodule CyfrWeb.Endpoint do
   end
 
   defp socket_body(%Plug.Conn{path_info: path_info} = conn) do
-    case Enum.find(socket_transports(), &(elem(&1, 1) == path_info)) do
-      {_transport, _path_info, bound} -> socket_body_bounded(conn, bound)
-      nil -> :ok
-    end
+    if path_info in socket_transports(),
+      do: socket_body_bounded(conn, Prima.HostAPI.max_body_bytes()),
+      else: :ok
   end
 
   defp socket_body_bounded(%Plug.Conn{method: "POST"} = conn, cap) do

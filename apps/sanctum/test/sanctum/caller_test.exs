@@ -276,7 +276,7 @@ defmodule Sanctum.CallerTest do
 
       assert {:ok, _ctx} = Caller.establish(session.token, entry: :loopback)
 
-      {:ok, :removed} = Sanctum.Session.destroy(session.token)
+      {:ok, :removed} = Sanctum.Session.destroy(session.token, :loopback)
       assert {:error, :unauthenticated} = Caller.establish(session.token, entry: :loopback)
     end
 
@@ -308,7 +308,7 @@ defmodule Sanctum.CallerTest do
       assert {:ok, _ctx} = Caller.establish(session.token, entry: :loopback)
       announced!()
 
-      {:ok, :removed} = Session.destroy(session.token)
+      {:ok, :removed} = Session.destroy(session.token, :loopback)
 
       # The member that revoked dropped its own copy synchronously; this
       # is what reaches the rest of the cell.
@@ -343,7 +343,7 @@ defmodule Sanctum.CallerTest do
 
       assert {:ok, _ctx} = Caller.establish(session.token, entry: :loopback)
 
-      {:ok, :removed} = Arca.SessionStorage.delete_session(hash)
+      {:ok, :removed} = Arca.SessionStorage.delete_session(hash, Sanctum.private_address())
 
       # The window the TTL exists to bound: the row is gone and this
       # member has heard nothing.
@@ -373,7 +373,7 @@ defmodule Sanctum.CallerTest do
       assert left > 0 and left < 2_000
 
       # A row removed below the memo, with no invalidation: the memo answers.
-      {:ok, :removed} = Arca.SessionStorage.delete_session(hash)
+      {:ok, :removed} = Arca.SessionStorage.delete_session(hash, Sanctum.private_address())
       assert {:ok, %Context{user_id: user_id}} = Caller.establish(session.token, entry: :loopback)
       assert user_id == ctx.user_id
     end
@@ -389,7 +389,7 @@ defmodule Sanctum.CallerTest do
       assert {:ok, _ctx} = Caller.establish(session.token, entry: :loopback)
       assert Arca.Cache.match(Arca.Cache.Keys.match_established(hash)) == []
 
-      {:ok, :removed} = Arca.SessionStorage.delete_session(hash)
+      {:ok, :removed} = Arca.SessionStorage.delete_session(hash, Sanctum.private_address())
       assert {:error, :unauthenticated} = Caller.establish(session.token, entry: :loopback)
     end
   end
@@ -455,7 +455,9 @@ defmodule Sanctum.CallerTest do
         Map.merge(key.credential_binding, %{user_id: key.user_id, athanor_id: key.athanor_id})
 
       # Standing while the row reads: both paths admit.
-      assert {:ok, _} = Caller.derived_standing(claims, client_ip: "192.168.1.10")
+      assert {:ok, _} =
+               Caller.derived_standing(claims, client_ip: "192.168.1.10", entry: :loopback)
+
       assert {:ok, _} = Caller.revalidate_session(key)
 
       {:ok, name: name, key: key, claims: claims}
@@ -480,7 +482,7 @@ defmodule Sanctum.CallerTest do
 
         log =
           capture_log(fn ->
-            assert Caller.derived_standing(claims, client_ip: "192.168.1.10") ==
+            assert Caller.derived_standing(claims, client_ip: "192.168.1.10", entry: :loopback) ==
                      {:error, :ip_not_allowed}
 
             assert Caller.revalidate_session(key) == {:error, :unauthenticated}

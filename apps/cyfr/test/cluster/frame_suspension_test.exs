@@ -47,7 +47,7 @@ defmodule Cyfr.Cluster.FrameSuspensionTest do
   defp use_on(id, bearer) do
     case Cell.call(id, Sanctum.Caller, :establish, [
            {:frame_credential, bearer},
-           [client_ip: "127.0.0.1"]
+           [client_ip: "127.0.0.1", entry: :loopback]
          ]) do
       {:ok, ctx} -> {:ok, ctx.frame.frame_id}
       {:error, reason} -> {:error, reason}

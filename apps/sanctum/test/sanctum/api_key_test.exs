@@ -937,13 +937,13 @@ defmodule Sanctum.ApiKeyTest do
           athanor_id: key_ctx.athanor_id
         })
 
-      assert {:ok, _} = Sanctum.Caller.derived_standing(claims)
+      assert {:ok, _} = Sanctum.Caller.derived_standing(claims, entry: :loopback)
       assert {:ok, _} = Sanctum.Caller.revalidate_session(key_ctx)
 
       # Suspended alone, generations untouched: the key row is what refuses.
       :ok = suspend!(ctx, "held")
 
-      assert {:error, :not_standing} = Sanctum.Caller.derived_standing(claims)
+      assert {:error, :not_standing} = Sanctum.Caller.derived_standing(claims, entry: :loopback)
       assert {:error, :unauthenticated} = Sanctum.Caller.revalidate_session(key_ctx)
     end
 

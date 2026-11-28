@@ -102,7 +102,7 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
       assert conn.assigns[:context].user_id == user.id
       assert conn.assigns[:context].auth_method == :session
 
-      Sanctum.Session.destroy(session.token)
+      Sanctum.Session.destroy(session.token, :loopback)
     end
 
     # The establish memo bounds establishing, not validating: a context it
@@ -404,7 +404,7 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
       # effect on the next call rather than when a cache entry expires.
       ctx = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
       {:ok, session} = Sanctum.Session.create(ctx, address: Sanctum.private_address())
-      {:ok, :removed} = Sanctum.Session.destroy(session.token)
+      {:ok, :removed} = Sanctum.Session.destroy(session.token, :loopback)
 
       conn =
         conn
