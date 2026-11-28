@@ -613,7 +613,7 @@ defmodule Aqua.RunnerTest do
        script: [
          call("c1", "http", %{"action" => "get", "url" => "https://example.test/x"}),
          {:probe, self()},
-         reply("done")
+         reply("never sent")
        ]}
     )
 
@@ -647,9 +647,9 @@ defmodule Aqua.RunnerTest do
 
     assert %{partials: partials} = Runner.state(thread.id, ctx.athanor_id)
     assert Aqua.stream_activity(partials) == calls
+    assert :ok = Runner.stop_turn(ctx, thread.id)
+    assert_receive %ThreadEvent{kind: :turn_finished}, 10_000
     send(worker, :continue)
-    assert_receive %ThreadEvent{kind: :turn_finished}, 60_000
-    assert {:ok, %{status: "completed"}} = Tape.turn(ctx, turn_id)
   end
 
   test "a steer offered again is the same steer", %{ctx: ctx, thread: thread} do

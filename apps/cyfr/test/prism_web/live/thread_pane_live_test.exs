@@ -4104,12 +4104,15 @@ defmodule PrismWeb.ThreadPaneLiveTest do
       pane = open_pane(conn, athanor, thread)
       told = told(pane, thread)
       runs(told, user, "trn_a")
-      start = ~s(echo "<img src=x onerror=alert(1)>")
+      start = ~s|echo "<img src=x onerror=alert(1)>"|
       change = "-<b>old</b>\n+<script>alert(2)</script>"
       told.(:tool_activity, listed("trn_a", 1, [ran("<i>Bash</i>", :done, [start, change])]))
 
       assert [ran, changed] =
-               pane |> render() |> LazyHTML.from_fragment() |> LazyHTML.query(@rows <> " pre")
+               pane
+               |> render()
+               |> LazyHTML.from_fragment()
+               |> LazyHTML.query(@rows <> " pre")
                |> Enum.map(&LazyHTML.text/1)
 
       assert {ran, changed} == {start, change}
@@ -4162,8 +4165,10 @@ defmodule PrismWeb.ThreadPaneLiveTest do
 
       # The answer's row lands in place of what streamed; the fold stays.
       row = brain_said!(here, today, turn, "The answer is 42.", %{"brain_message" => "msg_1"})
+      # An answer's Markdown is drawn in the browser from its raw text.
+      answered = ~s([id$="-msg-#{row.id}"][data-raw-content="The answer is 42."])
       Prima.Test.Wait.wait_until(fn -> not has_element?(pane, streaming) end)
-      assert has_element?(pane, ~s([id$="-msg-#{row.id}"]), "The answer is 42.")
+      assert has_element?(pane, answered)
       assert has_element?(pane, @fold, "weighing it")
       assert has_element?(pane, @rows, "notes.md")
 
@@ -4171,11 +4176,11 @@ defmodule PrismWeb.ThreadPaneLiveTest do
       turn_finished(pane, athanor, today)
       Prima.Test.Wait.wait_until(fn -> not has_element?(pane, @fold) end)
       refute has_element?(pane, @rows)
-      assert has_element?(pane, ~s([id$="-msg-#{row.id}"]), "The answer is 42.")
+      assert has_element?(pane, answered)
 
       # Opened again, the thread holds the answer and nothing of the work.
       again = open_pane(conn, athanor, today)
-      assert has_element?(again, ~s([id$="-msg-#{row.id}"]), "The answer is 42.")
+      assert has_element?(again, answered)
       refute has_element?(again, @fold)
       refute has_element?(again, @rows)
     end

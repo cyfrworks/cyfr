@@ -2351,6 +2351,7 @@ defmodule PrismWeb.ThreadPaneLive do
           <p
             :for={thought <- Aqua.stream_thoughts(@partials)}
             class="mt-1 whitespace-pre-wrap pl-4 text-gray-400 [overflow-wrap:anywhere]"
+            phx-no-format
           >{thought.text}</p>
         </details>
 

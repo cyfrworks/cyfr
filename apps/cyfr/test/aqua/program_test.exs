@@ -2411,6 +2411,7 @@ defmodule Aqua.ProgramTest do
       say(fake, row, idle(turn, [input.id]))
       assert :completed = Task.await(loop, 30_000)
     end
+
     test "two runs of one tool ending in reverse order end their own rows, each saying what " <>
            "it ran and then what it changed, under the turn and its fence",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do

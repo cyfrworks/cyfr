@@ -336,7 +336,8 @@ defmodule Aqua.Loop.Stream do
   @spec activity(t()) :: [activity_entry()]
   def activity(%__MODULE__{activity: activity}), do: activity
 
-  defp put_thought(kept, key, thought), do: %{kept | thoughts: Map.put(kept.thoughts, key, thought)}
+  defp put_thought(kept, key, thought),
+    do: %{kept | thoughts: Map.put(kept.thoughts, key, thought)}
 
   defp put_entry(kept, source, entry), do: %{kept | entries: Map.put(kept.entries, source, entry)}
 
