@@ -410,3 +410,26 @@ func TestARefusalNamesAVMPlacedAloneAsAProgram(t *testing.T) {
 		t.Fatalf("the refusal holds %+v, want the person's VM placed alone as a program's", h.Mine)
 	}
 }
+
+// Two starts under way in a running VM, the first not yet grown, each hold
+// their allowance above the VM's reading, the later one's and the earlier
+// one's together (5499's second note): the VM at rest reads 450 MiB, and
+// with two starts admitted it holds 450 and 384 twice, as the same two
+// starts on the host hold 384 twice.
+func TestTwoStartsInARunningVMHoldBothAllowances(t *testing.T) {
+	l := New(8192*mib, false)
+	m := NewMachine("backends", "ath_a", testGuest, nil)
+	z := inVM(m, "p0")
+	spawned(t, l, z, 0, 50*mib)
+	l.Spawned(m, at(0))
+	l.Read(m, 450*mib, false, at(20))
+	l.Drop(z, at(20))
+	a := inVM(m, "p1")
+	admitted(t, l.Place(a, at(30)), a)
+	l.Spawned(a, at(30))
+	b := inVM(m, "p2")
+	admitted(t, l.Place(b, at(31)), b)
+	if got, want := used(l, 31.5), uint64((450+384+384)*mib); got != want {
+		t.Fatalf("two starts under way in a VM at rest hold %d MiB, want the VM's reading and both allowances, %d", got/mib, want/mib)
+	}
+}

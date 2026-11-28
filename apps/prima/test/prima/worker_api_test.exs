@@ -116,6 +116,39 @@ defmodule Prima.WorkerAPITest do
     end
   end
 
+  test "the vectors' body bound and window are the wire's" do
+    assert @vectors["max_body_bytes"] === Prima.HostAPI.max_body_bytes()
+    assert @vectors["window_ms"] === WorkerAuth.window_ms()
+  end
+
+  test "the keeper's refusal of a runner is held as the reason, sentence and held its vector names" do
+    assert length(@vectors["keeper_refusals"]) >= 9
+
+    for c <- @vectors["keeper_refusals"] do
+      refused =
+        case c["code"] do
+          "memory_unavailable" -> :memory_unavailable
+          "no_memory" -> {:no_memory, Map.fetch!(c, "held")}
+          nil -> :timeout
+          code -> code
+        end
+
+      expected =
+        %{reason: c["reason"], message: c["message"]}
+        |> then(&if Map.has_key?(c, "held"), do: Map.put(&1, :held, c["held"]), else: &1)
+
+      assert WorkerAPI.keeper_refusal(refused) === expected, c["why"]
+      assert WorkerAPI.valid_refusal_message?(c["message"]), c["why"]
+    end
+  end
+
+  test "a report carries the refusal codes its vector names, and no other" do
+    %{"carried" => carried, "not_carried" => not_carried} = @vectors["report_refusals"]
+    assert carried != [] and not_carried != []
+    for code <- carried, do: assert(is_binary(WorkerAPI.runner_refusal(code)), code)
+    for code <- not_carried, do: assert(WorkerAPI.runner_refusal(code) === nil, code)
+  end
+
   # A runner holds one of its machine's runtime uids, so a refusal for want
   # of one says, in a person's words, how many runs that is on the machine
   # that would run it; every refusal's words stand alone.

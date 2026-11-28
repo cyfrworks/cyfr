@@ -17,9 +17,9 @@ defmodule Opus.StartRefusalTest do
 
   The worker service is a stub listener that answers `status` as a
   refusing runtime does and `start` as the case needs; the sentence
-  is the one the runtime's keeper gives (`Locus.Runtime.Keeper.Channel.refusal/1`),
+  is the one the runtime's keeper gives (`Prima.WorkerAPI.keeper_refusal/1`),
   which the runtime's own suite shows its listener answering a start with
-  (`Locus.Runtime.WorkerServicePoolTest`).
+  (its worker service pool test).
   """
 
   use ExUnit.Case, async: false
@@ -27,8 +27,6 @@ defmodule Opus.StartRefusalTest do
   alias Prima.Authority
   alias Prima.Authority.Blob
   alias Prima.WorkerWire
-
-  @compile {:no_warn_undefined, [Locus.Runtime.Keeper.Channel]}
 
   @service "wrk_refusing"
   @node "reagent:local.start-refusal"
@@ -96,7 +94,7 @@ defmodule Opus.StartRefusalTest do
         description: "A reagent no worker service starts"
       })
 
-    {:ok, ctx: ctx, refusal: Locus.Runtime.Keeper.Channel.refusal(:memory_unavailable)}
+    {:ok, ctx: ctx, refusal: Prima.WorkerAPI.keeper_refusal(:memory_unavailable)}
   end
 
   defp serve!(start, refusal) do

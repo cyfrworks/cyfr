@@ -5,6 +5,7 @@ package vm
 
 import (
 	"bufio"
+	"errors"
 	"io"
 	"net"
 	"os"
@@ -422,4 +423,19 @@ func TestAVMMsRetirementIsStartedByItsMachinesStart(t *testing.T) {
 			t.Fatalf("a retirement that exited 4 answered %v", err)
 		}
 	})
+}
+
+// A uid or gid outside 0 to 2^31-1 is refused before anything is started
+// as it, where it would be converted to the kernel's form.
+func TestARetirementOfNoUIDIsRefused(t *testing.T) {
+	started := false
+	start := func(string, []string, []string, []uintptr, string, *syscall.SysProcAttr) (proc.Process, error) {
+		started = true
+		return nil, errors.New("not started")
+	}
+	for _, ids := range [][2]int{{-1, 0}, {1 << 31, 0}, {0, -1}, {0, 1 << 31}} {
+		if err := runRetire(start, ids[0], ids[1], t.TempDir()); err == nil || !strings.Contains(err.Error(), "is not a uid and gid") || started {
+			t.Fatalf("a retirement as %d:%d answered %v, started %t", ids[0], ids[1], err, started)
+		}
+	}
 }

@@ -800,7 +800,18 @@ def scratch_in_vm(image):
                                                   "|| echo absent"), ("present", "absent"),
                                     "the probe of the disk's record and image") == "absent",
                "a person whose programs are all scratch has no disk: no record and no image")
+        # A new person's first scratch session's start: its disk's record and image made, the programs' device
+        # made or found, and the VM booted, all inside the role's bound on a spawn's answer (15 s).
+        # Its first request opens it: the time from that request to its answer holds the spawn's and more (the
+        # program's start, its handshake and the command), so the spawn's own is less.
+        began = time.monotonic()
         guest = scratch_boot(alone, "a")
+        answered_s = time.monotonic() - began
+        expect(answered_s < 15, "a scratch-only person's first session answers within the role's 15 s bound on a "
+               "spawn's answer", f"{answered_s:.1f} s")
+        print(f"a scratch-only person's first session answered its first command {answered_s:.1f} s after it was "
+              "asked: its disk's record and image made, the programs' device made or found, its VM booted, the "
+              "program started and the command run", flush=True)
         record = disk_record(stack, alone)
         stat, folder = image_stat(stack, alone)
         machines = vmms(stack)

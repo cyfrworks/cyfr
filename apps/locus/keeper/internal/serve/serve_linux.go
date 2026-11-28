@@ -939,6 +939,9 @@ type server struct {
 	ended   chan struct{}
 	endOnce sync.Once
 	endCode int
+	// rolesKilled, nil in production, runs once the guard's loss has
+	// killed the roles routed over the lost connection (guardLost).
+	rolesKilled func()
 }
 
 func (s *server) run() int {

@@ -845,6 +845,35 @@ func TestTheGuardsLossUnderARoleEndsTheKeeper(t *testing.T) {
 	}
 }
 
+// The guard's loss under a role's route ends the keeper for that reason
+// whatever sees the roles' end first: the end and its code are recorded
+// before the roles are killed, so serve's loop, which ends with its last
+// role, finds them recorded even where the roles' end is seen before the
+// guard's loss has returned.
+func TestTheGuardsLossIsTheKeepersEndBeforeItsRolesEnd(t *testing.T) {
+	rk := newRolesKeeper(t, nil)
+	rk.start(t)
+	seen := make(chan struct{})
+	rk.s.rolesKilled = func() {
+		select {
+		case <-rk.running:
+		case <-time.After(20 * time.Second):
+			t.Error("the roles' end was not seen")
+		}
+		select {
+		case <-rk.s.ended:
+			if rk.s.endCode != ExitLost {
+				t.Errorf("the keeper's end was recorded as %d", rk.s.endCode)
+			}
+		default:
+			t.Error("the roles' end was seen before the keeper's end for the guard's loss was recorded")
+		}
+		close(seen)
+	}
+	rk.s.guardLost(1)
+	<-seen
+}
+
 // The guard's loss after a role's route is admitted and its command
 // released, before the role stands (publishRole), ends it as it ends a
 // role standing: its space is killed, the keeper ends, and the start,

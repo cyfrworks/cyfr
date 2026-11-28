@@ -28,6 +28,7 @@ import (
 	"github.com/cyfr/locus/keeper/internal/cgroup"
 	"github.com/cyfr/locus/keeper/internal/frame"
 	"github.com/cyfr/locus/keeper/internal/home"
+	"github.com/cyfr/locus/keeper/internal/logx"
 	"github.com/cyfr/locus/keeper/internal/packview"
 	"github.com/cyfr/locus/keeper/internal/proc"
 	"github.com/cyfr/locus/keeper/internal/protocol"
@@ -183,7 +184,7 @@ type machineRef struct{ m *machine }
 // its own locks guard.
 type machine struct {
 	athanor string
-	// id names its route at the guard, its spawn id there.
+	// id names its route at the guard, its spawn id there: each boot's own.
 	id string
 	// entry is its own place in the ledger (admission.NewMachine), admitted
 	// with the first of its sessions' places to be.
@@ -340,6 +341,12 @@ func (s *server) bootMachine(m *machine, at keptAt, r *role, what string) string
 	if boot == nil {
 		boot = startVM
 	}
+	// Each boot's route has an id of its own at the guard, so a clear still
+	// owed for an earlier boot's route is asked for that route alone, never
+	// for this one (retryClears).
+	s.mu.Lock()
+	m.id = randomHex(16)
+	s.mu.Unlock()
 	routeCode := ""
 	g, err := boot(vmBoot{Disk: image, KeptRoot: s.keptRoot(), UID: at.uid, MemoryMiB: s.machineMiB(), VCPUs: s.machineVCPUs(r),
 		Groups: r.groups, Start: s.startTool, Route: func(uid int, netns, udp, tcp, nl *os.File) (vm.Network, error) {
@@ -865,7 +872,7 @@ func (s *server) startInMachine(c *client, req *protocol.Request, at keptAt, rea
 	if !s.hold(sp) {
 		return sp, protocol.CodeInternal
 	}
-	s.log.Info("spawn %s: in the VM of kept uid %d, its spawn %s there", sp.id, at.uid, sp.guest)
+	s.log.Info("spawn %s: in the VM of kept uid %d, its spawn %s there", sp.id, at.uid, logx.Untrusted(sp.guest))
 	s.send(c, protocol.NewSpawned(req.ID, sp.id, at.uid, sp.guestPID))
 	close(sp.announced)
 	return sp, ""
@@ -895,7 +902,7 @@ func (s *server) guestStart(l *guestLink, sp *spawn, req *protocol.Request, at k
 		return s.guestLost(l, sp, "placing", err)
 	}
 	if answer.Type != "placed" {
-		s.log.Warn("spawn %s refused: its VM's keeper refused its place: %s", sp.id, answer.Code)
+		s.log.Warn("spawn %s refused: its VM's keeper refused its place: %s", sp.id, logx.Untrusted(answer.Code))
 		return protocol.CodeUnavailable
 	}
 	s.mu.Lock()
@@ -910,7 +917,7 @@ func (s *server) guestStart(l *guestLink, sp *spawn, req *protocol.Request, at k
 		}
 		if answer.Type != "home_made" {
 			drop()
-			s.log.Warn("spawn %s refused: its VM's keeper refused its home: %s", sp.id, answer.Code)
+			s.log.Warn("spawn %s refused: its VM's keeper refused its home: %s", sp.id, logx.Untrusted(answer.Code))
 			return guestCode(answer.Code)
 		}
 	}
@@ -961,11 +968,11 @@ func (s *server) guestStart(l *guestLink, sp *spawn, req *protocol.Request, at k
 		if guestEnd != nil {
 			_ = guestEnd.Close()
 		}
-		s.log.Warn("spawn %s refused: its VM's keeper refused its spawn: %s", sp.id, answer.Code)
+		s.log.Warn("spawn %s refused: its VM's keeper refused its spawn: %s", sp.id, logx.Untrusted(answer.Code))
 		return guestCode(answer.Code)
 	}
 	s.mu.Lock()
-	sp.guestPID = answer.PID
+	sp.guestPID = guestPID(answer.PID)
 	s.mu.Unlock()
 	if err != nil {
 		if guestEnd != nil {
@@ -1035,7 +1042,7 @@ func (s *server) measureInMachine(c *client, req *protocol.Request, at keptAt) {
 		// A home is inside its image: the guest's word is held to it.
 		s.send(c, protocol.NewHomeMeasured(req.ID, min(answer.Bytes, home.ImageBytes)))
 	default:
-		s.log.Warn("home_measure %s refused: its VM's keeper refused it: %s", req.ID, answer.Code)
+		s.log.Warn("home_measure %s refused: its VM's keeper refused it: %s", req.ID, logx.Untrusted(answer.Code))
 		s.send(c, protocol.NewError(req.ID, "", guestCode(answer.Code)))
 	}
 }
@@ -1172,7 +1179,7 @@ func (s *server) guestPacks(l *guestLink, sp *spawn, packs *protocol.SpawnPacks,
 			return s.guestLost(l, sp, "holding its packs", err)
 		}
 		if answer.Type != "packs" {
-			s.log.Warn("spawn %s refused: its VM's keeper refused its packs' hold: %s", sp.id, answer.Code)
+			s.log.Warn("spawn %s refused: its VM's keeper refused its packs' hold: %s", sp.id, logx.Untrusted(answer.Code))
 			return protocol.CodeUnavailable
 		}
 		if answer.State == protocol.PacksHeld {
@@ -1220,7 +1227,7 @@ func (s *server) putGuestPacks(l *guestLink, sp *spawn, packs *protocol.SpawnPac
 			return s.guestLost(l, sp, "putting its packs", aerr), false
 		}
 		if answer.Type != "packs" {
-			s.log.Warn("spawn %s refused: its VM's keeper refused its packs at part %d: %s", sp.id, seq, answer.Code)
+			s.log.Warn("spawn %s refused: its VM's keeper refused its packs at part %d: %s", sp.id, seq, logx.Untrusted(answer.Code))
 			return protocol.CodeUnavailable, seq == 0 && answer.Code == protocol.CodePacksBusy
 		}
 		if last {
@@ -1352,6 +1359,19 @@ func (s *server) guestExit(sp *spawn, code *int, signal, memory *string) {
 		}
 		s.send(sp.client, protocol.NewExited(sp.id, code, signal, memory))
 	})
+}
+
+// pidLimit is the most a Linux pid may be (PID_MAX_LIMIT on 64 bits).
+const pidLimit = 1 << 22
+
+// guestPID is the pid a guest said its session's leader has, as the host
+// passes it on: one no Linux kernel gives is none known, 0, so what the
+// role reads stays a pid or nothing (it reads a count up to 2^32-1).
+func guestPID(pid int) int {
+	if pid < 1 || pid > pidLimit {
+		return 0
+	}
+	return pid
 }
 
 // exitOf is the end a guest said of a session, as the host takes it: an
