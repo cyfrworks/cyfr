@@ -329,13 +329,8 @@ defmodule Arca.PairedClients do
   def allow_again(%Prima.Actor{athanor_id: athanor_id} = actor, id)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(id) do
     locked(actor, id, "Arca.PairedClients.allow_again", fn
-      %PairedClient{standing: "removed"} = row ->
-        row
-        |> Ecto.Changeset.change(standing: "revoked", updated_at: Arca.ServerMetaStorage.now!())
-        |> Arca.Repo.update()
-
-      _not_removed ->
-        {:error, :not_found}
+      %PairedClient{standing: "removed"} = row -> readmitted(row)
+      _not_removed -> {:error, :not_found}
     end)
   end
 
@@ -609,6 +604,13 @@ defmodule Arca.PairedClients do
       end
     end)
     |> Arca.Data.project()
+  end
+
+  # arca:unscoped-ok the row was read and locked under the actor's athanor (`locked/4`).
+  defp readmitted(%PairedClient{} = row) do
+    row
+    |> Ecto.Changeset.change(standing: "revoked", updated_at: Arca.ServerMetaStorage.now!())
+    |> Arca.Repo.update()
   end
 
   # arca:unscoped-ok the row was read and locked under the actor's athanor (`locked/4`).
