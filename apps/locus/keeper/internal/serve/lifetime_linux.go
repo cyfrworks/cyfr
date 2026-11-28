@@ -62,13 +62,13 @@ func (s *server) giveWay(m *machine) {
 	s.endMachine(m, "it held no session, and a start needs its room")
 }
 
-// endIdleMachines ends every VM that has been at rest for machineIdleFor
-// (endMachine).
+// endIdleMachines ends every VM idle for machineIdleFor, of those at rest
+// (endMachine decides).
 func (s *server) endIdleMachines() {
 	s.mu.Lock()
 	var idle []*machine
 	for _, m := range s.vms {
-		if m.vm != nil && !m.ending && s.ledger.Rests(m.entry) && now().Sub(m.idleSince) >= machineIdleFor {
+		if m.vm != nil && !m.ending && now().Sub(m.idleSince) >= machineIdleFor {
 			idle = append(idle, m)
 		}
 	}

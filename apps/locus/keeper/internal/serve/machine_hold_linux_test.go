@@ -193,7 +193,7 @@ func TestAFoldersOperationIsRefusedWhileItsPersonsVMWaitsForRoom(t *testing.T) {
 				defer k.s.mu.Unlock()
 				return m != nil && m.places == 1
 			})
-			k.s.handle(k.c, &protocol.Request{V: protocol.Version, Type: protocol.TypeHomeReset, ID: "r1", Home: "vlt_a1"})
+			go k.s.handle(k.c, &protocol.Request{V: protocol.Version, Type: protocol.TypeHomeReset, ID: "r1", Home: "vlt_a1"})
 			if m := k.next(t); m["id"] != "r1" || m["type"] != "error" || m["code"] != protocol.CodeCapacity {
 				t.Fatalf("an operation while its person's VM waits for room answered %v", m)
 			}
