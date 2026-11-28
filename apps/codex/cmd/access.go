@@ -15,11 +15,13 @@ import (
 	"io"
 	"net"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/cyfr/codex/internal/access"
 	"github.com/cyfr/codex/internal/prompt"
+	"github.com/cyfr/codex/internal/setup"
 	"github.com/spf13/cobra"
 )
 
@@ -301,16 +303,18 @@ var (
 	askInput    io.Reader = os.Stdin
 )
 
-// accessOptions are the inputs of the mode `cyfr access` applies.
+// accessOptions are the inputs of the browser address `cyfr access
+// browser` applies.
 type accessOptions struct {
-	domain, acmeEmail, keyFile, hostname string
-	newNode, noOpen                      bool
+	domain, acmeEmail, publish, keyFile, hostname string
+	newNode, noOpen                               bool
 }
 
-// addAccessFlags adds the flags of the mode a command applies.
+// addAccessFlags adds the flags of the browser address a command applies.
 func addAccessFlags(c *cobra.Command) {
-	c.Flags().String("domain", "", "The domain CYFR is reached at with public access; its DNS names this machine")
-	c.Flags().String("acme-email", "", "With public access, the email CYFR's certificate authority writes to (optional)")
+	c.Flags().String("domain", "", "The domain CYFR is reached at with domain or proxy: its DNS names this machine, or the machine your proxy runs on")
+	c.Flags().String("acme-email", "", "With domain, the email CYFR's certificate authority writes to (optional)")
+	c.Flags().String("publish", "", "With proxy, the IPv4 loopback address and port your proxy forwards to (default "+access.DefaultPublish+", or the one .env has)")
 	c.Flags().String("tailscale-auth-key-file", "", "A file holding a Tailscale auth key, which joins this machine to the tailnet without the approval link")
 	c.Flags().String("hostname", "", "This machine's name on the tailnet (cyfr when not given); certificate names are public")
 	c.Flags().Bool("no-open", false, "Do not open a tailnet join's approval link in the default browser")
@@ -320,6 +324,7 @@ func accessFlags(c *cobra.Command) accessOptions {
 	var o accessOptions
 	o.domain, _ = c.Flags().GetString("domain")
 	o.acmeEmail, _ = c.Flags().GetString("acme-email")
+	o.publish, _ = c.Flags().GetString("publish")
 	o.keyFile, _ = c.Flags().GetString("tailscale-auth-key-file")
 	o.hostname, _ = c.Flags().GetString("hostname")
 	o.noOpen, _ = c.Flags().GetBool("no-open")
@@ -329,14 +334,14 @@ func accessFlags(c *cobra.Command) accessOptions {
 	return o
 }
 
-// checkTailnetOptions refuses a tailnet option given for another mode.
-func checkTailnetOptions(mode string, o accessOptions) error {
+// checkTailnetOptions refuses a tailnet option given for another kind.
+func checkTailnetOptions(browser string, o accessOptions) error {
 	for _, option := range []struct {
 		name  string
 		given bool
 	}{{"--tailscale-auth-key-file", o.keyFile != ""}, {"--hostname", o.hostname != ""}, {"--new-node", o.newNode}} {
-		if option.given && mode != access.ModeTailnet {
-			return fmt.Errorf("`%s` is for joining a tailnet, and this command chooses `%s`. Nothing was changed. Run it again without `%s`, or run `cyfr access tailnet` with it", option.name, mode, option.name)
+		if option.given && browser != access.BrowserTailnet {
+			return fmt.Errorf("`%s` is for joining a tailnet, and this command chooses `%s`. Nothing was changed. Run it again without `%s`, or run `cyfr access browser tailnet` with it", option.name, browser, option.name)
 		}
 	}
 	return nil
@@ -383,7 +388,7 @@ func joinTailnet(ctx context.Context, e stackEngine, id string, o accessOptions,
 	rec, err := e.Join(ctx, req)
 	if ctx.Err() != nil {
 		if err == nil && receiptFailure(rec) == nil {
-			return "", fmt.Errorf("the join was interrupted after the machine joined your tailnet as %s; how CYFR is reached was not changed, and `cyfr access tailnet` takes the machine as it is", rec.Payload["name"])
+			return "", fmt.Errorf("the join was interrupted after the machine joined your tailnet as %s; how CYFR is reached was not changed, and `cyfr access browser tailnet` takes the machine as it is", rec.Payload["name"])
 		}
 		if cerr := e.CancelWaitingJoin(context.WithoutCancel(ctx)); cerr != nil {
 			return "", fmt.Errorf("the join was interrupted, and cancelling it failed (%v), so its container may wait until its own deadline before it ends; how CYFR is reached was not changed", engineFailure(cerr))
@@ -431,7 +436,7 @@ type joined struct {
 // options of a new join rather than ignore them.
 func previewTarget(ctx context.Context, e stackEngine, target access.Target, id string, o accessOptions, key []byte, out io.Writer, choice joinChoice) (access.Preview, joined, error) {
 	p, err := e.Preview(ctx, target, "")
-	if target.Mode != access.ModeTailnet {
+	if target.Browser != access.BrowserTailnet {
 		return p, joined{}, engineFailure(err)
 	}
 	var r *access.Refusal
@@ -446,9 +451,9 @@ func previewTarget(ctx context.Context, e stackEngine, target access.Target, id 
 		return access.Preview{}, joined{}, engineFailure(err)
 	}
 	// The machine a new node replaces is the engine's own read of this
-	// home's machine (the running tailscale service's, else the latest
+	// server's machine (the running tailscale service's, else the latest
 	// completed join's), named only where .env agrees with it: .env's head
-	// names no machine (local or public) or the same node. A tailnet .env
+	// names no machine (any kind but tailnet) or the same node. A tailnet .env
 	// naming another node (a restore leaves the machine's state and its
 	// last join as they were) or a .env whose head does not read names
 	// none, and nor does any refusal but access_unchanged: that one derived
@@ -458,16 +463,16 @@ func previewTarget(ctx context.Context, e stackEngine, target access.Target, id 
 	switch {
 	case !o.newNode:
 	case err == nil:
-		switch p.Old.Mode {
-		case access.ModeLocal, access.ModePublic:
-			known = p.New
-		case access.ModeTailnet:
+		switch p.Old.Browser {
+		case access.BrowserTailnet:
 			if p.Old.NodeID == p.New.NodeID {
 				known = p.New
 			}
+		case access.BrowserNone, access.BrowserDomain, access.BrowserProxy:
+			known = p.New
 		}
 	case r != nil && r.Code == "access_unchanged":
-		if h, herr := e.Head(); herr == nil && h.Mode == access.ModeTailnet {
+		if h, herr := e.Head(); herr == nil && h.Browser == access.BrowserTailnet {
 			known = h
 		}
 	}
@@ -501,7 +506,7 @@ func alreadyJoined(name string, o accessOptions) error {
 	if o.keyFile != "" {
 		given = append(given, "`--tailscale-auth-key-file`")
 	}
-	return fmt.Errorf("This machine is already on your tailnet as `%s`, and %s %s for a new join. Nothing was changed. Run `cyfr access tailnet --new-node` with %s to replace its tailnet identity, or run it again without %s", name, joinNames(given), plural(given, "is", "are"), plural(given, "it", "them"), plural(given, "it", "them"))
+	return fmt.Errorf("This machine is already on your tailnet as `%s`, and %s %s for a new join. Nothing was changed. Run `cyfr access browser tailnet --new-node` with %s to replace its tailnet identity, or run it again without %s", name, joinNames(given), plural(given, "is", "are"), plural(given, "it", "them"), plural(given, "it", "them"))
 }
 
 // joinName is the name a join asks the tailnet for.
@@ -580,15 +585,18 @@ func printPreview(out io.Writer, p access.Preview, consequences bool) {
 }
 
 // reachedBy is how CYFR at head h is reached, as "CYFR will be reached"
-// and "CYFR is reached" go on: who reaches it and at what address, and for
-// public access the ports it opens on this machine.
+// and "CYFR is reached" go on: who reaches it and at what address, for
+// domain the ports it opens on this machine, and for proxy where the
+// person's proxy forwards to.
 func reachedBy(h access.Head) string {
 	w := access.Describe(h)
-	switch h.Mode {
-	case access.ModeTailnet:
+	switch h.Browser {
+	case access.BrowserTailnet:
 		return "by your devices on Tailscale at " + w.Address
-	case access.ModePublic:
+	case access.BrowserDomain:
 		return "by " + w.Who + ", at " + w.Address + ", through ports " + w.Ports + " on this machine"
+	case access.BrowserProxy:
+		return "by " + w.Who + ", at " + w.Address + ", through your proxy, which forwards to " + w.Forward
 	}
 	return "from this computer at " + w.Address
 }
@@ -612,7 +620,7 @@ func changedRows(p access.Preview) []string {
 	if p.OldWords.CertificateEmail != p.NewWords.CertificateEmail {
 		lines = append(lines, "Certificate email: "+p.OldWords.CertificateEmail+" → "+p.NewWords.CertificateEmail)
 	}
-	if p.OldWords.Ports != p.NewWords.Ports && next.Mode != access.ModePublic {
+	if p.OldWords.Ports != p.NewWords.Ports && next.Browser != access.BrowserDomain {
 		lines = append(lines, "Ports opened on this machine: "+p.OldWords.Ports+" → "+p.NewWords.Ports)
 	}
 	if old.Port != next.Port {
@@ -629,52 +637,63 @@ func printWords(out io.Writer, w access.Words) {
 }
 
 func init() {
-	addAccessFlags(accessCmd)
-	accessCmd.Flags().Bool("new-node", false, "Replace this machine's tailnet identity before joining, so CYFR can take another name")
-	accessCmd.Flags().Bool("yes", false, "Make the change without asking to confirm it")
+	addAccessFlags(accessBrowserCmd)
+	accessBrowserCmd.Flags().Bool("new-node", false, "Replace this machine's tailnet identity before joining, so CYFR can take another name")
+	accessBrowserCmd.Flags().Bool("yes", false, "Make the change without asking to confirm it")
 	accessCmd.Flags().Bool("resume", false, "Finish an interrupted change under the lock and report what happened")
-	accessCmd.AddCommand(accessStatusCmd)
+	accessCmd.AddCommand(accessBrowserCmd, accessStatusCmd)
 	rootCmd.AddCommand(accessCmd)
 }
 
 var accessCmd = &cobra.Command{
-	Use:         "access <local|tailnet|public>",
+	Use:         "access",
 	Annotations: map[string]string{dockerAnnotation: "yes"},
-	Short:       "Choose how CYFR is reached: this computer only, your tailnet, or a public domain",
+	Short:       "Choose CYFR's browser address, see how it is reached, or finish an interrupted change",
 	GroupID:     "server",
-	Long: `Change how the CYFR in the current directory is reached, and every setting that follows from it in .env (CYFR_ACCESS, CYFR_HOST, CYFR_PUBLIC_URL, CYFR_TAILNET_NODE_ID, CADDY_ACME_EMAIL).
+	Long: `See and change how the CYFR in the current directory is reached.
 
-  local    this computer only, at http://localhost:<CYFR_PORT>
-  tailnet  your devices on Tailscale, at https://<machine>.<tailnet>.ts.net; the machine joins your tailnet first (the link it prints approves it, and on a machine with a display it opens in the default browser unless --no-open is given; --tailscale-auth-key-file joins it without one)
-  public   anyone on the internet, who still has to sign in, at https://<--domain>, through Caddy on ports 80 and 443
-
-It shows the change first: who will reach CYFR and at what address, with the ports public access opens, then each other setting that changes, as before → after (the certificate email, the ports opened on this machine, the port on this computer, the builds service). When the address changes it also lists what changes with it for browsers, command lines, OAuth apps, webhook senders and saved addresses, unless no one is set up on CYFR yet; accounts and their passkeys do not change. Confirm it (or pass --yes), and the access containers are stopped, removed and checked stopped, keeping the networks, .env is rewritten, and what was running is started again in the new mode; a start that fails puts CYFR back as it was. A public change then resolves the domain from this machine: it ends on Done only when the domain resolves, and otherwise says that no one reaches CYFR there, and no certificate is issued, until the domain's DNS names this machine. With no terminal to confirm on and no --yes, it shows the change and makes none, and a tailnet change that needs this machine joined first is refused before the join.
-
-When CYFR has tailnet access and its Tailscale Serve is closed, because the machine was not ready when it started (HTTPS certificates off, say), 'cyfr access tailnet' serves it on the tailnet again: it shows that, and once confirmed checks the machine again and opens Serve without stopping anything or rewriting .env.
-
-'cyfr access status' shows how CYFR is reached and what runs, changing nothing. 'cyfr access --resume' finishes a change an interrupted command left, under the lock, and reports what happened; it is what to run after an interruption.
-
-Exit status 3: the change was made and CYFR started, but on this machine only, because the tailnet machine is not ready to serve it (not the one .env now names, not joined, or HTTPS off); Serve stays closed, and the message says what to do. A refused or failed change exits 1. Answering no to "Join it?" or "Make this change?" says what stands and exits 0.`,
-	Example: `  cyfr access tailnet
-  cyfr access public --domain cyfr.example.com --acme-email ops@example.com
-  cyfr access local --yes
-  cyfr access --resume
-  cyfr access status`,
-	Args: cobra.MaximumNArgs(1),
+'cyfr access browser <none|tailnet|domain|proxy>' chooses its browser address. 'cyfr access status' shows how CYFR is reached and what runs, changing nothing. 'cyfr access --resume' finishes a change an interrupted command left, under the lock, and reports what happened; it is what to run after an interruption.`,
+	Example: `  cyfr access browser tailnet
+  cyfr access status
+  cyfr access --resume`,
+	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
 		if ctx == nil {
 			ctx = context.Background()
 		}
-		resume, _ := cmd.Flags().GetBool("resume")
-		if resume {
-			if len(args) > 0 {
-				return errors.New("cyfr access --resume names no mode: it finishes the change already begun")
-			}
+		if resume, _ := cmd.Flags().GetBool("resume"); resume {
 			return runAccessResume(ctx, cmd.OutOrStdout())
 		}
-		if len(args) == 0 {
-			return errors.New("name the mode: cyfr access local, cyfr access tailnet or cyfr access public (cyfr access status shows the current one)")
+		return errors.New("name what to do: cyfr access browser none, tailnet, domain or proxy chooses the browser address, and cyfr access status shows the current one")
+	},
+}
+
+var accessBrowserCmd = &cobra.Command{
+	Use:         "browser <none|tailnet|domain|proxy>",
+	Annotations: map[string]string{dockerAnnotation: "yes"},
+	Short:       "Choose CYFR's browser address: none, your tailnet, a domain, or a domain your own proxy serves",
+	Long: `Choose the browser address of the CYFR in the current directory, and every setting that follows from it in .env (CYFR_BROWSER, CYFR_HOST, CYFR_PUBLIC_URL, CYFR_TAILNET_NODE_ID, CADDY_ACME_EMAIL, CYFR_PROXY_PUBLISH).
+
+  none     no browser address: this computer only, at http://localhost:<CYFR_PORT>
+  tailnet  your devices on Tailscale, at https://<machine>.<tailnet>.ts.net; the machine joins your tailnet first (the link it prints approves it, and on a machine with a display it opens in the default browser unless --no-open is given; --tailscale-auth-key-file joins it without one)
+  domain   anyone on the internet, who still has to sign in, at https://<--domain>, through Caddy on ports 80 and 443
+  proxy    a domain your own proxy serves (nginx, a tunnel, a NAS's proxy), at https://<--domain>: CYFR starts no Caddy and publishes its proxy listener on this machine's loopback at --publish (default ` + access.DefaultPublish + `), for your proxy to forward to. Your proxy's forwarded headers are trusted only as .env states: set CYFR_TRUSTED_PROXY_HOPS (1 for your proxy alone) or CYFR_TRUSTED_PROXY_CIDRS there first, or the change is refused
+
+It shows the change first: who will reach CYFR and at what address, with the ports a domain opens, then each other setting that changes, as before → after (the certificate email, the ports opened on this machine, the port on this computer, the builds service). When the address changes it also lists what changes with it for browsers, command lines, OAuth apps, webhook senders and saved addresses, unless no one is set up on CYFR yet; accounts and their passkeys do not change. Confirm it (or pass --yes), and the access containers are stopped, removed and checked stopped, keeping the networks, .env is rewritten, and what was running is started again with the new address; a start that fails puts CYFR back as it was. Once made, it prints the address and its QR code. A domain change then resolves the domain from this machine: it ends on Done only when the domain resolves, and otherwise says that no one reaches CYFR there, and no certificate is issued, until the domain's DNS names this machine. With no terminal to confirm on and no --yes, it shows the change and makes none, and a tailnet change that needs this machine joined first is refused before the join.
+
+When CYFR has a tailnet address and its Tailscale Serve is closed, because the machine was not ready when it started (HTTPS certificates off, say), 'cyfr access browser tailnet' serves it on the tailnet again: it shows that, and once confirmed checks the machine again and opens Serve without stopping anything or rewriting .env.
+
+Exit status 3: the change was made and CYFR started, but on this machine only, because the tailnet machine is not ready to serve it (not the one .env now names, not joined, or HTTPS off); Serve stays closed, and the message says what to do. A refused or failed change exits 1. Answering no to "Join it?" or "Make this change?" says what stands and exits 0.`,
+	Example: `  cyfr access browser tailnet
+  cyfr access browser domain --domain cyfr.example.com --acme-email ops@example.com
+  cyfr access browser proxy --domain cyfr.example.com --publish 127.0.0.1:4001
+  cyfr access browser none --yes`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		ctx := cmd.Context()
+		if ctx == nil {
+			ctx = context.Background()
 		}
 		yes, _ := cmd.Flags().GetBool("yes")
 		return runAccess(ctx, args[0], accessFlags(cmd), yes, cmd.OutOrStdout())
@@ -695,16 +714,17 @@ var accessStatusCmd = &cobra.Command{
 	},
 }
 
-// runAccess is `cyfr access <mode>`: the preview, the confirmation, then the
-// switch under the lock, for tailnet with the join first.
-func runAccess(ctx context.Context, mode string, o accessOptions, yes bool, out io.Writer) error {
-	if mode != access.ModeLocal && mode != access.ModeTailnet && mode != access.ModePublic {
-		return fmt.Errorf("cyfr access takes local, tailnet or public; %q is none of them", mode)
+// runAccess is `cyfr access browser <kind>`: the preview, the
+// confirmation, then the switch under the lock, for tailnet with the join
+// first.
+func runAccess(ctx context.Context, browser string, o accessOptions, yes bool, out io.Writer) error {
+	if !slices.Contains(access.Browsers, browser) {
+		return fmt.Errorf("cyfr access browser takes none, tailnet, domain or proxy; %q is none of them", browser)
 	}
-	if err := checkTailnetOptions(mode, o); err != nil {
+	if err := checkTailnetOptions(browser, o); err != nil {
 		return err
 	}
-	target := access.Target{Mode: mode, Domain: o.domain, ACMEEmail: o.acmeEmail}
+	target := access.Target{Browser: browser, Domain: o.domain, ACMEEmail: o.acmeEmail, Publish: o.publish}
 	key, err := readAuthKey(o.keyFile)
 	if err != nil {
 		return err
@@ -717,11 +737,11 @@ func runAccess(ctx context.Context, mode string, o accessOptions, yes bool, out 
 		return showUnconfirmed(ctx, target, o, out)
 	}
 	// The switch starts the stack.
-	if err := ensureAppArmor(ctx, out, "cyfr access "+mode); err != nil {
+	if err := ensureAppArmor(ctx, out, "cyfr access browser "+browser); err != nil {
 		return err
 	}
 
-	e, unlock, _, err := openLocked(ctx, "access "+mode, out)
+	e, unlock, _, err := openLocked(ctx, "access browser "+browser, out)
 	if err != nil {
 		return err
 	}
@@ -784,6 +804,10 @@ func runAccess(ctx context.Context, mode string, o accessOptions, yes bool, out 
 		if p.Reopen {
 			printTailscale(ctx, e, out)
 		}
+		printAddress(out, p.NewWords.Address)
+		if p.New.Browser == access.BrowserProxy {
+			fmt.Fprintln(out, proxyTrustLimit(p.New.Publish))
+		}
 	}
 	// .env holds the new head now, CYFR started as it says or on this
 	// machine only: a CYFR no one is set up on is set up at the new
@@ -811,14 +835,34 @@ var lookupDomain = func(ctx context.Context, domain string) error {
 	return err
 }
 
+// proxyTrustLimit is the limit of a proxy browser address, said when one is
+// taken: the publication is on this machine's loopback, where CYFR cannot
+// tell the person's proxy from any other program that connects to it.
+func proxyTrustLimit(publish string) string {
+	return "A stated limit: every program on this machine that can connect to " + publish + " counts as your proxy: CYFR sees Docker's gateway as the peer and cannot tell one local program from another. " +
+		"With CYFR_TRUSTED_PROXY_HOPS=0 no forwarded address is believed, and every caller counts as one address. " +
+		"With one hop or more, or a CYFR_TRUSTED_PROXY_CIDRS that covers Docker's gateway, any such program chooses the client address CYFR uses for its per-address limits and for an API key's address allowlist. " +
+		"Credentials are still required either way, and the scheme is the listener's, not a header's."
+}
+
+// printAddress prints the address a change gave CYFR and its QR code, for
+// a phone to open it from; an address no QR code holds is printed alone.
+func printAddress(out io.Writer, address string) {
+	fmt.Fprintln(out, "CYFR's address: "+hyperlink(out, address))
+	if code, err := setup.QRText(address); err == nil {
+		fmt.Fprint(out, code)
+	}
+}
+
 // switchedSentence is the sentence a change that took ends on: Done, with
-// how CYFR is reached at head, once a public domain resolves. A public
+// how CYFR is reached at head, once a domain Caddy serves resolves. A
 // domain the resolver answers does not exist is said instead, since no one
 // reaches CYFR there and no certificate can be issued until its DNS names
 // this machine; a lookup that times out or fails otherwise proves neither,
-// and is said as a check this machine could not make.
+// and is said as a check this machine could not make. A proxy's domain
+// names the person's proxy, which this machine cannot check.
 func switchedSentence(ctx context.Context, head access.Head) string {
-	if head.Mode == access.ModePublic {
+	if head.Browser == access.BrowserDomain {
 		err := lookupDomain(ctx, head.Host)
 		var dns *net.DNSError
 		switch {
@@ -837,9 +881,9 @@ func switchedSentence(ctx context.Context, head access.Head) string {
 func joinStands(join joined, host string) string {
 	switch {
 	case join.removed != "":
-		return fmt.Sprintf("This machine is on your tailnet as %s now, and its old tailnet identity %s was removed: remove %s in the Tailscale admin console too. Nothing else changed; run cyfr access tailnet again when you want CYFR reached there.", host, join.removed, join.removed)
+		return fmt.Sprintf("This machine is on your tailnet as %s now, and its old tailnet identity %s was removed: remove %s in the Tailscale admin console too. Nothing else changed; run cyfr access browser tailnet again when you want CYFR reached there.", host, join.removed, join.removed)
 	case join.id != "":
-		return fmt.Sprintf("Nothing changed. This machine stays on your tailnet as %s; run cyfr access tailnet again when you want CYFR reached there.", host)
+		return fmt.Sprintf("Nothing changed. This machine stays on your tailnet as %s; run cyfr access browser tailnet again when you want CYFR reached there.", host)
 	}
 	return ""
 }
@@ -865,7 +909,7 @@ func printTailscale(ctx context.Context, e stackEngine, out io.Writer) {
 	}
 }
 
-// showUnconfirmed is `cyfr access <mode>` with no terminal to confirm on and
+// showUnconfirmed is `cyfr access browser <kind>` with no terminal to confirm on and
 // no --yes: the change shown when its preview needs no join, read without
 // the lock, and refused either way, nothing changed and no input read. A
 // preview that needs the machine joined is refused before the join, which
@@ -873,7 +917,7 @@ func printTailscale(ctx context.Context, e stackEngine, out io.Writer) {
 func showUnconfirmed(ctx context.Context, target access.Target, o accessOptions, out io.Writer) error {
 	const again = "Run it again with --yes to make the change, or at a terminal"
 	joinFirst := errors.New("Nothing changed: this machine must join your tailnet before the change can be shown, and there is no terminal to confirm the join on. " + again)
-	if target.Mode == access.ModeTailnet && o.newNode {
+	if target.Browser == access.BrowserTailnet && o.newNode {
 		return joinFirst
 	}
 	e, err := openEngine(".")
@@ -887,7 +931,7 @@ func showUnconfirmed(ctx context.Context, target access.Target, o accessOptions,
 	if err != nil {
 		return engineFailure(err)
 	}
-	if target.Mode == access.ModeTailnet && (o.hostname != "" || o.keyFile != "") {
+	if target.Browser == access.BrowserTailnet && (o.hostname != "" || o.keyFile != "") {
 		return alreadyJoined(p.New.Host, o)
 	}
 	// This path takes no lock, and cyfr's log is read only under it

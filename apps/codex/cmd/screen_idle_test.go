@@ -876,7 +876,7 @@ func TestScreenShell_AChangedFolderIsOpenedAfreshByThisBox(t *testing.T) {
 	screenCompositor(t, idletest.Options{})
 	screenPrograms(t, quietScreen())
 	s := startScreen(t)
-	if err := os.WriteFile(".env", []byte("CYFR_ACCESS=local\nCYFR_PORT=4322\n"), 0o600); err != nil {
+	if err := os.WriteFile(".env", []byte("CYFR_BROWSER=none\nCYFR_PORT=4322\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	s.shows("changed after it was opened here")

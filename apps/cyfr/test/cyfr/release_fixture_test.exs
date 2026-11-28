@@ -10,7 +10,7 @@ defmodule Cyfr.ReleaseFixtureTest do
   token and every later one by the door, held to the open admission's
   caps, each with a paired device whose record it keeps; a person made
   before comes in again by the same hello, and every person's session
-  stands past the freshness bound on a public home; a kept record is the
+  stands past the freshness bound on a public server; a kept record is the
   device a first person made again comes in with; `device_confirm` and
   `confirmed` confirm a record by the person's own device answering this
   CYFR's request, a record made wrong and another person's key are
@@ -19,7 +19,7 @@ defmodule Cyfr.ReleaseFixtureTest do
 
   # The setup token the fixture puts for its call, the pinned directory,
   # the directory client's seam, the registry, the door, the caps, the
-  # access mode, the seed and the working directory the fixture keeps its
+  # exposure, the seed and the working directory the fixture keeps its
   # devices' records in are process-wide.
   use ExUnit.Case, async: false
 
@@ -203,9 +203,9 @@ defmodule Cyfr.ReleaseFixtureTest do
     end
   end
 
-  test "each account is published at the deployment's directory, and its person's session stands past the freshness bound on a public home",
+  test "each account is published at the deployment's directory, and its person's session stands past the freshness bound on a public server",
        %{fixture: fixture, directory: directory} do
-    Prima.Test.Env.put_app_env(:sanctum, :access_mode, :public)
+    Prima.Test.Env.put_app_env(:sanctum, :exposure, :public)
     first = person!(fixture, "fixture-first")
     {:ok, _} = Sanctum.Door.Store.allow("wildcard", "*", "test")
     second = person!(fixture, "fixture-second")

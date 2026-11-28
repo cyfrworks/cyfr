@@ -143,20 +143,20 @@ func readShippedTemplate(t *testing.T) string {
 }
 
 // The shipped template documents every setting init writes: the local
-// head's keys assigned once each, no key of another mode's head
+// head's keys assigned once each, no key of another kind's head
 // assigned. Each key stackKeys writes is assigned there once, empty, so
 // the editor writes every one on its own line.
 func TestShippedTemplateCarriesInitsAnchors(t *testing.T) {
 	text := readShippedTemplate(t)
 	f := parseEnvFile(text)
-	for key, want := range map[string]string{"CYFR_ACCESS": "local", "CYFR_HOST": "localhost", "CYFR_PORT": "4000"} {
+	for key, want := range map[string]string{"CYFR_BROWSER": "none", "CYFR_HOST": "localhost", "CYFR_PORT": "4000"} {
 		if v, assigned := f.value(key); !assigned || v != want || len(f.assignments(key)) != 1 {
 			t.Errorf("the shipped template's %s is %q (assigned: %v, on %d lines), want %s on one line", key, v, assigned, len(f.assignments(key)), want)
 		}
 	}
-	for _, key := range []string{"CYFR_PUBLIC_URL", "CYFR_TAILNET_NODE_ID", "CADDY_ACME_EMAIL"} {
+	for _, key := range []string{"CYFR_PUBLIC_URL", "CYFR_TAILNET_NODE_ID", "CADDY_ACME_EMAIL", "CYFR_PROXY_PUBLISH"} {
 		if _, assigned := f.value(key); assigned {
-			t.Errorf("the shipped template assigns %s, which a local home's head omits", key)
+			t.Errorf("the shipped template assigns %s, which none's head omits", key)
 		}
 	}
 	for _, key := range []string{secretKeyBaseVar, backendsKeyVar, setupTokenVar, workerRootVar, serviceKeyVar, buildsKeyVar, corsOriginsVar, appArmorEnv} {
@@ -294,7 +294,7 @@ func TestRenderEnvFileShippedTemplate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the .env init writes does not boot: %v", engineFailure(err))
 	}
-	if boot.Head.Mode != access.ModeLocal || boot.Origin != "http://localhost:4000" || len(boot.Head.Profiles) != 0 {
+	if boot.Head.Browser != access.BrowserNone || boot.Origin != "http://localhost:4000" || len(boot.Head.Profiles) != 0 {
 		t.Errorf("a project fresh from init is reached as %+v at %s, want local at http://localhost:4000", boot.Head, boot.Origin)
 	}
 	if _, again, err := stackKeys(envValuesOf(got), false); err != nil || len(again) != 0 {
@@ -322,7 +322,7 @@ func TestANewCYFRWritesThePublicURLItsAddressImplies(t *testing.T) {
 	useRealEngine(t, &stoppedDocker{})
 	var out bytes.Buffer
 	if err := initThenPublic(context.Background(), "", &out); err != nil {
-		t.Fatalf("cyfr init, then cyfr access public: %v\n%s", err, out.String())
+		t.Fatalf("cyfr init, then cyfr access browser domain: %v\n%s", err, out.String())
 	}
 	got, err := os.ReadFile(".env")
 	if err != nil {
@@ -637,7 +637,7 @@ func TestImagesFromCompose(t *testing.T) {
     image: ghcr.io/cyfrworks/cyfr:latest
   caddy:
     image: caddy:2-alpine
-    profiles: ["public"]
+    profiles: ["domain"]
   locus:
     image: ghcr.io/cyfrworks/cyfr-locus:latest
   locus-guard:
@@ -654,7 +654,7 @@ func TestImagesFromCompose(t *testing.T) {
 		want     []string
 	}{
 		{nil, []string{"ghcr.io/cyfrworks/cyfr:latest", "ghcr.io/cyfrworks/cyfr-locus:latest"}},
-		{[]string{"public"}, []string{"ghcr.io/cyfrworks/cyfr:latest", "caddy:2-alpine", "ghcr.io/cyfrworks/cyfr-locus:latest"}},
+		{[]string{"domain"}, []string{"ghcr.io/cyfrworks/cyfr:latest", "caddy:2-alpine", "ghcr.io/cyfrworks/cyfr-locus:latest"}},
 		{[]string{"other"}, []string{"ghcr.io/cyfrworks/cyfr:latest", "ghcr.io/cyfrworks/cyfr-locus:latest"}},
 	} {
 		got := imagesFromCompose(path, tc.profiles)

@@ -35,7 +35,7 @@
 #       one its egress refuses (the compose proof's and the Locus image
 #       tests' deployments name one, so that no read of theirs leaves the
 #       machine), the account is cached here alone, as a first read leaves
-#       it, and its person pauses past the bound on a public home; where its
+#       it, and its person pauses past the bound on a public server; where its
 #       registry is cyfr.run, or its directory holds no account, no name is
 #       claimed.
 #

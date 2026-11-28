@@ -147,7 +147,7 @@ defmodule Cyfr.Admission do
       entries: @endpoint_entries,
       reason:
         "the endpoint's proxy listener, which CYFR's proxy forwards to " <>
-          "from other devices with tailnet or public access, the one listener whose forwarded headers are trusted from " <>
+          "from other devices with a browser address, the one listener whose forwarded headers are trusted from " <>
           "that proxy alone: " <> @endpoint_reason
     },
     %{

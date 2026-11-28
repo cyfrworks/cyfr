@@ -142,7 +142,7 @@ func TestDockerIsHereOnlyThroughASocketOrAPipe(t *testing.T) {
 // is read, directly, through an interpolation or through a bare name.
 func TestReadProjectAloneTakesNothingFromTheEnvironment(t *testing.T) {
 	for k, v := range map[string]string{
-		"CYFR_PORT": "4999", "CYFR_ACCESS": "public", "CYFR_DIRECTORY_URL": "https://launcher.example",
+		"CYFR_PORT": "4999", "CYFR_BROWSER": "domain", "CYFR_DIRECTORY_URL": "https://launcher.example",
 		"CYFR_SETUP_TOKEN": "launchers", "LAUNCHER": "4888", "INFILE": "4777",
 	} {
 		t.Setenv(k, v)
@@ -152,9 +152,9 @@ func TestReadProjectAloneTakesNothingFromTheEnvironment(t *testing.T) {
 		port int
 		want map[string]string
 	}{
-		{"CYFR_ACCESS=local\nCYFR_PORT=4100\n", 4100, map[string]string{"CYFR_DIRECTORY_URL": "", "CYFR_SETUP_TOKEN": ""}},
-		{"CYFR_ACCESS=local\nINFILE=4300\nCYFR_PORT=${INFILE}\n", 4300, map[string]string{"INFILE": "4300"}},
-		{"CYFR_ACCESS=local\nCYFR_PORT=${LAUNCHER}\nCYFR_DIRECTORY_URL\nCYFR_SETUP_TOKEN\n", 4000,
+		{"CYFR_BROWSER=none\nCYFR_PORT=4100\n", 4100, map[string]string{"CYFR_DIRECTORY_URL": "", "CYFR_SETUP_TOKEN": ""}},
+		{"CYFR_BROWSER=none\nINFILE=4300\nCYFR_PORT=${INFILE}\n", 4300, map[string]string{"INFILE": "4300"}},
+		{"CYFR_BROWSER=none\nCYFR_PORT=${LAUNCHER}\nCYFR_DIRECTORY_URL\nCYFR_SETUP_TOKEN\n", 4000,
 			map[string]string{"CYFR_DIRECTORY_URL": "", "CYFR_SETUP_TOKEN": ""}},
 	} {
 		dir := t.TempDir()
@@ -162,7 +162,7 @@ func TestReadProjectAloneTakesNothingFromTheEnvironment(t *testing.T) {
 			t.Fatal(err)
 		}
 		values, head, err := ReadProjectAlone(dir)
-		if err != nil || head.Mode != ModeLocal || head.Port != tc.port {
+		if err != nil || head.Browser != BrowserNone || head.Port != tc.port {
 			t.Fatalf("%q read as %+v, %v", tc.env, head, err)
 		}
 		for k, v := range tc.want {

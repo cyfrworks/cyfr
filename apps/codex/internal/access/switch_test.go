@@ -5,6 +5,7 @@ package access
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -21,7 +22,7 @@ var bg = context.Background()
 func TestSwitchStopsCommitsThenStarts(t *testing.T) {
 	h := newHome(t)
 	h.fake.startStack(t, h.head())
-	target := Target{Mode: ModePublic, Domain: "home.example.com"}
+	target := Target{Browser: BrowserDomain, Domain: "home.example.com"}
 	r := h.request(id(1), target, "")
 	rc, err := h.e.Switch(bg, r)
 	if err != nil || rc.State != "completed" || rc.Outcome != "ok" {
@@ -30,10 +31,10 @@ func TestSwitchStopsCommitsThenStarts(t *testing.T) {
 	if got := h.head(); got.Digest() != r.NewDigest {
 		t.Errorf(".env holds %+v, not the new head", got)
 	}
-	h.assertConverged(publicStack...)
+	h.assertConverged(domainStack...)
 
 	calls := h.fake.calls()
-	commit := slices.IndexFunc(calls, func(c fakeCall) bool { return strings.Contains(c.DotEnv, "CYFR_ACCESS=public") })
+	commit := slices.IndexFunc(calls, func(c fakeCall) bool { return strings.Contains(c.DotEnv, "CYFR_BROWSER=domain") })
 	if commit < 0 {
 		t.Fatal("no call saw the committed .env")
 	}
@@ -51,7 +52,7 @@ func TestSwitchStopsCommitsThenStarts(t *testing.T) {
 		if c.Serve != serveClosed {
 			t.Errorf("compose up while Serve held %q: %s", c.Serve, c)
 		}
-		want := []string{"compose", "-p", "home", "-f", resolvedName(r.NewDigest), "--project-directory", ".", "--profile", "public"}
+		want := []string{"compose", "-p", "home", "-f", resolvedName(r.NewDigest), "--project-directory", ".", "--profile", "domain"}
 		if !slices.Equal(c.Args[:len(want)], want) {
 			t.Errorf("compose up is not on the new head's materialized file and selection: %s", c)
 		}
@@ -67,7 +68,7 @@ func TestSwitchStopsCommitsThenStarts(t *testing.T) {
 func TestStoppedStackSwitchMakesNoComposeCall(t *testing.T) {
 	h := newHome(t)
 	os.Remove(filepath.Join(h.dir, "docker-compose.yml"))
-	r := h.request(id(1), Target{Mode: ModePublic, Domain: "home.example.com"}, "")
+	r := h.request(id(1), Target{Browser: BrowserDomain, Domain: "home.example.com"}, "")
 	rc, err := h.e.Switch(bg, r)
 	if err != nil || rc.Outcome != "ok" {
 		t.Fatalf("switch answered %+v, %v", rc, err)
@@ -89,8 +90,8 @@ func TestStoppedStackSwitchMakesNoComposeCall(t *testing.T) {
 // public head's digest; the same head again is access_unchanged.
 func TestSwitchFenceRefusesAStalePreview(t *testing.T) {
 	h := newHome(t)
-	pub := Target{Mode: ModePublic, Domain: "home.example.com"}
-	withEmail := Target{Mode: ModePublic, Domain: "home.example.com", ACMEEmail: "ops@example.com"}
+	pub := Target{Browser: BrowserDomain, Domain: "home.example.com"}
+	withEmail := Target{Browser: BrowserDomain, Domain: "home.example.com", ACMEEmail: "ops@example.com"}
 	if h.preview(pub, "").NewDigest == h.preview(withEmail, "").NewDigest {
 		t.Error("an email-only change keeps the public head's digest")
 	}
@@ -112,7 +113,7 @@ func TestSwitchFenceRefusesAStalePreview(t *testing.T) {
 		}
 		writeFile(t, filepath.Join(h.dir, ".env"), []byte(strings.Replace(before, edit.to, edit.from, 1)))
 	}
-	if _, err := h.e.Preview(bg, Target{Mode: ModeLocal}, ""); refusalCode(err) != "access_unchanged" {
+	if _, err := h.e.Preview(bg, Target{Browser: BrowserNone}, ""); refusalCode(err) != "access_unchanged" {
 		t.Errorf("previewing the head .env holds answered %v", err)
 	}
 	if calls := h.fake.calls(); slices.ContainsFunc(calls, func(c fakeCall) bool { return c.Args[0] != "ps" && c.Args[0] != "compose" }) {
@@ -128,13 +129,13 @@ func TestRollbackStopsTheTargetBeforeRestoringTheOldHead(t *testing.T) {
 	h := newHome(t)
 	h.fake.startStack(t, h.head())
 	old := h.head()
-	r := h.request(id(1), Target{Mode: ModePublic, Domain: "home.example.com"}, "")
+	r := h.request(id(1), Target{Browser: BrowserDomain, Domain: "home.example.com"}, "")
 	h.fake.hook = func(_ context.Context, c *fakeCall) *fakeAnswer {
 		h.fake.mu.Lock()
 		defer h.fake.mu.Unlock()
 		// The new head's cyfr fails its health; the old one's passes.
 		h.fake.st.Health = "healthy"
-		if envNow(h.dir, "CYFR_ACCESS=public") {
+		if envNow(h.dir, "CYFR_BROWSER=domain") {
 			h.fake.st.Health = "unhealthy"
 		}
 		return nil
@@ -154,9 +155,9 @@ func TestRollbackStopsTheTargetBeforeRestoringTheOldHead(t *testing.T) {
 	calls := h.fake.calls()
 	proxyUp := slices.IndexFunc(calls, func(c fakeCall) bool { return slices.Contains(c.Args, "up") && slices.Contains(c.Args, "caddy") })
 	unhealthy := slices.IndexFunc(calls, func(c fakeCall) bool {
-		return c.Args[0] == "inspect" && strings.Contains(c.DotEnv, "CYFR_ACCESS=public")
+		return c.Args[0] == "inspect" && strings.Contains(c.DotEnv, "CYFR_BROWSER=domain")
 	})
-	restored := slices.IndexFunc(calls[max(unhealthy, 0):], func(c fakeCall) bool { return strings.Contains(c.DotEnv, "CYFR_ACCESS=local") }) + max(unhealthy, 0)
+	restored := slices.IndexFunc(calls[max(unhealthy, 0):], func(c fakeCall) bool { return strings.Contains(c.DotEnv, "CYFR_BROWSER=none") }) + max(unhealthy, 0)
 	if proxyUp < 0 || unhealthy < proxyUp || restored <= unhealthy {
 		t.Fatalf("no proxy start, failed health, then restore in %v", calls)
 	}
@@ -186,7 +187,7 @@ func TestFailedStopIsUncertainThenResumeConverges(t *testing.T) {
 	h := newHome(t)
 	h.fake.startStack(t, h.head())
 	old := h.env()
-	r := h.request(id(1), Target{Mode: ModePublic, Domain: "home.example.com"}, "")
+	r := h.request(id(1), Target{Browser: BrowserDomain, Domain: "home.example.com"}, "")
 	broken := true
 	h.fake.hook = func(_ context.Context, c *fakeCall) *fakeAnswer {
 		if broken && c.Args[0] == "stop" {
@@ -210,7 +211,7 @@ func TestFailedStopIsUncertainThenResumeConverges(t *testing.T) {
 	if j, _ := h.e.readJournal(); j == nil || j.Phase != "uncertain" {
 		t.Fatalf("the journal is %+v", j)
 	}
-	other := h.request(id(2), Target{Mode: ModePublic, Domain: "other.example.com"}, "")
+	other := h.request(id(2), Target{Browser: BrowserDomain, Domain: "other.example.com"}, "")
 	if rc, err := h.e.Switch(bg, other); refusalCode(err) != "access_uncertain" || rc.RequestID != id(1) {
 		t.Errorf("another switch answered %+v, %v, not the uncertain receipt", rc, err)
 	}
@@ -245,12 +246,12 @@ func envNow(dir, line string) bool {
 func TestUncertainRollbackKeepsItsFiles(t *testing.T) {
 	h := newHome(t)
 	h.fake.startStack(t, h.head())
-	r := h.request(id(1), publicTarget, "")
+	r := h.request(id(1), domainTarget, "")
 	broken := true
 	h.fake.hook = func(_ context.Context, c *fakeCall) *fakeAnswer {
 		h.fake.mu.Lock()
 		defer h.fake.mu.Unlock()
-		public := envNow(h.dir, "CYFR_ACCESS=public")
+		public := envNow(h.dir, "CYFR_BROWSER=domain")
 		h.fake.st.Health = "healthy"
 		if public {
 			h.fake.st.Health = "unhealthy"
@@ -293,5 +294,82 @@ func TestUncertainRollbackKeepsItsFiles(t *testing.T) {
 func TestAuthKeyFingerprintIsTheTrimmedKeys(t *testing.T) {
 	if fp := authKeyFingerprint([]byte(" " + testKey + "\n")); fp != "sha256:"+sha256Hex([]byte(testKey)) || authKeyFingerprint([]byte(" \n")) != "" {
 		t.Errorf("authKeyFingerprint gave %q", fp)
+	}
+}
+
+// A switch refuses a stated trust every start would refuse, by the boot's
+// own refusal and with the stack stopped, before .env is written: each
+// boot vector the trust's rule refuses (tests/fixtures/access.json) is
+// the input, to every kind with a proxy listener.
+func TestStoppedSwitchRefusesTheTrustEveryStartRefuses(t *testing.T) {
+	var cases int
+	for _, v := range readVectors(t).Boot {
+		key := ""
+		if v.Refusal != nil && v.Refusal.Code == "access_setting_invalid" {
+			key = v.Refusal.Payload["key"]
+		}
+		if key != "CYFR_TRUSTED_PROXY_HOPS" && key != "CYFR_TRUSTED_PROXY_CIDRS" {
+			continue
+		}
+		cases++
+		for _, target := range []Target{
+			{Browser: BrowserProxy, Domain: "cyfr.example.com"},
+			{Browser: BrowserDomain, Domain: "cyfr.example.com"},
+			{Browser: BrowserTailnet},
+		} {
+			h := newHome(t)
+			old := h.head().Digest()
+			before := h.env() + key + "=" + v.Input.Process[key] + "\n"
+			writeFile(t, filepath.Join(h.dir, ".env"), []byte(before))
+			if _, err := h.e.Preview(bg, target, ""); refusalCode(err) != "access_setting_invalid" {
+				t.Errorf("%s: the preview to %s answered %v", v.Name, target.Browser, err)
+			}
+			rc, err := h.e.Switch(bg, SwitchRequest{ID: id(1), Target: target, OldDigest: old, NewDigest: "sha256:any"})
+			var r *Refusal
+			// The refusal names the setting; its value is redacted as every
+			// .env value an engine refusal carries.
+			if !errors.As(err, &r) || r.Code != "access_setting_invalid" || r.Payload["key"] != key || rc.Outcome == "ok" {
+				t.Errorf("%s: the switch to %s answered %+v, %v; want the boot's refusal of %s", v.Name, target.Browser, rc, err, key)
+			}
+			if h.env() != before {
+				t.Errorf("%s: the refused switch to %s wrote .env:\n%s", v.Name, target.Browser, h.env())
+			}
+		}
+	}
+	if cases == 0 {
+		t.Fatal("the access vectors hold no trust the boot refuses")
+	}
+}
+
+// The proxy trust is .env's own word: a trust key whose value .env takes
+// from another variable, which the caller's environment would choose, is
+// refused by name, at the update's read of .env and at every engine read;
+// the same text single-quoted is a literal, read as any value is.
+func TestTrustKeysTakeLiteralValuesOnly(t *testing.T) {
+	t.Setenv("S2_TRUST", "10.0.0.0/8")
+	for _, c := range []struct {
+		line, key string
+	}{
+		{"CYFR_TRUSTED_PROXY_CIDRS=${S2_TRUST}", "CYFR_TRUSTED_PROXY_CIDRS"},
+		{"CYFR_TRUSTED_PROXY_CIDRS=\"$S2_TRUST\"", "CYFR_TRUSTED_PROXY_CIDRS"},
+		{"CYFR_TRUSTED_PROXY_HOPS=${S2_HOPS:-1}", "CYFR_TRUSTED_PROXY_HOPS"},
+		{"CYFR_TRUSTED_PROXY_HOPS", "CYFR_TRUSTED_PROXY_HOPS"},
+		{"CYFR_TRUSTED_PROXY_CIDRS", "CYFR_TRUSTED_PROXY_CIDRS"},
+	} {
+		h := newHome(t)
+		path := filepath.Join(h.dir, ".env")
+		writeFile(t, path, []byte(h.env()+c.line+"\n"))
+		for name, err := range map[string]error{"the update's read": CheckEnvFile(path), "the engine's read": func() error { _, err := h.e.Head(); return err }()} {
+			var r *Refusal
+			if !errors.As(err, &r) || r.Code != "access_trust_interpolated" || r.Payload["key"] != c.key {
+				t.Errorf("%q: %s answered %v", c.line, name, err)
+			}
+		}
+	}
+	h := newHome(t)
+	path := filepath.Join(h.dir, ".env")
+	writeFile(t, path, []byte(h.env()+"CYFR_TRUSTED_PROXY_HOPS='2'\n"))
+	if err := CheckEnvFile(path); err != nil {
+		t.Errorf("a single-quoted literal trust is refused: %v", err)
 	}
 }

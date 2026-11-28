@@ -19,7 +19,7 @@ defmodule Sanctum.ClientIp do
 
   The endpoint serves two listeners, and the listener that accepted a
   request is the boundary: `:loopback`, the listener this machine's
-  loopback reaches, or `:proxy`, the one a tailnet or public home's proxy
+  loopback reaches, or `:proxy`, the one a browser address's proxy
   forwards to. Each listener's first plug tags the request
   (`put_ingress/2`): the atom in `conn.private`, read by `ingress/1`, and
   the request header `x-cyfr-ingress`, which a socket's
@@ -33,10 +33,10 @@ defmodule Sanctum.ClientIp do
 
   X-Forwarded-For is honoured ONLY on the proxy listener, and only as
   `config :sanctum, :proxy_trust` says, which `config/runtime.exs` sets
-  from the home's access settings (`Cyfr.RuntimeConfig.resolve_access/1`):
+  from the server's access settings (`Cyfr.RuntimeConfig.resolve_access/1`):
   `{:cidrs, entries}` strips the trailing hops inside those IPs and CIDRs,
-  `{:hops, count}` strips a fixed count from 0 to 16, and `:none`, a
-  local home's, trusts nothing. On the loopback listener, and on a request
+  `{:hops, count}` strips a fixed count from 0 to 16, and `:none`, with no
+  browser address, trusts nothing. On the loopback listener, and on a request
   with no ingress, the header is never read: the client is the socket
   peer. Unconditional XFF trust would let any client spoof an API-key IP
   allowlist; ignoring XFF behind a proxy would make every allowlist check

@@ -15,7 +15,7 @@ import (
 	"testing"
 )
 
-var publicTarget = Target{Mode: ModePublic, Domain: "home.example.com"}
+var domainTarget = Target{Browser: BrowserDomain, Domain: "home.example.com"}
 
 // unhealthyWhen makes cyfr's health fail while .env holds line.
 func unhealthyWhen(h *testHome, line string) {
@@ -44,10 +44,10 @@ func TestKillAtEveryPhaseRecovers(t *testing.T) {
 	}{
 		{"journal:switch:accepted", "not_applied", false, baseStack},
 		{"journal:switch:stopped", "not_applied", false, baseStack},
-		{"env:commit", "ok", false, publicStack},
-		{"journal:switch:committed", "ok", false, publicStack},
-		{"start:public", "ok", false, publicStack},
-		{"receipt:switch", "ok", false, publicStack},
+		{"env:commit", "ok", false, domainStack},
+		{"journal:switch:committed", "ok", false, domainStack},
+		{"start:domain", "ok", false, domainStack},
+		{"receipt:switch", "ok", false, domainStack},
 		{"journal:switch:rolling_back", "rolled_back", true, baseStack},
 		{"env:rollback", "rolled_back", true, baseStack},
 		{"journal:switch:restored", "rolled_back", true, baseStack},
@@ -56,9 +56,9 @@ func TestKillAtEveryPhaseRecovers(t *testing.T) {
 			h := newHome(t)
 			h.fake.startStack(t, h.head())
 			if c.unhealthy {
-				unhealthyWhen(h, "CYFR_ACCESS=public")
+				unhealthyWhen(h, "CYFR_BROWSER=domain")
 			}
-			r := h.request(id(1), publicTarget, "")
+			r := h.request(id(1), domainTarget, "")
 			if !h.killAt(c.point, func(e *Engine) { e.Switch(bg, r) }) {
 				t.Fatalf("the switch never reached %s", c.point)
 			}
@@ -102,13 +102,13 @@ func envEdited(then, env string) string {
 	lead := "A change of how CYFR is reached was interrupted, and .env was edited before the change finished. CYFR stopped the stack, checked it stopped, "
 	switch then {
 	case "started":
-		return lead + "left .env as edited, and started CYFR as it says: " + env + ". If that is not how CYFR should be reached, run `cyfr access <mode>`."
+		return lead + "left .env as edited, and started CYFR as it says: " + env + ". If that is not how CYFR should be reached, run `cyfr access browser <kind>`."
 	case "not_running":
-		return lead + "and left .env as edited, which says: " + env + ". The stack was not running, so nothing was started. Run `cyfr up` to start it as .env says, or `cyfr access <mode>` to choose again."
+		return lead + "and left .env as edited, which says: " + env + ". The stack was not running, so nothing was started. Run `cyfr up` to start it as .env says, or `cyfr access browser <kind>` to choose again."
 	case "failed":
-		return lead + "and left .env as edited, but CYFR did not start as it says (" + env + "), and everything is stopped. Fix .env, then run `cyfr up`, or run `cyfr access <mode>` to choose again."
+		return lead + "and left .env as edited, but CYFR did not start as it says (" + env + "), and everything is stopped. Fix .env, then run `cyfr up`, or run `cyfr access browser <kind>` to choose again."
 	}
-	return lead + "and left .env as edited; nothing was started, because .env no longer says one coherent way CYFR is reached. Run `cyfr up` to see what is wrong with it, or `cyfr access <mode>` to choose again."
+	return lead + "and left .env as edited; nothing was started, because .env no longer says one coherent way CYFR is reached. Run `cyfr up` to see what is wrong with it, or `cyfr access browser <kind>` to choose again."
 }
 
 // .env edited during a switch to a head that is neither of the
@@ -129,14 +129,14 @@ func TestRecoveryOfAnEnvEditedMidSwitch(t *testing.T) {
 		{"started", edited, true, func(s string) string { return strings.Replace(s, "CYFR_PORT=4000", "CYFR_PORT=4100", 1) }, false, baseStack},
 		{"not_running", edited, false, func(s string) string { return strings.Replace(s, "CYFR_PORT=4000", "CYFR_PORT=4100", 1) }, false, nil},
 		{"failed", edited, true, func(s string) string { return strings.Replace(s, "CYFR_PORT=4000", "CYFR_PORT=4100", 1) }, true, slices.DeleteFunc(slices.Clone(baseStack), func(s string) bool { return s == "cyfr" })},
-		{"incoherent", "", true, func(s string) string { return strings.Replace(s, "CYFR_ACCESS=local", "CYFR_ACCESS=sideways", 1) }, false, slices.DeleteFunc(slices.Clone(baseStack), func(s string) bool { return s == "cyfr" })},
+		{"incoherent", "", true, func(s string) string { return strings.Replace(s, "CYFR_BROWSER=none", "CYFR_BROWSER=sideways", 1) }, false, slices.DeleteFunc(slices.Clone(baseStack), func(s string) bool { return s == "cyfr" })},
 	} {
 		t.Run(c.then, func(t *testing.T) {
 			h := newHome(t)
 			if c.running {
 				h.fake.startStack(t, h.head())
 			}
-			r := h.request(id(1), publicTarget, "")
+			r := h.request(id(1), domainTarget, "")
 			h.killAt("journal:switch:accepted", func(e *Engine) { e.Switch(bg, r) })
 			edit := c.edit(h.env())
 			writeFile(t, filepath.Join(h.dir, ".env"), []byte(edit))
@@ -181,7 +181,7 @@ func TestRecoveryOfAnEnvEditedMidSwitch(t *testing.T) {
 func TestLateDaemonCompletionConverges(t *testing.T) {
 	h := newHome(t)
 	h.fake.startStack(t, h.head())
-	r := h.request(id(1), publicTarget, "")
+	r := h.request(id(1), domainTarget, "")
 	landed := false
 	h.fake.hook = func(_ context.Context, c *fakeCall) *fakeAnswer {
 		h.fake.mu.Lock()
@@ -212,14 +212,14 @@ func TestLateDaemonCompletionConverges(t *testing.T) {
 	}
 	rms := 0
 	for _, c := range h.fake.calls() {
-		if c.Args[0] == "rm" && slices.Contains(c.Args, "cyfr") && !strings.Contains(c.DotEnv, "CYFR_ACCESS=public") {
+		if c.Args[0] == "rm" && slices.Contains(c.Args, "cyfr") && !strings.Contains(c.DotEnv, "CYFR_BROWSER=domain") {
 			rms++
 		}
 	}
 	if rms < 2 {
 		t.Errorf("the late cyfr was not stopped again before the commit (%d removals)", rms)
 	}
-	h.assertConverged(publicStack...)
+	h.assertConverged(domainStack...)
 }
 
 // A durable write that fails around its rename or its directory sync, at
@@ -236,7 +236,7 @@ func TestFailedDurableWritesRecoverToOneHead(t *testing.T) {
 				h := newHome(t)
 				h.fake.startStack(t, h.head())
 				old := h.head()
-				r := h.request(id(1), publicTarget, "")
+				r := h.request(id(1), domainTarget, "")
 				seen := 0
 				injected := false
 				h.e.failWrite = func(name, at string) error {
@@ -264,7 +264,7 @@ func TestFailedDurableWritesRecoverToOneHead(t *testing.T) {
 				case old.Digest():
 					h.assertConverged(baseStack...)
 				case r.NewDigest:
-					h.assertConverged(publicStack...)
+					h.assertConverged(domainStack...)
 				default:
 					t.Fatalf(".env holds neither head: %+v", got)
 				}
@@ -278,7 +278,7 @@ func TestFailedDurableWritesRecoverToOneHead(t *testing.T) {
 func TestStartWaitsForRecovery(t *testing.T) {
 	h := newHome(t)
 	h.fake.startStack(t, h.head())
-	r := h.request(id(1), publicTarget, "")
+	r := h.request(id(1), domainTarget, "")
 	h.killAt("journal:switch:stopped", func(e *Engine) { e.Switch(bg, r) })
 	before := len(h.fake.calls())
 	if _, err := h.e.Start(bg, "up"); refusalCode(err) != "access_outcome_unknown" || !strings.Contains(err.(*Refusal).Message(), "cyfr access --resume") {
@@ -305,7 +305,7 @@ func TestRecoverySweepsInterruptedWrites(t *testing.T) {
 		t.Run(file, func(t *testing.T) {
 			h := newHome(t)
 			h.fake.startStack(t, h.head())
-			r := h.request(id(1), publicTarget, "")
+			r := h.request(id(1), domainTarget, "")
 			var left string
 			h.e.failWrite = func(name, step string) error {
 				match := filepath.Base(name) == file || file == "receipt" && strings.Contains(name, receiptsDir)
@@ -349,7 +349,7 @@ func TestRecoveryKeepsAnIncoherentEdit(t *testing.T) {
 		t.Run(point, func(t *testing.T) {
 			h := newHome(t)
 			h.fake.startStack(t, h.head())
-			r := h.request(id(1), publicTarget, "")
+			r := h.request(id(1), domainTarget, "")
 			h.killAt(point, func(e *Engine) { e.Switch(bg, r) })
 			edit := h.env() + "CYFR_BIND_ADDRESS=not-an-address\n"
 			writeFile(t, h.e.envPath(), []byte(edit))
@@ -399,7 +399,7 @@ func TestRecoveryResolvesAHeadCorrectedAfterAcceptance(t *testing.T) {
 			fixed := h.env()
 			incoherent := fixed + "CYFR_BIND_ADDRESS=not-an-address\n"
 			writeFile(t, h.e.envPath(), []byte(incoherent))
-			r := h.request(id(1), publicTarget, "")
+			r := h.request(id(1), domainTarget, "")
 			if r.OldDigest != "" {
 				t.Fatalf("the incoherent .env has a head: %s", r.OldDigest)
 			}
@@ -452,7 +452,7 @@ func TestRecoveryConvergesUnderAComposeSettingInEnv(t *testing.T) {
 		t.Run(point, func(t *testing.T) {
 			h := newHome(t)
 			h.fake.startStack(t, h.head())
-			r := h.request(id(1), publicTarget, "")
+			r := h.request(id(1), domainTarget, "")
 			h.killAt(point, func(e *Engine) { e.Switch(bg, r) })
 			h.crash()
 			writeFile(t, h.e.envPath(), []byte(h.env()+"COMPOSE_PROFILES=public\n"))

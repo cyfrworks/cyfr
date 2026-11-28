@@ -47,7 +47,7 @@ func TestStatusTakesNoLockAndChangesNothing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.HeadErr != nil || s.Head.Mode != ModeTailnet || s.Words.Address != "https://cyfr.tail1234.ts.net" {
+	if s.HeadErr != nil || s.Head.Browser != BrowserTailnet || s.Words.Address != "https://cyfr.tail1234.ts.net" {
 		t.Errorf("status shows %+v (%v)", s.Head, s.HeadErr)
 	}
 	if s.Last == nil || s.Last.Op != "switch" || s.Unfinished != nil {
@@ -98,7 +98,7 @@ func TestStatusSaysDockerDidNotAnswer(t *testing.T) {
 	if s.Unobserved == nil || !strings.Contains(s.Unobserved.Error(), "docker ps failed") || s.Containers != nil {
 		t.Errorf("status shows %v, unobserved %v", s.Containers, s.Unobserved)
 	}
-	if s.HeadErr != nil || s.Head.Mode != ModeLocal {
+	if s.HeadErr != nil || s.Head.Browser != BrowserNone {
 		t.Errorf("status shows %+v (%v)", s.Head, s.HeadErr)
 	}
 }
@@ -121,8 +121,8 @@ func mapsEqual(a, b map[string]string) bool {
 // approved again.
 func TestPreviewShowsBothHeadsAndTheAddressChange(t *testing.T) {
 	h := newHome(t)
-	p := h.preview(publicTarget, "")
-	if p.Old.Mode != ModeLocal || p.New.Host != "home.example.com" || p.OldDigest != h.head().Digest() || p.NewDigest != p.New.Digest() {
+	p := h.preview(domainTarget, "")
+	if p.Old.Browser != BrowserNone || p.New.Host != "home.example.com" || p.OldDigest != h.head().Digest() || p.NewDigest != p.New.Digest() {
 		t.Errorf("preview %+v", p)
 	}
 	if p.OldWords.Who != "only this computer" || p.NewWords.Ports != "80 and 443" || p.NewWords.Address != "https://home.example.com" {
@@ -136,10 +136,10 @@ func TestPreviewShowsBothHeadsAndTheAddressChange(t *testing.T) {
 			t.Errorf("an address change asks for a passkey or a device again: %q", change)
 		}
 	}
-	if _, err := h.e.Switch(bg, h.request(id(1), publicTarget, "")); err != nil {
+	if _, err := h.e.Switch(bg, h.request(id(1), domainTarget, "")); err != nil {
 		t.Fatal(err)
 	}
-	email := h.preview(Target{Mode: ModePublic, Domain: "home.example.com", ACMEEmail: "ops@example.com"}, "")
+	email := h.preview(Target{Browser: BrowserDomain, Domain: "home.example.com", ACMEEmail: "ops@example.com"}, "")
 	if len(email.AddressChanges) != 0 || email.OldWords.CertificateEmail != "none" || email.NewWords.CertificateEmail != "ops@example.com" {
 		t.Errorf("an email-only change previews %+v", email)
 	}
@@ -208,7 +208,7 @@ func TestDockerDiagnosticsCarryNoEnvValue(t *testing.T) {
 	}
 	texts = append(texts, fmt.Sprint(h.e.CheckStack(bg)))
 	note(h.e.Start(bg, "up"))
-	note(h.e.Switch(bg, h.request(id(1), publicTarget, "")))
+	note(h.e.Switch(bg, h.request(id(1), domainTarget, "")))
 	note(h.e.Join(bg, JoinRequest{ID: id(2)}))
 	note(h.e.Stop(bg, "down", true))
 	s, err := h.e.Status(bg)
@@ -218,7 +218,7 @@ func TestDockerDiagnosticsCarryNoEnvValue(t *testing.T) {
 	stderr = "error: the daemon could not use " + secret + "\n"
 	texts = append(texts, fmt.Sprint(h.e.CheckStack(bg)))
 	note(h.e.Start(bg, "up"))
-	note(h.e.Switch(bg, h.request(id(3), publicTarget, "")))
+	note(h.e.Switch(bg, h.request(id(3), domainTarget, "")))
 	for path, data := range h.snapshot() {
 		if path != ".env" {
 			texts = append(texts, data)

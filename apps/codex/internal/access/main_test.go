@@ -200,11 +200,11 @@ func (h *testHome) assertConverged(want ...string) {
 // id is a request id, the n-th of a test.
 func id(n int) string { return fmt.Sprintf("%032x", n) }
 
-// localStack, publicStack and tailnetStack are the services each mode
-// runs, as docker-compose.yml has them.
+// baseStack, domainStack and tailnetStack are the services each kind
+// runs, as docker-compose.yml has them: baseStack is none's and proxy's.
 var (
 	baseStack    = []string{"cyfr", "locus", "locus-guard"}
-	publicStack  = append(slices.Clone(baseStack), "caddy")
+	domainStack  = append(slices.Clone(baseStack), "caddy")
 	tailnetStack = append(slices.Clone(baseStack), "tailscale")
 )
 

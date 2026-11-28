@@ -10,8 +10,8 @@
 # what differs. ROOT is the checkout.
 
 # The head, as the access vectors spell one, that the project runs: `$1` the
-# expected head (JSON: mode, host, port, public_url, acme_email,
-# node_id, profiles), `$2` .env, `$3` the cyfr container's
+# expected head (JSON: browser, host, port, public_url, acme_email,
+# node_id, publish, profiles), `$2` .env, `$3` the cyfr container's
 # environment (`docker inspect` .Config.Env as JSON), `$4` the project's
 # running services, one line, sorted, `$5` the node id the tailnet state
 # holds and `$6` the machine's name it holds (Self.DNSName, with the
@@ -27,13 +27,13 @@
 # remove, and the proof's mapping of them to head fields is held to that
 # set.
 head_holds() {
-  python3 -I - "$ROOT/tests/fixtures/access_modes.json" "$@" <<'PY'
+  python3 -I - "$ROOT/tests/fixtures/access.json" "$@" <<'PY'
 import json, sys
 vectors, want, env_path, container_env, running, state_id = sys.argv[1:7]
 state_name = sys.argv[7] if len(sys.argv) > 7 else ""
-FIELDS = {"mode": "CYFR_ACCESS", "host": "CYFR_HOST", "port": "CYFR_PORT", "public_url": "CYFR_PUBLIC_URL",
-          "acme_email": "CADDY_ACME_EMAIL", "node_id": "CYFR_TAILNET_NODE_ID"}
-PROXIES = {"public": "caddy", "tailnet": "tailscale"}
+FIELDS = {"browser": "CYFR_BROWSER", "host": "CYFR_HOST", "port": "CYFR_PORT", "public_url": "CYFR_PUBLIC_URL",
+          "acme_email": "CADDY_ACME_EMAIL", "node_id": "CYFR_TAILNET_NODE_ID", "publish": "CYFR_PROXY_PUBLISH"}
+PROXIES = {"domain": "caddy", "tailnet": "tailscale"}
 problems = []
 derived = set()
 for v in json.load(open(vectors))["derive"]:
@@ -77,7 +77,7 @@ else:
     services = " ".join(sorted(["cyfr"] + [PROXIES[p] for p in profiles]))
     if running != services:
         problems.append(f"the project runs '{running}', not '{services}'")
-if head.get("mode") == "tailnet" and state_id != "-":
+if head.get("browser") == "tailnet" and state_id != "-":
     if state_id != head.get("node_id"):
         problems.append(f"the tailnet state holds the node {state_id or 'none'!r}, not the head's {head.get('node_id')!r}")
     if len(state_name) < 2 or not state_name.endswith("."):
@@ -115,9 +115,9 @@ PY
 # command) for the switch from head `$2` to head `$3` (JSON), on a CYFR
 # that has booted, so someone may be set up on it: exactly the preview
 # block, who will reach CYFR at the new head's address (the access vectors'
-# words for its mode; apps/codex/cmd/access.go reachedBy), a line for each
+# words for its kind; apps/codex/cmd/access.go reachedBy), a line for each
 # other field that changes (a tailnet machine replaced, without its node
-# id, the certificate email, the ports unless the new head is public, the
+# id, the certificate email, the ports unless the new head is a domain's, the
 # port on this computer; access.go changedRows), and,
 # as the address changes, the engine's address-change steps
 # (apps/codex/internal/access/switch.go addressChanges) and the line on
@@ -126,26 +126,29 @@ PY
 # apps/codex/cmd/access.go showUnconfirmed returns, as the command line
 # prints an error ("Error: ", apps/codex/cmd/root.go).
 preview_holds() {
-  python3 -I - "$ROOT/tests/fixtures/access_modes.json" "$ROOT/apps/codex/internal/access/switch.go" \
+  python3 -I - "$ROOT/tests/fixtures/access.json" "$ROOT/apps/codex/internal/access/switch.go" \
     "$ROOT/apps/codex/cmd/access.go" "$@" <<'PY'
 import json, re, sys
 vectors, switch_go, access_go, log, old_text, new_text = sys.argv[1:7]
 words = json.load(open(vectors))["words"]
 def described(head):
-    # The words of a head: the vectors' for a head of the same mode and
-    # email presence, with its own address and email.
-    shaped = [w for w in words if w["head"]["mode"] == head["mode"] and bool(w["head"].get("acme_email")) == bool(head.get("acme_email"))]
+    # The words of a head: the vectors' for a head of the same kind and
+    # email presence, with its own address, email and publication.
+    shaped = [w for w in words if w["head"]["browser"] == head["browser"] and bool(w["head"].get("acme_email")) == bool(head.get("acme_email"))]
     if not shaped:
-        sys.exit(print(f"the access vectors hold no words for a {head['mode']} head like {head}") or 1)
-    who, _, email, ports = (s.partition(": ")[2] for s in shaped[0]["sentences"])
-    address = head["public_url"] if head["mode"] != "local" else f"http://localhost:{head['port']}"
-    return {"who": who, "address": address, "email": head.get("acme_email") or email, "ports": ports}
+        sys.exit(print(f"the access vectors hold no words for a {head['browser']} head like {head}") or 1)
+    who, _, email, ports = (s.partition(": ")[2] for s in shaped[0]["sentences"][:4])
+    address = head["public_url"] if head["browser"] != "none" else f"http://localhost:{head['port']}"
+    return {"who": who, "address": address, "email": head.get("acme_email") or email, "ports": ports,
+            "forward": f"http://{head['publish']}" if head.get("publish") else ""}
 old, new = json.loads(old_text), json.loads(new_text)
 was, now = described(old), described(new)
-if new["mode"] == "tailnet":
+if new["browser"] == "tailnet":
     lead = f"by your devices on Tailscale at {now['address']}"
-elif new["mode"] == "public":
+elif new["browser"] == "domain":
     lead = f"by {now['who']}, at {now['address']}, through ports {now['ports']} on this machine"
+elif new["browser"] == "proxy":
+    lead = f"by {now['who']}, at {now['address']}, through your proxy, which forwards to {now['forward']}"
 else:
     lead = f"from this computer at {now['address']}"
 block = [f"CYFR will be reached {lead}."]
@@ -153,7 +156,7 @@ if old.get("node_id") and new.get("node_id") and old["node_id"] != new["node_id"
     block.append(f"  Tailnet machine: {old['host']} → a new machine, {new['host']}")
 if was["email"] != now["email"]:
     block.append(f"  Certificate email: {was['email']} → {now['email']}")
-if was["ports"] != now["ports"] and new["mode"] != "public":
+if was["ports"] != now["ports"] and new["browser"] != "domain":
     block.append(f"  Ports opened on this machine: {was['ports']} → {now['ports']}")
 if old["port"] != new["port"]:
     block.append(f"  Port on this computer: {old['port']} → {new['port']}")
@@ -369,5 +372,56 @@ import sys
 actual, expected = (sorted(text.splitlines()) for text in sys.argv[1:3])
 if actual != expected:
     sys.exit(print(f"the published ports are {actual!r}, not {expected!r}") or 1)
+PY
+}
+
+# The proxy listener's publication, both ways: `$1` the head's kind
+# (CYFR_BROWSER), `$2` where the head publishes the proxy listener
+# (CYFR_PROXY_PUBLISH, `address:port`; empty for any kind
+# but proxy), `$3` the cyfr container's published bindings (`docker
+# inspect` .NetworkSettings.Ports as JSON), `$4` CYFR_PORT, `$5` the proxy
+# listener's container port, `$6` what a request to the publication
+# answered (`{"status": <code>}`), or, for any other kind, a connection to
+# `$8` (`{"refused": true}` when nothing accepted it), `$7` the host port
+# the loopback listener is published at (`$4` unless an overlay lets Docker
+# pick it), `$8` where a proxy head would publish (`$2` with proxy). With
+# proxy, cyfr publishes exactly its loopback listener at 127.0.0.1:`$7` and
+# its proxy listener at `$2`, and the publication answers HTTP; with every
+# other kind it publishes the loopback listener alone, and nothing answers
+# where the proxy listener would be published.
+proxy_publication_holds() {
+  python3 -I - "$@" <<'PY'
+import json, sys
+browser, publish, ports_text, port, pport, answer_text = sys.argv[1:7]
+host_port = sys.argv[7] if len(sys.argv) > 7 and sys.argv[7] else port
+where = sys.argv[8] if len(sys.argv) > 8 and sys.argv[8] else (publish or f"127.0.0.1:{pport}")
+problems = []
+if browser not in ("none", "tailnet", "domain", "proxy"):
+    sys.exit(print(f"{browser!r} is no browser address kind") or 1)
+if (browser == "proxy") != (publish != ""):
+    sys.exit(print(f"a {browser} head names the publication {publish!r}") or 1)
+try:
+    ports = json.loads(ports_text)
+    bound = {k: v for k, v in ports.items() if v}
+except (ValueError, AttributeError):
+    sys.exit(print(f"cyfr's published bindings could not be read: {ports_text[:200]!r}") or 1)
+expected = {f"{port}/tcp": [{"HostIp": "127.0.0.1", "HostPort": host_port}]}
+if browser == "proxy":
+    host, _, published = publish.rpartition(":")
+    expected[f"{pport}/tcp"] = [{"HostIp": host, "HostPort": published}]
+if bound != expected:
+    problems.append(f"cyfr publishes {json.dumps(bound, sort_keys=True)}, not {json.dumps(expected, sort_keys=True)}")
+try:
+    answer = json.loads(answer_text)
+except ValueError:
+    answer = None
+if browser == "proxy":
+    if not (isinstance(answer, dict) and set(answer) == {"status"} and isinstance(answer["status"], int) and 100 <= answer["status"] < 600):
+        problems.append(f"the proxy listener's publication {publish} answered {answer_text[:200]!r}, not an HTTP status")
+elif answer != {"refused": True}:
+    problems.append(f"with {browser}, {where} answered {answer_text[:200]!r}: something is published where only proxy publishes the proxy listener")
+for p in problems:
+    print(p)
+sys.exit(1 if problems else 0)
 PY
 }

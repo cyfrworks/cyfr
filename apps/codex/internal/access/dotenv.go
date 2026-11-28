@@ -494,9 +494,9 @@ func applyOperator(op, sub string, lookup func(string) (string, bool)) (string, 
 }
 
 // composeEnv is the environment the engine runs compose with: cyfr's,
-// every COMPOSE_* variable removed (sanitizedEnv).
+// every variable sanitizedEnv removes removed.
 func composeEnv(name string) (string, bool) {
-	if strings.HasPrefix(strings.ToUpper(name), "COMPOSE_") {
+	if environFiltered(name) {
 		return "", false
 	}
 	return os.LookupEnv(name)

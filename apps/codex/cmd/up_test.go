@@ -43,16 +43,16 @@ func bootSentence(t *testing.T, env string) string {
 
 // `cyfr up` refuses a .env whose access settings contradict each other with
 // the boot's own sentence, under the lock, before the stack is checked or
-// anything starts: a missing mode, a local home at another host, a public
+// anything starts: a missing kind, a server with no browser address at another host, a domain
 // URL that is not the host's, and the compose file's assertion from .env.
 func TestUpRefusesAnIncoherentEnvBeforeAnythingStarts(t *testing.T) {
 	for name, env := range map[string]string{
-		"a missing mode":           "CYFR_HOST=localhost\nCYFR_PORT=4000\n",
-		"a local home elsewhere":   "CYFR_ACCESS=local\nCYFR_HOST=cyfr.example.com\n",
-		"a public URL of another":  "CYFR_ACCESS=public\nCYFR_HOST=cyfr.example.com\nCYFR_PUBLIC_URL=https://other.example.com\n",
-		"the assertion from .env":  scenarioEnv + "CYFR_LOCAL_INGRESS_ASSERTED=true\n",
-		"a mode that is none":      "CYFR_ACCESS=tls\n",
-		"an email for a local one": "CYFR_ACCESS=local\nCADDY_ACME_EMAIL=ops@example.com\n",
+		"a missing mode":                      "CYFR_HOST=localhost\nCYFR_PORT=4000\n",
+		"no browser address, at another host": "CYFR_BROWSER=none\nCYFR_HOST=cyfr.example.com\n",
+		"a public URL of another":             "CYFR_BROWSER=domain\nCYFR_HOST=cyfr.example.com\nCYFR_PUBLIC_URL=https://other.example.com\n",
+		"the assertion from .env":             scenarioEnv + "CYFR_LOCAL_INGRESS_ASSERTED=true\n",
+		"a mode that is none":                 "CYFR_BROWSER=tls\n",
+		"an email for a local one":            "CYFR_BROWSER=none\nCADDY_ACME_EMAIL=ops@example.com\n",
 	} {
 		t.Run(name, func(t *testing.T) {
 			s := newUpdateScenario(t, shippedCompose(t), nil)
@@ -120,16 +120,16 @@ func TestUpSurfacesTheBootRefusal(t *testing.T) {
 // one is set up yet, it says how the first person is set up: on this
 // machine's screen when the cyfr-screen service runs, after a reboot when
 // it is enabled and not running, otherwise through the setup link, from a
-// phone or laptop with Tailscale on for tailnet access, and for local
-// access on a machine with no display beside the ssh line. Any later
+// phone or laptop with Tailscale on for a tailnet address, and with no
+// browser address on a machine with no display beside the ssh line. Any later
 // start, and a log that cannot be read, says the start and Prism's address
 // alone.
 func TestUpSaysHowTheFirstPersonIsSetUp(t *testing.T) {
 	const startedAt = "2026-10-28T00:01:02.123456789Z"
 	const line = "[Cyfr] Not set up: no one is set up on this CYFR yet. Its first person, who administers it, opens the setup link.\n"
 	const token = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-	const local = "CYFR_ACCESS=local\nCYFR_HOST=localhost\nCYFR_PORT=4123\n"
-	const tailnet = "CYFR_ACCESS=tailnet\nCYFR_HOST=cyfr.tail1234.ts.net\nCYFR_PUBLIC_URL=https://cyfr.tail1234.ts.net\nCYFR_TAILNET_NODE_ID=nTESTNODE1CNTRL\nCYFR_PORT=4000\n"
+	const local = "CYFR_BROWSER=none\nCYFR_HOST=localhost\nCYFR_PORT=4123\n"
+	const tailnet = "CYFR_BROWSER=tailnet\nCYFR_HOST=cyfr.tail1234.ts.net\nCYFR_PUBLIC_URL=https://cyfr.tail1234.ts.net\nCYFR_TAILNET_NODE_ID=nTESTNODE1CNTRL\nCYFR_PORT=4000\n"
 	account, err := user.Current()
 	if err != nil {
 		t.Fatal(err)
@@ -373,7 +373,7 @@ func TestComposeKeysInEnvAreRefusedBeforeAnyDockerCall(t *testing.T) {
 			return runRestore(context.Background(), r.dir, true, &bytes.Buffer{}, &bytes.Buffer{})
 		},
 		"access": func(*restoreScenario) error {
-			return runAccess(context.Background(), access.ModeLocal, accessOptions{}, true, &bytes.Buffer{})
+			return runAccess(context.Background(), access.BrowserNone, accessOptions{}, true, &bytes.Buffer{})
 		},
 		"access resume": func(*restoreScenario) error { return runAccessResume(context.Background(), &bytes.Buffer{}) },
 		"init": func(*restoreScenario) error {
@@ -382,7 +382,7 @@ func TestComposeKeysInEnvAreRefusedBeforeAnyDockerCall(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			r := newRestoreScenario(t, shippedCompose(t), nil, nil)
-			r.edit(".env", scenarioEnv+"export COMPOSE_PROFILES=public,tailnet\n")
+			r.edit(".env", scenarioEnv+"export COMPOSE_PROFILES=domain,tailnet\n")
 			before := read(t, filepath.Join(r.project, ".env"))
 			if err := command(r); err == nil || err.Error() != want {
 				t.Fatalf("cyfr %s answered %v, want %q", name, err, want)
@@ -420,9 +420,9 @@ func TestComposeKeysInEnvAreRefusedBeforeAnyDockerCall(t *testing.T) {
 // docker call.
 func TestUpRefusesThroughTheRealEngine(t *testing.T) {
 	for _, c := range []struct{ name, env, want string }{
-		{"a local home elsewhere", "CYFR_ACCESS=local\nCYFR_HOST=cyfr.example.com\n", ""},
+		{"no browser address, at another host", "CYFR_BROWSER=none\nCYFR_HOST=cyfr.example.com\n", ""},
 		{"a missing mode", "CYFR_PORT=4000\n", ""},
-		{"COMPOSE_PROFILES", "CYFR_ACCESS=local\nCOMPOSE_PROFILES=public,tailnet\n", access.Refuse("compose_env_refused", map[string]string{"key": "COMPOSE_PROFILES"}).Message()},
+		{"COMPOSE_PROFILES", "CYFR_BROWSER=none\nCOMPOSE_PROFILES=domain,tailnet\n", access.Refuse("compose_env_refused", map[string]string{"key": "COMPOSE_PROFILES"}).Message()},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -580,10 +580,10 @@ func TestStartedOnThisMachineOnlyExitsThree(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		stdout, stderr, status := runAsCyfr(t, "started-local", dir, "access", "tailnet", "--yes")
-		check(t, "access tailnet", stdout, stderr, status)
+		stdout, stderr, status := runAsCyfr(t, "started-local", dir, "access", "browser", "tailnet", "--yes")
+		check(t, "access browser tailnet", stdout, stderr, status)
 		if !strings.Contains(stdout, "CYFR will be reached by your devices on Tailscale at ") {
-			t.Errorf("cyfr access tailnet showed no change before making it:\n%s", stdout)
+			t.Errorf("cyfr access browser tailnet showed no change before making it:\n%s", stdout)
 		}
 		// Recovery's start is a start path too: a switch it finished on
 		// this machine only exits 3.
@@ -608,7 +608,7 @@ func TestAHangupCancelsAWaitingJoin(t *testing.T) {
 		t.Fatal(err)
 	}
 	logDir := t.TempDir()
-	process := exec.Command(os.Args[0], "access", "tailnet", "--yes")
+	process := exec.Command(os.Args[0], "access", "browser", "tailnet", "--yes")
 	process.Dir = dir
 	process.Env = append(os.Environ(), asCyfr+"=waiting-join", "FAKE_DOCKER_DIR="+logDir)
 	stdout, err := process.StdoutPipe()
@@ -698,7 +698,7 @@ func TestUpdateClosesServeBeforeItStops(t *testing.T) {
 		return access.Result{}, nil
 	})
 	u := &updater{ctx: context.Background(), out: io.Discard, errOut: io.Discard, engine: observedEngine{e, docker},
-		head: access.Head{Mode: access.ModeTailnet, Host: "cyfr.tail1234.ts.net", NodeID: "nAAAAAAAAACNTRL", PublicURL: "https://cyfr.tail1234.ts.net", Port: 4000, Profiles: []string{access.ModeTailnet}}, running: []string{"tailscale", "cyfr"}}
+		head: access.Head{Browser: access.BrowserTailnet, Host: "cyfr.tail1234.ts.net", NodeID: "nAAAAAAAAACNTRL", PublicURL: "https://cyfr.tail1234.ts.net", Port: 4000, Profiles: []string{access.BrowserTailnet}}, running: []string{"tailscale", "cyfr"}}
 	if err := u.stop(); err != nil {
 		t.Fatal(err)
 	}
@@ -741,7 +741,7 @@ func TestUpdateClosesServeBeforeTheStopAfterAFailedStart(t *testing.T) {
 		return access.Result{}, nil
 	})
 	u := &updater{ctx: context.Background(), version: "0.9.0", oldRelease: "0.8.0", snapshot: "backups/snapshot", out: io.Discard, errOut: io.Discard, engine: observedEngine{e, docker},
-		head: access.Head{Mode: access.ModeTailnet, Host: "cyfr.tail1234.ts.net", NodeID: "nAAAAAAAAACNTRL", PublicURL: "https://cyfr.tail1234.ts.net", Port: 4000, Profiles: []string{access.ModeTailnet}}}
+		head: access.Head{Browser: access.BrowserTailnet, Host: "cyfr.tail1234.ts.net", NodeID: "nAAAAAAAAACNTRL", PublicURL: "https://cyfr.tail1234.ts.net", Port: 4000, Profiles: []string{access.BrowserTailnet}}}
 	err = u.stopAfterSwitch(errors.New("Serve configuration directory sync failed"))
 	want := "Release 0.9.0 did not start (Serve configuration directory sync failed); the stack is left stopped.\nThe snapshot of release 0.8.0 is backups/snapshot; restore it with:\n  cyfr restore backups/snapshot"
 	if err == nil || err.Error() != want {
@@ -773,7 +773,7 @@ func TestUpdateStopsNothingAfterAFailedStartWhileServeDoesNotClose(t *testing.T)
 	})
 	u := &updater{ctx: context.Background(), version: "0.9.0", oldRelease: "0.8.0", snapshot: "backups/snapshot", out: io.Discard, errOut: io.Discard,
 		engine: closeServeFails{observedEngine{e, docker}, errors.New("no space left on device")},
-		head:   access.Head{Mode: access.ModeTailnet, Host: "cyfr.tail1234.ts.net", NodeID: "nAAAAAAAAACNTRL", PublicURL: "https://cyfr.tail1234.ts.net", Port: 4000, Profiles: []string{access.ModeTailnet}}}
+		head:   access.Head{Browser: access.BrowserTailnet, Host: "cyfr.tail1234.ts.net", NodeID: "nAAAAAAAAACNTRL", PublicURL: "https://cyfr.tail1234.ts.net", Port: 4000, Profiles: []string{access.BrowserTailnet}}}
 	err = u.stopAfterSwitch(errors.New("cyfr did not become healthy"))
 	want := "Release 0.9.0 did not start (cyfr did not become healthy), and Tailscale Serve could not be closed (no space left on device), so nothing was stopped and the stack may still be running with Serve open; stop it with 'cyfr down'.\nThe snapshot of release 0.8.0 is backups/snapshot; restore it with:\n  cyfr restore backups/snapshot"
 	if err == nil || err.Error() != want {
@@ -807,7 +807,7 @@ func (f observedDocker) Run(ctx context.Context, c access.Call) (access.Result, 
 	return f(ctx, c)
 }
 
-// tailnetDocker is a docker the real engine starts a tailnet home through:
+// tailnetDocker is a docker the real engine starts a tailnet server through:
 // the configuration compose gives it is the real Docker Compose's, the
 // stack starts and cyfr is healthy, and the tailscale service reports the
 // machine node, id; it records each call.
@@ -864,7 +864,7 @@ func newTailnetHome(t *testing.T) string {
 	}
 	text, _ := newEnvFromTemplate(t)
 	t.Chdir(dir)
-	d, err := access.Derive(access.Target{Mode: access.ModeTailnet}, access.Current{Port: 4000}, &access.Join{Name: "cyfr.tail1234.ts.net", NodeID: "nAAAAAAAAACNTRL"})
+	d, err := access.Derive(access.Target{Browser: access.BrowserTailnet}, access.Current{Port: 4000}, &access.Join{Name: "cyfr.tail1234.ts.net", NodeID: "nAAAAAAAAACNTRL"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -881,8 +881,8 @@ func newTailnetHome(t *testing.T) string {
 }
 
 // Through the real engine and Docker Compose's own configuration: a
-// tailnet home whose Serve is closed, its machine now the one .env names,
-// is served on the tailnet again by `cyfr access tailnet --yes`: the switch
+// tailnet server whose Serve is closed, its machine now the one .env names,
+// is served on the tailnet again by `cyfr access browser tailnet --yes`: the switch
 // of the head .env holds, its start only, opens Serve.
 func TestAccessTailnetServesAClosedHomeAgainThroughTheRealEngine(t *testing.T) {
 	requireCompose(t)
@@ -900,8 +900,8 @@ func TestAccessTailnetServesAClosedHomeAgainThroughTheRealEngine(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	var out bytes.Buffer
-	if err := runAccess(ctx, access.ModeTailnet, accessOptions{}, true, &out); err != nil {
-		t.Fatalf("cyfr access tailnet answered %v\n%s", err, out.String())
+	if err := runAccess(ctx, access.BrowserTailnet, accessOptions{}, true, &out); err != nil {
+		t.Fatalf("cyfr access browser tailnet answered %v\n%s", err, out.String())
 	}
 	for _, want := range []string{"CYFR answers on this computer only right now. Once the tailnet machine checks out,", "Done. CYFR is reached by your devices on Tailscale at https://cyfr.tail1234.ts.net.\n", "  Serve: open\n"} {
 		if !strings.Contains(out.String(), want) {
@@ -922,7 +922,7 @@ func TestAccessTailnetServesAClosedHomeAgainThroughTheRealEngine(t *testing.T) {
 }
 
 // Through the real engine and Docker Compose's own configuration: `cyfr up`
-// of a tailnet home whose machine is another node starts the home on this
+// of a tailnet server whose machine is another node starts the server on this
 // machine only, Serve closed, and answers that refusal's sentence with
 // exit status 3, never a failed start (the engine answers the receipt with
 // its refusal as the error).
@@ -957,7 +957,7 @@ func TestUpStartsOnThisMachineOnlyThroughTheRealEngine(t *testing.T) {
 
 // Outside CYFR's directory `cyfr up` says so, before the docker group
 // step and any access setting: a missing .env would otherwise read as one
-// with no access mode.
+// with no browser address kind.
 func TestUpRefusesADirectoryWithoutACompose(t *testing.T) {
 	stdout, stderr, status := runAsCyfr(t, "plain", t.TempDir(), "up")
 	want := "Error: There is no CYFR in this directory, so nothing was started: it holds no compose file (" + strings.Join(access.ComposeMainFiles, ", ") + "). Run 'cyfr up' in CYFR's directory, the one that holds its docker-compose.yml, or 'cyfr init' here to make one\n"

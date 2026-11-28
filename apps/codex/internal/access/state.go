@@ -206,7 +206,7 @@ type journal struct {
 	Running  bool              `json:"running,omitempty"`
 	Services []string          `json:"services,omitempty"`
 	Reason   string            `json:"reason,omitempty"`
-	// Reopen is a switch to the head .env already holds, a tailnet home
+	// Reopen is a switch to the head .env already holds, a tailnet server
 	// whose Serve is closed: it runs the start path alone.
 	Reopen bool `json:"reopen,omitempty"`
 	// Why a stop and verify was uncertain.

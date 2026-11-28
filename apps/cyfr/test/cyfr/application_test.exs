@@ -87,7 +87,7 @@ defmodule Cyfr.ApplicationTest do
   # The endpoint's listeners as its adapter starts them (`CyfrWeb.Ingress`),
   # under a supervisor with the endpoint's child id, as the tree holds it:
   # the proxy listener exists when `config/runtime.exs` writes the access
-  # settings' `proxy:` (a tailnet or public home), and `extra` beside them.
+  # settings' `proxy:` (with a browser address), and `extra` beside them.
   defp endpoint_tree(proxy?, extra \\ []) do
     address = [ip: {127, 0, 0, 1}, port: 0]
     proxy = if proxy?, do: [proxy: address], else: []
@@ -116,7 +116,7 @@ defmodule Cyfr.ApplicationTest do
   end
 
   describe "the endpoint's listeners" do
-    test "the census holds the proxy listener in a tailnet or public home, and none in a local one" do
+    test "the census holds the proxy listener with a browser address, and none without one" do
       {local, _endpoint} = endpoint_tree(false)
       assert Cyfr.Application.listeners(local) == [CyfrWeb.Endpoint]
       assert Cyfr.Application.check_listeners!(Cyfr.Application.listeners(local)) == :ok
@@ -152,7 +152,7 @@ defmodule Cyfr.ApplicationTest do
       refute error.message =~ "  - CyfrWeb.Endpoint"
     end
 
-    test "the graceful stop finds both listeners' servers, and the loopback listener's alone in a local home" do
+    test "the graceful stop finds both listeners' servers, and the loopback listener's alone with no browser address" do
       {_root, local} = endpoint_tree(false)
       assert [_loopback] = Cyfr.Application.endpoint_servers(local)
 

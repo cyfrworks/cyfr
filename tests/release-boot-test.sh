@@ -406,13 +406,13 @@ case "\$command" in
   access) [ -e .env ] || exit 9 ;;
 esac
 if [ -n "\$domain" ]; then
-  sed -i -e 's/^CYFR_ACCESS=.*/CYFR_ACCESS=public/' -e "s/^CYFR_HOST=.*/CYFR_HOST=\$domain/" .env
+  sed -i -e 's/^CYFR_BROWSER=.*/CYFR_BROWSER=domain/' -e "s/^CYFR_HOST=.*/CYFR_HOST=\$domain/" .env
   [ -e "$scratch/cli-writes-no-url" ] || echo "CYFR_PUBLIC_URL=https://\$domain" >>.env
 fi
 exit 0
 SH
 chmod +x "$scratch/bin/cyfr"
-cell() { DRIVE_SCRATCH="$scratch" DRIVE_CHECKOUT="$root" RELEASE_BOOT_PORT=4399 RELEASE_BOOT_HOST_API_PORT=4398 COMPOSE_PROFILES=public CYFR_LEFTOVER=1 bash "$scratch/drive.sh" cell "$@"; }
+cell() { DRIVE_SCRATCH="$scratch" DRIVE_CHECKOUT="$root" RELEASE_BOOT_PORT=4399 RELEASE_BOOT_HOST_API_PORT=4398 COMPOSE_PROFILES=domain CYFR_LEFTOVER=1 bash "$scratch/drive.sh" cell "$@"; }
 calls() { sed -n "s/^$1=//p" "$scratch/calls.log"; }
 assigned() { grep -c "^$2=" "$scratch/cells/$1/.env"; }
 value() { sed -n "s/^$2=//p" "$scratch/cells/$1/.env"; }
@@ -430,7 +430,7 @@ esac
 for key in CYFR_PUBLIC_URL CYFR_BIND_ADDRESS; do
   [ "$(assigned local "$key")" = 0 ] || fail "the local cell's deployment file assigns $key"
 done
-for pair in CYFR_ACCESS=local CYFR_HOST=localhost CYFR_PORT=4399 CYFR_DATABASE=sqlite CYFR_AUTO_MIGRATE=on \
+for pair in CYFR_BROWSER=none CYFR_HOST=localhost CYFR_PORT=4399 CYFR_DATABASE=sqlite CYFR_AUTO_MIGRATE=on \
   CYFR_HOST_API_BIND=127.0.0.1 CYFR_HOST_API_PORT=4398 LOCUS_RUNTIME_SERVICE_ID=wrk_locus \
   CYFR_SECRET_KEY_BASE=stub-key-base-0123456789abcdef; do
   [ "$(assigned local "${pair%%=*}")" = 1 ] && [ "$(value local "${pair%%=*}")" = "${pair#*=}" ] ||
@@ -457,11 +457,11 @@ pass "a local cell is init's deployment file with the test's settings beside it,
 : >"$scratch/calls.log"
 [ "$(status_of cell cell_new "$scratch/cells/named")" = 0 ] || { cat "$scratch/out" >&2; fail "cell_new failed for a named cell"; }
 [ "$(status_of cell cell_hostname "$scratch/cells/named" cyfr.example.com 4500 4501 4502)" = 0 ] || { cat "$scratch/out" >&2; fail "cell_hostname failed"; }
-[ "$(calls args)" = "$(printf '%s\n' "init --no-interactive --no-pull" "access public --domain cyfr.example.com --yes")" ] ||
+[ "$(calls args)" = "$(printf '%s\n' "init --no-interactive --no-pull" "access browser domain --domain cyfr.example.com --yes")" ] ||
   fail "a named cell ran cyfr $(calls args)"
 [ "$(status_of cell cell_hostname "$scratch/cells/named" cyfr.example.com 4500 4501 4502)" = 0 ] || { cat "$scratch/out" >&2; fail "cell_hostname failed again"; }
-[ "$(grep -c '^args=' "$scratch/calls.log")" = 2 ] || fail "cell_hostname ran the command line again on a cell public at its name: $(calls args)"
-for pair in CYFR_ACCESS=public CYFR_HOST=cyfr.example.com CYFR_PUBLIC_URL=https://cyfr.example.com CYFR_PORT=4500 CYFR_HOST_API_PORT=4501 CYFR_PROXY_PORT=4502; do
+[ "$(grep -c '^args=' "$scratch/calls.log")" = 2 ] || fail "cell_hostname ran the command line again on a cell with a domain address at its name: $(calls args)"
+for pair in CYFR_BROWSER=domain CYFR_HOST=cyfr.example.com CYFR_PUBLIC_URL=https://cyfr.example.com CYFR_PORT=4500 CYFR_HOST_API_PORT=4501 CYFR_PROXY_PORT=4502; do
   [ "$(assigned named "${pair%%=*}")" = 1 ] && [ "$(value named "${pair%%=*}")" = "${pair#*=}" ] ||
     fail "the named cell's deployment file does not assign $pair once"
 done
@@ -469,19 +469,19 @@ done
   fail "the named cell's node name is not its own: $(cat "$scratch/cells/named/node")"
 [ "$(DRIVE_SCRATCH="$scratch" DRIVE_CHECKOUT="$root" bash "$scratch/drive.sh" cell cell_proxy_port "$scratch/cells/named")" = 4502 ] ||
   fail "cell_proxy_port does not answer the named cell's proxy listener port"
-pass "a named cell is the public home cyfr access makes at its name, on three ports of its own, its proxy listener's the third"
+pass "a named cell has the domain address cyfr access browser domain makes at its name, on three ports of its own, its proxy listener's the third"
 
 : >"$scratch/calls.log"
 : >"$scratch/cli-writes-no-url"
 cp -a "$scratch/cells/local" "$scratch/cells/moved"
 key_before="$(value moved CYFR_SECRET_KEY_BASE)"
 [ "$(status_of cell cell_hostname "$scratch/cells/moved" other.example.com 4600)" = 0 ] || { cat "$scratch/out" >&2; fail "cell_hostname failed on a local cell"; }
-[ "$(calls args)" = "access public --domain other.example.com --yes" ] || fail "cell_hostname ran cyfr $(calls args) on a local cell"
+[ "$(calls args)" = "access browser domain --domain other.example.com --yes" ] || fail "cell_hostname ran cyfr $(calls args) on a local cell"
 [ "$(value moved CYFR_SECRET_KEY_BASE)" = "$key_before" ] || fail "the switch lost the cell's key base"
-[ "$(value moved CYFR_ACCESS)" = public ] && [ "$(value moved CYFR_HOST)" = other.example.com ] || fail "the switched cell is not public at other.example.com"
+[ "$(value moved CYFR_BROWSER)" = domain ] && [ "$(value moved CYFR_HOST)" = other.example.com ] || fail "the switched cell has no domain address at other.example.com"
 [ "$(assigned moved CYFR_PUBLIC_URL)" = 0 ] || fail "the fixture wrote a CYFR_PUBLIC_URL the command line did not"
 rm -f "$scratch/cli-writes-no-url"
-pass "a local cell becomes a public home through cyfr access, its keys kept, and the fixture writes no address of its own"
+pass "a local cell gets a domain address through cyfr access browser domain, its keys kept, and the fixture writes no address of its own"
 
 printf '3\n' >"$scratch/cli-fails"
 [ "$(status_of cell cell_new "$scratch/cells/failed")" = 1 ] || fail "a command line that failed did not fail cell_new"

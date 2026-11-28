@@ -471,7 +471,7 @@ defmodule Sanctum.CallerFreshnessTest do
   # window ahead of it. A public CYFR pauses a head it cannot refresh past
   # its bound.
   defp remote! do
-    Prima.Test.Env.put_app_env(:sanctum, :access_mode, :public)
+    Prima.Test.Env.put_app_env(:sanctum, :exposure, :public)
     %{user: user, athanor: athanor, session: session} = person!()
     account = Sanctum.TestContext.account!(user.id)
     %{user: user, athanor: athanor, identifier: account.identifier, token: session.token}

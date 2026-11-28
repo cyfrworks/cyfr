@@ -3,8 +3,8 @@
 # Copyright 2026 CYFR Works Inc.
 #
 # The browser harness: the `cyfr` release started as tests/release-boot/
-# starts one (tests/release-boot/release.sh), on SQLite, as the public home
-# https://cyfr.test (tests/browser/harness.sh), with the two tinctures of
+# starts one (tests/release-boot/release.sh), on SQLite, with the domain
+# address https://cyfr.test (tests/browser/harness.sh), with the two tinctures of
 # tests/browser/tinctures/ published publicly in a signed-in person's
 # athanor and frame-probe granted by that person, and the frame-facts
 # experiment (frame-facts.mjs) run against it in every browser the official

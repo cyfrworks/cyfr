@@ -11,39 +11,47 @@
 # certifies no Tailscale binary; tests/tailnet-real/run.sh is the real
 # tailnet's run). Its cases:
 #
-#   bind   in each access mode, switched with the stack stopped (`cyfr down`,
-#          `cyfr access <mode>`, `cyfr up`): cyfr binds its loopback listener
-#          to its fixed address on the default network (CYFR_BIND_ADDRESS,
-#          the role table's endpoint_address) alone, its proxy listener to
-#          its fixed address on the edge network alone in tailnet and
-#          public and nowhere in local, and its host API to its fixed
-#          address on the runtime's network. Docker publishes the host's
-#          loopback port to the loopback listener alone, which answers
-#          readiness and liveness there, and answers nothing to a container
-#          on the edge network, to one on Docker's default bridge, or at
-#          the host's non-loopback address; the proxy listener answers a
-#          container on the edge network in tailnet and public, and
-#          readiness answers through the mode's proxy (Caddy; Serve at the
-#          node's name). The ports each mode publishes are the shipped
-#          file's, as `docker compose config` resolves it alone and as
-#          `docker port` reads the running project. No Locus network
-#          reaches the loopback listener, while the runtime's network
-#          reaches the host API. cyfr and the mode's proxy (Caddy; the
-#          Tailscale stand-in, not tailscaled) run under the stack's
-#          container seccomp profile as Docker reports it, and in a
+#   bind   in each browser address kind, switched with the stack stopped
+#          (`cyfr down`, `cyfr access browser <kind>`, `cyfr up`): cyfr binds
+#          its loopback listener to its fixed address on the default network
+#          (CYFR_BIND_ADDRESS, the role table's endpoint_address) alone, its
+#          proxy listener to its fixed address on the edge network alone in
+#          tailnet and domain, to the loopback listener's address alone in
+#          proxy and nowhere in none, and its host API to its fixed address
+#          on the runtime's network. Docker publishes the host's loopback
+#          port to the loopback listener alone, and in proxy the proxy
+#          listener at CYFR_PROXY_PUBLISH too, which answers HTTP there,
+#          while with every other kind nothing answers where proxy would
+#          publish it (predicates.sh `proxy_publication_holds`). The
+#          loopback listener answers readiness and liveness there, and
+#          answers nothing to a container on the edge network, to one on
+#          Docker's default bridge, or at the host's non-loopback address;
+#          the proxy listener answers a container on the edge network in
+#          tailnet and domain, and readiness answers through the kind's
+#          proxy (Caddy; Serve at the node's name; with proxy, at the
+#          publication, asked as a person's proxy forwards). The ports each kind
+#          publishes are the shipped file's, as `docker compose config`
+#          resolves it alone and as `docker port` reads the running
+#          project. `cyfr access browser proxy` with neither
+#          CYFR_TRUSTED_PROXY_HOPS nor CYFR_TRUSTED_PROXY_CIDRS in .env is
+#          refused with access_proxy_trust_missing's sentence, .env as it
+#          was. No Locus network reaches the loopback listener, while the
+#          runtime's network reaches the host API. cyfr and the kind's
+#          proxy (Caddy; the Tailscale stand-in, not tailscaled) run under
+#          the stack's container seccomp profile as Docker reports it, and in a
 #          container of each one's shape (`seccomp_holds`) an AF_VSOCK
 #          socket is refused, its domain's high word set too, every 32-bit
 #          call is killed, and the sockets a service makes are made.
 #
-#   modes  one project switched with `cyfr access`, running, through every
-#          ordered pair of the three modes: after each switch the whole
-#          head is in .env and the running cyfr, a tailnet node id the one
+#   modes  one project switched with `cyfr access browser`, running, through
+#          every ordered pair of none, tailnet and domain: after each switch
+#          the whole head is in .env and the running cyfr, a tailnet node id the one
 #          the tailnet state holds, the head's proxy alone runs with the
 #          shipped file's capabilities and options, the old one stopped
 #          and removed, and cyfr is healthy at the head's address; in
 #          tailnet Serve holds exactly the engine's configuration. In
-#          public and tailnet a forged X-Forwarded-For and
-#          Tailscale-User-Login, on both listeners and through the mode's
+#          domain and tailnet a forged X-Forwarded-For and
+#          Tailscale-User-Login, on both listeners and through the kind's
 #          proxy, change neither the answer nor the client address cyfr
 #          resolves (Sanctum.ClientIp, read from a probe in the running
 #          node), which is the peer on the loopback listener and on the
@@ -54,17 +62,17 @@
 #          header as without. In tailnet the
 #          endpoint's HSTS is on the proxy listener's success, error and
 #          refusal answers for the node's name and on none for a loopback
-#          Host or on the loopback listener; in public the endpoint sends
+#          Host or on the loopback listener; in domain the endpoint sends
 #          none on its proxy listener, and an answer through Caddy carries
 #          the shipped site's one value. At the ts.net name the origin is
 #          the home's, MCP admits that origin and refuses another, the
 #          LiveView socket upgrades for it and not another, and the
 #          session cookie is the fixture person's: / sends to /login
 #          without it and is that person's desktop with it. Before the
-#          switches: COMPOSE_PROFILES=public,tailnet in the command line's
-#          environment starts neither proxy for a local home with builds
-#          off, and the same key in .env, an incoherent .env and one with
-#          no mode are each refused by `cyfr up` with the sentence the
+#          switches: COMPOSE_PROFILES=domain,tailnet in the command line's
+#          environment starts neither proxy with no browser address and
+#          builds off, and the same key in .env, an incoherent .env and one
+#          with no kind are each refused by `cyfr up` with the sentence the
 #          vectors hold, nothing started. The predicates are
 #          predicates.sh's, held to canned objects by predicates-test.sh.
 #
@@ -79,22 +87,22 @@
 #          resumable; a start that fails, then a stop that fails, leaving it
 #          uncertain with the target's materialized configuration kept.
 #          Then the tailnet join's two instructions followed as
-#          printed: HTTPS off for the tailnet, then `cyfr access tailnet`
-#          once it is on; tailnet_active, then `cyfr access local` and `cyfr
-#          access tailnet --new-node`. A docker on PATH before the real one
-#          (the run's own) pauses or fails the calls the case names, and
-#          runs every other.
+#          printed: HTTPS off for the tailnet, then `cyfr access browser
+#          tailnet` once it is on; tailnet_active, then `cyfr access browser
+#          none` and `cyfr access browser tailnet --new-node`. A docker on
+#          PATH before the real one (the run's own) pauses or fails the
+#          calls the case names, and runs every other.
 #
 #   restore-identity
 #          a home serving node A snapshotted by `cyfr backup`, which stops
 #          the running home, takes cyfr update's snapshot and starts it
-#          again; then switched to local and joined as node B; then
+#          again; then switched to none and joined as node B; then
 #          `cyfr restore` of
 #          A: .env names A while the state volume holds B, so Serve stays
 #          off (the node refuses 443 while it answers its PeerAPI), the
 #          start answers tailnet_node_mismatch, the home answers on this
-#          machine alone, and `cyfr access tailnet` previews exactly A's
-#          head to B's. The restore keeps the state volume (B) and the
+#          machine alone, and `cyfr access browser tailnet` previews exactly
+#          A's head to B's. The restore keeps the state volume (B) and the
 #          project's .cyfr/, and removes join.json. That a snapshot holds
 #          neither the tailnet state nor the access state is
 #          apps/codex/cmd/update_test.go's
@@ -332,7 +340,7 @@ PERSON="" THREAD="" MARK=""
 # it whole for a program that runs it (scripts/cosign.sh check run).
 COMPOSE_CMD=(docker compose --project-name "$RUN" --project-directory "$WORK"
   -f "$WORK/docker-compose.yml" -f "$WORK/docker-compose.override.yml"
-  --profile public --profile tailnet)
+  --profile domain --profile tailnet)
 compose() {
   "${COMPOSE_CMD[@]}" "$@"
 }
@@ -508,7 +516,7 @@ for template in templates:
         sys.exit(0)
 sys.exit(1)'
 sentence() {
-  python3 -I -c "$SENTENCE_PY" "$ROOT/tests/fixtures/access_modes.json" "$@"
+  python3 -I -c "$SENTENCE_PY" "$ROOT/tests/fixtures/access.json" "$@"
 }
 
 # The sentence of refusal `$1` rendered from its one variant whose fixed
@@ -527,7 +535,7 @@ for r in vectors["refusals"]:
         if sorted(v["slots"]) == sorted(rest) and all(given.get(k) == x for k, x in v["fixed"].items()):
             print(re.sub(r"\{([a-z_]+)\}", lambda m: given[m.group(1)], v["template"]))
             sys.exit(0)
-sys.exit(1)' "$ROOT/tests/fixtures/access_modes.json" "$@" || fail "no variant of $1 is filled by $*"
+sys.exit(1)' "$ROOT/tests/fixtures/access.json" "$@" || fail "no variant of $1 is filled by $*"
 }
 
 # The value `$2...` answers, as an expected value: the run fails, naming
@@ -549,8 +557,16 @@ for v in json.load(open(sys.argv[1]))["boot"]:
     if v["name"] == sys.argv[2]:
         print(v["refusal"]["sentence"]); break
 else:
-    sys.exit(1)' "$ROOT/tests/fixtures/access_modes.json" "$1"
+    sys.exit(1)' "$ROOT/tests/fixtures/access.json" "$1"
 }
+
+# Where this run publishes a proxy head's proxy listener: a port of the
+# host's loopback free when the run starts, read once, so that neither a
+# concurrent run nor a stack of this machine's own on the default
+# publication meets it. Every kind's check probes it: only proxy may answer
+# there.
+PROXY_PUBLISH="127.0.0.1:$(python3 -I -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')"
+proxy_publish() { printf '%s\n' "$PROXY_PUBLISH"; }
 
 # The project's services with a running container, sorted, one line.
 # A docker ps that fails answers that, never the empty list.
@@ -687,6 +703,21 @@ fetched() { printf '%s\n' "$1" | sed -n '/^{/p' | tail -1; }
 # The address cyfr's loopback listener is published on.
 published() { compose port cyfr "$(env_value CYFR_PORT)"; }
 
+# What a request from the host, curl `$@`, answers, as
+# predicates.sh `proxy_publication_holds` reads it: `{"status": <code>}`
+# for an HTTP answer, `{"refused": true}` when nothing accepts the
+# connection (curl's exit 7), `{"error": <exit>}` for anything else, a
+# timeout among them. -g takes an IPv6 publication's brackets literally.
+publication_answer() {
+  local code status=0
+  code="$(curl -gsS -o /dev/null -w '%{http_code}' -m 10 "$@" 2>/dev/null)" || status=$?
+  case "$status" in
+    0) printf '{"status": %s}\n' "$code" ;;
+    7) printf '{"refused": true}\n' ;;
+    *) printf '{"error": %d}\n' "$status" ;;
+  esac
+}
+
 # proof.Caddyfile: the shipped Caddyfile with its one site address given
 # the http:// scheme, then held to differ from the shipped file by exactly
 # the diff this file's header shows, line for line, before any case runs.
@@ -798,7 +829,7 @@ for line in sys.stdin.read().replace("\r", "").splitlines():
 }
 
 # ---------------------------------------------------------------------------
-# The stack's modes
+# The stack's browser addresses
 # ---------------------------------------------------------------------------
 
 # The tailnet's auth key the command line reads from a file: the
@@ -825,7 +856,7 @@ await_join() {
   fail "no join container of the project waited for approval within 120 s"
 }
 
-# `cyfr access tailnet` with `$1`'s arguments, approved by a person in the
+# `cyfr access browser tailnet` with `$1`'s arguments, approved by a person in the
 # stand-in as `$2...` (`standin approve`'s and, before it, `standin
 # tailnet --https off` when `$2` is `https-off`), its output in
 # `$WORK/<log>.log`; the command line's status is the answer's.
@@ -837,7 +868,7 @@ tailnet_join() {
     shift
   fi
   # shellcheck disable=SC2086
-  cli_run "$log" access tailnet $args &
+  cli_run "$log" access browser tailnet $args &
   local pid=$!
   join="$(await_join)"
   # The approval link the command line printed is the one the machine waits at.
@@ -846,7 +877,7 @@ tailnet_join() {
   [ -z "$https" ] || docker exec "$join" standin tailnet --https off
   docker exec "$join" standin approve "$@" >/dev/null
   wait "$pid" || status=$?
-  grep -qF -- "$link" "$WORK/$log.log" || fail "cyfr access tailnet did not print the approval link $link: $(tail -n 20 "$WORK/$log.log")"
+  grep -qF -- "$link" "$WORK/$log.log" || fail "cyfr access browser tailnet did not print the approval link $link: $(tail -n 20 "$WORK/$log.log")"
   return "$status"
 }
 
@@ -860,19 +891,24 @@ node_name() {
   printf '%s\n' "${name%.}"
 }
 
-# The project's whole head, checked (predicates.sh `head_holds`): mode
+# The project's whole head, checked (predicates.sh `head_holds`): kind
 # `$1` at host `$2` (a fixed fixture's name, or the state's, never .env's),
 # every access setting in .env and the running cyfr the head's, a tailnet
-# head's node id and name the ones the tailnet state holds, the head's
+# head's node id and name the ones the tailnet state holds, a proxy head's
+# publication the default one (no case passes --publish), the head's
 # proxy alone running beside cyfr with the shipped file's capabilities and
 # options (`capabilities_hold`), the other proxy without a container, and
 # cyfr healthy.
 expect_head() {
-  local mode="$1" host="$2" want profiles node="" dns_name="" public_url="" head why proxy id state
-  [ -n "$host" ] || fail "no host to expect the $mode home at"
-  case "$mode" in
-    local) want=cyfr profiles='[]' ;;
-    public) want="caddy cyfr" profiles='["public"]' public_url="https://$host" ;;
+  local kind="$1" host="$2" want profiles node="" dns_name="" public_url="" publish="" head why proxy id state
+  [ -n "$host" ] || fail "no host to expect the $kind head at"
+  case "$kind" in
+    none) want=cyfr profiles='[]' ;;
+    domain) want="caddy cyfr" profiles='["domain"]' public_url="https://$host" ;;
+    proxy)
+      want=cyfr profiles='[]' public_url="https://$host"
+      publish="$(proxy_publish)"
+      ;;
     tailnet)
       want="cyfr tailscale" profiles='["tailnet"]' public_url="https://$host"
       # The node id and name the tailnet state holds, read apart from .env.
@@ -881,22 +917,24 @@ expect_head() {
       dns_name="$(jget "$state" Self DNSName)"
       [ -n "$node" ] && [ "$node" != null ] || fail "the tailnet state names no node"
       ;;
-    *) fail "no head of a mode '$mode'" ;;
+    *) fail "no head of a kind '$kind'" ;;
   esac
   await_healthy
   # The whole head: no case changes the port cyfr init writes (the shipped
   # default), gives an email, or turns builds on.
   head="$(python3 -I -c '
 import json, sys
-mode, host, url, node, profiles = sys.argv[1:6]
-head = {"mode": mode, "host": host, "port": 4000, "profiles": json.loads(profiles)}
+browser, host, url, node, profiles, publish = sys.argv[1:7]
+head = {"browser": browser, "host": host, "port": 4000, "profiles": json.loads(profiles)}
 if url:
     head["public_url"] = url
 if node:
     head["node_id"] = node
-print(json.dumps(head))' "$mode" "$host" "$public_url" "$node" "$profiles")"
+if publish:
+    head["publish"] = publish
+print(json.dumps(head))' "$kind" "$host" "$public_url" "$node" "$profiles" "$publish")"
   why="$(head_holds "$head" "$WORK/.env" "$(docker inspect -f '{{json .Config.Env}}' "$cyfr_id")" "$(running)" "$node" "$dns_name")" ||
-    fail "the project does not run the $mode head at $host: $why"
+    fail "the project does not run the $kind head at $host: $why"
   for proxy in caddy tailscale; do
     case " $want " in
       *" $proxy "*)
@@ -904,10 +942,10 @@ print(json.dumps(head))' "$mode" "$host" "$public_url" "$node" "$profiles")"
         why="$(capabilities_hold "$proxy" "$(docker inspect -f '{{json .HostConfig}}' "$id")" "$(docker exec "$id" cat /proc/1/status)" "$CONTAINER_PROFILE")" ||
           fail "the $proxy proxy runs with other privileges than the shipped file's: $why"
         ;;
-      *) ! has_container "$proxy" || fail "in $mode the project still has a $proxy container: stopped, but not removed" ;;
+      *) ! has_container "$proxy" || fail "in $kind the project still has a $proxy container: stopped, but not removed" ;;
     esac
   done
-  ok "the home is $mode at $host: the whole head in .env and the running cyfr, '$want' runs$([ "$mode" = local ] || echo ", its proxy with the shipped file's capabilities"), cyfr is healthy, and no other proxy has a container"
+  ok "CYFR runs the $kind head at $host: the whole head in .env and the running cyfr, '$want' runs$([ "$want" = cyfr ] || echo ", its proxy with the shipped file's capabilities"), cyfr is healthy, and no other proxy has a container"
 }
 
 # The tailscale container's serve configuration, compact.
@@ -998,7 +1036,7 @@ project_new() {
     runtime_overlay
   fi
   (umask 077 && printf 'tskey-auth-proof%s\n' "$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')" >"$AUTH_KEY_FILE")
-  ok "wrote $WORK/.env: CYFR_ACCESS=$(env_value CYFR_ACCESS), builds off"
+  ok "wrote $WORK/.env: CYFR_BROWSER=$(env_value CYFR_BROWSER), builds off"
   # Once the project resolves, so a refused copy leaves a project its
   # teardown can take down.
   proof_caddyfile
@@ -1208,12 +1246,14 @@ host_address() {
     awk '$2 !~ /^(docker|br-|veth)/ { split($4, a, "/"); print a[1]; exit }'
 }
 
-# The ports the shipped file publishes in mode `$1`, as `docker compose
-# config` resolves docker-compose.yml alone with the mode's profile:
-# `service host_ip:published:target/protocol` lines, sorted.
+# The ports the shipped file publishes with kind `$1`, as `docker compose
+# config` resolves docker-compose.yml alone with the kind's profile:
+# `service host_ip:published:target/protocol` lines, sorted. The proxy
+# listener's publication with proxy is the engine's overlay
+# (apps/codex/internal/access/compose.go proxyOverlay), never the file's.
 shipped_ports() {
   local profile=()
-  case "$1" in public | tailnet) profile=(--profile "$1") ;; esac
+  case "$1" in domain | tailnet) profile=(--profile "$1") ;; esac
   (cd "$WORK" && docker compose --project-name "$RUN-shipped" -f "$WORK/docker-compose.yml" ${profile[@]+"${profile[@]}"} config --format json) |
     python3 -I -c '
 import json, sys
@@ -1223,8 +1263,8 @@ for name, s in sorted(json.load(sys.stdin)["services"].items()):
 }
 
 bind_checks() {
-  local mode="$1" config endpoint_address endpoint_network proxy_address host_api_address host_api_port runtime_network
-  local port pport bound answer network gateway address front hostip why
+  local kind="$1" config endpoint_address endpoint_network proxy_address host_api_address host_api_port runtime_network
+  local port pport publish publication bound answer network gateway address front hostip why
   config="$(compose config --format json)"
   endpoint_address="$(expected "endpoint address in the role table" table endpoint_address)" || exit 1
   endpoint_network="$(expected "endpoint network in the role table" table endpoint_network)" || exit 1
@@ -1242,40 +1282,54 @@ print(env["CYFR_PROXY_BIND_ADDRESS"], env["CYFR_HOST_API_BIND"], env["CYFR_HOST_
     fail "compose binds the loopback listener elsewhere than the table's $endpoint_address"
   port="$(env_value CYFR_PORT)"
   pport="$(proxy_port)"
+  # The head's publication, which .env names with proxy alone.
+  publish="$(env_value CYFR_PROXY_PUBLISH)"
 
-  step "$mode: cyfr holds its fixed addresses"
+  step "$kind: cyfr holds its fixed addresses"
   for pair in "$endpoint_network=$endpoint_address" "edge=$proxy_address" "$runtime_network=$host_api_address"; do
     address="$(docker inspect "$cyfr_id" --format "{{(index .NetworkSettings.Networks \"${RUN}_${pair%%=*}\").IPAddress}}")"
     [ "$address" = "${pair#*=}" ] || fail "cyfr's ${pair%%=*} address is $address, not ${pair#*=}"
   done
   ok "cyfr is $endpoint_address on $endpoint_network, $proxy_address on edge and $host_api_address on $runtime_network"
 
-  step "$mode: each listener binds its fixed address alone"
+  step "$kind: each listener binds its fixed address alone"
   bound="$(listening "$cyfr_id" "$port")"
   [ "$bound" = "$endpoint_address" ] || fail "the loopback listener listens on '$bound', not on $endpoint_address alone"
   ok "the loopback listener listens on $bound:$port alone"
   bound="$(listening "$cyfr_id" "$pport")"
-  if [ "$mode" = local ]; then
-    [ -z "$bound" ] || fail "in local a proxy listener listens on $bound:$pport"
-    ok "in local no proxy listener listens on port $pport"
-  else
-    [ "$bound" = "$proxy_address" ] || fail "the proxy listener listens on '$bound', not on $proxy_address alone"
-    ok "the proxy listener listens on $bound:$pport alone"
-  fi
+  case "$kind" in
+    none)
+      [ -z "$bound" ] || fail "in none a proxy listener listens on $bound:$pport"
+      ok "in none no proxy listener listens on port $pport"
+      ;;
+    proxy)
+      # The engine's overlay binds it to the loopback listener's address
+      # on the default network, where Docker's publication arrives, and
+      # not to the edge address, which Caddy and Serve reach.
+      [ "$bound" = "$endpoint_address" ] || fail "in proxy the proxy listener listens on '$bound', not on $endpoint_address alone"
+      ok "in proxy the proxy listener listens on $bound:$pport alone, the default network's address"
+      ;;
+    *)
+      [ "$bound" = "$proxy_address" ] || fail "the proxy listener listens on '$bound', not on $proxy_address alone"
+      ok "the proxy listener listens on $bound:$pport alone"
+      ;;
+  esac
   bound="$(listening "$cyfr_id" "$host_api_port")"
   [ "$bound" = "$host_api_address" ] || fail "the host API listens on '$bound', not on $host_api_address alone"
   ok "the host API listens on $bound alone"
 
-  step "$mode: the ports published, by docker port, and the shipped file's"
-  printf '%s\n' "$(docker inspect "$cyfr_id" --format '{{json .NetworkSettings.Ports}}')" | python3 -I -c '
-import json, sys
-ports, port, published = json.load(sys.stdin), sys.argv[1], sys.argv[2]
-bound = {k: v for k, v in ports.items() if v}
-host_ip, host_port = published.rsplit(":", 1)
-assert list(bound) == [f"{port}/tcp"], bound
-assert all(b["HostIp"] == "127.0.0.1" for b in bound[f"{port}/tcp"]), bound
-assert any(b["HostPort"] == host_port for b in bound[f"{port}/tcp"]), (bound, published)
-' "$port" "$(published)" || fail "cyfr publishes other than its loopback listener on the host's loopback: $(docker port "$cyfr_id")"
+  step "$kind: the ports published, by docker port, and the shipped file's"
+  # The proxy listener's publication (predicates.sh
+  # `proxy_publication_holds`): with proxy, a request at the head's
+  # publication as a person's proxy forwards one; with any other kind, a
+  # connection where this run's proxy head publishes.
+  if [ "$kind" = proxy ]; then
+    publication="$(publication_answer -H 'host: proof-home.example' -H 'x-forwarded-proto: https' "http://$publish/")"
+  else
+    publication="$(publication_answer "http://$(proxy_publish)/")"
+  fi
+  why="$(proxy_publication_holds "$kind" "$publish" "$(docker inspect "$cyfr_id" --format '{{json .NetworkSettings.Ports}}')" \
+    "$port" "$pport" "$publication" "$(published | sed 's/.*://')" "$(proxy_publish)")" || fail "in $kind: $why (docker port: $(docker port "$cyfr_id" | tr '\n' ';'))"
   for id in $(docker ps -q --no-trunc --filter "label=com.docker.compose.project=$RUN"); do
     [ "$id" = "$cyfr_id" ] && continue
     service="$(docker inspect -f '{{index .Config.Labels "com.docker.compose.service"}}' "$id")"
@@ -1292,24 +1346,24 @@ assert any(b["HostPort"] == host_port for b in bound[f"{port}/tcp"]), (bound, pu
       *) [ -z "$answer" ] || fail "$service publishes $answer" ;;
     esac
   done
-  ok "docker port: cyfr publishes $port on 127.0.0.1 alone$([ "$mode" = public ] && echo ", caddy port 80 on 127.0.0.1")$([ "$mode" = tailnet ] && echo ", tailscale SOCKS5 port 1055 on 127.0.0.1")"
-  answer="$(shipped_ports "$mode")"
-  case "$mode" in
-    public) expected="$(printf '%s\n' "caddy :443:443/tcp" "caddy :443:443/udp" "caddy :80:80/tcp" "cyfr 127.0.0.1:$port:$port/tcp" | sort)" ;;
+  ok "docker port: cyfr publishes $port on 127.0.0.1$([ "$kind" = proxy ] && echo " and its proxy listener at $publish, which answered $publication" || echo " alone, nothing answering 127.0.0.1:$pport")$([ "$kind" = domain ] && echo ", caddy port 80 on 127.0.0.1")$([ "$kind" = tailnet ] && echo ", tailscale SOCKS5 port 1055 on 127.0.0.1")"
+  answer="$(shipped_ports "$kind")"
+  case "$kind" in
+    domain) expected="$(printf '%s\n' "caddy :443:443/tcp" "caddy :443:443/udp" "caddy :80:80/tcp" "cyfr 127.0.0.1:$port:$port/tcp" | sort)" ;;
     tailnet) expected="$(printf '%s\n' "cyfr 127.0.0.1:$port:$port/tcp" "tailscale 127.0.0.1:1055:1055/tcp" | sort)" ;;
     *) expected="cyfr 127.0.0.1:$port:$port/tcp" ;;
   esac
-  why="$(published_ports_hold "$answer" "$expected")" || fail "in $mode: $why"
-  ok "the shipped file publishes in $mode: $(printf '%s' "$answer" | tr '\n' ';')"
+  why="$(published_ports_hold "$answer" "$expected")" || fail "in $kind: $why"
+  ok "the shipped file publishes in $kind: $(printf '%s' "$answer" | tr '\n' ';')"
 
-  step "$mode: cyfr and the mode's proxy run under the stack's container seccomp profile"
+  step "$kind: cyfr and the kind's proxy run under the stack's container seccomp profile"
   seccomp_holds cyfr "$CONTAINER_PROFILE" probe
-  case "$mode" in
-    public) seccomp_holds caddy "$CONTAINER_PROFILE" probe ;;
+  case "$kind" in
+    domain) seccomp_holds caddy "$CONTAINER_PROFILE" probe ;;
     tailnet) seccomp_holds tailscale "$CONTAINER_PROFILE" probe ;;
   esac
 
-  step "$mode: the loopback listener answers the host's loopback, and nothing else"
+  step "$kind: the loopback listener answers the host's loopback, and nothing else"
   curl -fsS -m 10 "http://$(published)/api/health/ready" >"$WORK/ready.json" || fail "GET http://$(published)/api/health/ready did not answer 200"
   ok "GET http://$(published)/api/health/ready -> 200 $(cat "$WORK/ready.json")"
   curl -fsS -m 10 "http://$(published)/api/health" >"$WORK/health.json" || fail "GET http://$(published)/api/health did not answer 200"
@@ -1334,17 +1388,20 @@ assert any(b["HostPort"] == host_port for b in bound[f"{port}/tcp"]), (bound, pu
     fail "this host has no non-loopback IPv4 address outside Docker's bridges to ask"
   fi
 
-  step "$mode: the proxy listener, from the edge network, and through the proxy"
+  step "$kind: the proxy listener, from the edge network, and through the proxy"
   answer="$(from_network edge "http://cyfr:$pport/api/health")"
-  if [ "$mode" = local ]; then
-    [ "$(status_of "$answer")" = refused ] || fail "in local the proxy listener's port answered '$(status_of "$answer")' from the edge network"
-    ok "in local nothing answers the edge network on port $pport"
-  else
-    [ "$(status_of "$answer")" = 200 ] || fail "the proxy listener answered '$(status_of "$answer")' to the edge network, not 200"
-    ok "the proxy listener answers the edge network: 200"
-  fi
-  case "$mode" in
-    public)
+  case "$kind" in
+    none | proxy)
+      [ "$(status_of "$answer")" = refused ] || fail "in $kind the proxy listener's port answered '$(status_of "$answer")' from the edge network"
+      ok "in $kind nothing answers the edge network on port $pport"
+      ;;
+    *)
+      [ "$(status_of "$answer")" = 200 ] || fail "the proxy listener answered '$(status_of "$answer")' to the edge network, not 200"
+      ok "the proxy listener answers the edge network: 200"
+      ;;
+  esac
+  case "$kind" in
+    domain)
       # The shipped site answers its host's name alone.
       front="$(compose port caddy 80)"
       curl -fsS -m 10 -H "host: $(env_value CYFR_HOST)" "http://$front/api/health/ready" >"$WORK/caddy-ready.json" ||
@@ -1357,9 +1414,16 @@ assert any(b["HostPort"] == host_port for b in bound[f"{port}/tcp"]), (bound, pu
       [ "$(jget "$answer" status)" = 200 ] || fail "readiness through Serve at $(env_value CYFR_HOST) answered: $answer"
       ok "GET https://$(env_value CYFR_HOST)/api/health/ready through Serve -> 200"
       ;;
+    proxy)
+      # The person's own proxy stands outside the stack: readiness at the
+      # publication, asked as that proxy forwards.
+      curl -fsS -m 10 -H "host: $(env_value CYFR_HOST)" -H 'x-forwarded-proto: https' "http://$publish/api/health/ready" >"$WORK/publish-ready.json" ||
+        fail "GET http://$publish/api/health/ready as $(env_value CYFR_HOST) did not answer 200"
+      ok "GET http://$publish/api/health/ready as $(env_value CYFR_HOST), at the publication -> 200 $(cat "$WORK/publish-ready.json")"
+      ;;
   esac
 
-  step "$mode: no Locus network reaches the loopback listener; the runtime's network reaches the host API"
+  step "$kind: no Locus network reaches the loopback listener; the runtime's network reaches the host API"
   for network in $(printf '%s' "$config" | python3 -I -c '
 import json, sys
 cyfr = json.load(sys.stdin)["services"]["cyfr"]
@@ -1375,34 +1439,59 @@ print(" ".join(name for name in cyfr["networks"] if name not in (sys.argv[1], "e
   esac
 }
 
+# `cyfr access browser proxy` with neither CYFR_TRUSTED_PROXY_HOPS nor
+# CYFR_TRUSTED_PROXY_CIDRS assigned in .env: it exits 1 with
+# access_proxy_trust_missing's sentence, leaves .env as it was and starts
+# nothing.
+proxy_trust_refused() {
+  local status=0
+  ! grep -qE '^CYFR_TRUSTED_PROXY_(HOPS|CIDRS)=' "$WORK/.env" ||
+    fail "the project's .env states a proxy trust before the refusal it is to show: $(grep -E '^CYFR_TRUSTED_PROXY_' "$WORK/.env" | tr '\n' ' ')"
+  cp "$WORK/.env" "$WORK/.env.untrusted"
+  cli_run proxy-untrusted access browser proxy --domain proof-home.example --yes || status=$?
+  [ "$status" -eq 1 ] || fail "cyfr access browser proxy with no stated trust exited $status, not 1: $(tail -n 10 "$WORK/proxy-untrusted.log")"
+  sentence access_proxy_trust_missing "$WORK/proxy-untrusted.log" >/dev/null ||
+    fail "cyfr access browser proxy with no stated trust did not say access_proxy_trust_missing's sentence: $(tail -n 10 "$WORK/proxy-untrusted.log")"
+  cmp -s "$WORK/.env" "$WORK/.env.untrusted" || fail "the refused switch to proxy changed .env"
+  [ -z "$(running)" ] || fail "the refused switch to proxy left '$(running)' running"
+  ok "with no stated trust, cyfr access browser proxy exits 1 with access_proxy_trust_missing's sentence, .env unchanged, nothing running"
+}
+
 bind_case() {
-  local mode name
-  for mode in local tailnet public; do
-    step "bind: $mode, switched with the stack stopped, then cyfr up"
-    case "$mode" in
-      local) ;;
+  local kind name
+  for kind in none tailnet domain proxy; do
+    step "bind: $kind, switched with the stack stopped, then cyfr up"
+    case "$kind" in
+      none) ;;
       tailnet)
         cli_ok down down
-        cli_ok access-tailnet access tailnet --tailscale-auth-key-file "$AUTH_KEY_FILE" --yes
+        cli_ok access-tailnet access browser tailnet --tailscale-auth-key-file "$AUTH_KEY_FILE" --yes
         ;;
-      public)
+      domain)
         cli_ok down down
-        cli_ok access-public access public --domain proof-home.example --yes
+        cli_ok access-domain access browser domain --domain proof-home.example --yes
+        ;;
+      proxy)
+        cli_ok down down
+        proxy_trust_refused
+        env_set CYFR_TRUSTED_PROXY_HOPS 1
+        cli_ok access-proxy access browser proxy --domain proof-home.example --publish "$(proxy_publish)" --yes
         ;;
     esac
     islands_first
-    cli_ok "up-$mode" up
-    case "$mode" in
-      local) expect_head local localhost ;;
+    cli_ok "up-$kind" up
+    case "$kind" in
+      none) expect_head none localhost ;;
       tailnet)
         name="$(node_name)"
         [[ "$name" == *.proof.ts.net ]] || fail "the joined node's name is ${name:-none}"
         expect_head tailnet "$name"
         expect_serve_open "$name"
         ;;
-      public) expect_head public proof-home.example ;;
+      domain) expect_head domain proof-home.example ;;
+      proxy) expect_head proxy proof-home.example ;;
     esac
-    bind_checks "$mode"
+    bind_checks "$kind"
   done
 }
 
@@ -1513,24 +1602,24 @@ probe_serve() {
     ${args[@]+"${args[@]}"} "https://$(env_value CYFR_HOST)/mcp"
 }
 
-# The forged-header checks of mode `$1`, on both listeners and through its
+# The forged-header checks of kind `$1`, on both listeners and through its
 # proxy.
 forged_checks() {
-  local mode="$1"
+  local kind="$1"
   probe_attach
   PROBE_PORT="$(proxy_port)"
-  forged "$mode, the loopback listener" probe_loopback
+  forged "$kind, the loopback listener" probe_loopback
   # Each probe from a container runs a container of its own, whose address
   # its answer names (IP=).
-  forged_peer "$mode, the proxy listener from an untrusted peer on edge" probe_edge
-  case "$mode" in
-    public)
-      forged_peer "$mode, through Caddy" probe_caddy
-      anonymous_pairs "$mode, through Caddy" anonymous_caddy
+  forged_peer "$kind, the proxy listener from an untrusted peer on edge" probe_edge
+  case "$kind" in
+    domain)
+      forged_peer "$kind, through Caddy" probe_caddy
+      anonymous_pairs "$kind, through Caddy" anonymous_caddy
       ;;
     tailnet)
-      forged_peer "$mode, through Serve" probe_serve
-      anonymous_pairs "$mode, through Serve" anonymous_serve
+      forged_peer "$kind, through Serve" probe_serve
+      anonymous_pairs "$kind, through Serve" anonymous_serve
       ;;
   esac
 }
@@ -1545,7 +1634,7 @@ FORGED_IDENTITY=(
   "Tailscale-Headers-Info: https://evil.example/info" 'Tailscale-App-Capabilities: {"evil.example/cap":[{}]}'
 )
 
-# Anonymous requests through mode `$1`'s proxy, the probe `$2` (`$2 mcp|page
+# Anonymous requests through kind `$1`'s proxy, the probe `$2` (`$2 mcp|page
 # REQUEST [header...]`, REQUEST the JSON-RPC body of an mcp request):
 # MCP's subscriptions/listen, which opens a stream to an authenticated
 # caller alone (tools/list is discovery, which an anonymous caller is
@@ -1695,68 +1784,68 @@ refused_before_start() {
 
 modes_case() {
   local m sentence_text name
-  step "modes: a local home, builds off, up"
-  cli_ok up-local up
-  expect_head local localhost
+  step "modes: no browser address, builds off, up"
+  cli_ok up-none up
+  expect_head none localhost
   sign_in
 
-  step "modes: COMPOSE_PROFILES=public,tailnet in the command line's environment starts neither proxy"
+  step "modes: COMPOSE_PROFILES=domain,tailnet in the command line's environment starts neither proxy"
   cli_ok down down
   [ -z "$(running)" ] || fail "cyfr down left '$(running)' running"
-  cli_ok up-profiles COMPOSE_PROFILES=public,tailnet up
-  expect_head local localhost
-  ok "with COMPOSE_PROFILES=public,tailnet in its environment, cyfr up started cyfr alone"
+  cli_ok up-profiles COMPOSE_PROFILES=domain,tailnet up
+  expect_head none localhost
+  ok "with COMPOSE_PROFILES=domain,tailnet in its environment, cyfr up started cyfr alone"
 
   step "modes: what cyfr up refuses before anything starts"
   cli_ok down down
-  env_set COMPOSE_PROFILES public,tailnet
+  env_set COMPOSE_PROFILES domain,tailnet
   refused_before_start "COMPOSE_PROFILES in .env" compose_env_refused key=COMPOSE_PROFILES
   env_set COMPOSE_PROFILES
   env_set CYFR_HOST cyfr.example.com
-  refused_before_start "a local .env naming another host" access_local_mismatch key=CYFR_HOST value=cyfr.example.com
-  sentence_text="$(expected "boot sentence 'local with a host'" boot_sentence 'local with a host')" || exit 1
+  refused_before_start "a .env with no browser address naming another host" access_none_mismatch key=CYFR_HOST value=cyfr.example.com
+  sentence_text="$(expected "boot sentence 'none with a host'" boot_sentence 'none with a host')" || exit 1
   grep -qF -- "$sentence_text" "$WORK/refused-up.log" || fail "cyfr up's sentence is not the boot's own"
   env_set CYFR_HOST localhost
-  cp "$WORK/.env" "$WORK/.env.with-mode"
-  env_set CYFR_ACCESS
-  refused_before_start "a .env with no mode" access_missing
-  sentence_text="$(expected "boot sentence 'a release with the mode unset'" boot_sentence 'a release with the mode unset')" || exit 1
+  cp "$WORK/.env" "$WORK/.env.with-kind"
+  env_set CYFR_BROWSER
+  refused_before_start "a .env with no kind" access_missing
+  sentence_text="$(expected "boot sentence 'a release with the kind unset'" boot_sentence 'a release with the kind unset')" || exit 1
   grep -qF -- "$sentence_text" "$WORK/refused-up.log" || fail "cyfr up's sentence is not the boot's own"
-  cp "$WORK/.env.with-mode" "$WORK/.env"
+  cp "$WORK/.env.with-kind" "$WORK/.env"
 
-  step "modes: up again, then every ordered pair of the three modes, running"
+  step "modes: up again, then every ordered pair of none, tailnet and domain, running"
   cli_ok up-again up
-  expect_head local localhost
-  # local -> public -> tailnet -> local -> tailnet -> public -> local
-  for m in public tailnet local tailnet public local; do
+  expect_head none localhost
+  # none -> domain -> tailnet -> none -> tailnet -> domain -> none
+  for m in domain tailnet none tailnet domain none; do
     step "modes: switch to $m"
     case "$m" in
-      local) cli_ok "to-$m" access local --yes ;;
-      public) cli_ok "to-$m" access public --domain proof-home.example --yes ;;
+      none) cli_ok "to-$m" access browser none --yes ;;
+      domain) cli_ok "to-$m" access browser domain --domain proof-home.example --yes ;;
       tailnet)
         if [ -z "${JOINED:-}" ]; then
-          tailnet_join "to-$m" "--yes" || fail "cyfr access tailnet, approved, exited non-zero: $(tail -n 20 "$WORK/to-$m.log")"
+          tailnet_join "to-$m" "--yes" || fail "cyfr access browser tailnet, approved, exited non-zero: $(tail -n 20 "$WORK/to-$m.log")"
           JOINED="$(env_value CYFR_TAILNET_NODE_ID)"
         else
-          cli_ok "to-$m" access tailnet --yes
+          cli_ok "to-$m" access browser tailnet --yes
           [ "$(env_value CYFR_TAILNET_NODE_ID)" = "$JOINED" ] ||
             fail "the second switch to tailnet named the node $(env_value CYFR_TAILNET_NODE_ID), not the machine already joined, $JOINED"
         fi
         ;;
     esac
     case "$m" in
-      local)
-        expect_head local localhost
+      none)
+        expect_head none localhost
         ;;
-      public)
-        expect_head public proof-home.example
-        forged_checks public
+      domain)
+        expect_head domain proof-home.example
+        forged_checks domain
         answer="$(from_network edge -H "host: proof-home.example" "http://cyfr:$(proxy_port)/api/health")"
         [ "$(status_of "$answer")" = 200 ] && [ -z "$(hsts_in "$answer")" ] ||
-          fail "in public the proxy listener as proof-home.example answered '$(status_of "$answer")' with Strict-Transport-Security '$(hsts_in "$answer")'"
+          fail "in domain the proxy listener as proof-home.example answered '$(status_of "$answer")' with Strict-Transport-Security '$(hsts_in "$answer")'"
         answer="$(from_network edge -H "host: proof-home.example" "http://caddy:80/api/health")"
         [ "$(hsts_in "$answer")" = "$HSTS" ] || fail "through Caddy the answer carries Strict-Transport-Security '$(hsts_in "$answer" | tr '\n' ';')', not the shipped site's '$HSTS' once"
-        ok "in public the endpoint sends no HSTS of its own, and through Caddy the answer carries the shipped site's one value"
+        ok "in domain the endpoint sends no HSTS of its own, and through Caddy the answer carries the shipped site's one value"
         ;;
       tailnet)
         name="$(node_name)"
@@ -1874,23 +1963,23 @@ PY
 # Converged: no journal, no materialized configuration, the receipt of
 # request `$1`, and one coherent head running, `$2` or `$3`'s.
 converged() {
-  local id="$1" mode
+  local id="$1" kind
   [ ! -e "$WORK/.cyfr/journal.json" ] || fail "an operation is still unfinished: $(cat "$WORK/.cyfr/journal.json")"
   ! compgen -G "$WORK/.cyfr/compose.resolved.*" >/dev/null || fail "materialized configurations are left: $(ls "$WORK/.cyfr")"
   [ -f "$WORK/.cyfr/receipts/$id.json" ] || fail "no receipt of the request $id"
   [ "$(jget "$(cat "$WORK/.cyfr/receipts/$id.json")" state)" = completed ] ||
     fail "the request $id's receipt is $(cat "$WORK/.cyfr/receipts/$id.json")"
-  mode="$(env_value CYFR_ACCESS)"
-  case "$mode" in
+  kind="$(env_value CYFR_BROWSER)"
+  case "$kind" in
     "$2" | "$3") ;;
-    *) fail ".env's head is $mode, neither $2 nor $3" ;;
+    *) fail ".env's head is $kind, neither $2 nor $3" ;;
   esac
-  case "$mode" in
-    local) expect_head local localhost ;;
-    public) expect_head public proof-home.example ;;
+  case "$kind" in
+    none) expect_head none localhost ;;
+    domain) expect_head domain proof-home.example ;;
     tailnet) expect_head tailnet "$(node_name)" ;;
   esac
-  ok "converged on $mode: a receipt ($(jget "$(cat "$WORK/.cyfr/receipts/$id.json")" outcome)), no journal and no materialized configuration"
+  ok "converged on $kind: a receipt ($(jget "$(cat "$WORK/.cyfr/receipts/$id.json")" outcome)), no journal and no materialized configuration"
 }
 
 # Runs, as the sentence `$1` (a refusal code) printed in `$2` says, the
@@ -1907,10 +1996,10 @@ as_printed() {
     n=$((n + 1))
     # shellcheck disable=SC2086
     set -- ${cmd#cyfr }
-    case "$1 ${2:-}" in "access local" | "access tailnet" | "access public") set -- "$@" --yes ;; esac
+    case "$1 ${2:-} ${3:-}" in "access browser none" | "access browser tailnet" | "access browser domain" | "access browser proxy") set -- "$@" --yes ;; esac
     step "as the $code sentence says: cyfr $*"
-    if [ "$1 ${2:-}" = "access tailnet" ] && printf '%s\n' "$@" | grep -qx -- --new-node; then
-      shift 2
+    if [ "$1 ${2:-} ${3:-}" = "access browser tailnet" ] && printf '%s\n' "$@" | grep -qx -- --new-node; then
+      shift 3
       tailnet_join "printed-$n" "$*" --name cyfr-1.proof.ts.net || fail "cyfr $cmd, approved, exited non-zero: $(tail -n 20 "$WORK/printed-$n.log")"
     else
       cli_ok "printed-$n" "$@"
@@ -1922,12 +2011,12 @@ as_printed() {
 interrupt_case() {
   local cli job pid id status
   shim_install
-  cli_ok up-local up
-  expect_head local localhost
+  cli_ok up-none up
+  expect_head none localhost
 
   step "interrupt: the command line killed after acceptance, before its stop runs"
   : >"$FAULTS/pause-stop"
-  cli_run kill-accepted access public --domain proof-home.example --yes &
+  cli_run kill-accepted access browser domain --domain proof-home.example --yes &
   job=$!
   cli="$(cli_pid kill-accepted)"
   pid="$(await_paused)"
@@ -1944,18 +2033,18 @@ interrupt_case() {
     fail "cyfr access status names no \`cyfr access --resume\` for the interrupted change: $(tail -n 20 "$WORK/status-killed.log")"
   step "interrupt: cyfr access --resume, as cyfr access status says"
   cli_ok resume-killed access --resume
-  converged "$id" local public
+  converged "$id" none domain
 
   step "interrupt: the command line killed alone while a docker child of its start is paused"
-  [ "$(env_value CYFR_ACCESS)" = local ] || cli_ok back-local access local --yes
+  [ "$(env_value CYFR_BROWSER)" = none ] || cli_ok back-none access browser none --yes
   : >"$FAULTS/pause-up"
-  cli_run kill-start access public --domain proof-home.example --yes &
+  cli_run kill-start access browser domain --domain proof-home.example --yes &
   job=$!
   cli="$(cli_pid kill-start)"
   pid="$(await_paused)"
   id="$(journal request_id)"
   [ -n "$id" ] || fail "no operation is unfinished while its start is paused"
-  [ "$(env_value CYFR_ACCESS)" = public ] || fail "the start paused before .env was committed to public"
+  [ "$(env_value CYFR_BROWSER)" = domain ] || fail "the start paused before .env was committed to domain"
   # The command line alone: the paused docker call and the watchdog that
   # started it hold the lock on.
   kill -KILL "$cli"
@@ -1973,13 +2062,13 @@ interrupt_case() {
   done
   rm -f "$FAULTS/paused"
   as_printed access_busy "$WORK/busy.log" 1
-  converged "$id" local public
+  converged "$id" none domain
 
   step "interrupt: a stop that fails leaves the change uncertain and resumable"
-  [ "$(env_value CYFR_ACCESS)" = public ] || cli_ok to-public access public --domain proof-home.example --yes
+  [ "$(env_value CYFR_BROWSER)" = domain ] || cli_ok to-domain access browser domain --domain proof-home.example --yes
   : >"$FAULTS/fail-stop"
   status=0
-  cli_run uncertain access local --yes || status=$?
+  cli_run uncertain access browser none --yes || status=$?
   [ "$status" -ne 0 ] || fail "a switch whose stop failed exited 0"
   sentence access_uncertain "$WORK/uncertain.log" >/dev/null || fail "the failed stop did not say access_uncertain: $(tail -n 10 "$WORK/uncertain.log")"
   [ "$(journal phase)" = uncertain ] || fail "the failed stop's operation is in phase '$(journal phase)', not uncertain"
@@ -1989,13 +2078,13 @@ interrupt_case() {
   ok "uncertain: the journal stays unfinished, with its two heads and every materialized file it names, and no receipt"
   rm -f "$FAULTS/fail-stop"
   as_printed access_uncertain "$WORK/uncertain.log" 1
-  converged "$id" public local
+  converged "$id" domain none
 
   step "interrupt: a start that fails, then a rollback whose stop fails, leaves the change uncertain with its configuration"
-  [ "$(env_value CYFR_ACCESS)" = public ] || cli_ok to-public-again access public --domain proof-home.example --yes
+  [ "$(env_value CYFR_BROWSER)" = domain ] || cli_ok to-domain-again access browser domain --domain proof-home.example --yes
   : >"$FAULTS/fail-up"
   status=0
-  cli_run rollback-uncertain access local --yes || status=$?
+  cli_run rollback-uncertain access browser none --yes || status=$?
   [ "$status" -ne 0 ] || fail "a switch whose start and rollback stop failed exited 0"
   [ ! -e "$FAULTS/fail-up" ] || fail "the switch ran no compose up"
   sentence access_uncertain "$WORK/rollback-uncertain.log" >/dev/null ||
@@ -2007,16 +2096,16 @@ interrupt_case() {
   ok "uncertain rollback: the journal stays unfinished, with its two heads and the target's materialized configuration, and no receipt"
   rm -f "$FAULTS/fail-stop"
   as_printed access_uncertain "$WORK/rollback-uncertain.log" 1
-  converged "$id" public local
+  converged "$id" domain none
 
   step "interrupt: a join with HTTPS off for the tailnet, then its instruction"
-  [ "$(env_value CYFR_ACCESS)" = local ] || cli_ok to-local access local --yes
+  [ "$(env_value CYFR_BROWSER)" = none ] || cli_ok to-none access browser none --yes
   status=0
   tailnet_join https-off "--new-node --yes" https-off || status=$?
   [ "$status" -ne 0 ] || fail "a join with HTTPS off switched the home"
   sentence tailnet_https_off "$WORK/https-off.log" name=cyfr.proof.ts.net >/dev/null ||
     fail "the join did not say tailnet_https_off for cyfr.proof.ts.net: $(tail -n 10 "$WORK/https-off.log")"
-  expect_head local localhost
+  expect_head none localhost
   # The console's HTTPS switch, in the tailnet the stand-in keeps on the
   # machine's volume.
   local enrolled first_id
@@ -2034,7 +2123,7 @@ interrupt_case() {
 
   step "interrupt: tailnet_active, then its instruction"
   status=0
-  cli_run active access tailnet --new-node --yes || status=$?
+  cli_run active access browser tailnet --new-node --yes || status=$?
   [ "$status" -ne 0 ] || fail "a join while the tailnet is active ran"
   sentence tailnet_active "$WORK/active.log" name=cyfr.proof.ts.net >/dev/null ||
     fail "the join did not say tailnet_active: $(tail -n 10 "$WORK/active.log")"
@@ -2065,7 +2154,7 @@ restore_identity_case() {
   local snapshot a_id b_id status answer mismatch
   step "restore-identity: a home serving node A"
   cli_ok down-first down
-  cli_ok join-a access tailnet --tailscale-auth-key-file "$AUTH_KEY_FILE" --yes
+  cli_ok join-a access browser tailnet --tailscale-auth-key-file "$AUTH_KEY_FILE" --yes
   cli_ok up-a up
   expect_head tailnet cyfr.proof.ts.net
   expect_serve_open cyfr.proof.ts.net
@@ -2078,8 +2167,8 @@ restore_identity_case() {
   expect_serve_open cyfr.proof.ts.net
   ok "snapshot $snapshot: $(python3 -I -c 'import json, sys; print(",".join(json.load(open(sys.argv[1]))["parts"]))' "$snapshot/snapshot.json")"
 
-  step "restore-identity: switched to local, then joined as node B"
-  cli_ok to-local access local --yes
+  step "restore-identity: switched to none, then joined as node B"
+  cli_ok to-none access browser none --yes
   tailnet_join join-b "--new-node --yes" --name cyfr-1.proof.ts.net || fail "joining B failed: $(tail -n 20 "$WORK/join-b.log")"
   cli_ok up-b up
   expect_head tailnet cyfr-1.proof.ts.net
@@ -2113,23 +2202,23 @@ restore_identity_case() {
   done
   ok "the restore kept the state volume (B) and the project's .cyfr/ (its receipts), and no join.json is left"
 
-  step "restore-identity: cyfr access tailnet previews A's address to B's"
+  step "restore-identity: cyfr access browser tailnet previews A's address to B's"
   cp "$WORK/.env" "$WORK/.env.restored"
   # With no terminal and no --yes, it shows the preview and changes nothing.
   status=0
-  cli_run preview access tailnet || status=$?
-  [ "$status" -ne 0 ] || fail "cyfr access tailnet with no terminal and no --yes made the change: $(tail -n 20 "$WORK/preview.log")"
+  cli_run preview access browser tailnet || status=$?
+  [ "$status" -ne 0 ] || fail "cyfr access browser tailnet with no terminal and no --yes made the change: $(tail -n 20 "$WORK/preview.log")"
   # The whole preview: A's head as .env holds it, the transition, and B's
   # head, the node the state holds (predicates.sh `preview_holds`).
   local old_head new_head why
-  old_head="{\"mode\":\"tailnet\",\"host\":\"cyfr.proof.ts.net\",\"port\":4000,\"public_url\":\"https://cyfr.proof.ts.net\",\"node_id\":\"$a_id\",\"profiles\":[\"tailnet\"]}"
-  new_head="{\"mode\":\"tailnet\",\"host\":\"cyfr-1.proof.ts.net\",\"port\":4000,\"public_url\":\"https://cyfr-1.proof.ts.net\",\"node_id\":\"$b_id\",\"profiles\":[\"tailnet\"]}"
+  old_head="{\"browser\":\"tailnet\",\"host\":\"cyfr.proof.ts.net\",\"port\":4000,\"public_url\":\"https://cyfr.proof.ts.net\",\"node_id\":\"$a_id\",\"profiles\":[\"tailnet\"]}"
+  new_head="{\"browser\":\"tailnet\",\"host\":\"cyfr-1.proof.ts.net\",\"port\":4000,\"public_url\":\"https://cyfr-1.proof.ts.net\",\"node_id\":\"$b_id\",\"profiles\":[\"tailnet\"]}"
   # The state holds B by design, as the mismatch above showed.
   why="$(head_holds "$old_head" "$WORK/.env" "$(docker inspect -f '{{json .Config.Env}}' "$cyfr_id")" "$(running)" -)" ||
     fail "before the preview the home does not hold A's head: $why"
-  why="$(preview_holds "$WORK/preview.log" "$old_head" "$new_head")" || fail "cyfr access tailnet's preview is not A's head to B's: $why"
+  why="$(preview_holds "$WORK/preview.log" "$old_head" "$new_head")" || fail "cyfr access browser tailnet's preview is not A's head to B's: $why"
   cmp -s "$WORK/.env" "$WORK/.env.restored" || fail "the declined preview changed .env"
-  ok "cyfr access tailnet previews exactly A's head to B's (https://cyfr.proof.ts.net -> https://cyfr-1.proof.ts.net), and, unconfirmed, changes nothing"
+  ok "cyfr access browser tailnet previews exactly A's head to B's (https://cyfr.proof.ts.net -> https://cyfr-1.proof.ts.net), and, unconfirmed, changes nothing"
 }
 
 # ---------------------------------------------------------------------------
@@ -2397,7 +2486,7 @@ restore_person_case() {
   backup_take backup-person
   snapshot="$SNAPSHOT"
   [ "$RESTORE" = "cyfr restore $snapshot" ] || fail "cyfr backup names the restore as '$RESTORE'"
-  expect_head local localhost
+  expect_head none localhost
   # Written after the snapshot as the server writes, the image's user's.
   docker run --rm ${PROOF_RUN_PREFIX:+--name "$RUN-write-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"} --network none --user 0 \
     -v "$WORK/data:/d" --entrypoint sh "$IMAGE" -c 'printf since > /d/written-since && chown 999:999 /d/written-since && chmod 600 /d/written-since' ||
@@ -2413,7 +2502,7 @@ restore_person_case() {
   [ "$status" -eq 0 ] || fail "cyfr restore as the person exited $status: $(tail -n 20 "$WORK/restore-person.log")"
   ! grep -q sudo "$WORK/restore-person.log" || fail "the restore spoke of sudo: $(grep sudo "$WORK/restore-person.log")"
   grep -q "^Declared restore " "$WORK/restore-person.log" || fail "the restore was not declared: $(tail -n 20 "$WORK/restore-person.log")"
-  expect_head local localhost
+  expect_head none localhost
   owners="$(docker run --rm --network none --user 0 -v "$WORK/data:/d:ro" --entrypoint sh "$IMAGE" -c '[ ! -e /d/written-since ] && [ "$(cat /d/proof/in-snapshot)" = kept ] && find /d -printf "%U\n" | sort -u')" ||
     fail "the file written since the snapshot is still there, or the snapshot's proof/in-snapshot did not come back"
   [ "$owners" = 999 ] || fail "after the restore data/ is owned by $(echo "$owners" | tr '\n' ' '), not the image's user alone"
@@ -2901,9 +2990,9 @@ case "$CASE" in
     restore_identity_case
     ;;
   shutdown | restore | restore-person)
-    step "up: a local home, as a project of this run's own"
-    cli_ok up-local up
-    expect_head local localhost
+    step "up: no browser address, as a project of this run's own"
+    cli_ok up-none up
+    expect_head none localhost
     case "$CASE" in
       shutdown) shutdown_case ;;
       restore) restore_case ;;
@@ -2918,8 +3007,8 @@ case "$CASE" in
     # The head's predicate holds the project to cyfr and its proxy alone;
     # this case runs the runtime beside them, and its subject is the
     # runtime's wiring, not the access head.
-    step "up: a local home with the runtime, as a project of this run's own"
-    cli_ok up-local up
+    step "up: no browser address, with the runtime, as a project of this run's own"
+    cli_ok up-none up
     await_healthy
     runtime_case
     ;;

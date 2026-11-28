@@ -43,18 +43,24 @@
 # own compares those arguments whole, so a domain whose low 32 bits are
 # AF_VSOCK's passes it and makes an AF_VSOCK socket. keeper.seccomp.json is
 # this profile and the keeper's three differences.
-#   caddy      — TLS and the reverse proxy in front of a public home, on
-#                 :80 and :443, forwarding to cyfr's proxy listener on the
-#                 edge network.                           [profile: public]
-#   tailscale  — Tailscale Serve in front of a tailnet home, forwarding to
+#   caddy      — TLS and the reverse proxy in front of a server whose
+#                 browser address is a domain, on :80 and :443, forwarding
+#                 to cyfr's proxy listener on the edge network.
+#                                                         [profile: domain]
+#   tailscale  — Tailscale Serve in front of a tailnet address, forwarding to
 #                 cyfr's proxy listener on the edge network; SOCKS5 on
 #                 host loopback for this device's browser. [profile: tailnet]
 #
-# How the home is reached is CYFR_ACCESS in .env (local, tailnet or public),
-# which `cyfr init` and `cyfr access` write with every setting it implies.
-# `cyfr up`, `cyfr access`, `cyfr update` and `cyfr restore` start the stack
-# with the access mode's proxy profile (`public` or `tailnet`; none for
-# `local`). They run Docker Compose with every COMPOSE_* variable cleared,
+# The server's browser address is CYFR_BROWSER in .env (none, tailnet,
+# domain or proxy), which `cyfr init` and `cyfr access browser` write with
+# every setting it implies. `cyfr up`, `cyfr access`, `cyfr update` and
+# `cyfr restore` start the stack with the kind's proxy profile (`tailnet`
+# or `domain`; none for `none` and for `proxy`, whose proxy is your own).
+# With `proxy` they also publish cyfr's proxy listener on this machine's
+# loopback at CYFR_PROXY_PUBLISH, which this file never does: a compose
+# file of cyfr's own, read after this one, publishes it and binds the
+# listener beside the loopback listener on the default network. They run
+# Docker Compose with every COMPOSE_* variable cleared,
 # refuse a .env that sets one, and check the home's settings and its
 # tailnet machine before anything is served. Running `docker compose`
 # directly skips those checks. To build nothing, set CYFR_LOCUS_BUILDS_KEY
@@ -67,7 +73,8 @@ services:
     expose:
       - "${CYFR_PORT:-4000}"
       # The proxy listener, reached by caddy and tailscale over the edge
-      # network; never published.
+      # network; published only with CYFR_BROWSER=proxy, by cyfr itself
+      # (the header says how).
       - "${CYFR_PROXY_PORT:-4001}"
       # The host API, reached by Locus's runtime over the locus network;
       # never published.
@@ -86,8 +93,9 @@ services:
       #   - ./my-bundle:/app/seed/components:ro
     env_file:
       - .env
-    # Every access setting (CYFR_ACCESS, CYFR_HOST, CYFR_PUBLIC_URL,
-    # CYFR_TAILNET_NODE_ID, CYFR_PORT) reaches cyfr from .env through
+    # Every access setting (CYFR_BROWSER, CYFR_HOST, CYFR_PUBLIC_URL,
+    # CYFR_TAILNET_NODE_ID, CYFR_PROXY_PUBLISH, CYFR_PORT) reaches cyfr from
+    # .env through
     # env_file alone: `cyfr` refuses to start a stack whose configuration
     # assigns one here.
     environment:
@@ -115,9 +123,11 @@ services:
       # file alone, and a .env that sets it is refused.
       - CYFR_BIND_ADDRESS=172.16.230.2
       - CYFR_LOCAL_INGRESS_ASSERTED=true
-      # The proxy listener, served in tailnet and public alone, binds cyfr's
-      # fixed address on the edge network, where caddy and tailscale reach
-      # it; it trusts forwarded headers from those two addresses alone.
+      # The proxy listener, served with a browser address alone, binds
+      # cyfr's fixed address on the edge network, where caddy and tailscale
+      # reach it; it trusts forwarded headers from those two addresses
+      # alone. With proxy, cyfr's own compose file moves it to the default
+      # network's address and takes the trust from .env alone.
       - CYFR_PROXY_BIND_ADDRESS=172.16.234.2
       - CYFR_TRUSTED_PROXY_CIDRS=${CYFR_TRUSTED_PROXY_CIDRS:-172.16.234.3,172.16.234.4}
     networks:
@@ -425,7 +435,7 @@ services:
           memory: 32M
 
   caddy:
-    profiles: ["public"]
+    profiles: ["domain"]
     # Pinned by digest, the tag kept for the reader: the release's manifest
     # carries this digest, and `cyfr update` rewrites the line to it.
     image: caddy:2.11-alpine@sha256:003a97808e781aa9f7e75cc2f43d34d461099031faf5e20faefb9f61126836f0
@@ -495,7 +505,7 @@ services:
       # No TUN device and no capability: tailscaled's own netstack.
       - TS_USERSPACE=true
       # The machine's tailnet identity, kept in a volume of its own, which no
-      # snapshot holds. `cyfr access tailnet` joins it once.
+      # snapshot holds. `cyfr access browser tailnet` joins it once.
       - TS_STATE_DIR=/var/lib/tailscale
       - TS_AUTH_ONCE=true
       - TS_ACCEPT_DNS=false

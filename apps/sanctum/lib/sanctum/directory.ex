@@ -31,7 +31,7 @@ defmodule Sanctum.Directory do
   The directory a node serves is its origin (`Sanctum.origin/0`) and
   nothing else. Its routes are mounted at the root, `/directory/v1`, never
   under a path a proxy adds. The origin as configured need not be in the
-  one spelling a genesis names its directory in (a local home on port 80
+  one spelling a genesis names its directory in (a server on localhost port 80
   is `http://localhost:80`, named `http://localhost`), so it is compared
   in that spelling (`Prima.Identity.Encoding.canonical_home/1`), byte for
   byte with the decoded genesis's directory. A genesis naming anything

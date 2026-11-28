@@ -255,7 +255,7 @@ func TestInitAsksBeforeItWritesAnything(t *testing.T) {
 // named before.
 func TestInitNamesTheProfileInEnv(t *testing.T) {
 	newInitProject(t)
-	if err := os.WriteFile(".env", []byte("CYFR_ACCESS=local\nCYFR_PORT=4000\n"+appArmorEnv+"="+olderName+"\n"), 0o600); err != nil {
+	if err := os.WriteFile(".env", []byte("CYFR_BROWSER=none\nCYFR_PORT=4000\n"+appArmorEnv+"="+olderName+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := ensureEnvFileKeys(".env"); err != nil {
@@ -348,8 +348,8 @@ func TestAccessLoadsTheProfileBeforeItSwitches(t *testing.T) {
 	s := newAccessProject(t)
 	appArmorOn(t)
 	askTerminal = func() bool { return false }
-	err := runAccess(context.Background(), "public", accessOptions{domain: "cyfr.example.com"}, true, &bytes.Buffer{})
-	if want := notLoaded("cyfr access public"); err == nil || err.Error() != want {
+	err := runAccess(context.Background(), access.BrowserDomain, accessOptions{domain: "cyfr.example.com"}, true, &bytes.Buffer{})
+	if want := notLoaded("cyfr access browser domain"); err == nil || err.Error() != want {
 		t.Fatalf("cyfr access answered %v, want %q", err, want)
 	}
 	if s.locks != 0 || len(s.switches) != 0 {
@@ -362,7 +362,7 @@ func TestAccessLoadsTheProfileBeforeItSwitches(t *testing.T) {
 // names it and the command that removes it, before it asks and at its end.
 func TestUninstallLeavesTheAppArmorProfile(t *testing.T) {
 	s := newUninstallScenario(t)
-	if err := os.WriteFile(filepath.Join(s.dir, ".env"), []byte("CYFR_ACCESS=local\n"+appArmorEnv+"="+olderName+"\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(s.dir, ".env"), []byte("CYFR_BROWSER=none\n"+appArmorEnv+"="+olderName+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	machine.system = func() string { return "linux" }

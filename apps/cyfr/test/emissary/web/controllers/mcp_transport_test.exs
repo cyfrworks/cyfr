@@ -265,7 +265,7 @@ defmodule Emissary.Web.MCPTransportTest do
     # refresh past its bound, and a session of theirs.
     defp remote_session! do
       n = System.unique_integer([:positive])
-      Prima.Test.Env.put_app_env(:sanctum, :access_mode, :public)
+      Prima.Test.Env.put_app_env(:sanctum, :exposure, :public)
 
       {:ok, user} =
         Sanctum.Test.People.linked(%{

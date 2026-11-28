@@ -732,7 +732,7 @@ defmodule Emissary.Web.DeviceChannelTest do
 
     test "on a public CYFR with the directory unreachable it pauses: closed 1013 unavailable, the pairing standing",
          %{device: device, user: user, dir: dir, account: account} do
-      Prima.Test.Env.put_app_env(:sanctum, :access_mode, :public)
+      Prima.Test.Env.put_app_env(:sanctum, :exposure, :public)
       state = proven(device)
       {token, _timer} = state.keepalive
 

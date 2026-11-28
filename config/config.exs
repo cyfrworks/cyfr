@@ -92,25 +92,26 @@ config :sanctum,
   ]
 
 # The proxies whose forwarded headers the proxy listener trusts
-# (`Sanctum.ClientIp`): none, as a local home has no proxy listener.
+# (`Sanctum.ClientIp`): none, as a server with no browser address has no
+# proxy listener.
 # `config/runtime.exs` writes the access settings'.
 config :sanctum, :proxy_trust, :none
 
-# How the home is reached (`Sanctum.access_mode/0`): a local home's, as
-# every boot that resolves no access mode is. `config/runtime.exs` writes
+# How far the server reaches (`Sanctum.exposure/0`): private, as every
+# boot that resolves no browser address is. `config/runtime.exs` writes
 # the access settings'.
-config :sanctum, :access_mode, :local
+config :sanctum, :exposure, :private
 
 # Whose HSTS a response carries (`CyfrWeb.Plugs.ApiSecurityHeaders.maybe_hsts/1`):
-# none, a local home's. `config/runtime.exs` writes the access settings': the
-# endpoint's on the proxy listener in a tailnet home, Caddy's in a public
-# one.
+# none, as with no browser address. `config/runtime.exs` writes the access
+# settings': the endpoint's on the proxy listener with `tailnet` and
+# `proxy`, Caddy's with `domain`.
 config :cyfr, :hsts, :none
 
 # Configures the endpoint
 # The one endpoint: the API, the MCP transport, tinctures, and the Prism
 # LiveViews all answer on it — one origin, one cookie, one login — on its
-# loopback listener (`http:`) and, in a tailnet or public home, the proxy
+# loopback listener (`http:`) and, with a browser address, the proxy
 # listener (`proxy:`), each started and tagged by `CyfrWeb.Ingress`.
 config :cyfr, CyfrWeb.Endpoint,
   url: [host: "localhost"],

@@ -174,7 +174,7 @@ var (
 
 // scenarioEnv is the .env of the scenarios' home: public at
 // cyfr.example.com, builds on.
-const scenarioEnv = "CYFR_ACCESS=public\nCYFR_HOST=cyfr.example.com\nCYFR_PUBLIC_URL=https://cyfr.example.com\nCYFR_PORT=4000\n"
+const scenarioEnv = "CYFR_BROWSER=domain\nCYFR_HOST=cyfr.example.com\nCYFR_PUBLIC_URL=https://cyfr.example.com\nCYFR_PORT=4000\n"
 
 // stackImage is the image the scenarios' cyfr service runs, through which
 // a snapshot reads the storage.
@@ -577,12 +577,12 @@ func (s *updateScenario) schemaRead(running bool) []string {
 	}
 	image := imagesFromCompose(original, nil)[0]
 	return append(reads,
-		"run --rm --name "+testSchemaContainer+" --pull never --network none --read-only --user app --entrypoint /usr/bin/timeout -e CYFR_ACCESS=local -e CYFR_SECRET_KEY_BASE "+image+" 90 /app/bin/cyfr eval "+testSchema+" {env CYFR_SECRET_KEY_BASE set}",
+		"run --rm --name "+testSchemaContainer+" --pull never --network none --read-only --user app --entrypoint /usr/bin/timeout -e CYFR_BROWSER=none -e CYFR_SECRET_KEY_BASE "+image+" 90 /app/bin/cyfr eval "+testSchema+" {env CYFR_SECRET_KEY_BASE set}",
 		"rm -f "+testSchemaContainer)
 }
 
 // scenarioHead is the access head scenarioEnv holds.
-var scenarioHead = access.Head{Mode: access.ModePublic, Host: "cyfr.example.com", PublicURL: "https://cyfr.example.com", Port: 4000, Profiles: []string{"public"}}
+var scenarioHead = access.Head{Browser: access.BrowserDomain, Host: "cyfr.example.com", PublicURL: "https://cyfr.example.com", Port: 4000, Profiles: []string{"domain"}}
 
 // profiles is the engine's compose selection for the scenario's head and
 // project, as the fake docker logs it (newUpdateScenario sets it).
@@ -1408,6 +1408,92 @@ func newThreeContainerScenario(t *testing.T) *updateScenario {
 	return s
 }
 
+// An install of the three-container release whose .env is as that release
+// left it, how it is reached in the retired CYFR_ACCESS and no
+// CYFR_BROWSER, is refused at the offer, as every start would refuse that
+// .env (access_missing), before any docker call: nothing stops, nothing is
+// snapshot, and docker-compose.yml and .env stay as they were.
+func TestUpdateRefusesTheThreeContainerReleasesEnvBeforeAnythingChanges(t *testing.T) {
+	s := newThreeContainerScenario(t)
+	old := "CYFR_ACCESS=public\nCYFR_HOST=cyfr.example.com\nCYFR_PUBLIC_URL=https://cyfr.example.com\nCYFR_PORT=4000\n" +
+		"CYFR_LOCUS_BUILDS_KEY=" + threeContainerBuildsKey + "\n"
+	s.edit(".env", old)
+	out, err := s.run(context.Background())
+	want := "CYFR_BROWSER is not set in .env, so CYFR does not know what browser address it has. Nothing started. Run `cyfr init` for a new CYFR, or `cyfr access browser none|tailnet|domain|proxy` for this one."
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("the update of a .env naming CYFR_ACCESS answered %v, not %q\n%s", err, want, out)
+	}
+	if log := s.dockerLog(); log != nil {
+		t.Errorf("docker ran before the refusal:\n%s", strings.Join(log, "\n"))
+	}
+	s.composeUnchanged()
+	s.noBackups()
+	if got := read(t, filepath.Join(s.project, ".env")); got != old {
+		t.Errorf("the refused update changed .env:\n%s", got)
+	}
+}
+
+// ownerProfileServices are services of the owner's own, which this
+// release's compose file does not ship, under a profile of theirs, builds,
+// which no browser address selects: a builder and the guard it depends on,
+// the guard on a network of the owner's.
+const ownerProfileServices = `  builder:
+    profiles: ["builds"]
+    image: alpine:3.22
+    depends_on: [builder-guard]
+  builder-guard:
+    profiles: ["builds"]
+    image: alpine:3.22
+    networks: [builds]
+`
+
+// ownerProfiles are the owner-profile stack's services under a profile,
+// as its compose file declares them.
+var ownerProfiles = map[string][]string{"builder": {"builds"}, "builder-guard": {"builds"}}
+
+// releaseComposeAt is this release's compose file with its images on
+// release version, as that release would have shipped it.
+func releaseComposeAt(t *testing.T, version string) string {
+	t.Helper()
+	compose := string(shippedCompose(t))
+	for _, edit := range []struct{ from, to string }{
+		{"ghcr.io/cyfrworks/cyfr:latest", "ghcr.io/cyfrworks/cyfr:" + version + "@" + digestOld},
+		{"ghcr.io/cyfrworks/cyfr-locus:latest", "ghcr.io/cyfrworks/cyfr-locus:" + version + "@" + digestOld},
+	} {
+		if !strings.Contains(compose, edit.from) {
+			t.Fatalf("docker-compose.yml holds no %q", edit.from)
+		}
+		compose = strings.ReplaceAll(compose, edit.from, edit.to)
+	}
+	return compose
+}
+
+// newOwnerProfileScenario is an update of a stack of this release's
+// layout, its images on release 0.8.0, whose owner added a builder and its
+// guard under a profile of their own (ownerProfileServices), with a .env
+// this release writes (scenarioEnv): every service running, the builder and
+// its guard among them, the project's networks the release's and the
+// owner's builds network, which the release does not declare. The update
+// replaces the owner's compose file with the release's, asking first.
+func newOwnerProfileScenario(t *testing.T) *updateScenario {
+	shipped := releaseComposeAt(t, "0.8.0")
+	owned := strings.Replace(shipped, "\nservices:\n", "\nservices:\n"+ownerProfileServices, 1)
+	owned = strings.Replace(owned, "\nnetworks:\n", "\nnetworks:\n  builds: {}\n", 1)
+	if owned == shipped || !strings.Contains(owned, "  builds: {}\n") {
+		t.Fatal("docker-compose.yml has no services or networks key to add the owner's to")
+	}
+	s := newUpdateScenario(t, []byte(owned), nil)
+	s.composes = map[string]string{"0.8.0": shipped}
+	s.examples = map[string]string{"0.8.0": readShippedTemplate(t), testVersion: readShippedTemplate(t)}
+	s.answer("ps.out", "locus-guard\ncyfr\ncaddy\nlocus\nbuilder\nbuilder-guard\n")
+	s.answer("network-ours-netb.out", "ctrnetb\n")
+	s.answer("network-all-netb.out", "ctrnetb\n")
+	s.answerNetworks("netd default", "nete edge", "netb builds")
+	s.answerContainers("c0 cyfr", "c1 locus", "c2 locus-guard", "c3 caddy", "c4 builder", "c5 builder-guard")
+	askWith(t, true, strings.NewReader("yes\n"))
+	return s
+}
+
 // withProfiles adds to the scenario's `compose config` answer each named
 // service with its profiles, as compose writes the services its selection
 // runs.
@@ -1430,105 +1516,12 @@ func (s *updateScenario) withProfiles(profiles map[string][]string) {
 	s.answer("config.out", string(raw))
 }
 
-// buildsSelection is the compose selection the three-container stack with
-// builds on runs under: the scenario's head and the builds' own profile.
+// buildsSelection is the compose selection the owner-profile stack runs
+// under: the scenario's head and the owner's own profile, builds.
 func (s *updateScenario) buildsSelection() string {
 	h := scenarioHead
-	h.Profiles = []string{"public", "locus-builds"}
+	h.Profiles = []string{"domain", "builds"}
 	return strings.Join(composePrefixArgs(access.ProjectName(s.project), h), " ") + " "
-}
-
-// The three-container release ran its builder and the builder's guard
-// under a profile of their own, which .env's head does not name: the
-// update lists and stops its stack under that profile beside the head's,
-// so the network the builder's guard sits on is removed once both are
-// stopped.
-func TestUpdateStopsTheThreeContainerBuildsUnderTheirProfile(t *testing.T) {
-	s := newThreeContainerScenario(t)
-	s.withProfiles(buildsProfiles)
-	if out, err := s.run(context.Background()); err != nil {
-		t.Fatalf("update: %v\n%s", err, out)
-	}
-	log, builds := s.log(), s.buildsSelection()
-	for _, call := range []string{builds + "ps --services --status running", builds + "stop caddy", builds + "stop cyfr", builds + "stop"} {
-		if !slices.Contains(log, call) {
-			t.Errorf("the update did not run %q:\n%s", call, strings.Join(log, "\n"))
-		}
-	}
-	if stopped, removed := slices.Index(log, builds+"stop"), slices.Index(log, "network rm net1"); removed < 0 || removed < stopped || slices.Index(log, "rm ctrnet1") < stopped {
-		t.Errorf("the network locus-builds was not removed after the builds stopped:\n%s", strings.Join(log, "\n"))
-	}
-}
-
-// A failure before the switch, after the stop, starts the old stack again
-// as it ran: the head's services through the engine's start, then the
-// builder and its guard under the builds' own profile.
-func TestUpdateRecoveryStartsTheThreeContainerBuildsAgain(t *testing.T) {
-	s := newThreeContainerScenario(t)
-	s.withProfiles(buildsProfiles)
-	s.answer("network-rm-net0.exit", "1")
-	out, err := s.run(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "could not remove the network locus-backends") || !strings.Contains(err.Error(), "The old stack was started again; docker-compose.yml is unchanged") {
-		t.Fatalf("update answered %v\n%s", err, out)
-	}
-	s.composeUnchanged()
-	want := append(started("update"), s.buildsSelection()+"up -d --no-deps locus-builds locus-builds-guard")
-	if log := s.log(); len(log) < len(want) || !slices.Equal(log[len(log)-len(want):], want) {
-		t.Errorf("the old stack was not started again as it ran:\n%s", strings.Join(log, "\n"))
-	}
-}
-
-// buildsProfiles are the three-container stack's services under a profile,
-// as its compose file declares them.
-var buildsProfiles = map[string][]string{"caddy": {"public"}, "locus-builds": {"locus-builds"}, "locus-builds-guard": {"locus-builds"}}
-
-// The recovery after a failure before the switch starts exactly the
-// services that ran: with the builder running and its guard, a dependency
-// of its under the same profile, stopped, the builder starts alone and
-// nothing it depends on starts.
-func TestUpdateRecoveryStartsNoServiceTheBuildsDependOn(t *testing.T) {
-	s := newThreeContainerScenario(t)
-	s.withProfiles(buildsProfiles)
-	s.answer("ps.out", "locus-backends-guard\ncyfr\ncaddy\nlocus-runtime\nlocus-builds\nlocus-backends\n")
-	s.answer("network-rm-net0.exit", "1")
-	if out, err := s.run(context.Background()); err == nil || !strings.Contains(err.Error(), "The old stack was started again; docker-compose.yml is unchanged") {
-		t.Fatalf("update answered %v\n%s", err, out)
-	}
-	want := append(started("update"), s.buildsSelection()+"up -d --no-deps locus-builds")
-	if log := s.log(); len(log) < len(want) || !slices.Equal(log[len(log)-len(want):], want) {
-		t.Errorf("the recovery did not start the builder alone:\n%s", strings.Join(log, "\n"))
-	}
-}
-
-// A recovery whose head's services started and whose builder did not says
-// so, naming the services and the command that starts them, never that
-// 'cyfr up' starts the old stack.
-func TestUpdateRecoveryWhoseBuildsDoNotStartSaysWhatStartsThem(t *testing.T) {
-	s := newThreeContainerScenario(t)
-	s.withProfiles(buildsProfiles)
-	s.answer("network-rm-net0.exit", "1")
-	s.answer("up-no-deps.exit", "1")
-	out, err := s.run(context.Background())
-	said := ".\nThe old stack was started again and docker-compose.yml is unchanged, but locus-builds, locus-builds-guard did not start ("
-	starts := "); 'docker compose --profile locus-builds up -d locus-builds locus-builds-guard' starts them"
-	if err == nil || strings.Count(err.Error(), said) != 1 || !strings.HasSuffix(err.Error(), starts) || strings.Contains(err.Error(), "'cyfr up'") {
-		t.Fatalf("update answered %v\n%s", err, out)
-	}
-}
-
-// A recovery whose own start fails says 'cyfr up' starts the old stack and,
-// since that starts none of the services that ran beside it, which they
-// are and what starts them.
-func TestUpdateRecoveryWhoseStartFailsSaysTheBuildsStayStopped(t *testing.T) {
-	s := newThreeContainerScenario(t)
-	s.withProfiles(buildsProfiles)
-	s.answer("network-rm-net0.exit", "1")
-	s.engine.startErr = errors.New("cyfr did not become healthy")
-	out, err := s.run(context.Background())
-	said := "; docker-compose.yml is unchanged, so 'cyfr up' starts it. These services are not started, since .env selects none of their profiles: locus-builds, locus-builds-guard; 'docker compose --profile locus-builds up -d locus-builds locus-builds-guard' starts them."
-	if err == nil || !strings.HasSuffix(err.Error(), said) || strings.Count(err.Error(), said) != 1 {
-		t.Fatalf("update answered %v\n%s", err, out)
-	}
 }
 
 func TestUpdateFromThreeContainers(t *testing.T) {
@@ -2160,10 +2153,10 @@ func TestUpdateHoldsOneLock(t *testing.T) {
 	// The home is on the release now: its compose file goes back to the
 	// one before, so the next update has a change to make.
 	s.edit("docker-compose.yml", string(s.compose))
-	s.engine.holder = "access tailnet"
+	s.engine.holder = "access browser tailnet"
 	calls = len(s.log())
 	err = homeStep(context.Background(), io.Discard, io.Discard)
-	if err == nil || !strings.Contains(err.Error(), "(`access tailnet`)") {
+	if err == nil || !strings.Contains(err.Error(), "(`access browser tailnet`)") {
 		t.Errorf("an update beside a held lock answered %v", err)
 	}
 	// The refused update ran the offer's reads alone, which write nothing.
@@ -2544,7 +2537,7 @@ func TestUpdateRemovesTheSettingsTheReleaseRetired(t *testing.T) {
 			t.Errorf("%s, retired by 0.9.0, is still in .env", name)
 		}
 	}
-	for name, value := range map[string]string{"CYFR_KEPT": "1", "CYFR_NOW_COMMENTED": "3", "CYFR_MINE": "4", "CYFR_ACCESS": "public"} {
+	for name, value := range map[string]string{"CYFR_KEPT": "1", "CYFR_NOW_COMMENTED": "3", "CYFR_MINE": "4", "CYFR_BROWSER": "domain"} {
 		if got[name] != value {
 			t.Errorf("%s is %q, want %q kept", name, got[name], value)
 		}
@@ -3638,4 +3631,93 @@ func TestUpdateHoldsTheStackUntilItsSwitch(t *testing.T) {
 		s.nothingStopped()
 		s.noBackups()
 	})
+}
+
+// The owner runs a builder and the builder's guard under a profile of
+// their own, which .env's head does not name: the
+// update lists and stops its stack under that profile beside the head's,
+// so the network the builder's guard sits on is removed once both are
+// stopped.
+func TestUpdateStopsTheOwnersBuildsUnderTheirProfile(t *testing.T) {
+	s := newOwnerProfileScenario(t)
+	s.withProfiles(ownerProfiles)
+	if out, err := s.run(context.Background()); err != nil {
+		t.Fatalf("update: %v\n%s", err, out)
+	}
+	log, builds := s.log(), s.buildsSelection()
+	for _, call := range []string{builds + "ps --services --status running", builds + "stop caddy", builds + "stop cyfr", builds + "stop"} {
+		if !slices.Contains(log, call) {
+			t.Errorf("the update did not run %q:\n%s", call, strings.Join(log, "\n"))
+		}
+	}
+	if stopped, removed := slices.Index(log, builds+"stop"), slices.Index(log, "network rm netb"); removed < 0 || removed < stopped || slices.Index(log, "rm ctrnetb") < stopped {
+		t.Errorf("the network locus-builds was not removed after the builds stopped:\n%s", strings.Join(log, "\n"))
+	}
+}
+
+// A failure before the switch, after the stop, starts the old stack again
+// as it ran: the head's services through the engine's start, then the
+// builder and its guard under the builds' own profile.
+func TestUpdateRecoveryStartsTheOwnersBuildsAgain(t *testing.T) {
+	s := newOwnerProfileScenario(t)
+	s.withProfiles(ownerProfiles)
+	s.answer("network-rm-netb.exit", "1")
+	out, err := s.run(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "could not remove the network builds") || !strings.Contains(err.Error(), "The old stack was started again; docker-compose.yml is unchanged") {
+		t.Fatalf("update answered %v\n%s", err, out)
+	}
+	s.composeUnchanged()
+	want := append(started("update"), s.buildsSelection()+"up -d --no-deps builder builder-guard")
+	if log := s.log(); len(log) < len(want) || !slices.Equal(log[len(log)-len(want):], want) {
+		t.Errorf("the old stack was not started again as it ran:\n%s", strings.Join(log, "\n"))
+	}
+}
+
+// The recovery after a failure before the switch starts exactly the
+// services that ran: with the builder running and its guard, a dependency
+// of its under the same profile, stopped, the builder starts alone and
+// nothing it depends on starts.
+func TestUpdateRecoveryStartsNoServiceTheBuildsDependOn(t *testing.T) {
+	s := newOwnerProfileScenario(t)
+	s.withProfiles(ownerProfiles)
+	s.answer("ps.out", "locus-guard\ncyfr\ncaddy\nlocus\nbuilder\n")
+	s.answer("network-rm-netb.exit", "1")
+	if out, err := s.run(context.Background()); err == nil || !strings.Contains(err.Error(), "The old stack was started again; docker-compose.yml is unchanged") {
+		t.Fatalf("update answered %v\n%s", err, out)
+	}
+	want := append(started("update"), s.buildsSelection()+"up -d --no-deps builder")
+	if log := s.log(); len(log) < len(want) || !slices.Equal(log[len(log)-len(want):], want) {
+		t.Errorf("the recovery did not start the builder alone:\n%s", strings.Join(log, "\n"))
+	}
+}
+
+// A recovery whose head's services started and whose builder did not says
+// so, naming the services and the command that starts them, never that
+// 'cyfr up' starts the old stack.
+func TestUpdateRecoveryWhoseBuildsDoNotStartSaysWhatStartsThem(t *testing.T) {
+	s := newOwnerProfileScenario(t)
+	s.withProfiles(ownerProfiles)
+	s.answer("network-rm-netb.exit", "1")
+	s.answer("up-no-deps.exit", "1")
+	out, err := s.run(context.Background())
+	said := ".\nThe old stack was started again and docker-compose.yml is unchanged, but builder, builder-guard did not start ("
+	starts := "); 'docker compose --profile builds up -d builder builder-guard' starts them"
+	if err == nil || strings.Count(err.Error(), said) != 1 || !strings.HasSuffix(err.Error(), starts) || strings.Contains(err.Error(), "'cyfr up'") {
+		t.Fatalf("update answered %v\n%s", err, out)
+	}
+}
+
+// A recovery whose own start fails says 'cyfr up' starts the old stack and,
+// since that starts none of the services that ran beside it, which they
+// are and what starts them.
+func TestUpdateRecoveryWhoseStartFailsSaysTheBuildsStayStopped(t *testing.T) {
+	s := newOwnerProfileScenario(t)
+	s.withProfiles(ownerProfiles)
+	s.answer("network-rm-netb.exit", "1")
+	s.engine.startErr = errors.New("cyfr did not become healthy")
+	out, err := s.run(context.Background())
+	said := "; docker-compose.yml is unchanged, so 'cyfr up' starts it. These services are not started, since .env selects none of their profiles: builder, builder-guard; 'docker compose --profile builds up -d builder builder-guard' starts them."
+	if err == nil || !strings.HasSuffix(err.Error(), said) || strings.Count(err.Error(), said) != 1 {
+		t.Fatalf("update answered %v\n%s", err, out)
+	}
 }

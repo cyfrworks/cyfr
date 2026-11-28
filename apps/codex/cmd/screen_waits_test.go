@@ -220,7 +220,7 @@ func TestScreenShell_TheAppsLockEndsAnUnsavedRecoveryCode(t *testing.T) {
 	}
 	// The folder's own CYFR serves its accounts, so the test asks no network.
 	home := "http://localhost:" + at.Port()
-	env := "CYFR_ACCESS=local\nCYFR_PORT=" + at.Port() + "\nCYFR_SETUP_TOKEN=the-token\nCYFR_DIRECTORY_URL=" + home + "\n"
+	env := "CYFR_BROWSER=none\nCYFR_PORT=" + at.Port() + "\nCYFR_SETUP_TOKEN=the-token\nCYFR_DIRECTORY_URL=" + home + "\n"
 	if err := os.WriteFile(".env", []byte(env), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -370,7 +370,7 @@ func TestScreenShell_TheNextLockPageNamesTheFolderUpdatedAtItsAddress(t *testing
 		t.Fatal(err)
 	}
 	home := "http://localhost:" + at.Port()
-	env := "CYFR_ACCESS=local\nCYFR_PORT=" + at.Port() + "\nCYFR_SETUP_TOKEN=the-token\nCYFR_DIRECTORY_URL=" + home + "\n"
+	env := "CYFR_BROWSER=none\nCYFR_PORT=" + at.Port() + "\nCYFR_SETUP_TOKEN=the-token\nCYFR_DIRECTORY_URL=" + home + "\n"
 	if err := os.WriteFile(".env", []byte(env), 0o600); err != nil {
 		t.Fatal(err)
 	}

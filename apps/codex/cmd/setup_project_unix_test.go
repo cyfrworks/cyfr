@@ -757,7 +757,7 @@ func TestARunOutlivesTheBoundOfAReading(t *testing.T) {
 func TestSetupsWorkTakesNoSettingFromTheLauncher(t *testing.T) {
 	p := newWorkProject(t)
 	for name, value := range map[string]string{
-		"CYFR_PORT": "4999", "CYFR_ACCESS": "public", "COMPOSE_PROJECT_NAME": "launchers",
+		"CYFR_PORT": "4999", "CYFR_BROWSER": "domain", "COMPOSE_PROJECT_NAME": "launchers",
 		setupTokenVar: strings.Repeat("cd", 32), directoryVar: "https://launcher.example",
 	} {
 		t.Setenv(name, value)
@@ -772,7 +772,7 @@ func TestSetupsWorkTakesNoSettingFromTheLauncher(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, setting := range []string{"CYFR_PORT=", "CYFR_ACCESS=", "COMPOSE_PROJECT_NAME=launchers", setupTokenVar + "=", directoryVar + "="} {
+	for _, setting := range []string{"CYFR_PORT=", "CYFR_BROWSER=", "COMPOSE_PROJECT_NAME=launchers", setupTokenVar + "=", directoryVar + "="} {
 		if strings.Contains(string(environ), setting) {
 			t.Errorf("docker was given %s", setting)
 		}

@@ -19,7 +19,7 @@ defmodule Sanctum.DeviceUnlockTest do
   """
 
   # The directory seam, the setup token, the directory setting and the
-  # access mode are process-wide.
+  # exposure are process-wide.
   use ExUnit.Case, async: false
 
   import Ecto.Query, only: [from: 2]
@@ -45,7 +45,7 @@ defmodule Sanctum.DeviceUnlockTest do
     dir = DirectoryServer.start!(tls)
     Prima.Test.Env.put_app_env(:sanctum, :setup_token, @token)
     Prima.Test.Env.put_app_env(:sanctum, :directory_url, dir.url)
-    Prima.Test.Env.put_app_env(:sanctum, :access_mode, :public)
+    Prima.Test.Env.put_app_env(:sanctum, :exposure, :public)
     # The installation holds no person inside this test's transaction.
     Arca.Repo.delete_all(User)
     %{dir: dir}

@@ -14,11 +14,14 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 // requireCompose skips t, naming why, where `docker compose version`
@@ -105,7 +108,7 @@ func TestRealComposeProvenanceReadsNamesNotValues(t *testing.T) {
 	home := func(t *testing.T, env, override string) *Engine {
 		t.Helper()
 		dir := t.TempDir()
-		writeFile(t, filepath.Join(dir, ".env"), []byte("CYFR_ACCESS=local\nCYFR_HOST=localhost\nCYFR_PORT=4000\n"+env))
+		writeFile(t, filepath.Join(dir, ".env"), []byte("CYFR_BROWSER=none\nCYFR_HOST=localhost\nCYFR_PORT=4000\n"+env))
 		writeFile(t, filepath.Join(dir, "compose.yml"), []byte("services:\n  cyfr:\n    image: busybox:latest\n    env_file: .env\n"))
 		writeFile(t, filepath.Join(dir, "compose.override.yml"), []byte(override))
 		e, err := Open(dir, nil)
@@ -224,18 +227,183 @@ func boxProject(t *testing.T, compose, env string) (string, string) {
 	return dir, name
 }
 
-// A profile of the stack's own, one no access mode selects, is read from
+// The proxy trust is .env's alone: with .env stating no hops and the
+// command run under an exported CYFR_TRUSTED_PROXY_CIDRS, the real compose
+// configuration cyfr would start with trusts no hop and no listed proxy.
+func TestRealComposeProxyTrustIsEnvsAlone(t *testing.T) {
+	requireCompose(t)
+	e, dir := realHome(t)
+	env := strings.Replace(strings.Replace(string(repoFile(t, ".env.example")), "CYFR_BROWSER=none\n", "CYFR_BROWSER=proxy\n", 1), "CYFR_HOST=localhost\n", "CYFR_HOST=cyfr.example.com\n", 1)
+	env += "CYFR_PUBLIC_URL=https://cyfr.example.com\nCYFR_PROXY_PUBLISH=127.0.0.2:4101\nCYFR_TRUSTED_PROXY_HOPS=0\n"
+	writeFile(t, filepath.Join(dir, ".env"), []byte(env))
+	sys := e.docker.(*systemDocker)
+	sys.watchdog, sys.environ = []string{exeOrSkip(t), "-access.watchdog"}, func() []string {
+		return append(childEnv(), "CYFR_TRUSTED_PROXY_CIDRS=10.0.0.0/8")
+	}
+	unlock, err := e.Lock("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	h, err := e.Head()
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, err := e.flatten(bg, h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := parseConfig(content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := ResolveBoot(BootInput{Process: cyfrEnv(c), Release: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := (Trust{Kind: "hops", Hops: 0}); !reflect.DeepEqual(b.Trust, want) {
+		t.Errorf("cyfr would start trusting %+v, not .env's %+v", b.Trust, want)
+	}
+	if err := e.checkEffective(h, content); err != nil {
+		t.Errorf("the configuration is refused: %v", err)
+	}
+}
+
+// With proxy, real compose flattens the shipped compose file with the
+// overlay read from standard input: cyfr publishes the proxy listener's
+// port at the head's loopback address alone, beside the loopback
+// listener's own publication, binds the listener at the loopback
+// listener's address, leaves its trust to .env, and the configuration
+// boots as the head.
+func TestRealComposeProxyOverlay(t *testing.T) {
+	requireCompose(t)
+	e, dir := realHome(t)
+	env := strings.Replace(strings.Replace(string(repoFile(t, ".env.example")), "CYFR_BROWSER=none\n", "CYFR_BROWSER=proxy\n", 1), "CYFR_HOST=localhost\n", "CYFR_HOST=cyfr.example.com\n", 1)
+	env += "CYFR_PUBLIC_URL=https://cyfr.example.com\nCYFR_PROXY_PUBLISH=127.0.0.2:4101\nCYFR_TRUSTED_PROXY_HOPS=1\n"
+	writeFile(t, filepath.Join(dir, ".env"), []byte(env))
+	sys := e.docker.(*systemDocker)
+	sys.watchdog, sys.environ = []string{exeOrSkip(t), "-access.watchdog"}, func() []string { return childEnv() }
+	unlock, err := e.Lock("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	h, err := e.Head()
+	if err != nil || h.Browser != BrowserProxy || h.Publish != "127.0.0.2:4101" {
+		t.Fatalf("the proxy .env holds %+v (%v)", h, err)
+	}
+	content, err := e.flatten(bg, h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var flat struct {
+		Services map[string]struct {
+			Ports []struct {
+				HostIP    string `yaml:"host_ip"`
+				Target    int    `yaml:"target"`
+				Published string `yaml:"published"`
+				Protocol  string `yaml:"protocol"`
+			} `yaml:"ports"`
+			Environment map[string]string `yaml:"environment"`
+		} `yaml:"services"`
+	}
+	if err := yaml.Unmarshal(content, &flat); err != nil {
+		t.Fatal(err)
+	}
+	cyfr, ok := flat.Services[cyfrService]
+	if !ok {
+		t.Fatalf("the configuration has no cyfr:\n%s", content)
+	}
+	if _, ok := flat.Services["caddy"]; ok {
+		t.Error("the proxy configuration runs caddy")
+	}
+	var proxy, loopback int
+	for _, p := range cyfr.Ports {
+		switch p.Target {
+		case 4001:
+			proxy++
+			if p.HostIP != "127.0.0.2" || p.Published != "4101" || p.Protocol != "tcp" {
+				t.Errorf("the proxy listener is published as %+v", p)
+			}
+		case 4000:
+			loopback++
+			if p.HostIP != "127.0.0.1" || p.Published != "4000" {
+				t.Errorf("the loopback listener is published as %+v", p)
+			}
+		default:
+			t.Errorf("cyfr publishes %+v", p)
+		}
+	}
+	if proxy != 1 || loopback != 1 {
+		t.Errorf("cyfr publishes the proxy listener %d times and the loopback listener %d times:\n%v", proxy, loopback, cyfr.Ports)
+	}
+	if bind := cyfr.Environment["CYFR_BIND_ADDRESS"]; bind == "" || cyfr.Environment["CYFR_PROXY_BIND_ADDRESS"] != bind {
+		t.Errorf("the proxy listener binds %q, the loopback listener %q", cyfr.Environment["CYFR_PROXY_BIND_ADDRESS"], bind)
+	}
+	if cidrs := cyfr.Environment["CYFR_TRUSTED_PROXY_CIDRS"]; cidrs != "" {
+		t.Errorf("the proxy listener trusts the stack's CIDRs %q", cidrs)
+	}
+	if err := e.checkEffective(h, content); err != nil {
+		t.Errorf("the proxy configuration does not boot as its head: %v", err)
+	}
+}
+
+// Compose merges the files' published ports into one entry per host
+// address, published port, target and protocol: the shipped loopback
+// binding repeated, identical, in an override file is one binding in the
+// configuration cyfr starts with, and a proxy head over it is accepted.
+func TestRealComposeRepeatedBindingIsOneEntry(t *testing.T) {
+	requireCompose(t)
+	e, dir := realHome(t)
+	env := strings.Replace(strings.Replace(string(repoFile(t, ".env.example")), "CYFR_BROWSER=none\n", "CYFR_BROWSER=proxy\n", 1), "CYFR_HOST=localhost\n", "CYFR_HOST=cyfr.example.com\n", 1)
+	env += "CYFR_PUBLIC_URL=https://cyfr.example.com\nCYFR_PROXY_PUBLISH=127.0.0.2:4101\nCYFR_TRUSTED_PROXY_HOPS=1\n"
+	writeFile(t, filepath.Join(dir, ".env"), []byte(env))
+	writeFile(t, filepath.Join(dir, "docker-compose.override.yml"), []byte("services:\n  cyfr:\n    ports:\n      - \"127.0.0.1:${CYFR_PORT:-4000}:${CYFR_PORT:-4000}\"\n"))
+	sys := e.docker.(*systemDocker)
+	sys.watchdog, sys.environ = []string{exeOrSkip(t), "-access.watchdog"}, func() []string { return childEnv() }
+	unlock, err := e.Lock("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	h, err := e.Head()
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, err := e.flatten(bg, h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := parseConfig(content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var loopback int
+	for _, p := range c.Services[cyfrService].Ports {
+		if p.Target == 4000 {
+			loopback++
+		}
+	}
+	if loopback != 1 {
+		t.Errorf("the repeated binding is %d entries in compose's configuration: %v", loopback, c.Services[cyfrService].Ports)
+	}
+	if err := e.checkEffective(h, content); err != nil {
+		t.Errorf("the configuration is refused: %v", err)
+	}
+}
+
+// A profile of the stack's own, one no kind selects, is read from
 // compose itself, every service's whichever selection runs it; a head
-// that names it beside its access mode's materializes a configuration
-// holding that profile's service, checked against .env's head, while a
-// head naming another mode's profile is still refused.
+// that names it beside its kind's materializes a configuration holding
+// that profile's service, checked against .env's head, while a head
+// naming another kind's profile is still refused.
 func TestRealComposeSelectsTheStacksOwnProfiles(t *testing.T) {
 	requireCompose(t)
 	dir := filepath.Join(t.TempDir(), "home")
 	os.Mkdir(dir, 0o755)
 	writeFile(t, filepath.Join(dir, "compose.yml"), []byte("services:\n  cyfr:\n    image: busybox:latest\n    env_file: .env\n"+
-		"  builds:\n    image: busybox:latest\n    profiles: [\"builds\"]\n  proxy:\n    image: busybox:latest\n    profiles: [\"public\"]\n"))
-	writeFile(t, filepath.Join(dir, ".env"), []byte("CYFR_ACCESS=local\nCYFR_HOST=localhost\nCYFR_PORT=4000\n"))
+		"  builds:\n    image: busybox:latest\n    profiles: [\"builds\"]\n  proxy:\n    image: busybox:latest\n    profiles: [\"domain\"]\n"))
+	writeFile(t, filepath.Join(dir, ".env"), []byte("CYFR_BROWSER=none\nCYFR_HOST=localhost\nCYFR_PORT=4000\n"))
 	e, err := Open(dir, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -248,7 +416,7 @@ func TestRealComposeSelectsTheStacksOwnProfiles(t *testing.T) {
 	}
 	defer unlock()
 	declared, err := e.DeclaredProfiles(bg)
-	if slices.Sort(declared); err != nil || !slices.Equal(declared, []string{"builds", "public"}) {
+	if slices.Sort(declared); err != nil || !slices.Equal(declared, []string{"builds", "domain"}) {
 		t.Fatalf("DeclaredProfiles answered %v, %v", declared, err)
 	}
 	h, err := e.Head()
@@ -269,9 +437,9 @@ func TestRealComposeSelectsTheStacksOwnProfiles(t *testing.T) {
 		t.Fatalf("the configuration under the stack's own profile runs %v (%v)", services, err)
 	}
 	other := h
-	other.Profiles = []string{"public"}
+	other.Profiles = []string{"domain"}
 	if _, err := e.ComposeArgs(bg, other, "ps"); err == nil || !strings.Contains(err.Error(), "starts cyfr reached as") {
-		t.Fatalf("a local head naming the public profile answered %v", err)
+		t.Fatalf("a head of none naming the domain profile answered %v", err)
 	}
 }
 
@@ -307,7 +475,7 @@ func TestRealComposeCallHoldsTheLock(t *testing.T) {
 
 // A stack shaped like the product's, on busybox: the one start path runs
 // real compose on the materialized file, its explicit selection and
-// cyfr's Docker health; a switch then starts the public profile's proxy;
+// cyfr's Docker health; a switch then starts the domain profile's proxy;
 // a full stop removes every project container, including an orphan, and
 // keeps the networks unchanged; a start serves the published port again.
 func TestRealComposeRunsTheMaterializedConfiguration(t *testing.T) {
@@ -334,13 +502,13 @@ func TestRealComposeRunsTheMaterializedConfiguration(t *testing.T) {
     image: busybox:latest
     init: true
     command: ["sleep", "600"]
-    profiles: ["public"]
+    profiles: ["domain"]
     networks: [edge]
 networks:
   default: {}
   edge: {}
 `
-	dir, name := boxProject(t, compose, "CYFR_ACCESS=local\nCYFR_HOST=localhost\nCYFR_PORT=4000\n")
+	dir, name := boxProject(t, compose, "CYFR_BROWSER=none\nCYFR_HOST=localhost\nCYFR_PORT=4000\n")
 	e, err := Open(dir, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -372,18 +540,18 @@ networks:
 	if got := services(); !slices.Equal(got, []string{"cyfr"}) {
 		t.Errorf("running %v", got)
 	}
-	p, err := e.Preview(bg, Target{Mode: ModePublic, Domain: "home.example.com"}, "")
+	p, err := e.Preview(bg, Target{Browser: BrowserDomain, Domain: "home.example.com"}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rc, err := e.Switch(bg, SwitchRequest{ID: id(1), Target: Target{Mode: ModePublic, Domain: "home.example.com"}, OldDigest: p.OldDigest, NewDigest: p.NewDigest}); err != nil || rc.Outcome != "ok" {
+	if rc, err := e.Switch(bg, SwitchRequest{ID: id(1), Target: Target{Browser: BrowserDomain, Domain: "home.example.com"}, OldDigest: p.OldDigest, NewDigest: p.NewDigest}); err != nil || rc.Outcome != "ok" {
 		t.Fatalf("switch answered %+v, %v", rc, err)
 	}
 	if got := services(); !slices.Equal(got, []string{"cyfr", "proxy"}) {
 		t.Errorf("running %v after the switch", got)
 	}
 	out, _ := exec.Command("docker", "inspect", "--format", `{{range .Config.Env}}{{println .}}{{end}}`, name+"-cyfr-1").Output()
-	if !strings.Contains(string(out), "CYFR_ACCESS=public\n") || !strings.Contains(string(out), "CYFR_HOST=home.example.com\n") {
+	if !strings.Contains(string(out), "CYFR_BROWSER=domain\n") || !strings.Contains(string(out), "CYFR_HOST=home.example.com\n") {
 		t.Errorf("cyfr started with\n%s", out)
 	}
 	networks := func() []string {

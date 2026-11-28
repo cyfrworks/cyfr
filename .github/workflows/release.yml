@@ -694,7 +694,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/release"
           cyfr=$(cat "$RUNNER_TEMP/merged/cyfr/digest")
           locus=$(cat "$RUNNER_TEMP/merged/cyfr-locus/digest")
-          schema=$(docker run --rm -e CYFR_ACCESS=local -e "CYFR_SECRET_KEY_BASE=$(openssl rand -hex 48)" "ghcr.io/cyfrworks/cyfr@$cyfr" bin/cyfr eval 'IO.puts("CYFR_SCHEMA=" <> Arca.SchemaFingerprint.current())' | sed -n 's/^CYFR_SCHEMA=//p')
+          schema=$(docker run --rm -e CYFR_BROWSER=none -e "CYFR_SECRET_KEY_BASE=$(openssl rand -hex 48)" "ghcr.io/cyfrworks/cyfr@$cyfr" bin/cyfr eval 'IO.puts("CYFR_SCHEMA=" <> Arca.SchemaFingerprint.current())' | sed -n 's/^CYFR_SCHEMA=//p')
           caddy=$(sed -nE 's/^[[:space:]]*image:[[:space:]]*caddy:[^@[:space:]]*@(sha256:[0-9a-f]{64})[[:space:]]*$/\1/p' docker-compose.yml)
           tailscale=$(sed -nE 's/^[[:space:]]*image:[[:space:]]*tailscale\/tailscale:[^@[:space:]]*@(sha256:[0-9a-f]{64})[[:space:]]*$/\1/p' docker-compose.yml)
           scaffold=$(sha256sum apps/codex/cyfr-scaffold.tar.gz | cut -d' ' -f1)
