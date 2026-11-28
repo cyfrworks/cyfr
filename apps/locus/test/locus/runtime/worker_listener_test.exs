@@ -406,7 +406,7 @@ defmodule Locus.Runtime.WorkerListenerTest do
         args = start_args(context, c["start"])
         assert c["header"] == "signed", c["name"]
         response = response(context, :start, request(:start, args), path: c["path"])
-        assert {response.status, response.body} == {c["status"], c["answer"]}, c["name"]
+        assert {response.status, response.body} === {c["status"], c["answer"]}, c["name"]
       end
 
       # The accepted start's runner attaches, finds no artifact here and

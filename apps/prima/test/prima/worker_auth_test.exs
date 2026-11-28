@@ -314,7 +314,7 @@ defmodule Prima.WorkerAuthTest do
       for c <- accepted ++ refused ++ v["verify"] do
         expected = Map.take(c, ~w(fields body_hash error))
 
-        assert verified(verify_kind(c["kind"], v, c["header"], c["now"])) == expected,
+        assert verified(verify_kind(c["kind"], v, c["header"], c["now"])) === expected,
                "#{c["kind"]}: #{c["why"]}"
       end
 
@@ -323,7 +323,7 @@ defmodule Prima.WorkerAuthTest do
 
     test "the window is inclusive: a header a window from the clock verifies, one past it is refused" do
       kinds = @vectors["verify"] |> Enum.map(& &1["kind"]) |> Enum.uniq() |> Enum.sort()
-      assert kinds == ~w(call report request)
+      assert kinds === ~w(call report request)
 
       for kind <- kinds do
         cases = Enum.filter(@vectors["verify"], &(&1["kind"] == kind))
@@ -342,7 +342,7 @@ defmodule Prima.WorkerAuthTest do
       for c <- @vectors["body_checks"] do
         expected = if c["error"], do: {:error, String.to_existing_atom(c["error"])}, else: :ok
 
-        assert WorkerAuth.verify_body(c["body_hash"], Base.decode64!(c["body_b64"])) == expected,
+        assert WorkerAuth.verify_body(c["body_hash"], Base.decode64!(c["body_b64"])) === expected,
                c["why"]
       end
     end
@@ -378,7 +378,7 @@ defmodule Prima.WorkerAuthTest do
               %{"error" => Atom.to_string(reason)}
           end
 
-        assert answer == Map.take(c, ~w(attempt call_hex seal_hex error)), c["why"]
+        assert answer === Map.take(c, ~w(attempt call_hex seal_hex error)), c["why"]
       end
     end
 
@@ -396,7 +396,7 @@ defmodule Prima.WorkerAuthTest do
             {:error, reason} -> %{"error" => Atom.to_string(reason)}
           end
 
-        assert answer == Map.take(c, ~w(plaintext_b64 error)), c["why"]
+        assert answer === Map.take(c, ~w(plaintext_b64 error)), c["why"]
       end
     end
   end

@@ -108,16 +108,33 @@ func assignKey(root macenvelope.Key) macenvelope.Key {
 	return macenvelope.Derive(root, label+"/assign")
 }
 
+// deriveOver is the key Prima.MacEnvelope derives from root over label and
+// each of fields' values in m, one per line, an integer in decimal.
+func deriveOver(root macenvelope.Key, label string, fields []macenvelope.Field, m macenvelope.Message) (macenvelope.Key, error) {
+	text := []string{label}
+	for _, f := range fields {
+		switch v := m[f.Name].(type) {
+		case string:
+			text = append(text, v)
+		case uint64:
+			text = append(text, strconv.FormatUint(v, 10))
+		default:
+			return macenvelope.Key{}, macenvelope.InvalidField{Name: f.Name}
+		}
+	}
+	return macenvelope.Derive(root, strings.Join(text, "\n")), nil
+}
+
 func workerKey(root macenvelope.Key, service string) (macenvelope.Key, error) {
-	return macenvelope.DeriveFields(root, label, dispatchFields[:1], macenvelope.Message{"service": service})
+	return deriveOver(root, label, dispatchFields[:1], macenvelope.Message{"service": service})
 }
 
 func attemptCallKey(root macenvelope.Key, attempt macenvelope.Message) (macenvelope.Key, error) {
-	return macenvelope.DeriveFields(root, label+"/call", AttemptFields, attempt)
+	return deriveOver(root, label+"/call", AttemptFields, attempt)
 }
 
 func attemptSealKey(root macenvelope.Key, attempt macenvelope.Message) (macenvelope.Key, error) {
-	return macenvelope.DeriveFields(root, label+"/seal", AttemptFields, attempt)
+	return deriveOver(root, label+"/seal", AttemptFields, attempt)
 }
 
 func requestHeader(dispatchKey macenvelope.Key, d macenvelope.Message, body []byte) (string, error) {
@@ -302,7 +319,7 @@ func TestSealedKeysAndSealedCallsReproduceAndOpen(t *testing.T) {
 	if err != nil || !keys.Call.Equal(key(t, v.Keys["attempt_call_hex"])) || !keys.Seal.Equal(key(t, v.Keys["attempt_seal_hex"])) {
 		t.Fatalf("the sealed attempt keys: %v", err)
 	}
-	if fmt.Sprint(keys.Attempt) != fmt.Sprint(message(t, attemptFields(), v.Attempt)) {
+	if !sameFields(attemptFields(), keys.Attempt, v.Attempt) {
 		t.Errorf("the attempt they name: %v", keys.Attempt)
 	}
 	call := v.call(t)

@@ -186,7 +186,7 @@ defmodule Prima.WorkerWireTest do
             do: {:error, String.to_existing_atom(c["error"])},
             else: {:ok, String.to_existing_atom(c["callback"]), c["args"]}
 
-        assert WorkerWire.read_request_body(WorkerAPI, Jason.decode!(c["body"])) == expected,
+        assert WorkerWire.read_request_body(WorkerAPI, Jason.decode!(c["body"])) === expected,
                c["why"]
       end
     end
@@ -202,7 +202,7 @@ defmodule Prima.WorkerWireTest do
             "lost" -> :lost
           end
 
-        assert WorkerWire.read_answer(Jason.decode!(c["answer"])) == expected, c["why"]
+        assert WorkerWire.read_answer(Jason.decode!(c["answer"])) === expected, c["why"]
       end
     end
 
@@ -217,7 +217,7 @@ defmodule Prima.WorkerWireTest do
             "request" -> WorkerWire.request_body(String.to_existing_atom(c["op"]), c["args"])
           end
 
-        assert Jason.encode!(written) == c["bytes"], c["why"]
+        assert Jason.encode!(written) === c["bytes"], c["why"]
       end
     end
 
@@ -226,12 +226,12 @@ defmodule Prima.WorkerWireTest do
 
       for %{"text" => text, "base" => base} <- @worker["base_urls"] do
         expected = if base, do: {:ok, base}, else: :error
-        assert WorkerWire.base_url(text) == expected, inspect(text)
+        assert WorkerWire.base_url(text) === expected, inspect(text)
       end
     end
 
     test "a report names at most the vectors' count of attempts" do
-      assert WorkerWire.max_report_attempts() == @worker["max_report_attempts"]
+      assert WorkerWire.max_report_attempts() === @worker["max_report_attempts"]
     end
 
     test "the vectors are at this version, named on the header this wire uses" do
