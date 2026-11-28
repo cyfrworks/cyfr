@@ -17,17 +17,19 @@ import (
 
 // hostSections are the sections of tests/fixtures/host_api.json this test reads.
 type hostSections struct {
-	Version            json.RawMessage `json:"version"`
-	Routes             json.RawMessage `json:"routes"`
-	Retries            json.RawMessage `json:"retries"`
-	TimeoutsMs         json.RawMessage `json:"timeouts_ms"`
-	MaxBodyBytes       json.RawMessage `json:"max_body_bytes"`
-	MaxAnswerBytes     json.RawMessage `json:"max_answer_bytes"`
-	Keys               json.RawMessage `json:"keys"`
-	Calls              json.RawMessage `json:"calls"`
-	AnswerOutcomes     json.RawMessage `json:"answer_outcomes"`
-	FramesContentTypes json.RawMessage `json:"frames_content_types"`
-	AnswerBounds       json.RawMessage `json:"answer_bounds"`
+	Version        int               `json:"version"`
+	Routes         map[string]string `json:"routes"`
+	Retries        map[string]string `json:"retries"`
+	TimeoutsMs     map[string]int    `json:"timeouts_ms"`
+	MaxBodyBytes   int               `json:"max_body_bytes"`
+	MaxAnswerBytes int               `json:"max_answer_bytes"`
+	Keys           map[string]string `json:"keys"`
+	// A call's members this test reads are its fields; the rest are
+	// Prima's and the relay's.
+	Calls              []map[string]json.RawMessage `json:"calls"`
+	AnswerOutcomes     json.RawMessage              `json:"answer_outcomes"`
+	FramesContentTypes json.RawMessage              `json:"frames_content_types"`
+	AnswerBounds       json.RawMessage              `json:"answer_bounds"`
 }
 
 func hostVectors(t *testing.T) hostSections {
@@ -40,30 +42,16 @@ func hostVectors(t *testing.T) hostSections {
 func load(t *testing.T) hostSections {
 	t.Helper()
 	top := hostVectors(t)
-	var version int
-	if err := json.Unmarshal(top.Version, &version); err != nil || version != 3 {
-		t.Fatalf("the vector file's version: %d, %v", version, err)
+	if top.Version != 3 {
+		t.Fatalf("the vector file's version: %d", top.Version)
 	}
 	return top
 }
 
-func member(t *testing.T, raw json.RawMessage, v any) {
-	t.Helper()
-	if err := json.Unmarshal(raw, v); err != nil {
-		t.Fatalf("%s: %v", raw, err)
-	}
-}
-
 func TestEveryCallbacksRouteRetryAndTimeoutAreTheVectors(t *testing.T) {
 	top := load(t)
-	var routes, retries map[string]string
-	var timeouts map[string]int
-	var maxBody, maxAnswer int
-	member(t, top.Routes, &routes)
-	member(t, top.Retries, &retries)
-	member(t, top.TimeoutsMs, &timeouts)
-	member(t, top.MaxBodyBytes, &maxBody)
-	member(t, top.MaxAnswerBytes, &maxAnswer)
+	routes, retries, timeouts := top.Routes, top.Retries, top.TimeoutsMs
+	maxBody, maxAnswer := top.MaxBodyBytes, top.MaxAnswerBytes
 	if len(retries) == 0 || !reflect.DeepEqual(retries, Retries()) || len(routes) != len(retries) || len(timeouts) != len(retries) {
 		t.Fatalf("the vector's retries %v, the package's %v", retries, Retries())
 	}
@@ -110,18 +98,14 @@ func message(t *testing.T, raw map[string]json.RawMessage) macenvelope.Message {
 	t.Helper()
 	m := macenvelope.Message{}
 	for _, f := range workerauth.Call.Fields {
-		var err error
 		if f.Type == macenvelope.Integer {
 			var n uint64
-			err = json.Unmarshal(raw[f.Name], &n)
+			wiretest.Value(t, raw[f.Name], &n)
 			m[f.Name] = n
 		} else {
 			var s string
-			err = json.Unmarshal(raw[f.Name], &s)
+			wiretest.Value(t, raw[f.Name], &s)
 			m[f.Name] = s
-		}
-		if err != nil {
-			t.Fatal(err)
 		}
 	}
 	return m
@@ -162,14 +146,10 @@ func readingOf(t *testing.T, r Reading) map[string]any {
 // met, each try's answer sealed to that try's own header fields.
 func TestEveryAnswerOutcomeIsTheCallersAsTheVectorsSay(t *testing.T) {
 	top := load(t)
-	var keys map[string]string
-	member(t, top.Keys, &keys)
-	var calls []struct {
-		Fields map[string]json.RawMessage `json:"fields"`
-	}
-	member(t, top.Calls, &calls)
-	seal, _ := macenvelope.DecodeRoot(keys["attempt_seal_hex"])
-	base := message(t, calls[0].Fields)
+	var fields map[string]json.RawMessage
+	wiretest.Value(t, top.Calls[0]["fields"], &fields)
+	seal, _ := macenvelope.DecodeRoot(top.Keys["attempt_seal_hex"])
+	base := message(t, fields)
 	names := map[Outcome]string{Answered: "answer", Lost: "lost", Uncertain: "uncertain", TooLarge: "too_large"}
 	for _, raw := range wiretest.Cases(t, top.AnswerOutcomes, 49) {
 		var c struct {

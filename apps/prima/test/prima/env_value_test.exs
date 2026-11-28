@@ -181,13 +181,22 @@ defmodule Prima.EnvValueTest do
   end
 
   describe "bind/2" do
-    test "is an IPv4 or IPv6 address as :inet reads it, or nil when unset" do
+    test "is an IPv4 or IPv6 address as a pin's address is read, or nil when unset" do
       assert {:ok, nil} = EnvValue.bind(env(%{}), "K")
       assert {:ok, {0, 0, 0, 0}} = EnvValue.bind(env(%{"K" => "0.0.0.0"}), "K")
       assert {:ok, {127, 0, 0, 1}} = EnvValue.bind(env(%{"K" => "127.0.0.1"}), "K")
       assert {:ok, {0, 0, 0, 0, 0, 0, 0, 1}} = EnvValue.bind(env(%{"K" => "::1"}), "K")
 
-      for bad <- ["builder", "127.0.0.1:4100", "http://127.0.0.1", "256.0.0.1"] do
+      for text <- ["::ffff:1.2.3.4", "fe80::1%lo", "fe80::1%1"] do
+        assert {:ok, address} = EnvValue.bind(env(%{"K" => text}), "K")
+        assert {:ok, address} === Prima.PinnedTarget.parse_ip(text), text
+      end
+
+      # The forms Erlang's loose reader takes and a pin's does not: two,
+      # one or no dots, a hexadecimal or octal field, leading zeros, a sign.
+      loose = ~w(127.1 10 0 4294967295 0x7f.0.0.1 0177.0.0.1 127.000.000.001 1.2.3.+4)
+
+      for bad <- ["builder", "127.0.0.1:4100", "http://127.0.0.1", "256.0.0.1"] ++ loose do
         assert {:error, message} =
                  EnvValue.bind(env(%{"LOCUS_BUILDS_BIND" => bad}), "LOCUS_BUILDS_BIND")
 

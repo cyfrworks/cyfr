@@ -90,7 +90,7 @@ defmodule Locus.Output do
       fetch's frame wait on the runner's credit, and the read-ahead on the
       upstream and the credit both, for as long as the attempt's deadline;
       so each leaves the room of the largest answer the role asks for at
-      once (`Locus.Runtime.Relay.answer_room/0`, CYFR's refusal of an
+      once (`Prima.RunnerRelay.answer_room/0`, CYFR's refusal of an
       attached fetch at the answer bound, 12,239,056 bytes), and the
       read-ahead the largest piece's beside it (612,696 bytes, a larger
       read's): a fetch's asks hold at most 4,538,160 bytes together, the

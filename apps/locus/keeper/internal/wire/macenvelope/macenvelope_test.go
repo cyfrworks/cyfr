@@ -26,7 +26,7 @@ func TestEveryBase64TextReadsAsPrimasDecoderReadsIt(t *testing.T) {
 		Base64URL []base64Case `json:"base64url"`
 		Base64    []base64Case `json:"base64"`
 	}
-	wiretest.LoadStrict(t, "wire_json.json", &v)
+	wiretest.Load(t, "wire_json.json", &v)
 	if len(v.Base64URL) < 10 || len(v.Base64) < 10 {
 		t.Fatalf("%d and %d base64 texts", len(v.Base64URL), len(v.Base64))
 	}
@@ -209,7 +209,7 @@ func TestPrimasSealsReproduce(t *testing.T) {
 			BodySealed   string `json:"body_sealed"`
 		} `json:"sealed_call"`
 	}
-	wiretest.LoadStrict(t, "worker_auth.json", &v)
+	wiretest.Load(t, "worker_auth.json", &v)
 	if v.SealedCall.BodySealed == "" || v.SealedAttemptKeys.Sealed == "" {
 		t.Fatal("the sealed call and attempt keys")
 	}
@@ -221,11 +221,11 @@ func TestPrimasSealsReproduce(t *testing.T) {
 	for _, f := range attemptFields {
 		if f.Type == Integer {
 			var n uint64
-			json.Unmarshal(v.Attempt[f.Name], &n)
+			wiretest.Value(t, v.Attempt[f.Name], &n)
 			attempt[f.Name] = n
 		} else {
 			var s string
-			json.Unmarshal(v.Attempt[f.Name], &s)
+			wiretest.Value(t, v.Attempt[f.Name], &s)
 			attempt[f.Name] = s
 		}
 	}

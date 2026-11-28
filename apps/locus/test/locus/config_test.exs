@@ -98,7 +98,7 @@ defmodule Locus.ConfigTest do
   end
 
   describe "the roster" do
-    test "a node asks its environment for the roster's names and the control plane's, and no other" do
+    test "a node asks its environment for the roster's names, the control plane's and the run folder's, and no other" do
       environment =
         Map.merge(full(), %{
           "LOCUS_RUNTIME_KEY" => @runtime_key_hex,
@@ -112,17 +112,22 @@ defmodule Locus.ConfigTest do
       assert settings[:request_key] != nil and settings[:backends_key] == @backends_key
       assert settings[:runtime][:service_key] == @runtime_key_hex
 
+      # The run folder, which the runtime's attach directory defaults to.
+      run_dir = Locus.Keeper.run_dir_env()
+
       assert asked() ==
                Enum.sort(
                  @control_plane ++
+                   [run_dir] ++
                    Config.variables(:runtime) ++
                    Config.variables(:builds) ++
                    Config.variables(:release) ++ Config.variables(:backends)
                )
 
-      # The runtime's reader asks for the runtime's rows and nothing else.
+      # The runtime's reader asks for the runtime's rows and the run
+      # folder, and nothing else.
       assert {:ok, [_ | _]} = Config.runtime_from_env(recording(environment))
-      assert asked() == Enum.sort(Config.variables(:runtime))
+      assert asked() == Enum.sort([run_dir | Config.variables(:runtime)])
     end
 
     test "every name is one role's, under the role's one prefix, and none is unknown" do

@@ -359,6 +359,10 @@ defmodule Locus.Keeper do
     end
   end
 
+  @doc "The environment variable naming the role's run folder, which the attach directory defaults to."
+  @spec run_dir_env() :: String.t()
+  def run_dir_env, do: @run_dir_env
+
   @doc "The environment variable cyfr-locus names the inherited channel in."
   @spec channel_env() :: String.t()
   def channel_env, do: @channel_env
