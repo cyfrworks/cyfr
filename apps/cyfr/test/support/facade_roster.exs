@@ -42,5 +42,5 @@
   ],
   "Compendium" => ["Compendium.Providers.Component"],
   "Opus" => [],
-  "Aqua" => ["Aqua.Text"]
+  "Aqua" => ["Aqua.Choices", "Aqua.Text"]
 }

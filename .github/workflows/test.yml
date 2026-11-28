@@ -372,6 +372,8 @@ jobs:
       # log included.
       - name: The install-and-screen proof's cookie-store reading
         run: python3 -I tests/install-screen-proof/box_test.py
+      - name: The install-and-screen proof's reading of what uninstall prints
+        run: bash tests/install-screen-proof/removals-test.sh
       # The tag pipeline publishes nothing unless every check passed: its
       # graph read from release.yml, then mutants of it, each refused.
       # It reads YAML through PyYAML, which -I finds only among the system
