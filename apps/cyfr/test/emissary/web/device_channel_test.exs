@@ -1730,15 +1730,9 @@ defmodule Emissary.Web.DeviceChannelTest do
       %{device: device, session_ctx: session_ctx} = enrolled(%{account: account, key: key})
       {state, request} = asked(hello_message(account, key, nil))
 
-      standing = :persistent_term.get({Arca.ControlPlane, :standing}, :absent)
-
-      restore = fn ->
-        if standing == :absent,
-          do: :persistent_term.erase({Arca.ControlPlane, :standing}),
-          else: :persistent_term.put({Arca.ControlPlane, :standing}, standing)
-      end
-
-      on_exit(restore)
+      # This suite claims no slot, so the member's standing is unclaimed
+      # before the case and again after it.
+      on_exit(fn -> Arca.ControlPlane.record(:unclaimed) end)
 
       # The slot is lost as the pairing reads the person's athanor, right
       # before its enrollment: the answer's earlier steps ran owning it.
@@ -1750,7 +1744,7 @@ defmodule Emissary.Web.DeviceChannelTest do
       :telemetry.detach(handler)
       assert_received :slot_lost
       # The slot is this member's again for what the test reads back.
-      restore.()
+      Arca.ControlPlane.record(:unclaimed)
 
       assert_told(result, 1013, "unavailable", Prima.Refusal.message(:unavailable))
 
