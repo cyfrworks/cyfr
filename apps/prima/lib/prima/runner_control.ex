@@ -421,14 +421,20 @@ defmodule Prima.RunnerControl do
   @doc """
   An `event` as one record of a `report_events` batch
   (`Prima.HostAPI.report_events_args/1`): the frame's `name`,
-  `measurements` and `metadata`, in wire order, written as `encode/1`
-  writes them, its strings cut to their bound. Raises as `encode/1` does.
+  `measurements` and `metadata`, each checked and its strings cut to
+  their bound as `encode/1` writes them, as a JSON object of string keys,
+  as every host call's args are. Raises as `encode/1` does.
   """
-  @spec event_record(event()) :: Jason.OrderedObject.t()
+  @spec event_record(event()) :: %{String.t() => term()}
   def event_record(%{type: :event} = event) do
     {_name, _sender, fields} = Map.fetch!(@by_type, :event)
-    write_object(fields, Map.delete(event, :type), "")
+    fields |> write_object(Map.delete(event, :type), "") |> plain()
   end
+
+  defp plain(%Jason.OrderedObject{values: members}),
+    do: Map.new(members, fn {key, value} -> {Atom.to_string(key), plain(value)} end)
+
+  defp plain(value), do: value
 
   @doc """
   The `event` one record of a `report_events` batch carries, read by the

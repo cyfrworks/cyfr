@@ -126,10 +126,15 @@ defmodule Locus.Runtime.RunnerEventsTest do
     assert result.status == :completed
     assert length(result.output["results"]) == length(names)
 
+    # Every operator event of this VM reaches the handler: this run's are
+    # told apart by its execution.
     for {tool, action} <- names do
       expected = cut(tool <> "." <> action)
       assert byte_size(expected) <= @max_string_bytes
-      assert_receive {:tool_event, %{duration_ms: ms}, metadata}, 10_000
+
+      assert_receive {:tool_event, %{duration_ms: ms}, %{execution_id: ^execution_id} = metadata},
+                     10_000
+
       assert is_integer(ms)
 
       assert metadata == %{

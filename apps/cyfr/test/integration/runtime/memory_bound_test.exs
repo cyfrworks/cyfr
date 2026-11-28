@@ -142,9 +142,7 @@ defmodule Locus.Runtime.MemoryBoundTest do
     # A second linear memory: refused at instantiation, nothing of it run.
     {result, row, runner} = run!(ctx, "extra_memory", 64 * @mib)
 
-    refused =
-      "resource_limit: the engine refused the component's memory or tables " <>
-        "(memory count too high at 2)"
+    refused = "Component instantiation failed: resource limit exceeded: memory count too high at 2"
 
     assert result == {:error, refused}
     assert row.status == "failed"
@@ -167,8 +165,8 @@ defmodule Locus.Runtime.MemoryBoundTest do
 
     assert result ==
              {:error,
-              "resource_limit: the engine refused the component's memory or tables " <>
-                "(table minimum size of 20001 elements exceeds table limits)"}
+              "Component instantiation failed: table minimum size of 20001 elements exceeds " <>
+                "table limits"}
 
     assert row.status == "failed"
 

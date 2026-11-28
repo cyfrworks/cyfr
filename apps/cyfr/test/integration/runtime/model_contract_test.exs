@@ -768,10 +768,11 @@ defmodule Locus.Runtime.ModelContractTest do
         part <- request ++ ["GenServer", "#PID"],
         do: refute(said =~ part)
 
-    # What the engine and the host said of the trap; the queries' own lines
-    # carry the person's line as the row it is.
+    # The log carries nothing of the request: the runner logs ids and
+    # kinds, never a trap's words, which the step's error and the row
+    # carry; the queries' own lines carry the person's line as the row it
+    # is.
     said_of_it = logged(played.log, ["warning", "error"])
-    assert said_of_it =~ "wasm trap"
     for part <- request, do: refute(said_of_it =~ part)
 
     # The close still sent the tail the guest left held.
