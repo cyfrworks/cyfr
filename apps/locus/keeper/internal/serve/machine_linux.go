@@ -495,7 +495,8 @@ func memoryOf(cause cgroup.Cause, err error) *string {
 // finishMachine releases an ended m once its route is withdrawn on the
 // guard's word and every session of it has gone: its place leaves the
 // ledger, and the person's next session boots a VM again. One whose route
-// is not yet withdrawn is released by the sweep that withdraws it.
+// is not yet withdrawn is released by the sweep that withdraws it
+// (retryClears lets m.route go, then finishMachines).
 func (s *server) finishMachine(m *machine) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

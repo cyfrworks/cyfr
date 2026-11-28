@@ -857,9 +857,9 @@ type server struct {
 	// that ended, so an admit answered over one is never recorded.
 	routing    map[string]*spawn
 	lostRoutes map[uint64]bool
-	// uncleared holds every withdrawn spawn's route the guard has not yet
-	// said cleared, by spawn id, asked again at each sweep.
-	uncleared map[string]guard.Route
+	// uncleared holds every withdrawn route the guard has not yet said
+	// cleared, by its spawn id, asked again at each sweep.
+	uncleared map[string]unclearedRoute
 	// exit ends the keeper (os.Exit in production) and groupKilled kills a
 	// spawn's group and answers whether it is empty (killGroup); tests set
 	// either. readerStarts, nil in production, runs as a role's channel
