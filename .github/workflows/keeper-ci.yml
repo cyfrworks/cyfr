@@ -54,8 +54,10 @@ jobs:
   keeper:
     name: vet + test (cyfr-locus)
     runs-on: ubuntu-latest
-    # The module's tests, as this user and again as root on the real
-    # kernel, take about nine and a half minutes together.
+    # A bound on a hung job, not on a slow one: the job passed in 9:04 to
+    # 9:20 on main, where cmd/cyfr-acp's race-built stand-ins alone take
+    # about four minutes, and a person's VM's tests, as this user and again
+    # as root, add about a minute more.
     timeout-minutes: 20
     defaults:
       run:

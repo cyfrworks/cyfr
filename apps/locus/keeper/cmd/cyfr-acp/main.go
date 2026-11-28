@@ -33,7 +33,13 @@
 // the tools, or, for a program whose servers list at a session's first
 // prompt, at once, the native turn that ends with no listing ending with an
 // error saying CYFR's tools did not reach it. The program's permission questions are each answered allow;
-// none stands in for an ask.
+// none stands in for an ask. The program's own tools are shown as `own`
+// (own.go), each run under its tool call's id with what its input runs and
+// the diffs its end shows, and its thought chunks as `thought`. A
+// sub-agent's frames are none of the member's: OpenCode's, each marked
+// `_meta["opencode/child-session"]`, are dropped, and Cursor and
+// Antigravity put none on the stream, so only the call that started it is
+// shown.
 //
 // A `start` makes a new session (`session/new`), or goes on with the one it
 // names (`session/resume`, and `session/load` where the program says the
