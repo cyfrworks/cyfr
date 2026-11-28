@@ -5,6 +5,7 @@ package access
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -293,5 +294,49 @@ func TestUncertainRollbackKeepsItsFiles(t *testing.T) {
 func TestAuthKeyFingerprintIsTheTrimmedKeys(t *testing.T) {
 	if fp := authKeyFingerprint([]byte(" " + testKey + "\n")); fp != "sha256:"+sha256Hex([]byte(testKey)) || authKeyFingerprint([]byte(" \n")) != "" {
 		t.Errorf("authKeyFingerprint gave %q", fp)
+	}
+}
+
+// A switch refuses a stated trust every start would refuse, by the boot's
+// own refusal and with the stack stopped, before .env is written: each
+// boot vector the trust's rule refuses (tests/fixtures/access.json) is
+// the input, to every kind with a proxy listener.
+func TestStoppedSwitchRefusesTheTrustEveryStartRefuses(t *testing.T) {
+	var cases int
+	for _, v := range readVectors(t).Boot {
+		key := ""
+		if v.Refusal != nil && v.Refusal.Code == "access_setting_invalid" {
+			key = v.Refusal.Payload["key"]
+		}
+		if key != "CYFR_TRUSTED_PROXY_HOPS" && key != "CYFR_TRUSTED_PROXY_CIDRS" {
+			continue
+		}
+		cases++
+		for _, target := range []Target{
+			{Browser: BrowserProxy, Domain: "cyfr.example.com"},
+			{Browser: BrowserDomain, Domain: "cyfr.example.com"},
+			{Browser: BrowserTailnet},
+		} {
+			h := newHome(t)
+			old := h.head().Digest()
+			before := h.env() + key + "=" + v.Input.Process[key] + "\n"
+			writeFile(t, filepath.Join(h.dir, ".env"), []byte(before))
+			if _, err := h.e.Preview(bg, target, ""); refusalCode(err) != "access_setting_invalid" {
+				t.Errorf("%s: the preview to %s answered %v", v.Name, target.Browser, err)
+			}
+			rc, err := h.e.Switch(bg, SwitchRequest{ID: id(1), Target: target, OldDigest: old, NewDigest: "sha256:any"})
+			var r *Refusal
+			// The refusal names the setting; its value is redacted as every
+			// .env value an engine refusal carries.
+			if !errors.As(err, &r) || r.Code != "access_setting_invalid" || r.Payload["key"] != key || rc.Outcome == "ok" {
+				t.Errorf("%s: the switch to %s answered %+v, %v; want the boot's refusal of %s", v.Name, target.Browser, rc, err, key)
+			}
+			if h.env() != before {
+				t.Errorf("%s: the refused switch to %s wrote .env:\n%s", v.Name, target.Browser, h.env())
+			}
+		}
+	}
+	if cases == 0 {
+		t.Fatal("the access vectors hold no trust the boot refuses")
 	}
 }

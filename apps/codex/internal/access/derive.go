@@ -21,11 +21,13 @@ type Target struct {
 // Current is what the head keeps from .env whatever the kind: the
 // loopback listener's port, where the proxy listener is published when
 // .env has proxy, and whether .env states whose forwarded headers the
-// proxy listener trusts.
+// proxy listener trusts, read by the boot's rule: TrustErr is the boot's
+// refusal of a stated trust no rule reads.
 type Current struct {
-	Port    int
-	Publish string
-	Trusted bool
+	Port     int
+	Publish  string
+	Trusted  bool
+	TrustErr error
 }
 
 // Join is a tailnet join's record: the machine's name and its stable node
@@ -92,6 +94,11 @@ func Derive(t Target, cur Current, join *Join) (Derivation, error) {
 	}
 	if cur.Port < 1 || cur.Port > 65535 {
 		return Derivation{}, refuse("access_setting_invalid", map[string]string{"key": "CYFR_PORT", "value": strconv.Itoa(cur.Port)})
+	}
+	// A trust every start would refuse is refused before .env is written,
+	// whether or not the stack runs.
+	if cur.TrustErr != nil {
+		return Derivation{}, cur.TrustErr
 	}
 	for _, o := range optionKinds {
 		if o.value(t) != "" && !slices.Contains(o.kinds, t.Browser) {

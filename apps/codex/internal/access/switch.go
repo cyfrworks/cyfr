@@ -49,7 +49,8 @@ func (e *Engine) readState() (envState, error) {
 	if st.headErr == nil && st.head.Browser == BrowserProxy {
 		st.cur.Publish = st.head.Publish
 	}
-	st.cur.Trusted = strings.TrimSpace(values["CYFR_TRUSTED_PROXY_CIDRS"]) != "" || strings.TrimSpace(values["CYFR_TRUSTED_PROXY_HOPS"]) != ""
+	trust, err := proxyTrust(func(key string) string { return strings.TrimSpace(values[key]) })
+	st.cur.Trusted, st.cur.TrustErr = trust.Kind != "", err
 	switch port := strings.TrimSpace(values["CYFR_PORT"]); {
 	case st.headErr == nil:
 		st.cur.Port = st.head.Port
