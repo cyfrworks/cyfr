@@ -214,17 +214,35 @@ func unhex(t *testing.T, s string) string {
 // it (the review's 15 pairs among them).
 func TestEveryMethodOfBytesIsAllowedAsTheElixirServiceAllowsIt(t *testing.T) {
 	top := hostVectors(t)
+	marked := 0
 	for _, raw := range wiretest.Cases(t, top.MethodBytes, 15) {
 		var c struct {
 			Method  string `json:"method_hex"`
 			Edge    string `json:"allowed_hex"`
 			Allowed bool   `json:"allowed"`
+			// Go is Go's own answer where it fails closed on bytes that
+			// are no UTF-8 and Elixir matches them.
+			Go *struct {
+				Allowed bool `json:"allowed"`
+			} `json:"go"`
 		}
 		wiretest.Decode(t, raw, &c, []string{"method_hex", "allowed_hex", "allowed"})
-		e := Egress{Methods: []string{unhex(t, c.Edge)}}
-		if got := e.AllowsMethod(unhex(t, c.Method)); got != c.Allowed {
+		method, edge := unhex(t, c.Method), unhex(t, c.Edge)
+		want := c.Allowed
+		if c.Go != nil {
+			marked++
+			if !c.Allowed || c.Go.Allowed || (utf8.ValidString(method) && utf8.ValidString(edge)) {
+				t.Fatalf("%s against %s: a go marker is Go's refusal of bytes that are no UTF-8, which Elixir matches", c.Method, c.Edge)
+			}
+			want = false
+		}
+		e := Egress{Methods: []string{edge}}
+		if got := e.AllowsMethod(method); got != want {
 			t.Errorf("%s against %s: %v", c.Method, c.Edge, got)
 		}
+	}
+	if marked == 0 {
+		t.Error("no method is marked as Go's refusal")
 	}
 	special := map[rune]string{}
 	for _, raw := range wiretest.Cases(t, top.UpcaseSpecial, 100) {

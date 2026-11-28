@@ -107,8 +107,19 @@ defmodule Locus.Runtime.EdgeGuardTest do
       assert length(@host_api["method_bytes"]) >= 15
 
       for c <- @host_api["method_bytes"] do
-        assert Map.keys(c) |> Enum.sort() === ~w(allowed allowed_hex method_hex), inspect(c)
         allowed = Base.decode16!(c["allowed_hex"], case: :lower)
+
+        # A case marked go is Go's own refusal of bytes that are no UTF-8,
+        # which this service matches: its answer is the case's allowed.
+        if Map.has_key?(c, "go") do
+          assert Map.keys(c) |> Enum.sort() === ~w(allowed allowed_hex go method_hex), inspect(c)
+          assert c["go"] === %{"allowed" => false} and c["allowed"] === true, inspect(c)
+          method = Base.decode16!(c["method_hex"], case: :lower)
+          refute String.valid?(method) and String.valid?(allowed), inspect(c)
+        else
+          assert Map.keys(c) |> Enum.sort() === ~w(allowed allowed_hex method_hex), inspect(c)
+        end
+
         {:ok, edge} = Prima.Authority.Blob.parse_edge(%{"egress" => %{"methods" => [allowed]}})
         method = Base.decode16!(c["method_hex"], case: :lower)
         assert EdgeGuard.check_method(edge, method) == :ok === c["allowed"], inspect(c)

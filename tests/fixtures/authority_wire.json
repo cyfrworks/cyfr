@@ -1,5 +1,5 @@
 {
-  "comment": "The vectors pinning the authority a runner reads from its assignment: Prima.Authority.from_wire/1 of `authority`, the map an assignment carries (Prima.Authority.to_wire/1 with every nil member omitted), and what a reader takes from it, the limits governing the execution (Prima.Limits.to_map/1 of Prima.Authority.limits/1: its bound node's, or the zero limits unbound) and the fields CYFR attaches and never hands the component (Prima.Authority.attached_fields/1: the field-map keys of the projection of every entry the vault binds, the default's and each named account's; a selection (via) or provided configuration projects none), a sorted list. Each `refused` authority is one from_wire/1 refuses in a part a runner reads: the cursor, the bound node's limits, or the projection of the resources' vault or of one of its named accounts. Generated with Prima's constructors (Prima.Authority.root/3 and its child constructors over a parsed Prima.Authority.Blob). Read by apps/prima/test/prima/authority_test.exs and by the Rust runner's crate. A refused case marked unread_by_service is refused in a part a runner reads that a worker service carries unread (the vault's projection): the worker service reads its cursor, its bound node's limits and its resources' egress, and refuses what Prima refuses there. durations are texts read as Prima.Limits.parse_duration/1 reads them, to their milliseconds or null: ms, s, m and h tried in that order and exactly one taken off, or a bare integer of seconds, an integer being an optional sign and ASCII digits of any size. egress are authorities whose resources' egress varies, each read as from_wire/1 reads it to its four lists (an absent or null list none), or null for one it refuses. A duration marked go is one past an int64 of milliseconds, which Prima reads and Go does not hold: go's ms, null, is the Go reader's answer, each side's test asserting its own. A bound cursor's members besides bound are read past, on either side.",
+  "comment": "The vectors pinning the authority a runner reads from its assignment: Prima.Authority.from_wire/1 of `authority`, the map an assignment carries (Prima.Authority.to_wire/1 with every nil member omitted), and what a reader takes from it, the limits governing the execution (Prima.Limits.to_map/1 of Prima.Authority.limits/1: its bound node's, or the zero limits unbound) and the fields CYFR attaches and never hands the component (Prima.Authority.attached_fields/1: the field-map keys of the projection of every entry the vault binds, the default's and each named account's; a selection (via) or provided configuration projects none), a sorted list. Each `refused` authority is one from_wire/1 refuses in a part a runner reads: the cursor, the bound node's limits, or the projection of the resources' vault or of one of its named accounts. Generated with Prima's constructors (Prima.Authority.root/3 and its child constructors over a parsed Prima.Authority.Blob). Read by apps/prima/test/prima/authority_test.exs and by the Rust runner's crate. A refused case marked unread_by_service is refused in a part a runner reads that a worker service carries unread (the vault's projection): the worker service reads its cursor, its bound node's limits and its resources' egress, and refuses what Prima refuses there. durations are texts read as Prima.Limits.parse_duration/1 reads them, to their milliseconds or null: ms, s, m and h tried in that order and exactly one taken off, or a bare integer of seconds, an integer being an optional sign and ASCII digits of any size. egress are authorities whose resources' egress varies, each read as from_wire/1 reads it to its four lists (an absent or null list none), or null for one it refuses. A duration marked go is one outside an int64 of milliseconds, -2^63 to 2^63 - 1, which Prima reads and Go does not hold: go's ms, null, is the Go reader's answer, each side's test asserting its own. A bound cursor's members besides bound are read past, on either side.",
   "version": 1,
   "read": [
     {
@@ -3641,6 +3641,17 @@
       },
       "ms": 9223372036854775808,
       "text": "9223372036854775808ms"
+    },
+    {
+      "text": "-9223372036854775808ms",
+      "ms": -9223372036854775808
+    },
+    {
+      "text": "-9223372036854775809ms",
+      "ms": -9223372036854775809,
+      "go": {
+        "ms": null
+      }
     }
   ],
   "egress": [

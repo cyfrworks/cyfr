@@ -146,10 +146,17 @@ func (e Egress) AllowsScheme(scheme string) bool {
 // compared upcased as Elixir's String.upcase/1 upcases it
 // (Locus.Runtime.EdgeGuard.check_method/2). A relay frame's method is one
 // of network.Methods(), which the caller checks first.
+//
+// A method, or an allowed one, that is no UTF-8 matches nothing: Go fails
+// closed where Elixir's casing of such bytes is its own (host_api.json's
+// method_bytes marked go).
 func (e Egress) AllowsMethod(method string) bool {
+	if !utf8.ValidString(method) {
+		return false
+	}
 	m := upcase(method)
 	for _, allowed := range e.Methods {
-		if upcase(allowed) == m {
+		if utf8.ValidString(allowed) && upcase(allowed) == m {
 			return true
 		}
 	}
@@ -266,9 +273,10 @@ var specialUpper = map[rune]string{
 }
 
 // upcase is s upcased as Elixir's String.upcase/1 does in its default
-// mode: each character's uppercase, a special one's as Elixir spells it,
-// and a byte that is no UTF-8 kept as it is, as Elixir keeps it, never
-// read as U+FFFD.
+// mode, for s that is UTF-8: each character's uppercase, a special one's
+// as Elixir spells it. A byte that is no UTF-8 is kept as it is, never
+// read as U+FFFD; Elixir's own walk differs there, so AllowsMethod
+// matches nothing on such bytes.
 func upcase(s string) string {
 	var b strings.Builder
 	for i := 0; i < len(s); {
