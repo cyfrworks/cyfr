@@ -1114,8 +1114,10 @@ jobs:
   # The WASM runner's crate (apps/locus/runner) on amd64 and on a native
   # arm64 runner, the two architectures the Locus image ships: its format,
   # lints and tests, which hold its wires to the vector files under
-  # tests/fixtures, then its release build, every step --locked under the
-  # Rust release rust-toolchain.toml names (scripts/runner.sh).
+  # tests/fixtures, every step --locked under the Rust release
+  # rust-toolchain.toml names (scripts/runner.sh), and the guard that
+  # refuses a pair built from other sources (tests/runner-pair-test.sh).
+  # Its release build is runner-build's.
   runner:
     name: The runner's crate (${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
@@ -1144,8 +1146,8 @@ jobs:
           key: ${{ runner.os }}-${{ matrix.arch }}-runner-${{ hashFiles('rust-toolchain.toml', 'apps/locus/runner/Cargo.lock') }}
       - name: Check the crate
         run: scripts/runner.sh check
-      - name: Build the release binary
-        run: scripts/runner.sh build
+      - name: Check the pair's guard
+        run: bash tests/runner-pair-test.sh
 
   # The runner's release binary and its stamp, the pair, built for amd64
   # and on a native arm64 runner (scripts/runner.sh build) and uploaded

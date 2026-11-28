@@ -775,6 +775,11 @@ defmodule Locus.Runtime.ModelContractTest do
     said_of_it = logged(played.log, ["warning", "error"])
     for part <- request, do: refute(said_of_it =~ part)
 
+    # The log was captured whole and carries the request where the
+    # queries do, at debug, so its absence above is the levels', not a
+    # capture's that saw nothing.
+    for part <- request, do: assert(logged(played.log, ["debug"]) =~ part)
+
     # The close still sent the tail the guest left held.
     stream = Map.fetch!(played.seen.streams, id)
     assert streamed_text(emitted(stream)) == "About to tr" <> binary_part(@canary, 0, 5)

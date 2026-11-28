@@ -550,12 +550,12 @@ async fn execute(
     }
 }
 
-// The parser's reason a guest's output is no JSON: a position, never the
-// output's bytes.
+// The reader's reason a guest's output is no JSON: what it met and where,
+// never the output's bytes.
 fn not_json(output: &str) -> String {
-    match serde_json::from_str::<serde::de::IgnoredAny>(output) {
-        Err(reason) => format!("{}: {reason}", words::OUTPUT_NOT_JSON),
-        Ok(_) => words::OUTPUT_NOT_JSON.to_owned(),
+    match crate::wire::malformed(output.as_bytes()) {
+        Some(reason) => format!("{}: {reason}", words::OUTPUT_NOT_JSON),
+        None => words::OUTPUT_NOT_JSON.to_owned(),
     }
 }
 

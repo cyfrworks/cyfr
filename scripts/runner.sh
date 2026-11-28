@@ -29,7 +29,8 @@
 # crate's .cargo/config.toml) unless CARGO_TARGET_DIR names another. The crate's tests read
 # the vector files under tests/fixtures. handoff's runner row
 # (scripts/stages.tsv) runs check; test.yml's runner job runs check and
-# its runner-build job build.
+# its runner-build job build. tests/runner-pair-test.sh holds pair's
+# refusals, run by its own handoff row and by the runner job.
 #
 # Exit 0 when every step passed, cargo's status at the first that failed,
 # 1 for a pair missing or stale, 64 on usage, 69 without cargo, rustfmt,

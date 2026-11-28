@@ -30,12 +30,13 @@
 //!   attempt and the request's `call_id`, and its refusal as its own type
 //!   and sentence, both read as they arrive (`crate::relay`).
 //!
-//! A method the relay's frame cannot carry (`crate::relay::METHODS`) is the
-//! one refusal the runner makes for the relay, since the frame cannot be
-//! written: `method_blocked`, before the pin. The runner records the
-//! relay's refusals (`record_denial`), and its own refusals of a method or
-//! a size, of the types CYFR records (`RECORDED`). A request that would
-//! pass `crate::relay::MAX_FETCHES` open is refused unsent.
+//! Two refusals of the egress the runner makes itself, before the pin: a
+//! URL whose scheme is neither http nor https, which no edge's egress
+//! names (`scheme_blocked`), and a method the relay's frame cannot carry
+//! (`crate::relay::METHODS`, `method_blocked`). The runner records the
+//! relay's refusals (`record_denial`), and its own refusals of a scheme, a
+//! method or a size, of the types CYFR records (`RECORDED`). A request
+//! that would pass `crate::relay::MAX_FETCHES` open is refused unsent.
 //!
 //! A fetch's answer is read as it arrives, each piece granted back as
 //! credit, to at most the node's `max_response_size`; a fetch abandoned
@@ -175,6 +176,7 @@ pub enum Kind {
     RequestFailed,
     HttpError,
     StreamLimit,
+    StreamError,
     InvalidHandle,
     EncodingError,
 }
@@ -184,7 +186,7 @@ impl Kind {
     /// it. A stream answers the runner's own failure after its request was
     /// sent as `request_failed`, but CYFR's `http_error` for an attached
     /// stream's upstream as given; a stream's own kinds are its alone.
-    pub const ALL: [(Kind, bool, bool); 18] = [
+    pub const ALL: [(Kind, bool, bool); 19] = [
         (Kind::InvalidJson, true, true),
         (Kind::InvalidRequest, true, true),
         (Kind::CredentialHeaderRefused, true, true),
@@ -201,6 +203,7 @@ impl Kind {
         (Kind::RequestFailed, true, true),
         (Kind::HttpError, true, true),
         (Kind::StreamLimit, false, true),
+        (Kind::StreamError, false, true),
         (Kind::InvalidHandle, false, true),
         (Kind::EncodingError, false, true),
     ];
@@ -223,6 +226,7 @@ impl Kind {
             Kind::RequestFailed => "request_failed",
             Kind::HttpError => "http_error",
             Kind::StreamLimit => "stream_limit",
+            Kind::StreamError => "stream_error",
             Kind::InvalidHandle => "invalid_handle",
             Kind::EncodingError => "encoding_error",
         }
@@ -376,6 +380,12 @@ pub fn requested(request: &str, limits: &Limits, purpose: Purpose) -> Result<Ask
         Err(Unread::Malformed) => return Err(refusal(Kind::InvalidJson, words::REQUEST_NOT_JSON)),
     };
     let invalid = |message: &str| refusal(Kind::InvalidRequest, message);
+    // A member of no shape a request takes: no request is made of it, and
+    // a stream answers that as its own error.
+    let malformed = || match purpose {
+        Purpose::Fetch => invalid(words::MALFORMED_REQUEST),
+        Purpose::Stream => refusal(Kind::StreamError, words::STREAM_UNSERVED),
+    };
     let Some(object) = json.value().as_object() else {
         return Err(invalid(words::NO_METHOD_OR_URL));
     };
@@ -383,7 +393,7 @@ pub fn requested(request: &str, limits: &Limits, purpose: Purpose) -> Result<Ask
         return Err(invalid(words::NO_METHOD_OR_URL));
     };
     let (Value::String(method), Value::String(url)) = (method, url) else {
-        return Err(invalid(words::MALFORMED_REQUEST));
+        return Err(malformed());
     };
     let url = Zeroizing::new(url.clone());
     let parts = Url::parse(&url).ok_or_else(|| invalid(words::BAD_URL))?;
@@ -401,7 +411,7 @@ pub fn requested(request: &str, limits: &Limits, purpose: Purpose) -> Result<Ask
     let body = match object.get("body") {
         None | Some(Value::Null) => "",
         Some(Value::String(body)) => body.as_str(),
-        Some(_) => return Err(invalid(words::MALFORMED_REQUEST)),
+        Some(_) => return Err(malformed()),
     };
     if multipart.is_some() && !body.is_empty() {
         return Err(invalid(words::BODY_AND_MULTIPART));
@@ -412,6 +422,17 @@ pub fn requested(request: &str, limits: &Limits, purpose: Purpose) -> Result<Ask
         Some(Value::String(connection)) => Some(connection.clone()),
         Some(_) => return Err(invalid(words::BAD_CONNECTION)),
     };
+    // No edge's egress names a scheme but http and https: any other is
+    // refused as the scheme it is, before any pin, and recorded.
+    match parts.scheme.as_deref() {
+        Some("http" | "https") => {}
+        other => {
+            return Err(refusal(
+                Kind::SchemeBlocked,
+                words::scheme_blocked(other.unwrap_or("")),
+            ));
+        }
+    }
     if multipart.is_some() && purpose == Purpose::Stream {
         return Err(invalid(words::STREAM_MULTIPART));
     }

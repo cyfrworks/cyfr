@@ -104,78 +104,222 @@ defmodule Locus.Runtime.HostClientTest do
     assert length(ScriptedHost.requests(host, "egress_pin")) == 2
   end
 
-  # The callbacks of the outcomes vector the worker service makes itself,
-  # as its client makes each; the runner's are its crate's to play
-  # (`apps/locus/runner/tests/vectors.rs`).
-  defp outcome_call("take_rate", client), do: HostClient.take_rate(client, "http:x")
+  # The calls the worker service makes itself, by the retry class each is
+  # of: `take_rate` and `egress_pin` for an attempt, sealed, and its two
+  # reports, plain. A runner's calls of the other classes (outcome, batch,
+  # keyed) are its crate's to play (`apps/locus/runner/tests/vectors.rs`).
+  @service_calls %{
+    "idempotent" => ~w(egress_pin runner_exited),
+    "never" => ~w(take_rate report_events)
+  }
 
-  defp outcome_call("egress_pin", client),
+  @pin_refusals Enum.map(PinnedTarget.refusals(), &Atom.to_string/1)
+
+  defp outcome_call("take_rate", %{client: client}), do: HostClient.take_rate(client, "http:x")
+
+  defp outcome_call("egress_pin", %{client: client}),
     do: HostClient.egress_pin(client, "https://api.example.test/x")
 
-  # What the client answers for a vector's reading of an answer.
+  defp outcome_call("runner_exited", %{host: host, client: client} = context) do
+    at = %{member: host.member, host_url: host.url}
+
+    HostClient.runner_exited(
+      credentials(context),
+      at,
+      client.boot,
+      client.runner,
+      [client.attempt],
+      nil,
+      nil
+    )
+  end
+
+  defp outcome_call("report_events", %{client: client} = context) do
+    event = %{
+      type: :event,
+      name: "formula.cancel",
+      measurements: %{system_time: 1},
+      metadata: %{parent_execution_id: client.execution_id, task_id: "task_1"}
+    }
+
+    HostClient.report_events(credentials(context), client.boot, [event])
+  end
+
+  # The worker service's credentials under the scripted host's root, which
+  # sign its reports.
+  defp credentials(%{host: host}) do
+    {:ok, worker_key} = Prima.WorkerAuth.worker_key(host.root, host.service)
+
+    %Locus.Runtime.Credentials{
+      service_id: host.service,
+      worker_key: worker_key,
+      dispatch_key: Prima.WorkerAuth.dispatch_key(worker_key),
+      dispatch_seal_key: Prima.WorkerAuth.dispatch_seal_key(worker_key),
+      host_url: host.url,
+      bind: {127, 0, 0, 1},
+      port: 0
+    }
+  end
+
+  # The calls a case stands for: a pin's own cases are `egress_pin`'s, and
+  # every other case is each service call's of its callback's class.
+  defp stand_ins(%{"callback" => "egress_pin"}), do: ["egress_pin"]
+
+  defp stand_ins(%{"callback" => callback}),
+    do: Map.get(@service_calls, @host_api["retries"][callback], [])
+
+  # Whether CYFR can answer `call` what the case answers. An attach's
+  # required setup and its claim's refusals, a complete's failure, a
+  # fetch_artifact's `not_found` and a guest error's remediation, which
+  # only an OAuth refusal names, answer a runner's calls alone; a pin's
+  # refusals answer an `egress_pin`, which reads one as its answer.
+  defp met?(_call, %{"reading" => %{"setup_required" => _}}), do: false
+  defp met?(_call, %{"reading" => %{"failed" => _}}), do: false
+  defp met?(_call, %{"reading" => %{"guest_error" => %{"remediation" => _}}}), do: false
+
+  defp met?(call, %{"reading" => %{"refused" => name}}),
+    do: name in ~w(lost unavailable) or (call == "egress_pin" and name in @pin_refusals)
+
+  defp met?("egress_pin", %{"callback" => callback, "answers" => answers})
+       when callback != "egress_pin",
+       do: not Enum.any?(answers, &(refusal_named(&1) in @pin_refusals))
+
+  defp met?(_call, _vector), do: true
+
+  defp refusal_named(%{"answer" => json}) do
+    case Jason.decode(json) do
+      {:ok, %{"error" => name}} -> name
+      _ -> nil
+    end
+  end
+
+  defp refusal_named(_answer), do: nil
+
+  # What the client reads of a vector's answer.
   defp reading(%{"ok" => value}), do: {:ok, value}
   defp reading(%{"ok_json" => text}), do: {:ok, Jason.decode!(text)}
   defp reading(%{"refused" => name}), do: {:error, String.to_existing_atom(name)}
 
-  defp reading(%{"guest_error" => %{"remediation" => remediation} = error}),
-    do: {:error, {:guest_error, error["type"], error["message"], remediation}}
-
   defp reading(%{"guest_error" => error}),
     do: {:error, {:guest_error, error["type"], error["message"]}}
 
-  defp reading(%{"setup_required" => payload}), do: {:error, {:setup_required, payload}}
-  defp reading(%{"failed" => message}), do: {:error, {:failed, message}}
+  # What `call` makes of what its client read: a take's and a report's
+  # value is `true`, and a pin's a pin; any other value is lost.
+  defp made(call, {:ok, true}) when call in ~w(take_rate runner_exited report_events), do: :ok
+
+  defp made(call, {:ok, _value}) when call in ~w(take_rate runner_exited report_events),
+    do: {:error, :lost}
+
+  defp made("egress_pin", {:ok, wire}) do
+    case PinnedTarget.read(wire) do
+      {:ok, pin} -> {:ok, pin}
+      :error -> {:error, :lost}
+    end
+  end
+
+  defp made(_call, refused), do: refused
 
   defp scripted(%{"status" => nil}), do: :drop
   defp scripted(%{"status" => 200, "answer" => json}), do: {:answer, json}
   defp scripted(%{"status" => status, "plain" => body}), do: {:raw, status, body}
 
-  test "each answer outcome of the vectors the service's own calls meet: what a call makes of what each try met",
-       %{
-         host: host,
-         client: client
-       } do
-    cases =
-      for %{"callback" => callback} = c <- @host_api["answer_outcomes"],
-          callback in ~w(take_rate egress_pin),
-          do: c
+  test "every answer outcome of the vectors a call of the service's own can meet: what each " <>
+         "call of its class makes of what each try met",
+       %{host: host} = context do
+    played =
+      for vector <- @host_api["answer_outcomes"],
+          call <- stand_ins(vector),
+          met?(call, vector) do
+        assert %{"why" => why, "answers" => answers} = vector
+        assert %{"outcome" => outcome, "posted" => posted} = vector
+        assert is_binary(outcome) and is_integer(posted), why
+        # A case is these members and, for an answer, its reading: none more.
+        assert Map.keys(vector) -- ~w(why callback answers outcome posted reading) == [], why
+        assert Map.has_key?(vector, "reading") == (outcome == "answer"), why
+        why = "#{call}: #{why}"
 
-    assert length(cases) >= 11
+        ScriptedHost.script(host, call, Enum.map(answers, &scripted/1))
+        before = length(ScriptedHost.requests(host, call))
 
-    # One case for each class the service's own calls are of.
-    classes = cases |> Enum.map(&@host_api["retries"][Map.fetch!(&1, "callback")]) |> Enum.uniq()
+        {result, _log} = with_log(fn -> outcome_call(call, context) end)
 
-    assert Enum.sort(classes) == ~w(idempotent never)
+        assert length(ScriptedHost.requests(host, call)) - before == posted, why
 
-    for vector <- cases do
-      assert %{"why" => why, "callback" => callback, "answers" => answers} = vector
-      assert %{"outcome" => outcome, "posted" => posted} = vector
-      assert is_binary(outcome) and is_integer(posted), why
-      # A case is these members and, for an answer, its reading: none more.
-      assert Map.keys(vector) -- ~w(why callback answers outcome posted reading) == [], why
-      assert Map.has_key?(vector, "reading") == (outcome == "answer"), why
+        case outcome do
+          "lost" ->
+            assert result == {:error, :lost}, why
 
-      ScriptedHost.script(host, callback, Enum.map(answers, &scripted/1))
-      before = length(ScriptedHost.requests(host, callback))
+          "uncertain" ->
+            assert {:error, {:uncertain, _sentence}} = result, why
 
-      {result, _log} = with_log(fn -> outcome_call(callback, client) end)
+          "too_large" ->
+            assert result == {:error, :too_large}, why
 
-      assert length(ScriptedHost.requests(host, callback)) - before == vector["posted"], why
+          "answer" ->
+            assert result == made(call, reading(vector["reading"])), why
+        end
 
-      case vector["outcome"] do
-        "lost" ->
-          assert result == {:error, :lost}, why
-
-        "uncertain" ->
-          assert {:error, {:uncertain, _sentence}} = result, why
-
-        "too_large" ->
-          assert result == {:error, :too_large}, why
-
-        "answer" ->
-          assert result == reading(vector["reading"]), why
+        call
       end
+
+    # Each of the service's calls meets the cases of its class.
+    assert played |> Enum.uniq() |> Enum.sort() ==
+             ~w(egress_pin report_events runner_exited take_rate)
+
+    assert length(played) >= 70
+
+    # The cases none of its calls can meet are a runner's calls' alone:
+    # those of the classes the service makes no call of, and the answers
+    # above that only a runner's calls are given.
+    unmet =
+      for %{"callback" => callback} = vector <- @host_api["answer_outcomes"],
+          not Enum.any?(stand_ins(vector), &met?(&1, vector)),
+          do: {callback, Map.get(vector, "reading")}
+
+    assert Enum.sort(unmet) ==
+             Enum.sort([
+               {"admit_child", nil},
+               {"complete", nil},
+               {"push_deltas", nil},
+               {"renew", %{"refused" => "bad_mac"}},
+               {"renew", %{"refused" => "claim_expired"}},
+               {"renew", %{"refused" => "not_found"}},
+               {"renew", %{"refused" => "replayed"}},
+               {"renew", %{"failed" => "the output exceeds the node's response size"}},
+               {"renew",
+                %{"setup_required" => %{"fields" => ["API_KEY"], "kind" => "vault_edge"}}},
+               {"renew",
+                %{
+                  "guest_error" => %{
+                    "type" => "oauth_required",
+                    "message" => "Connect github first.",
+                    "remediation" => %{"kind" => "oauth", "provider" => "github"}
+                  }
+                }}
+             ])
+  end
+
+  test "a report a member that does not hold the control plane refuses, 503 unavailable, is " <>
+         "answered unavailable, posted once and logged by no one",
+       %{host: host} = context do
+    unowned = {:raw, 503, ~s({"v":3,"error":"unavailable"})}
+
+    for call <- ~w(runner_exited report_events) do
+      ScriptedHost.script(host, call, unowned)
+
+      log =
+        capture_log(fn -> assert outcome_call(call, context) == {:error, :unavailable}, call end)
+
+      assert length(ScriptedHost.requests(host, call)) == 1, call
+      refute log =~ "[Locus.Runtime.HostClient] #{call}", call
     end
+
+    # A host call's 503 is the listener's `lost`, a refusal as any other
+    # status's: the host call is asked again as its class allows.
+    ScriptedHost.script(host, "egress_pin", {:raw, 503, ~s({"v":3,"error":"unavailable"})})
+    {result, _log} = with_log(fn -> outcome_call("egress_pin", context) end)
+    assert result == {:error, :lost}
+    assert length(ScriptedHost.requests(host, "egress_pin")) == 2
   end
 
   describe "a body past the host's bound" do

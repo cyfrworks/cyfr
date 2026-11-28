@@ -449,7 +449,7 @@ defmodule Cyfr.CrossLanguageDriftTest do
     ],
     "component_features.json" => [
       {"apps/locus/runner/tests/engine.rs", ~w(refused families sentences cases)},
-      {"apps/locus/runner/tests/process.rs", ~w(sentences)},
+      {"apps/locus/runner/tests/process.rs", ~w(sentences cases)},
       {"apps/prima/test/prima/component_features_test.exs", ~w(refused families sentences cases)}
     ],
     "component_refs.json" => [
@@ -512,9 +512,10 @@ defmodule Cyfr.CrossLanguageDriftTest do
     "guest_error.json" => [
       {"apps/cyfr/test/compendium/guide_protocol_drift_test.exs", ~w(invoke_types)},
       {"apps/cyfr/test/cyfr/docs_drift_test.exs", ~w(envelope fallback fetch_types)},
-      {"apps/locus/runner/tests/formula.rs", ~w(setup_required)},
+      {"apps/locus/runner/tests/formula.rs", ~w(setup_required render)},
       {"apps/locus/runner/tests/imports.rs", ~w(encode_error)},
-      {"apps/locus/runner/tests/vectors.rs", ~w(fetch_types invoke_types)},
+      {"apps/locus/runner/tests/requests.rs", ~w(fallback encode_error)},
+      {"apps/locus/runner/tests/vectors.rs", ~w(fetch_types invoke_types invoke_passed_on)},
       {"apps/prima/test/prima/wit_response_vectors_test.exs", ~w(envelope fallback)}
     ],
     "host_api.json" => [
@@ -534,8 +535,11 @@ defmodule Cyfr.CrossLanguageDriftTest do
        ~w(pin_answer_refusals pin_expiry pin_requests pin_purposes pin_refusal_names)},
       {"apps/locus/keeper/internal/wire/workerauth/frames_test.go",
        ~w(frame_cases frame_splits frame_body_bytes)},
+      {"apps/locus/runner/tests/formula.rs", ~w(connection_cases)},
+      {"apps/locus/runner/tests/imports.rs", ~w(question_cases)},
+      {"apps/locus/runner/tests/requests.rs", ~w(calls)},
       {"apps/locus/runner/tests/vectors.rs",
-       ~w(version max_body_bytes retries timeouts_ms keys calls connection_cases answer_outcomes frame_cases framing_headers override_headers override_prefixes credential_headers pin_answer_refusals)},
+       ~w(version max_body_bytes retries timeouts_ms keys calls connection_cases question_cases answer_outcomes frame_cases framing_headers override_headers override_prefixes credential_headers pin_answer_refusals)},
       {"apps/locus/test/locus/runtime/edge_guard_test.exs",
        ~w(edge_checks request_sizes method_bytes)},
       {"apps/locus/test/locus/runtime/host_client_test.exs",
@@ -707,8 +711,9 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"tests/pairing-proof/run.sh", ~w()}
     ],
     "runner_control.json" => [
+      {"apps/locus/runner/tests/process.rs", ~w(max_line_bytes invalid environment)},
       {"apps/locus/runner/tests/vectors.rs",
-       ~w(version max_line_bytes max_input_bytes max_open valid invalid decode_only environment events)},
+       ~w(version max_line_bytes max_input_bytes max_input_depth max_open valid invalid decode_only environment events)},
       {"apps/locus/test/locus/runtime/runner_control_vectors_test.exs",
        ~w(max_line_bytes valid invalid)},
       {"apps/prima/test/prima/runner_control_test.exs",
@@ -720,6 +725,7 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"apps/locus/keeper/internal/wire/network/network_test.go", ~w(methods)},
       {"apps/locus/keeper/internal/wire/workerauth/workerauth_test.go",
        ~w(max_signed_header_bytes)},
+      {"apps/locus/runner/tests/process.rs", ~w(refusals)},
       {"apps/locus/runner/tests/vectors.rs",
        ~w(version attempt max_body_bytes max_frame_bytes initial_credit max_headers max_header_name_bytes max_header_value_bytes max_signed_header_bytes max_attached_frame_bytes ops methods purposes max_path_bytes max_url_bytes max_calls max_fetches codes exchange refusals encode_refusals)},
       {"apps/locus/test/locus/runtime/relay_test.exs", ~w(call_checks)},
@@ -765,6 +771,7 @@ defmodule Cyfr.CrossLanguageDriftTest do
     ],
     "wire_json.json" => [
       {"apps/locus/keeper/internal/wire/macenvelope/macenvelope_test.go", ~w(base64url base64)},
+      {"apps/locus/runner/tests/vectors.rs", ~w(version max_integer_chars reads refused)},
       {"apps/locus/keeper/internal/wire/wirejson/wirejson_test.go",
        ~w(version max_integer_chars reads refused writes)},
       {"apps/prima/test/prima/wire_json_test.exs",
@@ -833,7 +840,9 @@ defmodule Cyfr.CrossLanguageDriftTest do
     {"locus_builds.json", "apps/cyfr/test/cyfr/stack_shape_test.exs"} =>
       "a planted harness text that reads it, for the drift check's own case",
     {"locus_roles.json", "apps/cyfr/test/cyfr/stack_shape_test.exs"} =>
-      "the drift check holds every image harness to reading it"
+      "the drift check holds every image harness to reading it",
+    {"wire_json.json", "apps/locus/test/support/runtime/test_wasm/hostile/big_integer.wat"} =>
+      "its comment names the bound its guest answers past"
   }
 
   # Every tracked or new file under a test path (a test/ or tests/

@@ -7,18 +7,23 @@ defmodule Locus.Runtime.EventsTest do
   runner, posted in batches of at most `Prima.HostAPI.max_report_events/0`,
   a full one at once and a short one after its first event's wait; one
   batch in flight at a time, none before the service serves; a batch that
-  reached no connection sent again whole and first, one whose answer was
-  lost never again; and, while CYFR cannot be reached, at most 1,024
-  events held, the oldest dropped first and the count said once, when a
-  batch reaches CYFR again. Each test's forwarder posts to the test
-  itself, which answers each post as the case needs.
+  reached no connection, or that a member not holding the control plane
+  refused `unavailable`, sent again whole and first a wait after its
+  answer, one whose answer was lost or that CYFR refused never again and
+  logged once; and, while CYFR cannot be reached, at most 1,024 events
+  held, the oldest dropped first and the count said once, when a batch
+  reaches CYFR again. Each test's forwarder posts to the test itself,
+  which answers each post as the case needs, or through the host client
+  to a scripted host.
   """
 
   use ExUnit.Case, async: true
 
   import ExUnit.CaptureLog
+  import Prima.Test.Wait
 
   alias Locus.Runtime.Events
+  alias Locus.Runtime.Test.ScriptedHost
 
   @batch Prima.HostAPI.max_report_events()
   @boot "boot_events_test"
@@ -58,6 +63,12 @@ defmodule Locus.Runtime.EventsTest do
   end
 
   defp answer(poster, answer), do: send(poster, {:answer, answer})
+
+  # Each batch the scripted host was posted, by its events' times.
+  defp batches(host) do
+    for %{args: %{"events" => events}} <- ScriptedHost.requests(host, "report_events"),
+        do: Enum.map(events, & &1["measurements"]["system_time"])
+  end
 
   test "posts nothing before the service serves, then a short batch after its first event's wait",
        %{events: events, credentials: credentials} do
@@ -141,6 +152,111 @@ defmodule Locus.Runtime.EventsTest do
 
     assert log =~ "77 runner events were dropped while CYFR could not be reached"
     assert length(String.split(log, "were dropped")) == 2
+  end
+
+  test "a batch that reached no connection goes again a whole wait after its answer, on one timer",
+       %{credentials: credentials} do
+    test = self()
+
+    post = fn _credentials, _boot, events ->
+      send(test, {:posted_at, self(), events})
+      receive do: ({:answer, answer} -> answer)
+    end
+
+    events =
+      start_supervised!(
+        Supervisor.child_spec({Events, post: post, flush_ms: 400, name: nil}, id: :one_timer)
+      )
+
+    :ok = Events.serve(events, credentials, @boot)
+    forward(events, 1..1)
+    assert_receive {:posted_at, first, _batch}, 5_000
+
+    # An event arriving while the batch is in flight arms the wait of its
+    # own batch, which has run most of its course when the batch in flight
+    # is answered unsent.
+    forward(events, 2..2)
+    refute_receive {:posted_at, _, _}, 300
+    answer(first, {:error, :unsent})
+
+    # The unsent batch goes again a whole wait after its answer, with the
+    # event that arrived meanwhile, and once.
+    refute_receive {:posted_at, _, _}, 250
+    assert_receive {:posted_at, again, batch}, 5_000
+    assert Enum.map(batch, & &1.measurements.system_time) == [1, 2]
+    answer(again, :ok)
+    refute_receive {:posted_at, _, _}, 600
+  end
+
+  describe "through the host client" do
+    setup %{credentials: _} do
+      host = ScriptedHost.start!()
+      {:ok, worker_key} = Prima.WorkerAuth.worker_key(host.root, host.service)
+
+      credentials = %Locus.Runtime.Credentials{
+        service_id: host.service,
+        worker_key: worker_key,
+        dispatch_key: Prima.WorkerAuth.dispatch_key(worker_key),
+        dispatch_seal_key: Prima.WorkerAuth.dispatch_seal_key(worker_key),
+        host_url: host.url,
+        bind: {127, 0, 0, 1},
+        port: 0
+      }
+
+      events =
+        start_supervised!(
+          Supervisor.child_spec({Events, flush_ms: 50, name: nil}, id: :through_the_client)
+        )
+
+      :ok = Events.serve(events, credentials, @boot)
+      {:ok, host: host, events: events}
+    end
+
+    test "a batch a member that does not hold the control plane refuses, 503 unavailable, is " <>
+           "sent again, whole and first, and logged by no one",
+         %{host: host, events: events} do
+      test = self()
+
+      ScriptedHost.script(host, "report_events", [
+        fn _args, _caller ->
+          send(test, {:refusing, self()})
+          receive do: (:refuse -> {:raw, 503, ~s({"v":3,"error":"unavailable"})})
+        end,
+        {:ok, true}
+      ])
+
+      forward(events, 1..2)
+      assert_receive {:refusing, refusing}, 5_000
+      forward(events, 3..3)
+
+      log =
+        capture_log(fn ->
+          send(refusing, :refuse)
+          wait_until(fn -> length(batches(host)) == 2 end, 5_000)
+        end)
+
+      assert batches(host) == [[1, 2], [1, 2, 3]]
+      refute log =~ "runner events"
+      refute log =~ "report_events"
+    end
+
+    test "a batch the listener refuses is not sent again, and is logged once", %{
+      host: host,
+      events: events
+    } do
+      ScriptedHost.script(host, "report_events", {:raw, 400, ~s({"v":3,"error":"malformed"})})
+
+      log =
+        capture_log(fn ->
+          forward(events, 1..2)
+          wait_until(fn -> batches(host) != [] end, 5_000)
+          refute_receive :never, 300
+        end)
+
+      assert batches(host) == [[1, 2]]
+      assert length(String.split(log, "a batch of 2 runner events was not reported")) == 2
+      refute log =~ "report_events's answer"
+    end
   end
 
   test "a status or crash report shows no credential and no event", %{

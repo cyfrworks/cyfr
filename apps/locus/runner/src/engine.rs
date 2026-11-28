@@ -4,22 +4,25 @@
 //! The engine and its bounds (section 5.2 of the plan).
 //!
 //! **Configuration.** The component model, epoch interruption and wide
-//! arithmetic are on. The component-model async family, GC and exception
-//! handling are not built in: without Wasmtime's `component-model-async`
-//! and `gc` features its engine leaves those features off
-//! (`Config::features`), and has no switch for most of them. GC is also
-//! turned off by name, with the component model's error context and
-//! memory64; fuel is off, since epochs bound the wall clock the contract
-//! states. Cranelift compiles at `OptLevel::None`, as the engine before it
-//! did, on one thread of the runner's own (`Compiler`), with no parallel
-//! compilation. Backtraces are off, so no error carries a guest's own
-//! function names.
+//! arithmetic are on. The component-model async family, GC, exception
+//! handling and threads are not built in: without Wasmtime's
+//! `component-model-async`, `gc` and `threads` features its engine leaves
+//! those features off (`Config::features`), and has no switch for most of
+//! them. GC and threads are also turned off by name, with the component
+//! model's error context and memory64. Threads stay off whatever is built
+//! in: a runner gives a guest no second thread, and a wait on a shared
+//! memory parks the thread it runs on in Wasmtime's own code, where no
+//! epoch reaches it, so no budget could end it. Fuel is off, since epochs
+//! bound the wall clock the contract states. Cranelift compiles at
+//! `OptLevel::None`, as the engine before it did, on one thread of the
+//! runner's own (`Compiler`), with no parallel compilation. Backtraces are
+//! off, so no error carries a guest's own function names.
 //!
 //! **A component's bytes** are compiled in memory, on the compile thread,
 //! only after they hash to their digest. The engine's configuration is
 //! what refuses each refused feature; a compile it refuses is classified
 //! there, after it, in `Prima.ComponentFeatures`'s order (`classify`):
-//! valid with the nine refused features off, the failure is the engine's
+//! valid with the ten refused features off, the failure is the engine's
 //! own, "Component compilation failed: ..."; otherwise valid with the
 //! validator's defaults it uses a refused feature, and invalid it is no
 //! WebAssembly, each in Prima's sentence
@@ -61,7 +64,7 @@ const COMPILE_STACK_BYTES: usize = 8 * 1024 * 1024;
 
 /// The features a component may not use, by wasmparser's names
 /// (`Prima.ComponentFeatures.refused/0`).
-pub const REFUSED: [(&str, WasmFeatures); 9] = [
+pub const REFUSED: [(&str, WasmFeatures); 10] = [
     ("cm-async", WasmFeatures::CM_ASYNC),
     ("cm-async-stackful", WasmFeatures::CM_ASYNC_STACKFUL),
     (
@@ -74,6 +77,7 @@ pub const REFUSED: [(&str, WasmFeatures); 9] = [
     ("gc-types", WasmFeatures::GC_TYPES),
     ("exceptions", WasmFeatures::EXCEPTIONS),
     ("legacy-exceptions", WasmFeatures::LEGACY_EXCEPTIONS),
+    ("threads", WasmFeatures::THREADS),
 ];
 
 /// A component's type, as its assignment names it.
@@ -152,7 +156,7 @@ pub fn unadmitted(refusal: Unadmitted, digest: &str) -> String {
     match refusal {
         Unadmitted::FeatureRefused => format!(
             "The component {digest} uses a WebAssembly feature this runtime does not admit: \
-             component-model async, GC or exception handling."
+             component-model async, GC, exception handling or threads."
         ),
         Unadmitted::Invalid => format!("The component {digest} is not valid WebAssembly."),
     }
@@ -340,6 +344,7 @@ pub fn config() -> Config {
         .wasm_wide_arithmetic(true)
         .wasm_component_model_error_context(false)
         .wasm_gc(false)
+        .wasm_features(WasmFeatures::THREADS, false)
         .wasm_memory64(false)
         .consume_fuel(false)
         .cranelift_opt_level(OptLevel::None)

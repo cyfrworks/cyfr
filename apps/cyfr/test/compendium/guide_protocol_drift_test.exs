@@ -127,12 +127,19 @@ defmodule Compendium.GuideProtocolDriftTest do
   # code produces, or one it omits, leaves generated error handling matching
   # nothing.
   # A formula's invoke errors are rendered in two places: the runner's
-  # formula import, whose crate holds the types it answers to the guest
-  # error vectors' `invoke_types`, and CYFR's answer to a child or catalog
-  # tool call it refuses (`Opus.Host.Children`), every type of which is
-  # one of them. The guide's table is the vectors' types.
+  # formula import (its `Kind`, each spelled `Name => "type"`), and CYFR's
+  # answer to a child or catalog tool call it refuses (`Opus.Host.Children`),
+  # which the runner hands on. The guide's table is the vectors' types, and
+  # exactly what the two produce: no type documented that nothing produces.
   test "component-guide's invoke error table matches the invoke error vocabulary" do
     handler = File.read!(Path.join(@project_root, "apps/cyfr/lib/opus/host/children.ex"))
+
+    runner =
+      ~r/^\s+[A-Z]\w* => "(\w+)",$/m
+      |> Regex.scan(
+        File.read!(Path.join(@project_root, "apps/locus/runner/src/imports/formula.rs"))
+      )
+      |> Enum.map(fn [_, t] -> t end)
 
     produced =
       [
@@ -166,8 +173,12 @@ defmodule Compendium.GuideProtocolDriftTest do
 
     refute produced == [], "no invoke error found in CYFR's answer: the scan has drifted"
 
-    assert produced -- documented == [],
-           "CYFR answers invoke errors component-guide.md's table does not name: " <>
-             inspect(produced -- documented)
+    refute runner == [],
+           "no invoke error found in the runner's formula import: the scan has drifted"
+
+    assert documented == Enum.sort(Enum.uniq(produced ++ runner)),
+           "component-guide.md's invoke error table drifted from what CYFR and the runner " <>
+             "produce: documented #{inspect(documented)}, produced " <>
+             inspect(Enum.sort(Enum.uniq(produced ++ runner)))
   end
 end

@@ -395,9 +395,15 @@ def run_guest(stack, plane, reflector, athanor, attached_value, disclosed_value=
                    for delta in push["args"].get("deltas", [])],
         "attach_answer": plane.seen("attach", execution_id)[0]["answer"],
         "exits": exits,
-        "sent": plane.seen(None, execution_id),
+        "sent": sent(plane, execution_id),
         "logs": stack.logs(),
     }
+
+
+def sent(plane, execution_id):
+    """Everything the runner or the service sent the control plane for the attempt: its calls and reports by its
+    execution, and every batch of operator events, which names none."""
+    return plane.seen(None, execution_id) + plane.seen("report_events")
 
 
 def plant_values():
@@ -428,7 +434,7 @@ def where(value, seen):
 
 
 def dumped(label, seen):
-    """The dumps read what they claim: the runner's memory and the service's are whole VMs, every mapping not read
+    """The dumps read what they claim: the runner's memory and the service's are read whole, every mapping not read
     named, and the home's entries were walked to the end (that the walk finds what a home holds is the positive
     control's)."""
     for name in ("runner_memory", "service_memory"):

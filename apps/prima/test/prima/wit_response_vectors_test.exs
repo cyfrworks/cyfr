@@ -31,7 +31,7 @@ defmodule Prima.WitResponseVectorsTest do
               some_internal_state
               stale_revision timeout type unavailable
               dispatch_error domain_blocked http_error request_failed
-              resource_limit storage_error storage_unavailable unknown)a,
+              resource_limit storage_error storage_unavailable stream_error unknown)a,
            &{Atom.to_string(&1), &1}
          )
 
@@ -92,7 +92,7 @@ defmodule Prima.WitResponseVectorsTest do
   end
 
   test "encode_error answers every case's envelope, for a type given as a string or an atom" do
-    for vector <- cases!("encode_error", 9, ~w(why type message answer)) do
+    for vector <- cases!("encode_error", 10, ~w(why type message answer)) do
       %{"why" => why, "type" => type, "message" => message, "answer" => answer} = vector
 
       for type <- [type, atom!(type)] do
@@ -104,7 +104,7 @@ defmodule Prima.WitResponseVectorsTest do
   test "every encode_error answer is the envelope and nothing else" do
     %{"member" => member, "fields" => fields} = @vectors["envelope"]
 
-    for vector <- cases!("encode_error", 9, ~w(why type message answer)) do
+    for vector <- cases!("encode_error", 10, ~w(why type message answer)) do
       %{"why" => why, "answer" => answer} = vector
       %{^member => error} = envelope = expected(answer)
       assert Map.keys(envelope) == [member], why

@@ -22,7 +22,7 @@ defmodule Compendium.ComponentFeaturesAdmissionTest do
 
   @root Path.expand("../../../..", __DIR__)
   @hostile Path.join(@root, "apps/locus/test/support/runtime/test_wasm/hostile")
-  @refused ~w(async_lift gc_alloc exception_throw externref_table)
+  @refused ~w(async_lift gc_alloc exception_throw externref_table atomic_fence shared_memory)
 
   # The guests whose feature the validator's defaults leave off, which the
   # check answers as invalid WebAssembly.
@@ -46,10 +46,7 @@ defmodule Compendium.ComponentFeaturesAdmissionTest do
 
   defp guest(name), do: File.read!(Path.join(@hostile, "#{name}.wasm"))
 
-  defp sentence(digest),
-    do:
-      "The component #{digest} uses a WebAssembly feature this runtime does not admit: " <>
-        "component-model async, GC or exception handling."
+  defp sentence(digest), do: Prima.Refusal.message({:component_feature_refused, digest})
 
   test "a publish refuses a component using a refused feature, and stores nothing of it",
        %{ctx: ctx} do

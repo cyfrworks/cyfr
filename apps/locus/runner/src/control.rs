@@ -198,7 +198,8 @@ const TYPES: [(&str, &[&str]); 6] = [
 ];
 
 impl Message {
-    fn type_name(&self) -> &'static str {
+    /// The message's type, as its line spells it.
+    pub fn type_name(&self) -> &'static str {
         match self {
             Message::Assign { .. } => "assign",
             Message::CancelChild { .. } => "cancel_child",

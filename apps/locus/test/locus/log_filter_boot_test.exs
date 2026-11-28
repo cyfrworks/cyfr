@@ -11,8 +11,11 @@ defmodule Locus.LogFilterBootTest do
   `:crash_reason`; neither carries the message the server was handed nor
   its state.
 
-  The tests add Logger handlers and one removes the filter, so the module
-  runs alone.
+  The filter is installed before the start reads the roles, so a start
+  that refuses them has it installed too.
+
+  The tests add Logger handlers, two remove the filter and one sets the
+  application's environment, so the module runs alone.
   """
   use ExUnit.Case, async: false
 
@@ -70,6 +73,26 @@ defmodule Locus.LogFilterBootTest do
 
     filters = Enum.map(:logger.get_primary_config().filters, &elem(&1, 0))
     assert hd(filters) == :prima_log_filter
+  end
+
+  # The test suite's node serves the runtime: given a builds key beside
+  # it, the start refuses its roles, and has installed the filter first all
+  # the same, since it reads the roles after.
+  test "a start that refuses its roles has installed the filter first, ahead of Logger's translator" do
+    assert get_in(Application.get_all_env(:locus), [:runtime, :service_key]) != nil
+    _ = :logger.remove_primary_filter(:prima_log_filter)
+    on_exit(fn -> :ok = Prima.LogFilter.install() end)
+    Prima.Test.Env.put_app_env(:locus, :request_key, String.duplicate("a", 64))
+
+    assert_raise ArgumentError,
+                 ~r/LOCUS_RUNTIME_KEY serves the runtime alone, .*LOCUS_BUILDS_KEY/,
+                 fn ->
+                   Locus.Application.start(:normal, [])
+                 end
+
+    filters = Enum.map(:logger.get_primary_config().filters, &elem(&1, 0))
+    assert hd(filters) == :prima_log_filter
+    assert index(filters, :prima_log_filter) < index(filters, :logger_translator)
   end
 
   for {format, opts} <- [text: [], json: [format: {Prima.JsonFormatter, :format}]] do

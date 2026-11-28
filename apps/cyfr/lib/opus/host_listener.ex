@@ -582,7 +582,7 @@ defmodule Opus.HostListener do
       end
 
     case read_body do
-      {:ok, :report_events, args} ->
+      {:ok, :report_events, args} when callback == :report_events ->
         whole_batch(read, args)
 
       {:ok, ^callback, _args} ->

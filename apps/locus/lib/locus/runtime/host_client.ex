@@ -42,15 +42,18 @@ defmodule Locus.Runtime.HostClient do
   its opening, is asked for as its reading begins, by the call's own
   timeout, and given back once the answer is read and decoded; an answer
   no room came for by then is one that did not arrive.
-  Any other status is the listener's refusal, and is lost, except two
+  Any other status is the listener's refusal, and is lost, except three
   that are final: a `413`, whatever its body, says the call's body is past
   the host's bound (`Prima.HostAPI.max_body_bytes/0`), refused before the
   host read it or acted on it, and the call is answered
   `{:error, :too_large}` rather than asked again, since the same body is
   refused again (a body past that bound is answered so before it is
-  sent); and a refusal naming `unknown_version` says the host speaks
+  sent); a refusal naming `unknown_version` says the host speaks
   another version of the wire, so it is not this engine's host, and the
-  call is answered `{:error, :lost}` at once rather than asked again.
+  call is answered `{:error, :lost}` at once rather than asked again; and
+  a report's refusal naming `unavailable` says the answering member does
+  not hold the control plane and read nothing of it, answered
+  `{:error, :unavailable}`.
 
   Each function answers as the `Prima.HostAPI` callback of the same name.
   An answer that does not arrive within `Prima.HostAPI.request_timeout_ms/1`,
@@ -81,7 +84,8 @@ defmodule Locus.Runtime.HostClient do
   service is configured with.
 
   Nothing a call carries is logged: the keys are kept out of a client's
-  inspection, and a loss is logged by its operation and reason alone.
+  inspection, and a loss is logged by its operation and reason alone, but
+  for a call never asked again, whose caller logs it.
   """
 
   require Logger
@@ -128,15 +132,12 @@ defmodule Locus.Runtime.HostClient do
           host_url: String.t()
         }
 
-  @refusals %{
-    "lost" => :lost,
-    "unavailable" => :unavailable,
-    "replayed" => :replayed,
-    "malformed" => :malformed,
-    "bad_mac" => :bad_mac,
-    "claim_expired" => :claim_expired,
-    "not_found" => :not_found
-  }
+  # The refusals CYFR answers a call of the service's own with: the
+  # others name what only a runner's calls meet (an attach's, a
+  # fetch_artifact's), whose answers the relay passes on unread.
+  @refusals %{"lost" => :lost, "unavailable" => :unavailable}
+
+  @reports HostAPI.reports()
 
   # The refusals only an `egress_pin` answer names.
   @pin_refusals Map.new(PinnedTarget.refusals(), &{Atom.to_string(&1), &1})
@@ -206,9 +207,21 @@ defmodule Locus.Runtime.HostClient do
   @spec take_rate(t(), String.t()) :: :ok | {:error, term()}
   def take_rate(%__MODULE__{} = client, bucket) when is_binary(bucket) do
     case request(client, :take_rate, %{"bucket" => bucket}) do
-      {:ok, true} -> :ok
-      {:ok, _other} -> {:error, :lost}
-      {:error, reason} -> {:error, reason}
+      {:ok, true} ->
+        :ok
+
+      {:ok, _other} ->
+        {:error, :lost}
+
+      {:error, {:uncertain, _sentence}} = uncertain ->
+        Logger.warning(
+          "[Locus.Runtime.HostClient] take_rate's answer was lost; its effect is uncertain"
+        )
+
+        uncertain
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -317,8 +330,11 @@ defmodule Locus.Runtime.HostClient do
   `Prima.HostAPI.max_report_events/0`: signed with the service's dispatch
   key and posted to the address the service is configured with, naming no
   member. A batch is never sent again: one whose answer was lost is
-  `{:error, {:uncertain, sentence}}`, and one that reached no connection
-  `{:error, :unsent}`, which its caller may send again. Answers `:ok`, or
+  `{:error, {:uncertain, sentence}}`; one that reached no connection is
+  `{:error, :unsent}`, and one the answering member refused because it
+  does not hold the control plane `{:error, :unavailable}`, each of which
+  its caller may send again, since CYFR emitted nothing of it. None of
+  these is logged here: the caller logs a batch's end. Answers `:ok`, or
   `{:error, reason}`.
   """
   @spec report_events(Locus.Runtime.Credentials.t(), String.t(), [
@@ -381,11 +397,8 @@ defmodule Locus.Runtime.HostClient do
           :never when lost == :unsent ->
             {:error, :unsent}
 
+          # Its caller logs it, naming what it asked.
           :never ->
-            Logger.warning(
-              "[Locus.Runtime.HostClient] #{op}'s answer was lost; its effect is uncertain"
-            )
-
             {:error, {:uncertain, @uncertain}}
 
           _retried ->
@@ -478,11 +491,22 @@ defmodule Locus.Runtime.HostClient do
   # attempt's work instead of being asked again. The refusal is plain,
   # since a listener that cannot read the header cannot seal to it, and is
   # read whatever version it carries, since it is the other version's
-  # answer.
+  # answer. A report's `unavailable` at this version is the answering
+  # member's word that it does not hold the control plane and read
+  # nothing of the report: an answer, never asked again.
   defp refused(raw, op) do
     case Jason.decode(raw) do
-      {:ok, %{"error" => "unknown_version"}} -> other_version(op)
-      _ -> :lost
+      {:ok, %{"error" => "unknown_version"}} ->
+        other_version(op)
+
+      {:ok, decoded} when op in @reports ->
+        case WorkerWire.read_answer(decoded) do
+          {:error, "unavailable", _fields} -> {:ok, {:error, :unavailable}}
+          _other -> :lost
+        end
+
+      _ ->
+        :lost
     end
   end
 
@@ -891,20 +915,16 @@ defmodule Locus.Runtime.HostClient do
     end
   end
 
+  # A `take_rate` refused its rate is a guest error, which names no
+  # remediation; nothing else the service asks is answered one.
   defp read_answer(decoded, op) do
     case WorkerWire.read_answer(decoded) do
       {:ok, value} ->
         {:ok, {:ok, value}}
 
-      {:error, "setup_required", %{"payload" => %{} = payload}} ->
-        {:ok, {:error, {:setup_required, payload}}}
-
-      {:error, "guest_error", %{"type" => type, "message" => message} = fields}
+      {:error, "guest_error", %{"type" => type, "message" => message}}
       when is_binary(type) and is_binary(message) ->
-        {:ok, guest_error(fields, type, message)}
-
-      {:error, "failed", %{"message" => message}} when is_binary(message) ->
-        {:ok, {:error, {:failed, message}}}
+        {:ok, {:error, {:guest_error, type, message}}}
 
       {:error, "unknown_version", _fields} ->
         other_version(op)
@@ -919,9 +939,4 @@ defmodule Locus.Runtime.HostClient do
         :lost
     end
   end
-
-  defp guest_error(%{"remediation" => %{} = remediation}, type, message),
-    do: {:error, {:guest_error, type, message, remediation}}
-
-  defp guest_error(_fields, type, message), do: {:error, {:guest_error, type, message}}
 end

@@ -244,6 +244,31 @@ class HomeVerdict(unittest.TestCase):
         self.assertEqual(said, "no home /h/<value>")
 
 
+class Sent(unittest.TestCase):
+    """What the canary searches of what reached the control plane: the attempt's own calls and reports, and every
+    batch of operator events, which names no execution, so a value in one is found."""
+
+    def setUp(self):
+        self.plane = canary.ControlPlane(bytes(32), canary.SERVICE)
+        self.plane.record({"op": "complete", "execution_id": "exec_a", "args": {"outcome": {}}})
+        self.plane.record({"op": "complete", "execution_id": "exec_b", "args": {"leak": "sk-other"}})
+        self.plane.record({"op": "report_events", "report": {}, "attempts": [],
+                           "args": {"events": [{"name": "http.request", "metadata": {"hostname": "sk-canary"}}]}})
+
+    def seen(self):
+        return {"runner_memory": ({}, 0, "", 0), "service_memory": ({}, 0, "", 0), "home": ({}, 0, "", 0),
+                "output": "", "events": [], "attach_answer": {}, "exits": [], "logs": "",
+                "sent": canary.sent(self.plane, "exec_a")}
+
+    def test_the_attempts_calls_and_every_events_batch_are_sent(self):
+        ops = [(r["op"], r.get("execution_id")) for r in canary.sent(self.plane, "exec_a")]
+        self.assertEqual(ops, [("complete", "exec_a"), ("report_events", None)])
+
+    def test_a_value_in_an_events_batch_is_found(self):
+        self.assertEqual(canary.where("sk-canary", self.seen()), ["sent"])
+        self.assertEqual(canary.where("sk-other", self.seen()), [])
+
+
 class Reflector(unittest.TestCase):
     def test_it_listens_on_loopback_and_answers_there(self):
         import http.client

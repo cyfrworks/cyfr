@@ -140,7 +140,9 @@ defmodule Locus.Runtime.WorkerService do
   nothing in it bounds a close CYFR holds unanswered. So the service
   watches every assignment it holds: a runner that still holds one
   `:watchdog_grace_ms` past the assignment's `deadline`
-  (`Locus.Runtime.Settings`), on the clock the deadline was set on, is
+  (`Locus.Runtime.Settings`), on the clock the deadline was set on, and
+  never later than that grace past the longest a subtree runs (the
+  platform's timeout ceiling, `Prima.Limits.Ceiling`), is
   logged once and released with no grace, as a kill of its root ends it
   (`Locus.Runtime.RunnerPool.taint/4`, which leaves alone a runner that
   has completed the subtree or been taken for another since), and its
@@ -192,6 +194,14 @@ defmodule Locus.Runtime.WorkerService do
   # service's answer: a runner's handle answers an assign by the deadline,
   # or half a second past it is failed (`Locus.Runtime.RunnerProcess`).
   @answer_ms 1_000
+  # The longest a subtree runs: no run's timeout passes the platform's
+  # ceiling. An assignment's deadline is CYFR's, on its clock, and the wire
+  # bounds it only to 2^53 - 1, so the watch waits this and the grace at
+  # most, whatever the deadline says, which also keeps it within what a
+  # timer can wait.
+  @longest_ms (case Prima.Limits.parse_duration(Prima.Limits.Ceiling.lowered(%{}).timeout) do
+                 {:ok, ms} -> ms
+               end)
 
   @doc false
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
@@ -720,16 +730,11 @@ defmodule Locus.Runtime.WorkerService do
     {started, state} = next_seq(state)
     watch = make_ref()
 
+    grace = state.settings.watchdog_grace_ms
+    left = assignment.deadline + grace - System.system_time(:millisecond)
+
     timer =
-      Process.send_after(
-        self(),
-        {:watch, pid, watch},
-        max(
-          assignment.deadline + state.settings.watchdog_grace_ms -
-            System.system_time(:millisecond),
-          0
-        )
-      )
+      Process.send_after(self(), {:watch, pid, watch}, min(max(left, 0), @longest_ms + grace))
 
     assigned = %{
       runner: runner,

@@ -262,9 +262,10 @@ impl Tree {
                 .insert(execution_id.clone(), Entry::new(&attempt, stop.clone()));
         }
         // Until it is handed to the loop, a child whose formula stopped
-        // while its frame was being written is reported left open: whether
-        // the service has it is not known, so the subtree ends naming it,
-        // and never waits for it.
+        // while its frame was being written runs nothing: it leaves the
+        // subtree, and its formula's import gives it back
+        // (`crate::imports::formula`). A frame already queued is still
+        // written, and names a child the service forgets with the subtree.
         let reserved = Reserved {
             tree: self,
             execution_id: Some(execution_id.clone()),
@@ -420,13 +421,7 @@ impl Reserved<'_> {
 impl Drop for Reserved<'_> {
     fn drop(&mut self) {
         if let Some(execution_id) = &self.execution_id {
-            self.tree.report(
-                execution_id,
-                Ended {
-                    closed: false,
-                    unclean: true,
-                },
-            );
+            self.tree.lock().entries.remove(execution_id);
         }
     }
 }
@@ -588,7 +583,11 @@ where
                     }
                 }
                 Received::Message(other) => {
-                    eprintln!("cyfr-runner: the service sent a {other:?} frame; ignored");
+                    // Its type alone: none of its members reaches the log.
+                    eprintln!(
+                        "cyfr-runner: the service sent a {} frame; ignored",
+                        other.type_name()
+                    );
                 }
                 Received::Refused(refusal) => {
                     eprintln!("cyfr-runner: the service sent a line that is not a frame: {refusal:?}");

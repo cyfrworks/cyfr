@@ -237,7 +237,9 @@ defmodule Prima.ComponentFeaturesTest do
         end
       end)
 
-      features = for %{"feature" => feature} <- cases, do: feature
+      # Every refused feature has a guest, threads two: an atomic
+      # instruction and a shared memory each use it alone.
+      features = for %{"feature" => feature} <- cases, uniq: true, do: feature
       assert Enum.sort(features) == Enum.sort(ComponentFeatures.refused())
       assert Enum.any?(cases, &Map.has_key?(&1, "hex"))
       assert Enum.count(cases, &(&1["outcome"] == "admitted")) >= 3

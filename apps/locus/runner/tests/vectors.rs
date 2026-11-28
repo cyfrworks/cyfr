@@ -15,9 +15,14 @@
 //! - `worker_auth.json`: a host call's canonical string, header and sealed
 //!   body and answer, and every assignment read.
 //! - `host_api.json`: the callbacks' retry classes and timeouts, every
-//!   call a runner makes as it crosses, and every answer outcome.
+//!   call a runner makes as it crosses, its question calls among them, and
+//!   every answer outcome.
+//! - `wire_json.json`: the one JSON reader's documents, read and refused
+//!   as Prima's reader reads and refuses them, an integer's bound among
+//!   them.
+//! - `guest_error.json`: the types each import answers a guest, exactly.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -288,6 +293,9 @@ fn control_bounds_are_the_vectors() {
     assert_eq!(control::VERSION, n(&v["version"]));
     assert_eq!(control::MAX_LINE_BYTES as u64, n(&v["max_line_bytes"]));
     assert_eq!(control::MAX_INPUT_BYTES as u64, n(&v["max_input_bytes"]));
+    // The depth an assign's input is read to (`crate::subtree`), which CYFR
+    // admits no input past.
+    assert_eq!(wire::MAX_DEPTH as u64, n(&v["max_input_depth"]));
     assert_eq!(control::MAX_OPEN as u64, n(&v["max_open"]));
 }
 
@@ -1419,6 +1427,65 @@ fn host_every_connection_case_crosses_as_the_vectors_write_it() {
     assert_eq!(names, ["omitted", "named", "reused"]);
 }
 
+// A question's calls, in the order one attempt asks: each body the one the
+// runner writes, sealed and signed as the vector does, and each answer
+// read as the value it carries. What the question import makes of each
+// answer is imports.rs's `the_question_cases_are_answered_to_the_guest_as_the_vector_says`.
+#[test]
+fn host_every_question_case_crosses_as_the_vectors_write_it() {
+    let v = fixture("host_api.json");
+    let call_key = key(&v["keys"]["attempt_call_hex"]);
+    let seal_key = key(&v["keys"]["attempt_seal_hex"]);
+    let mut names = Vec::new();
+    for case in cases(&v["question_cases"]["cases"], "question_cases") {
+        let name = s(&case["name"]);
+        names.push(name);
+        let op = Op::named(s(&case["callback"])).expect("a runner's callback");
+        let fields = host_fields(&case["fields"]);
+        let body = s(&case["body"]);
+        let parsed: Value = serde_json::from_str(body).expect("JSON");
+        let written = wire::request_body(op.name(), parsed["args"].as_object().expect("args"));
+        assert_eq!(written.as_str(), body, "{name}");
+        let sealed = auth::seal_call(
+            &seal_key,
+            Direction::Body,
+            &fields,
+            body.as_bytes(),
+            &iv(&case["body_iv_hex"]),
+        );
+        assert_eq!(sealed.expect("sealed"), s(&case["body_sealed"]), "{name}");
+        let header = auth::host_call_header(&call_key, &fields, s(&case["body_sealed"]).as_bytes());
+        assert_eq!(header.expect("signed"), s(&case["header"]), "{name}");
+        let opened = auth::open_call(
+            &seal_key,
+            Direction::Answer,
+            &fields,
+            s(&case["answer_sealed"]).as_bytes(),
+        )
+        .expect("opened");
+        assert_eq!(&opened[..], s(&case["answer"]).as_bytes(), "{name}");
+        let answer: Value = serde_json::from_str(s(&case["answer"])).expect("JSON");
+        let reading = host::answered(op, &opened).unwrap_or_else(|why| panic!("{name}: {why:?}"));
+        assert_eq!(answer_of(&reading_json(&reading)), answer, "{name}");
+    }
+    assert_eq!(
+        names,
+        [
+            "opened",
+            "keyed_replay",
+            "changed",
+            "paced",
+            "paced_admitted",
+            "unattended",
+            "invalid",
+            "wait_timed_out",
+            "allowed",
+            "denied",
+            "unavailable"
+        ]
+    );
+}
+
 /// A host reached through a scripted relay: each try meets the next answer
 /// of the case, its answer sealed to the try's own header.
 struct Scripted {
@@ -1764,16 +1831,146 @@ fn wire_a_member_named_as_the_parser_names_a_number_is_refused_and_an_integer_is
     assert_eq!(whole.value()["m"].to_string(), "-18446744073709551617");
 }
 
+/// Whether `read`, the crate's reading of a document, is the value
+/// `expected` Prima reads it as: an integer by its digits, minus zero the
+/// integer zero; a float as the double its text names, which is what a
+/// reader of the text the crate hands on reads (Jason reads an underflow
+/// as 0.0 and drops the sign of a zero with an exponent and no fraction,
+/// which `==` on doubles does not tell apart).
+fn reads_as(read: &Value, expected: &Value) -> bool {
+    match (read, expected) {
+        (Value::Number(read), Value::Number(expected)) => {
+            let (read, expected) = (read.to_string(), expected.to_string());
+            let float = |text: &str| text.contains(['.', 'e', 'E']);
+            match (float(&read), float(&expected)) {
+                (false, false) => {
+                    let whole = |text: &str| match text {
+                        "-0" => "0".to_owned(),
+                        text => text.to_owned(),
+                    };
+                    whole(&read) == whole(&expected)
+                }
+                (true, true) => read.parse::<f64>().ok() == expected.parse::<f64>().ok(),
+                _ => false,
+            }
+        }
+        (Value::Array(read), Value::Array(expected)) => {
+            read.len() == expected.len() && read.iter().zip(expected).all(|(a, b)| reads_as(a, b))
+        }
+        (Value::Object(read), Value::Object(expected)) => {
+            read.len() == expected.len()
+                && read
+                    .iter()
+                    .all(|(name, a)| expected.get(name).is_some_and(|b| reads_as(a, b)))
+        }
+        (read, expected) => read == expected,
+    }
+}
+
+#[test]
+fn wire_every_document_reads_as_prima_reads_it_and_every_one_it_refuses_is_refused() {
+    // The vector file holds a value 4,097 arrays deep: it is read, and
+    // dropped, on a stack of its own.
+    std::thread::Builder::new()
+        .stack_size(64 * 1024 * 1024)
+        .spawn(every_document_reads_as_prima_reads_it)
+        .expect("a thread")
+        .join()
+        .expect("the test passes");
+}
+
+fn every_document_reads_as_prima_reads_it() {
+    // The one reader of every JSON document the runner takes, a guest's
+    // bound for CYFR among them (its output, a formula's request, a
+    // storage or HTTP request), held to the documents Prima's reader is.
+    let v = {
+        use serde::Deserialize as _;
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../tests/fixtures/wire_json.json");
+        let text = std::fs::read(&path).expect("the vector file");
+        let mut reader = serde_json::Deserializer::from_slice(&text);
+        reader.disable_recursion_limit();
+        Value::deserialize(&mut reader).expect("the vectors")
+    };
+    let longest = n(&v["max_integer_chars"]) as usize;
+    assert_eq!(wire::MAX_INTEGER_CHARS, longest);
+    for (document, read) in [
+        ("9".repeat(longest), true),
+        ("9".repeat(longest + 1), false),
+        (format!("-{}", "9".repeat(longest - 1)), true),
+        (format!("-{}", "9".repeat(longest)), false),
+        (
+            format!(r#"{{"a":[1,{{"b":{}}}]}}"#, "9".repeat(longest)),
+            true,
+        ),
+        (
+            format!(r#"{{"a":[1,{{"b":{}}}]}}"#, "9".repeat(longest + 1)),
+            false,
+        ),
+        // Only an integer is bounded: a float is read whatever its digits.
+        (format!("0.{}", "1".repeat(longest + 1)), true),
+        (format!("{}e-1100", "1".repeat(longest + 1)), true),
+    ] {
+        assert_eq!(
+            wire::read(document.as_bytes()).is_ok(),
+            read,
+            "{} characters",
+            document.len()
+        );
+    }
+    for case in cases(&v["reads"], "reads") {
+        let why = s(&case["why"]);
+        let document = wire::decode_base64(s(&case["doc_b64"])).expect("base64");
+        // The crate's own depth bound, which CYFR's admission holds every
+        // input to: the Go reader's stated difference, the crate's too.
+        if case["go"] == "too_deep" {
+            assert_eq!(
+                wire::read(&document).err(),
+                Some(wire::Unread::TooDeep),
+                "{why}"
+            );
+            continue;
+        }
+        let read = wire::read(&document).unwrap_or_else(|why_not| panic!("{why}: {why_not:?}"));
+        assert!(
+            reads_as(read.value(), &case["value"]),
+            "{why}: {} is not {}",
+            read.value(),
+            case["value"]
+        );
+        // What the crate hands on reads as what it read.
+        let handed_on = wire::to_bytes(read.value());
+        let again = wire::read(&handed_on).expect("handed on, it reads");
+        assert!(reads_as(again.value(), &case["value"]), "{why}: handed on");
+    }
+    for case in cases(&v["refused"], "refused") {
+        let why = s(&case["why"]);
+        let document = wire::decode_base64(s(&case["doc_b64"])).expect("base64");
+        assert_eq!(
+            wire::read(&document).err(),
+            Some(wire::Unread::Malformed),
+            "{why}"
+        );
+    }
+}
+
 #[test]
 fn wire_a_host_answers_numbers_keep_their_digits_and_only_an_exponent_is_respelled() {
     // The crate hands a number on as its text, its digits kept exactly: it
-    // does not re-read a decimal as a double, and it takes an integer of
-    // any length. Jason, the Elixir runner's reader, rounds
-    // 1.00000000000000001 to 1.0, reads 1e-400 as 0.0 and refuses an
-    // integer past 1,024 digits; it goes with that runner (R5). Only an
-    // exponent is respelled, and the value read back is the value written.
-    let long = "9".repeat(1_025);
+    // does not re-read a decimal as a double, and it takes an integer as
+    // long as Prima's reader takes one (`wire_json.json`'s
+    // `max_integer_chars`). Jason, which CYFR reads the runner's calls
+    // with, rounds 1.00000000000000001 to 1.0 and reads 1e-400 as 0.0; the
+    // text it reads so is the text written. Only an exponent is
+    // respelled, and the value read back is the value written.
+    let long = "9".repeat(wire::MAX_INTEGER_CHARS);
     let op = Op::named("tool_call").expect("a callback");
+    let past = format!(r#"{{"v":3,"ok":{long}9}}"#);
+    assert_eq!(
+        host::answered(op, past.as_bytes()).err(),
+        Some(host::Unanswered::Lost),
+        "an integer past the bound is no answer, as Jason reads none"
+    );
     for (written, handed_on) in [
         ("1.00000000000000001", "1.00000000000000001"),
         ("1e-400", "1e-400"),
@@ -1890,23 +2087,29 @@ fn requests_every_fetch_end_code_answers_the_guest_in_a_type_of_its_interface() 
             "pin_{why} is no fetch_end code"
         );
     }
-    // Every type the runner answers, on each interface it answers it on.
+    // The types the runner answers on each interface are the vector's
+    // exactly: none it answers is missing, and none listed goes unanswered.
+    // An attached request CYFR refuses carries CYFR's own type besides.
     let streaming: Vec<&str> = cases(&types["fetch_types"]["cyfr:http/streaming"], "streaming")
         .iter()
         .map(s)
         .collect();
-    for (kind, on_fetch, on_stream) in http::Kind::ALL {
-        if on_fetch {
-            assert!(fetch.contains(&kind.name()), "fetch: {}", kind.name());
-        }
-        if on_stream {
-            assert!(
-                streaming.contains(&kind.name()),
-                "streaming: {}",
-                kind.name()
-            );
-        }
-    }
+    let on_fetch: BTreeSet<&str> = http::Kind::ALL
+        .iter()
+        .filter(|(_, on_fetch, _)| *on_fetch)
+        .map(|(kind, _, _)| kind.name())
+        .collect();
+    let on_stream: BTreeSet<&str> = http::Kind::ALL
+        .iter()
+        .filter(|(_, _, on_stream)| *on_stream)
+        .map(|(kind, _, _)| kind.name())
+        .collect();
+    assert_eq!(on_fetch, fetch.into_iter().collect(), "cyfr:http/fetch");
+    assert_eq!(
+        on_stream,
+        streaming.into_iter().collect(),
+        "cyfr:http/streaming"
+    );
 }
 
 #[test]
@@ -2027,14 +2230,27 @@ fn cases_of(value: &Value) -> &Vec<Value> {
 // ============================================================================
 
 #[test]
-fn formula_every_type_its_invoke_answers_itself_is_an_invoke_type() {
+fn formula_the_types_its_invoke_answers_are_the_invoke_types() {
+    // What a formula's invoke can be answered: the types the runner makes
+    // itself, and those CYFR alone renders for the guest and the runner
+    // hands on as they are (`invoke_passed_on`). Together they are the
+    // invoke types exactly, and no type is both.
     let types = fixture("guest_error.json");
-    let invoke: Vec<&str> = cases(&types["invoke_types"], "invoke_types")
+    let invoke: BTreeSet<&str> = cases(&types["invoke_types"], "invoke_types")
         .iter()
         .map(s)
         .collect();
-    // Every error the runner makes itself is made of one of these.
-    for kind in cyfr_runner::imports::formula::Kind::ALL {
-        assert!(invoke.contains(&kind.name()), "{kind:?} is no invoke type");
-    }
+    let passed_on: BTreeSet<&str> = cases(&types["invoke_passed_on"], "invoke_passed_on")
+        .iter()
+        .map(s)
+        .collect();
+    let own: BTreeSet<&str> = cyfr_runner::imports::formula::Kind::ALL
+        .iter()
+        .map(|kind| kind.name())
+        .collect();
+    assert!(own.is_disjoint(&passed_on), "{own:?} and {passed_on:?}");
+    assert_eq!(
+        own.union(&passed_on).copied().collect::<BTreeSet<_>>(),
+        invoke
+    );
 }

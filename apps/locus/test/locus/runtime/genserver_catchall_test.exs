@@ -3,8 +3,9 @@
 
 defmodule Locus.Runtime.GenServerCatchallTest do
   @moduledoc """
-  Verifies that the runtime's GenServers survive unexpected messages
-  via their catch-all `handle_info/2` clause and log a warning.
+  Verifies that the runtime's GenServers, the worker service and the
+  forwarder of its runners' events, survive unexpected messages via their
+  catch-all `handle_info/2` clause and log a warning.
   """
   use ExUnit.Case, async: false
 
@@ -20,6 +21,21 @@ defmodule Locus.Runtime.GenServerCatchallTest do
              end) =~ "unexpected message"
 
       assert Process.whereis(Locus.Runtime.WorkerService) == pid
+    end
+  end
+
+  describe "the forwarder of the runners' events' catch-all" do
+    test "survives an unexpected message and logs it, holding what it held" do
+      pid = Process.whereis(Locus.Runtime.Events)
+      held = :sys.get_state(pid)
+
+      assert capture_log(fn ->
+               send(pid, {:something, :entirely, :unexpected})
+               :sys.get_state(pid)
+             end) =~ "unexpected message"
+
+      assert Process.whereis(Locus.Runtime.Events) == pid
+      assert :sys.get_state(pid) == held
     end
   end
 end

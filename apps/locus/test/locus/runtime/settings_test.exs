@@ -120,8 +120,8 @@ defmodule Locus.Runtime.SettingsTest do
                    &Settings.pool!/0
     end
 
-    # A subtree runs in a runner's VM of its own in every build, the test
-    # build included: there is no keeper that runs one in the service's.
+    # A subtree runs in a runner process of its own in every build, the
+    # test build included: there is no keeper that runs one in the service.
     # The direct keeper is the test build's: without it, the channel alone.
     test "the keepers are the channel and the test build's direct keeper, and the channel alone without it" do
       assert Settings.keepers() == [:channel, :direct]

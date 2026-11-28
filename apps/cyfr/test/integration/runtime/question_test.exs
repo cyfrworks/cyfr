@@ -328,7 +328,8 @@ defmodule Locus.Runtime.QuestionTest do
     ref_open = opened!()
 
     assert answers!(id, task) == ~w(unavailable)
-    assert TwoServices.seen(:question_wait) |> Enum.take(2) == [:drop, :drop]
+    # Two losses, and no third wait: the ask is given up.
+    assert TwoServices.seen(:question_wait) == [:drop, :drop]
 
     # The card stood while the run did; the run's end closed it.
     assert %{state: "ended"} = question!(ref_open)

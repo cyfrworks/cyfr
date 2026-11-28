@@ -86,7 +86,9 @@ defmodule Prima.RunnerControl do
       `max_event_string_bytes/0` bytes; a status word is a string. An
       `event` line spans at most `max_event_line_bytes/0` bytes before its
       newline. The runner is untrusted, so an event off the roster is not
-      a frame.
+      a frame, and its service forwards one only when every execution it
+      names is of the subtree the runner holds or held last, and only
+      within the runner's budget (`event_burst/0`, `events_per_second/0`).
 
   ## Decoding
 
@@ -162,6 +164,16 @@ defmodule Prima.RunnerControl do
   # frames.
   @max_event_line_bytes 4096
   @max_event_string_bytes 256
+
+  # The events a service forwards for one runner: a burst, refilled at a
+  # rate a second. A formula fanning out to eight children of eight tool
+  # calls each sent 97 events in 0.67 s, one making 64 tool calls in a row
+  # 65 in 1.5 s; one awaiting in a loop, with no host call, sent 3,001 in
+  # 0.1 s. The burst holds the first runs whole, and the rate holds a
+  # runner that keeps that pace up near the busiest of them, far below the
+  # loop's.
+  @event_burst 256
+  @events_per_second 128
 
   # The operator events a runner sends, by name: each one's measurements
   # and metadata, every member with its type, in wire order. The
@@ -333,6 +345,14 @@ defmodule Prima.RunnerControl do
   @spec max_input_bytes() :: pos_integer()
   def max_input_bytes, do: @max_input_bytes
 
+  @doc """
+  The most arrays and objects an `assign`'s input may nest, the input
+  object itself the first: the runner reads no deeper, so CYFR admits
+  no input that nests deeper (`Opus.Admission`).
+  """
+  @spec max_input_depth() :: pos_integer()
+  def max_input_depth, do: 4096
+
   @doc "The most attempts an `exit` may list as open."
   @spec max_open() :: pos_integer()
   def max_open, do: @max_open
@@ -344,6 +364,18 @@ defmodule Prima.RunnerControl do
   @doc "The most bytes a metadata string of an `event` may hold."
   @spec max_event_string_bytes() :: pos_integer()
   def max_event_string_bytes, do: @max_event_string_bytes
+
+  @doc """
+  The most `event` frames of one runner its service forwards at once: a
+  runner's budget starts full, and each event it forwards takes one;
+  past it, an event is dropped (`Locus.Runtime.RunnerProcess`).
+  """
+  @spec event_burst() :: pos_integer()
+  def event_burst, do: @event_burst
+
+  @doc "How many events a runner's budget regains a second, up to `event_burst/0`."
+  @spec events_per_second() :: pos_integer()
+  def events_per_second, do: @events_per_second
 
   @doc """
   The operator events a runner may send, in the order the catalog lists

@@ -781,6 +781,32 @@ defmodule Opus.HostListenerTest do
       assert %{status: "running"} = row(fixture)
       assert Process.alive?(fixture.pid)
     end
+
+    @tag :capture_log
+    test "a runner's call at another route whose sealed body is a batch of events", %{url: url} do
+      fixture =
+        AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api), service_id: @service)
+
+      events = Jason.decode!(@vectors["events_report"]["body"])["args"]
+
+      assert {400, %{"error" => "malformed"}} =
+               call(url, fixture, "report_events", events, path: WorkerWire.host_route(:renew))
+
+      assert %{status: "running"} = row(fixture)
+    end
+
+    @tag :capture_log
+    test "a report at the runner_exited route whose body is a batch of events", %{url: url} do
+      fixture =
+        AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api), service_id: @service)
+
+      {header, body} = events_report(@vectors["events_report"]["body"])
+
+      assert {400, %{"error" => "malformed"}} =
+               post(url, WorkerWire.host_route(:runner_exited), [header], body)
+
+      assert %{status: "running"} = row(fixture)
+    end
   end
 
   describe "the rest of a body over the bound" do
@@ -1116,7 +1142,7 @@ defmodule Opus.HostListenerTest do
 
       assert Enum.map(vectors, & &1["error"]) ==
                ~w(unknown_version unknown_version unknown_version malformed malformed malformed
-                  malformed)
+                  malformed malformed)
 
       for %{"name" => name, "body" => json, "error" => error} <- vectors do
         fields = fields(fixture, [])
@@ -1168,9 +1194,9 @@ defmodule Opus.HostListenerTest do
     end
 
     @tag :capture_log
-    test "one signed batch of all nine is emitted through the listener, each as the vector " <>
-           "says; its replay is refused 401; one record off the roster refuses the batch 400 " <>
-           "whole, nothing of it emitted",
+    test "one signed batch of all nine is emitted, each as the vector says; its replay is " <>
+           "refused 401; one record off the roster, or another report's route, refuses it 400 " <>
+           "whole",
          %{url: url} do
       report = @vectors["events_report"]
       {header, body} = events_report(report["body"])
@@ -1202,6 +1228,14 @@ defmodule Opus.HostListenerTest do
 
       assert {400, %{"v" => 3, "error" => off["error"]}} ==
                post(url, WorkerWire.host_route(:report_events), [off_header], off_body)
+
+      # The batch is read at its own route alone.
+      other = report["other_route"]
+      {other_header, other_body} = events_report(report["body"])
+      route = WorkerWire.host_route(String.to_existing_atom(other["route"]))
+
+      assert {400, %{"v" => 3, "error" => other["error"]}} ==
+               post(url, route, [other_header], other_body)
 
       refute_received {:runner_event, _event, _measurements, _metadata}
     end

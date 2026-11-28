@@ -18,11 +18,14 @@ defmodule Locus.Runtime.Events do
   its call; one batch is in flight at a time, posted from a process of
   its own, so the forwarder never waits on CYFR. A batch whose answer
   was lost is not sent again: it may have arrived, and an event counted
-  twice misleads more than one missed. A batch that reached no
-  connection stays at the head of the queue and is sent again a second
-  later. The queue holds at most #{1_024} events while CYFR cannot be
-  reached, the oldest dropped first, and the forwarder logs once, when a
-  batch reaches CYFR again, how many it dropped.
+  twice misleads more than one missed; nor is one CYFR refused, and
+  either is logged once, here. A batch known not to have been emitted,
+  one that reached no connection or one the answering member refused
+  `unavailable` because it does not hold the control plane, stays at the
+  head of the queue and is sent again a second later. The queue holds at
+  most #{1_024} events while CYFR cannot be reached, the oldest dropped
+  first, and the forwarder logs once, when a batch reaches CYFR again,
+  how many it dropped.
 
   The worker service tells it which service and boot it posts for, and
   with which credentials (`serve/3`), as it starts; nothing is posted
@@ -165,12 +168,15 @@ defmodule Locus.Runtime.Events do
     %{state | sending: {task.ref, batch}, queue: queue, held: :queue.len(queue), timer: nil}
   end
 
-  # A batch that reached no connection goes back to the queue's head,
-  # under the bound, and goes again after the wait. One that reached CYFR,
-  # or whose answer was lost, is done: it is never sent again. Events
-  # dropped while CYFR could not be reached are said once, as a batch
-  # reaches it again.
-  defp sent(state, batch, {:error, :unsent}) do
+  # A batch known not to have been emitted, one that reached no connection
+  # or one a member that does not hold the control plane answered
+  # `unavailable`, goes back to the queue's head, under the bound, and
+  # goes again a wait after its answer, on the one timer. One that CYFR
+  # emitted, refused, or whose answer was lost, is done: it is never sent
+  # again, and one not emitted is logged here, once. Events dropped while
+  # CYFR could not be reached are said once, as a batch reaches it again.
+  defp sent(state, batch, {:error, unemitted}) when unemitted in [:unsent, :unavailable] do
+    if state.timer, do: Process.cancel_timer(state.timer)
     queue = :queue.join(batch, state.queue)
     state = within_bound(%{state | queue: queue, held: :queue.len(queue)})
     %{state | timer: Process.send_after(self(), :flush, state.flush_ms)}

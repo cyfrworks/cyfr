@@ -62,6 +62,9 @@ image's `tests/locus-runtime-image/runners.py` and
 | `http_probe` | reagent, catalyst, formula | imports `wasi:http/outgoing-handler` and the types it names; refused at instantiation, no type being given `wasi:http` |
 | `many_tables` | reagent | defines eleven tables over three core instances, one past the store's bound, the eleventh in the last |
 | `many_instances` | reagent | makes eleven core instances, one past the store's bound |
+| `atomic_fence` | reagent | `wide_arithmetic` with one `atomic.fence`; refused for the threads feature |
+| `shared_memory` | reagent | answers its input beside a shared memory it never touches; refused for the threads feature |
+| `big_integer` | reagent | answers its input's length in nines, an integer that many digits long, for the bound CYFR's reader holds an integer to |
 
 ## Rebuilding
 
@@ -73,8 +76,9 @@ of its custom sections, given its world's WIT from `wit/` and made a
 component; a `.wat` that is a whole component is parsed as it stands. The
 component records the version of the tool that made it, so another version
 gives other bytes. `build.sh --check` compares a fresh build with what is
-checked in, and `scripts/check-test-wasm.sh` runs it. Rebuild whenever a
-`.wat` changes or the pin moves, and record what the build prints below.
+checked in, and the digests recorded below with the checked-in files, and
+`scripts/check-test-wasm.sh` runs it. Rebuild whenever a `.wat` changes or
+the pin moves, and record what the build prints below.
 
 ```sh
 apps/locus/test/support/runtime/test_wasm/hostile/build.sh           # build and write
@@ -158,4 +162,10 @@ many_tables.wat            sha256:8a6448ac9fac65592ce3b02c8ac07ceea24ed389cc3c3f
 many_tables.wasm           sha256:ba7ddd71d39968a164bc3b8178565601f865f4f02dc231f96c882afef3463bd1
 many_instances.wat         sha256:59677aabb4f588901701ccc0d1ed73226bd2b36cdb8abf69aedc1e0292b0e933
 many_instances.wasm        sha256:93a008197df90a1250c4b8bcb573139799673db18671323e80de9298734b2030
+atomic_fence.wat           sha256:f839da2580a7c1ec9463c56124ed0fd67cc5878b99025e5670ac2f53be63e67a
+atomic_fence.wasm          sha256:a7218d294ad5c2158eab5484cc1e218a230599d0fdb8bd05058e12a430b1e97b
+shared_memory.wat          sha256:c13556388ed9dd6f306fb1862fdafed62f24adfd1fdb0a67ad5e916d4b777b7d
+shared_memory.wasm         sha256:d1049f0a76004de1d4b7970ce9811a45876d4ca8fa0444b5f6cb5be9c39256ee
+big_integer.wat            sha256:053ac512ebb1119d545d6133548007c81eace73fe8353d963006e47ab1c7584f
+big_integer.wasm           sha256:31d642e406c2464fd2ab2c1ed10df1e14c710ab5680db3abf563202fb2c4976f
 ```

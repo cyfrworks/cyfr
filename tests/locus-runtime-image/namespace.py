@@ -53,7 +53,7 @@ runner's own uid, outside that namespace, may not):
   as AF_VSOCK; on x86_64 its 32-bit socketcall of AF_VSOCK makes no socket,
   and under the profile alone, outside any space, a 32-bit socketcall of
   AF_INET or AF_VSOCK is killed, as every 32-bit call is.
-- `measure`: one real runner, the release's own runner command with its
+- `measure`: one real runner, the image's `/usr/local/bin/cyfr-runner` with its
   control channel and relay as the shipped service spawns it, its attach
   connection served by this machine as its worker service: its place is
   `warm` and no athanor's; once the keeper has read its group, a measure

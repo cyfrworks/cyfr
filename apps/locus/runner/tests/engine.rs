@@ -168,20 +168,27 @@ fn the_engine_itself_refuses_every_refused_feature() {
     // not the classifier, is what refuses it.
     let v = support::fixture("component_features.json");
     let engine = wasmtime::Engine::new(&engine::config()).expect("the engine");
-    let mut refused = Vec::new();
+    let mut refused: Vec<String> = Vec::new();
     for case in cases(&v["cases"], "cases") {
         let Some(feature) = case.get("feature") else {
             continue;
         };
         let compiled = wasmtime::component::Component::new(&engine, case_bytes(case));
-        assert!(compiled.is_err(), "the engine compiled the {feature} guest");
-        refused.push(text(feature).to_owned());
+        assert!(
+            compiled.is_err(),
+            "the engine compiled the {feature} guest {}",
+            case["path"]
+        );
+        // A feature may have more than one guest, each after the last.
+        if refused.last().map(String::as_str) != Some(text(feature)) {
+            refused.push(text(feature).to_owned());
+        }
     }
-    let nine: Vec<String> = engine::REFUSED
+    let every: Vec<String> = engine::REFUSED
         .iter()
         .map(|(name, _)| (*name).to_owned())
         .collect();
-    assert_eq!(refused, nine);
+    assert_eq!(refused, every);
 }
 
 #[tokio::test(start_paused = true)]

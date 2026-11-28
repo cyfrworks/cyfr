@@ -5,10 +5,12 @@
 //! arrives, as `super::http` reads, pins and sends a fetch's.
 //!
 //! - `request(json)` answers `{"handle": h}` once the request is sent, or
-//!   its refusal. At most `MAX_STREAMS` are open at once, and none past
-//!   the relay's `crate::relay::MAX_FETCHES`, which counts a stream closed
-//!   until its answer has drained (`stream_limit` for either). A stream's
-//!   request takes no `multipart`.
+//!   its refusal: a fetch's, but `stream_error` for a request whose method
+//!   or URL is no text, or whose body is neither text nor null, which a
+//!   fetch answers `invalid_request`. At most `MAX_STREAMS` are open at
+//!   once, and none past the relay's `crate::relay::MAX_FETCHES`, which
+//!   counts a stream closed until its answer has drained (`stream_limit`
+//!   for either). A stream's request takes no `multipart`.
 //! - `read(h)` answers the next piece of the answer as `{"data", "done"}`,
 //!   with `"status"` once the answer has begun, waiting at most
 //!   `READ_WAIT` for one and answering `"data": ""` when none arrived; an

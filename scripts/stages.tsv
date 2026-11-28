@@ -62,6 +62,7 @@ handoff	js	1	900	-	apps/cyfr/assets/**,seed/**	(cd apps/cyfr/assets && npm ci --
 handoff	desktop-js	1	1500	-	apps/codex/desktop/**,apps/codex/internal/desktop/assets/**,apps/cyfr/assets/account/**,tests/fixtures/desktop-process.json,tests/fixtures/sign_in.json,tests/desktop-proof/**,tests/setup-proof/**	(cd apps/codex/desktop && npm ci --ignore-scripts --no-audit --no-fund && npm test) && bash tests/setup-proof/app-cleanup-test.sh && bash tests/desktop-proof/client-image-test.sh
 handoff	stage-test	1	600	-	scripts/stage.sh,scripts/stages.tsv,scripts/lib/stage-chain.sh,scripts/lib/stage-deps.sh,scripts/lib/contain.sh,scripts/nightly.sh,scripts/lib/nightly.py,tests/stage-test.sh,tests/handle-proof/run.sh,.github/workflows/**	bash tests/stage-test.sh
 handoff	run-names-test	-	600	-	scripts/lib/run-names.sh,tests/run-names-test.sh	bash tests/run-names-test.sh
+handoff	runner-pair-test	-	600	-	scripts/runner.sh,tests/runner-pair-test.sh	bash tests/runner-pair-test.sh
 handoff	image-test	-	600	-	scripts/image.sh,tests/image-stub.sh,tests/image-test.sh	bash tests/image-test.sh
 handoff	apt-key-test	-	600	-	scripts/apt-key.sh,tests/apt-key-test.sh,tests/apt-key-archive.py,tests/apt-key-release/**	bash tests/apt-key-test.sh
 handoff	janitor-test	1	900	-	scripts/janitor.sh,scripts/image.sh,scripts/lib/run-names.sh,tests/image-stub.sh,tests/janitor-test.sh,tests/install-screen-proof/prepare.sh,tests/install-screen-proof/base-image.sh	bash tests/janitor-test.sh

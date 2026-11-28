@@ -1626,15 +1626,23 @@ defmodule Opus.Attempt do
     end
   end
 
+  # A close's answer carries the failure as recorded to its runner, which
+  # hands a child's to the formula awaiting it: redacted of credential
+  # shapes as every sentence a guest is answered is (`Prima.Sanitizer`).
+  # The row keeps the component's own words, masked.
   defp completed_answer({:ok, %{output: output}}), do: {:ok, output}
 
   defp completed_answer({:error, message}) when is_binary(message),
-    do: {:error, {:failed, message}}
+    do: {:error, {:failed, Prima.Sanitizer.sanitize(message)}}
 
   defp completed_answer({:error, _typed}), do: {:error, {:failed, "Execution failed"}}
 
-  defp failed_answer({:error, message}) when is_binary(message), do: {:ok, message}
-  defp failed_answer({:error, {:uncertain, message}}) when is_binary(message), do: {:ok, message}
+  defp failed_answer({:error, message}) when is_binary(message),
+    do: {:ok, Prima.Sanitizer.sanitize(message)}
+
+  defp failed_answer({:error, {:uncertain, message}}) when is_binary(message),
+    do: {:ok, Prima.Sanitizer.sanitize(message)}
+
   defp failed_answer(_result), do: {:ok, "Execution failed"}
 
   defp emit_delta(state, emit, %Delta{} = delta) do

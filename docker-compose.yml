@@ -330,7 +330,7 @@ services:
     # /tmp, /var/tmp or /dev/shm. Each role's spawns' homes, a mount of the
     # role's own: each spawn's uid creates its own 0700 home there holding
     # its temporary files (a build's sources, Cargo home, npm cache and
-    # target, a runner's VM's files, a program's npx cache); mode 1733 lets
+    # target, a runner's files, a program's npx cache); mode 1733 lets
     # it create one without listing the others, and spawns run from there,
     # so it allows exec. What a spawn writes to its home counts against its
     # memory bound, and the mount's size bounds what all of a role's spawns

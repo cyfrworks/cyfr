@@ -44,7 +44,8 @@ defmodule Locus.Runtime.WorkerServiceTest do
   alias Locus.Runtime.Test.{Runners, ScriptedHost, ScriptedKeeper}
   alias Locus.Runtime.{RunnerPool, RunnerProcess, WorkerService}
 
-  # A runner is a VM booting from nothing: its first host call takes seconds.
+  # A runner's host calls, bounded for a loaded host: its process starts
+  # and compiles its component before the calls that follow its attach.
   @boot_ms 30_000
 
   setup tags do
@@ -746,10 +747,35 @@ defmodule Locus.Runtime.WorkerServiceTest do
     end
   end
 
+  describe "the watch" do
+    @describetag :scripted
+
+    test "of a deadline further off than a timer waits is held to the longest a subtree runs " <>
+           "and the grace, and the service holds the runner",
+         context do
+      service = Process.whereis(WorkerService)
+      # About the latest deadline the wire carries, 2^53 - 1 ms after the
+      # epoch, a minute short of it: past what a timer can wait.
+      far = 9_007_199_254_740_991 - System.system_time(:millisecond) - 60_000
+      assert_raise ArgumentError, fn -> Process.send_after(self(), :never, far) end
+      {root, _runner} = started!(Map.put(context, :timeout_ms, far))
+      assert root.execution_id in Enum.map(assignments(), & &1.execution_id)
+      assert Process.whereis(WorkerService) == service
+
+      {:ok, longest} = Prima.Limits.parse_duration(Prima.Limits.Ceiling.lowered(%{}).timeout)
+      bound = longest + Locus.Runtime.Settings.pool!().watchdog_grace_ms
+      [%{watch_timer: timer}] = assignments()
+      left = Process.read_timer(timer)
+      assert left <= bound and left > bound - 60_000
+    end
+  end
+
   # A subtree started on a runner of the scripted keeper: the attempt and
-  # the runner's spawn, whose channel the test writes and reads.
+  # the runner's spawn, whose channel the test writes and reads; the
+  # context's `:timeout_ms`, when given, is the attempt's.
   defp started!(context) do
-    attempt = ScriptedHost.attempt!(context.host, boot: context.boot)
+    timeout = Map.take(context, [:timeout_ms]) |> Keyword.new()
+    attempt = ScriptedHost.attempt!(context.host, [boot: context.boot] ++ timeout)
     assert :ok = start(attempt)
 
     spawn =

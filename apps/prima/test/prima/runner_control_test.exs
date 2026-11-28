@@ -135,6 +135,7 @@ defmodule Prima.RunnerControlTest do
       assert RunnerControl.version() == @vectors["version"]
       assert RunnerControl.max_line_bytes() == @vectors["max_line_bytes"]
       assert RunnerControl.max_input_bytes() == @vectors["max_input_bytes"]
+      assert RunnerControl.max_input_depth() == @vectors["max_input_depth"]
       assert RunnerControl.max_open() == @vectors["max_open"]
     end
 
@@ -231,6 +232,15 @@ defmodule Prima.RunnerControlTest do
       assert RunnerControl.max_event_line_bytes() == events["max_line_bytes"]
       assert RunnerControl.max_event_string_bytes() == events["max_string_bytes"]
       assert RunnerControl.max_event_line_bytes() < RunnerControl.max_line_bytes()
+    end
+
+    test "a runner's budget of events is the fixture's: a burst of at least one batch, and a " <>
+           "rate a second no larger" do
+      budget = @vectors["events"]["budget"]
+      assert RunnerControl.event_burst() == budget["burst"]
+      assert RunnerControl.events_per_second() == budget["per_second"]
+      assert RunnerControl.event_burst() >= HostAPI.max_report_events()
+      assert RunnerControl.events_per_second() <= RunnerControl.event_burst()
     end
 
     test "the roster is the codec's, event by event and member by member in wire order" do

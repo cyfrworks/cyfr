@@ -39,7 +39,27 @@ defmodule Cyfr.Telemetry.Catalog do
   roster of `Prima.RunnerControl`, which its worker service forwards in
   batches and the control plane emits as they arrive
   (`Opus.Host.RunnerEvents`), for the operator's own attach.
+
+  A runner's event is its word, bounded by its worker service, which
+  CYFR does not check again: the service forwards one only when every
+  execution it names (`execution_id`, `parent_execution_id`) is of the
+  subtree the runner holds or held last, and within the runner's budget
+  (`Prima.RunnerControl.event_burst/0` at once, regaining
+  `Prima.RunnerControl.events_per_second/0` a second), and drops the
+  rest, logging how many as the runner's handle ends. Every other string
+  in its metadata (a reference, a tool's action, a host name) is a
+  guest's, cut to `Prima.RunnerControl.max_event_string_bytes/0` bytes,
+  and may carry any byte. The forwarder sends them in batches of at most
+  `Prima.HostAPI.max_report_events/0`, one in flight, and holds at most
+  1,024 while CYFR cannot take them, the oldest dropped first; a batch
+  whose answer was lost is not sent again, and one the answering member
+  refused `unavailable`, because it does not hold the control plane, is
+  kept and sent again. So an attach may miss events.
   """
+
+  # What every note of a runner's operator event adds: the Emitters
+  # paragraph says how the event is bounded.
+  @runner_word "; the runner's word, bounded by its worker service (Emitters, above)"
 
   @listed %{
     # ——— audit plane ———
@@ -276,7 +296,7 @@ defmodule Cyfr.Telemetry.Catalog do
       note:
         "every WASM entry in a runner names the execution and the reference it runs; the " <>
           "control plane holds the authority itself, by the execution, from the assignment " <>
-          "it signed"
+          "it signed" <> @runner_word
     },
     [:cyfr, :opus, :execution_events, :broadcast_failure] => %{
       consumers: [:operator],
@@ -364,19 +384,21 @@ defmodule Cyfr.Telemetry.Catalog do
     # ——— guest activity (high-frequency observability) ———
     [:cyfr, :locus, :runtime, :http, :request] => %{
       consumers: [:operator],
-      note: "guest egress activity; bounded and consented elsewhere, kept for operator metrics"
+      note:
+        "guest egress activity; bounded and consented elsewhere, kept for operator metrics" <>
+          @runner_word
     },
     [:cyfr, :locus, :runtime, :storage, :call] => %{
       consumers: [:operator],
-      note: "guest storage activity, kept for operator metrics"
+      note: "guest storage activity, kept for operator metrics" <> @runner_word
     },
     [:cyfr, :locus, :runtime, :mcp_tool, :call] => %{
       consumers: [:operator],
-      note: "guest tool-call activity, kept for operator metrics"
+      note: "guest tool-call activity, kept for operator metrics" <> @runner_word
     },
     [:cyfr, :locus, :runtime, :formula, :spawn] => %{
       consumers: [:operator],
-      note: "formula concurrency activity, kept for operator metrics"
+      note: "formula concurrency activity, kept for operator metrics" <> @runner_word
     },
     [:cyfr, :opus, :emit] => %{
       consumers: [:operator],
@@ -384,19 +406,19 @@ defmodule Cyfr.Telemetry.Catalog do
     },
     [:cyfr, :locus, :runtime, :formula, :cancel] => %{
       consumers: [:operator],
-      note: "formula concurrency activity, kept for operator metrics"
+      note: "formula concurrency activity, kept for operator metrics" <> @runner_word
     },
     [:cyfr, :locus, :runtime, :formula, :await] => %{
       consumers: [:operator],
-      note: "formula concurrency activity, kept for operator metrics"
+      note: "formula concurrency activity, kept for operator metrics" <> @runner_word
     },
     [:cyfr, :locus, :runtime, :formula, :await_any] => %{
       consumers: [:operator],
-      note: "formula concurrency activity, kept for operator metrics"
+      note: "formula concurrency activity, kept for operator metrics" <> @runner_word
     },
     [:cyfr, :locus, :runtime, :formula, :await_all] => %{
       consumers: [:operator],
-      note: "formula concurrency activity, kept for operator metrics"
+      note: "formula concurrency activity, kept for operator metrics" <> @runner_word
     },
 
     # ——— schedules ———

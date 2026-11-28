@@ -7,8 +7,9 @@ defmodule Locus.Runtime.RunnerControlVectorsTest do
   vectors (`tests/fixtures/runner_control.json`, which the runner's crate
   plays as the runner, `apps/locus/runner/tests/vectors.rs`): the
   service's handle (`Locus.Runtime.RunnerProcess`) hears every valid line
-  the runner sends, forwards every valid event to the forwarder of its
-  runner's events and none to its owner, refuses a line the service sends
+  the runner sends, forwards every valid event of the subtree it holds to
+  the forwarder of its runner's events and none to its owner, refuses a
+  line the service sends
   echoed back to it and every invalid line, events among them, with the
   fixture's reason, a protocol failure that retires the runner, and holds a line to
   the fixture's `max_line_bytes`: a partial line of exactly that many
@@ -121,6 +122,18 @@ defmodule Locus.Runtime.RunnerControlVectorsTest do
          %{handle: handle, spawn: spawn} do
       events = @vectors["events"]["valid"] ++ @vectors["events"]["cut"]
       assert events != []
+
+      # The runner holds the subtree of the vectors' assign, whose root is
+      # the execution every event vector names: an event is forwarded only
+      # for what its runner holds.
+      [assign] =
+        for %{"message" => %{"type" => "assign"}} = vector <- valid("service"), do: vector
+
+      {:ok, %{assignment: token, input: input, keys: keys}} = RunnerControl.decode(line(assign))
+      deadline = System.monotonic_time(:millisecond) + 5_000
+
+      assert :ok =
+               RunnerProcess.assign(handle, token, input, keys, "http://127.0.0.1:1", deadline)
 
       for vector <- events do
         :ok = ScriptedKeeper.write(spawn, vector["line"])

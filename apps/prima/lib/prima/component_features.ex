@@ -7,23 +7,27 @@ defmodule Prima.ComponentFeatures do
   refuses one that does. Every component is validated with them turned
   off before it is stored as runnable (`Prima.Wasm.validate/1,2`, which
   the registry's publish and registration and both builders call), by
-  the pinned `wasm-tools` (`scripts/wasm-tools.sh`), and again by the
-  runner before it compiles one (`apps/locus/runner`, its `engine`
-  module), with the same features off in the wasmparser of its own
-  Wasmtime, whose engine refuses them besides. `wasm-tools`' wasmparser
-  is the engine's own release (0.263, which Wasmtime 51.0.0 and
-  wasm-tools 1.263.0 both use), so both decode the async canonical
-  options and builtins alike, and `tests/fixtures/component_features.json`
-  holds the two checks to the same answers. The check before a compile
-  is what holds a component stored before the admission checks existed:
-  no stored row runs a refused feature.
+  the pinned `wasm-tools` (`scripts/wasm-tools.sh`), and again when the
+  runner compiles one (`apps/locus/runner`, its `engine` module): its
+  engine is configured with every refused feature off, so its compile
+  refuses a component that uses one, and only then does the runner
+  validate the component as `check/1` does, to name that refusal in
+  this module's sentence. `wasm-tools`' wasmparser is the engine's own
+  release (0.263, which Wasmtime 51.0.0 and wasm-tools 1.263.0 both
+  use), so both decode the async canonical options and builtins alike,
+  and `tests/fixtures/component_features.json` holds the two to the
+  same answers. The refusal at compile is what holds a component stored
+  before an admission check existed: no stored row runs a refused
+  feature.
 
   ## Admission policy
 
-  The engine (Wasmtime 51.0.0, the runner's) turns on `gc`,
-  `gc-types`, `exceptions` and `cm-async` by default; the other five are
-  a variant of one of those or build on it, and the engine leaves them
-  off, so refusing them here keeps the validator's answer and the
+  Wasmtime 51.0.0's defaults turn on `gc`, `gc-types`, `exceptions`,
+  `cm-async` and `threads`; the runner builds its engine without
+  Wasmtime's `gc`, `component-model-async` and `threads` features and
+  turns each of these off by name, so none is on there. The other five
+  are a variant of one of those or build on it, and the engine leaves
+  them off, so refusing them here keeps the validator's answer and the
   engine's the same. The advisories these refusals once answered
   (GHSA-32h6-97mm-8q3c, GHSA-cfhf-m2cr-62wj, GHSA-hw8m-q44c-ggrf) are
   fixed in that Wasmtime; what holds each refusal now is its own merit:
@@ -43,6 +47,11 @@ defmodule Prima.ComponentFeatures do
       one: Wasmtime published nine advisories against its callbacks,
       streams, futures and event loop between 2026-10-02 and 2026-11-16,
       most of them a host panic.
+    * Threads (`threads`: atomic instructions and shared memories): a
+      run is one guest on one thread, which the runner gives no second
+      thread, and an atomic wait on a shared memory parks the thread it
+      runs on where the run's budget, an epoch deadline, cannot end it,
+      which is what the runner exists to prevent.
 
   Wide arithmetic (`wide-arithmetic`: `i64.add128`, `i64.sub128`,
   `i64.mul_wide_s`, `i64.mul_wide_u`) is admitted. The engine turns it on
@@ -80,7 +89,8 @@ defmodule Prima.ComponentFeatures do
   @families [
     async: ~w(cm-async cm-async-stackful cm-more-async-builtins cm-error-context cm-threading),
     gc: ~w(gc gc-types),
-    exceptions: ~w(exceptions legacy-exceptions)
+    exceptions: ~w(exceptions legacy-exceptions),
+    threads: ~w(threads)
   ]
 
   @refused Enum.flat_map(@families, &elem(&1, 1))
