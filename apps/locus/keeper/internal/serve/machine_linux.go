@@ -245,6 +245,14 @@ func (s *server) machineFor(r *role, athanor string) *machine {
 // place names any more and never booted goes with it.
 func (s *server) unplaced(m *machine) {
 	m.places--
+	s.forgetUnbooted(m)
+}
+
+// forgetUnbooted lets m go, with s.mu held, where no place names it and no
+// VM of it runs or boots: its place leaves the ledger and the person's map,
+// so nothing of it is charged or found again. A boot that ends with its
+// places gone lets it go so (bootMachine).
+func (s *server) forgetUnbooted(m *machine) {
 	if m.places > 0 || m.vm != nil || m.booting {
 		return
 	}
@@ -264,13 +272,17 @@ func (s *server) unplaced(m *machine) {
 // bootMachine boots m unless it runs, within machineBootWait, and answers
 // the code its session is refused with: the device not made, the VMM not
 // started, its route not made or its relay unheard (CodeUnavailable, or
-// CodeGuardUnavailable for the route).
+// CodeGuardUnavailable for the route). Only a VM a place of the person's
+// names is booted: one whose places went, while its boot was asked or
+// waited for the last VM's release, is not, and one whose places went as
+// it booted and failed is let go (forgetUnbooted).
 func (s *server) bootMachine(m *machine, at keptAt, r *role) string {
 	m.bootMu.Lock()
 	defer m.bootMu.Unlock()
 	s.mu.Lock()
 	running, ending := m.vm != nil, m.ending
-	if !running && !ending {
+	unplaced := s.vms[m.athanor] != m || m.places == 0
+	if !running && !ending && !unplaced {
 		m.booting = true
 	}
 	prev := m.prev
@@ -280,10 +292,14 @@ func (s *server) bootMachine(m *machine, at keptAt, r *role) string {
 		return protocol.CodeUnavailable
 	case running:
 		return ""
+	case unplaced:
+		s.log.Warn("the VM of a person's disk of uid %d is not booted: no place of theirs names it now", at.uid)
+		return protocol.CodeUnavailable
 	}
 	defer func() {
 		s.mu.Lock()
 		m.booting = false
+		s.forgetUnbooted(m)
 		s.mu.Unlock()
 	}()
 	if prev != nil {
@@ -293,6 +309,13 @@ func (s *server) bootMachine(m *machine, at keptAt, r *role) string {
 			s.log.Warn("the VM of a person's disk of uid %d did not boot: their last VM was not yet released", at.uid)
 			return protocol.CodeUnavailable
 		}
+	}
+	s.mu.Lock()
+	unplaced = m.places == 0
+	s.mu.Unlock()
+	if unplaced {
+		s.log.Warn("the VM of a person's disk of uid %d is not booted: no place of theirs names it now", at.uid)
+		return protocol.CodeUnavailable
 	}
 	// The image is given its VM only as its uid's alone: the stage's bind
 	// of a file follows a link at its source.
