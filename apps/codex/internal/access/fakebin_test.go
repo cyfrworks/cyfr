@@ -122,6 +122,14 @@ func childEnv(extra ...string) []string {
 	return append(append(os.Environ(), "GORACE="+race), extra...)
 }
 
+// childEngine is the engine of a test binary re-exec'd as a holder or a
+// taker, reachable for as long as the process lives. The lock is the
+// engine's open file: a child that takes the lock and then only waits
+// reaches its engine no more, and a collection would close the file, so
+// the kernel would let the lock go under a child still standing as its
+// holder.
+var childEngine *Engine
+
 // holderMain is a cyfr command in a process of its own, its docker the
 // fake model in ACCESS_HOLDER_STATE, else the real one: `DIR READY lock`
 // takes the lock and waits; `DIR READY docker ARGS…` then runs one docker
@@ -138,6 +146,7 @@ func holderMain(args []string) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
+	childEngine = e
 	if state := os.Getenv("ACCESS_HOLDER_STATE"); state != "" {
 		binaryDocker(e, state)
 	} else {
