@@ -2801,6 +2801,37 @@ defmodule Aqua.CrewTest do
 
     @closed {:error, {:conflict, "This question is no longer open."}}
 
+    test "Aqua's own final row, written by its model through the model writer, gives buttons",
+         %{ctx: ctx} do
+      script!([{:hold, self()}])
+      {:ok, today} = Aqua.Day.current(ctx)
+
+      assert {:ok, %{admitted: :turn, turn_id: turn_id}} =
+               Runner.send_message(ctx, today.id, "export the notes")
+
+      assert_receive {:scripted_probe, player, _execution}, 30_000
+      :ok = ScriptedWorker.script([reply("Pick one.\n\n" <> block(turn_id))])
+      send(player, :continue)
+      await_status(ctx, turn_id, "completed")
+
+      [final] =
+        Enum.filter(rows(ctx, today.id), &(&1.turn_id == turn_id and &1.sent_by == "aqua"))
+
+      assert is_binary(Tape.payload(final)["step_id"])
+
+      assert {:ok,
+              %{
+                row: final.id,
+                prose: "Pick one.",
+                question: "Which database should the export target?",
+                choices: ["PostgreSQL", "SQLite"],
+                asker: "aqua",
+                open?: true,
+                file: nil,
+                file_state: nil
+              }} == Aqua.Choices.read(ctx, final)
+    end
+
     test "the room's copy of a member's final row gives buttons; a copy cut at the delivery's " <>
            "32 KiB does not, either side of it, and neither does Aqua's copy of the block",
          %{ctx: ctx} do
