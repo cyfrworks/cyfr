@@ -116,6 +116,63 @@ func TestWithNoHoldTheVMAtRestLongestGivesWay(t *testing.T) {
 	}
 }
 
+// A VM busy past its idle bound does not end idle while its last session is
+// leaving it: the session leaves the VM's sessions before its place leaves
+// the ledger, so the VM is never at rest with its boot's idle time. Held at
+// the VM's route, the release keeps its place and the sweep leaves the VM
+// standing; once the session has left, the VM's idle time starts then.
+func TestAVMDoesNotEndIdleWhileItsLastSessionLeavesIt(t *testing.T) {
+	idleFor(t, time.Hour)
+	k := newVMKeeper(t)
+	k.disk(t, "ath_a", "vlt_a1")
+	id, _ := k.session(t, "s1", "ath_a", "vlt_a1", nil)
+	m := k.machineOfAthanor("ath_a")
+	k.s.mu.Lock()
+	m.idleSince = now().Add(-2 * time.Hour)
+	sp := k.s.spawns[id]
+	k.s.mu.Unlock()
+	// The release is held where its session leaves the VM's sessions, at
+	// the VM's route, past its guest's word on the session.
+	m.reachMu.Lock()
+	held := true
+	defer func() {
+		if held {
+			m.reachMu.Unlock()
+		}
+	}()
+	ms := int64(0)
+	k.s.handle(k.c, &protocol.Request{V: protocol.Version, Type: protocol.TypeRelease, SpawnID: id, GraceMs: &ms})
+	select {
+	case <-sp.guestEnded:
+	case <-time.After(20 * time.Second):
+		t.Fatal("the guest did not release the session within 20 s")
+	}
+	ending := func() bool {
+		k.s.mu.Lock()
+		defer k.s.mu.Unlock()
+		return m.ending
+	}
+	// A bounded check that nothing happens: for half a second the sweep runs
+	// while the release is held, and the VM must stand throughout.
+	for until := time.Now().Add(500 * time.Millisecond); time.Now().Before(until); {
+		k.s.endIdleMachines()
+		if ending() {
+			t.Fatal("the VM ended idle while its last session was leaving it, its idle bound an hour and its session's place gone")
+		}
+		time.Sleep(5 * time.Millisecond) // sleep-ok: a bounded check that the sweep leaves the VM standing meanwhile
+	}
+	m.reachMu.Unlock()
+	held = false
+	k.expect(t, "released")
+	k.s.endIdleMachines()
+	k.s.mu.Lock()
+	idle := now().Sub(m.idleSince)
+	k.s.mu.Unlock()
+	if ending() || idle > time.Minute {
+		t.Fatalf("after its last session left, the VM ended %t, idle for %s: its idle time starts as that session leaves", ending(), idle)
+	}
+}
+
 // A VM held for a folder's operation does not end idle, though it has
 // rested past its bound, nor for an ask to give way; it is idle from the
 // operation's end, so the next sweep after the operation leaves it standing.

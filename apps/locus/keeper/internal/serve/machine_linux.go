@@ -754,13 +754,21 @@ func (s *server) joinMachine(m *machine, sp *spawn) string {
 	return ""
 }
 
-// leaveMachine takes sp out of its VM at its release, and narrows the VM's
-// route to the sessions left (reroute).
-func (s *server) leaveMachine(sp *spawn) {
+// leaveMachine takes sp out of its VM at its release: out of the VM's
+// sessions, the VM's route narrowed to the sessions left (reroute), and only
+// then its place out of the ledger (leave, as left says), so the ledger
+// never counts at rest a VM a session is still leaving, whose idle time
+// would be its last start's: the VM's idle time starts as its last session
+// leaves it. An ended VM is released once every session of it has gone
+// (finishMachine).
+func (s *server) leaveMachine(sp *spawn, left removal) {
 	m := sp.machine
 	if err := s.reroute(m, sp); err != nil && !errors.Is(err, errRouteLost) {
 		s.log.Warn("a person's VM's route still allows a released session's hosts, and is narrowed again at each sweep: %v", err)
 	}
+	s.mu.Lock()
+	s.leave(sp, true, left)
+	s.mu.Unlock()
 	s.finishMachine(m)
 }
 
@@ -1457,10 +1465,7 @@ func (s *server) retireGuest(sp *spawn, grace time.Duration, notify bool) {
 				// A spawn its guest never made is owed no exit.
 				sp.exitOnce.Do(func() {})
 			}
-			s.mu.Lock()
-			s.leave(sp, true, removal{notify: notify})
-			s.mu.Unlock()
-			s.leaveMachine(sp)
+			s.leaveMachine(sp, removal{notify: notify})
 			s.log.Info("spawn %s: released in its person's VM", sp.id)
 			if notify {
 				s.send(sp.client, protocol.NewReleased(sp.id))
