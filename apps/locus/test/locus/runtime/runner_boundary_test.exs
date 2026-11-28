@@ -157,7 +157,7 @@ defmodule Locus.Runtime.RunnerBoundaryTest do
            }
   end
 
-  test "a subtree runs in a runner's VM, completes cleanly, and its runner is reused for its athanor only",
+  test "a subtree runs in a runner's process, completes cleanly, and its runner is reused for its athanor only",
        %{host: host, boot: boot} do
     first = echo!(host, boot, input: %{"hello" => "world"})
     assert :ok = start(first)
