@@ -11,7 +11,7 @@
 # guard reads its mode and its stamp alone.
 set -uo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd -P)
-S=$(mktemp -d "${TMPDIR:-/tmp}/cyfr-runner-pair-test.XXXXXX") || exit 1
+S=$(mktemp -d "${TMPDIR:-/tmp}/${PROOF_RUN_PREFIX:-}cyfr-runner-pair-test.XXXXXX") || exit 1
 S=$(cd "$S" && pwd -P)
 trap 'rm -rf "$S"' EXIT
 
