@@ -37,9 +37,10 @@
 #     its lock page shows: the six words typed with no press in the field
 #     open This box's Prism again. On a box labwc activates that window a
 #     few milliseconds before or after the page loads, by chance; the row
-#     forces the later order, labwc mapping the window unfocused (a rule
-#     the row adds to its own copy of the screen's rc.xml) and the row
-#     activating it (wlrctl), as a person types at a keyboard
+#     forces the later order, labwc mapping the window unfocused and
+#     ignoring its own requests to be focused (a rule the row adds to its
+#     own copy of the screen's rc.xml) and the row activating it (wlrctl),
+#     as a person types at a keyboard
 #
 # No idle row: the idle lock reaches the same lock entry Prism's Lock does
 # (internal/desktop.Service.lockStep; TestEveryLockOnABoxIsOneStep moves
@@ -325,8 +326,11 @@ if [ "${1:-}" = --session ]; then
   }
   # ---- 6: a lock page activated after it loaded takes the words typed ----
   row6() {
-    sed -i 's#<action name="Maximize"/>#<action name="Maximize"/><action name="Unfocus"/>#' "$OUT/labwc/rc.xml" &&
-      grep -q 'name="Unfocus"' "$OUT/labwc/rc.xml" && labwc --reconfigure ||
+    # The window maps unfocused and its own requests to be focused
+    # (xdg-activation) are ignored: only the row's wlrctl activates it.
+    sed -i -e 's#<action name="Maximize"/>#<action name="Maximize"/><action name="Unfocus"/>#' \
+      -e 's#<windowRule identifier="\*" serverDecoration="no">#<windowRule identifier="*" serverDecoration="no" ignoreFocusRequest="yes">#' "$OUT/labwc/rc.xml" &&
+      grep -q 'name="Unfocus"' "$OUT/labwc/rc.xml" && grep -q 'ignoreFocusRequest="yes"' "$OUT/labwc/rc.xml" && labwc --reconfigure ||
       { failed 6 "labwc did not take the rule that maps a window unfocused"; return; }
     within 60 sees "Lock" || { failed 6 "This box's Prism shows no Lock"; return; }
     push "Lock" || { failed 6 "This box's Lock could not be pressed"; return; }
