@@ -791,6 +791,15 @@ def scratch_in_vm(image):
                                                   "|| echo absent"), ("present", "absent"),
                                     "the probe of the disk's record and image") == "absent",
                "a person whose programs are all scratch has no disk: no record and no image")
+        # A new person's first scratch session's start: its disk's record and image made, the programs' device
+        # made or found, and the VM booted, all inside the role's bound on a spawn's answer (15 s).
+        began = time.monotonic()
+        c.mcp(alone, "scratch", key="a")
+        spawned_s = time.monotonic() - began
+        expect(spawned_s < 15, "a scratch-only person's first session is spawned within the role's 15 s bound",
+               f"{spawned_s:.1f} s")
+        print(f"a scratch-only person's first session was spawned in {spawned_s:.1f} s from its open: its disk's record "
+              "and image made, the programs' device made or found, and its VM booted", flush=True)
         guest = scratch_boot(alone, "a")
         record = disk_record(stack, alone)
         stat, folder = image_stat(stack, alone)
