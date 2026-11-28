@@ -11,8 +11,8 @@ defmodule Locus.Runtime.RunnerProcess do
   to start it with, it spawns the runner from its own process, so the
   keeper's messages reach it, and tells its owner what happens as
   `{Locus.Runtime.RunnerProcess, pid, event}`: `:ready` once the channel is
-  attached, `{:message, message}` for each frame the runner sends
-  (`complete` or `exit`; a clean `complete` whose place the keeper did not
+  attached, `{:message, message}` for each frame the runner sends but an
+  `event` (`child`, `complete` or `exit`; a clean `complete` whose place the keeper did not
   make warm again is `{:message, complete, {:error, {:assign, reason}}}`;
   a frame the runner may not send, or a line that is not one, is
   `{:error, {:protocol, reason}}`), `:closed` once the
@@ -67,6 +67,26 @@ defmodule Locus.Runtime.RunnerProcess do
   `{:message, complete, {:error, {:assign, reason}}}`, the completion and
   the end of a runner no longer one to reuse in one event.
 
+  An `event` frame, one operator event the runner reports, goes to the
+  forwarder of every runner's events (`:events`, default
+  `Locus.Runtime.Events`) and not to the owner: it is no part of the
+  runner's work. A frame that is not one, an event off the runner's
+  roster among them, is a protocol failure like any line that does not
+  decode, and the owner retires the runner. An event is the runner's
+  word, so it is forwarded only when every execution it names (its
+  `execution_id`, its `parent_execution_id`) is of the subtree the runner
+  holds now, the root `assign/6` sent it and every child its `child`
+  frames named, or of the one it held last, whose final events may follow
+  its `complete`; one that names none (`http.request`, `storage.call`,
+  `formula.await`) only while the runner holds a subtree; and only within
+  the runner's budget, a burst of `Prima.RunnerControl.event_burst/0`
+  regaining `Prima.RunnerControl.events_per_second/0` a second, so one
+  runner cannot crowd the others out of the forwarder's queue. Any other
+  event, and every event of a runner that has held nothing, is dropped
+  and counted: the first since the count was last logged is logged as it
+  is dropped, and the count as each subtree begins and ends, and as the
+  handle ends.
+
   Guest data never crosses here: control bytes are frames, and the
   runner's own log lines, which the keeper relays, are logged under the
   runner's id. An `assign` carries the attempt's opened keys, so its
@@ -99,6 +119,13 @@ defmodule Locus.Runtime.RunnerProcess do
   # waits this much past it for that answer.
   @assign_answer_ms 500
 
+  # The most executions a hold names: what one report of the subtree's end
+  # can name. The service ends a runner that names more children.
+  @max_held Prima.WorkerWire.max_report_attempts()
+
+  @event_burst RunnerControl.event_burst()
+  @events_per_second RunnerControl.events_per_second()
+
   @doc false
   def child_spec(opts) do
     %{id: __MODULE__, start: {__MODULE__, :start_link, [opts]}, restart: :temporary}
@@ -106,7 +133,10 @@ defmodule Locus.Runtime.RunnerProcess do
 
   @doc """
   Start a handle. Options: `:id`, `:keeper`, `:keeper_opts` (the keeper's
-  options, default none), `:spec` (`t:Locus.Runtime.Keeper.spec/0`), `:owner`.
+  options, default none), `:spec` (`t:Locus.Runtime.Keeper.spec/0`),
+  `:owner`, `:events` (the forwarder of its runner's events, default
+  `Locus.Runtime.Events`), `:clock` (the monotonic milliseconds its
+  events' budget counts by, a function of none, default the system's).
   """
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts)
 
@@ -169,6 +199,7 @@ defmodule Locus.Runtime.RunnerProcess do
   @impl true
   def init(opts) do
     Process.flag(:trap_exit, true)
+    clock = Keyword.get(opts, :clock, &now/0)
 
     {:ok,
      %{
@@ -177,6 +208,7 @@ defmodule Locus.Runtime.RunnerProcess do
        keeper_opts: Keyword.get(opts, :keeper_opts, []),
        spec: Keyword.fetch!(opts, :spec),
        owner: Keyword.fetch!(opts, :owner),
+       events: Keyword.get(opts, :events, Locus.Runtime.Events),
        channel: nil,
        relay: nil,
        binding: nil,
@@ -191,7 +223,17 @@ defmodule Locus.Runtime.RunnerProcess do
        buffer: "",
        closed: false,
        exited: nil,
-       released: false
+       released: false,
+       # The executions of the subtree the runner holds, and of the one it
+       # held last, whose events are its own (`forwarded/2`).
+       holds: nil,
+       held_last: nil,
+       # Its events' budget, the events it has left and when they were
+       # counted on its clock, and the events dropped, by why, since their
+       # count was last logged (`said_dropped/1`).
+       clock: clock,
+       budget: {@event_burst, clock.()},
+       dropped: %{unheld: 0, over: 0}
      }, {:continue, :spawn}}
   end
 
@@ -302,6 +344,7 @@ defmodule Locus.Runtime.RunnerProcess do
 
   @impl true
   def terminate(_reason, state) do
+    state = said_dropped(state)
     _ = release_runner(state, 0)
     :ok
   end
@@ -436,15 +479,20 @@ defmodule Locus.Runtime.RunnerProcess do
       [line, rest] ->
         state = %{state | buffer: rest}
 
-        case RunnerControl.decode(line) do
-          {:ok, %{type: type} = message} ->
-            if RunnerControl.sender(type) == :runner,
-              do: heard(state, message),
-              else: notify(state, {:error, {:protocol, {:not_a_runner_frame, type}}})
+        state =
+          case RunnerControl.decode(line) do
+            {:ok, %{type: type} = message} ->
+              if RunnerControl.sender(type) == :runner do
+                heard(state, message)
+              else
+                notify(state, {:error, {:protocol, {:not_a_runner_frame, type}}})
+                state
+              end
 
-          {:error, reason} ->
-            notify(state, {:error, {:protocol, reason}})
-        end
+            {:error, reason} ->
+              notify(state, {:error, {:protocol, reason}})
+              state
+          end
 
         lines(state)
 
@@ -469,21 +517,128 @@ defmodule Locus.Runtime.RunnerProcess do
       :ok -> notify(state, {:message, message})
       {:error, reason} -> notify(state, {:message, message, {:error, {:assign, reason}}})
     end
+
+    completed(state)
   end
 
-  defp heard(state, message), do: notify(state, {:message, message})
+  defp heard(state, %{type: :event} = event), do: forwarded(state, event)
+
+  defp heard(state, %{type: :child, execution_id: child} = message) do
+    notify(state, {:message, message})
+
+    if state.holds != nil and MapSet.size(state.holds) < @max_held,
+      do: %{state | holds: MapSet.put(state.holds, child)},
+      else: state
+  end
+
+  defp heard(state, %{type: :complete} = message) do
+    notify(state, {:message, message})
+    completed(state)
+  end
+
+  defp heard(state, message) do
+    notify(state, {:message, message})
+    state
+  end
+
+  # The subtree is closed: its executions are the ones held last, so its
+  # final events, which may follow the `complete`, are still its own. What
+  # it dropped is said now.
+  defp completed(%{holds: nil} = state), do: state
+  defp completed(state), do: said_dropped(%{state | holds: nil, held_last: state.holds})
+
+  # An event goes to the forwarder when every execution it names is of
+  # the subtree held now or held last, one naming none only while a
+  # subtree is held, and the runner's budget has an event left; any other
+  # is dropped and counted.
+  defp forwarded(state, event) do
+    if held?(state, event) do
+      case taken_from(state.budget, state.clock.()) do
+        {:ok, budget} ->
+          Locus.Runtime.Events.forward(state.events, event)
+          %{state | budget: budget}
+
+        {:empty, budget} ->
+          dropped(%{state | budget: budget}, :over)
+      end
+    else
+      dropped(state, :unheld)
+    end
+  end
+
+  defp held?(state, %{metadata: metadata}) do
+    case metadata |> Map.take([:execution_id, :parent_execution_id]) |> Map.values() do
+      [] -> state.holds != nil
+      named -> Enum.all?(named, &(of?(state.holds, &1) or of?(state.held_last, &1)))
+    end
+  end
+
+  defp of?(nil, _execution), do: false
+  defp of?(holds, execution), do: MapSet.member?(holds, execution)
+
+  # The budget regains its rate for the time since it was last counted,
+  # up to the burst, and an event takes one.
+  defp taken_from({left, at}, now) do
+    left = min(@event_burst, left + (now - at) * @events_per_second / 1_000)
+    if left >= 1, do: {:ok, {left - 1, now}}, else: {:empty, {left, now}}
+  end
+
+  # The first event dropped since the count was last said is logged as it
+  # is dropped; the rest are counted alone.
+  defp dropped(%{dropped: %{unheld: 0, over: 0}} = state, why) do
+    Logger.warning(
+      "[Locus.Runtime.RunnerProcess] runner #{state.id}: an event was dropped, " <>
+        "#{dropped_for(why)}; how many follows as its subtree begins or ends, or its handle does"
+    )
+
+    %{state | dropped: Map.put(state.dropped, why, 1)}
+  end
+
+  defp dropped(state, why), do: %{state | dropped: Map.update!(state.dropped, why, &(&1 + 1))}
+
+  defp dropped_for(:unheld), do: "not of a subtree it holds"
+
+  defp dropped_for(:over),
+    do: "past its budget of #{@event_burst} at once and #{@events_per_second} a second"
+
+  # How many it dropped, said as each subtree begins, so that a count is
+  # of the subtree or of the wait before it, and as each ends, and as the
+  # handle ends.
+  defp said_dropped(%{dropped: %{unheld: 0, over: 0}} = state), do: state
+
+  defp said_dropped(%{dropped: %{unheld: unheld, over: over}} = state) do
+    Logger.warning(
+      "[Locus.Runtime.RunnerProcess] runner #{state.id}: #{unheld + over} of its events were " <>
+        "dropped, #{unheld} not of a subtree it held and #{over} past its budget of " <>
+        "#{@event_burst} at once and #{@events_per_second} a second"
+    )
+
+    %{state | dropped: %{unheld: 0, over: 0}}
+  end
 
   # Held until the runner attaches, or written once its relay is bound to
-  # the attempt.
-  defp assigned(%{relay: nil} = state, line, binding),
-    do: {:reply, :ok, %{state | binding: binding, pending: [state.pending, line]}}
+  # the attempt. An assign the runner may have read is the subtree it
+  # holds from then on, its root alone until it names children.
+  defp assigned(%{relay: nil} = state, line, binding) do
+    state = %{state | binding: binding, pending: [state.pending, line]}
+    {:reply, :ok, holding(state, binding)}
+  end
 
   defp assigned(state, line, binding) do
     case bind(state.relay, binding) do
-      :ok -> {:reply, written(state.keeper.send(state.channel, line)), state}
-      {:error, reason} -> {:reply, {:error, {:unsent, {:relay, reason}}}, state}
+      :ok ->
+        case written(state.keeper.send(state.channel, line)) do
+          {:error, {:unsent, _reason}} = unsent -> {:reply, unsent, state}
+          answer -> {:reply, answer, holding(state, binding)}
+        end
+
+      {:error, reason} ->
+        {:reply, {:error, {:unsent, {:relay, reason}}}, state}
     end
   end
+
+  defp holding(state, binding),
+    do: said_dropped(%{state | holds: MapSet.new([binding.keys.attempt.execution_id])})
 
   defp taken(state) do
     :ok = state.keeper.taken(state.channel)

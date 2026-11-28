@@ -10,19 +10,19 @@ defmodule Locus.Runtime.Settings do
   declares and reads every variable of the release: the service's
   `LOCUS_RUNTIME_*` names (`Locus.Config.runtime_from_env/1`), which
   `config/locus_runtime.exs` turns into `config :locus, :runtime` on a
-  node boot, and a runner's `RUNTIME_*` names
-  (`Locus.Config.runner/1`).
+  node boot.
 
   ## The pool
 
   The service role reads its pool from `config :locus, :runtime`
   (`pool/2`): how long at most an idle runner is kept for its athanor
   (`:idle_ttl_ms`, 900 000: 15 minutes, the life of the components a
-  runner has compiled, `Locus.Runtime.ComponentCache`, so a runner kept
-  longer compiles them again on its next run; it gives way sooner when
-  the keeper needs its memory or a spawn its uid,
-  `Locus.Runtime.RunnerPool`), how far past its assignment's deadline a runner may live
-  before it halts itself (`:watchdog_grace_ms`, 5 000), how long a
+  runner has compiled, so a runner kept longer compiles them again on its
+  next run; it gives way sooner when the keeper needs its memory or a
+  spawn its uid, `Locus.Runtime.RunnerPool`), how far past its
+  assignment's deadline the service lets a runner hold the subtree before
+  it releases the runner (`:watchdog_grace_ms`, 5 000,
+  `Locus.Runtime.WorkerService`), how long a
   released runner is given to report its open attempts before its
   process group is killed (`:release_grace_ms`, 2 000), which keeper
   starts its runners (`:keeper`, `:channel`: the `cyfr-locus` channel the
@@ -44,12 +44,13 @@ defmodule Locus.Runtime.Settings do
 
   ## A runner
 
-  A runner holds no configuration of its own: the service passes it
-  exactly the environment `runner_environment/1` writes (its role, its
-  ids and its watchdog grace) through the keeper's explicit environment,
-  outside every prefix the keeper refuses in a spawn, and the keeper adds
-  its control and relay descriptors. The runner reads them through
-  `Locus.Config.runner!/0` and nothing else of the release.
+  A runner is the runner program at `runner_command/0`'s path, which the
+  image installs. It holds no configuration of its own: the service
+  passes it exactly the environment `runner_environment/1` writes (its
+  ids) through the keeper's explicit environment, outside every prefix
+  the keeper refuses in a spawn, and the keeper adds its control and
+  relay descriptors (`tests/fixtures/runner_control.json`'s
+  `environment`, which the program's crate reads too).
   """
 
   @pool_defaults %{
@@ -67,15 +68,11 @@ defmodule Locus.Runtime.Settings do
           attach_dir: String.t()
         }
 
-  @typedoc "The runner role's settings, as its environment spells them (`Locus.Config.runner/1`)."
-  @type runner :: %{
-          runner_id: String.t(),
-          service_id: String.t(),
-          boot: String.t(),
-          control_fd: non_neg_integer(),
-          relay: {:fd, 4} | {:socket, String.t()},
-          watchdog_grace_ms: pos_integer()
-        }
+  @typedoc "What a keeper starts a runner with: its argv and the environment beside the keeper's own."
+  @type command :: %{argv: [String.t()], env: %{String.t() => String.t()}}
+
+  # Where the image installs the runner program (`Dockerfile.locus`).
+  @runner_path "/usr/local/bin/cyfr-runner"
 
   @doc """
   The keepers this build knows: `:channel` in every build, and `:direct`
@@ -94,8 +91,7 @@ defmodule Locus.Runtime.Settings do
 
   @doc """
   What the pool setting `key` is when `config :locus, :runtime` leaves it
-  unset, and the watchdog grace a runner takes when its environment
-  names none (`Locus.Config.runner/1`): the one definition of each.
+  unset: the one definition of each.
   """
   @spec default(:idle_ttl_ms | :watchdog_grace_ms | :release_grace_ms) :: pos_integer()
   def default(key), do: Map.fetch!(@pool_defaults, key)
@@ -151,26 +147,29 @@ defmodule Locus.Runtime.Settings do
   end
 
   @doc """
-  The environment a service gives a runner for `settings` (`t:runner/0`
-  minus what the keeper decides): every `RUNTIME_*` variable a runner
-  reads (`Locus.Config.runner/1`) that its service decides, and nothing
-  else, so no name the keeper refuses in a spawn. The keeper adds the
+  How a keeper starts a runner: the runner program at the path the image
+  installs it at, with no argument and no environment of the service's
+  (`t:command/0`), the pool adding `runner_environment/1`'s. The test
+  build's keeper runs the program its checkout built in its place.
+  """
+  @spec runner_command() :: command()
+  def runner_command, do: %{argv: [@runner_path], env: %{}}
+
+  @doc """
+  The environment a service gives a runner: the id it presents in its
+  host calls (`runner_id`), and the worker service and boot it presents
+  from, which an assignment must name (`service_id`, `boot`). Nothing
+  else, so no name the keeper refuses in a spawn; the keeper adds the
   control and relay descriptors. No address of CYFR's is among them: the
   runner reaches CYFR only through its relay.
   """
-  @spec runner_environment(map()) :: %{String.t() => String.t()}
-  def runner_environment(%{
-        runner_id: runner_id,
-        service_id: service_id,
-        boot: boot,
-        watchdog_grace_ms: watchdog_grace_ms
-      }) do
+  @spec runner_environment(%{runner_id: String.t(), service_id: String.t(), boot: String.t()}) ::
+          %{String.t() => String.t()}
+  def runner_environment(%{runner_id: runner_id, service_id: service_id, boot: boot}) do
     %{
-      "RUNTIME_ROLE" => "runner",
       "RUNTIME_RUNNER_ID" => runner_id,
       "RUNTIME_SERVICE_ID" => service_id,
-      "RUNTIME_BOOT_ID" => boot,
-      "RUNTIME_WATCHDOG_GRACE_MS" => Integer.to_string(watchdog_grace_ms)
+      "RUNTIME_BOOT_ID" => boot
     }
   end
 

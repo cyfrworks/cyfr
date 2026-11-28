@@ -1136,7 +1136,7 @@ defmodule Prima.Refusal do
       do:
         {:invalid_argument,
          "The component #{digest} uses a WebAssembly feature this runtime does not admit: " <>
-           "component-model async, GC or exception handling."}
+           "component-model async, GC, exception handling or threads."}
   end
 
   # A component larger than a runner can fetch (`Prima.Wasm`), refused

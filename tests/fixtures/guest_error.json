@@ -1,5 +1,5 @@
 {
-  "comment": "The vectors pinning the error envelope a host function answers a guest across the WIT boundary, and the sentence a runner hands its guest for a refusal. An error is the JSON object {\"error\": {\"type\": <type>, \"message\": <message>}}, its two members strings, and a setup_required error carries one more member, `setup_member`: the machine-readable fix Prima.Remediation.analyze/1 builds from a setup or consent refusal, which CYFR answers a formula's call with beside its sentence and Locus.Runtime.FormulaHandler hands on in the envelope. No error carries any other member; a type is one of component-guide.md's error types. `setup_required` cases are a refusal (`reason`) in and `remediation` out, and the envelope a formula's call answers when CYFR refuses it with that remediation and `message`. `encode_error` cases are Prima.WitResponse.encode_error/2's: `type` and `message` in, the decoded `answer` out, the type given as a string or as the atom of that name, and a message that is not a string normalized to one. `safe_encode` cases are Prima.WitResponse.safe_encode/1's: `data` in, the decoded `answer` out. A value that cannot be encoded answers `fallback`, exactly its `json` text, never a raised error. `render` cases are a named sample of Prima.GuestError.render/1's, not a copy of Prima.Refusal's table: a wire answer passed through, a bare sentence, one refusal of each `class` but confirmation_required, whose sentence is tests/fixtures/confirmation.json's `signal.message`, and terms the vocabulary does not know, which render as null; `reason` in, `sentence` out. A term is written as JSON: a string, number, boolean or null as itself, an array as a list, {\"atom\": name} as an atom, {\"tuple\": [...]} as a tuple, {\"map\": {...}} as a map with string keys, and {\"bytes_base64\": ...} as the bytes it decodes to. The host side reads them now: Prima's test (apps/prima/test/prima/wit_response_vectors_test.exs) plays every case, and Cyfr.DocsDriftTest checks the envelope component-guide.md documents (its Host Functions' Error lines and its Invoke Error Types), its setup_required row's remediation member and its encoding_error row against them; the runtime's test (apps/locus/test/locus/runtime/formula_handler_vectors_test.exs) plays every `setup_required` case through a formula's tool call, and every `encode_error` case of a `storage_` type whose message is a string through a storage call; the guide's error types are held to their producers by that test's fetch error check. The guest side is a seed guest's Rust parser in a shipped, immutable version, and reads them from the next version of a guest that parses the envelope. fetch_types are every error type a runner answers each HTTP interface's call with: `cyfr:http/fetch` a request's, and `cyfr:http/streaming` a stream's own and its request's, which are a fetch's but `http_error`, CYFR's own for an attached stream's upstream alone; an attached request CYFR refuses answers CYFR's own type and sentence besides. Cyfr.DocsDriftTest holds component-guide.md's fetch error line, and its streaming error table with its request refusals, to them, and the Rust runner's crate (apps/locus/runner/tests/vectors.rs) holds every type its HTTP imports answer to them, interface by interface. invoke_types are every error type a formula's `cyfr:formula/invoke` call is answered with: those the runner gives itself (a request that does not read, a task's end, a call that failed) and those CYFR renders for the guest and the runner hands on (a setup or a connection refused, a tool not granted). Compendium.GuideProtocolDriftTest holds component-guide.md's Invoke Error Types table to them and to what Locus.Runtime.FormulaHandler and Opus.Host.Children produce, and the Rust runner's crate holds every type its formula import answers itself to them.",
+  "comment": "The vectors pinning the error envelope a host function answers a guest across the WIT boundary, and the sentence a runner hands its guest for a refusal. An error is the JSON object {\"error\": {\"type\": <type>, \"message\": <message>}}, its two members strings, and a setup_required error carries one more member, `setup_member`: the machine-readable fix Prima.Remediation.analyze/1 builds from a setup or consent refusal, which CYFR answers a formula's call with beside its sentence and the runner's formula import hands on in the envelope. No error carries any other member; a type is one of component-guide.md's error types. `setup_required` cases are a refusal (`reason`) in and `remediation` out, and the envelope a formula's call answers when CYFR refuses it with that remediation and `message`. `encode_error` cases are Prima.WitResponse.encode_error/2's: `type` and `message` in, the decoded `answer` out, the type given as a string or as the atom of that name, and a message that is not a string normalized to one. `safe_encode` cases are Prima.WitResponse.safe_encode/1's: `data` in, the decoded `answer` out. A value that cannot be encoded answers `fallback`, exactly its `json` text, never a raised error. `fetch_refusals` cases are sentences a runner's fetch import refuses a guest's request with in its own words, each naming what the guest's author changes: `request` in, the error's `type` and `message` out. `render` cases are a named sample of Prima.GuestError.render/1's, not a copy of Prima.Refusal's table: a wire answer passed through, a bare sentence, one refusal of each `class` but confirmation_required, whose sentence is tests/fixtures/confirmation.json's `signal.message`, and terms the vocabulary does not know, which render as null; `reason` in, `sentence` out. A term is written as JSON: a string, number, boolean or null as itself, an array as a list, {\"atom\": name} as an atom, {\"tuple\": [...]} as a tuple, {\"map\": {...}} as a map with string keys, and {\"bytes_base64\": ...} as the bytes it decodes to. The host side reads them now: Prima's test (apps/prima/test/prima/wit_response_vectors_test.exs) plays every case, and Cyfr.DocsDriftTest checks the envelope component-guide.md documents (its Host Functions' Error lines and its Invoke Error Types), its setup_required row's remediation member and its encoding_error row against them; the runner's crate plays every `setup_required` case through a formula's tool call (apps/locus/runner/tests/formula.rs) every `encode_error` case of a `storage_` type whose message is a string through a storage call (apps/locus/runner/tests/imports.rs), the `stream_error` case through a stream's request, and every `fetch_refusals` case through a fetch (apps/locus/runner/tests/requests.rs); the guide's error types are held to their producers by that test's fetch error check. The guest side is a seed guest's Rust parser in a shipped, immutable version, and reads them from the next version of a guest that parses the envelope. fetch_types are every error type a runner answers each HTTP interface's call with: `cyfr:http/fetch` a request's, and `cyfr:http/streaming` a stream's own and its request's, which are a fetch's but `http_error`, CYFR's own for an attached stream's upstream alone; an attached request CYFR refuses answers CYFR's own type and sentence besides. Cyfr.DocsDriftTest holds component-guide.md's fetch error line, and its streaming error table with its request refusals, to them, and the Rust runner's crate (apps/locus/runner/tests/vectors.rs) holds the types its HTTP imports answer to be them exactly, interface by interface. invoke_types are every error type a formula's `cyfr:formula/invoke` call is answered with: those the runner gives itself (a request that does not read, a task's end, a call that failed) and those CYFR renders for the guest and the runner hands on (a setup or a connection refused, a tool not granted). invoke_passed_on are those of them CYFR alone renders, which the runner makes none of. Compendium.GuideProtocolDriftTest holds component-guide.md's Invoke Error Types table to them, and what Opus.Host.Children produces within them, and the Rust runner's crate holds the types its formula import answers itself and invoke_passed_on to be them exactly, no type in both.",
   "version": 1,
   "envelope": {"member": "error", "fields": ["type", "message"], "setup_member": "remediation"},
   "fallback": {
@@ -53,15 +53,19 @@
     "setup_required",
     "connection_not_granted",
     "dispatch_error",
-    "spawn_failed",
     "task_failed",
-    "cancel_failed",
     "resource_limit",
     "timeout",
     "tool_denied",
     "encoding_error",
     "uncertain",
     "unknown"
+  ],
+  "invoke_passed_on": [
+    "setup_required",
+    "connection_not_granted",
+    "tool_denied",
+    "encoding_error"
   ],
   "encode_error": [
     {
@@ -75,6 +79,12 @@
       "type": "request_failed",
       "message": "The connection was refused",
       "answer": {"error": {"type": "request_failed", "message": "The connection was refused"}}
+    },
+    {
+      "why": "a streaming request whose method or URL is no text, which no request is made of",
+      "type": "stream_error",
+      "message": "The streaming request could not be served.",
+      "answer": {"error": {"type": "stream_error", "message": "The streaming request could not be served."}}
     },
     {
       "why": "an invoke over its rate",
@@ -117,6 +127,26 @@
       "type": "http_error",
       "message": {"bytes_base64": "/w=="},
       "answer": "fallback"
+    }
+  ],
+  "fetch_refusals": [
+    {
+      "why": "a URL whose scheme is neither http nor https",
+      "request": {"method": "GET", "url": "ftp://api.example.test/file"},
+      "type": "scheme_blocked",
+      "message": "HTTP egress refused: the URL's scheme is ftp, and only http and https URLs are fetched"
+    },
+    {
+      "why": "a URL with a host and no scheme",
+      "request": {"method": "GET", "url": "//api.example.test/file"},
+      "type": "scheme_blocked",
+      "message": "HTTP egress refused: the URL has no scheme, and only http and https URLs are fetched"
+    },
+    {
+      "why": "a body that is neither text nor null, false among them",
+      "request": {"method": "POST", "url": "https://api.example.test/v1", "body": false},
+      "type": "invalid_request",
+      "message": "Invalid body: a string, or null for none"
     }
   ],
   "safe_encode": [

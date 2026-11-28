@@ -3,28 +3,23 @@
 
 defmodule Locus.Runtime do
   @moduledoc """
-  The runtime role of Locus, in either of its forms
-  (`Locus.Runtime.Release.role/0`). `Locus.Application` starts it.
+  The runtime role of Locus. `Locus.Application` starts it.
 
   On a service node that holds the runtime's key, it is one child of
   `Locus.Supervisor`, `Locus.Runtime.Supervisor` (`children/1`), which
   runs the worker service tree (`Locus.Runtime.WorkerService.Tree`: the
-  runner pool with its keeper and the worker service) and the listener
-  CYFR reaches it through. Neither supervisor restarts a child
+  runner pool with its keeper, the forwarder of its runners' operator
+  events and the worker service) and the listener CYFR reaches it
+  through. Neither supervisor restarts a child
   (`Locus.Application.tree_options/0`): the pool holds the account of the
   runners cyfr-locus holds for it, so its end, or any child's, ends the
-  node. It loads no
-  component, and starts no engine.
+  node. It loads no component, and runs no guest code.
 
-  A runner (`RUNTIME_ROLE=runner`) runs the engine and the runner
-  (`Locus.Runtime.Runner`) that takes subtrees over its control channel,
-  and no listener, as the application's own tree (`start_runner/0`): a
-  runner is reached by its service alone and serves no role. Its log
-  output goes to standard error, so standard output carries frames alone
-  when the channel is there. The runner's end ends the VM
-  (`Locus.Runtime.Release`).
-
-  A guest in a runner sits inside four bounds, each holding without the
+  A runner is the runner program (`apps/locus/runner`, at
+  `Locus.Runtime.Settings.runner_command/0`), started through the
+  service's keeper: it reads its control channel and its relay and runs
+  every subtree it is assigned, and is reached by its service alone. A
+  guest in a runner sits inside four bounds, each holding without the
   others: the engine's WebAssembly sandbox, the runner's pooled uid, the
   cgroup that bounds its memory, and the network namespace whose only way
   out is the relay.
@@ -75,29 +70,10 @@ defmodule Locus.Runtime do
     do: Locus.Application.tree_options()
 
   @doc """
-  Start a runner's tree, as the application's own supervisor: the runner
-  role reads its settings from its environment alone and serves nothing.
+  The children of `Locus.Runtime.Supervisor` on a service node, under its
+  settings (`t:Locus.Runtime.Settings.pool/0`).
   """
-  @spec start_runner() :: Supervisor.on_start()
-  def start_runner do
-    :ok = Locus.Runtime.Release.log_to_stderr()
-    settings = Locus.Config.runner!()
-
-    # A runner is one job's VM: a child that fails is not restarted, the VM
-    # ends instead, and the service reports what it assigned.
-    Supervisor.start_link(children(:runner, settings),
-      strategy: :one_for_one,
-      name: Locus.Runtime.Supervisor,
-      max_restarts: 0
-    )
-  end
-
-  @doc """
-  The children of `Locus.Runtime.Supervisor` in `role`, under its settings
-  (`t:Locus.Runtime.Settings.pool/0` for the service, `t:Locus.Runtime.Settings.runner/0`
-  for a runner).
-  """
-  @spec children(:service | :runner, map()) :: [
+  @spec children(:service, Locus.Runtime.Settings.pool()) :: [
           Supervisor.child_spec() | {module(), term()} | module()
         ]
   def children(:service, _settings) do
@@ -111,32 +87,6 @@ defmodule Locus.Runtime do
       # credentials name. Started after the service, so a request never
       # finds it absent.
       listener()
-    ]
-  end
-
-  def children(:runner, settings) do
-    engine() ++
-      [
-        {DynamicSupervisor,
-         name: Locus.Runtime.Runner.attempts_supervisor(), strategy: :one_for_one},
-        {Locus.Runtime.Runner, settings: settings}
-      ]
-  end
-
-  @doc """
-  What runs guest code: the shared Wasmex engine for
-  compile-once/instantiate-many, its disposable state
-  (compiled components and open streams), and the supervised
-  fire-and-forget tasks (a guest's streaming HTTP request).
-  """
-  @spec engine() :: [Supervisor.child_spec() | module()]
-  def engine do
-    [
-      Locus.Runtime.SharedEngine,
-      Locus.Runtime.Cache,
-      Supervisor.child_spec({Task.Supervisor, name: Locus.Runtime.TaskSupervisor},
-        shutdown: 30_000
-      )
     ]
   end
 
@@ -163,6 +113,8 @@ defmodule Locus.Runtime do
     [
       {DynamicSupervisor, name: Locus.Runtime.RunnerPool.Runners, strategy: :one_for_one},
       module.child_spec([]),
+      # Before the pool, whose runners' handles forward to it.
+      Locus.Runtime.Events,
       {Locus.Runtime.RunnerPool,
        settings: settings,
        keeper: module,

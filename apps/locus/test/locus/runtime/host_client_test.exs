@@ -3,8 +3,9 @@
 
 defmodule Locus.Runtime.HostClientTest do
   @moduledoc """
-  A runner's client reaches its attempt only over the wire: one signed
-  `POST` per call to the callback's route, a JSON body naming the
+  The worker service's own calls for an attempt, and the runners' it
+  posts for them (`post_call/5`), reach CYFR only over the wire: one
+  signed `POST` per call to the callback's route, a JSON body naming the
   operation, and a JSON answer read as the worker protocol spells it. A
   lost answer is retried as the callback's class allows — once, under a
   fresh header, as the same body — or ends uncertain; an answer CYFR gave
@@ -43,44 +44,15 @@ defmodule Locus.Runtime.HostClientTest do
     attempt: attempt,
     client: client
   } do
-    ScriptedHost.script(host, "oauth_token", {:error, {:guest_error, "vault_denied", "no vault"}})
-    ScriptedHost.script(host, "storage", {:error, {:guest_error, "action_denied", "denied"}})
-    ScriptedHost.script(host, "admit_child", {:error, {:guest_error, "dispatch_error", "no"}})
-    ScriptedHost.script(host, "tool_call", {:error, {:guest_error, "dispatch_error", "no"}})
-    ScriptedHost.script(host, "complete", {:ok, %{"done" => true}})
-    ScriptedHost.script(host, "fail", {:error, :lost})
-
-    assert {:ok, %{}} = HostClient.attach(client, attempt.assignment)
-    assert {:ok, %{} = renewals} = HostClient.renew(client, [client.attempt])
-    assert {:ok, until} = renewals[client.attempt]
-    assert is_integer(until)
-    assert {:ok, [_reply]} = HostClient.push_deltas(client, [~s({"type":"note"})])
-
-    assert {:error, {:guest_error, "vault_denied", "no vault"}} =
-             HostClient.oauth_token(client, "google")
+    ScriptedHost.pins(host, %{"api.test" => "203.0.113.10"})
 
     assert :ok = HostClient.take_rate(client, "http:" <> attempt.component_ref)
 
-    assert {:error, {:guest_error, "action_denied", _}} =
-             HostClient.storage(client, :read, %{"path" => "data/a.txt"})
-
-    assert {:error, :not_found} = HostClient.fetch_artifact(client, attempt.digest)
-    assert :ok = HostClient.record_denial(client, "invalid_json", "Invalid JSON request")
-
-    assert {:error, {:guest_error, "dispatch_error", _}} =
-             HostClient.admit_child(client, "reagent:local.missing:0.1.0", nil, %{}, :call, nil)
-
-    assert {:error, {:guest_error, "dispatch_error", _}} =
-             HostClient.tool_call(client, "tools", %{"action" => "list"}, :call)
-
-    assert :ok = HostClient.release_child(client, "exec_child")
-    assert {:ok, %{"done" => true}} = HostClient.complete(client, %{"done" => true})
-    assert {:error, :lost} = HostClient.fail(client, "after the close")
+    assert {:ok, %PinnedTarget{ip: "203.0.113.10"}} =
+             HostClient.egress_pin(client, "https://api.test/")
 
     ops = for %{op: op} <- ScriptedHost.requests(host), do: op
-
-    assert ops ==
-             ~w(attach renew push_deltas oauth_token take_rate storage fetch_artifact record_denial admit_child tool_call release_child complete fail)
+    assert ops == ~w(take_rate egress_pin)
 
     for %{op: op, header: header, body: body, caller: caller} <- ScriptedHost.requests(host) do
       assert String.starts_with?(header, "v1 kind=call ")
@@ -97,245 +69,301 @@ defmodule Locus.Runtime.HostClientTest do
          host: host,
          client: client
        } do
-    ScriptedHost.script(host, "renew", [:drop, {:ok, %{client.attempt => %{"lease_until" => 5}}}])
+    pin = fn args, _caller -> ScriptedHost.pin(%{"api.test" => "203.0.113.10"}, args, 30_000) end
+    ScriptedHost.script(host, "egress_pin", [:drop, pin])
 
-    assert {:ok, %{}} = HostClient.renew(client, [client.attempt])
+    assert {:ok, %PinnedTarget{}} = HostClient.egress_pin(client, "https://api.test/")
 
-    assert [first, second] = ScriptedHost.requests(host, "renew")
+    assert [first, second] = ScriptedHost.requests(host, "egress_pin")
     assert first.body == second.body
     assert first.caller.nonce != second.caller.nonce
     assert first.header != second.header
-  end
-
-  test "a lost push_deltas answer sends the same batch again, in order", %{
-    host: host,
-    client: client
-  } do
-    ScriptedHost.script(host, "push_deltas", [:drop, {:ok, ["a", "b"]}])
-    events = [~s({"n":1}), ~s({"n":2})]
-
-    assert {:ok, ["a", "b"]} = HostClient.push_deltas(client, events)
-
-    assert [first, second] = ScriptedHost.requests(host, "push_deltas")
-    assert first.body == second.body
-    assert Enum.map(second.args["deltas"], & &1["event"]) == events
-  end
-
-  test "a lost admit_child answer is asked again under the same child key", %{
-    host: host,
-    client: client
-  } do
-    ScriptedHost.script(host, "admit_child", [
-      :drop,
-      {:error, {:guest_error, "dispatch_error", "no"}}
-    ])
-
-    assert {:error, {:guest_error, "dispatch_error", "no"}} =
-             HostClient.admit_child(
-               client,
-               "reagent:local.x:0.1.0",
-               "need",
-               %{"a" => 1},
-               :spawn,
-               nil
-             )
-
-    assert [first, second] = ScriptedHost.requests(host, "admit_child")
-    assert first.body == second.body
-    assert Prima.HostAPI.valid_child_key?(first.args["child_key"])
-    assert first.args["child_key"] == second.args["child_key"]
-
-    # A new admission mints a new key.
-    ScriptedHost.script(host, "admit_child", {:error, {:guest_error, "dispatch_error", "no"}})
-    HostClient.admit_child(client, "reagent:local.x:0.1.0", "need", %{"a" => 1}, :spawn, nil)
-    [_, _, third] = ScriptedHost.requests(host, "admit_child")
-    assert third.args["child_key"] != first.args["child_key"]
-  end
-
-  test "a child's connection crosses as the vectors write it, and a retry asks for the same account",
-       %{host: host, client: client} do
-    cases = Map.new(@host_api["connection_cases"], &{&1["name"], &1})
-
-    for name <- ~w(omitted named) do
-      %{"v" => 3, "op" => "admit_child", "args" => args} = Jason.decode!(cases[name]["body"])
-      ScriptedHost.script(host, "admit_child", {:answer, cases["named"]["answer"]})
-
-      assert {:error, {:guest_error, "connection_not_granted", message}} =
-               HostClient.admit_child(
-                 client,
-                 args["reference"],
-                 args["need"],
-                 args["input"],
-                 String.to_existing_atom(args["guest_fn"]),
-                 args["connection"]
-               )
-
-      assert message == Prima.Refusal.message(:connection_not_granted)
-      [sent] = ScriptedHost.requests(host, "admit_child") |> Enum.take(-1)
-      assert Map.delete(sent.args, "child_key") == Map.delete(args, "child_key"), name
-    end
-
-    # A lost answer asks again under the same key for the same account.
-    ScriptedHost.script(host, "admit_child", [:drop, {:answer, cases["reused"]["answer"]}])
-
-    assert {:error, {:guest_error, "invalid_request", _message}} =
-             HostClient.admit_child(client, "reagent:local.x:0.1.0", nil, %{}, :call, "Work")
-
-    [first, second] = ScriptedHost.requests(host, "admit_child") |> Enum.take(-2)
-    assert first.body == second.body
-    assert first.args["connection"] == "Work"
   end
 
   test "a lost answer to a call that is never retried ends uncertain, asked once", %{
     host: host,
     client: client
   } do
-    for op <- ~w(take_rate storage oauth_token tool_call record_denial) do
-      ScriptedHost.script(host, op, :drop)
-    end
+    ScriptedHost.script(host, "take_rate", :drop)
 
     assert {:error, {:uncertain, sentence}} = HostClient.take_rate(client, "http:x")
     assert sentence =~ "lost"
-    assert {:error, {:uncertain, _}} = HostClient.storage(client, :read, %{"path" => "a"})
-    assert {:error, {:uncertain, _}} = HostClient.oauth_token(client, "google")
-    assert {:error, {:uncertain, _}} = HostClient.tool_call(client, "t", %{}, :call)
-    assert {:error, {:uncertain, _}} = HostClient.record_denial(client, "t", "m")
 
     ops = for %{op: op} <- ScriptedHost.requests(host), do: op
-    assert ops == ~w(take_rate storage oauth_token tool_call record_denial)
-  end
-
-  test "a second lost answer is lost", %{host: host, client: client} do
-    ScriptedHost.script(host, "renew", :drop)
-    assert {:error, :lost} = HostClient.renew(client, [client.attempt])
-    assert length(ScriptedHost.requests(host, "renew")) == 2
+    assert ops == ~w(take_rate)
   end
 
   test "an answer CYFR gave is never retried, lost and unavailable included", %{
     host: host,
     client: client
   } do
-    ScriptedHost.script(host, "renew", [{:error, :unavailable}, {:error, :lost}])
+    ScriptedHost.script(host, "egress_pin", [{:error, :unavailable}, {:error, :lost}])
 
-    assert {:error, :unavailable} = HostClient.renew(client, [client.attempt])
-    assert {:error, :lost} = HostClient.renew(client, [client.attempt])
-    assert length(ScriptedHost.requests(host, "renew")) == 2
+    assert {:error, :unavailable} = HostClient.egress_pin(client, "https://api.test/")
+    assert {:error, :lost} = HostClient.egress_pin(client, "https://api.test/")
+    assert length(ScriptedHost.requests(host, "egress_pin")) == 2
   end
 
-  # The callbacks the outcomes vector posts, one of each retry class, as a
-  # client makes each.
-  defp outcome_call("renew", client), do: HostClient.renew(client, [client.attempt])
-  defp outcome_call("complete", client), do: HostClient.complete(client, %{"done" => true})
+  # The calls the worker service makes itself, by the retry class each is
+  # of: `take_rate` and `egress_pin` for an attempt, sealed, and its two
+  # reports, plain. A runner's calls of the other classes (outcome, batch,
+  # keyed) are its crate's to play (`apps/locus/runner/tests/vectors.rs`).
+  @service_calls %{
+    "idempotent" => ~w(egress_pin runner_exited),
+    "never" => ~w(take_rate report_events)
+  }
 
-  defp outcome_call("push_deltas", client),
-    do: HostClient.push_deltas(client, [~s({"type":"note"})])
+  @pin_refusals Enum.map(PinnedTarget.refusals(), &Atom.to_string/1)
 
-  defp outcome_call("admit_child", client),
-    do: HostClient.admit_child(client, "reagent:local.missing:0.1.0", nil, %{}, :call, nil)
+  defp outcome_call("take_rate", %{client: client}), do: HostClient.take_rate(client, "http:x")
 
-  defp outcome_call("take_rate", client), do: HostClient.take_rate(client, "http:x")
-
-  defp outcome_call("egress_pin", client),
+  defp outcome_call("egress_pin", %{client: client}),
     do: HostClient.egress_pin(client, "https://api.example.test/x")
 
-  # What the client answers for a vector's reading of an answer.
+  defp outcome_call("runner_exited", %{host: host, client: client} = context) do
+    at = %{member: host.member, host_url: host.url}
+
+    HostClient.runner_exited(
+      credentials(context),
+      at,
+      client.boot,
+      client.runner,
+      [client.attempt],
+      nil,
+      nil
+    )
+  end
+
+  defp outcome_call("report_events", %{client: client} = context) do
+    event = %{
+      type: :event,
+      name: "formula.cancel",
+      measurements: %{system_time: 1},
+      metadata: %{parent_execution_id: client.execution_id, task_id: "task_1"}
+    }
+
+    HostClient.report_events(credentials(context), client.boot, [event])
+  end
+
+  # The worker service's credentials under the scripted host's root, which
+  # sign its reports.
+  defp credentials(%{host: host}) do
+    {:ok, worker_key} = Prima.WorkerAuth.worker_key(host.root, host.service)
+
+    %Locus.Runtime.Credentials{
+      service_id: host.service,
+      worker_key: worker_key,
+      dispatch_key: Prima.WorkerAuth.dispatch_key(worker_key),
+      dispatch_seal_key: Prima.WorkerAuth.dispatch_seal_key(worker_key),
+      host_url: host.url,
+      bind: {127, 0, 0, 1},
+      port: 0
+    }
+  end
+
+  # The calls a case stands for: a pin's own cases are `egress_pin`'s, and
+  # every other case is each service call's of its callback's class.
+  defp stand_ins(%{"callback" => "egress_pin"}), do: ["egress_pin"]
+
+  defp stand_ins(%{"callback" => callback}),
+    do: Map.get(@service_calls, @host_api["retries"][callback], [])
+
+  # Whether CYFR can answer `call` what the case answers. An attach's
+  # required setup and its claim's refusals, a complete's failure, a
+  # fetch_artifact's `not_found` and a guest error's remediation, which
+  # only an OAuth refusal names, answer a runner's calls alone; a pin's
+  # refusals answer an `egress_pin`, which reads one as its answer.
+  defp met?(_call, %{"reading" => %{"setup_required" => _}}), do: false
+  defp met?(_call, %{"reading" => %{"failed" => _}}), do: false
+  defp met?(_call, %{"reading" => %{"guest_error" => %{"remediation" => _}}}), do: false
+
+  defp met?(call, %{"reading" => %{"refused" => name}}),
+    do: name in ~w(lost unavailable) or (call == "egress_pin" and name in @pin_refusals)
+
+  defp met?("egress_pin", %{"callback" => callback, "answers" => answers})
+       when callback != "egress_pin",
+       do: not Enum.any?(answers, &(refusal_named(&1) in @pin_refusals))
+
+  defp met?(_call, _vector), do: true
+
+  defp refusal_named(%{"answer" => json}) do
+    case Jason.decode(json) do
+      {:ok, %{"error" => name}} -> name
+      _ -> nil
+    end
+  end
+
+  defp refusal_named(_answer), do: nil
+
+  # What the client reads of a vector's answer.
   defp reading(%{"ok" => value}), do: {:ok, value}
   defp reading(%{"ok_json" => text}), do: {:ok, Jason.decode!(text)}
   defp reading(%{"refused" => name}), do: {:error, String.to_existing_atom(name)}
 
-  defp reading(%{"guest_error" => %{"remediation" => remediation} = error}),
-    do: {:error, {:guest_error, error["type"], error["message"], remediation}}
-
   defp reading(%{"guest_error" => error}),
     do: {:error, {:guest_error, error["type"], error["message"]}}
 
-  defp reading(%{"setup_required" => payload}), do: {:error, {:setup_required, payload}}
-  defp reading(%{"failed" => message}), do: {:error, {:failed, message}}
+  # What `call` makes of what its client read: a take's and a report's
+  # value is `true`, and a pin's a pin; any other value is lost.
+  defp made(call, {:ok, true}) when call in ~w(take_rate runner_exited report_events), do: :ok
+
+  defp made(call, {:ok, _value}) when call in ~w(take_rate runner_exited report_events),
+    do: {:error, :lost}
+
+  defp made("egress_pin", {:ok, wire}) do
+    case PinnedTarget.read(wire) do
+      {:ok, pin} -> {:ok, pin}
+      :error -> {:error, :lost}
+    end
+  end
+
+  defp made(_call, refused), do: refused
 
   defp scripted(%{"status" => nil}), do: :drop
   defp scripted(%{"status" => 200, "answer" => json}), do: {:answer, json}
   defp scripted(%{"status" => status, "plain" => body}), do: {:raw, status, body}
 
-  test "each answer outcome of the vectors: what a call makes of what each try met", %{
-    host: host,
-    client: client
-  } do
-    cases = @host_api["answer_outcomes"]
-    assert length(cases) >= 40
+  test "every answer outcome of the vectors a call of the service's own can meet: what each " <>
+         "call of its class makes of what each try met",
+       %{host: host} = context do
+    played =
+      for vector <- @host_api["answer_outcomes"],
+          call <- stand_ins(vector),
+          met?(call, vector) do
+        assert %{"why" => why, "answers" => answers} = vector
+        assert %{"outcome" => outcome, "posted" => posted} = vector
+        assert is_binary(outcome) and is_integer(posted), why
+        # A case is these members and, for an answer, its reading: none more.
+        assert Map.keys(vector) -- ~w(why callback answers outcome posted reading) == [], why
+        assert Map.has_key?(vector, "reading") == (outcome == "answer"), why
+        why = "#{call}: #{why}"
 
-    # One case for every class the callbacks' retries name.
-    classes = cases |> Enum.map(&@host_api["retries"][Map.fetch!(&1, "callback")]) |> Enum.uniq()
+        ScriptedHost.script(host, call, Enum.map(answers, &scripted/1))
+        before = length(ScriptedHost.requests(host, call))
 
-    assert Enum.sort(classes) == ~w(batch idempotent keyed never outcome)
+        {result, _log} = with_log(fn -> outcome_call(call, context) end)
 
-    for vector <- cases do
-      assert %{"why" => why, "callback" => callback, "answers" => answers} = vector
-      assert %{"outcome" => outcome, "posted" => posted} = vector
-      assert is_binary(outcome) and is_integer(posted), why
-      # A case is these members and, for an answer, its reading: none more.
-      assert Map.keys(vector) -- ~w(why callback answers outcome posted reading) == [], why
-      assert Map.has_key?(vector, "reading") == (outcome == "answer"), why
+        assert length(ScriptedHost.requests(host, call)) - before == posted, why
 
-      ScriptedHost.script(host, callback, Enum.map(answers, &scripted/1))
-      before = length(ScriptedHost.requests(host, callback))
+        case outcome do
+          "lost" ->
+            assert result == {:error, :lost}, why
 
-      {result, _log} = with_log(fn -> outcome_call(callback, client) end)
+          "uncertain" ->
+            assert {:error, {:uncertain, _sentence}} = result, why
 
-      assert length(ScriptedHost.requests(host, callback)) - before == vector["posted"], why
+          "too_large" ->
+            assert result == {:error, :too_large}, why
 
-      case vector["outcome"] do
-        "lost" ->
-          assert result == {:error, :lost}, why
+          "answer" ->
+            assert result == made(call, reading(vector["reading"])), why
+        end
 
-        "uncertain" ->
-          assert {:error, {:uncertain, _sentence}} = result, why
-
-        "too_large" ->
-          assert result == {:error, :too_large}, why
-
-        "answer" ->
-          # A value answers only renew in the vectors, which reads it as
-          # it came; every other reading is the client's own.
-          assert result == reading(vector["reading"]), why
-
-          if Map.has_key?(vector["reading"], "ok") or Map.has_key?(vector["reading"], "ok_json"),
-            do: assert(callback == "renew", why)
+        call
       end
-    end
+
+    # Each of the service's calls meets the cases of its class.
+    assert played |> Enum.uniq() |> Enum.sort() ==
+             ~w(egress_pin report_events runner_exited take_rate)
+
+    assert length(played) >= 70
+
+    # The cases none of its calls can meet are a runner's calls' alone:
+    # those of the classes the service makes no call of, and the answers
+    # above that only a runner's calls are given.
+    unmet =
+      for %{"callback" => callback} = vector <- @host_api["answer_outcomes"],
+          not Enum.any?(stand_ins(vector), &met?(&1, vector)),
+          do: {callback, Map.get(vector, "reading")}
+
+    assert Enum.sort(unmet) ==
+             Enum.sort([
+               {"admit_child", nil},
+               {"complete", nil},
+               {"push_deltas", nil},
+               {"renew", %{"refused" => "bad_mac"}},
+               {"renew", %{"refused" => "claim_expired"}},
+               {"renew", %{"refused" => "not_found"}},
+               {"renew", %{"refused" => "replayed"}},
+               {"renew", %{"failed" => "the output exceeds the node's response size"}},
+               {"renew",
+                %{"setup_required" => %{"fields" => ["API_KEY"], "kind" => "vault_edge"}}},
+               {"renew",
+                %{
+                  "guest_error" => %{
+                    "type" => "oauth_required",
+                    "message" => "Connect github first.",
+                    "remediation" => %{"kind" => "oauth", "provider" => "github"}
+                  }
+                }}
+             ])
+  end
+
+  test "a batch of events a member that does not hold the control plane refuses, 503 " <>
+         "unavailable, is answered unavailable, posted once and logged by no one; an exit " <>
+         "report so refused is lost, asked once more as its class allows",
+       %{host: host} = context do
+    unowned = {:raw, 503, ~s({"v":3,"error":"unavailable"})}
+
+    ScriptedHost.script(host, "report_events", unowned)
+
+    log =
+      capture_log(fn ->
+        assert outcome_call("report_events", context) == {:error, :unavailable}
+      end)
+
+    assert length(ScriptedHost.requests(host, "report_events")) == 1
+    refute log =~ "[Locus.Runtime.HostClient] report_events"
+
+    # The rule that keeps a batch is the forwarder's alone: an exit
+    # report's 503 is a refusal as any other status's.
+    ScriptedHost.script(host, "runner_exited", unowned)
+
+    log =
+      capture_log(fn -> assert outcome_call("runner_exited", context) == {:error, :lost} end)
+
+    assert length(ScriptedHost.requests(host, "runner_exited")) == 2
+    assert log =~ "[Locus.Runtime.HostClient] runner_exited's answer was lost; calling once more"
+
+    # A host call's 503 is the listener's `lost`, a refusal as any other
+    # status's: the host call is asked again as its class allows.
+    ScriptedHost.script(host, "egress_pin", {:raw, 503, ~s({"v":3,"error":"unavailable"})})
+    {result, _log} = with_log(fn -> outcome_call("egress_pin", context) end)
+    assert result == {:error, :lost}
+    assert length(ScriptedHost.requests(host, "egress_pin")) == 2
   end
 
   describe "a body past the host's bound" do
     test "is refused for good: posted once, whatever the call's class or the refusal's body",
          %{host: host, client: client} do
-      # An idempotent call, one retried as a batch, and one never retried,
-      # whose refusal is final rather than uncertain.
-      ScriptedHost.script(host, "renew", {:raw, 413, ~s({"v":3,"error":"lost"})})
-      ScriptedHost.script(host, "push_deltas", {:raw, 413, "not json"})
+      # An idempotent call and one never retried, whose refusal is final
+      # rather than uncertain.
+      ScriptedHost.script(host, "egress_pin", {:raw, 413, "not json"})
       ScriptedHost.script(host, "take_rate", {:raw, 413, ""})
 
       log =
         capture_log(fn ->
-          assert {:error, :too_large} = HostClient.renew(client, [client.attempt])
-          assert {:error, :too_large} = HostClient.push_deltas(client, [~s({"type":"note"})])
+          assert {:error, :too_large} = HostClient.egress_pin(client, "https://api.test/")
           assert {:error, :too_large} = HostClient.take_rate(client, "http:x")
         end)
 
       ops = for %{op: op} <- ScriptedHost.requests(host), do: op
-      assert ops == ~w(renew push_deltas take_rate)
-      assert log =~ "renew was refused: its body is past the host's bound"
+      assert ops == ~w(egress_pin take_rate)
+      assert log =~ "egress_pin was refused: its body is past the host's bound"
       refute log =~ "not json"
     end
 
     test "with a refusal past the answer bound is refused for good, and none of that body is kept",
          %{host: host, attempt: attempt, client: client} do
       over = String.duplicate("x", Prima.HostAPI.max_answer_bytes() + 1)
+      ScriptedHost.script(host, "egress_pin", {:raw, 413, over})
+
+      assert {:error, :too_large} = HostClient.egress_pin(client, "https://api.test/")
+      assert [_once] = ScriptedHost.requests(host, "egress_pin")
+
+      # The status crosses without the body, for a runner's call the
+      # service posts too; a 200 answer past the bound is still no answer.
       ScriptedHost.script(host, "renew", {:raw, 413, over})
-
-      assert {:error, :too_large} = HostClient.renew(client, [client.attempt])
-      assert [_once] = ScriptedHost.requests(host, "renew")
-
-      # The status crosses without the body; a 200 answer past the bound is
-      # still no answer.
       json = Jason.encode!(Prima.WorkerWire.request_body(:renew, %{"attempts" => []}))
 
       posted = fn ->
@@ -354,19 +382,11 @@ defmodule Locus.Runtime.HostClientTest do
       host: host,
       client: client
     } do
-      ScriptedHost.script(host, "renew", [:drop, {:raw, 413, ~s({"v":3,"error":"lost"})}])
+      ScriptedHost.script(host, "egress_pin", [:drop, {:raw, 413, ~s({"v":3,"error":"lost"})}])
 
-      assert {:error, :too_large} = HostClient.renew(client, [client.attempt])
-      assert [first, second] = ScriptedHost.requests(host, "renew")
+      assert {:error, :too_large} = HostClient.egress_pin(client, "https://api.test/")
+      assert [first, second] = ScriptedHost.requests(host, "egress_pin")
       assert first.body == second.body
-    end
-
-    test "is refused for good through a runner's relay too", %{host: host} do
-      attempt = ScriptedHost.attempt!(host) |> Locus.Runtime.Test.ScriptedKeeper.relayed!()
-      ScriptedHost.script(host, "renew", {:raw, 413, ~s({"v":3,"error":"lost"})})
-
-      assert {:error, :too_large} = HostClient.renew(attempt.client, [attempt.attempt])
-      assert [_once] = ScriptedHost.requests(host, "renew")
     end
   end
 
@@ -405,36 +425,36 @@ defmodule Locus.Runtime.HostClientTest do
   test "an answer past the answer bound, or not an answer, is lost", %{host: host, client: client} do
     ScriptedHost.script(
       host,
-      "renew",
+      "egress_pin",
       {:raw, 200, String.duplicate("x", Prima.HostAPI.max_answer_bytes() + 1)}
     )
 
-    assert {:error, :lost} = HostClient.renew(client, [client.attempt])
+    assert {:error, :lost} = HostClient.egress_pin(client, "https://api.test/")
 
-    ScriptedHost.script(host, "renew", {:raw, 200, "not json"})
-    assert {:error, :lost} = HostClient.renew(client, [client.attempt])
+    ScriptedHost.script(host, "egress_pin", {:raw, 200, "not json"})
+    assert {:error, :lost} = HostClient.egress_pin(client, "https://api.test/")
 
-    ScriptedHost.script(host, "renew", {:raw, 200, ~s({"neither": "ok"})})
-    assert {:error, :lost} = HostClient.renew(client, [client.attempt])
+    ScriptedHost.script(host, "egress_pin", {:raw, 200, ~s({"neither": "ok"})})
+    assert {:error, :lost} = HostClient.egress_pin(client, "https://api.test/")
   end
 
   describe "the wire's version" do
     test "an answer without v, or at another version, is no answer: lost under the retry class",
          %{host: host, client: client} do
-      ScriptedHost.script(host, "renew", [
+      ScriptedHost.script(host, "egress_pin", [
         {:answer, ~s({"ok":{}})},
         {:answer, ~s({"v":4,"ok":{}})}
       ])
 
-      assert {:error, :lost} = HostClient.renew(client, [client.attempt])
-      assert length(ScriptedHost.requests(host, "renew")) == 2
+      assert {:error, :lost} = HostClient.egress_pin(client, "https://api.test/")
+      assert length(ScriptedHost.requests(host, "egress_pin")) == 2
 
       ScriptedHost.script(host, "take_rate", {:answer, ~s({"v":"2","ok":true})})
       assert {:error, {:uncertain, _}} = HostClient.take_rate(client, "http:x")
       assert length(ScriptedHost.requests(host, "take_rate")) == 1
 
-      ScriptedHost.script(host, "renew", {:answer, ~s({"v":3,"ok":{},"extra":true})})
-      assert {:error, :lost} = HostClient.renew(client, [client.attempt])
+      ScriptedHost.script(host, "take_rate", {:answer, ~s({"v":3,"ok":true,"extra":true})})
+      assert {:error, {:uncertain, _}} = HostClient.take_rate(client, "http:x")
     end
 
     test "a host at another version is not this engine's: its refusal stops the attempt, asked once",
@@ -444,30 +464,30 @@ defmodule Locus.Runtime.HostClientTest do
             ~s({"v":3,"error":"unknown_version"}),
             ~s({"v":4,"error":"unknown_version"})
           ] do
-        ScriptedHost.script(host, "renew", {:raw, 401, refusal})
-        before = length(ScriptedHost.requests(host, "renew"))
+        ScriptedHost.script(host, "egress_pin", {:raw, 401, refusal})
+        before = length(ScriptedHost.requests(host, "egress_pin"))
 
         log =
           capture_log(fn ->
-            assert {:error, :lost} = HostClient.renew(client, [client.attempt])
+            assert {:error, :lost} = HostClient.egress_pin(client, "https://api.test/")
           end)
 
         assert log =~ "another version"
-        assert length(ScriptedHost.requests(host, "renew")) == before + 1
+        assert length(ScriptedHost.requests(host, "egress_pin")) == before + 1
       end
 
       # Refused after the body was opened, sealed.
-      ScriptedHost.script(host, "storage", {:error, :unknown_version})
+      ScriptedHost.script(host, "take_rate", {:error, :unknown_version})
 
       capture_log(fn ->
-        assert {:error, :lost} = HostClient.storage(client, :read, %{"path" => "a"})
+        assert {:error, :lost} = HostClient.take_rate(client, "http:x")
       end)
 
       # Any other refusal by status is lost, and asked again as its class allows.
-      ScriptedHost.script(host, "renew", {:raw, 401, ~s({"v":3,"error":"bad_mac"})})
-      before = length(ScriptedHost.requests(host, "renew"))
-      assert {:error, :lost} = HostClient.renew(client, [client.attempt])
-      assert length(ScriptedHost.requests(host, "renew")) == before + 2
+      ScriptedHost.script(host, "egress_pin", {:raw, 401, ~s({"v":3,"error":"bad_mac"})})
+      before = length(ScriptedHost.requests(host, "egress_pin"))
+      assert {:error, :lost} = HostClient.egress_pin(client, "https://api.test/")
+      assert length(ScriptedHost.requests(host, "egress_pin")) == before + 2
     end
   end
 
@@ -548,97 +568,34 @@ defmodule Locus.Runtime.HostClientTest do
     end
 
     test "a pin refusal answers only an egress_pin", %{host: host, client: client} do
-      ScriptedHost.script(host, "renew", {:error, :denied})
-      assert {:error, :lost} = HostClient.renew(client, [client.attempt])
+      ScriptedHost.script(host, "take_rate", {:error, :denied})
+      assert {:error, {:uncertain, _}} = HostClient.take_rate(client, "http:x")
     end
   end
 
-  test "a host that cannot be reached loses every call", %{host: host} do
+  test "a host that cannot be reached loses an idempotent call, and leaves one never retried unsent",
+       %{host: host} do
     attempt = ScriptedHost.attempt!(host)
     client = %{attempt.client | host_url: "http://127.0.0.1:9"}
 
-    assert {:error, :lost} = HostClient.renew(client, [client.attempt])
-    assert {:error, {:uncertain, _}} = HostClient.storage(client, :read, %{"path" => "a"})
+    assert {:error, :lost} = HostClient.egress_pin(client, "https://api.test/")
+    assert {:error, :unsent} = HostClient.take_rate(client, "http:x")
     assert ScriptedHost.requests(host) == []
   end
 
   test "a client whose key is not its attempt's is refused by the host and answered lost", %{
     host: host,
-    attempt: attempt,
     client: client
   } do
     stranger = %{client | call_key: :crypto.strong_rand_bytes(32)}
 
-    assert {:error, :lost} = HostClient.push_deltas(stranger, [~s({"type":"note"})])
-    assert {:error, :lost} = HostClient.renew(stranger, [attempt.attempt])
+    assert {:error, :lost} = HostClient.egress_pin(stranger, "https://api.test/")
 
-    # A refusal by status is a lost answer: each retried class asked once more.
+    # A refusal by status is a lost answer: a retried class asked once more.
     assert [
-             {:refused, "push_deltas", :bad_mac},
-             {:refused, "push_deltas", :bad_mac},
-             {:refused, "renew", :bad_mac},
-             {:refused, "renew", :bad_mac}
+             {:refused, "egress_pin", :bad_mac},
+             {:refused, "egress_pin", :bad_mac}
            ] = ScriptedHost.requests(host)
-  end
-
-  test "a child CYFR admits is opened under this attempt's seal key and runs as the same runner",
-       %{
-         host: host,
-         attempt: attempt,
-         client: client
-       } do
-    child =
-      ScriptedHost.attempt!(host,
-        boot: client.boot,
-        runner: client.runner,
-        input: %{"child" => 1}
-      )
-
-    ScriptedHost.script(host, "admit_child", fn _args, _caller ->
-      {:ok,
-       %{
-         "assignment" => child.assignment,
-         "attempt_keys" => sealed_for(attempt.keys.seal, child.keys),
-         "input" => child.input,
-         "secrets" => %{"KEY" => "k"}
-       }}
-    end)
-
-    assert {:ok, admitted} =
-             HostClient.admit_child(client, child.component_ref, nil, %{"child" => 1}, :call, nil)
-
-    assert admitted.assignment.execution_id == child.execution_id
-    assert admitted.input == %{"child" => 1}
-    assert admitted.secrets == %{"KEY" => "k"}
-    assert admitted.client.runner == client.runner
-    assert admitted.client.host_url == client.host_url
-    assert admitted.client.execution_id == child.execution_id
-  end
-
-  test "a child whose keys do not open under this attempt's seal key is given back at once", %{
-    host: host,
-    attempt: attempt,
-    client: client
-  } do
-    child = ScriptedHost.attempt!(host, boot: client.boot, runner: client.runner)
-    other_seal = :crypto.strong_rand_bytes(32)
-
-    ScriptedHost.script(host, "admit_child", fn _args, _caller ->
-      {:ok,
-       %{
-         "assignment" => child.assignment,
-         "attempt_keys" => sealed_for(other_seal, child.keys),
-         "input" => child.input,
-         "secrets" => %{}
-       }}
-    end)
-
-    assert {:error, :lost} =
-             HostClient.admit_child(client, child.component_ref, nil, %{}, :call, nil)
-
-    assert [%{args: %{"execution_id" => released}}] = ScriptedHost.requests(host, "release_child")
-    assert released == child.execution_id
-    assert attempt.execution_id != released
   end
 
   test "a worker service's exit report is signed with its dispatch key and posted to the host", %{
@@ -758,29 +715,7 @@ defmodule Locus.Runtime.HostClientTest do
              )
   end
 
-  describe "a runner's client" do
-    test "posts nothing itself: each call leaves through its relay and the service posts it",
-         %{host: host} do
-      attempt = ScriptedHost.attempt!(host) |> Locus.Runtime.Test.ScriptedKeeper.relayed!()
-
-      assert attempt.client.host_url == nil and attempt.client.relay == attempt.endpoint
-      refute inspect(attempt.client) =~ host.url
-
-      assert {:ok, %{}} = HostClient.attach(attempt.client, attempt.assignment)
-      assert [%{caller: %{runner: runner}}] = ScriptedHost.requests(host, "attach")
-      assert runner == attempt.runner
-    end
-
-    test "loses a call its relay cannot carry, and asks an idempotent one once more", %{
-      host: host
-    } do
-      attempt = ScriptedHost.attempt!(host) |> Locus.Runtime.Test.ScriptedKeeper.relayed!()
-      :ok = stop_supervised_pid(attempt.endpoint)
-
-      assert {:error, :lost} = HostClient.renew(attempt.client, [attempt.attempt])
-      assert ScriptedHost.requests(host) == []
-    end
-
+  describe "a runner's calls, posted by the service" do
     test "post_call/4 answers CYFR's status and bytes, once", %{host: host} do
       attempt = ScriptedHost.attempt!(host)
       fields = call_fields(attempt)
@@ -792,7 +727,7 @@ defmodule Locus.Runtime.HostClientTest do
       assert {:ok, _json} = Prima.WorkerAuth.open_call(attempt.keys.seal, :answer, fields, answer)
 
       assert {:ok, 401, _refusal} = HostClient.post_call(host.url, :renew, header, "tampered")
-      assert :error = HostClient.post_call("http://127.0.0.1:9", :renew, header, sealed)
+      assert :unsent = HostClient.post_call("http://127.0.0.1:9", :renew, header, sealed)
     end
 
     test "post_call/5 asks its room once for the whole answer before it keeps any, and no room is an answer that did not arrive",
@@ -842,15 +777,6 @@ defmodule Locus.Runtime.HostClientTest do
     end
   end
 
-  defp stop_supervised_pid(pid) do
-    ref = Process.monitor(pid)
-    Process.exit(pid, :kill)
-
-    receive do
-      {:DOWN, ^ref, :process, ^pid, _reason} -> :ok
-    end
-  end
-
   defp call_fields(attempt) do
     {:ok, assignment} = Assignment.read(attempt.assignment)
 
@@ -880,8 +806,8 @@ defmodule Locus.Runtime.HostClientTest do
       assert at == %{member: issuer.member, host_url: issuer.url}
 
       client = HostClient.new(attempt.keys, attempt.runner, attempt.boot, at)
-      assert {:ok, %{}} = HostClient.renew(client, [attempt.attempt])
-      assert [%{caller: caller}] = ScriptedHost.requests(issuer, "renew")
+      assert :ok = HostClient.take_rate(client, "http:x")
+      assert [%{caller: caller}] = ScriptedHost.requests(issuer, "take_rate")
       assert caller.member == issuer.member
       assert ScriptedHost.requests(peer) == []
     end
@@ -898,7 +824,7 @@ defmodule Locus.Runtime.HostClientTest do
       # names is still the member that issued the work.
       assert attempt.client.host_url == host.url
       assert attempt.client.member == host.member
-      assert {:ok, %{}} = HostClient.renew(attempt.client, [attempt.attempt])
+      assert :ok = HostClient.take_rate(attempt.client, "http:x")
     end
 
     test "is refused by a member the call does not name, twice over", %{host: issuer} do
@@ -914,13 +840,13 @@ defmodule Locus.Runtime.HostClientTest do
           host_url: peer.url
         })
 
-      assert {:error, :lost} = HostClient.renew(client, [attempt.attempt])
+      assert {:error, :lost} = HostClient.egress_pin(client, "https://api.test/")
 
       # Idempotent, so the lost answer is asked once more, and refused
       # again: a member that does not hold the attempt never answers it.
       assert [
-               {:refused, "renew", :member_mismatch},
-               {:refused, "renew", :member_mismatch}
+               {:refused, "egress_pin", :member_mismatch},
+               {:refused, "egress_pin", :member_mismatch}
              ] = ScriptedHost.requests(peer)
     end
   end
@@ -940,24 +866,18 @@ defmodule Locus.Runtime.HostClientTest do
   end
 
   test "the transport's log carries nothing a call carried", %{host: host, client: client} do
-    ScriptedHost.script(host, "storage", :drop)
+    ScriptedHost.script(host, "take_rate", :drop)
     canary = "CANARY-" <> Base.encode16(:crypto.strong_rand_bytes(8))
 
     log =
       capture_log(fn ->
-        assert {:error, {:uncertain, _}} =
-                 HostClient.storage(client, :write, %{"path" => "a", "content" => canary})
+        assert {:error, {:uncertain, _}} = HostClient.take_rate(client, "http:" <> canary)
       end)
 
-    assert log =~ "storage"
+    assert log =~ "take_rate"
     refute log =~ canary
     refute log =~ client.host_url
     refute log =~ Base.encode16(client.call_key, case: :lower)
-  end
-
-  defp sealed_for(seal_key, keys) do
-    {:ok, sealed} = Prima.WorkerAuth.seal_attempt_keys(seal_key, keys)
-    sealed
   end
 
   defp worker_key(host, service) do

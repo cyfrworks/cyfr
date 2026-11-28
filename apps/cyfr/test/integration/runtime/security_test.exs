@@ -4,8 +4,6 @@
 defmodule Locus.Runtime.SecurityTest do
   use ExUnit.Case, async: false
 
-  alias Locus.Runtime.ComponentType
-
   alias Opus.Provider
   alias Sanctum.Context
 
@@ -67,48 +65,6 @@ defmodule Locus.Runtime.SecurityTest do
     end)
 
     {:ok, ctx: ctx, test_path: test_path, ref: @test_ref}
-  end
-
-  # ============================================================================
-  # Component Type Isolation
-  # ============================================================================
-
-  describe "component type isolation" do
-    test "reagent has WASI but no HTTP capability" do
-      assert %Wasmex.Wasi.WasiP2Options{} = opts = ComponentType.wasi_options(:reagent)
-      assert opts.allow_http == false
-    end
-
-    test "formula has WASI but no HTTP capability" do
-      assert %Wasmex.Wasi.WasiP2Options{} = opts = ComponentType.wasi_options(:formula)
-      assert opts.allow_http == false
-    end
-
-    test "catalyst uses host function HTTP (not native wasi:http)" do
-      assert %Wasmex.Wasi.WasiP2Options{} = opts = ComponentType.wasi_options(:catalyst)
-      # Catalysts use cyfr:http/fetch host function, not wasi:http/outgoing-handler
-      assert opts.allow_http == false
-    end
-
-    test "catalyst does not inherit stdin (prevents prompt injection)" do
-      opts = ComponentType.wasi_options(:catalyst)
-
-      assert opts.inherit_stdin == false
-    end
-
-    test "no component type inherits the host's stdout/stderr" do
-      # Guest output must use emit, which applies masking, rate limits,
-      # and size bounds before reaching operator logs.
-      opts = ComponentType.wasi_options(:catalyst)
-
-      assert opts.inherit_stdout == false
-      assert opts.inherit_stderr == false
-    end
-
-    test "an empty or unknown component type is refused" do
-      assert {:error, _} = ComponentType.parse("")
-      assert {:error, _} = ComponentType.parse("unknown")
-    end
   end
 
   # ============================================================================

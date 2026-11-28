@@ -6,8 +6,9 @@ defmodule Locus.Runtime.MemoryBoundTest do
   The engine bounds a guest's memory by its consent, in the runner, before
   the runner's own memory bound is reached, and the runner stays clean for
   its athanor's next run: a guest declaring a second linear memory, or a
-  table past the bound, is refused as a `resource_limit` in the run's row
-  and the caller's result; a guest that grows its memory and its table
+  table past the bound, is refused at instantiation in the engine's words
+  ("Component instantiation failed: ...") in the run's row and the
+  caller's result; a guest that grows its memory and its table
   reaches the consented total and the table bound exactly and is refused
   past them, and completes. Each run of the athanor here runs in the one
   runner the first took, which the pool reuses only after a clean
@@ -143,8 +144,7 @@ defmodule Locus.Runtime.MemoryBoundTest do
     {result, row, runner} = run!(ctx, "extra_memory", 64 * @mib)
 
     refused =
-      "resource_limit: the engine refused the component's memory or tables " <>
-        "(memory count too high at 2)"
+      "Component instantiation failed: resource limit exceeded: memory count too high at 2"
 
     assert result == {:error, refused}
     assert row.status == "failed"
@@ -167,8 +167,8 @@ defmodule Locus.Runtime.MemoryBoundTest do
 
     assert result ==
              {:error,
-              "resource_limit: the engine refused the component's memory or tables " <>
-                "(table minimum size of 20001 elements exceeds table limits)"}
+              "Component instantiation failed: table minimum size of 20001 elements exceeds " <>
+                "table limits"}
 
     assert row.status == "failed"
 

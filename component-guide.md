@@ -877,13 +877,13 @@ streaming::close(handle);
 | `stream_limit` | Max 3 concurrent streams per execution, or as many requests in flight as the execution's relay carries: a stream closed before its answer ended counts until the answer has drained |
 | `timeout` | The stream outlasted the component's consented `timeout`, or no data arrived for that long, or its connection could not be made in time |
 | `request_failed` | The request failed before any response (connection refused, TLS, DNS), or after it was sent |
-| `stream_error` | The transport broke mid-stream |
+| `stream_error` | A stream request whose method or URL is no text, or whose body is neither text nor null |
 | `invalid_handle` | Unknown or already-closed handle |
 | `response_too_large` | Cumulative data exceeds `max_response_size` |
 | `encoding_error` | A piece of the answer that is not UTF-8 text |
 | `http_error` | CYFR's own failure of an attached stream's upstream |
 
-A stream's request is refused as a fetch's is.
+A stream's request is refused as a fetch's is, at the request and with no handle, but for one whose method or URL is no text, or whose body is neither text nor null, which is `stream_error`.
 Request refusals: `invalid_json|invalid_request|credential_header_refused|domain_blocked|method_blocked|scheme_blocked|rate_limited|private_ip_blocked|dns_error|redirect_credentials|request_too_large`
 
 ### `cyfr:vault/read` — `get(name) -> result<string, string>`
@@ -1409,9 +1409,9 @@ Patterns are `"*"`, exact (`"execution.run"`), or prefix globs (`"component.*"`)
 
 `timeout`, `batch_timeout` (durations like `"30s"`, `"3m"`), `max_memory_bytes`, `max_request_size`, `max_response_size`, `max_concurrent_tasks` (integers), and `rate_limit` (`{"requests": N, "window": "1m"}`). These are *suggestions under the platform ceiling* — the operator can adjust them at commit, and nothing can exceed the ceiling. Default timeouts when unasked: reagent=1m, catalyst=3m, formula=5m.
 
-**Memory and tables.** The engine gives a run one linear memory, which grows no further than the consented `max_memory_bytes` (64 MiB when unasked, at most the platform ceiling's 256 MiB), and at most ten tables of 20,000 elements each, in at most ten instances. A component that declares a second memory, more tables, or a memory or table larger than that is refused when it is instantiated, as `resource_limit`. A `memory.grow` (or `table.grow`) past the bound is refused as WebAssembly specifies: the instruction answers the guest `-1` and the run goes on, so an allocator that cannot grow fails the way its language reports an allocation failure — usually a trap — rather than with `resource_limit`.
+**Memory and tables.** The engine gives a run one linear memory, which grows no further than the consented `max_memory_bytes` (64 MiB when unasked, at most the platform ceiling's 256 MiB), and at most ten tables of 20,000 elements each, in at most ten instances. A component that declares a second memory, more tables, or a memory or table larger than that is refused when it is instantiated: its run fails with `Component instantiation failed: ` and the engine's own words. A `memory.grow` (or `table.grow`) past the bound is refused as WebAssembly specifies: the instruction answers the guest `-1` and the run goes on, so an allocator that cannot grow fails the way its language reports an allocation failure — usually a trap, `Component call failed for <export>: ` and the trap's words — rather than with that refusal.
 
-**Refused features.** A component may not use the component-model async features (async lifts and lowers, their callbacks, streams, futures and the other async builtins), GC or its reference types (`struct`, `array`, `externref` and the other GC-heap types), or exception handling (tags, `throw`, `try_table`). Each is refused when the component is published, registered or built, and again before it is compiled, with one sentence naming the component's digest. The engine's Wasmtime release has open security advisories in exactly these features, and a GC heap would sit outside the one linear memory above. The shipped components use none of them. Check yours with `wasm-tools validate --features=-cm-async,-cm-async-stackful,-cm-more-async-builtins,-cm-error-context,-cm-threading,-gc,-gc-types,-exceptions,-legacy-exceptions <component>.wasm`.
+**Refused features.** A component may not use the component-model async features (async lifts and lowers, their callbacks, streams, futures and the other async builtins), GC or its reference types (`struct`, `array`, `externref` and the other GC-heap types), exception handling (tags, `throw`, `try_table`), or threads (atomic instructions and shared memories). Each is refused when the component is published, registered or built, and again when the runner compiles it, whose engine has every one of them off, with one sentence naming the component's digest; a component registered before a feature was refused is refused at its next run in the same sentence. A GC heap would sit outside the one linear memory above, no CYFR interface is async, and an atomic wait would park the guest's thread where its budget cannot end it. The shipped components use none of them. Check yours with `wasm-tools validate --features=-cm-async,-cm-async-stackful,-cm-more-async-builtins,-cm-error-context,-cm-threading,-gc,-gc-types,-exceptions,-legacy-exceptions,-threads <component>.wasm`.
 
 ### Versionless by default
 
@@ -1609,9 +1609,7 @@ Errors returned by `invoke::call`/`invoke::spawn` as `{"error": {"type": "...", 
 | `setup_required` | A need with no live vault entry bound — includes `remediation` field |
 | `connection_not_granted` | The call named an account (`connection`) that the formula's edge to the dependency does not bind; the default is never used in its place. Granting that account on the edge is the fix |
 | `dispatch_error` | The dispatched call itself failed (bad reference, refused by the host, sub-component error) |
-| `spawn_failed` | An async task could not be started |
 | `task_failed` | A spawned task ended in failure (including a sub-component panic) |
-| `cancel_failed` | A cancel request could not stop the task |
 | `resource_limit` | `max_concurrent_tasks`, emit size, or emit rate exceeded |
 | `timeout` | Exceeded `batch_timeout` |
 | `tool_denied` | MCP tool not covered by the granted tool patterns |
@@ -1625,7 +1623,7 @@ Errors returned by `invoke::call`/`invoke::spawn` as `{"error": {"type": "...", 
 
 ## Before Committing (WASM)
 
-- [ ] `wasm-tools validate` passes with the refused features off (correct exports, no forbidden imports, no async, GC or exceptions)
+- [ ] `wasm-tools validate` passes with the refused features off (correct exports, no forbidden imports, no async, GC, exceptions or threads)
 - [ ] `cyfr-manifest.json` complete: `name`, `type`, `version`, `publisher`, `description`, `schema`, `needs`, `caps`
 - [ ] For an attached key or bundle, `needs.fields` names exactly one field and requests name the need as `connection`; for a disclosed need, the fields match the names the binary passes to `cyfr:vault/read.get`. The person's entry may name its fields otherwise; the grant maps them
 - [ ] Tested with `cyfr run` using representative input

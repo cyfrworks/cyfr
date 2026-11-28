@@ -4,15 +4,17 @@
 defmodule Locus.Runtime.RunnerBoundaryTest do
   @moduledoc """
   The worker service over its runner boundary, with the direct launcher:
-  each runner is a VM of its own, started with this VM's code paths, that
-  attaches, runs the subtree and reports over the control channel. The
-  service loads no component. A clean completion leaves the runner idle
-  for its athanor, and the next subtree of that athanor reuses it; another
-  athanor gets a fresh one. A root kill ends the runner's process and
-  reports its exit once; a host answer that is lost taints the runner; a
-  guest that ignores its deadline is halted by the runner's watchdog, and
-  one whose call was killed at its timeout taints its runner; the
-  service's handle dying reaps the runner.
+  each runner is the runner program this checkout built, a process of its
+  own that attaches, runs the subtree and reports over the control
+  channel. The service loads no component. A clean completion leaves the
+  runner idle for its athanor, and the next subtree of that athanor reuses
+  it; another athanor gets a fresh one. A root kill ends the runner's
+  process and reports its exit once; a host answer that is lost taints the
+  runner; a close CYFR holds past the assignment's deadline and the grace
+  is ended by the service's watch, which releases the runner and reports
+  it once, and leaves alone a runner whose hold ended first, however it
+  ended; a guest stopped at its timeout taints its runner; the service's
+  handle dying reaps the runner.
   """
 
   use ExUnit.Case, async: false
@@ -27,7 +29,7 @@ defmodule Locus.Runtime.RunnerBoundaryTest do
   @echo File.read!(Path.expand("../../support/runtime/test_wasm/echo.wasm", __DIR__))
   @spin File.read!(Path.expand("../../support/runtime/test_wasm/spin.wasm", __DIR__))
 
-  # A runner is a VM booting from nothing: its first attach takes seconds.
+  # A runner's first attach, bounded for a loaded host.
   @boot_ms 30_000
 
   @settings [:keeper, :idle_ttl_ms, :watchdog_grace_ms, :release_grace_ms]
@@ -102,28 +104,60 @@ defmodule Locus.Runtime.RunnerBoundaryTest do
     end
   end
 
+  # Each request of `op` is held for as long as the test lives and no
+  # longer: a request still parked when the test ends would hold the
+  # scripted host's stop.
+  defp hold_while_alive(host, op) do
+    test = self()
+
+    ScriptedHost.script(host, op, fn _args, _caller ->
+      ref = Process.monitor(test)
+      receive do: ({:DOWN, ^ref, :process, ^test, _reason} -> {:ok, "held"})
+    end)
+  end
+
+  # What the service holds for the runner `handle`, its watch among it.
+  defp held_by!(handle) do
+    %{assigned: assigned} = :sys.get_state(WorkerService)
+    Map.fetch!(assigned, handle)
+  end
+
+  defp first_deadline(attempt) do
+    {:ok, assignment} = Prima.Assignment.read(attempt.assignment)
+    assignment.deadline
+  end
+
   defp attach_runners(host),
     do: for(%{caller: %{runner: runner}} <- ScriptedHost.requests(host, "attach"), do: runner)
 
-  test "the service role loads no component: the engine runs in the runner's VM alone" do
+  test "the service role loads no component: every runner is the runner program" do
     {:ok, settings} = Locus.Runtime.Settings.pool([keeper: :direct], %{})
     service = Locus.Runtime.children(:service, settings)
-    runner = Locus.Runtime.children(:runner, %{})
 
-    refute Locus.Runtime.SharedEngine in service
-    refute Locus.Runtime.Cache in service
-    assert Locus.Runtime.SharedEngine in runner
-    assert Locus.Runtime.Cache in runner
+    assert Locus.Runtime.Settings.runner_command() ==
+             %{argv: ["/usr/local/bin/cyfr-runner"], env: %{}}
+
     assert Enum.any?(service, &match?(%{id: Locus.Runtime.WorkerListener}, &1))
-    refute Enum.any?(runner, &match?(%{id: Locus.Runtime.WorkerListener}, &1))
 
     tree = Locus.Runtime.service_tree(settings)
     assert Enum.any?(tree, &match?(%{id: Locus.DirectLauncher.Runner}, &1))
+    assert Locus.Runtime.Events in tree
     assert Enum.any?(tree, &match?({Locus.Runtime.RunnerPool, _}, &1))
     assert Locus.Runtime.WorkerService in tree
+
+    # What the service hands a runner: its identities, and nothing else.
+    assert Locus.Runtime.Settings.runner_environment(%{
+             runner_id: "run_x",
+             service_id: "wrk_x",
+             boot: "boot_x"
+           }) == %{
+             "RUNTIME_RUNNER_ID" => "run_x",
+             "RUNTIME_SERVICE_ID" => "wrk_x",
+             "RUNTIME_BOOT_ID" => "boot_x"
+           }
   end
 
-  test "a subtree runs in a runner's VM, completes cleanly, and its runner is reused for its athanor only",
+  test "a subtree runs in a runner's process, completes cleanly, and its runner is reused for its athanor only",
        %{host: host, boot: boot} do
     first = echo!(host, boot, input: %{"hello" => "world"})
     assert :ok = start(first)
@@ -231,24 +265,19 @@ defmodule Locus.Runtime.RunnerBoundaryTest do
     assert fresh != runner
   end
 
-  test "a guest that ignores its deadline is halted by the runner's watchdog, and no process is left",
+  test "a close CYFR holds past the deadline and the grace is ended by the service's watch, " <>
+         "which releases the runner and reports it once, and no process is left",
        %{host: host, boot: boot} do
     # The attempt's close is held, so the subtree cannot end on its own:
-    # only the watchdog, armed at the deadline plus the grace, ends it.
+    # the runner stops its guest at its budget and waits on the close, and
+    # only the service's watch, at the deadline plus the grace, ends it.
     # Held for as long as the test lives and no longer: a request still
     # parked when the test ends would hold the scripted host's stop.
-    test = self()
+    hold_while_alive(host, "fail")
 
-    ScriptedHost.script(host, "fail", fn _args, _caller ->
-      ref = Process.monitor(test)
-      receive do: ({:DOWN, ^ref, :process, ^test, _reason} -> {:ok, "held"})
-    end)
-
-    # The pool's one runner, taken before the attempt's deadline is set.
-    # The watchdog halts it a grace after that deadline, which on a loaded
-    # host can come before the guest's first host call: the runner is known
-    # by its process and its report, never by a poll for the busy runner
-    # or by what its guest said.
+    # The pool's one runner, taken before the attempt's deadline is set:
+    # the runner is known by its process and its report, never by a poll
+    # for the busy runner, whose moment may pass between two looks.
     runner = fresh_runner!()
     os_pid = os_pid(runner)
     assert is_integer(os_pid)
@@ -256,8 +285,11 @@ defmodule Locus.Runtime.RunnerBoundaryTest do
     attempt = spin!(host, boot, timeout_ms: 500)
     assert :ok = start(attempt)
 
-    wait_until(fn -> not alive?(os_pid) end, @boot_ms, "the spinning runner to be halted")
-    wait_until(fn -> ScriptedHost.requests(host, "runner_exited") != [] end, 5_000)
+    wait_until(fn -> ScriptedHost.requests(host, "fail") != [] end, @boot_ms)
+    assert [%{args: %{"outcome" => %{"abandoned" => true}}}] = ScriptedHost.requests(host, "fail")
+
+    wait_until(fn -> not alive?(os_pid) end, @boot_ms, "the runner to be released")
+    wait_until(fn -> ScriptedHost.requests(host, "runner_exited") != [] end, 10_000)
 
     assert [%{args: %{"attempts" => [held], "runner" => reported}}] =
              ScriptedHost.requests(host, "runner_exited")
@@ -266,13 +298,77 @@ defmodule Locus.Runtime.RunnerBoundaryTest do
     assert reported == runner.id
     assert ScriptedHost.requests(host, "complete") == []
     wait_until(fn -> match?(%{busy: 0, tainted: 0}, runners()) end, 10_000)
+    assert {:ok, %{attempts: []}} = WorkerService.status()
+    # sleep-ok: 300 ms after the pool settled in which no second report may arrive
+    Process.sleep(300)
+    assert length(ScriptedHost.requests(host, "runner_exited")) == 1
   end
 
-  # The watchdog, armed at the deadline plus its grace, would halt the
-  # runner and report its exit: its grace outlasts the test, so only the
-  # call's timeout ends the subtree.
+  test "the watch ends with its hold: a runner whose subtree completed, or was killed, before " <>
+         "the deadline and the grace is never released by it",
+       %{host: host, boot: boot} do
+    # A clean completion, held until the test has read the watch's timer.
+    test = self()
+
+    ScriptedHost.script(host, "complete", fn _args, _caller ->
+      send(test, {:completing, self()})
+      receive do: (:complete -> {:ok, "done"})
+    end)
+
+    runner = fresh_runner!()
+    first = echo!(host, boot, timeout_ms: 5_000)
+    assert :ok = start(first)
+    assert_receive {:completing, completing}, @boot_ms
+    %{watch: stale, watch_timer: timer} = held_by!(runner.pid)
+    assert is_integer(Process.read_timer(timer))
+    send(completing, :complete)
+
+    wait_until(fn -> match?(%{busy: 0, idle: 1}, runners()) end, 10_000)
+    # Its hold ended with the completion, and its timer with it.
+    assert Process.read_timer(timer) == false
+
+    # The runner taken for its athanor's next subtree: the first hold's
+    # watch, should it still arrive, names a hold the runner no longer
+    # has, and ends nothing.
+    second = echo!(host, boot, timeout_ms: 5_000)
+    assert :ok = start(second)
+    assert_receive {:completing, completing}, @boot_ms
+    assert held_by!(runner.pid).watch != stale
+    send(WorkerService, {:watch, runner.pid, stale})
+    assert %{busy: 1} = runners()
+    assert alive?(os_pid(runner))
+    send(completing, :complete)
+    wait_until(fn -> match?(%{busy: 0, idle: 1}, runners()) end, 10_000)
+    assert attach_runners(host) == [runner.id, runner.id]
+
+    # A kill ends a hold too, whatever its deadline: of another athanor's
+    # subtree, so the first runner stays kept.
+    attempt = spin!(host, boot, athanor_id: "ath_other")
+    assert :ok = start(attempt)
+    wait_until(fn -> busy_runner() != nil end, @boot_ms)
+    %{watch_timer: killed} = held_by!(busy_runner().pid)
+    assert is_integer(Process.read_timer(killed))
+    assert :ok = WorkerService.kill(attempt.execution_id)
+    wait_until(fn -> ScriptedHost.requests(host, "runner_exited") != [] end, 10_000)
+    assert Process.read_timer(killed) == false
+
+    # Past the first subtree's deadline and the grace, its runner is still
+    # kept for its athanor, and only the killed runner was reported.
+    wait_until(
+      fn -> System.system_time(:millisecond) > first_deadline(first) + 1_000 + 500 end,
+      15_000
+    )
+
+    assert %{idle: 1} = runners()
+    assert [%{args: %{"attempts" => [held]}}] = ScriptedHost.requests(host, "runner_exited")
+    assert held == attempt.attempt
+  end
+
+  # The service's watch, armed at the deadline plus its grace, would
+  # release the runner and report its exit: its grace outlasts the test,
+  # so only the guest's budget ends the subtree.
   @tag watchdog_grace_ms: 60_000
-  test "a guest killed at its timeout taints its runner, which is ended with no process left",
+  test "a guest stopped at its timeout taints its runner, which is ended with no process left",
        %{host: host, boot: boot} do
     # The pool's one runner, attached before the attempt's deadline is
     # set: its busy moment ends at that deadline, sooner than a poll may
@@ -286,14 +382,19 @@ defmodule Locus.Runtime.RunnerBoundaryTest do
     wait_until(fn -> ScriptedHost.requests(host, "attach") != [] end, @boot_ms)
     assert attach_runners(host) == [runner.id]
 
-    # The attempt's own timeout kills the component call and closes the
-    # attempt failed as abandoned; the call's native thread spins on.
+    # The attempt's own budget stops the guest at the engine's next epoch
+    # tick and closes the attempt failed as abandoned.
     wait_until(fn -> ScriptedHost.requests(host, "fail") != [] end, 10_000)
     assert [%{args: %{"outcome" => %{"abandoned" => true}}}] = ScriptedHost.requests(host, "fail")
 
-    # A killed call makes the completion unclean: the runner is never kept
-    # idle for its athanor, and the service ends its VM, thread and all.
-    wait_until(fn -> not alive?(os_pid) end, 10_000, "the runner with the killed call to be gone")
+    # A stopped call makes the completion unclean: the runner is never kept
+    # idle for its athanor, and the service ends its process.
+    wait_until(
+      fn -> not alive?(os_pid) end,
+      10_000,
+      "the runner with the stopped call to be gone"
+    )
+
     wait_until(fn -> match?(%{busy: 0, idle: 0, tainted: 0}, runners()) end, 10_000)
     assert ScriptedHost.requests(host, "complete") == []
     assert ScriptedHost.requests(host, "runner_exited") == []

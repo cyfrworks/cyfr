@@ -134,7 +134,7 @@ defmodule Locus.Runtime.ApplicationTest do
     end
   end
 
-  test "the worker service, its keeper, its pool and the pool's handles restart together" do
+  test "the worker service, its keeper, its pool, the pool's handles and the forwarder of their events restart together" do
     ids =
       for {id, _pid, _type, _modules} <-
             Supervisor.which_children(Locus.Runtime.WorkerService.Tree),
@@ -144,11 +144,12 @@ defmodule Locus.Runtime.ApplicationTest do
              Enum.sort([
                Locus.DirectLauncher.Runner,
                Locus.Runtime.RunnerPool.Runners,
+               Locus.Runtime.Events,
                Locus.Runtime.RunnerPool,
                Locus.Runtime.WorkerService
              ])
 
-    assert Supervisor.count_children(Locus.Runtime.WorkerService.Tree).active == 4
+    assert Supervisor.count_children(Locus.Runtime.WorkerService.Tree).active == 5
   end
 
   test "the listener serves the worker routes on the address the credentials name" do

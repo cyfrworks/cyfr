@@ -89,9 +89,7 @@ runs:
       if: inputs.build-cache != 'none'
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
-        path: |
-          ~/.cache/rustler_precompiled
-          ~/.cache/elixir_make
+        path: ~/.cache/elixir_make
         key: ${{ runner.os }}-${{ runner.arch }}-prebuilt-nifs-${{ steps.beam.outputs.otp-version }}-${{ hashFiles('mix.lock') }}
         restore-keys: ${{ runner.os }}-${{ runner.arch }}-prebuilt-nifs-${{ steps.beam.outputs.otp-version }}-
     - name: The pinned wasm-tools version

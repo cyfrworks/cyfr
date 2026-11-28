@@ -55,25 +55,10 @@ defmodule Locus.Config do
   log's, their defaults, ranges, reads and refusals, for every language
   that reads them (`Locus.Runtime.SettingsTest` holds this module to it).
 
-  A runner is no node: it reads the `RUNTIME_*` rows (`runner/1`), which
-  its service writes for it outside every prefix the keeper refuses in a
-  spawn (`Locus.Runtime.Settings.runner_environment/1`), and nothing else
-  of the release. `RUNTIME_ROLE` is `runner` for one
-  (`Locus.Runtime.Release.role/1`, `config/locus_runtime.exs`);
-  `RUNTIME_RUNNER_ID` is the id it presents in its host calls,
-  `RUNTIME_SERVICE_ID` and `RUNTIME_BOOT_ID` the worker service and boot
-  it presents from, `RUNTIME_CONTROL_FD` the file descriptor its control
-  channel is on (3 by default; 0 means the channel is its standard input
-  and output), `RUNTIME_RELAY_SOCKET` the unix socket the test build's
-  direct launcher gives it for its relay to the service in place of the
-  file descriptor 4 cyfr-locus places it on (`Locus.Runtime.Relay.Runner`),
-  and `RUNTIME_WATCHDOG_GRACE_MS` how far past its
-  assignment's deadline it may live (`Locus.Runtime.Settings`' default
-  when unset). A runner is given no address of CYFR's: it has no network,
-  and every host call it makes leaves through its relay. A runner that
-  can see `LOCUS_RUNTIME_KEY` was given the service's own key, which no
-  runner holds, and refuses to start. `RUNTIME_*` names are never refused
-  as unknown.
+  A runner is no node of the release: it is the runner program
+  (`apps/locus/runner`), which reads only the environment its service
+  writes for it (`Locus.Runtime.Settings.runner_environment/1`), outside
+  every prefix the keeper refuses in a spawn, and nothing of this roster.
 
   A node serves the runtime when it holds the runtime's key, the builds
   service when it holds a builds key and the backends service when it
@@ -101,7 +86,8 @@ defmodule Locus.Config do
   A node's logging is the release's one setting whichever role it serves:
   `:log_level` and `:log_format` become the logger's when a release node
   that serves a role starts (`Locus.Application`). A runner reads neither:
-  it logs at the default level, as plain text to standard error.
+  it writes its own lines to standard error, which its keeper relays to
+  the service's log under the runner's id.
 
   Where the environment was never read — a development node, the test
   suite — every accessor answers its default and both keys are nil, so no
@@ -139,7 +125,7 @@ defmodule Locus.Config do
   # Every variable of the release, `{variable, role, key}`: the key its
   # role's reader answers it under (the flat `:locus` keys for builds,
   # backends and the release's log setting, the `:runtime` keyword's keys
-  # for the runtime, a runner's settings for a runner). A role's rows are
+  # for the runtime). A role's rows are
   # in its reader's order, so every answer keeps its order.
   @roster [
     {"LOCUS_BUILDS_KEY", :builds, :request_key},
@@ -161,25 +147,15 @@ defmodule Locus.Config do
     {"LOCUS_RUNTIME_IDLE_TTL_MS", :runtime, :idle_ttl_ms},
     {"LOCUS_RUNTIME_WATCHDOG_GRACE_MS", :runtime, :watchdog_grace_ms},
     {"LOCUS_RUNTIME_RELEASE_GRACE_MS", :runtime, :release_grace_ms},
-    {"LOCUS_RUNTIME_ATTACH_DIR", :runtime, :attach_dir},
-    {"RUNTIME_ROLE", :runner, :role},
-    {"RUNTIME_RUNNER_ID", :runner, :runner_id},
-    {"RUNTIME_SERVICE_ID", :runner, :service_id},
-    {"RUNTIME_BOOT_ID", :runner, :boot},
-    {"RUNTIME_CONTROL_FD", :runner, :control_fd},
-    {"RUNTIME_RELAY_SOCKET", :runner, :relay_socket},
-    {"RUNTIME_WATCHDOG_GRACE_MS", :runner, :watchdog_grace_ms}
+    {"LOCUS_RUNTIME_ATTACH_DIR", :runtime, :attach_dir}
   ]
 
-  # The one prefix every name of a role carries. The keeper refuses every
-  # `CYFR_`, `LOCUS_` and `KEEPER_` name in a spawn, so a runner's is none
-  # of those.
+  # The one prefix every name of a role carries.
   @prefixes %{
     builds: "LOCUS_BUILDS_",
     release: "LOCUS_LOG_",
     backends: "LOCUS_BACKENDS_",
-    runtime: "LOCUS_RUNTIME_",
-    runner: "RUNTIME_"
+    runtime: "LOCUS_RUNTIME_"
   }
 
   @variables Enum.map(@roster, &elem(&1, 0))
@@ -187,22 +163,13 @@ defmodule Locus.Config do
   # The variable each reader reads, by role and key.
   @variable Map.new(@roster, fn {variable, role, key} -> {{role, key}, variable} end)
 
-  # The runner's key of each runner variable, for the sentence that
-  # refuses a malformed one.
-  @runner_keys for {variable, :runner, key} <- @roster, into: %{}, do: {variable, key}
-
   # The runtime's settings that are the service's credentials and
   # listener (`Locus.Runtime.Credentials`); the rest are its pool's
   # (`Locus.Runtime.Settings`).
   @credential_keys [:service_id, :service_key, :host_url, :bind, :port]
 
-  # A runner's ids: printable ASCII without spaces. The service's id is a
-  # worker service id besides.
-  @id ~r/\A[\x21-\x7E]{1,256}\z/
-  @service_id ~r/\Awrk_[A-Za-z0-9_-]{1,64}\z/
-
   @typedoc "A role of the release's roster: one prefix, and the rows its reader reads."
-  @type role :: :runtime | :builds | :backends | :release | :runner
+  @type role :: :runtime | :builds | :backends | :release
 
   @typedoc "The `:locus` application environment `from_env/2` writes."
   @type settings :: [
@@ -413,126 +380,6 @@ defmodule Locus.Config do
     do: Locus.Runtime.Credentials.expected(name)
 
   defp runtime_expected(name), do: Locus.Runtime.Settings.expected(name)
-
-  @doc """
-  The runner settings `env` (a map of environment variables, a runner's
-  process environment) spells, or the first variable that refuses: the
-  service's key in sight is refused before anything else is read.
-  """
-  @spec runner(%{optional(String.t()) => String.t()}) ::
-          {:ok, Locus.Runtime.Settings.runner()}
-          | {:error, {:missing | :malformed | :refused, String.t()}}
-  def runner(env) when is_map(env) do
-    with :ok <- no_service_key(env),
-         {:ok, runner_id} <- runner_id(env, :runner_id),
-         {:ok, service_id} <- runner_service_id(env),
-         {:ok, boot} <- runner_id(env, :boot),
-         {:ok, control_fd} <- control_fd(env),
-         {:ok, relay} <- relay(env),
-         {:ok, grace} <- grace(env) do
-      {:ok,
-       %{
-         runner_id: runner_id,
-         service_id: service_id,
-         boot: boot,
-         control_fd: control_fd,
-         relay: relay,
-         watchdog_grace_ms: grace
-       }}
-    end
-  end
-
-  @doc "`runner/1` over the process environment, raising on a variable that refuses so the runner stops there."
-  @spec runner!() :: Locus.Runtime.Settings.runner()
-  def runner! do
-    case runner(System.get_env()) do
-      {:ok, runner} ->
-        runner
-
-      {:error, {:refused, name}} ->
-        raise ArgumentError,
-              "[Locus.Config] a runner must not see #{name}: the service's key never leaves the service"
-
-      {:error, {:missing, name}} ->
-        raise ArgumentError, "[Locus.Config] #{name} is not set"
-
-      {:error, {:malformed, name}} ->
-        raise ArgumentError, "[Locus.Config] #{name} is malformed: #{runner_expected(name)}"
-    end
-  end
-
-  defp no_service_key(env) do
-    key = variable(:runtime, :service_key)
-    if is_map_key(env, key), do: {:error, {:refused, key}}, else: :ok
-  end
-
-  defp runner_id(env, key) do
-    name = variable(:runner, key)
-
-    case Map.get(env, name) do
-      nil -> {:error, {:missing, name}}
-      value -> if Regex.match?(@id, value), do: {:ok, value}, else: {:error, {:malformed, name}}
-    end
-  end
-
-  defp runner_service_id(env) do
-    with {:ok, value} <- runner_id(env, :service_id) do
-      if Regex.match?(@service_id, value),
-        do: {:ok, value},
-        else: {:error, {:malformed, variable(:runner, :service_id)}}
-    end
-  end
-
-  defp control_fd(env) do
-    name = variable(:runner, :control_fd)
-
-    case Integer.parse(Map.get(env, name, "3")) do
-      {fd, ""} when fd >= 0 -> {:ok, fd}
-      _ -> {:error, {:malformed, name}}
-    end
-  end
-
-  # The descriptor cyfr-locus places every runner's relay on, 4, or the
-  # unix socket the test build's direct launcher names in its place: an
-  # absolute path, which wins when set.
-  defp relay(env) do
-    socket = variable(:runner, :relay_socket)
-
-    case Map.fetch(env, socket) do
-      {:ok, "/" <> _ = path} ->
-        if Path.expand(path) == path,
-          do: {:ok, {:socket, path}},
-          else: {:error, {:malformed, socket}}
-
-      {:ok, _path} ->
-        {:error, {:malformed, socket}}
-
-      :error ->
-        {:ok, {:fd, 4}}
-    end
-  end
-
-  defp grace(env) do
-    name = variable(:runner, :watchdog_grace_ms)
-    default = Integer.to_string(Locus.Runtime.Settings.default(:watchdog_grace_ms))
-
-    case Integer.parse(Map.get(env, name, default)) do
-      {ms, ""} when ms > 0 -> {:ok, ms}
-      _ -> {:error, {:malformed, name}}
-    end
-  end
-
-  # What a well-formed value of the runner variable `name` is, for the
-  # message that refuses one.
-  defp runner_expected(name) do
-    case Map.fetch!(@runner_keys, name) do
-      key when key in [:runner_id, :boot] -> "1 to 256 bytes of printable ASCII without spaces"
-      :service_id -> Locus.Runtime.Credentials.expected(:service_id)
-      :control_fd -> "a file descriptor number, 0 for standard input and output"
-      :relay_socket -> "an absolute path to a unix socket"
-      :watchdog_grace_ms -> "a positive integer of milliseconds"
-    end
-  end
 
   @doc "Every name the release reads: the roster's, role by role."
   @spec variables() :: [String.t()]

@@ -13,7 +13,9 @@ defmodule Prima.HostAPITest do
   header a listener refuses before the body is refused with its error, in
   `Prima.WorkerAuth`'s order; the report verifies under its service's
   dispatch key and names its member, and carries the memory limit its
-  runner was ended at as one of three words, any other refused; a retried call is the same body under
+  runner was ended at as one of three words, any other refused; a report
+  of events verifies the same way, names no member and reads whole, a
+  record off the runner's roster refusing the batch; a retried call is the same body under
   a fresh header; a child's `connection` is an optional member of its
   `admit_child` args, an account its edge lacks is refused
   `connection_not_granted`, and a key repeated naming another connection
@@ -147,7 +149,8 @@ defmodule Prima.HostAPITest do
       callbacks = Enum.map(@vectors["calls"], & &1["callback"])
 
       assert callbacks ==
-               HostAPI.callbacks() |> List.delete(:runner_exited) |> Enum.map(&Atom.to_string/1)
+               (HostAPI.callbacks() -- [:runner_exited, :report_events])
+               |> Enum.map(&Atom.to_string/1)
 
       for call <- @vectors["calls"] do
         assert {_fields, _args, answer} = reproduces(call)
@@ -230,6 +233,67 @@ defmodule Prima.HostAPITest do
 
       assert other != member
       assert cross["error"] == "lost"
+    end
+
+    test "a report of events verifies under its service's dispatch key and reads whole, " <>
+           "each record by the runner's roster, and one record off it refuses the batch" do
+      report = @vectors["events_report"]
+      fields = atoms(report["fields"], @dispatch_fields)
+
+      assert {:ok, report["header"]} ==
+               WorkerAuth.report_header(dispatch_key(), fields, report["body"])
+
+      assert {:ok, ^fields} =
+               WorkerAuth.verify_report(root(), report["header"], report["body"], fields.ts)
+
+      assert {:ok, :report_events, args} =
+               WorkerWire.read_request_body(HostAPI, Jason.decode!(report["body"]))
+
+      refute Map.has_key?(args, "member")
+      assert {:ok, events} = HostAPI.read_events(args)
+      assert length(events) == length(report["emitted"])
+
+      # The service writes the same body from the events it read.
+      assert Jason.encode!(
+               WorkerWire.request_body(:report_events, HostAPI.report_events_args(events))
+             ) ==
+               report["body"]
+
+      assert Enum.map(events, & &1.name) ==
+               Enum.map(report["emitted"], fn %{"event" => ["cyfr", "locus", "runtime" | name]} ->
+                 Enum.join(name, ".")
+               end)
+
+      assert Enum.sort(Enum.map(events, & &1.name)) ==
+               Enum.sort(Enum.map(Prima.RunnerControl.event_roster(), & &1.name))
+
+      assert {:ok, true} = WorkerWire.read_answer(Jason.decode!(report["answer"]))
+
+      off = report["off_roster"]
+      off_fields = atoms(off["fields"], @dispatch_fields)
+
+      assert {:ok, off["header"]} ==
+               WorkerAuth.report_header(dispatch_key(), off_fields, off["body"])
+
+      assert {:ok, :report_events, off_args} =
+               WorkerWire.read_request_body(HostAPI, Jason.decode!(off["body"]))
+
+      assert :error = HostAPI.read_events(off_args)
+      assert HostAPI.retry(:report_events) == :never
+    end
+
+    test "a report of events carries one to the batch bound, and nothing beside them" do
+      %{"events" => [record | _]} =
+        Jason.decode!(@vectors["events_report"]["body"])["args"]
+
+      bound = HostAPI.max_report_events()
+
+      assert {:ok, events} = HostAPI.read_events(%{"events" => List.duplicate(record, bound)})
+      assert length(events) == bound
+      assert :error = HostAPI.read_events(%{"events" => List.duplicate(record, bound + 1)})
+      assert :error = HostAPI.read_events(%{"events" => []})
+      assert :error = HostAPI.read_events(%{"events" => [record], "member" => "m"})
+      assert :error = HostAPI.read_events(%{"events" => record})
     end
 
     test "a report carries the memory limit its runner was ended at, and none other" do

@@ -3,9 +3,10 @@
 import Config
 
 # The pinned wasm-tools every component is validated with
-# (`Prima.ComponentFeatures`), where both images install it
-# (scripts/wasm-tools.sh); `CYFR_WASM_TOOLS` names another for a cyfr
-# release run outside its image.
+# (`Prima.ComponentFeatures`), where the cyfr image installs it
+# (scripts/wasm-tools.sh); the locus image validates nothing, its runner's
+# engine refusing a refused feature at compile. `CYFR_WASM_TOOLS` names
+# another for a cyfr release run outside its image.
 config :prima, :wasm_tools, "/usr/local/bin/wasm-tools"
 
 config :cyfr, CyfrWeb.Endpoint, cache_static_manifest: "priv/static/cache_manifest.json"

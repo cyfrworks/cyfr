@@ -51,9 +51,6 @@ CLAUDE.md
 cosign.key
 *.key
 
-# Wasmex/Wasmtime compiled NIFs cache
-priv/native/
-
 # Phoenix generated assets
 apps/*/priv/static/assets/
 

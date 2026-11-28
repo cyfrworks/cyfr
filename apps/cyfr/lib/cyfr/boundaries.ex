@@ -156,7 +156,7 @@ defmodule Cyfr.Boundaries do
       note:
         "the island: the runtime, which reaches CYFR over its host API alone, and builds " <>
           "and backends, which CYFR reaches over their wires alone",
-      dependency_roots: ~w(Jason Req Plug Bandit Wasmex ThousandIsland)
+      dependency_roots: ~w(Jason Req Plug Bandit ThousandIsland)
     }
   ]
 
@@ -3150,10 +3150,7 @@ defmodule Cyfr.Boundaries do
         "holding a sandbox connection is released before the next test.",
     "apps/cyfr/test/cyfr/test_sandbox_test.exs" =>
       "the sandbox helper's own case: what it drains IS the pool, so the assertion " <>
-        "has to name it.",
-    "apps/cyfr/test/cyfr/wit_abi_drift_test.exs" =>
-      "names `Locus.Runtime.Engine` in the sentence its failure prints, so a reader is told " <>
-        "which side of the ABI to look at."
+        "has to name it."
   }
 
   @doc """

@@ -12,32 +12,37 @@
 //! (`read_answer`). `tests/fixtures/host_api.json` holds both.
 //!
 //! JSON a peer sends is read as Prima's reader reads it (`parse`): a
-//! member given twice is its first, an integer of any size is an integer
-//! and kept whole, and a number past a double's range is no JSON. What is
-//! read is held as `Json`, whose strings are cleared when it is dropped and
-//! whose `Debug` prints none of it. Two things are not cleared: the
-//! parser's own scratch buffers, which it frees itself, and the text of
-//! each number. A refused document's parts are freed as the parser leaves
-//! them.
+//! member given twice is its first, an integer of at most
+//! `MAX_INTEGER_CHARS` characters is an integer and kept whole, and a
+//! longer integer or a number past a double's range is no JSON
+//! (`tests/fixtures/wire_json.json`). A guest's JSON bound for CYFR (its
+//! output, its requests) is read so too, so the runner refuses before it
+//! sends what CYFR's reader would refuse. What is read is held as `Json`,
+//! whose strings are cleared when it is dropped and whose `Debug` prints
+//! none of it. Two things are not cleared: the parser's own scratch
+//! buffers, which it frees itself, and the text of each number. A refused
+//! document's parts are freed as the parser leaves them.
 //!
-//! Two kinds of document Prima reads are refused here. One nested deeper
-//! than `MAX_DEPTH` arrays and objects: the parser recurses once a level,
+//! One kind of document Prima reads is refused here: one nested deeper
+//! than `MAX_DEPTH` arrays and objects. The parser recurses once a level,
 //! so the depth is counted before it reads anything (`read` answers
 //! `Unread::TooDeep`), and every thread that parses has the stack for that
-//! depth (`STACK_BYTES`), the guest's fiber among them. And one with a
-//! member named `$serde_json::private::Number`, the name under which the
-//! parser hands this reader a number, which is never read as one.
+//! depth (`STACK_BYTES`), the guest's fiber among them. The same scan
+//! refuses a raw control byte inside a string (`scan`): the parser reads a
+//! member's name as bytes, unchecked for one, and hands an escaped one
+//! over as the same byte.
 //!
-//! Two stated differences from the Elixir runner, whose readers go with it
-//! (R5). A number in a host answer's data is carried as the text CYFR
-//! wrote, its digits kept exactly: an integer of any length whole, a
-//! decimal never re-read as a double. Only an exponent may be respelled,
-//! its letter lowercased and a positive exponent given its `+` (`1.0E20` is
-//! handed on as `1.0e+20`), which changes no value. Jason rounds
-//! `1.00000000000000001` to `1.0`, reads `1e-400` as `0.0` and refuses an
-//! integer past 1,024 digits. And `crate::control::encode` of an `assign`,
-//! the service's direction, which a runner never encodes, writes plain
-//! copies of the token and of the keys' hex.
+//! Two stated differences from the Elixir runner's readers. A number in a
+//! host answer's data or a guest's document is carried as the text it was
+//! written in, its digits kept exactly: an integer whole, a decimal never
+//! re-read as a double. Only an exponent may be respelled, its letter
+//! lowercased and a positive exponent given its `+` (`1.0E20` is handed on
+//! as `1.0e+20`), which changes no value. Jason, which read them there,
+//! rounds `1.00000000000000001` to `1.0` and reads `1e-400` as `0.0`, as
+//! CYFR's reader still reads the text handed on. And
+//! `crate::control::encode` of an `assign`, the service's direction, which
+//! a runner never encodes, writes plain copies of the token and of the
+//! keys' hex.
 
 use std::io::Write as _;
 
@@ -55,6 +60,11 @@ pub const VERSION: u64 = 3;
 /// The largest integer every JSON reader holds exactly, 2^53 − 1: the
 /// domain of every integer field of the protocol.
 pub const MAX_INTEGER: u64 = 9_007_199_254_740_991;
+
+/// The most characters an integer is read with, its sign among them, as
+/// Prima's reader reads one (`tests/fixtures/wire_json.json`'s
+/// `max_integer_chars`).
+pub const MAX_INTEGER_CHARS: usize = 1024;
 
 /// Standard base64 with its padding, as every body and input crosses. It
 /// reads what Prima's decoder reads: the padding is required, and bits
@@ -271,21 +281,40 @@ pub fn parse(bytes: &[u8]) -> Option<Json> {
 
 /// The one JSON value `bytes` spell, or why it is not read.
 pub fn read(bytes: &[u8]) -> Result<Json, Unread> {
-    if depth(bytes) > MAX_DEPTH {
+    let scanned = scan(bytes);
+    if scanned.depth > MAX_DEPTH {
         return Err(Unread::TooDeep);
     }
-    read_within(bytes).ok_or(Unread::Malformed)
+    if scanned.control.is_some() {
+        return Err(Unread::Malformed);
+    }
+    read_within(bytes).map_err(|_| Unread::Malformed)
 }
 
-/// The deepest nesting of arrays and objects in `bytes` outside strings,
-/// counted without recursion. A string runs from an unescaped quote to the
-/// next, as the parser reads one, so every level the parser enters is
-/// counted; bytes that are no JSON are refused by the parser after.
-pub fn depth(bytes: &[u8]) -> usize {
+/// What a document's bytes hold that the parser is not left to judge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Scanned {
+    /// The deepest nesting of arrays and objects outside strings.
+    pub depth: usize,
+    /// Where the first raw byte below 0x20 inside a string is, which no
+    /// reader takes.
+    pub control: Option<usize>,
+}
+
+/// Scan `bytes` once, without recursion, before the parser reads them. A
+/// string runs from an unescaped quote to the next, as the parser reads
+/// one, so every level the parser enters is counted and every byte of
+/// every string, a member's name among them, is seen; bytes that are no
+/// JSON are refused by the parser after.
+pub fn scan(bytes: &[u8]) -> Scanned {
     let (mut level, mut deepest) = (0usize, 0usize);
     let (mut string, mut escaped) = (false, false);
-    for &byte in bytes {
+    let mut control = None;
+    for (at, &byte) in bytes.iter().enumerate() {
         if string {
+            if byte < 0x20 {
+                control = control.or(Some(at));
+            }
             if escaped {
                 escaped = false;
             } else if byte == b'\\' {
@@ -305,16 +334,41 @@ pub fn depth(bytes: &[u8]) -> usize {
             _ => {}
         }
     }
-    deepest
+    Scanned {
+        depth: deepest,
+        control,
+    }
 }
 
-fn read_within(bytes: &[u8]) -> Option<Json> {
+/// Why `bytes`, nested no deeper than `MAX_DEPTH`, are no JSON, in the
+/// parser's words: what it met and where, never the bytes themselves.
+/// None for a document that reads.
+pub fn malformed(bytes: &[u8]) -> Option<String> {
+    if let Err(reason) = read_within(bytes) {
+        return Some(reason.to_string());
+    }
+    // Only the scan refuses it: a raw control byte in a member's name,
+    // placed as the parser places one it refuses in a value, by its line
+    // and the column after it.
+    let after = scan(bytes).control? + 1;
+    let start = bytes[..after]
+        .iter()
+        .rposition(|&byte| byte == b'\n')
+        .map_or(0, |newline| newline + 1);
+    let line = 1 + bytes[..start].iter().filter(|&&byte| byte == b'\n').count();
+    Some(format!(
+        "control character (\\u0000-\\u001F) found while parsing a string at line {line} column {}",
+        after - start
+    ))
+}
+
+fn read_within(bytes: &[u8]) -> Result<Json, serde_json::Error> {
     let mut reader = serde_json::Deserializer::from_slice(bytes);
     reader.disable_recursion_limit();
-    let FirstMember(value) = FirstMember::deserialize(&mut reader).ok()?;
+    let FirstMember(value) = FirstMember::deserialize(&mut reader)?;
     let json = Json(value);
-    reader.end().ok()?;
-    Some(json)
+    reader.end()?;
+    Ok(json)
 }
 
 /// The name under which the parser, keeping each number's text, hands a
@@ -414,7 +468,7 @@ enum Key {
 
 /// A member's name, read as bytes: the parser spells a real member's name
 /// so, and the name it hands a number under as text, which tells the two
-/// apart. A real member of that name is refused.
+/// apart. A real member of that name is a member, as Prima reads it.
 struct KeySeed;
 
 impl<'de> de::DeserializeSeed<'de> for KeySeed {
@@ -441,20 +495,24 @@ impl<'de> Visitor<'de> for KeySeed {
     }
 
     fn visit_bytes<E: de::Error>(self, name: &[u8]) -> Result<Key, E> {
-        match std::str::from_utf8(name) {
-            Ok(NUMBER) => Err(E::custom("a member named as the parser names a number")),
-            Ok(name) => Ok(Key::Name(name.to_owned())),
-            Err(_) => Err(E::custom("a member's name that is no text")),
-        }
+        std::str::from_utf8(name)
+            .map(|name| Key::Name(name.to_owned()))
+            .map_err(|_| E::custom("a member's name that is no text"))
     }
 }
 
-/// The number `text` spells, kept whole; a float past a double's range is
-/// refused, as Prima's reader refuses it.
+/// The number `text` spells, kept whole; a float past a double's range and
+/// an integer longer than `MAX_INTEGER_CHARS` are refused, as Prima's
+/// reader refuses them.
 fn number<E: de::Error>(text: &str) -> Result<Value, E> {
     let float = text.contains(['.', 'e', 'E']);
     if float && !text.parse::<f64>().is_ok_and(f64::is_finite) {
         return Err(E::custom("a number past a double's range"));
+    }
+    if !float && text.len() > MAX_INTEGER_CHARS {
+        return Err(E::custom(format_args!(
+            "an integer longer than {MAX_INTEGER_CHARS} characters"
+        )));
     }
     serde_json::from_str::<Number>(text)
         .map(Value::Number)

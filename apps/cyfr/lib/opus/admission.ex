@@ -278,7 +278,9 @@ defmodule Opus.Admission do
 
   In order: this boot must believe it owns the control plane, from its
   cached standing alone (`Arca.ControlPlane.held?/0`, a fast path that
-  refuses `{:error, :control_plane_lost}` with no query); the run's grant
+  refuses `{:error, :control_plane_lost}` with no query); the input must
+  nest no deeper than `Prima.RunnerControl.max_input_depth/0`, the most a
+  runner reads, refused with no row; the run's grant
   is read — a root's athanor standing now, a child's its parent's stored stamp —
   and one that does not stand refuses with no row
   (`{:error, :not_standing}`); a version-less reference is resolved to
@@ -362,7 +364,8 @@ defmodule Opus.Admission do
   end
 
   defp admit_owned(ctx, reference, input, opts) do
-    with {:ok, grant} <- grant(ctx, opts),
+    with :ok <- check_input_depth(input),
+         {:ok, grant} <- grant(ctx, opts),
          {:ok, pinned, resolution} <- resolve(ctx, reference),
          {:ok, component_ref, extracted_type, component} <- inspect_component(ctx, pinned),
          {:ok, component_type} <- authoritative_type(extracted_type, opts[:type]) do
@@ -693,6 +696,35 @@ defmodule Opus.Admission do
       allowed_paths: Edge.paths(edge),
       allowed_actions: Edge.actions(edge)
     }
+  end
+
+  # The runner reads an input no deeper than this, so an input nesting
+  # deeper is refused here, before a runner is taken for it. The walk
+  # stops at the first level past the bound.
+  @max_input_depth Prima.RunnerControl.max_input_depth()
+
+  defp check_input_depth(input) do
+    if within_depth?([input], 1),
+      do: :ok,
+      else:
+        {:error,
+         {:invalid_argument,
+          "Input nests arrays and objects deeper than #{@max_input_depth} levels, " <>
+            "the most a run's input may nest"}}
+  end
+
+  defp within_depth?([], _level), do: true
+  defp within_depth?(_values, level) when level > @max_input_depth, do: false
+
+  defp within_depth?(values, level) do
+    values
+    |> Enum.flat_map(fn
+      value when is_map(value) -> Map.values(value)
+      value when is_list(value) -> value
+      _scalar -> []
+    end)
+    |> Enum.filter(&(is_map(&1) or is_list(&1)))
+    |> within_depth?(level + 1)
   end
 
   defp check_input_size(run, input, %Prima.Limits{max_request_size: max_size}) do

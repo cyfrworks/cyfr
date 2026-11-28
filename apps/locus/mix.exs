@@ -48,14 +48,12 @@ defmodule Locus.MixProject do
   defp aliases, do: [test: ["test --no-start"]]
 
   # Every role of the release: the shared contracts, each role's own
-  # listener, the runtime's WASM engine (`wasmex`) and its client of
-  # CYFR's host API (`req`), and nothing of the control plane
-  # (`Cyfr.Boundaries` keeps it so). It reads no `.env` file: the `locus`
-  # release takes every role's settings from its process environment alone
-  # (`config/locus_runtime.exs`).
+  # listener, the runtime's client of CYFR's host API (`req`), and nothing
+  # of the control plane (`Cyfr.Boundaries` keeps it so). It reads no
+  # `.env` file: the `locus` release takes every role's settings from its
+  # process environment alone (`config/locus_runtime.exs`).
   defp deps do
     [
-      {:wasmex, "~> 0.18.1"},
       {:jason, "~> 1.4"},
       {:req, "~> 0.5"},
       {:plug, "~> 1.16"},

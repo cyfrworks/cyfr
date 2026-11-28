@@ -1621,14 +1621,24 @@ CARGO_EXIT=3 catalysts cats-fail
 catalysts cats-usage "$S/catalysts-tmp/kept"
 [ "$rc" = 64 ] && [ -d "$S/catalysts-tmp/kept" ] && [ ! -s "$S/cargo-calls" ] || fail "a directory argument gave $rc"
 
-begin "the Locus island script compiles and tests, in a folder of its own under TMPDIR that it removes alone, an island holding the lock, Locus, the deps and the WIT tree and no control plane"
+begin "the Locus island script compiles and tests, in a folder of its own under TMPDIR that it removes alone, an island holding the lock, Locus, the deps, the WIT tree and the runner's pair and no control plane"
 isle="$S/island-repo"
 mkdir -p "$isle/scripts" "$isle/bin" "$S/island-tmp/kept"
 cp "$ROOT/scripts/locus-island.sh" "$isle/scripts/"
 for f in mix.lock apps/prima/mix.exs apps/locus/mix.exs apps/cyfr/mix.exs deps/jason/mix.exs wit/catalyst/world.wit \
-  _tools/wasm-tools tests/fixtures/toy_wire.json config/locus_runtime.exs; do
+  tests/fixtures/toy_wire.json config/locus_runtime.exs rust-toolchain.toml _build/runner/release/cyfr-runner \
+  _build/runner/release/cyfr-runner.stamp; do
   put "$isle/$f" "$f"
 done
+# A stand-in for the runner's script: its pair is the stand-in build's
+# unless RUNNER_STALE says the stamp is not the checkout's.
+cat >"$isle/scripts/runner.sh" <<'EOF'
+#!/usr/bin/env bash
+[ "$1" = pair ] || exit 64
+[ -z "${RUNNER_STALE-}" ] || { echo "runner: stale" >&2; exit 1; }
+echo "$(cd "$(dirname "$0")/.." && pwd -P)/_build/runner/release/cyfr-runner"
+EOF
+chmod +x "$isle/scripts/runner.sh"
 cat >"$isle/bin/mix" <<'EOF'
 #!/usr/bin/env bash
 echo "${PWD#"$TMPDIR"/} ${MIX_ENV-} ${MIX_OS_CONCURRENCY_LOCK-} $*" >>"$MIX_CALLS"
@@ -1643,15 +1653,17 @@ sed -E 's/^cyfr-locus-island\.[A-Za-z0-9]+/ISLAND/' "$S/island-mix" >"$S/island-
 printf '%s\n' 'ISLAND/apps/locus test 0 compile --warnings-as-errors' 'ISLAND/apps/locus test 0 test' >"$S/want"
 diff "$S/want" "$S/island-mix.got" >/dev/null || fail "Mix ran as: $(tr '\n' ';' <"$S/island-mix")"
 [ "$(ls -A "$S/island-tmp")" = kept ] || fail "the island left or removed: $(ls -A "$S/island-tmp")"
-for want in mix.lock apps/locus deps wit; do
+for want in mix.lock apps/locus deps wit rust-toolchain.toml scripts _build; do
   grep -qx "$want" "$S/island-mix.tree" || fail "the island lacks $want: $(tr '\n' ' ' <"$S/island-mix.tree")"
 done
 ! grep -qx apps/cyfr "$S/island-mix.tree" || fail "the island holds the control plane: $(tr '\n' ' ' <"$S/island-mix.tree")"
 rc=0; (cd "$isle" && scripts/locus-island.sh "$S/island-tmp/kept") >/dev/null 2>&1 || rc=$?
 [ "$rc" = 64 ] && [ -d "$S/island-tmp/kept" ] || fail "a directory argument gave $rc"
-rm -r "$isle/_tools"
+rc=0; (cd "$isle" && RUNNER_STALE=1 TMPDIR="$S/island-tmp" scripts/locus-island.sh) >"$S/island-stale.err" 2>&1 || rc=$?
+[ "$rc" = 69 ] && grep -qF "the runner's pair is not the checkout's" "$S/island-stale.err" || fail "a stale pair gave $rc: $(cat "$S/island-stale.err")"
+rm "$isle/rust-toolchain.toml"
 rc=0; (cd "$isle" && TMPDIR="$S/island-tmp" scripts/locus-island.sh) >"$S/island-missing.err" 2>&1 || rc=$?
-[ "$rc" = 69 ] && grep -qF '_tools is missing' "$S/island-missing.err" || fail "a missing _tools gave $rc: $(cat "$S/island-missing.err")"
+[ "$rc" = 69 ] && grep -qF 'rust-toolchain.toml is missing' "$S/island-missing.err" || fail "a missing rust-toolchain.toml gave $rc: $(cat "$S/island-missing.err")"
 
 begin "the real table's nightly runs the janitor, then the install, handle and update proofs, each on one quarter, one after another"
 status=0; (cd "$ROOT" && scripts/stage.sh -n nightly) >"$S/nightly-real.out" 2>"$S/nightly-real.err" || status=$?

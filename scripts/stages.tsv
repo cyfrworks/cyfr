@@ -62,6 +62,7 @@ handoff	js	1	900	-	apps/cyfr/assets/**,seed/**	(cd apps/cyfr/assets && npm ci --
 handoff	desktop-js	1	1500	-	apps/codex/desktop/**,apps/codex/internal/desktop/assets/**,apps/cyfr/assets/account/**,tests/fixtures/desktop-process.json,tests/fixtures/sign_in.json,tests/desktop-proof/**,tests/setup-proof/**	(cd apps/codex/desktop && npm ci --ignore-scripts --no-audit --no-fund && npm test) && bash tests/setup-proof/app-cleanup-test.sh && bash tests/desktop-proof/client-image-test.sh
 handoff	stage-test	1	600	-	scripts/stage.sh,scripts/stages.tsv,scripts/lib/stage-chain.sh,scripts/lib/stage-deps.sh,scripts/lib/contain.sh,scripts/nightly.sh,scripts/lib/nightly.py,tests/stage-test.sh,tests/handle-proof/run.sh,.github/workflows/**	bash tests/stage-test.sh
 handoff	run-names-test	-	600	-	scripts/lib/run-names.sh,tests/run-names-test.sh	bash tests/run-names-test.sh
+handoff	runner-pair-test	-	600	-	scripts/runner.sh,tests/runner-pair-test.sh	bash tests/runner-pair-test.sh
 handoff	image-test	-	600	-	scripts/image.sh,tests/image-stub.sh,tests/image-test.sh	bash tests/image-test.sh
 handoff	apt-key-test	-	600	-	scripts/apt-key.sh,tests/apt-key-test.sh,tests/apt-key-archive.py,tests/apt-key-release/**	bash tests/apt-key-test.sh
 handoff	janitor-test	1	900	-	scripts/janitor.sh,scripts/image.sh,scripts/lib/run-names.sh,tests/image-stub.sh,tests/janitor-test.sh,tests/install-screen-proof/prepare.sh,tests/install-screen-proof/base-image.sh	bash tests/janitor-test.sh
@@ -96,8 +97,12 @@ handoff	catalysts	1	900	-	seed/components/catalysts/*/*/*/src/**,scripts/test-ca
 # The WASM runner's crate: its format, lints and tests, which read the
 # vector files it holds its wires to, the validator's pin, Locus's test
 # WASM and the seed's components, each named here.
-handoff	runner	1	900	-	apps/locus/runner/**,rust-toolchain.toml,wit/**,scripts/runner.sh,scripts/wasm-tools.sh,tests/fixtures/runner_control.json,tests/fixtures/runner_relay.json,tests/fixtures/worker_auth.json,tests/fixtures/host_api.json,tests/fixtures/authority_wire.json,tests/fixtures/component_features.json,apps/locus/test/support/runtime/test_wasm/**/*.wasm,seed/components/**/*.wasm	env PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH" scripts/runner.sh check
+handoff	runner	1	900	-	apps/locus/runner/**,rust-toolchain.toml,wit/**,scripts/runner.sh,scripts/wasm-tools.sh,tests/fixtures/runner_control.json,tests/fixtures/runner_relay.json,tests/fixtures/worker_auth.json,tests/fixtures/host_api.json,tests/fixtures/authority_wire.json,tests/fixtures/component_features.json,tests/fixtures/guest_error.json,tests/fixtures/wire_json.json,apps/locus/test/support/runtime/test_wasm/**/*.wasm,seed/components/**/*.wasm	env PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH" scripts/runner.sh check
 handoff	test-wasm	1	900	test	apps/locus/test/support/runtime/test_wasm/**,apps/cyfr/test/support/test_wasm/**,apps/cyfr/test/integration/runtime/support/test_wasm/**,tests/locus-runtime-image/hog.wat,tests/locus-runtime-image/build.sh,**/*.wasm,wit/**,apps/prima/lib/prima/cargo_toml.ex,scripts/check-test-wasm.sh,scripts/wasm-tools.sh	scripts/wasm-tools.sh install _tools && env PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH" CYFR_DATABASE=sqlite RUSTUP_TOOLCHAIN="$(sed -n 's/^rustc_version=//p' apps/cyfr/test/support/test_wasm/build-fixture.sh)" scripts/check-test-wasm.sh
+# A change to the runner's program alone reaches the service's launch of
+# it: the boundary and the worker service suites run the checkout's build
+# of the program (stage-deps.sh builds a stale pair first).
+handoff	runner-launch	1	1800	test	apps/locus/runner/**,rust-toolchain.toml,wit/**	scripts/test-partitioned.sh -n 1 -a sqlite -- --warnings-as-errors apps/locus/test/locus/runtime/runner_boundary_test.exs apps/locus/test/locus/runtime/worker_service_test.exs
 # Locus compiled and tested from its declared apps alone, as the pull
 # request's island job does.
 handoff	locus-alone	1	900	-	named	env TMPDIR="$STAGE_LOGDIR" scripts/locus-island.sh

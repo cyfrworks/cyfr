@@ -34,11 +34,7 @@ defmodule Locus.Runtime.KeeperChannelTest do
   @stream_control 4
   @max_payload 65_536
 
-  @spec_env %{
-    "RUNTIME_ROLE" => "runner",
-    "RUNTIME_RUNNER_ID" => "runner_1",
-    "RUNTIME_CONTROL_FD" => "3"
-  }
+  @spec_env %{"RUNTIME_RUNNER_ID" => "runner_1", "RUNTIME_CONTROL_FD" => "3"}
 
   # The keeper's vectors, the one file the keeper and every client of its
   # wire read. Read as this module compiles, so a checkout without the file

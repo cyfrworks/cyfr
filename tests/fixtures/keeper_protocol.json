@@ -82,7 +82,7 @@
       "id": "10",
       "pool": "runner",
       "argv": ["/app/bin/locus", "start"],
-      "env": { "RUNTIME_ROLE": "runner", "LANG": "C.UTF-8" },
+      "env": { "RUNTIME_RUNNER_ID": "run_01a09fee-1c2d-7e3f-8a4b-5c6d7e8f9a0b", "LANG": "C.UTF-8" },
       "control": true,
       "attach": { "path": "/run/locus/attach.sock", "token": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" }
     },
@@ -115,7 +115,7 @@
       "id": "13",
       "pool": "runner",
       "argv": ["/app/bin/locus", "start"],
-      "env": { "RUNTIME_ROLE": "runner" },
+      "env": { "RUNTIME_RUNNER_ID": "run_01a09fee-1c2d-7e3f-8a4b-5c6d7e8f9a0b" },
       "control": true,
       "attach": { "path": "/run/locus/attach.sock", "token": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210" }
     },

@@ -312,9 +312,9 @@ defmodule Prima.Network do
   Whether a header `name`, in any case, is one only the client making a
   request sets: one of `framing_headers/0` or `override_headers/0`, or a
   name starting with one of `override_prefixes/0`. Neither a guest's
-  request, ordinary (`Locus.Runtime.HttpRequestValidation`, and again at
-  the relay that connects it, `Locus.Runtime.Relay`, which sets `Host`
-  from the pin itself) or attached (`Prima.AttachedRequest`), nor an
+  request, ordinary (the runner's, and again at the relay that connects
+  it, `Locus.Runtime.Relay`, which sets `Host` from the pin itself) or
+  attached (`Prima.AttachedRequest`), nor an
   attach rule (`Prima.Manifest.Needs`) names one, so the upstream answers
   the identity CYFR granted.
   """

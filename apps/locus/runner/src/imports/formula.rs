@@ -25,8 +25,10 @@
 //! assignment reads but that fails any of these, or that the subtree does
 //! not start, is given back (`release_child`) exactly once, and its guest
 //! answered as a call that failed; one whose assignment does not read
-//! names no child to give back. Either leaves the runner not clean when
-//! nothing confirms the child was given back. A lost admission is asked
+//! names no child to give back. So is one whose formula stops while its
+//! `child` frame is being written: it runs nothing, and a task its
+//! formula's close waits for gives it back (`Admitted`). Each leaves the
+//! runner not clean when nothing confirms the child was given back. A lost admission is asked
 //! again under the same `child_key`, so CYFR admits one child however its
 //! answer is lost.
 //!
@@ -444,6 +446,52 @@ fn child_key() -> String {
     crate::wire::encode_base64url(&bytes)
 }
 
+/// A child CYFR admitted and the subtree has neither started nor handed
+/// back. Dropped so, its formula's call was dropped as the child's frame
+/// was being written (the formula stopped): the child runs nothing, and is
+/// given back by a task the formula's close waits for
+/// (`Host::settle_tasks`), so the stop ends only the formula's own work.
+struct Admitted {
+    run: Option<Arc<Run>>,
+    execution_id: String,
+    attempt: String,
+}
+
+impl Admitted {
+    fn new(run: &Arc<Run>, start: &Start) -> Admitted {
+        Admitted {
+            run: Some(run.clone()),
+            execution_id: start.assignment.execution_id.clone(),
+            attempt: start.assignment.attempt.clone(),
+        }
+    }
+
+    /// The subtree started the child, or handed it back to be answered.
+    fn settled(mut self) {
+        self.run = None;
+    }
+}
+
+impl Drop for Admitted {
+    fn drop(&mut self) {
+        let Some(run) = self.run.take() else {
+            return;
+        };
+        run.runner.relay.retire(&self.attempt);
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            // No runtime is left to give it back on: its lease lapses.
+            run.runner.tree.doubt();
+            return;
+        };
+        let execution_id = std::mem::take(&mut self.execution_id);
+        let host = run.host.clone();
+        host.stopping(runtime.spawn(async move {
+            let why = "its formula stopped while its child frame was written";
+            let _ = release(&run, &execution_id, why).await;
+        }));
+    }
+}
+
 // A child CYFR admitted that the subtree did not start: nothing of it ran.
 // One the subtree runs already is that running child, which is left as it
 // is and the runner is not reused; any other is given back.
@@ -805,6 +853,7 @@ impl Guest {
         let execution_id = start.assignment.execution_id.clone();
         let stop = Stop::new();
         let tree = run.runner.tree.clone();
+        let admitted = Admitted::new(&run, &start);
         match arm {
             Arm::Call => {
                 let (waiter, answer) = tokio::sync::oneshot::channel();
@@ -815,9 +864,11 @@ impl Guest {
                     .start_child(start, run.runner.clone(), stop, Some(waiter))
                     .await
                 {
+                    admitted.settled();
                     guard.disarm();
                     return Ok((text(unstarted(&run, &start, why).await?), false));
                 }
+                admitted.settled();
                 let answer = answer.await.ok();
                 guard.disarm();
                 let (bytes, ok) = answered(answer);
@@ -828,8 +879,10 @@ impl Guest {
                     .start_child(start, run.runner.clone(), stop, None)
                     .await
                 {
+                    admitted.settled();
                     return Ok((text(unstarted(&run, &start, why).await?), false));
                 }
+                admitted.settled();
                 let streamed = json!({"execution_id": execution_id,
                     "stream_url": format!("/api/executions/{execution_id}/events")});
                 Ok((
@@ -862,9 +915,11 @@ impl Guest {
         let stop = Stop::new();
         let (waiter, answer) = tokio::sync::oneshot::channel();
         let tree = run.runner.tree.clone();
+        let admitted = Admitted::new(&run, &start);
         let started = tree
             .start_child(start, run.runner.clone(), stop.clone(), Some(waiter))
             .await;
+        admitted.settled();
         let task_id = match started {
             Err((why, start)) => {
                 let refused = unstarted(&run, &start, why).await?;

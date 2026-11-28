@@ -1626,15 +1626,23 @@ defmodule Opus.Attempt do
     end
   end
 
+  # A close's answer carries the failure as recorded to its runner, which
+  # hands a child's to the formula awaiting it: redacted of credential
+  # shapes as every sentence a guest is answered is (`Prima.Sanitizer`).
+  # The row keeps the component's own words, masked.
   defp completed_answer({:ok, %{output: output}}), do: {:ok, output}
 
   defp completed_answer({:error, message}) when is_binary(message),
-    do: {:error, {:failed, message}}
+    do: {:error, {:failed, Prima.Sanitizer.sanitize(message)}}
 
   defp completed_answer({:error, _typed}), do: {:error, {:failed, "Execution failed"}}
 
-  defp failed_answer({:error, message}) when is_binary(message), do: {:ok, message}
-  defp failed_answer({:error, {:uncertain, message}}) when is_binary(message), do: {:ok, message}
+  defp failed_answer({:error, message}) when is_binary(message),
+    do: {:ok, Prima.Sanitizer.sanitize(message)}
+
+  defp failed_answer({:error, {:uncertain, message}}) when is_binary(message),
+    do: {:ok, Prima.Sanitizer.sanitize(message)}
+
   defp failed_answer(_result), do: {:ok, "Execution failed"}
 
   defp emit_delta(state, emit, %Delta{} = delta) do
@@ -1690,9 +1698,8 @@ defmodule Opus.Attempt do
 
   # The run's deadline, fixed when the attempt answers its runner's attach:
   # its timeout from then, and no later than its subtree's deadline. The
-  # runner starts its own budget once the attach is answered
-  # (`Locus.Runtime.Attempt`), so this is never later than the moment the
-  # runner ends the run.
+  # runner starts its own budget once the attach is answered, so this is
+  # never later than the moment the runner ends the run.
   defp run_deadline(state) do
     now = System.system_time(:millisecond)
 

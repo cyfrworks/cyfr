@@ -382,6 +382,26 @@ defmodule Opus.HostTest do
       assert %{status: "failed", error_message: "saw [REDACTED]"} = row(fixture)
     end
 
+    test "a close answers its recorded failure redacted of credential shapes, which reach a " <>
+           "formula awaiting it, and the row keeps the component's words" do
+      key = Prima.CredentialShape.mint(:api_key)
+
+      failing = AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api))
+      outcome = AttemptFixtures.outcome(failing, "failed", %{"error" => "leaked #{key}"})
+
+      assert %{"ok" => "leaked [REDACTED]"} =
+               AttemptFixtures.call(failing, "fail", %{"outcome" => outcome})
+
+      assert %{status: "failed", error_message: "leaked " <> ^key} = row(failing)
+
+      # A completion whose output reports an error is recorded failed, and
+      # answered with that failure, redacted the same way.
+      completing = AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api))
+      answer = complete(completing, %{"error" => %{"message" => "leaked #{key}"}})
+      refute inspect(answer) =~ key
+      assert inspect(answer) =~ "leaked [REDACTED]"
+    end
+
     @tag :capture_log
     test "an outcome naming another attempt closes nothing" do
       fixture = AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api))
@@ -1237,8 +1257,7 @@ defmodule Opus.HostTest do
       calls = @vectors["calls"]
 
       assert Enum.map(calls, & &1["callback"]) ==
-               Prima.HostAPI.callbacks()
-               |> List.delete(:runner_exited)
+               (Prima.HostAPI.callbacks() -- [:runner_exited, :report_events])
                |> Enum.map(&Atom.to_string/1)
 
       for vector <- calls do

@@ -53,7 +53,7 @@ runner's own uid, outside that namespace, may not):
   as AF_VSOCK; on x86_64 its 32-bit socketcall of AF_VSOCK makes no socket,
   and under the profile alone, outside any space, a 32-bit socketcall of
   AF_INET or AF_VSOCK is killed, as every 32-bit call is.
-- `measure`: one real runner, the release's own runner command with its
+- `measure`: one real runner, the image's `/usr/local/bin/cyfr-runner` with its
   control channel and relay as the shipped service spawns it, its attach
   connection served by this machine as its worker service: its place is
   `warm` and no athanor's; once the keeper has read its group, a measure
@@ -67,7 +67,8 @@ runner's own uid, outside that namespace, may not):
   holds (the plane holds that emit's answer), a reading the keeper took
   after it is `run` of that athanor and holds at least half of those
   bytes more than the reading before the work was sent; the work then
-  closes its attempt completed and the runner says `complete`, clean.
+  closes its attempt completed and the runner says on its control stream
+  that it entered the work's authority and then `complete`, clean.
   Assigned `warm` for that athanor and `run` again for another run, each
   measure answers above zero under the owner of the moment; after its
   `release`, a measure sent with it is still answered with a reading
@@ -673,15 +674,12 @@ def test_compat_killed(image):
                "as every 32-bit call is", {"stdout": ran.stdout, "stderr": ran.stderr[-1000:]})
 
 
-# The runner as the shipped service spawns it from a release (Locus.Runtime.Release.runner_command/1): the release's
-# own command, the service's environment it shares (that module's shared names, as the image sets them) and the
-# runner's own (Locus.Runtime.Settings.runner_environment/1), under the grace the service's defaults give
-# (Locus.Runtime.Settings) and the bound the keeper sets on a runner. Its id names its place, as the runner pool's does.
-RUNNER_ARGV = ["/bin/sh", "-c", 'RELEASE_TMP="${TMPDIR:-/tmp}" exec "$0" start', RELEASE["bin"]]
-SHARED_ENVIRONMENT = ("LANG", "LANGUAGE", "LC_ALL", "ELIXIR_ERL_OPTIONS")
+# The runner as the shipped service spawns it (Locus.Runtime.Settings.runner_command/0): the runner program, with no
+# argument and none of the service's environment, and the runner's own (Locus.Runtime.Settings.runner_environment/1),
+# under the bound the keeper sets on a runner. Its id names its place, as the runner pool's does.
+RUNNER_ARGV = ["/usr/local/bin/cyfr-runner"]
 RUNNER = "runner_measured"
-RUNNER_ENV = {"RELEASE_DISTRIBUTION": "none", "RUNTIME_ROLE": "runner", "RUNTIME_RUNNER_ID": RUNNER, "RUNTIME_SERVICE_ID": SERVICE,
-              "RUNTIME_BOOT_ID": "boot_measured", "RUNTIME_WATCHDOG_GRACE_MS": "5000"}
+RUNNER_ENV = {"RUNTIME_RUNNER_ID": RUNNER, "RUNTIME_SERVICE_ID": SERVICE, "RUNTIME_BOOT_ID": "boot_measured"}
 RELEASE_GRACE_MS = 2_000
 ATHANOR = "ath_measured"
 # The runner's owners, one step each, read once the keeper has read its group: the place's own, then the owner an
@@ -760,13 +758,6 @@ while read -r line <&3; do
 done
 ask after
 """
-
-
-def runner_env(image):
-    """The runner's whole environment: the shared names as the image sets them, then the runner's own."""
-    config = json.loads(run("docker", "image", "inspect", "--format", "{{json .Config.Env}}", image).stdout or "null") or []
-    image_env = dict(entry.split("=", 1) for entry in config)
-    return {**{name: image_env[name] for name in SHARED_ENVIRONMENT if name in image_env}, **RUNNER_ENV}
 
 
 def assigns():
@@ -915,9 +906,12 @@ def judge_work(served, calls, attempt):
            and calls[4]["args"]["outcome"]["output"] == {"status": 200, "data": {"held": HOG_BYTES}},
            f"measure: the runner attached, fetched hog.wasm, ran it to its answer while its emit of holding {HOG_BYTES >> 20} MiB "
            "was held until the client had read it, and closed the attempt completed", calls)
-    complete = json.dumps({"v": 1, "type": "complete", "execution_id": attempt["execution_id"], "clean": True}, separators=(",", ":"))
-    expect(served.get("control") == [complete],
-           "measure: the runner said on its control stream that the work's subtree is complete and clean, and nothing else", served)
+    entered = {"v": 1, "type": "event", "name": "engine.authority_entered", "measurements": {},
+               "metadata": {"execution_id": attempt["execution_id"], "reference": HOG_REF}}
+    complete = {"v": 1, "type": "complete", "execution_id": attempt["execution_id"], "clean": True}
+    expect(served.get("control") == [json.dumps(frame, separators=(",", ":")) for frame in (entered, complete)],
+           "measure: the runner said on its control stream that it entered the work's authority and that the work's subtree "
+           "is complete and clean, and nothing else", served)
 
 
 def relay_frame(frame):
@@ -1030,7 +1024,7 @@ def held_until_measured(plane, attach):
 
 
 def test_measure(image):
-    env = runner_env(image)
+    env = RUNNER_ENV
     plane = ControlPlane(secrets.token_bytes(32), SERVICE).serve()
     marks = ClientMarks()
     attach = Attach(marks)

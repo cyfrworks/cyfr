@@ -3,17 +3,16 @@
 
 defmodule Locus.Runtime.HostClient do
   @moduledoc """
-  A client of CYFR's host calls (`Prima.HostAPI`) for one execution
-  attempt, and the worker service's poster of every host call.
-
-  A runner has no network. Its client sends each call through its relay
-  (`Locus.Runtime.Relay.Runner`, the `:relay` a client is made with), whose service
-  end (`Locus.Runtime.Relay`) verifies the call under the attempt's keys and posts
-  it unchanged with `post_call/4`: every host call reaches CYFR from the
-  worker service, never from a runner. The service's own calls for an
-  attempt (the `take_rate` its relay takes and the `egress_pin` it asks
-  before it connects a fetch) are made by a client posting directly
-  (`:host_url`), as are its runner exit reports.
+  The worker service's poster of CYFR's host calls (`Prima.HostAPI`):
+  every host call reaches CYFR from the worker service, never from a
+  runner. A runner signs and seals its own calls under its attempt's keys
+  and sends them through its relay, whose service end (`Locus.Runtime.Relay`)
+  verifies each and posts it unchanged with `post_call/5`. The service's
+  own calls for an attempt (the `take_rate` its relay takes and the
+  `egress_pin` it asks before it connects a fetch, and an attached
+  request, `attached_fetch/3`) are made by a client of this module for
+  that attempt, and its reports (`runner_exited/7`, `report_events/3`)
+  are signed with its own dispatch key.
 
   A client names the attempt (its athanor, execution, attempt id, fence,
   generation and worker service), the runner presenting it, the attempt's
@@ -43,39 +42,35 @@ defmodule Locus.Runtime.HostClient do
   its opening, is asked for as its reading begins, by the call's own
   timeout, and given back once the answer is read and decoded; an answer
   no room came for by then is one that did not arrive.
-  Any other status is the listener's refusal, and is lost, except two
+  Any other status is the listener's refusal, and is lost, except three
   that are final: a `413`, whatever its body, says the call's body is past
   the host's bound (`Prima.HostAPI.max_body_bytes/0`), refused before the
   host read it or acted on it, and the call is answered
   `{:error, :too_large}` rather than asked again, since the same body is
-  refused again (a body past that bound is answered so before it is sent,
-  through a relay or directly); and a refusal naming `unknown_version` says the host
-  speaks another version of the wire, so it is not this engine's host, and
-  the call is answered `{:error, :lost}` at once, which stops the
-  attempt's work, rather than asked again. The attempt's seal key also
-  opens the keys of a child CYFR admits for this client's runner
-  (`admit_child/6`), whose attempt the runner's relay then carries.
+  refused again (a body past that bound is answered so before it is
+  sent); a refusal naming `unknown_version` says the host speaks
+  another version of the wire, so it is not this engine's host, and the
+  call is answered `{:error, :lost}` at once rather than asked again; and
+  a `report_events` batch's refusal naming `unavailable` says the
+  answering member does not hold the control plane and read nothing of
+  it, answered `{:error, :unavailable}`, which its forwarder sends again
+  (`Locus.Runtime.Events`); a `runner_exited` so refused is lost, as any
+  other refusal of its class.
 
   Each function answers as the `Prima.HostAPI` callback of the same name.
   An answer that does not arrive within `Prima.HostAPI.request_timeout_ms/1`,
   or cannot be read, is lost, and what the client does then is the
-  callback's retry class (`Prima.HostAPI.retry/1`): an `:idempotent`,
-  `:outcome`, `:batch` or `:keyed` call is made once more — the same body
-  under a fresh header, so a `push_deltas` batch goes again as the same
-  batch and an `admit_child` under the same `child_key` — and a `:never`
-  call ends `{:error, {:uncertain, sentence}}`, since its effect may have
-  happened. A second loss is `{:error, :lost}`. CYFR's own answers, `lost`
-  included, are never retried: they are answers, and so are the two final
-  refusals.
+  callback's retry class (`Prima.HostAPI.retry/1`): an `:idempotent`
+  call is made once more — the same body under a fresh header — and a
+  `:never` call ends `{:error, {:uncertain, sentence}}`, since its effect
+  may have happened, or `{:error, :unsent}` when no connection to CYFR
+  could be made, since nothing of it was sent. A second loss is
+  `{:error, :lost}`. CYFR's own answers, `lost` included, are never
+  retried: they are answers, and so are the two final refusals.
 
   `egress_pin/3` asks CYFR for the address a guest's outbound URL may be
-  reached at (`c:Prima.HostAPI.egress_pin/3`): the engine resolves no name
-  itself, and connects to the address the answer names
-  (`Locus.Runtime.Egress.pin/3`).
-
-  `question_ask/5` and `question_wait/3` carry a catalyst's ask, keyed by
-  its attempt and number (`c:Prima.HostAPI.question_ask/3`); each is one
-  call, and the import's loop is the caller's (`Locus.Runtime.Engine`).
+  reached at (`c:Prima.HostAPI.egress_pin/3`), and the relay connects to
+  the address the answer names (`Locus.Runtime.Egress.connect_options/3`).
 
   `attached_fetch/3` posts a guest's request naming a connection, which
   CYFR makes itself with the credential attached, and hands the answer's
@@ -83,13 +78,16 @@ defmodule Locus.Runtime.HostClient do
   service's relay posts it for its runner (`Locus.Runtime.Relay`), and only the
   runner opens the frames. Every other call is read whole.
 
-  One call reaches CYFR beside a runner's: `runner_exited/7`, a worker
-  service's report that one of its runners exited, a plain JSON body
-  signed with that worker service's dispatch key and posted to the
-  `runner_exited` host route, answered in plain JSON.
+  Two calls are the worker service's reports, each a plain JSON body
+  signed with its dispatch key and answered in plain JSON:
+  `runner_exited/7`, that one of its runners exited, posted to the
+  member that assigned the runner its subtree, and `report_events/3`, a
+  batch of its runners' operator events, posted to the address the
+  service is configured with.
 
   Nothing a call carries is logged: the keys are kept out of a client's
-  inspection, and a loss is logged by its operation and reason alone.
+  inspection, and a loss is logged by its operation and reason alone, but
+  for a call never asked again, whose caller logs it.
   """
 
   require Logger
@@ -105,8 +103,6 @@ defmodule Locus.Runtime.HostClient do
   }
 
   @derive {Inspect, except: [:call_key, :seal_key]}
-  # A client posts through a runner's relay (`relay`) or directly to the
-  # member's address (`host_url`), never both.
   @enforce_keys [
     :athanor_id,
     :execution_id,
@@ -121,7 +117,7 @@ defmodule Locus.Runtime.HostClient do
     :seal_key,
     :host_url
   ]
-  defstruct @enforce_keys ++ [relay: nil]
+  defstruct @enforce_keys
 
   @type t :: %__MODULE__{
           athanor_id: String.t(),
@@ -135,40 +131,22 @@ defmodule Locus.Runtime.HostClient do
           member: String.t(),
           call_key: binary(),
           seal_key: binary(),
-          host_url: String.t() | nil,
-          relay: GenServer.server() | nil
+          host_url: String.t()
         }
 
-  @typedoc """
-  A child CYFR admitted and claimed for this client's runner: its assignment
-  token and the assignment it carries, the input it was admitted with (which
-  may differ from what the guest asked for), a client for its attempt
-  presenting as the same runner, and the fields its vault edge projects.
-  """
-  @type child :: %{
-          token: Assignment.token(),
-          assignment: Assignment.t(),
-          input: map(),
-          client: t(),
-          secrets: %{optional(String.t()) => String.t()}
-        }
-
-  @attempt_fields [:athanor_id, :execution_id, :attempt, :fence, :generation]
-
-  @refusals %{
-    "lost" => :lost,
-    "unavailable" => :unavailable,
-    "replayed" => :replayed,
-    "malformed" => :malformed,
-    "bad_mac" => :bad_mac,
-    "claim_expired" => :claim_expired,
-    "not_found" => :not_found
-  }
+  # The refusals CYFR answers a call of the service's own with: the
+  # others name what only a runner's calls meet (an attach's, a
+  # fetch_artifact's), whose answers the relay passes on unread.
+  @refusals %{"lost" => :lost, "unavailable" => :unavailable}
 
   # The refusals only an `egress_pin` answer names.
   @pin_refusals Map.new(PinnedTarget.refusals(), &{Atom.to_string(&1), &1})
 
   @uncertain "The call's answer was lost and its effect is unknown"
+
+  # What a connection that could not be made fails with: nothing of the
+  # call was written.
+  @unconnected [:econnrefused, :nxdomain, :ehostunreach, :enetunreach, :eaddrnotavail]
 
   # The count every answer the worker service reads is held under: its own
   # calls' here, its runners' in their relays (`Locus.Runtime.Relay`).
@@ -180,34 +158,25 @@ defmodule Locus.Runtime.HostClient do
   @doc """
   A client for the attempt `keys` name (`t:Prima.WorkerAuth.attempt_keys/0`),
   signing with its call key, addressed to the member `at` names: its
-  `member` boot id, which every header presents, and either the `relay`
-  a runner sends its calls through (`Locus.Runtime.Relay.Runner`) or the
-  `host_url` the worker service posts to. `runner` names the runner
-  presenting the calls (a fresh runner id is minted when it is nil) and
-  `boot` the worker service boot it presents from.
+  `member` boot id, which every header presents, and the `host_url` the
+  worker service posts to. `runner` names the runner presenting the calls
+  (a fresh runner id is minted when it is nil) and `boot` the worker
+  service boot it presents from.
   """
   @spec new(
           Prima.WorkerAuth.attempt_keys(),
           String.t() | nil,
           String.t(),
           %{member: String.t(), host_url: String.t()}
-          | %{member: String.t(), relay: GenServer.server()}
         ) :: t()
-  def new(keys, runner, boot, %{member: member, relay: relay}) when relay != nil,
-    do: build(keys, runner, boot, member, {nil, relay})
-
-  def new(keys, runner, boot, %{member: member, host_url: host_url}) when is_binary(host_url),
-    do: build(keys, runner, boot, member, {host_url, nil})
-
-  defp build(
-         %{attempt: attempt, call: call_key, seal: seal_key},
-         runner,
-         boot,
-         member,
-         {url, relay}
-       )
-       when is_map(attempt) and is_binary(call_key) and is_binary(seal_key) and is_binary(boot) and
-              is_binary(member) do
+  def new(
+        %{attempt: attempt, call: call_key, seal: seal_key},
+        runner,
+        boot,
+        %{member: member, host_url: url}
+      )
+      when is_map(attempt) and is_binary(call_key) and is_binary(seal_key) and is_binary(boot) and
+             is_binary(member) and is_binary(url) do
     %__MODULE__{
       athanor_id: Map.fetch!(attempt, :athanor_id),
       execution_id: Map.fetch!(attempt, :execution_id),
@@ -220,8 +189,7 @@ defmodule Locus.Runtime.HostClient do
       member: member,
       call_key: call_key,
       seal_key: seal_key,
-      host_url: url,
-      relay: relay
+      host_url: url
     }
   end
 
@@ -235,225 +203,26 @@ defmodule Locus.Runtime.HostClient do
   def at(%Assignment{} = assignment, fallback) when is_binary(fallback),
     do: %{member: assignment.member, host_url: assignment.host_url || fallback}
 
-  @doc "Attach with the assignment `token`, answering the run's vault fields."
-  @spec attach(t(), String.t()) :: {:ok, %{optional(String.t()) => String.t()}} | {:error, term()}
-  def attach(%__MODULE__{} = client, token) when is_binary(token) do
-    with {:ok, %{} = secrets} <- request(client, :attach, %{"assignment" => token}),
-         do: {:ok, secrets}
-  end
-
-  @doc "Renew the leases of `attempts`, answering each one's renewal by attempt id."
-  @spec renew(t(), [String.t()]) ::
-          {:ok, %{optional(String.t()) => Prima.HostAPI.renewal()}} | {:error, term()}
-  def renew(%__MODULE__{} = client, attempts) when is_list(attempts) do
-    with {:ok, %{} = renewals} <- request(client, :renew, %{"attempts" => attempts}) do
-      {:ok, Map.new(renewals, fn {attempt, renewal} -> {attempt, renewal(renewal)} end)}
-    end
-  end
-
-  @doc "Close the attempt completed with the guest's `output`, answering the output as recorded."
-  @spec complete(t(), term()) :: {:ok, term()} | {:error, term()}
-  def complete(%__MODULE__{} = client, output) do
-    request(client, :complete, %{
-      "outcome" => outcome(client, "completed", %{"output" => output})
-    })
-  end
-
-  @doc """
-  Close the attempt failed with the sentence `error`, answering the failure
-  as recorded, masked. `abandoned: true` says the runner stopped the
-  guest's component call before it returned.
-  """
-  @spec fail(t(), String.t(), keyword()) :: {:ok, String.t()} | {:error, term()}
-  def fail(%__MODULE__{} = client, error, opts \\ []) when is_binary(error) do
-    fields = %{"error" => error, "abandoned" => Keyword.get(opts, :abandoned, false) == true}
-
-    case request(client, :fail, %{"outcome" => outcome(client, "failed", fields)}) do
-      {:ok, message} when is_binary(message) -> {:ok, message}
-      {:ok, _other} -> {:error, :lost}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  @doc "Deliver the guest's emitted JSON `events`, in order, answering one reply per event."
-  @spec push_deltas(t(), [String.t()]) :: {:ok, [String.t()]} | {:error, term()}
-  def push_deltas(%__MODULE__{} = client, events) when is_list(events) do
-    deltas =
-      for event <- events do
-        %{
-          "execution_id" => client.execution_id,
-          "attempt" => client.attempt,
-          "fence" => client.fence,
-          "event" => event
-        }
-      end
-
-    with {:ok, replies} when is_list(replies) and length(replies) == length(events) <-
-           request(client, :push_deltas, %{"deltas" => deltas}) do
-      if Enum.all?(replies, &is_binary/1), do: {:ok, replies}, else: {:error, :lost}
-    else
-      {:ok, _other} -> {:error, :lost}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  @doc "Dispense an OAuth access token for `provider`."
-  @spec oauth_token(t(), String.t()) :: {:ok, String.t()} | {:error, term()}
-  def oauth_token(%__MODULE__{} = client, provider) when is_binary(provider) do
-    case request(client, :oauth_token, %{"provider" => provider}) do
-      {:ok, token} when is_binary(token) -> {:ok, token}
-      {:ok, _other} -> {:error, :lost}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
   @doc "Take one request from the consented rate for `bucket`."
   @spec take_rate(t(), String.t()) :: :ok | {:error, term()}
   def take_rate(%__MODULE__{} = client, bucket) when is_binary(bucket) do
     case request(client, :take_rate, %{"bucket" => bucket}) do
-      {:ok, true} -> :ok
-      {:ok, _other} -> {:error, :lost}
-      {:error, reason} -> {:error, reason}
+      {:ok, true} ->
+        :ok
+
+      {:ok, _other} ->
+        {:error, :lost}
+
+      {:error, {:uncertain, _sentence}} = uncertain ->
+        Logger.warning(
+          "[Locus.Runtime.HostClient] take_rate's answer was lost; its effect is uncertain"
+        )
+
+        uncertain
+
+      {:error, reason} ->
+        {:error, reason}
     end
-  end
-
-  @doc """
-  Run the guest's storage operation `op` with the guest request's `args`
-  (`"path"`, and `"content"` for a write or append), answering the
-  success answer's members.
-  """
-  @spec storage(t(), Prima.HostAPI.storage_op(), map()) :: {:ok, map()} | {:error, term()}
-  def storage(%__MODULE__{} = client, op, args)
-      when op in [:read, :write, :append, :list, :delete, :exists] and is_map(args) do
-    case request(client, :storage, Map.put(args, "action", Atom.to_string(op))) do
-      {:ok, %{} = members} -> {:ok, members}
-      {:ok, _other} -> {:error, :lost}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  @doc "The bytes of the attempt's component artifact with `digest`."
-  @spec fetch_artifact(t(), String.t()) :: {:ok, binary()} | {:error, term()}
-  def fetch_artifact(%__MODULE__{} = client, digest) when is_binary(digest) do
-    with {:ok, encoded} when is_binary(encoded) <-
-           request(client, :fetch_artifact, %{"digest" => digest}),
-         {:ok, bytes} <- Base.decode64(encoded) do
-      {:ok, bytes}
-    else
-      {:error, reason} -> {:error, reason}
-      _unreadable -> {:error, :lost}
-    end
-  end
-
-  @doc """
-  Record a refusal the runner made for the attempt's component: one of its
-  own egress checks, by its WIT error `type` and `message`, or
-  `secret_denied` with the vault field name the guest was refused
-  (`Prima.HostAPI.valid_field_name?/1`), which CYFR audits for this attempt.
-  """
-  @spec record_denial(t(), String.t(), String.t()) :: :ok | {:error, term()}
-  def record_denial(%__MODULE__{} = client, type, message)
-      when is_binary(type) and is_binary(message) do
-    case request(client, :record_denial, %{"type" => type, "message" => message}) do
-      {:ok, true} -> :ok
-      {:ok, _other} -> {:error, :lost}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  @doc """
-  Admit a child the attempt's guest starts on `reference`, through the edge
-  named `need`, with `input`, made with `guest_fn` (`:call` or `:spawn`),
-  asking its edge for the account `connection` names
-  (`t:Prima.HostAPI.connection/0`, nil for the edge's default, which the
-  body then does not name). CYFR admits it under the authority it holds
-  for this attempt and claims it for this client's runner, under a
-  `child_key` this client mints (`t:Prima.HostAPI.child_key/0`), so a lost
-  answer is asked again for the same child and the same account. Answers
-  the child to run (`t:child/0`), once its keys open under this attempt's
-  seal key as the attempt its assignment names on this client's worker
-  service, and its input hashes to the assignment's digest. A refusal of
-  the child is `{:error, guest_error}` (`t:Prima.HostAPI.guest_error/0`).
-  """
-  @spec admit_child(t(), String.t(), term(), map(), :call | :spawn, Prima.HostAPI.connection()) ::
-          {:ok, child()} | {:error, term()}
-  def admit_child(%__MODULE__{} = client, reference, need, input, guest_fn, connection)
-      when is_binary(reference) and is_map(input) and guest_fn in [:call, :spawn] and
-             (is_nil(connection) or is_binary(connection)) do
-    args =
-      %{
-        "reference" => reference,
-        "need" => need,
-        "input" => input,
-        "guest_fn" => Atom.to_string(guest_fn),
-        "child_key" => nonce()
-      }
-      |> then(&if(connection, do: Map.put(&1, "connection", connection), else: &1))
-
-    with {:ok,
-          %{
-            "assignment" => token,
-            "attempt_keys" => sealed,
-            "input" => input_json,
-            "secrets" => %{} = secrets
-          }}
-         when is_binary(input_json) <- request(client, :admit_child, args),
-         {:ok, assignment} <- Assignment.read(token) do
-      with {:ok, keys} <- WorkerAuth.open_attempt_keys(client.seal_key, sealed),
-           true <- names_attempt?(assignment, keys.attempt, client),
-           true <- Prima.Digest.sha256(input_json) == assignment.input_digest,
-           {:ok, %{} = admitted_input} <- Jason.decode(input_json),
-           :ok <- carried(client, assignment.attempt) do
-        {:ok,
-         %{
-           token: token,
-           assignment: assignment,
-           input: admitted_input,
-           client: new(keys, client.runner, client.boot, at(client)),
-           secrets: secrets
-         }}
-      else
-        # Admitted for this runner but not startable by it: give it back at
-        # once rather than leaving it to its lease.
-        _unopenable ->
-          _ = release_child(client, assignment.execution_id)
-          {:error, :lost}
-      end
-    else
-      {:error, {:guest_error, _type, _message} = refusal} -> {:error, refusal}
-      {:error, {:guest_error, _type, _message, _remediation} = refusal} -> {:error, refusal}
-      {:error, :unavailable} -> {:error, :unavailable}
-      _unreadable -> {:error, :lost}
-    end
-  end
-
-  @doc """
-  Give back the child `execution_id` this client's runner was handed but
-  could not start, so CYFR closes it failed and releases what it held.
-  Answers `:ok`, or `{:error, :lost | :unavailable}`.
-  """
-  @spec release_child(t(), String.t()) :: :ok | {:error, term()}
-  def release_child(%__MODULE__{} = client, execution_id) when is_binary(execution_id) do
-    case request(client, :release_child, %{"execution_id" => execution_id}) do
-      {:ok, true} -> :ok
-      {:error, reason} -> {:error, reason}
-      _ -> {:error, :lost}
-    end
-  end
-
-  @doc """
-  Run the catalog tool `name` with `args` for the attempt's guest, which
-  made it with `guest_fn` (`:call` or `:spawn`). Answers the tool's result,
-  or a refusal the guest is handed as `{:error, guest_error}`.
-  """
-  @spec tool_call(t(), String.t(), map(), :call | :spawn) :: {:ok, term()} | {:error, term()}
-  def tool_call(%__MODULE__{} = client, name, args, guest_fn)
-      when is_binary(name) and is_map(args) and guest_fn in [:call, :spawn] do
-    request(client, :tool_call, %{
-      "name" => name,
-      "args" => args,
-      "guest_fn" => Atom.to_string(guest_fn)
-    })
   end
 
   @doc """
@@ -489,68 +258,6 @@ defmodule Locus.Runtime.HostClient do
   end
 
   defp pin_args(_url, _purpose, _from), do: {:error, :malformed}
-
-  @doc """
-  Ask the attempt's ask `ask_no` before `action`, with its `summary` and
-  `operation`: `{:ok, {:answer, answer}}`, `{:ok, :pending}` while its
-  question is open, or `{:ok, {:retry_after_ms, ms}}` when the root's
-  allowance has no room (`t:Prima.HostAPI.question_asked/0`). Keyed: a
-  lost answer is asked once more with the same arguments, and CYFR
-  answers what it admitted under the number.
-  """
-  @spec question_ask(t(), pos_integer(), String.t(), String.t(), String.t()) ::
-          {:ok, Prima.HostAPI.question_asked()} | {:error, term()}
-  def question_ask(%__MODULE__{} = client, ask_no, action, summary, operation)
-      when is_integer(ask_no) and ask_no > 0 and is_binary(action) and is_binary(summary) and
-             is_binary(operation) do
-    args = %{
-      "ask_no" => ask_no,
-      "action" => action,
-      "summary" => summary,
-      "operation" => operation
-    }
-
-    case request(client, :question_ask, args) do
-      {:ok, %{"retry_after_ms" => ms} = wire}
-      when map_size(wire) == 1 and is_integer(ms) and ms > 0 ->
-        {:ok, {:retry_after_ms, ms}}
-
-      {:ok, wire} ->
-        question_answered(wire)
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
-  @doc """
-  Wait up to `max_wait_ms` (at most `Prima.HostAPI.max_question_wait_ms/0`)
-  for the attempt's ask `ask_no` to be decided: `{:ok, {:answer, answer}}`
-  or `{:ok, :pending}`. Idempotent: a lost answer is asked once more.
-  """
-  @spec question_wait(t(), pos_integer(), non_neg_integer()) ::
-          {:ok, {:answer, Prima.HostAPI.question_answer()} | :pending} | {:error, term()}
-  def question_wait(%__MODULE__{} = client, ask_no, max_wait_ms)
-      when is_integer(ask_no) and ask_no > 0 and is_integer(max_wait_ms) and max_wait_ms >= 0 do
-    args = %{
-      "ask_no" => ask_no,
-      "max_wait_ms" => min(max_wait_ms, HostAPI.max_question_wait_ms())
-    }
-
-    with {:ok, wire} <- request(client, :question_wait, args), do: question_answered(wire)
-  end
-
-  defp question_answered(%{"pending" => true} = wire) when map_size(wire) == 1,
-    do: {:ok, :pending}
-
-  defp question_answered(%{"answer" => answer} = wire) when map_size(wire) == 1 do
-    case HostAPI.answer_from_wire(answer) do
-      {:ok, answer} -> {:ok, {:answer, answer}}
-      :error -> {:error, :lost}
-    end
-  end
-
-  defp question_answered(_wire), do: {:error, :lost}
 
   @doc """
   Report, for the worker service `credentials` name on its boot `boot`,
@@ -609,7 +316,49 @@ defmodule Locus.Runtime.HostClient do
            do: {:ok, header, body, &{:ok, &1}}
     end
 
-    case call({:http, at.host_url}, :runner_exited, try) do
+    case call(at.host_url, :runner_exited, try) do
+      {:ok, true} -> :ok
+      {:ok, _other} -> {:error, :lost}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @doc """
+  Report, for the worker service `credentials` name on its boot `boot`,
+  its runners' operator `events`, each an `event` frame a runner sent
+  (`c:Prima.HostAPI.report_events/2`), as one batch of at most
+  `Prima.HostAPI.max_report_events/0`: signed with the service's dispatch
+  key and posted to the address the service is configured with, naming no
+  member. A batch is never sent again: one whose answer was lost is
+  `{:error, {:uncertain, sentence}}`; one that reached no connection is
+  `{:error, :unsent}`, and one the answering member refused because it
+  does not hold the control plane `{:error, :unavailable}`, each of which
+  its caller may send again, since CYFR emitted nothing of it. None of
+  these is logged here: the caller logs a batch's end. Answers `:ok`, or
+  `{:error, reason}`.
+  """
+  @spec report_events(Locus.Runtime.Credentials.t(), String.t(), [
+          Prima.RunnerControl.event(),
+          ...
+        ]) :: :ok | {:error, term()}
+  def report_events(%Locus.Runtime.Credentials{} = credentials, boot, events)
+      when is_binary(boot) and is_list(events) do
+    body =
+      Jason.encode!(WorkerWire.request_body(:report_events, HostAPI.report_events_args(events)))
+
+    try = fn ->
+      report = %{
+        service: credentials.service_id,
+        boot: boot,
+        ts: System.system_time(:millisecond),
+        nonce: nonce()
+      }
+
+      with {:ok, header} <- WorkerAuth.report_header(credentials.dispatch_key, report, body),
+           do: {:ok, header, body, &{:ok, &1}}
+    end
+
+    case call(credentials.host_url, :report_events, try) do
       {:ok, true} -> :ok
       {:ok, _other} -> {:error, :lost}
       {:error, reason} -> {:error, reason}
@@ -630,71 +379,52 @@ defmodule Locus.Runtime.HostClient do
       end
     end
 
-    call(via(client), op, try)
+    call(client.host_url, op, try)
   end
-
-  defp via(%__MODULE__{relay: nil, host_url: host_url}), do: {:http, host_url}
-  defp via(%__MODULE__{relay: relay, attempt: attempt}), do: {:relay, relay, attempt}
-
-  # A child's attempt is carried on the runner's relay before its first
-  # call; a client posting directly has no relay to tell.
-  defp carried(%__MODULE__{relay: nil}, _attempt), do: :ok
-
-  defp carried(%__MODULE__{relay: relay}, attempt),
-    do: Locus.Runtime.Relay.Runner.admit(relay, attempt)
 
   # One call: sealed and signed afresh for each try (`try` answers the
   # header, the body and how to read the answer), retried once after a
   # lost answer when its class allows, never on an answer CYFR gave.
-  defp call(via, op, try) do
-    answer =
-      case post(via, op, try) do
-        {:ok, answer} ->
-          answer
+  defp call(host_url, op, try) do
+    case post(host_url, op, try) do
+      {:ok, answer} ->
+        answer
 
-        :lost ->
-          case HostAPI.retry(op) do
-            :never ->
-              Logger.warning(
-                "[Locus.Runtime.HostClient] #{op}'s answer was lost; its effect is uncertain"
-              )
+      lost ->
+        case HostAPI.retry(op) do
+          # Nothing of a call that reached no connection was sent, so
+          # nothing of it happened.
+          :never when lost == :unsent ->
+            {:error, :unsent}
 
-              {:error, {:uncertain, @uncertain}}
+          # Its caller logs it, naming what it asked.
+          :never ->
+            {:error, {:uncertain, @uncertain}}
 
-            _retried ->
-              Logger.warning(
-                "[Locus.Runtime.HostClient] #{op}'s answer was lost; calling once more"
-              )
+          _retried ->
+            Logger.warning(
+              "[Locus.Runtime.HostClient] #{op}'s answer was lost; calling once more"
+            )
 
-              case post(via, op, try) do
-                {:ok, answer} -> answer
-                :lost -> {:error, :lost}
-              end
-          end
-      end
-
-    # A lost answer, whether CYFR's `lost` or one that never arrived,
-    # leaves what the call did unknown: the subtree's runner is never
-    # reused (`Locus.Runtime.Subtree.unclean/1`).
-    case answer do
-      {:error, :lost} -> Locus.Runtime.Subtree.unclean({op, :lost})
-      {:error, {:uncertain, _}} -> Locus.Runtime.Subtree.unclean({op, :uncertain})
-      _ -> :ok
+            case post(host_url, op, try) do
+              {:ok, answer} -> answer
+              _lost -> {:error, :lost}
+            end
+        end
     end
-
-    answer
   end
 
-  defp post(via, op, try) do
+  defp post(host_url, op, try) do
     with {:ok, header, body, read} <- try.(),
          :ok <- within_bound(body),
-         {:ok, raw} <- transport(via, op, header, body),
+         {:ok, raw} <- transport(host_url, op, header, body),
          {:ok, json} <- read.(raw) do
       answer(json, op)
     else
       {:refused, 413, _raw} -> too_large(op)
       :too_large -> too_large(op)
       {:refused, _status, raw} -> refused(raw, op)
+      :unsent -> :unsent
       _ -> :lost
     end
   after
@@ -740,9 +470,7 @@ defmodule Locus.Runtime.HostClient do
   end
 
   # A body past the host's bound is never sent: the host would refuse it
-  # `413`, and a runner's relay refuses a frame past its own, larger bound
-  # before it reaches the host at all, which reads as a lost answer. So it
-  # is refused here, the same on both paths.
+  # `413`, so it is refused here.
   defp within_bound(body),
     do: if(byte_size(body) > HostAPI.max_body_bytes(), do: :too_large, else: :ok)
 
@@ -763,11 +491,23 @@ defmodule Locus.Runtime.HostClient do
   # attempt's work instead of being asked again. The refusal is plain,
   # since a listener that cannot read the header cannot seal to it, and is
   # read whatever version it carries, since it is the other version's
-  # answer.
+  # answer. A batch's `unavailable` at this version is the answering
+  # member's word that it does not hold the control plane and read
+  # nothing of the batch: an answer, never asked again, since the batch's
+  # forwarder keeps it and sends it again.
   defp refused(raw, op) do
     case Jason.decode(raw) do
-      {:ok, %{"error" => "unknown_version"}} -> other_version(op)
-      _ -> :lost
+      {:ok, %{"error" => "unknown_version"}} ->
+        other_version(op)
+
+      {:ok, decoded} when op == :report_events ->
+        case WorkerWire.read_answer(decoded) do
+          {:error, "unavailable", _fields} -> {:ok, {:error, :unavailable}}
+          _other -> :lost
+        end
+
+      _ ->
+        :lost
     end
   end
 
@@ -782,28 +522,12 @@ defmodule Locus.Runtime.HostClient do
   # The bytes of a `200` answer, `{:refused, status, bytes}` for any other
   # status and its body (none of a body past the bound), or `:error` for a
   # transport failure, a `200` answer past the bound or one later than the
-  # callback's timeout, whether the worker service posted it for a runner's
-  # relay or itself. No answer body is logged.
-  defp transport(via, op, header, body) do
-    sent =
-      case via do
-        {:http, host_url} ->
-          own_call(host_url, op, header, body)
-
-        {:relay, relay, attempt} ->
-          Locus.Runtime.Relay.Runner.call(
-            relay,
-            attempt,
-            op,
-            header,
-            body,
-            HostAPI.request_timeout_ms(op)
-          )
-      end
-
-    case sent do
+  # callback's timeout. No answer body is logged.
+  defp transport(host_url, op, header, body) do
+    case own_call(host_url, op, header, body) do
       {:ok, 200, raw} -> {:ok, raw}
       {:ok, status, raw} when is_integer(status) -> {:refused, status, raw}
+      :unsent -> :unsent
       _lost -> :error
     end
   end
@@ -855,7 +579,7 @@ defmodule Locus.Runtime.HostClient do
           optional(:room) => (pos_integer() -> :ok | :full)
         }) :: :ok | :halted | {:error, String.t()}
   def attached_fetch(
-        %__MODULE__{relay: nil} = client,
+        %__MODULE__{} = client,
         %AttachedRequest{} = request,
         %{sink: sink, max_response_size: max, deadline: deadline} = options
       )
@@ -1066,10 +790,12 @@ defmodule Locus.Runtime.HostClient do
   host API at `host_url`, once: CYFR's status and the answer's bytes, read
   up to `Prima.HostAPI.max_answer_bytes/0`, or `:error` for a transport
   failure, a `200` answer past the bound or an answer later than the
-  callback's timeout. A refusal, any other status, whose body runs past
-  the bound keeps its status, with none of its body: the status is what a
-  refusal says. The worker service posts every host call with it, its
-  runners' as their relay hands them over and its own.
+  callback's timeout, and `:unsent` for a connection to `host_url` that
+  could not be made, so nothing of the call was sent. A refusal, any
+  other status, whose body runs past the bound keeps its status, with
+  none of its body: the status is what a refusal says. The worker service
+  posts every host call with it, its runners' as their relay hands them
+  over and its own.
 
   `:room`, a function of the bytes an answer may hold, is asked once, as
   the answer's first piece is read and before it is kept, for the whole
@@ -1080,7 +806,7 @@ defmodule Locus.Runtime.HostClient do
   """
   @spec post_call(String.t(), atom(), String.t(), binary(), [
           {:room, (pos_integer() -> :ok | :full)}
-        ]) :: {:ok, 100..599, binary()} | :error
+        ]) :: {:ok, 100..599, binary()} | :unsent | :error
   def post_call(host_url, op, header, body, opts \\ [])
       when is_binary(host_url) and is_binary(header) and is_binary(body) and is_list(opts) do
     max = HostAPI.max_answer_bytes()
@@ -1120,6 +846,9 @@ defmodule Locus.Runtime.HostClient do
           {_room, {:error, {:response_too_large, _seen, _max}}} ->
             :error
         end
+
+      {:error, %Req.TransportError{reason: reason}} when reason in @unconnected ->
+        :unsent
 
       _ ->
         :error
@@ -1176,35 +905,7 @@ defmodule Locus.Runtime.HostClient do
     }
   end
 
-  defp at(%__MODULE__{relay: nil} = client),
-    do: %{member: client.member, host_url: client.host_url}
-
-  defp at(%__MODULE__{} = client), do: %{member: client.member, relay: client.relay}
-
   defp nonce, do: Base.url_encode64(:crypto.strong_rand_bytes(18), padding: false)
-
-  # A child's assignment must name the attempt its keys open as, on this
-  # client's worker service and boot, and be issued by the member its
-  # parent's is: a child is admitted through the parent's host call, so a
-  # child of another member's is a child this runner cannot reach. A
-  # runner's client knows no address: its relay's service end holds the
-  # child's to its parent's.
-  defp names_attempt?(%Assignment{} = assignment, attempt, %__MODULE__{} = client) do
-    Map.take(assignment, @attempt_fields) == Map.take(attempt, @attempt_fields) and
-      assignment.service == client.service and assignment.boot == client.boot and
-      attempt.service == client.service and assignment.member == client.member and
-      (assignment.host_url == nil or client.host_url == nil or
-         assignment.host_url == client.host_url)
-  end
-
-  defp outcome(client, status, fields) do
-    Map.merge(fields, %{
-      "execution_id" => client.execution_id,
-      "attempt" => client.attempt,
-      "fence" => client.fence,
-      "status" => status
-    })
-  end
 
   # An answer CYFR gave to `op`, or `:lost` for bytes that are not one at
   # this wire's version (`Prima.WorkerWire.read_answer/1`).
@@ -1215,20 +916,16 @@ defmodule Locus.Runtime.HostClient do
     end
   end
 
+  # A `take_rate` refused its rate is a guest error, which names no
+  # remediation; nothing else the service asks is answered one.
   defp read_answer(decoded, op) do
     case WorkerWire.read_answer(decoded) do
       {:ok, value} ->
         {:ok, {:ok, value}}
 
-      {:error, "setup_required", %{"payload" => %{} = payload}} ->
-        {:ok, {:error, {:setup_required, payload}}}
-
-      {:error, "guest_error", %{"type" => type, "message" => message} = fields}
+      {:error, "guest_error", %{"type" => type, "message" => message}}
       when is_binary(type) and is_binary(message) ->
-        {:ok, guest_error(fields, type, message)}
-
-      {:error, "failed", %{"message" => message}} when is_binary(message) ->
-        {:ok, {:error, {:failed, message}}}
+        {:ok, {:error, {:guest_error, type, message}}}
 
       {:error, "unknown_version", _fields} ->
         other_version(op)
@@ -1243,12 +940,4 @@ defmodule Locus.Runtime.HostClient do
         :lost
     end
   end
-
-  defp guest_error(%{"remediation" => %{} = remediation}, type, message),
-    do: {:error, {:guest_error, type, message, remediation}}
-
-  defp guest_error(_fields, type, message), do: {:error, {:guest_error, type, message}}
-
-  defp renewal(%{"lease_until" => until}) when is_integer(until), do: {:ok, until}
-  defp renewal(_lost), do: :lost
 end

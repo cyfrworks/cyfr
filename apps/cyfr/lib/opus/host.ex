@@ -168,6 +168,17 @@ defmodule Opus.Host do
   another member, and `{"v": 3, "error": "unavailable"}` when this boot
   does not hold the control plane (nothing is lapsed) or the store cannot
   list the attempts.
+
+  `events_report/2` takes a worker service's batch of its runners'
+  operator events, `{"v": 3, "op": "report_events", "args": {"events":
+  [record, ...]}}` (`Prima.HostAPI.report_events_args/1`), under a report
+  header verified as `runner_exited/2`'s is. It names no member, so
+  whichever member answers emits it. The batch is read whole
+  (`Prima.HostAPI.read_events/1`): one record off the runner's roster
+  refuses it whole, `lost`, and nothing of it is emitted; otherwise each
+  event is emitted in order (`Opus.Host.RunnerEvents`), and it answers
+  `{"v": 3, "ok": true}`. The listener has refused its replay already,
+  since a batch is never sent again (`Prima.HostAPI.retry/1`).
   """
 
   @behaviour Prima.HostAPI
@@ -265,6 +276,45 @@ defmodule Opus.Host do
       encode({:error, :unavailable})
   end
 
+  @doc "Answer one worker service's batch of its runners' operator events: `header` and the JSON `body` it signs."
+  @spec events_report(String.t(), String.t()) :: String.t()
+  def events_report(header, body) when is_binary(header) and is_binary(body) do
+    now = System.system_time(:millisecond)
+
+    answer =
+      with :ok <- owner(:unavailable),
+           {:ok, report} <- verify_report(header, body, now),
+           {:ok, events} <- reported_events(body) do
+        report_events(report, events)
+      end
+
+    encode(answer)
+  rescue
+    # A raise may come after some of the batch was emitted, so the batch is
+    # answered lost, which its forwarder never sends again: a record is
+    # emitted once or not at all. A handler's own raise never comes here:
+    # `:telemetry` catches it and detaches the handler.
+    exception ->
+      Logger.error(
+        "[Opus.Host] runner events report raised: " <>
+          Prima.LogFilter.format_exception(:error, exception, __STACKTRACE__)
+      )
+
+      encode({:error, :lost})
+  end
+
+  defp reported_events(body) do
+    with {:ok, decoded} <- Jason.decode(body),
+         {:ok, :report_events, args} <- WorkerWire.read_request_body(HostAPI, decoded),
+         {:ok, events} <- HostAPI.read_events(args) do
+      {:ok, events}
+    else
+      _ ->
+        Logger.warning("[Opus.Host] runner events report refused: a record is not the roster's")
+        {:error, :lost}
+    end
+  end
+
   defp owner(refusal) do
     if Arca.ControlPlane.held?() do
       :ok
@@ -280,7 +330,7 @@ defmodule Opus.Host do
         {:ok, report}
 
       {:error, reason} ->
-        Logger.warning("[Opus.Host] runner exit report refused: #{reason}")
+        Logger.warning("[Opus.Host] worker service report refused: #{reason}")
         {:error, :lost}
     end
   end
@@ -527,6 +577,11 @@ defmodule Opus.Host do
       Enum.each(attempts, &Attempt.stop_unclosed(&1, holder))
     end
   end
+
+  # Reached from `events_report/2` once the report has verified and its
+  # batch has read whole: `report` is the verified report header.
+  @impl HostAPI
+  def report_events(_report, events), do: Opus.Host.RunnerEvents.emit(events)
 
   defp names_caller(%Assignment{} = assignment, caller) do
     cond do

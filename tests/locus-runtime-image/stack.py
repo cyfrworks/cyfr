@@ -181,7 +181,7 @@ class Stack(imagesuite.Stack):
         sys.exit(f"FAIL: the {COMPOSE_SERVICE} service never answered its status\n" + self.logs())
 
     def wait_pool(self, timeout=90):
-        """Every fresh runner of the warm floor is up: a runner is a VM booting from nothing."""
+        """Every fresh runner of the warm floor is up."""
         return wait_until(
             lambda: (lambda r: r if r and r["fresh"] >= imagesuite.FLOOR_RUNNERS else None)(self.runners()),
             timeout, f"the pool to hold its floor of {imagesuite.FLOOR_RUNNERS} fresh runner(s)", interval=0.25,
@@ -280,13 +280,13 @@ class Stack(imagesuite.Stack):
         return run("docker", "exec", "--privileged", self.container, "sh", "-c", script, check=False)
 
     def runner_processes(self):
-        """The runner VMs: each pooled uid's beam.smp with the runner id and home its environment names, read by the observer (`observe`)."""
+        """The runners: each pooled uid's cyfr-runner with the runner id and home its environment names, read by the observer (`observe`)."""
         script = r"""
           for d in /proc/[0-9]*; do
             s="$(cat "$d/status" 2>/dev/null)" || continue
             uid="$(printf '%s\n' "$s" | awk '/^Uid:/ {print $2}')"
             [ "$uid" -ge FIRST ] && [ "$uid" -le LAST ] || continue
-            tr '\0' ' ' < "$d/cmdline" 2>/dev/null | grep -q 'beam.smp' || continue
+            tr '\0' ' ' < "$d/cmdline" 2>/dev/null | grep -q 'cyfr-runner' || continue
             env="$(tr '\0' '\n' < "$d/environ" 2>/dev/null)"
             runner="$(printf '%s\n' "$env" | sed -n 's/^RUNTIME_RUNNER_ID=//p')"
             home="$(printf '%s\n' "$env" | sed -n 's/^HOME=//p')"
@@ -302,8 +302,8 @@ class Stack(imagesuite.Stack):
         return out
 
     def runner_left(self, runner):
-        """What is left of a runner (`runner_processes`' entry): its VM by
-        pid, and every process whose command line names its home or whose
+        """What is left of a runner (`runner_processes`' entry): its process
+        by pid, and every process whose command line names its home or whose
         environment's HOME is it, as every child the runner started
         inherited. Its uid is no measure: the pool hands a freed uid to a
         fresh runner as soon as it is free."""

@@ -3,26 +3,30 @@
 
 defmodule Locus.Runtime.Test.RelayFixtures do
   @moduledoc """
-  Fixtures for tests of a runner's relay (`Locus.Runtime.Relay`,
-  `Locus.Runtime.Relay.Runner`) joined to a scripted host.
+  Fixtures for tests of the service's end of a runner's relay
+  (`Locus.Runtime.Relay`), its peer the test's scripted runner end
+  (`Locus.Runtime.Test.RunnerEnd`), joined to a scripted host.
 
   `attempt!/2` mints an attempt of `component_ref/0` on a
   `Locus.Runtime.Test.ScriptedHost` under an edge and limits of the test's
-  choosing. `upstream!/0` and `big_upstream!/1` serve a loopback upstream
-  for the calling test; the first answers `/wide-head` with a head of
-  64 headers of 2,000 bytes. `attached/2` and `attached_fetch/2` build and send
-  an attached fetch as a runner's handler does. `events/4`, `body_of/1`
-  and `read_granting/3` read a fetch's events to its end at the runner's
-  end, granting credit back as a runner's handlers do. Each is called from
-  the test's own process: servers are supervised by it and upstream
-  messages go to it.
+  choosing. `signed_call/3` builds a host call as a runner signs and seals
+  it under its attempt's keys, and `call/3` sends one through the runner's
+  end and opens CYFR's answer; `pin!/3` asks CYFR for a pin that way.
+  `upstream!/0` and `big_upstream!/1` serve a loopback upstream for the
+  calling test; the first answers `/wide-head` with a head of 64 headers
+  of 2,000 bytes. `attached/2` and `attached_fetch/2` build and send an
+  attached fetch as a runner does. `events/4`, `body_of/1` and
+  `read_granting/3` read a fetch's events to its end at the runner's end,
+  granting credit back as a runner's guest reads. Each is called from the
+  test's own process: servers are supervised by it and upstream messages
+  go to it.
   """
 
   import ExUnit.Assertions, only: [flunk: 1]
 
-  alias Locus.Runtime.Relay.Runner, as: Endpoint
+  alias Locus.Runtime.Test.RunnerEnd, as: Endpoint
   alias Locus.Runtime.Test.{EdgeFixtures, ScriptedHost, ScriptedKeeper}
-  alias Prima.AttachedRequest
+  alias Prima.{Assignment, AttachedRequest, PinnedTarget, WorkerAuth, WorkerWire}
 
   @ref "catalyst:local.relayed:1.0.0"
 
@@ -67,6 +71,77 @@ defmodule Locus.Runtime.Test.RelayFixtures do
     )
   end
 
+  @doc """
+  A host call of `op` with `args` for `attempt`, as its runner signs and
+  seals one: under the attempt's keys, presenting its runner and boot and
+  the member its assignment names.
+  """
+  @spec signed_call(map(), atom(), map()) :: map()
+  def signed_call(attempt, op, args), do: attempt |> sign(op, args) |> elem(0)
+
+  @doc """
+  A host call of `op` with `args`, as `attempt`'s runner makes it: signed
+  and sealed (`signed_call/3`), sent through the runner's end of the relay
+  (`attempt.endpoint`), and CYFR's answer opened under the attempt's seal
+  key and read as the wire reads one (`Prima.WorkerWire.read_answer/1`).
+  Answers `{:ok, value}`, `{:error, name, fields}` or `:lost` for a `200`
+  answer, `{:status, status}` for any other, `:no_answer` for an answer
+  that did not reach the service, or the runner's end's `{:error, reason}`.
+  """
+  @spec call(map(), atom(), map()) :: term()
+  def call(attempt, op, args) do
+    {frame, fields} = sign(attempt, op, args)
+    timeout = Prima.HostAPI.request_timeout_ms(op)
+
+    case Endpoint.call(attempt.endpoint, frame.attempt, op, frame.header, frame.body, timeout) do
+      {:ok, 200, body} ->
+        {:ok, json} = WorkerAuth.open_call(attempt.keys.seal, :answer, fields, body)
+        json |> Jason.decode!() |> WorkerWire.read_answer()
+
+      {:ok, nil, _body} ->
+        :no_answer
+
+      {:ok, status, _body} ->
+        {:status, status}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @doc """
+  The pin CYFR grants `attempt`'s runner for `url`, asked through its relay
+  (`call/3`) as a runner asks one: for the `:purpose` `opts` names
+  (default `:fetch`), from the pin `:from` names for a redirect. The
+  service's end learns it as it relays the answer.
+  """
+  @spec pin!(map(), String.t(), keyword()) :: PinnedTarget.t()
+  def pin!(attempt, url, opts \\ []) do
+    purpose = Keyword.get(opts, :purpose, :fetch)
+    {:ok, args} = PinnedTarget.request_args(url, purpose, Keyword.get(opts, :from))
+    {:ok, wire} = call(attempt, :egress_pin, args)
+    {:ok, pin} = PinnedTarget.read(wire)
+    pin
+  end
+
+  defp sign(attempt, op, args) do
+    {:ok, assignment} = Assignment.read(attempt.assignment)
+
+    fields =
+      Map.merge(attempt.keys.attempt, %{
+        boot: attempt.boot,
+        runner: attempt.runner,
+        member: assignment.member,
+        ts: System.system_time(:millisecond),
+        nonce: Base.url_encode64(:crypto.strong_rand_bytes(12), padding: false)
+      })
+
+    json = Jason.encode!(WorkerWire.request_body(op, args))
+    {:ok, sealed} = WorkerAuth.seal_call(attempt.keys.seal, :body, fields, json)
+    {:ok, header} = WorkerAuth.host_call_header(attempt.keys.call, fields, sealed)
+    {%{kind: :host_call, attempt: attempt.attempt, op: op, header: header, body: sealed}, fields}
+  end
+
   @spec upstream!() :: :inet.port_number()
   def upstream! do
     server =
@@ -79,9 +154,9 @@ defmodule Locus.Runtime.Test.RelayFixtures do
   end
 
   # A fetch's events to its end, and why it ended; each chunk is granted
-  # back as it is read, as a runner's handlers grant it, unless `grant` is
-  # false: a runner that reads nothing.
-  @spec events(pid(), reference(), boolean(), list()) :: {list(), term()}
+  # back as it is read, as a runner grants it for its guest, unless
+  # `grant` is false: a runner that reads nothing.
+  @spec events(pid(), non_neg_integer(), boolean(), list()) :: {list(), term()}
   def events(endpoint, ref, grant \\ true, acc \\ []) do
     receive do
       {Endpoint, ^ref, {:end, error}} ->
@@ -105,7 +180,7 @@ defmodule Locus.Runtime.Test.RelayFixtures do
     end)
   end
 
-  # A guest's request naming a connection, as the runner's handler builds it.
+  # A guest's request naming a connection, as a runner builds it.
   @spec attached(String.t(), keyword()) :: AttachedRequest.t()
   def attached(url \\ "http://api.test/v1/x", opts \\ []) do
     %AttachedRequest{
@@ -163,7 +238,7 @@ defmodule Locus.Runtime.Test.RelayFixtures do
   end
 
   # Read a fetch to its end, granting back each chunk as it is read.
-  @spec read_granting(pid(), reference(), non_neg_integer()) :: non_neg_integer()
+  @spec read_granting(pid(), non_neg_integer(), non_neg_integer()) :: non_neg_integer()
   def read_granting(endpoint, ref, total) do
     receive do
       {Endpoint, ^ref, {:head, 200, _headers, body}} ->

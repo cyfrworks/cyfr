@@ -3,8 +3,9 @@
 
 defmodule Opus.HostListenerTest do
   @moduledoc """
-  A runner's host calls and a worker service's reports reach
-  `Opus.Host` over HTTP through one listener of CYFR's own, and
+  A runner's host calls and a worker service's reports, of a runner's
+  exit and of its runners' operator events, reach `Opus.Host` over HTTP
+  through one listener of CYFR's own, and
   the listener refuses what the header alone disproves before it reads
   the body: a wrong key, another worker service, a stale generation, a
   reused nonce, a runner other than the one the attempt row is claimed by
@@ -18,7 +19,9 @@ defmodule Opus.HostListenerTest do
   Every `pre_body_refusals` vector of `tests/fixtures/host_api.json` is
   answered at its status, in the documented order, on a connection the
   listener closes without reading the body; every `body_refusals` vector
-  is refused, once opened, with the error it names.
+  is refused, once opened, with the error it names. A report of events
+  is emitted whole, as `events_report` says, never twice, and not at all
+  when one record is off the runner's roster.
   """
 
   use ExUnit.Case, async: false
@@ -778,6 +781,32 @@ defmodule Opus.HostListenerTest do
       assert %{status: "running"} = row(fixture)
       assert Process.alive?(fixture.pid)
     end
+
+    @tag :capture_log
+    test "a runner's call at another route whose sealed body is a batch of events", %{url: url} do
+      fixture =
+        AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api), service_id: @service)
+
+      events = Jason.decode!(@vectors["events_report"]["body"])["args"]
+
+      assert {400, %{"error" => "malformed"}} =
+               call(url, fixture, "report_events", events, path: WorkerWire.host_route(:renew))
+
+      assert %{status: "running"} = row(fixture)
+    end
+
+    @tag :capture_log
+    test "a report at the runner_exited route whose body is a batch of events", %{url: url} do
+      fixture =
+        AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api), service_id: @service)
+
+      {header, body} = events_report(@vectors["events_report"]["body"])
+
+      assert {400, %{"error" => "malformed"}} =
+               post(url, WorkerWire.host_route(:runner_exited), [header], body)
+
+      assert %{status: "running"} = row(fixture)
+    end
   end
 
   describe "the rest of a body over the bound" do
@@ -1113,7 +1142,7 @@ defmodule Opus.HostListenerTest do
 
       assert Enum.map(vectors, & &1["error"]) ==
                ~w(unknown_version unknown_version unknown_version malformed malformed malformed
-                  malformed)
+                  malformed malformed)
 
       for %{"name" => name, "body" => json, "error" => error} <- vectors do
         fields = fields(fixture, [])
@@ -1152,6 +1181,149 @@ defmodule Opus.HostListenerTest do
 
       assert {200, %{"v" => 3, "ok" => true}} = report(url, fixture)
     end
+  end
+
+  describe "a report of a worker service's runner events" do
+    setup do
+      test = self()
+      id = "host-listener-runner-events-#{System.unique_integer([:positive])}"
+      events = Enum.map(@vectors["events_report"]["emitted"], &emitted_event/1)
+      :ok = :telemetry.attach_many(id, events, &__MODULE__.forward_event/4, test)
+      on_exit(fn -> :telemetry.detach(id) end)
+      :ok
+    end
+
+    @tag :capture_log
+    test "one signed batch of all nine is emitted, each as the vector says; its replay is " <>
+           "refused 401; one record off the roster, or another report's route, refuses it 400 " <>
+           "whole",
+         %{url: url} do
+      report = @vectors["events_report"]
+      {header, body} = events_report(report["body"])
+
+      assert Enum.sort(Enum.map(report["emitted"], &emitted_event/1)) ==
+               Enum.sort(
+                 Enum.map(
+                   Prima.RunnerControl.event_roster(),
+                   &Opus.Host.RunnerEvents.event(&1.name)
+                 )
+               )
+
+      assert {200, Jason.decode!(report["answer"])} ==
+               post(url, WorkerWire.host_route(:report_events), [header], body)
+
+      for emitted <- report["emitted"] do
+        event = emitted_event(emitted)
+        assert_receive {:runner_event, ^event, measurements, metadata}
+        assert measurements == emitted_measurements(emitted)
+        assert metadata == emitted_metadata(emitted)
+      end
+
+      # Never sent again: the same header and body is a replay.
+      assert {401, %{"v" => 3, "error" => report["replay_error"]}} ==
+               post(url, WorkerWire.host_route(:report_events), [header], body)
+
+      off = report["off_roster"]
+      {off_header, off_body} = events_report(off["body"])
+
+      assert {400, %{"v" => 3, "error" => off["error"]}} ==
+               post(url, WorkerWire.host_route(:report_events), [off_header], off_body)
+
+      # The batch is read at its own route alone.
+      other = report["other_route"]
+      {other_header, other_body} = events_report(report["body"])
+      route = WorkerWire.host_route(String.to_existing_atom(other["route"]))
+
+      assert {400, %{"v" => 3, "error" => other["error"]}} ==
+               post(url, route, [other_header], other_body)
+
+      refute_received {:runner_event, _event, _measurements, _metadata}
+    end
+
+    @tag :capture_log
+    test "a handler that raises on a record is detached, and no record of the batch is " <>
+           "emitted twice, to it or to another",
+         %{url: url} do
+      report = @vectors["events_report"]
+      [first, second | _rest] = Enum.map(report["emitted"], &emitted_event/1)
+      test = self()
+      id = "host-listener-raising-#{System.unique_integer([:positive])}"
+
+      :ok =
+        :telemetry.attach_many(id, [first, second], &__MODULE__.raise_on/4, {test, second})
+
+      on_exit(fn -> :telemetry.detach(id) end)
+
+      {header, body} = events_report(report["body"])
+
+      assert {200, Jason.decode!(report["answer"])} ==
+               post(url, WorkerWire.host_route(:report_events), [header], body)
+
+      # The raising handler heard the first record and the second, which it
+      # raised on, and was detached; every record reached the other once.
+      assert_receive {:raising_heard, ^first}
+      assert_receive {:raising_heard, ^second}
+
+      for emitted <- report["emitted"] do
+        event = emitted_event(emitted)
+        assert_receive {:runner_event, ^event, _measurements, _metadata}
+        refute_received {:runner_event, ^event, _measurements, _metadata}
+      end
+
+      refute_received {:raising_heard, _event}
+
+      # The batch is never emitted again: the same post is a replay.
+      assert {401, %{"v" => 3, "error" => report["replay_error"]}} ==
+               post(url, WorkerWire.host_route(:report_events), [header], body)
+
+      refute_received {:runner_event, _event, _measurements, _metadata}
+    end
+  end
+
+  @doc false
+  def raise_on(event, _measurements, _metadata, {test, raise_at}) do
+    send(test, {:raising_heard, event})
+    if event == raise_at, do: raise("a handler that raises")
+  end
+
+  @doc false
+  def forward_event(event, measurements, metadata, test),
+    do: send(test, {:runner_event, event, measurements, metadata})
+
+  # A report of events carrying `body`, signed with this service's
+  # dispatch key under a fresh nonce: the vector's keys are not this
+  # deployment's.
+  defp events_report(body) do
+    fields = %{
+      service: @service,
+      boot: "boot_#{System.unique_integer([:positive])}",
+      ts: now(),
+      nonce: "n_#{System.unique_integer([:positive])}"
+    }
+
+    {:ok, header} = WorkerAuth.report_header(dispatch_key(@service), fields, body)
+    {header, body}
+  end
+
+  defp emitted_event(%{"event" => event}), do: Enum.map(event, &String.to_existing_atom/1)
+
+  # The vector's system_time is nanoseconds since the epoch: this VM emits
+  # it in its native unit.
+  defp emitted_measurements(%{"measurements" => measurements}) do
+    Map.new(measurements, fn
+      {"system_time", ns} ->
+        {:system_time, System.convert_time_unit(ns, :nanosecond, :native)}
+
+      {name, value} ->
+        {String.to_existing_atom(name), value}
+    end)
+  end
+
+  defp emitted_metadata(%{"metadata" => metadata, "atoms" => atoms}) do
+    Map.new(metadata, fn {name, value} ->
+      {String.to_existing_atom(name),
+       if(name in atoms, do: String.to_existing_atom(value), else: value)}
+    end)
   end
 
   # The live header carrying the defect a pre-body vector names. A vector

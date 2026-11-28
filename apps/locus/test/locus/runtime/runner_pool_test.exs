@@ -212,11 +212,7 @@ defmodule Locus.Runtime.RunnerPoolTest do
     assert counts(pool).fresh == 1
 
     for spawn <- spawns(keeper) do
-      assert %{
-               "RUNTIME_ROLE" => "runner",
-               "RUNTIME_SERVICE_ID" => "wrk_local",
-               "RUNTIME_BOOT_ID" => "boot_pool"
-             } =
+      assert %{"RUNTIME_SERVICE_ID" => "wrk_local", "RUNTIME_BOOT_ID" => "boot_pool"} =
                spawn.spec.env
 
       assert spawn.spec.env["RUNTIME_RUNNER_ID"] == spawn.spec.runner

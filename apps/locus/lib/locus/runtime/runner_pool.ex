@@ -160,8 +160,8 @@ defmodule Locus.Runtime.RunnerPool do
   Start the pool. Options: `:settings` (`t:Locus.Runtime.Settings.pool/0`),
   `:keeper` (the keeper module), `:keeper_opts` (the options the keeper
   was started with, default none), `:supervisor` (the `DynamicSupervisor`
-  the handles run under), `:command` (`t:Locus.Runtime.Release.command/0`, default
-  this boot's), `:retire_bound_ms` (how long past a release's grace the
+  the handles run under), `:command` (`t:Locus.Runtime.Settings.command/0`,
+  default `Locus.Runtime.Settings.runner_command/0`), `:retire_bound_ms` (how long past a release's grace the
   pool waits for the keeper to retire the runner before it says so,
   default #{@retire_bound_ms}), `:uids` (how many uids the keeper's pool
   for runners has, default its role's, `Prima.LocusRoles`), `:clock` (the
@@ -286,7 +286,7 @@ defmodule Locus.Runtime.RunnerPool do
        keeper_opts: Keyword.get(opts, :keeper_opts, []),
        memory_bytes: nil,
        supervisor: Keyword.fetch!(opts, :supervisor),
-       command: Keyword.get_lazy(opts, :command, &Locus.Runtime.Release.runner_command/0),
+       command: Keyword.get_lazy(opts, :command, &Locus.Runtime.Settings.runner_command/0),
        retire_bound_ms: Keyword.get(opts, :retire_bound_ms, @retire_bound_ms),
        uids: Keyword.get_lazy(opts, :uids, &role_uids/0),
        clock: Keyword.get(opts, :clock, &now/0),
@@ -997,8 +997,7 @@ defmodule Locus.Runtime.RunnerPool do
         Locus.Runtime.Settings.runner_environment(%{
           runner_id: id,
           service_id: service.service_id,
-          boot: service.boot,
-          watchdog_grace_ms: state.settings.watchdog_grace_ms
+          boot: service.boot
         })
       )
 

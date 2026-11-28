@@ -12,12 +12,9 @@ defmodule Locus.ConfigTest do
   the control plane's variables in the environment refuses before
   anything else is read, whichever role the node serves, naming no value.
   The runtime's rows read into its `:runtime` keyword, or into nothing
-  without its key; a runner's settings come from its `RUNTIME_*` rows
-  alone, outside every prefix the keeper refuses in a spawn, and a runner
-  that can see the service's key refuses to start. Every memory bound
-  takes the keeper's range, read from `Prima.KeeperProtocol`. Where the
-  environment was never read, every accessor answers its default and no
-  key is held.
+  without its key. Every memory bound takes the keeper's range, read from
+  `Prima.KeeperProtocol`. Where the environment was never read, every
+  accessor answers its default and no key is held.
   """
   use ExUnit.Case, async: true
 
@@ -42,14 +39,7 @@ defmodule Locus.ConfigTest do
     runtime: "LOCUS_RUNTIME_",
     builds: "LOCUS_BUILDS_",
     backends: "LOCUS_BACKENDS_",
-    release: "LOCUS_LOG_",
-    runner: "RUNTIME_"
-  }
-
-  @runner_env %{
-    "RUNTIME_RUNNER_ID" => "runner_1",
-    "RUNTIME_SERVICE_ID" => "wrk_local",
-    "RUNTIME_BOOT_ID" => "nonode@nohost#boot_1"
+    release: "LOCUS_LOG_"
   }
 
   @backends_defaults [
@@ -144,12 +134,6 @@ defmodule Locus.ConfigTest do
 
       for {role, _prefix} <- @prefixes do
         assert Config.unknown_names(Config.variables(), role) == []
-      end
-
-      # A runner's names carry no prefix the keeper refuses in a spawn.
-      for name <- Config.variables(:runner),
-          prefix <- Prima.KeeperProtocol.reserved_env_prefixes() do
-        refute String.starts_with?(name, prefix), "#{name} carries #{prefix}"
       end
 
       # One role's undeclared names, under its prefix alone.
@@ -368,16 +352,12 @@ defmodule Locus.ConfigTest do
     assert {:ok, _settings} = Config.from_env(env(full()), Map.keys(full()))
 
     # The runtime role's names are the node's too.
-    assert Config.unknown_names(Config.variables(:runtime) ++ Config.variables(:runner)) == []
+    assert Config.unknown_names(Config.variables(:runtime)) == []
 
     assert {:error, message} =
              Config.from_env(env(full()), Map.keys(full()) ++ ["LOCUS_RUNTIME_POOL_SIZ"])
 
     assert message =~ "LOCUS_RUNTIME_POOL_SIZ is not a variable the locus release reads"
-
-    # A runner's names are never refused as unknown.
-    assert {:ok, _settings} =
-             Config.from_env(env(full()), Map.keys(full()) ++ ["RUNTIME_PLANTED"])
   end
 
   # The one list every role's boot reads: no `RELEASE_NAME` is consulted.
@@ -576,107 +556,6 @@ defmodule Locus.ConfigTest do
       assert {:ok, %{keeper: :channel}} = Locus.Runtime.Settings.pool(runtime, %{})
     end
   end
-
-  describe "runner/1" do
-    test "reads the runner's settings from its environment, with the descriptors and grace defaulted" do
-      assert {:ok,
-              %{
-                runner_id: "runner_1",
-                service_id: "wrk_local",
-                boot: "nonode@nohost#boot_1",
-                control_fd: 3,
-                relay: {:fd, 4},
-                watchdog_grace_ms: 5_000
-              } = settings} = Config.runner(@runner_env)
-
-      # A runner knows no address of CYFR's: it reaches CYFR through its relay.
-      refute Map.has_key?(settings, :host_url)
-
-      assert {:ok, %{relay: {:socket, "/tmp/runner/relay.sock"}}} =
-               Config.runner(
-                 Map.put(@runner_env, "RUNTIME_RELAY_SOCKET", "/tmp/runner/relay.sock")
-               )
-
-      assert {:ok, %{control_fd: 0, watchdog_grace_ms: 250}} =
-               Config.runner(
-                 Map.merge(@runner_env, %{
-                   "RUNTIME_CONTROL_FD" => "0",
-                   "RUNTIME_WATCHDOG_GRACE_MS" => "250"
-                 })
-               )
-    end
-
-    test "refuses to start with the service's key in sight, before anything else is read" do
-      with_key = Map.put(@runner_env, "LOCUS_RUNTIME_KEY", String.duplicate("0", 64))
-      assert {:error, {:refused, "LOCUS_RUNTIME_KEY"}} = Config.runner(with_key)
-
-      assert {:error, {:refused, "LOCUS_RUNTIME_KEY"}} =
-               Config.runner(%{"LOCUS_RUNTIME_KEY" => "not even a key"})
-    end
-
-    test "runner!/0 refuses the boot naming what is wrong: this VM is no runner" do
-      assert_raise ArgumentError, ~r/\A\[Locus\.Config\] RUNTIME_RUNNER_ID is not set/, fn ->
-        Config.runner!()
-      end
-    end
-
-    test "a missing or malformed variable refuses, naming it" do
-      for name <- Map.keys(@runner_env) do
-        assert {:error, {:missing, ^name}} = Config.runner(Map.delete(@runner_env, name))
-      end
-
-      assert {:error, {:malformed, "RUNTIME_SERVICE_ID"}} =
-               Config.runner(%{@runner_env | "RUNTIME_SERVICE_ID" => "svc"})
-
-      assert {:error, {:malformed, "RUNTIME_RUNNER_ID"}} =
-               Config.runner(%{@runner_env | "RUNTIME_RUNNER_ID" => "has space"})
-
-      assert {:error, {:malformed, "RUNTIME_RELAY_SOCKET"}} =
-               Config.runner(Map.put(@runner_env, "RUNTIME_RELAY_SOCKET", "relay.sock"))
-
-      assert {:error, {:malformed, "RUNTIME_RELAY_SOCKET"}} =
-               Config.runner(Map.put(@runner_env, "RUNTIME_RELAY_SOCKET", "/tmp/../relay.sock"))
-
-      assert {:error, {:malformed, "RUNTIME_CONTROL_FD"}} =
-               Config.runner(Map.put(@runner_env, "RUNTIME_CONTROL_FD", "-1"))
-
-      assert {:error, {:malformed, "RUNTIME_WATCHDOG_GRACE_MS"}} =
-               Config.runner(Map.put(@runner_env, "RUNTIME_WATCHDOG_GRACE_MS", "0"))
-    end
-
-    test "runner_environment/1 spells exactly the variables a runner reads" do
-      env =
-        Locus.Runtime.Settings.runner_environment(%{
-          runner_id: "runner_1",
-          service_id: "wrk_local",
-          boot: "boot_1",
-          watchdog_grace_ms: 5_000
-        })
-
-      # No address of CYFR's: the runner's host calls leave through its
-      # relay.
-      assert env == %{
-               "RUNTIME_ROLE" => "runner",
-               "RUNTIME_RUNNER_ID" => "runner_1",
-               "RUNTIME_SERVICE_ID" => "wrk_local",
-               "RUNTIME_BOOT_ID" => "boot_1",
-               "RUNTIME_WATCHDOG_GRACE_MS" => "5000"
-             }
-
-      # Every name is the runner's own prefix: the keeper refuses any
-      # `CYFR_`, `LOCUS_` or `KEEPER_` name in a spawn.
-      assert Enum.all?(env, fn {name, _} -> String.starts_with?(name, "RUNTIME_") end)
-
-      refute Enum.any?(env, fn {name, _} ->
-               Enum.any?(
-                 Prima.KeeperProtocol.reserved_env_prefixes(),
-                 &String.starts_with?(name, &1)
-               )
-             end)
-
-      assert {:ok, _settings} = Config.runner(Map.put(env, "RUNTIME_CONTROL_FD", "0"))
-    end
-  end
 end
 
 defmodule Locus.RuntimeConfigFileTest do
@@ -686,8 +565,8 @@ defmodule Locus.RuntimeConfigFileTest do
   and no other application, and refuses the boot with the message, the
   control plane's builds key among the names it refuses. The release's
   one log setting reaches the logger by boot kind: a release node applies
-  it whichever role it serves, a `mix` or test boot keeps its own logger,
-  and a runner keeps its default.
+  it whichever role it serves, and a `mix` or test boot keeps its own
+  logger.
   """
   # Sets the operating system's environment and the logger for the
   # duration of a test.
@@ -752,7 +631,7 @@ defmodule Locus.RuntimeConfigFileTest do
     end)
   end
 
-  test "writes the runtime role's settings under :runtime, and nothing for a runner" do
+  test "writes the runtime role's settings under :runtime" do
     set = %{
       "LOCUS_RUNTIME_KEY" => @key_hex,
       "LOCUS_RUNTIME_HOST_API_URL" => "http://cyfr:4300",
@@ -768,12 +647,6 @@ defmodule Locus.RuntimeConfigFileTest do
       assert config[:locus][:runtime][:service_key] == @key_hex
       assert config[:locus][:runtime][:idle_ttl_ms] == 2000
       assert config[:locus][:request_key] == nil
-    end)
-
-    # A runner reads its `RUNTIME_*` environment when it starts: the file
-    # configures nothing for it, and refuses nothing.
-    with_env(%{"RUNTIME_ROLE" => "runner"}, fn ->
-      assert Config.Reader.read!(@config_file, env: :prod, imports: :disabled) == []
     end)
   end
 
@@ -914,40 +787,10 @@ defmodule Locus.RuntimeConfigFileTest do
       assert Logger.level() == :critical
       assert {:ok, ^handler} = :logger.get_handler_config(:default)
     end
-
-    test "a runner keeps its default logging: the file writes no log setting and its start applies none",
-         %{handler: handler} do
-      Logger.configure(level: :critical)
-
-      set = %{
-        "RUNTIME_ROLE" => "runner",
-        "LOCUS_LOG_LEVEL" => "error",
-        "LOCUS_LOG_FORMAT" => "json"
-      }
-
-      with_env(set, fn ->
-        assert Config.Reader.read!(@config_file, env: :prod, imports: :disabled) == []
-
-        # The application's start for a runner: its logging step, then its
-        # settings, which this environment does not carry, so the start
-        # ends there before any child.
-        assert_raise ArgumentError, ~r/RUNTIME_RUNNER_ID is not set/, fn ->
-          App.start(:normal, [])
-        end
-      end)
-
-      assert Logger.level() == :critical
-
-      assert {:ok, %{config: %{type: :standard_error}, formatter: formatter}} =
-               :logger.get_handler_config(:default)
-
-      assert formatter == handler.formatter
-      refute inspect(formatter) =~ "JsonFormatter"
-    end
   end
 
-  # Puts the default handler back as it was: the runner's start replaces
-  # it with one writing to standard error.
+  # Puts the default handler back as it was: a release node's logging sets
+  # its formatter.
   defp restore_handler(handler) do
     if :logger.get_handler_config(:default) != {:ok, handler} do
       _ = :logger.remove_handler(:default)

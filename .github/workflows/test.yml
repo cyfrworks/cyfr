@@ -599,6 +599,7 @@ jobs:
   test:
     name: Elixir Tests (${{ matrix.db }}, shard ${{ matrix.shard }})
     runs-on: ubuntu-latest
+    needs: runner-build
     timeout-minutes: 45
     # Both adapters must stay green. SQLite is the shipped default; Postgres is
     # bring-your-own. The data layer is Ecto-schema-backed so column values cast
@@ -640,6 +641,10 @@ jobs:
         uses: ./.github/actions/setup-elixir
         with:
           cache-key-prefix: mix-${{ matrix.db }}
+      # The runners the suites start run as the runner's pair.
+      - uses: ./.github/actions/runner-pair
+        with:
+          arch: amd64
       # The cargo-component version the Rust fixtures' build script pins,
       # read as the static job reads it.
       - name: Read the Rust fixtures' toolchain pin
@@ -872,6 +877,7 @@ jobs:
   cluster:
     name: One cell on two members (Postgres and MinIO, cell ${{ matrix.cell }})
     runs-on: ubuntu-latest
+    needs: runner-build
     timeout-minutes: 40
     # One cell runs on several members, and a cluster flag is not evidence
     # of it. This job runs the two-node suite: two `:peer` nodes,
@@ -919,6 +925,10 @@ jobs:
         uses: ./.github/actions/setup-elixir
         with:
           cache-key-prefix: mix-cluster
+      # The runners the cells start run as the runner's pair.
+      - uses: ./.github/actions/runner-pair
+        with:
+          arch: amd64
       # The cell's files (scripts/ci/cluster-cell.sh, which holds cell a's).
       - name: The cell's files
         id: cell
@@ -1104,8 +1114,10 @@ jobs:
   # The WASM runner's crate (apps/locus/runner) on amd64 and on a native
   # arm64 runner, the two architectures the Locus image ships: its format,
   # lints and tests, which hold its wires to the vector files under
-  # tests/fixtures, then its release build, every step --locked under the
-  # Rust release rust-toolchain.toml names (scripts/runner.sh).
+  # tests/fixtures, every step --locked under the Rust release
+  # rust-toolchain.toml names (scripts/runner.sh), and the guard that
+  # refuses a pair built from other sources (tests/runner-pair-test.sh).
+  # Its release build is runner-build's.
   runner:
     name: The runner's crate (${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
@@ -1134,15 +1146,64 @@ jobs:
           key: ${{ runner.os }}-${{ matrix.arch }}-runner-${{ hashFiles('rust-toolchain.toml', 'apps/locus/runner/Cargo.lock') }}
       - name: Check the crate
         run: scripts/runner.sh check
-      - name: Build the release binary
+      - name: Check the pair's guard
+        run: bash tests/runner-pair-test.sh
+
+  # The runner's release binary and its stamp, the pair, built for amd64
+  # and on a native arm64 runner (scripts/runner.sh build) and uploaded
+  # together for every job that runs runners: the Elixir suites, the
+  # cluster's cells and the Locus island run theirs as the pair's binary
+  # (.github/actions/runner-pair). A job apart from the crate's check
+  # above, so those jobs wait for the build alone, not for the crate's
+  # tests.
+  runner-build:
+    name: The runner's build (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {arch: amd64, runner: ubuntu-latest}
+          - {arch: arm64, runner: ubuntu-24.04-arm}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install the Rust release rust-toolchain.toml names
+        run: |
+          set -euo pipefail
+          channel="$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)"
+          [ -n "$channel" ] || { echo "::error::rust-toolchain.toml names no channel" >&2; exit 1; }
+          rustup toolchain install "$channel" --profile minimal
+      - name: Cache the crate's dependencies and release build
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            _build/runner
+          key: ${{ runner.os }}-${{ matrix.arch }}-runner-build-${{ hashFiles('rust-toolchain.toml', 'apps/locus/runner/Cargo.lock') }}
+      - name: Build the release binary and its stamp
         run: scripts/runner.sh build
+      # The archive keeps the binary's mode, which an artifact does not.
+      - name: Pack the pair
+        run: tar -C _build/runner/release -cf "$RUNNER_TEMP/runner.tar" cyfr-runner cyfr-runner.stamp
+      # Read only by this run's jobs. A re-run of this job replaces it.
+      - name: Upload the pair
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: runner-${{ matrix.arch }}
+          path: ${{ runner.temp }}/runner.tar
+          if-no-files-found: error
+          retention-days: 1
+          overwrite: true
 
   # On amd64 and on a native arm64 runner: the runtime's native guest
-  # tests (test_wasm/ and its hostile guests) run the engine's precompiled
-  # NIF and Cranelift's code for each architecture the Locus image ships.
+  # tests (test_wasm/ and its hostile guests) run the runner's Cranelift
+  # code for each architecture the Locus image ships.
   locus-independence:
     name: Locus compiles and tests from its declared apps alone (${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
+    needs: runner-build
     timeout-minutes: 10
     strategy:
       fail-fast: false
@@ -1163,10 +1224,10 @@ jobs:
         run: |
           scripts/ci/retry.sh mix deps.get
           scripts/fetch-prebuilt-binaries.sh
-      # The pinned validator every component passes (scripts/wasm-tools.sh),
-      # at `_tools/wasm-tools`, which the island copies.
-      - name: Install the pinned wasm-tools
-        run: scripts/wasm-tools.sh install _tools
+      # The runner's pair for this architecture, which the island copies.
+      - uses: ./.github/actions/runner-pair
+        with:
+          arch: ${{ matrix.arch }}
       # Locus compiled and tested from a copy holding only what it declares
       # (the script's header lists it).
       - name: Compile and test Locus from its declared apps alone

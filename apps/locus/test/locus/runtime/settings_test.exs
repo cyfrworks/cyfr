@@ -7,11 +7,9 @@ defmodule Locus.Runtime.SettingsTest do
   defaults in code, each validated, the keeper the cyfr-locus channel when
   unset, no setting for how many runners are kept ahead or what bounds
   one, and no `LOCUS_RUNTIME_*` name in the environment that `Locus.Config`
-  does not declare; the environment a runner is handed is its declared
-  `RUNTIME_*` names alone, as `tests/fixtures/runner_control.json`'s
-  `environment` writes it, and every environment of that section reads
-  as its runner or is refused as it says, through `Locus.Config.runner/1`;
-  the runtime role's settings and the release's log settings read and
+  does not declare; the environment a runner is handed is its ids alone,
+  as `tests/fixtures/runner_control.json`'s `environment` writes it; the
+  runtime role's settings and the release's log settings read and
   refuse every case of `tests/fixtures/locus_settings.json`, every
   variable's default and range edge with them, as the Go runtime role
   will; and the module reads no variable by name. `Locus.Config`'s suite
@@ -47,34 +45,6 @@ defmodule Locus.Runtime.SettingsTest do
 
       assert Settings.runner_environment(settings) == written
     end
-
-    test "every valid environment reads as its runner" do
-      for %{"why" => why, "environment" => env, "runner" => runner} <- @environment["valid"] do
-        assert {:ok, read} = Locus.Config.runner(env), why
-
-        relay =
-          case read.relay do
-            {:fd, fd} -> %{"fd" => fd}
-            {:socket, path} -> %{"socket" => path}
-          end
-
-        assert %{
-                 "runner_id" => read.runner_id,
-                 "service_id" => read.service_id,
-                 "boot" => read.boot,
-                 "control_fd" => read.control_fd,
-                 "relay" => relay
-               } == runner,
-               why
-      end
-    end
-
-    test "every invalid environment is refused, naming its variable" do
-      for %{"why" => why, "environment" => env, "reason" => reason, "name" => name} <-
-            @environment["invalid"] do
-        assert Locus.Config.runner(env) == {:error, {String.to_existing_atom(reason), name}}, why
-      end
-    end
   end
 
   describe "pool/2" do
@@ -89,7 +59,7 @@ defmodule Locus.Runtime.SettingsTest do
                   attach_dir: "/run/locus"
                 }}
 
-      # Each default has one definition, which a runner's grace takes too.
+      # Each default has one definition.
       for {key, value} <- [
             idle_ttl_ms: 900_000,
             watchdog_grace_ms: 5_000,
@@ -150,21 +120,8 @@ defmodule Locus.Runtime.SettingsTest do
                    &Settings.pool!/0
     end
 
-    test "the declared names are every name a runner is handed" do
-      env =
-        Settings.runner_environment(%{
-          runner_id: "r",
-          service_id: "wrk_local",
-          boot: "b",
-          watchdog_grace_ms: 5_000
-        })
-
-      assert Map.keys(env) -- Locus.Config.variables(:runner) == []
-      assert "RUNTIME_CONTROL_FD" in Locus.Config.variables(:runner)
-    end
-
-    # A subtree runs in a runner's VM of its own in every build, the test
-    # build included: there is no keeper that runs one in the service's.
+    # A subtree runs in a runner process of its own in every build, the
+    # test build included: there is no keeper that runs one in the service.
     # The direct keeper is the test build's: without it, the channel alone.
     test "the keepers are the channel and the test build's direct keeper, and the channel alone without it" do
       assert Settings.keepers() == [:channel, :direct]
@@ -464,13 +421,7 @@ defmodule Locus.Runtime.SettingsTest do
       assert Enum.filter(literals, &String.starts_with?(&1, "LOCUS_")) == [],
              "settings.ex spells a LOCUS_ name; Locus.Config declares every one"
 
-      written =
-        Settings.runner_environment(%{
-          runner_id: "r",
-          service_id: "wrk_local",
-          boot: "b",
-          watchdog_grace_ms: 1
-        })
+      written = Settings.runner_environment(%{runner_id: "r", service_id: "wrk_local", boot: "b"})
 
       spelled =
         literals
@@ -479,7 +430,6 @@ defmodule Locus.Runtime.SettingsTest do
         |> Enum.sort()
 
       assert spelled == written |> Map.keys() |> Enum.sort()
-      assert spelled -- Locus.Config.variables(:runner) == []
     end
 
     test "the scan finds a read by name in every form, and passes the whole environment's read" do

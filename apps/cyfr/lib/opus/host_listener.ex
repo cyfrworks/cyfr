@@ -7,8 +7,9 @@ defmodule Opus.HostListener do
   serving the host routes `Prima.WorkerWire` declares, on the bind address
   and port its child spec is given. A worker service posts its runners'
   host calls here, each as the runner signed it under its attempt's keys
-  and the service verified it before posting it unchanged, and its runner
-  exit reports; nothing else is served.
+  and the service verified it before posting it unchanged, and its two
+  reports, a runner's exit and its runners' operator events; nothing
+  else is served.
 
   Every request is refused as early as its evidence allows, before any
   authorized action and, for anything the header alone decides, before
@@ -23,16 +24,19 @@ defmodule Opus.HostListener do
        host call under the call key of the attempt it names, at this
        member's standing (`Opus.Keys.standing/0`: its generation and
        its own boot, so a call addressed to a peer is refused here,
-       `Prima.WorkerAuth.verify_host_call_header/4`), a report under the
-       dispatch key of the worker service it names
+       `Prima.WorkerAuth.verify_host_call_header/4`), a report
+       (`runner_exited`, `report_events`) under the dispatch key of the
+       worker service it names
        (`Prima.WorkerAuth.verify_report_header/3`) — refused `401`, in
        the verifier's order: a version token other than `v1`, then a
        header that does not parse, a timestamp outside the window, a MAC
        that is not the key's, another generation and another member;
     5. for a callback that is not idempotent (`Prima.HostAPI.retry/1`), the
-       header's nonce has not been presented for its attempt within the
-       window before, else `401`;
-    6. for every call but `attach`, which is the claim, the attempt row is
+       header's nonce has not been presented within the window before, for
+       its attempt or, for a `report_events`, whose header names none, for
+       its worker service and boot, else `401`;
+    6. for every call but `attach`, which is the claim, and the two
+       reports, which name no attempt of their own, the attempt row is
        running at the header's fence and claimed by the runner the header
        names (`Arca.ExecutionAttempts.held?/4`): the runner id is the worker
        service's, the one it verified before it posted the call. A header
@@ -55,7 +59,10 @@ defmodule Opus.HostListener do
     9. the body is at this wire's version, else `400` `unknown_version`,
        read before its `op`, and its `op` is the route's callback with
        arguments that are an object, else `400` `malformed`
-       (`Prima.WorkerWire.read_request_body/2`).
+       (`Prima.WorkerWire.read_request_body/2`); a `report_events` batch is
+       read whole there too (`Prima.HostAPI.read_events/1`), and one record
+       off the runner's roster refuses it whole, `400` `malformed`, so no
+       batch is emitted in part.
 
   A body over the bound is never kept. Its refusal is sent first; then
   what the client still sends of the body is read and dropped, each read
@@ -84,8 +91,8 @@ defmodule Opus.HostListener do
   opened JSON under the verified fields re-signed over that JSON with the
   attempt's call key, which CYFR derives from the root as `Host` does:
   the fields, timestamp and nonce are the runner's, and `Host` verifies
-  the whole call again itself. A report (`runner_exited`) crosses as
-  plain JSON under its report header, and its answer is plain.
+  the whole call again itself. A report (`runner_exited`, `report_events`)
+  crosses as plain JSON under its report header, and its answer is plain.
 
   An `attached_fetch` refused before its admission is answered as any
   call is, sealed. Admitted, its answer is streamed: `Host` writes each
@@ -127,6 +134,10 @@ defmodule Opus.HostListener do
   # Where the conn an attached request's frames stream on is kept while its
   # answer is written.
   @stream {__MODULE__, :stream}
+
+  # The worker service's reports: each signed with its dispatch key, plain,
+  # naming no attempt of its own.
+  @reports HostAPI.reports()
 
   @typedoc """
   How the listener is started: the address to bind, the port (0 for any
@@ -204,7 +215,7 @@ defmodule Opus.HostListener do
           "control plane"
       )
 
-      {:refused, 503, if(callback == :runner_exited, do: :unavailable, else: :lost)}
+      {:refused, 503, if(callback in @reports, do: :unavailable, else: :lost)}
     end
   end
 
@@ -240,10 +251,10 @@ defmodule Opus.HostListener do
   # member's standing. A generation the control plane cannot answer
   # verifies nothing, and a call naming another member is refused before
   # its body is read.
-  defp verify_header(:runner_exited, header, now) do
+  defp verify_header(callback, header, now) when callback in @reports do
     case WorkerAuth.verify_report_header(Keys.root(), header, now) do
       {:ok, fields, body_hash} -> {:ok, fields, body_hash}
-      {:error, reason} -> header_refused(:runner_exited, reason)
+      {:error, reason} -> header_refused(callback, reason)
     end
   end
 
@@ -266,9 +277,10 @@ defmodule Opus.HostListener do
     end
   end
 
-  # A nonce is remembered per attempt for as long as a header carrying it
-  # still verifies. An idempotent callback (and a report, which is one)
-  # may be repeated as it is.
+  # A nonce is remembered per attempt, or for a report of events per
+  # worker service and boot, for as long as a header carrying it still
+  # verifies. An idempotent callback (`runner_exited` among them) may be
+  # repeated as it is.
   defp fresh_nonce(conn, callback, fields, now) do
     if HostAPI.retry(callback) == :idempotent or
          __MODULE__.Nonces.fresh?(conn.assigns.host_listener.nonces, fields, now) do
@@ -288,7 +300,7 @@ defmodule Opus.HostListener do
   # names, the one the worker service verified before posting. Attach is
   # the claim itself, and a report names no attempt of its own. `Host`
   # checks the hold again, under the attempt's grant.
-  defp claimed(callback, _fields) when callback in [:attach, :runner_exited], do: :ok
+  defp claimed(callback, _fields) when callback == :attach or callback in @reports, do: :ok
 
   defp claimed(callback, fields) do
     case Arca.ExecutionAttempts.held?(
@@ -474,7 +486,7 @@ defmodule Opus.HostListener do
   # handed to `Host` under the same verified fields, signed over it with
   # the attempt's call key, since `Host` verifies the header over the body
   # it reads. Both keys derive from the root and the verified fields.
-  defp open(_read, :runner_exited, _fields, header, body),
+  defp open(_read, callback, _fields, header, body) when callback in @reports,
     do: {:ok, %{header: header, json: body}}
 
   defp open(read, callback, fields, _header, body) do
@@ -548,6 +560,7 @@ defmodule Opus.HostListener do
   end
 
   defp answer(:runner_exited, _fields, call), do: Host.runner_exited(call.header, call.json)
+  defp answer(:report_events, _fields, call), do: Host.events_report(call.header, call.json)
 
   defp answer(_callback, fields, call),
     do: seal_answer(call, fields, Host.call(call.header, call.json))
@@ -559,7 +572,8 @@ defmodule Opus.HostListener do
 
   # The opened body is read at this wire's version before its `op`, and the
   # route and the body name the same callback, so a body cannot be posted
-  # at another route.
+  # at another route. A batch of events is read whole here, so none is
+  # emitted in part.
   defp names_route(read, callback, body) do
     read_body =
       case Jason.decode(body) do
@@ -568,6 +582,9 @@ defmodule Opus.HostListener do
       end
 
     case read_body do
+      {:ok, :report_events, args} when callback == :report_events ->
+        whole_batch(read, args)
+
       {:ok, ^callback, _args} ->
         :ok
 
@@ -579,6 +596,17 @@ defmodule Opus.HostListener do
       _other ->
         Logger.warning("[Opus.HostListener] #{callback} refused: the body does not name it")
 
+        {:refused, read, 400, :malformed}
+    end
+  end
+
+  defp whole_batch(read, args) do
+    case HostAPI.read_events(args) do
+      {:ok, _events} ->
+        :ok
+
+      :error ->
+        Logger.warning("[Opus.HostListener] report_events refused: a record is not the roster's")
         {:refused, read, 400, :malformed}
     end
   end
@@ -642,9 +670,10 @@ defmodule Opus.HostListener do
 
   defmodule Nonces do
     @moduledoc false
-    # The nonces host calls have presented, per attempt, remembered for
-    # twice the header window (a header within the window on either side
-    # of the clock still verifies) and swept on the window.
+    # The nonces host calls have presented, per attempt, and reports of
+    # events, per worker service and boot, remembered for twice the header
+    # window (a header within the window on either side of the clock still
+    # verifies) and swept on the window.
 
     use GenServer
 
@@ -653,10 +682,22 @@ defmodule Opus.HostListener do
     @doc "A new, empty nonce table, owned by the calling process."
     def new, do: :ets.new(__MODULE__, [:public, :set, write_concurrency: true])
 
-    @doc "Whether the header's nonce was not presented for its attempt within the window, remembering it if so."
-    @spec fresh?(:ets.table(), Prima.WorkerAuth.host_call(), integer()) :: boolean()
+    @doc """
+    Whether the header's nonce was not presented within the window, for
+    its attempt, or for a report's worker service and boot, remembering it
+    if so.
+    """
+    @spec fresh?(
+            :ets.table(),
+            Prima.WorkerAuth.host_call() | Prima.WorkerAuth.dispatch(),
+            integer()
+          ) ::
+            boolean()
     def fresh?(table, %{attempt: attempt, nonce: nonce}, now),
       do: :ets.insert_new(table, {{attempt, nonce}, now + 2 * @window_ms})
+
+    def fresh?(table, %{service: service, boot: boot, nonce: nonce}, now),
+      do: :ets.insert_new(table, {{{:report, service, boot}, nonce}, now + 2 * @window_ms})
 
     def start_link(table), do: GenServer.start_link(__MODULE__, table)
 

@@ -134,6 +134,28 @@ defmodule Locus.Runtime.WorkerService do
   reported holding its subtree's root and every child it said it
   started.
 
+  ## The watch
+
+  A runner bounds its own subtree by the assignment's deadline, but
+  nothing in it bounds a close CYFR holds unanswered. So the service
+  watches every assignment it holds: a runner that still holds one
+  `:watchdog_grace_ms` past the assignment's `deadline`
+  (`Locus.Runtime.Settings`), on the clock the deadline was set on, and
+  never later than that grace past the longest a subtree runs (the
+  platform's timeout ceiling, `Prima.Limits.Ceiling`), is
+  logged once and released with no grace, as a kill of its root ends it
+  (`Locus.Runtime.RunnerPool.taint/4`, which leaves alone a runner that
+  has completed the subtree or been taken for another since), and its
+  end is reported as any runner's is, once. The watch ends with its
+  assignment, however that ends.
+
+  ## The runners' events
+
+  The service tells the forwarder of its runners' operator events
+  (`Locus.Runtime.Events`) its credentials and boot as it starts, and
+  each runner's handle hands it what its runner reports
+  (`Locus.Runtime.RunnerProcess`); none of it passes through here.
+
   ## What one report can name
 
   A report names at most `Prima.WorkerWire.max_report_attempts/0`
@@ -163,7 +185,7 @@ defmodule Locus.Runtime.WorkerService do
   require Logger
 
   alias Prima.{Assignment, WorkerAuth}
-  alias Locus.Runtime.{HostClient, RunnerPool, RunnerProcess, Subtree}
+  alias Locus.Runtime.{HostClient, RunnerPool, RunnerProcess}
 
   @attempt_fields [:athanor_id, :execution_id, :attempt, :fence, :generation]
   @remembered 10_000
@@ -172,6 +194,14 @@ defmodule Locus.Runtime.WorkerService do
   # service's answer: a runner's handle answers an assign by the deadline,
   # or half a second past it is failed (`Locus.Runtime.RunnerProcess`).
   @answer_ms 1_000
+  # The longest a subtree runs: no run's timeout passes the platform's
+  # ceiling. An assignment's deadline is CYFR's, on its clock, and the wire
+  # bounds it only to 2^53 - 1, so the watch waits this and the grace at
+  # most, whatever the deadline says, which also keeps it within what a
+  # timer can wait.
+  @longest_ms (case Prima.Limits.parse_duration(Prima.Limits.Ceiling.lowered(%{}).timeout) do
+                 {:ok, ms} -> ms
+               end)
 
   @doc false
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
@@ -181,7 +211,7 @@ defmodule Locus.Runtime.WorkerService do
       when is_binary(token) and is_binary(input) and is_binary(sealed_keys) do
     GenServer.call(
       __MODULE__,
-      {:start, token, input, sealed_keys, Subtree.caller()},
+      {:start, token, input, sealed_keys, caller()},
       Assignment.claim_window_ms() + @answer_ms
     )
   end
@@ -206,6 +236,7 @@ defmodule Locus.Runtime.WorkerService do
     :ok = Locus.Runtime.Credentials.install(credentials)
     settings = Locus.Runtime.Settings.pool!()
     boot = "#{node()}#" <> Prima.UUID7.generate_id("boot")
+    :ok = Locus.Runtime.Events.serve(credentials, boot)
 
     :ok =
       RunnerPool.serve(
@@ -353,6 +384,29 @@ defmodule Locus.Runtime.WorkerService do
 
       nil ->
         pooled(message, state)
+    end
+  end
+
+  # The watch of an assignment its runner still holds past its deadline
+  # and the grace: the runner is released, and its end reported as any
+  # runner's is. One whose hold has ended, or a timer of an earlier hold,
+  # names a ref no assignment carries, and changes nothing.
+  defp info({:watch, pid, ref}, state) do
+    case Map.get(state.assigned, pid) do
+      %{watch: ^ref} = assignment ->
+        log(
+          :warning,
+          assignment,
+          "[Locus.Runtime.WorkerService] runner #{assignment.runner} holds " <>
+            "#{assignment.execution_id} #{state.settings.watchdog_grace_ms} ms past its " <>
+            "deadline, and is released"
+        )
+
+        :ok = RunnerPool.taint(RunnerPool, pid, 0, assignment.execution_id)
+        {:noreply, state}
+
+      _ended ->
+        {:noreply, state}
     end
   end
 
@@ -664,12 +718,23 @@ defmodule Locus.Runtime.WorkerService do
     answer(state, start, {:error, :unavailable})
   end
 
-  # The assignment the runner `pid` was sent, held until its runner's end.
+  # The assignment the runner `pid` was sent, held until its runner's end,
+  # and watched: its runner is released once it holds it past the
+  # assignment's deadline and the grace, on the clock the deadline was
+  # set on, since nothing in the runner bounds a close CYFR has not
+  # answered.
   defp hold(state, %{start: start, pid: pid, runner: runner}) do
     %{assignment: assignment, caller: caller} = start
     execution_id = assignment.execution_id
     Process.monitor(pid)
     {started, state} = next_seq(state)
+    watch = make_ref()
+
+    grace = state.settings.watchdog_grace_ms
+    left = assignment.deadline + grace - System.system_time(:millisecond)
+
+    timer =
+      Process.send_after(self(), {:watch, pid, watch}, min(max(left, 0), @longest_ms + grace))
 
     assigned = %{
       runner: runner,
@@ -681,6 +746,8 @@ defmodule Locus.Runtime.WorkerService do
       children: %{},
       cancelled: MapSet.new(),
       over_bound: false,
+      watch: watch,
+      watch_timer: timer,
       callers: caller.callers,
       logger: caller.logger
     }
@@ -772,6 +839,11 @@ defmodule Locus.Runtime.WorkerService do
 
   defp now, do: System.monotonic_time(:millisecond)
 
+  # The calling process's callers and log metadata, carried to what a
+  # start does for it: its assign's task and its runner's report.
+  defp caller,
+    do: %{callers: [self() | Process.get(:"$callers", [])], logger: Prima.LoggerContext.capture()}
+
   # ---------------------------------------------------------------------------
   # Runners' ends
   # ---------------------------------------------------------------------------
@@ -852,9 +924,11 @@ defmodule Locus.Runtime.WorkerService do
     do: %{state | assigned: Map.put(state.assigned, pid, assignment)}
 
   # The subtree's root and its children are ended for this boot: a kill of
-  # any of them is `:ok` from now on.
+  # any of them is `:ok` from now on. Its watch ends with it, whichever
+  # end it had.
   defp forget(state, pid) do
     {assignment, assigned} = Map.pop(state.assigned, pid)
+    Process.cancel_timer(assignment.watch_timer)
 
     ended =
       Enum.reduce(

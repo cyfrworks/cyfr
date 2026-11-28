@@ -46,12 +46,12 @@ defmodule Cyfr.DocsDriftTest do
   # the operator keys of `Cyfr.Boundaries.config_key_classes/0`, the
   # resolvers it calls, and the platform settings roster whose variables it
   # reads), the Locus release's one reader, `Locus.Config`, whose roster
-  # holds every role's names (the runtime's `LOCUS_RUNTIME_*` and its
-  # runners' `RUNTIME_*` among them), and the keeper's own sources
-  # (`keeper_sources/0`).
+  # holds every role's names (the runtime's `LOCUS_RUNTIME_*` among them),
+  # the runner program's reader of its `RUNTIME_*`, and the keeper's own
+  # sources (`keeper_sources/0`).
   @env_readers ~w(config/runtime.exs apps/cyfr/lib/cyfr/runtime_config.ex
                   apps/cyfr/lib/cyfr/platform/settings/roster.ex
-                  apps/locus/lib/locus/config.ex)
+                  apps/locus/lib/locus/config.ex apps/locus/runner/src/control.rs)
 
   # Spelled in the keeper's Go and no variable: the egress guard's iptables
   # chains (apps/locus/keeper/guard/rules.go).
@@ -1191,11 +1191,9 @@ defmodule Cyfr.DocsDriftTest do
   end
 
   # The error types each HTTP interface answers a guest are the guest
-  # error vectors' `fetch_types`, which the Rust runner's crate holds its
-  # imports to: the component guide's fetch error line and its streaming
-  # error table name exactly them, and every type a refused pin reaches
-  # the guest as in today's runner (`Locus.Runtime.Egress`) is one of the
-  # fetch's.
+  # error vectors' `fetch_types`, which the runner's crate holds its
+  # imports, a refused pin's words among them, to: the component guide's
+  # fetch error line and its streaming error table name exactly them.
   test "component-guide's HTTP error types are the guest error vectors' fetch_types" do
     types =
       @repo_root
@@ -1221,19 +1219,6 @@ defmodule Cyfr.DocsDriftTest do
 
     assert Enum.sort(List.flatten(streaming) ++ String.split(requests, "|")) ==
              Enum.sort(types["cyfr:http/streaming"])
-
-    answered =
-      @repo_root
-      |> Path.join("apps/locus/lib/locus/runtime/egress.ex")
-      |> SourceTree.read()
-      |> then(&Regex.scan(~r/\{:(?:refused|error), :([a-z_]+),/, &1, capture: :all_but_first))
-      |> List.flatten()
-      |> Enum.uniq()
-
-    assert "redirect_credentials" in answered and "domain_blocked" in answered
-
-    assert answered -- types["cyfr:http/fetch"] == [],
-           "guest_error.json's fetch_types lack #{inspect(answered -- types["cyfr:http/fetch"])}"
   end
 
   # The envelope a host function answers a guest's error with is the shared
@@ -1344,16 +1329,14 @@ defmodule Cyfr.DocsDriftTest do
     # The role's run folder, where its client attaches its spawns' relays,
     # which the keeper names to each role process it starts.
     "KEEPER_RUN_DIR" => :keeper,
-    # The worker service hands each runner its role and identities
+    # The worker service hands each runner its identities
     # (`Locus.Runtime.Settings.runner_environment/1`). cyfr-locus places
     # the control channel and the relay on file descriptors 3 and 4, which
     # a runner reads by contract; the test build's direct launcher names
     # its control descriptor and a relay socket in their place.
-    "RUNTIME_ROLE" => :worker_service,
     "RUNTIME_RUNNER_ID" => :worker_service,
     "RUNTIME_SERVICE_ID" => :worker_service,
     "RUNTIME_BOOT_ID" => :worker_service,
-    "RUNTIME_WATCHDOG_GRACE_MS" => :worker_service,
     "RUNTIME_CONTROL_FD" => :keeper,
     "RUNTIME_RELAY_SOCKET" => :keeper,
     # Compose hands the egress guard cyfr's fixed address, core's host API

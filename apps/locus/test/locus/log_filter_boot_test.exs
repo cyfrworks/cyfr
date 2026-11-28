@@ -4,15 +4,18 @@
 defmodule Locus.LogFilterBootTest do
   @moduledoc """
   The `locus` application's start installs `Prima.LogFilter` ahead of
-  Logger's translator before it reads its role, so a service node, whichever
-  roles it serves, and every runner log alike. A crashed
-  server's report names the failed callback by arity, in the text format
-  and in the JSON format `LOCUS_LOG_FORMAT=json` selects, and so
-  does a logged exception's `:crash_reason`; neither carries the message
-  the server was handed nor its state.
+  Logger's translator before anything logs, so a service node logs alike
+  whichever roles it serves. A crashed server's report names the failed
+  callback by arity, in the text format and in the JSON format
+  `LOCUS_LOG_FORMAT=json` selects, and so does a logged exception's
+  `:crash_reason`; neither carries the message the server was handed nor
+  its state.
+
+  The filter is installed before the start reads the roles, so a start
+  that refuses them has it installed too.
 
   The tests add Logger handlers, two remove the filter and one sets the
-  role's variable, so the module runs alone.
+  application's environment, so the module runs alone.
   """
   use ExUnit.Case, async: false
 
@@ -72,19 +75,20 @@ defmodule Locus.LogFilterBootTest do
     assert hd(filters) == :prima_log_filter
   end
 
-  test "the filter is installed before the role is read" do
-    role = System.get_env("RUNTIME_ROLE")
+  # The test suite's node serves the runtime: given a builds key beside
+  # it, the start refuses its roles, and has installed the filter first all
+  # the same, since it reads the roles after.
+  test "a start that refuses its roles has installed the filter first, ahead of Logger's translator" do
+    assert get_in(Application.get_all_env(:locus), [:runtime, :service_key]) != nil
     _ = :logger.remove_primary_filter(:prima_log_filter)
-    System.put_env("RUNTIME_ROLE", "neither")
+    on_exit(fn -> :ok = Prima.LogFilter.install() end)
+    Prima.Test.Env.put_app_env(:locus, :request_key, String.duplicate("a", 64))
 
-    on_exit(fn ->
-      if role, do: System.put_env("RUNTIME_ROLE", role), else: System.delete_env("RUNTIME_ROLE")
-      :ok = Prima.LogFilter.install()
-    end)
-
-    assert_raise ArgumentError, ~r/RUNTIME_ROLE names no role/, fn ->
-      Locus.Application.start(:normal, [])
-    end
+    assert_raise ArgumentError,
+                 ~r/LOCUS_RUNTIME_KEY serves the runtime alone, .*LOCUS_BUILDS_KEY/,
+                 fn ->
+                   Locus.Application.start(:normal, [])
+                 end
 
     filters = Enum.map(:logger.get_primary_config().filters, &elem(&1, 0))
     assert hd(filters) == :prima_log_filter

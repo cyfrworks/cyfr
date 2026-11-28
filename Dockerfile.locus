@@ -2,7 +2,7 @@
 # The Locus container: the untrusted things CYFR runs, and nothing else.
 # One release serves three roles, each by its key and each as a process of
 # its own that cyfr-locus starts: holding LOCUS_RUNTIME_KEY it is the
-# runtime, the WASM engine and its worker service, reached by CYFR on its
+# runtime, the WASM runner and its worker service, reached by CYFR on its
 # own listener and reaching CYFR's host API over HTTP (Prima.WorkerAPI,
 # Prima.HostAPI); holding LOCUS_BUILDS_KEY it compiles components and
 # tinctures over the build wire (Prima.BuilderProtocol), sources in a
@@ -41,10 +41,10 @@
 # backend ends every process of its uid is killed and everything the uid
 # left is removed before another gets it; when a role process ends, every
 # spawn of its own is retired and it starts again alone. The locus release
-# refuses to serve any role without cyfr-locus. A runner runs one
-# execution subtree at a time (`Locus.Runtime.Runner`) with its control
-# channel on file descriptor 3, holds no key, and the runtime's service
-# loads no component.
+# refuses to serve any role without cyfr-locus. A runner is the WASM
+# runner, cyfr-runner (apps/locus/runner), which runs one execution
+# subtree at a time with its control channel on file descriptor 3 and its
+# relay on 4, holds no key, and the runtime's service loads no component.
 #
 # The memory bound is a cgroup v2 group cyfr-locus makes for each spawn, so
 # the container must be started with the security option
@@ -82,6 +82,53 @@
 # start, naming what to check. The read-only root the runtime's runners
 # see carries the build toolchain's files too; they still hold no
 # capability, no route and no descriptor but their channel and relay.
+
+# The rustup-init both Rust stages install, version- and checksum-pinned
+# (hashes from static.rust-lang.org's own .sha256 files) instead of
+# `curl | sh` of a moving script that runs as root at build time.
+ARG RUSTUP_VERSION=1.28.2
+ARG RUSTUP_SHA_AMD64=20a06e644b0d9bd2fbdbfd52d42540bdde820ea7df86e92e533c073da0cdd43c
+ARG RUSTUP_SHA_ARM64=e3853c5a252fca15252d07cb23a1bdd9377a8c6f3efa01531109281ae47f841c
+
+# ---- The WASM runner, cyfr-runner (apps/locus/runner): built --locked
+# under the Rust release rust-toolchain.toml names, from the crate and the
+# WIT tree its bindings read; only the binary leaves this stage ----
+FROM debian:trixie-slim@sha256:62bd423aeee912639ca8ee681c2b762cb3e25137e0a92b20be455898a9f034ad AS runner
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl gcc libc6-dev \
+    && rm -rf /var/lib/apt/lists/*
+ENV RUSTUP_HOME=/usr/local/rustup \
+    CARGO_HOME=/usr/local/cargo \
+    PATH="/usr/local/cargo/bin:$PATH"
+ARG RUSTUP_VERSION
+ARG RUSTUP_SHA_AMD64
+ARG RUSTUP_SHA_ARM64
+WORKDIR /src
+COPY rust-toolchain.toml ./
+RUN ARCH=$(dpkg --print-architecture) \
+    && RUST_TOOLCHAIN=$(sed -n 's/^channel = "\([0-9][0-9.]*\)"$/\1/p' rust-toolchain.toml) \
+    && { [ -n "$RUST_TOOLCHAIN" ] || { echo "rust-toolchain.toml names no channel"; exit 1; }; } \
+    && case "$ARCH" in \
+         amd64) RUST_TRIPLE=x86_64-unknown-linux-gnu; RUSTUP_SHA=$RUSTUP_SHA_AMD64 ;; \
+         arm64) RUST_TRIPLE=aarch64-unknown-linux-gnu; RUSTUP_SHA=$RUSTUP_SHA_ARM64 ;; \
+         *) echo "Unsupported architecture: $ARCH" && exit 1 ;; \
+       esac \
+    && curl --proto '=https' --tlsv1.2 -fsSL \
+       "https://static.rust-lang.org/rustup/archive/${RUSTUP_VERSION}/${RUST_TRIPLE}/rustup-init" \
+       -o /tmp/rustup-init \
+    && echo "${RUSTUP_SHA}  /tmp/rustup-init" | sha256sum -c - \
+    && chmod +x /tmp/rustup-init \
+    && /tmp/rustup-init -y --profile minimal --default-toolchain "$RUST_TOOLCHAIN" \
+    && rm /tmp/rustup-init \
+    && [ "$(rustc --version | cut -d' ' -f2)" = "$RUST_TOOLCHAIN" ]
+COPY wit/ wit/
+COPY apps/locus/runner/ apps/locus/runner/
+# From the crate's own folder, so cargo reads its .cargo/config.toml and
+# builds into /src/_build/runner, and rustup finds rust-toolchain.toml
+# above it.
+WORKDIR /src/apps/locus/runner
+RUN cargo build --locked --release \
+    && install -D -m 0755 /src/_build/runner/release/cyfr-runner /out/cyfr-runner
 
 # ---- The process helper, cyfr-locus, cyfr-stub, cyfr-browser, cyfr-fetch
 # and the brain drivers cyfr-claude-code, cyfr-codex and cyfr-acp: static Go binaries, pinned
@@ -163,20 +210,13 @@ RUN mix local.hex --force && mix local.rebar --force
 # The release is built from the two apps it holds: the umbrella here is
 # the contracts and Locus alone, so nothing of the control plane is
 # fetched, compiled or present in this stage.
-# The pinned wasm-tools every component is validated with
-# (`Prima.ComponentFeatures`), its archive checked against the pinned
-# sha256 by the one installer (scripts/wasm-tools.sh).
-COPY scripts/wasm-tools.sh scripts/wasm-tools.sh
-RUN scripts/wasm-tools.sh install /opt/wasm-tools
-
 COPY mix.exs mix.lock ./
 COPY apps/prima/mix.exs apps/prima/mix.exs
 COPY apps/locus/mix.exs apps/locus/mix.exs
 
-# The deps' precompiled NIFs are fetched into the caches their compiles
-# read (rustler_precompiled's and elixir_make's) before the deps compile,
-# which cannot download them itself
-# (scripts/fetch-prebuilt-binaries.sh says why).
+# The deps' precompiled NIFs are fetched into the cache their compiles
+# read (elixir_make's) before the deps compile, which cannot download them
+# itself (scripts/fetch-prebuilt-binaries.sh says why).
 COPY scripts/fetch-prebuilt-binaries.sh scripts/fetch-prebuilt-binaries.sh
 RUN mix deps.get --only prod && scripts/fetch-prebuilt-binaries.sh && mix deps.compile
 
@@ -262,20 +302,20 @@ ENV RUSTUP_HOME=/usr/local/rustup \
     CARGO_HOME=/usr/local/cargo \
     PATH="/usr/local/cargo/bin:$PATH"
 
-# rustup-init is version- and checksum-pinned (hashes from
-# static.rust-lang.org's own .sha256 files) instead of `curl | sh` of a
-# moving script that runs as root at build time, and it installs the Rust
-# release rust-toolchain.toml names as the default toolchain, so a build
-# does not take whatever stable is current.
-ARG RUSTUP_VERSION=1.28.2
+# The pinned rustup-init (above) installs the Rust release
+# rust-toolchain.toml names as the default toolchain, so a build does not
+# take whatever stable is current.
+ARG RUSTUP_VERSION
+ARG RUSTUP_SHA_AMD64
+ARG RUSTUP_SHA_ARM64
 ARG CARGO_COMPONENT_VERSION=0.21.1
 COPY rust-toolchain.toml /tmp/rust-toolchain.toml
 RUN ARCH=$(dpkg --print-architecture) \
     && RUST_TOOLCHAIN=$(sed -n 's/^channel = "\([0-9][0-9.]*\)"$/\1/p' /tmp/rust-toolchain.toml) \
     && { [ -n "$RUST_TOOLCHAIN" ] || { echo "rust-toolchain.toml names no channel"; exit 1; }; } \
     && case "$ARCH" in \
-         amd64) RUST_TRIPLE=x86_64-unknown-linux-gnu; RUSTUP_SHA=20a06e644b0d9bd2fbdbfd52d42540bdde820ea7df86e92e533c073da0cdd43c ;; \
-         arm64) RUST_TRIPLE=aarch64-unknown-linux-gnu; RUSTUP_SHA=e3853c5a252fca15252d07cb23a1bdd9377a8c6f3efa01531109281ae47f841c ;; \
+         amd64) RUST_TRIPLE=x86_64-unknown-linux-gnu; RUSTUP_SHA=$RUSTUP_SHA_AMD64 ;; \
+         arm64) RUST_TRIPLE=aarch64-unknown-linux-gnu; RUSTUP_SHA=$RUSTUP_SHA_ARM64 ;; \
          *) echo "Unsupported architecture: $ARCH" && exit 1 ;; \
        esac \
     && curl --proto '=https' --tlsv1.2 -fsSL \
@@ -418,7 +458,9 @@ COPY apps/codex/internal/apparmor/name /etc/cyfr/apparmor-profile
 # The container's health probe, each role whose key it holds (HEALTHCHECK).
 COPY --chmod=0755 apps/locus/health.sh /usr/local/bin/locus-health
 COPY --from=relbuilder /app/_build/prod/rel/locus ./
-COPY --from=relbuilder /opt/wasm-tools/wasm-tools /usr/local/bin/wasm-tools
+# The WASM runner the runtime's service starts every runner as
+# (`Locus.Runtime.Settings.runner_command/0`).
+COPY --from=runner /out/cyfr-runner /usr/local/bin/cyfr-runner
 COPY LICENSE FAIR_SOURCE.md /app/
 COPY LICENSES/ /app/LICENSES/
 
@@ -452,8 +494,8 @@ RUN cyfr-locus image-digest > /etc/cyfr/image-digest
 # The release starts no Erlang distribution: a listener any guest, build
 # or backend could reach, authenticated by a cookie any of them could read.
 # Each role process's temporary files go in its own run folder, which the
-# keeper names as its RELEASE_TMP; a runner's go under the home the keeper
-# gives it (`Locus.Runtime.Release.runner_command/0`).
+# keeper names as its RELEASE_TMP; a runner is no release, and writes only
+# under the home the keeper gives it.
 ENV RELEASE_DISTRIBUTION=none
 
 # Every role whose key the container holds answers at its port, each at

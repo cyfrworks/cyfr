@@ -30,6 +30,14 @@
 #      own compile writes under deps/, which every folder shares (erlex's
 #      generated parser), so two cold builds started together race there.
 #      One folder needs no turn: its first row compiles what it lacks.
+#   3. With a test folder (test or test_pg), the runner. Those rows run
+#      the runtime's suites, whose keeper runs the runner program this
+#      checkout built and refuses a pair (the binary and its stamp) that
+#      is missing or not the checkout's (scripts/runner.sh pair). Such a
+#      pair is built (scripts/runner.sh build) on one quarter, held to
+#      1800 s, before any row runs; one already current is kept. A host
+#      without cargo builds none and says so, and those suites then refuse
+#      to start. A tree without the runner's crate has no pair to prepare.
 # Warm, it starts no BEAM and takes no quarter. A fetch run by hand changes
 # deps/, so the stamps it leaves older send each folder through the compile
 # again, which finds nothing to do. Its waits, for the worktree's lock and
@@ -37,7 +45,7 @@
 # work does: the fetch's hold and the compile's ticket's.
 #
 # Exits 0 when everything passed or there was nothing to prepare, 1 when
-# the fetch or a compile failed, 124 when the fetch reached its hold, 64
+# the fetch, a compile or the runner's build failed, 124 when the fetch reached its hold, 64
 # on usage, 69 without flock(1) or outside a Git checkout, and 130, 143
 # and 129 on INT, TERM and HUP, once what it started has stopped.
 set -uo pipefail
@@ -105,6 +113,27 @@ if [ "$(cat deps/.cyfr-fetched 2>/dev/null)" != "$id" ]; then
   [ "$s" = 0 ] || exit "$s"
   printf '%s\n' "$id" >deps/.cyfr-fetched || exit 1
 fi
+for folder in "$@"; do
+  [ -f apps/locus/runner/Cargo.toml ] || break
+  case $folder in
+    test | test_pg)
+      if scripts/runner.sh pair >/dev/null 2>&1; then
+        echo '==> runner: warm'
+      elif ! PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH" command -v cargo >/dev/null 2>&1; then
+        echo '==> runner: no cargo on PATH, so no pair is built; the runtime suites refuse to start without it'
+      else
+        echo '==> runner'
+        # In the background, so a signal reaches its trap while it queues
+        # or runs.
+        scripts/heavy-check.sh -t 1800 -- env PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH" scripts/runner.sh build 9>&- &
+        compiling=$!
+        wait "$compiling" || exit 1
+        compiling=
+      fi
+      break
+      ;;
+  esac
+done
 [ "$#" -ge 2 ] || exit 0
 stale=()
 for folder in "$@"; do

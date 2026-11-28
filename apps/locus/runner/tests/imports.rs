@@ -10,6 +10,7 @@ mod support;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use serde_json::{Value, json};
 use tokio::io::AsyncBufReadExt as _;
@@ -26,8 +27,9 @@ use cyfr_runner::imports::catalyst::cyfr::vault::read::Host as _;
 use cyfr_runner::imports::{Ended, Guest, Run};
 use cyfr_runner::relay::Relay;
 use cyfr_runner::wire::MAX_DEPTH;
+use cyfr_runner::words;
 
-use support::{Call, Job, Reply, Script, TEST_WASM};
+use support::{Call, Job, Reply, Script, Service, TEST_WASM};
 
 /// A guest of a run whose host calls the script answers, the calls the
 /// script was sent, and the control lines the run's events were written to.
@@ -174,6 +176,91 @@ fn storage_runs_the_guests_operation_and_answers_cyfrs_members() {
 }
 
 #[test]
+fn storage_writes_and_appends_carry_the_guests_content_to_cyfr_as_it_wrote_it() {
+    run(|| async {
+        let mut under = under(
+            answering(|call| {
+                Reply::Ok(json!({"path": call.args["path"], "written": true, "size": 5}))
+            }),
+            Limits::zero(),
+            &[],
+            &[],
+        )
+        .await;
+        // The content is the guest's base64, sent as written, never decoded
+        // or spelled again: CYFR reads it.
+        for (action, content) in [("write", "aGVsbG8="), ("append", "IHdvcmxk")] {
+            let request = json!({"action": action, "path": "data/a.txt", "content": content});
+            let answer = under
+                .guest
+                .call(request.to_string())
+                .await
+                .expect("an answer");
+            assert_eq!(
+                serde_json::from_str::<Value>(&answer).expect("JSON"),
+                json!({"status": "ok", "path": "data/a.txt", "written": true, "size": 5}),
+                "{action}"
+            );
+            assert_eq!(under.event().await["metadata"]["action"], action);
+        }
+        let sent: Vec<Value> = under.calls().into_iter().map(|call| call.args).collect();
+        assert_eq!(
+            sent,
+            [
+                json!({"action": "write", "path": "data/a.txt", "content": "aGVsbG8="}),
+                json!({"action": "append", "path": "data/a.txt", "content": "IHdvcmxk"}),
+            ]
+        );
+    });
+}
+
+#[test]
+fn storage_reads_a_request_of_exactly_its_envelope_and_refuses_one_byte_more() {
+    // Twice the node's limit and 4,096 bytes; under a zero limit, the
+    // 4,096 bytes of framing alone.
+    run(|| async {
+        let padded = |bytes: usize| {
+            let (head, tail) = (r#"{"action":"list","pad":""#, r#""}"#);
+            format!(
+                "{head}{}{tail}",
+                "a".repeat(bytes - head.len() - tail.len())
+            )
+        };
+        for max in [Limits::zero().max_request_size, 0] {
+            let mut limits = Limits::zero();
+            limits.max_request_size = max;
+            let mut under = under(
+                answering(|_call| Reply::Ok(json!({"files": []}))),
+                limits,
+                &[],
+                &[],
+            )
+            .await;
+            let envelope = usize::try_from(2 * max + 4096).expect("a size");
+            let answer = under.guest.call(padded(envelope)).await.expect("an answer");
+            assert_eq!(
+                serde_json::from_str::<Value>(&answer).expect("JSON"),
+                json!({"files": [], "status": "ok"}),
+                "{max}"
+            );
+            assert_eq!(
+                under
+                    .guest
+                    .call(padded(envelope + 1))
+                    .await
+                    .expect("an answer"),
+                error(
+                    "request_too_large",
+                    "Request exceeds the consented max_request_size for this component."
+                ),
+                "{max}"
+            );
+            assert_eq!(under.calls().len(), 1, "{max}");
+        }
+    });
+}
+
+#[test]
 fn storage_refuses_what_does_not_read_before_any_call() {
     run(|| async {
         let mut under = under(
@@ -235,6 +322,168 @@ fn storage_refuses_what_does_not_read_before_any_call() {
             assert_eq!(under.event().await["metadata"]["status"], "error");
         }
         assert!(under.calls().is_empty());
+    });
+}
+
+#[test]
+fn storage_refuses_a_request_with_an_integer_past_cyfrs_bound_as_no_json_unasked() {
+    // CYFR reads an integer of at most `max_integer_chars` characters
+    // (`tests/fixtures/wire_json.json`), and so does the runner a guest's
+    // storage request: one longer is no JSON, whatever member carries it.
+    run(|| async {
+        let longest = cyfr_runner::wire::MAX_INTEGER_CHARS;
+        let mut under = under(
+            answering(|_call| Reply::Ok(json!({}))),
+            Limits::zero(),
+            &[],
+            &[],
+        )
+        .await;
+        let request = |digits: usize| {
+            format!(
+                r#"{{"action":"write","path":"a.txt","content":"aGk=","n":{}}}"#,
+                "9".repeat(digits)
+            )
+        };
+        let answered = under
+            .guest
+            .call(request(longest + 1))
+            .await
+            .expect("an answer");
+        assert_eq!(answered, error("invalid_json", words::REQUEST_NOT_JSON));
+        assert_eq!(under.event().await["metadata"]["status"], "error");
+        assert!(under.calls().is_empty());
+        under.guest.call(request(longest)).await.expect("an answer");
+        assert_eq!(
+            under.calls()[0].args,
+            json!({"action": "write", "path": "a.txt", "content": "aGk="})
+        );
+    });
+}
+
+#[test]
+fn the_question_cases_are_answered_to_the_guest_as_the_vector_says() {
+    // `tests/fixtures/host_api.json`'s question_cases, in the order one
+    // attempt asks, each answered as the vector answers it: every ask and
+    // wait the runner sends is the case's body, and the guest is answered
+    // as each case's answer says. A case's keyed replay and a changed
+    // request under an ask's number are CYFR's to answer: the runner sends
+    // each ask once under its own number, again only on a lost answer.
+    run(|| async {
+        let v = support::fixture("host_api.json");
+        let cases: Vec<Value> = v["question_cases"]["cases"]
+            .as_array()
+            .expect("the question cases")
+            .clone();
+        let case = |name: &str| -> Value {
+            cases
+                .iter()
+                .find(|case| case["name"] == name)
+                .unwrap_or_else(|| panic!("no case {name}"))
+                .clone()
+        };
+        let args = |case: &Value| -> Value {
+            serde_json::from_str::<Value>(case["body"].as_str().expect("a body"))
+                .expect("JSON")["args"]
+                .clone()
+        };
+        let ok = |case: &Value| -> Value {
+            serde_json::from_str::<Value>(case["answer"].as_str().expect("an answer"))
+                .expect("JSON")["ok"]
+                .clone()
+        };
+        let request = |case: &Value| {
+            let args = args(case);
+            Request {
+                action: args["action"].as_str().expect("an action").to_owned(),
+                summary: args["summary"].as_str().expect("a summary").to_owned(),
+                operation: args["operation"].as_str().expect("an operation").to_owned(),
+            }
+        };
+        // Each ask the guest makes, the cases its calls are answered by in
+        // turn, and the answer the guest is handed.
+        let asks: Vec<(Vec<Value>, Answer)> = vec![
+            (
+                vec![case("opened"), case("wait_timed_out"), case("allowed")],
+                Answer::Allowed,
+            ),
+            (vec![case("paced"), case("paced_admitted")], Answer::Allowed),
+            (
+                vec![case("unattended")],
+                Answer::None(Unanswered::Unattended),
+            ),
+            (vec![case("invalid")], Answer::None(Unanswered::Invalid)),
+        ];
+        let answers: Vec<Value> = asks
+            .iter()
+            .flat_map(|(cases, _)| cases.iter().map(ok))
+            .collect();
+        let mut scripted = answers.into_iter();
+        let mut asking = under(
+            Box::new(move |_call, _job| Reply::Ok(scripted.next().expect("a scripted answer"))),
+            Limits::zero(),
+            &[],
+            &[],
+        )
+        .await;
+        for (cases, answer) in &asks {
+            assert_eq!(
+                said(
+                    &asking
+                        .guest
+                        .ask(request(&cases[0]))
+                        .await
+                        .expect("an answer")
+                ),
+                said(answer),
+                "{}",
+                cases[0]["name"]
+            );
+        }
+        let sent: Vec<(String, Value)> = asking
+            .calls()
+            .into_iter()
+            .map(|call| (call.op, call.args))
+            .collect();
+        let expected: Vec<(String, Value)> = asks
+            .iter()
+            .flat_map(|(cases, _)| cases.iter())
+            .map(|case| {
+                (
+                    case["callback"].as_str().expect("a callback").to_owned(),
+                    args(case),
+                )
+            })
+            .collect();
+        assert_eq!(sent, expected);
+        // A denied and an unavailable wait answer the guest so.
+        for (name, answer) in [
+            ("denied", Answer::Denied),
+            ("unavailable", Answer::None(Unanswered::Unavailable)),
+        ] {
+            let pending = ok(&case("opened"));
+            let decided = ok(&case(name));
+            let mut answers = vec![pending, decided].into_iter();
+            let mut waited = under(
+                Box::new(move |_call, _job| Reply::Ok(answers.next().expect("a scripted answer"))),
+                Limits::zero(),
+                &[],
+                &[],
+            )
+            .await;
+            assert_eq!(
+                said(
+                    &waited
+                        .guest
+                        .ask(request(&case("opened")))
+                        .await
+                        .expect("an answer")
+                ),
+                said(&answer),
+                "{name}"
+            );
+            assert_eq!(waited.calls()[1].args, args(&case(name)), "{name}");
+        }
     });
 }
 
@@ -316,6 +565,56 @@ fn storage_answers_each_refusal_cyfr_gives_in_its_own_words() {
             assert_eq!(answered, answer);
             // storage is never asked again.
             assert_eq!(under.calls().len(), 1);
+        }
+    });
+}
+
+// The guest error vectors' envelopes (tests/fixtures/guest_error.json's
+// `encode_error`) of a storage type whose message is text: CYFR refuses a
+// storage call so, and the guest is answered exactly the case's envelope.
+#[test]
+fn storage_answers_every_vector_cases_envelope_of_a_storage_type() {
+    run(|| async {
+        let vectors = support::fixture("guest_error.json");
+        let storage: Vec<&Value> = vectors["encode_error"]
+            .as_array()
+            .expect("encode_error")
+            .iter()
+            .filter(|case| {
+                case["type"]
+                    .as_str()
+                    .is_some_and(|kind| kind.starts_with("storage_"))
+                    && case["message"].is_string()
+            })
+            .collect();
+        assert!(!storage.is_empty());
+        for case in storage {
+            let refusal = json!({"type": case["type"], "message": case["message"]});
+            let reply = Mutex::new(Some(Reply::Error("guest_error", refusal)));
+            let mut under = under(
+                answering(move |_call| {
+                    reply
+                        .lock()
+                        .expect("a reply")
+                        .take()
+                        .unwrap_or(Reply::Silent)
+                }),
+                Limits::zero(),
+                &[],
+                &[],
+            )
+            .await;
+            let answered = under
+                .guest
+                .call(r#"{"action":"read","path":"a.txt"}"#.to_owned())
+                .await
+                .expect("an answer");
+            assert_eq!(
+                serde_json::from_str::<Value>(&answered).expect("JSON"),
+                case["answer"],
+                "{}",
+                case["why"]
+            );
         }
     });
 }
@@ -572,6 +871,45 @@ fn an_ask_waits_out_its_allowance_and_then_its_open_question() {
 }
 
 #[test]
+fn a_paced_ask_waits_as_long_as_cyfr_says_before_it_is_sent_again_signed_afresh() {
+    run(|| async {
+        let asked: Arc<Mutex<Vec<std::time::Instant>>> = Arc::new(Mutex::new(Vec::new()));
+        let at = asked.clone();
+        let mut under = under(
+            Box::new(move |_call, _job| {
+                let mut at = at.lock().expect("the asks");
+                at.push(std::time::Instant::now());
+                if at.len() == 1 {
+                    Reply::Ok(json!({"retry_after_ms": 300}))
+                } else {
+                    Reply::Ok(json!({"answer": "allowed"}))
+                }
+            }),
+            Limits::zero(),
+            &[],
+            &[],
+        )
+        .await;
+        assert_eq!(
+            said(&under.guest.ask(request()).await.expect("an answer")),
+            said(&Answer::Allowed)
+        );
+        let asked = asked.lock().expect("the asks").clone();
+        assert_eq!(asked.len(), 2);
+        let waited = asked[1] - asked[0];
+        assert!(
+            waited >= Duration::from_millis(300),
+            "asked again after {waited:?}"
+        );
+        let calls = under.calls();
+        assert_eq!(calls[0].op, "question_ask");
+        assert_eq!(calls[0].args, calls[1].args);
+        assert_eq!(calls[0].args["ask_no"], 1);
+        assert_ne!(calls[0].header, calls[1].header);
+    });
+}
+
+#[test]
 fn an_ask_nobody_answers_is_unavailable_and_one_past_the_bound_invalid() {
     run(|| async {
         let mut lost = under(
@@ -614,6 +952,83 @@ fn an_ask_nobody_answers_is_unavailable_and_one_past_the_bound_invalid() {
             "too large before it is posted"
         );
     });
+}
+
+#[test]
+fn an_ask_answered_in_no_shape_the_wire_knows_is_unavailable_and_asked_no_more() {
+    run(|| async {
+        for shape in [
+            json!({"answer": "maybe"}),
+            json!({"answer": {"none": "bored"}}),
+            json!({"pending": true, "answer": "allowed"}),
+            json!({"retry_after_ms": 0}),
+        ] {
+            let answer = shape.clone();
+            let mut under = under(
+                answering(move |_call| Reply::Ok(answer.clone())),
+                Limits::zero(),
+                &[],
+                &[],
+            )
+            .await;
+            assert_eq!(
+                said(&under.guest.ask(request()).await.expect("an answer")),
+                said(&Answer::None(Unanswered::Unavailable)),
+                "{shape}"
+            );
+            let ops: Vec<String> = under.calls().into_iter().map(|call| call.op).collect();
+            assert_eq!(ops, ["question_ask"], "{shape}");
+        }
+    });
+}
+
+const QUESTION_PROBE: &str =
+    "apps/locus/test/support/runtime/test_wasm/question_probe/question_probe.wasm";
+
+/// The runner's own binary, as its budget stops a catalyst waiting on an
+/// open question: the stop is the attempt's, not the import's.
+#[test]
+fn a_guest_stopped_while_it_waits_on_an_ask_waits_no_more_after_its_close() {
+    let mut service = Service::start();
+    let input = json!({"operation": "run", "params": {"statements": ["DROP TABLE users"]}});
+    let mut job = Job::new("catalyst", QUESTION_PROBE, &input.to_string());
+    job.timeout_ms = 3_000;
+    service.assign(
+        &job,
+        Box::new(|call, job| match call.op.as_str() {
+            "question_ask" => Reply::Ok(json!({"pending": true})),
+            // The question stays open: each wait is answered so 20 ms after
+            // it is asked, and the probe waits as long as it lives.
+            "question_wait" => Reply::Later(Duration::from_millis(20), json!({"pending": true})),
+            _ => support::standard(call, job),
+        }),
+    );
+    let within = Duration::from_secs(60);
+    assert_eq!(
+        service.frame(within),
+        json!({"v": 1, "type": "complete", "execution_id": job.execution_id, "clean": false})
+    );
+    // A guest left running past its close would wait again every 20 ms or
+    // so: this long after it, it would have waited more than a dozen times.
+    std::thread::sleep(Duration::from_millis(300)); // sleep-ok: the window after the close in which no question_wait may come
+    let ops = service.ops();
+    let closed = ops
+        .iter()
+        .position(|op| op == "fail")
+        .expect("the attempt closed");
+    let waits: Vec<usize> = (0..ops.len())
+        .filter(|at| ops[*at] == "question_wait")
+        .collect();
+    assert!(!waits.is_empty(), "it waited on its question: {ops:?}");
+    assert!(
+        waits.iter().all(|at| *at < closed),
+        "a question_wait after the close: {ops:?}"
+    );
+    assert_eq!(
+        service.calls_of("fail")[0].args["outcome"]["error"],
+        words::timeout(3_000)
+    );
+    assert_eq!(service.exit_after_close(within).code(), Some(0));
 }
 
 #[test]

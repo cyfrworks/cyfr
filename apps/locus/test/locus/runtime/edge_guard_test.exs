@@ -3,13 +3,13 @@
 
 defmodule Locus.Runtime.EdgeGuardTest do
   @moduledoc """
-  `Locus.Runtime.EdgeGuard` is the runner's one place a concrete egress request is
-  matched against the consent edge an execution runs under. Every HTTP host
-  handler asks it before touching a domain, a scheme, a method or a byte
-  budget — so a bug here is not a bug in one import, it is the guest
-  reaching past its consent in all of them. The address a request may
-  reach, and so the edge's private-address grant, is CYFR's to decide when
-  it pins the request.
+  `Locus.Runtime.EdgeGuard` is where the relay's service end matches a
+  runner's concrete egress request against the consent edge its attempt
+  runs under, before it connects. Every pinned and attached fetch passes
+  it on its domain, scheme, method and byte budget — so a bug here is the
+  guest reaching past its consent in all of them. The address a request
+  may reach, and so the edge's private-address grant, is CYFR's to decide
+  when it pins the request.
 
   Its own moduledoc makes two promises this file holds it to.
 
@@ -290,42 +290,6 @@ defmodule Locus.Runtime.EdgeGuardTest do
   # Size ceilings
   # ==========================================================================
 
-  describe "check_envelope_size/2" do
-    test "the envelope ceiling is the payload ceiling doubled plus framing" do
-      l = limits(max_request_size: 1_000)
-      ceiling = 1_000 * 2 + EdgeGuard.envelope_overhead()
-
-      assert :ok = EdgeGuard.check_envelope_size(l, String.duplicate("x", ceiling))
-
-      assert {:error, :request_too_large} =
-               EdgeGuard.check_envelope_size(l, String.duplicate("x", ceiling + 1))
-    end
-
-    test "a payload at the consented ceiling always fits once base64'd" do
-      # The reason the envelope is generous: a request at the limit arrives
-      # as ~4/3 its size in base64 plus JSON escaping. A ceiling that
-      # refused it would refuse a legitimate consented request.
-      l = limits(max_request_size: 1_000)
-      encoded = Base.encode64(:crypto.strong_rand_bytes(1_000))
-
-      assert :ok =
-               EdgeGuard.check_envelope_size(
-                 l,
-                 Jason.encode!(%{"body" => encoded, "url" => "https://example.com"})
-               )
-    end
-
-    test "a zero ceiling is a ceiling: the envelope holds the framing alone" do
-      l = limits(max_request_size: 0)
-      framing = EdgeGuard.envelope_overhead()
-
-      assert :ok = EdgeGuard.check_envelope_size(l, String.duplicate("x", framing))
-
-      assert {:error, :request_too_large} =
-               EdgeGuard.check_envelope_size(l, String.duplicate("x", framing + 1))
-    end
-  end
-
   describe "check_request_size/2" do
     test "the URL and headers count against the same ceiling as the body" do
       l = limits(max_request_size: 100)
@@ -345,38 +309,9 @@ defmodule Locus.Runtime.EdgeGuardTest do
       assert message =~ "incl. URL and headers"
     end
 
-    test "a multipart request is measured by its parts plus the metadata" do
-      l = limits(max_request_size: 100)
-
-      assert :ok =
-               EdgeGuard.check_request_size(l, %{
-                 multipart: [%{data: String.duplicate("x", 40)}, %{value: "small"}],
-                 url: ""
-               })
-
-      assert {:error, :request_too_large, message} =
-               EdgeGuard.check_request_size(l, %{
-                 multipart: [%{data: String.duplicate("x", 101)}],
-                 url: ""
-               })
-
-      assert message =~ "Multipart request"
-    end
-
     test "a nil body is zero bytes, not a crash" do
       assert :ok =
                EdgeGuard.check_request_size(limits(max_request_size: 10), %{body: nil, url: ""})
-    end
-  end
-
-  describe "check_response_bytes/2" do
-    test "the ceiling itself is allowed; one byte past it is refused in the denial's words" do
-      l = limits(max_response_size: 100)
-
-      assert :ok = EdgeGuard.check_response_bytes(l, 100)
-      assert :ok = EdgeGuard.check_response_bytes(l, 0)
-      assert {:error, :response_too_large, message} = EdgeGuard.check_response_bytes(l, 101)
-      assert message == "Response body (101 bytes) exceeds limit (100 bytes)"
     end
   end
 end

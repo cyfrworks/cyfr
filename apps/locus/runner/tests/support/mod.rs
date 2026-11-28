@@ -355,6 +355,10 @@ pub enum Upstream {
     End(Option<&'static str>),
     /// The service's `close`, then its end of the stream closed.
     Close,
+    /// What came before written, then what follows written once the runner
+    /// has granted this many bytes of the fetch back in all, as the
+    /// service sends only what the runner's credit covers.
+    AfterCredit(u64),
     /// What came before written, then this long before what follows.
     Pause(Duration),
 }
@@ -408,6 +412,8 @@ pub struct Service {
     pub calls: Arc<Mutex<Vec<Call>>>,
     /// Every frame the runner sent on its relay, in order.
     pub frames: Arc<Mutex<Vec<Value>>>,
+    /// Whether the service's end of the relay has read its last frame.
+    pub relay_ended: Arc<std::sync::atomic::AtomicBool>,
     socket: Option<UnixStream>,
 }
 
@@ -543,6 +549,7 @@ impl Service {
             listener: Some(listener),
             calls: Arc::new(Mutex::new(Vec::new())),
             frames: Arc::new(Mutex::new(Vec::new())),
+            relay_ended: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             socket,
         }
     }
@@ -604,15 +611,16 @@ impl Service {
         let listener = self.listener.take().expect("the relay is not yet served");
         let calls = self.calls.clone();
         let frames = self.frames.clone();
+        let ended = self.relay_ended.clone();
         let relay_end = std::thread::Builder::new().stack_size(STACK_BYTES);
         let _ = relay_end.spawn(move || {
             listener
                 .set_nonblocking(false)
                 .expect("a blocking listener");
-            let Ok((stream, _)) = listener.accept() else {
-                return;
-            };
-            relay_fetching(stream, job, script, fetches, calls, frames);
+            if let Ok((stream, _)) = listener.accept() {
+                relay_fetching(stream, job, script, fetches, calls, frames);
+            }
+            ended.store(true, Ordering::SeqCst);
         });
     }
 
@@ -775,53 +783,7 @@ pub fn relay_fetching(
         if frame["kind"] == "fetch" {
             let re = frame["seq"].as_u64().expect("a seq");
             let attempt = frame["attempt"].as_str().expect("an attempt").to_owned();
-            // One fetch's frames go in one write, so its runner reads them
-            // together.
-            let mut written = Vec::new();
-            let mut writing = out.lock().expect("the writer");
-            for upstream in fetches(&frame, &job) {
-                if let Upstream::Pause(pause) = upstream {
-                    if writing.0.write_all(&written).is_err() {
-                        return;
-                    }
-                    written.clear();
-                    std::thread::sleep(pause); // sleep-ok: the upstream's pause, as the test scripts it
-                    continue;
-                }
-                let mut sent = json!({"v": 1, "attempt": attempt, "seq": writing.1, "re": re});
-                let members = match upstream {
-                    Upstream::Head(status, headers, body) => json!({"kind": "fetch_chunk",
-                        "status": status,
-                        "headers": headers.iter().map(|(name, value)| json!([name, value]))
-                                          .collect::<Vec<_>>(),
-                        "body": wire::encode_base64(&body)}),
-                    Upstream::Chunk(body) => json!({"kind": "fetch_chunk", "status": null,
-                        "headers": null, "body": wire::encode_base64(&body)}),
-                    Upstream::Frame(frame) => json!({"kind": "attached_frame",
-                        "frame": wire::encode_base64(&frame)}),
-                    Upstream::Refusal(header, body) => json!({"kind": "attached_refusal",
-                        "header": header, "body": wire::encode_base64(&body)}),
-                    Upstream::End(error) => json!({"kind": "fetch_end", "error": error}),
-                    Upstream::Close => {
-                        json!({"kind": "close", "reason": "malformed"})
-                    }
-                    Upstream::Pause(_) => unreachable!("written above"),
-                };
-                let closing = members["kind"] == "close";
-                sent.as_object_mut()
-                    .expect("an object")
-                    .extend(members.as_object().expect("an object").clone());
-                writing.1 += 1;
-                let json = sent.to_string();
-                let length = u32::try_from(json.len()).expect("a frame under 4 GiB");
-                written.extend_from_slice(&length.to_be_bytes());
-                written.extend_from_slice(json.as_bytes());
-                if closing {
-                    let _ = writing.0.write_all(&written);
-                    return;
-                }
-            }
-            if writing.0.write_all(&written).is_err() {
+            if !answer_fetch(&out, &frames, &attempt, re, fetches(&frame, &job)) {
                 return;
             }
             continue;
@@ -969,6 +931,91 @@ pub fn relay_fetching(
     }
 }
 
+/// What the service end writes, and the seq of its next frame.
+type Out = Arc<Mutex<(UnixStream, u64)>>;
+
+/// Write `upstream` for the fetch `re` of `attempt`: its frames in one write,
+/// so its runner reads them together, up to an `AfterCredit` the runner has
+/// not yet granted, whose rest a thread of its own writes once it has.
+/// False once the service's end closed or its write failed.
+fn answer_fetch(
+    out: &Out,
+    frames: &Arc<Mutex<Vec<Value>>>,
+    attempt: &str,
+    re: u64,
+    upstream: Vec<Upstream>,
+) -> bool {
+    let mut written = Vec::new();
+    let mut writing = out.lock().expect("the writer");
+    let mut upstream = upstream.into_iter();
+    while let Some(next) = upstream.next() {
+        let members = match next {
+            Upstream::Pause(pause) => {
+                if writing.0.write_all(&written).is_err() {
+                    return false;
+                }
+                written.clear();
+                std::thread::sleep(pause); // sleep-ok: the upstream's pause, as the test scripts it
+                continue;
+            }
+            Upstream::AfterCredit(bytes) => {
+                if granted(frames, re) >= bytes {
+                    continue;
+                }
+                if writing.0.write_all(&written).is_err() {
+                    return false;
+                }
+                let rest: Vec<Upstream> = upstream.by_ref().collect();
+                let (out, frames, attempt) = (out.clone(), frames.clone(), attempt.to_owned());
+                std::thread::spawn(move || {
+                    eventually(|| granted(&frames, re) >= bytes);
+                    answer_fetch(&out, &frames, &attempt, re, rest);
+                });
+                return true;
+            }
+            Upstream::Head(status, headers, body) => json!({"kind": "fetch_chunk",
+                "status": status,
+                "headers": headers.iter().map(|(name, value)| json!([name, value]))
+                                  .collect::<Vec<_>>(),
+                "body": wire::encode_base64(&body)}),
+            Upstream::Chunk(body) => json!({"kind": "fetch_chunk", "status": null,
+                "headers": null, "body": wire::encode_base64(&body)}),
+            Upstream::Frame(frame) => json!({"kind": "attached_frame",
+                "frame": wire::encode_base64(&frame)}),
+            Upstream::Refusal(header, body) => json!({"kind": "attached_refusal",
+                "header": header, "body": wire::encode_base64(&body)}),
+            Upstream::End(error) => json!({"kind": "fetch_end", "error": error}),
+            Upstream::Close => json!({"kind": "close", "reason": "malformed"}),
+        };
+        let closing = members["kind"] == "close";
+        let mut sent = json!({"v": 1, "attempt": attempt, "seq": writing.1, "re": re});
+        sent.as_object_mut()
+            .expect("an object")
+            .extend(members.as_object().expect("an object").clone());
+        writing.1 += 1;
+        let json = sent.to_string();
+        let length = u32::try_from(json.len()).expect("a frame under 4 GiB");
+        written.extend_from_slice(&length.to_be_bytes());
+        written.extend_from_slice(json.as_bytes());
+        if closing {
+            let _ = writing.0.write_all(&written);
+            return false;
+        }
+    }
+    writing.0.write_all(&written).is_ok()
+}
+
+/// The bytes the runner has granted back for the fetch `re` so far.
+pub fn granted(frames: &Arc<Mutex<Vec<Value>>>, re: u64) -> u64 {
+    frames
+        .lock()
+        .expect("the frames")
+        .iter()
+        .filter(|frame| frame["kind"] == "credit" && frame["re"] == re)
+        .map(|frame| frame["bytes"].as_u64().expect("bytes"))
+        .sum()
+}
+
 /// Wait until `holds` holds, within a minute: what it looks for is the
 /// runner's, reached on its own time.
 pub fn eventually(mut holds: impl FnMut() -> bool) {
@@ -1047,6 +1094,14 @@ pub fn refusal_as(
     message: &str,
     signed: &Signed,
 ) -> Upstream {
+    let answer = json!({"v": 3, "error": "guest_error", "type": kind, "message": message,
+                        "call_id": call_id});
+    answered_refusal(job, &answer, signed)
+}
+
+/// CYFR's refusal of an attached fetch whose sealed answer is `answer`, as
+/// given, its header signed as `signed` says.
+pub fn answered_refusal(job: &Job, answer: &Value, signed: &Signed) -> Upstream {
     let fields = CallFields {
         attempt: signed.attempt.clone().unwrap_or_else(|| job.attempt()),
         boot: BOOT.to_owned(),
@@ -1058,8 +1113,6 @@ pub fn refusal_as(
     let posted = b"the posted body";
     let key = signed.call_key.unwrap_or(job.call_key);
     let header = auth::host_call_header(&key, &fields, posted).expect("a header");
-    let answer = json!({"v": 3, "error": "guest_error", "type": kind, "message": message,
-                        "call_id": call_id});
     let body = seal(&job.keys(), &fields, answer.to_string().into_bytes());
     Upstream::Refusal(header, body)
 }

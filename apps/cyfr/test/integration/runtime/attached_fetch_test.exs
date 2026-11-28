@@ -488,7 +488,7 @@ defmodule Locus.Runtime.AttachedFetchTest do
     end
 
     # Inside the destination, outside the grant's egress: refused by the
-    # runner's own check and recorded, never sent.
+    # worker service's check on the relay and recorded, never sent.
     played =
       run!(ctx, probe, request(port, "/hello", %{"url" => "http://upstream.test:#{port}/hello"}))
 
@@ -567,7 +567,8 @@ defmodule Locus.Runtime.AttachedFetchTest do
     end
 
     # Inside the source's destination, outside the grant's egress: refused
-    # by the runner's own check, never sent and never counted.
+    # by the worker service's check on the relay, never sent and never
+    # counted.
     played =
       run!(
         alice.ctx,

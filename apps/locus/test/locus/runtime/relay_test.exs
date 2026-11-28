@@ -3,36 +3,40 @@
 
 defmodule Locus.Runtime.RelayTest do
   @moduledoc """
-  A runner's relay (`Locus.Runtime.Relay`, `Locus.Runtime.Relay.Runner`), joined in this VM
-  to a scripted host: the service's end verifies each host call a runner
-  hands it under the attempt's keys and posts it unchanged, naming the
-  service's runner id; it refuses, closing the channel, a frame for an
-  attempt the channel does not carry, each call
+  The service's end of a runner's relay (`Locus.Runtime.Relay`), joined
+  in this VM to the test's scripted runner end
+  (`Locus.Runtime.Test.RunnerEnd`) and to a scripted host: it verifies
+  each host call a runner hands it under the attempt's keys and posts it
+  unchanged, naming the service's runner id; it refuses, closing the
+  channel, a frame for an attempt the channel does not carry, each call
   `tests/fixtures/runner_relay.json`'s `call_checks` refuse, in the order
   they are decided, a fetch naming a pin CYFR never granted to the
-  frame's attempt and a frame past the relay's bound. A child CYFR admits is carried, with pins
+  frame's attempt and a frame past the relay's bound, and answers CYFR's
+  413 to a runner's call as that status. A child CYFR admits is carried, with pins
   of its own. A granted pin serves one fetch, and only before its
-  `expires_at`: a fetch naming it again closes the channel. A fetch
+  `expires_at`: a fetch naming it again closes the channel, and a stream
+  it opened is read on past it. A fetch
   through a granted pin is checked again against the attempt's edge and
   limits, taken from the rate by the relay itself, then decided by CYFR
   again as it leaves — the relay asks `egress_pin` itself, as the runner
   asked it, and connects only to the address of that answer, so a host
   CYFR refuses since the runner's pin, an answer naming another target and
-  a lost answer each end the fetch with nothing connected. The answer
+  a lost answer each end the fetch with nothing connected, and an answer
+  naming a metadata address ends it `private_ip_blocked`, nothing
+  connected either. The answer
   streams back never past the runner's credit: a slow runner holds the
   service waiting, and the attempt's deadline ends the fetch and closes
-  the upstream connection. Neither end shows an attempt's keys in its
-  status.
+  the upstream connection. A fetch's wait for its answer ends at its
+  node's consented timeout when that comes before the deadline. The
+  service's end shows none of an attempt's keys in its status.
 
   A fetch naming a connection is posted by the service as the host call
   `attached_fetch`, taking no rate and asking no pin, after the attempt's
   edge and limits are checked again; CYFR's sealed frames are relayed
   unopened, never past the runner's credit nor the attempt's
-  `max_response_size`, and the runner's end opens them in order for the
-  call id it chose. CYFR's refusal is taken only as the answer to the
-  fetch's own call, naming its call id; a frame that does not read, or an
-  answer that ends short, ends the fetch with nothing more of it handed
-  on.
+  `max_response_size`, and its refusal before admission is relayed as
+  the answer to the fetch's own call, its `unavailable` among them, which
+  reads as no answer.
   """
 
   use ExUnit.Case, async: true
@@ -40,8 +44,7 @@ defmodule Locus.Runtime.RelayTest do
   import Prima.Test.Wait
 
   alias Prima.{Assignment, AttachedRequest, RunnerRelay, WorkerAuth, WorkerWire}
-  alias Locus.Runtime.{Egress, HostClient, HttpHandler}
-  alias Locus.Runtime.Relay.Runner, as: Endpoint
+  alias Locus.Runtime.Test.RunnerEnd, as: Endpoint
   alias Locus.Runtime.Test.{EdgeFixtures, RelayFixtures, ScriptedHost, ScriptedKeeper}
 
   import RelayFixtures
@@ -54,6 +57,37 @@ defmodule Locus.Runtime.RelayTest do
                |> Map.fetch!("call_checks")
   @call_cases Map.fetch!(@call_checks, "cases")
   @call_request_bound Map.fetch!(@call_checks, "max_request_size")
+
+  defmodule HeldUpstream do
+    @moduledoc false
+    # A loopback upstream that streams its head and a first piece, then
+    # holds its answer open until the test says, and ends it with a last.
+    @behaviour Plug
+
+    @impl true
+    def init(test), do: test
+
+    @impl true
+    def call(conn, test) do
+      conn = Plug.Conn.send_chunked(conn, 200)
+      {:ok, conn} = Plug.Conn.chunk(conn, "first ")
+      send(test, {:holding, self()})
+
+      receive do
+        :more -> :ok
+      after
+        30_000 -> :ok
+      end
+
+      {:ok, conn} = Plug.Conn.chunk(conn, "last")
+      conn
+    end
+  end
+
+  @doc false
+  # Each connection the HTTP client opens, told to the test that attached it.
+  def connecting(_event, _measurements, %{host: host, port: port}, test),
+    do: send(test, {:connecting, host, port})
 
   setup do
     host = ScriptedHost.start!()
@@ -85,29 +119,6 @@ defmodule Locus.Runtime.RelayTest do
       })
 
     relay
-  end
-
-  # A host call as a runner signs and seals it, under `keys`, naming
-  # `fields` over the attempt's own.
-  defp signed_call(attempt, op, args, fields \\ %{}, keys \\ nil) do
-    keys = keys || attempt.keys
-    {:ok, assignment} = Assignment.read(attempt.assignment)
-
-    call =
-      keys.attempt
-      |> Map.merge(%{
-        boot: attempt.boot,
-        runner: attempt.runner,
-        member: assignment.member,
-        ts: System.system_time(:millisecond),
-        nonce: Base.url_encode64(:crypto.strong_rand_bytes(12), padding: false)
-      })
-      |> Map.merge(fields)
-
-    json = Jason.encode!(WorkerWire.request_body(op, args))
-    {:ok, sealed} = WorkerAuth.seal_call(keys.seal, :body, call, json)
-    {:ok, header} = WorkerAuth.host_call_header(keys.call, call, sealed)
-    %{kind: :host_call, attempt: attempt.attempt, op: op, header: header, body: sealed}
   end
 
   # A case of runner_relay.json's call_checks as a runner sends it, and
@@ -205,12 +216,25 @@ defmodule Locus.Runtime.RelayTest do
     test "are posted by the service, unchanged, naming the service's runner", %{host: host} do
       attempt = attempt!(host) |> ScriptedKeeper.relayed!()
 
-      assert {:ok, %{}} = HostClient.attach(attempt.client, attempt.assignment)
-      assert {:ok, _renewals} = HostClient.renew(attempt.client, [attempt.attempt])
+      assert {:ok, %{}} = call(attempt, :attach, %{"assignment" => attempt.assignment})
+      assert {:ok, %{}} = call(attempt, :renew, %{"attempts" => [attempt.attempt]})
 
       assert [%{caller: %{runner: runner, attempt: id}}] = ScriptedHost.requests(host, "attach")
       assert runner == attempt.runner and id == attempt.attempt
       assert [%{caller: %{runner: ^runner}}] = ScriptedHost.requests(host, "renew")
+    end
+
+    test "CYFR's 413 crosses to the runner as that status, posted once, whatever its body", %{
+      host: host
+    } do
+      attempt = attempt!(host) |> ScriptedKeeper.relayed!()
+      over = String.duplicate("x", Prima.HostAPI.max_answer_bytes() + 1)
+
+      for {body, posted} <- [{~s({"v":3,"error":"lost"}), 1}, {over, 2}] do
+        ScriptedHost.script(host, "renew", {:raw, 413, body})
+        assert {:status, 413} = call(attempt, :renew, %{"attempts" => [attempt.attempt]})
+        assert length(ScriptedHost.requests(host, "renew")) == posted
+      end
     end
 
     test "a frame for an attempt the channel does not carry closes it", %{host: host} do
@@ -347,10 +371,21 @@ defmodule Locus.Runtime.RelayTest do
          }}
       end)
 
-      assert {:ok, admitted} =
-               HostClient.admit_child(attempt.client, @ref, nil, %{"fixture" => true}, :call, nil)
+      admit = %{
+        "reference" => @ref,
+        "need" => nil,
+        "input" => %{"fixture" => true},
+        "guest_fn" => "call",
+        "child_key" => Base.url_encode64(:crypto.strong_rand_bytes(18), padding: false)
+      }
 
-      assert {:ok, %{}} = HostClient.attach(admitted.client, admitted.token)
+      # The runner carries the child as it starts it, and presents it as
+      # the parent's runner.
+      assert {:ok, %{"assignment" => token}} = call(attempt, :admit_child, admit)
+      :ok = Endpoint.admit(attempt.endpoint, child.attempt)
+
+      as_parent = Map.merge(child, %{runner: attempt.runner, endpoint: attempt.endpoint})
+      assert {:ok, %{}} = call(as_parent, :attach, %{"assignment" => token})
 
       assert [%{caller: %{attempt: child_attempt, runner: runner}}] =
                ScriptedHost.requests(host, "attach")
@@ -358,14 +393,14 @@ defmodule Locus.Runtime.RelayTest do
       assert child_attempt == child.attempt and runner == attempt.runner
 
       # A pin CYFR granted the parent is not the child's.
-      assert {:ok, pinned} = Egress.pin(attempt.client, "http://api.test/x")
+      pin = pin!(attempt, "http://api.test/x")
       monitor = Process.monitor(attempt.relay)
 
       assert {:ok, ref} =
                Endpoint.fetch(
                  attempt.endpoint,
                  child.attempt,
-                 pinned.target.id,
+                 pin.id,
                  "GET",
                  "/x",
                  [],
@@ -383,13 +418,13 @@ defmodule Locus.Runtime.RelayTest do
     test "go to the pinned address, the rate taken by the service first", %{host: host} do
       port = upstream!()
       attempt = attempt!(host) |> ScriptedKeeper.relayed!()
-      assert {:ok, pinned} = Egress.pin(attempt.client, "http://api.test:#{port}/hello")
+      pin = pin!(attempt, "http://api.test:#{port}/hello")
 
       assert {:ok, ref} =
                Endpoint.fetch(
                  attempt.endpoint,
                  attempt.attempt,
-                 pinned.target.id,
+                 pin.id,
                  "GET",
                  "/hello?q=1",
                  [{"x-trace", "t"}],
@@ -418,13 +453,13 @@ defmodule Locus.Runtime.RelayTest do
 
       # A runner sending the guest's Host and X-Forwarded-Host itself, past
       # the runner's own validation: the relay refuses the fetch.
-      assert {:ok, pinned} = Egress.pin(attempt.client, "http://api.test:#{port}/hello")
+      pin = pin!(attempt, "http://api.test:#{port}/hello")
 
       assert {:ok, ref} =
                Endpoint.fetch(
                  attempt.endpoint,
                  attempt.attempt,
-                 pinned.target.id,
+                 pin.id,
                  "GET",
                  "/hello",
                  [{"host", "admin.internal"}, {"x-forwarded-host", "admin.internal"}],
@@ -436,13 +471,13 @@ defmodule Locus.Runtime.RelayTest do
       assert ScriptedHost.requests(host, "take_rate") == []
 
       # Without one, the relay sets Host from the pin, port included.
-      assert {:ok, pinned} = Egress.pin(attempt.client, "http://api.test:#{port}/hello")
+      pin = pin!(attempt, "http://api.test:#{port}/hello")
 
       assert {:ok, ref} =
                Endpoint.fetch(
                  attempt.endpoint,
                  attempt.attempt,
-                 pinned.target.id,
+                 pin.id,
                  "GET",
                  "/hello",
                  [{"x-trace", "t"}],
@@ -480,13 +515,13 @@ defmodule Locus.Runtime.RelayTest do
       ]
 
       for name <- names do
-        assert {:ok, pinned} = Egress.pin(attempt.client, "http://api.test:#{port}/x")
+        pin = pin!(attempt, "http://api.test:#{port}/x")
 
         assert {:ok, ref} =
                  Endpoint.fetch(
                    attempt.endpoint,
                    attempt.attempt,
-                   pinned.target.id,
+                   pin.id,
                    "GET",
                    "/x",
                    [{"x-trace", "t"}, {name, "admin.internal"}],
@@ -502,86 +537,31 @@ defmodule Locus.Runtime.RelayTest do
       assert length(ScriptedHost.requests(host, "egress_pin")) == length(names)
     end
 
-    test "a guest's Host on a POST is refused before its pin, and without it the POST reaches the pinned host",
+    test "a POST reaches the pinned host with its body's length and the pin's Host alone",
          %{host: host} do
       port = upstream!()
       edge = EdgeFixtures.edge(domains: ["api.test"], methods: ["POST"])
-      limits = EdgeFixtures.limits()
-      attempt = attempt!(host, edge: edge, limits: limits) |> ScriptedKeeper.relayed!()
-
-      for headers <- [
-            %{"Host" => "blocked.test"},
-            %{"X-Forwarded-Host" => "blocked.test"},
-            %{"X-Real-IP" => "127.0.0.1"},
-            %{"True-Client-IP" => "10.0.0.1"}
-          ] do
-        [{name, _value}] = Map.to_list(headers)
-
-        request =
-          Jason.encode!(%{
-            "method" => "POST",
-            "url" => "http://api.test:#{port}/",
-            "headers" => headers,
-            "body" => "sample"
-          })
-
-        assert %{"error" => %{"type" => "invalid_request", "message" => message}} =
-                 request
-                 |> HttpHandler.execute(edge, limits, attempt.client, @ref)
-                 |> Jason.decode!()
-
-        assert message == "A request cannot set the #{name} header."
-      end
-
-      refute_received {:upstream, _, _, _}
-      assert ScriptedHost.requests(host, "egress_pin") == []
-      assert ScriptedHost.requests(host, "take_rate") == []
-
-      request =
-        Jason.encode!(%{
-          "method" => "POST",
-          "url" => "http://api.test:#{port}/",
-          "body" => "sample"
-        })
-
-      assert %{"status" => 200, "body" => "reached /"} =
-               request
-               |> HttpHandler.execute(edge, limits, attempt.client, @ref)
-               |> Jason.decode!()
-
-      assert_received {:upstream, "POST", "/", upstream_headers}
-      assert {"content-length", "6"} in upstream_headers
-
-      assert Enum.filter(upstream_headers, fn {name, _value} -> name == "host" end) ==
-               [{"host", "api.test:#{port}"}]
-    end
-
-    test "a runner's header the relay refuses answers the guest invalid_request, not an HTTP failure",
-         %{host: host} do
-      port = upstream!()
-      limits = EdgeFixtures.limits()
-      attempt = attempt!(host, limits: limits) |> ScriptedKeeper.relayed!()
-      assert {:ok, pinned} = Egress.pin(attempt.client, "http://api.test:#{port}/")
+      attempt = attempt!(host, edge: edge) |> ScriptedKeeper.relayed!()
+      pin = pin!(attempt, "http://api.test:#{port}/")
 
       assert {:ok, ref} =
                Endpoint.fetch(
                  attempt.endpoint,
                  attempt.attempt,
-                 pinned.target.id,
-                 "GET",
+                 pin.id,
+                 "POST",
                  "/",
-                 [{"Host", "admin.internal"}],
-                 ""
+                 [],
+                 "sample"
                )
 
-      assert {[], "invalid_request" = code} = events(attempt.endpoint, ref)
-      refute_received {:upstream, _, _, _}
-      assert ScriptedHost.requests(host, "take_rate") == []
+      {events, nil} = events(attempt.endpoint, ref)
+      assert body_of(events) == "reached /"
+      assert_received {:upstream, "POST", "/", upstream_headers}
+      assert {"content-length", "6"} in upstream_headers
 
-      assert {:error, :invalid_request, message} =
-               HttpHandler.relay_ended(code, %{hostname: "api.test"}, limits)
-
-      assert message =~ "worker service's check"
+      assert Enum.filter(upstream_headers, fn {name, _value} -> name == "host" end) ==
+               [{"host", "api.test:#{port}"}]
     end
 
     test "a pin CYFR never granted closes the channel", %{host: host} do
@@ -594,7 +574,7 @@ defmodule Locus.Runtime.RelayTest do
       assert_receive {Endpoint, ^ref, {:end, "relay_closed"}}, 5_000
       assert_receive {:DOWN, ^monitor, :process, _, {:shutdown, {:closed, :unknown_pin}}}, 5_000
       # Nothing more crosses the closed channel.
-      assert {:error, :lost} = HostClient.attach(attempt.client, attempt.assignment)
+      assert {:error, :closed} = call(attempt, :attach, %{"assignment" => attempt.assignment})
       assert ScriptedHost.requests(host, "attach") == []
     end
 
@@ -602,13 +582,13 @@ defmodule Locus.Runtime.RelayTest do
          %{host: host} do
       port = upstream!()
       attempt = attempt!(host) |> ScriptedKeeper.relayed!()
-      assert {:ok, pinned} = Egress.pin(attempt.client, "http://api.test:#{port}/once")
+      pin = pin!(attempt, "http://api.test:#{port}/once")
 
       assert {:ok, ref} =
                Endpoint.fetch(
                  attempt.endpoint,
                  attempt.attempt,
-                 pinned.target.id,
+                 pin.id,
                  "GET",
                  "/once",
                  [],
@@ -623,7 +603,7 @@ defmodule Locus.Runtime.RelayTest do
                Endpoint.fetch(
                  attempt.endpoint,
                  attempt.attempt,
-                 pinned.target.id,
+                 pin.id,
                  "GET",
                  "/twice",
                  [],
@@ -639,10 +619,10 @@ defmodule Locus.Runtime.RelayTest do
     test "a pin a refused fetch named is spent all the same", %{host: host} do
       port = upstream!()
       attempt = attempt!(host) |> ScriptedKeeper.relayed!()
-      assert {:ok, pinned} = Egress.pin(attempt.client, "http://api.test:#{port}/x")
+      pin = pin!(attempt, "http://api.test:#{port}/x")
 
       fetch =
-        &Endpoint.fetch(attempt.endpoint, attempt.attempt, pinned.target.id, &1, "/x", [], "")
+        &Endpoint.fetch(attempt.endpoint, attempt.attempt, pin.id, &1, "/x", [], "")
 
       assert {:ok, ref} = fetch.("POST")
       assert {[], "method_blocked"} = events(attempt.endpoint, ref)
@@ -659,13 +639,13 @@ defmodule Locus.Runtime.RelayTest do
       port = upstream!()
       attempt = attempt!(host) |> ScriptedKeeper.relayed!()
       ScriptedHost.pins(host, %{"api.test" => "127.0.0.1"}, expires_in: -1)
-      assert {:ok, pinned} = Egress.pin(attempt.client, "http://api.test:#{port}/late")
+      pin = pin!(attempt, "http://api.test:#{port}/late")
 
       assert {:ok, ref} =
                Endpoint.fetch(
                  attempt.endpoint,
                  attempt.attempt,
-                 pinned.target.id,
+                 pin.id,
                  "GET",
                  "/late",
                  [],
@@ -690,13 +670,13 @@ defmodule Locus.Runtime.RelayTest do
       ])
 
       url = "http://api.test:#{port}/send?q=1"
-      assert {:ok, pinned} = Egress.pin(attempt.client, url)
+      pin = pin!(attempt, url)
 
       assert {:ok, ref} =
                Endpoint.fetch(
                  attempt.endpoint,
                  attempt.attempt,
-                 pinned.target.id,
+                 pin.id,
                  "GET",
                  "/send?q=1",
                  [],
@@ -729,14 +709,13 @@ defmodule Locus.Runtime.RelayTest do
         fn args, _caller -> ScriptedHost.pin(%{"api.test" => "127.0.0.1"}, args, 30_000) end
       ])
 
-      assert {:ok, %{ip: "127.0.0.2"} = pinned} =
-               Egress.pin(attempt.client, "http://api.test:#{port}/fresh")
+      assert %{ip: "127.0.0.2"} = pin = pin!(attempt, "http://api.test:#{port}/fresh")
 
       assert {:ok, ref} =
                Endpoint.fetch(
                  attempt.endpoint,
                  attempt.attempt,
-                 pinned.target.id,
+                 pin.id,
                  "GET",
                  "/fresh",
                  [],
@@ -763,13 +742,13 @@ defmodule Locus.Runtime.RelayTest do
       ScriptedHost.script(host, "egress_pin", [pin, elsewhere, pin, :drop, :drop])
 
       for code <- ["pin_elsewhere", "pin_lost"] do
-        assert {:ok, pinned} = Egress.pin(attempt.client, "http://api.test:#{port}/x")
+        pin = pin!(attempt, "http://api.test:#{port}/x")
 
         assert {:ok, ref} =
                  Endpoint.fetch(
                    attempt.endpoint,
                    attempt.attempt,
-                   pinned.target.id,
+                   pin.id,
                    "GET",
                    "/x",
                    [],
@@ -788,16 +767,14 @@ defmodule Locus.Runtime.RelayTest do
       port = upstream!()
       attempt = attempt!(host) |> ScriptedKeeper.relayed!()
       origin_url = "http://api.test:#{port}/start"
-      assert {:ok, origin} = Egress.pin(attempt.client, origin_url)
-      :ok = Egress.redirected(attempt.client, origin, origin_url, "/moved")
-      assert {:ok, hop} = Egress.pin(attempt.client, "http://api.test:#{port}/moved")
-      assert hop.from == origin.target
+      origin = pin!(attempt, origin_url)
+      hop = pin!(attempt, "http://api.test:#{port}/moved", purpose: :redirect, from: origin.id)
 
       assert {:ok, ref} =
                Endpoint.fetch(
                  attempt.endpoint,
                  attempt.attempt,
-                 hop.target.id,
+                 hop.id,
                  "GET",
                  "/moved",
                  [],
@@ -810,7 +787,7 @@ defmodule Locus.Runtime.RelayTest do
       expected = %{
         "url" => "http://api.test:#{port}/moved",
         "purpose" => "redirect",
-        "from" => origin.target.id
+        "from" => origin.id
       }
 
       assert [_origin, %{args: ^expected}, %{args: ^expected}] =
@@ -821,13 +798,13 @@ defmodule Locus.Runtime.RelayTest do
       port = upstream!()
       attempt = attempt!(host) |> ScriptedKeeper.relayed!()
       ScriptedHost.script(host, "take_rate", {:error, {:guest_error, "rate_limited", "no"}})
-      assert {:ok, pinned} = Egress.pin(attempt.client, "http://api.test:#{port}/x")
+      pin = pin!(attempt, "http://api.test:#{port}/x")
 
       assert {:ok, ref} =
                Endpoint.fetch(
                  attempt.endpoint,
                  attempt.attempt,
-                 pinned.target.id,
+                 pin.id,
                  "GET",
                  "/x",
                  [],
@@ -846,13 +823,13 @@ defmodule Locus.Runtime.RelayTest do
         |> ScriptedKeeper.relayed!()
 
       # Each fetch is a request of its own, pinned for itself.
-      assert {:ok, pinned} = Egress.pin(attempt.client, "http://api.test:#{port}/x")
+      pin = pin!(attempt, "http://api.test:#{port}/x")
 
       assert {:ok, ref} =
                Endpoint.fetch(
                  attempt.endpoint,
                  attempt.attempt,
-                 pinned.target.id,
+                 pin.id,
                  "POST",
                  "/x",
                  [],
@@ -860,13 +837,13 @@ defmodule Locus.Runtime.RelayTest do
                )
 
       assert {[], "method_blocked"} = events(attempt.endpoint, ref)
-      assert {:ok, pinned} = Egress.pin(attempt.client, "http://api.test:#{port}/x")
+      pin = pin!(attempt, "http://api.test:#{port}/x")
 
       assert {:ok, ref} =
                Endpoint.fetch(
                  attempt.endpoint,
                  attempt.attempt,
-                 pinned.target.id,
+                 pin.id,
                  "GET",
                  "/x",
                  [],
@@ -885,13 +862,13 @@ defmodule Locus.Runtime.RelayTest do
         attempt!(host, limits: EdgeFixtures.limits(max_response_size: 4))
         |> ScriptedKeeper.relayed!()
 
-      assert {:ok, pinned} = Egress.pin(attempt.client, "http://api.test:#{port}/long")
+      pin = pin!(attempt, "http://api.test:#{port}/long")
 
       assert {:ok, ref} =
                Endpoint.fetch(
                  attempt.endpoint,
                  attempt.attempt,
-                 pinned.target.id,
+                 pin.id,
                  "GET",
                  "/long",
                  [],
@@ -902,6 +879,133 @@ defmodule Locus.Runtime.RelayTest do
       assert byte_size(body_of(events)) <= 4
     end
 
+    test "a stream's answer past the attempt's max_response_size ends it, as a fetch's", %{
+      host: host
+    } do
+      port = upstream!()
+
+      attempt =
+        attempt!(host, limits: EdgeFixtures.limits(max_response_size: 4))
+        |> ScriptedKeeper.relayed!()
+
+      pin = pin!(attempt, "http://api.test:#{port}/long", purpose: :stream)
+
+      assert {:ok, ref} =
+               Endpoint.fetch(attempt.endpoint, attempt.attempt, pin.id, "GET", "/long", [], "")
+
+      {events, "response_too_large"} = events(attempt.endpoint, ref)
+      assert byte_size(body_of(events)) <= 4
+
+      assert [%{args: %{"purpose" => "stream"}}, %{args: %{"purpose" => "stream"}}] =
+               ScriptedHost.requests(host, "egress_pin")
+    end
+
+    test "a stream outlives its pin: it is read on past the pin's expires_at to its end", %{
+      host: host
+    } do
+      server =
+        start_supervised!(
+          {Bandit, plug: {HeldUpstream, self()}, ip: {127, 0, 0, 1}, port: 0, startup_log: false},
+          id: :held_upstream
+        )
+
+      {:ok, {_ip, port}} = ThousandIsland.listener_info(server)
+      attempt = attempt!(host) |> ScriptedKeeper.relayed!()
+      test = self()
+
+      ScriptedHost.script(host, "egress_pin", fn args, _caller ->
+        {:ok, %{"expires_at" => expires_at}} =
+          answer = ScriptedHost.pin(%{"api.test" => "127.0.0.1"}, args, 1_000)
+
+        send(test, {:expires_at, expires_at})
+        answer
+      end)
+
+      pin = pin!(attempt, "http://api.test:#{port}/held", purpose: :stream)
+      assert_received {:expires_at, runners}
+
+      assert {:ok, ref} =
+               Endpoint.fetch(attempt.endpoint, attempt.attempt, pin.id, "GET", "/held", [], "")
+
+      assert_receive {:holding, upstream}, 5_000
+
+      # The relay's own pin, asked as it connected, expires after the
+      # runner's: both are past their expires_at before the rest is sent.
+      assert_received {:expires_at, relays}
+      assert relays >= runners
+      wait_until(fn -> System.system_time(:millisecond) > relays end, 5_000)
+      send(upstream, :more)
+
+      {events, nil} = events(attempt.endpoint, ref)
+      assert [{:head, 200, _headers, _body} | _] = events
+      assert body_of(events) == "first last"
+    end
+
+    test "a pin CYFR grants for a metadata address ends the fetch private_ip_blocked after the " <>
+           "rate, and nothing connects",
+         %{host: host} do
+      port = upstream!()
+      id = {__MODULE__, make_ref()}
+      :ok = :telemetry.attach(id, [:finch, :connect, :start], &__MODULE__.connecting/4, self())
+      on_exit(fn -> :telemetry.detach(id) end)
+      attempt = attempt!(host) |> ScriptedKeeper.relayed!()
+
+      # The control: a fetch to a pin of a loopback address connects there.
+      pin = pin!(attempt, "http://api.test:#{port}/near")
+
+      assert {:ok, ref} =
+               Endpoint.fetch(attempt.endpoint, attempt.attempt, pin.id, "GET", "/near", [], "")
+
+      assert {[_ | _], nil} = events(attempt.endpoint, ref)
+      assert_received {:connecting, "127.0.0.1", ^port}
+
+      for ip <- ["169.254.169.254", "fd00:ec2::254"] do
+        ScriptedHost.pins(host, %{"api.test" => ip})
+        pin = pin!(attempt, "http://api.test:#{port}/meta")
+        assert pin.ip == ip
+
+        assert {:ok, ref} =
+                 Endpoint.fetch(attempt.endpoint, attempt.attempt, pin.id, "GET", "/meta", [], "")
+
+        assert {[], "private_ip_blocked"} = events(attempt.endpoint, ref), ip
+      end
+
+      # Nothing connected again to the fetches' port, whatever its address.
+      refute_received {:connecting, _host, ^port}
+      refute_received {:upstream, _, "/meta", _}
+      # Each was taken from the rate, and asked of CYFR again by the relay.
+      assert length(ScriptedHost.requests(host, "take_rate")) == 3
+      assert length(ScriptedHost.requests(host, "egress_pin")) == 6
+    end
+
+    test "a runner's stream naming a header that frames, routes or overrides the request ends " <>
+           "invalid_request before the rate, nothing connected, as a fetch",
+         %{host: host} do
+      port = upstream!()
+      attempt = attempt!(host) |> ScriptedKeeper.relayed!()
+      names = Prima.Network.framing_headers() ++ Prima.Network.override_headers()
+
+      for name <- names, spelled <- [name, String.upcase(name)] do
+        pin = pin!(attempt, "http://api.test:#{port}/x", purpose: :stream)
+
+        assert {:ok, ref} =
+                 Endpoint.fetch(
+                   attempt.endpoint,
+                   attempt.attempt,
+                   pin.id,
+                   "GET",
+                   "/x",
+                   [{"accept", "*/*"}, {spelled, "admin.internal"}],
+                   ""
+                 )
+
+        assert {[], "invalid_request"} = events(attempt.endpoint, ref), spelled
+      end
+
+      refute_received {:upstream, _, _, _}
+      assert ScriptedHost.requests(host, "take_rate") == []
+    end
+
     test "a body past one credit window completes as the runner grants credit", %{host: host} do
       size = RunnerRelay.initial_credit() * 2 + 12_345
       {port, _server} = big_upstream!(size)
@@ -910,13 +1014,13 @@ defmodule Locus.Runtime.RelayTest do
         attempt!(host, limits: EdgeFixtures.limits(max_response_size: 4 * size))
         |> ScriptedKeeper.relayed!()
 
-      assert {:ok, pinned} = Egress.pin(attempt.client, "http://api.test:#{port}/big")
+      pin = pin!(attempt, "http://api.test:#{port}/big")
 
       assert {:ok, ref} =
                Endpoint.fetch(
                  attempt.endpoint,
                  attempt.attempt,
-                 pinned.target.id,
+                 pin.id,
                  "GET",
                  "/big",
                  [],
@@ -938,13 +1042,13 @@ defmodule Locus.Runtime.RelayTest do
         )
         |> ScriptedKeeper.relayed!()
 
-      assert {:ok, pinned} = Egress.pin(attempt.client, "http://api.test:#{port}/big")
+      pin = pin!(attempt, "http://api.test:#{port}/big")
 
       assert {:ok, ref} =
                Endpoint.fetch(
                  attempt.endpoint,
                  attempt.attempt,
-                 pinned.target.id,
+                 pin.id,
                  "GET",
                  "/big",
                  [],
@@ -988,14 +1092,13 @@ defmodule Locus.Runtime.RelayTest do
         attempt =
           attempt!(host, limits: EdgeFixtures.limits(timeout: "1s")) |> ScriptedKeeper.relayed!()
 
-        assert {:ok, pinned} =
-                 Egress.pin(attempt.client, "#{unquote(scheme)}://api.test:#{port}/")
+        pin = pin!(attempt, "#{unquote(scheme)}://api.test:#{port}/")
 
         assert {:ok, ref} =
                  Endpoint.fetch(
                    attempt.endpoint,
                    attempt.attempt,
-                   pinned.target.id,
+                   pin.id,
                    "GET",
                    "/",
                    [],
@@ -1004,6 +1107,22 @@ defmodule Locus.Runtime.RelayTest do
 
         assert {[], unquote(code)} = events(attempt.endpoint, ref)
       end
+    end
+
+    test "over http ends timeout at its node's consented timeout, long before the attempt's deadline",
+         %{host: host, port: port} do
+      attempt =
+        attempt!(host, timeout_ms: 60_000, limits: EdgeFixtures.limits(timeout: "1s"))
+        |> ScriptedKeeper.relayed!()
+
+      pin = pin!(attempt, "http://api.test:#{port}/")
+      started = System.monotonic_time(:millisecond)
+
+      assert {:ok, ref} =
+               Endpoint.fetch(attempt.endpoint, attempt.attempt, pin.id, "GET", "/", [], "")
+
+      assert_receive {Endpoint, ^ref, {:end, "timeout"}}, 10_000
+      assert System.monotonic_time(:millisecond) - started >= 1_000
     end
   end
 
@@ -1052,97 +1171,16 @@ defmodule Locus.Runtime.RelayTest do
       assert {[], "lost"} = events(attempt.endpoint, ref)
     end
 
-    test "a refusal naming another call, or not the fetch's call's answer, does not read", %{
-      host: host
-    } do
-      attempt = attempt!(host) |> ScriptedKeeper.relayed!()
-      other = AttachedRequest.call_id(:crypto.strong_rand_bytes(16))
-
-      ScriptedHost.script(host, "attached_fetch", [
-        {:answer,
-         Jason.encode!(
-           WorkerWire.error(:guest_error, %{
-             "type" => "destination_mismatch",
-             "message" => "Outside the destination.",
-             "call_id" => other
-           })
-         )},
-        {:answer,
-         Jason.encode!(
-           WorkerWire.error(:guest_error, %{"type" => "dispatch_error", "message" => "no call id"})
-         )},
-        {:error, :unavailable}
-      ])
-
-      for _answer <- 1..2 do
-        assert {:ok, ref} = attached_fetch(attempt, attached())
-        assert {[], "bad_frame"} = events(attempt.endpoint, ref)
-      end
-
-      # The third: CYFR answered `unavailable`, which an attached fetch is
-      # not answered by.
-      assert {:ok, ref} = attached_fetch(attempt, attached())
-      assert {[], "bad_frame"} = events(attempt.endpoint, ref)
-    end
-
-    test "a frame out of order, under another call or with a bad tag ends the fetch, and nothing of it is handed on",
+    test "CYFR's unavailable is no answer of an attached fetch: relayed once to the fetch's own " <>
+           "call, it reads as none, and the channel goes idle",
          %{host: host} do
       attempt = attempt!(host) |> ScriptedKeeper.relayed!()
-      seal = attempt.keys.seal
+      ScriptedHost.script(host, "attached_fetch", {:error, :unavailable})
 
-      sealed = fn call_id, seq, kind, plaintext ->
-        {:ok, <<_length::32, frame::binary>> = bytes} =
-          WorkerAuth.seal_frame(seal, :answer, call_id, seq, kind, plaintext, iv())
-
-        {bytes, frame}
-      end
-
-      request = attached()
-      {_bytes, chunk} = sealed.(request.call_id, 1, :chunk, "secret part")
-      <<kind, value::binary>> = chunk
-      tampered = <<byte_size(chunk)::32, kind, flip(value)::binary>>
-
-      {another, _} =
-        sealed.(AttachedRequest.call_id(:crypto.strong_rand_bytes(16)), 1, :chunk, "x")
-
-      for {name, frames, heard} <- [
-            {"a bad tag", [{:head, 200, []}, {:raw, tampered}, :end], [{:head, 200, [], ""}]},
-            {"another call", [{:head, 200, []}, {:raw, another}, :end], [{:head, 200, [], ""}]},
-            {"out of order", [{:chunk, "first"}, :end], []}
-          ] do
-        request = if name == "a bad tag", do: request, else: attached()
-        ScriptedHost.script(host, "attached_fetch", {:frames, frames})
-        assert {:ok, ref} = attached_fetch(attempt, request)
-        assert {^heard, "bad_frame"} = events(attempt.endpoint, ref), name
-      end
-
-      # Each ended fetch drained to its end on the channel.
+      assert {:ok, ref} = attached_fetch(attempt, attached())
+      assert {[], "bad_frame"} = events(attempt.endpoint, ref)
+      assert [_once] = ScriptedHost.requests(host, "attached_fetch")
       wait_until(fn -> Endpoint.idle?(attempt.endpoint) end)
-    end
-
-    test "an answer that ends before its end or error is an error at the runner", %{host: host} do
-      attempt = attempt!(host) |> ScriptedKeeper.relayed!()
-      ScriptedHost.script(host, "attached_fetch", {:frames, [{:head, 200, []}, {:chunk, "part"}]})
-
-      assert {:ok, ref} = attached_fetch(attempt, attached())
-
-      assert {[{:head, 200, [], ""}, {:chunk, "part"}], "truncated"} =
-               events(attempt.endpoint, ref)
-    end
-
-    test "an error frame ends the fetch with CYFR's type and sentence", %{host: host} do
-      attempt = attempt!(host) |> ScriptedKeeper.relayed!()
-
-      ScriptedHost.script(
-        host,
-        "attached_fetch",
-        {:frames, [{:head, 200, []}, {:error, "response_too_large", "Past the bound."}]}
-      )
-
-      assert {:ok, ref} = attached_fetch(attempt, attached())
-
-      assert {[{:head, 200, [], ""}], {:guest_error, "response_too_large", "Past the bound."}} =
-               events(attempt.endpoint, ref)
     end
 
     test "the attempt's edge and limits are checked again, outside the runner, before any call",
@@ -1238,7 +1276,7 @@ defmodule Locus.Runtime.RelayTest do
                events(attempt.endpoint, ref)
     end
 
-    test "neither end shows the keys, and the runner's end drops them with the fetch", %{
+    test "the service's end shows none of the keys while the fetch is held", %{
       host: host
     } do
       attempt = attempt!(host) |> ScriptedKeeper.relayed!()
@@ -1255,15 +1293,13 @@ defmodule Locus.Runtime.RelayTest do
       assert {:ok, ref} = attached_fetch(attempt, attached())
       assert_receive {:held, held}, 5_000
 
-      for process <- [attempt.relay, attempt.endpoint],
-          key <- [attempt.keys.call, attempt.keys.seal] do
-        status = :erlang.term_to_binary(:sys.get_status(process))
-        assert :binary.match(status, key) == :nomatch
-      end
+      status = :erlang.term_to_binary(:sys.get_status(attempt.relay))
+
+      for key <- [attempt.keys.call, attempt.keys.seal],
+          do: assert(:binary.match(status, key) == :nomatch)
 
       send(held, :go)
       assert {[{:head, 200, [], ""}], nil} = events(attempt.endpoint, ref)
-      wait_until(fn -> Endpoint.idle?(attempt.endpoint) end)
     end
   end
 
@@ -1380,41 +1416,28 @@ defmodule Locus.Runtime.RelayTest do
     end
   end
 
-  defp iv, do: :crypto.strong_rand_bytes(12)
-
-  # A sealed value with one bit of its tag changed.
-  defp flip(sealed) do
-    <<iv::binary-size(12), first, tag::binary-size(15), ciphertext::binary>> =
-      Base.url_decode64!(sealed, padding: false)
-
-    Base.url_encode64(<<iv::binary, Bitwise.bxor(first, 1), tag::binary, ciphertext::binary>>,
-      padding: false
-    )
-  end
-
-  test "neither end shows an attempt's keys in its status", %{host: host} do
+  test "the service's end shows none of an attempt's keys in its status", %{host: host} do
     attempt = attempt!(host) |> ScriptedKeeper.relayed!()
-    assert {:ok, %{}} = HostClient.attach(attempt.client, attempt.assignment)
+    assert {:ok, %{}} = call(attempt, :attach, %{"assignment" => attempt.assignment})
+    status = :erlang.term_to_binary(:sys.get_status(attempt.relay))
 
-    for process <- [attempt.relay, attempt.endpoint],
-        key <- [attempt.keys.call, attempt.keys.seal] do
-      status = :erlang.term_to_binary(:sys.get_status(process))
-      assert :binary.match(status, key) == :nomatch
-    end
+    for key <- [attempt.keys.call, attempt.keys.seal],
+        do: assert(:binary.match(status, key) == :nomatch)
   end
 end
 
 defmodule Locus.Runtime.RelayCountTest do
   @moduledoc """
-  What a runner's relay holds to answer or send its runner is counted
-  under the runtime's count (`Locus.Output.server(:runtime)`), which these
-  tests fill or read whole, so they run alone. A pinned fetch's head and
-  piece and an attached fetch's frame are asked for before they are handed
-  on and given back once written; a host call's answer is asked for whole
-  as its reading begins and freed once written, and the service's own
-  call's once it is read. No room by the deadline ends a fetch `timeout`
+  What the service's end of a runner's relay holds to answer or send its
+  runner (the test's scripted runner end) is counted under the runtime's
+  count (`Locus.Output.server(:runtime)`), which these tests fill or read
+  whole, so they run alone. A pinned fetch's head and piece and an
+  attached fetch's frame are asked for before they are handed on and
+  given back once written; a host call's answer is asked for whole as its
+  reading begins and freed once written, and the service's own call's
+  once it is read. No room by the deadline ends a fetch `timeout`
   with nothing of the piece or frame handed on, and makes a host call's
-  answer one that did not arrive, under the call's retry class. A worker
+  answer one that did not arrive: the runner hears no status. A worker
   or a poster killed while it holds frees what it held. Once the relay
   says a piece or an answer is written it holds none of it.
   """
@@ -1424,13 +1447,16 @@ defmodule Locus.Runtime.RelayCountTest do
   import Prima.Test.Wait
 
   alias Prima.{Assignment, RunnerRelay, WorkerAuth}
-  alias Locus.Runtime.{Egress, HostClient, Relay}
-  alias Locus.Runtime.Relay.Runner, as: Endpoint
+  alias Locus.Runtime.{HostClient, Relay}
+  alias Locus.Runtime.Test.RunnerEnd, as: Endpoint
   alias Locus.Runtime.Test.{EdgeFixtures, RelayFixtures, ScriptedHost, ScriptedKeeper}
 
   import RelayFixtures
 
   @count Locus.Output.server(:runtime)
+
+  # A runner's tool call, as its guest makes one.
+  @tool_call %{"name" => "t", "args" => %{}, "guest_fn" => "call"}
 
   setup do
     host = ScriptedHost.start!()
@@ -1502,11 +1528,10 @@ defmodule Locus.Runtime.RelayCountTest do
     Enum.any?(binaries, fn {_id, size, _refs} -> size >= bytes end)
   end
 
-  # `attempt` routed through a relay joined in this VM, as
-  # `ScriptedKeeper.relayed!/2` routes one, whose service end holds its
-  # first write of `gate` bytes or more as a keeper's write that has not
-  # returned: the test hears `{:writing, relay, bytes}` and lets it go
-  # with `:go`.
+  # `attempt` with a relay joined in this VM, as `ScriptedKeeper.relayed!/1`
+  # joins one, whose service end holds its first write of `gate` bytes or
+  # more as a keeper's write that has not returned: the test hears
+  # `{:writing, relay, bytes}` and lets it go with `:go`.
   defp gated!(attempt, gate) do
     test = self()
     {:ok, assignment} = Assignment.read(attempt.assignment)
@@ -1540,14 +1565,7 @@ defmodule Locus.Runtime.RelayCountTest do
       })
 
     :ok = Endpoint.bind(endpoint, attempt.attempt)
-
-    client =
-      HostClient.new(attempt.keys, attempt.runner, attempt.boot, %{
-        member: assignment.member,
-        relay: endpoint
-      })
-
-    Map.merge(attempt, %{client: client, relay: relay, endpoint: endpoint})
+    Map.merge(attempt, %{relay: relay, endpoint: endpoint})
   end
 
   defp forward(nil) do
@@ -1565,13 +1583,13 @@ defmodule Locus.Runtime.RelayCountTest do
   end
 
   defp pinned_fetch!(attempt, port, path) do
-    assert {:ok, pinned} = Egress.pin(attempt.client, "http://api.test:#{port}#{path}")
+    pin = pin!(attempt, "http://api.test:#{port}#{path}")
 
     assert {:ok, ref} =
              Endpoint.fetch(
                attempt.endpoint,
                attempt.attempt,
-               pinned.target.id,
+               pin.id,
                "GET",
                path,
                [],
@@ -1763,7 +1781,7 @@ defmodule Locus.Runtime.RelayCountTest do
         for {_attempt, %{pid: pid}} <- runners, do: assert_receive({:fetching, ^pid}, 10_000)
 
         [{attempt, _reader} | _] = runners
-        call = Task.async(fn -> HostClient.tool_call(attempt.client, "t", %{}, :call) end)
+        call = Task.async(fn -> call(attempt, :tool_call, @tool_call) end)
 
         assert {:ok, ^answer} =
                  Task.await(call, Prima.HostAPI.request_timeout_ms(:tool_call) + 10_000)
@@ -1833,7 +1851,7 @@ defmodule Locus.Runtime.RelayCountTest do
       [{attempt, _reader, _count} | _] = runners
       answer = largest_answer(attempt)
       ScriptedHost.script(host, "tool_call", {:ok, answer})
-      call = Task.async(fn -> HostClient.tool_call(attempt.client, "t", %{}, :call) end)
+      call = Task.async(fn -> call(attempt, :tool_call, @tool_call) end)
 
       assert {:ok, ^answer} =
                Task.await(call, Prima.HostAPI.request_timeout_ms(:tool_call) + 10_000)
@@ -1987,13 +2005,13 @@ defmodule Locus.Runtime.RelayCountTest do
 
       # Room for the pin's answer and other small answers, and none for the head.
       held = fill!(65_536)
-      assert {:ok, pinned} = Egress.pin(attempt.client, "http://api.test:#{port}/wide-head")
+      pin = pin!(attempt, "http://api.test:#{port}/wide-head")
 
       assert {:ok, ref} =
                Endpoint.fetch(
                  attempt.endpoint,
                  attempt.attempt,
-                 pinned.target.id,
+                 pin.id,
                  "GET",
                  "/wide-head",
                  [],
@@ -2084,29 +2102,28 @@ defmodule Locus.Runtime.RelayCountTest do
   end
 
   describe "a host call's answer" do
-    test "waits for room, whole, as its reading begins, and none by the call's own deadline is an answer that did not arrive, under the call's retry class",
+    test "waits for room, whole, as its reading begins, and none by the call's own deadline is an answer that did not arrive",
          %{host: host} do
       attempt = attempt!(host) |> ScriptedKeeper.relayed!()
       full = fill!()
 
-      never = Task.async(fn -> HostClient.tool_call(attempt.client, "t", %{}, :call) end)
-      idempotent = Task.async(fn -> HostClient.renew(attempt.client, [attempt.attempt]) end)
+      # Posted once, its answer finds no room by the call's own timeout:
+      # the runner hears no status.
+      never = Task.async(fn -> call(attempt, :tool_call, @tool_call) end)
 
-      # A call whose effect may have happened is never asked again.
-      assert {:error, {:uncertain, _sentence}} =
+      assert :no_answer =
                Task.await(never, Prima.HostAPI.request_timeout_ms(:tool_call) + 10_000)
 
       assert [_once] = ScriptedHost.requests(host, "tool_call")
 
-      # An idempotent one is asked once more, and answered once there is
-      # room: the count stays full until it has been asked again.
-      wait_until(fn -> length(ScriptedHost.requests(host, "renew")) == 2 end, 10_000)
+      # One that waits for room is answered once there is room.
+      renew = %{"attempts" => [attempt.attempt]}
+      waiting = Task.async(fn -> call(attempt, :renew, renew) end)
+      wait_until(fn -> Locus.Output.held(@count).waiting == 1 end, 10_000)
       Locus.Output.return(full)
 
-      assert {:ok, _renewals} =
-               Task.await(idempotent, Prima.HostAPI.request_timeout_ms(:renew) + 10_000)
-
-      assert [_first, _second] = ScriptedHost.requests(host, "renew")
+      assert {:ok, %{}} = Task.await(waiting, Prima.HostAPI.request_timeout_ms(:renew) + 10_000)
+      assert [_once] = ScriptedHost.requests(host, "renew")
     end
 
     test "is counted until the relay has written it, then freed as its poster exits, and the relay keeps none of it",
@@ -2115,7 +2132,7 @@ defmodule Locus.Runtime.RelayCountTest do
       ScriptedHost.script(host, "tool_call", {:ok, answer})
       attempt = attempt!(host) |> gated!(65_536)
       baseline = answering()
-      call = Task.async(fn -> HostClient.tool_call(attempt.client, "t", %{}, :call) end)
+      call = Task.async(fn -> call(attempt, :tool_call, @tool_call) end)
 
       assert_receive {:writing, relay, _base64}, 10_000
       assert answering() > baseline
@@ -2136,7 +2153,7 @@ defmodule Locus.Runtime.RelayCountTest do
       ScriptedHost.script(host, "tool_call", {:ok, answer})
       attempt = attempt!(host) |> gated!(65_536)
       baseline = answering()
-      call = Task.async(fn -> HostClient.tool_call(attempt.client, "t", %{}, :call) end)
+      call = Task.async(fn -> call(attempt, :tool_call, @tool_call) end)
 
       assert_receive {:writing, relay, _base64}, 10_000
       assert answering() > baseline
@@ -2158,7 +2175,7 @@ defmodule Locus.Runtime.RelayCountTest do
 
       calls =
         for _n <- 1..6,
-            do: Task.async(fn -> HostClient.tool_call(attempt.client, "t", %{}, :call) end)
+            do: Task.async(fn -> call(attempt, :tool_call, @tool_call) end)
 
       for call <- calls, do: assert({:ok, ^answer} = Task.await(call, 30_000))
       assert length(ScriptedHost.requests(host, "tool_call")) == 6

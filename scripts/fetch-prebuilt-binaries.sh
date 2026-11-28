@@ -8,11 +8,9 @@
 #
 #   scripts/fetch-prebuilt-binaries.sh              every precompiled NIF the
 #                                                   locked deps compile
-#                                                   against: wasmex's, into
-#                                                   rustler_precompiled's
-#                                                   cache, and exqlite's and
+#                                                   against: exqlite's and
 #                                                   lazy_html's, into
-#                                                   elixir_make's
+#                                                   elixir_make's cache
 #   scripts/fetch-prebuilt-binaries.sh --tailwind   the tailwind CLI each
 #                                                   tailwind profile runs, at
 #                                                   the path `mix tailwind`
@@ -29,34 +27,21 @@
 # watcher. tests/fetch-prebuilt-binaries-test.sh holds every tracked
 # invocation of those commands to the fetch before it.
 #
-# Why: four downloads go through Erlang's :httpc: rustler_precompiled's
-# (wasmex's NIF), elixir_make's (exqlite's and lazy_html's NIFs) and the
-# tailwind package's (its CLI). :httpc refuses a response whose headers
+# Why: three downloads go through Erlang's :httpc: elixir_make's
+# (exqlite's and lazy_html's NIFs) and the tailwind package's (its CLI). :httpc refuses a response whose headers
 # pass 10,240 bytes (inets' HTTP_MAX_HEADER_SIZE, a constant no option
 # sets), answering {:header_too_long, {:max, 10240}}. GitHub answers a
 # release-asset URL with a redirect whose headers pass it (its
 # content-security-policy alone is about 9 KB), so every one of those
-# downloads fails: wasmex does not compile, exqlite and lazy_html quietly
-# build from source instead of the artefact their release ships, and
+# downloads fails: exqlite and lazy_html quietly build from source instead of the artefact their release ships, and
 # `mix tailwind`, which `mix assets.deploy` runs, stops. curl takes those
 # headers. This script stays until each downloads with a client that
 # accepts them.
 #
 # Nothing here restates their rules. Every derivation runs in the dep's own
 # Mix project and directory, where Mix compiles the dep, so a relative
-# cache override (RUSTLER_PRECOMPILED_GLOBAL_CACHE_PATH, ELIXIR_MAKE_CACHE_DIR)
-# names a directory under that dep, as the dep's compile reads it.
-#
-# For wasmex the script loads the rustler_precompiled the deps hold and asks
-# it for the file name, URL and cache path (RustlerPrecompiled.build_metadata/1
-# and nifs_from_metadata/1, the functions its compile-time download uses),
-# from the options each module passes to `use RustlerPrecompiled`. A
-# download is checked with rustler_precompiled's own integrity check
-# against the dep's checksum file. The cache is
-# RUSTLER_PRECOMPILED_GLOBAL_CACHE_PATH when set, else its user cache
-# directory (MIX_XDG respected). A module whose options or
-# RUSTLER_PRECOMPILED_FORCE_BUILD_ALL force a build from source needs no
-# file and is skipped.
+# cache override (ELIXIR_MAKE_CACHE_DIR) names a directory under that dep,
+# as the dep's compile reads it.
 #
 # For every locked dep whose project names a make_precompiler (exqlite,
 # lazy_html) the script loads the elixir_make and cc_precompiler the deps
@@ -200,10 +185,8 @@ lay_down = fn url, path, name, mode_bits, what, verify ->
   end
 end
 
-nifs = fn ->
-  load_dep.("rustler_precompiled")
-
-  # Read as Mix reads it, quoted keys and all.
+# The locked deps, read as Mix reads the lock, quoted keys and all.
+locked = fn ->
   lockfile = Path.join(root, "mix.lock")
 
   {lock, _} =
@@ -211,125 +194,6 @@ nifs = fn ->
     |> File.read!()
     |> Code.string_to_quoted!(file: lockfile, emit_warnings: false)
     |> Code.eval_quoted([], file: lockfile)
-
-  rp_use? = &match?({:use, _, [{:__aliases__, _, [:RustlerPrecompiled]} | _]}, &1)
-
-  # Every source file of a locked dep that calls `use RustlerPrecompiled`
-  # anywhere, and how many times.
-  sources =
-    for app <- lock |> Map.keys() |> Enum.sort(),
-        dir = Path.join(deps, to_string(app)),
-        File.regular?(Path.join(dir, "mix.exs")),
-        file <- Path.wildcard(Path.join(dir, "lib/**/*.ex")),
-        source = File.read!(file),
-        String.contains?(source, "RustlerPrecompiled"),
-        ast = Code.string_to_quoted!(source, file: file),
-        {_, calls} = Macro.prewalk(ast, 0, fn node, n -> {node, if(rp_use?.(node), do: n + 1, else: n)} end),
-        calls > 0,
-        do: {app, dir, file, ast, calls}
-
-  # Every top-level module of those that calls it among its own top-level
-  # statements, with the statements before the call and its options,
-  # unevaluated.
-  users =
-    for {app, dir, file, ast, _} <- sources,
-        {:defmodule, _, [name, [do: body]]} <-
-          (case ast do
-             {:__block__, _, forms} -> forms
-             form -> [form]
-           end) do
-      forms =
-        case body do
-          {:__block__, _, forms} -> forms
-          form -> [form]
-        end
-
-      {before, rest} = Enum.split_while(forms, &(not rp_use?.(&1)))
-
-      case {name, rest} do
-        {_, []} ->
-          nil
-
-        {{:__aliases__, _, parts}, [{:use, _, [_, opts]} | _]} ->
-          # Module attributes (@moduledoc and the like) mean nothing outside
-          # the module; every other statement before the call is evaluated.
-          before = Enum.reject(before, &match?({:@, _, _}, &1))
-          {app, dir, file, Module.concat(parts), before, opts}
-
-        _ ->
-          refuse.("#{file}: a `use RustlerPrecompiled` this script cannot read")
-      end
-    end
-    |> Enum.reject(&is_nil/1)
-
-  # A call this reading does not find (in a nested module, a condition or
-  # a quote) is refused, not skipped.
-  for {_, _, file, _, calls} <- sources, calls != Enum.count(users, &(elem(&1, 2) == file)) do
-    refuse.("#{file} calls `use RustlerPrecompiled` outside a top-level module's own statements, which this script does not read")
-  end
-
-  if users == [] do
-    refuse.("no locked dep in #{deps} calls `use RustlerPrecompiled`: run mix deps.get first, or drop this part of the script once no dep needs it")
-  end
-
-
-  for {app, dir, file, module, before, opts} <- users do
-    # In the dep's own Mix project and directory, as its compile runs: the
-    # options are evaluated with Mix.Project.config/0 the dep's, and a
-    # relative cache override resolves against the dep's directory.
-    {config, meta, path} =
-      Mix.Project.in_project(app, dir, fn _ ->
-        {opts, _} = Code.eval_quoted({:__block__, [], before ++ [opts]}, [], file: file)
-
-        # What `use RustlerPrecompiled` adds before it builds its config.
-        opts =
-          if System.get_env("RUSTLER_PRECOMPILED_FORCE_BUILD_ALL") in ["1", "true"] do
-            Keyword.put(opts, :force_build, true)
-          else
-            Keyword.put_new(opts, :force_build, false)
-          end
-
-        config = RustlerPrecompiled.Config.new(Keyword.put_new(opts, :module, module))
-
-        if config.force_build? do
-          {config, nil, nil}
-        else
-          case RustlerPrecompiled.build_metadata(config) do
-            {:ok, meta} -> {config, meta, Path.expand(meta.cached_tar_gz)}
-            {:error, reason} -> refuse.("#{inspect(module)}: #{reason}")
-          end
-        end
-      end)
-
-    if config.force_build? do
-      IO.puts(:stderr, "#{inspect(module)} is built from source here (force_build): no NIF to fetch")
-    else
-      {:ok, nifs} = RustlerPrecompiled.nifs_from_metadata(meta)
-
-      {url, headers} =
-        case List.keyfind(nifs, meta.file_name, 0) do
-          {_, found} -> found
-          nil -> refuse.("#{inspect(module)}: rustler_precompiled names no URL for #{meta.file_name}")
-        end
-
-      if headers != [] do
-        refuse.("#{inspect(module)}: #{url} takes request headers, which this script does not send")
-      end
-
-      case mode do
-        "print" ->
-          IO.puts(Enum.join([inspect(module), meta.file_name, url, path], "\t"))
-
-        "fetch" ->
-          checksum_file = Path.join(dir, "checksum-#{module}.exs")
-          File.regular?(checksum_file) || refuse.("#{checksum_file} is missing")
-          {checksums, _} = Code.eval_file(checksum_file)
-
-          lay_down.(url, path, meta.file_name, nil, "#{app}'s checksum file",
-            &RustlerPrecompiled.check_integrity_from_map(checksums, &1, module))
-      end
-    end
-  end
 
   lock
 end
@@ -462,7 +326,7 @@ try do
   Mix.start()
 
   case what do
-    "nifs" -> make_nifs.(nifs.())
+    "nifs" -> make_nifs.(locked.())
     "tailwind" -> tailwind.()
   end
 catch

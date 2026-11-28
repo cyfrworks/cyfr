@@ -73,11 +73,11 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
   the runner's end of it alone, and `refuse_write/2` refuses the service's
   writes to a runner's channel, writing nothing.
 
-  `relayed!/2` routes an attempt's client as a runner's is routed, for a
-  test that runs runner code in this VM: through a runner's end of a relay
-  (`Locus.Runtime.Relay.Runner`) joined in this VM to a service's end
-  (`Locus.Runtime.Relay`) bound to the attempt, which verifies and posts every host
-  call to the scripted host and performs every pinned fetch.
+  `relayed!/1` joins an attempt's relay in this VM, for a test of the
+  service's end (`Locus.Runtime.Relay`) bound to the attempt, which
+  verifies and posts every host call to the scripted host and performs
+  every pinned fetch: its peer is the test's scripted runner end
+  (`Locus.Runtime.Test.RunnerEnd`).
   """
 
   @behaviour Locus.Runtime.Keeper
@@ -321,17 +321,16 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
   def relay_closed?(%{runner: runner}), do: GenServer.call(runner, :relay_closed?)
 
   @doc """
-  `attempt` (`Locus.Runtime.Test.ScriptedHost.attempt!/2`'s) with its `:client`
-  routed through a relay joined in this VM and bound to the attempt, as
-  a runner's is: the runner's end (`:endpoint`) and the service's
-  (`:relay`), which posts to the host the assignment names and connects
-  to what the host pins. Both stop when the test ends. `opts`: `:runner`
-  (the runner id the service's end holds, default the attempt's).
+  `attempt` (`Locus.Runtime.Test.ScriptedHost.attempt!/2`'s) with a relay
+  joined in this VM and bound to it on both ends: the test's scripted
+  runner end (`:endpoint`) and the service's (`:relay`), which posts to
+  the host the assignment names and connects to what the host pins. Both
+  stop when the test ends.
   """
-  @spec relayed!(map(), keyword()) :: map()
-  def relayed!(attempt, opts \\ []) do
+  @spec relayed!(map()) :: map()
+  def relayed!(attempt) do
     {:ok, assignment} = Prima.Assignment.read(attempt.assignment)
-    %{endpoint: endpoint, relay: relay} = relay!(Keyword.get(opts, :runner, attempt.runner))
+    %{endpoint: endpoint, relay: relay} = relay!(attempt.runner)
 
     :ok =
       Locus.Runtime.Relay.bind(relay, %{
@@ -340,23 +339,15 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
         host_url: assignment.host_url || "http://127.0.0.1:9"
       })
 
-    :ok = Locus.Runtime.Relay.Runner.bind(endpoint, attempt.attempt)
-
-    client =
-      Locus.Runtime.HostClient.new(attempt.keys, attempt.runner, attempt.boot, %{
-        member: assignment.member,
-        relay: endpoint
-      })
-
-    Map.merge(attempt, %{client: client, relay: relay, endpoint: endpoint})
+    :ok = Locus.Runtime.Test.RunnerEnd.bind(endpoint, attempt.attempt)
+    Map.merge(attempt, %{relay: relay, endpoint: endpoint})
   end
 
   @doc """
   An authority bound at one node whose limits are `limits`, reached
   through `edge`, as an assignment carries a consented component's
   (`Locus.Runtime.Test.ScriptedHost.attempt!/2`'s `:authority`): what the relay's
-  service end checks a runner's fetches against, so a test hands its
-  handler the same edge and limits the relay holds.
+  service end checks a runner's fetches against.
   """
   @spec authority(Prima.Authority.Blob.Edge.t(), Prima.Limits.t()) :: Prima.Authority.t()
   def authority(edge, limits) do
@@ -373,21 +364,15 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
     }
   end
 
-  @doc """
-  A relay joined in this VM, unbound: a runner's end (`:endpoint`,
-  `Locus.Runtime.Relay.Runner`) and a service's end (`:relay`, `Locus.Runtime.Relay`) for
-  the runner `runner`, each writing what the other reads. Both stop when
-  the test ends. A test that plays the service binds `:relay` to each
-  attempt it assigns (`Locus.Runtime.Relay.bind/2`); a runner started with
-  `relay: endpoint` binds its end itself.
-  """
-  @spec relay!(String.t()) :: %{endpoint: pid(), relay: pid()}
-  def relay!(runner) do
+  # A relay joined in this VM, unbound: the test's scripted runner end
+  # (`:endpoint`) and a service's end (`:relay`) for the runner `runner`,
+  # each writing what the other reads. Both stop when the test ends.
+  defp relay!(runner) do
     forwarder = spawn_link(fn -> forward(nil) end)
 
     endpoint =
       ExUnit.Callbacks.start_supervised!(
-        {Locus.Runtime.Relay.Runner, relay: {:peer, forwarder}},
+        {Locus.Runtime.Test.RunnerEnd, relay: {:peer, forwarder}},
         id: {:relay_runner, make_ref()}
       )
 

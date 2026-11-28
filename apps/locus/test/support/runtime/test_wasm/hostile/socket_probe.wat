@@ -7,9 +7,8 @@
 ;; index of `wasi:sockets/network`'s error-code as two digits ("01" is
 ;; access-denied). It exports its one function as a reagent's `compute`
 ;; and a catalyst's and a formula's `run`. No component type is granted
-;; the network through WASI, so both are refused
-;; (`Locus.Runtime.ComponentType`). A component text,
-;; built by `build.sh` (README.md).
+;; the network through WASI, so both are refused (`apps/locus/runner`).
+;; A component text, built by `build.sh` (README.md).
 (component
   (import "wasi:sockets/network@0.2.0" (instance $network
     (type $error-code (enum "unknown" "access-denied" "not-supported" "invalid-argument"

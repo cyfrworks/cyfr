@@ -13,9 +13,10 @@
 # Usage, from anywhere in the repository:
 #   build.sh            build, write each .wasm, print the digests README.md
 #                       records
-#   build.sh --check    build and compare with the checked-in binaries
+#   build.sh --check    build and compare with the checked-in binaries, and
+#                       the digests README.md records with the files
 #
-# Exit 0 built or identical; 1 a binary differs; 2 usage; 69
+# Exit 0 built or identical; 1 a binary or a recorded digest differs; 2 usage; 69
 # `_tools/wasm-tools` is missing or not the pinned version.
 set -euo pipefail
 
@@ -43,9 +44,19 @@ case "$("$wasm_tools" --version 2>/dev/null)" in
 esac
 
 # Each guest and the world it is a component of, or `text`.
-guests="extra_memory:reagent wide_table:reagent grower:reagent vault_probe:catalyst attached_header_probe:catalyst credential_canary:catalyst trapper:reagent async_lift:text sync_lift:text gc_alloc:text exception_throw:text externref_table:text wide_arithmetic:text socket_probe:text stackful_lift:text async_cancel:text error_context:text thread_index:text legacy_try:text nested_output:text storage_flood:catalyst vault_log_flood:catalyst slow_validate:text stream_once:catalyst stream_flood:catalyst fetch_twice:catalyst stream_hold:catalyst stream_aside:catalyst stream_closed:catalyst stream_late:catalyst stream_pile:catalyst fetch_garbage:catalyst stream_twice:catalyst stream_until:catalyst"
+guests="extra_memory:reagent wide_table:reagent grower:reagent vault_probe:catalyst attached_header_probe:catalyst credential_canary:catalyst trapper:reagent async_lift:text sync_lift:text gc_alloc:text exception_throw:text externref_table:text wide_arithmetic:text socket_probe:text stackful_lift:text async_cancel:text error_context:text thread_index:text legacy_try:text nested_output:text storage_flood:catalyst vault_log_flood:catalyst slow_validate:text stream_once:catalyst stream_flood:catalyst fetch_twice:catalyst stream_hold:catalyst stream_aside:catalyst stream_closed:catalyst stream_late:catalyst stream_pile:catalyst fetch_garbage:catalyst stream_twice:catalyst stream_until:catalyst cli_probe:text http_probe:text many_tables:text many_instances:text atomic_fence:text shared_memory:text big_integer:text"
 
 digest() { shasum -a 256 "$1" | cut -d' ' -f1; }
+
+# The digests README.md records: each guest's checked-in .wat and .wasm, in
+# the guests' order.
+recorded() {
+  for entry in $guests; do
+    name="${entry%%:*}"
+    printf '%-26s sha256:%s\n' "$name.wat" "$(digest "$here/$name.wat")"
+    printf '%-26s sha256:%s\n' "$name.wasm" "$(digest "$here/$name.wasm")"
+  done
+}
 
 # Every source and binary here is a guest's, so none goes unbuilt.
 for file in "$here"/*.wat "$here"/*.wasm; do
@@ -89,12 +100,22 @@ if [ "${1:-}" = --check ]; then
       status=1
     fi
   done
+  # README.md records every guest's two digests, and no other line of the
+  # form: each as the files checked in hash.
+  recorded >"$work/recorded"
+  grep -E '^[a-z0-9_]+\.(wat|wasm) +sha256:' "$here/README.md" >"$work/readme" || true
+  if cmp -s "$work/recorded" "$work/readme"; then
+    echo "README.md records each guest's digests as checked in"
+  else
+    echo "README.md's digests are not the checked-in files' (build.sh prints them):" >&2
+    diff "$work/readme" "$work/recorded" >&2 || true
+    status=1
+  fi
   exit "$status"
 fi
 
 for entry in $guests; do
   name="${entry%%:*}"
   cp "$work/$name.wasm" "$here/$name.wasm"
-  printf '%-26s sha256:%s\n' "$name.wat" "$(digest "$here/$name.wat")"
-  printf '%-26s sha256:%s\n' "$name.wasm" "$(digest "$here/$name.wasm")"
 done
+recorded

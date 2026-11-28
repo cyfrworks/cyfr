@@ -15,9 +15,14 @@
 //! - `worker_auth.json`: a host call's canonical string, header and sealed
 //!   body and answer, and every assignment read.
 //! - `host_api.json`: the callbacks' retry classes and timeouts, every
-//!   call a runner makes as it crosses, and every answer outcome.
+//!   call a runner makes as it crosses, its question calls among them, and
+//!   every answer outcome.
+//! - `wire_json.json`: the one JSON reader's documents, read and refused
+//!   as Prima's reader reads and refuses them, an integer's bound among
+//!   them.
+//! - `guest_error.json`: the types each import answers a guest, exactly.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -288,6 +293,9 @@ fn control_bounds_are_the_vectors() {
     assert_eq!(control::VERSION, n(&v["version"]));
     assert_eq!(control::MAX_LINE_BYTES as u64, n(&v["max_line_bytes"]));
     assert_eq!(control::MAX_INPUT_BYTES as u64, n(&v["max_input_bytes"]));
+    // The depth an assign's input is read to (`crate::subtree`), which CYFR
+    // admits no input past.
+    assert_eq!(wire::MAX_DEPTH as u64, n(&v["max_input_depth"]));
     assert_eq!(control::MAX_OPEN as u64, n(&v["max_open"]));
 }
 
@@ -433,6 +441,139 @@ fn control_an_events_long_strings_are_cut_on_a_character_boundary() {
         let encoded = control::encode(&message_from(&case["message"])).expect(why);
         assert_eq!(String::from_utf8_lossy(&encoded), s(&case["line"]), "{why}");
     }
+}
+
+#[test]
+fn control_an_event_no_line_carries_is_not_written() {
+    let v = fixture("runner_control.json");
+    let unwritten = cases(&v["events"]["unwritten"], "events.unwritten");
+    assert!(!unwritten.is_empty());
+    for case in unwritten {
+        let why = s(&case["why"]);
+        assert!(
+            control::encode(&message_from(&case["message"])).is_err(),
+            "{why}"
+        );
+    }
+}
+
+// A guest shapes an event's strings: a host name, a method, an action, a
+// tool's name. Whatever their length and their characters (control bytes
+// and quotes the line escapes, characters of every width), the runner
+// writes a line its decoder, held to the same vectors as the service's,
+// reads back with each string cut on a character boundary, or writes
+// none: never one the service refuses.
+#[test]
+fn control_any_guest_shaped_event_is_written_as_a_line_its_reader_reads_or_not_at_all() {
+    const PIECES: &[&str] = &[
+        "a",
+        "Z",
+        "0",
+        ".",
+        "-",
+        " ",
+        "\"",
+        "\\",
+        "/",
+        "\u{1}",
+        "\u{1f}",
+        "\u{7f}",
+        "\n",
+        "\t",
+        "é",
+        "€",
+        "𝄞",
+        "\u{2028}",
+        "\u{fffd}",
+        "\u{10ffff}",
+    ];
+    let mut state: u64 = 0x9e37_79b9_7f4a_7c15;
+    let mut next = move |bound: u64| {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        state % bound
+    };
+    let text = |next: &mut dyn FnMut(u64) -> u64| -> String {
+        let pieces = next(700);
+        (0..pieces)
+            .map(|_| PIECES[next(PIECES.len() as u64) as usize])
+            .collect()
+    };
+    let mut written = 0;
+    for round in 0..600 {
+        // Every fifth round's strings are control bytes alone, six bytes
+        // each on the line: an http.request of them spans past the line's
+        // bound, and must not be written.
+        let text = |next: &mut dyn FnMut(u64) -> u64| -> String {
+            if round % 5 == 0 {
+                "\u{1}".repeat(300)
+            } else {
+                text(next)
+            }
+        };
+        let (name, metadata) = match round % 3 {
+            0 => (
+                "http.request",
+                vec![
+                    ("component_ref", control::Meta::Text(text(&mut next))),
+                    ("method", control::Meta::Text(text(&mut next))),
+                    ("hostname", control::Meta::Text(text(&mut next))),
+                    ("status", control::Meta::Integer(100 + next(500))),
+                ],
+            ),
+            1 => (
+                "storage.call",
+                vec![
+                    ("component_ref", control::Meta::Text(text(&mut next))),
+                    ("action", control::Meta::Text(text(&mut next))),
+                    ("status", control::Meta::text("ok")),
+                ],
+            ),
+            _ => (
+                "mcp_tool.call",
+                vec![
+                    ("execution_id", control::Meta::Text(text(&mut next))),
+                    ("tool_action", control::Meta::Text(text(&mut next))),
+                    ("status", control::Meta::text("error")),
+                ],
+            ),
+        };
+        let measurements = if name == "http.request" {
+            vec![("duration_ms", 1), ("system_time", 1_795_770_665_819_204)]
+        } else {
+            vec![("duration_ms", 1)]
+        };
+        let event = control::Event {
+            name,
+            measurements,
+            metadata: metadata.clone(),
+        };
+        let Ok(line) = control::encode(&Message::Event(event)) else {
+            continue;
+        };
+        written += 1;
+        assert!(
+            line.len() <= control::MAX_EVENT_LINE_BYTES + 1,
+            "round {round}"
+        );
+        let Ok(Message::Event(read)) = control::decode(&line) else {
+            panic!("round {round}: the runner wrote a line its reader refuses");
+        };
+        for ((member, sent), (_, held)) in metadata.iter().zip(read.metadata.iter()) {
+            if let (control::Meta::Text(sent), control::Meta::Text(held)) = (sent, held) {
+                assert_eq!(held.as_str(), control::cut(sent), "round {round}: {member}");
+            }
+        }
+    }
+    assert!(
+        written > 300,
+        "only {written} of 600 shaped events were written"
+    );
+    assert!(
+        written < 600,
+        "every shaped event was written, the long ones too"
+    );
 }
 
 fn environment(value: &Value) -> Vec<(OsString, OsString)> {
@@ -1101,7 +1242,7 @@ fn host_each_callbacks_class_and_timeout_are_the_vectors() {
         .keys()
         .filter(|name| Op::named(name).is_none())
         .collect();
-    assert_eq!(theirs, ["attached_fetch", "runner_exited"]);
+    assert_eq!(theirs, ["attached_fetch", "report_events", "runner_exited"]);
 }
 
 fn host_fields(fields: &Value) -> CallFields {
@@ -1240,6 +1381,109 @@ fn host_every_call_a_runner_makes_crosses_as_the_vectors_write_it() {
     }
     let all: Vec<&str> = Op::all().map(Op::name).collect();
     assert_eq!(made, all, "every callback a runner makes has its call");
+}
+
+// A child's connection crosses as an optional member of its admit_child
+// args: each case's body is the one the runner writes, sealed and signed
+// as the vector does, and its answer reads as what it carries, the child
+// admitted or CYFR's refusal of the connection or of the reused key.
+#[test]
+fn host_every_connection_case_crosses_as_the_vectors_write_it() {
+    let v = fixture("host_api.json");
+    let call_key = key(&v["keys"]["attempt_call_hex"]);
+    let seal_key = key(&v["keys"]["attempt_seal_hex"]);
+    let mut names = Vec::new();
+    for case in cases(&v["connection_cases"], "connection_cases") {
+        let name = s(&case["name"]);
+        names.push(name);
+        let op = Op::named(s(&case["callback"])).expect("a runner's callback");
+        let fields = host_fields(&case["fields"]);
+        let body = s(&case["body"]);
+        let parsed: Value = serde_json::from_str(body).expect("JSON");
+        let written = wire::request_body(op.name(), parsed["args"].as_object().expect("args"));
+        assert_eq!(written.as_str(), body, "{name}");
+        let sealed = auth::seal_call(
+            &seal_key,
+            Direction::Body,
+            &fields,
+            body.as_bytes(),
+            &iv(&case["body_iv_hex"]),
+        );
+        assert_eq!(sealed.expect("sealed"), s(&case["body_sealed"]), "{name}");
+        let header = auth::host_call_header(&call_key, &fields, s(&case["body_sealed"]).as_bytes());
+        assert_eq!(header.expect("signed"), s(&case["header"]), "{name}");
+        let opened = auth::open_call(
+            &seal_key,
+            Direction::Answer,
+            &fields,
+            s(&case["answer_sealed"]).as_bytes(),
+        )
+        .expect("opened");
+        assert_eq!(&opened[..], s(&case["answer"]).as_bytes(), "{name}");
+        let answer: Value = serde_json::from_str(s(&case["answer"])).expect("JSON");
+        let reading = host::answered(op, &opened).unwrap_or_else(|why| panic!("{name}: {why:?}"));
+        assert_eq!(answer_of(&reading_json(&reading)), answer, "{name}");
+    }
+    assert_eq!(names, ["omitted", "named", "reused"]);
+}
+
+// A question's calls, in the order one attempt asks: each body the one the
+// runner writes, sealed and signed as the vector does, and each answer
+// read as the value it carries. What the question import makes of each
+// answer is imports.rs's `the_question_cases_are_answered_to_the_guest_as_the_vector_says`.
+#[test]
+fn host_every_question_case_crosses_as_the_vectors_write_it() {
+    let v = fixture("host_api.json");
+    let call_key = key(&v["keys"]["attempt_call_hex"]);
+    let seal_key = key(&v["keys"]["attempt_seal_hex"]);
+    let mut names = Vec::new();
+    for case in cases(&v["question_cases"]["cases"], "question_cases") {
+        let name = s(&case["name"]);
+        names.push(name);
+        let op = Op::named(s(&case["callback"])).expect("a runner's callback");
+        let fields = host_fields(&case["fields"]);
+        let body = s(&case["body"]);
+        let parsed: Value = serde_json::from_str(body).expect("JSON");
+        let written = wire::request_body(op.name(), parsed["args"].as_object().expect("args"));
+        assert_eq!(written.as_str(), body, "{name}");
+        let sealed = auth::seal_call(
+            &seal_key,
+            Direction::Body,
+            &fields,
+            body.as_bytes(),
+            &iv(&case["body_iv_hex"]),
+        );
+        assert_eq!(sealed.expect("sealed"), s(&case["body_sealed"]), "{name}");
+        let header = auth::host_call_header(&call_key, &fields, s(&case["body_sealed"]).as_bytes());
+        assert_eq!(header.expect("signed"), s(&case["header"]), "{name}");
+        let opened = auth::open_call(
+            &seal_key,
+            Direction::Answer,
+            &fields,
+            s(&case["answer_sealed"]).as_bytes(),
+        )
+        .expect("opened");
+        assert_eq!(&opened[..], s(&case["answer"]).as_bytes(), "{name}");
+        let answer: Value = serde_json::from_str(s(&case["answer"])).expect("JSON");
+        let reading = host::answered(op, &opened).unwrap_or_else(|why| panic!("{name}: {why:?}"));
+        assert_eq!(answer_of(&reading_json(&reading)), answer, "{name}");
+    }
+    assert_eq!(
+        names,
+        [
+            "opened",
+            "keyed_replay",
+            "changed",
+            "paced",
+            "paced_admitted",
+            "unattended",
+            "invalid",
+            "wait_timed_out",
+            "allowed",
+            "denied",
+            "unavailable"
+        ]
+    );
 }
 
 /// A host reached through a scripted relay: each try meets the next answer
@@ -1567,36 +1811,305 @@ fn holding_no_debug_or_error_form_prints_a_token_an_input_a_key_or_a_disclosed_f
 }
 
 #[test]
-fn wire_a_member_named_as_the_parser_names_a_number_is_refused_and_an_integer_is_kept() {
+fn wire_a_member_named_as_the_parser_names_a_number_is_a_member_and_an_integer_is_kept() {
+    // The parser hands the reader a number under this name: a member
+    // really named so is a member, as Prima reads it.
     let private = "$serde_json::private::Number";
-    for document in [
-        format!(r#"{{"{private}":"5"}}"#),
-        format!(r#"{{"v":3,"ok":{{"{private}":"18446744073709551617"}}}}"#),
-        format!(r#"[{{"a":1,"{private}":"5"}}]"#),
+    for (document, at) in [
+        (format!(r#"{{"{private}":"5"}}"#), format!("/{private}")),
+        (
+            format!(r#"{{"v":3,"ok":{{"{private}":"18446744073709551617"}}}}"#),
+            format!("/ok/{private}"),
+        ),
+        (
+            format!(r#"[{{"a":1,"{private}":"5"}}]"#),
+            format!("/0/{private}"),
+        ),
         // Escaped, the name is the same name.
-        r#"{"\u0024serde_json::private::Number":"5"}"#.to_owned(),
+        (
+            r#"{"\u0024serde_json::private::Number":"5"}"#.to_owned(),
+            format!("/{private}"),
+        ),
     ] {
+        let read =
+            wire::parse(document.as_bytes()).unwrap_or_else(|| panic!("{document} is not read"));
         assert!(
-            wire::parse(document.as_bytes()).is_none(),
-            "{document} is read"
+            read.value().pointer(&at).is_some_and(Value::is_string),
+            "{document}"
         );
     }
+    // CYFR's answer carrying one is its answer, not a lost one.
+    let answer = format!(r#"{{"v":3,"ok":{{"{private}":"1"}}}}"#);
+    let op = Op::named("tool_call").expect("a callback");
+    assert!(matches!(
+        host::answered(op, answer.as_bytes()),
+        Ok(Reading::Ok(_))
+    ));
     let whole =
         wire::parse(br#"{"n":18446744073709551617,"m":-18446744073709551617}"#).expect("JSON");
     assert_eq!(whole.value()["n"].to_string(), "18446744073709551617");
     assert_eq!(whole.value()["m"].to_string(), "-18446744073709551617");
 }
 
+/// Whether `read`, the crate's reading of a document, is the value
+/// `expected` Prima reads it as: an integer by its digits, minus zero the
+/// integer zero; a float as the double its text names, which is what a
+/// reader of the text the crate hands on reads (Jason reads an underflow
+/// as 0.0 and drops the sign of a zero with an exponent and no fraction,
+/// which `==` on doubles does not tell apart).
+fn reads_as(read: &Value, expected: &Value) -> bool {
+    match (read, expected) {
+        (Value::Number(read), Value::Number(expected)) => {
+            let (read, expected) = (read.to_string(), expected.to_string());
+            let float = |text: &str| text.contains(['.', 'e', 'E']);
+            match (float(&read), float(&expected)) {
+                (false, false) => {
+                    let whole = |text: &str| match text {
+                        "-0" => "0".to_owned(),
+                        text => text.to_owned(),
+                    };
+                    whole(&read) == whole(&expected)
+                }
+                (true, true) => read.parse::<f64>().ok() == expected.parse::<f64>().ok(),
+                _ => false,
+            }
+        }
+        (Value::Array(read), Value::Array(expected)) => {
+            read.len() == expected.len() && read.iter().zip(expected).all(|(a, b)| reads_as(a, b))
+        }
+        (Value::Object(read), Value::Object(expected)) => {
+            read.len() == expected.len()
+                && read
+                    .iter()
+                    .all(|(name, a)| expected.get(name).is_some_and(|b| reads_as(a, b)))
+        }
+        (read, expected) => read == expected,
+    }
+}
+
+#[test]
+fn wire_every_document_reads_as_prima_reads_it_and_every_one_it_refuses_is_refused() {
+    // The vector file holds a value 4,097 arrays deep: it is read, and
+    // dropped, on a stack of its own.
+    std::thread::Builder::new()
+        .stack_size(64 * 1024 * 1024)
+        .spawn(every_document_reads_as_prima_reads_it)
+        .expect("a thread")
+        .join()
+        .expect("the test passes");
+}
+
+/// The vector file's value as it is written. serde_json's own `Value`
+/// reads an object whose first member is named
+/// `$serde_json::private::Number`, the name its parser hands a number to a
+/// reader under, as that number; this reads every member's name as bytes,
+/// as the parser spells a real one, so such a member is a member.
+struct Written(Value);
+
+impl<'de> serde::Deserialize<'de> for Written {
+    fn deserialize<D: serde::Deserializer<'de>>(reader: D) -> Result<Written, D::Error> {
+        reader.deserialize_any(WrittenVisitor)
+    }
+}
+
+struct WrittenVisitor;
+
+impl<'de> serde::de::Visitor<'de> for WrittenVisitor {
+    type Value = Written;
+
+    fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("a JSON value")
+    }
+
+    fn visit_bool<E>(self, value: bool) -> Result<Written, E> {
+        Ok(Written(Value::Bool(value)))
+    }
+
+    fn visit_i64<E>(self, value: i64) -> Result<Written, E> {
+        Ok(Written(Value::from(value)))
+    }
+
+    fn visit_u64<E>(self, value: u64) -> Result<Written, E> {
+        Ok(Written(Value::from(value)))
+    }
+
+    fn visit_str<E>(self, value: &str) -> Result<Written, E> {
+        Ok(Written(Value::String(value.to_owned())))
+    }
+
+    fn visit_unit<E>(self) -> Result<Written, E> {
+        Ok(Written(Value::Null))
+    }
+
+    fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut items: A) -> Result<Written, A::Error> {
+        let mut list = Vec::new();
+        while let Some(Written(item)) = items.next_element()? {
+            list.push(item);
+        }
+        Ok(Written(Value::Array(list)))
+    }
+
+    fn visit_map<A: serde::de::MapAccess<'de>>(self, mut members: A) -> Result<Written, A::Error> {
+        use serde::de::Error as _;
+        let mut object = Map::new();
+        while let Some(Name(name)) = members.next_key()? {
+            let Some(name) = name else {
+                let text: String = members.next_value()?;
+                return text
+                    .parse()
+                    .map(|number| Written(Value::Number(number)))
+                    .map_err(A::Error::custom);
+            };
+            let Written(member) = members.next_value()?;
+            object.insert(name, member);
+        }
+        Ok(Written(Value::Object(object)))
+    }
+}
+
+/// A member's name, or none for the name the parser hands a number under,
+/// which reaches `visit_str` where a real name reaches `visit_bytes`.
+struct Name(Option<String>);
+
+impl<'de> serde::Deserialize<'de> for Name {
+    fn deserialize<D: serde::Deserializer<'de>>(reader: D) -> Result<Name, D::Error> {
+        reader.deserialize_bytes(NameVisitor)
+    }
+}
+
+struct NameVisitor;
+
+impl<'de> serde::de::Visitor<'de> for NameVisitor {
+    type Value = Name;
+
+    fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("a member's name")
+    }
+
+    fn visit_str<E>(self, _number: &str) -> Result<Name, E> {
+        Ok(Name(None))
+    }
+
+    fn visit_bytes<E: serde::de::Error>(self, name: &[u8]) -> Result<Name, E> {
+        String::from_utf8(name.to_vec())
+            .map(|name| Name(Some(name)))
+            .map_err(E::custom)
+    }
+}
+
+fn every_document_reads_as_prima_reads_it() {
+    // The one reader of every JSON document the runner takes, a guest's
+    // bound for CYFR among them (its output, a formula's request, a
+    // storage or HTTP request), held to the documents Prima's reader is.
+    let v = {
+        use serde::Deserialize as _;
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../tests/fixtures/wire_json.json");
+        let text = std::fs::read(&path).expect("the vector file");
+        let mut reader = serde_json::Deserializer::from_slice(&text);
+        reader.disable_recursion_limit();
+        Written::deserialize(&mut reader).expect("the vectors").0
+    };
+    let longest = n(&v["max_integer_chars"]) as usize;
+    assert_eq!(wire::MAX_INTEGER_CHARS, longest);
+    for (document, read) in [
+        ("9".repeat(longest), true),
+        ("9".repeat(longest + 1), false),
+        (format!("-{}", "9".repeat(longest - 1)), true),
+        (format!("-{}", "9".repeat(longest)), false),
+        (
+            format!(r#"{{"a":[1,{{"b":{}}}]}}"#, "9".repeat(longest)),
+            true,
+        ),
+        (
+            format!(r#"{{"a":[1,{{"b":{}}}]}}"#, "9".repeat(longest + 1)),
+            false,
+        ),
+        // Only an integer is bounded: a float is read whatever its digits.
+        (format!("0.{}", "1".repeat(longest + 1)), true),
+        (format!("{}e-1100", "1".repeat(longest + 1)), true),
+    ] {
+        assert_eq!(
+            wire::read(document.as_bytes()).is_ok(),
+            read,
+            "{} characters",
+            document.len()
+        );
+    }
+    for case in cases(&v["reads"], "reads") {
+        let why = s(&case["why"]);
+        let document = wire::decode_base64(s(&case["doc_b64"])).expect("base64");
+        // The crate's own depth bound, which CYFR's admission holds every
+        // input to: the Go reader's stated difference, the crate's too.
+        if case["go"] == "too_deep" {
+            assert_eq!(
+                wire::read(&document).err(),
+                Some(wire::Unread::TooDeep),
+                "{why}"
+            );
+            continue;
+        }
+        let read = wire::read(&document).unwrap_or_else(|why_not| panic!("{why}: {why_not:?}"));
+        assert!(
+            reads_as(read.value(), &case["value"]),
+            "{why}: {} is not {}",
+            read.value(),
+            case["value"]
+        );
+        // What the crate hands on reads as what it read.
+        let handed_on = wire::to_bytes(read.value());
+        let again = wire::read(&handed_on).expect("handed on, it reads");
+        assert!(reads_as(again.value(), &case["value"]), "{why}: handed on");
+    }
+    for case in cases(&v["refused"], "refused") {
+        let why = s(&case["why"]);
+        let document = wire::decode_base64(s(&case["doc_b64"])).expect("base64");
+        assert_eq!(
+            wire::read(&document).err(),
+            Some(wire::Unread::Malformed),
+            "{why}"
+        );
+        assert!(wire::malformed(&document).is_some(), "{why}: no reason");
+    }
+    // A raw control byte in a member's name, which the scan refuses and
+    // the parser does not, is placed as the parser places one in a value.
+    let control = |line: usize, column: usize| {
+        format!(
+            "control character (\\u0000-\\u001F) found while parsing a string at line {line} \
+             column {column}"
+        )
+    };
+    for (document, line, column) in [
+        (&b"\"a\tb\""[..], 1, 3),
+        (b"{\"a\tb\":1}", 1, 4),
+        (b"{\"x\":1,\n \"a\nb\":1}", 3, 0),
+    ] {
+        assert_eq!(
+            wire::malformed(document),
+            Some(control(line, column)),
+            "{}",
+            String::from_utf8_lossy(document)
+        );
+    }
+}
+
 #[test]
 fn wire_a_host_answers_numbers_keep_their_digits_and_only_an_exponent_is_respelled() {
     // The crate hands a number on as its text, its digits kept exactly: it
-    // does not re-read a decimal as a double, and it takes an integer of
-    // any length. Jason, the Elixir runner's reader, rounds
-    // 1.00000000000000001 to 1.0, reads 1e-400 as 0.0 and refuses an
-    // integer past 1,024 digits; it goes with that runner (R5). Only an
-    // exponent is respelled, and the value read back is the value written.
-    let long = "9".repeat(1_025);
+    // does not re-read a decimal as a double, and it takes an integer as
+    // long as Prima's reader takes one (`wire_json.json`'s
+    // `max_integer_chars`). Jason, which CYFR reads the runner's calls
+    // with, rounds 1.00000000000000001 to 1.0 and reads 1e-400 as 0.0; the
+    // text it reads so is the text written. Only an exponent is
+    // respelled, and the value read back is the value written.
+    let long = "9".repeat(wire::MAX_INTEGER_CHARS);
     let op = Op::named("tool_call").expect("a callback");
+    let past = format!(r#"{{"v":3,"ok":{long}9}}"#);
+    assert_eq!(
+        host::answered(op, past.as_bytes()).err(),
+        Some(host::Unanswered::Lost),
+        "an integer past the bound is no answer, as Jason reads none"
+    );
     for (written, handed_on) in [
         ("1.00000000000000001", "1.00000000000000001"),
         ("1e-400", "1e-400"),
@@ -1713,23 +2226,29 @@ fn requests_every_fetch_end_code_answers_the_guest_in_a_type_of_its_interface() 
             "pin_{why} is no fetch_end code"
         );
     }
-    // Every type the runner answers, on each interface it answers it on.
+    // The types the runner answers on each interface are the vector's
+    // exactly: none it answers is missing, and none listed goes unanswered.
+    // An attached request CYFR refuses carries CYFR's own type besides.
     let streaming: Vec<&str> = cases(&types["fetch_types"]["cyfr:http/streaming"], "streaming")
         .iter()
         .map(s)
         .collect();
-    for (kind, on_fetch, on_stream) in http::Kind::ALL {
-        if on_fetch {
-            assert!(fetch.contains(&kind.name()), "fetch: {}", kind.name());
-        }
-        if on_stream {
-            assert!(
-                streaming.contains(&kind.name()),
-                "streaming: {}",
-                kind.name()
-            );
-        }
-    }
+    let on_fetch: BTreeSet<&str> = http::Kind::ALL
+        .iter()
+        .filter(|(_, on_fetch, _)| *on_fetch)
+        .map(|(kind, _, _)| kind.name())
+        .collect();
+    let on_stream: BTreeSet<&str> = http::Kind::ALL
+        .iter()
+        .filter(|(_, _, on_stream)| *on_stream)
+        .map(|(kind, _, _)| kind.name())
+        .collect();
+    assert_eq!(on_fetch, fetch.into_iter().collect(), "cyfr:http/fetch");
+    assert_eq!(
+        on_stream,
+        streaming.into_iter().collect(),
+        "cyfr:http/streaming"
+    );
 }
 
 #[test]
@@ -1850,14 +2369,27 @@ fn cases_of(value: &Value) -> &Vec<Value> {
 // ============================================================================
 
 #[test]
-fn formula_every_type_its_invoke_answers_itself_is_an_invoke_type() {
+fn formula_the_types_its_invoke_answers_are_the_invoke_types() {
+    // What a formula's invoke can be answered: the types the runner makes
+    // itself, and those CYFR alone renders for the guest and the runner
+    // hands on as they are (`invoke_passed_on`). Together they are the
+    // invoke types exactly, and no type is both.
     let types = fixture("guest_error.json");
-    let invoke: Vec<&str> = cases(&types["invoke_types"], "invoke_types")
+    let invoke: BTreeSet<&str> = cases(&types["invoke_types"], "invoke_types")
         .iter()
         .map(s)
         .collect();
-    // Every error the runner makes itself is made of one of these.
-    for kind in cyfr_runner::imports::formula::Kind::ALL {
-        assert!(invoke.contains(&kind.name()), "{kind:?} is no invoke type");
-    }
+    let passed_on: BTreeSet<&str> = cases(&types["invoke_passed_on"], "invoke_passed_on")
+        .iter()
+        .map(s)
+        .collect();
+    let own: BTreeSet<&str> = cyfr_runner::imports::formula::Kind::ALL
+        .iter()
+        .map(|kind| kind.name())
+        .collect();
+    assert!(own.is_disjoint(&passed_on), "{own:?} and {passed_on:?}");
+    assert_eq!(
+        own.union(&passed_on).copied().collect::<BTreeSet<_>>(),
+        invoke
+    );
 }

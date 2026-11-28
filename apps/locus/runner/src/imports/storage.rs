@@ -29,8 +29,10 @@ use crate::host::{Outcome, Reading};
 use crate::wire::{Unread, read};
 use crate::words::{UNCERTAIN, request_too_deep};
 
-/// The slack above twice the consented `max_request_size` a request's
-/// envelope may take (`Locus.Runtime.EdgeGuard.envelope_overhead/0`).
+/// The slack above twice the consented `max_request_size` a guest's
+/// request text may take before it is read: room for base64's growth and
+/// the JSON around a request at the bound. Every import that reads a
+/// guest's request bounds it so.
 pub const ENVELOPE_OVERHEAD: u64 = 4096;
 
 const ACTIONS: [&str; 6] = ["read", "write", "append", "list", "delete", "exists"];

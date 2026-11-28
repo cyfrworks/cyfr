@@ -8,7 +8,7 @@ defmodule Prima.Wasm do
   Validates pre-built artifacts before publishing. Only component-model
   binaries are admitted: a core WebAssembly module is refused
   (`{:core_module, sentence}`), since registration is where an artifact
-  enters and `Locus.Runtime.Engine` executes components only.
+  enters and the runner (`apps/locus/runner`) executes components only.
 
   ## Validation Steps
 

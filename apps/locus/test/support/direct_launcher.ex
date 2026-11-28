@@ -1299,6 +1299,17 @@ defmodule Locus.DirectLauncher.Runner do
   signal this VM, and has this VM's network. A deployment runs the image,
   whose keeper isolates.
 
+  The runner program the pool names (`Locus.Runtime.Settings.runner_command/0`,
+  the image's path) runs here as the program this checkout built, the
+  binary of `scripts/runner.sh build` beside its stamp: the pair, found by
+  `scripts/runner.sh pair`. A pair missing, or whose stamp is not the
+  checkout's sources', refuses the runner's spawn naming why
+  (`refusal/1`), so a suite never runs runners built from other sources
+  than its own, and a suite that starts none runs without one;
+  `scripts/lib/stage-deps.sh` builds it before a stage's tests, and CI
+  hands every job that runs runners the pair its `runner-build` job
+  built. Any other argv runs as it is.
+
   This process is the janitor: every runner registers with it as it
   starts, and when the pool goes down with it, it kills every runner's
   process group, stops its stderr reader and removes its home. It signals
@@ -1323,6 +1334,9 @@ defmodule Locus.DirectLauncher.Runner do
   def start_link(opts \\ []),
     do: GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
 
+  # The checkout's root, whose scripts/runner.sh names the pair.
+  @root Path.expand("../../../..", __DIR__)
+
   @impl Locus.Runtime.Keeper
   def available(false = _inherited?, _opts), do: :ok
 
@@ -1345,11 +1359,35 @@ defmodule Locus.DirectLauncher.Runner do
 
   @impl Locus.Runtime.Keeper
   def spawn(%{argv: argv, env: env} = runner) do
-    spec = %{argv: argv, env: env, pool: "runner", control: true, heir: Map.get(runner, :heir)}
+    with {:ok, argv} <- program(argv) do
+      spec = %{argv: argv, env: env, pool: "runner", control: true, heir: Map.get(runner, :heir)}
 
-    case DirectLauncher.spawn([janitor: __MODULE__], spec) do
-      {:ok, handle} -> {:ok, handle, []}
-      {:error, reason} -> {:error, reason}
+      case DirectLauncher.spawn([janitor: __MODULE__], spec) do
+        {:ok, handle} -> {:ok, handle, []}
+        {:error, reason} -> {:error, reason}
+      end
+    end
+  end
+
+  # The runner program the pool names runs as the checkout's build of it.
+  defp program(argv) do
+    if argv == Locus.Runtime.Settings.runner_command().argv do
+      with {:ok, program} <- pair(), do: {:ok, [program]}
+    else
+      {:ok, argv}
+    end
+  end
+
+  # The checkout's built runner when its stamp is the checkout's, read at
+  # each spawn. One missing or stale is the spawn's refusal, its sentence
+  # the script's.
+  defp pair do
+    case System.cmd("/bin/bash", [Path.join(@root, "scripts/runner.sh"), "pair"],
+           env: Locus.Test.ProcessFamily.without_cyfr(),
+           stderr_to_stdout: true
+         ) do
+      {path, 0} -> {:ok, String.trim(path)}
+      {why, _status} -> {:error, {:runner_pair, String.trim(why)}}
     end
   end
 
@@ -1380,8 +1418,12 @@ defmodule Locus.DirectLauncher.Runner do
   def release(channel, grace_ms) when is_integer(grace_ms) and grace_ms >= 0,
     do: DirectLauncher.release([], channel, grace_ms)
 
-  # A spawn fails here only when its home or its janitor cannot be had.
+  # A spawn fails here only when the runner program is not the checkout's
+  # build, or its home or its janitor cannot be had.
   @impl Locus.Runtime.Keeper
+  def refusal({:runner_pair, why}),
+    do: %{reason: "spawn_failed", message: "the runner program cannot run here: " <> why}
+
   def refusal(_reason),
     do: %{reason: "spawn_failed", message: "a runner could not be started on this machine"}
 
