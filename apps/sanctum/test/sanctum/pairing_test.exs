@@ -142,9 +142,10 @@ defmodule Sanctum.PairingTest do
 
   # A change the person asks under their session, confirmed by `by`,
   # another device of their account here, as a device confirms over its
-  # channel (`confirmation.request`, then `confirmation.confirm` with its
-  # answer); then made again naming the record. The person keeps the
-  # account their devices are keys of.
+  # channel: this CYFR's `confirm` request bound to that channel
+  # (`Sanctum.SignIn.binding/1`), and the device's answer to it; then made
+  # again naming the record. The person keeps the account their devices
+  # are keys of.
   defp device_confirmed!(session_ctx, by, change),
     do: change.(device_proven!(session_ctx, by, change))
 
@@ -154,22 +155,13 @@ defmodule Sanctum.PairingTest do
     {:error, {:confirmation_required, %{id: id}}} = change.(session_ctx)
     ref = Prima.Confirmation.ref(id)
     device_ctx = Devices.connected!(by)
+    {:ok, binding, opts} = Sanctum.SignIn.binding(device_ctx)
 
-    {:ok, %{request: encoded}} =
-      Sanctum.Gate.call_external("confirmation", device_ctx, %{
-        "action" => "request",
-        "ref" => ref
-      })
+    {:ok, %{request: request}} =
+      Sanctum.SignIn.request(:confirm, binding, [ctx: device_ctx, ref: ref] ++ opts)
 
-    {:ok, request} = Prima.SignIn.decode(encoded)
-    answer = request |> Devices.answer(by.key) |> Prima.SignIn.DeviceAnswer.encode()
-
-    {:ok, %{state: "confirmed"}} =
-      Sanctum.Gate.call_external("confirmation", device_ctx, %{
-        "action" => "confirm",
-        "ref" => ref,
-        "answer" => answer
-      })
+    {:ok, %{purpose: :confirm, ref: ^ref}} =
+      Sanctum.SignIn.answer(Devices.answer(request, by.key), binding, ref: ref)
 
     %{session_ctx | confirmation_id: id}
   end
