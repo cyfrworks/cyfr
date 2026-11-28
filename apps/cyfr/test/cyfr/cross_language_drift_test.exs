@@ -767,6 +767,8 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"apps/cyfr/test/cyfr/locus_dev_stack_task_test.exs", ~w(keys root_hex service)},
       {"apps/cyfr/test/cyfr/locus_runtime_key_task_test.exs",
        ~w(keys root_hex root_text service)},
+      {"apps/locus/keeper/internal/wire/macenvelope/macenvelope_test.go",
+       ~w(attempt boot call keys member sealed_attempt_keys sealed_call)},
       {"apps/locus/keeper/internal/wire/workerauth/workerauth_test.go",
        ~w(attempt boot body_checks call headers keys member open_attempt_keys open_call report request root_hex root_text sealed_attempt_keys sealed_call service verify)},
       {"apps/locus/runner/tests/vectors.rs",
