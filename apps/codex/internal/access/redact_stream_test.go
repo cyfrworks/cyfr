@@ -19,7 +19,7 @@ import (
 // a byte at a time and at every pair of points.
 func TestRedactedStreamReadsAsTheWholeTextWhereverItsWritesSplitIt(t *testing.T) {
 	dir := t.TempDir()
-	writeFile(t, filepath.Join(dir, ".env"), []byte("CYFR_ACCESS=local\n"))
+	writeFile(t, filepath.Join(dir, ".env"), []byte("CYFR_BROWSER=none\n"))
 	streams := 0
 	check := func(values []string, text string, everyPair bool) {
 		t.Helper()

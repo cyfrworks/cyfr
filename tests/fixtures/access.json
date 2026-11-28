@@ -2,55 +2,57 @@
   "about": "The access head, its derivation, its canonical bytes and digest, the boot's resolution of a deployment's access settings, the compose selections, the name grammars and the words a person reads. Cyfr.RuntimeConfig (Elixir) generates every canonical, digest, class and boot answer; apps/codex/internal/access (Go) agrees with them. The derive vectors' .env assignments and removals are Go's alone.",
   "derive": [
     {
-      "name": "local, default port",
+      "name": "none, default port",
       "target": {
-        "mode": "local"
+        "browser": "none"
       },
       "current": {
         "port": 4000
       },
       "head": {
-        "mode": "local",
+        "browser": "none",
         "host": "localhost",
         "port": 4000,
         "profiles": []
       },
-      "canonical": "{\"host\":\"localhost\",\"mode\":\"local\",\"port\":4000,\"profiles\":[]}",
-      "digest": "sha256:7300d73c8b043098a710c0a5d7b0a2ce4cecdefb1b288912e8387aeb9428627f",
+      "canonical": "{\"browser\":\"none\",\"host\":\"localhost\",\"port\":4000,\"profiles\":[]}",
+      "digest": "sha256:fdf0bb2b75b7f70aba7d6c85c1651c847c8b6717f0721f6b05d58c62bbd4b51d",
       "assignments": {
         "CYFR_HOST": "localhost",
         "CYFR_PORT": "4000",
-        "CYFR_ACCESS": "local"
+        "CYFR_BROWSER": "none"
       },
       "removals": [
         "CADDY_ACME_EMAIL",
+        "CYFR_PROXY_PUBLISH",
         "CYFR_PUBLIC_URL",
         "CYFR_TAILNET_NODE_ID"
       ]
     },
     {
-      "name": "local, custom port",
+      "name": "none, custom port",
       "target": {
-        "mode": "local"
+        "browser": "none"
       },
       "current": {
         "port": 8080
       },
       "head": {
-        "mode": "local",
+        "browser": "none",
         "host": "localhost",
         "port": 8080,
         "profiles": []
       },
-      "canonical": "{\"host\":\"localhost\",\"mode\":\"local\",\"port\":8080,\"profiles\":[]}",
-      "digest": "sha256:719280e9741f6ba3c1baba8c276ed83bf942643422f23e6a626cc6aadb3c1815",
+      "canonical": "{\"browser\":\"none\",\"host\":\"localhost\",\"port\":8080,\"profiles\":[]}",
+      "digest": "sha256:ce8d713f14e0cff5372b51a371cef0e1f35cb1bba63856db0251a09c730c3be7",
       "assignments": {
         "CYFR_HOST": "localhost",
         "CYFR_PORT": "8080",
-        "CYFR_ACCESS": "local"
+        "CYFR_BROWSER": "none"
       },
       "removals": [
         "CADDY_ACME_EMAIL",
+        "CYFR_PROXY_PUBLISH",
         "CYFR_PUBLIC_URL",
         "CYFR_TAILNET_NODE_ID"
       ]
@@ -58,7 +60,7 @@
     {
       "name": "tailnet",
       "target": {
-        "mode": "tailnet"
+        "browser": "tailnet"
       },
       "current": {
         "port": 4000
@@ -68,7 +70,7 @@
         "node_id": "nAbc123XYZ1CNTRL"
       },
       "head": {
-        "mode": "tailnet",
+        "browser": "tailnet",
         "host": "cyfr.tail1a2b3c.ts.net",
         "port": 4000,
         "node_id": "nAbc123XYZ1CNTRL",
@@ -77,23 +79,24 @@
           "tailnet"
         ]
       },
-      "canonical": "{\"host\":\"cyfr.tail1a2b3c.ts.net\",\"mode\":\"tailnet\",\"node_id\":\"nAbc123XYZ1CNTRL\",\"port\":4000,\"profiles\":[\"tailnet\"],\"public_url\":\"https://cyfr.tail1a2b3c.ts.net\"}",
-      "digest": "sha256:12838274123aeeb461b3411a5baf75c89a707320930efd039d09e4a881505cfd",
+      "canonical": "{\"browser\":\"tailnet\",\"host\":\"cyfr.tail1a2b3c.ts.net\",\"node_id\":\"nAbc123XYZ1CNTRL\",\"port\":4000,\"profiles\":[\"tailnet\"],\"public_url\":\"https://cyfr.tail1a2b3c.ts.net\"}",
+      "digest": "sha256:0b490d5a14d5ce4be25439d69b37119c499adf1f9825caaed2a87ef11509c6ea",
       "assignments": {
         "CYFR_HOST": "cyfr.tail1a2b3c.ts.net",
         "CYFR_PORT": "4000",
+        "CYFR_BROWSER": "tailnet",
         "CYFR_PUBLIC_URL": "https://cyfr.tail1a2b3c.ts.net",
-        "CYFR_ACCESS": "tailnet",
         "CYFR_TAILNET_NODE_ID": "nAbc123XYZ1CNTRL"
       },
       "removals": [
-        "CADDY_ACME_EMAIL"
+        "CADDY_ACME_EMAIL",
+        "CYFR_PROXY_PUBLISH"
       ]
     },
     {
       "name": "tailnet, another node of the same name",
       "target": {
-        "mode": "tailnet"
+        "browser": "tailnet"
       },
       "current": {
         "port": 4000
@@ -103,7 +106,7 @@
         "node_id": "nDifferent9CNTRL"
       },
       "head": {
-        "mode": "tailnet",
+        "browser": "tailnet",
         "host": "cyfr.tail1a2b3c.ts.net",
         "port": 4000,
         "node_id": "nDifferent9CNTRL",
@@ -112,23 +115,24 @@
           "tailnet"
         ]
       },
-      "canonical": "{\"host\":\"cyfr.tail1a2b3c.ts.net\",\"mode\":\"tailnet\",\"node_id\":\"nDifferent9CNTRL\",\"port\":4000,\"profiles\":[\"tailnet\"],\"public_url\":\"https://cyfr.tail1a2b3c.ts.net\"}",
-      "digest": "sha256:1f390522a320a5657b9aeef6a57f8daff384d91bf1c58bdbb65357809ceda0f3",
+      "canonical": "{\"browser\":\"tailnet\",\"host\":\"cyfr.tail1a2b3c.ts.net\",\"node_id\":\"nDifferent9CNTRL\",\"port\":4000,\"profiles\":[\"tailnet\"],\"public_url\":\"https://cyfr.tail1a2b3c.ts.net\"}",
+      "digest": "sha256:2f592b886f60f8d852c2a91b7e15f5315d102aab6167a1b18a1b8ccfc4702235",
       "assignments": {
         "CYFR_HOST": "cyfr.tail1a2b3c.ts.net",
         "CYFR_PORT": "4000",
+        "CYFR_BROWSER": "tailnet",
         "CYFR_PUBLIC_URL": "https://cyfr.tail1a2b3c.ts.net",
-        "CYFR_ACCESS": "tailnet",
         "CYFR_TAILNET_NODE_ID": "nDifferent9CNTRL"
       },
       "removals": [
-        "CADDY_ACME_EMAIL"
+        "CADDY_ACME_EMAIL",
+        "CYFR_PROXY_PUBLISH"
       ]
     },
     {
-      "name": "public, with an email",
+      "name": "domain, with an email",
       "target": {
-        "mode": "public",
+        "browser": "domain",
         "domain": "cyfr.example.com",
         "acme_email": "ops@example.com"
       },
@@ -136,32 +140,33 @@
         "port": 4000
       },
       "head": {
-        "mode": "public",
+        "browser": "domain",
         "host": "cyfr.example.com",
         "port": 4000,
         "public_url": "https://cyfr.example.com",
         "acme_email": "ops@example.com",
         "profiles": [
-          "public"
+          "domain"
         ]
       },
-      "canonical": "{\"acme_email\":\"ops@example.com\",\"host\":\"cyfr.example.com\",\"mode\":\"public\",\"port\":4000,\"profiles\":[\"public\"],\"public_url\":\"https://cyfr.example.com\"}",
-      "digest": "sha256:5f5fa1730f47f78e56df1f6d5bd53953e67c675384f1d9bf856692a8ce58901b",
+      "canonical": "{\"acme_email\":\"ops@example.com\",\"browser\":\"domain\",\"host\":\"cyfr.example.com\",\"port\":4000,\"profiles\":[\"domain\"],\"public_url\":\"https://cyfr.example.com\"}",
+      "digest": "sha256:544c50c4db306d6e127a57d135a21d8f695cde7f24dacd32cab16fd1da6f4ddd",
       "assignments": {
         "CADDY_ACME_EMAIL": "ops@example.com",
         "CYFR_HOST": "cyfr.example.com",
         "CYFR_PORT": "4000",
-        "CYFR_PUBLIC_URL": "https://cyfr.example.com",
-        "CYFR_ACCESS": "public"
+        "CYFR_BROWSER": "domain",
+        "CYFR_PUBLIC_URL": "https://cyfr.example.com"
       },
       "removals": [
+        "CYFR_PROXY_PUBLISH",
         "CYFR_TAILNET_NODE_ID"
       ]
     },
     {
-      "name": "public, an email-only change",
+      "name": "domain, an email-only change",
       "target": {
-        "mode": "public",
+        "browser": "domain",
         "domain": "cyfr.example.com",
         "acme_email": "admin@example.com"
       },
@@ -169,84 +174,151 @@
         "port": 4000
       },
       "head": {
-        "mode": "public",
+        "browser": "domain",
         "host": "cyfr.example.com",
         "port": 4000,
         "public_url": "https://cyfr.example.com",
         "acme_email": "admin@example.com",
         "profiles": [
-          "public"
+          "domain"
         ]
       },
-      "canonical": "{\"acme_email\":\"admin@example.com\",\"host\":\"cyfr.example.com\",\"mode\":\"public\",\"port\":4000,\"profiles\":[\"public\"],\"public_url\":\"https://cyfr.example.com\"}",
-      "digest": "sha256:e121ccc8ead13c197101f48726159ed067b21d27be2017ca7e47afb68f1ef604",
+      "canonical": "{\"acme_email\":\"admin@example.com\",\"browser\":\"domain\",\"host\":\"cyfr.example.com\",\"port\":4000,\"profiles\":[\"domain\"],\"public_url\":\"https://cyfr.example.com\"}",
+      "digest": "sha256:f96021dfcad74f1d11f1863f322e2c88ea7a50933495260ef2d741340de6e61f",
       "assignments": {
         "CADDY_ACME_EMAIL": "admin@example.com",
         "CYFR_HOST": "cyfr.example.com",
         "CYFR_PORT": "4000",
-        "CYFR_PUBLIC_URL": "https://cyfr.example.com",
-        "CYFR_ACCESS": "public"
+        "CYFR_BROWSER": "domain",
+        "CYFR_PUBLIC_URL": "https://cyfr.example.com"
       },
       "removals": [
+        "CYFR_PROXY_PUBLISH",
         "CYFR_TAILNET_NODE_ID"
       ]
     },
     {
-      "name": "public, no email, a custom port",
+      "name": "domain, no email, a custom port",
       "target": {
-        "mode": "public",
+        "browser": "domain",
         "domain": "cyfr.example.com"
       },
       "current": {
         "port": 8080
       },
       "head": {
-        "mode": "public",
+        "browser": "domain",
         "host": "cyfr.example.com",
         "port": 8080,
         "public_url": "https://cyfr.example.com",
         "profiles": [
-          "public"
+          "domain"
         ]
       },
-      "canonical": "{\"host\":\"cyfr.example.com\",\"mode\":\"public\",\"port\":8080,\"profiles\":[\"public\"],\"public_url\":\"https://cyfr.example.com\"}",
-      "digest": "sha256:22519e995e04cc9bbe1d4bb53af8c59c6052155e1d6b965abcfbbcc353d49246",
+      "canonical": "{\"browser\":\"domain\",\"host\":\"cyfr.example.com\",\"port\":8080,\"profiles\":[\"domain\"],\"public_url\":\"https://cyfr.example.com\"}",
+      "digest": "sha256:3b2177aaa4b04b540c393682f5b7cb99ad66221fe37bedc180ff8452deba3345",
       "assignments": {
         "CYFR_HOST": "cyfr.example.com",
         "CYFR_PORT": "8080",
-        "CYFR_PUBLIC_URL": "https://cyfr.example.com",
-        "CYFR_ACCESS": "public"
+        "CYFR_BROWSER": "domain",
+        "CYFR_PUBLIC_URL": "https://cyfr.example.com"
       },
       "removals": [
         "CADDY_ACME_EMAIL",
+        "CYFR_PROXY_PUBLISH",
         "CYFR_TAILNET_NODE_ID"
       ]
     },
     {
-      "name": "public, a domain is read without case",
+      "name": "domain, a domain is read without case",
       "target": {
-        "mode": "public",
+        "browser": "domain",
         "domain": "CYFR.Example.COM"
       },
       "current": {
         "port": 4000
       },
       "head": {
-        "mode": "public",
+        "browser": "domain",
         "host": "cyfr.example.com",
         "port": 4000,
         "public_url": "https://cyfr.example.com",
         "profiles": [
-          "public"
+          "domain"
         ]
       },
-      "canonical": "{\"host\":\"cyfr.example.com\",\"mode\":\"public\",\"port\":4000,\"profiles\":[\"public\"],\"public_url\":\"https://cyfr.example.com\"}",
-      "digest": "sha256:d2675f15d62d707ad4cfe9063d85e4bff85773f81483ede01ce53d39caacdf04",
+      "canonical": "{\"browser\":\"domain\",\"host\":\"cyfr.example.com\",\"port\":4000,\"profiles\":[\"domain\"],\"public_url\":\"https://cyfr.example.com\"}",
+      "digest": "sha256:88fafbe50d6341e3ea08395f93a556a78282313682ebaa99e089f003702a5e61",
       "assignments": {
         "CYFR_HOST": "cyfr.example.com",
         "CYFR_PORT": "4000",
-        "CYFR_PUBLIC_URL": "https://cyfr.example.com",
-        "CYFR_ACCESS": "public"
+        "CYFR_BROWSER": "domain",
+        "CYFR_PUBLIC_URL": "https://cyfr.example.com"
+      },
+      "removals": [
+        "CADDY_ACME_EMAIL",
+        "CYFR_PROXY_PUBLISH",
+        "CYFR_TAILNET_NODE_ID"
+      ]
+    },
+    {
+      "name": "domain, a CYFR_PORT change",
+      "target": {
+        "browser": "domain",
+        "domain": "cyfr.example.com"
+      },
+      "current": {
+        "port": 4443
+      },
+      "head": {
+        "browser": "domain",
+        "host": "cyfr.example.com",
+        "port": 4443,
+        "public_url": "https://cyfr.example.com",
+        "profiles": [
+          "domain"
+        ]
+      },
+      "canonical": "{\"browser\":\"domain\",\"host\":\"cyfr.example.com\",\"port\":4443,\"profiles\":[\"domain\"],\"public_url\":\"https://cyfr.example.com\"}",
+      "digest": "sha256:350a36fbe43e85e84fcfde4eed8061770e6ce83b7ce8212cbb3fa1db1bd79525",
+      "assignments": {
+        "CYFR_HOST": "cyfr.example.com",
+        "CYFR_PORT": "4443",
+        "CYFR_BROWSER": "domain",
+        "CYFR_PUBLIC_URL": "https://cyfr.example.com"
+      },
+      "removals": [
+        "CADDY_ACME_EMAIL",
+        "CYFR_PROXY_PUBLISH",
+        "CYFR_TAILNET_NODE_ID"
+      ]
+    },
+    {
+      "name": "proxy, the default publication",
+      "target": {
+        "browser": "proxy",
+        "domain": "cyfr.example.com"
+      },
+      "current": {
+        "port": 4000,
+        "trusted": true
+      },
+      "head": {
+        "browser": "proxy",
+        "host": "cyfr.example.com",
+        "port": 4000,
+        "public_url": "https://cyfr.example.com",
+        "publish": "127.0.0.1:4001",
+        "profiles": []
+      },
+      "canonical": "{\"browser\":\"proxy\",\"host\":\"cyfr.example.com\",\"port\":4000,\"profiles\":[],\"public_url\":\"https://cyfr.example.com\",\"publish\":\"127.0.0.1:4001\"}",
+      "digest": "sha256:2ee58b884f408da6a402558a95e535eba5855d310058619cba88c71a5bbb30a6",
+      "assignments": {
+        "CYFR_HOST": "cyfr.example.com",
+        "CYFR_PORT": "4000",
+        "CYFR_BROWSER": "proxy",
+        "CYFR_PROXY_PUBLISH": "127.0.0.1:4001",
+        "CYFR_PUBLIC_URL": "https://cyfr.example.com"
       },
       "removals": [
         "CADDY_ACME_EMAIL",
@@ -254,30 +326,65 @@
       ]
     },
     {
-      "name": "public, a CYFR_PORT change",
+      "name": "proxy, a publication of its own",
       "target": {
-        "mode": "public",
+        "browser": "proxy",
+        "domain": "cyfr.example.com",
+        "publish": "127.0.0.2:8443"
+      },
+      "current": {
+        "port": 4000,
+        "trusted": true
+      },
+      "head": {
+        "browser": "proxy",
+        "host": "cyfr.example.com",
+        "port": 4000,
+        "public_url": "https://cyfr.example.com",
+        "publish": "127.0.0.2:8443",
+        "profiles": []
+      },
+      "canonical": "{\"browser\":\"proxy\",\"host\":\"cyfr.example.com\",\"port\":4000,\"profiles\":[],\"public_url\":\"https://cyfr.example.com\",\"publish\":\"127.0.0.2:8443\"}",
+      "digest": "sha256:db31822b2bbfc4e6f10ba909acd6c30227dc6f11bcd7675ded7b997c4cad2ada",
+      "assignments": {
+        "CYFR_HOST": "cyfr.example.com",
+        "CYFR_PORT": "4000",
+        "CYFR_BROWSER": "proxy",
+        "CYFR_PROXY_PUBLISH": "127.0.0.2:8443",
+        "CYFR_PUBLIC_URL": "https://cyfr.example.com"
+      },
+      "removals": [
+        "CADDY_ACME_EMAIL",
+        "CYFR_TAILNET_NODE_ID"
+      ]
+    },
+    {
+      "name": "proxy keeps the publication .env has",
+      "target": {
+        "browser": "proxy",
         "domain": "cyfr.example.com"
       },
       "current": {
-        "port": 4443
+        "port": 4000,
+        "publish": "127.0.0.2:5000",
+        "trusted": true
       },
       "head": {
-        "mode": "public",
+        "browser": "proxy",
         "host": "cyfr.example.com",
-        "port": 4443,
+        "port": 4000,
         "public_url": "https://cyfr.example.com",
-        "profiles": [
-          "public"
-        ]
+        "publish": "127.0.0.2:5000",
+        "profiles": []
       },
-      "canonical": "{\"host\":\"cyfr.example.com\",\"mode\":\"public\",\"port\":4443,\"profiles\":[\"public\"],\"public_url\":\"https://cyfr.example.com\"}",
-      "digest": "sha256:9478f5a1d6d2f9db69da856eb5605bd36382e711335eac5ee68389b968053eda",
+      "canonical": "{\"browser\":\"proxy\",\"host\":\"cyfr.example.com\",\"port\":4000,\"profiles\":[],\"public_url\":\"https://cyfr.example.com\",\"publish\":\"127.0.0.2:5000\"}",
+      "digest": "sha256:8a6998bfe1142a93571fa1ddbda5255aec20cde487be6ee9095a068f9b50fd9a",
       "assignments": {
         "CYFR_HOST": "cyfr.example.com",
-        "CYFR_PORT": "4443",
-        "CYFR_PUBLIC_URL": "https://cyfr.example.com",
-        "CYFR_ACCESS": "public"
+        "CYFR_PORT": "4000",
+        "CYFR_BROWSER": "proxy",
+        "CYFR_PROXY_PUBLISH": "127.0.0.2:5000",
+        "CYFR_PUBLIC_URL": "https://cyfr.example.com"
       },
       "removals": [
         "CADDY_ACME_EMAIL",
@@ -287,7 +394,7 @@
     {
       "name": "tailnet, not joined",
       "target": {
-        "mode": "tailnet"
+        "browser": "tailnet"
       },
       "current": {
         "port": 4000
@@ -295,13 +402,14 @@
       "refusal": {
         "code": "tailnet_not_joined",
         "class": "setup_required",
-        "payload": {}
+        "payload": {},
+        "sentence": "This machine has not joined your tailnet. Nothing was changed. Run `cyfr access browser tailnet` and approve the machine with the link it prints."
       }
     },
     {
       "name": "tailnet, a node id outside the grammar",
       "target": {
-        "mode": "tailnet"
+        "browser": "tailnet"
       },
       "current": {
         "port": 4000
@@ -315,13 +423,14 @@
         "class": "invalid_argument",
         "payload": {
           "value": "n/bad"
-        }
+        },
+        "sentence": "Tailscale reported a machine identity CYFR cannot store (`n/bad`). How CYFR is reached was not changed. Report this with your Tailscale version."
       }
     },
     {
       "name": "tailnet, a name that is not a tailnet name",
       "target": {
-        "mode": "tailnet"
+        "browser": "tailnet"
       },
       "current": {
         "port": 4000
@@ -337,13 +446,14 @@
           "input": "cyfr.example.com",
           "kind": "tailnet_name",
           "rule": "a tailnet machine name is <machine>.<tailnet>.ts.net"
-        }
+        },
+        "sentence": "`cyfr.example.com` is not a valid tailnet machine name: a tailnet machine name is <machine>.<tailnet>.ts.net. Nothing was changed. Correct it and run the command again."
       }
     },
     {
-      "name": "public, a ts.net domain",
+      "name": "domain, a ts.net domain",
       "target": {
-        "mode": "public",
+        "browser": "domain",
         "domain": "cyfr.tail1a2b3c.ts.net"
       },
       "current": {
@@ -356,13 +466,14 @@
           "input": "cyfr.tail1a2b3c.ts.net",
           "kind": "domain",
           "rule": "a domain is two or more labels of letters, digits and hyphens, and not localhost, an IP address or a ts.net name"
-        }
+        },
+        "sentence": "`cyfr.tail1a2b3c.ts.net` is not a valid domain: a domain is two or more labels of letters, digits and hyphens, and not localhost, an IP address or a ts.net name. Nothing was changed. Correct it and run the command again."
       }
     },
     {
-      "name": "public, an IP address",
+      "name": "domain, an IP address",
       "target": {
-        "mode": "public",
+        "browser": "domain",
         "domain": "192.0.2.10"
       },
       "current": {
@@ -375,13 +486,14 @@
           "input": "192.0.2.10",
           "kind": "domain",
           "rule": "a domain is two or more labels of letters, digits and hyphens, and not localhost, an IP address or a ts.net name"
-        }
+        },
+        "sentence": "`192.0.2.10` is not a valid domain: a domain is two or more labels of letters, digits and hyphens, and not localhost, an IP address or a ts.net name. Nothing was changed. Correct it and run the command again."
       }
     },
     {
-      "name": "public, a URL for a domain",
+      "name": "domain, a URL for a domain",
       "target": {
-        "mode": "public",
+        "browser": "domain",
         "domain": "https://cyfr.example.com"
       },
       "current": {
@@ -394,27 +506,31 @@
           "input": "https://cyfr.example.com",
           "kind": "domain",
           "rule": "a domain is two or more labels of letters, digits and hyphens, and not localhost, an IP address or a ts.net name"
-        }
+        },
+        "sentence": "`https://cyfr.example.com` is not a valid domain: a domain is two or more labels of letters, digits and hyphens, and not localhost, an IP address or a ts.net name. Nothing was changed. Correct it and run the command again."
       }
     },
     {
-      "name": "public, no domain",
+      "name": "domain, no domain",
       "target": {
-        "mode": "public"
+        "browser": "domain"
       },
       "current": {
         "port": 4000
       },
       "refusal": {
-        "code": "access_public_host_invalid",
+        "code": "access_domain_host_invalid",
         "class": "invalid_argument",
-        "payload": {}
+        "payload": {
+          "browser": "domain"
+        },
+        "sentence": "CYFR_BROWSER is `domain`, but CYFR_HOST is not set to a public domain name (not localhost, an IP address or a ts.net name). Run `cyfr access browser domain --domain <your domain>`."
       }
     },
     {
-      "name": "public, a malformed email",
+      "name": "domain, a malformed email",
       "target": {
-        "mode": "public",
+        "browser": "domain",
         "domain": "cyfr.example.com",
         "acme_email": "ops at example.com"
       },
@@ -428,13 +544,14 @@
           "input": "ops at example.com",
           "kind": "email",
           "rule": "an email address is a name of letters, digits, dots, plus signs, hyphens and underscores, then @ and a domain"
-        }
+        },
+        "sentence": "`ops at example.com` is not a valid email address: an email address is a name of letters, digits, dots, plus signs, hyphens and underscores, then @ and a domain. Nothing was changed. Correct it and run the command again."
       }
     },
     {
       "name": "tailnet, an email",
       "target": {
-        "mode": "tailnet",
+        "browser": "tailnet",
         "acme_email": "ops@example.com"
       },
       "current": {
@@ -445,70 +562,74 @@
         "node_id": "nAbc123XYZ1CNTRL"
       },
       "refusal": {
-        "code": "access_option_outside_mode",
+        "code": "access_option_outside_browser",
         "class": "invalid_argument",
         "payload": {
           "option": "--acme-email",
-          "mode": "tailnet"
-        }
+          "browser": "tailnet"
+        },
+        "sentence": "`--acme-email` is for a domain through Caddy, and this command chooses `tailnet`. Nothing was changed. Run it again without `--acme-email`, or run `cyfr access browser domain` with it."
       }
     },
     {
-      "name": "local, a domain",
+      "name": "none, a domain",
       "target": {
-        "mode": "local",
+        "browser": "none",
         "domain": "cyfr.example.com"
       },
       "current": {
         "port": 4000
       },
       "refusal": {
-        "code": "access_option_outside_mode",
+        "code": "access_option_outside_browser",
         "class": "invalid_argument",
         "payload": {
           "option": "--domain",
-          "mode": "local"
-        }
+          "browser": "none"
+        },
+        "sentence": "`--domain` is for a domain, through Caddy or your own proxy, and this command chooses `none`. Nothing was changed. Run it again without `--domain`, or run `cyfr access browser domain` with it."
       }
     },
     {
-      "name": "local, an email",
+      "name": "none, an email",
       "target": {
-        "mode": "local",
+        "browser": "none",
         "acme_email": "ops@example.com"
       },
       "current": {
         "port": 4000
       },
       "refusal": {
-        "code": "access_option_outside_mode",
+        "code": "access_option_outside_browser",
         "class": "invalid_argument",
         "payload": {
           "option": "--acme-email",
-          "mode": "local"
-        }
+          "browser": "none"
+        },
+        "sentence": "`--acme-email` is for a domain through Caddy, and this command chooses `none`. Nothing was changed. Run it again without `--acme-email`, or run `cyfr access browser domain` with it."
       }
     },
     {
-      "name": "an unknown mode",
+      "name": "an unknown kind",
       "target": {
-        "mode": "lan"
+        "browser": "lan"
       },
       "current": {
         "port": 4000
       },
       "refusal": {
-        "code": "access_unknown_mode",
+        "code": "access_unknown_browser",
         "class": "invalid_argument",
         "payload": {
           "value": "lan"
-        }
+        },
+        "sentence": "CYFR_BROWSER is `lan`; it must be `none`, `tailnet`, `domain` or `proxy`. Run `cyfr access browser <kind>` to set it with the address it implies."
       }
     },
     {
       "name": "a port outside 1 to 65535",
       "target": {
-        "mode": "local"
+        "browser": "none"
       },
       "current": {
         "port": 70000
@@ -519,21 +640,140 @@
         "payload": {
           "key": "CYFR_PORT",
           "value": "70000"
-        }
+        },
+        "sentence": "`CYFR_PORT` is `70000`, which is not a port from 1 to 65535. Nothing started. Correct it, or remove it to take the default."
+      }
+    },
+    {
+      "name": "proxy, no stated trust",
+      "target": {
+        "browser": "proxy",
+        "domain": "cyfr.example.com"
+      },
+      "current": {
+        "port": 4000
+      },
+      "refusal": {
+        "code": "access_proxy_trust_missing",
+        "class": "setup_required",
+        "payload": {},
+        "sentence": "CYFR_BROWSER is `proxy`, and .env states no trust in your proxy's forwarded headers: neither CYFR_TRUSTED_PROXY_HOPS nor CYFR_TRUSTED_PROXY_CIDRS is set. Nothing was started or changed. Set CYFR_TRUSTED_PROXY_HOPS in .env to the number of proxies in front of CYFR (1 for your proxy alone), or list them in CYFR_TRUSTED_PROXY_CIDRS, then run the command again."
+      }
+    },
+    {
+      "name": "proxy, no domain",
+      "target": {
+        "browser": "proxy"
+      },
+      "current": {
+        "port": 4000,
+        "trusted": true
+      },
+      "refusal": {
+        "code": "access_domain_host_invalid",
+        "class": "invalid_argument",
+        "payload": {
+          "browser": "proxy"
+        },
+        "sentence": "CYFR_BROWSER is `proxy`, but CYFR_HOST is not set to a public domain name (not localhost, an IP address or a ts.net name). Run `cyfr access browser proxy --domain <your domain>`."
+      }
+    },
+    {
+      "name": "proxy, an email",
+      "target": {
+        "browser": "proxy",
+        "domain": "cyfr.example.com",
+        "acme_email": "ops@example.com"
+      },
+      "current": {
+        "port": 4000,
+        "trusted": true
+      },
+      "refusal": {
+        "code": "access_option_outside_browser",
+        "class": "invalid_argument",
+        "payload": {
+          "option": "--acme-email",
+          "browser": "proxy"
+        },
+        "sentence": "`--acme-email` is for a domain through Caddy, and this command chooses `proxy`. Nothing was changed. Run it again without `--acme-email`, or run `cyfr access browser domain` with it."
+      }
+    },
+    {
+      "name": "domain, a publication",
+      "target": {
+        "browser": "domain",
+        "domain": "cyfr.example.com",
+        "publish": "127.0.0.1:4001"
+      },
+      "current": {
+        "port": 4000
+      },
+      "refusal": {
+        "code": "access_option_outside_browser",
+        "class": "invalid_argument",
+        "payload": {
+          "option": "--publish",
+          "browser": "domain"
+        },
+        "sentence": "`--publish` is for your own proxy, and this command chooses `domain`. Nothing was changed. Run it again without `--publish`, or run `cyfr access browser proxy` with it."
+      }
+    },
+    {
+      "name": "proxy, a publication off the loopback",
+      "target": {
+        "browser": "proxy",
+        "domain": "cyfr.example.com",
+        "publish": "192.0.2.1:4001"
+      },
+      "current": {
+        "port": 4000,
+        "trusted": true
+      },
+      "refusal": {
+        "code": "access_setting_invalid",
+        "class": "invalid_argument",
+        "payload": {
+          "key": "CYFR_PROXY_PUBLISH",
+          "value": "192.0.2.1:4001"
+        },
+        "sentence": "`CYFR_PROXY_PUBLISH` is `192.0.2.1:4001`, which is not an IPv4 loopback address and a port, as 127.0.0.1:4001. Nothing started. Correct it, or remove it to take the default."
+      }
+    },
+    {
+      "name": "proxy, published at the loopback listener's own",
+      "target": {
+        "browser": "proxy",
+        "domain": "cyfr.example.com",
+        "publish": "127.0.0.1:4000"
+      },
+      "current": {
+        "port": 4000,
+        "trusted": true
+      },
+      "refusal": {
+        "code": "access_setting_invalid",
+        "class": "invalid_argument",
+        "payload": {
+          "key": "CYFR_PROXY_PUBLISH",
+          "value": "127.0.0.1:4000",
+          "port": "4000"
+        },
+        "sentence": "`CYFR_PROXY_PUBLISH` is `127.0.0.1:4000`, where the loopback listener is published already (127.0.0.1 on CYFR_PORT `4000`). Nothing started. Publish the proxy listener at another port."
       }
     }
   ],
   "boot": [
     {
-      "name": "local, as cyfr init writes it",
+      "name": "none, as cyfr init writes it",
       "input": {
         "file": {
-          "CYFR_ACCESS": "local",
+          "CYFR_BROWSER": "none",
           "CYFR_HOST": "localhost",
           "CYFR_PORT": "4000"
         },
         "process": {
-          "CYFR_ACCESS": "local",
+          "CYFR_BROWSER": "none",
           "CYFR_HOST": "localhost",
           "CYFR_PORT": "4000"
         },
@@ -541,7 +781,8 @@
       },
       "access": {
         "assertion": "absent",
-        "canonical": "{\"host\":\"localhost\",\"mode\":\"local\",\"port\":4000,\"profiles\":[]}",
+        "browser": "none",
+        "canonical": "{\"browser\":\"none\",\"host\":\"localhost\",\"port\":4000,\"profiles\":[]}",
         "check_origins": [
           "http://localhost:4000",
           "https://localhost:4000",
@@ -550,10 +791,11 @@
           "http://[::1]:4000",
           "https://[::1]:4000"
         ],
-        "digest": "sha256:7300d73c8b043098a710c0a5d7b0a2ce4cecdefb1b288912e8387aeb9428627f",
+        "digest": "sha256:fdf0bb2b75b7f70aba7d6c85c1651c847c8b6717f0721f6b05d58c62bbd4b51d",
+        "exposure": "private",
         "head": {
+          "browser": "none",
           "host": "localhost",
-          "mode": "local",
           "port": 4000,
           "profiles": []
         },
@@ -563,27 +805,28 @@
             "127.0.0.1",
             4000
           ],
-          "proxy": "none"
+          "proxy": "none",
+          "published": "none"
         },
-        "mode": "local",
         "origin": "http://localhost:4000",
         "trust": "none"
       }
     },
     {
-      "name": "local, defaults",
+      "name": "none, defaults",
       "input": {
         "file": {
-          "CYFR_ACCESS": "local"
+          "CYFR_BROWSER": "none"
         },
         "process": {
-          "CYFR_ACCESS": "local"
+          "CYFR_BROWSER": "none"
         },
         "release?": true
       },
       "access": {
         "assertion": "absent",
-        "canonical": "{\"host\":\"localhost\",\"mode\":\"local\",\"port\":4000,\"profiles\":[]}",
+        "browser": "none",
+        "canonical": "{\"browser\":\"none\",\"host\":\"localhost\",\"port\":4000,\"profiles\":[]}",
         "check_origins": [
           "http://localhost:4000",
           "https://localhost:4000",
@@ -592,10 +835,11 @@
           "http://[::1]:4000",
           "https://[::1]:4000"
         ],
-        "digest": "sha256:7300d73c8b043098a710c0a5d7b0a2ce4cecdefb1b288912e8387aeb9428627f",
+        "digest": "sha256:fdf0bb2b75b7f70aba7d6c85c1651c847c8b6717f0721f6b05d58c62bbd4b51d",
+        "exposure": "private",
         "head": {
+          "browser": "none",
           "host": "localhost",
-          "mode": "local",
           "port": 4000,
           "profiles": []
         },
@@ -605,15 +849,15 @@
             "127.0.0.1",
             4000
           ],
-          "proxy": "none"
+          "proxy": "none",
+          "published": "none"
         },
-        "mode": "local",
         "origin": "http://localhost:4000",
         "trust": "none"
       }
     },
     {
-      "name": "dev with the mode unset is local",
+      "name": "dev with the kind unset is none",
       "input": {
         "file": {},
         "process": {},
@@ -621,7 +865,8 @@
       },
       "access": {
         "assertion": "absent",
-        "canonical": "{\"host\":\"localhost\",\"mode\":\"local\",\"port\":4000,\"profiles\":[]}",
+        "browser": "none",
+        "canonical": "{\"browser\":\"none\",\"host\":\"localhost\",\"port\":4000,\"profiles\":[]}",
         "check_origins": [
           "http://localhost:4000",
           "https://localhost:4000",
@@ -630,10 +875,11 @@
           "http://[::1]:4000",
           "https://[::1]:4000"
         ],
-        "digest": "sha256:7300d73c8b043098a710c0a5d7b0a2ce4cecdefb1b288912e8387aeb9428627f",
+        "digest": "sha256:fdf0bb2b75b7f70aba7d6c85c1651c847c8b6717f0721f6b05d58c62bbd4b51d",
+        "exposure": "private",
         "head": {
+          "browser": "none",
           "host": "localhost",
-          "mode": "local",
           "port": 4000,
           "profiles": []
         },
@@ -643,15 +889,15 @@
             "127.0.0.1",
             4000
           ],
-          "proxy": "none"
+          "proxy": "none",
+          "published": "none"
         },
-        "mode": "local",
         "origin": "http://localhost:4000",
         "trust": "none"
       }
     },
     {
-      "name": "a release with the mode unset",
+      "name": "a release with the kind unset",
       "input": {
         "file": {},
         "process": {},
@@ -661,17 +907,17 @@
         "class": "setup_required",
         "code": "access_missing",
         "payload": {},
-        "sentence": "CYFR_ACCESS is not set in .env, so CYFR does not know how it is reached. Nothing started. Run `cyfr init` for a new CYFR, or `cyfr access local|tailnet|public` for this one."
+        "sentence": "CYFR_BROWSER is not set in .env, so CYFR does not know what browser address it has. Nothing started. Run `cyfr init` for a new CYFR, or `cyfr access browser none|tailnet|domain|proxy` for this one."
       }
     },
     {
-      "name": "a release with the mode blank",
+      "name": "a release with the kind blank",
       "input": {
         "file": {
-          "CYFR_ACCESS": "  "
+          "CYFR_BROWSER": "  "
         },
         "process": {
-          "CYFR_ACCESS": "  "
+          "CYFR_BROWSER": "  "
         },
         "release?": true
       },
@@ -679,154 +925,154 @@
         "class": "setup_required",
         "code": "access_missing",
         "payload": {},
-        "sentence": "CYFR_ACCESS is not set in .env, so CYFR does not know how it is reached. Nothing started. Run `cyfr init` for a new CYFR, or `cyfr access local|tailnet|public` for this one."
+        "sentence": "CYFR_BROWSER is not set in .env, so CYFR does not know what browser address it has. Nothing started. Run `cyfr init` for a new CYFR, or `cyfr access browser none|tailnet|domain|proxy` for this one."
       }
     },
     {
-      "name": "an unknown mode",
+      "name": "an unknown kind",
       "input": {
         "file": {
-          "CYFR_ACCESS": "lan"
+          "CYFR_BROWSER": "lan"
         },
         "process": {
-          "CYFR_ACCESS": "lan"
+          "CYFR_BROWSER": "lan"
         },
         "release?": true
       },
       "refusal": {
         "class": "invalid_argument",
-        "code": "access_unknown_mode",
+        "code": "access_unknown_browser",
         "payload": {
           "value": "lan"
         },
-        "sentence": "CYFR_ACCESS is `lan`; it must be `local`, `tailnet` or `public`. Run `cyfr access <mode>` to set it with the address it implies."
+        "sentence": "CYFR_BROWSER is `lan`; it must be `none`, `tailnet`, `domain` or `proxy`. Run `cyfr access browser <kind>` to set it with the address it implies."
       }
     },
     {
-      "name": "the mode is read as written",
+      "name": "the kind is read as written",
       "input": {
         "file": {
-          "CYFR_ACCESS": "Local"
+          "CYFR_BROWSER": "Local"
         },
         "process": {
-          "CYFR_ACCESS": "Local"
+          "CYFR_BROWSER": "Local"
         },
         "release?": true
       },
       "refusal": {
         "class": "invalid_argument",
-        "code": "access_unknown_mode",
+        "code": "access_unknown_browser",
         "payload": {
           "value": "Local"
         },
-        "sentence": "CYFR_ACCESS is `Local`; it must be `local`, `tailnet` or `public`. Run `cyfr access <mode>` to set it with the address it implies."
+        "sentence": "CYFR_BROWSER is `Local`; it must be `none`, `tailnet`, `domain` or `proxy`. Run `cyfr access browser <kind>` to set it with the address it implies."
       }
     },
     {
-      "name": "local with a host",
+      "name": "none with a host",
       "input": {
         "file": {
-          "CYFR_ACCESS": "local",
+          "CYFR_BROWSER": "none",
           "CYFR_HOST": "cyfr.example.com"
         },
         "process": {
-          "CYFR_ACCESS": "local",
+          "CYFR_BROWSER": "none",
           "CYFR_HOST": "cyfr.example.com"
         },
         "release?": true
       },
       "refusal": {
         "class": "invalid_argument",
-        "code": "access_local_mismatch",
+        "code": "access_none_mismatch",
         "payload": {
           "key": "CYFR_HOST",
           "value": "cyfr.example.com"
         },
-        "sentence": "CYFR_ACCESS is `local`, which serves this computer alone at its localhost address, but CYFR_HOST is `cyfr.example.com`. Run `cyfr access local` to write the matching settings, or `cyfr access tailnet|public` to reach it from other devices."
+        "sentence": "CYFR_BROWSER is `none`, which serves this computer alone at its localhost address, but CYFR_HOST is `cyfr.example.com`. Run `cyfr access browser none` to write the matching settings, or `cyfr access browser tailnet|domain|proxy` to reach it from other devices."
       }
     },
     {
-      "name": "local with a public URL",
+      "name": "none with a public URL",
       "input": {
         "file": {
-          "CYFR_ACCESS": "local",
+          "CYFR_BROWSER": "none",
           "CYFR_PUBLIC_URL": "https://cyfr.example.com"
         },
         "process": {
-          "CYFR_ACCESS": "local",
+          "CYFR_BROWSER": "none",
           "CYFR_PUBLIC_URL": "https://cyfr.example.com"
         },
         "release?": true
       },
       "refusal": {
         "class": "invalid_argument",
-        "code": "access_local_mismatch",
+        "code": "access_none_mismatch",
         "payload": {
           "key": "CYFR_PUBLIC_URL",
           "value": "https://cyfr.example.com"
         },
-        "sentence": "CYFR_ACCESS is `local`, which serves this computer alone at its localhost address, but CYFR_PUBLIC_URL is `https://cyfr.example.com`. Run `cyfr access local` to write the matching settings, or `cyfr access tailnet|public` to reach it from other devices."
+        "sentence": "CYFR_BROWSER is `none`, which serves this computer alone at its localhost address, but CYFR_PUBLIC_URL is `https://cyfr.example.com`. Run `cyfr access browser none` to write the matching settings, or `cyfr access browser tailnet|domain|proxy` to reach it from other devices."
       }
     },
     {
-      "name": "local with an email",
+      "name": "none with an email",
       "input": {
         "file": {
-          "CYFR_ACCESS": "local",
+          "CYFR_BROWSER": "none",
           "CADDY_ACME_EMAIL": "ops@example.com"
         },
         "process": {
-          "CYFR_ACCESS": "local",
+          "CYFR_BROWSER": "none",
           "CADDY_ACME_EMAIL": "ops@example.com"
         },
         "release?": true
       },
       "refusal": {
         "class": "invalid_argument",
-        "code": "access_key_outside_mode",
+        "code": "access_key_outside_browser",
         "payload": {
+          "browser": "none",
           "key": "CADDY_ACME_EMAIL",
-          "mode": "local",
-          "needs": "public"
+          "needs": "domain"
         },
-        "sentence": "`CADDY_ACME_EMAIL` is set, but only `public` access uses it (CYFR_ACCESS is `local`). Remove it, or run `cyfr access public`."
+        "sentence": "`CADDY_ACME_EMAIL` is set, but only `domain` uses it (CYFR_BROWSER is `none`). Remove it, or run `cyfr access browser domain`."
       }
     },
     {
-      "name": "local with a node id",
+      "name": "none with a node id",
       "input": {
         "file": {
-          "CYFR_ACCESS": "local",
+          "CYFR_BROWSER": "none",
           "CYFR_TAILNET_NODE_ID": "nAbc123XYZ1CNTRL"
         },
         "process": {
-          "CYFR_ACCESS": "local",
+          "CYFR_BROWSER": "none",
           "CYFR_TAILNET_NODE_ID": "nAbc123XYZ1CNTRL"
         },
         "release?": true
       },
       "refusal": {
         "class": "invalid_argument",
-        "code": "access_key_outside_mode",
+        "code": "access_key_outside_browser",
         "payload": {
+          "browser": "none",
           "key": "CYFR_TAILNET_NODE_ID",
-          "mode": "local",
           "needs": "tailnet"
         },
-        "sentence": "`CYFR_TAILNET_NODE_ID` is set, but only `tailnet` access uses it (CYFR_ACCESS is `local`). Remove it, or run `cyfr access tailnet`."
+        "sentence": "`CYFR_TAILNET_NODE_ID` is set, but only `tailnet` uses it (CYFR_BROWSER is `none`). Remove it, or run `cyfr access browser tailnet`."
       }
     },
     {
       "name": "tailnet",
       "input": {
         "file": {
-          "CYFR_ACCESS": "tailnet",
+          "CYFR_BROWSER": "tailnet",
           "CYFR_HOST": "cyfr.tail1a2b3c.ts.net",
           "CYFR_TAILNET_NODE_ID": "nAbc123XYZ1CNTRL",
           "CYFR_PUBLIC_URL": "https://cyfr.tail1a2b3c.ts.net"
         },
         "process": {
-          "CYFR_ACCESS": "tailnet",
+          "CYFR_BROWSER": "tailnet",
           "CYFR_HOST": "cyfr.tail1a2b3c.ts.net",
           "CYFR_TAILNET_NODE_ID": "nAbc123XYZ1CNTRL",
           "CYFR_PUBLIC_URL": "https://cyfr.tail1a2b3c.ts.net"
@@ -835,7 +1081,8 @@
       },
       "access": {
         "assertion": "absent",
-        "canonical": "{\"host\":\"cyfr.tail1a2b3c.ts.net\",\"mode\":\"tailnet\",\"node_id\":\"nAbc123XYZ1CNTRL\",\"port\":4000,\"profiles\":[\"tailnet\"],\"public_url\":\"https://cyfr.tail1a2b3c.ts.net\"}",
+        "browser": "tailnet",
+        "canonical": "{\"browser\":\"tailnet\",\"host\":\"cyfr.tail1a2b3c.ts.net\",\"node_id\":\"nAbc123XYZ1CNTRL\",\"port\":4000,\"profiles\":[\"tailnet\"],\"public_url\":\"https://cyfr.tail1a2b3c.ts.net\"}",
         "check_origins": [
           "https://cyfr.tail1a2b3c.ts.net",
           "http://localhost:4000",
@@ -845,10 +1092,11 @@
           "http://[::1]:4000",
           "https://[::1]:4000"
         ],
-        "digest": "sha256:12838274123aeeb461b3411a5baf75c89a707320930efd039d09e4a881505cfd",
+        "digest": "sha256:0b490d5a14d5ce4be25439d69b37119c499adf1f9825caaed2a87ef11509c6ea",
+        "exposure": "private",
         "head": {
+          "browser": "tailnet",
           "host": "cyfr.tail1a2b3c.ts.net",
-          "mode": "tailnet",
           "node_id": "nAbc123XYZ1CNTRL",
           "port": 4000,
           "profiles": [
@@ -865,9 +1113,9 @@
           "proxy": [
             "127.0.0.1",
             4001
-          ]
+          ],
+          "published": "none"
         },
-        "mode": "tailnet",
         "origin": "https://cyfr.tail1a2b3c.ts.net",
         "trust": {
           "hops": 1
@@ -878,7 +1126,7 @@
       "name": "tailnet, a custom proxy listener and CIDRs",
       "input": {
         "file": {
-          "CYFR_ACCESS": "tailnet",
+          "CYFR_BROWSER": "tailnet",
           "CYFR_HOST": "cyfr.tail1a2b3c.ts.net",
           "CYFR_TAILNET_NODE_ID": "nAbc123XYZ1CNTRL",
           "CYFR_PUBLIC_URL": "https://cyfr.tail1a2b3c.ts.net",
@@ -887,7 +1135,7 @@
           "CYFR_TRUSTED_PROXY_CIDRS": "172.16.234.3, 172.16.234.4"
         },
         "process": {
-          "CYFR_ACCESS": "tailnet",
+          "CYFR_BROWSER": "tailnet",
           "CYFR_HOST": "cyfr.tail1a2b3c.ts.net",
           "CYFR_TAILNET_NODE_ID": "nAbc123XYZ1CNTRL",
           "CYFR_PUBLIC_URL": "https://cyfr.tail1a2b3c.ts.net",
@@ -899,7 +1147,8 @@
       },
       "access": {
         "assertion": "absent",
-        "canonical": "{\"host\":\"cyfr.tail1a2b3c.ts.net\",\"mode\":\"tailnet\",\"node_id\":\"nAbc123XYZ1CNTRL\",\"port\":4000,\"profiles\":[\"tailnet\"],\"public_url\":\"https://cyfr.tail1a2b3c.ts.net\"}",
+        "browser": "tailnet",
+        "canonical": "{\"browser\":\"tailnet\",\"host\":\"cyfr.tail1a2b3c.ts.net\",\"node_id\":\"nAbc123XYZ1CNTRL\",\"port\":4000,\"profiles\":[\"tailnet\"],\"public_url\":\"https://cyfr.tail1a2b3c.ts.net\"}",
         "check_origins": [
           "https://cyfr.tail1a2b3c.ts.net",
           "http://localhost:4000",
@@ -909,10 +1158,11 @@
           "http://[::1]:4000",
           "https://[::1]:4000"
         ],
-        "digest": "sha256:12838274123aeeb461b3411a5baf75c89a707320930efd039d09e4a881505cfd",
+        "digest": "sha256:0b490d5a14d5ce4be25439d69b37119c499adf1f9825caaed2a87ef11509c6ea",
+        "exposure": "private",
         "head": {
+          "browser": "tailnet",
           "host": "cyfr.tail1a2b3c.ts.net",
-          "mode": "tailnet",
           "node_id": "nAbc123XYZ1CNTRL",
           "port": 4000,
           "profiles": [
@@ -929,9 +1179,9 @@
           "proxy": [
             "172.16.234.2",
             4001
-          ]
+          ],
+          "published": "none"
         },
-        "mode": "tailnet",
         "origin": "https://cyfr.tail1a2b3c.ts.net",
         "trust": {
           "cidrs": [
@@ -945,14 +1195,14 @@
       "name": "tailnet, hops",
       "input": {
         "file": {
-          "CYFR_ACCESS": "tailnet",
+          "CYFR_BROWSER": "tailnet",
           "CYFR_HOST": "cyfr.tail1a2b3c.ts.net",
           "CYFR_TAILNET_NODE_ID": "nAbc123XYZ1CNTRL",
           "CYFR_PUBLIC_URL": "https://cyfr.tail1a2b3c.ts.net",
           "CYFR_TRUSTED_PROXY_HOPS": "2"
         },
         "process": {
-          "CYFR_ACCESS": "tailnet",
+          "CYFR_BROWSER": "tailnet",
           "CYFR_HOST": "cyfr.tail1a2b3c.ts.net",
           "CYFR_TAILNET_NODE_ID": "nAbc123XYZ1CNTRL",
           "CYFR_PUBLIC_URL": "https://cyfr.tail1a2b3c.ts.net",
@@ -962,7 +1212,8 @@
       },
       "access": {
         "assertion": "absent",
-        "canonical": "{\"host\":\"cyfr.tail1a2b3c.ts.net\",\"mode\":\"tailnet\",\"node_id\":\"nAbc123XYZ1CNTRL\",\"port\":4000,\"profiles\":[\"tailnet\"],\"public_url\":\"https://cyfr.tail1a2b3c.ts.net\"}",
+        "browser": "tailnet",
+        "canonical": "{\"browser\":\"tailnet\",\"host\":\"cyfr.tail1a2b3c.ts.net\",\"node_id\":\"nAbc123XYZ1CNTRL\",\"port\":4000,\"profiles\":[\"tailnet\"],\"public_url\":\"https://cyfr.tail1a2b3c.ts.net\"}",
         "check_origins": [
           "https://cyfr.tail1a2b3c.ts.net",
           "http://localhost:4000",
@@ -972,10 +1223,11 @@
           "http://[::1]:4000",
           "https://[::1]:4000"
         ],
-        "digest": "sha256:12838274123aeeb461b3411a5baf75c89a707320930efd039d09e4a881505cfd",
+        "digest": "sha256:0b490d5a14d5ce4be25439d69b37119c499adf1f9825caaed2a87ef11509c6ea",
+        "exposure": "private",
         "head": {
+          "browser": "tailnet",
           "host": "cyfr.tail1a2b3c.ts.net",
-          "mode": "tailnet",
           "node_id": "nAbc123XYZ1CNTRL",
           "port": 4000,
           "profiles": [
@@ -992,9 +1244,9 @@
           "proxy": [
             "127.0.0.1",
             4001
-          ]
+          ],
+          "published": "none"
         },
-        "mode": "tailnet",
         "origin": "https://cyfr.tail1a2b3c.ts.net",
         "trust": {
           "hops": 2
@@ -1005,12 +1257,12 @@
       "name": "tailnet without a host",
       "input": {
         "file": {
-          "CYFR_ACCESS": "tailnet",
+          "CYFR_BROWSER": "tailnet",
           "CYFR_TAILNET_NODE_ID": "nAbc123XYZ1CNTRL",
           "CYFR_PUBLIC_URL": "https://cyfr.tail1a2b3c.ts.net"
         },
         "process": {
-          "CYFR_ACCESS": "tailnet",
+          "CYFR_BROWSER": "tailnet",
           "CYFR_TAILNET_NODE_ID": "nAbc123XYZ1CNTRL",
           "CYFR_PUBLIC_URL": "https://cyfr.tail1a2b3c.ts.net"
         },
@@ -1020,20 +1272,20 @@
         "class": "invalid_argument",
         "code": "access_tailnet_host_invalid",
         "payload": {},
-        "sentence": "CYFR_ACCESS is `tailnet`, but CYFR_HOST is not set to a tailnet machine name (<machine>.<tailnet>.ts.net). Run `cyfr access tailnet`, which reads both from Tailscale."
+        "sentence": "CYFR_BROWSER is `tailnet`, but CYFR_HOST is not set to a tailnet machine name (<machine>.<tailnet>.ts.net). Run `cyfr access browser tailnet`, which reads both from Tailscale."
       }
     },
     {
       "name": "tailnet with a domain for a host",
       "input": {
         "file": {
-          "CYFR_ACCESS": "tailnet",
+          "CYFR_BROWSER": "tailnet",
           "CYFR_HOST": "cyfr.example.com",
           "CYFR_TAILNET_NODE_ID": "nAbc123XYZ1CNTRL",
           "CYFR_PUBLIC_URL": "https://cyfr.example.com"
         },
         "process": {
-          "CYFR_ACCESS": "tailnet",
+          "CYFR_BROWSER": "tailnet",
           "CYFR_HOST": "cyfr.example.com",
           "CYFR_TAILNET_NODE_ID": "nAbc123XYZ1CNTRL",
           "CYFR_PUBLIC_URL": "https://cyfr.example.com"
@@ -1046,19 +1298,19 @@
         "payload": {
           "host": "cyfr.example.com"
         },
-        "sentence": "CYFR_ACCESS is `tailnet`, but CYFR_HOST `cyfr.example.com` is not a tailnet machine name (<machine>.<tailnet>.ts.net). Run `cyfr access tailnet`, which reads both from Tailscale."
+        "sentence": "CYFR_BROWSER is `tailnet`, but CYFR_HOST `cyfr.example.com` is not a tailnet machine name (<machine>.<tailnet>.ts.net). Run `cyfr access browser tailnet`, which reads both from Tailscale."
       }
     },
     {
       "name": "tailnet without a node id",
       "input": {
         "file": {
-          "CYFR_ACCESS": "tailnet",
+          "CYFR_BROWSER": "tailnet",
           "CYFR_HOST": "cyfr.tail1a2b3c.ts.net",
           "CYFR_PUBLIC_URL": "https://cyfr.tail1a2b3c.ts.net"
         },
         "process": {
-          "CYFR_ACCESS": "tailnet",
+          "CYFR_BROWSER": "tailnet",
           "CYFR_HOST": "cyfr.tail1a2b3c.ts.net",
           "CYFR_PUBLIC_URL": "https://cyfr.tail1a2b3c.ts.net"
         },
@@ -1068,20 +1320,20 @@
         "class": "invalid_argument",
         "code": "access_tailnet_node_invalid",
         "payload": {},
-        "sentence": "CYFR_ACCESS is `tailnet`, but CYFR_TAILNET_NODE_ID is missing. Run `cyfr access tailnet`, which reads both from Tailscale."
+        "sentence": "CYFR_BROWSER is `tailnet`, but CYFR_TAILNET_NODE_ID is missing. Run `cyfr access browser tailnet`, which reads both from Tailscale."
       }
     },
     {
       "name": "tailnet with a malformed node id",
       "input": {
         "file": {
-          "CYFR_ACCESS": "tailnet",
+          "CYFR_BROWSER": "tailnet",
           "CYFR_HOST": "cyfr.tail1a2b3c.ts.net",
           "CYFR_TAILNET_NODE_ID": "n/bad",
           "CYFR_PUBLIC_URL": "https://cyfr.tail1a2b3c.ts.net"
         },
         "process": {
-          "CYFR_ACCESS": "tailnet",
+          "CYFR_BROWSER": "tailnet",
           "CYFR_HOST": "cyfr.tail1a2b3c.ts.net",
           "CYFR_TAILNET_NODE_ID": "n/bad",
           "CYFR_PUBLIC_URL": "https://cyfr.tail1a2b3c.ts.net"
@@ -1094,19 +1346,19 @@
         "payload": {
           "value": "n/bad"
         },
-        "sentence": "CYFR_ACCESS is `tailnet`, but CYFR_TAILNET_NODE_ID `n/bad` is malformed. Run `cyfr access tailnet`, which reads both from Tailscale."
+        "sentence": "CYFR_BROWSER is `tailnet`, but CYFR_TAILNET_NODE_ID `n/bad` is malformed. Run `cyfr access browser tailnet`, which reads both from Tailscale."
       }
     },
     {
       "name": "tailnet without a public URL",
       "input": {
         "file": {
-          "CYFR_ACCESS": "tailnet",
+          "CYFR_BROWSER": "tailnet",
           "CYFR_HOST": "cyfr.tail1a2b3c.ts.net",
           "CYFR_TAILNET_NODE_ID": "nAbc123XYZ1CNTRL"
         },
         "process": {
-          "CYFR_ACCESS": "tailnet",
+          "CYFR_BROWSER": "tailnet",
           "CYFR_HOST": "cyfr.tail1a2b3c.ts.net",
           "CYFR_TAILNET_NODE_ID": "nAbc123XYZ1CNTRL"
         },
@@ -1116,23 +1368,23 @@
         "class": "invalid_argument",
         "code": "access_public_url_mismatch",
         "payload": {
-          "expected": "https://cyfr.tail1a2b3c.ts.net",
-          "mode": "tailnet"
+          "browser": "tailnet",
+          "expected": "https://cyfr.tail1a2b3c.ts.net"
         },
-        "sentence": "CYFR_PUBLIC_URL must be exactly https://cyfr.tail1a2b3c.ts.net when CYFR_ACCESS is `tailnet`; it is not set. Run `cyfr access tailnet` to rewrite both."
+        "sentence": "CYFR_PUBLIC_URL must be exactly https://cyfr.tail1a2b3c.ts.net when CYFR_BROWSER is `tailnet`; it is not set. Run `cyfr access browser tailnet` to rewrite both."
       }
     },
     {
       "name": "tailnet with an http URL",
       "input": {
         "file": {
-          "CYFR_ACCESS": "tailnet",
+          "CYFR_BROWSER": "tailnet",
           "CYFR_HOST": "cyfr.tail1a2b3c.ts.net",
           "CYFR_TAILNET_NODE_ID": "nAbc123XYZ1CNTRL",
           "CYFR_PUBLIC_URL": "http://cyfr.tail1a2b3c.ts.net"
         },
         "process": {
-          "CYFR_ACCESS": "tailnet",
+          "CYFR_BROWSER": "tailnet",
           "CYFR_HOST": "cyfr.tail1a2b3c.ts.net",
           "CYFR_TAILNET_NODE_ID": "nAbc123XYZ1CNTRL",
           "CYFR_PUBLIC_URL": "http://cyfr.tail1a2b3c.ts.net"
@@ -1143,24 +1395,24 @@
         "class": "invalid_argument",
         "code": "access_public_url_mismatch",
         "payload": {
+          "browser": "tailnet",
           "expected": "https://cyfr.tail1a2b3c.ts.net",
-          "mode": "tailnet",
           "value": "http://cyfr.tail1a2b3c.ts.net"
         },
-        "sentence": "CYFR_PUBLIC_URL must be exactly https://cyfr.tail1a2b3c.ts.net when CYFR_ACCESS is `tailnet`; it is `http://cyfr.tail1a2b3c.ts.net`. Run `cyfr access tailnet` to rewrite both."
+        "sentence": "CYFR_PUBLIC_URL must be exactly https://cyfr.tail1a2b3c.ts.net when CYFR_BROWSER is `tailnet`; it is `http://cyfr.tail1a2b3c.ts.net`. Run `cyfr access browser tailnet` to rewrite both."
       }
     },
     {
       "name": "tailnet with a trailing slash on the URL",
       "input": {
         "file": {
-          "CYFR_ACCESS": "tailnet",
+          "CYFR_BROWSER": "tailnet",
           "CYFR_HOST": "cyfr.tail1a2b3c.ts.net",
           "CYFR_TAILNET_NODE_ID": "nAbc123XYZ1CNTRL",
           "CYFR_PUBLIC_URL": "https://cyfr.tail1a2b3c.ts.net/"
         },
         "process": {
-          "CYFR_ACCESS": "tailnet",
+          "CYFR_BROWSER": "tailnet",
           "CYFR_HOST": "cyfr.tail1a2b3c.ts.net",
           "CYFR_TAILNET_NODE_ID": "nAbc123XYZ1CNTRL",
           "CYFR_PUBLIC_URL": "https://cyfr.tail1a2b3c.ts.net/"
@@ -1171,25 +1423,25 @@
         "class": "invalid_argument",
         "code": "access_public_url_mismatch",
         "payload": {
+          "browser": "tailnet",
           "expected": "https://cyfr.tail1a2b3c.ts.net",
-          "mode": "tailnet",
           "value": "https://cyfr.tail1a2b3c.ts.net/"
         },
-        "sentence": "CYFR_PUBLIC_URL must be exactly https://cyfr.tail1a2b3c.ts.net when CYFR_ACCESS is `tailnet`; it is `https://cyfr.tail1a2b3c.ts.net/`. Run `cyfr access tailnet` to rewrite both."
+        "sentence": "CYFR_PUBLIC_URL must be exactly https://cyfr.tail1a2b3c.ts.net when CYFR_BROWSER is `tailnet`; it is `https://cyfr.tail1a2b3c.ts.net/`. Run `cyfr access browser tailnet` to rewrite both."
       }
     },
     {
       "name": "tailnet with an email",
       "input": {
         "file": {
-          "CYFR_ACCESS": "tailnet",
+          "CYFR_BROWSER": "tailnet",
           "CYFR_HOST": "cyfr.tail1a2b3c.ts.net",
           "CYFR_TAILNET_NODE_ID": "nAbc123XYZ1CNTRL",
           "CYFR_PUBLIC_URL": "https://cyfr.tail1a2b3c.ts.net",
           "CADDY_ACME_EMAIL": "ops@example.com"
         },
         "process": {
-          "CYFR_ACCESS": "tailnet",
+          "CYFR_BROWSER": "tailnet",
           "CYFR_HOST": "cyfr.tail1a2b3c.ts.net",
           "CYFR_TAILNET_NODE_ID": "nAbc123XYZ1CNTRL",
           "CYFR_PUBLIC_URL": "https://cyfr.tail1a2b3c.ts.net",
@@ -1199,26 +1451,26 @@
       },
       "refusal": {
         "class": "invalid_argument",
-        "code": "access_key_outside_mode",
+        "code": "access_key_outside_browser",
         "payload": {
+          "browser": "tailnet",
           "key": "CADDY_ACME_EMAIL",
-          "mode": "tailnet",
-          "needs": "public"
+          "needs": "domain"
         },
-        "sentence": "`CADDY_ACME_EMAIL` is set, but only `public` access uses it (CYFR_ACCESS is `tailnet`). Remove it, or run `cyfr access public`."
+        "sentence": "`CADDY_ACME_EMAIL` is set, but only `domain` uses it (CYFR_BROWSER is `tailnet`). Remove it, or run `cyfr access browser domain`."
       }
     },
     {
-      "name": "public with an email",
+      "name": "domain with an email",
       "input": {
         "file": {
-          "CYFR_ACCESS": "public",
+          "CYFR_BROWSER": "domain",
           "CYFR_HOST": "cyfr.example.com",
           "CYFR_PUBLIC_URL": "https://cyfr.example.com",
           "CADDY_ACME_EMAIL": "ops@example.com"
         },
         "process": {
-          "CYFR_ACCESS": "public",
+          "CYFR_BROWSER": "domain",
           "CYFR_HOST": "cyfr.example.com",
           "CYFR_PUBLIC_URL": "https://cyfr.example.com",
           "CADDY_ACME_EMAIL": "ops@example.com"
@@ -1227,7 +1479,8 @@
       },
       "access": {
         "assertion": "absent",
-        "canonical": "{\"acme_email\":\"ops@example.com\",\"host\":\"cyfr.example.com\",\"mode\":\"public\",\"port\":4000,\"profiles\":[\"public\"],\"public_url\":\"https://cyfr.example.com\"}",
+        "browser": "domain",
+        "canonical": "{\"acme_email\":\"ops@example.com\",\"browser\":\"domain\",\"host\":\"cyfr.example.com\",\"port\":4000,\"profiles\":[\"domain\"],\"public_url\":\"https://cyfr.example.com\"}",
         "check_origins": [
           "https://cyfr.example.com",
           "http://localhost:4000",
@@ -1237,14 +1490,15 @@
           "http://[::1]:4000",
           "https://[::1]:4000"
         ],
-        "digest": "sha256:5f5fa1730f47f78e56df1f6d5bd53953e67c675384f1d9bf856692a8ce58901b",
+        "digest": "sha256:544c50c4db306d6e127a57d135a21d8f695cde7f24dacd32cab16fd1da6f4ddd",
+        "exposure": "public",
         "head": {
           "acme_email": "ops@example.com",
+          "browser": "domain",
           "host": "cyfr.example.com",
-          "mode": "public",
           "port": 4000,
           "profiles": [
-            "public"
+            "domain"
           ],
           "public_url": "https://cyfr.example.com"
         },
@@ -1257,9 +1511,9 @@
           "proxy": [
             "127.0.0.1",
             4001
-          ]
+          ],
+          "published": "none"
         },
-        "mode": "public",
         "origin": "https://cyfr.example.com",
         "trust": {
           "hops": 1
@@ -1267,33 +1521,35 @@
       }
     },
     {
-      "name": "public without a host",
+      "name": "domain without a host",
       "input": {
         "file": {
-          "CYFR_ACCESS": "public"
+          "CYFR_BROWSER": "domain"
         },
         "process": {
-          "CYFR_ACCESS": "public"
+          "CYFR_BROWSER": "domain"
         },
         "release?": true
       },
       "refusal": {
         "class": "invalid_argument",
-        "code": "access_public_host_invalid",
-        "payload": {},
-        "sentence": "CYFR_ACCESS is `public`, but CYFR_HOST is not set to a public domain name (not localhost, an IP address or a ts.net name). Run `cyfr access public --domain <your domain>`."
+        "code": "access_domain_host_invalid",
+        "payload": {
+          "browser": "domain"
+        },
+        "sentence": "CYFR_BROWSER is `domain`, but CYFR_HOST is not set to a public domain name (not localhost, an IP address or a ts.net name). Run `cyfr access browser domain --domain <your domain>`."
       }
     },
     {
-      "name": "public with localhost",
+      "name": "domain with localhost",
       "input": {
         "file": {
-          "CYFR_ACCESS": "public",
+          "CYFR_BROWSER": "domain",
           "CYFR_HOST": "localhost",
           "CYFR_PUBLIC_URL": "https://localhost"
         },
         "process": {
-          "CYFR_ACCESS": "public",
+          "CYFR_BROWSER": "domain",
           "CYFR_HOST": "localhost",
           "CYFR_PUBLIC_URL": "https://localhost"
         },
@@ -1301,23 +1557,24 @@
       },
       "refusal": {
         "class": "invalid_argument",
-        "code": "access_public_host_invalid",
+        "code": "access_domain_host_invalid",
         "payload": {
+          "browser": "domain",
           "host": "localhost"
         },
-        "sentence": "CYFR_ACCESS is `public`, but CYFR_HOST `localhost` is not a public domain name (not localhost, an IP address or a ts.net name). Run `cyfr access public --domain <your domain>`."
+        "sentence": "CYFR_BROWSER is `domain`, but CYFR_HOST `localhost` is not a public domain name (not localhost, an IP address or a ts.net name). Run `cyfr access browser domain --domain <your domain>`."
       }
     },
     {
-      "name": "public with an IP address",
+      "name": "domain with an IP address",
       "input": {
         "file": {
-          "CYFR_ACCESS": "public",
+          "CYFR_BROWSER": "domain",
           "CYFR_HOST": "192.0.2.10",
           "CYFR_PUBLIC_URL": "https://192.0.2.10"
         },
         "process": {
-          "CYFR_ACCESS": "public",
+          "CYFR_BROWSER": "domain",
           "CYFR_HOST": "192.0.2.10",
           "CYFR_PUBLIC_URL": "https://192.0.2.10"
         },
@@ -1325,23 +1582,24 @@
       },
       "refusal": {
         "class": "invalid_argument",
-        "code": "access_public_host_invalid",
+        "code": "access_domain_host_invalid",
         "payload": {
+          "browser": "domain",
           "host": "192.0.2.10"
         },
-        "sentence": "CYFR_ACCESS is `public`, but CYFR_HOST `192.0.2.10` is not a public domain name (not localhost, an IP address or a ts.net name). Run `cyfr access public --domain <your domain>`."
+        "sentence": "CYFR_BROWSER is `domain`, but CYFR_HOST `192.0.2.10` is not a public domain name (not localhost, an IP address or a ts.net name). Run `cyfr access browser domain --domain <your domain>`."
       }
     },
     {
-      "name": "public with a ts.net name",
+      "name": "domain with a ts.net name",
       "input": {
         "file": {
-          "CYFR_ACCESS": "public",
+          "CYFR_BROWSER": "domain",
           "CYFR_HOST": "cyfr.tail1a2b3c.ts.net",
           "CYFR_PUBLIC_URL": "https://cyfr.tail1a2b3c.ts.net"
         },
         "process": {
-          "CYFR_ACCESS": "public",
+          "CYFR_BROWSER": "domain",
           "CYFR_HOST": "cyfr.tail1a2b3c.ts.net",
           "CYFR_PUBLIC_URL": "https://cyfr.tail1a2b3c.ts.net"
         },
@@ -1349,23 +1607,24 @@
       },
       "refusal": {
         "class": "invalid_argument",
-        "code": "access_public_host_invalid",
+        "code": "access_domain_host_invalid",
         "payload": {
+          "browser": "domain",
           "host": "cyfr.tail1a2b3c.ts.net"
         },
-        "sentence": "CYFR_ACCESS is `public`, but CYFR_HOST `cyfr.tail1a2b3c.ts.net` is not a public domain name (not localhost, an IP address or a ts.net name). Run `cyfr access public --domain <your domain>`."
+        "sentence": "CYFR_BROWSER is `domain`, but CYFR_HOST `cyfr.tail1a2b3c.ts.net` is not a public domain name (not localhost, an IP address or a ts.net name). Run `cyfr access browser domain --domain <your domain>`."
       }
     },
     {
-      "name": "public with another host's URL",
+      "name": "domain with another host's URL",
       "input": {
         "file": {
-          "CYFR_ACCESS": "public",
+          "CYFR_BROWSER": "domain",
           "CYFR_HOST": "cyfr.example.com",
           "CYFR_PUBLIC_URL": "https://other.example.com"
         },
         "process": {
-          "CYFR_ACCESS": "public",
+          "CYFR_BROWSER": "domain",
           "CYFR_HOST": "cyfr.example.com",
           "CYFR_PUBLIC_URL": "https://other.example.com"
         },
@@ -1375,24 +1634,24 @@
         "class": "invalid_argument",
         "code": "access_public_url_mismatch",
         "payload": {
+          "browser": "domain",
           "expected": "https://cyfr.example.com",
-          "mode": "public",
           "value": "https://other.example.com"
         },
-        "sentence": "CYFR_PUBLIC_URL must be exactly https://cyfr.example.com when CYFR_ACCESS is `public`; it is `https://other.example.com`. Run `cyfr access public` to rewrite both."
+        "sentence": "CYFR_PUBLIC_URL must be exactly https://cyfr.example.com when CYFR_BROWSER is `domain`; it is `https://other.example.com`. Run `cyfr access browser domain` to rewrite both."
       }
     },
     {
-      "name": "public with a node id",
+      "name": "domain with a node id",
       "input": {
         "file": {
-          "CYFR_ACCESS": "public",
+          "CYFR_BROWSER": "domain",
           "CYFR_HOST": "cyfr.example.com",
           "CYFR_PUBLIC_URL": "https://cyfr.example.com",
           "CYFR_TAILNET_NODE_ID": "nAbc123XYZ1CNTRL"
         },
         "process": {
-          "CYFR_ACCESS": "public",
+          "CYFR_BROWSER": "domain",
           "CYFR_HOST": "cyfr.example.com",
           "CYFR_PUBLIC_URL": "https://cyfr.example.com",
           "CYFR_TAILNET_NODE_ID": "nAbc123XYZ1CNTRL"
@@ -1401,24 +1660,24 @@
       },
       "refusal": {
         "class": "invalid_argument",
-        "code": "access_key_outside_mode",
+        "code": "access_key_outside_browser",
         "payload": {
+          "browser": "domain",
           "key": "CYFR_TAILNET_NODE_ID",
-          "mode": "public",
           "needs": "tailnet"
         },
-        "sentence": "`CYFR_TAILNET_NODE_ID` is set, but only `tailnet` access uses it (CYFR_ACCESS is `public`). Remove it, or run `cyfr access tailnet`."
+        "sentence": "`CYFR_TAILNET_NODE_ID` is set, but only `tailnet` uses it (CYFR_BROWSER is `domain`). Remove it, or run `cyfr access browser tailnet`."
       }
     },
     {
       "name": "a source conflict",
       "input": {
         "file": {
-          "CYFR_ACCESS": "local",
+          "CYFR_BROWSER": "none",
           "CYFR_PORT": "4000"
         },
         "process": {
-          "CYFR_ACCESS": "local",
+          "CYFR_BROWSER": "none",
           "CYFR_PORT": "4100"
         },
         "release?": true
@@ -1438,12 +1697,12 @@
       "name": "a source conflict, the first name in byte order",
       "input": {
         "file": {
-          "CYFR_ACCESS": "local",
+          "CYFR_BROWSER": "none",
           "CYFR_PORT": "4000",
           "CYFR_HOST": "localhost"
         },
         "process": {
-          "CYFR_ACCESS": "local",
+          "CYFR_BROWSER": "none",
           "CYFR_PORT": "4100",
           "CYFR_HOST": "cyfr.example.com"
         },
@@ -1464,11 +1723,11 @@
       "name": "a blank process value overrides .env",
       "input": {
         "file": {
-          "CYFR_ACCESS": "local",
+          "CYFR_BROWSER": "none",
           "CYFR_PORT": "4000"
         },
         "process": {
-          "CYFR_ACCESS": "local",
+          "CYFR_BROWSER": "none",
           "CYFR_PORT": ""
         },
         "release?": true
@@ -1488,18 +1747,19 @@
       "name": "the process agrees with .env",
       "input": {
         "file": {
-          "CYFR_ACCESS": "local",
+          "CYFR_BROWSER": "none",
           "CYFR_PORT": "4000"
         },
         "process": {
-          "CYFR_ACCESS": "local",
+          "CYFR_BROWSER": "none",
           "CYFR_PORT": " 4000 "
         },
         "release?": true
       },
       "access": {
         "assertion": "absent",
-        "canonical": "{\"host\":\"localhost\",\"mode\":\"local\",\"port\":4000,\"profiles\":[]}",
+        "browser": "none",
+        "canonical": "{\"browser\":\"none\",\"host\":\"localhost\",\"port\":4000,\"profiles\":[]}",
         "check_origins": [
           "http://localhost:4000",
           "https://localhost:4000",
@@ -1508,10 +1768,11 @@
           "http://[::1]:4000",
           "https://[::1]:4000"
         ],
-        "digest": "sha256:7300d73c8b043098a710c0a5d7b0a2ce4cecdefb1b288912e8387aeb9428627f",
+        "digest": "sha256:fdf0bb2b75b7f70aba7d6c85c1651c847c8b6717f0721f6b05d58c62bbd4b51d",
+        "exposure": "private",
         "head": {
+          "browser": "none",
           "host": "localhost",
-          "mode": "local",
           "port": 4000,
           "profiles": []
         },
@@ -1521,9 +1782,9 @@
             "127.0.0.1",
             4000
           ],
-          "proxy": "none"
+          "proxy": "none",
+          "published": "none"
         },
-        "mode": "local",
         "origin": "http://localhost:4000",
         "trust": "none"
       }
@@ -1533,7 +1794,7 @@
       "input": {
         "file": null,
         "process": {
-          "CYFR_ACCESS": "local",
+          "CYFR_BROWSER": "none",
           "CYFR_BIND_ADDRESS": "172.16.230.2",
           "CYFR_LOCAL_INGRESS_ASSERTED": "true"
         },
@@ -1541,7 +1802,8 @@
       },
       "access": {
         "assertion": "process",
-        "canonical": "{\"host\":\"localhost\",\"mode\":\"local\",\"port\":4000,\"profiles\":[]}",
+        "browser": "none",
+        "canonical": "{\"browser\":\"none\",\"host\":\"localhost\",\"port\":4000,\"profiles\":[]}",
         "check_origins": [
           "http://localhost:4000",
           "https://localhost:4000",
@@ -1550,10 +1812,11 @@
           "http://[::1]:4000",
           "https://[::1]:4000"
         ],
-        "digest": "sha256:7300d73c8b043098a710c0a5d7b0a2ce4cecdefb1b288912e8387aeb9428627f",
+        "digest": "sha256:fdf0bb2b75b7f70aba7d6c85c1651c847c8b6717f0721f6b05d58c62bbd4b51d",
+        "exposure": "private",
         "head": {
+          "browser": "none",
           "host": "localhost",
-          "mode": "local",
           "port": 4000,
           "profiles": []
         },
@@ -1563,9 +1826,9 @@
             "172.16.230.2",
             4000
           ],
-          "proxy": "none"
+          "proxy": "none",
+          "published": "none"
         },
-        "mode": "local",
         "origin": "http://localhost:4000",
         "trust": "none"
       }
@@ -1574,11 +1837,11 @@
       "name": "the assertion from the file",
       "input": {
         "file": {
-          "CYFR_ACCESS": "local",
+          "CYFR_BROWSER": "none",
           "CYFR_LOCAL_INGRESS_ASSERTED": "false"
         },
         "process": {
-          "CYFR_ACCESS": "local",
+          "CYFR_BROWSER": "none",
           "CYFR_LOCAL_INGRESS_ASSERTED": "false"
         },
         "release?": true
@@ -1594,11 +1857,11 @@
       "name": "the assertion from the file, blank",
       "input": {
         "file": {
-          "CYFR_ACCESS": "local",
+          "CYFR_BROWSER": "none",
           "CYFR_LOCAL_INGRESS_ASSERTED": ""
         },
         "process": {
-          "CYFR_ACCESS": "local"
+          "CYFR_BROWSER": "none"
         },
         "release?": true
       },
@@ -1613,11 +1876,11 @@
       "name": "the assertion from the process accepts a non-loopback bind",
       "input": {
         "file": {
-          "CYFR_ACCESS": "local",
+          "CYFR_BROWSER": "none",
           "CYFR_BIND_ADDRESS": "172.16.230.2"
         },
         "process": {
-          "CYFR_ACCESS": "local",
+          "CYFR_BROWSER": "none",
           "CYFR_BIND_ADDRESS": "172.16.230.2",
           "CYFR_LOCAL_INGRESS_ASSERTED": "true"
         },
@@ -1625,7 +1888,8 @@
       },
       "access": {
         "assertion": "process",
-        "canonical": "{\"host\":\"localhost\",\"mode\":\"local\",\"port\":4000,\"profiles\":[]}",
+        "browser": "none",
+        "canonical": "{\"browser\":\"none\",\"host\":\"localhost\",\"port\":4000,\"profiles\":[]}",
         "check_origins": [
           "http://localhost:4000",
           "https://localhost:4000",
@@ -1634,10 +1898,11 @@
           "http://[::1]:4000",
           "https://[::1]:4000"
         ],
-        "digest": "sha256:7300d73c8b043098a710c0a5d7b0a2ce4cecdefb1b288912e8387aeb9428627f",
+        "digest": "sha256:fdf0bb2b75b7f70aba7d6c85c1651c847c8b6717f0721f6b05d58c62bbd4b51d",
+        "exposure": "private",
         "head": {
+          "browser": "none",
           "host": "localhost",
-          "mode": "local",
           "port": 4000,
           "profiles": []
         },
@@ -1647,9 +1912,9 @@
             "172.16.230.2",
             4000
           ],
-          "proxy": "none"
+          "proxy": "none",
+          "published": "none"
         },
-        "mode": "local",
         "origin": "http://localhost:4000",
         "trust": "none"
       }
@@ -1658,10 +1923,10 @@
       "name": "an assertion other than true",
       "input": {
         "file": {
-          "CYFR_ACCESS": "local"
+          "CYFR_BROWSER": "none"
         },
         "process": {
-          "CYFR_ACCESS": "local",
+          "CYFR_BROWSER": "none",
           "CYFR_LOCAL_INGRESS_ASSERTED": "yes"
         },
         "release?": true
@@ -1680,11 +1945,11 @@
       "name": "a non-loopback bind without the assertion",
       "input": {
         "file": {
-          "CYFR_ACCESS": "local",
+          "CYFR_BROWSER": "none",
           "CYFR_BIND_ADDRESS": "172.16.230.2"
         },
         "process": {
-          "CYFR_ACCESS": "local",
+          "CYFR_BROWSER": "none",
           "CYFR_BIND_ADDRESS": "172.16.230.2"
         },
         "release?": true
@@ -1695,18 +1960,18 @@
         "payload": {
           "address": "172.16.230.2"
         },
-        "sentence": "CYFR_BIND_ADDRESS `172.16.230.2` is not a loopback address, so other machines could reach CYFR's loopback listener. Bind 127.0.0.1 or ::1; to reach CYFR from other devices, use CYFR_ACCESS=tailnet or public."
+        "sentence": "CYFR_BIND_ADDRESS `172.16.230.2` is not a loopback address, so other machines could reach CYFR's loopback listener. Bind 127.0.0.1 or ::1; to reach CYFR from other devices, give it a browser address with `cyfr access browser`."
       }
     },
     {
       "name": "the unspecified address",
       "input": {
         "file": {
-          "CYFR_ACCESS": "local",
+          "CYFR_BROWSER": "none",
           "CYFR_BIND_ADDRESS": "0.0.0.0"
         },
         "process": {
-          "CYFR_ACCESS": "local",
+          "CYFR_BROWSER": "none",
           "CYFR_BIND_ADDRESS": "0.0.0.0"
         },
         "release?": true
@@ -1717,25 +1982,26 @@
         "payload": {
           "address": "0.0.0.0"
         },
-        "sentence": "CYFR_BIND_ADDRESS `0.0.0.0` is not a loopback address, so other machines could reach CYFR's loopback listener. Bind 127.0.0.1 or ::1; to reach CYFR from other devices, use CYFR_ACCESS=tailnet or public."
+        "sentence": "CYFR_BIND_ADDRESS `0.0.0.0` is not a loopback address, so other machines could reach CYFR's loopback listener. Bind 127.0.0.1 or ::1; to reach CYFR from other devices, give it a browser address with `cyfr access browser`."
       }
     },
     {
       "name": "IPv6 loopback",
       "input": {
         "file": {
-          "CYFR_ACCESS": "local",
+          "CYFR_BROWSER": "none",
           "CYFR_BIND_ADDRESS": "::1"
         },
         "process": {
-          "CYFR_ACCESS": "local",
+          "CYFR_BROWSER": "none",
           "CYFR_BIND_ADDRESS": "::1"
         },
         "release?": true
       },
       "access": {
         "assertion": "absent",
-        "canonical": "{\"host\":\"localhost\",\"mode\":\"local\",\"port\":4000,\"profiles\":[]}",
+        "browser": "none",
+        "canonical": "{\"browser\":\"none\",\"host\":\"localhost\",\"port\":4000,\"profiles\":[]}",
         "check_origins": [
           "http://localhost:4000",
           "https://localhost:4000",
@@ -1744,10 +2010,11 @@
           "http://[::1]:4000",
           "https://[::1]:4000"
         ],
-        "digest": "sha256:7300d73c8b043098a710c0a5d7b0a2ce4cecdefb1b288912e8387aeb9428627f",
+        "digest": "sha256:fdf0bb2b75b7f70aba7d6c85c1651c847c8b6717f0721f6b05d58c62bbd4b51d",
+        "exposure": "private",
         "head": {
+          "browser": "none",
           "host": "localhost",
-          "mode": "local",
           "port": 4000,
           "profiles": []
         },
@@ -1757,9 +2024,9 @@
             "::1",
             4000
           ],
-          "proxy": "none"
+          "proxy": "none",
+          "published": "none"
         },
-        "mode": "local",
         "origin": "http://localhost:4000",
         "trust": "none"
       }
@@ -1768,18 +2035,19 @@
       "name": "IPv4 loopback, another address",
       "input": {
         "file": {
-          "CYFR_ACCESS": "local",
+          "CYFR_BROWSER": "none",
           "CYFR_BIND_ADDRESS": "127.0.0.2"
         },
         "process": {
-          "CYFR_ACCESS": "local",
+          "CYFR_BROWSER": "none",
           "CYFR_BIND_ADDRESS": "127.0.0.2"
         },
         "release?": true
       },
       "access": {
         "assertion": "absent",
-        "canonical": "{\"host\":\"localhost\",\"mode\":\"local\",\"port\":4000,\"profiles\":[]}",
+        "browser": "none",
+        "canonical": "{\"browser\":\"none\",\"host\":\"localhost\",\"port\":4000,\"profiles\":[]}",
         "check_origins": [
           "http://localhost:4000",
           "https://localhost:4000",
@@ -1788,10 +2056,11 @@
           "http://[::1]:4000",
           "https://[::1]:4000"
         ],
-        "digest": "sha256:7300d73c8b043098a710c0a5d7b0a2ce4cecdefb1b288912e8387aeb9428627f",
+        "digest": "sha256:fdf0bb2b75b7f70aba7d6c85c1651c847c8b6717f0721f6b05d58c62bbd4b51d",
+        "exposure": "private",
         "head": {
+          "browser": "none",
           "host": "localhost",
-          "mode": "local",
           "port": 4000,
           "profiles": []
         },
@@ -1801,9 +2070,9 @@
             "127.0.0.2",
             4000
           ],
-          "proxy": "none"
+          "proxy": "none",
+          "published": "none"
         },
-        "mode": "local",
         "origin": "http://localhost:4000",
         "trust": "none"
       }
@@ -1812,11 +2081,11 @@
       "name": "IPv4-mapped loopback is not loopback",
       "input": {
         "file": {
-          "CYFR_ACCESS": "local",
+          "CYFR_BROWSER": "none",
           "CYFR_BIND_ADDRESS": "::ffff:127.0.0.1"
         },
         "process": {
-          "CYFR_ACCESS": "local",
+          "CYFR_BROWSER": "none",
           "CYFR_BIND_ADDRESS": "::ffff:127.0.0.1"
         },
         "release?": true
@@ -1827,18 +2096,18 @@
         "payload": {
           "address": "::ffff:127.0.0.1"
         },
-        "sentence": "CYFR_BIND_ADDRESS `::ffff:127.0.0.1` is not a loopback address, so other machines could reach CYFR's loopback listener. Bind 127.0.0.1 or ::1; to reach CYFR from other devices, use CYFR_ACCESS=tailnet or public."
+        "sentence": "CYFR_BIND_ADDRESS `::ffff:127.0.0.1` is not a loopback address, so other machines could reach CYFR's loopback listener. Bind 127.0.0.1 or ::1; to reach CYFR from other devices, give it a browser address with `cyfr access browser`."
       }
     },
     {
       "name": "a short IPv4 form",
       "input": {
         "file": {
-          "CYFR_ACCESS": "local",
+          "CYFR_BROWSER": "none",
           "CYFR_BIND_ADDRESS": "127.1"
         },
         "process": {
-          "CYFR_ACCESS": "local",
+          "CYFR_BROWSER": "none",
           "CYFR_BIND_ADDRESS": "127.1"
         },
         "release?": true
@@ -1857,11 +2126,11 @@
       "name": "a zoned address",
       "input": {
         "file": {
-          "CYFR_ACCESS": "local",
+          "CYFR_BROWSER": "none",
           "CYFR_BIND_ADDRESS": "fe80::1%eth0"
         },
         "process": {
-          "CYFR_ACCESS": "local",
+          "CYFR_BROWSER": "none",
           "CYFR_BIND_ADDRESS": "fe80::1%eth0"
         },
         "release?": true
@@ -1880,11 +2149,11 @@
       "name": "a port with a sign",
       "input": {
         "file": {
-          "CYFR_ACCESS": "local",
+          "CYFR_BROWSER": "none",
           "CYFR_PORT": "+4000"
         },
         "process": {
-          "CYFR_ACCESS": "local",
+          "CYFR_BROWSER": "none",
           "CYFR_PORT": "+4000"
         },
         "release?": true
@@ -1903,11 +2172,11 @@
       "name": "port 0",
       "input": {
         "file": {
-          "CYFR_ACCESS": "local",
+          "CYFR_BROWSER": "none",
           "CYFR_PORT": "0"
         },
         "process": {
-          "CYFR_ACCESS": "local",
+          "CYFR_BROWSER": "none",
           "CYFR_PORT": "0"
         },
         "release?": true
@@ -1926,14 +2195,14 @@
       "name": "a malformed proxy port",
       "input": {
         "file": {
-          "CYFR_ACCESS": "tailnet",
+          "CYFR_BROWSER": "tailnet",
           "CYFR_HOST": "cyfr.tail1a2b3c.ts.net",
           "CYFR_TAILNET_NODE_ID": "nAbc123XYZ1CNTRL",
           "CYFR_PUBLIC_URL": "https://cyfr.tail1a2b3c.ts.net",
           "CYFR_PROXY_PORT": "http"
         },
         "process": {
-          "CYFR_ACCESS": "tailnet",
+          "CYFR_BROWSER": "tailnet",
           "CYFR_HOST": "cyfr.tail1a2b3c.ts.net",
           "CYFR_TAILNET_NODE_ID": "nAbc123XYZ1CNTRL",
           "CYFR_PUBLIC_URL": "https://cyfr.tail1a2b3c.ts.net",
@@ -1955,14 +2224,14 @@
       "name": "a malformed CIDR",
       "input": {
         "file": {
-          "CYFR_ACCESS": "tailnet",
+          "CYFR_BROWSER": "tailnet",
           "CYFR_HOST": "cyfr.tail1a2b3c.ts.net",
           "CYFR_TAILNET_NODE_ID": "nAbc123XYZ1CNTRL",
           "CYFR_PUBLIC_URL": "https://cyfr.tail1a2b3c.ts.net",
           "CYFR_TRUSTED_PROXY_CIDRS": "172.16.234.3/33"
         },
         "process": {
-          "CYFR_ACCESS": "tailnet",
+          "CYFR_BROWSER": "tailnet",
           "CYFR_HOST": "cyfr.tail1a2b3c.ts.net",
           "CYFR_TAILNET_NODE_ID": "nAbc123XYZ1CNTRL",
           "CYFR_PUBLIC_URL": "https://cyfr.tail1a2b3c.ts.net",
@@ -1984,14 +2253,14 @@
       "name": "hops past 16",
       "input": {
         "file": {
-          "CYFR_ACCESS": "tailnet",
+          "CYFR_BROWSER": "tailnet",
           "CYFR_HOST": "cyfr.tail1a2b3c.ts.net",
           "CYFR_TAILNET_NODE_ID": "nAbc123XYZ1CNTRL",
           "CYFR_PUBLIC_URL": "https://cyfr.tail1a2b3c.ts.net",
           "CYFR_TRUSTED_PROXY_HOPS": "17"
         },
         "process": {
-          "CYFR_ACCESS": "tailnet",
+          "CYFR_BROWSER": "tailnet",
           "CYFR_HOST": "cyfr.tail1a2b3c.ts.net",
           "CYFR_TAILNET_NODE_ID": "nAbc123XYZ1CNTRL",
           "CYFR_PUBLIC_URL": "https://cyfr.tail1a2b3c.ts.net",
@@ -2013,12 +2282,12 @@
       "name": "precedence: a source conflict before the assertion from the file",
       "input": {
         "file": {
-          "CYFR_ACCESS": "local",
+          "CYFR_BROWSER": "none",
           "CYFR_HOST": "a.example.com",
           "CYFR_LOCAL_INGRESS_ASSERTED": "true"
         },
         "process": {
-          "CYFR_ACCESS": "local",
+          "CYFR_BROWSER": "none",
           "CYFR_HOST": "b.example.com",
           "CYFR_LOCAL_INGRESS_ASSERTED": "true"
         },
@@ -2036,7 +2305,7 @@
       }
     },
     {
-      "name": "precedence: the assertion from the file before the mode",
+      "name": "precedence: the assertion from the file before the kind",
       "input": {
         "file": {
           "CYFR_LOCAL_INGRESS_ASSERTED": "true"
@@ -2057,11 +2326,11 @@
       "name": "precedence: the host before the node id and the URL",
       "input": {
         "file": {
-          "CYFR_ACCESS": "tailnet",
+          "CYFR_BROWSER": "tailnet",
           "CYFR_HOST": "bad"
         },
         "process": {
-          "CYFR_ACCESS": "tailnet",
+          "CYFR_BROWSER": "tailnet",
           "CYFR_HOST": "bad"
         },
         "release?": true
@@ -2072,20 +2341,20 @@
         "payload": {
           "host": "bad"
         },
-        "sentence": "CYFR_ACCESS is `tailnet`, but CYFR_HOST `bad` is not a tailnet machine name (<machine>.<tailnet>.ts.net). Run `cyfr access tailnet`, which reads both from Tailscale."
+        "sentence": "CYFR_BROWSER is `tailnet`, but CYFR_HOST `bad` is not a tailnet machine name (<machine>.<tailnet>.ts.net). Run `cyfr access browser tailnet`, which reads both from Tailscale."
       }
     },
     {
       "name": "precedence: the node id before the URL",
       "input": {
         "file": {
-          "CYFR_ACCESS": "tailnet",
+          "CYFR_BROWSER": "tailnet",
           "CYFR_HOST": "cyfr.tail1a2b3c.ts.net",
           "CYFR_TAILNET_NODE_ID": "n/bad",
           "CYFR_PUBLIC_URL": "http://x"
         },
         "process": {
-          "CYFR_ACCESS": "tailnet",
+          "CYFR_BROWSER": "tailnet",
           "CYFR_HOST": "cyfr.tail1a2b3c.ts.net",
           "CYFR_TAILNET_NODE_ID": "n/bad",
           "CYFR_PUBLIC_URL": "http://x"
@@ -2098,20 +2367,20 @@
         "payload": {
           "value": "n/bad"
         },
-        "sentence": "CYFR_ACCESS is `tailnet`, but CYFR_TAILNET_NODE_ID `n/bad` is malformed. Run `cyfr access tailnet`, which reads both from Tailscale."
+        "sentence": "CYFR_BROWSER is `tailnet`, but CYFR_TAILNET_NODE_ID `n/bad` is malformed. Run `cyfr access browser tailnet`, which reads both from Tailscale."
       }
     },
     {
-      "name": "precedence: the URL before a key outside the mode",
+      "name": "precedence: the URL before a key outside the kind",
       "input": {
         "file": {
-          "CYFR_ACCESS": "public",
+          "CYFR_BROWSER": "domain",
           "CYFR_HOST": "cyfr.example.com",
           "CYFR_PUBLIC_URL": "http://x",
           "CYFR_TAILNET_NODE_ID": "nAbc123XYZ1CNTRL"
         },
         "process": {
-          "CYFR_ACCESS": "public",
+          "CYFR_BROWSER": "domain",
           "CYFR_HOST": "cyfr.example.com",
           "CYFR_PUBLIC_URL": "http://x",
           "CYFR_TAILNET_NODE_ID": "nAbc123XYZ1CNTRL"
@@ -2122,23 +2391,23 @@
         "class": "invalid_argument",
         "code": "access_public_url_mismatch",
         "payload": {
+          "browser": "domain",
           "expected": "https://cyfr.example.com",
-          "mode": "public",
           "value": "http://x"
         },
-        "sentence": "CYFR_PUBLIC_URL must be exactly https://cyfr.example.com when CYFR_ACCESS is `public`; it is `http://x`. Run `cyfr access public` to rewrite both."
+        "sentence": "CYFR_PUBLIC_URL must be exactly https://cyfr.example.com when CYFR_BROWSER is `domain`; it is `http://x`. Run `cyfr access browser domain` to rewrite both."
       }
     },
     {
-      "name": "precedence: the host before the public URL in local",
+      "name": "precedence: the host before the public URL with none",
       "input": {
         "file": {
-          "CYFR_ACCESS": "local",
+          "CYFR_BROWSER": "none",
           "CYFR_HOST": "x.example.com",
           "CYFR_PUBLIC_URL": "https://x.example.com"
         },
         "process": {
-          "CYFR_ACCESS": "local",
+          "CYFR_BROWSER": "none",
           "CYFR_HOST": "x.example.com",
           "CYFR_PUBLIC_URL": "https://x.example.com"
         },
@@ -2146,24 +2415,24 @@
       },
       "refusal": {
         "class": "invalid_argument",
-        "code": "access_local_mismatch",
+        "code": "access_none_mismatch",
         "payload": {
           "key": "CYFR_HOST",
           "value": "x.example.com"
         },
-        "sentence": "CYFR_ACCESS is `local`, which serves this computer alone at its localhost address, but CYFR_HOST is `x.example.com`. Run `cyfr access local` to write the matching settings, or `cyfr access tailnet|public` to reach it from other devices."
+        "sentence": "CYFR_BROWSER is `none`, which serves this computer alone at its localhost address, but CYFR_HOST is `x.example.com`. Run `cyfr access browser none` to write the matching settings, or `cyfr access browser tailnet|domain|proxy` to reach it from other devices."
       }
     },
     {
       "name": "precedence: the email before the node id",
       "input": {
         "file": {
-          "CYFR_ACCESS": "local",
+          "CYFR_BROWSER": "none",
           "CADDY_ACME_EMAIL": "ops@example.com",
           "CYFR_TAILNET_NODE_ID": "nAbc123XYZ1CNTRL"
         },
         "process": {
-          "CYFR_ACCESS": "local",
+          "CYFR_BROWSER": "none",
           "CADDY_ACME_EMAIL": "ops@example.com",
           "CYFR_TAILNET_NODE_ID": "nAbc123XYZ1CNTRL"
         },
@@ -2171,25 +2440,25 @@
       },
       "refusal": {
         "class": "invalid_argument",
-        "code": "access_key_outside_mode",
+        "code": "access_key_outside_browser",
         "payload": {
+          "browser": "none",
           "key": "CADDY_ACME_EMAIL",
-          "mode": "local",
-          "needs": "public"
+          "needs": "domain"
         },
-        "sentence": "`CADDY_ACME_EMAIL` is set, but only `public` access uses it (CYFR_ACCESS is `local`). Remove it, or run `cyfr access public`."
+        "sentence": "`CADDY_ACME_EMAIL` is set, but only `domain` uses it (CYFR_BROWSER is `none`). Remove it, or run `cyfr access browser domain`."
       }
     },
     {
-      "name": "precedence: a key outside the mode before the bind",
+      "name": "precedence: a key outside the kind before the bind",
       "input": {
         "file": {
-          "CYFR_ACCESS": "local",
+          "CYFR_BROWSER": "none",
           "CADDY_ACME_EMAIL": "ops@example.com",
           "CYFR_BIND_ADDRESS": "0.0.0.0"
         },
         "process": {
-          "CYFR_ACCESS": "local",
+          "CYFR_BROWSER": "none",
           "CADDY_ACME_EMAIL": "ops@example.com",
           "CYFR_BIND_ADDRESS": "0.0.0.0"
         },
@@ -2197,25 +2466,25 @@
       },
       "refusal": {
         "class": "invalid_argument",
-        "code": "access_key_outside_mode",
+        "code": "access_key_outside_browser",
         "payload": {
+          "browser": "none",
           "key": "CADDY_ACME_EMAIL",
-          "mode": "local",
-          "needs": "public"
+          "needs": "domain"
         },
-        "sentence": "`CADDY_ACME_EMAIL` is set, but only `public` access uses it (CYFR_ACCESS is `local`). Remove it, or run `cyfr access public`."
+        "sentence": "`CADDY_ACME_EMAIL` is set, but only `domain` uses it (CYFR_BROWSER is `none`). Remove it, or run `cyfr access browser domain`."
       }
     },
     {
       "name": "precedence: a malformed port before the bind",
       "input": {
         "file": {
-          "CYFR_ACCESS": "local",
+          "CYFR_BROWSER": "none",
           "CYFR_PORT": "x",
           "CYFR_BIND_ADDRESS": "0.0.0.0"
         },
         "process": {
-          "CYFR_ACCESS": "local",
+          "CYFR_BROWSER": "none",
           "CYFR_PORT": "x",
           "CYFR_BIND_ADDRESS": "0.0.0.0"
         },
@@ -2239,14 +2508,14 @@
           "CYFR_PORT": "4100",
           "CYFR_PROXY_PORT": "4100",
           "CYFR_PUBLIC_URL": "https://cyfr.example.com",
-          "CYFR_ACCESS": "public"
+          "CYFR_BROWSER": "domain"
         },
         "process": {
           "CYFR_HOST": "cyfr.example.com",
           "CYFR_PORT": "4100",
           "CYFR_PROXY_PORT": "4100",
           "CYFR_PUBLIC_URL": "https://cyfr.example.com",
-          "CYFR_ACCESS": "public"
+          "CYFR_BROWSER": "domain"
         },
         "release?": true
       },
@@ -2272,7 +2541,7 @@
           "CYFR_PROXY_BIND_ADDRESS": "127.0.0.2",
           "CYFR_PROXY_PORT": "4100",
           "CYFR_PUBLIC_URL": "https://cyfr.example.com",
-          "CYFR_ACCESS": "public"
+          "CYFR_BROWSER": "domain"
         },
         "process": {
           "CYFR_HOST": "cyfr.example.com",
@@ -2280,13 +2549,14 @@
           "CYFR_PROXY_BIND_ADDRESS": "127.0.0.2",
           "CYFR_PROXY_PORT": "4100",
           "CYFR_PUBLIC_URL": "https://cyfr.example.com",
-          "CYFR_ACCESS": "public"
+          "CYFR_BROWSER": "domain"
         },
         "release?": true
       },
       "access": {
         "assertion": "absent",
-        "canonical": "{\"host\":\"cyfr.example.com\",\"mode\":\"public\",\"port\":4100,\"profiles\":[\"public\"],\"public_url\":\"https://cyfr.example.com\"}",
+        "browser": "domain",
+        "canonical": "{\"browser\":\"domain\",\"host\":\"cyfr.example.com\",\"port\":4100,\"profiles\":[\"domain\"],\"public_url\":\"https://cyfr.example.com\"}",
         "check_origins": [
           "https://cyfr.example.com",
           "http://localhost:4100",
@@ -2296,13 +2566,14 @@
           "http://[::1]:4100",
           "https://[::1]:4100"
         ],
-        "digest": "sha256:4d698afcf1fe67a1b17e3eddd082640b7e4b988b9a6cb7a1df25aa7e06e756e5",
+        "digest": "sha256:c395bfbb8a91810c711be17d9b286232b4beb5e0fc0bcf9bc2b6855e22ca9e80",
+        "exposure": "public",
         "head": {
+          "browser": "domain",
           "host": "cyfr.example.com",
-          "mode": "public",
           "port": 4100,
           "profiles": [
-            "public"
+            "domain"
           ],
           "public_url": "https://cyfr.example.com"
         },
@@ -2315,9 +2586,9 @@
           "proxy": [
             "127.0.0.2",
             4100
-          ]
+          ],
+          "published": "none"
         },
-        "mode": "public",
         "origin": "https://cyfr.example.com",
         "trust": {
           "hops": 1
@@ -2325,23 +2596,24 @@
       }
     },
     {
-      "name": "a local home on the port a proxy listener would take",
+      "name": "a server with no browser address on the port a proxy listener would take",
       "input": {
         "file": {
           "CYFR_PORT": "4100",
           "CYFR_PROXY_PORT": "4100",
-          "CYFR_ACCESS": "local"
+          "CYFR_BROWSER": "none"
         },
         "process": {
           "CYFR_PORT": "4100",
           "CYFR_PROXY_PORT": "4100",
-          "CYFR_ACCESS": "local"
+          "CYFR_BROWSER": "none"
         },
         "release?": true
       },
       "access": {
         "assertion": "absent",
-        "canonical": "{\"host\":\"localhost\",\"mode\":\"local\",\"port\":4100,\"profiles\":[]}",
+        "browser": "none",
+        "canonical": "{\"browser\":\"none\",\"host\":\"localhost\",\"port\":4100,\"profiles\":[]}",
         "check_origins": [
           "http://localhost:4100",
           "https://localhost:4100",
@@ -2350,10 +2622,11 @@
           "http://[::1]:4100",
           "https://[::1]:4100"
         ],
-        "digest": "sha256:6cfca5de9414e7c1b5839c4269aeef614774141b31204793ab6d41af0a481d8c",
+        "digest": "sha256:5d47b923523ccad88b9b744f96a17d8907566b6b4bc004b279b9eeb17bc5ff5e",
+        "exposure": "private",
         "head": {
+          "browser": "none",
           "host": "localhost",
-          "mode": "local",
           "port": 4100,
           "profiles": []
         },
@@ -2363,9 +2636,9 @@
             "127.0.0.1",
             4100
           ],
-          "proxy": "none"
+          "proxy": "none",
+          "published": "none"
         },
-        "mode": "local",
         "origin": "http://localhost:4100",
         "trust": "none"
       }
@@ -2379,7 +2652,7 @@
           "CYFR_PROXY_BIND_ADDRESS": "0.0.0.0",
           "CYFR_PROXY_PORT": "4100",
           "CYFR_PUBLIC_URL": "https://cyfr.example.com",
-          "CYFR_ACCESS": "public"
+          "CYFR_BROWSER": "domain"
         },
         "process": {
           "CYFR_HOST": "cyfr.example.com",
@@ -2387,7 +2660,7 @@
           "CYFR_PROXY_BIND_ADDRESS": "0.0.0.0",
           "CYFR_PROXY_PORT": "4100",
           "CYFR_PUBLIC_URL": "https://cyfr.example.com",
-          "CYFR_ACCESS": "public"
+          "CYFR_BROWSER": "domain"
         },
         "release?": true
       },
@@ -2413,7 +2686,7 @@
           "CYFR_PROXY_BIND_ADDRESS": "::",
           "CYFR_PROXY_PORT": "4100",
           "CYFR_PUBLIC_URL": "https://cyfr.example.com",
-          "CYFR_ACCESS": "public"
+          "CYFR_BROWSER": "domain"
         },
         "process": {
           "CYFR_HOST": "cyfr.example.com",
@@ -2421,7 +2694,7 @@
           "CYFR_PROXY_BIND_ADDRESS": "::",
           "CYFR_PROXY_PORT": "4100",
           "CYFR_PUBLIC_URL": "https://cyfr.example.com",
-          "CYFR_ACCESS": "public"
+          "CYFR_BROWSER": "domain"
         },
         "release?": true
       },
@@ -2447,7 +2720,7 @@
           "CYFR_PROXY_BIND_ADDRESS": "::ffff:127.0.0.1",
           "CYFR_PROXY_PORT": "4100",
           "CYFR_PUBLIC_URL": "https://cyfr.example.com",
-          "CYFR_ACCESS": "public"
+          "CYFR_BROWSER": "domain"
         },
         "process": {
           "CYFR_HOST": "cyfr.example.com",
@@ -2455,7 +2728,7 @@
           "CYFR_PROXY_BIND_ADDRESS": "::ffff:127.0.0.1",
           "CYFR_PROXY_PORT": "4100",
           "CYFR_PUBLIC_URL": "https://cyfr.example.com",
-          "CYFR_ACCESS": "public"
+          "CYFR_BROWSER": "domain"
         },
         "release?": true
       },
@@ -2471,24 +2744,902 @@
         },
         "sentence": "`CYFR_PROXY_PORT` is `4100` on `::ffff:127.0.0.1`, and the loopback listener takes CYFR_PORT `4100` on `127.0.0.1`: the proxy listener's port must differ from the loopback listener's on the same address. Nothing started. Set CYFR_PROXY_PORT to another port."
       }
+    },
+    {
+      "name": "proxy, as cyfr access browser proxy writes it, hops",
+      "input": {
+        "file": {
+          "CYFR_BROWSER": "proxy",
+          "CYFR_HOST": "cyfr.example.com",
+          "CYFR_PUBLIC_URL": "https://cyfr.example.com",
+          "CYFR_PROXY_PUBLISH": "127.0.0.1:4001",
+          "CYFR_PORT": "4000",
+          "CYFR_TRUSTED_PROXY_HOPS": "1"
+        },
+        "process": {
+          "CYFR_BROWSER": "proxy",
+          "CYFR_HOST": "cyfr.example.com",
+          "CYFR_PUBLIC_URL": "https://cyfr.example.com",
+          "CYFR_PROXY_PUBLISH": "127.0.0.1:4001",
+          "CYFR_PORT": "4000",
+          "CYFR_TRUSTED_PROXY_HOPS": "1"
+        },
+        "release?": true
+      },
+      "access": {
+        "assertion": "absent",
+        "browser": "proxy",
+        "canonical": "{\"browser\":\"proxy\",\"host\":\"cyfr.example.com\",\"port\":4000,\"profiles\":[],\"public_url\":\"https://cyfr.example.com\",\"publish\":\"127.0.0.1:4001\"}",
+        "check_origins": [
+          "https://cyfr.example.com",
+          "http://localhost:4000",
+          "https://localhost:4000",
+          "http://127.0.0.1:4000",
+          "https://127.0.0.1:4000",
+          "http://[::1]:4000",
+          "https://[::1]:4000"
+        ],
+        "digest": "sha256:2ee58b884f408da6a402558a95e535eba5855d310058619cba88c71a5bbb30a6",
+        "exposure": "public",
+        "head": {
+          "browser": "proxy",
+          "host": "cyfr.example.com",
+          "port": 4000,
+          "profiles": [],
+          "public_url": "https://cyfr.example.com",
+          "publish": "127.0.0.1:4001"
+        },
+        "hsts": "endpoint_on_proxy",
+        "listeners": {
+          "loopback": [
+            "127.0.0.1",
+            4000
+          ],
+          "proxy": [
+            "127.0.0.1",
+            4001
+          ],
+          "published": [
+            "127.0.0.1",
+            4001
+          ]
+        },
+        "origin": "https://cyfr.example.com",
+        "trust": {
+          "hops": 1
+        }
+      }
+    },
+    {
+      "name": "proxy, as the stack starts it",
+      "input": {
+        "file": {
+          "CYFR_BROWSER": "proxy",
+          "CYFR_HOST": "cyfr.example.com",
+          "CYFR_PUBLIC_URL": "https://cyfr.example.com",
+          "CYFR_PROXY_PUBLISH": "127.0.0.1:4001",
+          "CYFR_PORT": "4000",
+          "CYFR_TRUSTED_PROXY_HOPS": "1"
+        },
+        "process": {
+          "CYFR_BROWSER": "proxy",
+          "CYFR_HOST": "cyfr.example.com",
+          "CYFR_PUBLIC_URL": "https://cyfr.example.com",
+          "CYFR_PROXY_PUBLISH": "127.0.0.1:4001",
+          "CYFR_PORT": "4000",
+          "CYFR_TRUSTED_PROXY_HOPS": "1",
+          "CYFR_BIND_ADDRESS": "172.16.230.2",
+          "CYFR_LOCAL_INGRESS_ASSERTED": "true",
+          "CYFR_PROXY_BIND_ADDRESS": "172.16.230.2",
+          "CYFR_TRUSTED_PROXY_CIDRS": ""
+        },
+        "release?": true
+      },
+      "access": {
+        "assertion": "process",
+        "browser": "proxy",
+        "canonical": "{\"browser\":\"proxy\",\"host\":\"cyfr.example.com\",\"port\":4000,\"profiles\":[],\"public_url\":\"https://cyfr.example.com\",\"publish\":\"127.0.0.1:4001\"}",
+        "check_origins": [
+          "https://cyfr.example.com",
+          "http://localhost:4000",
+          "https://localhost:4000",
+          "http://127.0.0.1:4000",
+          "https://127.0.0.1:4000",
+          "http://[::1]:4000",
+          "https://[::1]:4000"
+        ],
+        "digest": "sha256:2ee58b884f408da6a402558a95e535eba5855d310058619cba88c71a5bbb30a6",
+        "exposure": "public",
+        "head": {
+          "browser": "proxy",
+          "host": "cyfr.example.com",
+          "port": 4000,
+          "profiles": [],
+          "public_url": "https://cyfr.example.com",
+          "publish": "127.0.0.1:4001"
+        },
+        "hsts": "endpoint_on_proxy",
+        "listeners": {
+          "loopback": [
+            "172.16.230.2",
+            4000
+          ],
+          "proxy": [
+            "172.16.230.2",
+            4001
+          ],
+          "published": [
+            "127.0.0.1",
+            4001
+          ]
+        },
+        "origin": "https://cyfr.example.com",
+        "trust": {
+          "hops": 1
+        }
+      }
+    },
+    {
+      "name": "proxy, CIDRs",
+      "input": {
+        "file": {
+          "CYFR_BROWSER": "proxy",
+          "CYFR_HOST": "cyfr.example.com",
+          "CYFR_PUBLIC_URL": "https://cyfr.example.com",
+          "CYFR_PROXY_PUBLISH": "127.0.0.1:4001",
+          "CYFR_TRUSTED_PROXY_CIDRS": "172.16.230.1"
+        },
+        "process": {
+          "CYFR_BROWSER": "proxy",
+          "CYFR_HOST": "cyfr.example.com",
+          "CYFR_PUBLIC_URL": "https://cyfr.example.com",
+          "CYFR_PROXY_PUBLISH": "127.0.0.1:4001",
+          "CYFR_TRUSTED_PROXY_CIDRS": "172.16.230.1"
+        },
+        "release?": true
+      },
+      "access": {
+        "assertion": "absent",
+        "browser": "proxy",
+        "canonical": "{\"browser\":\"proxy\",\"host\":\"cyfr.example.com\",\"port\":4000,\"profiles\":[],\"public_url\":\"https://cyfr.example.com\",\"publish\":\"127.0.0.1:4001\"}",
+        "check_origins": [
+          "https://cyfr.example.com",
+          "http://localhost:4000",
+          "https://localhost:4000",
+          "http://127.0.0.1:4000",
+          "https://127.0.0.1:4000",
+          "http://[::1]:4000",
+          "https://[::1]:4000"
+        ],
+        "digest": "sha256:2ee58b884f408da6a402558a95e535eba5855d310058619cba88c71a5bbb30a6",
+        "exposure": "public",
+        "head": {
+          "browser": "proxy",
+          "host": "cyfr.example.com",
+          "port": 4000,
+          "profiles": [],
+          "public_url": "https://cyfr.example.com",
+          "publish": "127.0.0.1:4001"
+        },
+        "hsts": "endpoint_on_proxy",
+        "listeners": {
+          "loopback": [
+            "127.0.0.1",
+            4000
+          ],
+          "proxy": [
+            "127.0.0.1",
+            4001
+          ],
+          "published": [
+            "127.0.0.1",
+            4001
+          ]
+        },
+        "origin": "https://cyfr.example.com",
+        "trust": {
+          "cidrs": [
+            "172.16.230.1"
+          ]
+        }
+      }
+    },
+    {
+      "name": "proxy, an IPv6 publication is refused",
+      "input": {
+        "file": {
+          "CYFR_BROWSER": "proxy",
+          "CYFR_HOST": "cyfr.example.com",
+          "CYFR_PUBLIC_URL": "https://cyfr.example.com",
+          "CYFR_PROXY_PUBLISH": "[::1]:4001",
+          "CYFR_TRUSTED_PROXY_HOPS": "2"
+        },
+        "process": {
+          "CYFR_BROWSER": "proxy",
+          "CYFR_HOST": "cyfr.example.com",
+          "CYFR_PUBLIC_URL": "https://cyfr.example.com",
+          "CYFR_PROXY_PUBLISH": "[::1]:4001",
+          "CYFR_TRUSTED_PROXY_HOPS": "2"
+        },
+        "release?": true
+      },
+      "refusal": {
+        "class": "invalid_argument",
+        "code": "access_setting_invalid",
+        "payload": {
+          "key": "CYFR_PROXY_PUBLISH",
+          "value": "[::1]:4001"
+        },
+        "sentence": "`CYFR_PROXY_PUBLISH` is `[::1]:4001`, which is not an IPv4 loopback address and a port, as 127.0.0.1:4001. Nothing started. Correct it, or remove it to take the default."
+      }
+    },
+    {
+      "name": "proxy, the publication unset takes the default",
+      "input": {
+        "file": {
+          "CYFR_BROWSER": "proxy",
+          "CYFR_HOST": "cyfr.example.com",
+          "CYFR_PUBLIC_URL": "https://cyfr.example.com",
+          "CYFR_TRUSTED_PROXY_HOPS": "1"
+        },
+        "process": {
+          "CYFR_BROWSER": "proxy",
+          "CYFR_HOST": "cyfr.example.com",
+          "CYFR_PUBLIC_URL": "https://cyfr.example.com",
+          "CYFR_TRUSTED_PROXY_HOPS": "1"
+        },
+        "release?": true
+      },
+      "access": {
+        "assertion": "absent",
+        "browser": "proxy",
+        "canonical": "{\"browser\":\"proxy\",\"host\":\"cyfr.example.com\",\"port\":4000,\"profiles\":[],\"public_url\":\"https://cyfr.example.com\",\"publish\":\"127.0.0.1:4001\"}",
+        "check_origins": [
+          "https://cyfr.example.com",
+          "http://localhost:4000",
+          "https://localhost:4000",
+          "http://127.0.0.1:4000",
+          "https://127.0.0.1:4000",
+          "http://[::1]:4000",
+          "https://[::1]:4000"
+        ],
+        "digest": "sha256:2ee58b884f408da6a402558a95e535eba5855d310058619cba88c71a5bbb30a6",
+        "exposure": "public",
+        "head": {
+          "browser": "proxy",
+          "host": "cyfr.example.com",
+          "port": 4000,
+          "profiles": [],
+          "public_url": "https://cyfr.example.com",
+          "publish": "127.0.0.1:4001"
+        },
+        "hsts": "endpoint_on_proxy",
+        "listeners": {
+          "loopback": [
+            "127.0.0.1",
+            4000
+          ],
+          "proxy": [
+            "127.0.0.1",
+            4001
+          ],
+          "published": [
+            "127.0.0.1",
+            4001
+          ]
+        },
+        "origin": "https://cyfr.example.com",
+        "trust": {
+          "hops": 1
+        }
+      }
+    },
+    {
+      "name": "proxy, published at another loopback address on the loopback listener's port",
+      "input": {
+        "file": {
+          "CYFR_BROWSER": "proxy",
+          "CYFR_HOST": "cyfr.example.com",
+          "CYFR_PUBLIC_URL": "https://cyfr.example.com",
+          "CYFR_PROXY_PUBLISH": "127.0.0.2:4000",
+          "CYFR_TRUSTED_PROXY_HOPS": "1"
+        },
+        "process": {
+          "CYFR_BROWSER": "proxy",
+          "CYFR_HOST": "cyfr.example.com",
+          "CYFR_PUBLIC_URL": "https://cyfr.example.com",
+          "CYFR_PROXY_PUBLISH": "127.0.0.2:4000",
+          "CYFR_TRUSTED_PROXY_HOPS": "1"
+        },
+        "release?": true
+      },
+      "access": {
+        "assertion": "absent",
+        "browser": "proxy",
+        "canonical": "{\"browser\":\"proxy\",\"host\":\"cyfr.example.com\",\"port\":4000,\"profiles\":[],\"public_url\":\"https://cyfr.example.com\",\"publish\":\"127.0.0.2:4000\"}",
+        "check_origins": [
+          "https://cyfr.example.com",
+          "http://localhost:4000",
+          "https://localhost:4000",
+          "http://127.0.0.1:4000",
+          "https://127.0.0.1:4000",
+          "http://[::1]:4000",
+          "https://[::1]:4000"
+        ],
+        "digest": "sha256:61e96e40590fb6350b5432c0e1666a93fede6d14618a70a19a0d716bcb8e94d4",
+        "exposure": "public",
+        "head": {
+          "browser": "proxy",
+          "host": "cyfr.example.com",
+          "port": 4000,
+          "profiles": [],
+          "public_url": "https://cyfr.example.com",
+          "publish": "127.0.0.2:4000"
+        },
+        "hsts": "endpoint_on_proxy",
+        "listeners": {
+          "loopback": [
+            "127.0.0.1",
+            4000
+          ],
+          "proxy": [
+            "127.0.0.1",
+            4001
+          ],
+          "published": [
+            "127.0.0.2",
+            4000
+          ]
+        },
+        "origin": "https://cyfr.example.com",
+        "trust": {
+          "hops": 1
+        }
+      }
+    },
+    {
+      "name": "proxy without a stated trust",
+      "input": {
+        "file": {
+          "CYFR_BROWSER": "proxy",
+          "CYFR_HOST": "cyfr.example.com",
+          "CYFR_PUBLIC_URL": "https://cyfr.example.com",
+          "CYFR_PROXY_PUBLISH": "127.0.0.1:4001"
+        },
+        "process": {
+          "CYFR_BROWSER": "proxy",
+          "CYFR_HOST": "cyfr.example.com",
+          "CYFR_PUBLIC_URL": "https://cyfr.example.com",
+          "CYFR_PROXY_PUBLISH": "127.0.0.1:4001"
+        },
+        "release?": true
+      },
+      "refusal": {
+        "class": "setup_required",
+        "code": "access_proxy_trust_missing",
+        "payload": {},
+        "sentence": "CYFR_BROWSER is `proxy`, and .env states no trust in your proxy's forwarded headers: neither CYFR_TRUSTED_PROXY_HOPS nor CYFR_TRUSTED_PROXY_CIDRS is set. Nothing was started or changed. Set CYFR_TRUSTED_PROXY_HOPS in .env to the number of proxies in front of CYFR (1 for your proxy alone), or list them in CYFR_TRUSTED_PROXY_CIDRS, then run the command again."
+      }
+    },
+    {
+      "name": "proxy without a stated trust, as the stack's overlay leaves it",
+      "input": {
+        "file": {
+          "CYFR_BROWSER": "proxy",
+          "CYFR_HOST": "cyfr.example.com",
+          "CYFR_PUBLIC_URL": "https://cyfr.example.com",
+          "CYFR_PROXY_PUBLISH": "127.0.0.1:4001"
+        },
+        "process": {
+          "CYFR_BROWSER": "proxy",
+          "CYFR_HOST": "cyfr.example.com",
+          "CYFR_PUBLIC_URL": "https://cyfr.example.com",
+          "CYFR_PROXY_PUBLISH": "127.0.0.1:4001",
+          "CYFR_BIND_ADDRESS": "172.16.230.2",
+          "CYFR_LOCAL_INGRESS_ASSERTED": "true",
+          "CYFR_PROXY_BIND_ADDRESS": "172.16.230.2",
+          "CYFR_TRUSTED_PROXY_CIDRS": ""
+        },
+        "release?": true
+      },
+      "refusal": {
+        "class": "setup_required",
+        "code": "access_proxy_trust_missing",
+        "payload": {},
+        "sentence": "CYFR_BROWSER is `proxy`, and .env states no trust in your proxy's forwarded headers: neither CYFR_TRUSTED_PROXY_HOPS nor CYFR_TRUSTED_PROXY_CIDRS is set. Nothing was started or changed. Set CYFR_TRUSTED_PROXY_HOPS in .env to the number of proxies in front of CYFR (1 for your proxy alone), or list them in CYFR_TRUSTED_PROXY_CIDRS, then run the command again."
+      }
+    },
+    {
+      "name": "proxy, a publication off the loopback",
+      "input": {
+        "file": {
+          "CYFR_BROWSER": "proxy",
+          "CYFR_HOST": "cyfr.example.com",
+          "CYFR_PUBLIC_URL": "https://cyfr.example.com",
+          "CYFR_PROXY_PUBLISH": "0.0.0.0:4001",
+          "CYFR_TRUSTED_PROXY_HOPS": "1"
+        },
+        "process": {
+          "CYFR_BROWSER": "proxy",
+          "CYFR_HOST": "cyfr.example.com",
+          "CYFR_PUBLIC_URL": "https://cyfr.example.com",
+          "CYFR_PROXY_PUBLISH": "0.0.0.0:4001",
+          "CYFR_TRUSTED_PROXY_HOPS": "1"
+        },
+        "release?": true
+      },
+      "refusal": {
+        "class": "invalid_argument",
+        "code": "access_setting_invalid",
+        "payload": {
+          "key": "CYFR_PROXY_PUBLISH",
+          "value": "0.0.0.0:4001"
+        },
+        "sentence": "`CYFR_PROXY_PUBLISH` is `0.0.0.0:4001`, which is not an IPv4 loopback address and a port, as 127.0.0.1:4001. Nothing started. Correct it, or remove it to take the default."
+      }
+    },
+    {
+      "name": "proxy, a publication without a port",
+      "input": {
+        "file": {
+          "CYFR_BROWSER": "proxy",
+          "CYFR_HOST": "cyfr.example.com",
+          "CYFR_PUBLIC_URL": "https://cyfr.example.com",
+          "CYFR_PROXY_PUBLISH": "127.0.0.1",
+          "CYFR_TRUSTED_PROXY_HOPS": "1"
+        },
+        "process": {
+          "CYFR_BROWSER": "proxy",
+          "CYFR_HOST": "cyfr.example.com",
+          "CYFR_PUBLIC_URL": "https://cyfr.example.com",
+          "CYFR_PROXY_PUBLISH": "127.0.0.1",
+          "CYFR_TRUSTED_PROXY_HOPS": "1"
+        },
+        "release?": true
+      },
+      "refusal": {
+        "class": "invalid_argument",
+        "code": "access_setting_invalid",
+        "payload": {
+          "key": "CYFR_PROXY_PUBLISH",
+          "value": "127.0.0.1"
+        },
+        "sentence": "`CYFR_PROXY_PUBLISH` is `127.0.0.1`, which is not an IPv4 loopback address and a port, as 127.0.0.1:4001. Nothing started. Correct it, or remove it to take the default."
+      }
+    },
+    {
+      "name": "proxy, a host name for a publication",
+      "input": {
+        "file": {
+          "CYFR_BROWSER": "proxy",
+          "CYFR_HOST": "cyfr.example.com",
+          "CYFR_PUBLIC_URL": "https://cyfr.example.com",
+          "CYFR_PROXY_PUBLISH": "localhost:4001",
+          "CYFR_TRUSTED_PROXY_HOPS": "1"
+        },
+        "process": {
+          "CYFR_BROWSER": "proxy",
+          "CYFR_HOST": "cyfr.example.com",
+          "CYFR_PUBLIC_URL": "https://cyfr.example.com",
+          "CYFR_PROXY_PUBLISH": "localhost:4001",
+          "CYFR_TRUSTED_PROXY_HOPS": "1"
+        },
+        "release?": true
+      },
+      "refusal": {
+        "class": "invalid_argument",
+        "code": "access_setting_invalid",
+        "payload": {
+          "key": "CYFR_PROXY_PUBLISH",
+          "value": "localhost:4001"
+        },
+        "sentence": "`CYFR_PROXY_PUBLISH` is `localhost:4001`, which is not an IPv4 loopback address and a port, as 127.0.0.1:4001. Nothing started. Correct it, or remove it to take the default."
+      }
+    },
+    {
+      "name": "proxy, an IPv4 address in brackets",
+      "input": {
+        "file": {
+          "CYFR_BROWSER": "proxy",
+          "CYFR_HOST": "cyfr.example.com",
+          "CYFR_PUBLIC_URL": "https://cyfr.example.com",
+          "CYFR_PROXY_PUBLISH": "[127.0.0.1]:4001",
+          "CYFR_TRUSTED_PROXY_HOPS": "1"
+        },
+        "process": {
+          "CYFR_BROWSER": "proxy",
+          "CYFR_HOST": "cyfr.example.com",
+          "CYFR_PUBLIC_URL": "https://cyfr.example.com",
+          "CYFR_PROXY_PUBLISH": "[127.0.0.1]:4001",
+          "CYFR_TRUSTED_PROXY_HOPS": "1"
+        },
+        "release?": true
+      },
+      "refusal": {
+        "class": "invalid_argument",
+        "code": "access_setting_invalid",
+        "payload": {
+          "key": "CYFR_PROXY_PUBLISH",
+          "value": "[127.0.0.1]:4001"
+        },
+        "sentence": "`CYFR_PROXY_PUBLISH` is `[127.0.0.1]:4001`, which is not an IPv4 loopback address and a port, as 127.0.0.1:4001. Nothing started. Correct it, or remove it to take the default."
+      }
+    },
+    {
+      "name": "proxy, published at the loopback listener's own",
+      "input": {
+        "file": {
+          "CYFR_BROWSER": "proxy",
+          "CYFR_HOST": "cyfr.example.com",
+          "CYFR_PUBLIC_URL": "https://cyfr.example.com",
+          "CYFR_PROXY_PUBLISH": "127.0.0.1:4000",
+          "CYFR_TRUSTED_PROXY_HOPS": "1"
+        },
+        "process": {
+          "CYFR_BROWSER": "proxy",
+          "CYFR_HOST": "cyfr.example.com",
+          "CYFR_PUBLIC_URL": "https://cyfr.example.com",
+          "CYFR_PROXY_PUBLISH": "127.0.0.1:4000",
+          "CYFR_TRUSTED_PROXY_HOPS": "1"
+        },
+        "release?": true
+      },
+      "refusal": {
+        "class": "invalid_argument",
+        "code": "access_setting_invalid",
+        "payload": {
+          "key": "CYFR_PROXY_PUBLISH",
+          "port": "4000",
+          "value": "127.0.0.1:4000"
+        },
+        "sentence": "`CYFR_PROXY_PUBLISH` is `127.0.0.1:4000`, where the loopback listener is published already (127.0.0.1 on CYFR_PORT `4000`). Nothing started. Publish the proxy listener at another port."
+      }
+    },
+    {
+      "name": "proxy without a host",
+      "input": {
+        "file": {
+          "CYFR_BROWSER": "proxy",
+          "CYFR_TRUSTED_PROXY_HOPS": "1"
+        },
+        "process": {
+          "CYFR_BROWSER": "proxy",
+          "CYFR_TRUSTED_PROXY_HOPS": "1"
+        },
+        "release?": true
+      },
+      "refusal": {
+        "class": "invalid_argument",
+        "code": "access_domain_host_invalid",
+        "payload": {
+          "browser": "proxy"
+        },
+        "sentence": "CYFR_BROWSER is `proxy`, but CYFR_HOST is not set to a public domain name (not localhost, an IP address or a ts.net name). Run `cyfr access browser proxy --domain <your domain>`."
+      }
+    },
+    {
+      "name": "proxy with a ts.net name",
+      "input": {
+        "file": {
+          "CYFR_BROWSER": "proxy",
+          "CYFR_HOST": "cyfr.tail1a2b3c.ts.net",
+          "CYFR_PUBLIC_URL": "https://cyfr.tail1a2b3c.ts.net",
+          "CYFR_PROXY_PUBLISH": "127.0.0.1:4001",
+          "CYFR_TRUSTED_PROXY_HOPS": "1"
+        },
+        "process": {
+          "CYFR_BROWSER": "proxy",
+          "CYFR_HOST": "cyfr.tail1a2b3c.ts.net",
+          "CYFR_PUBLIC_URL": "https://cyfr.tail1a2b3c.ts.net",
+          "CYFR_PROXY_PUBLISH": "127.0.0.1:4001",
+          "CYFR_TRUSTED_PROXY_HOPS": "1"
+        },
+        "release?": true
+      },
+      "refusal": {
+        "class": "invalid_argument",
+        "code": "access_domain_host_invalid",
+        "payload": {
+          "browser": "proxy",
+          "host": "cyfr.tail1a2b3c.ts.net"
+        },
+        "sentence": "CYFR_BROWSER is `proxy`, but CYFR_HOST `cyfr.tail1a2b3c.ts.net` is not a public domain name (not localhost, an IP address or a ts.net name). Run `cyfr access browser proxy --domain <your domain>`."
+      }
+    },
+    {
+      "name": "proxy with an email",
+      "input": {
+        "file": {
+          "CYFR_BROWSER": "proxy",
+          "CYFR_HOST": "cyfr.example.com",
+          "CYFR_PUBLIC_URL": "https://cyfr.example.com",
+          "CYFR_PROXY_PUBLISH": "127.0.0.1:4001",
+          "CADDY_ACME_EMAIL": "ops@example.com",
+          "CYFR_TRUSTED_PROXY_HOPS": "1"
+        },
+        "process": {
+          "CYFR_BROWSER": "proxy",
+          "CYFR_HOST": "cyfr.example.com",
+          "CYFR_PUBLIC_URL": "https://cyfr.example.com",
+          "CYFR_PROXY_PUBLISH": "127.0.0.1:4001",
+          "CADDY_ACME_EMAIL": "ops@example.com",
+          "CYFR_TRUSTED_PROXY_HOPS": "1"
+        },
+        "release?": true
+      },
+      "refusal": {
+        "class": "invalid_argument",
+        "code": "access_key_outside_browser",
+        "payload": {
+          "browser": "proxy",
+          "key": "CADDY_ACME_EMAIL",
+          "needs": "domain"
+        },
+        "sentence": "`CADDY_ACME_EMAIL` is set, but only `domain` uses it (CYFR_BROWSER is `proxy`). Remove it, or run `cyfr access browser domain`."
+      }
+    },
+    {
+      "name": "domain with a publication",
+      "input": {
+        "file": {
+          "CYFR_BROWSER": "domain",
+          "CYFR_HOST": "cyfr.example.com",
+          "CYFR_PUBLIC_URL": "https://cyfr.example.com",
+          "CYFR_PROXY_PUBLISH": "127.0.0.1:4001"
+        },
+        "process": {
+          "CYFR_BROWSER": "domain",
+          "CYFR_HOST": "cyfr.example.com",
+          "CYFR_PUBLIC_URL": "https://cyfr.example.com",
+          "CYFR_PROXY_PUBLISH": "127.0.0.1:4001"
+        },
+        "release?": true
+      },
+      "refusal": {
+        "class": "invalid_argument",
+        "code": "access_key_outside_browser",
+        "payload": {
+          "browser": "domain",
+          "key": "CYFR_PROXY_PUBLISH",
+          "needs": "proxy"
+        },
+        "sentence": "`CYFR_PROXY_PUBLISH` is set, but only `proxy` uses it (CYFR_BROWSER is `domain`). Remove it, or run `cyfr access browser proxy`."
+      }
+    },
+    {
+      "name": "none with a publication",
+      "input": {
+        "file": {
+          "CYFR_BROWSER": "none",
+          "CYFR_PROXY_PUBLISH": "127.0.0.1:4001"
+        },
+        "process": {
+          "CYFR_BROWSER": "none",
+          "CYFR_PROXY_PUBLISH": "127.0.0.1:4001"
+        },
+        "release?": true
+      },
+      "refusal": {
+        "class": "invalid_argument",
+        "code": "access_key_outside_browser",
+        "payload": {
+          "browser": "none",
+          "key": "CYFR_PROXY_PUBLISH",
+          "needs": "proxy"
+        },
+        "sentence": "`CYFR_PROXY_PUBLISH` is set, but only `proxy` uses it (CYFR_BROWSER is `none`). Remove it, or run `cyfr access browser proxy`."
+      }
+    },
+    {
+      "name": "tailnet with a publication",
+      "input": {
+        "file": {
+          "CYFR_BROWSER": "tailnet",
+          "CYFR_HOST": "cyfr.tail1a2b3c.ts.net",
+          "CYFR_TAILNET_NODE_ID": "nAbc123XYZ1CNTRL",
+          "CYFR_PUBLIC_URL": "https://cyfr.tail1a2b3c.ts.net",
+          "CYFR_PROXY_PUBLISH": "127.0.0.1:4001"
+        },
+        "process": {
+          "CYFR_BROWSER": "tailnet",
+          "CYFR_HOST": "cyfr.tail1a2b3c.ts.net",
+          "CYFR_TAILNET_NODE_ID": "nAbc123XYZ1CNTRL",
+          "CYFR_PUBLIC_URL": "https://cyfr.tail1a2b3c.ts.net",
+          "CYFR_PROXY_PUBLISH": "127.0.0.1:4001"
+        },
+        "release?": true
+      },
+      "refusal": {
+        "class": "invalid_argument",
+        "code": "access_key_outside_browser",
+        "payload": {
+          "browser": "tailnet",
+          "key": "CYFR_PROXY_PUBLISH",
+          "needs": "proxy"
+        },
+        "sentence": "`CYFR_PROXY_PUBLISH` is set, but only `proxy` uses it (CYFR_BROWSER is `tailnet`). Remove it, or run `cyfr access browser proxy`."
+      }
+    },
+    {
+      "name": "precedence: a malformed trust before a trust left unstated",
+      "input": {
+        "file": {
+          "CYFR_BROWSER": "proxy",
+          "CYFR_HOST": "cyfr.example.com",
+          "CYFR_PUBLIC_URL": "https://cyfr.example.com",
+          "CYFR_PROXY_PUBLISH": "127.0.0.1:4001",
+          "CYFR_TRUSTED_PROXY_HOPS": "17"
+        },
+        "process": {
+          "CYFR_BROWSER": "proxy",
+          "CYFR_HOST": "cyfr.example.com",
+          "CYFR_PUBLIC_URL": "https://cyfr.example.com",
+          "CYFR_PROXY_PUBLISH": "127.0.0.1:4001",
+          "CYFR_TRUSTED_PROXY_HOPS": "17"
+        },
+        "release?": true
+      },
+      "refusal": {
+        "class": "invalid_argument",
+        "code": "access_setting_invalid",
+        "payload": {
+          "key": "CYFR_TRUSTED_PROXY_HOPS",
+          "value": "17"
+        },
+        "sentence": "`CYFR_TRUSTED_PROXY_HOPS` is `17`, which is not a whole number of proxy hops from 0 to 16. Nothing started. Correct it, or remove it to take the default."
+      }
+    },
+    {
+      "name": "precedence: the publication before a trust left unstated",
+      "input": {
+        "file": {
+          "CYFR_BROWSER": "proxy",
+          "CYFR_HOST": "cyfr.example.com",
+          "CYFR_PUBLIC_URL": "https://cyfr.example.com",
+          "CYFR_PROXY_PUBLISH": "0.0.0.0:4001"
+        },
+        "process": {
+          "CYFR_BROWSER": "proxy",
+          "CYFR_HOST": "cyfr.example.com",
+          "CYFR_PUBLIC_URL": "https://cyfr.example.com",
+          "CYFR_PROXY_PUBLISH": "0.0.0.0:4001"
+        },
+        "release?": true
+      },
+      "refusal": {
+        "class": "invalid_argument",
+        "code": "access_setting_invalid",
+        "payload": {
+          "key": "CYFR_PROXY_PUBLISH",
+          "value": "0.0.0.0:4001"
+        },
+        "sentence": "`CYFR_PROXY_PUBLISH` is `0.0.0.0:4001`, which is not an IPv4 loopback address and a port, as 127.0.0.1:4001. Nothing started. Correct it, or remove it to take the default."
+      }
+    },
+    {
+      "name": "precedence: the email before the publication",
+      "input": {
+        "file": {
+          "CYFR_BROWSER": "none",
+          "CADDY_ACME_EMAIL": "ops@example.com",
+          "CYFR_PROXY_PUBLISH": "127.0.0.1:4001"
+        },
+        "process": {
+          "CYFR_BROWSER": "none",
+          "CADDY_ACME_EMAIL": "ops@example.com",
+          "CYFR_PROXY_PUBLISH": "127.0.0.1:4001"
+        },
+        "release?": true
+      },
+      "refusal": {
+        "class": "invalid_argument",
+        "code": "access_key_outside_browser",
+        "payload": {
+          "browser": "none",
+          "key": "CADDY_ACME_EMAIL",
+          "needs": "domain"
+        },
+        "sentence": "`CADDY_ACME_EMAIL` is set, but only `domain` uses it (CYFR_BROWSER is `none`). Remove it, or run `cyfr access browser domain`."
+      }
+    },
+    {
+      "name": "the retired setting is read as no setting",
+      "input": {
+        "file": {
+          "CYFR_ACCESS": "local"
+        },
+        "process": {
+          "CYFR_ACCESS": "local"
+        },
+        "release?": true
+      },
+      "refusal": {
+        "class": "setup_required",
+        "code": "access_missing",
+        "payload": {},
+        "sentence": "CYFR_BROWSER is not set in .env, so CYFR does not know what browser address it has. Nothing started. Run `cyfr init` for a new CYFR, or `cyfr access browser none|tailnet|domain|proxy` for this one."
+      }
+    },
+    {
+      "name": "domain, as cyfr access browser domain writes it",
+      "input": {
+        "file": {
+          "CYFR_BROWSER": "domain",
+          "CYFR_HOST": "cyfr.example.com",
+          "CYFR_PORT": "4000",
+          "CYFR_PUBLIC_URL": "https://cyfr.example.com"
+        },
+        "process": {
+          "CYFR_BROWSER": "domain",
+          "CYFR_HOST": "cyfr.example.com",
+          "CYFR_PORT": "4000",
+          "CYFR_PUBLIC_URL": "https://cyfr.example.com"
+        },
+        "release?": true
+      },
+      "access": {
+        "assertion": "absent",
+        "browser": "domain",
+        "canonical": "{\"browser\":\"domain\",\"host\":\"cyfr.example.com\",\"port\":4000,\"profiles\":[\"domain\"],\"public_url\":\"https://cyfr.example.com\"}",
+        "check_origins": [
+          "https://cyfr.example.com",
+          "http://localhost:4000",
+          "https://localhost:4000",
+          "http://127.0.0.1:4000",
+          "https://127.0.0.1:4000",
+          "http://[::1]:4000",
+          "https://[::1]:4000"
+        ],
+        "digest": "sha256:88fafbe50d6341e3ea08395f93a556a78282313682ebaa99e089f003702a5e61",
+        "exposure": "public",
+        "head": {
+          "browser": "domain",
+          "host": "cyfr.example.com",
+          "port": 4000,
+          "profiles": [
+            "domain"
+          ],
+          "public_url": "https://cyfr.example.com"
+        },
+        "hsts": "caddy",
+        "listeners": {
+          "loopback": [
+            "127.0.0.1",
+            4000
+          ],
+          "proxy": [
+            "127.0.0.1",
+            4001
+          ],
+          "published": "none"
+        },
+        "origin": "https://cyfr.example.com",
+        "trust": {
+          "hops": 1
+        }
+      }
     }
   ],
   "profiles": [
     {
-      "mode": "local",
+      "browser": "none",
       "profiles": []
     },
     {
-      "mode": "tailnet",
+      "browser": "tailnet",
       "profiles": [
         "tailnet"
       ]
     },
     {
-      "mode": "public",
+      "browser": "domain",
       "profiles": [
-        "public"
+        "domain"
       ]
+    },
+    {
+      "browser": "proxy",
+      "profiles": []
     }
   ],
   "names": {
@@ -2727,7 +3878,7 @@
   "words": [
     {
       "head": {
-        "mode": "local",
+        "browser": "none",
         "host": "localhost",
         "port": 4000,
         "profiles": []
@@ -2741,7 +3892,7 @@
     },
     {
       "head": {
-        "mode": "local",
+        "browser": "none",
         "host": "localhost",
         "port": 8080,
         "profiles": []
@@ -2755,7 +3906,7 @@
     },
     {
       "head": {
-        "mode": "tailnet",
+        "browser": "tailnet",
         "host": "cyfr.tail1a2b3c.ts.net",
         "port": 4000,
         "node_id": "nAbc123XYZ1CNTRL",
@@ -2773,13 +3924,13 @@
     },
     {
       "head": {
-        "mode": "public",
+        "browser": "domain",
         "host": "cyfr.example.com",
         "port": 4000,
         "public_url": "https://cyfr.example.com",
         "acme_email": "ops@example.com",
         "profiles": [
-          "public"
+          "domain"
         ]
       },
       "sentences": [
@@ -2791,12 +3942,12 @@
     },
     {
       "head": {
-        "mode": "public",
+        "browser": "domain",
         "host": "cyfr.example.com",
         "port": 4000,
         "public_url": "https://cyfr.example.com",
         "profiles": [
-          "public"
+          "domain"
         ]
       },
       "sentences": [
@@ -2804,6 +3955,23 @@
         "Address: https://cyfr.example.com",
         "Certificate email: none",
         "Ports opened on this machine: 80 and 443"
+      ]
+    },
+    {
+      "head": {
+        "browser": "proxy",
+        "host": "cyfr.example.com",
+        "port": 4000,
+        "public_url": "https://cyfr.example.com",
+        "publish": "127.0.0.1:4001",
+        "profiles": []
+      },
+      "sentences": [
+        "Who can reach CYFR: whoever your own proxy lets through, who still has to sign in",
+        "Address: https://cyfr.example.com",
+        "Certificate email: none",
+        "Ports opened on this machine: none",
+        "Your proxy sends CYFR's requests to: http://127.0.0.1:4001"
       ]
     }
   ],
@@ -2973,67 +4141,127 @@
       ]
     },
     {
-      "code": "access_option_outside_mode",
+      "code": "access_option_outside_browser",
       "class": "invalid_argument",
       "variants": [
         {
           "fixed": {
-            "mode": "local",
+            "browser": "none",
             "option": "--domain"
           },
           "slots": [],
-          "template": "`--domain` is for public access, and this command chooses `local`. Nothing was changed. Run it again without `--domain`, or run `cyfr access public` with it.",
+          "template": "`--domain` is for a domain, through Caddy or your own proxy, and this command chooses `none`. Nothing was changed. Run it again without `--domain`, or run `cyfr access browser domain` with it.",
           "example": {
             "payload": {
-              "mode": "local",
+              "browser": "none",
               "option": "--domain"
             },
-            "sentence": "`--domain` is for public access, and this command chooses `local`. Nothing was changed. Run it again without `--domain`, or run `cyfr access public` with it."
+            "sentence": "`--domain` is for a domain, through Caddy or your own proxy, and this command chooses `none`. Nothing was changed. Run it again without `--domain`, or run `cyfr access browser domain` with it."
           }
         },
         {
           "fixed": {
-            "mode": "tailnet",
+            "browser": "tailnet",
             "option": "--domain"
           },
           "slots": [],
-          "template": "`--domain` is for public access, and this command chooses `tailnet`. Nothing was changed. Run it again without `--domain`, or run `cyfr access public` with it.",
+          "template": "`--domain` is for a domain, through Caddy or your own proxy, and this command chooses `tailnet`. Nothing was changed. Run it again without `--domain`, or run `cyfr access browser domain` with it.",
           "example": {
             "payload": {
-              "mode": "tailnet",
+              "browser": "tailnet",
               "option": "--domain"
             },
-            "sentence": "`--domain` is for public access, and this command chooses `tailnet`. Nothing was changed. Run it again without `--domain`, or run `cyfr access public` with it."
+            "sentence": "`--domain` is for a domain, through Caddy or your own proxy, and this command chooses `tailnet`. Nothing was changed. Run it again without `--domain`, or run `cyfr access browser domain` with it."
           }
         },
         {
           "fixed": {
-            "mode": "local",
+            "browser": "none",
             "option": "--acme-email"
           },
           "slots": [],
-          "template": "`--acme-email` is for public access, and this command chooses `local`. Nothing was changed. Run it again without `--acme-email`, or run `cyfr access public` with it.",
+          "template": "`--acme-email` is for a domain through Caddy, and this command chooses `none`. Nothing was changed. Run it again without `--acme-email`, or run `cyfr access browser domain` with it.",
           "example": {
             "payload": {
-              "mode": "local",
+              "browser": "none",
               "option": "--acme-email"
             },
-            "sentence": "`--acme-email` is for public access, and this command chooses `local`. Nothing was changed. Run it again without `--acme-email`, or run `cyfr access public` with it."
+            "sentence": "`--acme-email` is for a domain through Caddy, and this command chooses `none`. Nothing was changed. Run it again without `--acme-email`, or run `cyfr access browser domain` with it."
           }
         },
         {
           "fixed": {
-            "mode": "tailnet",
+            "browser": "tailnet",
             "option": "--acme-email"
           },
           "slots": [],
-          "template": "`--acme-email` is for public access, and this command chooses `tailnet`. Nothing was changed. Run it again without `--acme-email`, or run `cyfr access public` with it.",
+          "template": "`--acme-email` is for a domain through Caddy, and this command chooses `tailnet`. Nothing was changed. Run it again without `--acme-email`, or run `cyfr access browser domain` with it.",
           "example": {
             "payload": {
-              "mode": "tailnet",
+              "browser": "tailnet",
               "option": "--acme-email"
             },
-            "sentence": "`--acme-email` is for public access, and this command chooses `tailnet`. Nothing was changed. Run it again without `--acme-email`, or run `cyfr access public` with it."
+            "sentence": "`--acme-email` is for a domain through Caddy, and this command chooses `tailnet`. Nothing was changed. Run it again without `--acme-email`, or run `cyfr access browser domain` with it."
+          }
+        },
+        {
+          "fixed": {
+            "browser": "proxy",
+            "option": "--acme-email"
+          },
+          "slots": [],
+          "template": "`--acme-email` is for a domain through Caddy, and this command chooses `proxy`. Nothing was changed. Run it again without `--acme-email`, or run `cyfr access browser domain` with it.",
+          "example": {
+            "payload": {
+              "browser": "proxy",
+              "option": "--acme-email"
+            },
+            "sentence": "`--acme-email` is for a domain through Caddy, and this command chooses `proxy`. Nothing was changed. Run it again without `--acme-email`, or run `cyfr access browser domain` with it."
+          }
+        },
+        {
+          "fixed": {
+            "browser": "none",
+            "option": "--publish"
+          },
+          "slots": [],
+          "template": "`--publish` is for your own proxy, and this command chooses `none`. Nothing was changed. Run it again without `--publish`, or run `cyfr access browser proxy` with it.",
+          "example": {
+            "payload": {
+              "browser": "none",
+              "option": "--publish"
+            },
+            "sentence": "`--publish` is for your own proxy, and this command chooses `none`. Nothing was changed. Run it again without `--publish`, or run `cyfr access browser proxy` with it."
+          }
+        },
+        {
+          "fixed": {
+            "browser": "tailnet",
+            "option": "--publish"
+          },
+          "slots": [],
+          "template": "`--publish` is for your own proxy, and this command chooses `tailnet`. Nothing was changed. Run it again without `--publish`, or run `cyfr access browser proxy` with it.",
+          "example": {
+            "payload": {
+              "browser": "tailnet",
+              "option": "--publish"
+            },
+            "sentence": "`--publish` is for your own proxy, and this command chooses `tailnet`. Nothing was changed. Run it again without `--publish`, or run `cyfr access browser proxy` with it."
+          }
+        },
+        {
+          "fixed": {
+            "browser": "domain",
+            "option": "--publish"
+          },
+          "slots": [],
+          "template": "`--publish` is for your own proxy, and this command chooses `domain`. Nothing was changed. Run it again without `--publish`, or run `cyfr access browser proxy` with it.",
+          "example": {
+            "payload": {
+              "browser": "domain",
+              "option": "--publish"
+            },
+            "sentence": "`--publish` is for your own proxy, and this command chooses `domain`. Nothing was changed. Run it again without `--publish`, or run `cyfr access browser proxy` with it."
           }
         }
       ]
@@ -3045,10 +4273,10 @@
         {
           "fixed": {},
           "slots": [],
-          "template": "This machine has not joined your tailnet. Nothing was changed. Run `cyfr access tailnet` and approve the machine with the link it prints.",
+          "template": "This machine has not joined your tailnet. Nothing was changed. Run `cyfr access browser tailnet` and approve the machine with the link it prints.",
           "example": {
             "payload": {},
-            "sentence": "This machine has not joined your tailnet. Nothing was changed. Run `cyfr access tailnet` and approve the machine with the link it prints."
+            "sentence": "This machine has not joined your tailnet. Nothing was changed. Run `cyfr access browser tailnet` and approve the machine with the link it prints."
           }
         }
       ]
@@ -3062,12 +4290,12 @@
           "slots": [
             "name"
           ],
-          "template": "This machine joined your tailnet as `{name}`, but your tailnet has HTTPS certificates turned off, and CYFR needs them. How CYFR is reached was not changed. Turn on HTTPS on the DNS page of the Tailscale admin console, then run `cyfr access tailnet` again, which uses this machine as it is. If you do not want it in your tailnet, remove `{name}` on the Machines page of the admin console.",
+          "template": "This machine joined your tailnet as `{name}`, but your tailnet has HTTPS certificates turned off, and CYFR needs them. How CYFR is reached was not changed. Turn on HTTPS on the DNS page of the Tailscale admin console, then run `cyfr access browser tailnet` again, which uses this machine as it is. If you do not want it in your tailnet, remove `{name}` on the Machines page of the admin console.",
           "example": {
             "payload": {
               "name": "x-name"
             },
-            "sentence": "This machine joined your tailnet as `x-name`, but your tailnet has HTTPS certificates turned off, and CYFR needs them. How CYFR is reached was not changed. Turn on HTTPS on the DNS page of the Tailscale admin console, then run `cyfr access tailnet` again, which uses this machine as it is. If you do not want it in your tailnet, remove `x-name` on the Machines page of the admin console."
+            "sentence": "This machine joined your tailnet as `x-name`, but your tailnet has HTTPS certificates turned off, and CYFR needs them. How CYFR is reached was not changed. Turn on HTTPS on the DNS page of the Tailscale admin console, then run `cyfr access browser tailnet` again, which uses this machine as it is. If you do not want it in your tailnet, remove `x-name` on the Machines page of the admin console."
           }
         }
       ]
@@ -3081,12 +4309,12 @@
           "slots": [
             "name"
           ],
-          "template": "CYFR is already on your tailnet as `{name}`. Nothing was changed. To give it another name, run `cyfr access local`, then `cyfr access tailnet --new-node`, and remove `{name}` on the Machines page of the Tailscale admin console.",
+          "template": "CYFR is already on your tailnet as `{name}`. Nothing was changed. To give it another name, run `cyfr access browser none`, then `cyfr access browser tailnet --new-node`, and remove `{name}` on the Machines page of the Tailscale admin console.",
           "example": {
             "payload": {
               "name": "x-name"
             },
-            "sentence": "CYFR is already on your tailnet as `x-name`. Nothing was changed. To give it another name, run `cyfr access local`, then `cyfr access tailnet --new-node`, and remove `x-name` on the Machines page of the Tailscale admin console."
+            "sentence": "CYFR is already on your tailnet as `x-name`. Nothing was changed. To give it another name, run `cyfr access browser none`, then `cyfr access browser tailnet --new-node`, and remove `x-name` on the Machines page of the Tailscale admin console."
           }
         }
       ]
@@ -3122,13 +4350,13 @@
             "node",
             "env"
           ],
-          "template": "This machine's tailnet identity is `{node}`, but .env says CYFR is `{env}`, so it is not being served on your tailnet: it answers on this machine only, and nothing else was changed. Run `cyfr access tailnet`, which offers to move CYFR to https://{node} after you confirm.",
+          "template": "This machine's tailnet identity is `{node}`, but .env says CYFR is `{env}`, so it is not being served on your tailnet: it answers on this machine only, and nothing else was changed. Run `cyfr access browser tailnet`, which offers to move CYFR to https://{node} after you confirm.",
           "example": {
             "payload": {
               "env": "x-env",
               "node": "x-node"
             },
-            "sentence": "This machine's tailnet identity is `x-node`, but .env says CYFR is `x-env`, so it is not being served on your tailnet: it answers on this machine only, and nothing else was changed. Run `cyfr access tailnet`, which offers to move CYFR to https://x-node after you confirm."
+            "sentence": "This machine's tailnet identity is `x-node`, but .env says CYFR is `x-env`, so it is not being served on your tailnet: it answers on this machine only, and nothing else was changed. Run `cyfr access browser tailnet`, which offers to move CYFR to https://x-node after you confirm."
           }
         }
       ]
@@ -3159,10 +4387,10 @@
         {
           "fixed": {},
           "slots": [],
-          "template": "The approval link expired before the machine was approved. How CYFR is reached was not changed. Run `cyfr access tailnet` for a new link.",
+          "template": "The approval link expired before the machine was approved. How CYFR is reached was not changed. Run `cyfr access browser tailnet` for a new link.",
           "example": {
             "payload": {},
-            "sentence": "The approval link expired before the machine was approved. How CYFR is reached was not changed. Run `cyfr access tailnet` for a new link."
+            "sentence": "The approval link expired before the machine was approved. How CYFR is reached was not changed. Run `cyfr access browser tailnet` for a new link."
           }
         }
       ]
@@ -3189,10 +4417,10 @@
         {
           "fixed": {},
           "slots": [],
-          "template": "Tailscale did not accept the auth key this machine's join was given: it may be wrong, already used or expired. How CYFR is reached was not changed. Check the key, then run `cyfr access tailnet` again.",
+          "template": "Tailscale did not accept the auth key this machine's join was given: it may be wrong, already used or expired. How CYFR is reached was not changed. Check the key, then run `cyfr access browser tailnet` again.",
           "example": {
             "payload": {},
-            "sentence": "Tailscale did not accept the auth key this machine's join was given: it may be wrong, already used or expired. How CYFR is reached was not changed. Check the key, then run `cyfr access tailnet` again."
+            "sentence": "Tailscale did not accept the auth key this machine's join was given: it may be wrong, already used or expired. How CYFR is reached was not changed. Check the key, then run `cyfr access browser tailnet` again."
           }
         }
       ]
@@ -3204,10 +4432,10 @@
         {
           "fixed": {},
           "slots": [],
-          "template": "The join ended before this machine was approved on your tailnet; no auth key was given, so only its approval link could have joined it. How CYFR is reached was not changed. Run `cyfr access tailnet` again and approve the machine with the link it prints.",
+          "template": "The join ended before this machine was approved on your tailnet; no auth key was given, so only its approval link could have joined it. How CYFR is reached was not changed. Run `cyfr access browser tailnet` again and approve the machine with the link it prints.",
           "example": {
             "payload": {},
-            "sentence": "The join ended before this machine was approved on your tailnet; no auth key was given, so only its approval link could have joined it. How CYFR is reached was not changed. Run `cyfr access tailnet` again and approve the machine with the link it prints."
+            "sentence": "The join ended before this machine was approved on your tailnet; no auth key was given, so only its approval link could have joined it. How CYFR is reached was not changed. Run `cyfr access browser tailnet` again and approve the machine with the link it prints."
           }
         }
       ]
@@ -3276,7 +4504,7 @@
             "old",
             "reason"
           ],
-          "template": "CYFR could not start as {new} ({reason}). What it started was stopped and checked stopped, and CYFR was put back as before, {old}, but it answers on this machine only, because this machine's tailnet identity is not the one .env names. Fix what the reason names, then run the command again; run `cyfr access tailnet`, which offers to move CYFR to the machine's tailnet name.",
+          "template": "CYFR could not start as {new} ({reason}). What it started was stopped and checked stopped, and CYFR was put back as before, {old}, but it answers on this machine only, because this machine's tailnet identity is not the one .env names. Fix what the reason names, then run the command again; run `cyfr access browser tailnet`, which offers to move CYFR to the machine's tailnet name.",
           "example": {
             "payload": {
               "local": "tailnet_node_mismatch",
@@ -3284,7 +4512,7 @@
               "old": "x-old",
               "reason": "x-reason"
             },
-            "sentence": "CYFR could not start as x-new (x-reason). What it started was stopped and checked stopped, and CYFR was put back as before, x-old, but it answers on this machine only, because this machine's tailnet identity is not the one .env names. Fix what the reason names, then run the command again; run `cyfr access tailnet`, which offers to move CYFR to the machine's tailnet name."
+            "sentence": "CYFR could not start as x-new (x-reason). What it started was stopped and checked stopped, and CYFR was put back as before, x-old, but it answers on this machine only, because this machine's tailnet identity is not the one .env names. Fix what the reason names, then run the command again; run `cyfr access browser tailnet`, which offers to move CYFR to the machine's tailnet name."
           }
         },
         {
@@ -3296,7 +4524,7 @@
             "old",
             "reason"
           ],
-          "template": "CYFR could not start as {new} ({reason}). What it started was stopped and checked stopped, and CYFR was put back as before, {old}, but it answers on this machine only, because this machine has not joined your tailnet. Fix what the reason names, then run the command again; run `cyfr access tailnet` and approve the machine with the link it prints.",
+          "template": "CYFR could not start as {new} ({reason}). What it started was stopped and checked stopped, and CYFR was put back as before, {old}, but it answers on this machine only, because this machine has not joined your tailnet. Fix what the reason names, then run the command again; run `cyfr access browser tailnet` and approve the machine with the link it prints.",
           "example": {
             "payload": {
               "local": "tailnet_not_joined",
@@ -3304,7 +4532,7 @@
               "old": "x-old",
               "reason": "x-reason"
             },
-            "sentence": "CYFR could not start as x-new (x-reason). What it started was stopped and checked stopped, and CYFR was put back as before, x-old, but it answers on this machine only, because this machine has not joined your tailnet. Fix what the reason names, then run the command again; run `cyfr access tailnet` and approve the machine with the link it prints."
+            "sentence": "CYFR could not start as x-new (x-reason). What it started was stopped and checked stopped, and CYFR was put back as before, x-old, but it answers on this machine only, because this machine has not joined your tailnet. Fix what the reason names, then run the command again; run `cyfr access browser tailnet` and approve the machine with the link it prints."
           }
         },
         {
@@ -3316,7 +4544,7 @@
             "old",
             "reason"
           ],
-          "template": "CYFR could not start as {new} ({reason}). What it started was stopped and checked stopped, and CYFR was put back as before, {old}, but it answers on this machine only, because your tailnet has HTTPS certificates turned off. Fix what the reason names, then run the command again; turn on HTTPS on the DNS page of the Tailscale admin console, then run `cyfr access tailnet`.",
+          "template": "CYFR could not start as {new} ({reason}). What it started was stopped and checked stopped, and CYFR was put back as before, {old}, but it answers on this machine only, because your tailnet has HTTPS certificates turned off. Fix what the reason names, then run the command again; turn on HTTPS on the DNS page of the Tailscale admin console, then run `cyfr access browser tailnet`.",
           "example": {
             "payload": {
               "local": "tailnet_https_off",
@@ -3324,7 +4552,7 @@
               "old": "x-old",
               "reason": "x-reason"
             },
-            "sentence": "CYFR could not start as x-new (x-reason). What it started was stopped and checked stopped, and CYFR was put back as before, x-old, but it answers on this machine only, because your tailnet has HTTPS certificates turned off. Fix what the reason names, then run the command again; turn on HTTPS on the DNS page of the Tailscale admin console, then run `cyfr access tailnet`."
+            "sentence": "CYFR could not start as x-new (x-reason). What it started was stopped and checked stopped, and CYFR was put back as before, x-old, but it answers on this machine only, because your tailnet has HTTPS certificates turned off. Fix what the reason names, then run the command again; turn on HTTPS on the DNS page of the Tailscale admin console, then run `cyfr access browser tailnet`."
           }
         }
       ]
@@ -3339,13 +4567,13 @@
             "new",
             "env"
           ],
-          "template": "CYFR could not start as {new}, nor as before; everything was stopped and checked stopped. .env says: {env}. Run `cyfr up` to start it as .env says, or `cyfr access <mode>` to choose again.",
+          "template": "CYFR could not start as {new}, nor as before; everything was stopped and checked stopped. .env says: {env}. Run `cyfr up` to start it as .env says, or `cyfr access browser <kind>` to choose again.",
           "example": {
             "payload": {
               "env": "x-env",
               "new": "x-new"
             },
-            "sentence": "CYFR could not start as x-new, nor as before; everything was stopped and checked stopped. .env says: x-env. Run `cyfr up` to start it as .env says, or `cyfr access <mode>` to choose again."
+            "sentence": "CYFR could not start as x-new, nor as before; everything was stopped and checked stopped. .env says: x-env. Run `cyfr up` to start it as .env says, or `cyfr access browser <kind>` to choose again."
           }
         }
       ]
@@ -3361,13 +4589,13 @@
           "slots": [
             "env"
           ],
-          "template": "A change of how CYFR is reached was interrupted, and .env was edited before the change finished. CYFR stopped the stack, checked it stopped, left .env as edited, and started CYFR as it says: {env}. If that is not how CYFR should be reached, run `cyfr access <mode>`.",
+          "template": "A change of how CYFR is reached was interrupted, and .env was edited before the change finished. CYFR stopped the stack, checked it stopped, left .env as edited, and started CYFR as it says: {env}. If that is not how CYFR should be reached, run `cyfr access browser <kind>`.",
           "example": {
             "payload": {
               "env": "x-env",
               "then": "started"
             },
-            "sentence": "A change of how CYFR is reached was interrupted, and .env was edited before the change finished. CYFR stopped the stack, checked it stopped, left .env as edited, and started CYFR as it says: x-env. If that is not how CYFR should be reached, run `cyfr access <mode>`."
+            "sentence": "A change of how CYFR is reached was interrupted, and .env was edited before the change finished. CYFR stopped the stack, checked it stopped, left .env as edited, and started CYFR as it says: x-env. If that is not how CYFR should be reached, run `cyfr access browser <kind>`."
           }
         },
         {
@@ -3377,13 +4605,13 @@
           "slots": [
             "env"
           ],
-          "template": "A change of how CYFR is reached was interrupted, and .env was edited before the change finished. CYFR stopped the stack, checked it stopped, and left .env as edited, which says: {env}. The stack was not running, so nothing was started. Run `cyfr up` to start it as .env says, or `cyfr access <mode>` to choose again.",
+          "template": "A change of how CYFR is reached was interrupted, and .env was edited before the change finished. CYFR stopped the stack, checked it stopped, and left .env as edited, which says: {env}. The stack was not running, so nothing was started. Run `cyfr up` to start it as .env says, or `cyfr access browser <kind>` to choose again.",
           "example": {
             "payload": {
               "env": "x-env",
               "then": "not_running"
             },
-            "sentence": "A change of how CYFR is reached was interrupted, and .env was edited before the change finished. CYFR stopped the stack, checked it stopped, and left .env as edited, which says: x-env. The stack was not running, so nothing was started. Run `cyfr up` to start it as .env says, or `cyfr access <mode>` to choose again."
+            "sentence": "A change of how CYFR is reached was interrupted, and .env was edited before the change finished. CYFR stopped the stack, checked it stopped, and left .env as edited, which says: x-env. The stack was not running, so nothing was started. Run `cyfr up` to start it as .env says, or `cyfr access browser <kind>` to choose again."
           }
         },
         {
@@ -3393,13 +4621,13 @@
           "slots": [
             "env"
           ],
-          "template": "A change of how CYFR is reached was interrupted, and .env was edited before the change finished. CYFR stopped the stack, checked it stopped, and left .env as edited, but CYFR did not start as it says ({env}), and everything is stopped. Fix .env, then run `cyfr up`, or run `cyfr access <mode>` to choose again.",
+          "template": "A change of how CYFR is reached was interrupted, and .env was edited before the change finished. CYFR stopped the stack, checked it stopped, and left .env as edited, but CYFR did not start as it says ({env}), and everything is stopped. Fix .env, then run `cyfr up`, or run `cyfr access browser <kind>` to choose again.",
           "example": {
             "payload": {
               "env": "x-env",
               "then": "failed"
             },
-            "sentence": "A change of how CYFR is reached was interrupted, and .env was edited before the change finished. CYFR stopped the stack, checked it stopped, and left .env as edited, but CYFR did not start as it says (x-env), and everything is stopped. Fix .env, then run `cyfr up`, or run `cyfr access <mode>` to choose again."
+            "sentence": "A change of how CYFR is reached was interrupted, and .env was edited before the change finished. CYFR stopped the stack, checked it stopped, and left .env as edited, but CYFR did not start as it says (x-env), and everything is stopped. Fix .env, then run `cyfr up`, or run `cyfr access browser <kind>` to choose again."
           }
         },
         {
@@ -3407,12 +4635,12 @@
             "then": "incoherent"
           },
           "slots": [],
-          "template": "A change of how CYFR is reached was interrupted, and .env was edited before the change finished. CYFR stopped the stack, checked it stopped, and left .env as edited; nothing was started, because .env no longer says one coherent way CYFR is reached. Run `cyfr up` to see what is wrong with it, or `cyfr access <mode>` to choose again.",
+          "template": "A change of how CYFR is reached was interrupted, and .env was edited before the change finished. CYFR stopped the stack, checked it stopped, and left .env as edited; nothing was started, because .env no longer says one coherent way CYFR is reached. Run `cyfr up` to see what is wrong with it, or `cyfr access browser <kind>` to choose again.",
           "example": {
             "payload": {
               "then": "incoherent"
             },
-            "sentence": "A change of how CYFR is reached was interrupted, and .env was edited before the change finished. CYFR stopped the stack, checked it stopped, and left .env as edited; nothing was started, because .env no longer says one coherent way CYFR is reached. Run `cyfr up` to see what is wrong with it, or `cyfr access <mode>` to choose again."
+            "sentence": "A change of how CYFR is reached was interrupted, and .env was edited before the change finished. CYFR stopped the stack, checked it stopped, and left .env as edited; nothing was started, because .env no longer says one coherent way CYFR is reached. Run `cyfr up` to see what is wrong with it, or `cyfr access browser <kind>` to choose again."
           }
         }
       ]
@@ -3464,12 +4692,12 @@
           "slots": [
             "key"
           ],
-          "template": "`.env` sets `{key}`, which Docker Compose would read to choose this stack's files, project or services behind cyfr's back. Nothing started. Remove it; cyfr chooses them from CYFR_ACCESS.",
+          "template": "`.env` sets `{key}`, which Docker Compose would read to choose this stack's files, project or services behind cyfr's back. Nothing started. Remove it; cyfr chooses them from CYFR_BROWSER.",
           "example": {
             "payload": {
               "key": "COMPOSE_PROFILES"
             },
-            "sentence": "`.env` sets `COMPOSE_PROFILES`, which Docker Compose would read to choose this stack's files, project or services behind cyfr's back. Nothing started. Remove it; cyfr chooses them from CYFR_ACCESS."
+            "sentence": "`.env` sets `COMPOSE_PROFILES`, which Docker Compose would read to choose this stack's files, project or services behind cyfr's back. Nothing started. Remove it; cyfr chooses them from CYFR_BROWSER."
           }
         },
         {

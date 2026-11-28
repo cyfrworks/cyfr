@@ -54,17 +54,17 @@ func TestStartIsRefusedWhileAJoinWaits(t *testing.T) {
 	}
 }
 
-// A switch from a home whose .env is incoherent stops every access mode's
+// A switch from a home whose .env is incoherent stops every kind's
 // service, its proxy included, though the old head cannot name it.
 func TestSwitchFromAnIncoherentEnvStopsEveryAccessService(t *testing.T) {
 	h := newHome(t)
 	h.fake.startStack(t, h.head())
-	h.e.Switch(bg, h.request(id(1), publicTarget, ""))
+	h.e.Switch(bg, h.request(id(1), domainTarget, ""))
 	if !slices.Contains(h.fake.runningServices(), "caddy") {
 		t.Fatal("caddy does not run")
 	}
-	writeFile(t, h.e.envPath(), []byte(strings.Replace(h.env(), "CYFR_ACCESS=public", "CYFR_ACCESS=sideways", 1)))
-	r := h.request(id(2), Target{Mode: ModeLocal}, "")
+	writeFile(t, h.e.envPath(), []byte(strings.Replace(h.env(), "CYFR_BROWSER=domain", "CYFR_BROWSER=sideways", 1)))
+	r := h.request(id(2), Target{Browser: BrowserNone}, "")
 	if r.OldDigest != "" {
 		t.Fatalf("the incoherent .env has a head: %s", r.OldDigest)
 	}
@@ -75,7 +75,7 @@ func TestSwitchFromAnIncoherentEnvStopsEveryAccessService(t *testing.T) {
 	h.assertConverged(baseStack...)
 	calls := h.fake.calls()[mark:]
 	stop := slices.IndexFunc(calls, func(c fakeCall) bool { return c.Args[0] == "stop" && slices.Contains(c.Args, "home-caddy-1") })
-	commit := slices.IndexFunc(calls, func(c fakeCall) bool { return strings.Contains(c.DotEnv, "CYFR_ACCESS=local") })
+	commit := slices.IndexFunc(calls, func(c fakeCall) bool { return strings.Contains(c.DotEnv, "CYFR_BROWSER=none") })
 	if stop < 0 || commit < stop {
 		t.Errorf("caddy was not stopped before the commit (stop %d, commit %d)", stop, commit)
 	}
@@ -86,13 +86,13 @@ func TestSwitchFromAnIncoherentEnvStopsEveryAccessService(t *testing.T) {
 func TestStartRemovesAnAccessServiceItsHeadDoesNotSelect(t *testing.T) {
 	h := newHome(t)
 	h.fake.startStack(t, h.head())
-	h.e.Switch(bg, h.request(id(1), publicTarget, ""))
+	h.e.Switch(bg, h.request(id(1), domainTarget, ""))
 	h.fake.st.Containers["home-tailscale-1"] = &fakeContainer{Name: "home-tailscale-1", Service: serveService, State: "running", Volume: stateVolume}
 	mark := len(h.fake.calls())
 	if rc, err := h.e.Start(bg, "up"); err != nil || rc.Outcome != "ok" {
 		t.Fatalf("start answered %+v, %v", rc, err)
 	}
-	h.assertConverged(publicStack...)
+	h.assertConverged(domainStack...)
 	calls := h.fake.calls()[mark:]
 	rm := slices.IndexFunc(calls, func(c fakeCall) bool { return c.Args[0] == "rm" && slices.Contains(c.Args, "home-tailscale-1") })
 	up := slices.IndexFunc(calls, func(c fakeCall) bool { return c.Args[0] == "compose" && slices.Contains(c.Args, "up") })
@@ -110,13 +110,13 @@ func TestStartRemovesAnAccessServiceItsHeadDoesNotSelect(t *testing.T) {
 	}
 }
 
-// A stop under an incoherent .env covers every access mode's service, not
+// A stop under an incoherent .env covers every kind's service, not
 // only cyfr and the journal's.
 func TestStopUnderAnIncoherentEnvStopsEveryAccessService(t *testing.T) {
 	h := newHome(t)
 	h.fake.startStack(t, h.head())
-	h.e.Switch(bg, h.request(id(1), publicTarget, ""))
-	writeFile(t, h.e.envPath(), []byte(strings.Replace(h.env(), "CYFR_ACCESS=public", "CYFR_ACCESS=sideways", 1)))
+	h.e.Switch(bg, h.request(id(1), domainTarget, ""))
+	writeFile(t, h.e.envPath(), []byte(strings.Replace(h.env(), "CYFR_BROWSER=domain", "CYFR_BROWSER=sideways", 1)))
 	if rc, err := h.e.Stop(bg, "update", false); err != nil || rc.Outcome != "ok" {
 		t.Fatalf("stop answered %+v, %v", rc, err)
 	}
@@ -125,12 +125,12 @@ func TestStopUnderAnIncoherentEnvStopsEveryAccessService(t *testing.T) {
 	}
 }
 
-// Recovery's stop covers every access mode's service, beyond the services
+// Recovery's stop covers every kind's service, beyond the services
 // its journal names: a proxy started after a stopped-stack switch was
 // accepted is stopped too.
 func TestRecoveryStopsEveryAccessService(t *testing.T) {
 	h := newHome(t)
-	r := h.request(id(1), publicTarget, "")
+	r := h.request(id(1), domainTarget, "")
 	h.killAt("journal:switch:accepted", func(e *Engine) { e.Switch(bg, r) })
 	h.fake.st.Containers["home-caddy-1"] = &fakeContainer{Name: "home-caddy-1", Service: "caddy", State: "running"}
 	if _, err := h.e.Resume(bg); err != nil {
@@ -197,7 +197,7 @@ func TestCloseServe(t *testing.T) {
 func TestStopUnderAComposeSettingStopsEverything(t *testing.T) {
 	h := newHome(t)
 	h.fake.startStack(t, h.head())
-	h.e.Switch(bg, h.request(id(1), publicTarget, ""))
+	h.e.Switch(bg, h.request(id(1), domainTarget, ""))
 	writeFile(t, h.e.envPath(), []byte(h.env()+"COMPOSE_PROFILES=tailnet\n"))
 	mark := len(h.fake.calls())
 	if rc, err := h.e.Stop(bg, "down", false); err != nil || rc.Outcome != "ok" {

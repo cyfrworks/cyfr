@@ -748,8 +748,8 @@ defmodule Cyfr.PlatformSettingsRosterTest do
       assert "CYFR_CPU_LIMIT" in Roster.compose_only()
 
       # Caddy's certificate email is interpolated for Caddy and read by the
-      # release, which refuses it outside a public home: a deployment
-      # variable.
+      # release, which refuses it with any browser address but `domain`: a
+      # deployment variable.
       refute "CADDY_ACME_EMAIL" in Roster.compose_only()
       assert "CADDY_ACME_EMAIL" in Roster.deployment()
     end
@@ -916,13 +916,13 @@ defmodule Cyfr.PlatformSettingsRosterTest do
   # The boot, evaluated
   # ---------------------------------------------------------------------------
 
-  # A local home, which a release must name.
+  # A server with no browser address, which a release must name.
   defp base_env do
     %{
       "CYFR_SECRET_KEY_BASE" => Base.encode64(:crypto.strong_rand_bytes(48)),
       "RELEASE_NAME" => "cyfr",
       "CYFR_DATABASE" => nil,
-      "CYFR_ACCESS" => "local"
+      "CYFR_BROWSER" => "none"
     }
   end
 

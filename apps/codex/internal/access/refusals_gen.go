@@ -6,7 +6,7 @@
 package access
 
 // refusalRows are the engine's and `cyfr up`'s refusals, each code's
-// class and sentence templates, as tests/fixtures/access_modes.json's
+// class and sentence templates, as tests/fixtures/access.json's
 // refusals section holds them.
 var refusalRows = map[string]refusalRow{
 	"access_busy": {
@@ -38,31 +38,35 @@ var refusalRows = map[string]refusalRow{
 			{Fixed: map[string]string{"kind": "email"}, Slots: []string{"input", "rule"}, Template: "`{input}` is not a valid email address: {rule}. Nothing was changed. Correct it and run the command again."},
 		},
 	},
-	"access_option_outside_mode": {
+	"access_option_outside_browser": {
 		Class: "invalid_argument",
 		Variants: []refusalVariant{
-			{Fixed: map[string]string{"mode": "local", "option": "--domain"}, Slots: []string{}, Template: "`--domain` is for public access, and this command chooses `local`. Nothing was changed. Run it again without `--domain`, or run `cyfr access public` with it."},
-			{Fixed: map[string]string{"mode": "tailnet", "option": "--domain"}, Slots: []string{}, Template: "`--domain` is for public access, and this command chooses `tailnet`. Nothing was changed. Run it again without `--domain`, or run `cyfr access public` with it."},
-			{Fixed: map[string]string{"mode": "local", "option": "--acme-email"}, Slots: []string{}, Template: "`--acme-email` is for public access, and this command chooses `local`. Nothing was changed. Run it again without `--acme-email`, or run `cyfr access public` with it."},
-			{Fixed: map[string]string{"mode": "tailnet", "option": "--acme-email"}, Slots: []string{}, Template: "`--acme-email` is for public access, and this command chooses `tailnet`. Nothing was changed. Run it again without `--acme-email`, or run `cyfr access public` with it."},
+			{Fixed: map[string]string{"browser": "none", "option": "--domain"}, Slots: []string{}, Template: "`--domain` is for a domain, through Caddy or your own proxy, and this command chooses `none`. Nothing was changed. Run it again without `--domain`, or run `cyfr access browser domain` with it."},
+			{Fixed: map[string]string{"browser": "tailnet", "option": "--domain"}, Slots: []string{}, Template: "`--domain` is for a domain, through Caddy or your own proxy, and this command chooses `tailnet`. Nothing was changed. Run it again without `--domain`, or run `cyfr access browser domain` with it."},
+			{Fixed: map[string]string{"browser": "none", "option": "--acme-email"}, Slots: []string{}, Template: "`--acme-email` is for a domain through Caddy, and this command chooses `none`. Nothing was changed. Run it again without `--acme-email`, or run `cyfr access browser domain` with it."},
+			{Fixed: map[string]string{"browser": "tailnet", "option": "--acme-email"}, Slots: []string{}, Template: "`--acme-email` is for a domain through Caddy, and this command chooses `tailnet`. Nothing was changed. Run it again without `--acme-email`, or run `cyfr access browser domain` with it."},
+			{Fixed: map[string]string{"browser": "proxy", "option": "--acme-email"}, Slots: []string{}, Template: "`--acme-email` is for a domain through Caddy, and this command chooses `proxy`. Nothing was changed. Run it again without `--acme-email`, or run `cyfr access browser domain` with it."},
+			{Fixed: map[string]string{"browser": "none", "option": "--publish"}, Slots: []string{}, Template: "`--publish` is for your own proxy, and this command chooses `none`. Nothing was changed. Run it again without `--publish`, or run `cyfr access browser proxy` with it."},
+			{Fixed: map[string]string{"browser": "tailnet", "option": "--publish"}, Slots: []string{}, Template: "`--publish` is for your own proxy, and this command chooses `tailnet`. Nothing was changed. Run it again without `--publish`, or run `cyfr access browser proxy` with it."},
+			{Fixed: map[string]string{"browser": "domain", "option": "--publish"}, Slots: []string{}, Template: "`--publish` is for your own proxy, and this command chooses `domain`. Nothing was changed. Run it again without `--publish`, or run `cyfr access browser proxy` with it."},
 		},
 	},
 	"tailnet_not_joined": {
 		Class: "setup_required",
 		Variants: []refusalVariant{
-			{Fixed: map[string]string{}, Slots: []string{}, Template: "This machine has not joined your tailnet. Nothing was changed. Run `cyfr access tailnet` and approve the machine with the link it prints."},
+			{Fixed: map[string]string{}, Slots: []string{}, Template: "This machine has not joined your tailnet. Nothing was changed. Run `cyfr access browser tailnet` and approve the machine with the link it prints."},
 		},
 	},
 	"tailnet_https_off": {
 		Class: "setup_required",
 		Variants: []refusalVariant{
-			{Fixed: map[string]string{}, Slots: []string{"name"}, Template: "This machine joined your tailnet as `{name}`, but your tailnet has HTTPS certificates turned off, and CYFR needs them. How CYFR is reached was not changed. Turn on HTTPS on the DNS page of the Tailscale admin console, then run `cyfr access tailnet` again, which uses this machine as it is. If you do not want it in your tailnet, remove `{name}` on the Machines page of the admin console."},
+			{Fixed: map[string]string{}, Slots: []string{"name"}, Template: "This machine joined your tailnet as `{name}`, but your tailnet has HTTPS certificates turned off, and CYFR needs them. How CYFR is reached was not changed. Turn on HTTPS on the DNS page of the Tailscale admin console, then run `cyfr access browser tailnet` again, which uses this machine as it is. If you do not want it in your tailnet, remove `{name}` on the Machines page of the admin console."},
 		},
 	},
 	"tailnet_active": {
 		Class: "conflict",
 		Variants: []refusalVariant{
-			{Fixed: map[string]string{}, Slots: []string{"name"}, Template: "CYFR is already on your tailnet as `{name}`. Nothing was changed. To give it another name, run `cyfr access local`, then `cyfr access tailnet --new-node`, and remove `{name}` on the Machines page of the Tailscale admin console."},
+			{Fixed: map[string]string{}, Slots: []string{"name"}, Template: "CYFR is already on your tailnet as `{name}`. Nothing was changed. To give it another name, run `cyfr access browser none`, then `cyfr access browser tailnet --new-node`, and remove `{name}` on the Machines page of the Tailscale admin console."},
 		},
 	},
 	"tailnet_name_changed": {
@@ -74,7 +78,7 @@ var refusalRows = map[string]refusalRow{
 	"tailnet_node_mismatch": {
 		Class: "conflict",
 		Variants: []refusalVariant{
-			{Fixed: map[string]string{}, Slots: []string{"node", "env"}, Template: "This machine's tailnet identity is `{node}`, but .env says CYFR is `{env}`, so it is not being served on your tailnet: it answers on this machine only, and nothing else was changed. Run `cyfr access tailnet`, which offers to move CYFR to https://{node} after you confirm."},
+			{Fixed: map[string]string{}, Slots: []string{"node", "env"}, Template: "This machine's tailnet identity is `{node}`, but .env says CYFR is `{env}`, so it is not being served on your tailnet: it answers on this machine only, and nothing else was changed. Run `cyfr access browser tailnet`, which offers to move CYFR to https://{node} after you confirm."},
 		},
 	},
 	"tailnet_node_id_unsupported": {
@@ -86,7 +90,7 @@ var refusalRows = map[string]refusalRow{
 	"tailnet_join_expired": {
 		Class: "timeout",
 		Variants: []refusalVariant{
-			{Fixed: map[string]string{}, Slots: []string{}, Template: "The approval link expired before the machine was approved. How CYFR is reached was not changed. Run `cyfr access tailnet` for a new link."},
+			{Fixed: map[string]string{}, Slots: []string{}, Template: "The approval link expired before the machine was approved. How CYFR is reached was not changed. Run `cyfr access browser tailnet` for a new link."},
 		},
 	},
 	"tailnet_join_cancelled": {
@@ -98,13 +102,13 @@ var refusalRows = map[string]refusalRow{
 	"tailnet_join_ended": {
 		Class: "unauthenticated",
 		Variants: []refusalVariant{
-			{Fixed: map[string]string{}, Slots: []string{}, Template: "Tailscale did not accept the auth key this machine's join was given: it may be wrong, already used or expired. How CYFR is reached was not changed. Check the key, then run `cyfr access tailnet` again."},
+			{Fixed: map[string]string{}, Slots: []string{}, Template: "Tailscale did not accept the auth key this machine's join was given: it may be wrong, already used or expired. How CYFR is reached was not changed. Check the key, then run `cyfr access browser tailnet` again."},
 		},
 	},
 	"tailnet_join_unapproved": {
 		Class: "setup_required",
 		Variants: []refusalVariant{
-			{Fixed: map[string]string{}, Slots: []string{}, Template: "The join ended before this machine was approved on your tailnet; no auth key was given, so only its approval link could have joined it. How CYFR is reached was not changed. Run `cyfr access tailnet` again and approve the machine with the link it prints."},
+			{Fixed: map[string]string{}, Slots: []string{}, Template: "The join ended before this machine was approved on your tailnet; no auth key was given, so only its approval link could have joined it. How CYFR is reached was not changed. Run `cyfr access browser tailnet` again and approve the machine with the link it prints."},
 		},
 	},
 	"tailnet_join_not_current": {
@@ -123,24 +127,24 @@ var refusalRows = map[string]refusalRow{
 		Class: "conflict",
 		Variants: []refusalVariant{
 			{Fixed: map[string]string{}, Slots: []string{"new", "old", "reason"}, Template: "CYFR could not start as {new} ({reason}). What it started was stopped and checked stopped, and CYFR was put back: it is reached as before, {old}, and running. Fix what the reason names, then run the command again."},
-			{Fixed: map[string]string{"local": "tailnet_node_mismatch"}, Slots: []string{"new", "old", "reason"}, Template: "CYFR could not start as {new} ({reason}). What it started was stopped and checked stopped, and CYFR was put back as before, {old}, but it answers on this machine only, because this machine's tailnet identity is not the one .env names. Fix what the reason names, then run the command again; run `cyfr access tailnet`, which offers to move CYFR to the machine's tailnet name."},
-			{Fixed: map[string]string{"local": "tailnet_not_joined"}, Slots: []string{"new", "old", "reason"}, Template: "CYFR could not start as {new} ({reason}). What it started was stopped and checked stopped, and CYFR was put back as before, {old}, but it answers on this machine only, because this machine has not joined your tailnet. Fix what the reason names, then run the command again; run `cyfr access tailnet` and approve the machine with the link it prints."},
-			{Fixed: map[string]string{"local": "tailnet_https_off"}, Slots: []string{"new", "old", "reason"}, Template: "CYFR could not start as {new} ({reason}). What it started was stopped and checked stopped, and CYFR was put back as before, {old}, but it answers on this machine only, because your tailnet has HTTPS certificates turned off. Fix what the reason names, then run the command again; turn on HTTPS on the DNS page of the Tailscale admin console, then run `cyfr access tailnet`."},
+			{Fixed: map[string]string{"local": "tailnet_node_mismatch"}, Slots: []string{"new", "old", "reason"}, Template: "CYFR could not start as {new} ({reason}). What it started was stopped and checked stopped, and CYFR was put back as before, {old}, but it answers on this machine only, because this machine's tailnet identity is not the one .env names. Fix what the reason names, then run the command again; run `cyfr access browser tailnet`, which offers to move CYFR to the machine's tailnet name."},
+			{Fixed: map[string]string{"local": "tailnet_not_joined"}, Slots: []string{"new", "old", "reason"}, Template: "CYFR could not start as {new} ({reason}). What it started was stopped and checked stopped, and CYFR was put back as before, {old}, but it answers on this machine only, because this machine has not joined your tailnet. Fix what the reason names, then run the command again; run `cyfr access browser tailnet` and approve the machine with the link it prints."},
+			{Fixed: map[string]string{"local": "tailnet_https_off"}, Slots: []string{"new", "old", "reason"}, Template: "CYFR could not start as {new} ({reason}). What it started was stopped and checked stopped, and CYFR was put back as before, {old}, but it answers on this machine only, because your tailnet has HTTPS certificates turned off. Fix what the reason names, then run the command again; turn on HTTPS on the DNS page of the Tailscale admin console, then run `cyfr access browser tailnet`."},
 		},
 	},
 	"access_failed": {
 		Class: "unavailable",
 		Variants: []refusalVariant{
-			{Fixed: map[string]string{}, Slots: []string{"new", "env"}, Template: "CYFR could not start as {new}, nor as before; everything was stopped and checked stopped. .env says: {env}. Run `cyfr up` to start it as .env says, or `cyfr access <mode>` to choose again."},
+			{Fixed: map[string]string{}, Slots: []string{"new", "env"}, Template: "CYFR could not start as {new}, nor as before; everything was stopped and checked stopped. .env says: {env}. Run `cyfr up` to start it as .env says, or `cyfr access browser <kind>` to choose again."},
 		},
 	},
 	"access_env_edited": {
 		Class: "conflict",
 		Variants: []refusalVariant{
-			{Fixed: map[string]string{"then": "started"}, Slots: []string{"env"}, Template: "A change of how CYFR is reached was interrupted, and .env was edited before the change finished. CYFR stopped the stack, checked it stopped, left .env as edited, and started CYFR as it says: {env}. If that is not how CYFR should be reached, run `cyfr access <mode>`."},
-			{Fixed: map[string]string{"then": "not_running"}, Slots: []string{"env"}, Template: "A change of how CYFR is reached was interrupted, and .env was edited before the change finished. CYFR stopped the stack, checked it stopped, and left .env as edited, which says: {env}. The stack was not running, so nothing was started. Run `cyfr up` to start it as .env says, or `cyfr access <mode>` to choose again."},
-			{Fixed: map[string]string{"then": "failed"}, Slots: []string{"env"}, Template: "A change of how CYFR is reached was interrupted, and .env was edited before the change finished. CYFR stopped the stack, checked it stopped, and left .env as edited, but CYFR did not start as it says ({env}), and everything is stopped. Fix .env, then run `cyfr up`, or run `cyfr access <mode>` to choose again."},
-			{Fixed: map[string]string{"then": "incoherent"}, Slots: []string{}, Template: "A change of how CYFR is reached was interrupted, and .env was edited before the change finished. CYFR stopped the stack, checked it stopped, and left .env as edited; nothing was started, because .env no longer says one coherent way CYFR is reached. Run `cyfr up` to see what is wrong with it, or `cyfr access <mode>` to choose again."},
+			{Fixed: map[string]string{"then": "started"}, Slots: []string{"env"}, Template: "A change of how CYFR is reached was interrupted, and .env was edited before the change finished. CYFR stopped the stack, checked it stopped, left .env as edited, and started CYFR as it says: {env}. If that is not how CYFR should be reached, run `cyfr access browser <kind>`."},
+			{Fixed: map[string]string{"then": "not_running"}, Slots: []string{"env"}, Template: "A change of how CYFR is reached was interrupted, and .env was edited before the change finished. CYFR stopped the stack, checked it stopped, and left .env as edited, which says: {env}. The stack was not running, so nothing was started. Run `cyfr up` to start it as .env says, or `cyfr access browser <kind>` to choose again."},
+			{Fixed: map[string]string{"then": "failed"}, Slots: []string{"env"}, Template: "A change of how CYFR is reached was interrupted, and .env was edited before the change finished. CYFR stopped the stack, checked it stopped, and left .env as edited, but CYFR did not start as it says ({env}), and everything is stopped. Fix .env, then run `cyfr up`, or run `cyfr access browser <kind>` to choose again."},
+			{Fixed: map[string]string{"then": "incoherent"}, Slots: []string{}, Template: "A change of how CYFR is reached was interrupted, and .env was edited before the change finished. CYFR stopped the stack, checked it stopped, and left .env as edited; nothing was started, because .env no longer says one coherent way CYFR is reached. Run `cyfr up` to see what is wrong with it, or `cyfr access browser <kind>` to choose again."},
 		},
 	},
 	"access_uncertain": {
@@ -158,7 +162,7 @@ var refusalRows = map[string]refusalRow{
 	"compose_env_refused": {
 		Class: "invalid_argument",
 		Variants: []refusalVariant{
-			{Fixed: map[string]string{}, Slots: []string{"key"}, Template: "`.env` sets `{key}`, which Docker Compose would read to choose this stack's files, project or services behind cyfr's back. Nothing started. Remove it; cyfr chooses them from CYFR_ACCESS."},
+			{Fixed: map[string]string{}, Slots: []string{"key"}, Template: "`.env` sets `{key}`, which Docker Compose would read to choose this stack's files, project or services behind cyfr's back. Nothing started. Remove it; cyfr chooses them from CYFR_BROWSER."},
 			{Fixed: map[string]string{}, Slots: []string{"line"}, Template: "Line {line} of `.env` does not read as Docker Compose reads it, so cyfr cannot read or change .env as compose would. Nothing was changed. Correct that line, then run the command again."},
 		},
 	},

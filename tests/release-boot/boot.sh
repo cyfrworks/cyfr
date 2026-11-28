@@ -7,7 +7,7 @@
 # booted against a FRESH database of that adapter with auto-migration on
 # (tests/release-boot/release.sh). Six cases, in order:
 #
-#   boots    the deployment file `cyfr init` writes, a local home — the
+#   boots    the deployment file `cyfr init` writes, no browser address — the
 #            stack's keys, the empty CORS allowlist, authentication
 #            configured — with CYFR_AUTO_MIGRATE=on. The release migrates
 #            the schema itself (nothing else can: the database carries no
@@ -30,7 +30,7 @@
 #            the test permission set at runtime: it still holds its slot,
 #            writes on its own pool and takes write turns, and starts every
 #            switched process as it ships (tests/release-boot/test_seams.exs).
-#            Then a public home `cyfr access public
+#            Then the domain address `cyfr access browser domain
 #            --domain cyfr.example.com` writes answers as https://cyfr.example.com
 #            (`Sanctum.origin()`), with nothing written for it but the
 #            test's ports, and its proxy listener answers readiness.
@@ -40,7 +40,7 @@
 #            The release must exit non-zero naming CORS: a boot that raises
 #            is loud, never a container that looks started.
 #
-#   access   every boot refusal of tests/fixtures/access_modes.json's `boot`
+#   access   every boot refusal of tests/fixtures/access.json's `boot`
 #            vectors that a release can be given: the release exits
 #            non-zero printing `[Cyfr] FATAL: <the vector's sentence>`. A
 #            copy of the release, the run's own, reads the vector's `file`
@@ -51,7 +51,7 @@
 #            release's own read. Then the bare release in a network
 #            namespace of its own (a container's, with no network, holding
 #            172.16.230.2/24 on a dummy interface, the compose stack's
-#            loopback-listener address) is refused that bind in `local`
+#            loopback-listener address) is refused that bind with `none`
 #            without the compose file's assertion, while the same address
 #            binds there and the same boot with the assertion in its
 #            environment configures.
@@ -113,8 +113,8 @@
 # Usage:  tests/release-boot/boot.sh <sqlite|postgres>
 #
 # Postgres needs CYFR_DATABASE_URL pointing at an EXISTING database with no
-# schema in it, as a role that may create databases: the boots case's public
-# home and the restores case create three databases beside it, named for this run (`pg_run_database`), and drop them
+# schema in it, as a role that may create databases: the boots case's domain
+# address and the restores case create three databases beside it, named for this run (`pg_run_database`), and drop them
 # when it ends; it drops no database it did not create, so runs that share
 # one server and one URL leave each other's alone. A run killed before its
 # cleanup leaves its three behind, under its own names. The dump and the
@@ -468,7 +468,7 @@ if [ "${after:-1}" -ne 0 ]; then
 fi
 echo "pending migrations after the boot: $after"
 
-step "a home given a public name answers at the https origin that name implies"
+step "a cell given a domain address answers at the https origin that name implies"
 ADDRESS="$WORK/address"
 ADDRESS_URL=""
 if [ "$ADAPTER" = postgres ]; then
@@ -481,13 +481,13 @@ cell_hostname "$ADDRESS" cyfr.example.com
 server_start "$ADDRESS"
 home="$(cell_cyfr "$ADDRESS" rpc 'IO.puts("CYFR_HOME=" <> Sanctum.origin())' | sed -n 's/^CYFR_HOME=//p' | tail -1)"
 [ "$home" = "https://cyfr.example.com" ] ||
-  fail "the home given cyfr.example.com answers as '$home', not https://cyfr.example.com"
+  fail "the cell given cyfr.example.com answers as '$home', not https://cyfr.example.com"
 echo "Sanctum.origin() -> $home"
 # The listener its TLS front forwards to, as a front forwards.
 proxied="$(curl -sS -m 10 -o "$ADDRESS/proxied.json" -w '%{http_code}' \
   -H 'host: cyfr.example.com' -H 'x-forwarded-proto: https' -H 'x-forwarded-for: 127.0.0.1' \
   "http://127.0.0.1:$(cell_proxy_port "$ADDRESS")/api/health/ready")" || proxied="none"
-[ "$proxied" = 200 ] || fail "the public home's proxy listener answered readiness with $proxied, not 200"
+[ "$proxied" = 200 ] || fail "the domain address's proxy listener answered readiness with $proxied, not 200"
 echo "its proxy listener on 127.0.0.1:$(cell_proxy_port "$ADDRESS"): GET /api/health/ready -> 200 $(cat "$ADDRESS/proxied.json")"
 server_stop "$ADDRESS"
 
@@ -537,7 +537,7 @@ cp -R "$CELL/data" "$ACCESS/data"
 cp -R "$ROOT/seed" "$ACCESS/seed"
 echo "copied $REL to $ACCESS_REL"
 
-ACCESS_COUNT="$(access_vectors "$ROOT/tests/fixtures/access_modes.json" "$ACCESS_VECTORS")"
+ACCESS_COUNT="$(access_vectors "$ROOT/tests/fixtures/access.json" "$ACCESS_VECTORS")"
 [ "$ACCESS_COUNT" -gt 0 ] || fail "the access vectors hold no boot refusal a release can be given"
 access_settings "$CELL/.env" "$ACCESS_VECTORS/strip" >"$ACCESS/.env"
 grep -q '^CYFR_SECRET_KEY_BASE=.' "$ACCESS/.env" || fail "the access cell's settings lost the cell's key base"
@@ -560,7 +560,7 @@ for vector in "$ACCESS_VECTORS"/*/; do
 done
 rm -f "$ACCESS_REL/.env"
 
-step "access: in a network namespace holding 172.16.230.2, a local release without the assertion is refused that bind"
+step "access: in a network namespace holding 172.16.230.2, a release with no browser address and without the assertion is refused that bind"
 # The namespace is a container's of this run's own, with no network and
 # CAP_NET_ADMIN, which adds a dummy interface holding the compose stack's
 # loopback-listener address: unshare -r's uid map is what the host's
@@ -596,10 +596,10 @@ import json, sys
 for v in json.load(open(sys.argv[1]))["boot"]:
     r = v.get("refusal")
     if r and r["code"] == "access_bind_not_loopback" and r["payload"].get("address") == sys.argv[2]:
-        print(r["sentence"]); break' "$ROOT/tests/fixtures/access_modes.json" "$NS_ADDRESS")"
+        print(r["sentence"]); break' "$ROOT/tests/fixtures/access.json" "$NS_ADDRESS")"
 [ -n "$NS_SENTENCE" ] || fail "the access vectors hold no refusal of a bind to $NS_ADDRESS"
 
-# The release in the namespace: cell `$NS`'s environment, a local home
+# The release in the namespace: cell `$NS`'s environment, no browser address
 # with builds off binding the namespace's address, and `$@`'s NAME=value
 # words, then the release's command; its output on stdout.
 ns_cyfr() {
@@ -608,7 +608,7 @@ ns_cyfr() {
     words+=("$1")
     shift
   done
-  cell_env "$NS" CYFR_ACCESS=local CYFR_BIND_ADDRESS="$NS_ADDRESS" CYFR_LOCUS_BUILDS_KEY= \
+  cell_env "$NS" CYFR_BROWSER=none CYFR_BIND_ADDRESS="$NS_ADDRESS" CYFR_LOCUS_BUILDS_KEY= \
     RELEASE_TMP="$NS/tmp" RELEASE_DISTRIBUTION=none \
     ${words[@]+"${words[@]}"} env >"$NS/container.env"
   docker exec -u "$(id -u):$(id -g)" -w "$NS" --env-file "$NS/container.env" "$NS_HOLDER" \
@@ -621,15 +621,15 @@ status=$?
 set -e
 if ! boot_refused "$status" "$NS/refused.log" "$NS_SENTENCE"; then
   redact_log "$NS" <"$NS/refused.log" >&2 || echo "(the log could not be redacted, so it is not printed)" >&2
-  fail "the release bound $NS_ADDRESS in local without the assertion, or refused it otherwise (exit $status)"
+  fail "the release bound $NS_ADDRESS with no browser address and without the assertion, or refused it otherwise (exit $status)"
 fi
 echo "refused, exit $status: $(grep -oF -- "[Cyfr] FATAL: $NS_SENTENCE" "$NS/refused.log" | head -1)"
 
 set +e
-ns_cyfr CYFR_LOCAL_INGRESS_ASSERTED=true eval 'IO.puts("CYFR_ACCESS_CONFIGURED")' >"$NS/asserted.log" 2>&1
+ns_cyfr CYFR_LOCAL_INGRESS_ASSERTED=true eval 'IO.puts("CYFR_RELEASE_CONFIGURED")' >"$NS/asserted.log" 2>&1
 status=$?
 set -e
-if [ "$status" -ne 0 ] || ! grep -qx 'CYFR_ACCESS_CONFIGURED' "$NS/asserted.log"; then
+if [ "$status" -ne 0 ] || ! grep -qx 'CYFR_RELEASE_CONFIGURED' "$NS/asserted.log"; then
   redact_log "$NS" <"$NS/asserted.log" >&2 || echo "(the log could not be redacted, so it is not printed)" >&2
   fail "with the compose file's assertion in its environment, the release in the namespace did not configure (exit $status)"
 fi
@@ -1166,4 +1166,4 @@ reserve_stop
 docker rm -f "$RESERVE_HOLDER" >/dev/null
 RESERVE_HOLDER=""
 
-step "the cyfr release boots on $ADAPTER, migrates itself, answers at the address its access mode implies, serves its sign-in page, refuses loudly, refuses every access setting the vectors refuse and a bind no assertion covers, restores from its backup, consumes a declared restore, refuses a database another schema built before reading it and keeps its storage reserve"
+step "the cyfr release boots on $ADAPTER, migrates itself, answers at the address its CYFR_BROWSER implies, serves its sign-in page, refuses loudly, refuses every access setting the vectors refuse and a bind no assertion covers, restores from its backup, consumes a declared restore, refuses a database another schema built before reading it and keeps its storage reserve"

@@ -39,7 +39,7 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
                   CYFR_LOCUS_BUILDS_KEY)
   @registry_names ~w(CYFR_REGISTRY_URL CYFR_DIRECTORY_URL CYFR_OCI_REGISTRY_URL)
   @database_names ~w(CYFR_DATA_PATH CYFR_DATABASE_PATH CYFR_DATABASE_URL)
-  @names ["RELEASE_ROOT", "CYFR_HOST_API_URL", "CYFR_BIND_ADDRESS", "CYFR_ACCESS"] ++
+  @names ["RELEASE_ROOT", "CYFR_HOST_API_URL", "CYFR_BIND_ADDRESS", "CYFR_BROWSER"] ++
            @server ++ @provisioned ++ @registry_names ++ @database_names
   @domain "cyfr.test"
   @hosts [~c"cyfr.test", ~c"registry.cyfr.test"]

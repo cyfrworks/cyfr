@@ -28,21 +28,22 @@ defmodule Cyfr.RuntimeConfigWiringTest do
 
   # Every setting the access resolver reads, so a case clears the ones it does not
   # set.
-  @access_keys ~w(CYFR_ACCESS CYFR_HOST CYFR_TAILNET_NODE_ID CYFR_PUBLIC_URL CADDY_ACME_EMAIL
+  @access_keys ~w(CYFR_BROWSER CYFR_HOST CYFR_TAILNET_NODE_ID CYFR_PUBLIC_URL CADDY_ACME_EMAIL
                  CYFR_PORT CYFR_BIND_ADDRESS CYFR_LOCAL_INGRESS_ASSERTED CYFR_PROXY_BIND_ADDRESS
-                 CYFR_PROXY_PORT CYFR_TRUSTED_PROXY_HOPS CYFR_TRUSTED_PROXY_CIDRS)
+                 CYFR_PROXY_PORT CYFR_PROXY_PUBLISH CYFR_TRUSTED_PROXY_HOPS
+                 CYFR_TRUSTED_PROXY_CIDRS)
 
   # Enough for the prod branch to reach the database section; everything else
-  # has a default or is gated behind a knob this test does not set. A local
-  # home, which a release must name: a case that points RELEASE_ROOT at a
-  # directory of its own is a release.
+  # has a default or is gated behind a knob this test does not set. A
+  # server with no browser address, which a release must name: a case that
+  # points RELEASE_ROOT at a directory of its own is a release.
   defp base_env do
     @access_keys
     |> Map.new(&{&1, nil})
     |> Map.merge(%{
       "CYFR_SECRET_KEY_BASE" => Base.encode64(:crypto.strong_rand_bytes(48)),
       "RELEASE_NAME" => "cyfr",
-      "CYFR_ACCESS" => "local"
+      "CYFR_BROWSER" => "none"
     })
   end
 
@@ -369,7 +370,7 @@ defmodule Cyfr.RuntimeConfigWiringTest do
   # Access
   # ==========================================================================
 
-  @access_vectors Path.expand("../../../../tests/fixtures/access_modes.json", __DIR__)
+  @access_vectors Path.expand("../../../../tests/fixtures/access.json", __DIR__)
                   |> File.read!()
                   |> Jason.decode!()
 
@@ -423,9 +424,17 @@ defmodule Cyfr.RuntimeConfigWiringTest do
       assert length(refused) > 40
 
       for {vector, %{"sentence" => sentence}} <- refused do
+        # A name the roster does not declare, as the retired CYFR_ACCESS, is
+        # refused by name before any access setting is read.
+        expected =
+          case Cyfr.Platform.Settings.Roster.unknown(Map.keys(vector["input"]["file"] || %{}), []) do
+            [] -> sentence
+            names -> Cyfr.Platform.Settings.Roster.refusal(names)
+          end
+
         boot_vector(vector, dir, fn ->
           message = Exception.message(assert_raise(RuntimeError, &read_prod_config!/0))
-          assert message == "[Cyfr] FATAL: " <> sentence, vector["name"]
+          assert message == "[Cyfr] FATAL: " <> expected, vector["name"]
         end)
       end
     end
@@ -455,9 +464,9 @@ defmodule Cyfr.RuntimeConfigWiringTest do
           end
 
           expected_url =
-            case access["mode"] do
-              "local" -> [scheme: "http", host: "localhost", port: access["head"]["port"]]
-              _exposed -> [scheme: "https", host: access["head"]["host"], port: 443]
+            case access["browser"] do
+              "none" -> [scheme: "http", host: "localhost", port: access["head"]["port"]]
+              _addressed -> [scheme: "https", host: access["head"]["host"], port: 443]
             end
 
           assert endpoint[:url] == expected_url, name
@@ -465,22 +474,24 @@ defmodule Cyfr.RuntimeConfigWiringTest do
           assert config[:cyfr][:mcp_allowed_origins] == access["check_origins"], name
           assert config[:sanctum][:proxy_trust] == trust(access["trust"]), name
           assert config[:cyfr][:hsts] == String.to_existing_atom(access["hsts"]), name
+          assert config[:sanctum][:exposure] == String.to_existing_atom(access["exposure"]), name
 
           # `Sanctum.origin/0`: the public URL, or the fallback where there
-          # is none, as a local home has none.
+          # is none, as a server with no browser address has none.
           assert config[:sanctum][:public_url] == access["head"]["public_url"], name
           assert config[:sanctum][:fallback_origin] == access["origin"], name
 
           # The session cookie is a secure one in a release, whatever the
-          # mode: a browser keeps it for https and for localhost alike.
+          # browser address: a browser keeps it for https and for localhost
+          # alike.
           assert config[:cyfr][:cookie_secure] == true, name
         end)
       end
     end
 
-    test "a development or test boot with no mode is a local home on the loopback" do
+    test "a development or test boot with no browser kind has no browser address, on the loopback" do
       for read <- [&read_dev_config!/0, &read_prod_config!/0] do
-        with_env(%{"CYFR_ACCESS" => nil, "RELEASE_ROOT" => nil}, fn ->
+        with_env(%{"CYFR_BROWSER" => nil, "RELEASE_ROOT" => nil}, fn ->
           config = read.()
           endpoint = config[:cyfr][CyfrWeb.Endpoint]
 
@@ -490,13 +501,14 @@ defmodule Cyfr.RuntimeConfigWiringTest do
           assert endpoint[:url] == [scheme: "http", host: "localhost", port: 4000]
           assert config[:sanctum][:fallback_origin] == "http://localhost:4000"
           assert config[:sanctum][:proxy_trust] == :none
+          assert config[:sanctum][:exposure] == :private
         end)
       end
     end
 
-    test "a release names its mode, whatever else it sets", %{tmp_dir: dir} do
+    test "a release names its browser kind, whatever else it sets", %{tmp_dir: dir} do
       for access <- [nil, ""] do
-        with_env(%{"CYFR_ACCESS" => access, "RELEASE_ROOT" => dir}, fn ->
+        with_env(%{"CYFR_BROWSER" => access, "RELEASE_ROOT" => dir}, fn ->
           message = Exception.message(assert_raise(RuntimeError, &read_prod_config!/0))
 
           assert message ==

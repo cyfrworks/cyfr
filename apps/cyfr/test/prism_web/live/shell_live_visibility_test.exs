@@ -191,7 +191,7 @@ defmodule PrismWeb.ShellLiveVisibilityTest do
   end
 
   # The address a person copies to share a public tincture is the home's
-  # own (`Sanctum.origin/0`), its public URL in a tailnet or public home,
+  # own (`Sanctum.origin/0`), its public URL with a browser address,
   # never the endpoint's own listener address; a private one copies nothing.
   test "a public tincture's copied URL is at the home's own address, a private one's is none",
        %{conn: conn, ctx: ctx} do

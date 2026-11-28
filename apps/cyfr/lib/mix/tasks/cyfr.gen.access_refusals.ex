@@ -5,7 +5,7 @@ defmodule Mix.Tasks.Cyfr.Gen.AccessRefusals do
   @shortdoc "Render the access engine's refusal sentences from Prima.Refusal"
 
   @moduledoc """
-  Renders the `refusals` section of `tests/fixtures/access_modes.json` and
+  Renders the `refusals` section of `tests/fixtures/access.json` and
   `apps/codex/internal/access/refusals_gen.go` from `Prima.Refusal`, the one
   definition of every sentence the access engine and `cyfr up` print. Each
   code carries its class and its variants: the payload values a variant
@@ -22,7 +22,7 @@ defmodule Mix.Tasks.Cyfr.Gen.AccessRefusals do
 
   use Mix.Task
 
-  @fixture "tests/fixtures/access_modes.json"
+  @fixture "tests/fixtures/access.json"
   @go "apps/codex/internal/access/refusals_gen.go"
 
   # Every code the engine and `cyfr up` render, with its variants: the payload values a
@@ -41,11 +41,15 @@ defmodule Mix.Tasks.Cyfr.Gen.AccessRefusals do
     {:access_unchanged, [{%{}, ~w(address)}]},
     {:access_invalid,
      for(kind <- ~w(domain tailnet_name email), do: {%{kind: kind}, ~w(input rule)})},
-    {:access_option_outside_mode,
+    {:access_option_outside_browser,
      for(
-       option <- ~w(--domain --acme-email),
-       mode <- ~w(local tailnet),
-       do: {%{option: option, mode: mode}, []}
+       {option, browsers} <- [
+         {"--domain", ~w(none tailnet)},
+         {"--acme-email", ~w(none tailnet proxy)},
+         {"--publish", ~w(none tailnet domain)}
+       ],
+       browser <- browsers,
+       do: {%{option: option, browser: browser}, []}
      )},
     {:tailnet_not_joined, [{%{}, []}]},
     {:tailnet_https_off, [{%{}, ~w(name)}]},
@@ -208,7 +212,7 @@ defmodule Mix.Tasks.Cyfr.Gen.AccessRefusals do
     package access
 
     // refusalRows are the engine's and `cyfr up`'s refusals, each code's
-    // class and sentence templates, as tests/fixtures/access_modes.json's
+    // class and sentence templates, as tests/fixtures/access.json's
     // refusals section holds them.
     var refusalRows = map[string]refusalRow{
     #{Enum.join(rows)}}

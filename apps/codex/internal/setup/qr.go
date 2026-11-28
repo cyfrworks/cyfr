@@ -43,7 +43,7 @@ func QRSVG(text string) (string, error) {
 func qrModules(text string) ([][]bool, error) {
 	code, err := qr.Encode(text, qr.M, qr.Auto)
 	if err != nil {
-		return nil, fmt.Errorf("the approval link does not fit a QR code: %w", err)
+		return nil, fmt.Errorf("the text does not fit a QR code: %w", err)
 	}
 	b := code.Bounds()
 	m := make([][]bool, b.Dy())
@@ -55,4 +55,38 @@ func qrModules(text string) ([][]bool, error) {
 		}
 	}
 	return m, nil
+}
+
+// QRText is text as a QR code drawn in a terminal, two modules a
+// character cell high with half blocks, quiet zone included. The light
+// modules are drawn, since a terminal's text is light on a dark ground
+// more often than not; a phone's camera reads the code either way round.
+func QRText(text string) (string, error) {
+	m, err := qrModules(text)
+	if err != nil {
+		return "", err
+	}
+	size := len(m) + 2*quietZone
+	light := func(x, y int) bool {
+		x, y = x-quietZone, y-quietZone
+		return y < 0 || y >= len(m) || x < 0 || x >= len(m) || !m[y][x]
+	}
+	var b strings.Builder
+	for y := 0; y < size; y += 2 {
+		for x := 0; x < size; x++ {
+			top, bottom := light(x, y), y+1 < size && light(x, y+1)
+			switch {
+			case top && bottom:
+				b.WriteString("█")
+			case top:
+				b.WriteString("▀")
+			case bottom:
+				b.WriteString("▄")
+			default:
+				b.WriteString(" ")
+			}
+		}
+		b.WriteByte('\n')
+	}
+	return b.String(), nil
 }

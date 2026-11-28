@@ -12,7 +12,7 @@ defmodule Sanctum.PairingTest do
   """
 
   # The directory seam, the setup token, the directory setting and the
-  # access mode are process-wide.
+  # exposure are process-wide.
   use ExUnit.Case, async: false
 
   import Ecto.Query, only: [from: 2]
@@ -53,7 +53,7 @@ defmodule Sanctum.PairingTest do
     dir = DirectoryServer.start!(tls)
     Prima.Test.Env.put_app_env(:sanctum, :setup_token, @token)
     Prima.Test.Env.put_app_env(:sanctum, :directory_url, dir.url)
-    Prima.Test.Env.put_app_env(:sanctum, :access_mode, :public)
+    Prima.Test.Env.put_app_env(:sanctum, :exposure, :public)
     Arca.Repo.delete_all(User)
 
     account = DirectoryServer.account!(dir.dir, dir.url)

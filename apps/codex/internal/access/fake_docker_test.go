@@ -505,7 +505,7 @@ func (f *fakeDocker) compose(c *fakeCall) fakeAnswer {
 		return fail(1, "fake compose: no command")
 	}
 	cmd, rest := args[i], args[i+1:]
-	cfg, err := f.load(files, profiles, c.Env)
+	cfg, err := f.load(files, profiles, c.Env, c.Stdin)
 	if err != nil {
 		return fail(1, "%v", err)
 	}
@@ -589,10 +589,10 @@ type fakeService struct {
 }
 
 // load reads the compose files and flattens them for the profiles: a
-// materialized file as it is, a source set merged service by service, its
-// env_file .env inlined and its ${…} interpolated from .env and the
-// environment.
-func (f *fakeDocker) load(files, profiles []string, env []string) (*fakeConfig, error) {
+// materialized file as it is, a source set merged service by service (the
+// file - read from stdin, as compose reads it), its env_file .env inlined
+// and its ${…} interpolated from .env and the environment.
+func (f *fakeDocker) load(files, profiles []string, env []string, stdin string) (*fakeConfig, error) {
 	if len(files) == 0 {
 		return nil, fmt.Errorf("fake compose: no file named")
 	}
@@ -625,6 +625,9 @@ func (f *fakeDocker) load(files, profiles []string, env []string) (*fakeConfig, 
 	cfg := &fakeConfig{Name: f.st.Project, Services: map[string]*fakeService{}}
 	for i := 0; i < len(files); i++ {
 		data, err := os.ReadFile(filepath.Join(f.dir, files[i]))
+		if files[i] == "-" {
+			data, err = []byte(stdin), nil
+		}
 		if err != nil {
 			return nil, err
 		}

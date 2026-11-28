@@ -424,7 +424,7 @@ defmodule CyfrWeb.ContextGuardTest do
   # directory, which it cannot reach, on a public CYFR, which pauses a head
   # it cannot refresh past its bound.
   defp remote!(conn, user) do
-    Prima.Test.Env.put_app_env(:sanctum, :access_mode, :public)
+    Prima.Test.Env.put_app_env(:sanctum, :exposure, :public)
     {conn, _token, hash} = signed_in(conn, user)
     {conn, Sanctum.TestContext.account!(user.user_id).identifier, hash}
   end

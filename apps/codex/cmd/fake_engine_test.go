@@ -375,8 +375,9 @@ func (e *fakeEngine) Status(ctx context.Context) (access.Status, error) {
 	return st, nil
 }
 
-// Preview derives the target's head with access.Derive from .env's port and
-// builds URL, and for tailnet from the join joinID completed.
+// Preview derives the target's head with access.Derive from .env's port,
+// its proxy publication and whether it states a trust, as the engine
+// reads them, and for tailnet from the join joinID completed.
 func (e *fakeEngine) Preview(ctx context.Context, t access.Target, joinID string) (access.Preview, error) {
 	old, _ := e.Head()
 	d, err := e.derive(t, joinID)
@@ -389,7 +390,7 @@ func (e *fakeEngine) Preview(ctx context.Context, t access.Target, joinID string
 	}
 	if p.OldDigest == p.NewDigest {
 		e.s.mu.Lock()
-		reopen := e.s.serveClosed && t.Mode == access.ModeTailnet
+		reopen := e.s.serveClosed && t.Browser == access.BrowserTailnet
 		e.s.mu.Unlock()
 		if !reopen {
 			return access.Preview{}, access.Refuse("access_unchanged", map[string]string{"address": p.NewWords.Address})
@@ -409,8 +410,12 @@ func (e *fakeEngine) derive(t access.Target, joinID string) (access.Derivation, 
 	if text := env["CYFR_PORT"]; text != "" {
 		cur.Port, _ = strconv.Atoi(text)
 	}
+	if env["CYFR_BROWSER"] == access.BrowserProxy {
+		cur.Publish = env["CYFR_PROXY_PUBLISH"]
+	}
+	cur.Trusted = env["CYFR_TRUSTED_PROXY_HOPS"] != "" || env["CYFR_TRUSTED_PROXY_CIDRS"] != ""
 	var join *access.Join
-	if j, ok := e.s.joined[joinID]; ok && t.Mode == access.ModeTailnet {
+	if j, ok := e.s.joined[joinID]; ok && t.Browser == access.BrowserTailnet {
 		join = &j
 	}
 	return access.Derive(t, cur, join)
@@ -429,7 +434,7 @@ func (e *fakeEngine) Switch(ctx context.Context, r access.SwitchRequest) (access
 // .env as a switch of the stopped stack does.
 func (e *fakeEngine) doSwitch(ctx context.Context, r access.SwitchRequest) (access.Receipt, error) {
 	s := e.s
-	s.logLine("switch %s %s", r.Target.Mode, r.ID)
+	s.logLine("switch %s %s", r.Target.Browser, r.ID)
 	s.mu.Lock()
 	s.switches = append(s.switches, r)
 	s.mu.Unlock()

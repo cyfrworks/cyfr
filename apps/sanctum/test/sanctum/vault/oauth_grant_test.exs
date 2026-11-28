@@ -160,7 +160,7 @@ defmodule Sanctum.Vault.OAuthGrantStandingTest do
   # bound, at the suite's directory, which this CYFR cannot reach, on a
   # public CYFR, which pauses a head it cannot refresh.
   defp stale_remote!(user_id) do
-    Prima.Test.Env.put_app_env(:sanctum, :access_mode, :public)
+    Prima.Test.Env.put_app_env(:sanctum, :exposure, :public)
     %{identifier: identifier} = Sanctum.TestContext.account!(user_id)
 
     Arca.Repo.update_all(

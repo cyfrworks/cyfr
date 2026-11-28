@@ -2523,7 +2523,7 @@ func readRunningSchema(ctx context.Context, image string) (string, error) {
 	case image == "":
 		return "", errors.New("docker-compose.yml names no image for cyfr")
 	default:
-		// The release's runtime configuration needs an access mode and a
+		// The release's runtime configuration needs a browser address and a
 		// key base to load; the key is a throwaway, given through the
 		// environment so it is on no argv.
 		key := make([]byte, 48)
@@ -2538,7 +2538,7 @@ func readRunningSchema(ctx context.Context, image string) (string, error) {
 		defer removeSchemaContainer(name)
 		output, err = schemaDocker(ctx, []string{"CYFR_SECRET_KEY_BASE=" + hex.EncodeToString(key)},
 			"run", "--rm", "--name", name, "--pull", "never", "--network", "none", "--read-only", "--user", "app",
-			"--entrypoint", "/usr/bin/timeout", "-e", "CYFR_ACCESS=local", "-e", "CYFR_SECRET_KEY_BASE",
+			"--entrypoint", "/usr/bin/timeout", "-e", "CYFR_BROWSER=none", "-e", "CYFR_SECRET_KEY_BASE",
 			image, schemaReadLife, "/app/bin/cyfr", "eval", schemaExpr)
 	}
 	return output, err
@@ -2700,8 +2700,8 @@ func (u *updater) listRunning(ctx context.Context) error {
 }
 
 // ownServices answers, by name, the services of the stack's compose file
-// set that run only under profiles of its own, which no access mode
-// selects (DeclaredProfiles), as an older release ran its builds under
+// set that run only under profiles of its own, which no browser address
+// kind selects (DeclaredProfiles), as an older release ran its builds under
 // one: none of them starts under .env's head. Each maps to those of its
 // profiles; wide are every such profile the file set declares.
 func (u *updater) ownServices(ctx context.Context) (apart map[string][]string, wide []string, err error) {
@@ -2709,7 +2709,7 @@ func (u *updater) ownServices(ctx context.Context) (apart map[string][]string, w
 	if err != nil {
 		return nil, nil, fmt.Errorf("docker compose could not list the stack's profiles (%v)", engineFailure(err))
 	}
-	wide = slices.DeleteFunc(declared, func(p string) bool { return slices.Contains(access.ModeProfiles(), p) })
+	wide = slices.DeleteFunc(declared, func(p string) bool { return slices.Contains(access.BrowserProfiles(), p) })
 	if len(wide) == 0 {
 		return nil, nil, nil
 	}

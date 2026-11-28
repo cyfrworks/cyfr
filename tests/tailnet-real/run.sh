@@ -56,7 +56,7 @@
 #               account reaches the upstream through Serve, with that
 #               account's identity headers
 #   rejoin      with the machine's container and state volume removed, as
-#               `cyfr access tailnet --new-node` removes them, the key joins
+#               `cyfr access browser tailnet --new-node` removes them, the key joins
 #               again as a new node, another id, which Serve serves once
 #               its configuration names it; the old node, ephemeral, is
 #               Tailscale's to remove once it is offline, as the engine
@@ -452,7 +452,7 @@ sys.exit(1)' "$shared_login"; do
 fi
 
 step "rejoin: the machine's container and state are removed, and the key joins again as a new node"
-# The engine never logs a machine out: `cyfr access tailnet --new-node`
+# The engine never logs a machine out: `cyfr access browser tailnet --new-node`
 # removes the state volume, and the person removes the replaced machine in
 # the admin console. Under containerboot (TS_AUTH_ONCE) `tailscale logout`
 # ends the container as tailscaled leaves Running, cancelling the

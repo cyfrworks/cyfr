@@ -166,7 +166,7 @@ defmodule CyfrWeb.EndpointHTTP2Test do
     assert get_in(release, enabled) == false, "the release's endpoint serves HTTP/2"
   end
 
-  # The environment a local home's release boots under, `.env` files read
+  # The environment a release with no browser address boots under, `.env` files read
   # from an empty RELEASE_ROOT, restored after the case.
   defp release_env! do
     dir =
@@ -176,7 +176,7 @@ defmodule CyfrWeb.EndpointHTTP2Test do
       "CYFR_SECRET_KEY_BASE" => Base.encode64(:crypto.strong_rand_bytes(48)),
       "RELEASE_NAME" => "cyfr",
       "RELEASE_ROOT" => dir,
-      "CYFR_ACCESS" => "local",
+      "CYFR_BROWSER" => "none",
       "CYFR_DATABASE" => nil
     }
 

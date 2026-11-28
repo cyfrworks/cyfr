@@ -49,7 +49,7 @@ func projectEnv(t *testing.T) *envFile {
 // accessOf is the mode the working directory's .env holds.
 func accessOf(t *testing.T) string {
 	t.Helper()
-	mode, _ := projectEnv(t).value("CYFR_ACCESS")
+	mode, _ := projectEnv(t).value("CYFR_BROWSER")
 	return mode
 }
 
@@ -79,7 +79,7 @@ func initThenPublic(ctx context.Context, acmeEmail string, out io.Writer) error 
 	if err := initProject(ctx, initOptions{noPull: true}, nil, out, out); err != nil {
 		return err
 	}
-	return runAccess(ctx, access.ModePublic, accessOptions{domain: "cyfr.example.com", acmeEmail: acmeEmail}, true, out)
+	return runAccess(ctx, access.BrowserDomain, accessOptions{domain: "cyfr.example.com", acmeEmail: acmeEmail}, true, out)
 }
 
 // nothingWritten fails unless the working directory holds exactly names.
@@ -116,8 +116,8 @@ func TestInitAsksNothingAboutHowCYFRIsReached(t *testing.T) {
 		if err := runInit(context.Background(), initOptions{noPull: true}, &out, &out); err != nil {
 			t.Fatalf("init: %v\n%s", err, out.String())
 		}
-		if got := accessOf(t); got != access.ModeLocal {
-			t.Errorf("the home is %s, want local", got)
+		if got := accessOf(t); got != access.BrowserNone {
+			t.Errorf("the home is %s, want none", got)
 		}
 		if s.locks != 0 || len(s.joins) != 0 || len(s.switches) != 0 {
 			t.Errorf("init took the lock %d times, joined %v and switched %v", s.locks, s.joins, s.switches)
@@ -126,7 +126,7 @@ func TestInitAsksNothingAboutHowCYFRIsReached(t *testing.T) {
 			t.Errorf("init asked how CYFR is reached:\n%s", out.String())
 		}
 	}
-	for _, name := range []string{"access", "domain", "acme-email", "tailscale-auth-key-file", "hostname", "no-open"} {
+	for _, name := range []string{"access", "domain", "acme-email", "tailscale-auth-key-file", "hostname", "no-open", "publish"} {
 		if initCmd.Flags().Lookup(name) != nil {
 			t.Errorf("cyfr init has --%s", name)
 		}
@@ -134,14 +134,14 @@ func TestInitAsksNothingAboutHowCYFRIsReached(t *testing.T) {
 }
 
 // An existing .env is read as compose and the engine read it
-// (access.ReadEnvValues): `export CYFR_ACCESS=local` says how the home is
+// (access.ReadEnvValues): `export CYFR_BROWSER=none` says how the home is
 // reached, a stack key spelled `export NAME=` is kept and never minted
 // again beside it, and the port is the last assignment's.
 func TestInitReadsAnExistingEnvAsComposeDoes(t *testing.T) {
 	newInitProject(t)
 	useFakeEngine(t)
 	const kept = "kept-secret-key-base-kept-secret-key-base-kept-secret-key-base-kept"
-	env := "export CYFR_ACCESS=local\nexport " + secretKeyBaseVar + "=" + kept + "\nCYFR_PORT=4000\nCYFR_PORT: 4123\n"
+	env := "export CYFR_BROWSER=none\nexport " + secretKeyBaseVar + "=" + kept + "\nCYFR_PORT=4000\nCYFR_PORT: 4123\n"
 	if err := os.WriteFile(".env", []byte(env), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -200,10 +200,10 @@ func TestInitRefusesAnExistingEnvWithoutAccessAndWritesNothing(t *testing.T) {
 		name, env string
 		want      string
 	}{
-		{"no CYFR_ACCESS", "CYFR_SECRET_KEY_BASE=kept\nCYFR_HOST=localhost\n", access.Refuse("access_missing", nil).Message()},
-		{"CYFR_ACCESS blank", "CYFR_ACCESS=\nCYFR_LOCUS_RUNTIME_ROOT=\n", access.Refuse("access_missing", nil).Message()},
+		{"no CYFR_BROWSER", "CYFR_SECRET_KEY_BASE=kept\nCYFR_HOST=localhost\n", access.Refuse("access_missing", nil).Message()},
+		{"CYFR_BROWSER blank", "CYFR_BROWSER=\nCYFR_LOCUS_RUNTIME_ROOT=\n", access.Refuse("access_missing", nil).Message()},
 		// The last assignment is the one compose reads.
-		{"CYFR_ACCESS blanked by a later line", "CYFR_ACCESS=local\nCYFR_ACCESS=\n", access.Refuse("access_missing", nil).Message()},
+		{"CYFR_BROWSER blanked by a later line", "CYFR_BROWSER=none\nCYFR_BROWSER=\n", access.Refuse("access_missing", nil).Message()},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			newInitProject(t)
@@ -258,10 +258,10 @@ func TestANewCYFRSwitchesThroughTheRealEngineAndHostDocker(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	if err := initThenPublic(ctx, "ops@example.com", &out); err != nil {
-		t.Fatalf("init, then access public: %v\n%s", err, out.String())
+		t.Fatalf("init, then access browser domain: %v\n%s", err, out.String())
 	}
 	f := projectEnv(t)
-	for k, want := range map[string]string{"CYFR_ACCESS": "public", "CYFR_HOST": "cyfr.example.com", "CYFR_PUBLIC_URL": "https://cyfr.example.com", "CADDY_ACME_EMAIL": "ops@example.com"} {
+	for k, want := range map[string]string{"CYFR_BROWSER": "domain", "CYFR_HOST": "cyfr.example.com", "CYFR_PUBLIC_URL": "https://cyfr.example.com", "CADDY_ACME_EMAIL": "ops@example.com"} {
 		if got, _ := f.value(k); got != want {
 			t.Errorf(".env's %s is %q, want %q", k, got, want)
 		}
@@ -316,7 +316,7 @@ func TestInitWritesTheSetupTokenAndPrintsTheSetupLink(t *testing.T) {
 // machine at address, up to its next step.
 func localEnding(address string) string {
 	return "CYFR is set up in this directory, reached from this computer at " + address + ".\n" +
-		"Want it on your phone and laptop too? Run cyfr access tailnet first.\n"
+		"Want it on your phone and laptop too? Run cyfr access browser tailnet first.\n"
 }
 
 // Without the screen, init's last line on a machine with no display is

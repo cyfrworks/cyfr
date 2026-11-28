@@ -357,9 +357,9 @@ func TestComposeProfilesInTheEnvironmentStartNeitherProxy(t *testing.T) {
 			if a != "--profile" {
 				continue
 			}
-			// The one read of every access mode's services names their
+			// The one read of every kind's services names their
 			// profiles; nothing the home starts names any.
-			if !slices.Contains(c.Args, "config") || !slices.Contains(ModeProfiles(), c.Args[i+1]) {
+			if !slices.Contains(c.Args, "config") || !slices.Contains(BrowserProfiles(), c.Args[i+1]) {
 				t.Errorf("a compose call selects profile %s: %s", c.Args[i+1], c)
 			}
 		}
@@ -378,7 +378,7 @@ func TestOrphanedStartNeverLandsAfterRecovery(t *testing.T) {
 	st.Pause = &fakePause{Match: "up -d --no-deps cyfr", Paused: filepath.Join(dir, "paused"), Release: filepath.Join(dir, "release")}
 	writeFakeState(t, state, st)
 	ready := filepath.Join(dir, "ready")
-	cmd := exec.Command(exeOrSkip(t), "-access.holder", h.dir, ready, "switch", ModePublic, id(1))
+	cmd := exec.Command(exeOrSkip(t), "-access.holder", h.dir, ready, "switch", BrowserDomain, id(1))
 	cmd.Env = childEnv("ACCESS_HOLDER_STATE="+state, "ACCESS_HOLDER_DOMAIN=home.example.com")
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
@@ -419,7 +419,7 @@ func TestOrphanedStartNeverLandsAfterRecovery(t *testing.T) {
 		}
 	}
 	slices.Sort(live)
-	if want := slices.Sorted(slices.Values(publicStack)); !slices.Equal(live, want) {
+	if want := slices.Sorted(slices.Values(domainStack)); !slices.Equal(live, want) {
 		t.Errorf("running %v, want %v", live, want)
 	}
 	if _, err := os.Stat(filepath.Join(h.dir, stateDir, journalFile)); err == nil {

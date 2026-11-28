@@ -167,7 +167,7 @@ func (r *restoreScenario) stagedConfig(overrides ...string) string {
 	for _, o := range overrides {
 		files += " -f " + o
 	}
-	return "compose -p " + access.ProjectName(r.project) + " " + files + " --project-directory . --profile public config --format json"
+	return "compose -p " + access.ProjectName(r.project) + " " + files + " --project-directory . --profile domain config --format json"
 }
 
 // restoreScenario is an update scenario whose update has taken a snapshot,
@@ -1749,17 +1749,17 @@ func TestRestoreReadsTheStagedConfigurationAsComposeWill(t *testing.T) {
 // the engine refuses a home's .env (access.CheckEnvFile), with its
 // sentence, before anything stops: a COMPOSE_* setting in any form, and a
 // head that does not boot, its CYFR_PUBLIC_URL not its host's, or no
-// CYFR_ACCESS at all.
+// CYFR_BROWSER at all.
 func TestRestoreRefusesASnapshotEnvTheEngineRefusesBeforeAnythingStops(t *testing.T) {
 	compose := shippedCompose(t)
 	for name, edit := range map[string]func(env string) string{
 		"COMPOSE_FILE":                func(env string) string { return env + "COMPOSE_FILE=other.yml\n" },
-		"export COMPOSE_PROFILES":     func(env string) string { return env + "export COMPOSE_PROFILES=public\n" },
+		"export COMPOSE_PROFILES":     func(env string) string { return env + "export COMPOSE_PROFILES=domain\n" },
 		"COMPOSE_PROJECT_NAME: other": func(env string) string { return env + "COMPOSE_PROJECT_NAME: other\n" },
 		"a public URL not the host's": func(env string) string {
 			return strings.Replace(env, "CYFR_PUBLIC_URL=https://cyfr.example.com\n", "CYFR_PUBLIC_URL=https://elsewhere.example.com\n", 1)
 		},
-		"no CYFR_ACCESS": func(env string) string { return strings.Replace(env, "CYFR_ACCESS=public\n", "", 1) },
+		"no CYFR_BROWSER": func(env string) string { return strings.Replace(env, "CYFR_BROWSER=domain\n", "", 1) },
 	} {
 		t.Run(name, func(t *testing.T) {
 			r := newRestoreScenario(t, compose, nil, nil)
@@ -1840,8 +1840,8 @@ func TestRestoreStagedReadSelectsAsTheEngine(t *testing.T) {
 	}
 	t.Chdir(dir)
 	for name, content := range map[string]string{
-		"docker-compose.yml": "services:\n  cyfr:\n    image: alpine:3.22\n    env_file: [.env]\n  caddy:\n    image: alpine:3.22\n    profiles: [public]\n",
-		".env":               "CYFR_ACCESS=public\nCYFR_HOST=cyfr.example.com\nCYFR_PUBLIC_URL=https://cyfr.example.com\n",
+		"docker-compose.yml": "services:\n  cyfr:\n    image: alpine:3.22\n    env_file: [.env]\n  caddy:\n    image: alpine:3.22\n    profiles: [domain]\n",
+		".env":               "CYFR_BROWSER=domain\nCYFR_HOST=cyfr.example.com\nCYFR_PUBLIC_URL=https://cyfr.example.com\n",
 	} {
 		if err := os.WriteFile(name, []byte(content), 0600); err != nil {
 			t.Fatal(err)
@@ -1879,7 +1879,7 @@ func TestRestoreStagedReadSelectsAsTheEngine(t *testing.T) {
 		}
 		return kept
 	}
-	if got, want := selection(staged), selection(engine); !slices.Equal(got, want) || !slices.Contains(want, "public") {
+	if got, want := selection(staged), selection(engine); !slices.Equal(got, want) || !slices.Contains(want, "domain") {
 		t.Errorf("the staged read selects %v, the engine's compose calls %v", got, want)
 	}
 }

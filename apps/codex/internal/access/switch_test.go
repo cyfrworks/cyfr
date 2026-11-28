@@ -21,7 +21,7 @@ var bg = context.Background()
 func TestSwitchStopsCommitsThenStarts(t *testing.T) {
 	h := newHome(t)
 	h.fake.startStack(t, h.head())
-	target := Target{Mode: ModePublic, Domain: "home.example.com"}
+	target := Target{Browser: BrowserDomain, Domain: "home.example.com"}
 	r := h.request(id(1), target, "")
 	rc, err := h.e.Switch(bg, r)
 	if err != nil || rc.State != "completed" || rc.Outcome != "ok" {
@@ -30,10 +30,10 @@ func TestSwitchStopsCommitsThenStarts(t *testing.T) {
 	if got := h.head(); got.Digest() != r.NewDigest {
 		t.Errorf(".env holds %+v, not the new head", got)
 	}
-	h.assertConverged(publicStack...)
+	h.assertConverged(domainStack...)
 
 	calls := h.fake.calls()
-	commit := slices.IndexFunc(calls, func(c fakeCall) bool { return strings.Contains(c.DotEnv, "CYFR_ACCESS=public") })
+	commit := slices.IndexFunc(calls, func(c fakeCall) bool { return strings.Contains(c.DotEnv, "CYFR_BROWSER=domain") })
 	if commit < 0 {
 		t.Fatal("no call saw the committed .env")
 	}
@@ -51,7 +51,7 @@ func TestSwitchStopsCommitsThenStarts(t *testing.T) {
 		if c.Serve != serveClosed {
 			t.Errorf("compose up while Serve held %q: %s", c.Serve, c)
 		}
-		want := []string{"compose", "-p", "home", "-f", resolvedName(r.NewDigest), "--project-directory", ".", "--profile", "public"}
+		want := []string{"compose", "-p", "home", "-f", resolvedName(r.NewDigest), "--project-directory", ".", "--profile", "domain"}
 		if !slices.Equal(c.Args[:len(want)], want) {
 			t.Errorf("compose up is not on the new head's materialized file and selection: %s", c)
 		}
@@ -67,7 +67,7 @@ func TestSwitchStopsCommitsThenStarts(t *testing.T) {
 func TestStoppedStackSwitchMakesNoComposeCall(t *testing.T) {
 	h := newHome(t)
 	os.Remove(filepath.Join(h.dir, "docker-compose.yml"))
-	r := h.request(id(1), Target{Mode: ModePublic, Domain: "home.example.com"}, "")
+	r := h.request(id(1), Target{Browser: BrowserDomain, Domain: "home.example.com"}, "")
 	rc, err := h.e.Switch(bg, r)
 	if err != nil || rc.Outcome != "ok" {
 		t.Fatalf("switch answered %+v, %v", rc, err)
@@ -89,8 +89,8 @@ func TestStoppedStackSwitchMakesNoComposeCall(t *testing.T) {
 // public head's digest; the same head again is access_unchanged.
 func TestSwitchFenceRefusesAStalePreview(t *testing.T) {
 	h := newHome(t)
-	pub := Target{Mode: ModePublic, Domain: "home.example.com"}
-	withEmail := Target{Mode: ModePublic, Domain: "home.example.com", ACMEEmail: "ops@example.com"}
+	pub := Target{Browser: BrowserDomain, Domain: "home.example.com"}
+	withEmail := Target{Browser: BrowserDomain, Domain: "home.example.com", ACMEEmail: "ops@example.com"}
 	if h.preview(pub, "").NewDigest == h.preview(withEmail, "").NewDigest {
 		t.Error("an email-only change keeps the public head's digest")
 	}
@@ -112,7 +112,7 @@ func TestSwitchFenceRefusesAStalePreview(t *testing.T) {
 		}
 		writeFile(t, filepath.Join(h.dir, ".env"), []byte(strings.Replace(before, edit.to, edit.from, 1)))
 	}
-	if _, err := h.e.Preview(bg, Target{Mode: ModeLocal}, ""); refusalCode(err) != "access_unchanged" {
+	if _, err := h.e.Preview(bg, Target{Browser: BrowserNone}, ""); refusalCode(err) != "access_unchanged" {
 		t.Errorf("previewing the head .env holds answered %v", err)
 	}
 	if calls := h.fake.calls(); slices.ContainsFunc(calls, func(c fakeCall) bool { return c.Args[0] != "ps" && c.Args[0] != "compose" }) {
@@ -128,13 +128,13 @@ func TestRollbackStopsTheTargetBeforeRestoringTheOldHead(t *testing.T) {
 	h := newHome(t)
 	h.fake.startStack(t, h.head())
 	old := h.head()
-	r := h.request(id(1), Target{Mode: ModePublic, Domain: "home.example.com"}, "")
+	r := h.request(id(1), Target{Browser: BrowserDomain, Domain: "home.example.com"}, "")
 	h.fake.hook = func(_ context.Context, c *fakeCall) *fakeAnswer {
 		h.fake.mu.Lock()
 		defer h.fake.mu.Unlock()
 		// The new head's cyfr fails its health; the old one's passes.
 		h.fake.st.Health = "healthy"
-		if envNow(h.dir, "CYFR_ACCESS=public") {
+		if envNow(h.dir, "CYFR_BROWSER=domain") {
 			h.fake.st.Health = "unhealthy"
 		}
 		return nil
@@ -154,9 +154,9 @@ func TestRollbackStopsTheTargetBeforeRestoringTheOldHead(t *testing.T) {
 	calls := h.fake.calls()
 	proxyUp := slices.IndexFunc(calls, func(c fakeCall) bool { return slices.Contains(c.Args, "up") && slices.Contains(c.Args, "caddy") })
 	unhealthy := slices.IndexFunc(calls, func(c fakeCall) bool {
-		return c.Args[0] == "inspect" && strings.Contains(c.DotEnv, "CYFR_ACCESS=public")
+		return c.Args[0] == "inspect" && strings.Contains(c.DotEnv, "CYFR_BROWSER=domain")
 	})
-	restored := slices.IndexFunc(calls[max(unhealthy, 0):], func(c fakeCall) bool { return strings.Contains(c.DotEnv, "CYFR_ACCESS=local") }) + max(unhealthy, 0)
+	restored := slices.IndexFunc(calls[max(unhealthy, 0):], func(c fakeCall) bool { return strings.Contains(c.DotEnv, "CYFR_BROWSER=none") }) + max(unhealthy, 0)
 	if proxyUp < 0 || unhealthy < proxyUp || restored <= unhealthy {
 		t.Fatalf("no proxy start, failed health, then restore in %v", calls)
 	}
@@ -186,7 +186,7 @@ func TestFailedStopIsUncertainThenResumeConverges(t *testing.T) {
 	h := newHome(t)
 	h.fake.startStack(t, h.head())
 	old := h.env()
-	r := h.request(id(1), Target{Mode: ModePublic, Domain: "home.example.com"}, "")
+	r := h.request(id(1), Target{Browser: BrowserDomain, Domain: "home.example.com"}, "")
 	broken := true
 	h.fake.hook = func(_ context.Context, c *fakeCall) *fakeAnswer {
 		if broken && c.Args[0] == "stop" {
@@ -210,7 +210,7 @@ func TestFailedStopIsUncertainThenResumeConverges(t *testing.T) {
 	if j, _ := h.e.readJournal(); j == nil || j.Phase != "uncertain" {
 		t.Fatalf("the journal is %+v", j)
 	}
-	other := h.request(id(2), Target{Mode: ModePublic, Domain: "other.example.com"}, "")
+	other := h.request(id(2), Target{Browser: BrowserDomain, Domain: "other.example.com"}, "")
 	if rc, err := h.e.Switch(bg, other); refusalCode(err) != "access_uncertain" || rc.RequestID != id(1) {
 		t.Errorf("another switch answered %+v, %v, not the uncertain receipt", rc, err)
 	}
@@ -245,12 +245,12 @@ func envNow(dir, line string) bool {
 func TestUncertainRollbackKeepsItsFiles(t *testing.T) {
 	h := newHome(t)
 	h.fake.startStack(t, h.head())
-	r := h.request(id(1), publicTarget, "")
+	r := h.request(id(1), domainTarget, "")
 	broken := true
 	h.fake.hook = func(_ context.Context, c *fakeCall) *fakeAnswer {
 		h.fake.mu.Lock()
 		defer h.fake.mu.Unlock()
-		public := envNow(h.dir, "CYFR_ACCESS=public")
+		public := envNow(h.dir, "CYFR_BROWSER=domain")
 		h.fake.st.Health = "healthy"
 		if public {
 			h.fake.st.Health = "unhealthy"

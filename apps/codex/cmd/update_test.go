@@ -174,7 +174,7 @@ var (
 
 // scenarioEnv is the .env of the scenarios' home: public at
 // cyfr.example.com, builds on.
-const scenarioEnv = "CYFR_ACCESS=public\nCYFR_HOST=cyfr.example.com\nCYFR_PUBLIC_URL=https://cyfr.example.com\nCYFR_PORT=4000\n"
+const scenarioEnv = "CYFR_BROWSER=domain\nCYFR_HOST=cyfr.example.com\nCYFR_PUBLIC_URL=https://cyfr.example.com\nCYFR_PORT=4000\n"
 
 // stackImage is the image the scenarios' cyfr service runs, through which
 // a snapshot reads the storage.
@@ -577,12 +577,12 @@ func (s *updateScenario) schemaRead(running bool) []string {
 	}
 	image := imagesFromCompose(original, nil)[0]
 	return append(reads,
-		"run --rm --name "+testSchemaContainer+" --pull never --network none --read-only --user app --entrypoint /usr/bin/timeout -e CYFR_ACCESS=local -e CYFR_SECRET_KEY_BASE "+image+" 90 /app/bin/cyfr eval "+testSchema+" {env CYFR_SECRET_KEY_BASE set}",
+		"run --rm --name "+testSchemaContainer+" --pull never --network none --read-only --user app --entrypoint /usr/bin/timeout -e CYFR_BROWSER=none -e CYFR_SECRET_KEY_BASE "+image+" 90 /app/bin/cyfr eval "+testSchema+" {env CYFR_SECRET_KEY_BASE set}",
 		"rm -f "+testSchemaContainer)
 }
 
 // scenarioHead is the access head scenarioEnv holds.
-var scenarioHead = access.Head{Mode: access.ModePublic, Host: "cyfr.example.com", PublicURL: "https://cyfr.example.com", Port: 4000, Profiles: []string{"public"}}
+var scenarioHead = access.Head{Browser: access.BrowserDomain, Host: "cyfr.example.com", PublicURL: "https://cyfr.example.com", Port: 4000, Profiles: []string{"domain"}}
 
 // profiles is the engine's compose selection for the scenario's head and
 // project, as the fake docker logs it (newUpdateScenario sets it).
@@ -1434,7 +1434,7 @@ func (s *updateScenario) withProfiles(profiles map[string][]string) {
 // builds on runs under: the scenario's head and the builds' own profile.
 func (s *updateScenario) buildsSelection() string {
 	h := scenarioHead
-	h.Profiles = []string{"public", "locus-builds"}
+	h.Profiles = []string{"domain", "locus-builds"}
 	return strings.Join(composePrefixArgs(access.ProjectName(s.project), h), " ") + " "
 }
 
@@ -2160,10 +2160,10 @@ func TestUpdateHoldsOneLock(t *testing.T) {
 	// The home is on the release now: its compose file goes back to the
 	// one before, so the next update has a change to make.
 	s.edit("docker-compose.yml", string(s.compose))
-	s.engine.holder = "access tailnet"
+	s.engine.holder = "access browser tailnet"
 	calls = len(s.log())
 	err = homeStep(context.Background(), io.Discard, io.Discard)
-	if err == nil || !strings.Contains(err.Error(), "(`access tailnet`)") {
+	if err == nil || !strings.Contains(err.Error(), "(`access browser tailnet`)") {
 		t.Errorf("an update beside a held lock answered %v", err)
 	}
 	// The refused update ran the offer's reads alone, which write nothing.
@@ -2544,7 +2544,7 @@ func TestUpdateRemovesTheSettingsTheReleaseRetired(t *testing.T) {
 			t.Errorf("%s, retired by 0.9.0, is still in .env", name)
 		}
 	}
-	for name, value := range map[string]string{"CYFR_KEPT": "1", "CYFR_NOW_COMMENTED": "3", "CYFR_MINE": "4", "CYFR_ACCESS": "public"} {
+	for name, value := range map[string]string{"CYFR_KEPT": "1", "CYFR_NOW_COMMENTED": "3", "CYFR_MINE": "4", "CYFR_BROWSER": "domain"} {
 		if got[name] != value {
 			t.Errorf("%s is %q, want %q kept", name, got[name], value)
 		}

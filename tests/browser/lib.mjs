@@ -10,7 +10,7 @@
 // it writes. The account pages a proof drives are account.mjs's.
 //
 // Every cell of a run is a home (tests/browser/harness.sh `browser_home`):
-// a public home of a `.test` hostname of its own, reached at https://HOST,
+// with a domain address at a `.test` hostname of its own, reached at https://HOST,
 // one or several at once. A proof of one cell runs it as the home
 // `cyfr.test` (`browser_cell`), so the origin the browsers see is the
 // origin the server derives its policies for: a tincture document's

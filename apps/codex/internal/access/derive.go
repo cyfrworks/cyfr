@@ -4,6 +4,7 @@
 package access
 
 import (
+	"cmp"
 	"net"
 	"regexp"
 	"slices"
@@ -12,15 +13,19 @@ import (
 	"unicode/utf8"
 )
 
-// Target is the access mode a person asks for.
+// Target is the browser address a person asks for.
 type Target struct {
-	Mode, Domain, ACMEEmail string
+	Browser, Domain, ACMEEmail, Publish string
 }
 
-// Current is what the head keeps from .env whatever the mode: the loopback
-// listener's port.
+// Current is what the head keeps from .env whatever the kind: the
+// loopback listener's port, where the proxy listener is published when
+// .env has proxy, and whether .env states whose forwarded headers the
+// proxy listener trusts.
 type Current struct {
-	Port int
+	Port    int
+	Publish string
+	Trusted bool
 }
 
 // Join is a tailnet join's record: the machine's name and its stable node
@@ -47,8 +52,9 @@ var envKeys = []struct {
 	{"CADDY_ACME_EMAIL", func(h Head) string { return h.ACMEEmail }},
 	{"CYFR_HOST", func(h Head) string { return h.Host }},
 	{"CYFR_PORT", func(h Head) string { return strconv.Itoa(h.Port) }},
+	{"CYFR_BROWSER", func(h Head) string { return h.Browser }},
+	{"CYFR_PROXY_PUBLISH", func(h Head) string { return h.Publish }},
 	{"CYFR_PUBLIC_URL", func(h Head) string { return h.PublicURL }},
-	{"CYFR_ACCESS", func(h Head) string { return h.Mode }},
 	{"CYFR_TAILNET_NODE_ID", func(h Head) string { return h.NodeID }},
 }
 
@@ -60,6 +66,17 @@ const (
 	emailRule       = "an email address is a name of letters, digits, dots, plus signs, hyphens and underscores, then @ and a domain"
 )
 
+// optionKinds are the kinds each option of a target is for.
+var optionKinds = []struct {
+	option string
+	kinds  []string
+	value  func(t Target) string
+}{
+	{"--domain", []string{BrowserDomain, BrowserProxy}, func(t Target) string { return strings.TrimSpace(t.Domain) }},
+	{"--acme-email", []string{BrowserDomain}, func(t Target) string { return strings.TrimSpace(t.ACMEEmail) }},
+	{"--publish", []string{BrowserProxy}, func(t Target) string { return strings.TrimSpace(t.Publish) }},
+}
+
 // Derive is the head a target makes from the current settings and, for
 // tailnet, the join record, with the .env change that writes it. A domain
 // is read without case; every other input is taken as given. An input that
@@ -70,23 +87,22 @@ func Derive(t Target, cur Current, join *Join) (Derivation, error) {
 	}
 	domain := strings.ToLower(strings.TrimSpace(t.Domain))
 	email := strings.TrimSpace(t.ACMEEmail)
-	if t.Mode != ModeLocal && t.Mode != ModeTailnet && t.Mode != ModePublic {
-		return Derivation{}, refuse("access_unknown_mode", map[string]string{"value": t.Mode})
+	if !slices.Contains(Browsers, t.Browser) {
+		return Derivation{}, refuse("access_unknown_browser", map[string]string{"value": t.Browser})
 	}
 	if cur.Port < 1 || cur.Port > 65535 {
 		return Derivation{}, refuse("access_setting_invalid", map[string]string{"key": "CYFR_PORT", "value": strconv.Itoa(cur.Port)})
 	}
-	if t.Mode != ModePublic && domain != "" {
-		return Derivation{}, refuse("access_option_outside_mode", map[string]string{"option": "--domain", "mode": t.Mode})
+	for _, o := range optionKinds {
+		if o.value(t) != "" && !slices.Contains(o.kinds, t.Browser) {
+			return Derivation{}, refuse("access_option_outside_browser", map[string]string{"option": o.option, "browser": t.Browser})
+		}
 	}
-	if t.Mode != ModePublic && email != "" {
-		return Derivation{}, refuse("access_option_outside_mode", map[string]string{"option": "--acme-email", "mode": t.Mode})
-	}
-	h := Head{Mode: t.Mode, Port: cur.Port}
-	switch t.Mode {
-	case ModeLocal:
+	h := Head{Browser: t.Browser, Port: cur.Port}
+	switch t.Browser {
+	case BrowserNone:
 		h.Host = "localhost"
-	case ModeTailnet:
+	case BrowserTailnet:
 		if join == nil {
 			return Derivation{}, refuse("tailnet_not_joined", nil)
 		}
@@ -97,9 +113,9 @@ func Derive(t Target, cur Current, join *Join) (Derivation, error) {
 			return Derivation{}, refuse("tailnet_node_id_unsupported", map[string]string{"value": join.NodeID})
 		}
 		h.Host, h.NodeID, h.PublicURL = join.Name, join.NodeID, "https://"+join.Name
-	case ModePublic:
+	case BrowserDomain, BrowserProxy:
 		if domain == "" {
-			return Derivation{}, refuse("access_public_host_invalid", nil)
+			return Derivation{}, refuse("access_domain_host_invalid", map[string]string{"browser": t.Browser})
 		}
 		if !PublicDomain(domain) {
 			return Derivation{}, invalid(t.Domain, "domain", domainRule)
@@ -109,7 +125,19 @@ func Derive(t Target, cur Current, join *Join) (Derivation, error) {
 		}
 		h.Host, h.PublicURL, h.ACMEEmail = domain, "https://"+domain, email
 	}
-	h.Profiles = Profiles(h.Mode)
+	if t.Browser == BrowserProxy {
+		h.Publish = strings.TrimSpace(t.Publish)
+		if h.Publish == "" {
+			h.Publish = cmp.Or(cur.Publish, DefaultPublish)
+		}
+		if _, err := publishOf(h.Publish, h.Port); err != nil {
+			return Derivation{}, err
+		}
+		if !cur.Trusted {
+			return Derivation{}, refuse("access_proxy_trust_missing", nil)
+		}
+	}
+	h.Profiles = Profiles(h.Browser)
 
 	d := Derivation{Head: h, Assignments: map[string]string{}, Removals: []string{}}
 	for _, k := range envKeys {
@@ -137,7 +165,8 @@ func unreadableInput(t Target, join *Join) string {
 		{"CADDY_ACME_EMAIL", t.ACMEEmail},
 		{"CYFR_HOST", t.Domain},
 		{"CYFR_HOST", name},
-		{"CYFR_ACCESS", t.Mode},
+		{"CYFR_BROWSER", t.Browser},
+		{"CYFR_PROXY_PUBLISH", t.Publish},
 		{"CYFR_TAILNET_NODE_ID", nodeID},
 	} {
 		if !utf8.ValidString(input.value) {
@@ -154,8 +183,8 @@ func validEmail(email string) bool {
 
 // BootInput is what a boot read: the names and values .env assigns, nil
 // when no .env was read itself; the environment merged over it; and
-// whether this is a release, where an unset mode is refused, or a dev or
-// test run, where it is local.
+// whether this is a release, where an unset kind is refused, or a dev or
+// test run, where it is none.
 type BootInput struct {
 	File    map[string]string
 	Process map[string]string
@@ -176,12 +205,17 @@ type Trust struct {
 	Hops  int
 }
 
-// Boot is a coherent deployment's access mode, as the release resolves it.
+// Boot is a coherent deployment's browser address, as the release
+// resolves it.
 type Boot struct {
-	Head         Head
-	Origin       string
-	Loopback     Listener
-	Proxy        *Listener // nil in local, which has no proxy listener
+	Head     Head
+	Exposure string // "public" for domain and proxy, "private" otherwise
+	Origin   string
+	Loopback Listener
+	Proxy    *Listener // nil with none, which has no proxy listener
+	// Published is where the proxy listener is published on this
+	// machine's loopback: with proxy alone, nil otherwise.
+	Published    *Listener
 	Trust        Trust
 	HSTS         string // "none", "endpoint_on_proxy" or "caddy"
 	CheckOrigins []string
@@ -191,8 +225,8 @@ type Boot struct {
 // accessKeys are every name the boot reads but the compose file's
 // assertion, in byte order: the order a source conflict is looked for.
 var accessKeys = []string{
-	"CADDY_ACME_EMAIL", "CYFR_BIND_ADDRESS", "CYFR_HOST",
-	"CYFR_PORT", "CYFR_PROXY_BIND_ADDRESS", "CYFR_PROXY_PORT", "CYFR_PUBLIC_URL", "CYFR_ACCESS",
+	"CADDY_ACME_EMAIL", "CYFR_BIND_ADDRESS", "CYFR_BROWSER", "CYFR_HOST",
+	"CYFR_PORT", "CYFR_PROXY_BIND_ADDRESS", "CYFR_PROXY_PORT", "CYFR_PROXY_PUBLISH", "CYFR_PUBLIC_URL",
 	"CYFR_TAILNET_NODE_ID", "CYFR_TRUSTED_PROXY_CIDRS", "CYFR_TRUSTED_PROXY_HOPS",
 }
 
@@ -227,17 +261,17 @@ func ResolveBoot(in BootInput) (Boot, error) {
 		return Boot{}, refuse("access_assertion_from_file", nil)
 	}
 
-	mode := get("CYFR_ACCESS")
+	browser := get("CYFR_BROWSER")
 	switch {
-	case mode == "" && in.Release:
+	case browser == "" && in.Release:
 		return Boot{}, refuse("access_missing", nil)
-	case mode == "":
-		mode = ModeLocal
-	case mode != ModeLocal && mode != ModeTailnet && mode != ModePublic:
-		return Boot{}, refuse("access_unknown_mode", map[string]string{"value": mode})
+	case browser == "":
+		browser = BrowserNone
+	case !slices.Contains(Browsers, browser):
+		return Boot{}, refuse("access_unknown_browser", map[string]string{"value": browser})
 	}
 
-	h, err := bootHead(mode, get)
+	h, err := bootHead(browser, get)
 	if err != nil {
 		return Boot{}, err
 	}
@@ -266,7 +300,19 @@ func ResolveBoot(in BootInput) (Boot, error) {
 	if err != nil {
 		return Boot{}, err
 	}
-	if mode != ModeLocal && proxyPort == h.Port && overlapping(bind, proxyBind) {
+	var published *Listener
+	if browser == BrowserProxy {
+		if published, err = publishOf(h.Publish, h.Port); err != nil {
+			return Boot{}, err
+		}
+		if trust.Kind == "" {
+			return Boot{}, refuse("access_proxy_trust_missing", nil)
+		}
+	}
+	if trust.Kind == "" {
+		trust = Trust{Kind: "hops", Hops: defaultHops}
+	}
+	if browser != BrowserNone && proxyPort == h.Port && overlapping(bind, proxyBind) {
 		return Boot{}, refuse("access_setting_invalid", map[string]string{
 			"key": "CYFR_PROXY_PORT", "value": strconv.Itoa(proxyPort), "address": proxyBind,
 			"bind": bind, "port": strconv.Itoa(h.Port),
@@ -278,13 +324,15 @@ func ResolveBoot(in BootInput) (Boot, error) {
 
 	b := Boot{
 		Head:      h,
+		Exposure:  exposure(browser),
 		Origin:    h.origin(),
 		Loopback:  Listener{bind, h.Port},
+		Published: published,
 		Trust:     Trust{Kind: "none"},
-		HSTS:      map[string]string{ModeLocal: "none", ModeTailnet: "endpoint_on_proxy", ModePublic: "caddy"}[mode],
+		HSTS:      map[string]string{BrowserNone: "none", BrowserTailnet: "endpoint_on_proxy", BrowserDomain: "caddy", BrowserProxy: "endpoint_on_proxy"}[browser],
 		Assertion: assertion,
 	}
-	if mode != ModeLocal {
+	if browser != BrowserNone {
 		b.Proxy = &Listener{proxyBind, proxyPort}
 		b.Trust = trust
 		b.CheckOrigins = append(b.CheckOrigins, "https://"+h.Host)
@@ -297,39 +345,41 @@ func ResolveBoot(in BootInput) (Boot, error) {
 	return b, nil
 }
 
-// bootHead is the head the mode's settings make, once each is the one the
-// mode allows, checked in order: the host, the node id, the URL, the keys
-// outside the mode, the port.
-func bootHead(mode string, get func(string) string) (Head, error) {
+// bootHead is the head the kind's settings make, once each is the one
+// the kind allows, checked in order: the host, the node id, the URL, the
+// keys outside the kind, the port.
+func bootHead(browser string, get func(string) string) (Head, error) {
 	host, nodeID, publicURL := get("CYFR_HOST"), get("CYFR_TAILNET_NODE_ID"), get("CYFR_PUBLIC_URL")
-	email := get("CADDY_ACME_EMAIL")
+	email, publish := get("CADDY_ACME_EMAIL"), get("CYFR_PROXY_PUBLISH")
 
-	switch mode {
-	case ModeLocal:
+	switch browser {
+	case BrowserNone:
 		if host != "" && host != "localhost" {
-			return Head{}, refuse("access_local_mismatch", map[string]string{"key": "CYFR_HOST", "value": host})
+			return Head{}, refuse("access_none_mismatch", map[string]string{"key": "CYFR_HOST", "value": host})
 		}
-	case ModeTailnet:
+	case BrowserTailnet:
 		if !TailnetName(host) {
 			return Head{}, refuse("access_tailnet_host_invalid", omitEmpty(map[string]string{"host": host}))
 		}
 		if !NodeID(nodeID) {
 			return Head{}, refuse("access_tailnet_node_invalid", omitEmpty(map[string]string{"value": nodeID}))
 		}
-	case ModePublic:
+	case BrowserDomain, BrowserProxy:
 		if !PublicDomain(host) {
-			return Head{}, refuse("access_public_host_invalid", omitEmpty(map[string]string{"host": host}))
+			return Head{}, refuse("access_domain_host_invalid", omitEmpty(map[string]string{"browser": browser, "host": host}))
 		}
 	}
 	switch {
-	case mode == ModeLocal && publicURL != "":
-		return Head{}, refuse("access_local_mismatch", map[string]string{"key": "CYFR_PUBLIC_URL", "value": publicURL})
-	case mode != ModeLocal && publicURL != "https://"+host:
-		return Head{}, refuse("access_public_url_mismatch", omitEmpty(map[string]string{"mode": mode, "expected": "https://" + host, "value": publicURL}))
-	case mode != ModePublic && email != "":
-		return Head{}, refuse("access_key_outside_mode", map[string]string{"key": "CADDY_ACME_EMAIL", "mode": mode, "needs": ModePublic})
-	case mode != ModeTailnet && nodeID != "":
-		return Head{}, refuse("access_key_outside_mode", map[string]string{"key": "CYFR_TAILNET_NODE_ID", "mode": mode, "needs": ModeTailnet})
+	case browser == BrowserNone && publicURL != "":
+		return Head{}, refuse("access_none_mismatch", map[string]string{"key": "CYFR_PUBLIC_URL", "value": publicURL})
+	case browser != BrowserNone && publicURL != "https://"+host:
+		return Head{}, refuse("access_public_url_mismatch", omitEmpty(map[string]string{"browser": browser, "expected": "https://" + host, "value": publicURL}))
+	case browser != BrowserDomain && email != "":
+		return Head{}, refuse("access_key_outside_browser", map[string]string{"key": "CADDY_ACME_EMAIL", "browser": browser, "needs": BrowserDomain})
+	case browser != BrowserTailnet && nodeID != "":
+		return Head{}, refuse("access_key_outside_browser", map[string]string{"key": "CYFR_TAILNET_NODE_ID", "browser": browser, "needs": BrowserTailnet})
+	case browser != BrowserProxy && publish != "":
+		return Head{}, refuse("access_key_outside_browser", map[string]string{"key": "CYFR_PROXY_PUBLISH", "browser": browser, "needs": BrowserProxy})
 	}
 	p, err := port(get, "CYFR_PORT", 4000)
 	if err != nil {
@@ -338,10 +388,42 @@ func bootHead(mode string, get func(string) string) (Head, error) {
 	if host == "" {
 		host = "localhost"
 	}
+	if browser == BrowserProxy && publish == "" {
+		publish = DefaultPublish
+	}
 	return Head{
-		Mode: mode, Host: host, NodeID: nodeID, PublicURL: publicURL, Port: p,
-		ACMEEmail: email, Profiles: Profiles(mode),
+		Browser: browser, Host: host, NodeID: nodeID, PublicURL: publicURL, Port: p,
+		ACMEEmail: email, Publish: publish, Profiles: Profiles(browser),
 	}, nil
+}
+
+// exposure is how far a kind reaches: public for a domain, whether
+// through Caddy or the person's own proxy, private otherwise.
+func exposure(browser string) string {
+	if browser == BrowserDomain || browser == BrowserProxy {
+		return "public"
+	}
+	return "private"
+}
+
+// publishOf reads where the proxy listener is published, text: an IPv4
+// loopback address and a port, apart from the loopback listener's own
+// publication at 127.0.0.1 on port. IPv4 alone: the listener binds the
+// container's IPv4 address, which Docker's IPv6 publication of [::1] does
+// not reach.
+func publishOf(text string, port int) (*Listener, error) {
+	addr, portText, ok := strings.Cut(text, ":")
+	if !ok || strings.Contains(addr, ":") || strings.Contains(addr, "%") || strings.Contains(portText, ":") {
+		return nil, settingInvalid("CYFR_PROXY_PUBLISH", text)
+	}
+	n, err := strconv.Atoi(portText)
+	if ip := ipLiteral(addr); err != nil || !digits.MatchString(portText) || n < 1 || n > 65535 || ip == nil || ip.To4() == nil || ip.To4()[0] != 127 {
+		return nil, settingInvalid("CYFR_PROXY_PUBLISH", text)
+	}
+	if n == port && ipLiteral(addr).Equal(net.IPv4(127, 0, 0, 1)) {
+		return nil, refuse("access_setting_invalid", map[string]string{"key": "CYFR_PROXY_PUBLISH", "value": text, "port": strconv.Itoa(port)})
+	}
+	return &Listener{addr, n}, nil
 }
 
 func omitEmpty(m map[string]string) map[string]string {
@@ -379,6 +461,12 @@ func address(get func(string) string, key string) (string, error) {
 	return text, nil
 }
 
+// defaultHops is the proxy hops trusted when no trust is stated, by every
+// kind but proxy.
+const defaultHops = 1
+
+// proxyTrust is the trust .env and the environment state, its Kind ""
+// when they state none.
 func proxyTrust(get func(string) string) (Trust, error) {
 	if text := get("CYFR_TRUSTED_PROXY_CIDRS"); text != "" {
 		var entries []string
@@ -394,7 +482,8 @@ func proxyTrust(get func(string) string) (Trust, error) {
 	}
 	text := get("CYFR_TRUSTED_PROXY_HOPS")
 	if text == "" {
-		return Trust{Kind: "hops", Hops: 1}, nil
+		// Unstated: proxy refuses it, every other kind takes the default.
+		return Trust{}, nil
 	}
 	if n, err := strconv.Atoi(text); err == nil && digits.MatchString(text) && n <= 16 {
 		return Trust{Kind: "hops", Hops: n}, nil

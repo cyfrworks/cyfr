@@ -5,11 +5,12 @@ defmodule CyfrWeb.Plugs.ApiSecurityHeadersTest do
   @moduledoc """
   The endpoint's HSTS, through its real listeners.
 
-  A tailnet home's proxy listener carries the endpoint's one HSTS value on
-  every response it sends whose `Host` is not a loopback name: a success,
-  an error and a refusal made before any pipeline alike. The loopback
-  listener never carries it, and neither does a public home's proxy
-  listener, whose HSTS is Caddy's, nor a local home's listener.
+  With a `tailnet` or `proxy` browser address the proxy listener carries
+  the endpoint's one HSTS value on every response it sends whose `Host` is
+  not a loopback name: a success, an error and a refusal made before any
+  pipeline alike. The loopback listener never carries it, and neither does
+  the proxy listener with `domain`, whose HSTS is Caddy's, nor a server's
+  listener with no browser address.
 
   Both listeners run here as Phoenix would start them for the running
   endpoint (`CyfrWeb.Ingress.child_specs/2`), on ports of their own; the
@@ -100,7 +101,7 @@ defmodule CyfrWeb.Plugs.ApiSecurityHeadersTest do
     "localhost:4100"
   ]
 
-  test "a tailnet home's proxy listener sends the endpoint's HSTS on success, error and refusal",
+  test "a tailnet address's proxy listener sends the endpoint's HSTS on success, error and refusal",
        %{ports: ports} do
     for {request, status} <- @answers, host <- [@tailnet_host, @tailnet_host <> ":443"] do
       assert answer(ports.proxy, request, host) == {status, [@hsts]}, "#{request} for #{host}"
@@ -119,7 +120,7 @@ defmodule CyfrWeb.Plugs.ApiSecurityHeadersTest do
     end
   end
 
-  test "a public home's proxy listener leaves HSTS to Caddy, and a local home sends none",
+  test "a domain address's proxy listener leaves HSTS to Caddy, and no browser address sends none",
        %{ports: ports} do
     for reach <- [:caddy, :none], {request, status} <- @answers do
       Application.put_env(:cyfr, :hsts, reach)

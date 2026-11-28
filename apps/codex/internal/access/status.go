@@ -57,8 +57,8 @@ func (e *Engine) status(ctx context.Context) (Status, error) {
 // is read where the proxy keeps it, and said not to be read when it
 // cannot be.
 func (e *Engine) health(ctx context.Context, h Head, cs []Container) []string {
-	switch h.Mode {
-	case ModeTailnet:
+	switch h.Browser {
+	case BrowserTailnet:
 		name, ok := containerOf(cs, serveService)
 		if !ok || !running(stateOf(cs, name)) {
 			return []string{"Tailscale: not running"}
@@ -89,7 +89,7 @@ func (e *Engine) health(ctx context.Context, h Head, cs []Container) []string {
 			lines = append(lines, "Serve: off")
 		}
 		return append(lines, e.certificate(ctx, name, "cat /var/lib/tailscale/certs/"+h.Host+".crt"))
-	case ModePublic:
+	case BrowserDomain:
 		proxies, err := e.servicesOf(ctx, h, nil)
 		if err != nil {
 			return []string{"The proxy: its service could not be read (" + err.Error() + ")"}

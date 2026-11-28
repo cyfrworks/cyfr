@@ -21,7 +21,7 @@ CYFR is a home for a person's work with AI and a place to talk with other people
 
 - **Trusted:** the home's own code, with the system layer and the command line that runs its machine; the platform administrator; the home's store; a person's passkey or a protected device's local unlock (§9.3); and the directory, for consistently ordered logs alone, with its account pages, trusted browser code like any site a passkey lives on.
 - **Not trusted:** models and their output, components and tinctures, untrusted processes, another person's session, another home's word, and anything a guest hands back.
-- **Stated limits.** Fresh confirmation protects against a stolen session, not a compromised administrator. A recovery code, a backup or a session is authority to whoever holds it, and malware on an unlocked device can use its key until the key is removed from the account. A local or tailnet home that cannot reach the directory keeps admitting the people it holds on the keys it last read, so a removed key keeps working there until it reconnects. The gate decides CYFR's operations: a program harness's own tools run inside its box, bounded by its isolation (§5.7), not by the gate.
+- **Stated limits.** Fresh confirmation protects against a stolen session, not a compromised administrator. A recovery code, a backup or a session is authority to whoever holds it, and malware on an unlocked device can use its key until the key is removed from the account. A private server that cannot reach the directory keeps admitting the people it holds on the keys it last read, so a removed key keeps working there until it reconnects. The gate decides CYFR's operations: a program harness's own tools run inside its box, bounded by its isolation (§5.7), not by the gate.
 - **The trusted computing base** is the control plane, which holds the decrypted credentials; Locus is the process boundary for untrusted code.
 - **Clock trust.** Expiry, leases and freshness are read on the deciding home's clock, and a cell's leases on its database's.
 
@@ -74,7 +74,7 @@ The order describes dependencies, not a request's path. Codex shares no code wit
 ### Cyfr (Host): the machine
 
 - Supervision, boot, the cell claim and the composition root.
-- The bus (`Cyfr.Bus`), the telemetry bridge, configuration, the access mode and platform settings (§6.8).
+- The bus (`Cyfr.Bus`), the telemetry bridge, configuration, the browser address and platform settings (§6.8).
 - The endpoint: the listener that accepted a request is its ingress, never a header (`CyfrWeb.Ingress`).
 - The admission roster of every path an intent enters by (`Cyfr.Admission`) and the boundary catalog (`Cyfr.Boundaries`). *Not built yet:* the local socket and the compositor, which the roster declares and defers.
 
@@ -251,7 +251,7 @@ One baseline migration is the schema, on both adapters alike, and a database run
 
 ### 6.8 Configuration and settings
 
-Configuration is parsed explicitly, and an invalid security-relevant value is refused. An unreadable settings store refuses the boot. The access mode is a deployment setting from which the home's address, listeners, origins and proxy trust follow (`Cyfr.RuntimeConfig`): only the machine's own `cyfr` writes it, and the boot refuses a setting that contradicts it.
+Configuration is parsed explicitly, and an invalid security-relevant value is refused. An unreadable settings store refuses the boot. The browser address is a deployment setting from which the server's address, listeners, origins, exposure and proxy trust follow (`Cyfr.RuntimeConfig`): only the machine's own `cyfr` writes it, and the boot refuses a setting that contradicts it.
 
 ### 6.9 Backup, runtime and budgets
 

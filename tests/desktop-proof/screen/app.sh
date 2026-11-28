@@ -59,7 +59,7 @@ if [ "${1:-}" = --inside ]; then
   useradd -m proof
   install -d -o proof -m 700 /home/proof/cyfr
   printf 'services: {}\n' >/home/proof/cyfr/docker-compose.yml
-  printf 'CYFR_ACCESS=local\nCYFR_PORT=4321\n' >/home/proof/cyfr/.env
+  printf 'CYFR_BROWSER=none\nCYFR_PORT=4321\n' >/home/proof/cyfr/.env
   chown proof /home/proof/cyfr/docker-compose.yml /home/proof/cyfr/.env
   # The list keeps one CYFR elsewhere beside This box, whose entry the
   # screen's first start makes.

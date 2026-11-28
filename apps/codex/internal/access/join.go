@@ -225,7 +225,7 @@ func (e *Engine) doJoin(ctx context.Context, r JoinRequest) (Receipt, error) {
 // serveImage is the tailscale service's image, which a join container
 // runs.
 func (e *Engine) serveImage(ctx context.Context) (string, error) {
-	content, err := e.flatten(ctx, Head{Profiles: []string{ModeTailnet}})
+	content, err := e.flatten(ctx, Head{Profiles: []string{BrowserTailnet}})
 	if err != nil {
 		return "", err
 	}

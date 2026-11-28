@@ -4,6 +4,7 @@
 package access
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"maps"
@@ -11,6 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -40,21 +42,72 @@ func (e *Engine) selection(files []string, h Head) []string {
 
 // flatten is `docker compose config` of h over the default file set: the
 // configuration compose would run for h's selection, .env's values
-// inlined.
+// inlined. With proxy it is read again with proxyOverlay over the set.
 func (e *Engine) flatten(ctx context.Context, h Head) ([]byte, error) {
-	return e.readConfig(ctx, h, "config")
+	content, err := e.readConfig(ctx, h, nil, "config")
+	if err != nil || h.Browser != BrowserProxy {
+		return content, err
+	}
+	c, err := parseConfig(content)
+	if err != nil {
+		return nil, err
+	}
+	overlay, err := proxyOverlay(h, cyfrEnv(c)["CYFR_BIND_ADDRESS"])
+	if err != nil {
+		return nil, err
+	}
+	return e.readConfig(ctx, h, overlay, "config")
+}
+
+// proxyOverlay is the compose file, read last, that publishes the proxy
+// listener for proxy, the one kind whose proxy is outside the stack. No
+// other kind publishes it, so only proxy lets anything outside the stack
+// send the proxy listener forwarded headers it trusts.
+//
+//   - It publishes the proxy listener's port at the head's CYFR_PROXY_PUBLISH,
+//     an IPv4 loopback address of this machine.
+//   - The listener binds the loopback listener's own address, bind, on
+//     the stack's default network: Docker publishes a port at the
+//     container's address on that network, and the edge network's,
+//     which the listener binds for Caddy and Tailscale, receives nothing
+//     published. No other container joins the default network. A stack
+//     whose cyfr service names no such address is refused: the
+//     publication would reach no listener.
+//   - CYFR_TRUSTED_PROXY_CIDRS is .env's alone: the stack's default names
+//     Caddy's and Tailscale's addresses, which do not run with proxy, and
+//     would stand in for the trust proxy requires .env to state.
+func proxyOverlay(h Head, bind string) ([]byte, error) {
+	published, err := publishOf(h.Publish, h.Port)
+	if err != nil {
+		return nil, err
+	}
+	if bind == "" {
+		return nil, fmt.Errorf("access: the stack's %s service names no CYFR_BIND_ADDRESS, the address its proxy listener is published at with proxy, so CYFR cannot be reached through your proxy. Nothing started. Give the %s service the shipped docker-compose.yml's CYFR_BIND_ADDRESS", cyfrService, cyfrService)
+	}
+	overlay := map[string]any{"services": map[string]any{cyfrService: map[string]any{
+		"ports": []map[string]any{{
+			"host_ip": published.Address, "published": strconv.Itoa(published.Port),
+			"target": "${CYFR_PROXY_PORT:-4001}", "protocol": "tcp",
+		}},
+		"environment": map[string]string{
+			"CYFR_PROXY_BIND_ADDRESS":  bind,
+			"CYFR_TRUSTED_PROXY_CIDRS": "${CYFR_TRUSTED_PROXY_CIDRS:-}",
+		},
+	}}}
+	return yaml.Marshal(overlay)
 }
 
 // declaredProfiles is DeclaredProfiles: `docker compose config --profiles`
 // over the default file set, under no selection.
 func (e *Engine) declaredProfiles(ctx context.Context) ([]string, error) {
-	out, err := e.readConfig(ctx, Head{}, "config", "--profiles")
+	out, err := e.readConfig(ctx, Head{}, nil, "config", "--profiles")
 	return strings.Fields(string(out)), err
 }
 
-// readConfig is compose's read args over the default file set under h's
+// readConfig is compose's read args over the default file set, and
+// overlay read last from standard input when there is one, under h's
 // selection, its stdout.
-func (e *Engine) readConfig(ctx context.Context, h Head, args ...string) ([]byte, error) {
+func (e *Engine) readConfig(ctx context.Context, h Head, overlay []byte, args ...string) ([]byte, error) {
 	// compose reads COMPOSE_* from .env: no compose call runs over one
 	// that sets any.
 	if _, err := e.readEnv(); err != nil {
@@ -64,7 +117,13 @@ func (e *Engine) readConfig(ctx context.Context, h Head, args ...string) ([]byte
 	if err != nil {
 		return nil, err
 	}
-	res, err := e.docker.Run(ctx, Call{Args: append(e.selection(files, h), args...), Deadline: StopDeadline})
+	call := Call{Deadline: StopDeadline}
+	if overlay != nil {
+		files = append(files, "-")
+		call.Stdin = bytes.NewReader(overlay)
+	}
+	call.Args = append(e.selection(files, h), args...)
+	res, err := e.docker.Run(ctx, call)
 	if err != nil {
 		return nil, fmt.Errorf("access: %s", e.callFailed("docker compose "+strings.Join(args, " "), err, res.Stderr))
 	}
@@ -257,11 +316,11 @@ func (e *Engine) servicesOf(ctx context.Context, h Head, content []byte) ([]stri
 }
 
 // everyAccessService is every service the stack's configuration puts in a
-// access mode's profile, whichever head selects it: what a stop of the
-// access services must cover when a head cannot say, and what a start removes when
-// its head does not select it.
+// kind's profile, whichever head selects it: what a stop of the access
+// services must cover when a head cannot say, and what a start removes
+// when its head does not select it.
 func (e *Engine) everyAccessService(ctx context.Context) ([]string, error) {
-	return e.servicesOf(ctx, Head{Profiles: ModeProfiles()}, nil)
+	return e.servicesOf(ctx, Head{Profiles: BrowserProfiles()}, nil)
 }
 
 // otherServices are c's services that are not access services of h.
@@ -291,7 +350,7 @@ func cyfrEnv(c config) map[string]string {
 // checkEffective validates the values cyfr would start with: ResolveBoot
 // with .env's own read as the file and the flattened environment as the
 // process, a release's rules, and the head that answers must be h without
-// its profiles no access mode selects: those choose more of the stack's own
+// its profiles no kind selects: those choose more of the stack's own
 // services (an update's selection of the stack an older release left) and
 // reach no setting of cyfr's.
 func (e *Engine) checkEffective(h Head, content []byte) error {
@@ -315,7 +374,7 @@ func (e *Engine) checkEffective(h Head, content []byte) error {
 		return err
 	}
 	reach := h
-	reach.Profiles = slices.DeleteFunc(slices.Clone(h.Profiles), func(p string) bool { return !slices.Contains(ModeProfiles(), p) })
+	reach.Profiles = slices.DeleteFunc(slices.Clone(h.Profiles), func(p string) bool { return !slices.Contains(BrowserProfiles(), p) })
 	if b.Head.Digest() != reach.Digest() {
 		return fmt.Errorf("access: the stack's configuration starts cyfr reached as %s, not as %s", wordsText(Describe(b.Head)), wordsText(Describe(h)))
 	}

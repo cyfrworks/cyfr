@@ -38,7 +38,7 @@ func (s started) identityMismatch() bool {
 // access services; cyfr's health awaited within health; then, in tailnet,
 // the running machine validated against h before Serve opens.
 func (e *Engine) startHead(ctx context.Context, h Head, j *journal, full bool, health time.Duration) started {
-	e.reached("start:" + h.Mode)
+	e.reached("start:" + h.Browser)
 	content, err := e.materialize(ctx, h, j)
 	if err != nil {
 		if r, ok := err.(*Refusal); ok {
@@ -74,7 +74,7 @@ func (e *Engine) startHead(ctx context.Context, h Head, j *journal, full bool, h
 	if why := e.waitHealthy(ctx, health); why != "" {
 		return started{why: why, content: content}
 	}
-	if h.Mode == ModeTailnet {
+	if h.Browser == BrowserTailnet {
 		ref, err := e.validateNode(ctx, h)
 		if err != nil {
 			return started{why: err.Error(), content: content}

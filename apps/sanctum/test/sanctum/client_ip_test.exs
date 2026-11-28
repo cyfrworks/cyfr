@@ -66,7 +66,7 @@ defmodule Sanctum.ClientIpTest do
       assert ClientIp.resolve(conn(@untrusted, @forged)) == "172.16.234.9"
     end
 
-    test "under a hop count strips that many hops, and trusts nothing in a local home" do
+    test "under a hop count strips that many hops, and trusts nothing with no browser address" do
       Application.put_env(:sanctum, :proxy_trust, {:hops, 1})
       assert ClientIp.resolve(conn(@untrusted, @forged)) == "100.101.102.103"
 

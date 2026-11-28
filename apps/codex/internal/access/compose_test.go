@@ -50,7 +50,7 @@ func TestDefaultFileSetIsRefusedWhenNotDetermined(t *testing.T) {
 func TestMaterializedFilesAreTheOperationsInputs(t *testing.T) {
 	h := newHome(t)
 	h.fake.startStack(t, h.head())
-	r := h.request(id(1), publicTarget, "")
+	r := h.request(id(1), domainTarget, "")
 	name := resolvedName(r.NewDigest)
 	var checked bool
 	h.fake.hook = func(_ context.Context, c *fakeCall) *fakeAnswer {
@@ -89,7 +89,7 @@ func TestMaterializedFilesAreTheOperationsInputs(t *testing.T) {
 	if !strings.HasPrefix(image, "caddy:2.11-alpine") {
 		t.Errorf("the proxy started from %q, a source changed mid-operation", image)
 	}
-	h.assertConverged(publicStack...)
+	h.assertConverged(domainStack...)
 }
 
 // An interrupted operation keeps exactly the files its journal names;
@@ -98,9 +98,9 @@ func TestMaterializedFilesAreTheOperationsInputs(t *testing.T) {
 func TestKeptFilesAreNeverUsedToStart(t *testing.T) {
 	h := newHome(t)
 	h.fake.startStack(t, h.head())
-	r := h.request(id(1), publicTarget, "")
+	r := h.request(id(1), domainTarget, "")
 	h.killAt("journal:switch:rolling_back", func(e *Engine) {
-		unhealthyWhen(h, "CYFR_ACCESS=public")
+		unhealthyWhen(h, "CYFR_BROWSER=domain")
 		e.Switch(bg, r)
 	})
 	h.fake.hook, h.fake.st.Health = nil, "healthy"
@@ -127,7 +127,7 @@ func TestKeptFilesAreNeverUsedToStart(t *testing.T) {
 	if image != "ghcr.io/cyfrworks/cyfr:latest" {
 		t.Errorf("recovery started cyfr from %q, a kept file", image)
 	}
-	h.assertConverged(publicStack...)
+	h.assertConverged(domainStack...)
 }
 
 // overrideSets is compose_override_refused's sentence for a head key a
@@ -161,7 +161,7 @@ func TestCheckStackReadsTheSourcesProvenance(t *testing.T) {
 	}{
 		{name: "shipped"},
 		{"override", map[string]string{"docker-compose.override.yml": "services:\n  cyfr:\n    environment:\n      - CYFR_HOST=localhost\n"}, "docker-compose.override.yml", "cyfr", "CYFR_HOST", ""},
-		{"mapping form", map[string]string{"docker-compose.override.yml": "services:\n  cyfr:\n    environment:\n      CYFR_ACCESS: local\n"}, "docker-compose.override.yml", "cyfr", "CYFR_ACCESS", ""},
+		{"mapping form", map[string]string{"docker-compose.override.yml": "services:\n  cyfr:\n    environment:\n      CYFR_BROWSER: none\n"}, "docker-compose.override.yml", "cyfr", "CYFR_BROWSER", ""},
 		{"inherited", map[string]string{"docker-compose.override.yml": "services:\n  cyfr:\n    environment:\n      - CYFR_PORT\n"}, "docker-compose.override.yml", "cyfr", "CYFR_PORT", ""},
 		{"include", map[string]string{
 			"docker-compose.override.yml": "include:\n  - extra/more.yml\n",
@@ -187,7 +187,7 @@ func TestCheckStackReadsTheSourcesProvenance(t *testing.T) {
 		// Every merge form.
 		{"merged service sequence", map[string]string{"docker-compose.override.yml": "x-part: &part\n  cyfr:\n    environment:\n      CYFR_HOST: localhost\nservices:\n  <<: [*part]\n"}, "docker-compose.override.yml", "cyfr", "CYFR_HOST", ""},
 		{"merged environment alias", map[string]string{"docker-compose.override.yml": "x-env: &env\n  CYFR_PORT: \"4000\"\nservices:\n  cyfr:\n    environment:\n      <<: *env\n"}, "docker-compose.override.yml", "cyfr", "CYFR_PORT", ""},
-		{"nested merges", map[string]string{"docker-compose.override.yml": "x-inner: &inner\n  environment:\n    CYFR_ACCESS: local\nx-outer: &outer\n  <<: [*inner]\nx-svc: &svc\n  cyfr:\n    <<: *outer\nservices:\n  <<: *svc\n"}, "docker-compose.override.yml", "cyfr", "CYFR_ACCESS", ""},
+		{"nested merges", map[string]string{"docker-compose.override.yml": "x-inner: &inner\n  environment:\n    CYFR_BROWSER: none\nx-outer: &outer\n  <<: [*inner]\nx-svc: &svc\n  cyfr:\n    <<: *outer\nservices:\n  <<: *svc\n"}, "docker-compose.override.yml", "cyfr", "CYFR_BROWSER", ""},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			h := newHome(t)

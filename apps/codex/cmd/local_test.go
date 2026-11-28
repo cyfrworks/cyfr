@@ -425,17 +425,20 @@ func newLocalStack(t *testing.T) localStack {
 	return localStack{s, after}
 }
 
-// envReached writes the folder's .env for access mode, public or tailnet,
-// with port the one published here and its accounts its own, and answers
-// its address.
-func (s localStack) envReached(mode string, port int) string {
+// envReached writes the folder's .env for a browser address, domain,
+// proxy or tailnet, with port the one published here and its accounts its
+// own, and answers its address.
+func (s localStack) envReached(browser string, port int) string {
 	s.t.Helper()
 	host, more := "cyfr.example.com", ""
-	if mode == access.ModeTailnet {
+	switch browser {
+	case access.BrowserTailnet:
 		host, more = "box.tail1234.ts.net", "CYFR_TAILNET_NODE_ID=nAAAAAAAAACNTRL\n"
+	case access.BrowserProxy:
+		more = "CYFR_PROXY_PUBLISH=127.0.0.1:4001\nCYFR_TRUSTED_PROXY_HOPS=1\n"
 	}
 	home := "https://" + host
-	text := "CYFR_ACCESS=" + mode + "\nCYFR_HOST=" + host + "\nCYFR_PUBLIC_URL=" + home + "\n" + more +
+	text := "CYFR_BROWSER=" + browser + "\nCYFR_HOST=" + host + "\nCYFR_PUBLIC_URL=" + home + "\n" + more +
 		"CYFR_PORT=" + strconv.Itoa(port) + "\n" +
 		"CYFR_DIRECTORY_URL=" + home + "\n" + setupTokenVar + "=" + testToken + "\n"
 	if err := os.WriteFile(filepath.Join(s.project, ".env"), []byte(text), 0o600); err != nil {
@@ -487,7 +490,7 @@ func (s localStack) env(port int, extra ...string) {
 	if port != 80 {
 		home += ":" + strconv.Itoa(port)
 	}
-	text := "CYFR_ACCESS=local\nCYFR_PORT=" + strconv.Itoa(port) + "\n" +
+	text := "CYFR_BROWSER=none\nCYFR_PORT=" + strconv.Itoa(port) + "\n" +
 		"CYFR_DIRECTORY_URL=" + home + "\n" + setupTokenVar + "=" + testToken + "\n" + strings.Join(extra, "")
 	if err := os.WriteFile(filepath.Join(s.project, ".env"), []byte(text), 0o600); err != nil {
 		s.t.Fatal(err)
@@ -607,7 +610,7 @@ func TestTheAppOpensTheRememberedFoldersCYFR(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				unlock, err := e.Lock("access tailnet")
+				unlock, err := e.Lock("access browser tailnet")
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -875,18 +878,20 @@ func TestTheTokensConnectionFollowsNoRedirect(t *testing.T) {
 	}
 }
 
-// With public and with tailnet access everything cyfr sends that CYFR, the
+// With a domain, through Caddy or the person's own proxy, and with a
+// tailnet address everything cyfr sends that CYFR, the
 // setup token and the channel among it, goes to the loopback listener its
 // folder's container publishes, under the configured address's name, and
 // nothing to that name or through a proxy. The app's engine keeps its own
 // route, a tailnet CYFR's through the folder's SOCKS5 proxy.
-func TestEveryAccessModeIsReachedOnThisComputer(t *testing.T) {
+func TestEveryBrowserAddressIsReachedOnThisComputer(t *testing.T) {
 	for _, c := range []struct {
 		mode  string
 		route []string
 	}{
-		{access.ModePublic, nil},
-		{access.ModeTailnet, []string{"socks5://127.0.0.1:1055"}},
+		{access.BrowserDomain, nil},
+		{access.BrowserProxy, nil},
+		{access.BrowserTailnet, []string{"socks5://127.0.0.1:1055"}},
 	} {
 		t.Run(c.mode, func(t *testing.T) {
 			s := newLocalStack(t)
@@ -945,7 +950,7 @@ func TestAFirstPersonIsAdmittedAtABoxInTailnetAccess(t *testing.T) {
 		t.Fatal(err)
 	}
 	cyfr := newListening(t, httputil.NewSingleHostReverseProxy(raw))
-	home := s.envReached(access.ModeTailnet, cyfr.port)
+	home := s.envReached(access.BrowserTailnet, cyfr.port)
 	accounts.ServedAt(home)
 	cyfr.admitting = home
 	s.runs("c0ffee", s.project, nil, cyfr.port)
@@ -1042,16 +1047,16 @@ func TestTheFoldersClientReachesThatCYFRAlone(t *testing.T) {
 	}
 }
 
-// The folder's own address takes no proxy of the environment in any
-// access mode, nor the tailnet's, and needs no proxy's container running.
+// The folder's own address takes no proxy of the environment with any
+// browser address, nor the tailnet's, and needs no proxy's container running.
 // Anywhere else takes this computer's own way, the environment's proxy
 // and never the tailnet's.
 func TestAFoldersOwnAddressTakesNoProxy(t *testing.T) {
-	for _, mode := range []string{access.ModeLocal, access.ModePublic, access.ModeTailnet} {
+	for _, mode := range access.Browsers {
 		t.Run(mode, func(t *testing.T) {
 			s := newLocalStack(t)
 			cyfr := newListening(t, http.NotFoundHandler())
-			if mode == access.ModeLocal {
+			if mode == access.BrowserNone {
 				s.env(cyfr.port)
 			} else {
 				s.envReached(mode, cyfr.port)
@@ -1290,7 +1295,7 @@ func TestALockWaitsForNoWorkStarting(t *testing.T) {
 		t.Fatal(err)
 	}
 	cyfr := newListening(t, httputil.NewSingleHostReverseProxy(raw))
-	home := s.envReached(access.ModeTailnet, cyfr.port)
+	home := s.envReached(access.BrowserTailnet, cyfr.port)
 	accounts.ServedAt(home)
 	cyfr.admitting = home
 	s.runs("c0ffee", s.project, nil, cyfr.port)

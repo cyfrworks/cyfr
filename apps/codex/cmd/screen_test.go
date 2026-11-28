@@ -44,7 +44,7 @@ func screenProject(t *testing.T) *standIn {
 	// The CYFR app of this cyfr's version is installed, unless a test
 	// says otherwise, so screen on fetches nothing.
 	s.installed, s.app = []string{appPackage}, version.Version
-	for name, body := range map[string]string{"docker-compose.yml": "services: {}\n", ".env": "CYFR_ACCESS=local\nCYFR_PORT=4321\nCYFR_SETUP_TOKEN=the-token\n"} {
+	for name, body := range map[string]string{"docker-compose.yml": "services: {}\n", ".env": "CYFR_BROWSER=none\nCYFR_PORT=4321\nCYFR_SETUP_TOKEN=the-token\n"} {
 		if err := os.WriteFile(name, []byte(body), 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -867,7 +867,7 @@ func TestScreenSetupOpen_ReadsCyfrsLog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	unlock, err := e.Lock("access tailnet")
+	unlock, err := e.Lock("access browser tailnet")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -910,8 +910,8 @@ func TestScreenSaysWhereTheAppIsAnotherRelease(t *testing.T) {
 // app's error stream, the app ends itself and the launcher tries again.
 func TestTheScreensAppStartsOnItsFolderAlone(t *testing.T) {
 	for _, c := range []struct{ name, env string }{
-		{"tailnet", "CYFR_ACCESS=tailnet\nCYFR_HOST=box.tail1234.ts.net\nCYFR_PUBLIC_URL=https://box.tail1234.ts.net\nCYFR_TAILNET_NODE_ID=nAAAAAAAAACNTRL\nCYFR_PORT=4000\n"},
-		{"local", "CYFR_ACCESS=local\nCYFR_PORT=4321\n"},
+		{"tailnet", "CYFR_BROWSER=tailnet\nCYFR_HOST=box.tail1234.ts.net\nCYFR_PUBLIC_URL=https://box.tail1234.ts.net\nCYFR_TAILNET_NODE_ID=nAAAAAAAAACNTRL\nCYFR_PORT=4000\n"},
+		{"local", "CYFR_BROWSER=none\nCYFR_PORT=4321\n"},
 		{"unreadable", ""},
 	} {
 		t.Run(c.name, func(t *testing.T) {

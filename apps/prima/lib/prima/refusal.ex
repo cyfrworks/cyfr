@@ -228,26 +228,33 @@ defmodule Prima.Refusal do
     :invalid_request
   ]
 
-  # How the home is reached: the boot's and the access engine's refusals
+  # How the server is reached: the boot's and the access engine's refusals
   # that carry nothing but their code.
   @access %{
     access_missing:
       {:setup_required,
-       "CYFR_ACCESS is not set in .env, so CYFR does not know how it is reached. " <>
-         "Nothing started. Run `cyfr init` for a new CYFR, or `cyfr access " <>
-         "local|tailnet|public` for this one."},
+       "CYFR_BROWSER is not set in .env, so CYFR does not know what browser address it " <>
+         "has. Nothing started. Run `cyfr init` for a new CYFR, or `cyfr access browser " <>
+         "none|tailnet|domain|proxy` for this one."},
+    access_proxy_trust_missing:
+      {:setup_required,
+       "CYFR_BROWSER is `proxy`, and .env states no trust in your proxy's forwarded " <>
+         "headers: neither CYFR_TRUSTED_PROXY_HOPS nor CYFR_TRUSTED_PROXY_CIDRS is set. " <>
+         "Nothing was started or changed. Set CYFR_TRUSTED_PROXY_HOPS in .env to the number " <>
+         "of proxies in front of CYFR (1 for your proxy alone), or list them in " <>
+         "CYFR_TRUSTED_PROXY_CIDRS, then run the command again."},
     access_assertion_from_file:
       {:forbidden,
        "CYFR_LOCAL_INGRESS_ASSERTED is the compose file's assertion and cannot come from " <>
          ".env. Remove it from .env."},
     tailnet_not_joined:
       {:setup_required,
-       "This machine has not joined your tailnet. Nothing was changed. Run `cyfr access " <>
+       "This machine has not joined your tailnet. Nothing was changed. Run `cyfr access browser " <>
          "tailnet` and approve the machine with the link it prints."},
     tailnet_join_expired:
       {:timeout,
        "The approval link expired before the machine was approved. How CYFR is " <>
-         "reached was not changed. Run `cyfr access tailnet` for a new link."},
+         "reached was not changed. Run `cyfr access browser tailnet` for a new link."},
     tailnet_join_cancelled:
       {:cancelled, "Joining your tailnet was cancelled. How CYFR is reached was not changed."},
     # A join that ended before its machine joined: given an auth key,
@@ -257,12 +264,12 @@ defmodule Prima.Refusal do
       {:unauthenticated,
        "Tailscale did not accept the auth key this machine's join was given: it may be " <>
          "wrong, already used or expired. How CYFR is reached was not changed. Check the " <>
-         "key, then run `cyfr access tailnet` again."},
+         "key, then run `cyfr access browser tailnet` again."},
     tailnet_join_unapproved:
       {:setup_required,
        "The join ended before this machine was approved on your tailnet; no auth key was " <>
          "given, so only its approval link could have joined it. How CYFR is reached was " <>
-         "not changed. Run `cyfr access tailnet` again and approve the machine with the " <>
+         "not changed. Run `cyfr access browser tailnet` again and approve the machine with the " <>
          "link it prints."},
     tailnet_join_not_current:
       {:conflict, "That join attempt is no longer the one in progress. Nothing was changed."}
@@ -276,8 +283,26 @@ defmodule Prima.Refusal do
     "CYFR_PROXY_BIND_ADDRESS" => "an IPv4 or IPv6 address",
     "CYFR_LOCAL_INGRESS_ASSERTED" => "true, the one value the compose file asserts",
     "CYFR_TRUSTED_PROXY_HOPS" => "a whole number of proxy hops from 0 to 16",
-    "CYFR_TRUSTED_PROXY_CIDRS" => "a comma-separated list of IP addresses and CIDRs"
+    "CYFR_TRUSTED_PROXY_CIDRS" => "a comma-separated list of IP addresses and CIDRs",
+    "CYFR_PROXY_PUBLISH" => "an IPv4 loopback address and a port, as 127.0.0.1:4001"
   }
+
+  # What each `cyfr access browser` option is for, and the kind it names.
+  @access_options %{
+    "--domain" => {"a domain, through Caddy or your own proxy", "domain"},
+    "--acme-email" => {"a domain through Caddy", "domain"},
+    "--publish" => {"your own proxy", "proxy"}
+  }
+
+  # The kinds each option is refused with: every kind but those it is for.
+  @access_option_refused (for {option, browsers} <- [
+                                {"--domain", ~w(none tailnet)},
+                                {"--acme-email", ~w(none tailnet proxy)},
+                                {"--publish", ~w(none tailnet domain)}
+                              ],
+                              browser <- browsers,
+                              into: %{},
+                              do: {{option, browser}, true})
 
   # What a `cyfr access` input was meant to be.
   @access_input_kinds %{
@@ -286,18 +311,18 @@ defmodule Prima.Refusal do
     "email" => "email address"
   }
 
-  # Why a home put back after a failed change answers on this machine only,
+  # Why a server put back after a failed change answers on this machine only,
   # and the step that serves it on the tailnet again.
   @rolled_back_local %{
     "tailnet_node_mismatch" =>
       {"this machine's tailnet identity is not the one .env names",
-       "run `cyfr access tailnet`, which offers to move CYFR to the machine's tailnet name"},
+       "run `cyfr access browser tailnet`, which offers to move CYFR to the machine's tailnet name"},
     "tailnet_not_joined" =>
       {"this machine has not joined your tailnet",
-       "run `cyfr access tailnet` and approve the machine with the link it prints"},
+       "run `cyfr access browser tailnet` and approve the machine with the link it prints"},
     "tailnet_https_off" =>
       {"your tailnet has HTTPS certificates turned off",
-       "turn on HTTPS on the DNS page of the Tailscale admin console, then run `cyfr access tailnet`"}
+       "turn on HTTPS on the DNS page of the Tailscale admin console, then run `cyfr access browser tailnet`"}
   }
 
   @doc "The sixteen refusal classes."
@@ -1531,23 +1556,23 @@ defmodule Prima.Refusal do
        when is_map_key(@access, reason) and is_map(payload) and map_size(payload) == 0,
        do: Map.fetch!(@access, reason)
 
-  # How the home is reached, as the boot reads it (`Cyfr.RuntimeConfig.resolve_access/1`):
+  # How the server is reached, as the boot reads it (`Cyfr.RuntimeConfig.resolve_access/1`):
   # each sentence names what is wrong and the command that writes it right.
   # Every payload is a setting's name or its non-secret value.
-  defp row({:access_unknown_mode, %{value: value}}) when is_binary(value),
+  defp row({:access_unknown_browser, %{value: value}}) when is_binary(value),
     do:
       {:invalid_argument,
-       "CYFR_ACCESS is `#{value}`; it must be `local`, `tailnet` or `public`. Run " <>
-         "`cyfr access <mode>` to set it with the address it implies."}
+       "CYFR_BROWSER is `#{value}`; it must be `none`, `tailnet`, `domain` or `proxy`. Run " <>
+         "`cyfr access browser <kind>` to set it with the address it implies."}
 
-  defp row({:access_local_mismatch, %{key: key, value: value}})
+  defp row({:access_none_mismatch, %{key: key, value: value}})
        when key in ["CYFR_HOST", "CYFR_PUBLIC_URL"] and is_binary(value) do
     what = "#{key} is `#{value}`"
 
     {:invalid_argument,
-     "CYFR_ACCESS is `local`, which serves this computer alone at its localhost address, " <>
-       "but #{what}. Run `cyfr access local` to write the matching settings, or " <>
-       "`cyfr access tailnet|public` to reach it from other devices."}
+     "CYFR_BROWSER is `none`, which serves this computer alone at its localhost address, " <>
+       "but #{what}. Run `cyfr access browser none` to write the matching settings, or " <>
+       "`cyfr access browser tailnet|domain|proxy` to reach it from other devices."}
   end
 
   defp row({:access_tailnet_host_invalid, payload}) when is_map(payload) do
@@ -1574,7 +1599,8 @@ defmodule Prima.Refusal do
     {:invalid_argument, tailnet_sentence(what)}
   end
 
-  defp row({:access_public_host_invalid, payload}) when is_map(payload) do
+  defp row({:access_domain_host_invalid, %{browser: browser} = payload})
+       when browser in ["domain", "proxy"] do
     what =
       case payload do
         %{host: host} when is_binary(host) -> "CYFR_HOST `#{host}` is not"
@@ -1582,12 +1608,12 @@ defmodule Prima.Refusal do
       end
 
     {:invalid_argument,
-     "CYFR_ACCESS is `public`, but #{what} a public domain name (not localhost, an IP address " <>
-       "or a ts.net name). Run `cyfr access public --domain <your domain>`."}
+     "CYFR_BROWSER is `#{browser}`, but #{what} a public domain name (not localhost, an IP " <>
+       "address or a ts.net name). Run `cyfr access browser #{browser} --domain <your domain>`."}
   end
 
-  defp row({:access_public_url_mismatch, %{mode: mode, expected: expected} = payload})
-       when mode in ["tailnet", "public"] and is_binary(expected) do
+  defp row({:access_public_url_mismatch, %{browser: browser, expected: expected} = payload})
+       when browser in ["tailnet", "domain", "proxy"] and is_binary(expected) do
     now =
       case payload do
         %{value: url} when is_binary(url) -> "it is `#{url}`"
@@ -1595,17 +1621,18 @@ defmodule Prima.Refusal do
       end
 
     {:invalid_argument,
-     "CYFR_PUBLIC_URL must be exactly #{expected} when CYFR_ACCESS is `#{mode}`; #{now}. " <>
-       "Run `cyfr access #{mode}` to rewrite both."}
+     "CYFR_PUBLIC_URL must be exactly #{expected} when CYFR_BROWSER is `#{browser}`; #{now}. " <>
+       "Run `cyfr access browser #{browser}` to rewrite both."}
   end
 
-  defp row({:access_key_outside_mode, %{key: key, mode: mode, needs: needs}})
-       when key in ["CADDY_ACME_EMAIL", "CYFR_TAILNET_NODE_ID"] and
-              mode in ["local", "tailnet", "public"] and needs in ["tailnet", "public"],
+  defp row({:access_key_outside_browser, %{key: key, browser: browser, needs: needs}})
+       when key in ["CADDY_ACME_EMAIL", "CYFR_TAILNET_NODE_ID", "CYFR_PROXY_PUBLISH"] and
+              browser in ["none", "tailnet", "domain", "proxy"] and
+              needs in ["tailnet", "domain", "proxy"],
        do:
          {:invalid_argument,
-          "`#{key}` is set, but only `#{needs}` access uses it (CYFR_ACCESS is `#{mode}`). " <>
-            "Remove it, or run `cyfr access #{needs}`."}
+          "`#{key}` is set, but only `#{needs}` uses it (CYFR_BROWSER is `#{browser}`). " <>
+            "Remove it, or run `cyfr access browser #{needs}`."}
 
   defp row({:access_source_conflict, %{key: key, file_value: file, process_value: process}})
        when is_binary(key) and is_binary(file) and is_binary(process) do
@@ -1621,7 +1648,7 @@ defmodule Prima.Refusal do
       {:forbidden,
        "CYFR_BIND_ADDRESS `#{address}` is not a loopback address, so other machines could " <>
          "reach CYFR's loopback listener. Bind 127.0.0.1 or ::1; to reach CYFR from " <>
-         "other devices, use CYFR_ACCESS=tailnet or public."}
+         "other devices, give it a browser address with `cyfr access browser`."}
 
   defp row({:access_setting_invalid, %{key: key, value: value} = payload})
        when map_size(payload) == 2 and is_map_key(@access_setting_forms, key) and
@@ -1647,6 +1674,19 @@ defmodule Prima.Refusal do
             "loopback listener's on the same address. Nothing started. Set CYFR_PROXY_PORT to " <>
             "another port."}
 
+  # The proxy listener published at the loopback listener's own
+  # publication, 127.0.0.1 on CYFR_PORT, where Docker could not publish it.
+  defp row(
+         {:access_setting_invalid,
+          %{key: "CYFR_PROXY_PUBLISH", value: value, port: port} = payload}
+       )
+       when map_size(payload) == 3 and is_binary(value) and is_binary(port),
+       do:
+         {:invalid_argument,
+          "`CYFR_PROXY_PUBLISH` is `#{value}`, where the loopback listener is published " <>
+            "already (127.0.0.1 on CYFR_PORT `#{port}`). Nothing started. Publish the proxy " <>
+            "listener at another port."}
+
   # A value no rule can read: its name alone, never its bytes.
   defp row({:access_setting_invalid, %{key: key} = payload})
        when is_binary(key) and map_size(payload) == 1,
@@ -1654,13 +1694,15 @@ defmodule Prima.Refusal do
          {:invalid_argument,
           "`#{key}` is not valid UTF-8 text. Nothing started. Correct it, or remove it."}
 
-  # A `cyfr access` option only a public home takes, given for another mode.
-  defp row({:access_option_outside_mode, %{option: option, mode: mode}})
-       when option in ["--domain", "--acme-email"] and mode in ["local", "tailnet"],
-       do:
-         {:invalid_argument,
-          "`#{option}` is for public access, and this command chooses `#{mode}`. Nothing was " <>
-            "changed. Run it again without `#{option}`, or run `cyfr access public` with it."}
+  # A `cyfr access browser` option given for a kind that takes none of it.
+  defp row({:access_option_outside_browser, %{option: option, browser: browser}})
+       when is_map_key(@access_option_refused, {option, browser}) do
+    {kinds, kind} = Map.fetch!(@access_options, option)
+
+    {:invalid_argument,
+     "`#{option}` is for #{kinds}, and this command chooses `#{browser}`. Nothing was " <>
+       "changed. Run it again without `#{option}`, or run `cyfr access browser #{kind}` with it."}
+  end
 
   defp row({:tailnet_node_id_unsupported, %{value: value}}) when is_binary(value),
     do:
@@ -1673,7 +1715,7 @@ defmodule Prima.Refusal do
       {:invalid_argument,
        "`.env` sets `#{key}`, which Docker Compose would read to choose this stack's files, " <>
          "project or services behind cyfr's back. Nothing started. Remove it; cyfr chooses " <>
-         "them from CYFR_ACCESS."}
+         "them from CYFR_BROWSER."}
 
   # A .env line Docker Compose does not read: cyfr neither reads nor
   # writes a file it cannot read as compose does, and names the line,
@@ -1779,14 +1821,14 @@ defmodule Prima.Refusal do
        "This machine joined your tailnet as `#{name}`, but your tailnet has HTTPS " <>
          "certificates turned off, and CYFR needs them. How CYFR is reached was " <>
          "not changed. Turn on HTTPS on the DNS page of the Tailscale admin console, then " <>
-         "run `cyfr access tailnet` again, which uses this machine as it is. If you do not " <>
+         "run `cyfr access browser tailnet` again, which uses this machine as it is. If you do not " <>
          "want it in your tailnet, remove `#{name}` on the Machines page of the admin console."}
 
   defp row({:tailnet_active, %{name: name}}) when is_binary(name),
     do:
       {:conflict,
        "CYFR is already on your tailnet as `#{name}`. Nothing was changed. To give it " <>
-         "another name, run `cyfr access local`, then `cyfr access tailnet --new-node`, and " <>
+         "another name, run `cyfr access browser none`, then `cyfr access browser tailnet --new-node`, and " <>
          "remove `#{name}` on the Machines page of the Tailscale admin console."}
 
   defp row({:tailnet_name_changed, %{frozen: frozen, now: now}})
@@ -1802,7 +1844,7 @@ defmodule Prima.Refusal do
          {:conflict,
           "This machine's tailnet identity is `#{node}`, but .env says CYFR is " <>
             "`#{env}`, so it is not being served on your tailnet: it answers on this machine " <>
-            "only, and nothing else was changed. Run `cyfr access tailnet`, which offers to " <>
+            "only, and nothing else was changed. Run `cyfr access browser tailnet`, which offers to " <>
             "move CYFR to https://#{node} after you confirm."}
 
   defp row({:docker_unavailable, %{reason: why}}) when is_binary(why),
@@ -1838,7 +1880,7 @@ defmodule Prima.Refusal do
       {:unavailable,
        "CYFR could not start as #{new}, nor as before; everything was stopped and " <>
          "checked stopped. .env says: #{env}. Run `cyfr up` to start it as .env says, or " <>
-         "`cyfr access <mode>` to choose again."}
+         "`cyfr access browser <kind>` to choose again."}
 
   # A switch interrupted, then recovered after .env was edited meanwhile:
   # what the recovery did, in the one order it does it, and the next step.
@@ -1849,7 +1891,7 @@ defmodule Prima.Refusal do
           env_edited() <>
             " CYFR stopped the stack, checked it stopped, left .env as edited, and started " <>
             "CYFR as it says: #{env}. If that is not how CYFR should be reached, run " <>
-            "`cyfr access <mode>`."}
+            "`cyfr access browser <kind>`."}
 
   defp row({:access_env_edited, %{then: "not_running", env: env} = payload})
        when map_size(payload) == 2 and is_binary(env),
@@ -1858,7 +1900,7 @@ defmodule Prima.Refusal do
           env_edited() <>
             " CYFR stopped the stack, checked it stopped, and left .env as edited, which says: " <>
             "#{env}. The stack was not running, so nothing was started. Run `cyfr up` to start " <>
-            "it as .env says, or `cyfr access <mode>` to choose again."}
+            "it as .env says, or `cyfr access browser <kind>` to choose again."}
 
   defp row({:access_env_edited, %{then: "failed", env: env} = payload})
        when map_size(payload) == 2 and is_binary(env),
@@ -1867,7 +1909,7 @@ defmodule Prima.Refusal do
           env_edited() <>
             " CYFR stopped the stack, checked it stopped, and left .env as edited, but " <>
             "CYFR did not start as it says (#{env}), and everything is stopped. Fix .env, then " <>
-            "run `cyfr up`, or run `cyfr access <mode>` to choose again."}
+            "run `cyfr up`, or run `cyfr access browser <kind>` to choose again."}
 
   defp row({:access_env_edited, %{then: "incoherent"} = payload}) when map_size(payload) == 1,
     do:
@@ -1875,7 +1917,7 @@ defmodule Prima.Refusal do
        env_edited() <>
          " CYFR stopped the stack, checked it stopped, and left .env as edited; nothing was " <>
          "started, because .env no longer says one coherent way CYFR is reached. Run " <>
-         "`cyfr up` to see what is wrong with it, or `cyfr access <mode>` to choose again."}
+         "`cyfr up` to see what is wrong with it, or `cyfr access browser <kind>` to choose again."}
 
   defp row({:access_uncertain, %{observed: observed}}) when is_binary(observed),
     do:
@@ -1911,7 +1953,7 @@ defmodule Prima.Refusal do
 
   defp tailnet_sentence(what),
     do:
-      "CYFR_ACCESS is `tailnet`, but #{what}. Run `cyfr access tailnet`, which reads both from " <>
+      "CYFR_BROWSER is `tailnet`, but #{what}. Run `cyfr access browser tailnet`, which reads both from " <>
         "Tailscale."
 
   defp signal_class(:setup_required), do: :setup_required

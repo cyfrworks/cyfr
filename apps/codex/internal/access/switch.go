@@ -46,6 +46,10 @@ func (e *Engine) readState() (envState, error) {
 		values = env.values()
 	}
 	st.head, st.headErr = headOf(values)
+	if st.headErr == nil && st.head.Browser == BrowserProxy {
+		st.cur.Publish = st.head.Publish
+	}
+	st.cur.Trusted = strings.TrimSpace(values["CYFR_TRUSTED_PROXY_CIDRS"]) != "" || strings.TrimSpace(values["CYFR_TRUSTED_PROXY_HOPS"]) != ""
 	switch port := strings.TrimSpace(values["CYFR_PORT"]); {
 	case st.headErr == nil:
 		st.cur.Port = st.head.Port
@@ -120,7 +124,7 @@ func wordsText(w Words) string {
 // served: Serve open, which only a validated start writes, and the
 // tailscale service running.
 func (e *Engine) tailnetActive(ctx context.Context, st envState) bool {
-	if st.headErr != nil || st.head.Mode != ModeTailnet || !e.serveIsOpen() {
+	if st.headErr != nil || st.head.Browser != BrowserTailnet || !e.serveIsOpen() {
 		return false
 	}
 	cs, err := e.observe(ctx)
@@ -132,7 +136,7 @@ func (e *Engine) preview(ctx context.Context, t Target, joinID string) (Preview,
 	if err != nil {
 		return Preview{}, err
 	}
-	if t.Mode == ModeTailnet && joinID == "" && e.tailnetActive(ctx, st) {
+	if t.Browser == BrowserTailnet && joinID == "" && e.tailnetActive(ctx, st) {
 		return Preview{}, Refuse("tailnet_active", map[string]string{"name": st.head.Host})
 	}
 	d, err := e.derive(ctx, st, t, joinID)
@@ -159,11 +163,11 @@ func (e *Engine) preview(ctx context.Context, t Target, joinID string) (Preview,
 // closedTailnet reports whether .env's head is tailnet with Serve closed:
 // a start found its machine not ready to serve, or the home is stopped.
 func (e *Engine) closedTailnet(st envState) bool {
-	return st.headErr == nil && st.head.Mode == ModeTailnet && !e.serveIsOpen()
+	return st.headErr == nil && st.head.Browser == BrowserTailnet && !e.serveIsOpen()
 }
 
 // reopens reports whether a switch to .env's own head is a reopen: a
-// tailnet home whose Serve is closed while its cyfr runs. A stopped one
+// tailnet server whose Serve is closed while its cyfr runs. A stopped one
 // is unchanged: its next start validates the machine and opens Serve.
 func (e *Engine) reopens(ctx context.Context, st envState) bool {
 	if !e.closedTailnet(st) {
@@ -194,7 +198,7 @@ func (e *Engine) derive(ctx context.Context, st envState, t Target, joinID strin
 	}
 	var join *Join
 	switch {
-	case t.Mode != ModeTailnet:
+	case t.Browser != BrowserTailnet:
 	case joinID != "":
 		rec, err := e.readJoin()
 		if err != nil {
@@ -250,7 +254,7 @@ func (e *Engine) machine(ctx context.Context) (*Join, error) {
 // alone.
 func switchDigest(r SwitchRequest) string {
 	return requestDigest(map[string]any{
-		"op": "switch", "mode": r.Target.Mode, "domain": r.Target.Domain, "acme_email": r.Target.ACMEEmail,
+		"op": "switch", "browser": r.Target.Browser, "domain": r.Target.Domain, "acme_email": r.Target.ACMEEmail, "publish": r.Target.Publish,
 		"join_id": r.JoinID, "old_digest": r.OldDigest, "new_digest": r.NewDigest,
 	})
 }
@@ -280,7 +284,7 @@ func (e *Engine) doSwitch(ctx context.Context, r SwitchRequest) (Receipt, error)
 	if err != nil {
 		return refuse(err)
 	}
-	if r.Target.Mode == ModeTailnet {
+	if r.Target.Browser == BrowserTailnet {
 		if ref, err := e.nameChanged(ctx, r.JoinID); err != nil || ref != nil {
 			if err != nil {
 				return Receipt{}, err
@@ -327,12 +331,12 @@ func (e *Engine) doSwitch(ctx context.Context, r SwitchRequest) (Receipt, error)
 		j.OldHead = &st.head
 	}
 	if anyRunning(cs, js) {
-		// The access services, named from the access modes' profiles: a
+		// The access services, named from the kinds' profiles: a
 		// stopped stack needs none, and makes no compose call.
 		if _, err := e.checkProvenance(); err != nil {
 			return Receipt{}, err
 		}
-		// Every access mode's services, so one an incoherent old head
+		// Every kind's services, so one an incoherent old head
 		// cannot name, or a leftover no head selects, is stopped too.
 		names, err := e.everyAccessService(ctx)
 		if err != nil {

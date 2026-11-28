@@ -74,13 +74,13 @@ origin is refused by the frame's policy, never as mixed content.
 ## Homes: several cells on several hostnames, over HTTPS
 
 A home is a cell started on a hostname of its own (`browser_home`, and
-`release.sh`'s `cell_hostname`): the public home `cyfr access public
---domain HOST` makes (`CYFR_ACCESS=public`), whose server names that host
+`release.sh`'s `cell_hostname`): the domain address `cyfr access browser
+domain --domain HOST` makes (`CYFR_BROWSER=domain`), whose server names that host
 (`CYFR_HOST`) and whose public URL, the origin every policy is derived
 for, is `https://HOST` (`CYFR_PUBLIC_URL`), both as the command line wrote
 them. It runs behind a TLS-terminating front that forwards to its proxy
 listener (`CYFR_PROXY_PORT`), the one listener that trusts forwarded
-headers, as a public deployment runs behind the stack's Caddy. Each home
+headers, as a domain address runs behind the stack's Caddy. Each home
 has its own node name and free listener ports picked by
 `scripts/lib/run-names.sh`'s `run_names_free_port`. Read the chosen ports
 from the cell with `cell_port`, `cell_value CELL CYFR_HOST_API_PORT`, and
