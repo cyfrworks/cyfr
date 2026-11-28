@@ -855,10 +855,6 @@ func (s *server) makeHome(c *client, req *protocol.Request) {
 // variable the tests of a keeper running as one uid replace.
 var keptTaken = func(k *home.Kept) (map[int]bool, error) { return k.Taken("/proc") }
 
-// removeImage removes an image as its uid (home.Kept.RemoveImage), a
-// variable its tests replace.
-var removeImage = func(k *home.Kept, athanor string, uid int) error { return k.RemoveImage(athanor, uid) }
-
 // retireUnkept retires athanor's disk where it has never held a kept home
 // (home.Disk.Unkept) and no VM of its person stands or is placed, under the
 // disk's lock, which a first spawn's making of the disk takes too: its
@@ -877,7 +873,7 @@ func (s *server) retireUnkept(athanor string) {
 	if d == nil || !d.Unkept || used {
 		return
 	}
-	if err := removeImage(s.cfg.Kept, athanor, d.UID); err != nil {
+	if err := s.cfg.Kept.RemoveImage(athanor, d.UID); err != nil {
 		s.log.Warn("the never-kept disk of uid %d is not yet retired, its image stays: %v", d.UID, err)
 		return
 	}

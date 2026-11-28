@@ -260,18 +260,28 @@ func TestANeverKeptDiskStaysWhileItsPersonsVMIsPlaced(t *testing.T) {
 }
 
 // A retirement that fails leaves the disk whole, for its next session to
-// use, and is asked again at its VM's next release.
+// use, and is asked again at its VM's next release. Its image's removal
+// fails here as a folder with something in it does.
 func TestAFailedRetirementIsAskedAgainAndBlocksNoOne(t *testing.T) {
 	k := newVMKeeper(t)
 	unkeptDisk(t, k, "ath_a")
-	saved := removeImage
-	t.Cleanup(func() { removeImage = saved })
-	removeImage = func(*home.Kept, string, int) error { return errors.New("the image did not go") }
+	image := k.kept.ImagePath("ath_a")
+	if err := os.Remove(image); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(image, "held"), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	k.s.retireUnkept("ath_a")
 	if diskOf(k, "ath_a") == nil {
 		t.Fatal("a retirement that failed took the disk's record")
 	}
-	removeImage = saved
+	if err := os.RemoveAll(image); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(image, nil, home.ImageMode); err != nil {
+		t.Fatal(err)
+	}
 	k.place(t, "p-s1", "ath_a")
 	k.s.handleSpawn(k.c, k.scratchReq("s1", "p-s1"))
 	if m := k.next(t); m["type"] != "spawned" {
