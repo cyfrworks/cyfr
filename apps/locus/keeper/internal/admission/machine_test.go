@@ -253,3 +253,66 @@ func TestABootingStartNeedsTheVMsOwnRoomBesideItsAllowance(t *testing.T) {
 		t.Fatalf("a booting start of an 8 GiB guest needs %d, want %d", got, want)
 	}
 }
+
+// Each start under way in a VM holds its allowance above the VM's reading
+// at its own admission (@Fable3's, 4742 fail 3): a later start admitted
+// while an earlier one's allowance time runs, the earlier grown past its
+// own, holds its 384 MiB above what the VM read then.
+func TestALaterStartHoldsTheReadingAtItsOwnAdmission(t *testing.T) {
+	l := New(8192*mib, false)
+	m := NewMachine("backends", "ath_a", testGuest, nil)
+	z := inVM(m, "p0")
+	spawned(t, l, z, 0, 50*mib)
+	l.Spawned(m, at(0))
+	l.Read(m, 450*mib, false, at(20))
+	l.Drop(z, at(20))
+	a := inVM(m, "p1")
+	admitted(t, l.Place(a, at(30)), a)
+	l.Spawned(a, at(30))
+	l.Read(m, 1450*mib, false, at(35))
+	l.Read(a, 1000*mib, false, at(35))
+	b := inVM(m, "p2")
+	admitted(t, l.Place(b, at(35)), b)
+	if got, want := used(l, 35.5), uint64((1450+384)*mib); got < want {
+		t.Fatalf("B's start holds %d MiB over the VM's reading at its admission, want its allowance, 384 (used %d MiB, want at least %d)",
+			(got-1450*mib)/mib, got/mib, want/mib)
+	}
+}
+
+// The same two starts on the host hold A's reading and B's allowance: in
+// the VM they hold that beside the VM's own reading at rest.
+func TestTheSameStartsOnTheHostHoldAsInTheVM(t *testing.T) {
+	l := New(8192*mib, false)
+	a := session("ath_a", "p1")
+	admitted(t, l.Place(a, at(30)), a)
+	l.Spawned(a, at(30))
+	l.Read(a, 1000*mib, false, at(35))
+	b := session("ath_a", "p2")
+	admitted(t, l.Place(b, at(35)), b)
+	if got, want := used(l, 35.5), uint64((1000+384)*mib); got != want {
+		t.Fatalf("on the host the two hold %d MiB, want %d", got/mib, want/mib)
+	}
+}
+
+// At a full pool another person's start is not admitted into the room a
+// later start in a VM holds (@Fable3's, 4742 fail 3).
+func TestAnotherPersonIsNotAdmittedIntoALaterStartsRoom(t *testing.T) {
+	l := New((1450+384+300)*mib, false)
+	m := NewMachine("backends", "ath_a", testGuest, nil)
+	z := inVM(m, "p0")
+	spawned(t, l, z, 0, 50*mib)
+	l.Spawned(m, at(0))
+	l.Read(m, 450*mib, false, at(20))
+	l.Drop(z, at(20))
+	a := inVM(m, "p1")
+	admitted(t, l.Place(a, at(30)), a)
+	l.Spawned(a, at(30))
+	l.Read(m, 1450*mib, false, at(35))
+	l.Read(a, 1000*mib, false, at(35))
+	b := inVM(m, "p2")
+	admitted(t, l.Place(b, at(35)), b)
+	c := session("ath_c", "p3")
+	if ev := l.Place(c, at(35.2)); len(ev.Admitted) != 0 {
+		t.Fatalf("another person's start was admitted into the room of a start still under way: free was %d MiB before it", free(l, 35.1)/mib)
+	}
+}

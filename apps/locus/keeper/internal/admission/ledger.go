@@ -192,28 +192,37 @@ func (l *Ledger) charge(e *Entry, now time.Time) uint64 {
 }
 
 // machineCharge is a VM's charge at now: the larger of its reading and
-// what its starts hold, its own allowance from its admission until
-// AllowanceFor after its VMM's start, and, while any of its sessions'
-// allowances' time runs, the VM's reading at the earliest such session's
-// admission with the allowances of every one of them; a reading that is
-// lesser, or none for StaleAfter, never under its last charge.
+// what its starts under way hold. Each start holds its allowance above the
+// VM's reading at its own admission (its base), with the allowances of
+// every start of the VM admitted with or after it, so two starts in a VM
+// hold what the same two hold on the host; the VM's own start holds its
+// own allowance above nothing, with every session's start beside it, from
+// its admission until AllowanceFor after its VMM's start. A start is under
+// way from its admission until AllowanceFor after its Spawned. A reading
+// that is lesser, or none for StaleAfter, is never under its last charge.
 func (l *Ledger) machineCharge(m *Entry, now time.Time) uint64 {
+	var starting []*Entry
+	for _, e := range l.admitted {
+		if e.Machine == m && (e.spawnedAt.IsZero() || now.Before(e.spawnedAt.Add(AllowanceFor))) {
+			starting = append(starting, e)
+		}
+	}
+	// since is the allowances of the starts admitted at or after at.
+	since := func(at time.Time) uint64 {
+		var sum uint64
+		for _, e := range starting {
+			if !e.admittedAt.Before(at) {
+				sum += Allowance(e.class())
+			}
+		}
+		return sum
+	}
 	var held uint64
 	if m.spawnedAt.IsZero() || now.Before(m.spawnedAt.Add(AllowanceFor)) {
-		held = m.own
+		held = m.own + since(m.admittedAt)
 	}
-	var earliest *Entry
-	for _, e := range l.admitted {
-		if e.Machine != m || !e.spawnedAt.IsZero() && !now.Before(e.spawnedAt.Add(AllowanceFor)) {
-			continue
-		}
-		held += Allowance(e.class())
-		if earliest == nil || e.admittedAt.Before(earliest.admittedAt) {
-			earliest = e
-		}
-	}
-	if earliest != nil {
-		held += earliest.base
+	for _, e := range starting {
+		held = max(held, e.base+since(e.admittedAt))
 	}
 	reading := m.reading
 	if m.lesser || m.readAt.IsZero() || now.Sub(m.readAt) >= StaleAfter {
