@@ -73,9 +73,9 @@ HOME = "mcp_brain-openai-codex"
 FAKE = "fake-openai-codex.mjs"
 PROGRAM = {"name": "brain", "command": f"cyfr-codex node /probe/{FAKE}", "env": {}, "home": "kept", "packs": True}
 CANARIES = ("FAKE-STDERR-CANARY", "FAKE-FOLDER-CANARY", "FAKE-ACCOUNT-CANARY")
-# The user allowed a tool row to show its command and its diff (#2540): the
-# name of a credentials file may therefore appear as an own start's detail
-# and nowhere else; its contents never. The fake's own command names the
+# A tool row shows its command and its diff, so the name of a credentials
+# file may appear as an own start's detail and nowhere else; its contents
+# never. The fake's own command names the
 # sign-in file (fake-openai-codex.mjs), so the name is held to that one place
 # (beside_start_detail) and its contents stay a canary above.
 SIGNIN_NAME = "auth.json"
