@@ -17,8 +17,8 @@
 //                       admits the root and the loaded edge carries
 //                       exactly the provided configuration, used only
 //                       within its destination
-//   account_choices     two OpenAI entries, one made through "Connect your
-//                       openai.com account" and one on the Vault page, and
+//   account_choices     two OpenAI entries, one made through "Paste your
+//                       openai.com API key" and one on the Vault page, and
 //                       one Anthropic entry; the app's own calls take the
 //                       first and the OpenAI dependency's edge the second,
 //                       the one Anthropic entry chosen with no picker
@@ -699,12 +699,12 @@ const depSelector = (dep) =>
 const credentialRow = (page, key) =>
   page.locator(`${layer} [data-row="credential"]`).filter({ has: page.getByText(`Binding: ${key}`, { exact: true }) });
 
-// "Connect your <provider> account" on the need `block`: the
+// "Paste your <provider> API key" on the need `block`: the
 // credential-entry prompt in front of the grant, its name and key typed,
 // the entry it saves confirmed with the passkey, then the grant back.
 // Whether the page may show secret material the proof typed into it. The
 // proof types a key in two places alone: the credential prompt's value
-// field (`#system-layer-secret`, which "Connect your <provider> account"
+// field (`#system-layer-secret`, which "Paste your <provider> API key"
 // opens), for OpenAI Work and Anthropic, and the Vault page create form's
 // fields (`textarea[name="fields"]`, `FIELD=value`), for OpenAI Home and
 // My xAI key. It is set before each key is filled in, and cleared only once

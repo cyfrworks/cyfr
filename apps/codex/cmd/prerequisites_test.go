@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cyfr/codex/internal/access"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 )
@@ -42,7 +43,7 @@ func sgStandIn(t *testing.T, status string) string {
 func prepare(t *testing.T) (bool, string, error) {
 	t.Helper()
 	var out bytes.Buffer
-	continued, err := prepareMachine(context.Background(), []string{"--no-pull"}, &out, &out)
+	continued, err := prepareMachine(context.Background(), continuation{run: []string{"init", "--no-pull"}, said: []string{"init", "--no-pull"}}, &out, &out)
 	return continued, out.String(), err
 }
 
@@ -264,7 +265,7 @@ func TestInitSaysWhosePasswordBeforeSudoAsks(t *testing.T) {
 			sgStandIn(t, "0")
 			var out bytes.Buffer
 			s.prompt = func() { out.WriteString("[sudo's prompt]\n") }
-			if _, err := prepareMachine(context.Background(), nil, &out, &out); err != nil {
+			if _, err := prepareMachine(context.Background(), continuation{run: []string{"init"}, said: []string{"init"}}, &out, &out); err != nil {
 				t.Fatalf("%v\n%s", err, out.String())
 			}
 			if !strings.Contains(out.String(), "Install these requirements? (yes/no) [no]: "+passwordSentence+"[sudo's prompt]\n") {
@@ -689,20 +690,32 @@ func TestLogInSentenceNamesTheFlagsThatMatter(t *testing.T) {
 // A program whose path sg's string cannot carry as it is goes through no
 // sg: the person is told to log in again.
 func TestAPathSgCannotCarryIsToldToLogInAgain(t *testing.T) {
+	sg := madeSg(t)
 	for _, self := range []string{"/home/ana/my bin/cyfr", "/home/ana/$x/cyfr", "/home/ana/cyfr;id", "relative/cyfr"} {
-		if _, err := groupRun("/bin/true", self, []string{"down"}, nil); err == nil {
+		if _, err := groupRun(sg, self, []string{"down"}, nil); err == nil {
 			t.Errorf("%q went through sg", self)
 		}
 	}
-	if _, err := groupRun("/bin/true", "/home/ana/.local/bin/cyfr-0.6_1+x", []string{"down"}, nil); err != nil {
+	if _, err := groupRun(sg, "/home/ana/.local/bin/cyfr-0.6_1+x", []string{"down"}, nil); err != nil {
 		t.Errorf("a plain path was refused: %v", err)
 	}
+}
+
+// madeSg is an sg of the test's own making, which groupRun finds; nothing
+// runs it.
+func madeSg(t *testing.T) string {
+	t.Helper()
+	sg := filepath.Join(t.TempDir(), "sg")
+	if err := os.WriteFile(sg, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return sg
 }
 
 // The second run reads its command line once and leaves no trace of it
 // for anything it starts; an unreadable one is refused.
 func TestTheSecondRunTakesItsCommandLineOnce(t *testing.T) {
-	cmd, err := groupRun("/bin/true", "/opt/cyfr", []string{"restore", "it's $HOME `id` ;x\nnext"}, []string{groupRunVar + "=old", "KEEP=1"})
+	cmd, err := groupRun(madeSg(t), "/opt/cyfr", []string{"restore", "it's $HOME `id` ;x\nnext"}, []string{groupRunVar + "=old", "KEEP=1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -958,7 +971,7 @@ func TestAStopReachesTheSecondRun(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	ended := make(chan error, 1)
 	go func() {
-		_, err := continueWithGroup(ctx, []string{"down"}, "ana", io.Discard, io.Discard)
+		_, err := continueWithGroup(ctx, continuation{run: []string{"down"}, said: []string{"down"}}, "ana", io.Discard, io.Discard)
 		ended <- err
 	}()
 	for start := time.Now(); ; time.Sleep(20 * time.Millisecond) { // sleep-ok: polls for the stand-in's record, bounded below
@@ -977,6 +990,105 @@ func TestAStopReachesTheSecondRun(t *testing.T) {
 		}
 	case <-time.After(20 * time.Second):
 		t.Fatal("the stop did not reach the second run")
+	}
+}
+
+// Where there is no sg, a terminal older than the group and a Docker that
+// never answers hold the log-in sentence no longer than the step's own
+// bound (groupProbe).
+func TestNoSgAndADockerThatNeverAnswersIsNotWaitedFor(t *testing.T) {
+	never := func(ctx context.Context) {
+		select {
+		case <-ctx.Done():
+		case <-time.After(6 * time.Second):
+		}
+	}
+	s := standInMachine(t)
+	s.member = []string{"docker"}
+	sgProgram = filepath.Join(t.TempDir(), "sg")
+	machine.reachable = func(ctx context.Context) bool { never(ctx); return false }
+	machine.refusal = func(ctx context.Context) (access.DockerRefusal, string, bool) {
+		never(ctx)
+		return access.RefusalDenied, "", false
+	}
+	saved := groupProbe
+	t.Cleanup(func() { groupProbe = saved })
+	groupProbe = 50 * time.Millisecond
+	t.Chdir(t.TempDir())
+	start := time.Now()
+	err := runCommandLine(t, "down")
+	if took := time.Since(start); took > 2*time.Second || err == nil || !strings.Contains(err.Error(), "Then run `cyfr down` again") {
+		t.Errorf("down waited %s on a Docker that never answers, then said: %v", took.Round(time.Millisecond), err)
+	}
+}
+
+// The sentence never prints a credential back: a flag marked
+// credentialFlag is named with a placeholder for its value. The second
+// run gets the value all the same.
+func TestTheSentenceNeverPrintsACredential(t *testing.T) {
+	const secret = "cyfr_sk_0123456789abcdef"
+	line := []string{"--token", secret, "down"}
+	t.Run("no sg", func(t *testing.T) {
+		s := standInMachine(t)
+		s.member, s.refused = []string{"docker"}, socketDenied
+		sgProgram = filepath.Join(t.TempDir(), "sg")
+		t.Chdir(t.TempDir())
+		err := runCommandLine(t, line...)
+		if err == nil || strings.Contains(err.Error(), secret) || !strings.Contains(err.Error(), "`cyfr down --token="+credentialPlaceholder+"`") {
+			t.Errorf("says %v", err)
+		}
+	})
+	t.Run("through sg", func(t *testing.T) {
+		s := standInMachine(t)
+		s.member = []string{"docker"}
+		record := sgStandIn(t, "0")
+		t.Chdir(t.TempDir())
+		if err := runCommandLine(t, line...); ExitStatus(err) != 0 {
+			t.Fatal(err)
+		}
+		if got := sgRan(t, record); !slices.Equal(got, []string{"down", "--token=" + secret}) {
+			t.Errorf("sg ran %q", got)
+		}
+	})
+}
+
+// A hidden flag, one only the app passes, is not shown to a person at
+// all; the second run gets it all the same.
+func TestTheSentenceShowsNoFlagOnlyTheAppPasses(t *testing.T) {
+	line := []string{"update", "--offer", "--confirmed", "ref-0123", "--yes"}
+	t.Run("no sg", func(t *testing.T) {
+		s := standInMachine(t)
+		s.member, s.refused = []string{"docker"}, socketDenied
+		sgProgram = filepath.Join(t.TempDir(), "sg")
+		t.Chdir(t.TempDir())
+		err := runCommandLine(t, line...)
+		if err == nil || !strings.Contains(err.Error(), "Then run `cyfr update --yes` again") || strings.Contains(err.Error(), "ref-0123") {
+			t.Errorf("says %v", err)
+		}
+	})
+	t.Run("through sg", func(t *testing.T) {
+		s := standInMachine(t)
+		s.member = []string{"docker"}
+		record := sgStandIn(t, "0")
+		t.Chdir(t.TempDir())
+		if err := runCommandLine(t, line...); ExitStatus(err) != 0 {
+			t.Fatal(err)
+		}
+		if got := sgRan(t, record); !slices.Equal(got, []string{"update", "--confirmed=ref-0123", "--offer", "--yes"}) {
+			t.Errorf("sg ran %q", got)
+		}
+	})
+}
+
+// The second run's command line, a credential among it, is in no error:
+// an unreadable one is refused without being said back.
+func TestAnUnreadableCommandLineIsNotSaidBack(t *testing.T) {
+	for _, value := range []string{"cyfr_sk_0123456789abcdef!", "Y3lmcl9za18wMTIzNDU2Nzg5YWJjZGVm"} {
+		t.Setenv(groupRunVar, value)
+		_, continued, err := takeGroupRun([]string{groupWord})
+		if !continued || err == nil || strings.Contains(err.Error(), "cyfr_sk_") || strings.Contains(err.Error(), value) {
+			t.Errorf("%q: %v", value, err)
+		}
 	}
 }
 

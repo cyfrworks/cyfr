@@ -646,7 +646,7 @@
       return {
         meta: list.length ? `${list.length} ${plural(list.length, "entry", "entries")} · ${need} to look at` : "",
         body: list.length === 0 ? `<p class="empty">Your vault is empty.</p>`
-          : `<ul class="rows">${list.slice(0, cap).map((v) => `<li class="row"><button class="row-btn" data-act="page" data-page="vault" data-key="v-${esc(v.name)}"><span class="row-t">${esc(text(v.name))}</span><span class="row-s">${esc(v.type ? human(v.type) : "Entry")}</span></button>${v.status === "needs_reauthorisation" ? `<span class="pill neg">Needs re-authorisation</span>` : `<span class="row-r">Fine</span>`}</li>`).join("")}</ul>`,
+          : `<ul class="rows">${list.slice(0, cap).map((v) => `<li class="row"><button class="row-btn" data-act="page" data-page="vault" data-key="v-${esc(v.name)}"><span class="row-t">${esc(text(v.name))}</span><span class="row-s">${esc(v.type ? human(v.type) : "Entry")}</span></button>${v.status === "needs_reauthorisation" ? `<span class="pill neg">Needs re-authorisation</span>` : ""}</li>`).join("")}</ul>`,
       };
     },
     day() {

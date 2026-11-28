@@ -119,6 +119,112 @@ defmodule PrismWeb.CommandPaletteTest do
     refute html =~ "palette-word"
   end
 
+  # An app is listed by its name, the name its desktop tile shows, while
+  # its description still finds it; a row whose name holds what is typed
+  # comes before one found by its other words; Enter opens the first result for what the field holds, and with
+  # none opens nothing.
+  test "an app is listed by its name, found by its description, and Enter opens the first result",
+       %{conn: conn} do
+    user = test_user()
+    conn = log_in_user(conn, user)
+    athanor = seated_athanor()
+    ctx = %{Sanctum.TestContext.local() | user_id: user.user_id, athanor_id: athanor.id}
+
+    Arca.Test.UnitFixtures.tenant_component!(ctx, "tincture", "local", "palette-bird", "1.0.0",
+      manifest: %{
+        "name" => "palette-bird",
+        "type" => "tincture",
+        "version" => "1.0.0",
+        "publisher" => "local",
+        "description" => "A game of a small bird flying between pipes",
+        "tincture" => %{"entry" => "index.html"}
+      },
+      files: [{"index.html", "<!doctype html><title>palette-bird</title>"}]
+    )
+
+    Arca.Test.UnitFixtures.tenant_component!(ctx, "tincture", "local", "api-kit", "1.0.0",
+      manifest: %{
+        "name" => "api-kit",
+        "type" => "tincture",
+        "version" => "1.0.0",
+        "publisher" => "local",
+        "tincture" => %{"entry" => "index.html"}
+      },
+      files: [{"index.html", "<!doctype html><title>api-kit</title>"}]
+    )
+
+    Prism.TinctureRegistry.reload_athanor(athanor.id)
+
+    {view, _html} = mount_athanor(conn, "/settings")
+    view |> with_target("#command-palette") |> render_click("toggle", %{})
+    view |> element("#command-palette input") |> render_keyup(%{"value" => "pipes"})
+    html = view |> element("#command-palette") |> render()
+
+    item = ~s(#command-palette [phx-value-to="/?publisher=local&tincture_name=palette-bird"])
+
+    assert view |> element(item) |> render() =~
+             ~r{<span class="flex-1 truncate">\s*palette-bird\s*</span>}
+
+    refute html =~ "flying between pipes"
+    assert html =~ "Enter opens the first"
+    refute html =~ "↑ ↓ navigate"
+
+    assert view |> element("#command-palette form") |> render_submit(%{"value" => "zz-none"}) =~
+             "No matches."
+
+    # The API Keys page (`/api-keys`) matches "api-k" by its address alone,
+    # and pages are listed before apps; the app whose name holds it comes
+    # first.
+    assert {:error, {:live_redirect, %{to: to}}} =
+             view |> element("#command-palette form") |> render_submit(%{"value" => "api-k"})
+
+    assert to == athanor_path("/?publisher=local&tincture_name=api-kit", athanor)
+
+    {view, _html} = mount_athanor(conn, "/settings")
+    view |> with_target("#command-palette") |> render_click("toggle", %{})
+
+    assert {:error, {:live_redirect, %{to: to}}} =
+             view |> element("#command-palette form") |> render_submit(%{"value" => "flying"})
+
+    assert to == athanor_path("/?publisher=local&tincture_name=palette-bird", athanor)
+  end
+
+  # Two publishers' apps of one name never read alike: each row shows its
+  # publisher, and each names its own app's address.
+  test "two apps of one name are each listed by publisher and name", %{conn: conn} do
+    user = test_user()
+    conn = log_in_user(conn, user)
+    athanor = seated_athanor()
+    ctx = %{Sanctum.TestContext.local() | user_id: user.user_id, athanor_id: athanor.id}
+
+    for publisher <- ["local", "acme"] do
+      Arca.Test.UnitFixtures.tenant_component!(ctx, "tincture", publisher, "twin-dash", "1.0.0",
+        manifest: %{
+          "name" => "twin-dash",
+          "type" => "tincture",
+          "version" => "1.0.0",
+          "publisher" => publisher,
+          "tincture" => %{"entry" => "index.html"}
+        },
+        files: [{"index.html", "<!doctype html><title>twin-dash</title>"}]
+      )
+    end
+
+    Prism.TinctureRegistry.reload_athanor(athanor.id)
+
+    {view, _html} = mount_athanor(conn, "/settings")
+    view |> with_target("#command-palette") |> render_click("toggle", %{})
+    view |> element("#command-palette input") |> render_keyup(%{"value" => "twin"})
+
+    for publisher <- ["local", "acme"] do
+      item =
+        ~s(#command-palette [phx-value-to="/?publisher=#{publisher}&tincture_name=twin-dash"])
+
+      assert view |> element(item) |> render() =~
+               ~r{<span class="flex-1 truncate">\s*#{publisher}\.twin-dash\s*</span>}
+    end
+  end
+
   # A component row as the registry writes one, `inserted_at` naming how new
   # it is.
   defp component_row!(ctx, name, inserted_at, description \\ nil, type \\ "catalyst") do

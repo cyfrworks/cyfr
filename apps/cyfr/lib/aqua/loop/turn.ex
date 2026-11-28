@@ -15,7 +15,7 @@ defmodule Aqua.Loop.Turn do
   options — the agent file's own, over which a crew request's
   (`options["brain_options"]`) set theirs — the system prompt (the
   soul's prompt or a crew member's opening, then CYFR's part, the
-  briefing its pinned harness says its work needs, `Aqua.Prompt.briefing/3`;
+  briefing its pinned harness says its work needs, `Aqua.Prompt.briefing/4`;
   the soul's brain is its member's), the tool
   surface (with the accounts its launches may name,
   read once here for every request the spec makes,

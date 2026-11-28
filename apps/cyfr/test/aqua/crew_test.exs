@@ -1207,7 +1207,7 @@ defmodule Aqua.CrewTest do
   end
 
   # CYFR's words for a member on a model's brain, with nothing of a folder,
-  # and the line a brain that searches adds (`Aqua.Prompt.crew_briefing/3`).
+  # and the line a brain that searches adds (`Aqua.Prompt.crew_briefing/4`).
   # The rule names the member's thread's mark.
   defp briefing(mark) do
     "## Crew member\n\nYou are a crew member of this athanor's Aqua. A job arrives " <>

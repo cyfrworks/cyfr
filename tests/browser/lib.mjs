@@ -702,12 +702,20 @@ export async function signedIn(browser, base, cookie) {
   return context;
 }
 
-// The shell's picker focused on one tincture, its LiveView connected.
-export async function openShell(page, base, segment, name) {
-  const url = `${base}/a/${encodeURIComponent(segment)}?publisher=local&tincture_name=${encodeURIComponent(name)}`;
-  await page.goto(url);
-  await page.waitForSelector(".phx-connected", { timeout: 30_000 });
-  await launchButton(page, name).waitFor({ timeout: 30_000 });
+// One tincture opened by the desktop's address that names it, as Search and
+// Aqua's show open one: the shell opens its frame and puts the desktop's
+// plain address in the named one's place. Answers the frame as `launch`
+// does, with `connectedAt`, when the shell's LiveView was connected (the
+// moment a Launch could have been pressed). Once its frame closes, the
+// picker stands focused on the tincture, so `launch` opens it again.
+export async function openApp(page, base, segment, name, { timeoutMs = 30_000 } = {}) {
+  const desktop = `${base}/a/${encodeURIComponent(segment)}`;
+  await page.goto(`${desktop}?publisher=local&tincture_name=${encodeURIComponent(name)}`);
+  await page.waitForSelector(".phx-connected", { timeout: timeoutMs });
+  const connectedAt = Date.now();
+  const opened = await awaitFrame(page, new Set(), timeoutMs);
+  await page.waitForURL((url) => !url.searchParams.has("tincture_name"), { timeout: timeoutMs });
+  return { ...opened, connectedAt };
 }
 
 const launchButton = (page, name) =>

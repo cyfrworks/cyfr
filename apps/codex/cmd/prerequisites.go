@@ -376,11 +376,11 @@ func requirementCommands(account string) []string {
 // ends here, the rest of it run in a process carrying the docker group or
 // the installation declined, false when this process goes on to prepare
 // the project. Running init again is the retry.
-func prepareMachine(ctx context.Context, args []string, out, errOut io.Writer) (bool, error) {
+func prepareMachine(ctx context.Context, again continuation, out, errOut io.Writer) (bool, error) {
 	// Only a new login cures this, with a terminal or without, so it is
 	// said before anything is installed or written.
 	if loginIsMissing(ctx) {
-		return true, fmt.Errorf("%s. Then run `%s` again", loginAgain, commandSaid(append([]string{"init"}, args...)))
+		return true, fmt.Errorf("%s. Then run `%s` again", loginAgain, commandSaid(again.said))
 	}
 	if !askTerminal() {
 		return false, nil
@@ -428,7 +428,7 @@ func prepareMachine(ctx context.Context, args []string, out, errOut io.Writer) (
 			return false, nil
 		}
 	}
-	return continueWithGroup(ctx, append([]string{"init"}, args...), account.Username, out, errOut)
+	return continueWithGroup(ctx, again, account.Username, out, errOut)
 }
 
 // dockerDesktopPage is where Docker offers Docker Desktop's installer for
@@ -544,15 +544,27 @@ func withDockerGroup(ctx context.Context, c *cobra.Command, args []string, out, 
 	if err := stepInterrupted(ctx); err != nil || answers {
 		return false, err
 	}
-	argv := append(strings.Fields(strings.TrimPrefix(c.CommandPath(), c.Root().Name()+" ")), continuationArgs(c)...)
-	if slices.ContainsFunc(args, func(a string) bool { return strings.HasPrefix(a, "-") }) {
-		argv = append(argv, "--")
-	}
-	argv = append(argv, args...)
-	return continueWithGroup(ctx, argv, account.Username, out, errOut)
+	return continueWithGroup(ctx, continued(c, args), account.Username, out, errOut)
 }
 
-// groupProbe bounds the one question the group step asks Docker.
+// whyNoLogin is why Docker does not answer a process older than the
+// group, read within groupProbe (seeDocker, dockerSentence); none where
+// it answers. A ctx that ends meanwhile is an interruption.
+func whyNoLogin(ctx context.Context) (string, error) {
+	probe, stop := context.WithTimeout(ctx, groupProbe)
+	defer stop()
+	seen := seeDocker(probe, true)
+	if err := stepInterrupted(ctx); err != nil {
+		return "", err
+	}
+	// A Docker that did not answer within the bound is one that does not
+	// answer, never one that was not waited for.
+	seen.cancelled = false
+	why, _ := dockerSentence(seen)
+	return why, nil
+}
+
+// groupProbe bounds every question the group step asks Docker.
 var groupProbe = 10 * time.Second
 
 // stepInterrupted is the interruption of a step whose ctx ended, none
@@ -651,7 +663,7 @@ func loginIsMissing(ctx context.Context) bool {
 	if err != nil || !staleGroup(ctx, account.Username) {
 		return false
 	}
-	why, _ := dockerSentence(seeDocker(ctx, true))
+	why, _ := whyNoLogin(ctx)
 	return why == loginAgain
 }
 
@@ -680,20 +692,20 @@ func staleGroup(ctx context.Context, account string) bool {
 // second run, so a stop from outside stops the work, and this process
 // exits as the second run did: with its status, or with 128 and the number
 // of the signal that killed it, as a shell reports one.
-func continueWithGroup(ctx context.Context, argv []string, account string, out, errOut io.Writer) (bool, error) {
+func continueWithGroup(ctx context.Context, c continuation, account string, out, errOut io.Writer) (bool, error) {
 	if !staleGroup(ctx, account) {
 		return false, nil
 	}
-	again := "Then run `" + commandSaid(argv) + "` again"
+	again := "Then run `" + commandSaid(c.said) + "` again"
 	self, err := os.Executable()
 	if err != nil {
 		return true, fmt.Errorf("cyfr could not find its own program to go on with the docker group (%v). Run `newgrp docker`, or log out and in again. %s", err, again)
 	}
-	cmd, err := groupRun(sgProgram, self, argv, os.Environ())
+	cmd, err := groupRun(sgProgram, self, c.run, os.Environ())
 	if err != nil {
-		why, _ := dockerSentence(seeDocker(ctx, true))
-		if why == "" {
-			return false, nil
+		why, err := whyNoLogin(ctx)
+		if err != nil || why == "" {
+			return false, err
 		}
 		return true, fmt.Errorf("%s. %s", why, again)
 	}
@@ -816,20 +828,46 @@ func shellQuote(argv []string) string {
 	return strings.Join(words, " ")
 }
 
-// continuationArgs are the arguments of the run a continuation starts:
-// each flag the person gave, as --name=value, or --name for a switch
-// given on.
-func continuationArgs(c *cobra.Command) []string {
-	var args []string
+// continuation is a command to run again: run, the second run's command
+// line, every flag and argument as given; and said, the words a sentence
+// gives a person to run it again (commandSaid), where a flag marked
+// credentialFlag stands with credentialPlaceholder for its value and a
+// hidden flag, one only the app passes, is not named at all.
+type continuation struct{ run, said []string }
+
+// credentialFlag marks a flag whose value is a credential: no sentence
+// prints its value back (continued).
+const credentialFlag = "cyfr.credential"
+
+// credentialPlaceholder stands where a credential's value was.
+const credentialPlaceholder = "YOUR-KEY"
+
+// continued is c run again with args: its words, each flag the person
+// gave, as --name=value or --name for a switch given on, then args, after
+// -- where one begins with a dash.
+func continued(c *cobra.Command, args []string) continuation {
+	words := strings.Fields(strings.TrimPrefix(c.CommandPath(), c.Root().Name()+" "))
+	again := continuation{run: slices.Clone(words), said: slices.Clone(words)}
 	c.Flags().VisitAll(func(f *pflag.Flag) {
 		if !f.Changed {
 			return
 		}
+		word := "--" + f.Name + "=" + f.Value.String()
 		if f.Value.Type() == "bool" && f.Value.String() == "true" {
-			args = append(args, "--"+f.Name)
-			return
+			word = "--" + f.Name
 		}
-		args = append(args, "--"+f.Name+"="+f.Value.String())
+		again.run = append(again.run, word)
+		switch {
+		case f.Hidden:
+		case f.Annotations[credentialFlag] != nil:
+			again.said = append(again.said, "--"+f.Name+"="+credentialPlaceholder)
+		default:
+			again.said = append(again.said, word)
+		}
 	})
-	return args
+	if slices.ContainsFunc(args, func(a string) bool { return strings.HasPrefix(a, "-") }) {
+		again.run, again.said = append(again.run, "--"), append(again.said, "--")
+	}
+	again.run, again.said = append(again.run, args...), append(again.said, args...)
+	return again
 }
