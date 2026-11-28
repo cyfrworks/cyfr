@@ -35,8 +35,7 @@
 // error saying CYFR's tools did not reach it. The program's permission questions are each answered allow;
 // none stands in for an ask. The program's own tools are shown as `own`
 // (own.go), each run under its tool call's id with what its input runs and
-// the diffs its end shows, and its thought chunks as `thought`. Its
-// message chunks are said whole under the message id it gives them; where
+// the diffs its end shows. Its message chunks are said whole under the message id it gives them; where
 // it gives none (Cursor, Antigravity), the turn's words are one message,
 // and what it says after a tool call starts begins a paragraph. A
 // sub-agent's frames are none of the member's: OpenCode's, each marked

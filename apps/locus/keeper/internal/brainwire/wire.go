@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 CYFR Works Inc.
 
-// Package brainwire is the brain wire, version 8, a driver's side, for
+// Package brainwire is the brain wire, version 9, a driver's side, for
 // every brain driver (cmd/cyfr-claude-code, cmd/cyfr-codex, cmd/cyfr-acp):
 // tests/fixtures/brain_wire.json defines it (its "comment") and binds this
 // package and the holder (Opus.Brain.Wire) to the same lines. Commands come
@@ -29,7 +29,7 @@ import (
 )
 
 const (
-	Version      = 8
+	Version      = 9
 	MaxLineBytes = 1 << 20
 	MaxIDBytes   = 256
 	MaxList      = 1000
@@ -118,7 +118,7 @@ var mediaTypes = map[string][]string{
 	"image":    {"image/jpeg", "image/png", "image/gif", "image/webp"},
 	"document": {"application/pdf"},
 }
-var nativeEvents = []string{"text", "thought", "said", "own", "ask", "usage", "idle", "error"}
+var nativeEvents = []string{"text", "said", "own", "ask", "usage", "idle", "error"}
 
 // Commands are the messages the holder writes.
 var Commands = map[string]Spec{
@@ -146,8 +146,6 @@ var Events = map[string]Spec{
 	"refused": {[]string{"t", "id", "reason"}, []string{"account"},
 		map[string]fieldType{"id": tID, "reason": tString, "account": tSignedOut}},
 	"text": {[]string{"t", "gen", "message", "delta"}, []string{"work"},
-		map[string]fieldType{"gen": tCount, "work": tID, "message": tID, "delta": tString}},
-	"thought": {[]string{"t", "gen", "message", "delta"}, []string{"work"},
 		map[string]fieldType{"gen": tCount, "work": tID, "message": tID, "delta": tString}},
 	"said": {[]string{"t", "gen", "message", "text"}, []string{"work"},
 		map[string]fieldType{"gen": tCount, "work": tID, "message": tID, "text": tString}},

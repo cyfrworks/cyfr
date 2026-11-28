@@ -637,12 +637,12 @@ func TestOwnToolsAreOwnAndCYFRsCallsAreNot(t *testing.T) {
 }
 
 // activityHolds reads a stand-in's `activity` turn (fake_test.go,
-// cursor_fake_test.go) as wire version 8 carries it: each own call starts
-// and ends once under one `call`, the twin commands ending in reverse
-// order each with its own and starting with what it runs, the edit's
-// change cut between characters to a detail's bound, the sub-agent's call
-// one row, nothing of its child, the reasoning as `thought` alone, and the
-// reply `reply`, the member's own words.
+// cursor_fake_test.go) as the wire carries it: each own call starts and
+// ends once under one `call`, the twin commands ending in reverse order
+// each with its own and starting with what it runs, the edit's change cut
+// between characters to a detail's bound, the sub-agent's call one row,
+// nothing of its child, nothing of the reasoning, and the reply `reply`,
+// the member's own words.
 func activityHolds(t *testing.T, s *wireSession, twins [2]string, task, reply string) {
 	t.Helper()
 	got := s.until("idle")
@@ -680,21 +680,9 @@ func activityHolds(t *testing.T, s *wireSession, twins [2]string, task, reply st
 	if len(calls[task]) != 2 || len(calls) != 4 {
 		t.Fatalf("the sub-agent's call is one row, and its child's tool none: %v", calls)
 	}
-	thought := ""
-	for _, e := range ofType(got, "thought") {
-		thought += e["delta"].(string)
-	}
-	if thought != "THINK-ONE THINK-TWO" {
-		t.Fatalf("the reasoning arrives as thought: %q", thought)
-	}
-	for _, e := range got {
-		if (e["t"] == "text" || e["t"] == "said") && strings.Contains(fmt.Sprint(e), "THINK") {
-			t.Fatalf("reasoning is never said: %v", e)
-		}
-	}
-	for _, canary := range []string{"CHILD-WORDS", "CHILD-THOUGHT", "CHILD-RAN", "CHILD-CHANGE", "CHILD-RESULT"} {
+	for _, canary := range []string{"THINK", "CHILD-WORDS", "CHILD-THOUGHT", "CHILD-RAN", "CHILD-CHANGE", "CHILD-RESULT"} {
 		if strings.Contains(s.output(), canary) {
-			t.Fatalf("nothing of the sub-agent's own frames reaches the wire: %s", canary)
+			t.Fatalf("nothing of the reasoning nor of the sub-agent's own frames reaches the wire: %s", canary)
 		}
 	}
 	if said := saidOf(got); said != reply {
@@ -736,7 +724,7 @@ func TestAntigravitysWordsAroundItsToolAreOneMessageWithABreak(t *testing.T) {
 	saidHolds(t, s.until("idle"), []string{"Before the tool.\n\nAfter it."})
 }
 
-func TestAntigravitysActivityIsItsCallsThoughtsAndOwnWords(t *testing.T) {
+func TestAntigravitysActivityIsItsCallsAndOwnWords(t *testing.T) {
 	s := startDriver(t)
 	startFresh(s, map[string]any{})
 	postText(s, "stp_act", "trn_1", "activity")
@@ -1046,22 +1034,21 @@ func TestAnInitializeThatDoesNotReadIsUnreadable(t *testing.T) {
 
 // Updates of kinds the driver does not use, another session's text and a
 // request it has no handler for change nothing on the wire; the request is
-// answered method-not-found. The program's reasoning is its thought alone.
+// answered method-not-found.
 func TestAnUnknownUpdateIsDroppedAndAnUnknownRequestRefused(t *testing.T) {
 	s := startDriver(t)
 	startFresh(s, map[string]any{})
 	postText(s, "stp_strange", "trn_1", "strange")
 	got := s.until("idle")
 	for _, e := range got {
-		if e["t"] != "text" && e["t"] != "said" && e["t"] != "usage" && e["t"] != "idle" &&
-			(e["t"] != "thought" || e["delta"] != "THOUGHT-CANARY") {
-			t.Fatalf("nothing but the reply's events and the thought: %v", e)
+		if e["t"] != "text" && e["t"] != "said" && e["t"] != "usage" && e["t"] != "idle" {
+			t.Fatalf("nothing but the reply's events: %v", e)
 		}
 	}
-	if saidOf(got) != "fs answered -32601" || len(ofType(got, "thought")) != 1 {
+	if saidOf(got) != "fs answered -32601" {
 		t.Fatalf("the request is answered method-not-found: %q", saidOf(got))
 	}
-	for _, canary := range []string{"PLAN-CANARY", "NEW-KIND-CANARY", "USER-CANARY", "OTHER-SESSION-CANARY"} {
+	for _, canary := range []string{"PLAN-CANARY", "NEW-KIND-CANARY", "THOUGHT-CANARY", "USER-CANARY", "OTHER-SESSION-CANARY"} {
 		if strings.Contains(s.output(), canary) {
 			t.Fatalf("a dropped update reached the wire: %s", canary)
 		}

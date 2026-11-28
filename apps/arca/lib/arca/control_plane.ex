@@ -593,6 +593,26 @@ defmodule Arca.ControlPlane do
     end
   end
 
+  @doc """
+  The member's slot as a step of the caller's locking transaction: the
+  slot this member believes it holds now (`member_slot/0`), verified on
+  the database (`verify_held/1`, whose lock on the lease row a takeover
+  then waits on until the transaction ends). A member that holds none,
+  or whose slot was taken or ran out, rolls the transaction back with
+  `:not_owner`; where no claimant runs it passes. Called after the last
+  lock its transaction takes, it judges the slot the write commits under.
+  """
+  @spec verify_member!() :: :ok
+  # arca:db-raise-ok a step inside the caller's locking transaction; a refusal rolls it back.
+  def verify_member! do
+    with {:ok, slot} <- member_slot(),
+         :ok <- verify_held(slot) do
+      :ok
+    else
+      _not_held -> Arca.Repo.rollback(:not_owner)
+    end
+  end
+
   # ---- the roster ------------------------------------------------------------
 
   @doc """

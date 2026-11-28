@@ -152,13 +152,9 @@ func threadResume(id, thread, system string, config brainwire.Config, policy thr
 }
 
 // turnStart starts a turn of `input` under the post's uuid, with the
-// start's effort, which Codex takes per turn, and asking for its
-// reasoning's summary, the text a `thought` carries: Codex otherwise
-// reasons with an empty summary ("summary":"none" in the thread's turn
-// context, at effort high too). The setting holds for the thread's later
-// turns, but every turn asks, so a resumed thread asks again.
+// start's effort, which Codex takes per turn.
 func turnStart(id, thread string, input []any, uuid string, config brainwire.Config) []byte {
-	params := map[string]any{"threadId": thread, "input": input, "clientUserMessageId": uuid, "summary": "auto"}
+	params := map[string]any{"threadId": thread, "input": input, "clientUserMessageId": uuid}
 	if config.Effort != "" {
 		params["effort"] = config.Effort
 	}
