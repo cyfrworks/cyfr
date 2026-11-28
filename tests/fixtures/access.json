@@ -3543,24 +3543,6 @@
       }
     },
     {
-      "name": "the retired setting is read as no setting",
-      "input": {
-        "file": {
-          "CYFR_ACCESS": "local"
-        },
-        "process": {
-          "CYFR_ACCESS": "local"
-        },
-        "release?": true
-      },
-      "refusal": {
-        "class": "setup_required",
-        "code": "access_missing",
-        "payload": {},
-        "sentence": "CYFR_BROWSER is not set in .env, so CYFR does not know what browser address it has. Nothing started. Run `cyfr init` for a new CYFR, or `cyfr access browser none|tailnet|domain|proxy` for this one."
-      }
-    },
-    {
       "name": "domain, as cyfr access browser domain writes it",
       "input": {
         "file": {

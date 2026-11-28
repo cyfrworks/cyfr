@@ -424,19 +424,33 @@ defmodule Cyfr.RuntimeConfigWiringTest do
       assert length(refused) > 40
 
       for {vector, %{"sentence" => sentence}} <- refused do
-        # A name the roster does not declare, as the retired CYFR_ACCESS, is
-        # refused by name before any access setting is read.
-        expected =
-          case Cyfr.Platform.Settings.Roster.unknown(Map.keys(vector["input"]["file"] || %{}), []) do
-            [] -> sentence
-            names -> Cyfr.Platform.Settings.Roster.refusal(names)
-          end
-
         boot_vector(vector, dir, fn ->
           message = Exception.message(assert_raise(RuntimeError, &read_prod_config!/0))
-          assert message == "[Cyfr] FATAL: " <> expected, vector["name"]
+          assert message == "[Cyfr] FATAL: " <> sentence, vector["name"]
         end)
       end
+    end
+
+    # The retired access setting is no setting: a release whose .env names
+    # it is refused by the roster's rule, by that name, before any access
+    # setting is read (what the resolver alone answers for it is
+    # runtime_config_test's).
+    test "a .env naming the retired CYFR_ACCESS refuses the boot by that name", %{tmp_dir: dir} do
+      vector = %{
+        "name" => "the retired CYFR_ACCESS",
+        "input" => %{
+          "file" => %{"CYFR_ACCESS" => "local"},
+          "process" => %{"CYFR_ACCESS" => "local"},
+          "release?" => true
+        }
+      }
+
+      boot_vector(vector, dir, fn ->
+        message = Exception.message(assert_raise(RuntimeError, &read_prod_config!/0))
+
+        assert message ==
+                 "[Cyfr] FATAL: " <> Cyfr.Platform.Settings.Roster.refusal(["CYFR_ACCESS"])
+      end)
     end
 
     test "every resolved boot vector configures its listeners, address, origins, trust and HSTS",

@@ -668,6 +668,16 @@ defmodule Cyfr.RuntimeConfigTest do
       end
     end
 
+    # The retired access setting is no input: the resolver handed it alone
+    # answers as for no setting (a real boot refuses the name first, by the
+    # roster's rule: runtime_config_wiring_test).
+    test "the retired CYFR_ACCESS is read as no setting" do
+      env = %{"CYFR_ACCESS" => "local"}
+
+      assert {:error, %{code: :access_missing, class: :setup_required, payload: %{}}} =
+               RuntimeConfig.resolve_access(%{file: env, process: env, release?: true})
+    end
+
     test "a dev or test run without a kind is none, and a release without one is refused" do
       assert {:ok, %{browser: :none, exposure: :private, assertion: :absent}} =
                RuntimeConfig.resolve_access(%{file: nil, process: %{}, release?: false})

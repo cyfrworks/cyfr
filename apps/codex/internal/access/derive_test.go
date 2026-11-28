@@ -464,3 +464,13 @@ func TestResolveBootExposureAndDefaultTrust(t *testing.T) {
 		}
 	}
 }
+
+// The retired access setting is no input: a .env naming it alone holds no
+// head, refused as a .env with no browser address is (access_missing),
+// what cyfr update says to a server of the release before this one.
+func TestResolveBootReadsNoRetiredSetting(t *testing.T) {
+	env := map[string]string{"CYFR_ACCESS": "local"}
+	if _, err := ResolveBoot(BootInput{File: env, Process: env, Release: true}); refusalCode(err) != "access_missing" {
+		t.Errorf("a .env naming CYFR_ACCESS alone answered %v", err)
+	}
+}
