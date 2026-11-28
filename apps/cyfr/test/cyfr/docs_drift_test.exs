@@ -1423,9 +1423,10 @@ defmodule Cyfr.DocsDriftTest do
 
   # The compose-only class and the deployment list are the roster's
   # (`Cyfr.Platform.Settings.Roster`), which derives the first from
-  # docker-compose.yml and .env.example and holds it there; this reads them
-  # from their owner.
-  test "every name a shipped example documents is read by a release or rostered as no release's" do
+  # docker-compose.yml and the tunnel key's minting owner and holds it
+  # there; this reads them from their owner.
+  test "every name a shipped example documents is read by a release or by compose, or minted " <>
+         "by cyfr init for the link service" do
     read =
       MapSet.union(
         spelled_by_readers(),
@@ -1439,8 +1440,8 @@ defmodule Cyfr.DocsDriftTest do
           do: {example, name}
 
     assert unread == [],
-           "these examples document names no release reads and the roster does not " <>
-             "declare: #{inspect(unread)}"
+           "these examples document names no release reads, compose does not interpolate " <>
+             "and cyfr init does not mint: #{inspect(unread)}"
   end
 
   # ==========================================================================

@@ -135,9 +135,9 @@ defmodule CyfrWeb.Ingress do
   """
   @spec socket_transports(module()) :: [[String.t()]]
   def socket_transports(endpoint) do
-    for {path, _socket, opts} <- endpoint.__sockets__(),
-        config = transport_config(opts, :websocket, true),
-        config != false do
+    # Long-poll is looked for on every mount, whatever its WebSocket says:
+    # Phoenix enables the two transports apart.
+    Enum.flat_map(endpoint.__sockets__(), fn {path, _socket, opts} ->
       if transport_config(opts, :longpoll, false) != false,
         do:
           raise(
@@ -145,8 +145,14 @@ defmodule CyfrWeb.Ingress do
             "the socket #{path} enables long-poll: every socket is a WebSocket"
           )
 
-      String.split(path <> Keyword.get(config, :path, "/websocket"), "/", trim: true)
-    end
+      case transport_config(opts, :websocket, true) do
+        false ->
+          []
+
+        config ->
+          [String.split(path <> Keyword.get(config, :path, "/websocket"), "/", trim: true)]
+      end
+    end)
   end
 
   defp transport_config(opts, transport, default) do

@@ -300,6 +300,13 @@ defmodule CyfrWeb.IngressTest do
       def __sockets__, do: [{"/live", CyfrWeb.IngressTest.Socket, [longpoll: true]}]
     end
 
+    # A mount with long-poll alone, its WebSocket turned off.
+    defmodule LongPollOnlyEndpoint do
+      @moduledoc false
+      def __sockets__,
+        do: [{"/live", CyfrWeb.IngressTest.Socket, [websocket: false, longpoll: true]}]
+    end
+
     test "are WebSockets alone: a mount that enables long-poll is refused" do
       assert CyfrWeb.Ingress.socket_transports(Endpoint) == [["live", "websocket"]]
 
@@ -308,8 +315,10 @@ defmodule CyfrWeb.IngressTest do
                ["live", "websocket"]
              ]
 
-      assert_raise ArgumentError, ~r/enables long-poll/, fn ->
-        CyfrWeb.Ingress.socket_transports(LongPollEndpoint)
+      for endpoint <- [LongPollEndpoint, LongPollOnlyEndpoint] do
+        assert_raise ArgumentError, ~r/enables long-poll/, fn ->
+          CyfrWeb.Ingress.socket_transports(endpoint)
+        end
       end
     end
 
