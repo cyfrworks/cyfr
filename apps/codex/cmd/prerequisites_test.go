@@ -885,8 +885,13 @@ func TestNeedsNoContinuation(t *testing.T) {
 // A Docker that never answers costs a command nothing outside a stale
 // group, and within one no more than groupProbe before the second run.
 func TestADockerThatNeverAnswersIsNotWaitedFor(t *testing.T) {
+	// It answers nothing until its ctx ends, or 5 s pass: a step that
+	// waits for it unbounded fails below rather than hanging the suite.
 	never := func(ctx context.Context) bool {
-		<-ctx.Done()
+		select {
+		case <-ctx.Done():
+		case <-time.After(5 * time.Second):
+		}
 		return false
 	}
 	t.Run("the process holds the group", func(t *testing.T) {
