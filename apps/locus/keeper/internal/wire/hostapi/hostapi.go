@@ -15,6 +15,7 @@ import (
 	"unicode"
 
 	"github.com/cyfr/locus/keeper/internal/wire/macenvelope"
+	"github.com/cyfr/locus/keeper/internal/wire/network"
 	"github.com/cyfr/locus/keeper/internal/wire/pinned"
 	"github.com/cyfr/locus/keeper/internal/wire/wirejson"
 	"github.com/cyfr/locus/keeper/internal/wire/workerauth"
@@ -50,12 +51,14 @@ var Retry = map[string]string{
 func Route(callback string) string { return hostPrefix + callback }
 
 // Frames is whether an answer of these content-type values carries
-// frames: one of them, cut at its first ; and trimmed, is
-// FramesContentType in any case.
+// frames: one of them, cut at its first ; and trimmed of Unicode
+// whitespace (Go's unicode.IsSpace and Elixir's String.trim/1 take the
+// same set), is FramesContentType in any case, folded as Elixir's
+// String.downcase/1 folds it.
 func Frames(contentTypes []string) bool {
 	for _, t := range contentTypes {
 		t, _, _ = strings.Cut(t, ";")
-		if strings.ToLower(strings.TrimFunc(t, unicode.IsSpace)) == FramesContentType {
+		if network.Downcase(strings.TrimFunc(t, unicode.IsSpace)) == FramesContentType {
 			return true
 		}
 	}

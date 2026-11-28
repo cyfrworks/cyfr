@@ -71,6 +71,8 @@ defmodule Locus.Runtime.EdgeGuardTest do
     end
 
     test "every request's body, URL and headers are counted against max_request_size" do
+      assert length(@host_api["request_sizes"]) >= 5
+
       for c <- @host_api["request_sizes"] do
         {:ok, limits} =
           Prima.Limits.new(%{

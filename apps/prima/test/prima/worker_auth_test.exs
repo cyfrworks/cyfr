@@ -349,7 +349,7 @@ defmodule Prima.WorkerAuthTest do
       %{"refused" => refused, "read" => read, "carried" => carried} =
         @vectors["assignment_service_reads"]
 
-      assert length(refused) >= 12 and length(carried) >= 8
+      assert length(refused) >= 12 and length(carried) >= 8 and length(read) >= 3
 
       for %{"token" => token, "why" => why} <- refused ++ carried,
           do: assert({:error, :malformed} = Assignment.read(token), why)

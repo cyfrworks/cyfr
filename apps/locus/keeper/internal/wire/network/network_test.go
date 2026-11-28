@@ -95,6 +95,9 @@ func TestEveryHeaderIsRuledAsPrimaRulesIt(t *testing.T) {
 func TestEveryHostHeaderIsWrittenAsPrimaWritesIt(t *testing.T) {
 	var v hostVectors
 	fixture(t, "host_api.json", &v)
+	if len(v.HostHeaders) < 10 {
+		t.Fatalf("%d host headers", len(v.HostHeaders))
+	}
 	for _, c := range v.HostHeaders {
 		port := ""
 		if c.Port != nil {

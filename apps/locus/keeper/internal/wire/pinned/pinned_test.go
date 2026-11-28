@@ -81,7 +81,11 @@ func TestEveryPinReadsOrIsRefusedAsPrimaReadsIt(t *testing.T) {
 }
 
 func TestAPinExpiresPastItsExpiry(t *testing.T) {
-	for _, c := range load(t).PinExpiry {
+	cases := load(t).PinExpiry
+	if len(cases) < 6 {
+		t.Fatalf("%d cases", len(cases))
+	}
+	for _, c := range cases {
 		if got := (Pin{ExpiresAt: c.ExpiresAt}).Expired(c.Now); got != c.Expired {
 			t.Errorf("expiring at %d, at %d: %v", c.ExpiresAt, c.Now, got)
 		}

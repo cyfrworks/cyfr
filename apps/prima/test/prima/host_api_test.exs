@@ -456,12 +456,16 @@ defmodule Prima.HostAPITest do
     end
 
     test "every frame's body bytes are counted from its sealed length alone" do
+      assert length(@vectors["frame_body_bytes"]) >= 10
+
       for c <- @vectors["frame_body_bytes"] do
         assert WorkerAuth.frame_body_bytes(unhex(c["frame_hex"])) == c["bytes"], c["why"]
       end
     end
 
     test "an answer carries frames by its content type" do
+      assert length(@vectors["frames_content_types"]) >= 10
+
       for %{"content_types" => types, "frames" => frames} <- @vectors["frames_content_types"] do
         assert WorkerWire.frames_content_type?(types) == frames, inspect(types)
       end
@@ -476,6 +480,8 @@ defmodule Prima.HostAPITest do
     end
 
     test "every header name is ruled as its vector says" do
+      assert length(@vectors["header_rules"]) >= 25
+
       for c <- @vectors["header_rules"] do
         assert Prima.Network.framing_or_override_header?(c["name"]) == c["framing_or_override"],
                c["name"]
@@ -485,6 +491,8 @@ defmodule Prima.HostAPITest do
     end
 
     test "every Host header is written as its vector says" do
+      assert length(@vectors["host_headers"]) >= 10
+
       for %{"scheme" => scheme, "host" => host, "port" => port, "header" => header} <-
             @vectors["host_headers"] do
         assert Prima.Network.host_header(%URI{scheme: scheme, host: host, port: port}) == header
@@ -492,6 +500,8 @@ defmodule Prima.HostAPITest do
     end
 
     test "every attached request is posted with its vector's args, which read back to it" do
+      assert length(@vectors["attached_requests"]) >= 3
+
       for %{"request" => r, "args" => args} = c <- @vectors["attached_requests"] do
         request = %Prima.AttachedRequest{
           call_id: r["call_id"],
@@ -518,6 +528,8 @@ defmodule Prima.HostAPITest do
         host: "h",
         expires_at: 0
       }
+
+      assert length(@vectors["pin_expiry"]) >= 6 and length(@vectors["pin_requests"]) >= 15
 
       for %{"expires_at" => at, "now" => now, "expired" => expired} <- @vectors["pin_expiry"],
           do: assert(Prima.PinnedTarget.expired?(%{pin | expires_at: at}, now) == expired)

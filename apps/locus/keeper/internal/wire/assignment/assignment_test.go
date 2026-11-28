@@ -55,7 +55,7 @@ func load(t *testing.T) vectors {
 func TestEveryAssignmentReadsAsTheServiceReadsIt(t *testing.T) {
 	v := load(t)
 	sr := v.AssignmentServiceReads
-	if len(v.AssignmentReads.Invalid) < 50 || len(sr.Refused) < 12 || len(sr.Carried) < 8 {
+	if len(v.AssignmentReads.Invalid) < 50 || len(v.AssignmentReads.Valid) < 6 || len(sr.Refused) < 12 || len(sr.Read) < 3 || len(sr.Carried) < 8 {
 		t.Fatalf("%d invalid, %d refused, %d carried", len(v.AssignmentReads.Invalid), len(sr.Refused), len(sr.Carried))
 	}
 	reads := append(append([]tokenCase{{Why: "the signed token", Token: v.Assignment.Token}}, v.AssignmentReads.Valid...), sr.Read...)

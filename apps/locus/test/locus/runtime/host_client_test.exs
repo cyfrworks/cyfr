@@ -368,6 +368,8 @@ defmodule Locus.Runtime.HostClientTest do
        %{host: host, attempt: attempt} do
     json = Jason.encode!(Prima.WorkerWire.request_body(:renew, %{"attempts" => []}))
 
+    assert length(@host_api["answer_bounds"]) >= 6
+
     for c <- @host_api["answer_bounds"] do
       ScriptedHost.script(
         host,
