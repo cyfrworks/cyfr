@@ -61,12 +61,12 @@ func (s *server) giveWay(m *machine) {
 }
 
 // endIdleMachines ends every VM that has held no session for
-// machineIdleFor.
+// machineIdleFor, and no place names (endMachine).
 func (s *server) endIdleMachines() {
 	s.mu.Lock()
 	var idle []*machine
 	for _, m := range s.vms {
-		if m.vm != nil && !m.ending && len(m.sessions) == 0 && m.places == 0 && now().Sub(m.idleSince) >= machineIdleFor {
+		if m.vm != nil && !m.ending && len(m.sessions) == 0 && now().Sub(m.idleSince) >= machineIdleFor {
 			idle = append(idle, m)
 		}
 	}

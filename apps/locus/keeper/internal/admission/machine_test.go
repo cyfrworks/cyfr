@@ -300,3 +300,22 @@ func TestAnotherPersonIsNotAdmittedIntoALaterStartsRoom(t *testing.T) {
 		t.Fatalf("another person's start was admitted into the room of a start still under way: free was %d MiB before it", free(l, 35.1)/mib)
 	}
 }
+
+// A VM's reading that is lesser, or stale, never takes its charge under the
+// last one (R8 of 4742 fail 5): a VM read at 1,000 MiB and then at 200 MiB,
+// lesser, is charged 1,000.
+func TestAVMsLesserReadingStaysAtItsLastCharge(t *testing.T) {
+	l := New(8192*mib, false)
+	m := NewMachine("backends", "ath_a", testGuest, nil)
+	a := inVM(m, "p1")
+	spawned(t, l, a, 0, 50*mib)
+	l.Spawned(m, at(0))
+	l.Read(m, 1000*mib, false, at(20))
+	l.Read(m, 200*mib, true, at(21))
+	if got := l.charge(m, at(21)); got != 1000*mib {
+		t.Fatalf("a VM read lesser is charged %d MiB, want its last charge, 1000", got/mib)
+	}
+	if got := l.charge(m, at(30)); got != 1000*mib {
+		t.Fatalf("a VM whose reading is stale is charged %d MiB, want its last charge, 1000", got/mib)
+	}
+}

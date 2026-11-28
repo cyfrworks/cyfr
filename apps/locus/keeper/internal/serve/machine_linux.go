@@ -833,14 +833,8 @@ func (s *server) startInMachine(c *client, req *protocol.Request, at keptAt, rea
 	if code := s.guestStart(l, sp, req, at); code != "" {
 		return sp, code
 	}
-	// The VM's route is lost meanwhile only by the guard's end, which ends
-	// the VM; a session whose VM ended is refused here and retired.
-	s.mu.Lock()
-	ending := m.ending
-	s.mu.Unlock()
-	if ending {
-		return sp, protocol.CodeGuardUnavailable
-	}
+	// A VM that ends from here ends sp as one of its sessions
+	// (machineEnded): its exit, SIGKILL, follows its spawned.
 	if !s.hold(sp) {
 		return sp, protocol.CodeInternal
 	}
