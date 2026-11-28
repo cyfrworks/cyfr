@@ -32,9 +32,10 @@ defmodule Arca.PairedClients do
   ## Standing
 
   `active`, `suspended`, `revoked` or `removed`, and nothing leaves
-  `revoked`. `revoke/2` ends one row; `remove/2` ends a device's row as
-  `removed`, which keeps the device out here: its person's next hello by
-  that key is refused until `allow_again/2` makes the row `revoked`. A
+  `revoked`. `revoke/2` ends one row; `remove/2` ends an active device's
+  row as `removed`, which keeps the device out here: its person's next
+  hello by that key is refused (`enroll/3`) until `allow_again/4` makes
+  the row `revoked`. A
   standing transition revokes a person's rows, and every row of an
   athanor it archives, in its own transaction
   (`Arca.SecurityTransitions`), and leaves every `removed` row as it is,
@@ -173,17 +174,23 @@ defmodule Arca.PairedClients do
   def record(%Prima.Actor{}, _attrs), do: {:error, :no_athanor}
 
   @doc """
-  Enroll a protected device's client in the actor's athanor: `record/2`'s
-  row, its `attrs` the same, written under the person's lock, the first
-  of the standing order (`Arca.DirectoryHeads.lock_person!/1`). `also:`
-  runs after the insert, handed the row, and answers `{:ok, _}` or
-  `{:error, reason}`, which rolls the enrollment back: the certificate is
-  issued and recorded in the same transaction. Refused as `record/2` is.
+  Enroll a protected device's client in the actor's athanor, deciding
+  under the person's lock, the first of the standing order
+  (`Arca.DirectoryHeads.lock_person!/1`), from the person's rows of that
+  device key there: refused `:removed` while one is `removed`; the row
+  that is `active` when there is one; else `record/2`'s row, its `attrs`
+  the same. A person holds at most one row of a device key that is
+  active or removed in an athanor, which the store also refuses twice
+  (`:conflict`). `also:` runs after, handed the row, and answers `{:ok,
+  _}` or `{:error, reason}`, which rolls the enrollment back: the
+  certificate is issued and recorded in the same transaction. Refused as
+  `record/2` is otherwise.
   """
   @spec enroll(Prima.Actor.t(), map(), keyword()) ::
           {:ok, row()}
           | {:error,
              :no_athanor
+             | :removed
              | :conflict
              | :not_owner
              | :database_error
@@ -205,7 +212,7 @@ defmodule Arca.PairedClients do
         _locked = Arca.DirectoryHeads.lock_person!(user_id)
 
         with :ok <- fenced(changeset),
-             {:ok, row} <- inserted(changeset),
+             {:ok, row} <- enrolled(actor, changeset),
              {:ok, _also} <- also.(Arca.Data.project(row)) do
           {:ok, row}
         end
@@ -292,10 +299,11 @@ defmodule Arca.PairedClients do
   def revoke(%Prima.Actor{}, _id), do: {:error, :no_athanor}
 
   @doc """
-  Remove the device row `id` from the actor's athanor: the row becomes
-  `removed`, with what `revoke/2` retires, and the hashes it answers the
-  same way; removing a revoked or removed row answers it as it is, with
-  none. Only a device's row (`device_cert`) is removed; any other is
+  Remove the active device row `id` from the actor's athanor: the row
+  becomes `removed`, with what `revoke/2` retires, and every certificate,
+  confirmation and session that stands on another row of the same
+  person's device key there goes with it, its hashes answered the same
+  way. Any other row, a device's that is not active among them, is
   `:not_found`.
   """
   @spec remove(Prima.Actor.t(), String.t()) ::
@@ -304,37 +312,55 @@ defmodule Arca.PairedClients do
   def remove(%Prima.Actor{athanor_id: athanor_id} = actor, id)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(id) do
     locked(actor, id, "Arca.PairedClients.remove", fn
-      %PairedClient{source_kind: "device_cert", standing: standing} = row
-      when standing in ["revoked", "removed"] ->
-        {:ok, Map.put(row, :revoked_session_hashes, [])}
-
-      %PairedClient{source_kind: "device_cert"} = row ->
-        retire(row, "removed")
-
-      _not_a_device ->
-        {:error, :not_found}
+      %PairedClient{source_kind: "device_cert", standing: "active"} = row -> removed(actor, row)
+      _not_an_active_device -> {:error, :not_found}
     end)
   end
 
   def remove(%Prima.Actor{}, _id), do: {:error, :no_athanor}
 
   @doc """
-  Allow the removed row `id` in the actor's athanor again: it becomes
-  `revoked`, so its device's next hello pairs it anew. Its retirement
-  took everything that stood on it, and this restores none of it. A row
-  that is not `removed` is `:not_found`.
+  Allow the removed row `id` of the person `user_id` in the actor's
+  athanor again: it becomes `revoked`, so its device's next hello pairs it
+  anew. Its retirement took everything that stood on it, and this
+  restores none of it. It widens what may be admitted, so it runs under
+  the live ownership fence (`Arca.Repo.owned/2`), the person's lock first,
+  then the row's; `verify:` runs there, handed the row, and answers `:ok`
+  or `{:error, reason}`, which writes nothing: the caller consumes its
+  confirmation there, so the two commit or roll back together. A row
+  that is not the person's or not `removed` is `:not_found`; a member
+  that lost its slot is `:not_owner`, with nothing written.
   """
-  @spec allow_again(Prima.Actor.t(), String.t()) ::
-          {:ok, row()} | {:error, :not_found | :no_athanor | :database_error}
-  def allow_again(%Prima.Actor{athanor_id: athanor_id} = actor, id)
-      when is_binary(athanor_id) and athanor_id != "" and is_binary(id) do
-    locked(actor, id, "Arca.PairedClients.allow_again", fn
-      %PairedClient{standing: "removed"} = row -> readmitted(row)
-      _not_removed -> {:error, :not_found}
+  @spec allow_again(Prima.Actor.t(), String.t(), String.t(), keyword()) ::
+          {:ok, row()}
+          | {:error, :not_found | :no_athanor | :not_owner | :database_error | term()}
+  def allow_again(%Prima.Actor{athanor_id: athanor_id} = actor, user_id, id, opts)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(user_id) and is_binary(id) and
+             is_list(opts) do
+    verify = Keyword.fetch!(opts, :verify)
+
+    Arca.Repo.owned("Arca.PairedClients.allow_again", fn ->
+      _locked = Arca.DirectoryHeads.lock_person!(user_id)
+
+      PairedClient
+      |> QueryHelpers.where_tenant(actor)
+      |> where([p], p.id == ^id and p.user_id == ^user_id)
+      |> QueryHelpers.for_update()
+      |> Arca.Repo.one()
+      |> case do
+        %PairedClient{standing: "removed"} = row ->
+          case verify.(Arca.Data.project(row)) do
+            :ok -> readmitted(row)
+            {:error, reason} -> {:error, reason}
+          end
+
+        _not_removed ->
+          {:error, :not_found}
+      end
     end)
   end
 
-  def allow_again(%Prima.Actor{}, _id), do: {:error, :no_athanor}
+  def allow_again(%Prima.Actor{}, _user_id, _id, _opts), do: {:error, :no_athanor}
 
   @doc false
   @spec revoke_all(Ecto.Queryable.t()) :: [String.t()]
@@ -491,6 +517,7 @@ defmodule Arca.PairedClients do
     |> Ecto.Changeset.unique_constraint([:athanor_id, :source_kind, :source_id])
     |> Ecto.Changeset.unique_constraint(:id, name: :paired_clients_pkey)
     |> Ecto.Changeset.unique_constraint(:id, name: :paired_clients_id_index)
+    |> Ecto.Changeset.unique_constraint([:athanor_id, :user_id, :device_public_key])
   end
 
   # A device client carries the key it proved possession of; no other
@@ -606,7 +633,61 @@ defmodule Arca.PairedClients do
     |> Arca.Data.project()
   end
 
-  # arca:unscoped-ok the row was read and locked under the actor's athanor (`locked/4`).
+  # The person's rows of the device key `changeset` enrolls, in the
+  # actor's athanor, read under the person's lock its caller holds: a
+  # removed one refuses, the active one is the client, and with neither a
+  # new row is written.
+  defp enrolled(actor, changeset) do
+    case Ecto.Changeset.get_field(changeset, :source_kind) do
+      "device_cert" ->
+        standings =
+          actor
+          |> of_device_key(
+            Ecto.Changeset.get_field(changeset, :user_id),
+            Ecto.Changeset.get_field(changeset, :device_public_key)
+          )
+          |> Arca.Repo.all()
+
+        cond do
+          Enum.any?(standings, &(&1.standing == "removed")) -> {:error, :removed}
+          active = Enum.find(standings, &(&1.standing == "active")) -> {:ok, active}
+          true -> inserted(changeset)
+        end
+
+      _not_a_device ->
+        inserted(changeset)
+    end
+  end
+
+  # The device rows of the person `user_id` in the actor's athanor that
+  # hold the device key `key`, oldest first.
+  defp of_device_key(actor, user_id, key) do
+    PairedClient
+    |> QueryHelpers.where_tenant(actor)
+    |> where(
+      [p],
+      p.user_id == ^user_id and p.source_kind == "device_cert" and p.device_public_key == ^key
+    )
+    |> order_by([p], asc: p.inserted_at, asc: p.id)
+  end
+
+  # A device's removal ends what stands on every row of its key there, so
+  # no certificate of that key outlives it, whatever rows the key has.
+  defp removed(actor, %PairedClient{} = row) do
+    with {:ok, retired} <- retire(row, "removed") do
+      others =
+        actor
+        |> of_device_key(row.user_id, row.device_public_key)
+        |> where([p], p.id != ^row.id)
+        |> select([p], p.id)
+        |> Arca.Repo.all()
+
+      %{session_hashes: hashes} = retire_dependents!(others)
+      {:ok, Map.update!(retired, :revoked_session_hashes, &Enum.uniq(&1 ++ hashes))}
+    end
+  end
+
+  # arca:unscoped-ok the row was read and locked under the actor's athanor (`allow_again/4`).
   defp readmitted(%PairedClient{} = row) do
     row
     |> Ecto.Changeset.change(standing: "revoked", updated_at: Arca.ServerMetaStorage.now!())

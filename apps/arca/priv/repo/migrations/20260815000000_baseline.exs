@@ -540,6 +540,13 @@ defmodule Arca.Repo.Migrations.Baseline do
 
     # A credential is one client in its athanor.
     create unique_index(:paired_clients, [:athanor_id, :source_kind, :source_id])
+    # A person holds at most one row of a device key that is active or
+    # removed in an athanor: a second hello of the key finds that row, and
+    # a removed one keeps the key out until it is allowed again.
+    create unique_index(:paired_clients, [:athanor_id, :user_id, :device_public_key],
+             where: "source_kind = 'device_cert' AND standing IN ('active', 'removed')"
+           )
+
     create index(:paired_clients, [:user_id, :standing])
     create index(:paired_clients, [:athanor_id, :standing])
     create index(:paired_clients, [:kid], where: "kid IS NOT NULL")

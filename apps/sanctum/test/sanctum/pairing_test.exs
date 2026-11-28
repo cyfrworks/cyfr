@@ -145,7 +145,12 @@ defmodule Sanctum.PairingTest do
   # channel (`confirmation.request`, then `confirmation.confirm` with its
   # answer); then made again naming the record. The person keeps the
   # account their devices are keys of.
-  defp device_confirmed!(session_ctx, by, change) do
+  defp device_confirmed!(session_ctx, by, change),
+    do: change.(device_proven!(session_ctx, by, change))
+
+  # The session's context naming the record `change` opened, confirmed by
+  # the device `by` (`device_confirmed!/3`), the change not yet made again.
+  defp device_proven!(session_ctx, by, change) do
     {:error, {:confirmation_required, %{id: id}}} = change.(session_ctx)
     ref = Prima.Confirmation.ref(id)
     device_ctx = Devices.connected!(by)
@@ -166,7 +171,40 @@ defmodule Sanctum.PairingTest do
         "answer" => answer
       })
 
-    change.(%{session_ctx | confirmation_id: id})
+    %{session_ctx | confirmation_id: id}
+  end
+
+  defp record_state(ctx) do
+    {:ok, %{state: state}} =
+      Arca.PendingConfirmations.get(
+        Context.actor(ctx),
+        Prima.Confirmation.ref(ctx.confirmation_id)
+      )
+
+    state
+  end
+
+  # A statement `event` on `table` refused by the store, for this case's
+  # transaction alone.
+  defp fail_on!(table, event) do
+    name = "pairing_fail_#{table}_#{String.downcase(event)}"
+
+    if Arca.Test.Adapter.sqlite?() do
+      Arca.Repo.query!(
+        "CREATE TRIGGER #{name} BEFORE #{event} ON #{table} " <>
+          "BEGIN SELECT RAISE(ABORT, 'injected #{event} failure'); END"
+      )
+    else
+      Arca.Repo.query!(
+        "CREATE FUNCTION #{name}() RETURNS trigger LANGUAGE plpgsql AS " <>
+          "$$ BEGIN RAISE EXCEPTION 'injected #{event} failure'; END $$"
+      )
+
+      Arca.Repo.query!(
+        "CREATE TRIGGER #{name} BEFORE #{event} ON #{table} " <>
+          "FOR EACH ROW EXECUTE FUNCTION #{name}()"
+      )
+    end
   end
 
   # Whole rows of the person's clients, oldest first: which client, what
@@ -403,9 +441,21 @@ defmodule Sanctum.PairingTest do
     } do
       account = DirectoryServer.add_device!(dir.dir, account)
       other = Devices.admitted!(account, List.last(account.devices))
+      connected = Devices.connected!(device)
 
       assert {:ok, %{standing: "removed"}} =
                device_confirmed!(session_ctx, other, &Pairing.remove(&1, device.client_id))
+
+      # No certificate of the key is usable here any more.
+      {pub, _priv} = device.key
+
+      assert Arca.Repo.all(
+               from(c in DeviceCertificate,
+                 where: c.device_public_key == ^pub and c.state == "active"
+               )
+             ) == []
+
+      assert {:error, :revoked} = DeviceCerts.verify_request(device.certificate, connected)
 
       {client_id, request} = Devices.hello!(account, device.key)
 
@@ -429,6 +479,59 @@ defmodule Sanctum.PairingTest do
                {device.client_id, "device_cert", "revoked"},
                {other.client_id, "device_cert", "active"},
                {again.client_id, "device_cert", "active"}
+             ]
+    end
+
+    # A stale id of a row that no longer stands removes nothing and asks
+    # nothing: the operation promises a removed device.
+    test "a stale id, allowed again since, is refused and asks nothing", %{
+      account: account,
+      dir: dir,
+      device: device,
+      session_ctx: session_ctx
+    } do
+      account = DirectoryServer.add_device!(dir.dir, account)
+      other = Devices.admitted!(account, List.last(account.devices))
+      {:ok, _} = device_confirmed!(session_ctx, other, &Pairing.remove(&1, device.client_id))
+      {:ok, _} = device_confirmed!(session_ctx, other, &Pairing.allow_again(&1, device.client_id))
+      id = device.client_id
+
+      assert {:error, {:not_found, "paired client", ^id}} = Pairing.remove(session_ctx, id)
+
+      assert Arca.Repo.all(
+               from(c in "pending_confirmations",
+                 where: c.user_id == ^session_ctx.user_id and c.state == "pending",
+                 select: c.operation
+               )
+             ) == []
+
+      assert standings(device.user.id) == [
+               {device.client_id, "device_cert", "revoked"},
+               {other.client_id, "device_cert", "active"}
+             ]
+    end
+
+    # The confirmation is consumed in the write's own transaction: a write
+    # the store refuses spends nothing, and the device stays removed.
+    test "allowing it again, a write that rolls back leaves its confirmation unspent", %{
+      account: account,
+      dir: dir,
+      device: device,
+      session_ctx: session_ctx
+    } do
+      account = DirectoryServer.add_device!(dir.dir, account)
+      other = Devices.admitted!(account, List.last(account.devices))
+      {:ok, _} = device_confirmed!(session_ctx, other, &Pairing.remove(&1, device.client_id))
+
+      proven = device_proven!(session_ctx, other, &Pairing.allow_again(&1, device.client_id))
+      fail_on!("paired_clients", "UPDATE")
+
+      assert {:error, :unavailable} = Pairing.allow_again(proven, device.client_id)
+      assert record_state(proven) == "confirmed"
+
+      assert standings(device.user.id) == [
+               {device.client_id, "device_cert", "removed"},
+               {other.client_id, "device_cert", "active"}
              ]
     end
 

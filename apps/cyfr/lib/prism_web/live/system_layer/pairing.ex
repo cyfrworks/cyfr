@@ -91,10 +91,12 @@ defmodule PrismWeb.SystemLayer.Pairing do
           <p class="text-sm text-gray-300" data-test="pairing-none">No device is paired yet.</p>
         <% {:ok, clients} -> %>
           <p class="text-xs text-gray-300" data-test="pairing-account">
-            Removing a device from this CYFR keeps it out of this CYFR alone, until you allow
-            it again: its key stays on your account. Removing its key from your account ends
-            it everywhere: Keys on your account, in Settings, links to your account page,
-            where you do that.
+            Removing a device from this CYFR keeps that device's key out of this CYFR alone,
+            until you allow it again. It signs no one out of your account: the key stays on
+            it, and on that device your passkey still signs you in here. A device that was
+            offline is first told this CYFR no longer takes it, and at its next unlock that
+            it was removed here. Removing its key from your account ends it everywhere: Keys
+            on your account, in Settings, links to your account page, where you do that.
           </p>
           <ul class="divide-y divide-gray-800 text-sm" data-test="pairing-clients">
             <li
@@ -196,7 +198,9 @@ defmodule PrismWeb.SystemLayer.Pairing do
         "and signing in with it again brings it back."
 
   defp scope(%{standing: "removed"}),
-    do: "Removed from this CYFR: it cannot connect here until you allow it again."
+    do:
+      "Removed from this CYFR: its key cannot connect here until you allow it again. " <>
+        "Your passkey still signs you in here on that device."
 
   defp scope(_device), do: nil
 

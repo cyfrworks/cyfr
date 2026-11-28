@@ -6107,17 +6107,21 @@ defmodule PrismWeb.SystemLayerTest do
         |> Enum.to_list()
 
       assert String.trim(LazyHTML.text(scope)) ==
-               "Removed from this CYFR: it cannot connect here until you allow it again."
+               "Removed from this CYFR: its key cannot connect here until you allow it again. " <>
+                 "Your passkey still signs you in here on that device."
 
       assert doc
              |> LazyHTML.query(~s([data-test="pairing-account"]))
              |> LazyHTML.text()
              |> String.replace(~r/\s+/, " ")
              |> String.trim() ==
-               "Removing a device from this CYFR keeps it out of this CYFR alone, until you " <>
-                 "allow it again: its key stays on your account. Removing its key from your " <>
-                 "account ends it everywhere: Keys on your account, in Settings, links to your " <>
-                 "account page, where you do that."
+               "Removing a device from this CYFR keeps that device's key out of this CYFR " <>
+                 "alone, until you allow it again. It signs no one out of your account: the " <>
+                 "key stays on it, and on that device your passkey still signs you in here. A " <>
+                 "device that was offline is first told this CYFR no longer takes it, and at " <>
+                 "its next unlock that it was removed here. Removing its key from your account " <>
+                 "ends it everywhere: Keys on your account, in Settings, links to your account " <>
+                 "page, where you do that."
 
       refute html =~ "Revoke"
       PrismWeb.Vocabulary.refute_vocabulary(html)

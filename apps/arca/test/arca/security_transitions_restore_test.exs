@@ -190,6 +190,29 @@ defmodule Arca.SecurityTransitionsRestoreTest do
     id
   end
 
+  # A device of the person, paired as its hello writes one and removed
+  # through the store, as its person removes one.
+  defp removed_device!(athanor_id, user_id) do
+    id = Prima.UUID7.generate_id("pcl")
+
+    insert!(Schemas.PairedClient, %{
+      id: id,
+      athanor_id: athanor_id,
+      user_id: user_id,
+      source_kind: "device_cert",
+      source_id: id,
+      device_public_key: :crypto.strong_rand_bytes(32),
+      standing: "active",
+      inserted_at: now(),
+      updated_at: now()
+    })
+
+    {:ok, %{standing: "removed"}} =
+      Arca.PairedClients.remove(Prima.Actor.in_athanor(athanor_id), id)
+
+    id
+  end
+
   # A certificate this home issued the paired client `client_id`, in
   # `state`, unexpired.
   defp certificate!(athanor_id, user_id, client_id, state) do
@@ -527,7 +550,7 @@ defmodule Arca.SecurityTransitionsRestoreTest do
       webhook: webhook!(own.id, alice.id, profile),
       paired: paired,
       revoked_paired: paired!(own.id, alice.id, "revoked"),
-      removed_paired: paired!(own.id, alice.id, "removed"),
+      removed_paired: removed_device!(own.id, alice.id),
       certificate: certificate!(own.id, alice.id, paired, "active"),
       revoked_certificate: certificate!(own.id, alice.id, paired, "revoked"),
       passkey: passkey!(own.id, alice.id, "active"),

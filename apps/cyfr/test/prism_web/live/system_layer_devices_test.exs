@@ -155,7 +155,7 @@ defmodule PrismWeb.SystemLayerDevicesTest do
       assert has_element?(
                view,
                ~s([data-client="#{client_id}"] [data-test="pairing-scope"]),
-               "it cannot connect here until you allow it again"
+               "its key cannot connect here until you allow it again"
              )
 
       view |> element(control(client_id), "Allow again") |> render_click()
