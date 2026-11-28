@@ -218,10 +218,8 @@ func (s *server) withdrawRoute(id string, held **guard.Route) {
 			return
 		}
 	}
-	// A withdrawal answered leaves nothing to ask again.
 	s.mu.Lock()
 	*held = nil
-	delete(s.uncleared, id)
 	s.mu.Unlock()
 }
 

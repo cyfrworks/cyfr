@@ -212,3 +212,45 @@ func TestAStaleClearDoesNotTakeARebootedVMsRoute(t *testing.T) {
 		t.Fatalf("the sweep's retry of an earlier boot's clear was asked of the running VM's route id and let the keeper's hold on it go, %d sessions in the VM", sessions)
 	}
 }
+
+// A clear retried for a boot whose VM did not start is asked of that boot's
+// route alone: the person's VM booted next has a route id of its own, which
+// the retry never names, and its hold stays.
+func TestARetriedClearIsForItsOwnBootsRoute(t *testing.T) {
+	k := newVMKeeper(t)
+	k.disk(t, "ath_a", "vlt_a1", "vlt_a2")
+	k.place(t, "p-s1", "ath_a")
+	k.place(t, "p-s2", "ath_a")
+	m := k.machineOfAthanor("ath_a")
+	k.guest.mu.Lock()
+	k.guest.refuseBoot = errors.New("the VMM's space did not start")
+	k.guest.mu.Unlock()
+	k.guard.mu.Lock()
+	k.guard.refuseClears = 1
+	k.guard.mu.Unlock()
+	k.s.handleSpawn(k.c, k.spawnReq("s1", "p-s1", "vlt_a1", nil))
+	if got := k.next(t); got["type"] != "error" {
+		t.Fatalf("a start whose VM did not start answered %v", got)
+	}
+	k.guest.mu.Lock()
+	k.guest.refuseBoot = nil
+	k.guest.mu.Unlock()
+	k.s.handleSpawn(k.c, k.spawnReq("s2", "p-s2", "vlt_a2", nil))
+	k.expect(t, "spawned")
+	k.s.mu.Lock()
+	running := m.id
+	k.s.mu.Unlock()
+	asked := len(k.guard.taken())
+	k.s.retryClears()
+	for _, c := range k.guard.taken()[asked:] {
+		if c.op == guard.TypeClear && c.spawnID == running {
+			t.Fatalf("a clear retried for a boot that did not start was asked of the running VM's route %s", running)
+		}
+	}
+	k.s.mu.Lock()
+	held := m.route != nil
+	k.s.mu.Unlock()
+	if !held {
+		t.Fatal("a clear retried for a boot that did not start let the running VM's hold on its route go")
+	}
+}
