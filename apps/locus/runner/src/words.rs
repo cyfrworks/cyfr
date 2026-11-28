@@ -27,6 +27,13 @@ pub const NOT_FETCHED: &str = "Execution error: the component's bytes could not 
 /// A component whose bytes are not the digest's.
 pub const NOT_DIGEST: &str = "Execution error: the component's bytes do not match its digest";
 
+/// An attempt the runner stopped for its waiter or its service's cancel.
+pub const CANCELLED: &str = "Execution cancelled before it completed";
+
+/// What a waiter is answered of an attempt left open, or of a child the
+/// runner could not run to its close.
+pub const ENDED: &str = "Execution attempt ended before it closed";
+
 /// The uncertain end of a call never asked again.
 pub const UNCERTAIN: &str = "The call's answer was lost and its effect is unknown";
 
@@ -230,4 +237,60 @@ pub fn stream_too_large(max: u64) -> String {
 }
 pub fn stream_counted(size: u64, max: u64) -> String {
     format!("Stream response ({size} bytes) exceeds limit ({max} bytes)")
+}
+
+// ============================================================================
+// A formula's invoke (`cyfr:formula/invoke`)
+// ============================================================================
+
+/// A host call CYFR did not answer as one, or refused in no words of its own.
+pub const CALL_FAILED: &str = "The call failed.";
+
+/// A request past the envelope its node's `max_request_size` allows.
+pub const INVOKE_TOO_LARGE: &str =
+    "Request exceeds the consented max_request_size for this component.";
+
+pub const NO_TOOL_OR_ACTION: &str = "Request must include 'tool' (string) and 'action' (string)";
+pub const ARGS_NOT_MAP: &str = "args must be a map";
+pub const NO_TASK_IDS: &str = "Request must include 'task_ids' array";
+pub const EMPTY_TASK_IDS: &str = "task_ids array must be non-empty";
+pub const TASKS_EXCEEDED: &str = "Maximum concurrent tasks exceeded";
+pub const TASK_TIMED_OUT: &str = "Task timed out";
+pub const ALL_TIMED_OUT: &str = "All tasks timed out";
+pub const RUN_STREAM_SPAWNED: &str =
+    "run_stream cannot be spawned — spawn execution.run, or call run_stream directly";
+pub const UNEXPECTED_RESULT: &str = "Unexpected result";
+pub const UNEXPECTED_FORMAT: &str = "Unexpected result format";
+
+/// The sentence a task's end renders as, for a task the formula cancelled
+/// (`Prima.Refusal`'s `:cancelled`).
+pub const TASK_CANCELLED: &str = "The call was cancelled";
+
+/// A task id a formula's tracker does not hold, as `Prima.GuestError`
+/// renders a reason it does not know.
+pub const UNKNOWN_REASON: &str = "the call failed";
+
+pub fn no_reference(name: &str) -> String {
+    format!("{name} requires a 'reference'")
+}
+pub fn input_not_object(name: &str) -> String {
+    format!("{name} requires 'input' to be an object")
+}
+pub fn connection_not_name(name: &str) -> String {
+    format!("{name} requires 'connection' to be an account's name")
+}
+pub fn no_dispatch(name: &str) -> String {
+    format!("{name} has no host dispatch")
+}
+pub fn not_spawnable(name: &str) -> String {
+    format!("{name} cannot be spawned")
+}
+pub fn too_many_task_ids(most: u64) -> String {
+    format!("task_ids exceeds the concurrent-task limit ({most})")
+}
+pub fn unknown_task(task_id: &str) -> String {
+    format!("Unknown task_id: {task_id}")
+}
+pub fn already_completed(task_id: &str) -> String {
+    format!("Task {task_id} already completed")
 }
