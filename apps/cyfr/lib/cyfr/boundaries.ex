@@ -903,13 +903,16 @@ defmodule Cyfr.Boundaries do
         "apps/cyfr/lib/prism_web.ex"
       ],
       into: "Aqua",
-      allow: ~w(Aqua),
+      allow: ~w(Aqua Aqua.Choices),
       reason:
         "the console reads threads, attachments, notes, the virtual-tool " <>
           "catalogue and the reply stream through the assistant's root facade, and " <>
-          "follows a thread on `Cyfr.Bus`. " <>
-          "Boundary's exports are global, and `Aqua` exports `Supervisor` and `Text` beside " <>
-          "its root to every boundary that lists it, so no declaration can say it."
+          "follows a thread on `Cyfr.Bus`; the thread pane reads Aqua's question card " <>
+          "through `Aqua.Choices.read/2`, whose grammar and rule of which row gives " <>
+          "buttons are that module's alone, and presses one through `thread.send`. " <>
+          "Boundary's exports are global, and `Aqua` exports `Supervisor`, `Text` and " <>
+          "`Choices` beside its root to every boundary that lists it, so no declaration " <>
+          "can say it."
     },
     %{
       from: [
@@ -1980,7 +1983,6 @@ defmodule Cyfr.Boundaries do
     "Sanctum.Context" => [
       actor: 1,
       athanor!: 1,
-      authorize: 2,
       authorize: 3,
       build: 1,
       enter_guest: 1,
@@ -3149,9 +3151,6 @@ defmodule Cyfr.Boundaries do
     "apps/cyfr/test/cyfr/test_sandbox_test.exs" =>
       "the sandbox helper's own case: what it drains IS the pool, so the assertion " <>
         "has to name it.",
-    "apps/cyfr/test/opus/start_refusal_test.exs" =>
-      "the refusal a keeper gives is `Locus.Runtime.Keeper.Channel.refusal/1`'s shape, and this " <>
-        "case holds CYFR's rendering of it to that shape.",
     "apps/cyfr/test/cyfr/wit_abi_drift_test.exs" =>
       "names `Locus.Runtime.Engine` in the sentence its failure prints, so a reader is told " <>
         "which side of the ABI to look at."

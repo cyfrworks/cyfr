@@ -16,12 +16,16 @@ on:
     paths:
       - 'apps/locus/keeper/**'
       # The keeper-protocol, pool, browser-framing and brain-wire vectors
-      # the suite reproduces, and the residue canary, which the gofmt step
-      # checks with them.
+      # the suite reproduces, the worker protocol's (internal/wire), and the
+      # residue canary, which the gofmt step checks with them.
       - 'tests/fixtures/keeper_protocol.json'
       - 'tests/fixtures/locus_pool.json'
       - 'tests/fixtures/browser_frames.json'
       - 'tests/fixtures/brain_wire.json'
+      - 'tests/fixtures/wire_json.json'
+      - 'tests/fixtures/worker_api.json'
+      - 'tests/fixtures/worker_auth.json'
+      - 'tests/fixtures/runner_relay.json'
       - 'tests/fixtures/residue-canary.go'
       - '.github/workflows/keeper-ci.yml'
   pull_request:
@@ -31,6 +35,10 @@ on:
       - 'tests/fixtures/locus_pool.json'
       - 'tests/fixtures/browser_frames.json'
       - 'tests/fixtures/brain_wire.json'
+      - 'tests/fixtures/wire_json.json'
+      - 'tests/fixtures/worker_api.json'
+      - 'tests/fixtures/worker_auth.json'
+      - 'tests/fixtures/runner_relay.json'
       - 'tests/fixtures/residue-canary.go'
       - '.github/workflows/keeper-ci.yml'
   workflow_call:
@@ -46,7 +54,11 @@ jobs:
   keeper:
     name: vet + test (cyfr-locus)
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # A bound on a hung job, not on a slow one: the job passed in 9:04 to
+    # 9:20 on main, where cmd/cyfr-acp's race-built stand-ins alone take
+    # about four minutes, and a person's VM's tests, as this user and again
+    # as root, add about a minute more.
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: apps/locus/keeper
@@ -146,7 +158,7 @@ jobs:
             echo "::error::a real-kernel test skipped for want of root or of a memory bound"
             exit 1
           fi
-          for t in TestTheProbeProvesTheSpaceWhereTheHostAllowsIt TestARelaySpaceHasItsOwnNamespacesAndNoCapability TestARelaySpacesRelayIsCarriedOnceOpened TestARelaySpacesRelayIsSilentUnopened TestASpaceRunsInItsBoundedGroup TestTwoSessionsOfOneFolderSeeAndSignalOnlyTheirOwn TestASpacesProcessesEndWithItsCommand TestASignalReachesTheCommandInsideItsSpace TestNoThreadOfASpaceHoldsACapability TestTheProbeRefusesAHostThatCannotBuildASpacesFiles TestTheProfileDeniesWhatDockerMasks TestTheWaiterNeverSignalsAPidItReaped TestARoleRunsInItsOwnSpace TestARoleNamesOnlyItsOwn TestEachRolesGroupReadsItsLimits TestAPoolOfNoWorkStartsItsRolesAndRefusesEachSpawn TestARoleThatEndsStartsAgainAloneWhileTheOtherRunsOn TestARoleKilledStartsAgain TestTheGuardsLossUnderARoleEndsTheKeeper TestEachRolesRunFolderIsItsOwn TestAMachinesRouteJoinsItsTapToTheGuardsEnd TestAGuestsForgedSourcesCarryNothingOut TestAGuestsCardIsSetAsItsMachineRouteExpects TestADisksImageIsASparseExt4FileMadeOnce TestAFailedMakingLeavesNoImage TestAnImageDiskIsRecordedAndMadeWithNoFolder TestAPersonsMachineSpaceHasTheTunDeviceAtItsOwnPath TestAPersonsMachineSpaceHoldsNoIPv6 TestAMachinesRouteLetsOnlyAWholeIPv4PacketIn TestTheGuardsStartTriesAMachinesIngressFilter; do grep -q -- "--- PASS: $t " "$RUNNER_TEMP/keeper-kernel.log" || { echo "::error::the isolation test $t did not run and pass"; exit 1; }; done
+          for t in TestTheProbeProvesTheSpaceWhereTheHostAllowsIt TestARelaySpaceHasItsOwnNamespacesAndNoCapability TestARelaySpacesRelayIsCarriedOnceOpened TestARelaySpacesRelayIsSilentUnopened TestASpaceRunsInItsBoundedGroup TestTwoSessionsOfOneFolderSeeAndSignalOnlyTheirOwn TestASpacesProcessesEndWithItsCommand TestASignalReachesTheCommandInsideItsSpace TestNoThreadOfASpaceHoldsACapability TestTheProbeRefusesAHostThatCannotBuildASpacesFiles TestTheProfileDeniesWhatDockerMasks TestTheWaiterNeverSignalsAPidItReaped TestARoleRunsInItsOwnSpace TestARoleNamesOnlyItsOwn TestEachRolesGroupReadsItsLimits TestAPoolOfNoWorkStartsItsRolesAndRefusesEachSpawn TestARoleThatEndsStartsAgainAloneWhileTheOtherRunsOn TestARoleKilledStartsAgain TestTheGuardsLossUnderARoleEndsTheKeeper TestEachRolesRunFolderIsItsOwn TestAMachinesRouteJoinsItsTapToTheGuardsEnd TestAGuestsForgedSourcesCarryNothingOut TestAGuestsCardIsSetAsItsMachineRouteExpects TestADisksImageIsASparseExt4FileMadeOnce TestAFailedMakingLeavesNoImage TestAnImageDiskIsRecordedAndMadeWithNoFolder TestAPersonsMachineSpaceHasTheTunDeviceAtItsOwnPath TestAPersonsMachineSpaceHoldsNoIPv6 TestAMachinesRouteLetsOnlyAWholeIPv4PacketIn TestTheGuardsStartTriesAMachinesIngressFilter TestAMachinesRouteIsRecordedAndWithdrawnAsTheKernelListsIt TestAVMMsStageIsStartedAndReapedByItsKeepersStart; do grep -q -- "--- PASS: $t " "$RUNNER_TEMP/keeper-kernel.log" || { echo "::error::the isolation test $t did not run and pass"; exit 1; }; done
 
       - name: Static build
         run: CGO_ENABLED=0 go build -o "$RUNNER_TEMP/cyfr-locus" .

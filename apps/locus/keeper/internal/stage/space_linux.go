@@ -542,12 +542,9 @@ func buildFiles(spec Spec) error {
 	return nil
 }
 
-// bindContainerRoot gives the space the container's root: each directory
-// but those in keptOut bound read-only at its path, each symbolic link
-// made again. Its other entries are left out.
 // spaceProc mounts the space's own proc at Root/proc and, in a person's
-// machine's space, turns IPv6 off there (NoIPv6) before the space's
-// command, the VMM, starts.
+// machine's space, turns IPv6 off there (NoIPv6) and IPv4's reassembly
+// (noReassembly) before the space's command, the VMM, starts.
 func spaceProc(machine bool) error {
 	if err := mount("proc", Root+"/proc", "proc", unix.MS_NOSUID|unix.MS_NODEV|unix.MS_NOEXEC, ""); err != nil {
 		return err
@@ -555,7 +552,30 @@ func spaceProc(machine bool) error {
 	if !machine {
 		return nil
 	}
-	return NoIPv6(Root + "/proc")
+	if err := NoIPv6(Root + "/proc"); err != nil {
+		return err
+	}
+	return noReassembly(Root + "/proc")
+}
+
+// noReassembly gives a person's machine's namespace no memory to
+// reassemble IPv4 fragments in, so each is dropped: a guest's datagram to
+// an address of that namespace's own, its name sockets' or a group's, is
+// delivered there, and an unfinished one would be held for 30 seconds.
+// Only a whole IPv4 packet leaves through the guard's end too (package
+// guard's ingress). The low mark goes first, as the kernel holds the high
+// one above it. Each value is read back.
+func noReassembly(proc string) error {
+	for _, mark := range []string{"ipfrag_low_thresh", "ipfrag_high_thresh"} {
+		path := proc + "/sys/net/ipv4/" + mark
+		if err := os.WriteFile(path, []byte("0\n"), 0); err != nil {
+			return fmt.Errorf("turning IPv4 reassembly off in the machine's namespace: %w", err)
+		}
+		if v, err := os.ReadFile(path); err != nil || strings.TrimSpace(string(v)) != "0" {
+			return fmt.Errorf("%s reads %q, not 0 (%v)", path, strings.TrimSpace(string(v)), err)
+		}
+	}
+	return nil
 }
 
 // NoIPv6 turns IPv6 off on every link of the calling process's network
@@ -582,6 +602,9 @@ func NoIPv6(proc string) error {
 	return nil
 }
 
+// bindContainerRoot gives the space the container's root: each directory
+// but those in keptOut bound read-only at its path, each symbolic link
+// made again. Its other entries are left out.
 func bindContainerRoot() error {
 	entries, err := os.ReadDir("/")
 	if err != nil {

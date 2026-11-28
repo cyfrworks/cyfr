@@ -6,7 +6,9 @@ defmodule Aqua.Loop.FilesHandHostRootsTest do
   The assistant cannot rewrite its own definition through the files hand:
   a `files.write` to the soul's file, run end to end from a turn through
   the files catalyst and its guest storage door, is refused and leaves the
-  file as it was, while the same hand writes under `data/`.
+  file as it was, while the same hand writes under `data/`. A plan the
+  model writes as its prompt says lands under `data/aqua/plans/` at its
+  turn's own path.
 
   The loop, the gate, the files catalyst (run on the runtime) and its
   storage door are real; the model is scripted.
@@ -88,6 +90,41 @@ defmodule Aqua.Loop.FilesHandHostRootsTest do
     assert {:ok, "control"} = Arca.get(Sanctum.Context.actor(ctx), ["data", "control.md"])
   end
 
+  # The plan's path starts with the turn's own id, which the facts name, so
+  # two turns' plans of one short name land at two paths, each its own.
+  test "a plan written as the prompt says lands at its turn's own path, in two turns of one " <>
+         "short name",
+       %{ctx: ctx, thread: thread} do
+    first = accept!(ctx, thread, "plan the export")
+    script!(plan(first, "Plan one."))
+    assert :completed = run(ctx, first)
+    second = accept!(ctx, thread, "plan the export again")
+    :ok = ScriptedWorker.script(plan(second, "Plan two."))
+    assert :completed = run(ctx, second)
+
+    systems =
+      for %{input: %{"operation" => "chat", "params" => %{"system" => system}}} <-
+            ScriptedWorker.calls(),
+          do: system
+
+    for turn <- [first, second] do
+      assert [_ | _] = told = Enum.filter(systems, &(&1 =~ "This turn's id is `#{turn.id}`."))
+
+      for system <- told do
+        assert system =~
+                 "write the plan with `files.write` to " <>
+                   "`data/aqua/plans/<turn id>-<n>-<short-name>.md`"
+
+        refute system =~ "workbench"
+        refute system =~ "no file access"
+      end
+    end
+
+    actor = Sanctum.Context.actor(ctx)
+    assert {:ok, "Plan one."} = Arca.get(actor, plan_path(first))
+    assert {:ok, "Plan two."} = Arca.get(actor, plan_path(second))
+  end
+
   # ---------------------------------------------------------------------------
   # Helpers
   # ---------------------------------------------------------------------------
@@ -106,6 +143,19 @@ defmodule Aqua.Loop.FilesHandHostRootsTest do
 
     turn
   end
+
+  # The model writing its turn's first plan, named "export", as the prompt
+  # tells it, then asking whether to proceed.
+  defp plan(turn, text) do
+    path = Enum.join(plan_path(turn), "/")
+
+    [
+      calls([{"c1", "files", %{"action" => "write", "path" => path, "content" => text}}]),
+      reply("The plan is in #{path}. Shall I proceed?")
+    ]
+  end
+
+  defp plan_path(turn), do: ["data", "aqua", "plans", "#{turn.id}-1-export.md"]
 
   defp script!(items), do: start_supervised!({ScriptedWorker, ref: @model, script: items})
 

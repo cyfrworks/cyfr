@@ -288,7 +288,9 @@ defmodule Aqua.Runner do
   message id), `:client_id`, `:attachments` (refs), `:model`,
   `:agent` (a pick; an `@name` in the text wins), `:room` (the
   room the sender had open, `%{"athanor_id", "thread_id", ...}`),
-  `:agents` (the roster, read here when absent).
+  `:agents` (the roster, read here when absent), `:choice` (a press of a
+  question's choice, `%{"row", "index"}`: a turn of Aqua's whatever the
+  text names, its line the label as `Aqua.Choices.press/2` reads it).
 
   The crew's delivery consumer (`Aqua.Crew`) sends with `:sent_by` (the
   sender's name; `"person"` when absent), `:request` (the request row a
@@ -574,7 +576,9 @@ defmodule Aqua.Runner do
   defp handle_owned_call({:send, ctx, text, opts}, _from, state) do
     opts = Keyword.put(opts, :last, state.agent)
 
-    with {:ok, decision, text} <- Admission.check(ctx, state.athanor_id, state.thread, text, opts),
+    with {:ok, text, opts} <- chosen(ctx, state, text, opts),
+         {:ok, decision, text} <- Admission.check(ctx, state.athanor_id, state.thread, text, opts),
+         decision = if(Keyword.has_key?(opts, :choice), do: {:turn, @aqua}, else: decision),
          :ok <- crew_ready(ctx, decision, opts) do
       case decision do
         {:turn, name} -> admit_turn(state, ctx, name, text, opts)
@@ -686,6 +690,65 @@ defmodule Aqua.Runner do
   # ---------------------------------------------------------------------------
   # Admitting a turn
   # ---------------------------------------------------------------------------
+
+  # A press (`thread.send`'s `choice`) is the person's answer to Aqua,
+  # whatever its label says: the row it names is read again under the
+  # person's context, its line is the label as the server reads it, and
+  # its payload the press (`Aqua.Choices.press/2`); it lands only in a
+  # room, where the card is. A resend under the press's `client_id` is
+  # the same send only when it names the same row and index; any other
+  # send under that id, a press or not, is refused, as a different send
+  # under a taken id is (`Aqua.Tape.accept/3`), even when its words read
+  # alike.
+  defp chosen(ctx, state, text, opts) do
+    case Keyword.get(opts, :choice) do
+      nil ->
+        with :ok <- not_a_press(ctx, state, Keyword.get(opts, :client_id)),
+             do: {:ok, text, opts}
+
+      _choice when state.thread.kind not in ["daily", "workspace"] ->
+        {:error, :no_choice}
+
+      choice ->
+        with {:ok, pressed} <- pressed(ctx, state, choice, Keyword.get(opts, :client_id)) do
+          payload = Map.put(Keyword.get(opts, :payload, %{}), "choice", pressed)
+          {:ok, pressed["label"], Keyword.put(opts, :payload, payload)}
+        end
+    end
+  end
+
+  # A send that is no press under a press's client id is another send.
+  defp not_a_press(_ctx, _state, nil), do: :ok
+
+  defp not_a_press(ctx, state, client_id) do
+    case Tape.accepted(ctx, state.id, client_id) do
+      {:ok, %{message: row}} ->
+        if Aqua.Choices.pressed(row), do: {:error, :client_id_reused}, else: :ok
+
+      _not_taken ->
+        :ok
+    end
+  end
+
+  defp pressed(ctx, _state, choice, nil), do: Aqua.Choices.press(ctx, choice)
+
+  defp pressed(ctx, state, choice, client_id) do
+    case Tape.accepted(ctx, state.id, client_id) do
+      {:ok, %{message: row}} ->
+        with %{} = pressed <- Aqua.Choices.pressed(row),
+             true <- Map.take(pressed, ["row", "index"]) == Map.take(choice, ["row", "index"]) do
+          {:ok, pressed}
+        else
+          _other -> {:error, :client_id_reused}
+        end
+
+      {:error, :not_found} ->
+        Aqua.Choices.press(ctx, choice)
+
+      {:error, _} = refused ->
+        refused
+    end
+  end
 
   defp admit_turn(state, ctx, name, text, opts) do
     cond do

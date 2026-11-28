@@ -299,9 +299,16 @@ defmodule Aqua.SeatTest do
              seat_prompt() <>
                "\n\n---\n\n" <>
                Aqua.Reader.deliver(
-                 Aqua.Prompt.briefing(false, false, false),
+                 Aqua.Prompt.briefing(false, false, false, true),
                  Aqua.Reader.mark(room.id)
-               )
+               ) <>
+               "\n\n---\n\n## Choices as buttons\n\nWhen you ask the person to decide, you " <>
+               "may offer the choices as buttons: end that reply with a block and nothing after " <>
+               "it: a line of three backticks, `choices`, a space and this turn's id; the " <>
+               "question on one line, at most 200 characters; each choice on a line of its own " <>
+               "after `- `, one to eight, each different and at most 100 characters; optionally " <>
+               "a line `file: ` and the path of a file in Files the person should open first; " <>
+               "and a line of three backticks. Neither the question nor a choice holds « or »."
 
     refute opening =~ "## Crew member"
     refute params["system"] =~ "folder"
@@ -371,7 +378,7 @@ defmodule Aqua.SeatTest do
 
     assert opening ==
              Aqua.Reader.deliver(
-               Aqua.Prompt.crew_briefing(false, false, false),
+               Aqua.Prompt.crew_briefing(false, false, false, true),
                Aqua.Reader.mark(child.id)
              )
 

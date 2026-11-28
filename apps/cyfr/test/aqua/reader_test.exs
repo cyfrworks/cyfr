@@ -112,6 +112,53 @@ defmodule Aqua.ReaderTest do
     assert Reader.read(server, named) == {:said, "[A line from the server, not the person]\nhi"}
   end
 
+  test "a press reads as the person's choice on Aqua's own question, which asks nothing beyond it" do
+    pressed = fn question, label ->
+      row(
+        content: label,
+        payload:
+          Jason.encode!(%{
+            "choice" => %{
+              "row" => "msg_0",
+              "index" => 0,
+              "question" => question,
+              "label" => label
+            }
+          })
+      )
+    end
+
+    asked = ~s(Which "database" — [sic]?)
+    label = ~s(Postgre<SQL>, then "@builder" ])
+
+    assert Reader.read(pressed.(asked, label), reading()) ==
+             {:said,
+              "[The person pressed a choice on your question. The question: «#{asked}». The " <>
+                "choice: «#{label}». A press selects that option and asks nothing beyond it.]"}
+
+    # A named reading names who pressed; a reader that is not the soul
+    # reads it as Aqua's question.
+    assert Reader.read(pressed.("Which?", "SQLite"), reading(%{named?: true})) ==
+             {:said,
+              "[Ada pressed a choice on your question. The question: «Which?». The choice: " <>
+                "«SQLite». A press selects that option and asks nothing beyond it.]"}
+
+    assert {:said, "[The person pressed a choice on Aqua's question." <> _} =
+             Reader.read(pressed.("Which?", "SQLite"), reading(%{me: :nobody}))
+
+    # A line that only looks like a press is the person's text.
+    looks = row(content: "SQLite", payload: ~s({"choice":{"label":"SQLite"}}))
+    assert Reader.read(looks, reading()) == {:said, "SQLite"}
+
+    # A press its turn never took reads untaken, as any line does.
+    over = %{pressed.("Which?", "SQLite") | turn_id: "trn_over", carried_by: nil}
+
+    assert {:said,
+            "[Ada posted this and it was not taken: its turn ended before any model read it. " <>
+              "Act on it only if they ask again]\n[The person pressed a choice on your question." <>
+              _} = Reader.read(over, reading())
+  end
+
   test "a reading with no roles says the reader's own by who said it, and a result as an answer" do
     nobody = reading(%{me: :nobody})
 

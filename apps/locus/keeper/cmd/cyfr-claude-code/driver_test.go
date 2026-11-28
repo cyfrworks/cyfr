@@ -20,6 +20,7 @@ import (
 	"syscall"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/cyfr/locus/keeper/internal/brainwire"
 	"golang.org/x/sys/unix"
@@ -659,10 +660,8 @@ func TestTheHarnessesOwnToolRunsInItsBoxShownByNameOnly(t *testing.T) {
 	if fmt.Sprint(own) != "[Bash:start Bash:end]" {
 		t.Fatalf("an own tool is shown starting and ending by name: %v", own)
 	}
-	for _, words := range []string{"secret-of-the-folder", "FOLDER-CANARY"} {
-		if strings.Contains(s.output(), words) {
-			t.Fatalf("nothing of an own tool's input or result reaches the wire: %s", words)
-		}
+	if !strings.Contains(s.output(), `"detail":"cat secret-of-the-folder"`) || strings.Contains(s.output(), "FOLDER-CANARY") {
+		t.Fatalf("an own tool's start says what its input runs, and nothing of its result reaches the wire: %s", s.output())
 	}
 }
 
@@ -956,6 +955,59 @@ func TestASubagentsLinesAreNotTheReply(t *testing.T) {
 	}
 	if !reflect.DeepEqual(said, []string{"the main reply"}) || strings.Contains(s.output(), "SUBAGENT-WORDS") {
 		t.Fatalf("only the main session's reply is said: %q", said)
+	}
+}
+
+// Wire version 8's activity: each own tool's start and end carry one
+// call, its tool use's id, two commands whose results come in reverse
+// order each ending under its own; a start says its command, else the
+// file it acts on, else its input, cut between characters to a detail's
+// bound; the thinking is thought and
+// never said; and a subagent's lines, its reasoning, words and tool, emit
+// nothing while the Task that started it starts and ends.
+func TestClaudeCodesActivityIsItsCallsThoughtsAndOwnWords(t *testing.T) {
+	s := startDriver(t)
+	startFresh(s, map[string]any{})
+	work(s, "stp_work", []any{})
+	postText(s, "stp_post", "activity")
+	got := s.until("idle")
+	var seen []string
+	details := map[string]any{}
+	thought, said := "", ""
+	for _, e := range got {
+		switch e["t"] {
+		case "own":
+			seen = append(seen, fmt.Sprintf("%v:%v:%v", e["call"], e["name"], e["phase"]))
+			details[fmt.Sprintf("%v:%v", e["call"], e["phase"])] = e["detail"]
+		case "thought":
+			thought += e["delta"].(string)
+		case "said":
+			said += e["text"].(string)
+		case "text":
+			if strings.Contains(e["delta"].(string), "THINK") {
+				t.Fatalf("reasoning is never said: %v", e)
+			}
+		}
+	}
+	want := []string{"toolu_a:Bash:start", "toolu_b:Bash:start", "toolu_edit:Edit:start", "toolu_grep:Grep:start", "toolu_b:Bash:end",
+		"toolu_a:Bash:end", "toolu_edit:Edit:end", "toolu_grep:Grep:end", "toolu_task:Task:start", "toolu_task:Task:end"}
+	if !reflect.DeepEqual(seen, want) {
+		t.Fatalf("each own tool starts and ends under its tool use's id, the commands in the order they ended: %v", seen)
+	}
+	whole := `{"pattern":"` + strings.Repeat("€", 1000) + `"}`
+	grep, _ := details["toolu_grep:start"].(string)
+	if details["toolu_a:start"] != "echo A" || details["toolu_b:start"] != "echo B" || details["toolu_a:end"] != nil ||
+		details["toolu_edit:start"] != "big.txt" || len(grep) > brainwire.MaxDetailBytes || len(grep) < brainwire.MaxDetailBytes-3 ||
+		!utf8.ValidString(grep) || !strings.HasPrefix(whole, grep) {
+		t.Fatalf("a start says its command, else the file it acts on, else its input cut between characters to the bound, and an end nothing: %v", details)
+	}
+	if thought != "THINK-ONE THINK-TWO" || said != "The member said its own words." {
+		t.Fatalf("the thinking is thought, and the reply only the member's own words: %q %q", thought, said)
+	}
+	for _, canary := range []string{"CHILD-THOUGHT", "CHILD-WORDS", "CHILD-RAN", "CHILD-RESULT", "OUTPUT-CANARY", "toolu_child"} {
+		if strings.Contains(s.output(), canary) {
+			t.Fatalf("nothing of the subagent's lines, nor a tool's result, reaches the wire: %s", canary)
+		}
 	}
 }
 

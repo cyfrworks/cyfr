@@ -86,6 +86,21 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
 
   def handle_event("pick", _params, socket), do: {:noreply, close(socket)}
 
+  # Enter in the search field opens the first result for what the field
+  # holds, filtered again here since the debounced search may not have
+  # reached the palette yet; with no result it opens nothing.
+  def handle_event("pick_first", %{"value" => query}, socket) when is_binary(query) do
+    CyfrWeb.ContextGuard.guard(socket, fn socket ->
+      socket =
+        socket |> assign(:query, query) |> find_components() |> find_threads() |> refilter()
+
+      case socket.assigns.items do
+        [%{to: to} | _] -> handle_event("pick", %{"to" => to}, socket)
+        [] -> {:noreply, socket}
+      end
+    end)
+  end
+
   defp close(socket) do
     socket
     |> assign(:open, false)
@@ -338,13 +353,17 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
           "&tincture_name=#{URI.encode_www_form(t.name)}"
   end
 
+  # An app is listed by its name; two of one name, from two publishers,
+  # each by its publisher and name, so no two results read alike.
   defp tincture_items(ctx) do
     try do
-      Prism.TinctureRegistry.list_tinctures(ctx)
-      |> Enum.map(fn t ->
+      tinctures = Prism.TinctureRegistry.list_tinctures(ctx)
+      shared = tinctures |> Enum.frequencies_by(& &1.name) |> Map.filter(fn {_, n} -> n > 1 end)
+
+      Enum.map(tinctures, fn t ->
         %{
           kind: :tincture,
-          label: t.title || "#{t.publisher}.#{t.name}",
+          label: if(Map.has_key?(shared, t.name), do: "#{t.publisher}.#{t.name}", else: t.name),
           hint: if(Prism.Frames.canvas?(t), do: "desktop", else: "app"),
           to: tincture_path(t),
           icon: "palette",
@@ -375,9 +394,15 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
   defp filter_items(items, ""), do: items
   defp filter_items(items, nil), do: items
 
+  # What is typed matched; a row whose shown name holds it comes before one
+  # found only by its other words (an app's description), so the first
+  # result, the one Enter opens, is the one the person named.
   defp filter_items(items, query) do
     needle = String.downcase(query)
-    Enum.filter(items, fn item -> String.contains?(item.keywords, needle) end)
+
+    items
+    |> Enum.filter(fn item -> String.contains?(item.keywords, needle) end)
+    |> Enum.sort_by(fn item -> not String.contains?(String.downcase(item.label), needle) end)
   end
 
   # See `ExecutionsLive.short/1`: one truncation, in one unit.
@@ -418,9 +443,14 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
           phx-click-away="close"
           phx-target={@myself}
         >
-          <div class="border-b border-gray-800 px-4 py-3">
+          <form
+            class="border-b border-gray-800 px-4 py-3"
+            phx-submit="pick_first"
+            phx-target={@myself}
+          >
             <input
               type="text"
+              name="value"
               placeholder="Search pages, components, requests…  (Esc to close)"
               value={@query}
               phx-keyup="search"
@@ -428,7 +458,7 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
               phx-debounce="120"
               class="w-full bg-transparent text-sm text-white placeholder-gray-500 outline-none"
             />
-          </div>
+          </form>
 
           <ul class="max-h-[50vh] overflow-y-auto py-1">
             <li :if={@items == []} class="px-4 py-6 text-center text-sm text-gray-500">
@@ -455,7 +485,7 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
           </ul>
 
           <div class="flex items-center justify-between border-t border-gray-800 px-4 py-2 text-[11px] text-gray-500">
-            <span>↑ ↓ navigate</span>
+            <span>Enter opens the first</span>
             <span>⌘⇧K toggle</span>
           </div>
         </div>

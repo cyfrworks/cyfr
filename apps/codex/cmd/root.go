@@ -54,6 +54,23 @@ joined, or HTTPS off; the message says what to do);
 	// cobra so a prompt abort (prompt.ErrAborted) can exit 130 silently.
 	SilenceUsage:  true,
 	SilenceErrors: true,
+	// A command that reaches Docker, in a terminal older than the
+	// account's docker group, runs again through it (withDockerGroup);
+	// that run printed its own outcome, and its status is this one's.
+	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+		if !needsDocker(cmd) {
+			return nil
+		}
+		ctx := cmd.Context()
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		continued, err := withDockerGroup(ctx, cmd, args, cmd.OutOrStdout(), cmd.ErrOrStderr())
+		if err == nil && continued {
+			return handedOver{0}
+		}
+		return err
+	},
 }
 
 func init() {
@@ -63,6 +80,8 @@ func init() {
 	rootCmd.PersistentFlags().BoolVar(&flagNoInteractive, "no-interactive", false, "Disable interactive prompts")
 	rootCmd.PersistentFlags().StringVar(&flagToken, "token", "",
 		"The API key this invocation uses (cyfr_sk_…), made on CYFR's API Keys page; CYFR_TOKEN works too.")
+	// Its value is never said back to a person (continued).
+	_ = rootCmd.PersistentFlags().SetAnnotation("token", credentialFlag, []string{"true"})
 
 	rootCmd.AddGroup(
 		&cobra.Group{ID: "server", Title: "Server:"},
@@ -128,6 +147,16 @@ func Main() int {
 	// none of cyfr's commands.
 	if status, ok := appUpdateService(os.Args); ok {
 		return status
+	}
+	// A second run through the docker group takes its command from the
+	// environment (takeGroupRun), and no command started inherits it.
+	args, continued, err := takeGroupRun(os.Args[1:])
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "Error:", err)
+		return exitFailure
+	}
+	if continued {
+		rootCmd.SetArgs(args)
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	defer stop()

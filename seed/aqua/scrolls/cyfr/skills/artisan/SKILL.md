@@ -112,7 +112,7 @@ A canvas's own calls, and what `installed` tells it of each tincture:
 - A frame never raises itself: no verb places, sizes or raises a frame.
 - A frame never performs the person's own acts (a grant, a schedule, a feed binding, the layout, an operation that asks for their confirmation): `cyfr.request(operation, args)` asks the person in CYFR's own prompt, which shows what would run, and resolves with their decision (`approved`, `refused` or `cancelled`); the tincture guide's Requests section says what it answers.
 - A refusal rejects with a `CyfrError` whose `code` is its class (`forbidden`, `rate_limited`, `consent_required`, `unauthenticated`, …).
-- A public tincture's page at its address calls the same SDK with no credential, under its public profile.
+- A public tincture's page at its address calls the same SDK with no credential, under its public profile. No page in Prism, the CYFR app or the command line makes an app public yet.
 
 The SDK talks only to these routes, with the frame's credential as a bearer, and over its stream connection, the credential in each subscription:
 

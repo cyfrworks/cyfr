@@ -59,6 +59,7 @@ function reset({relaunch = false} = {}) {
   world.unclearable = false
   world.windows = []
   world.frames = []
+  world.keyboard = []
   world.log = []
   world.holdPages = false
   world.heldPages = []
@@ -147,6 +148,12 @@ class Contents extends EventEmitter {
     })
   }
   setWindowOpenHandler(h) { this.opens = h }
+  // The keyboard given to this page, in world.keyboard by its owner: the
+  // page has it, as the engine says (its focus event).
+  focus() {
+    world.keyboard.push(this.owner.id)
+    this.emit("focus")
+  }
   // A view's page closed: gone from its window at once, destroyed once
   // the engine says so (end).
   close() {
@@ -257,6 +264,13 @@ class BaseWindow extends EventEmitter {
   maximize() { this.maximized = true }
   restore() { this.minimized = false }
   focus() { this.focused++ }
+  // Whether the compositor has activated it, which `activate` does as the
+  // compositor does it, in a turn of its own.
+  isFocused() { return this.active === true }
+  activate() {
+    this.active = true
+    this.emit("focus")
+  }
 }
 
 function fromPartition(partition) {
@@ -2672,6 +2686,112 @@ test("a lock on the screen hides the page at once and shows the chooser again, i
   const after = content()
   assert.equal(after.webContents.url, SCREEN_CHOOSER)
   assert.notEqual(after.webContents.session, session)
+})
+
+// A lock on the box's screen opens the lock page in a fresh window, and
+// the chooser's move on to the device's page there can commit before the
+// compositor activates that window: the keyboard goes to the content's
+// page as the window is activated, whatever committed first, and never to
+// the rail.
+test("on the box's screen the page a lock shows takes the keyboard once its window is activated, and the rail never does", ON_LINUX, async () => {
+  await screenStarted()
+  assert.ok(await opens())
+  await give(content())
+  child.say({type: "locked", home: HOME, account: ACCOUNT})
+  await settled()
+  await settled()
+  const shown = content()
+  assert.equal(shown.webContents.url, SCREEN_CHOOSER)
+  world.keyboard = []
+  frame().activate()
+  assert.deepEqual(world.keyboard, [shown.id], "the page shown, as the window is activated")
+  // The chooser moves on to the device's page in the same view, which
+  // keeps the keyboard; the window activated again gives it the page again.
+  frame().activate()
+  assert.deepEqual(world.keyboard, [shown.id, shown.id])
+  assert.ok(!world.keyboard.includes(rail().id), "never the rail")
+})
+
+// A person's press in the rail, as the engine tells it: the rail's focus
+// first, then the press (Electron's input-event).
+function railPressed() {
+  rail().webContents.emit("focus")
+  rail().webContents.emit("input-event", {}, {type: "mouseDown"})
+}
+// The timers of this turn, run.
+const turned = () => new Promise((resolve) => setTimeout(resolve, 5))
+
+// A rail pressed before a lock holds the keyboard of the window the lock
+// closes alone: the fresh window's keyboard is its lock page's.
+test("on the box's screen a rail pressed before a lock leaves the fresh window's keyboard to the lock page", ON_LINUX, async () => {
+  await screenStarted()
+  assert.ok(await opens())
+  await give(content())
+  frame().activate()
+  railPressed()
+  await turned()
+  child.say({type: "locked", home: HOME, account: ACCOUNT})
+  await settled()
+  await settled()
+  const shown = content()
+  world.keyboard = []
+  frame().activate()
+  assert.deepEqual(world.keyboard, [shown.id], "the lock page, as the fresh window is activated")
+})
+
+// A rail that takes the keyboard by itself, its page loading after the
+// content's, gives it back to the page: it is no holder of the keyboard.
+test("a rail that takes the keyboard with no press gives it back to the page, and is no holder of it", ON_LINUX, async () => {
+  await screenStarted()
+  const shown = content()
+  frame().activate()
+  world.keyboard = []
+  rail().webContents.emit("focus")
+  await turned()
+  assert.deepEqual(world.keyboard, [shown.id], "given back to the page")
+  world.keyboard = []
+  frame().activate()
+  assert.deepEqual(world.keyboard, [shown.id], "the page, at the next activation")
+})
+
+// Only the content shown is recorded as the holder: a page already closed
+// that tells its focus late changes nothing.
+test("a closed page's focus told late does not take the holder from the rail", async () => {
+  await started(true)
+  const before = content()
+  frame().activate()
+  // The CYFR's page replaces the chooser's in the same window.
+  assert.ok(await opens())
+  assert.notEqual(content().id, before.id)
+  assert.ok(before.destroyed, "the chooser's page is closed")
+  railPressed()
+  await turned()
+  before.webContents.emit("focus")
+  world.keyboard = []
+  frame().activate()
+  assert.deepEqual(world.keyboard, [rail().id], "the rail, which the person pressed last")
+})
+
+// A window returned to gives the keyboard back to the part that last held
+// it: a person on a row of the rail keeps their place, and one in the page
+// stays there.
+test("a window returned to gives the keyboard back to the rail or the page, whichever last held it", async () => {
+  await started(true)
+  assert.ok(await opens())
+  const page = content()
+  frame().activate()
+  assert.deepEqual(world.keyboard, [page.id], "a fresh window: the page")
+  // The person presses a row of the rail, which takes the keyboard, then
+  // switches away and back.
+  railPressed()
+  await turned()
+  world.keyboard = []
+  frame().activate()
+  assert.deepEqual(world.keyboard, [rail().id], "the rail, last held")
+  page.webContents.emit("focus")
+  world.keyboard = []
+  frame().activate()
+  assert.deepEqual(world.keyboard, [page.id], "the page, last held")
 })
 
 test("on the screen a lost page locks, a failed load shows the chooser, and cyfr's end ends the app with no message", ON_LINUX, async () => {

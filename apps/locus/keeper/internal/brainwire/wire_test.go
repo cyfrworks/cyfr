@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 type wireVectors struct {
@@ -19,6 +20,7 @@ type wireVectors struct {
 	MaxLineBytes int                 `json:"max_line_bytes"`
 	MaxIDBytes   int                 `json:"max_id_bytes"`
 	MaxList      int                 `json:"max_list"`
+	MaxDetail    int                 `json:"max_detail_bytes"`
 	Config       map[string]string   `json:"config"`
 	Counts       []string            `json:"counts"`
 	Accountings  []string            `json:"accountings"`
@@ -97,7 +99,7 @@ func loadWireVectors(t *testing.T) wireVectors {
 }
 
 var typeNames = map[fieldType]string{
-	tID: "id", tString: "string", tCount: "count", tBoolean: "boolean", tObject: "object", tIDs: "ids",
+	tID: "id", tString: "string", tDetail: "detail", tCount: "count", tBoolean: "boolean", tObject: "object", tIDs: "ids",
 	tStrings: "strings", tContent: "content", tTools: "tools", tConfig: "config", tCounts: "counts",
 	tModels: "models", tChoices: "choices", tModelCounts: "model_counts", tPhase: "phase", tErrorType: "error_type",
 	tAccounting: "accounting", tStop: "stop", tAccount: "account", tSignedIn: "signed_in", tSignedOut: "signed_out", tWhy: "why",
@@ -123,8 +125,9 @@ func sorted(s []string) []string {
 
 func TestTheWiresBoundsAndVocabulariesAreTheVectors(t *testing.T) {
 	v := loadWireVectors(t)
-	if v.Version != Version || v.MaxLineBytes != MaxLineBytes || v.MaxIDBytes != MaxIDBytes || v.MaxList != MaxList {
-		t.Fatalf("the vectors' version and bounds are %d, %d, %d, %d", v.Version, v.MaxLineBytes, v.MaxIDBytes, v.MaxList)
+	if v.Version != Version || v.MaxLineBytes != MaxLineBytes || v.MaxIDBytes != MaxIDBytes || v.MaxList != MaxList ||
+		v.MaxDetail != MaxDetailBytes {
+		t.Fatalf("the vectors' version and bounds are %d, %d, %d, %d, %d", v.Version, v.MaxLineBytes, v.MaxIDBytes, v.MaxList, v.MaxDetail)
 	}
 	config := map[string]string{}
 	for name, ft := range configTypes {
@@ -286,5 +289,65 @@ func TestEachToolAndListTheVectorsMeasureIsCarriedAsTheySay(t *testing.T) {
 		if got, err := ToolsBytes(tools); err != nil || got != l.ToolsBytes || (got <= MaxToolsBytes) != l.Fits {
 			t.Fatalf("%s take %d bytes, the vectors say %d, fitting %v (%v)", l.Name, got, l.ToolsBytes, l.Fits, err)
 		}
+	}
+}
+
+func TestADetailIsCutBetweenCharactersToItsBound(t *testing.T) {
+	short := "ls -l notes"
+	if Detail(short) != short {
+		t.Fatalf("a detail within its bound is the text: %q", Detail(short))
+	}
+	// 2047 bytes of x and a character of three: the bound falls inside it.
+	text := strings.Repeat("x", MaxDetailBytes-1) + "€" + "tail"
+	got := Detail(text)
+	if got != strings.Repeat("x", MaxDetailBytes-1) || !utf8.ValidString(got) {
+		t.Fatalf("a detail past its bound is cut before the character the bound falls in: %d bytes", len(got))
+	}
+	at := strings.Repeat("é", MaxDetailBytes/2)
+	if Detail(at) != at || Detail(at+"x") != at {
+		t.Fatal("a detail of two-byte characters at its bound is whole, and one byte past it is cut back to it")
+	}
+	if !utf8.ValidString(Detail("a\xffb")) {
+		t.Fatal("a detail is UTF-8")
+	}
+	line, err := EncodeEvent(NewEvent("own").Set("gen", 0).Set("call", "c").Set("name", "edit").Set("phase", "end").Set("detail", Detail(text+text)))
+	if err != nil || len(line) == 0 {
+		t.Fatalf("a cut detail reads: %v", err)
+	}
+}
+
+func TestACallIsTheHarnesssIdOrOneDerivedFromIt(t *testing.T) {
+	cursor := "call-0734ac1a-0\nfc_ee1556ff_0"
+	if CallID(cursor) != cursor {
+		t.Fatal("an id the wire takes, a newline in it, is carried as written")
+	}
+	long := strings.Repeat("a", MaxIDBytes+1)
+	if got := CallID(long); !IsID(got) || got != CallID(long) || got == CallID(long+"b") {
+		t.Fatalf("an id past the wire's bound is carried as one derived from it, the same for the same id: %q", got)
+	}
+}
+
+func TestADetailSaysWhatARunDoesOrDid(t *testing.T) {
+	if got := InputDetail(json.RawMessage(`{"CommandLine":"ls -l","Path":"/w","toolSummary":"List"}`), "CommandLine", "Path"); got != "ls -l" {
+		t.Fatalf("an input naming a command where the program puts one is its command: %q", got)
+	}
+	if got := InputDetail(json.RawMessage(`{"Path":"/w/a.txt","Target":"x"}`), "CommandLine", "Path"); got != "/w/a.txt" {
+		t.Fatalf("else it is what the run acts on: %q", got)
+	}
+	if got := InputDetail(json.RawMessage(`{ "pattern": "x" }`), "CommandLine", "Path"); got != `{"pattern":"x"}` {
+		t.Fatalf("any other input is its compact JSON: %q", got)
+	}
+	if InputDetail(json.RawMessage(`{}`), "command", "") != "" || InputDetail(nil, "command", "") != "" || InputDetail(json.RawMessage(`"x"`), "command", "") != "" {
+		t.Fatal("an empty input, or none, is no detail")
+	}
+	got := ChangeDetail([]Change{{"/w/a.txt", "alpha\nbeta\ngamma\n", "alpha\nBETA\ngamma\n"}, {"/w/new.txt", "", "hello\n"}})
+	if got != "/w/a.txt\n-beta\n+BETA\n/w/new.txt\n+hello" {
+		t.Fatalf("a change is its path and the lines that differ: %q", got)
+	}
+	if got := ChangeDetail([]Change{{"/w/n.txt", "", "x"}}); got != "/w/n.txt\n+x" {
+		t.Fatalf("a new file's change is its lines, all new: %q", got)
+	}
+	if got := ChangeDetail([]Change{{"/w/big.txt", "", strings.Repeat("€", MaxDetailBytes)}}); len(got) > MaxDetailBytes || !utf8.ValidString(got) {
+		t.Fatalf("a change past the bound is cut between characters: %d bytes", len(got))
 	}
 }

@@ -126,6 +126,13 @@ defmodule Prima.WorkerAPI do
     "guard_unavailable" => "Nothing ran: its network access could not be confirmed.",
     "hosts_unresolved" => "Nothing ran: a host it reaches did not resolve to an address."
   }
+  # `memory_unavailable` is the keeper's word for any bound it cannot
+  # enforce, the memory's or the CPU's.
+  @memory_unavailable "cyfr-locus cannot bound a runner's memory and CPU in this container, " <>
+                        "so it starts none: start the locus service with the security " <>
+                        "option writable-cgroups=true (Docker Engine 28 or later on a cgroup v2 " <>
+                        "host whose memory and cpu controllers reach the container)"
+
   # 2^53 − 1: the largest integer every JSON reader holds exactly.
   @max_integer 9_007_199_254_740_991
 
@@ -243,6 +250,29 @@ defmodule Prima.WorkerAPI do
   """
   @spec runner_refusal(term()) :: String.t() | nil
   def runner_refusal(code), do: Map.get(@runner_refusals, code)
+
+  @doc """
+  The `t:refusal/0` a worker service holds for the keeper's refusal of a
+  runner's spawn, by what the keeper refused it with, which a start refused
+  for it answers (`c:start/3`) and a status carries: `:memory_unavailable`
+  names what the deployment lacks; `{:no_memory, held}`, a place refused for
+  room, keeps the keeper's `held`; any other code of a code's shape is
+  named as it was sent, and anything else is `refused`. The vectors are
+  `tests/fixtures/worker_api.json`'s `keeper_refusals`.
+  """
+  @spec keeper_refusal(term()) :: refusal()
+  def keeper_refusal(:memory_unavailable),
+    do: %{reason: "memory_unavailable", message: @memory_unavailable}
+
+  def keeper_refusal({:no_memory, held}), do: Map.put(keeper_refusal("no_memory"), :held, held)
+
+  def keeper_refusal(code) when is_binary(code) do
+    reason = if Regex.match?(@reason, code), do: code, else: "refused"
+    %{reason: reason, message: "cyfr-locus refused to start a runner (#{reason})"}
+  end
+
+  def keeper_refusal(_reason),
+    do: %{reason: "refused", message: "cyfr-locus refused to start a runner"}
 
   @doc "Whether `code` is a refusal's code a report may carry: a code's shape, of the list or not."
   @spec refusal_code?(term()) :: boolean()

@@ -101,12 +101,18 @@ defmodule Sanctum.Providers.TinctureVisibility do
     end
   end
 
-  # The public profile's id when there is one, and the way to publish when
-  # the tincture has no profile at all.
+  # The public profile's id when there is one, and what comes first when
+  # the tincture has no profile at all: a grant, whose owner profile a
+  # public one is published from.
   defp visibility(result, %{id: id}, _profiles), do: Map.put(result, :public_profile_id, id)
 
   defp visibility(result, nil, []),
-    do: Map.put(result, :note, "No profiles — publish with profile.publish")
+    do:
+      Map.put(
+        result,
+        :note,
+        "No profiles — grant it first; a public profile is published from its owner profile"
+      )
 
   defp visibility(result, nil, _profiles), do: result
 

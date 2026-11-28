@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cyfr/locus/keeper/internal/home"
 	"github.com/cyfr/locus/keeper/internal/pool"
 	"github.com/cyfr/locus/keeper/internal/protocol"
 )
@@ -308,11 +309,12 @@ func TestMachineSpecValidation(t *testing.T) {
 	machine := Spec{
 		UID: 30201, GID: 993, User: "locus-machine",
 		HomeRoot: "/run/locus/machines", Home: "/run/locus/machines/30201-0123456789abcdef0123456789abcdef",
-		Argv:    []string{"/usr/lib/cyfr/guest/firecracker", "--api-sock", "/run/locus/machines/30201-0123456789abcdef0123456789abcdef/api.sock"},
-		Limits:  protocol.Limits{Nofile: 256, Nproc: 64, Fsize: 1 << 20},
-		Reach:   pool.ReachRelay,
-		Cgroup:  "/keeper-30201",
-		Machine: "/var/lib/locus/guest/" + strings.Repeat("a", 64) + ".sqfs",
+		Argv:     []string{"/usr/lib/cyfr/guest/firecracker", "--api-sock", "/run/locus/machines/30201-0123456789abcdef0123456789abcdef/api.sock"},
+		Limits:   protocol.Limits{Nofile: 256, Nproc: 64, Fsize: 1 << 20},
+		Reach:    pool.ReachRelay,
+		Cgroup:   "/keeper-30201",
+		Machine:  "/var/lib/locus/guest/" + strings.Repeat("a", 64) + ".sqfs",
+		KeptRoot: "/var/lib/locus/kept",
 	}
 	if err := machine.Validate(); err != nil {
 		t.Fatal(err)
@@ -326,6 +328,7 @@ func TestMachineSpecValidation(t *testing.T) {
 		"a kept home":              func(s *Spec) { s.Kept = true },
 		"root's group":             func(s *Spec) { s.GID = 0 },
 		"another uid's folder":     func(s *Spec) { s.UID, s.Cgroup = 30202, "/keeper-30202" },
+		"no kept root to cover":    func(s *Spec) { s.KeptRoot = "" },
 		"a disk with no route": func(s *Spec) {
 			s.Disk, s.KeptRoot = "/var/lib/locus/kept/"+strings.Repeat("b", 64)+".img", "/var/lib/locus/kept"
 		},
@@ -344,6 +347,18 @@ func TestMachineSpecValidation(t *testing.T) {
 	person.Disk = "/var/lib/locus/kept/" + strings.Repeat("b", 64) + ".img"
 	if err := person.Validate(); err != nil {
 		t.Fatal(err)
+	}
+	// A person's VMM writes its disk's image to the image's own size, and
+	// no space without a disk may write as far.
+	written := person
+	written.Limits.Fsize = home.ImageBytes
+	if err := written.Validate(); err != nil {
+		t.Fatalf("a person's VMM writing its image: %v", err)
+	}
+	diskless := machine
+	diskless.Limits.Fsize = home.ImageBytes
+	if err := diskless.Validate(); err == nil {
+		t.Fatal("a machine with no disk may write files of an image's size")
 	}
 	routedNoDisk := person
 	routedNoDisk.Disk = ""

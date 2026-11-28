@@ -72,7 +72,32 @@ OWNER = owner_of("brain-openai-codex")
 HOME = "mcp_brain-openai-codex"
 FAKE = "fake-openai-codex.mjs"
 PROGRAM = {"name": "brain", "command": f"cyfr-codex node /probe/{FAKE}", "env": {}, "home": "kept", "packs": True}
-CANARIES = ("FAKE-STDERR-CANARY", "FAKE-FOLDER-CANARY", "FAKE-ACCOUNT-CANARY", "auth.json")
+CANARIES = ("FAKE-STDERR-CANARY", "FAKE-FOLDER-CANARY", "FAKE-ACCOUNT-CANARY")
+# A tool row shows its command and its diff, so the name of a credentials
+# file may appear as an own start's detail and nowhere else; its contents
+# never. The fake's own command names the
+# sign-in file (fake-openai-codex.mjs), so the name is held to that one place
+# (beside_start_detail) and its contents stay a canary above.
+SIGNIN_NAME = "auth.json"
+SIGNIN_TOOL = "commandExecution"
+
+
+def beside_start_detail(lines, name, tool):
+    """The lines of the driver's that carry `name` anywhere but in the detail of an own start of `tool`."""
+    wrong = []
+    for line in lines:
+        if name not in line:
+            continue
+        try:
+            event = json.loads(line)
+        except ValueError:
+            wrong.append(line)
+            continue
+        rest = {member: value for member, value in event.items() if member != "detail"}
+        if not (event.get("t") == "own" and event.get("phase") == "start" and event.get("name") == tool
+                and name in str(event.get("detail", "")) and name not in json.dumps(rest)):
+            wrong.append(line)
+    return wrong
 FILES = {
     "name": "files",
     "description": "Read the athanor's files",
@@ -351,6 +376,10 @@ def main():
                "the harness kept its folder's canaries, in its sign-in and its snapshot (a positive control)")
         for canary in CANARIES:
             expect(not any(canary in line for line in seen), f"no line of the driver's carries {canary}")
+        expect(any(SIGNIN_NAME in line for line in seen),
+               f"the harness's own command names {SIGNIN_NAME} on the wire (a positive control for the check below)")
+        wrong = beside_start_detail(seen, SIGNIN_NAME, SIGNIN_TOOL)
+        expect(not wrong, f"{SIGNIN_NAME} is on the wire only as the detail of an own start of {SIGNIN_TOOL}", wrong)
 
         # ————— on a terminal the harness runs unchanged —————
         status, opened = c.open(OWNER, PROGRAM["name"], key="brain-terminal", mode="terminal", argv=[], home_id=HOME,

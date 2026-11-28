@@ -35,8 +35,9 @@ func init() {
 }
 
 var restoreCmd = &cobra.Command{
-	Use:   "restore <snapshot>",
-	Short: "Put a snapshot from backups/ back with the whole cluster stopped, and declare the restore",
+	Use:         "restore <snapshot>",
+	Annotations: map[string]string{dockerAnnotation: "yes"},
+	Short:       "Put a snapshot from backups/ back with the whole cluster stopped, and declare the restore",
 	Long: `Put back a snapshot 'cyfr update' took (backups/<timestamp>/) and declare the restore, so the next start suspends every credential the backup carried until its owner re-enables it.
 
 1. Read the snapshot: snapshot.json must be there and say complete, its parts must be exactly what the directory holds, and its .env must be one cyfr can start CYFR from (no COMPOSE_* setting, and access settings that agree); an incomplete snapshot, a layout cyfr restore cannot invert or a .env cyfr refuses refuses before anything stops. So does a project directory or scaffold directory this account cannot write, and a scaffold file whose path leads outside the project.

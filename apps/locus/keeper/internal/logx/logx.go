@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -63,4 +64,18 @@ func (l *Logger) write(level, format string, args ...any) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	_, _ = l.out.Write(line)
+}
+
+// UntrustedMax is the most bytes of an untrusted word a line carries
+// (Untrusted).
+const UntrustedMax = 64
+
+// Untrusted is a word a line carries from a party the keeper does not
+// trust, a person's guest: quoted, so no byte of it ends the line or makes
+// another, and cut to UntrustedMax bytes, its cut said.
+func Untrusted(word string) string {
+	if len(word) > UntrustedMax {
+		return strconv.Quote(word[:UntrustedMax]) + " (cut at " + strconv.Itoa(UntrustedMax) + " bytes)"
+	}
+	return strconv.Quote(word)
 }

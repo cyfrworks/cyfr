@@ -91,6 +91,17 @@ type profile struct {
 	// mcpCall is the server and tool a tool_call's rawInput names when it
 	// is a call of an MCP server's, shown as `mcp:<server>/<tool>`.
 	mcpCall func(rawInput json.RawMessage) (server, tool string, ok bool)
+	// toolPrefix, where it is set, is how the program names a tool of the
+	// server `server` in a tool_call's name: a call so named is one of that
+	// server's.
+	toolPrefix func(server string) string
+	// commandInput and subjectInput are the members of a call's rawInput
+	// where the program puts the command it runs and the path it acts on,
+	// what its start's detail says (brainwire.InputDetail). nameInput,
+	// where it is set, is the member where it puts the tool's name, for a
+	// call whose update has no name: a call no update names has no detail
+	// (own.go's named).
+	commandInput, subjectInput, nameInput string
 	// sessionFiles are the files that hold one session's content, each a
 	// way down from the home, or from the folder the program is told to
 	// keep its files in, which internal/homepath walks following no link;
@@ -235,7 +246,12 @@ var antigravity = &profile{
 	// Seen in Antigravity 1.5.16: a stdio server's tool is kind other ("Run
 	// mcp_<server>_<tool>"); its own tools are read, edit, execute and the
 	// rest, and a person's server through its call_mcp_tool is execute.
-	stubKinds: map[string]bool{"other": true},
+	stubKinds:  map[string]bool{"other": true},
+	toolPrefix: func(server string) string { return "mcp_" + server + "_" },
+	// Seen in Antigravity 1.5.16: run_command's {CommandLine, …,
+	// toolSummary}, read_file's and edit_file's {Path, …}.
+	commandInput: "CommandLine",
+	subjectInput: "Path",
 	mcpCall: func(rawInput json.RawMessage) (string, string, bool) {
 		var input struct {
 			ServerName string `json:"ServerName"`
@@ -372,6 +388,10 @@ var opencode = &profile{
 	stubKinds:  map[string]bool{},
 	mcpCall:    func(json.RawMessage) (string, string, bool) { return "", "", false },
 	namesTools: true,
+	// Seen in OpenCode 2.4.1: a shell's {command, description, cwd}, an
+	// edit's and a write's {path, …}.
+	commandInput: "command",
+	subjectInput: "path",
 	sessionFiles: func(string, string) ([]homepath.Path, error) {
 		return nil, nil
 	},
@@ -506,6 +526,12 @@ var cursor = &profile{
 		return []json.RawMessage{input.Args}
 	},
 	stubKinds: map[string]bool{"other": true},
+	// Seen in Cursor 2026.11.22-e9042b2 (S3 F4): a command's {command}, a
+	// read's and an edit's {path}; its sub-agent's {_toolName: "task", …}
+	// (S3, sub-agents).
+	commandInput: "command",
+	subjectInput: "path",
+	nameInput:    "_toolName",
 	mcpCall: func(rawInput json.RawMessage) (string, string, bool) {
 		var input struct {
 			Server string `json:"providerIdentifier"`

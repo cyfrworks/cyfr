@@ -406,9 +406,9 @@ defmodule Cyfr.CrossLanguageDriftTest do
     ],
     "brain_wire.json" => [
       {"apps/cyfr/test/opus/brain/wire_test.exs",
-       ~w(version max_line_bytes max_id_bytes max_list config counts accountings stops phases accounts error_types media_types native commands events read refuse)},
+       ~w(version max_line_bytes max_id_bytes max_list max_detail_bytes config counts accountings stops phases accounts error_types media_types native commands events read refuse)},
       {"apps/locus/keeper/internal/brainwire/wire_test.go",
-       ~w(version max_line_bytes max_id_bytes max_list config counts accountings stops phases accounts error_types blocks media_types native commands events uuid read refuse)},
+       ~w(version max_line_bytes max_id_bytes max_list max_detail_bytes config counts accountings stops phases accounts error_types blocks media_types native commands events uuid read refuse)},
       {"tests/locus-backends-image/brain_antigravity.py", ~w(version events refuse)},
       {"tests/locus-backends-image/brain_claude_code.py", ~w(version events refuse)},
       {"tests/locus-backends-image/brain_openai_codex.py", ~w(version events refuse)},
@@ -602,11 +602,12 @@ defmodule Cyfr.CrossLanguageDriftTest do
     ],
     "locus_pool.json" => [
       {"apps/locus/keeper/internal/admission/size_test.go",
-       ~w(allowance_bytes allowance_ms cap_bytes counters floor_bytes floor_runners kinds least_cap_bytes processors room_wait_ms stale_ms)},
+       ~w(allowance_bytes allowance_ms cap_bytes counters floor_bytes floor_runners kinds least_cap_bytes machine_bytes processors room_wait_ms stale_ms)},
       {"apps/prima/test/prima/locus_pool_test.exs",
-       ~w(allowance_bytes allowance_ms cap_bytes counters floor_bytes floor_runners kinds least_cap_bytes processors room_wait_ms stale_ms wire)},
+       ~w(allowance_bytes allowance_ms cap_bytes counters floor_bytes floor_runners kinds least_cap_bytes machine_bytes processors room_wait_ms stale_ms wire)},
       {"tests/imagesuite.py",
-       ~w(allowance_ms cap_bytes counters floor_runners kinds least_cap_bytes wire)},
+       ~w(allowance_ms cap_bytes counters floor_runners kinds least_cap_bytes machine_bytes wire)},
+      {"tests/imagesuite_test.py", ~w(machine_bytes)},
       {"tests/locus-backends-image/roles.py", ~w(floor_bytes)}
     ],
     "locus_roles.json" => [
@@ -693,6 +694,8 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"tests/locus-runtime-image/namespace_test.py", ~w(valid)}
     ],
     "runner_relay.json" => [
+      {"apps/locus/keeper/internal/wire/workerauth/workerauth_test.go",
+       ~w(max_signed_header_bytes)},
       {"apps/locus/runner/tests/vectors.rs",
        ~w(version attempt max_body_bytes max_frame_bytes initial_credit max_headers max_header_name_bytes max_header_value_bytes max_signed_header_bytes max_attached_frame_bytes ops methods purposes max_path_bytes max_url_bytes max_calls max_fetches codes exchange refusals encode_refusals)},
       {"apps/locus/test/locus/runtime/relay_vectors_test.exs",
@@ -735,23 +738,40 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"apps/prima/test/prima/tincture_wire_test.exs",
        ~w(version bearer_header routes requests public_request answers refusal connection stream_rejections delivery shell shell_invalid canvas)}
     ],
+    "wire_json.json" => [
+      {"apps/locus/keeper/internal/wire/macenvelope/macenvelope_test.go", ~w(base64url base64)},
+      {"apps/locus/keeper/internal/wire/wirejson/wirejson_test.go",
+       ~w(version max_integer_chars reads refused writes)},
+      {"apps/prima/test/prima/wire_json_test.exs",
+       ~w(reads max_integer_chars refused writes base64url base64)}
+    ],
     "worker_api.json" => [
       {"apps/cyfr/test/opus/worker_client_test.exs", ~w(requests status)},
-      {"apps/locus/test/locus/runtime/worker_listener_test.exs", ~w(requests status)},
+      {"apps/locus/keeper/internal/wire/workerapi/workerapi_test.go",
+       ~w(version routes retries timeouts_ms status keeper_refusals report_refusals)},
+      {"apps/locus/keeper/internal/wire/workerwire/workerwire_test.go",
+       ~w(version routes max_body_bytes max_report_attempts requests request_bodies answers answer_writes base_urls)},
+      {"apps/locus/test/locus/listener_test.exs", ~w(listener nonces window_ms)},
+      {"apps/locus/test/locus/runtime/worker_listener_test.exs", ~w(requests status starts)},
       {"apps/prima/test/prima/worker_api_test.exs",
-       ~w(version routes retries timeouts_ms requests status)},
+       ~w(version routes retries timeouts_ms requests max_body_bytes window_ms keeper_refusals report_refusals)},
       {"apps/prima/test/prima/worker_protocol_test.exs", ~w(retries timeouts_ms status)},
-      {"apps/prima/test/prima/worker_wire_test.exs", ~w(version routes requests)},
+      {"apps/prima/test/prima/worker_wire_test.exs",
+       ~w(version routes requests request_bodies answers answer_writes base_urls max_report_attempts)},
       {"tests/desktop-proof/media/proof.js", ~w(version routes status)},
       {"tests/locus-runtime-image/runners.py", ~w(status)},
       {"tests/locus-runtime-image/worker_auth.py",
-       ~w(version routes retries timeouts_ms requests status)}
+       ~w(version routes retries timeouts_ms requests status request_bodies answers)}
     ],
     "worker_auth.json" => [
       {"apps/codex/cmd/lifecycle_test.go", ~w(keys root_hex root_text service)},
       {"apps/cyfr/test/cyfr/locus_dev_stack_task_test.exs", ~w(keys root_hex service)},
       {"apps/cyfr/test/cyfr/locus_runtime_key_task_test.exs",
        ~w(keys root_hex root_text service)},
+      {"apps/locus/keeper/internal/wire/macenvelope/macenvelope_test.go",
+       ~w(attempt boot call keys member sealed_attempt_keys sealed_call)},
+      {"apps/locus/keeper/internal/wire/workerauth/workerauth_test.go",
+       ~w(attempt boot body_checks call headers keys member open_attempt_keys open_call report request root_hex root_text sealed_attempt_keys sealed_call service verify)},
       {"apps/locus/runner/tests/vectors.rs",
        ~w(assignment assignment_reads attempt boot call host_url keys member sealed_call)},
       {"apps/locus/test/locus/runtime/relay_vectors_test.exs",
@@ -761,7 +781,7 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"apps/prima/test/prima/runner_relay_test.exs", ~w(attempt call keys service)},
       {"apps/prima/test/prima/worker_api_test.exs", ~w(keys root_hex service)},
       {"apps/prima/test/prima/worker_auth_test.exs",
-       ~w(assignment assignment_reads attempt boot call host_url keys member report request root_hex root_text sealed_attempt_keys sealed_call sealed_frames service)},
+       ~w(assignment assignment_reads attempt body_checks boot call headers host_url keys member open_attempt_keys open_call report request root_hex root_text sealed_attempt_keys sealed_call sealed_frames service verify)},
       {"tests/locus-runtime-image/runners.py", ~w(attempt boot report service)},
       {"tests/locus-runtime-image/worker_auth.py",
        ~w(assignment attempt boot call host_url keys member report root_hex root_text sealed_attempt_keys sealed_call sealed_frames service)}

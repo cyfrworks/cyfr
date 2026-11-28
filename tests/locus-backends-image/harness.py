@@ -992,11 +992,15 @@ def require_docker():
 
 
 class Stack(imagesuite.Stack):
-    def __init__(self, project, image, canary_dir=None, guard_tools_dir=None, names=False):
+    def __init__(self, project, image, canary_dir=None, guard_tools_dir=None, names=False, layers=()):
         super().__init__(project)
         # With names, the guard's resolver asks the suites' name listener
         # (compose.names.yml), which starts beside it.
         self.names = names
+        # Compose files a suite layers last, paths of its own; a suite may
+        # change them between two `up`s, and the next `up` recreates the
+        # containers as they say.
+        self.layers = list(layers)
         self.image = image
         self.canary_dir = canary_dir or HERE
         # The directory first on the guard's PATH: empty, so the guard runs
@@ -1034,6 +1038,7 @@ class Stack(imagesuite.Stack):
         files = [os.path.join(ROOT, "docker-compose.yml"), os.path.join(HERE, "compose.backends.yml")]
         if self.names:
             files.append(os.path.join(HERE, "compose.names.yml"))
+        files += self.layers
         return run(
             "docker", "compose", "--project-name", self.project, "--project-directory", self.project_dir,
             *[arg for file in files for arg in ("-f", file)], *args,

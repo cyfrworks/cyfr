@@ -298,6 +298,22 @@ func (k Kept) WriteDisk(d Disk) error {
 	return f.Sync()
 }
 
+// RemoveDisk removes the record of athanor's disk, once its folder is gone,
+// and syncs the records' folder: a keeper killed before the removal
+// leaves a record whose folder is gone, which its next start removes as
+// well. An absent record is no error.
+func (k Kept) RemoveDisk(athanor string) error {
+	if err := os.Remove(k.recordPath(Person(athanor))); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	f, err := os.Open(filepath.Join(k.Root, DisksDir))
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return f.Sync()
+}
+
 // checkKeepers checks that path, read without following a link, has mode
 // and is the keeper's (keeperUID).
 func checkKeepers(path string, mode fs.FileMode) error {

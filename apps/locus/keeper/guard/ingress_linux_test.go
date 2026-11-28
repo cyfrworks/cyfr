@@ -275,3 +275,15 @@ func TestTheGuardsStartTriesAMachinesIngressFilter(t *testing.T) {
 		t.Errorf("the try left its pair:\n%s", out)
 	}
 }
+
+// A guard that cannot open the tun device routes no machine, and its start
+// says so before it tries anything else of a machine's route.
+func TestAGuardWithNoTunDeviceRoutesNoMachine(t *testing.T) {
+	saved := tunDevice
+	t.Cleanup(func() { tunDevice = saved })
+	tunDevice = t.TempDir() + "/no-such-device"
+	want := "the guard routes no machine: it could not open " + tunDevice + ", which a machine's tap is made through: no such file or directory"
+	if got := probeMachines(); got != want {
+		t.Fatalf("the probe answered %q, want %q", got, want)
+	}
+}
