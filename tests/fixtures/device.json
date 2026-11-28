@@ -1,5 +1,5 @@
 {
-  "comment": "The vectors pinning Prima.Device, the device protocol: every side reads each message as its sender sent it and writes it back to the same map, and refuses each refusal with the named reason. A refusal that names a field carries it as field, as each side's typed result does; an unknown type and a type the other side sends name the message's type. Certificates, challenges and proofs are tests/fixtures/device_cert.json's, and sign-in requests and device answers tests/fixtures/sign_in.json's. A device's first connection is hello, sign_in_request, sign_in_answer and admitted: the hello names device_1's kid and the certificate's account, the request is sign_in.json's sign_in request, the answer is device_1's Ed25519 signature over that request's digest, which every side re-signs from keys.device_1's seed, and admitted carries the certificate issued for that kid and the standing message's fields. A hello's admission is {\"setup\": the setup token, 64 lowercase hexadecimal characters}, or absent; its holder_kind is chip or software, and its display_name non-empty UTF-8 of at most 64 bytes with no control character. A hello or a sign_in_answer the home refuses is answered refused right before the close: its error is exactly class and message, the refusal's class and its sentence (Prima.Refusal), as an answer's error carries one; the vector is a hello refused for a setup token that is not this CYFR's. An intent is one discrete operation; one carrying a stream, frames, chunks, samples or a continuous field is refused by its shape. The too_large case is the valid intent with args {\"blob\": args_filler_length 'a' characters}.",
+  "comment": "The vectors pinning Prima.Device, the device protocol: every side reads each message as its sender sent it and writes it back to the same map, and refuses each refusal with the named reason. A refusal that names a field carries it as field, as each side's typed result does; an unknown type and a type the other side sends name the message's type. Certificates, challenges and proofs are tests/fixtures/device_cert.json's, and sign-in requests and device answers tests/fixtures/sign_in.json's. A device's first connection is hello, sign_in_request, sign_in_answer and admitted: the hello names device_1's kid and the certificate's account, the request is sign_in.json's sign_in request, the answer is device_1's Ed25519 signature over that request's digest, which every side re-signs from keys.device_1's seed, and admitted carries the certificate issued for that kid and the standing message's fields. A hello's admission is {\"setup\": the setup token, 64 lowercase hexadecimal characters}, or absent; its holder_kind is chip or software, and its display_name non-empty UTF-8 of at most 64 bytes with no control character. A hello or a sign_in_answer the home refuses is answered refused right before the close: its error is exactly class and message, the refusal's class and its sentence (Prima.Refusal), as an answer's error carries one; the vectors are a hello refused for a setup token that is not this CYFR's, and a sign_in_answer refused for a device its person removed from this CYFR, which stays out there until they allow it again. An intent is one discrete operation; one carrying a stream, frames, chunks, samples or a continuous field is refused by its shape. The too_large case is the valid intent with args {\"blob\": args_filler_length 'a' characters}.",
   "continuous_fields": [
     "stream",
     "frames",
@@ -389,6 +389,18 @@
         "type": "refused"
       },
       "name": "a hello refused for a setup token that is not this CYFR's, told its refusal before the close",
+      "sender": "home"
+    },
+    {
+      "message": {
+        "error": {
+          "class": "forbidden",
+          "message": "This device was removed from this CYFR. To use it here again, press Allow again beside it in Your devices, signed in here another way."
+        },
+        "protocol": "cyfr-device/v1",
+        "type": "refused"
+      },
+      "name": "a sign_in_answer refused for a device its person removed from this CYFR, told its refusal before the close",
       "sender": "home"
     }
   ],

@@ -244,6 +244,33 @@ defmodule Arca.SecurityTransitions.Fixtures do
 
   def paired_standing(id), do: Arca.Repo.get(Arca.Schemas.PairedClient, id).standing
 
+  # A device of the person, paired as its hello writes one and removed
+  # from the athanor through the store, as its person removes one.
+  def removed_device!(athanor_id, user_id) do
+    now = DateTime.utc_now()
+    id = Prima.UUID7.generate_id("pcl")
+
+    {1, _} =
+      Arca.Repo.insert_all(Arca.Schemas.PairedClient, [
+        %{
+          id: id,
+          athanor_id: athanor_id,
+          user_id: user_id,
+          source_kind: "device_cert",
+          source_id: id,
+          device_public_key: :crypto.strong_rand_bytes(32),
+          standing: "active",
+          inserted_at: now,
+          updated_at: now
+        }
+      ])
+
+    {:ok, %{standing: "removed"}} =
+      Arca.PairedClients.remove(Prima.Actor.in_athanor(athanor_id), id)
+
+    id
+  end
+
   # A device certificate and a pending confirmation, each inserted directly for the reason a frame
   # is: writing them is fenced by the member's slot.
   def certificate!(athanor_id, user_id, paired_client_id) do
@@ -1037,6 +1064,31 @@ defmodule Arca.SecurityTransitionsTest do
           do: assert(paired_standing(id) == "revoked")
 
       assert paired_standing(peer_theirs) == "active"
+    end
+
+    # A device its person removed stays out: no denial, archive or allow
+    # moves it to revoked, from where a hello would pair it again.
+    test "a removed client stays removed through a denial, the archive it makes and an allow" do
+      {user, own} = owner!()
+      {peer, theirs} = owner!()
+
+      mine_theirs = removed_device!(theirs.id, user.id)
+      # A device of another person in the athanor the denial archives.
+      guest_own = removed_device!(own.id, peer.id)
+      revoked = paired!(own.id, user.id)
+
+      assert {:ok, denied} =
+               SecurityTransitions.deny_user(server(), user.id, slot: :none, verify: admit())
+
+      assert denied.revoked_paired_client_ids == [revoked]
+
+      assert {:ok, allowed} =
+               SecurityTransitions.allow_user(server(), user.id, slot: :none, verify: admit())
+
+      assert allowed.revoked_paired_client_ids == []
+      assert paired_standing(mine_theirs) == "removed"
+      assert paired_standing(guest_own) == "removed"
+      assert paired_standing(revoked) == "revoked"
     end
 
     test "an allow revokes a client that outlived the denial and restores none" do

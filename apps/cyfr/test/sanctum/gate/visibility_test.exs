@@ -243,7 +243,7 @@ defmodule Sanctum.Gate.VisibilityTest do
 
       assert length(visible_actions("vault", device)) == 10
       assert "commit" in visible_actions("profile", device)
-      assert "revoke" in visible_actions("pairing", device)
+      assert "remove" in visible_actions("pairing", device)
     end
 
     test "a paired client is the device channel's alone: a context claiming the other half sees no consent arm" do

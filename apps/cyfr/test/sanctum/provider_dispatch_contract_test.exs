@@ -76,7 +76,7 @@ defmodule Sanctum.ProviderDispatchContractTest do
       "delete"
     ],
     "profile" => ["plan", "preview", "commit", "grant", "publish", "list", "grants", "revoke"],
-    "pairing" => ["renew", "revoke", "list", "waiting"],
+    "pairing" => ["renew", "remove", "allow_again", "list", "waiting"],
     "confirmation" => ["request", "confirm", "pending", "cancel"],
     "share" => ["create", "list", "set_audience", "set_caps", "revoke", "usage", "offered"],
     "question" => ["pending", "answer", "answers", "set", "forget"]

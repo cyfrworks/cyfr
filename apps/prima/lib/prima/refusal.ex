@@ -1364,6 +1364,14 @@ defmodule Prima.Refusal do
        "This CYFR is set up. Sign in with your passkey, a device you connected, or a " <>
          "sign-in method you linked."}
 
+  # A device's hello at a CYFR its person removed it from: it stays out
+  # until they allow it again there (`Sanctum.Pairing.allow_again/2`).
+  defp row(:removed_here),
+    do:
+      {:forbidden,
+       "This device was removed from this CYFR. To use it here again, press Allow again " <>
+         "beside it in Your devices, signed in here another way."}
+
   # An admission other than setup onto a CYFR with no person:
   # its first person is its administrator, made only by its setup.
   defp row(:not_set_up),
