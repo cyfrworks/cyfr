@@ -200,3 +200,12 @@ func TestAGuestsPIDIsHeldToAPid(t *testing.T) {
 		}
 	}
 }
+
+// A guest's line that does not decode, its number past every integer, ends
+// its VM with a reason whose guest bytes are quoted and cut: the keeper's
+// log line about it is short.
+func TestAnUndecodableGuestLineReachesTheLogCut(t *testing.T) {
+	if _, err := parseAnswer([]byte(`{"type":"placed","id":"x","pid":1` + strings.Repeat("9", 1<<20) + `}`)); err == nil || len(err.Error()) > 300 {
+		t.Fatalf("an undecodable line answered %d bytes: %.120q", len(fmt.Sprint(err)), err)
+	}
+}

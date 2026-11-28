@@ -1530,7 +1530,9 @@ type guestAnswer struct {
 func parseAnswer(line []byte) (guestAnswer, error) {
 	var a guestAnswer
 	if err := json.Unmarshal(line, &a); err != nil {
-		return guestAnswer{}, err
+		// A decode error quotes the guest's own bytes, which reach a log
+		// line only quoted and cut.
+		return guestAnswer{}, fmt.Errorf("a line of the guest's does not read: %s", logx.Untrusted(err.Error()))
 	}
 	if a.Type == "error" {
 		_ = json.Unmarshal(a.Raw, &a.Code)

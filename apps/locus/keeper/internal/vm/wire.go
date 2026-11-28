@@ -200,7 +200,9 @@ func NewHello(raw string) (Hello, error) {
 func ParseHello(line []byte) (Hello, error) {
 	var h Hello
 	if err := json.Unmarshal(line, &h); err != nil {
-		return Hello{}, fmt.Errorf("the guest agent's hello: %w", err)
+		// A decode error quotes the guest's own bytes, a number literal
+		// among them: they reach a log line only quoted and cut.
+		return Hello{}, fmt.Errorf("the guest agent's hello does not read: %s", logx.Untrusted(err.Error()))
 	}
 	if h.V != HelloVersion || h.Type != HelloType {
 		return Hello{}, fmt.Errorf("the guest agent's hello is %s, not a version %d %s", logx.Untrusted(strings.TrimSpace(string(line))), HelloVersion, HelloType)
