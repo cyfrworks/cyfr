@@ -165,6 +165,7 @@ func takerMain(args []string) int {
 	if err != nil {
 		return 1
 	}
+	childEngine = e
 	os.WriteFile(filepath.Join(round, name+".ready"), nil, 0o600)
 	for {
 		if _, err := os.Stat(filepath.Join(round, "start")); err == nil {
