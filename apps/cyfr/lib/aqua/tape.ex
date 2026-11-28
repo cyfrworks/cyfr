@@ -882,12 +882,23 @@ defmodule Aqua.Tape do
   end
 
   @doc """
-  The person's stop of a workspace thread: everything of its work ends
-  in one transaction, in it and in its crew members' threads
-  (`Arca.TurnStorage.stop_work/3`), under the stamp each root's attempt
-  stores, and the thread is `stopped`; the runtime still holding the
-  cancelled turns is the caller's to stop (`Aqua.Runner.stop_cancelled/1`).
-  The thread's place in the person's list is announced after the commit.
+  What the person's stop says of the work it ended, wherever it is
+  pressed: the error of each turn it cancels, and so the answer a crew
+  member's stopped job gives its room, which Aqua reads as the person's
+  act.
+  """
+  @spec stopped() :: String.t()
+  def stopped, do: "the person stopped it"
+
+  @doc """
+  The person's stop of a workspace thread or a crew member's thread: its
+  work ends in one transaction (`Arca.TurnStorage.stop_work/3`), a
+  workspace thread's in it and in its crew members' threads, which is
+  then `stopped`, a crew member's thread's with the requests its jobs
+  answer; each under the stamp its root's attempt stores. The runtime
+  still holding the cancelled turns is the caller's to stop
+  (`Aqua.Runner.stop_cancelled/1`). The thread's place in the person's
+  list is announced after the commit.
   """
   @spec stop_work(Context.t(), String.t()) ::
           {:ok, %{cancelled: [map()]}} | {:error, term()}
@@ -900,10 +911,10 @@ defmodule Aqua.Tape do
         {:error, _unread} -> []
       end
 
-    open = open_jobs(ctx, children)
+    open = open_jobs(ctx, [thread_id | children])
 
     with {:ok, %{cancelled: cancelled}} = stopped <-
-           TurnStorage.stop_work(actor, thread_id, standing(%{error: "stopped"}, :retiring)) do
+           TurnStorage.stop_work(actor, thread_id, standing(%{error: stopped()}, :retiring)) do
       # What a turn's own end does after its commit (`finish/4`), for each
       # turn the stop ended, and the deliveries it left nothing to land
       # woken to say so.
@@ -1308,12 +1319,7 @@ defmodule Aqua.Tape do
   # What a row is to a viewer: a request to a crew member, a reply
   # answering one, or any other row.
   defp row_kind(%{reply_to: reply_to}) when is_binary(reply_to), do: :reply
-
-  defp row_kind(%{addressee: addressee, status: status})
-       when is_binary(addressee) and status in ["pending", "answered"],
-       do: :request
-
-  defp row_kind(_row), do: :message
+  defp row_kind(row), do: if(Threads.request?(row), do: :request, else: :message)
 
   # A workspace thread's turn ending may have recorded a report
   # (`Arca.TurnStorage`'s host moves); a read that fails wakes nobody, and

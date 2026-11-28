@@ -306,6 +306,68 @@ defmodule Arca.CrewStorageTest do
   end
 
   describe "the end of a member's work" do
+    test "the person's stop of a member's thread ends each job there with the request it " <>
+           "answers: each reply is recorded and lands as a row that opens no turn",
+         %{actor: actor, room: room} do
+      first = request!(actor, room, "planner", "first", "aqua")
+      second = request!(actor, room, "planner", "second", "aqua")
+      later = request!(actor, room, "planner", "later", "aqua")
+      {:ok, child} = Threads.crew_thread(actor, room.id, "planner")
+      running = start!(actor, delivered!(actor, room, child, first))
+      queued = delivered!(actor, room, child, second)
+
+      assert {:ok, %{cancelled: cancelled}} =
+               TurnStorage.stop_work(actor, child.id, %{
+                 error: "the person stopped it",
+                 grant: :stored,
+                 verify: &Arca.Test.Actor.admits/1
+               })
+
+      assert Enum.sort(Enum.map(cancelled, & &1.turn_id)) == Enum.sort([running.id, queued.id])
+
+      for {turn, request} <- [{running, first}, {queued, second}] do
+        assert {:ok, %{status: "cancelled"}} = TurnStorage.get(actor, turn.id)
+        assert {:ok, %{status: "expired"}} = Threads.get_message(actor, request.id)
+        [record] = Enum.filter(replies(actor), &(&1.source_id == turn.id))
+
+        assert %{
+                 "outcome" => "cancelled",
+                 "text" => "the person stopped it",
+                 "request_ids" => ids
+               } =
+                 record.snapshot
+
+        assert ids == [request.id]
+
+        # The reply as its delivery lands it, waking Aqua as every reply
+        # asks: a row, and no turn.
+        assert {:ok, %{message: row, turn: nil}} =
+                 TurnStorage.accept_message(actor, room.id, %{
+                   message: %{
+                     author: "aqua",
+                     sent_by: "planner",
+                     addressee: "aqua",
+                     reply_to: request.id,
+                     outcome: "cancelled",
+                     content: "the person stopped it"
+                   },
+                   answers: [request.id],
+                   turn: %{agent: "aqua", requested_by: actor.user_id, origin: :interactive}
+                 })
+
+        assert row.reply_to == request.id
+        assert {:ok, %{status: "expired"}} = Threads.get_message(actor, request.id)
+      end
+
+      assert {:ok, []} = TurnStorage.open_turns(actor, room.id)
+      assert {:ok, []} = TurnStorage.open_turns(actor, child.id)
+
+      # A request not yet delivered is no job of the thread's: it still
+      # waits, and its delivery opens its turn.
+      assert {:ok, %{status: "pending"}} = Threads.get_message(actor, later.id)
+      assert %{status: "accepted"} = delivered!(actor, room, child, later)
+    end
+
     test "a reply is recorded under the identity of the request it answers, a damaged child row notwithstanding",
          %{actor: actor, room: room} do
       request = request!(actor, room, "planner", "go")

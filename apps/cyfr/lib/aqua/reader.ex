@@ -337,8 +337,8 @@ defmodule Aqua.Reader do
       # The reader's own post is its call's to show (`thread.post`).
       posted?(row) and own?(row, me) -> :none
       is_binary(Map.get(row, :reply_to)) -> {:said, reply_text(row)}
-      request?(row) and own?(row, me) -> :none
-      request?(row) -> {:said, request_text(row, reading)}
+      Arca.ThreadStorage.request?(row) and own?(row, me) -> :none
+      Arca.ThreadStorage.request?(row) -> {:said, request_text(row, reading)}
       # Before the reader's own speech: a line in the server's voice, a
       # schedule's or the server's own post, which a reading that names no
       # reader reads as its own.
@@ -386,9 +386,6 @@ defmodule Aqua.Reader do
   # person or an agent.
   defp server?(%{author: author}), do: author == Prima.Author.system()
   defp server?(_row), do: false
-
-  defp request?(row),
-    do: is_binary(Map.get(row, :addressee)) and Map.get(row, :status) in ["pending", "answered"]
 
   defp posted?(row), do: Tape.payload(row)["post"] == true
 

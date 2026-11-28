@@ -30,7 +30,10 @@ defmodule Aqua.CrewTest do
 
   import Ecto.Query, only: [from: 2]
   import Phoenix.ConnTest, only: [get: 2, response: 2]
-  import Phoenix.LiveViewTest, only: [live_isolated: 3, has_element?: 2]
+
+  import Phoenix.LiveViewTest,
+    only: [live_isolated: 3, has_element?: 2, element: 2, render_click: 1]
+
   import Prima.Test.Wait
 
   @endpoint CyfrWeb.Endpoint
@@ -2187,6 +2190,111 @@ defmodule Aqua.CrewTest do
     assert {:ok, %{status: "cancelled"}} = Tape.turn(ctx, turn_id)
     assert %{running: false} = Runner.state(child.id, ctx.athanor_id)
     assert [%{snapshot: %{"outcome" => "cancelled"}}] = replies_of(ctx, turn_id)
+  end
+
+  describe "the person's Stop in a member's thread" do
+    # What the person's stop says of the work it ended (`Aqua.Tape.stopped/0`).
+    @stopped "the person stopped it"
+
+    # A job of Aqua's running in the planner's thread, its model call held.
+    defp held_job!(ctx, room, task) do
+      request = soul_request!(ctx, room, "planner", task)
+      assert {:ok, %{"applied" => 1}} = drain(ctx)
+      assert_receive {:scripted_probe, _worker, _}, 60_000
+      child = child!(ctx, room, "planner")
+      {request, child, delivered_turn(ctx, child, request.id)}
+    end
+
+    # The member's answer as Aqua's next turn reads it.
+    defp stopped_answer(request),
+      do: "[planner replied to request #{request.id}: cancelled]\n#{@stopped}"
+
+    test "ends the job Aqua handed it: the request ends as the person's stop ends one, the " <>
+           "member's answer lands on the room and opens no turn, and Aqua reads that the " <>
+           "person stopped it",
+         %{ctx: ctx, room: room} do
+      script!([{:hold, self()}, reply("Understood.")])
+      {request, child, turn_id} = held_job!(ctx, room, "take a while")
+
+      assert :ok = Runner.stop_turn(ctx, child.id)
+      assert {:ok, %{status: "cancelled"}} = Tape.turn(ctx, turn_id)
+      assert %{status: "expired"} = row(ctx, request.id)
+
+      assert {:ok, %{"applied" => 1}} = drain(ctx)
+      answer = Enum.find(rows(ctx, room.id), &(&1.reply_to == request.id))
+
+      assert %{sent_by: "planner", outcome: "cancelled", content: @stopped, turn_id: nil} =
+               answer
+
+      assert room_turns(ctx, room) == []
+      assert %{status: "expired"} = row(ctx, request.id)
+
+      # The person's next line opens Aqua's turn, which reads the job's end.
+      assert {:ok, %{turn_id: next}} = Runner.send_message(ctx, room.id, "what happened?")
+      await_status(ctx, next, "completed")
+      assert [%{input: %{"params" => %{"messages" => messages}}}] = member_chats(ctx, "aqua")
+
+      assert Jason.encode!(messages) =~ String.trim(Jason.encode!(stopped_answer(request)), "\"")
+    end
+
+    test "ends the job queued behind the running one too, each request with its job, and opens " <>
+           "nothing",
+         %{ctx: ctx, room: room} do
+      script!([{:hold, self()}])
+      {first, child, running} = held_job!(ctx, room, "first job")
+      second = soul_request!(ctx, room, "planner", "second job")
+      assert {:ok, %{"applied" => 1}} = drain(ctx)
+      queued = delivered_turn(ctx, child, second.id)
+      assert %{running: true, queued: 1} = Runner.state(child.id, ctx.athanor_id)
+
+      assert :ok = Runner.stop_turn(ctx, child.id)
+
+      for {turn_id, request} <- [{running, first}, {queued, second}] do
+        assert {:ok, %{status: "cancelled"}} = Tape.turn(ctx, turn_id)
+        assert %{status: "expired"} = row(ctx, request.id)
+      end
+
+      assert %{running: false, queued: 0} = Runner.state(child.id, ctx.athanor_id)
+      assert {:ok, %{"applied" => 2}} = drain(ctx)
+      room_rows = rows(ctx, room.id)
+
+      for request <- [first, second] do
+        assert %{outcome: "cancelled", content: @stopped, turn_id: nil} =
+                 Enum.find(room_rows, &(&1.reply_to == request.id))
+
+        assert %{status: "expired"} = row(ctx, request.id)
+      end
+
+      assert room_turns(ctx, room) == []
+    end
+
+    test "pressed in the member's pane does what the direct stop does", %{ctx: ctx, room: room} do
+      script!([{:hold, self()}])
+      {request, child, turn_id} = held_job!(ctx, room, "take a while")
+      {:ok, session} = Sanctum.TestContext.create_session(ctx)
+
+      conn =
+        Phoenix.ConnTest.build_conn()
+        |> Plug.Test.init_test_session(%{CyfrWeb.SignInResponse.session_key() => session.token})
+
+      {:ok, pane, _html} =
+        live_isolated(conn, PrismWeb.ThreadPaneLive,
+          session: %{"athanor_id" => ctx.athanor_id, "thread_id" => child.id}
+        )
+
+      wait_until(fn -> has_element?(pane, ~s([id$="-crew-stop"] button[phx-click="stop"])) end)
+      render_click(element(pane, ~s([id$="-crew-stop"] button[phx-click="stop"])))
+
+      await_status(ctx, turn_id, "cancelled")
+      assert %{status: "expired"} = row(ctx, request.id)
+      assert {:ok, %{"applied" => 1}} = drain(ctx)
+
+      assert %{outcome: "cancelled", content: @stopped, turn_id: nil} =
+               Enum.find(rows(ctx, room.id), &(&1.reply_to == request.id))
+
+      assert room_turns(ctx, room) == []
+      Cyfr.Test.Sandbox.end_views()
+    end
   end
 
   test "a delivered request carries copies of the request's files, its own, to the member's turn",

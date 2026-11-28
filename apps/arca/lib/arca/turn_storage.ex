@@ -802,16 +802,26 @@ defmodule Arca.TurnStorage do
   def report_workspace(%Prima.Actor{}, _turn_id, _outcome, _attrs), do: {:error, :no_athanor}
 
   @doc """
-  The person's stop of a workspace thread: everything of its work ends,
-  in it and in the crew threads under it, in one transaction. Every open
-  turn there is cancelled (`cancel_open!/4`, ended by the person), the
-  workspace thread's own with their replies and the crew threads'
-  silently, as a deletion cancels a room's; each request there still
-  waiting for a crew member's answer, and each opening still waiting for
-  its turn, is `expired`, so its delivery lands nothing
-  (`accept_message/3`); and the thread is `stopped` with no report (the
-  moduledoc's "Workspace threads"). A stop that finds nothing to end
-  changes nothing.
+  The person's stop of a workspace thread or of a crew member's thread,
+  in one transaction.
+
+  A workspace thread's: everything of its work ends, in it and in the
+  crew threads under it. Every open turn there is cancelled
+  (`cancel_open!/4`, ended by the person), the workspace thread's own
+  with their replies and the crew threads' silently, as a deletion
+  cancels a room's; each request there still waiting for a crew member's
+  answer, and each opening still waiting for its turn, is `expired`, so
+  its delivery lands nothing (`accept_message/3`); and the thread is
+  `stopped` with no report (the moduledoc's "Workspace threads").
+
+  A crew member's thread's: every open turn there, the running one and
+  those queued behind it, is cancelled with its reply, ended by the
+  person, and each request those turns answer that still waits is
+  `expired` first, so the reply lands on the room as a row and opens no
+  turn there (`accept_message/3`). A request not yet delivered into the
+  thread is no turn of it and is left to run.
+
+  A stop that finds nothing to end changes nothing.
 
   The turns are chosen before the locks and asked again under them, in
   the one order (`Arca.ThreadStorage.lock_threads!/2`): the turns, then
@@ -821,7 +831,7 @@ defmodule Arca.TurnStorage do
   `attrs` carry the root's grant as `finish/4` takes it and `:error`,
   the cancelled turns' error. Answers the cancelled turns with the steps
   their holders' runtime stops after the commit (`cancel_open!/4`); a
-  thread that is no workspace thread is `{:error, :not_a_workspace}`.
+  thread that is neither, a daily thread, is `{:error, :not_a_workspace}`.
   """
   @spec stop_work(Prima.Actor.t(), String.t(), map()) ::
           {:ok, %{cancelled: [map()]}} | {:error, term()}
@@ -847,10 +857,47 @@ defmodule Arca.TurnStorage do
     end
   end
 
+  # A thread's kind and room never change, so they are read unlocked.
   # arca:db-raise-ok inside the caller's transaction
-  defp stopped!(%Prima.Actor{athanor_id: athanor_id} = actor, workspace_id, attrs, chosen) do
+  defp stopped!(%Prima.Actor{athanor_id: athanor_id} = actor, thread_id, attrs, chosen) do
     _held = hold_turns!(actor, chosen)
 
+    case Arca.Repo.get_by(Thread, id: thread_id, athanor_id: athanor_id) do
+      %Thread{kind: "crew"} = member -> member_stopped!(actor, member, attrs, chosen)
+      _workspace_or_other -> work_stopped!(actor, thread_id, attrs, chosen)
+    end
+  end
+
+  # A crew member's thread, with its room's row, the one order
+  # (`Arca.ThreadStorage.lock_threads!/2`): its open turns' waiting
+  # requests expired before the turns end, so the end that settles a
+  # workspace room finds them answered for.
+  # arca:db-raise-ok inside the caller's transaction
+  defp member_stopped!(%Prima.Actor{athanor_id: athanor_id} = actor, member, attrs, chosen) do
+    _locked =
+      Arca.ThreadStorage.lock_threads!(
+        actor,
+        Enum.reject([member.parent_id, member.id], &is_nil/1)
+      )
+
+    if Arca.Repo.all(work_turns(athanor_id, member.id)) -- chosen != [],
+      do: Arca.Repo.rollback(:turns_moved)
+
+    for turn_id <- chosen,
+        %Turn{asking_thread_id: room, status: status} = turn <- [turn!(athanor_id, turn_id)],
+        is_binary(room) and status in @open do
+      from(m in Message,
+        where: m.athanor_id == ^athanor_id and m.thread_id == ^room,
+        where: m.id in ^requests_of(athanor_id, turn) and m.status == "pending"
+      )
+      |> Arca.Repo.update_all(set: [status: "expired", resolved_at: DateTime.utc_now()])
+    end
+
+    cancel_open!(actor, member.id, attrs, :reply)
+  end
+
+  # arca:db-raise-ok inside the caller's transaction
+  defp work_stopped!(%Prima.Actor{athanor_id: athanor_id} = actor, workspace_id, attrs, chosen) do
     crew =
       from(c in Thread,
         where: c.athanor_id == ^athanor_id and c.kind == "crew",
@@ -6337,14 +6384,39 @@ defmodule Arca.TurnStorage do
   end
 
   # The `crew_reply` of a turn with a reply address, recorded in the
-  # transaction that ends it: the requests it answers
-  # are every request delivered into it, opening one first, each named
-  # by its delivered row's payload.
+  # transaction that ends it, answering its requests (`requests_of/2`).
   # arca:db-raise-ok inside the caller's transaction
   defp replied!(_athanor_id, %Turn{asking_thread_id: nil}, _outcome, _at, _text), do: :ok
 
   defp replied!(athanor_id, %Turn{} = turn, outcome, %DateTime{} = at, text) do
-    requests =
+    # Recorded under the identity of the request it answers, which the
+    # asking turn wrote: never the answering turn's own, so a damaged
+    # child row still answers. A request gone with its room is answered
+    # by nobody.
+    case asked_by(athanor_id, turn.request_id) do
+      {:ok, person_id, origin} ->
+        reply!(
+          athanor_id,
+          turn,
+          outcome,
+          at,
+          text,
+          requests_of(athanor_id, turn),
+          person_id,
+          origin
+        )
+
+      :gone ->
+        :ok
+    end
+  end
+
+  # The requests a turn with a reply address answers: the one that opened
+  # it, then every request delivered into it, each named by its delivered
+  # row's payload.
+  # arca:db-raise-ok inside the caller's transaction
+  defp requests_of(athanor_id, %Turn{} = turn) do
+    delivered =
       from(m in Message,
         where: m.athanor_id == ^athanor_id and m.turn_id == ^turn.id,
         where: m.sent_by != ^turn.agent and not is_nil(m.payload),
@@ -6359,17 +6431,7 @@ defmodule Arca.TurnStorage do
         end
       end)
 
-    # Recorded under the identity of the request it answers, which the
-    # asking turn wrote: never the answering turn's own, so a damaged
-    # child row still answers. A request gone with its room is answered
-    # by nobody.
-    case asked_by(athanor_id, turn.request_id) do
-      {:ok, person_id, origin} ->
-        reply!(athanor_id, turn, outcome, at, text, requests, person_id, origin)
-
-      :gone ->
-        :ok
-    end
+    Enum.uniq([turn.request_id | delivered])
   end
 
   # arca:db-raise-ok inside the caller's transaction
@@ -6395,7 +6457,7 @@ defmodule Arca.TurnStorage do
         turn_id: turn.id,
         ended_at: at,
         asking_thread_id: turn.asking_thread_id,
-        request_ids: Enum.uniq([turn.request_id | requests]),
+        request_ids: requests,
         member: turn.agent,
         outcome: outcome,
         text: text || "",
