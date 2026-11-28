@@ -4716,6 +4716,38 @@
       ]
     },
     {
+      "code": "access_trust_interpolated",
+      "class": "invalid_argument",
+      "variants": [
+        {
+          "fixed": {
+            "key": "CYFR_TRUSTED_PROXY_CIDRS"
+          },
+          "slots": [],
+          "template": "`CYFR_TRUSTED_PROXY_CIDRS` in .env takes its value from another variable, and the proxy listener trusts only what .env itself says. Nothing was started or changed. Write the value itself in .env, with no `$` and not as a bare name.",
+          "example": {
+            "payload": {
+              "key": "CYFR_TRUSTED_PROXY_CIDRS"
+            },
+            "sentence": "`CYFR_TRUSTED_PROXY_CIDRS` in .env takes its value from another variable, and the proxy listener trusts only what .env itself says. Nothing was started or changed. Write the value itself in .env, with no `$` and not as a bare name."
+          }
+        },
+        {
+          "fixed": {
+            "key": "CYFR_TRUSTED_PROXY_HOPS"
+          },
+          "slots": [],
+          "template": "`CYFR_TRUSTED_PROXY_HOPS` in .env takes its value from another variable, and the proxy listener trusts only what .env itself says. Nothing was started or changed. Write the value itself in .env, with no `$` and not as a bare name.",
+          "example": {
+            "payload": {
+              "key": "CYFR_TRUSTED_PROXY_HOPS"
+            },
+            "sentence": "`CYFR_TRUSTED_PROXY_HOPS` in .env takes its value from another variable, and the proxy listener trusts only what .env itself says. Nothing was started or changed. Write the value itself in .env, with no `$` and not as a bare name."
+          }
+        }
+      ]
+    },
+    {
       "code": "compose_override_refused",
       "class": "invalid_argument",
       "variants": [

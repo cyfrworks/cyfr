@@ -166,6 +166,13 @@ var refusalRows = map[string]refusalRow{
 			{Fixed: map[string]string{}, Slots: []string{"line"}, Template: "Line {line} of `.env` does not read as Docker Compose reads it, so cyfr cannot read or change .env as compose would. Nothing was changed. Correct that line, then run the command again."},
 		},
 	},
+	"access_trust_interpolated": {
+		Class: "invalid_argument",
+		Variants: []refusalVariant{
+			{Fixed: map[string]string{"key": "CYFR_TRUSTED_PROXY_CIDRS"}, Slots: []string{}, Template: "`CYFR_TRUSTED_PROXY_CIDRS` in .env takes its value from another variable, and the proxy listener trusts only what .env itself says. Nothing was started or changed. Write the value itself in .env, with no `$` and not as a bare name."},
+			{Fixed: map[string]string{"key": "CYFR_TRUSTED_PROXY_HOPS"}, Slots: []string{}, Template: "`CYFR_TRUSTED_PROXY_HOPS` in .env takes its value from another variable, and the proxy listener trusts only what .env itself says. Nothing was started or changed. Write the value itself in .env, with no `$` and not as a bare name."},
+		},
+	},
 	"compose_override_refused": {
 		Class: "invalid_argument",
 		Variants: []refusalVariant{

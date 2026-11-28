@@ -76,6 +76,8 @@ defmodule Mix.Tasks.Cyfr.Gen.AccessRefusals do
     {:access_uncertain, [{%{}, ~w(observed)}]},
     {:access_outcome_unknown, [{%{}, ~w(reason)}]},
     {:compose_env_refused, [{%{}, ~w(key)}, {%{}, ~w(line)}]},
+    {:access_trust_interpolated,
+     for(key <- ~w(CYFR_TRUSTED_PROXY_CIDRS CYFR_TRUSTED_PROXY_HOPS), do: {%{key: key}, []})},
     {:compose_override_refused,
      [
        {%{}, ~w(file service key)},

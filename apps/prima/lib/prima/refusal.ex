@@ -1704,6 +1704,17 @@ defmodule Prima.Refusal do
        "changed. Run it again without `#{option}`, or run `cyfr access browser #{kind}` with it."}
   end
 
+  # A proxy trust .env takes from another variable, which the caller's
+  # environment would choose: the trust is .env's own word alone.
+  defp row({:access_trust_interpolated, %{key: key} = payload})
+       when key in ["CYFR_TRUSTED_PROXY_CIDRS", "CYFR_TRUSTED_PROXY_HOPS"] and
+              map_size(payload) == 1,
+       do:
+         {:invalid_argument,
+          "`#{key}` in .env takes its value from another variable, and the proxy listener " <>
+            "trusts only what .env itself says. Nothing was started or changed. Write the " <>
+            "value itself in .env, with no `$` and not as a bare name."}
+
   defp row({:tailnet_node_id_unsupported, %{value: value}}) when is_binary(value),
     do:
       {:invalid_argument,

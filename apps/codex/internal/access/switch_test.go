@@ -340,3 +340,36 @@ func TestStoppedSwitchRefusesTheTrustEveryStartRefuses(t *testing.T) {
 		t.Fatal("the access vectors hold no trust the boot refuses")
 	}
 }
+
+// The proxy trust is .env's own word: a trust key whose value .env takes
+// from another variable, which the caller's environment would choose, is
+// refused by name, at the update's read of .env and at every engine read;
+// the same text single-quoted is a literal, read as any value is.
+func TestTrustKeysTakeLiteralValuesOnly(t *testing.T) {
+	t.Setenv("S2_TRUST", "10.0.0.0/8")
+	for _, c := range []struct {
+		line, key string
+	}{
+		{"CYFR_TRUSTED_PROXY_CIDRS=${S2_TRUST}", "CYFR_TRUSTED_PROXY_CIDRS"},
+		{"CYFR_TRUSTED_PROXY_CIDRS=\"$S2_TRUST\"", "CYFR_TRUSTED_PROXY_CIDRS"},
+		{"CYFR_TRUSTED_PROXY_HOPS=${S2_HOPS:-1}", "CYFR_TRUSTED_PROXY_HOPS"},
+		{"CYFR_TRUSTED_PROXY_HOPS", "CYFR_TRUSTED_PROXY_HOPS"},
+		{"CYFR_TRUSTED_PROXY_CIDRS", "CYFR_TRUSTED_PROXY_CIDRS"},
+	} {
+		h := newHome(t)
+		path := filepath.Join(h.dir, ".env")
+		writeFile(t, path, []byte(h.env()+c.line+"\n"))
+		for name, err := range map[string]error{"the update's read": CheckEnvFile(path), "the engine's read": func() error { _, err := h.e.Head(); return err }()} {
+			var r *Refusal
+			if !errors.As(err, &r) || r.Code != "access_trust_interpolated" || r.Payload["key"] != c.key {
+				t.Errorf("%q: %s answered %v", c.line, name, err)
+			}
+		}
+	}
+	h := newHome(t)
+	path := filepath.Join(h.dir, ".env")
+	writeFile(t, path, []byte(h.env()+"CYFR_TRUSTED_PROXY_HOPS='2'\n"))
+	if err := CheckEnvFile(path); err != nil {
+		t.Errorf("a single-quoted literal trust is refused: %v", err)
+	}
+}
