@@ -2344,9 +2344,8 @@ defmodule PrismWeb.ThreadPaneLive do
           data-test="thinking"
           class="text-xs"
         >
-          <summary class="flex min-h-6 cursor-pointer items-center gap-2 text-gray-400 hover:text-gray-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-300">
-            <span class="inline-block h-2 w-2 animate-pulse rounded-full bg-blue-400" />
-            <span>Thinking</span>
+          <summary class="min-h-6 cursor-pointer rounded text-gray-400 hover:text-gray-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-300">
+            Thinking
           </summary>
           <p
             :for={thought <- Aqua.stream_thoughts(@partials)}
