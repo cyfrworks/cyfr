@@ -11,6 +11,7 @@
 
 use serde_json::Value;
 
+use super::formula::Kind;
 use super::{Guest, Run, args, catalyst, ended, error_json};
 use crate::host::{Outcome, Reading};
 
@@ -25,7 +26,7 @@ impl catalyst::cyfr::emit::events::Host for Guest {
 pub async fn emit(run: &Run, event: String) -> wasmtime::Result<String> {
     if event.len() as u64 > run.limits.max_request_size {
         return Ok(error_json(
-            "resource_limit",
+            Kind::ResourceLimit.name(),
             "Event exceeds the consented max_request_size for this component.",
         ));
     }
@@ -49,5 +50,8 @@ pub async fn emit(run: &Run, event: String) -> wasmtime::Result<String> {
     host.note("an unanswered emit", || {
         format!("{}'s emit was not answered", host.execution_id())
     });
-    Ok(error_json("dispatch_error", "The emit call failed."))
+    Ok(error_json(
+        Kind::DispatchError.name(),
+        "The emit call failed.",
+    ))
 }

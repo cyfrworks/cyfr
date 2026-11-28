@@ -1677,36 +1677,32 @@ fn a_formulas_unawaited_results_are_held_as_bytes() {
     let mut steps: Vec<(&str, Value)> = (0..4).map(|_| ("spawn", tool("big"))).collect();
     steps.push(("call", tool("wait")));
     let job = formula(&steps);
-    let log = service.calls.clone();
+    let held = Arc::new(Mutex::new(false));
+    let all_held = held.clone();
     service.assign(
         &job,
         Box::new(
             move |call, job| match call.args["args"]["action"].as_str() {
-                Some("big") if call.op == "tool_call" => {
-                    Reply::When(Box::new(|| true), numbers.clone())
-                }
-                // Answered once the four answers are written, so their results
-                // are the runner's, held unawaited, as the formula returns.
+                Some("big") if call.op == "tool_call" => Reply::Ok(numbers.clone()),
+                // Answered once the runner has each of the four results, so
+                // they are its, held unawaited, as the formula returns.
                 Some("wait") if call.op == "tool_call" => {
-                    let log = log.clone();
-                    Reply::When(
-                        Box::new(move || {
-                            let log = log.lock().expect("the calls");
-                            log.iter()
-                                .filter(|call| {
-                                    call.op == "answered:tool_call"
-                                        && call.args["args"]["action"] == "big"
-                                })
-                                .count()
-                                == 4
-                        }),
-                        json!(true),
-                    )
+                    let held = all_held.clone();
+                    Reply::When(Box::new(move || *held.lock().expect("held")), json!(true))
                 }
                 _ => standard(call, job),
             },
         ),
     );
+    // Each spawned call's event follows its outcome's taking.
+    let mut events = 0;
+    while events < 4 {
+        let line = service.line(SOON);
+        if line["name"] == "mcp_tool.call" && line["metadata"]["tool_action"] == "component.big" {
+            events += 1;
+        }
+    }
+    *held.lock().expect("held") = true;
     let ended = ended(&service, SOON);
     let (resident, peak) = (
         support::resident_kib(service.pid()),
@@ -1725,4 +1721,55 @@ fn a_formulas_unawaited_results_are_held_as_bytes() {
         peak < RESULTS_PEAK_KIB,
         "the runner peaked at {peak} KiB, past {RESULTS_PEAK_KIB}"
     );
+}
+
+#[test]
+fn a_release_answered_past_the_depth_bound_leaves_the_runner_not_clean() {
+    let mut service = Service::start();
+    let parent = formula(&[("call", run("run", "reagent:local.echo:0.1.0", json!({})))]);
+    let child = echo(&parent, "{}");
+    let deep = format!(
+        r#"{{"v":3,"ok":{}}}"#,
+        support::nested(cyfr_runner::wire::MAX_DEPTH)
+    );
+    service.assign(
+        &parent,
+        Box::new(move |call, job| match call.op.as_str() {
+            "admit_child" => {
+                let mut answer = job.admitted(&child);
+                answer["input"] = json!("null");
+                Reply::Ok(answer)
+            }
+            "release_child" => Reply::Plain(deep.clone().into_bytes()),
+            _ => standard(call, job),
+        }),
+    );
+    let frames = ended(&service, SOON);
+    assert_eq!(calls(&service, "release_child", &parent).len(), 1);
+    assert_eq!(frames.last["clean"], json!(false), "{}", frames.last);
+}
+
+#[test]
+fn a_call_answered_past_the_depth_bound_leaves_the_runner_not_clean() {
+    let mut service = Service::start();
+    let parent = formula(&[("call", json!({"tool": "component", "action": "deep"}))]);
+    let deep = format!(
+        r#"{{"v":3,"ok":{}}}"#,
+        support::nested(cyfr_runner::wire::MAX_DEPTH)
+    );
+    service.assign(
+        &parent,
+        Box::new(move |call, job| match call.op.as_str() {
+            "tool_call" => Reply::Plain(deep.clone().into_bytes()),
+            _ => standard(call, job),
+        }),
+    );
+    let frames = ended(&service, SOON);
+    // The formula's run ends at the answer it cannot read, in its words;
+    // what CYFR did for the call is not known.
+    assert_eq!(
+        calls(&service, "fail", &parent)[0].args["outcome"]["error"],
+        words::answer_too_deep("tool_call")
+    );
+    assert_eq!(frames.last["clean"], json!(false), "{}", frames.last);
 }

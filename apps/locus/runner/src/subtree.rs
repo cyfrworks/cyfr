@@ -294,9 +294,10 @@ impl Tree {
     }
 
     // Run `launch` on the runner's thread, as a task of its own; its end
-    // is reported to the loop once its waiter has been answered. A subtree
-    // that began to end meanwhile starts nothing: the entry, still open, is
-    // named in its `exit`.
+    // is reported to the loop once its waiter has been answered. The loop
+    // launches only a child its subtree holds, and a subtree that ends
+    // either holds none or ends the loop with it, so no launch meets one
+    // ending.
     fn launch(self: &Arc<Tree>, launch: Launch) {
         let Launch {
             start,
@@ -307,9 +308,6 @@ impl Tree {
         let execution_id = start.assignment.execution_id.clone();
         let tree = self.clone();
         let mut state = self.lock();
-        if state.ending {
-            return;
-        }
         let reported = execution_id.clone();
         let task = tokio::task::spawn_local(async move {
             let (ended, answer) = attempt::run(start, runner, stop).await;

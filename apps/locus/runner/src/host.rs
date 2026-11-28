@@ -164,9 +164,6 @@ pub struct Place {
     // Held, never read: dropped, each frees its place.
     _permit: Option<tokio::sync::OwnedSemaphorePermit>,
     _guest: Option<tokio::sync::OwnedSemaphorePermit>,
-    /// Set by the relay when an answer to the call reaches the runner,
-    /// whoever then reads it.
-    answered: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 
 impl Place {
@@ -175,20 +172,6 @@ impl Place {
         Place {
             _permit: Some(permit),
             _guest: None,
-            answered: None,
-        }
-    }
-
-    /// The place, marking `answered` when an answer to its call arrives.
-    pub fn watched(mut self, answered: std::sync::Arc<std::sync::atomic::AtomicBool>) -> Place {
-        self.answered = Some(answered);
-        self
-    }
-
-    /// Record that an answer to the place's call has reached the runner.
-    pub fn mark_answered(&self) {
-        if let Some(answered) = &self.answered {
-            answered.store(true, std::sync::atomic::Ordering::Release);
         }
     }
 
@@ -201,7 +184,6 @@ impl Place {
         Place {
             _permit: Some(permit),
             _guest: Some(guest),
-            answered: None,
         }
     }
 
@@ -210,7 +192,6 @@ impl Place {
         Place {
             _permit: None,
             _guest: None,
-            answered: None,
         }
     }
 }

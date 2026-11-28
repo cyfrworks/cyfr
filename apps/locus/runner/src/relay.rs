@@ -1648,7 +1648,7 @@ struct Owned {
 /// place it holds until then.
 struct Waiting {
     reply: tokio::sync::oneshot::Sender<Option<crate::host::Reached>>,
-    place: crate::host::Place,
+    _place: crate::host::Place,
 }
 
 /// What the relay's task holds.
@@ -1697,7 +1697,13 @@ impl Serving {
         };
         match open.encode(&frame) {
             Ok(bytes) => {
-                self.waiting.insert(seq, Waiting { reply, place });
+                self.waiting.insert(
+                    seq,
+                    Waiting {
+                        reply,
+                        _place: place,
+                    },
+                );
                 self.send(bytes)
             }
             Err(_unsent) => {
@@ -1925,9 +1931,6 @@ impl Serving {
                 } => {
                     // The answer frees its call's place.
                     if let Some(waiting) = self.waiting.remove(&re) {
-                        if status.is_some() {
-                            waiting.place.mark_answered();
-                        }
                         let _ = waiting
                             .reply
                             .send(status.map(|status| crate::host::Reached { status, body }));

@@ -532,6 +532,13 @@ pub fn request_body(op: &str, args: &Map<String, Value>) -> Zeroizing<String> {
 /// cleared when it is dropped: what the runner holds of a peer's value as
 /// bytes, never as a parsed tree.
 pub fn to_bytes(value: &Value) -> Zeroizing<Vec<u8>> {
+    let mut bytes = Zeroizing::new(Vec::with_capacity(json_len(value)));
+    serde_json::to_writer(&mut *bytes, value).expect("a JSON value is written");
+    bytes
+}
+
+/// How many bytes `value` is as JSON, counted without writing it.
+pub fn json_len<T: serde::Serialize + ?Sized>(value: &T) -> usize {
     struct Count(usize);
     impl std::io::Write for Count {
         fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
@@ -544,9 +551,7 @@ pub fn to_bytes(value: &Value) -> Zeroizing<Vec<u8>> {
     }
     let mut count = Count(0);
     serde_json::to_writer(&mut count, value).expect("a JSON value is written");
-    let mut bytes = Zeroizing::new(Vec::with_capacity(count.0));
-    serde_json::to_writer(&mut *bytes, value).expect("a JSON value is written");
-    bytes
+    count.0
 }
 
 /// What an answer at this wire's version says. Its `Debug` prints nothing

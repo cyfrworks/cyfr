@@ -72,48 +72,40 @@ use crate::subtree::{Stop, StopOnDrop, Unstarted};
 use crate::wire::{Json, Unread, read, to_bytes};
 use crate::words;
 
-/// Every error type the runner itself answers a formula's invoke with,
-/// held to `tests/fixtures/guest_error.json`'s `invoke_types`: every error
-/// the runner makes is made of one (`error`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Kind {
-    InvalidJson,
-    InvalidRequest,
-    RequestTooLarge,
-    ResourceLimit,
-    DispatchError,
-    Uncertain,
-    Timeout,
-    TaskFailed,
-    Unknown,
+/// Kind and every one of its variants, from one list: no variant can be
+/// left out of `Kind::ALL`.
+macro_rules! kinds {
+    ($($kind:ident => $name:literal),+ $(,)?) => {
+        /// Every error type the runner itself answers a formula's invoke
+        /// with (its emit's too), held to `tests/fixtures/guest_error.json`'s
+        /// `invoke_types`: every error the runner makes is made of one.
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub enum Kind {
+            $($kind),+
+        }
+
+        impl Kind {
+            pub const ALL: &'static [Kind] = &[$(Kind::$kind),+];
+
+            pub fn name(self) -> &'static str {
+                match self {
+                    $(Kind::$kind => $name),+
+                }
+            }
+        }
+    };
 }
 
-impl Kind {
-    pub const ALL: [Kind; 9] = [
-        Kind::InvalidJson,
-        Kind::InvalidRequest,
-        Kind::RequestTooLarge,
-        Kind::ResourceLimit,
-        Kind::DispatchError,
-        Kind::Uncertain,
-        Kind::Timeout,
-        Kind::TaskFailed,
-        Kind::Unknown,
-    ];
-
-    pub fn name(self) -> &'static str {
-        match self {
-            Kind::InvalidJson => "invalid_json",
-            Kind::InvalidRequest => "invalid_request",
-            Kind::RequestTooLarge => "request_too_large",
-            Kind::ResourceLimit => "resource_limit",
-            Kind::DispatchError => "dispatch_error",
-            Kind::Uncertain => "uncertain",
-            Kind::Timeout => "timeout",
-            Kind::TaskFailed => "task_failed",
-            Kind::Unknown => "unknown",
-        }
-    }
+kinds! {
+    InvalidJson => "invalid_json",
+    InvalidRequest => "invalid_request",
+    RequestTooLarge => "request_too_large",
+    ResourceLimit => "resource_limit",
+    DispatchError => "dispatch_error",
+    Uncertain => "uncertain",
+    Timeout => "timeout",
+    TaskFailed => "task_failed",
+    Unknown => "unknown",
 }
 
 /// The intercepted actions the host runs, and how.
@@ -323,18 +315,25 @@ async fn admit(run: &Run, request: ChildRequest, guest_fn: &str) -> Result<Start
         run.runner.tree.doubt();
         return Err(Unadmitted::Refused(call_failed()));
     };
-    let projected = (
+    // Checked whole while each part is still the answer's, which clears
+    // them all as it drops; taken apart only once it is known good.
+    let whole = {
+        let projected = answer.value();
+        matches!(projected.get("attempt_keys"), Some(Value::String(_)))
+            && matches!(projected.get("input"), Some(Value::String(_)))
+            && matches!(projected.get("secrets"), Some(Value::Object(_)))
+    };
+    if !whole {
+        return Err(given_back(run, &assignment.execution_id, "its admission is incomplete").await);
+    }
+    let (Some(Value::String(sealed)), Some(Value::String(input)), Some(secrets)) = (
         member(&mut answer, "attempt_keys"),
         member(&mut answer, "input"),
-        member(&mut answer, "secrets"),
-    );
-    let (Some(Value::String(sealed)), Some(Value::String(input)), Some(Value::Object(secrets))) =
-        projected
-    else {
-        return Err(given_back(run, &assignment.execution_id, "its admission is incomplete").await);
+        answer.take_member("secrets"),
+    ) else {
+        unreachable!("checked whole")
     };
     let (sealed, input) = (Zeroizing::new(sealed), Zeroizing::new(input));
-    let secrets = Json::from_value(Value::Object(secrets));
     // Admitted for this runner but not startable by it: given back at
     // once, rather than left to its lease.
     let Some((keys, input)) = checked(run, &assignment, &sealed, &input).await else {
@@ -385,7 +384,7 @@ async fn release(run: &Run, execution_id: &str, why: &str) -> wasmtime::Result<(
             args([("execution_id", Value::String(execution_id.to_owned()))]),
         )
         .await;
-    ended("release_child", &released)?;
+    // The doubt is recorded before any outcome of the release goes on.
     let confirmed = matches!(&released, Outcome::Answered(Reading::Ok(ok))
         if ok.value() == &Value::Bool(true));
     if !confirmed {
@@ -397,7 +396,7 @@ async fn release(run: &Run, execution_id: &str, why: &str) -> wasmtime::Result<(
         });
         run.runner.tree.doubt();
     }
-    Ok(())
+    ended("release_child", &released)
 }
 
 // The child's keys and input, when what CYFR answered for it is a child
@@ -495,8 +494,9 @@ enum Task {
 enum Held {
     /// A child, which a stop tells to close abandoned.
     Child(Stop),
-    /// A tool call, true once an answer to its call has reached the
-    /// runner: stopped before that, what it did is not known.
+    /// A tool call, true once the host has its call's outcome: stopped
+    /// before that, an answer may have arrived and been dropped unread, and
+    /// what CYFR did is not known.
     Call(Arc<std::sync::atomic::AtomicBool>),
 }
 
@@ -712,13 +712,26 @@ fn success_bytes(output: &[u8]) -> Result_ {
     bytes
 }
 
+/// The runner's error of `kind` with `message`, a peer's recorded words,
+/// written straight into a cleared buffer of its exact length, never
+/// through a plain value.
+fn error_bytes(kind: Kind, message: &str) -> Result_ {
+    let head = format!("{{\"error\":{{\"type\":\"{}\",\"message\":", kind.name());
+    let length = head.len() + crate::wire::json_len(message) + 2;
+    let mut bytes = Zeroizing::new(Vec::with_capacity(length));
+    bytes.extend_from_slice(head.as_bytes());
+    serde_json::to_writer(&mut *bytes, message).expect("a JSON string is written");
+    bytes.extend_from_slice(b"}}");
+    bytes
+}
+
 // What a child's answer is to its caller, and whether it succeeded.
 fn answered(answer: Option<Answer>) -> (Result_, bool) {
     match answer {
         Some(Answer::Output(output)) => (success_bytes(&output), true),
-        Some(Answer::Uncertain(message)) => (to_bytes(&error(Kind::Uncertain, &message)), false),
-        Some(Answer::Failed(message)) => (to_bytes(&error(Kind::DispatchError, &message)), false),
-        None => (to_bytes(&error(Kind::DispatchError, words::ENDED)), false),
+        Some(Answer::Uncertain(message)) => (error_bytes(Kind::Uncertain, &message), false),
+        Some(Answer::Failed(message)) => (error_bytes(Kind::DispatchError, &message), false),
+        None => (error_bytes(Kind::DispatchError, words::ENDED), false),
     }
 }
 
@@ -737,16 +750,20 @@ async fn tool_call(
     } = request;
     args.insert("action".to_owned(), Value::String(action));
     let outcome = host
-        .call_watched(
+        .call(
             "tool_call",
             super::args([
                 ("args", Value::Object(args)),
                 ("guest_fn", Value::String(guest_fn.to_owned())),
                 ("name", Value::String(tool)),
             ]),
-            answered,
         )
         .await;
+    // The host has taken the reply as the call's answer (or found none):
+    // what CYFR did is known from here, whoever reads it.
+    if let Some(answered) = answered {
+        answered.store(true, std::sync::atomic::Ordering::Release);
+    }
     ended("tool_call", &outcome)?;
     Ok(match outcome {
         Outcome::Answered(Reading::Ok(result)) => (success_bytes(&to_bytes(result.value())), true),

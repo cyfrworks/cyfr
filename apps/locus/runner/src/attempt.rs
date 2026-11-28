@@ -204,30 +204,19 @@ impl Host {
     /// Make the host call `op` with `args`, whose strings (a token, a
     /// guest's output or content) are cleared once the call has ended.
     pub async fn call(&self, op: &'static str, args: Map<String, Value>) -> Outcome {
-        self.call_watched(op, args, None).await
-    }
-
-    /// `call`, setting `answered` once any answer to it reaches the runner:
-    /// from then on what CYFR did is known, whoever reads the answer.
-    pub async fn call_watched(
-        &self,
-        op: &'static str,
-        args: Map<String, Value>,
-        answered: Option<Arc<std::sync::atomic::AtomicBool>>,
-    ) -> Outcome {
         let op = Op::named(op).expect("a callback of the host API");
-        let mut poster = Watched {
-            poster: self.relay.poster(&self.caller.keys.attempt.attempt),
-            answered,
-        };
+        let mut poster = self.relay.poster(&self.caller.keys.attempt.attempt);
         let args = Json::from_value(Value::Object(args));
         let Value::Object(members) = args.value() else {
             unreachable!("an object")
         };
         let outcome = host::call(&mut poster, &self.caller, op, members).await;
+        // An answer nested past the bound reached the runner unread: what
+        // CYFR did is as unknown as for a lost one.
         let ended = match outcome {
             Outcome::Lost | Outcome::Answered(Reading::Refused("lost")) => Some("lost"),
             Outcome::Uncertain => Some("uncertain"),
+            Outcome::TooDeep => Some("unread, nested too deep"),
             _ => None,
         };
         if let Some(ended) = ended {
@@ -305,33 +294,6 @@ impl Host {
 
     pub fn fence(&self) -> u64 {
         self.caller.keys.attempt.fence
-    }
-}
-
-/// A poster whose calls' places the relay marks when an answer to them
-/// reaches the runner.
-struct Watched {
-    poster: crate::relay::Poster,
-    answered: Option<Arc<std::sync::atomic::AtomicBool>>,
-}
-
-impl host::Post for Watched {
-    async fn place(&mut self, op: Op) -> Option<host::Place> {
-        let place = self.poster.place(op).await?;
-        Some(match &self.answered {
-            Some(answered) => place.watched(answered.clone()),
-            None => place,
-        })
-    }
-
-    fn post(
-        &mut self,
-        op: Op,
-        header: String,
-        body: Vec<u8>,
-        place: host::Place,
-    ) -> impl std::future::Future<Output = Option<host::Reached>> {
-        self.poster.post(op, header, body, place)
     }
 }
 
