@@ -146,6 +146,16 @@ func Main() int {
 	if status, ok := appUpdateService(os.Args); ok {
 		return status
 	}
+	// A second run through the docker group takes its command from the
+	// environment (takeGroupRun), and no command started inherits it.
+	args, continued, err := takeGroupRun(os.Args[1:])
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "Error:", err)
+		return exitFailure
+	}
+	if continued {
+		rootCmd.SetArgs(args)
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	defer stop()
 	return Run(ctx)

@@ -8,14 +8,18 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -94,14 +98,34 @@ func TestInitInstallsThroughOneSudoAndContinues(t *testing.T) {
 	if !strings.Contains(out, "Install these requirements? (yes/no)") {
 		t.Errorf("output:\n%s", out)
 	}
+	if got := sgRan(t, record); !slices.Equal(got, []string{"init", "--no-pull"}) {
+		t.Errorf("sg ran init again as %q", got)
+	}
+}
+
+// sgRan is the second run the sg stand-in was handed, its command line as
+// that run reads it (takeGroupRun): sg's string is this program's path and
+// groupWord alone, and no value of the person's is in it.
+func sgRan(t *testing.T, record string) []string {
+	t.Helper()
 	self, _ := os.Executable()
 	sg, err := os.ReadFile(record)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := string(sg), "docker\n-c\n"+shellQuote([]string{self, "init", "--no-pull"})+"\n"; got != want {
-		t.Errorf("sg ran %q, want %q", got, want)
+	if got, want := string(sg), "docker\n-c\nexec "+self+" "+groupWord+"\n"; got != want {
+		t.Fatalf("sg was given %q, want %q", got, want)
 	}
+	run, err := os.ReadFile(record + ".run")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(groupRunVar, string(run))
+	argv, continued, err := takeGroupRun([]string{groupWord})
+	if !continued || err != nil {
+		t.Fatalf("the second run's command line is unreadable: %v", err)
+	}
+	return argv
 }
 
 // Only what is missing is run.
@@ -518,7 +542,7 @@ func TestInitSaysLogInAgainWhereThereIsNoNewgrp(t *testing.T) {
 				sgProgram = filepath.Join(t.TempDir(), "sg")
 				t.Chdir(t.TempDir())
 				continued, _, err := prepare(t)
-				const want = "Docker does not answer this account until you log out and in again. Then run `cyfr init` again"
+				const want = "Docker does not answer this account until you log out and in again. Then run `cyfr init --no-pull` again"
 				if !r.login && err != nil && strings.Contains(err.Error(), loginAgain) {
 					t.Fatalf("with no daemon, init said %v", err)
 				}
@@ -560,21 +584,19 @@ func TestInitAnswersTheContinuationsStatus(t *testing.T) {
 }
 
 // dockerCommands are the command lines of every command that reaches
-// Docker, each as a person may give it: its words, and what sg must run
-// again.
-var dockerCommands = []struct {
-	path        string
-	args, again []string
-}{
-	{"up", []string{"up"}, []string{"up"}},
-	{"down", []string{"down"}, []string{"down"}},
-	{"backup", []string{"backup"}, []string{"backup"}},
-	{"restore snapshot.tar.gz", []string{"restore", "snapshot.tar.gz"}, []string{"restore", "--", "snapshot.tar.gz"}},
-	{"update", []string{"update", "--yes"}, []string{"update", "--yes=true"}},
-	{"uninstall", []string{"uninstall"}, []string{"uninstall"}},
-	{"access local", []string{"access", "local", "--yes"}, []string{"access", "--yes=true", "--", "local"}},
-	{"access", []string{"access", "--resume"}, []string{"access", "--resume=true"}},
-	{"access status", []string{"access", "status"}, []string{"access", "status"}},
+// Docker, each as a person may give it, and the second run's.
+var dockerCommands = []struct{ args, again []string }{
+	{[]string{"up"}, []string{"up"}},
+	{[]string{"down"}, []string{"down"}},
+	{[]string{"backup"}, []string{"backup"}},
+	{[]string{"restore", "snapshot.tar.gz"}, []string{"restore", "snapshot.tar.gz"}},
+	{[]string{"restore", "--no-start", "backups/my snap"}, []string{"restore", "--no-start", "backups/my snap"}},
+	{[]string{"restore", "--", "-weird"}, []string{"restore", "--", "-weird"}},
+	{[]string{"update", "--yes", "--version", "0.6.0-alpha.12"}, []string{"update", "--version=0.6.0-alpha.12", "--yes"}},
+	{[]string{"uninstall"}, []string{"uninstall"}},
+	{[]string{"access", "local", "--yes"}, []string{"access", "--yes", "local"}},
+	{[]string{"access", "--resume"}, []string{"access", "--resume"}},
+	{[]string{"access", "status"}, []string{"access", "status"}},
 }
 
 // runCommandLine runs the cyfr command line with args as a process of
@@ -599,7 +621,6 @@ func runCommandLine(t *testing.T, args ...string) error {
 // account's docker group, runs itself again through sg, as it was given,
 // before anything else; that run's status is its.
 func TestContinuesInATerminalOlderThanTheGroup(t *testing.T) {
-	self, _ := os.Executable()
 	for _, c := range dockerCommands {
 		for _, status := range []string{"0", "3"} {
 			t.Run(strings.Join(c.args, " ")+", status "+status, func(t *testing.T) {
@@ -611,12 +632,8 @@ func TestContinuesInATerminalOlderThanTheGroup(t *testing.T) {
 				if got := strconv.Itoa(ExitStatus(err)); err != nil && got != status || err == nil && status != "0" {
 					t.Fatalf("err %v, want the status %s", err, status)
 				}
-				sg, err := os.ReadFile(record)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if got, want := string(sg), "docker\n-c\n"+shellQuote(append([]string{self}, c.again...))+"\n"; got != want {
-					t.Errorf("sg ran %q, want %q", got, want)
+				if got := sgRan(t, record); !slices.Equal(got, c.again) {
+					t.Errorf("sg ran %q, want %q", got, c.again)
 				}
 				nothingWritten(t)
 			})
@@ -626,7 +643,8 @@ func TestContinuesInATerminalOlderThanTheGroup(t *testing.T) {
 
 // Where there is no sg, every command that reaches Docker says, when
 // Docker's socket refused this process, that a new login gives the
-// account the group, and runs nothing.
+// account the group, naming the command as the person gave it, flags
+// included and quoted where a shell needs it; and runs nothing.
 func TestSaysLogInAgainForEachCommandWhereThereIsNoSg(t *testing.T) {
 	for _, c := range dockerCommands {
 		t.Run(strings.Join(c.args, " "), func(t *testing.T) {
@@ -634,13 +652,179 @@ func TestSaysLogInAgainForEachCommandWhereThereIsNoSg(t *testing.T) {
 			s.member, s.refused = []string{"docker"}, socketDenied
 			sgProgram = filepath.Join(t.TempDir(), "sg")
 			t.Chdir(t.TempDir())
-			want := "Docker does not answer this account until you log out and in again. Then run `cyfr " + c.path + "` again"
+			want := "Docker does not answer this account until you log out and in again. Then run `" + commandSaid(c.again) + "` again"
 			if err := runCommandLine(t, c.args...); err == nil || err.Error() != want {
 				t.Fatalf("err %v, want %q", err, want)
 			}
 			nothingWritten(t)
 		})
 	}
+}
+
+// The sentence names what changes the command: a person who runs it gets
+// the command they gave.
+func TestLogInSentenceNamesTheFlagsThatMatter(t *testing.T) {
+	for _, c := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"update", "--version", "0.6.0-alpha.12"}, "`cyfr update --version=0.6.0-alpha.12`"},
+		{[]string{"restore", "--no-start", "backups/2026"}, "`cyfr restore --no-start backups/2026`"},
+		{[]string{"access", "--resume"}, "`cyfr access --resume`"},
+		{[]string{"access", "tailnet", "--tailscale-auth-key-file", "key"}, "`cyfr access --tailscale-auth-key-file=key tailnet`"},
+		{[]string{"restore", "backups/my snap"}, "`cyfr restore 'backups/my snap'`"},
+	} {
+		t.Run(strings.Join(c.args, " "), func(t *testing.T) {
+			s := standInMachine(t)
+			s.member, s.refused = []string{"docker"}, socketDenied
+			sgProgram = filepath.Join(t.TempDir(), "sg")
+			t.Chdir(t.TempDir())
+			if err := runCommandLine(t, c.args...); err == nil || !strings.Contains(err.Error(), c.want) {
+				t.Errorf("says %v, want it to name %s", err, c.want)
+			}
+		})
+	}
+}
+
+// A program whose path sg's string cannot carry as it is goes through no
+// sg: the person is told to log in again.
+func TestAPathSgCannotCarryIsToldToLogInAgain(t *testing.T) {
+	for _, self := range []string{"/home/ana/my bin/cyfr", "/home/ana/$x/cyfr", "/home/ana/cyfr;id", "relative/cyfr"} {
+		if _, err := groupRun("/bin/true", self, []string{"down"}, nil); err == nil {
+			t.Errorf("%q went through sg", self)
+		}
+	}
+	if _, err := groupRun("/bin/true", "/home/ana/.local/bin/cyfr-0.6_1+x", []string{"down"}, nil); err != nil {
+		t.Errorf("a plain path was refused: %v", err)
+	}
+}
+
+// The second run reads its command line once and leaves no trace of it
+// for anything it starts; an unreadable one is refused.
+func TestTheSecondRunTakesItsCommandLineOnce(t *testing.T) {
+	cmd, err := groupRun("/bin/true", "/opt/cyfr", []string{"restore", "it's $HOME `id` ;x\nnext"}, []string{groupRunVar + "=old", "KEEP=1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var run string
+	for _, e := range cmd.Env {
+		if v, ok := strings.CutPrefix(e, groupRunVar+"="); ok {
+			if run != "" {
+				t.Fatal("two command lines in the environment")
+			}
+			run = v
+		}
+	}
+	if !slices.Contains(cmd.Env, "KEEP=1") || strings.ContainsAny(run, "'\"$`;\n =") {
+		t.Fatalf("environment %q", cmd.Env)
+	}
+	t.Setenv(groupRunVar, run)
+	argv, continued, err := takeGroupRun([]string{groupWord})
+	if err != nil || !continued || !slices.Equal(argv, []string{"restore", "it's $HOME `id` ;x\nnext"}) {
+		t.Fatalf("read %q, %v, %v", argv, continued, err)
+	}
+	if _, left := os.LookupEnv(groupRunVar); left {
+		t.Error("the command line is left in the environment")
+	}
+	t.Setenv(groupRunVar, "not base64!")
+	if _, _, err := takeGroupRun([]string{groupWord}); err == nil {
+		t.Error("an unreadable command line was taken")
+	}
+	t.Setenv(groupRunVar, run)
+	if _, continued, _ := takeGroupRun([]string{"down"}); continued {
+		t.Error("a run not started by groupRun took a command line")
+	}
+	if _, left := os.LookupEnv(groupRunVar); left {
+		t.Error("a run not started by groupRun left the variable for what it starts")
+	}
+}
+
+// The second run is the first's command, flags and arguments, byte for
+// byte, as each login shell the account may have reads sg's string, and
+// nothing else runs: dash and bash, and any other shell
+// CYFR_TEST_LOGIN_SHELLS names (fish and tcsh, unpacked from Ubuntu's
+// packages, ran it here).
+func TestSecondRunIsTheSameCommandInEachLoginShell(t *testing.T) {
+	shells := append([]string{"/usr/bin/dash", "/usr/bin/bash"}, strings.Fields(os.Getenv("CYFR_TEST_LOGIN_SHELLS"))...)
+	for _, line := range [][]string{
+		{"restore", "backups/my snap"},
+		{"restore", "--no-start", "it's $HOME `id` ;x\nnext"},
+		{"restore", "--", "-weird"},
+		{"restore", ""},
+		{"restore", "snap!1"},
+		{"access", "public", "--domain", `ex'ample.com`, "--acme-email", `a"b$c`},
+		{"access", "tailnet", "--hostname", "", "--tailscale-auth-key-file", "my keys/key"},
+		{"access", "status", "--json"},
+		{"update", "--version", "0.6.0-alpha.12"},
+		{"backup", `--context=a\\b`},
+		{"access", "public", "--acme-email", `a\`, "--domain", "; touch PWNED; #"},
+	} {
+		t.Run(strings.Join(line, " "), func(t *testing.T) {
+			s := standInMachine(t)
+			s.member = []string{"docker"}
+			record := sgStandIn(t, "0")
+			t.Chdir(t.TempDir())
+			if err := runCommandLine(t, line...); err != nil && ExitStatus(err) != 0 {
+				t.Fatalf("err %v", err)
+			}
+			sent, err := os.ReadFile(record)
+			if err != nil {
+				t.Fatal(err)
+			}
+			run, err := os.ReadFile(record + ".run")
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := parsedLine(t, line)
+			for _, shell := range shells {
+				if _, err := os.Stat(shell); err != nil {
+					t.Logf("%s: not here", shell)
+					continue
+				}
+				dir := t.TempDir()
+				cmd := exec.Command(shell, "-c", strings.TrimSuffix(strings.TrimPrefix(string(sent), "docker\n-c\n"), "\n"))
+				cmd.Dir = dir
+				cmd.Env = append(os.Environ(), groupRunVar+"="+string(run), fakeGroupDump+"=1")
+				out, err := cmd.CombinedOutput()
+				var got struct {
+					Args  []string
+					Error string
+					Left  bool
+				}
+				if err != nil || json.Unmarshal(out, &got) != nil || got.Error != "<nil>" || got.Left {
+					t.Errorf("%s ran %q: %v", filepath.Base(shell), out, err)
+					continue
+				}
+				if entries, _ := os.ReadDir(dir); len(entries) > 0 {
+					t.Errorf("%s: something else ran, and wrote %v", filepath.Base(shell), entries)
+				}
+				if again := parsedLine(t, got.Args); !reflect.DeepEqual(again, want) {
+					t.Errorf("%s runs %q: %+v, want %+v", filepath.Base(shell), got.Args, again, want)
+				}
+			}
+		})
+	}
+}
+
+// parsedLine is a command line as cobra reads it: the command, every flag
+// given and its value, and the arguments.
+func parsedLine(t *testing.T, args []string) [3]any {
+	t.Helper()
+	c, rest, err := rootCmd.Find(args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Flags().VisitAll(func(f *pflag.Flag) { _ = f.Value.Set(f.DefValue); f.Changed = false })
+	if err := c.ParseFlags(rest); err != nil {
+		t.Fatal(err)
+	}
+	flags := map[string]string{}
+	c.Flags().VisitAll(func(f *pflag.Flag) {
+		if f.Changed {
+			flags[f.Name] = f.Value.String()
+		}
+	})
+	return [3]any{c.CommandPath(), flags, c.Flags().Args()}
 }
 
 // A command that does not reach Docker is not run again through sg.
@@ -658,31 +842,163 @@ func TestCommandsWithoutDockerAreNotContinued(t *testing.T) {
 
 // A command that reaches Docker carries on as it is when Docker already
 // answers this account, a rootless Docker or a group the account holds
-// already among them, and when sg has nothing to give it.
+// already among them, and when sg has nothing to give it; it asks Docker
+// nothing unless this process lacks the group its account has.
 func TestNeedsNoContinuation(t *testing.T) {
 	up, _, err := rootCmd.Find([]string{"up"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for name, set := range map[string]func(*testing.T, *standIn){
-		"Docker answers":     func(_ *testing.T, s *standIn) { s.reachable = true },
-		"another system":     func(_ *testing.T, s *standIn) { s.supported = false },
-		"not in the group":   func(_ *testing.T, s *standIn) { s.member = nil },
-		"the process has it": func(_ *testing.T, s *standIn) { s.process = []string{"docker"} },
+	for name, c := range map[string]struct {
+		set   func(*standIn)
+		asked int
+	}{
+		"Docker answers":     {func(s *standIn) { s.reachable = true }, 1},
+		"another system":     {func(s *standIn) { s.supported = false }, 0},
+		"not in the group":   {func(s *standIn) { s.member = nil }, 0},
+		"the process has it": {func(s *standIn) { s.process = []string{"docker"} }, 0},
 	} {
 		t.Run(name, func(t *testing.T) {
 			s := standInMachine(t)
 			s.member = []string{"docker"}
 			record := sgStandIn(t, "0")
-			set(t, s)
+			c.set(s)
+			asked := 0
+			reachable := machine.reachable
+			machine.reachable = func(ctx context.Context) bool {
+				asked++
+				return reachable(ctx)
+			}
 			if continued, err := withDockerGroup(t.Context(), up, nil, &bytes.Buffer{}, &bytes.Buffer{}); continued || err != nil {
 				t.Fatalf("continued %t, err %v", continued, err)
+			}
+			if asked != c.asked {
+				t.Errorf("Docker was asked %d times, want %d", asked, c.asked)
 			}
 			if _, err := os.Stat(record); err == nil {
 				t.Error("sg ran")
 			}
 		})
 	}
+}
+
+// A Docker that never answers costs a command nothing outside a stale
+// group, and within one no more than groupProbe before the second run.
+func TestADockerThatNeverAnswersIsNotWaitedFor(t *testing.T) {
+	// It answers nothing until its ctx ends, or 5 s pass: a step that
+	// waits for it unbounded fails below rather than hanging the suite.
+	never := func(ctx context.Context) bool {
+		select {
+		case <-ctx.Done():
+		case <-time.After(5 * time.Second):
+		}
+		return false
+	}
+	t.Run("the process holds the group", func(t *testing.T) {
+		s := standInMachine(t)
+		s.member, s.process = []string{"docker"}, []string{"docker"}
+		machine.reachable = never
+		t.Chdir(t.TempDir())
+		start := time.Now()
+		err := runCommandLine(t, "down")
+		if took := time.Since(start); took > 2*time.Second || err == nil || !strings.Contains(err.Error(), "no compose file") {
+			t.Fatalf("down answered %v after %s", err, took)
+		}
+	})
+	t.Run("older than the group", func(t *testing.T) {
+		s := standInMachine(t)
+		s.member = []string{"docker"}
+		record := sgStandIn(t, "0")
+		machine.reachable = never
+		saved := groupProbe
+		t.Cleanup(func() { groupProbe = saved })
+		groupProbe = 50 * time.Millisecond
+		t.Chdir(t.TempDir())
+		start := time.Now()
+		if err := runCommandLine(t, "down"); ExitStatus(err) != 0 || time.Since(start) > 5*time.Second {
+			t.Fatalf("down answered %v after %s", err, time.Since(start))
+		}
+		if got := sgRan(t, record); !slices.Equal(got, []string{"down"}) {
+			t.Errorf("sg ran %q", got)
+		}
+	})
+}
+
+// Ctrl-C in the step ends the command there, as an interruption: nothing
+// runs, through sg or in this process.
+func TestTheStepInterruptedEndsTheCommand(t *testing.T) {
+	s := standInMachine(t)
+	s.member = []string{"docker"}
+	record := sgStandIn(t, "0")
+	ctx, cancel := context.WithCancel(t.Context())
+	machine.reachable = func(probe context.Context) bool {
+		cancel()
+		<-probe.Done()
+		return false
+	}
+	t.Chdir(t.TempDir())
+	rootCmd.SetArgs([]string{"access", "status"})
+	t.Cleanup(func() { rootCmd.SetArgs(nil) })
+	err := Execute(ctx)
+	if ExitStatus(err) != exitInterrupted {
+		t.Fatalf("access status answered %v", err)
+	}
+	if _, err := os.Stat(record); err == nil {
+		t.Error("sg ran")
+	}
+}
+
+// A stop from outside reaches the second run, and this process exits as a
+// shell reports a run a signal killed: 128 and the signal's number.
+func TestAStopReachesTheSecondRun(t *testing.T) {
+	s := standInMachine(t)
+	s.member = []string{"docker"}
+	record := sgStandIn(t, "0")
+	t.Setenv(fakeSgWaits, "1")
+	ctx, cancel := context.WithCancel(t.Context())
+	ended := make(chan error, 1)
+	go func() {
+		_, err := continueWithGroup(ctx, []string{"down"}, "ana", io.Discard, io.Discard)
+		ended <- err
+	}()
+	for start := time.Now(); ; time.Sleep(20 * time.Millisecond) { // sleep-ok: polls for the stand-in's record, bounded below
+		if _, err := os.Stat(record + ".run"); err == nil {
+			break
+		}
+		if time.Since(start) > 20*time.Second {
+			t.Fatal("the second run did not start")
+		}
+	}
+	cancel()
+	select {
+	case err := <-ended:
+		if ExitStatus(err) != 128+int(syscall.SIGTERM) {
+			t.Fatalf("answered %v, status %d", err, ExitStatus(err))
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("the stop did not reach the second run")
+	}
+}
+
+// The root's one step is every command's: no command below the root sets
+// a PersistentPreRun of its own, which would take it away. Whether a
+// command reaches Docker is read from what it calls, which no test here
+// can read without a list kept by hand: the annotation is held to the
+// commands TestContinuesInATerminalOlderThanTheGroup names.
+func TestNoCommandTakesTheRootsStepAway(t *testing.T) {
+	var walk func(c *cobra.Command)
+	walk = func(c *cobra.Command) {
+		for _, sub := range c.Commands() {
+			if sub.PersistentPreRun != nil || sub.PersistentPreRunE != nil {
+				t.Errorf("%s sets a PersistentPreRun of its own", sub.CommandPath())
+			}
+			walk(sub)
+		}
+	}
+	if rootCmd.PersistentPreRunE == nil {
+		t.Error("the root has no step")
+	}
+	walk(rootCmd)
 }
 
 // TestShellQuoteReadsBackWordForWord runs shellQuote's line through sh, as
