@@ -586,19 +586,44 @@ var errNarrowing = errors.New("the person's VM's route still allows a released s
 // errRouteLost is a change after which the VM has no route.
 var errRouteLost = errors.New("the person's VM's route is lost")
 
-// reroute changes m's route to its live sessions' union, with without
-// left out, and answers whether the guard holds it: a change refused while
-// the old reach stands is errRefused's (the old reach stands); a route
-// withdrawn or gone ends the VM (errRouteLost).
-func (s *server) reroute(m *machine, without *spawn) error {
+// reroute takes leave out of m's sessions, where one is given, and changes
+// m's route to the union of the sessions left, in one step under m.reachMu:
+// no release or start of the person's between the two computes a union
+// that still holds a session gone. It answers whether the guard holds the
+// change: one refused while the old reach stands is the guard's error, and
+// a narrowing so refused is asked again at each sweep (m.narrowing); a
+// route withdrawn or gone ends the VM (errRouteLost).
+func (s *server) reroute(m *machine, leave *spawn) error {
 	m.reachMu.Lock()
 	defer m.reachMu.Unlock()
+	if leave == nil {
+		return s.routeToSessions(m)
+	}
 	s.mu.Lock()
-	var live []*spawn
-	for _, sp := range m.sessions {
-		if sp != without {
-			live = append(live, sp)
+	delete(m.sessions, leave.id)
+	if len(m.sessions) == 0 {
+		m.idleSince = now()
+	}
+	s.mu.Unlock()
+	err := s.routeToSessions(m)
+	if err != nil && !errors.Is(err, errRouteLost) {
+		s.mu.Lock()
+		if !m.ending && m.narrowing.IsZero() {
+			m.narrowing = now()
 		}
+		s.mu.Unlock()
+	}
+	return err
+}
+
+// routeToSessions changes m's route to its sessions' union, with
+// m.reachMu held: a change refused while the old reach stands is the
+// guard's error; a route withdrawn or gone ends the VM (errRouteLost).
+func (s *server) routeToSessions(m *machine) error {
+	s.mu.Lock()
+	live := make([]*spawn, 0, len(m.sessions))
+	for _, sp := range m.sessions {
+		live = append(live, sp)
 	}
 	reach, addrs := unionOf(live)
 	same := reach == m.reach && slices.Equal(addrs, m.addrs)
@@ -635,9 +660,12 @@ func (s *server) reroute(m *machine, without *spawn) error {
 }
 
 // joinMachine makes sp one of m's sessions and widens m's route to hold it,
-// answering the code sp is refused with: m's route still narrowing, its
-// hosts past the guard's bound, or the guard refusing the change.
+// in one step under m.reachMu, answering the code sp is refused with: m's
+// route still narrowing, its hosts past the guard's bound, or the guard
+// refusing the change, which takes sp out again before the lock is let go.
 func (s *server) joinMachine(m *machine, sp *spawn) string {
+	m.reachMu.Lock()
+	defer m.reachMu.Unlock()
 	s.mu.Lock()
 	switch {
 	case m.ending:
@@ -650,7 +678,7 @@ func (s *server) joinMachine(m *machine, sp *spawn) string {
 	}
 	m.sessions[sp.id] = sp
 	s.mu.Unlock()
-	if err := s.reroute(m, nil); err != nil {
+	if err := s.routeToSessions(m); err != nil {
 		s.mu.Lock()
 		delete(m.sessions, sp.id)
 		s.mu.Unlock()
@@ -664,21 +692,10 @@ func (s *server) joinMachine(m *machine, sp *spawn) string {
 }
 
 // leaveMachine takes sp out of its VM at its release, and narrows the VM's
-// route to the sessions left: a narrowing the guard refuses while the old
-// reach stands is asked again at each sweep (retryNarrowing).
+// route to the sessions left (reroute).
 func (s *server) leaveMachine(sp *spawn) {
 	m := sp.machine
-	err := s.reroute(m, sp)
-	s.mu.Lock()
-	delete(m.sessions, sp.id)
-	if len(m.sessions) == 0 {
-		m.idleSince = now()
-	}
-	if err != nil && !errors.Is(err, errRouteLost) && !m.ending && m.narrowing.IsZero() {
-		m.narrowing = now()
-	}
-	s.mu.Unlock()
-	if err != nil && !errors.Is(err, errRouteLost) {
+	if err := s.reroute(m, sp); err != nil && !errors.Is(err, errRouteLost) {
 		s.log.Warn("a person's VM's route still allows a released session's hosts, and is narrowed again at each sweep: %v", err)
 	}
 	s.finishMachine(m)
