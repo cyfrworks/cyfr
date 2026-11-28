@@ -125,6 +125,8 @@ missing() {
 . "$HERE/cleanup.sh" || missing
 # shellcheck source=lib.sh
 . "$HERE/lib.sh" || missing
+# shellcheck source=removals.sh
+. "$HERE/removals.sh" || missing
 proof_traps
 
 # The published release the guests install, INSTALL_VERSION, is the one
@@ -1175,19 +1177,10 @@ active" ]' sh "$GUEST_DIR/vt-after.txt"
     others=$(sed -n 's/^volume \(.*\):$/\1/p' "$GUEST_DIR/left-before.txt" | sort | comm -23 - <(sort "$GUEST_DIR/stack-volumes.txt"))
     [ -z "$(comm -12 <(uninstall_volume_names) <(printf '%s\n' "$others" | sed '/^$/d'))" ]
   }
-  # Every printed line that removes is one of the two commands the
-  # uninstall gives, each once: the stack's volumes' and the removal of
-  # the AppArmor profile .env names, which cyfr init installed as root
-  # under /etc/apparmor.d. No printed command removes a file or a folder
-  # of the person's.
+  # The commands uninstall prints are its removal of the stack's volumes
+  # and of the AppArmor profile .env names, and no other (removals.sh).
   printed_removals_are_the_volumes_and_the_profile() {
-    local profile target
-    profile=$(guest_ssh "sed -n 's/^CYFR_LOCUS_APPARMOR=//p' ~/cyfr/.env | tail -n 1") && [ -n "$profile" ] || return 1
-    target="/etc/apparmor.d/$profile"
-    grep -w rm "$GUEST_DIR/transcript-uninstall.txt" >"$GUEST_DIR/uninstall-removals.txt"
-    [ "$(wc -l <"$GUEST_DIR/uninstall-removals.txt")" = 2 ] &&
-      [ "$(grep -c '^    docker volume rm ' "$GUEST_DIR/uninstall-removals.txt")" = 1 ] &&
-      [ "$(grep -cxF -- "    sudo sh -c 'apparmor_parser -R $target && rm $target'" "$GUEST_DIR/uninstall-removals.txt")" = 1 ]
+    printed_removals "$GUEST_DIR/transcript-uninstall.txt" "$(guest_ssh "sed -n 's/^CYFR_LOCUS_APPARMOR=//p' ~/cyfr/.env | tail -n 1")"
   }
   check "cyfr down stops the stack first" guest_ssh 'cd ~/cyfr && cyfr down'
   # The screen's browser writes its profile in the folder until the screen
@@ -1217,7 +1210,7 @@ active" ]' sh "$GUEST_DIR/vt-after.txt"
   check "it names the folder by its path" transcript_has uninstall "^  every file in /home/proof/cyfr, CYFR's data among them\$"
   check "the volumes' command it prints removes exactly the stack's volumes" volume_command_names_the_volumes
   check "it names no volume of another project" volume_command_names_no_other_project
-  check "no printed command removes a file or a folder of the person's: it prints two that remove, the stack's volumes' and the AppArmor profile's .env names" \
+  check "no printed command removes a file or a folder of the person's: it prints two commands alone, the stack's volumes' removal and that of the AppArmor profile .env names, of the product's shape" \
     printed_removals_are_the_volumes_and_the_profile
   check "it names the CYFR app among what it removes, and says it removed it" \
     sh -c 'grep -qx "  the CYFR app, the package cyfr-desktop" "$1" && grep -qx "Removed the CYFR app." "$1"' sh "$GUEST_DIR/transcript-uninstall.txt"
