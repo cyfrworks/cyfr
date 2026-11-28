@@ -55,6 +55,7 @@ defmodule Aqua do
   use Boundary,
     deps: [Compendium, Opus, Cyfr, Sanctum, Arca],
     exports: [
+      Choices,
       Supervisor,
       Text
     ],

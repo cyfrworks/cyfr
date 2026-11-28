@@ -20,6 +20,8 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/cyfr/locus/keeper/internal/proc"
 )
 
 const digest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
@@ -64,7 +66,7 @@ printf '%s\n' "$@" > "$2"
 		t.Fatal(err)
 	}
 	return Maker{Dir: volume, Digest: id, Tool: tool, Root: "/", Mounts: mounts,
-		Wait: 5 * time.Second, Deadline: 30 * time.Second, Log: io.Discard}, dir
+		Wait: 5 * time.Second, Deadline: 30 * time.Second, Log: io.Discard, Start: proc.Own}, dir
 }
 
 // device is mk's device, failing the test otherwise, closed at its end.
@@ -133,11 +135,13 @@ func TestMakeArgsStayOnTheRootsFilesystemAndLeaveOutItsMounts(t *testing.T) {
 	if i := slices.Index(args, "-comp"); i < 0 || args[i+1] != "lz4" {
 		t.Fatalf("MakeArgs compress otherwise: %v", args)
 	}
-	if i := slices.Index(args, "-e"); i < 0 || !slices.Equal(args[i+1:], []string{"proc/*", "proc/.*", "etc/hosts"}) {
+	if i := slices.Index(args, "-e"); i < 0 || !slices.Equal(args[i+1:], []string{"proc/*", "proc/.*", "etc/hosts", "etc/resolv.conf"}) {
 		t.Fatalf("MakeArgs leave out otherwise: %v", args)
 	}
-	if slices.Contains(MakeArgs("/", "/out", nil), "-e") {
-		t.Fatal("MakeArgs ends in an empty -e")
+	// With no mount to leave out, the root's files of the guest's own
+	// names are still left out, for the guest's own to be the device's.
+	if args := MakeArgs("/", "/out", nil); !slices.Equal(args[slices.Index(args, "-e")+1:], []string{"etc/resolv.conf", "etc/hosts"}) {
+		t.Fatalf("MakeArgs with nothing to leave out: %v", args)
 	}
 }
 
@@ -430,7 +434,7 @@ func bindsChild(raw string) int {
 			return childRefused
 		}
 	}
-	job.Maker.Log = os.Stderr
+	job.Maker.Log, job.Maker.Start = os.Stderr, proc.Own
 	dev, _, err := job.Maker.Device()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -546,10 +550,55 @@ func TestABindOfTheRootsOwnFilesystemStaysOutOfTheDevice(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the child: %v\n%s", err, out)
 	}
-	got := listing(t, filepath.Join(guest, digest+".sqfs"))
-	if want := []string{"", "a *[x]", "a x", "a x/kept", "etc", "etc/kept"}; !slices.Equal(got, want) {
+	device := filepath.Join(guest, digest+".sqfs")
+	got := listing(t, device)
+	if want := []string{"", "a *[x]", "a x", "a x/kept", "etc", "etc/hosts", "etc/kept", "etc/resolv.conf"}; !slices.Equal(got, want) {
 		t.Fatalf("the device holds %q, want %q", got, want)
 	}
+	guestFilesHeld(t, device)
+}
+
+// guestFilesHeld fails unless the device at path holds each of the guest's
+// own files with its body, of root's, mode 0644.
+func guestFilesHeld(t *testing.T, path string) {
+	t.Helper()
+	for _, f := range guestFiles {
+		body, err := exec.Command("unsquashfs", "-cat", path, f.Path).Output()
+		if err != nil || string(body) != f.Body {
+			t.Errorf("the device's %s is %q (%v), want the guest's %q", f.Path, body, err, f.Body)
+		}
+		line, err := exec.Command("unsquashfs", "-lln", path, f.Path).Output()
+		if err != nil || !strings.Contains(string(line), "-rw-r--r-- 0/0 ") {
+			t.Errorf("the device's %s is listed %q (%v), want root's, mode 0644", f.Path, line, err)
+		}
+	}
+}
+
+// Where the root holds files of the guest's own names that are no mounts,
+// as on a host outside Docker, the device holds the guest's all the same.
+func TestTheDeviceHoldsTheGuestsOwnFiles(t *testing.T) {
+	if _, err := os.Stat(Mksquashfs); err != nil {
+		t.Skipf("this host has no %s: %v", Mksquashfs, err)
+	}
+	if _, err := exec.LookPath("unsquashfs"); err != nil {
+		t.Skipf("this host has no unsquashfs: %v", err)
+	}
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "etc"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"resolv.conf", "hosts"} {
+		if err := os.WriteFile(filepath.Join(root, "etc", name), []byte("the root's own\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	device := filepath.Join(t.TempDir(), "device.sqfs")
+	start, _, _ := reapingStart(t, "")
+	mk := Maker{Tool: Mksquashfs, Deadline: time.Minute, Start: start}
+	if err := mk.run(MakeArgs(root, device, nil)); err != nil {
+		t.Fatal(err)
+	}
+	guestFilesHeld(t, device)
 }
 
 // A machine's VMM reads the device under a uid of its own, in no group of
@@ -567,5 +616,17 @@ func TestTheDeviceIsReadableByAnyUIDAndWritableByNone(t *testing.T) {
 	}
 	if info.Mode().Perm() != 0o644 {
 		t.Fatalf("the device's mode is %s, not -rw-r--r--", info.Mode().Perm())
+	}
+}
+
+// The machines' device's maker is started by the maker's start, the
+// keeper's own, whose reaper hands it the maker's end.
+func TestTheDevicesMakerIsStartedByItsStart(t *testing.T) {
+	mk, _ := testMaker(t)
+	start, _, calls := reapingStart(t, "")
+	mk.Start = start
+	device(t, mk)
+	if got := calls(); len(got) != 1 || got[0][0] != filepath.Base(mk.Tool) {
+		t.Fatalf("the maker's start was asked to start %v, not the maker", got)
 	}
 }

@@ -26,10 +26,19 @@ import (
 // resolveTimeout bounds the resolution of one spawn's hosts.
 const resolveTimeout = 10 * time.Second
 
-// lookupHost answers a host's addresses; the resolver of the keeper's own
-// namespace in production.
+// lookupHost answers a host's addresses: the resolver of the keeper's own
+// namespace, or the one it is given (Config.Resolver, resolverAt).
 var lookupHost = func(ctx context.Context, host string) ([]netip.Addr, error) {
 	return net.DefaultResolver.LookupNetIP(ctx, "ip", host)
+}
+
+// resolverAt answers a host's addresses from the resolver at addr alone.
+func resolverAt(addr string) func(context.Context, string) ([]netip.Addr, error) {
+	r := &net.Resolver{PreferGo: true, Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
+		var d net.Dialer
+		return d.DialContext(ctx, network, addr)
+	}}
+	return func(ctx context.Context, host string) ([]netip.Addr, error) { return r.LookupNetIP(ctx, "ip", host) }
 }
 
 // resolveHosts answers the addresses a spawn's hosts name, at this moment
@@ -65,10 +74,19 @@ func resolveHosts(hosts []string) ([]netip.Addr, string, error) {
 type routeGuard interface {
 	Admit(spawnID, reach string, addrs []netip.Addr, netns, udp, tcp *os.File) (guard.Route, error)
 	AdmitRole(spawnID string, port uint16, private bool, netns, udp, tcp *os.File) (guard.Route, error)
+	// AdmitMachine and Change are a person's VM's route's
+	// (machine_linux.go): its admit, from its VMM's space's four
+	// descriptors, and a change of what it allows.
+	AdmitMachine(spawnID string, uid int, reach string, addrs []netip.Addr, netns, udp, tcp, nl *os.File) (guard.Machine, error)
+	Change(spawnID string, r guard.Route, reach string, addrs []netip.Addr) error
 	Clear(spawnID string, r guard.Route) error
 	// Live reports whether r's connection is the live one at this instant,
 	// with no end waiting unread on it.
 	Live(r guard.Route) bool
+	// Machines is why the guard of the last hello routes no person's VM,
+	// "" where it routes them or before any hello (guard.Client.Machines).
+	// It takes the client's lock, so it is read outside the keeper's.
+	Machines() string
 }
 
 // egress is what a routed spawn may reach, read from its request before it
@@ -163,12 +181,23 @@ func receiveRoute(route *os.File) ([]*os.File, error) {
 	return []*os.File{os.NewFile(uintptr(fds[0]), "netns"), os.NewFile(uintptr(fds[1]), "names-udp"), os.NewFile(uintptr(fds[2]), "names-tcp")}, nil
 }
 
+// unclearedRoute is a withdrawn route the guard has not yet said cleared,
+// the hold it was withdrawn from (at) and where its holder holds it, which
+// lets that hold go once the guard does, and never one taken since.
+type unclearedRoute struct {
+	route guard.Route
+	at    *guard.Route
+	held  **guard.Route
+}
+
 // withdrawRoute has the guard withdraw a space's route, held in held under
-// its id, once its processes are gone: a retiring spawn's, or an ended
-// role process's. The route stays the keeper's until the guard says
-// cleared, or its connection has ended (the guard's own rule withdraws
-// every route made over it): one the guard refuses is asked again at each
-// sweep (retryClears), and nothing counts it cleared before.
+// its id, once its processes are gone: a retiring spawn's, an ended role
+// process's or an ended VM's. The route stays the keeper's, held in held,
+// until the guard says cleared, or its connection has ended (the guard's
+// own rule withdraws every route made over it): one the guard refuses is
+// asked again at each sweep (retryClears), which lets held go once it is
+// cleared, and nothing counts it cleared before. A person's VM is released
+// only once its route is let go (finishMachine), by the sweep's clear too.
 func (s *server) withdrawRoute(id string, held **guard.Route) {
 	s.mu.Lock()
 	r := *held
@@ -182,9 +211,9 @@ func (s *server) withdrawRoute(id string, held **guard.Route) {
 			s.log.Warn("space %s: its route is not yet withdrawn, and is asked again: %v", id, err)
 			s.mu.Lock()
 			if s.uncleared == nil {
-				s.uncleared = map[string]guard.Route{}
+				s.uncleared = map[string]unclearedRoute{}
 			}
-			s.uncleared[id] = *r
+			s.uncleared[id] = unclearedRoute{route: *r, at: r, held: held}
 			s.mu.Unlock()
 			return
 		}
@@ -195,26 +224,30 @@ func (s *server) withdrawRoute(id string, held **guard.Route) {
 }
 
 // retryClears asks the guard again for every route it has not yet said
-// cleared, and forgets one only once it has, or once its connection ended.
+// cleared, and forgets one only once it has, or once its connection ended:
+// then its holder's hold on it is let go too.
 func (s *server) retryClears() {
 	s.mu.Lock()
-	todo := make(map[string]guard.Route, len(s.uncleared))
-	for id, r := range s.uncleared {
-		todo[id] = r
+	todo := make(map[string]unclearedRoute, len(s.uncleared))
+	for id, u := range s.uncleared {
+		todo[id] = u
 	}
 	s.mu.Unlock()
-	for id, r := range todo {
+	for id, u := range todo {
 		s.mu.Lock()
-		gone := s.lostRoutes[r.Conn]
+		gone := s.lostRoutes[u.route.Conn]
 		s.mu.Unlock()
 		if !gone {
-			if err := s.guard.Clear(id, r); err != nil && !errors.Is(err, guard.ErrConnectionGone) {
+			if err := s.guard.Clear(id, u.route); err != nil && !errors.Is(err, guard.ErrConnectionGone) {
 				s.log.Warn("spawn %s: its route is still not withdrawn: %v", id, err)
 				continue
 			}
 		}
 		s.mu.Lock()
 		delete(s.uncleared, id)
+		if *u.held == u.at {
+			*u.held = nil
+		}
 		s.mu.Unlock()
 	}
 }
@@ -251,13 +284,33 @@ func (s *server) guardLost(conn uint64) {
 			}
 		}
 	}
+	// A person's VM routed over conn ends at once: the VMM's group is
+	// killed, every session in it with it, before the client dials again.
+	machines := s.machineRoutes(conn)
 	// No role starts again from here, nor any spawn: the end is marked in
 	// the critical section every start's last check takes (owns).
 	if len(roles) > 0 {
 		s.closing.Store(true)
 	}
 	s.mu.Unlock()
+	for _, m := range machines {
+		if !killMachineGroup(m) {
+			s.log.Error("a person's VM's group outlived its kill after the guard's connection ended; the keeper ends")
+			s.exitKeeper(ExitLost)
+			return
+		}
+		go m.vm.Kill()
+	}
+	if len(machines) > 0 {
+		s.log.Warn("egress: the guard's connection %d ended; %d people's VMs are killed", conn, len(machines))
+	}
 	if len(roles) > 0 {
+		// The keeper's end, and why, are said and recorded before the roles
+		// are killed: their end is what serve's loop sees, and it then ends
+		// for this reason and with its code, every time. The VMs above are
+		// killed first, so the line that says so comes before this one.
+		s.log.Error("egress: the guard's connection %d ended under the routes of roles %s; the keeper ends", conn, roleNames(roles))
+		s.end(ExitLost)
 		for _, r := range roles {
 			if !r.leaf.KillBy(time.Now()) {
 				s.log.Error("role %s: processes outlived its group's kill after the guard's connection ended", r.spec.Name)
@@ -266,10 +319,9 @@ func (s *server) guardLost(conn uint64) {
 				return
 			}
 		}
-		defer func() {
-			s.log.Error("egress: the guard's connection %d ended under the routes of roles %s; the keeper ends", conn, roleNames(roles))
-			s.end(ExitLost)
-		}()
+		if s.rolesKilled != nil {
+			s.rolesKilled()
+		}
 	}
 	if len(routed) == 0 {
 		return

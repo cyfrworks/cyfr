@@ -555,7 +555,8 @@ func (d *driver) controlRequest(l harnessLine) error {
 			if _, shown := d.own[request.ToolUseID]; !shown {
 				own := ownName(request.ToolName)
 				d.own[request.ToolUseID] = own
-				if err := d.c.Emit(brainwire.NewEvent("own").Set("gen", d.gen).SetOptional("work", d.turnWork).Set("name", own).Set("phase", "start")); err != nil {
+				input, _ := brainwire.Marshal(request.Input)
+				if err := d.startOwn(request.ToolUseID, own, input); err != nil {
 					return err
 				}
 			}
@@ -583,8 +584,9 @@ func (d *driver) streamEvent(raw json.RawMessage) error {
 			ID string `json:"id"`
 		} `json:"message"`
 		Delta struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
+			Type     string `json:"type"`
+			Text     string `json:"text"`
+			Thinking string `json:"thinking"`
 		} `json:"delta"`
 	}
 	if json.Unmarshal(raw, &e) != nil {
@@ -595,8 +597,21 @@ func (d *driver) streamEvent(raw json.RawMessage) error {
 		d.message = e.Message.ID
 	case e.Type == "content_block_delta" && e.Delta.Type == "text_delta" && e.Delta.Text != "":
 		return d.c.EmitText(brainwire.NewEvent("text").Set("gen", d.gen).SetOptional("work", d.turnWork).Set("message", d.messageID("")), "delta", e.Delta.Text)
+	case e.Type == "content_block_delta" && e.Delta.Type == "thinking_delta" && e.Delta.Thinking != "":
+		// The model's reasoning, never part of what it said: the whole
+		// message's thinking block is not said either (assistant).
+		return d.c.EmitText(brainwire.NewEvent("thought").Set("gen", d.gen).SetOptional("work", d.turnWork).Set("message", d.messageID("")), "delta", e.Delta.Thinking)
 	}
 	return nil
+}
+
+// startOwn shows the start of the harness's own tool, the run `id`, with
+// what its input shows it runs: its `command`, else the `file_path` it
+// acts on, else the input. Only its input is read: its result can carry
+// whole files (`tool_use_result`), so an end says nothing more.
+func (d *driver) startOwn(id, name string, input json.RawMessage) error {
+	return d.c.Emit(brainwire.NewEvent("own").Set("gen", d.gen).SetOptional("work", d.turnWork).Set("call", brainwire.CallID(id)).
+		Set("name", name).Set("phase", "start").SetOptional("detail", brainwire.InputDetail(input, "command", "file_path")))
 }
 
 // messageID is a native message's id, or the driver's own name for one
@@ -615,10 +630,11 @@ func (d *driver) assistant(l harnessLine) error {
 	var message struct {
 		ID      string `json:"id"`
 		Content []struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-			ID   string `json:"id"`
-			Name string `json:"name"`
+			Type  string          `json:"type"`
+			Text  string          `json:"text"`
+			ID    string          `json:"id"`
+			Name  string          `json:"name"`
+			Input json.RawMessage `json:"input"`
 		} `json:"content"`
 	}
 	_ = json.Unmarshal(l.Message, &message)
@@ -643,7 +659,7 @@ func (d *driver) assistant(l harnessLine) error {
 		case block.Type == "tool_use" && !strings.HasPrefix(block.Name, toolPrefix(d.server)) && block.Name != "":
 			name := ownName(block.Name)
 			d.own[block.ID] = name
-			if err := d.c.Emit(brainwire.NewEvent("own").Set("gen", d.gen).SetOptional("work", d.turnWork).Set("name", name).Set("phase", "start")); err != nil {
+			if err := d.startOwn(block.ID, name, block.Input); err != nil {
 				return err
 			}
 		}
@@ -671,7 +687,8 @@ func (d *driver) toolResults(raw json.RawMessage) error {
 			continue
 		}
 		delete(d.own, block.ToolUseID)
-		if err := d.c.Emit(brainwire.NewEvent("own").Set("gen", d.gen).SetOptional("work", d.turnWork).Set("name", name).Set("phase", "end")); err != nil {
+		if err := d.c.Emit(brainwire.NewEvent("own").Set("gen", d.gen).SetOptional("work", d.turnWork).Set("call", brainwire.CallID(block.ToolUseID)).
+			Set("name", name).Set("phase", "end")); err != nil {
 			return err
 		}
 	}

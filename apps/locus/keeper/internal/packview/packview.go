@@ -939,3 +939,82 @@ func removeTree(path string) error {
 	}
 	return os.RemoveAll(path)
 }
+
+// Stream writes the complete generation at path as a put's stream, which
+// Extract reads back to the same files: its manifest first, then every
+// file in the manifest's order, each of mode 0644, or 0755 with the
+// executable bit. A keeper puts its own copy of a generation into a
+// person's VM so, over that VM's control connection (package serve): the
+// guest's keeper checks the stream as this one checks a role's.
+func Stream(path string, w io.Writer) error {
+	var lines []Line
+	err := filepath.WalkDir(path, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("%s is not a regular file", p)
+		}
+		rel, err := filepath.Rel(path, p)
+		if err != nil {
+			return err
+		}
+		f, err := os.Open(p)
+		if err != nil {
+			return err
+		}
+		h := sha256.New()
+		n, err := io.Copy(h, f)
+		_ = f.Close()
+		if err != nil {
+			return err
+		}
+		lines = append(lines, Line{Path: filepath.ToSlash(rel), Size: n, SHA256: "sha256:" + hex.EncodeToString(h.Sum(nil)),
+			Executable: info.Mode().Perm()&0o100 != 0})
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if lines == nil {
+		lines = []Line{}
+	}
+	sort.Slice(lines, func(i, j int) bool { return lines[i].Path < lines[j].Path })
+	manifest, err := json.Marshal(Manifest{Files: lines})
+	if err != nil {
+		return err
+	}
+	tw := tar.NewWriter(w)
+	if err := tw.WriteHeader(&tar.Header{Name: ManifestName, Mode: 0o644, Size: int64(len(manifest)), Typeflag: tar.TypeReg, Format: tar.FormatPAX}); err != nil {
+		return err
+	}
+	if _, err := tw.Write(manifest); err != nil {
+		return err
+	}
+	for _, line := range lines {
+		mode := int64(0o644)
+		if line.Executable {
+			mode = 0o755
+		}
+		if err := tw.WriteHeader(&tar.Header{Name: line.Path, Mode: mode, Size: line.Size, Typeflag: tar.TypeReg, Format: tar.FormatPAX}); err != nil {
+			return err
+		}
+		f, err := os.Open(filepath.Join(path, filepath.FromSlash(line.Path)))
+		if err != nil {
+			return err
+		}
+		_, err = io.Copy(tw, io.LimitReader(f, line.Size))
+		_ = f.Close()
+		if err != nil {
+			return err
+		}
+	}
+	return tw.Close()
+}

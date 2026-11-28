@@ -28,6 +28,10 @@ import (
 //	slow      streams a first part, waits for a steer, then replies naming what it read
 //	read      calls CYFR's `files` and replies with the answer and whether it ran
 //	own       runs its own command, its output a canary, then replies
+//	activity  reasons in a summary of two deltas, runs two commands that end in
+//	          reverse order and a patch whose diff is past a detail's bound
+//	          (fakeBigText), and calls a sub-agent whose thread speaks,
+//	          reasons and runs a command of its own, then replies
 //	fail      fails on a 401, its error in the harness's own words
 //	late      replies, then runs a turn of its own that no post started
 //	counts    sends a total missing a count, one with none, a reroute, then a whole one
@@ -162,6 +166,9 @@ func fakeCodex() int {
 		notify("thread/tokenUsage/updated", map[string]any{"threadId": thread.id, "turnId": turn,
 			"tokenUsage": map[string]any{"total": total, "last": map[string]any{"inputTokens": input, "outputTokens": output}}})
 	}
+	// fakeBigText is the diff of the `activity` patch: 3,000 bytes of
+	// three-byte characters, past a detail's bound.
+	fakeBigText := strings.Repeat("€", 1000)
 	say := func(turn, message, text string) {
 		notify("item/started", map[string]any{"threadId": thread.id, "turnId": turn, "item": map[string]any{"type": "agentMessage", "id": message, "text": ""}})
 		half := len(text) / 2
@@ -200,6 +207,40 @@ func fakeCodex() int {
 			case <-time.After(5 * time.Second):
 				reply(turn, "no steer came")
 			}
+		case strings.Contains(words, "activity"):
+			notify("item/started", map[string]any{"threadId": thread.id, "turnId": turn, "item": map[string]any{"type": "reasoning", "id": "rs_act", "summary": []any{}}})
+			for _, delta := range []string{"THINK-ONE ", "THINK-TWO"} {
+				notify("item/reasoning/summaryTextDelta", map[string]any{"threadId": thread.id, "turnId": turn, "itemId": "rs_act", "delta": delta, "summaryIndex": 0})
+			}
+			notify("item/completed", map[string]any{"threadId": thread.id, "turnId": turn, "item": map[string]any{"type": "reasoning", "id": "rs_act",
+				"summary": []any{"THINK-ONE THINK-TWO"}}})
+			first := map[string]any{"type": "commandExecution", "id": "cmd_a", "command": "echo A", "status": "inProgress"}
+			second := map[string]any{"type": "commandExecution", "id": "cmd_b", "command": "echo B", "status": "inProgress"}
+			for _, command := range []map[string]any{first, second} {
+				notify("item/started", map[string]any{"threadId": thread.id, "turnId": turn, "item": command})
+			}
+			for _, command := range []map[string]any{second, first} {
+				command["status"], command["aggregatedOutput"] = "completed", "OUTPUT-CANARY"
+				notify("item/completed", map[string]any{"threadId": thread.id, "turnId": turn, "item": command})
+			}
+			patch := map[string]any{"type": "fileChange", "id": "patch_1", "status": "inProgress",
+				"changes": []any{map[string]any{"path": "big.md", "kind": map[string]any{"type": "add"}, "diff": fakeBigText}}}
+			notify("item/started", map[string]any{"threadId": thread.id, "turnId": turn, "item": patch})
+			patch["status"] = "completed"
+			notify("item/completed", map[string]any{"threadId": thread.id, "turnId": turn, "item": patch})
+			collab := map[string]any{"type": "collabAgentToolCall", "id": "collab_act", "tool": "spawnAgent", "status": "inProgress"}
+			notify("item/started", map[string]any{"threadId": thread.id, "turnId": turn, "item": collab})
+			child, childTurn := "019a0000-0000-7000-8000-00000000c41d", "turn_child_act"
+			notify("item/reasoning/summaryTextDelta", map[string]any{"threadId": child, "turnId": childTurn, "itemId": "rs_child", "delta": "CHILD-THOUGHT"})
+			ran := map[string]any{"type": "commandExecution", "id": "cmd_child", "command": "echo CHILD-RAN", "status": "inProgress"}
+			notify("item/started", map[string]any{"threadId": child, "turnId": childTurn, "item": ran})
+			ran["status"] = "completed"
+			notify("item/completed", map[string]any{"threadId": child, "turnId": childTurn, "item": ran})
+			notify("item/agentMessage/delta", map[string]any{"threadId": child, "turnId": childTurn, "itemId": "msg_child", "delta": "CHILD-WORDS"})
+			notify("item/completed", map[string]any{"threadId": child, "turnId": childTurn, "item": map[string]any{"type": "agentMessage", "id": "msg_child", "text": "CHILD-WORDS"}})
+			collab["status"] = "completed"
+			notify("item/completed", map[string]any{"threadId": thread.id, "turnId": turn, "item": collab})
+			reply(turn, "The member said its own words.")
 		case strings.Contains(words, "read"):
 			args := json.RawMessage(`{"action":"read","path":"notes.txt","count":12345678901234567890}`)
 			notify("item/started", map[string]any{"threadId": thread.id, "turnId": turn, "item": map[string]any{"type": "dynamicToolCall", "id": "call_read", "tool": "files"}})

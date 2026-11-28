@@ -807,10 +807,14 @@ func noARP(fd int, name string) error {
 	return nil
 }
 
+// tunDevice is the device a machine's tap is made through, a variable its
+// tests point elsewhere.
+var tunDevice = "/dev/net/tun"
+
 // makeTap makes a persistent tap named name in the guard's namespace,
 // owned by uid, so that uid attaches to it with no capability.
 func makeTap(name string, uid int) error {
-	fd, err := unix.Open("/dev/net/tun", unix.O_RDWR|unix.O_CLOEXEC, 0)
+	fd, err := unix.Open(tunDevice, unix.O_RDWR|unix.O_CLOEXEC, 0)
 	if err != nil {
 		return fmt.Errorf("the machine's tap: %w", err)
 	}

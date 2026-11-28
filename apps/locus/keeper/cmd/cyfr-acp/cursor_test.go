@@ -270,6 +270,16 @@ func TestCursorsCallIsAnAskAndAPersonsIsTheirOwn(t *testing.T) {
 
 // A post mid-turn is answered later: Cursor's second prompt would cancel
 // the running one. Usage is unavailable.
+// Cursor's calls carry their ids as Cursor writes them, a newline in each,
+// and its sub-agent is the one call of its tool `task`, whose own request
+// after it is answered method-not-found (S3, sub-agents).
+func TestCursorsActivityIsItsCallsThoughtsAndOwnWords(t *testing.T) {
+	s := startCursor(t, "")
+	freshCursor(s)
+	postText(s, "stp_act", "trn_1", "activity")
+	activityHolds(t, s, [2]string{"call-a-0\nfc_a_0", "call-b-1\nfc_b_0"}, "call-t-3\nfc_t_0")
+}
+
 func TestCursorTakesNoMessageMidTurnAndReportsNoUsage(t *testing.T) {
 	s := startCursor(t, "")
 	freshCursor(s)

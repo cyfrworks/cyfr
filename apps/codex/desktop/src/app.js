@@ -39,6 +39,9 @@ export const RESTART_WAIT_MS = 5_000
 const END_WAITS_MS = 5000
 // The rail's width, at the window's left.
 const RAIL = 72
+// The input events by which a person acts in a page (Electron's
+// input-event types): a press, a touch or a key, never the page's own focus.
+const PERSON_INPUT = new Set(["mouseDown", "touchStart", "gestureTapDown", "rawKeyDown", "keyDown"])
 // How many times a clear goes over a kept storage. A closing page's
 // scripts write until its process has gone, also after a clear that began
 // once its view was destroyed, and no header rule sees those writes: the
@@ -162,6 +165,7 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
   let state = initial(accountRoad, screen, app.commandLine.hasSwitch("updated"))
   let child = null
   let frame = null // the app's one window, holding the rail and the content
+  let keyboardHeld = null // the part of frame that last held the keyboard, "rail" or "content" (keyboardBack)
   let rail = null // the rail's view
   let railURL = "" // its address, as the last ready gave it
   let menuOpen = null // the row menu shown, or its Forget's dialog: {menu, asked}
@@ -516,6 +520,8 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
     const f = new BaseWindow({width: 1280, height: 860, show: false, title: "CYFR", autoHideMenuBar: true, backgroundColor: "#071013",
       ...(screen ? {frame: false} : {})})
     frame = f
+    keyboardHeld = null
+    f.on("focus", keyboardBack)
     f.on("resize", layout)
     f.on("closed", () => {
       if (frame === f) frame = null
@@ -539,6 +545,24 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
       retired.add(f)
       f.destroy()
     }
+  }
+
+  // As the app's window gains focus it gives the keyboard back to the part
+  // that last held it, and to the content's page where none has, as in a
+  // fresh window: a BaseWindow gives none of its views the keyboard, where
+  // a BrowserWindow gives its own page. Without it a page whose document
+  // committed before the compositor activated its window, as the chooser's
+  // move on to the device's lock page does in the fresh window every lock
+  // on the box's screen opens, took no key typed to it until a press
+  // inside it. A person on a row of the rail keeps their place there: the
+  // rail is the part that last held the keyboard only when they pressed or
+  // typed in it (openRail).
+  function keyboardBack() {
+    const part = keyboardHeld === "rail" && rail ? rail : content
+    if (part && !part.webContents.isDestroyed()) part.webContents.focus()
+  }
+  function keyboardToContent() {
+    if (content && !content.webContents.isDestroyed()) content.webContents.focus()
   }
 
   // Where the content is: the window's content area beside the rail.
@@ -649,6 +673,17 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
     if (!rail) {
       rail = new WebContentsView({webPreferences: {...SECURE, session: appSession()}})
       confine(rail.webContents, "rail")
+      // The rail holds the keyboard only by a person's press or key in it;
+      // one it takes by itself, its page loading after the content's, is
+      // given back to the content. Its focus is told before the press that
+      // gave it, so it is read once that press has been told.
+      const r = rail
+      r.webContents.on("input-event", (_event, input) => {
+        if (rail === r && PERSON_INPUT.has(input.type)) keyboardHeld = "rail"
+      })
+      r.webContents.on("focus", () => setTimeout(() => {
+        if (rail === r && keyboardHeld !== "rail") keyboardToContent()
+      }, 0))
       // A lost rail is shown again; one that failed to load is tried again
       // at the next ready.
       ends(rail.webContents, {failed: () => {}, lost: () => rail?.webContents.reload()})
@@ -702,6 +737,9 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
     }
     content = v
     const contents = v.webContents
+    contents.on("focus", () => {
+      if (content === v) keyboardHeld = "content"
+    })
     ends(contents, {failed: (code, url) => heard({type: "load-failed", code, url}), lost: () => heard({type: "lost"})})
     confine(contents, "content")
     // The window handler opens only the device's two loopback confirmation

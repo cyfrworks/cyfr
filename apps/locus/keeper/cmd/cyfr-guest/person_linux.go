@@ -99,7 +99,13 @@ func keeperArgs(person bool) []string {
 	if person {
 		argv = append(argv, "--kept-homes", vm.GuestKeptRoot+":"+vm.GuestKeptUIDs)
 	}
-	return append(argv, "--guard", vm.GuestGuardControl, "--", vm.GuestAgent, "relay")
+	argv = append(argv, "--guard", vm.GuestGuardControl)
+	if person {
+		// The guest's root has no resolver of its own: its /etc/resolv.conf
+		// names 127.0.0.11, its spaces' own name sockets (vm's guestFiles).
+		argv = append(argv, "--resolver", netip.AddrPortFrom(guard.MachineNames, 53).String())
+	}
+	return append(argv, "--", vm.GuestAgent, "relay")
 }
 
 // guardEnv is the guest guard's environment: a person's VM's asks its
