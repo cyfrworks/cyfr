@@ -167,3 +167,36 @@ func TestAGuestsWordsReachTheLogQuoted(t *testing.T) {
 		t.Fatalf("the guest's code is not in the log quoted:\n%s", said)
 	}
 }
+
+// A guest's pid for its session's leader is passed on only as a pid a
+// Linux kernel gives, else as none known (5444's note): 2^40 and -5 reach
+// the role as 0, 77 as 77.
+func TestAGuestsPIDIsHeldToAPid(t *testing.T) {
+	k := newVMKeeper(t)
+	k.disk(t, "ath_a", "vlt_a1", "vlt_a2", "vlt_a3")
+	pids := []int{1 << 40, -5, 77}
+	n := 0
+	k.guest.mu.Lock()
+	k.guest.answer = func(_ *fakeVM, req map[string]any) ([]any, bool) {
+		if req["type"] != protocol.TypeSpawn {
+			return nil, false
+		}
+		id, _ := req["id"].(string)
+		spawnID := fmt.Sprintf("%032x", 200+n)
+		k.guest.mu.Lock()
+		k.guest.spawns[spawnID] = true
+		k.guest.mu.Unlock()
+		pid := pids[n]
+		n++
+		return []any{protocol.NewSpawned(id, spawnID, 40001, pid)}, true
+	}
+	k.guest.mu.Unlock()
+	for i, want := range []float64{0, 0, 77} {
+		id := fmt.Sprintf("s%d", i+1)
+		k.place(t, "p-"+id, "ath_a")
+		k.s.handleSpawn(k.c, k.spawnReq(id, "p-"+id, fmt.Sprintf("vlt_a%d", i+1), nil))
+		if m := k.expect(t, "spawned"); m["pid"] != want {
+			t.Fatalf("a guest's pid %d reached the role as %v, want %v", pids[i], m["pid"], want)
+		}
+	}
+}

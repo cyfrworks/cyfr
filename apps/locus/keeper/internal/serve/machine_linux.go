@@ -966,7 +966,7 @@ func (s *server) guestStart(l *guestLink, sp *spawn, req *protocol.Request, at k
 		return guestCode(answer.Code)
 	}
 	s.mu.Lock()
-	sp.guestPID = answer.PID
+	sp.guestPID = guestPID(answer.PID)
 	s.mu.Unlock()
 	if err != nil {
 		if guestEnd != nil {
@@ -1254,6 +1254,19 @@ func (s *server) guestExit(sp *spawn, code *int, signal, memory *string) {
 		}
 		s.send(sp.client, protocol.NewExited(sp.id, code, signal, memory))
 	})
+}
+
+// pidLimit is the most a Linux pid may be (PID_MAX_LIMIT on 64 bits).
+const pidLimit = 1 << 22
+
+// guestPID is the pid a guest said its session's leader has, as the host
+// passes it on: one no Linux kernel gives is none known, 0, so what the
+// role reads stays a pid or nothing (it reads a count up to 2^32-1).
+func guestPID(pid int) int {
+	if pid < 1 || pid > pidLimit {
+		return 0
+	}
+	return pid
 }
 
 // exitOf is the end a guest said of a session, as the host takes it: an
