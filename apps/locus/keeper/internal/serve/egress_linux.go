@@ -303,6 +303,12 @@ func (s *server) guardLost(conn uint64) {
 		s.log.Warn("egress: the guard's connection %d ended; %d people's VMs are killed", conn, len(machines))
 	}
 	if len(roles) > 0 {
+		// The keeper's end, and why, are said and recorded before the roles
+		// are killed: their end is what serve's loop sees, and it then ends
+		// for this reason and with its code, every time. The VMs above are
+		// killed first, so the line that says so comes before this one.
+		s.log.Error("egress: the guard's connection %d ended under the routes of roles %s; the keeper ends", conn, roleNames(roles))
+		s.end(ExitLost)
 		for _, r := range roles {
 			if !r.leaf.KillBy(time.Now()) {
 				s.log.Error("role %s: processes outlived its group's kill after the guard's connection ended", r.spec.Name)
@@ -311,10 +317,9 @@ func (s *server) guardLost(conn uint64) {
 				return
 			}
 		}
-		defer func() {
-			s.log.Error("egress: the guard's connection %d ended under the routes of roles %s; the keeper ends", conn, roleNames(roles))
-			s.end(ExitLost)
-		}()
+		if s.rolesKilled != nil {
+			s.rolesKilled()
+		}
 	}
 	if len(routed) == 0 {
 		return
