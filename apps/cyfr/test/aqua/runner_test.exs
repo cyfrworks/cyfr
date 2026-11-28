@@ -588,7 +588,7 @@ defmodule Aqua.RunnerTest do
 
     wait_until(fn ->
       match?(
-        %{running: true, turn_id: ^turn_id, tool_activity: [_ | _]},
+        %{running: true, turn_id: ^turn_id, partials: %{activity: [_ | _]}},
         Runner.state(thread.id, ctx.athanor_id)
       )
     end)
@@ -598,7 +598,58 @@ defmodule Aqua.RunnerTest do
     send(worker, :continue)
 
     assert {:ok, %{status: "cancelled"}} = Tape.turn(ctx, turn_id)
-    assert %{running: false, tool_activity: []} = Runner.state(thread.id, ctx.athanor_id)
+    assert %{running: false, partials: partials} = Runner.state(thread.id, ctx.athanor_id)
+    assert Aqua.stream_activity(partials) == []
+  end
+
+  # A viewer joining mid-turn draws the runner's snapshot: only the
+  # running turn's calls, under the fence it holds.
+  test "a viewer joining mid-turn reads only the running turn's calls under its fence, " <>
+         "never a list of another turn or of an earlier holder",
+       %{ctx: ctx, thread: thread} do
+    start_supervised!(
+      {ScriptedWorker,
+       ref: [@model, "catalyst:local.http"],
+       script: [
+         call("c1", "http", %{"action" => "get", "url" => "https://example.test/x"}),
+         {:probe, self()},
+         reply("never sent")
+       ]}
+    )
+
+    {:ok, %{turn_id: turn_id}} = Runner.send_message(ctx, thread.id, "@aqua fetch")
+    assert_receive {:scripted_probe, worker, _}, 30_000
+
+    wait_until(fn ->
+      match?(
+        %{running: true, turn_id: ^turn_id, partials: %{activity: [_ | _]}},
+        Runner.state(thread.id, ctx.athanor_id)
+      )
+    end)
+
+    %{partials: partials} = Runner.state(thread.id, ctx.athanor_id)
+    calls = Aqua.stream_activity(partials)
+    {:ok, %{fence: fence}} = Tape.turn(ctx, turn_id)
+    stale = [%{tool: "stale", sentence: "Used a tool", status: :running, details: []}]
+
+    # An ended turn's list, and the list of an earlier holder of this one.
+    Tape.announce(ctx, thread.id, :tool_activity, %{
+      turn_id: "trn_ended",
+      fence: fence,
+      entries: stale
+    })
+
+    Tape.announce(ctx, thread.id, :tool_activity, %{
+      turn_id: turn_id,
+      fence: fence - 1,
+      entries: stale
+    })
+
+    assert %{partials: partials} = Runner.state(thread.id, ctx.athanor_id)
+    assert Aqua.stream_activity(partials) == calls
+    assert :ok = Runner.stop_turn(ctx, thread.id)
+    assert_receive %ThreadEvent{kind: :turn_finished}, 10_000
+    send(worker, :continue)
   end
 
   test "a steer offered again is the same steer", %{ctx: ctx, thread: thread} do

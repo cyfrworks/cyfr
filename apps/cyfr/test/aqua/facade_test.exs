@@ -39,11 +39,14 @@ defmodule Aqua.FacadeTest do
     steps: 2,
     steps: 3,
     stream_abandoned: 2,
+    stream_activity: 1,
     stream_add: 2,
     stream_advance: 2,
     stream_landed: 2,
     stream_new: 0,
+    stream_put_activity: 2,
     stream_texts: 1,
+    stream_thoughts: 1,
     strip_attachment_name: 1,
     thread_state: 2,
     threads: 2,
@@ -165,5 +168,13 @@ defmodule Aqua.FacadeTest do
     assert Aqua.stream_texts(Aqua.stream_abandoned(through_facade, marker)) == []
 
     assert Aqua.stream_landed(through_facade, %{kind: "note"}) == through_facade
+
+    thought = delta |> Map.delete(:ordinal) |> Map.put(:kind, :thought)
+    calls = %{fence: 2, entries: [%{tool: "Bash", status: :running, details: []}]}
+    kept = through_facade |> Aqua.stream_add(thought) |> Aqua.stream_put_activity(calls)
+
+    assert Aqua.stream_thoughts(kept) == Aqua.Loop.Stream.thoughts(kept)
+    assert [%{text: "hello"}] = Aqua.stream_thoughts(kept)
+    assert Aqua.stream_activity(kept) == calls.entries
   end
 end

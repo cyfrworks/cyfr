@@ -369,12 +369,15 @@ defmodule Cyfr.Test.ScriptedBackends do
     do: Agent.get(agent, &Map.get(&1.packs, athanor, %{}))
 
   @doc "Write `line` into every running session of `server`, as its program would."
-  def write(%{agent: agent}, server, line) do
+  def write(fake, server, line), do: write_lines(fake, server, [line])
+
+  @doc "Write several lines in one update, so a pending recv can only see them together."
+  def write_lines(%{agent: agent}, server, lines) do
     Agent.update(agent, fn st ->
       sessions =
         Map.new(st.sessions, fn {id, s} ->
           if elem(s.owner, 1) == server and s.running,
-            do: {id, emit(s, line)},
+            do: {id, Enum.reduce(lines, s, fn line, session -> emit(session, line) end)},
             else: {id, s}
         end)
 

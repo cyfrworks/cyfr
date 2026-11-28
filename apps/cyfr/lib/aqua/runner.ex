@@ -108,10 +108,11 @@ defmodule Aqua.Runner do
   `:turn_starting`, `:turn_started`, `:turn_paused`, `:queued` and
   `:restart_prompt`; the loop
   announces `:usage`, `:tool_activity`, `:intents`, `:consent_required`,
-  the running loop's `:turn_fence`, a chat step's streamed text as
-  `:delta` and its withdrawal as `:delta_abandoned` (`Aqua.Loop.Stream`),
-  which the runner keeps for the running turn's current fence until each
-  step's answer lands or is withdrawn. `Cyfr.Bus.ThreadEvent` says what
+  the running loop's `:turn_fence`, a chat step's streamed text and a
+  program's reasoning as `:delta`, its withdrawal as `:delta_abandoned`
+  (`Aqua.Loop.Stream`), which the runner keeps for the running turn's
+  current fence until each step's answer lands or is withdrawn, and the
+  turn's list of calls, kept the same way until the turn ends. `Cyfr.Bus.ThreadEvent` says what
   each kind's `data` is.
 
   A `:turn_finished` the runner hears, on whichever member the writer
@@ -533,8 +534,8 @@ defmodule Aqua.Runner do
           held: %{},
           # What the latest turn used, as the rows store it.
           usage: Tape.usage(ctx, thread.id),
-          tool_activity: [],
-          # The running turn's streamed answers (`Aqua.Loop.Stream`).
+          # What the running turn shows live, its streamed answers,
+          # reasoning and calls (`Aqua.Loop.Stream`).
           partials: Aqua.Loop.Stream.new(),
           agent: thread.agent,
           idle_ref: nil,
@@ -1118,7 +1119,6 @@ defmodule Aqua.Runner do
       | live: Map.merge(entry, %{task: task}),
         paused: nil,
         usage: %{input: 0, output: 0},
-        tool_activity: [],
         partials: Aqua.Loop.Stream.new()
     }
 
@@ -1220,8 +1220,11 @@ defmodule Aqua.Runner do
   defp handle_owned_info(%ThreadEvent{kind: :usage, data: usage}, state),
     do: {:noreply, %{state | usage: usage}}
 
-  defp handle_owned_info(%ThreadEvent{kind: :tool_activity, data: list}, state),
-    do: {:noreply, %{state | tool_activity: list}}
+  defp handle_owned_info(
+         %ThreadEvent{kind: :tool_activity, data: %{turn_id: turn_id} = update},
+         %{live: %{turn_id: turn_id}} = state
+       ),
+       do: {:noreply, %{state | partials: Aqua.Loop.Stream.put_activity(state.partials, update)}}
 
   # The loop announces its fence as it starts and as it takes its root
   # back after a launch: a page's call waiting here becomes a step now.
@@ -2060,9 +2063,9 @@ defmodule Aqua.Runner do
       athanor_id: state.athanor_id,
       turn_id: current && current.turn_id,
       # A viewer joining draws what a live pane draws, which clears a
-      # turn's text and calls when it hears the turn end or pause.
+      # turn's text, reasoning and calls when it hears the turn end or
+      # pause.
       partials: if(state.live, do: state.partials, else: Aqua.Loop.Stream.new()),
-      tool_activity: if(state.live, do: state.tool_activity, else: []),
       usage: state.usage,
       agent: state.agent && %{"name" => state.agent, "title" => state.agent},
       turn_user: current && current.user_id,
