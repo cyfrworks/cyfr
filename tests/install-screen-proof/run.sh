@@ -587,7 +587,7 @@ sys.exit(0 if handle["identifier"] == holder.get("identifier") == log["identifie
     "$GUEST_DIR/handle-saved.json" "$GUEST_DIR/holder-saved.json" "$GUEST_DIR/log-saved.json"
   check "the box keeps its client at CYFR beside its key" guest_ssh 'grep -q "\"client_id\": *\"pcl_" ~/.cyfr/device/homes.json'
   check "the screen sends CYFR the session cookie Prism opened with" screen_cookie prism
-  check "the home serves that cookie on a page that needs a session" cookie_is in prism
+  check "the home serves that cookie on a page that needs a session$(uncaptured prism)" cookie_is in prism
 
   screen_confirms
   guest_ssh "curl -s -o /dev/null --max-time 10 -w '%{http_code} %{redirect_url}' -H 'Origin: http://127.0.0.1:7340' -d x=y http://127.0.0.1:7340/open" >"$GUEST_DIR/open-forged.txt" 2>&1
@@ -601,7 +601,7 @@ sys.exit(0 if handle["identifier"] == holder.get("identifier") == log["identifie
   shell_page idle
   check "the screen locked itself after five minutes without input, the video playing" grep -q 'CYFR is locked' "$GUEST_DIR/shell-idle.html"
   check "screenshot screen-locked.png" guest_screenshot screen-locked.png
-  check "after the idle lock the home sends that unlock's cookie to sign in" cookie_is out prism
+  check "after the idle lock the home sends that unlock's cookie to sign in$(uncaptured prism)" cookie_is out prism
   if [ "$GUEST_TPM" = swtpm ]; then
     printf '000000\n' | guest_keys || fail "QMP did not type"
     sleep 5
@@ -611,7 +611,7 @@ sys.exit(0 if handle["identifier"] == holder.get("identifier") == log["identifie
   check "screenshot screen-unlocked.png" guest_screenshot screen-unlocked.png
   check "the unlock reached Prism, the shell's page no longer shown" sh -c '! cmp -s "$1" "$2"' sh "$GUEST_DIR/screen-unlocked.png" "$GUEST_DIR/screen-locked.png"
   check "the screen sends CYFR the new unlock's session cookie" screen_cookie unlocked
-  check "the home serves it" cookie_is in unlocked
+  check "the home serves it$(uncaptured unlocked)" cookie_is in unlocked
 
   step "Prism's Lock"
   screen_press Lock || fail "the screen did not press Prism's Lock ($GUEST_DIR/screen-press.txt)"
@@ -619,10 +619,10 @@ sys.exit(0 if handle["identifier"] == holder.get("identifier") == log["identifie
   check "Prism's Lock locked the screen, which says so" grep -q 'Locked\.' "$GUEST_DIR/shell-lock-prism.html"
   screen_ready
   check "screenshot screen-locked-prism.png" guest_screenshot screen-locked-prism.png
-  check "after Prism's Lock the home sends that unlock's cookie to sign in" cookie_is out unlocked
+  check "after Prism's Lock the home sends that unlock's cookie to sign in$(uncaptured unlocked)" cookie_is out unlocked
   screen_unlock
   check "the screen sends CYFR the next unlock's session cookie" screen_cookie relocked
-  check "the home serves it" cookie_is in relocked
+  check "the home serves it$(uncaptured relocked)" cookie_is in relocked
 
   screen_hides_first
   screen_killed
@@ -657,11 +657,11 @@ screen_hides_first() {
   shell_page_until lock-silent 'CYFR is locked' 30
   check "the silent CYFR's lock page says it locked" grep -q 'Locked\.' "$GUEST_DIR/shell-lock-silent.html"
   took=$(cookie_out_within relocked 150)
-  check "that session ended at the home within 60 s, a poll's 5 s aside (in ${took:-more than 150} s)" \
+  check "that session ended at the home within 60 s, a poll's 5 s aside ($(took_said relocked "$took" 150))" \
     sh -c '[ -n "$1" ] && [ "$1" -le 65 ]' sh "$took"
   screen_unlock
   check "the screen sends CYFR the next unlock's session cookie" screen_cookie unsilenced
-  check "the home serves it" cookie_is in unsilenced
+  check "the home serves it$(uncaptured unsilenced)" cookie_is in unsilenced
 }
 
 # A video in the five minutes: the API key the screen just made, read as
@@ -694,6 +694,10 @@ screen_video() {
   sleep 3
   screen_press proof-video last || fail "the screen did not press the canvas's result ($GUEST_DIR/screen-press.txt)"
   check "Prism offers it among the desktops to choose" screen_shows 'Choose your desktop' 15
+  # The chooser lists every desktop, the shipped ones among them, in the
+  # order the registry gives: one below what the screen shows, under its
+  # keyboard, is brought into view as a person scrolls the list to its end.
+  screen_read shows proof-video 2>/dev/null || { guest_chord end || fail "QMP did not send the key"; sleep 2; }
   screen_press proof-video || fail "the screen did not choose the canvas ($GUEST_DIR/screen-press.txt)"
   # A canvas runs once the person grants it.
   check "Prism asks the person to grant it" screen_shows 'Grant proof-video' 15
@@ -723,9 +727,9 @@ screen_confirms() {
   # press of that result opens it.
   printf 'API keys' | guest_keys || fail "QMP did not type"
   sleep 3
-  check "the search lists the API Keys page" screen_shows PAGE 10
-  screen_press 'API Keys' last || fail "the screen did not press API Keys ($GUEST_DIR/screen-press.txt)"
+  screen_press 'API Keys' last || fail "the search listed no API Keys result to press ($GUEST_DIR/screen-press.txt)"
   sleep 8
+  check "the search's API Keys result opens the API Keys page, its Create Key shown" screen_shows 'Create Key' 10
   check "screenshot screen-api-keys.png" guest_screenshot screen-api-keys.png
   # Create Key opens the form; Tab reaches its name, and Enter there
   # submits it, which asks the fresh confirmation.
@@ -865,8 +869,8 @@ screen_killed() {
   step "the shell killed: the launcher starts it again, locked, and its session ends"
   old=$(guest_ssh 'pgrep -f "cyfr [s]creen shell"')
   guest_ssh 'pkill -KILL -f "cyfr [s]creen shell"' || fail "the shell was not killed"
-  took=$(cookie_out_within relocked 75)
-  check "the killed shell's session ended within 60 s (in ${took:-more than 75} s)" sh -c '[ -n "$1" ] && [ "$1" -le 60 ]' sh "$took"
+  took=$(cookie_out_within unsilenced 75)
+  check "the killed shell's session ended within 60 s ($(took_said unsilenced "$took" 75))" sh -c '[ -n "$1" ] && [ "$1" -le 60 ]' sh "$took"
   shell_page_until killed 'CYFR is locked' 30
   new=$(guest_ssh 'pgrep -f "cyfr [s]creen shell"')
   check "the launcher started the shell again (pid $old, then ${new:-none})" sh -c '[ -n "$2" ] && [ "$1" != "$2" ]' sh "$old" "$new"
@@ -890,7 +894,7 @@ screen_severed() {
   step "the shell's connection to CYFR severed past 60 s while Prism's page stays open"
   screen_unlock
   check "the screen sends CYFR the next unlock's session cookie" screen_cookie severed
-  check "the home serves it" cookie_is in severed
+  check "the home serves it$(uncaptured severed)" cookie_is in severed
   ports=$(guest_root_out "ss -tnpH state established '( dport = :4000 )' | grep '\"cyfr\",' | awk '{print \$3}' | sed 's/.*://'" | tr '\n' ' ')
   check "the shell holds its connection to CYFR (local ports $ports)" test -n "${ports// /}"
   cut=$(guest_ssh 'date +%s')
@@ -902,7 +906,7 @@ screen_severed() {
   guest_chord shift || fail "QMP did not send the key"
   check "screenshot screen-severed.png" guest_screenshot screen-severed.png
   took=$(cookie_out_within severed 150)
-  check "the severed shell's session ended within 60 s, a poll's 5 s aside (in ${took:-more than 150} s)" \
+  check "the severed shell's session ended within 60 s, a poll's 5 s aside ($(took_said severed "$took" 150))" \
     sh -c '[ -n "$1" ] && [ "$1" -le 65 ]' sh "$took"
   budget 90 || BUDGET=0
   closes=$((SECONDS + BUDGET))
@@ -1015,7 +1019,7 @@ screen_keeps_no_session() {
   step "the session open on the screen is on no disk, and a reboot ends it"
   screen_unlock
   check "the screen sends CYFR that unlock's session cookie" screen_cookie kept
-  check "the home serves it" cookie_is in kept
+  check "the home serves it$(uncaptured kept)" cookie_is in kept
   # The stores are read by the cookie's name (box.py stored), each 5 s
   # for 45 s: a cookie store takes its writes in batches, seconds after
   # the page was sent the cookie.
@@ -1028,7 +1032,7 @@ screen_keeps_no_session() {
   shell_page rebooted
   check "after the reboot the screen boots locked" grep -q 'CYFR is locked' "$GUEST_DIR/shell-rebooted.html"
   check "screenshot screen-rebooted.png" guest_screenshot screen-rebooted.png
-  check "the session it had open opens nothing" cookie_is out kept
+  check "the session it had open opens nothing$(uncaptured kept)" cookie_is out kept
 }
 
 clean_install() {
@@ -1171,6 +1175,20 @@ active" ]' sh "$GUEST_DIR/vt-after.txt"
     others=$(sed -n 's/^volume \(.*\):$/\1/p' "$GUEST_DIR/left-before.txt" | sort | comm -23 - <(sort "$GUEST_DIR/stack-volumes.txt"))
     [ -z "$(comm -12 <(uninstall_volume_names) <(printf '%s\n' "$others" | sed '/^$/d'))" ]
   }
+  # Every printed line that removes is one of the two commands the
+  # uninstall gives, each once: the stack's volumes' and the removal of
+  # the AppArmor profile .env names, which cyfr init installed as root
+  # under /etc/apparmor.d. No printed command removes a file or a folder
+  # of the person's.
+  printed_removals_are_the_volumes_and_the_profile() {
+    local profile target
+    profile=$(guest_ssh "sed -n 's/^CYFR_LOCUS_APPARMOR=//p' ~/cyfr/.env | tail -n 1") && [ -n "$profile" ] || return 1
+    target="/etc/apparmor.d/$profile"
+    grep -w rm "$GUEST_DIR/transcript-uninstall.txt" >"$GUEST_DIR/uninstall-removals.txt"
+    [ "$(wc -l <"$GUEST_DIR/uninstall-removals.txt")" = 2 ] &&
+      [ "$(grep -c '^    docker volume rm ' "$GUEST_DIR/uninstall-removals.txt")" = 1 ] &&
+      [ "$(grep -cxF -- "    sudo sh -c 'apparmor_parser -R $target && rm $target'" "$GUEST_DIR/uninstall-removals.txt")" = 1 ]
+  }
   check "cyfr down stops the stack first" guest_ssh 'cd ~/cyfr && cyfr down'
   # The screen's browser writes its profile in the folder until the screen
   # stops, which cyfr down leaves running: it is stopped before the first
@@ -1197,9 +1215,10 @@ active" ]' sh "$GUEST_DIR/vt-after.txt"
   check "cyfr says whose password on the line before sudo's prompt" sh -c 'grep -A1 -xF -- "$1" "$2" | sed -n 2p | grep -qE -- "$3"' sh \
     "$PASSWORD_SENTENCE" "$GUEST_DIR/transcript-uninstall.txt" "$SUDO_PROMPT"
   check "it names the folder by its path" transcript_has uninstall "^  every file in /home/proof/cyfr, CYFR's data among them\$"
-  check "the one command it prints removes exactly the stack's volumes" volume_command_names_the_volumes
+  check "the volumes' command it prints removes exactly the stack's volumes" volume_command_names_the_volumes
   check "it names no volume of another project" volume_command_names_no_other_project
-  check "it prints no command that removes a file or a folder" sh -c '[ -z "$(grep -w rm "$1" | grep -v "^    docker volume rm ")" ]' sh "$GUEST_DIR/transcript-uninstall.txt"
+  check "no printed command removes a file or a folder of the person's: it prints two that remove, the stack's volumes' and the AppArmor profile's .env names" \
+    printed_removals_are_the_volumes_and_the_profile
   check "it names the CYFR app among what it removes, and says it removed it" \
     sh -c 'grep -qx "  the CYFR app, the package cyfr-desktop" "$1" && grep -qx "Removed the CYFR app." "$1"' sh "$GUEST_DIR/transcript-uninstall.txt"
   pane_step_end uninstall

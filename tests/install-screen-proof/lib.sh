@@ -800,6 +800,18 @@ cookie_answer() {
   esac
 }
 
+# uncaptured NAME: " (no cookie was captured)" when screen_cookie NAME
+# captured none, which a check's name then says in place of a reading of
+# a cookie that does not exist; nothing otherwise.
+uncaptured() { [ -n "${COOKIE_DIGEST[$1]:-}" ] || printf ' (no cookie was captured)'; }
+
+# took_said NAME TOOK MOST: what a check reading the cookie NAME saw: "in
+# TOOK s", "in more than MOST s", or that no cookie was captured.
+took_said() {
+  if [ -z "${COOKIE_DIGEST[$1]:-}" ]; then printf 'no cookie was captured'
+  else printf 'in %s s' "${2:-more than $3}"; fi
+}
+
 # cookie_out_within NAME SECONDS: the seconds until the home sends the
 # cookie NAME to sign in, read each 5 s, or nothing when it serves it
 # still after SECONDS.
