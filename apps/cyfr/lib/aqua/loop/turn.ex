@@ -41,6 +41,7 @@ defmodule Aqua.Loop.Turn do
   # A person's rooms, which hold a crew's waiting requests.
   @rooms Tape.room_kinds()
   @probe_timeout_ms 60_000
+  @soul_name Prima.AgentRef.soul_name()
   # A catalyst's refusal that its key is not there to use.
   @key_refusals ~w(secret_denied)
 
@@ -731,16 +732,17 @@ defmodule Aqua.Loop.Turn do
   end
 
   @doc """
-  What starts `turn`'s member again where a refusal of it is read
-  (`Prima.Refusal`), by what opened it: a message in its thread
-  (`:message`, a turn a person's line opened there), asking the crew
-  member for its job again (`:ask`, a turn with a request to answer), or
-  nothing that reader can do (`:none`): a schedule's or another source's
-  turn, a page's call, which the row has no action for, or a crew
-  member's reply to Aqua.
+  What starts `turn`'s agent again where a refusal of it is read
+  (`Prima.Refusal`), by what opened it: asking the crew member for its
+  job again (`:ask`, any turn of a crew member's, whoever opened it, since
+  its thread takes no message and a job reaches it only from Aqua), a
+  message in its thread (`:message`, a turn of Aqua's a person's line
+  opened), or nothing that reader can do (`:none`): a schedule's or
+  another source's turn, a page's call, which the row has no action for,
+  or a crew member's reply to Aqua.
   """
   @spec again(map()) :: :message | :ask | :none
-  def again(%{request_id: request}) when is_binary(request), do: :ask
+  def again(%{agent: agent}) when is_binary(agent) and agent != @soul_name, do: :ask
   def again(%{origin: "interactive", sent_by: "person"}), do: :message
   def again(_turn), do: :none
 

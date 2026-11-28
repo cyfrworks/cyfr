@@ -245,7 +245,6 @@ defmodule Prima.RefusalTest do
     {:wait_not_a_turn, :forbidden},
     {:propose_not_a_turn, :forbidden},
     {:schedule_changed, :conflict},
-    {:no_agent, :setup_required},
     {:execution_unavailable, :unavailable},
     {:message_too_long, :invalid_argument},
     {:client_id_reused, :conflict},
@@ -1008,6 +1007,23 @@ defmodule Prima.RefusalTest do
                "No one here signs in with this account. Sign in another way, then link it in Settings."
 
       for reason <- [:setup_closed, :not_set_up, :no_person], do: assert(Refusal.reason?(reason))
+    end
+
+    # A person's line in a room is always Aqua's turn, which says why when
+    # Aqua cannot answer: no refusal says an athanor has no assistant.
+    test "no row refuses a send for want of an assistant" do
+      refute Refusal.reason?(:no_agent)
+    end
+
+    # The one reason a person's send into a member's thread, a client's, a
+    # member's reply elsewhere and a call from no turn of Aqua's all meet.
+    test "a sender that cannot reach a thread or member is told who reaches whom" do
+      assert %Refusal{class: :forbidden, message: message} = Refusal.classify(:not_addressable)
+
+      assert message ==
+               "That thread or crew member cannot be reached from here: a person writes to " <>
+                 "Aqua in a daily or workspace thread, only Aqua hands a job to a crew " <>
+                 "member, and a crew member answers only the thread that asked it"
     end
 
     test "an invitation and a handle each say what went wrong" do

@@ -3057,6 +3057,67 @@ defmodule PrismWeb.ThreadPaneLiveTest do
   end
 
   describe "the crew" do
+    # A member's thread takes no line, so it offers no model for one: the
+    # model is said as text, and a pick sent from there is dropped, so the
+    # room the pane turns back to sends with none.
+    test "a member's thread offers no model to pick, and a pick sent from it leaves the room's " <>
+           "next send without one",
+         %{conn: conn, athanor: athanor, here: here, thread: room} do
+      on_exit(fn -> PrismWeb.ModelCatalog.forget(athanor.id) end)
+
+      :ok =
+        PrismWeb.ModelCatalog.remember(athanor.id, %{"models" => %{"kept" => ["kept-model-1"]}})
+
+      {:ok, child} = Threads.crew_thread(Sanctum.Context.actor(here), room.id, "explorer")
+      pane = open_pane(conn, athanor, room)
+      assert has_element?(pane, ~s(select[name="model"]))
+
+      send(pane.pid, {:switch_thread, child.id})
+      on_thread!(pane, child.id)
+      refute has_element?(pane, ~s(select[name="model"]))
+
+      render_click(pane, "select_model", %{"model" => "kept-model-1"})
+
+      send(pane.pid, {:switch_thread, room.id})
+      on_thread!(pane, room.id)
+      assert :sys.get_state(pane.pid).socket.assigns.model_override == nil
+      refute has_element?(pane, ~s(option[value="kept-model-1"][selected]))
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    test "a member's thread reads as it stands, offers no composer, and refuses a line sent there",
+         %{conn: conn, athanor: athanor, here: here, thread: room} do
+      actor = Sanctum.Context.actor(here)
+      {:ok, child} = Threads.crew_thread(actor, room.id, "explorer")
+
+      {:ok, said} =
+        Threads.append(actor, child.id, %{
+          author: Prima.Author.agent(),
+          sent_by: "explorer",
+          kind: "text",
+          content: "Reading the plan."
+        })
+
+      pane = open_pane(conn, athanor, child)
+      assert render(pane) =~ "Reading the plan."
+      refute has_element?(pane, ~s([id$="-composer"]))
+      refute has_element?(pane, "textarea")
+
+      # A line that still reaches the pane, from a page drawn before, is
+      # refused where every send is taken, and writes nothing.
+      render_click(pane, "submit", %{"message" => "go on"})
+
+      assert :sys.get_state(pane.pid).socket.assigns.flash["error"] ==
+               "A crew member's thread can be read, not written in — ask Aqua in your own thread."
+
+      assert [%{id: only}] = Threads.messages(actor, child.id)
+      assert only == said.id
+
+      # The room it works under keeps its composer.
+      assert has_element?(open_pane(conn, athanor, room), ~s([id$="-composer"]))
+      Cyfr.Test.Sandbox.end_views()
+    end
+
     test "a room shows a request with the reply under it, by the member's name and its outcome",
          %{conn: conn, athanor: athanor, here: here, thread: room} do
       {:ok, child} = Threads.crew_thread(Sanctum.Context.actor(here), room.id, "explorer")

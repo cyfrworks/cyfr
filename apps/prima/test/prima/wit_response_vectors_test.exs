@@ -26,8 +26,8 @@ defmodule Prima.WitResponseVectorsTest do
   # vector naming another fails until this roster names it too.
   @atoms Map.new(
            ~w(busy cancelled consent_required control_plane_lost enospc error failed
-              guest_error invalid_objects lost message_too_long no_agent
-              no_grant not_found not_member ok oops revoked setup_required shape_moved
+              guest_error invalid_objects lost message_too_long
+              no_grant not_found not_member not_set_up ok oops revoked setup_required shape_moved
               some_internal_state
               stale_revision timeout type unavailable
               dispatch_error domain_blocked http_error request_failed

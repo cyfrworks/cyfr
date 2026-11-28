@@ -206,6 +206,36 @@ defmodule Cyfr.Cluster.Person do
   def send(token, thread_id, text), do: Aqua.Runner.send_message(context!(token), thread_id, text)
 
   @doc """
+  Hand `task` to crew member `member` on `thread_id` as the soul's
+  `crew.ask` writes it, through this member: the request row and the
+  record that delivers it, in one transaction. Answers the request's id.
+  """
+  @spec ask(String.t(), String.t(), String.t(), String.t()) :: {:ok, String.t()}
+  def ask(token, thread_id, member, task) do
+    ctx = context!(token)
+
+    {:ok, %{message: row}} =
+      Aqua.Tape.accept(ctx, thread_id, %{
+        message: %{
+          author: Prima.Author.agent(),
+          sent_by: Prima.AgentRef.soul_name(),
+          addressee: member,
+          status: "pending",
+          content: task
+        },
+        request: %{
+          member: member,
+          task: task,
+          options: %{},
+          person_id: ctx.user_id,
+          origin: :interactive
+        }
+      })
+
+    {:ok, row.id}
+  end
+
+  @doc """
   Open `thread_id` as the person's console does, through this member's
   runner: the live part of the thread a viewer joining reads, which starts
   the thread's runner here when no live member runs it.

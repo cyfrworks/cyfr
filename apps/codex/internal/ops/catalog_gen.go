@@ -4865,12 +4865,10 @@ func (args ThreadSearchArgs) MarshalJSON() ([]byte, error) {
 
 // ThreadSendArgs carries arguments for thread.send.
 type ThreadSendArgs struct {
-	// send: a workspace thread or a crew member's thread; with none, or a daily thread, the send joins today's daily thread
+	// send: a workspace thread; with none, or a daily thread, the send joins today's daily thread
 	Thread Field[string] `json:"thread,omitzero"`
 	// send: the text to say (at most 32 KiB of text); a send that is no press says a line or carries files
 	Message Field[string] `json:"message,omitzero"`
-	// send: the agent to address when the text names none
-	Agent Field[string] `json:"agent,omitzero"`
 	// send: the refs `attach` answered for this message id
 	Attachments Field[[]ThreadSendArgsAttachmentsItem] `json:"attachments,omitzero"`
 	// send: the sender's own id for this send, so a retry answers the same message

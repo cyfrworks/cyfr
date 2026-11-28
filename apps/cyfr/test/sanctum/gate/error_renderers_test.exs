@@ -12,7 +12,7 @@ defmodule Sanctum.Gate.ErrorRenderersTest do
 
   alias Prima.Refusal
 
-  # Seven refusals a guest meets in a turn. Each has one sentence, and the
+  # Six refusals a guest meets in a turn. Each has one sentence, and the
   # guest's vocabulary (`Prima.GuestError`) and the console render the
   # same one, so a send that meets a full turn queue reads the same words
   # to a guest as to a person at the page, never the atom's name.
@@ -20,7 +20,6 @@ defmodule Sanctum.Gate.ErrorRenderersTest do
     :busy,
     :not_member,
     :archived,
-    :no_agent,
     :control_plane_lost,
     :not_provisioned,
     :message_too_long
