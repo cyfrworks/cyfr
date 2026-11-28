@@ -318,28 +318,43 @@ defmodule Locus.Runtime.SettingsTest do
       assert dir === attach["default"] and attach["default_from"] === "KEEPER_RUN_DIR"
     end
 
+    # Each variable's refusal is written whole from its accepted and
+    # compared exactly: a sentence stands between the name's `must be` and
+    # what follows it, and a list is the refusal's own list, so a word cut
+    # from either, or a value added, fails, as does an empty one.
     test "every variable's accepted is what its reader takes and what its refusal says it takes" do
       env = @settings["environment"]
+      shown = inspect("x y")
 
       for variable <- @settings["variables"] do
         assert %{"name" => name, "setting" => setting, "accepted" => accepted} = variable
         assert {:error, message} = runtime_settings(Map.put(env, name, "x y")), name
-        assert String.starts_with?(message, name), message
 
-        case accepted do
-          sentence when is_binary(sentence) ->
-            assert message =~ sentence, message
+        expected =
+          case {setting, accepted} do
+            {"log_level", [_ | _] = levels} ->
+              "#{name}=#{shown} is not a Logger level; use one of #{Enum.join(levels, ", ")}."
 
-          values when is_list(values) ->
-            for value <- values do
-              assert {:ok, %{^setting => ^value}} = runtime_settings(Map.put(env, name, value))
-              assert message =~ value, message
-            end
+            {"log_format", [_ | _] = formats} ->
+              "#{name}=#{shown} is not a log format; use #{Enum.join(formats, " or ")}."
+
+            {duration, <<_, _::binary>> = sentence}
+            when duration in ~w(idle_ttl_ms watchdog_grace_ms release_grace_ms) ->
+              "#{name}=#{shown} must be #{sentence} from #{variable["min"]} to #{variable["max"]}."
+
+            {_setting, <<_, _::binary>> = sentence} ->
+              "#{name} must be #{sentence}"
+          end
+
+        assert message === expected, name
+
+        for value <- if(is_list(accepted), do: accepted, else: []) do
+          assert {:ok, %{^setting => ^value}} = runtime_settings(Map.put(env, name, value)), value
         end
       end
 
       levels = Enum.find(@settings["variables"], &(&1["setting"] == "log_level"))["accepted"]
-      assert Enum.sort(levels) === Logger.levels() |> Enum.map(&Atom.to_string/1) |> Enum.sort()
+      assert levels === Enum.map(Logger.levels(), &Atom.to_string/1)
     end
 
     test "every range reads to its edges and is refused one past either, naming its variable" do
@@ -402,7 +417,7 @@ defmodule Locus.Runtime.SettingsTest do
     end
 
     test "every environment of reads reads as its settings" do
-      assert length(@settings["reads"]) >= 25
+      assert length(@settings["reads"]) >= 30
 
       for row <- @settings["reads"] do
         assert %{"why" => why, "environment" => env, "settings" => settings} = row
@@ -411,7 +426,7 @@ defmodule Locus.Runtime.SettingsTest do
     end
 
     test "every environment of refusals refuses the boot with its message, which shows no key" do
-      assert length(@settings["refusals"]) >= 55
+      assert length(@settings["refusals"]) >= 60
       key = @settings["environment"]["LOCUS_RUNTIME_KEY"]
 
       for row <- @settings["refusals"] do
