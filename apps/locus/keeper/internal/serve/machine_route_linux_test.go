@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -300,6 +301,24 @@ func TestARefusedWideningLeavesTheSessionsBeforeTheLockIsLetGo(t *testing.T) {
 		time.Sleep(time.Millisecond) // sleep-ok: a bounded look at the route's lock while the keeper's is held
 	}
 	k.s.mu.Unlock()
+	// With the keeper's lock let go, the first time the route's lock is
+	// free the refused session is gone, before its own retirement would
+	// take it out.
+	for deadline := time.Now().Add(20 * time.Second); ; runtime.Gosched() {
+		if m.reachMu.TryLock() {
+			k.s.mu.Lock()
+			still := refused()
+			k.s.mu.Unlock()
+			m.reachMu.Unlock()
+			if still {
+				t.Fatal("the route's lock was free with the refused start's session still among the VM's sessions")
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the route's lock was never free")
+		}
+	}
 	if r := k.next(t); r["type"] != "error" || r["code"] != protocol.CodeGuardUnavailable {
 		t.Fatalf("a start whose widening the guard refused answered %v", r)
 	}
