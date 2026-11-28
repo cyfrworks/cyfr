@@ -279,6 +279,7 @@ func (s *server) forgetUnbooted(m *machine) {
 	default:
 		close(m.done)
 	}
+	go s.retireUnkept(m.athanor)
 }
 
 // bootMachine boots m unless it runs, within machineBootWait, for what
@@ -575,6 +576,7 @@ func (s *server) finishMachine(m *machine) {
 	s.admit(s.ledger.Drop(m.entry, now()))
 	close(m.done)
 	s.log.Info("a person's VM is released: its group is empty, its route withdrawn and its device let go")
+	go s.retireUnkept(m.athanor)
 }
 
 // finishMachines releases every ended VM whose route a sweep withdrew.

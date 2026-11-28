@@ -855,6 +855,40 @@ func (s *server) makeHome(c *client, req *protocol.Request) {
 // variable the tests of a keeper running as one uid replace.
 var keptTaken = func(k *home.Kept) (map[int]bool, error) { return k.Taken("/proc") }
 
+// removeImage removes an image as its uid (home.Kept.RemoveImage), a
+// variable its tests replace.
+var removeImage = func(k *home.Kept, athanor string, uid int) error { return k.RemoveImage(athanor, uid) }
+
+// retireUnkept retires athanor's disk where it has never held a kept home
+// (home.Disk.Unkept) and no VM of its person stands or is placed, under the
+// disk's lock, which a first spawn's making of the disk takes too: its
+// image, then its record, then its uid, each step one the next release or
+// start finishes where a keeper killed after it left the rest. A step that
+// fails leaves the disk as it is, for its next session to use and its next
+// release or start to retire. A disk that has ever held a home is never
+// retired so.
+func (s *server) retireUnkept(athanor string) {
+	unlock := s.lockDisk(athanor)
+	defer unlock()
+	s.mu.Lock()
+	d := s.disks[athanor]
+	used := s.vms[athanor] != nil
+	s.mu.Unlock()
+	if d == nil || !d.Unkept || used {
+		return
+	}
+	if err := removeImage(s.cfg.Kept, athanor, d.UID); err != nil {
+		s.log.Warn("the never-kept disk of uid %d is not yet retired, its image stays: %v", d.UID, err)
+		return
+	}
+	if err := s.cfg.Kept.RemoveDisk(athanor); err != nil {
+		s.log.Warn("the never-kept disk of uid %d is not yet retired, its record stays: %v", d.UID, err)
+		return
+	}
+	s.indexDisk(athanor, nil)
+	s.log.Info("the disk of uid %d, which held no kept home, is retired with its VM: its image, its record and its uid", d.UID)
+}
+
 // recordDisk is athanor's disk, its record written first where none is,
 // holding homeID where one is given, with the disk's lock held (lockDisk):
 // a new disk draws its uid (drawKept) and takes this keeper's form
@@ -885,6 +919,9 @@ func (s *server) recordDisk(what, athanor, homeID string) (home.Disk, string) {
 	}
 	if homeID == "" {
 		if !recorded {
+			// Made for a scratch session's first spawn, it has held no kept
+			// home, and goes with its VM until one is made on it.
+			d.Unkept = d.Form == home.FormImage
 			if err := s.putDisk(d); err != nil {
 				s.log.Error("%s: recording the person's disk: %v", what, err)
 				return d, protocol.CodeInternal

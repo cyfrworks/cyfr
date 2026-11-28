@@ -175,3 +175,135 @@ func TestAPlaceOfAScratchSessionNeedsItsVMsRoom(t *testing.T) {
 		t.Fatalf("a scratch program's place in a pool too small for its VM answered %v", m)
 	}
 }
+
+// A disk that has never held a kept home goes with its VM (ruled #5908):
+// a scratch-only person's first session makes it, marked so, and at its
+// VM's release its image, record and uid are retired; their next first
+// session makes it again.
+func TestAScratchOnlyPersonsDiskGoesWithItsVM(t *testing.T) {
+	if _, err := os.Stat(home.Mke2fs); err != nil {
+		t.Skipf("this host has no %s for the person's image: %v", home.Mke2fs, err)
+	}
+	anyUID(t)
+	k := newVMKeeper(t)
+	k.place(t, "p-s1", "ath_a")
+	k.s.handleSpawn(k.c, k.scratchReq("s1", "p-s1"))
+	if m := k.next(t); m["type"] != "spawned" {
+		t.Fatalf("the scratch session answered %v", m)
+	}
+	if d := diskOf(k, "ath_a"); d == nil || !d.Unkept {
+		t.Fatalf("a scratch-only person's disk is %+v, want one marked as never kept", d)
+	}
+	k.guest.booted()[0].Kill()
+	k.expect(t, "released")
+	vmEventually(t, "the never-kept disk's retirement", func() bool { return diskOf(k, "ath_a") == nil })
+	for _, p := range []string{k.kept.ImagePath("ath_a"), filepath.Join(k.kept.Root, home.DisksDir, home.Person("ath_a")+".json")} {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Fatalf("%s is still there after the never-kept disk's retirement: %v", p, err)
+		}
+	}
+	k.place(t, "p-s2", "ath_a")
+	k.s.handleSpawn(k.c, k.scratchReq("s2", "p-s2"))
+	if m := k.next(t); m["type"] != "spawned" {
+		t.Fatalf("the person's next first session answered %v", m)
+	}
+	if d := diskOf(k, "ath_a"); d == nil || !d.Unkept {
+		t.Fatalf("the person's next disk is %+v", d)
+	}
+}
+
+// A disk that has held a kept home is never retired by the keeper alone:
+// the mark goes with the first home made on it, and its VM's release
+// leaves it, its record and its image.
+func TestADiskThatHeldAKeptHomeIsKeptAtItsVMsRelease(t *testing.T) {
+	if _, err := os.Stat(home.Mke2fs); err != nil {
+		t.Skipf("this host has no %s for the person's image: %v", home.Mke2fs, err)
+	}
+	anyUID(t)
+	k := newVMKeeper(t)
+	k.place(t, "p-s1", "ath_a")
+	k.s.handleSpawn(k.c, k.scratchReq("s1", "p-s1"))
+	if m := k.next(t); m["type"] != "spawned" {
+		t.Fatalf("the scratch session answered %v", m)
+	}
+	k.s.handle(k.c, &protocol.Request{V: protocol.Version, Type: protocol.TypeHomeMake, ID: "m1", Home: "vlt_a1", Athanor: "ath_a"})
+	k.expect(t, "home_made")
+	if d := diskOf(k, "ath_a"); d == nil || d.Unkept {
+		t.Fatalf("a disk a kept home was made on is %+v, want it kept", d)
+	}
+	m := k.machineOfAthanor("ath_a")
+	k.guest.booted()[0].Kill()
+	k.expect(t, "released")
+	vmEventually(t, "the VM's release", func() bool { return released(m) })
+	k.s.retireUnkept("ath_a")
+	if d := diskOf(k, "ath_a"); d == nil {
+		t.Fatal("a disk that held a kept home was retired at its VM's release")
+	}
+	if _, err := os.Stat(k.kept.ImagePath("ath_a")); err != nil {
+		t.Fatalf("its image: %v", err)
+	}
+}
+
+// A never-kept disk is not retired while a VM of its person is placed, so
+// a retirement never takes the disk of a first spawn under way; once no
+// place names one, it goes.
+func TestANeverKeptDiskStaysWhileItsPersonsVMIsPlaced(t *testing.T) {
+	k := newVMKeeper(t)
+	unkeptDisk(t, k, "ath_a")
+	k.place(t, "p-s1", "ath_a")
+	k.s.retireUnkept("ath_a")
+	if diskOf(k, "ath_a") == nil {
+		t.Fatal("a never-kept disk was retired while a place of its person names their VM")
+	}
+	k.s.handle(k.c, &protocol.Request{V: protocol.Version, Type: protocol.TypeDrop, Place: "p-s1"})
+	vmEventually(t, "the never-kept disk's retirement once no place names its VM", func() bool { return diskOf(k, "ath_a") == nil })
+}
+
+// A retirement that fails leaves the disk whole, for its next session to
+// use, and is asked again at its VM's next release.
+func TestAFailedRetirementIsAskedAgainAndBlocksNoOne(t *testing.T) {
+	k := newVMKeeper(t)
+	unkeptDisk(t, k, "ath_a")
+	saved := removeImage
+	t.Cleanup(func() { removeImage = saved })
+	removeImage = func(*home.Kept, string, int) error { return errors.New("the image did not go") }
+	k.s.retireUnkept("ath_a")
+	if diskOf(k, "ath_a") == nil {
+		t.Fatal("a retirement that failed took the disk's record")
+	}
+	removeImage = saved
+	k.place(t, "p-s1", "ath_a")
+	k.s.handleSpawn(k.c, k.scratchReq("s1", "p-s1"))
+	if m := k.next(t); m["type"] != "spawned" {
+		t.Fatalf("a session on a disk whose retirement failed answered %v", m)
+	}
+	k.guest.booted()[0].Kill()
+	k.expect(t, "released")
+	vmEventually(t, "the retirement at the VM's next release", func() bool { return diskOf(k, "ath_a") == nil })
+}
+
+// diskOf is the keeper's index of athanor's disk.
+func diskOf(k *vmKeeper, athanor string) *home.Disk {
+	k.s.mu.Lock()
+	defer k.s.mu.Unlock()
+	return k.s.disks[athanor]
+}
+
+// unkeptDisk records athanor's disk as a never-kept image, its file made.
+func unkeptDisk(t *testing.T, k *vmKeeper, athanor string) {
+	t.Helper()
+	if err := k.s.putDisk(home.Disk{Athanor: athanor, Form: home.FormImage, UID: os.Getuid(), Homes: []string{}, Unkept: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(k.kept.ImagePath(athanor), nil, home.ImageMode); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// anyUID lets this test's one kept uid be drawn though the keeper's own
+// processes hold it.
+func anyUID(t *testing.T) {
+	saved := keptTaken
+	t.Cleanup(func() { keptTaken = saved })
+	keptTaken = func(*home.Kept) (map[int]bool, error) { return map[int]bool{}, nil }
+}
