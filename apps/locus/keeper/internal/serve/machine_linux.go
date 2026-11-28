@@ -957,7 +957,8 @@ func (s *server) measureInMachine(c *client, req *protocol.Request, at keptAt) {
 		s.loseMachine(m, fmt.Sprintf("its guest did not answer home_measure %s: %v", req.ID, err))
 		s.send(c, protocol.NewError(req.ID, "", protocol.CodeUnavailable))
 	case answer.Type == "home_measured":
-		s.send(c, protocol.NewHomeMeasured(req.ID, answer.Bytes))
+		// A home is inside its image: the guest's word is held to it.
+		s.send(c, protocol.NewHomeMeasured(req.ID, min(answer.Bytes, home.ImageBytes)))
 	default:
 		s.log.Warn("home_measure %s refused: its VM's keeper refused it: %s", req.ID, answer.Code)
 		s.send(c, protocol.NewError(req.ID, "", guestCode(answer.Code)))
@@ -1161,8 +1162,10 @@ func (s *server) followGuest(sp *spawn) {
 }
 
 // guestExit sends sp's one `exited`, once its `spawned` has gone: a spawn
-// refused once made has its exit settled as none before.
+// refused once made has its exit settled as none before. What its guest
+// said of the end is read first (exitOf).
 func (s *server) guestExit(sp *spawn, code *int, signal, memory *string) {
+	code, signal, memory = exitOf(code, signal, memory)
 	select {
 	case <-sp.announced:
 	case <-sp.retired:
@@ -1175,6 +1178,26 @@ func (s *server) guestExit(sp *spawn, code *int, signal, memory *string) {
 		}
 		s.send(sp.client, protocol.NewExited(sp.id, code, signal, memory))
 	})
+}
+
+// exitOf is the end a guest said of a session, as the host takes it: an
+// exit code an exit can have, or a signal's name the host knows, exactly
+// one of them, else SIGKILL, the end of a session whose guest said nothing
+// the host can read; and a memory word of an exited's own, else none. So a
+// guest's line puts nothing in a session's exit, its kill counters or a
+// report that its own keeper could not have.
+func exitOf(code *int, signal, memory *string) (*int, *string, *string) {
+	if memory != nil && *memory != protocol.MemoryCap && *memory != protocol.MemoryMachine && *memory != protocol.MemoryEither {
+		memory = nil
+	}
+	switch {
+	case signal == nil && code != nil && *code >= 0 && *code <= 255:
+		return code, nil, memory
+	case code == nil && signal != nil && unix.SignalNum(*signal) != 0:
+		return nil, signal, memory
+	}
+	killed := unix.SignalName(unix.SIGKILL)
+	return nil, &killed, memory
 }
 
 // retireGuest ends a session in a VM once: its guest asked to release it,
@@ -1257,12 +1280,15 @@ func (s *server) readGuest(sp *spawn, clock func() time.Time) {
 	if err != nil || answer.Type != "measured" {
 		return
 	}
+	// The guest's word is held to its own memory: no number it sends
+	// enters the ledger, a counter or a report beyond what it holds.
+	bytes := min(answer.Bytes, s.machineGuest())
 	at := clock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if p := sp.client.places[sp.place]; p != nil && p.spawn == sp {
-		p.reading, p.readAt = protocol.Reading{Bytes: answer.Bytes, Lesser: answer.Lesser}, at
-		s.ledger.Read(p.entry, answer.Bytes, answer.Lesser, at)
+		p.reading, p.readAt = protocol.Reading{Bytes: bytes, Lesser: answer.Lesser}, at
+		s.ledger.Read(p.entry, bytes, answer.Lesser, at)
 	}
 }
 
