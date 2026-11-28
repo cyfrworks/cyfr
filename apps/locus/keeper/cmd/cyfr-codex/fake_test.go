@@ -28,7 +28,9 @@ import (
 //	slow      streams a first part, waits for a steer, then replies naming what it read
 //	read      calls CYFR's `files` and replies with the answer and whether it ran
 //	own       runs its own command, its output a canary, then replies
-//	activity  reasons in a summary of two deltas, runs two commands that end in
+//	activity  reasons, in a summary of two deltas once a turn asked for a
+//	          summary (turn/start's `summary`, kept for the thread's later
+//	          turns), else with an empty one, runs two commands that end in
 //	          reverse order and a patch whose diff is past a detail's bound
 //	          (fakeBigText), and calls a sub-agent whose thread speaks,
 //	          reasons and runs a command of its own, then replies
@@ -133,6 +135,10 @@ func fakeCodex() int {
 		steered                                  chan string
 		total                                    map[string]int
 		opened                                   map[string]any
+		// summary is the reasoning summary a turn's start last asked for,
+		// which Codex keeps for the thread's later turns: none until one
+		// asks, as the walk's thread read "summary":"none".
+		summary string
 	}
 	rolloutOf := func(id string) string {
 		matches, _ := filepath.Glob(filepath.Join(sessions, "rollout-*-"+id+".jsonl"))
@@ -193,6 +199,13 @@ func fakeCodex() int {
 		}
 		notify("turn/completed", map[string]any{"threadId": thread.id, "turn": t})
 	}
+	// summarises is whether the thread's reasoning carries its summary's
+	// text: only once a turn asked for one other than "none".
+	summarises := func() bool {
+		thread.Lock()
+		defer thread.Unlock()
+		return thread.summary != "" && thread.summary != "none"
+	}
 	// runTurn runs a turn of `words`, `params` its `turn/start`'s.
 	runTurn := func(turn, words string, params map[string]any) {
 		switch {
@@ -209,11 +222,15 @@ func fakeCodex() int {
 			}
 		case strings.Contains(words, "activity"):
 			notify("item/started", map[string]any{"threadId": thread.id, "turnId": turn, "item": map[string]any{"type": "reasoning", "id": "rs_act", "summary": []any{}}})
-			for _, delta := range []string{"THINK-ONE ", "THINK-TWO"} {
-				notify("item/reasoning/summaryTextDelta", map[string]any{"threadId": thread.id, "turnId": turn, "itemId": "rs_act", "delta": delta, "summaryIndex": 0})
+			summarised := []any{}
+			if summarises() {
+				for _, delta := range []string{"THINK-ONE ", "THINK-TWO"} {
+					notify("item/reasoning/summaryTextDelta", map[string]any{"threadId": thread.id, "turnId": turn, "itemId": "rs_act", "delta": delta, "summaryIndex": 0})
+				}
+				summarised = []any{"THINK-ONE THINK-TWO"}
 			}
 			notify("item/completed", map[string]any{"threadId": thread.id, "turnId": turn, "item": map[string]any{"type": "reasoning", "id": "rs_act",
-				"summary": []any{"THINK-ONE THINK-TWO"}}})
+				"summary": summarised}})
 			first := map[string]any{"type": "commandExecution", "id": "cmd_a", "command": "echo A", "status": "inProgress"}
 			second := map[string]any{"type": "commandExecution", "id": "cmd_b", "command": "echo B", "status": "inProgress"}
 			for _, command := range []map[string]any{first, second} {
@@ -231,7 +248,9 @@ func fakeCodex() int {
 			collab := map[string]any{"type": "collabAgentToolCall", "id": "collab_act", "tool": "spawnAgent", "status": "inProgress"}
 			notify("item/started", map[string]any{"threadId": thread.id, "turnId": turn, "item": collab})
 			child, childTurn := "019a0000-0000-7000-8000-00000000c41d", "turn_child_act"
-			notify("item/reasoning/summaryTextDelta", map[string]any{"threadId": child, "turnId": childTurn, "itemId": "rs_child", "delta": "CHILD-THOUGHT"})
+			if summarises() {
+				notify("item/reasoning/summaryTextDelta", map[string]any{"threadId": child, "turnId": childTurn, "itemId": "rs_child", "delta": "CHILD-THOUGHT"})
+			}
 			ran := map[string]any{"type": "commandExecution", "id": "cmd_child", "command": "echo CHILD-RAN", "status": "inProgress"}
 			notify("item/started", map[string]any{"threadId": child, "turnId": childTurn, "item": ran})
 			ran["status"] = "completed"
@@ -439,6 +458,11 @@ func fakeCodex() int {
 				}
 			case m.Method == "thread/start" || m.Method == "thread/resume":
 				thread.opened = m.Params
+				// A thread this process opens has been asked for no summary:
+				// the driver asks on every turn, a resumed thread's included.
+				thread.Lock()
+				thread.summary = ""
+				thread.Unlock()
 				thread.policy, thread.sandbox = str("approvalPolicy"), str("sandbox")
 				thread.instructions = str("developerInstructions")
 				thread.model = "fake-sol"
@@ -489,6 +513,9 @@ func fakeCodex() int {
 				turn := fmt.Sprintf("turn_%d", turns)
 				thread.Lock()
 				thread.active = turn
+				if summary, ok := m.Params["summary"].(string); ok {
+					thread.summary = summary
+				}
 				thread.Unlock()
 				input, _ := m.Params["input"].([]any)
 				words := ""

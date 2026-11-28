@@ -642,8 +642,8 @@ func TestOwnToolsAreOwnAndCYFRsCallsAreNot(t *testing.T) {
 // order each with its own and starting with what it runs, the edit's
 // change cut between characters to a detail's bound, the sub-agent's call
 // one row, nothing of its child, the reasoning as `thought` alone, and the
-// reply the member's own words.
-func activityHolds(t *testing.T, s *wireSession, twins [2]string, task string) {
+// reply `reply`, the member's own words.
+func activityHolds(t *testing.T, s *wireSession, twins [2]string, task, reply string) {
 	t.Helper()
 	got := s.until("idle")
 	calls := map[string][]map[string]any{}
@@ -697,16 +697,50 @@ func activityHolds(t *testing.T, s *wireSession, twins [2]string, task string) {
 			t.Fatalf("nothing of the sub-agent's own frames reaches the wire: %s", canary)
 		}
 	}
-	if said := saidOf(got); said != "The member said its own words." {
+	if said := saidOf(got); said != reply {
 		t.Fatalf("the reply holds only the member's own words: %q", said)
 	}
+}
+
+// saidHolds holds a turn's speech: the messages it said are `want`, in
+// order, and each streamed, in order, as exactly the text it is said with,
+// so a pane shows what its row stores.
+func saidHolds(t *testing.T, events []map[string]any, want []string) {
+	t.Helper()
+	var said []string
+	streamed := map[string]string{}
+	for _, e := range events {
+		switch e["t"] {
+		case "text":
+			streamed[e["message"].(string)] += e["delta"].(string)
+		case "said":
+			id, text := e["message"].(string), e["text"].(string)
+			if streamed[id] != text {
+				t.Fatalf("a message streams as it is said: streamed %q, said %q", streamed[id], text)
+			}
+			delete(streamed, id)
+			said = append(said, text)
+		}
+	}
+	if !reflect.DeepEqual(said, want) {
+		t.Fatalf("said %q, want %q", said, want)
+	}
+}
+
+// Antigravity names no message: its words before its own tool and after it
+// are one message, the later words a paragraph of their own.
+func TestAntigravitysWordsAroundItsToolAreOneMessageWithABreak(t *testing.T) {
+	s := startDriver(t)
+	startFresh(s, map[string]any{})
+	postText(s, "stp_around", "trn_1", "around")
+	saidHolds(t, s.until("idle"), []string{"Before the tool.\n\nAfter it."})
 }
 
 func TestAntigravitysActivityIsItsCallsThoughtsAndOwnWords(t *testing.T) {
 	s := startDriver(t)
 	startFresh(s, map[string]any{})
 	postText(s, "stp_act", "trn_1", "activity")
-	activityHolds(t, s, [2]string{"call_twin_a", "call_twin_b"}, "call_task")
+	activityHolds(t, s, [2]string{"call_twin_a", "call_twin_b"}, "call_task", "The member said its own words.")
 }
 
 // Usage: counts that read are partial, since the program's title request
