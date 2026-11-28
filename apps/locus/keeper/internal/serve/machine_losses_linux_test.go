@@ -45,9 +45,17 @@ func TestTheIdleClockStartsAtTheLastSessionsRelease(t *testing.T) {
 	k.expect(t, "released")
 	k.s.handle(k.c, &protocol.Request{V: protocol.Version, Type: protocol.TypeDrop, Place: "p-s1"})
 	k.s.endIdleMachines()
-	if f := k.guest.booted()[0]; f.ended() {
+	// An end begun is marked at once (endMachine); the VM's own end follows.
+	if endBegun(k, m) {
 		t.Fatal("a VM whose last session was released a moment ago ended as idle past its bound")
 	}
+}
+
+// endBegun says m's end has begun.
+func endBegun(k *vmKeeper, m *machine) bool {
+	k.s.mu.Lock()
+	defer k.s.mu.Unlock()
+	return m.ending
 }
 
 // A VM a place of its person's names is not ended at rest, neither by the
@@ -66,7 +74,7 @@ func TestAVMAPlaceNamesIsNotEndedAtRest(t *testing.T) {
 	k.idleLongAgo(m)
 	k.s.endIdleMachines()
 	k.s.giveWay(m)
-	if f := k.guest.booted()[0]; f.ended() {
+	if endBegun(k, m) {
 		t.Fatal("a VM a waiting place of its person names was ended at rest")
 	}
 	k.s.handle(k.c, &protocol.Request{V: protocol.Version, Type: protocol.TypeDrop, Place: "p-s2"})
@@ -196,6 +204,11 @@ func TestAVMWhoseEndLeftSomethingIsNotReleased(t *testing.T) {
 	f.mu.Unlock()
 	f.end(vm.EndOwnExit, cgroup.NotKilled)
 	k.expect(t, "released")
+	vmEventually(t, "the VM's route withdrawn and its sessions gone", func() bool {
+		k.s.mu.Lock()
+		defer k.s.mu.Unlock()
+		return m.route == nil && len(m.sessions) == 0
+	})
 	sweepRoutes(k.s)
 	if released(m) || k.usedNow() == 0 {
 		t.Fatalf("a VM whose end left its group was released %t, the pool holding %d of it", released(m), k.usedNow())

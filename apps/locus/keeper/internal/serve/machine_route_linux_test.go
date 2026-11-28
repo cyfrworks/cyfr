@@ -4,6 +4,7 @@
 package serve
 
 import (
+	"errors"
 	"fmt"
 	"net/netip"
 	"slices"
@@ -180,6 +181,7 @@ func TestAReleaseAsAnotherStartsLeavesTheRouteToTheLiveSession(t *testing.T) {
 			p := k.c.places["p-s2"]
 			return p != nil && p.spawn != nil
 		})
+		time.Sleep(100 * time.Millisecond) // sleep-ok: a start that did not wait for the route's lock would reach the guard meanwhile
 		close(g.release)
 		k.expect(t, "spawned")
 		vmEventually(t, "the released session's leaving", func() bool { return sessionsOf(k, m) == 1 })
@@ -242,5 +244,29 @@ func TestTwoReleasesAtOnceLeaveTheRouteAtNone(t *testing.T) {
 	}
 	if open > 0 {
 		t.Fatalf("in %d of %d tries a person's VM with no session left keeps a route that allows a released session's host, with no narrowing owed; the last try's: %s", open, tries, last)
+	}
+}
+
+// A start whose widening the guard refuses is taken out of the VM's
+// sessions before the route's lock is let go: the next start's union holds
+// the live session's hosts and its own, never the refused one's.
+func TestARefusedWideningLeavesNoHostOfItsSession(t *testing.T) {
+	fakeResolver(t, map[string][]string{"a.example.com": {"203.0.113.1"}, "b.example.com": {"203.0.113.2"}, "c.example.com": {"203.0.113.3"}})
+	k := newVMKeeper(t)
+	k.disk(t, "ath_a", "vlt_a1", "vlt_a2", "vlt_a3")
+	k.session(t, "s1", "ath_a", "vlt_a1", []string{"a.example.com"})
+	m := k.machineOfAthanor("ath_a")
+	k.guard.mu.Lock()
+	k.guard.changes = []error{errors.New("the guard refuses this change")}
+	k.guard.mu.Unlock()
+	k.place(t, "p-s2", "ath_a")
+	k.s.handleSpawn(k.c, k.spawnReq("s2", "p-s2", "vlt_a2", []string{"b.example.com"}))
+	if r := k.next(t); r["type"] != "error" || r["code"] != protocol.CodeGuardUnavailable {
+		t.Fatalf("a start whose widening the guard refused answered %v", r)
+	}
+	k.session(t, "s3", "ath_a", "vlt_a3", []string{"c.example.com"})
+	changes := k.routeChanges()
+	if last := changes[len(changes)-1]; last != "hosts[203.0.113.1 203.0.113.3]" || sessionsOf(k, m) != 2 {
+		t.Fatalf("after a refused widening the route's last change is %s with %d sessions in the VM", last, sessionsOf(k, m))
 	}
 }

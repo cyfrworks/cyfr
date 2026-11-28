@@ -283,9 +283,11 @@ func (s *server) forgetUnbooted(m *machine) {
 func (s *server) bootMachine(m *machine, at keptAt, r *role) string {
 	m.bootMu.Lock()
 	defer m.bootMu.Unlock()
+	// named says a place of the person's names m now; s.mu is held.
+	named := func() bool { return s.vms[m.athanor] == m && m.places > 0 }
 	s.mu.Lock()
 	running, ending := m.vm != nil, m.ending
-	unplaced := s.vms[m.athanor] != m || m.places == 0
+	unplaced := !named()
 	if !running && !ending && !unplaced {
 		m.booting = true
 	}
@@ -315,7 +317,7 @@ func (s *server) bootMachine(m *machine, at keptAt, r *role) string {
 		}
 	}
 	s.mu.Lock()
-	unplaced = m.places == 0
+	unplaced = !named()
 	s.mu.Unlock()
 	if unplaced {
 		s.log.Warn("the VM of a person's disk of uid %d is not booted: no place of theirs names it now", at.uid)
