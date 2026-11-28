@@ -623,15 +623,15 @@ defmodule PrismWeb.ShellLive do
     end
   end
 
-  # Only a public app has an address to share: the home's own origin
-  # (`Sanctum.origin/0`) plus its path. A private one copies nothing. The
+  # Only a public app has an address to share: the server's shared
+  # address (`Sanctum.shared_address/0`) plus its path. A private one copies nothing. The
   # card is the one pressed, by its publisher and name: two publishers'
   # apps of one name share a card id.
   def handle_event("copy_url", %{"publisher" => publisher, "name" => name}, socket) do
     case Enum.find(socket.assigns.tinctures, &(&1.publisher == publisher and &1.name == name)) do
       %{public: true} = tincture ->
         url =
-          Cyfr.RuntimeConfig.origin() <>
+          Cyfr.RuntimeConfig.shared_address() <>
             Prima.TinctureUrl.path(tincture.athanor_segment, tincture.publisher, tincture.name)
 
         {:noreply,
@@ -3767,7 +3767,7 @@ defmodule PrismWeb.ShellLive do
         {live_render(@socket, PrismWeb.ChatOverlayLive,
           id: "chat-overlay",
           container: {:div, class: "contents"},
-          session: %{"room_feed" => @room_feed}
+          session: %{"room_feed" => @room_feed, "entry" => @request_entry}
         )}
         {live_render(@socket, PrismWeb.AquaPanelLive,
           id: "aqua-panel",
@@ -3775,7 +3775,8 @@ defmodule PrismWeb.ShellLive do
           session: %{
             "ui_mode" => Prism.Labels.mode(assigns[:ui_mode]),
             "room_feed" => @room_feed,
-            "aqua_ask" => @aqua_ask
+            "aqua_ask" => @aqua_ask,
+            "entry" => @request_entry
           }
         )}
       </div>

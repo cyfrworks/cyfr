@@ -118,7 +118,7 @@ func envEdited(then, env string) string {
 // started, the stack not running; the start as .env says failed, all
 // stopped; or .env no longer coherent, nothing started.
 func TestRecoveryOfAnEnvEditedMidSwitch(t *testing.T) {
-	const edited = "only this computer, at http://localhost:4100"
+	const edited = "only this computer, at http://h-xeypbemm44chehc5.localhost:4100"
 	for _, c := range []struct {
 		then, env string
 		running   bool
@@ -378,7 +378,7 @@ func TestRecoveryKeepsAnIncoherentEdit(t *testing.T) {
 // (then=not_running). One still incoherent is .env unchanged: the switch
 // was not applied and nothing starts.
 func TestRecoveryResolvesAHeadCorrectedAfterAcceptance(t *testing.T) {
-	const words = "only this computer, at http://localhost:4000"
+	const words = "only this computer, at " + testPrivate
 	for _, c := range []struct {
 		name, point string
 		running     bool

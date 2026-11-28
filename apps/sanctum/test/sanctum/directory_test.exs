@@ -29,6 +29,9 @@ defmodule Sanctum.DirectoryTest do
   alias Sanctum.Directory
 
   @directory "https://dir.example"
+  # The private name of the test configuration's tunnel key
+  # (the first of the private name vectors).
+  @private_name "h-xeypbemm44chehc5.localhost"
   @policy %{max_identities: 100_000, log_bytes: 1_073_741_824, recovery_reserve_bytes: 10_485_760}
 
   setup tags do
@@ -40,15 +43,15 @@ defmodule Sanctum.DirectoryTest do
     :ok
   end
 
-  # This node's public URL, and so the directory it serves
-  # (`Sanctum.origin/0`), restored when the test ends.
-  defp serve_at(url), do: put_sanctum_env(:public_url, url)
+  # This node's browser address, and so the directory it serves
+  # (`Sanctum.shared_address/0`), restored when the test ends.
+  defp serve_at(url), do: put_sanctum_env(:browser_address, url)
 
-  # A server with no browser address declares no public URL: its origin
-  # is the fallback the runtime builds from its port (`Cyfr.RuntimeConfig`).
-  defp serve_locally_at(origin) do
-    put_sanctum_env(:public_url, nil)
-    put_sanctum_env(:fallback_origin, origin)
+  # A server with no browser address serves its directory at its private
+  # address (`Cyfr.RuntimeConfig.resolve_link/3`).
+  defp serve_locally_at(address) do
+    put_sanctum_env(:browser_address, nil)
+    put_sanctum_env(:private_address, address)
   end
 
   # A `:sanctum` setting for the rest of the test, nil unsetting it, its
@@ -304,27 +307,27 @@ defmodule Sanctum.DirectoryTest do
                Directory.register(%{genesis: Entry.encode(account().genesis), source: source()})
     end
 
-    test "a server with no browser address on port 80, whose origin is http://localhost:80, registers a genesis " <>
-           "naming http://localhost" do
-      serve_locally_at("http://localhost:80")
-      assert Sanctum.origin() == "http://localhost:80"
+    test "a server with no browser address on port 80, whose private address is " <>
+           "http://#{@private_name}, registers a genesis naming it" do
+      # The private address on port 80 is its origin as a browser spells
+      # it (`Cyfr.RuntimeConfig.resolve_link/3`), the one spelling a
+      # genesis names its directory in.
+      serve_locally_at("http://#{@private_name}")
+      assert Prima.Identity.Encoding.directory_url?(Sanctum.shared_address())
 
-      # A genesis cannot name the origin as configured: its directory is
-      # in the one spelling, which drops the scheme's default port.
-      refute Prima.Identity.Encoding.directory_url?("http://localhost:80")
-
-      register!(account(directory: "http://localhost"))
+      register!(account(directory: "http://#{@private_name}"))
     end
 
     test "serves its origin with the scheme's default port dropped, and still refuses another " <>
            "scheme, host, port or path, storing nothing" do
       for {serve, origin, served, others} <- [
-            {&serve_locally_at/1, "http://localhost:80", "http://localhost",
+            {&serve_locally_at/1, "http://#{@private_name}", "http://#{@private_name}",
              [
-               "https://localhost",
+               "https://#{@private_name}",
                "http://elsewhere.example",
-               "http://localhost:4000",
-               "http://localhost/directory"
+               "http://#{@private_name}:4000",
+               "http://#{@private_name}/directory",
+               "http://localhost"
              ]},
             {&serve_at/1, "https://dir.example:443", "https://dir.example",
              [

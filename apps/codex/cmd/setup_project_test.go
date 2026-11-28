@@ -125,7 +125,7 @@ func workInThisProcess(args []string) *workProcess {
 // made and offers no token, whatever else it says.
 func TestALookNamingNoContainerSendsNothing(t *testing.T) {
 	dir := t.TempDir()
-	env := "CYFR_BROWSER=none\nCYFR_PORT=4100\n" + setupTokenVar + "=" + testToken + "\n"
+	env := "CYFR_BROWSER=none\nCYFR_PORT=4100\n" + setupTokenVar + "=" + testToken + "\n" + testLinkLine
 	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte(env), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -257,7 +257,7 @@ func begins(w *workProcess) workBegin { return func() (*workProcess, error) { re
 func setUpFolder(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("CYFR_BROWSER=none\nCYFR_PORT=4100\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("CYFR_BROWSER=none\nCYFR_PORT=4100\n"+testLinkLine), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return dir
@@ -593,7 +593,7 @@ func (s localStack) publishing(dir string, port int, logs string) {
 // portOf is the port the .env in dir names.
 func portOf(t *testing.T, dir string) string {
 	t.Helper()
-	_, head, err := access.ReadProjectAlone(dir)
+	_, head, _, err := access.ReadProjectAlone(dir)
 	if err != nil {
 		t.Fatal(err)
 	}

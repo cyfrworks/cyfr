@@ -216,7 +216,7 @@ defmodule Emissary.Web.MCPTransportTest do
       Cyfr.Test.Settings.put("mcp_subscription_max_ms", 5_000)
 
       ctx = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
-      {:ok, session} = Sanctum.Session.create(ctx)
+      {:ok, session} = Sanctum.Session.create(ctx, address: Sanctum.private_address())
       {:ok, ctx: ctx, session: session}
     end
 

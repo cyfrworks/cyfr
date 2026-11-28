@@ -49,7 +49,7 @@ defmodule Sanctum.Vault.OAuthGrantStandingTest do
         )
       )
 
-    {:ok, ctx} = Caller.establish(session.token, focus: athanor.id)
+    {:ok, ctx} = Caller.establish(session.token, focus: athanor.id, entry: :loopback)
     ctx
   end
 

@@ -382,7 +382,7 @@ defmodule Cyfr.Cluster.Fixtures do
   @doc "Establish a caller from `token` on this member, warming its memo."
   @spec establish(String.t()) :: {:ok, String.t()} | {:error, term()}
   def establish(token) do
-    case Sanctum.Caller.establish(token) do
+    case Sanctum.Caller.establish(token, entry: :loopback) do
       {:ok, ctx} -> {:ok, ctx.athanor_id}
       other -> other
     end
@@ -398,7 +398,7 @@ defmodule Cyfr.Cluster.Fixtures do
   when it is used again after one.
   """
   @spec context(String.t()) :: {:ok, Sanctum.Context.t()} | {:error, term()}
-  def context(token), do: Sanctum.Caller.establish(token)
+  def context(token), do: Sanctum.Caller.establish(token, entry: :loopback)
 
   @doc """
   A process on this member holding `token`'s context the way a mounted
@@ -412,7 +412,7 @@ defmodule Cyfr.Cluster.Fixtures do
 
     pid =
       spawn(fn ->
-        {:ok, ctx} = Sanctum.Caller.establish(token)
+        {:ok, ctx} = Sanctum.Caller.establish(token, entry: :loopback)
         watch = CyfrWeb.ContextGuard.watch(ctx)
         send(owner, {:held, self()})
         held(watch)
@@ -522,7 +522,10 @@ defmodule Cyfr.Cluster.Fixtures do
   @doc "What the asset credential `credential` opens on this member: its athanor, or the refusal."
   @spec open_asset(String.t()) :: {:ok, String.t()} | {:error, term()}
   def open_asset(credential) do
-    case Sanctum.TinctureAuth.verify_asset_credential(credential, client_ip: "127.0.0.1") do
+    case Sanctum.TinctureAuth.verify_asset_credential(credential,
+           client_ip: "127.0.0.1",
+           entry: :loopback
+         ) do
       {:ok, authority} -> {:ok, authority.athanor_id}
       other -> other
     end

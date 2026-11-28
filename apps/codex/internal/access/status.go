@@ -28,7 +28,7 @@ func (e *Engine) status(ctx context.Context) (Status, error) {
 	default:
 		s.Head, s.HeadErr = st.head, st.headErr
 		if st.headErr == nil {
-			s.Words = Describe(st.head)
+			s.Words = st.describe(st.head)
 		}
 	}
 	if j, err := e.readJournal(); err == nil && j != nil {

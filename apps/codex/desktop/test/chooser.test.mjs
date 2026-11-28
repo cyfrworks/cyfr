@@ -13,7 +13,7 @@ import {readFileSync} from "node:fs"
 import {test} from "node:test"
 import vm from "node:vm"
 
-import {UNROUTED, initial, step} from "../src/states.js"
+import {initial, step} from "../src/states.js"
 
 const asset = (name) => readFileSync(new URL(`../../internal/desktop/assets/${name}`, import.meta.url), "utf8")
 const script = asset("chooser.js")
@@ -152,7 +152,6 @@ test("the passkey's way on goes nowhere when its press is not answered with a wa
 })
 
 const UNANSWERED = `The CYFR at ${HOME} did not answer.`
-const UNROUTED_WORDS = `The app could not reach the CYFR at ${HOME} through this computer's tailnet, so it loaded nothing of it.`
 
 test("a chooser told that the CYFR did not answer names it and offers it again", async () => {
   const keys = await chooser("", OPEN, OPEN, ROAD + "&notice=unanswered")
@@ -175,7 +174,7 @@ test("a chooser told that the CYFR did not answer names it and offers it again",
 })
 
 test("Try again loads nothing until a Connect at that CYFR answered with a way on", async () => {
-  const local = {cyfr: "http://localhost:4000", next: "/"}
+  const local = {cyfr: "http://h-xeypbemm44chehc5.localhost:4000", next: "/"}
   for (const said of [{cyfr: local.cyfr, error: "The CYFR in /srv/cyfr does not answer."}, {error: "CYFR locked. Connect again."}]) {
     const {$, went} = await chooser("", local, said, ROAD + "&notice=unanswered")
     $("again").onclick()
@@ -242,25 +241,6 @@ test("a CYFR selected last that does not open says why, and Try again presses it
     await settled()
     assert.equal($("reopen").hidden, true, `${hash}: the person's Connect hides Try again`)
     assert.deepEqual(went.asked.at(-1), ["/bootstrap/connect", {address: HOME}], hash)
-  }
-})
-
-// A proposal whose route main could not set comes back as main's word,
-// naming that CYFR: the chooser says why and offers it again, pressing
-// nothing by itself, the CYFR selected last included. On the box's screen
-// too, This box's first opening among them, which the service takes as a
-// press of This box (internal/desktop
-// TestTryAgainOnThisBoxsFirstOpeningPressesThisBox).
-test("a CYFR whose route could not be set is said, and Try again presses it", async () => {
-  const OTHER = "https://other.example"
-  for (const box of ["", "&box=1"]) {
-    const {$, went} = await chooser("", {cyfr: OTHER, resume: OTHER}, OPEN, `#road=words${box}&notice=unrouted&retry=${encodeURIComponent(HOME)}`)
-    assert.equal($("notice").textContent, UNROUTED_WORDS, box)
-    assert.deepEqual([$("choose").hidden, $("reopen").hidden], [false, false], `${box}: Connect and Try again`)
-    assert.deepEqual(went.asked, [], `${box}: nothing by itself`)
-    $("reopen").onclick()
-    await settled()
-    assert.deepEqual(went.asked, [["/bootstrap/connect", {address: HOME, kept: true}]], box)
   }
 })
 
@@ -358,8 +338,7 @@ const NOTICES = {
   unleft: {words: UNLEFT, observed: [{type: "navigate", window: "rail", url: LOOPBACK + "/rail/select?cyfr=https%3A%2F%2Fbob.example",
     target: "top", asker: "top", showing: LOOPBACK + "/rail/", by: LOOPBACK + "/rail/"}, {type: "late", id: 1}, ready]},
   unforgotten: {words: UNFORGOTTEN, observed: [locked, {type: "forgot", cleared: false}]},
-  unanswered: {words: UNANSWERED, observed: [{type: "load-failed", code: -106, url: HOME + "/threads"}]},
-  unrouted: {words: UNROUTED_WORDS, observed: [{type: "load-failed", code: UNROUTED, url: HOME + "/"}]}
+  unanswered: {words: UNANSWERED, observed: [{type: "load-failed", code: -106, url: HOME + "/threads"}]}
 }
 
 // Every way a load of the chooser can begin that is not main's, as main is
@@ -528,7 +507,7 @@ test("Set up and start shows its steps as they begin, then opens the CYFR set up
     "/bootstrap/start": [running([], 1)],
     "/bootstrap/setup": [running(["files"], 2), running(["files", "settings", "images", "start"], 5),
       {setup: {run: 1, folder: "/home/ada/cyfr", steps: ["files", "settings", "images", "start"], done: true, seq: 6}}],
-    "/bootstrap/open": [{cyfr: "http://localhost:4000", next: "/"}]
+    "/bootstrap/open": [{cyfr: "http://h-xeypbemm44chehc5.localhost:4000", next: "/"}]
   }
   const {$, went} = await chooser("", {folder: "/home/ada/cyfr"}, {}, "#road=words", {docker: [{docker: {ready: true}}], setup})
   $("here").fire("click")
@@ -564,10 +543,10 @@ test("a setup that failed says why and offers Try again, which starts it again",
 
 test("after a lock the chooser shows the setup's progress again, and once it is done opens nothing by itself", async () => {
   const done = {setup: {run: 1, folder: "/home/ada/cyfr", steps: ["files", "settings", "images", "start"], done: true, seq: 6}}
-  const setup = {"/bootstrap/setup": [done], "/bootstrap/open": [{cyfr: "http://localhost:4000", next: "/"}]}
+  const setup = {"/bootstrap/setup": [done], "/bootstrap/open": [{cyfr: "http://h-xeypbemm44chehc5.localhost:4000", next: "/"}]}
   for (const road of ["#road=words", ROAD]) {
     const {$, went} = await chooser("", {folder: "/home/ada/cyfr", ...running(["files", "settings"], 3), resume: HOME}, {}, road,
-      {setup: {...setup, "/bootstrap/setup": [done], "/bootstrap/open": [{cyfr: "http://localhost:4000", next: "/"}]}})
+      {setup: {...setup, "/bootstrap/setup": [done], "/bootstrap/open": [{cyfr: "http://h-xeypbemm44chehc5.localhost:4000", next: "/"}]}})
     assert.deepEqual([$("choose").hidden, $("setup").hidden], [true, false], road)
     await settled()
     assert.deepEqual(progressOf($), ["Setting up CYFR in /home/ada/cyfr", ...SETUP_WORDS])
@@ -584,7 +563,7 @@ test("after a lock the chooser shows the setup's progress again, and once it is 
 test("the CYFR set up opens at the device's pages on the six-word road, through main on the passkey road, and every request says the time its page was shown in", async () => {
   const done = {setup: {run: 1, folder: "/home/ada/cyfr", steps: ["files", "settings", "images", "start"], done: true, seq: 2}}
   for (const [road, byItself] of [["#road=words", ["/"]], [ROAD, []]]) {
-    const setup = {"/bootstrap/start": [running([], 1)], "/bootstrap/setup": [done], "/bootstrap/open": [{cyfr: "http://localhost:4000", next: "/"}]}
+    const setup = {"/bootstrap/start": [running([], 1)], "/bootstrap/setup": [done], "/bootstrap/open": [{cyfr: "http://h-xeypbemm44chehc5.localhost:4000", next: "/"}]}
     const {$, went} = await chooser("", {folder: "/home/ada/cyfr", picks: 1, epoch: 4}, {}, road, {docker: [{docker: {ready: true}}], setup})
     $("here").fire("click")
     await settled()
@@ -631,7 +610,7 @@ test("a folder set up already offers Open CYFR on the setup screen, and none is 
   for (const [state, offered] of [[{folder: "/home/ada/cyfr", found: true}, true], [{folder: "/home/ada/cyfr"}, false],
     [{folder: "/home/ada/cyfr", found: true, ...running(["files"], 2)}, false]]) {
     const {$, went} = await chooser("", state, {}, "#road=words", {docker: [{docker: {ready: true}}],
-      setup: {"/bootstrap/setup": [new Promise(() => {})], "/bootstrap/open": [{cyfr: "http://localhost:4000", next: "/"}]}})
+      setup: {"/bootstrap/setup": [new Promise(() => {})], "/bootstrap/open": [{cyfr: "http://h-xeypbemm44chehc5.localhost:4000", next: "/"}]}})
     $("here").fire("click")
     await settled()
     assert.equal($("go").hidden, !offered, JSON.stringify(state))

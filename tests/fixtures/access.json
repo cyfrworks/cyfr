@@ -1,5 +1,5 @@
 {
-  "about": "The access head, its derivation, its canonical bytes and digest, the boot's resolution of a deployment's access settings, the compose selections, the name grammars and the words a person reads. Cyfr.RuntimeConfig (Elixir) generates every canonical, digest, class and boot answer; apps/codex/internal/access (Go) agrees with them. The derive vectors' .env assignments and removals are Go's alone.",
+  "about": "The access head, its derivation, its canonical bytes and digest, the boot's resolution of a deployment's access settings, the compose selections, the name grammars and the words a person reads, on a server whose private address is the row's `private` (the first name of the private name's vectors). Cyfr.RuntimeConfig (Elixir) generates every canonical, digest, class and boot answer; apps/codex/internal/access (Go) agrees with them. The derive vectors' .env assignments and removals are Go's alone.",
   "derive": [
     {
       "name": "none, default port",
@@ -782,15 +782,8 @@
       "access": {
         "assertion": "absent",
         "browser": "none",
+        "browser_address": "none",
         "canonical": "{\"browser\":\"none\",\"host\":\"localhost\",\"port\":4000,\"profiles\":[]}",
-        "check_origins": [
-          "http://localhost:4000",
-          "https://localhost:4000",
-          "http://127.0.0.1:4000",
-          "https://127.0.0.1:4000",
-          "http://[::1]:4000",
-          "https://[::1]:4000"
-        ],
         "digest": "sha256:fdf0bb2b75b7f70aba7d6c85c1651c847c8b6717f0721f6b05d58c62bbd4b51d",
         "exposure": "private",
         "head": {
@@ -808,7 +801,6 @@
           "proxy": "none",
           "published": "none"
         },
-        "origin": "http://localhost:4000",
         "trust": "none"
       }
     },
@@ -826,15 +818,8 @@
       "access": {
         "assertion": "absent",
         "browser": "none",
+        "browser_address": "none",
         "canonical": "{\"browser\":\"none\",\"host\":\"localhost\",\"port\":4000,\"profiles\":[]}",
-        "check_origins": [
-          "http://localhost:4000",
-          "https://localhost:4000",
-          "http://127.0.0.1:4000",
-          "https://127.0.0.1:4000",
-          "http://[::1]:4000",
-          "https://[::1]:4000"
-        ],
         "digest": "sha256:fdf0bb2b75b7f70aba7d6c85c1651c847c8b6717f0721f6b05d58c62bbd4b51d",
         "exposure": "private",
         "head": {
@@ -852,7 +837,6 @@
           "proxy": "none",
           "published": "none"
         },
-        "origin": "http://localhost:4000",
         "trust": "none"
       }
     },
@@ -866,15 +850,8 @@
       "access": {
         "assertion": "absent",
         "browser": "none",
+        "browser_address": "none",
         "canonical": "{\"browser\":\"none\",\"host\":\"localhost\",\"port\":4000,\"profiles\":[]}",
-        "check_origins": [
-          "http://localhost:4000",
-          "https://localhost:4000",
-          "http://127.0.0.1:4000",
-          "https://127.0.0.1:4000",
-          "http://[::1]:4000",
-          "https://[::1]:4000"
-        ],
         "digest": "sha256:fdf0bb2b75b7f70aba7d6c85c1651c847c8b6717f0721f6b05d58c62bbd4b51d",
         "exposure": "private",
         "head": {
@@ -892,7 +869,6 @@
           "proxy": "none",
           "published": "none"
         },
-        "origin": "http://localhost:4000",
         "trust": "none"
       }
     },
@@ -988,7 +964,7 @@
           "key": "CYFR_HOST",
           "value": "cyfr.example.com"
         },
-        "sentence": "CYFR_BROWSER is `none`, which serves this computer alone at its localhost address, but CYFR_HOST is `cyfr.example.com`. Run `cyfr access browser none` to write the matching settings, or `cyfr access browser tailnet|domain|proxy` to reach it from other devices."
+        "sentence": "CYFR_BROWSER is `none`, which serves this computer alone at its private address, but CYFR_HOST is `cyfr.example.com`. Run `cyfr access browser none` to write the matching settings, or `cyfr access browser tailnet|domain|proxy` to reach it from other devices."
       }
     },
     {
@@ -1011,7 +987,7 @@
           "key": "CYFR_PUBLIC_URL",
           "value": "https://cyfr.example.com"
         },
-        "sentence": "CYFR_BROWSER is `none`, which serves this computer alone at its localhost address, but CYFR_PUBLIC_URL is `https://cyfr.example.com`. Run `cyfr access browser none` to write the matching settings, or `cyfr access browser tailnet|domain|proxy` to reach it from other devices."
+        "sentence": "CYFR_BROWSER is `none`, which serves this computer alone at its private address, but CYFR_PUBLIC_URL is `https://cyfr.example.com`. Run `cyfr access browser none` to write the matching settings, or `cyfr access browser tailnet|domain|proxy` to reach it from other devices."
       }
     },
     {
@@ -1082,16 +1058,8 @@
       "access": {
         "assertion": "absent",
         "browser": "tailnet",
+        "browser_address": "https://cyfr.tail1a2b3c.ts.net",
         "canonical": "{\"browser\":\"tailnet\",\"host\":\"cyfr.tail1a2b3c.ts.net\",\"node_id\":\"nAbc123XYZ1CNTRL\",\"port\":4000,\"profiles\":[\"tailnet\"],\"public_url\":\"https://cyfr.tail1a2b3c.ts.net\"}",
-        "check_origins": [
-          "https://cyfr.tail1a2b3c.ts.net",
-          "http://localhost:4000",
-          "https://localhost:4000",
-          "http://127.0.0.1:4000",
-          "https://127.0.0.1:4000",
-          "http://[::1]:4000",
-          "https://[::1]:4000"
-        ],
         "digest": "sha256:0b490d5a14d5ce4be25439d69b37119c499adf1f9825caaed2a87ef11509c6ea",
         "exposure": "private",
         "head": {
@@ -1116,7 +1084,6 @@
           ],
           "published": "none"
         },
-        "origin": "https://cyfr.tail1a2b3c.ts.net",
         "trust": {
           "hops": 1
         }
@@ -1148,16 +1115,8 @@
       "access": {
         "assertion": "absent",
         "browser": "tailnet",
+        "browser_address": "https://cyfr.tail1a2b3c.ts.net",
         "canonical": "{\"browser\":\"tailnet\",\"host\":\"cyfr.tail1a2b3c.ts.net\",\"node_id\":\"nAbc123XYZ1CNTRL\",\"port\":4000,\"profiles\":[\"tailnet\"],\"public_url\":\"https://cyfr.tail1a2b3c.ts.net\"}",
-        "check_origins": [
-          "https://cyfr.tail1a2b3c.ts.net",
-          "http://localhost:4000",
-          "https://localhost:4000",
-          "http://127.0.0.1:4000",
-          "https://127.0.0.1:4000",
-          "http://[::1]:4000",
-          "https://[::1]:4000"
-        ],
         "digest": "sha256:0b490d5a14d5ce4be25439d69b37119c499adf1f9825caaed2a87ef11509c6ea",
         "exposure": "private",
         "head": {
@@ -1182,7 +1141,6 @@
           ],
           "published": "none"
         },
-        "origin": "https://cyfr.tail1a2b3c.ts.net",
         "trust": {
           "cidrs": [
             "172.16.234.3",
@@ -1213,16 +1171,8 @@
       "access": {
         "assertion": "absent",
         "browser": "tailnet",
+        "browser_address": "https://cyfr.tail1a2b3c.ts.net",
         "canonical": "{\"browser\":\"tailnet\",\"host\":\"cyfr.tail1a2b3c.ts.net\",\"node_id\":\"nAbc123XYZ1CNTRL\",\"port\":4000,\"profiles\":[\"tailnet\"],\"public_url\":\"https://cyfr.tail1a2b3c.ts.net\"}",
-        "check_origins": [
-          "https://cyfr.tail1a2b3c.ts.net",
-          "http://localhost:4000",
-          "https://localhost:4000",
-          "http://127.0.0.1:4000",
-          "https://127.0.0.1:4000",
-          "http://[::1]:4000",
-          "https://[::1]:4000"
-        ],
         "digest": "sha256:0b490d5a14d5ce4be25439d69b37119c499adf1f9825caaed2a87ef11509c6ea",
         "exposure": "private",
         "head": {
@@ -1247,7 +1197,6 @@
           ],
           "published": "none"
         },
-        "origin": "https://cyfr.tail1a2b3c.ts.net",
         "trust": {
           "hops": 2
         }
@@ -1480,16 +1429,8 @@
       "access": {
         "assertion": "absent",
         "browser": "domain",
+        "browser_address": "https://cyfr.example.com",
         "canonical": "{\"acme_email\":\"ops@example.com\",\"browser\":\"domain\",\"host\":\"cyfr.example.com\",\"port\":4000,\"profiles\":[\"domain\"],\"public_url\":\"https://cyfr.example.com\"}",
-        "check_origins": [
-          "https://cyfr.example.com",
-          "http://localhost:4000",
-          "https://localhost:4000",
-          "http://127.0.0.1:4000",
-          "https://127.0.0.1:4000",
-          "http://[::1]:4000",
-          "https://[::1]:4000"
-        ],
         "digest": "sha256:544c50c4db306d6e127a57d135a21d8f695cde7f24dacd32cab16fd1da6f4ddd",
         "exposure": "public",
         "head": {
@@ -1514,7 +1455,6 @@
           ],
           "published": "none"
         },
-        "origin": "https://cyfr.example.com",
         "trust": {
           "hops": 1
         }
@@ -1759,15 +1699,8 @@
       "access": {
         "assertion": "absent",
         "browser": "none",
+        "browser_address": "none",
         "canonical": "{\"browser\":\"none\",\"host\":\"localhost\",\"port\":4000,\"profiles\":[]}",
-        "check_origins": [
-          "http://localhost:4000",
-          "https://localhost:4000",
-          "http://127.0.0.1:4000",
-          "https://127.0.0.1:4000",
-          "http://[::1]:4000",
-          "https://[::1]:4000"
-        ],
         "digest": "sha256:fdf0bb2b75b7f70aba7d6c85c1651c847c8b6717f0721f6b05d58c62bbd4b51d",
         "exposure": "private",
         "head": {
@@ -1785,7 +1718,6 @@
           "proxy": "none",
           "published": "none"
         },
-        "origin": "http://localhost:4000",
         "trust": "none"
       }
     },
@@ -1803,15 +1735,8 @@
       "access": {
         "assertion": "process",
         "browser": "none",
+        "browser_address": "none",
         "canonical": "{\"browser\":\"none\",\"host\":\"localhost\",\"port\":4000,\"profiles\":[]}",
-        "check_origins": [
-          "http://localhost:4000",
-          "https://localhost:4000",
-          "http://127.0.0.1:4000",
-          "https://127.0.0.1:4000",
-          "http://[::1]:4000",
-          "https://[::1]:4000"
-        ],
         "digest": "sha256:fdf0bb2b75b7f70aba7d6c85c1651c847c8b6717f0721f6b05d58c62bbd4b51d",
         "exposure": "private",
         "head": {
@@ -1829,7 +1754,6 @@
           "proxy": "none",
           "published": "none"
         },
-        "origin": "http://localhost:4000",
         "trust": "none"
       }
     },
@@ -1889,15 +1813,8 @@
       "access": {
         "assertion": "process",
         "browser": "none",
+        "browser_address": "none",
         "canonical": "{\"browser\":\"none\",\"host\":\"localhost\",\"port\":4000,\"profiles\":[]}",
-        "check_origins": [
-          "http://localhost:4000",
-          "https://localhost:4000",
-          "http://127.0.0.1:4000",
-          "https://127.0.0.1:4000",
-          "http://[::1]:4000",
-          "https://[::1]:4000"
-        ],
         "digest": "sha256:fdf0bb2b75b7f70aba7d6c85c1651c847c8b6717f0721f6b05d58c62bbd4b51d",
         "exposure": "private",
         "head": {
@@ -1915,7 +1832,6 @@
           "proxy": "none",
           "published": "none"
         },
-        "origin": "http://localhost:4000",
         "trust": "none"
       }
     },
@@ -2001,15 +1917,8 @@
       "access": {
         "assertion": "absent",
         "browser": "none",
+        "browser_address": "none",
         "canonical": "{\"browser\":\"none\",\"host\":\"localhost\",\"port\":4000,\"profiles\":[]}",
-        "check_origins": [
-          "http://localhost:4000",
-          "https://localhost:4000",
-          "http://127.0.0.1:4000",
-          "https://127.0.0.1:4000",
-          "http://[::1]:4000",
-          "https://[::1]:4000"
-        ],
         "digest": "sha256:fdf0bb2b75b7f70aba7d6c85c1651c847c8b6717f0721f6b05d58c62bbd4b51d",
         "exposure": "private",
         "head": {
@@ -2027,7 +1936,6 @@
           "proxy": "none",
           "published": "none"
         },
-        "origin": "http://localhost:4000",
         "trust": "none"
       }
     },
@@ -2047,15 +1955,8 @@
       "access": {
         "assertion": "absent",
         "browser": "none",
+        "browser_address": "none",
         "canonical": "{\"browser\":\"none\",\"host\":\"localhost\",\"port\":4000,\"profiles\":[]}",
-        "check_origins": [
-          "http://localhost:4000",
-          "https://localhost:4000",
-          "http://127.0.0.1:4000",
-          "https://127.0.0.1:4000",
-          "http://[::1]:4000",
-          "https://[::1]:4000"
-        ],
         "digest": "sha256:fdf0bb2b75b7f70aba7d6c85c1651c847c8b6717f0721f6b05d58c62bbd4b51d",
         "exposure": "private",
         "head": {
@@ -2073,7 +1974,6 @@
           "proxy": "none",
           "published": "none"
         },
-        "origin": "http://localhost:4000",
         "trust": "none"
       }
     },
@@ -2420,7 +2320,7 @@
           "key": "CYFR_HOST",
           "value": "x.example.com"
         },
-        "sentence": "CYFR_BROWSER is `none`, which serves this computer alone at its localhost address, but CYFR_HOST is `x.example.com`. Run `cyfr access browser none` to write the matching settings, or `cyfr access browser tailnet|domain|proxy` to reach it from other devices."
+        "sentence": "CYFR_BROWSER is `none`, which serves this computer alone at its private address, but CYFR_HOST is `x.example.com`. Run `cyfr access browser none` to write the matching settings, or `cyfr access browser tailnet|domain|proxy` to reach it from other devices."
       }
     },
     {
@@ -2556,16 +2456,8 @@
       "access": {
         "assertion": "absent",
         "browser": "domain",
+        "browser_address": "https://cyfr.example.com",
         "canonical": "{\"browser\":\"domain\",\"host\":\"cyfr.example.com\",\"port\":4100,\"profiles\":[\"domain\"],\"public_url\":\"https://cyfr.example.com\"}",
-        "check_origins": [
-          "https://cyfr.example.com",
-          "http://localhost:4100",
-          "https://localhost:4100",
-          "http://127.0.0.1:4100",
-          "https://127.0.0.1:4100",
-          "http://[::1]:4100",
-          "https://[::1]:4100"
-        ],
         "digest": "sha256:c395bfbb8a91810c711be17d9b286232b4beb5e0fc0bcf9bc2b6855e22ca9e80",
         "exposure": "public",
         "head": {
@@ -2589,7 +2481,6 @@
           ],
           "published": "none"
         },
-        "origin": "https://cyfr.example.com",
         "trust": {
           "hops": 1
         }
@@ -2613,15 +2504,8 @@
       "access": {
         "assertion": "absent",
         "browser": "none",
+        "browser_address": "none",
         "canonical": "{\"browser\":\"none\",\"host\":\"localhost\",\"port\":4100,\"profiles\":[]}",
-        "check_origins": [
-          "http://localhost:4100",
-          "https://localhost:4100",
-          "http://127.0.0.1:4100",
-          "https://127.0.0.1:4100",
-          "http://[::1]:4100",
-          "https://[::1]:4100"
-        ],
         "digest": "sha256:5d47b923523ccad88b9b744f96a17d8907566b6b4bc004b279b9eeb17bc5ff5e",
         "exposure": "private",
         "head": {
@@ -2639,7 +2523,6 @@
           "proxy": "none",
           "published": "none"
         },
-        "origin": "http://localhost:4100",
         "trust": "none"
       }
     },
@@ -2769,16 +2652,8 @@
       "access": {
         "assertion": "absent",
         "browser": "proxy",
+        "browser_address": "https://cyfr.example.com",
         "canonical": "{\"browser\":\"proxy\",\"host\":\"cyfr.example.com\",\"port\":4000,\"profiles\":[],\"public_url\":\"https://cyfr.example.com\",\"publish\":\"127.0.0.1:4001\"}",
-        "check_origins": [
-          "https://cyfr.example.com",
-          "http://localhost:4000",
-          "https://localhost:4000",
-          "http://127.0.0.1:4000",
-          "https://127.0.0.1:4000",
-          "http://[::1]:4000",
-          "https://[::1]:4000"
-        ],
         "digest": "sha256:2ee58b884f408da6a402558a95e535eba5855d310058619cba88c71a5bbb30a6",
         "exposure": "public",
         "head": {
@@ -2804,7 +2679,6 @@
             4001
           ]
         },
-        "origin": "https://cyfr.example.com",
         "trust": {
           "hops": 1
         }
@@ -2838,16 +2712,8 @@
       "access": {
         "assertion": "process",
         "browser": "proxy",
+        "browser_address": "https://cyfr.example.com",
         "canonical": "{\"browser\":\"proxy\",\"host\":\"cyfr.example.com\",\"port\":4000,\"profiles\":[],\"public_url\":\"https://cyfr.example.com\",\"publish\":\"127.0.0.1:4001\"}",
-        "check_origins": [
-          "https://cyfr.example.com",
-          "http://localhost:4000",
-          "https://localhost:4000",
-          "http://127.0.0.1:4000",
-          "https://127.0.0.1:4000",
-          "http://[::1]:4000",
-          "https://[::1]:4000"
-        ],
         "digest": "sha256:2ee58b884f408da6a402558a95e535eba5855d310058619cba88c71a5bbb30a6",
         "exposure": "public",
         "head": {
@@ -2873,7 +2739,6 @@
             4001
           ]
         },
-        "origin": "https://cyfr.example.com",
         "trust": {
           "hops": 1
         }
@@ -2901,16 +2766,8 @@
       "access": {
         "assertion": "absent",
         "browser": "proxy",
+        "browser_address": "https://cyfr.example.com",
         "canonical": "{\"browser\":\"proxy\",\"host\":\"cyfr.example.com\",\"port\":4000,\"profiles\":[],\"public_url\":\"https://cyfr.example.com\",\"publish\":\"127.0.0.1:4001\"}",
-        "check_origins": [
-          "https://cyfr.example.com",
-          "http://localhost:4000",
-          "https://localhost:4000",
-          "http://127.0.0.1:4000",
-          "https://127.0.0.1:4000",
-          "http://[::1]:4000",
-          "https://[::1]:4000"
-        ],
         "digest": "sha256:2ee58b884f408da6a402558a95e535eba5855d310058619cba88c71a5bbb30a6",
         "exposure": "public",
         "head": {
@@ -2936,7 +2793,6 @@
             4001
           ]
         },
-        "origin": "https://cyfr.example.com",
         "trust": {
           "cidrs": [
             "172.16.230.1"
@@ -2993,16 +2849,8 @@
       "access": {
         "assertion": "absent",
         "browser": "proxy",
+        "browser_address": "https://cyfr.example.com",
         "canonical": "{\"browser\":\"proxy\",\"host\":\"cyfr.example.com\",\"port\":4000,\"profiles\":[],\"public_url\":\"https://cyfr.example.com\",\"publish\":\"127.0.0.1:4001\"}",
-        "check_origins": [
-          "https://cyfr.example.com",
-          "http://localhost:4000",
-          "https://localhost:4000",
-          "http://127.0.0.1:4000",
-          "https://127.0.0.1:4000",
-          "http://[::1]:4000",
-          "https://[::1]:4000"
-        ],
         "digest": "sha256:2ee58b884f408da6a402558a95e535eba5855d310058619cba88c71a5bbb30a6",
         "exposure": "public",
         "head": {
@@ -3028,7 +2876,6 @@
             4001
           ]
         },
-        "origin": "https://cyfr.example.com",
         "trust": {
           "hops": 1
         }
@@ -3056,16 +2903,8 @@
       "access": {
         "assertion": "absent",
         "browser": "proxy",
+        "browser_address": "https://cyfr.example.com",
         "canonical": "{\"browser\":\"proxy\",\"host\":\"cyfr.example.com\",\"port\":4000,\"profiles\":[],\"public_url\":\"https://cyfr.example.com\",\"publish\":\"127.0.0.2:4000\"}",
-        "check_origins": [
-          "https://cyfr.example.com",
-          "http://localhost:4000",
-          "https://localhost:4000",
-          "http://127.0.0.1:4000",
-          "https://127.0.0.1:4000",
-          "http://[::1]:4000",
-          "https://[::1]:4000"
-        ],
         "digest": "sha256:61e96e40590fb6350b5432c0e1666a93fede6d14618a70a19a0d716bcb8e94d4",
         "exposure": "public",
         "head": {
@@ -3091,7 +2930,6 @@
             4000
           ]
         },
-        "origin": "https://cyfr.example.com",
         "trust": {
           "hops": 1
         }
@@ -3562,16 +3400,8 @@
       "access": {
         "assertion": "absent",
         "browser": "domain",
+        "browser_address": "https://cyfr.example.com",
         "canonical": "{\"browser\":\"domain\",\"host\":\"cyfr.example.com\",\"port\":4000,\"profiles\":[\"domain\"],\"public_url\":\"https://cyfr.example.com\"}",
-        "check_origins": [
-          "https://cyfr.example.com",
-          "http://localhost:4000",
-          "https://localhost:4000",
-          "http://127.0.0.1:4000",
-          "https://127.0.0.1:4000",
-          "http://[::1]:4000",
-          "https://[::1]:4000"
-        ],
         "digest": "sha256:88fafbe50d6341e3ea08395f93a556a78282313682ebaa99e089f003702a5e61",
         "exposure": "public",
         "head": {
@@ -3595,7 +3425,6 @@
           ],
           "published": "none"
         },
-        "origin": "https://cyfr.example.com",
         "trust": {
           "hops": 1
         }
@@ -3865,9 +3694,10 @@
         "port": 4000,
         "profiles": []
       },
+      "private": "http://h-xeypbemm44chehc5.localhost:4000",
       "sentences": [
         "Who can reach CYFR: only this computer",
-        "Address: http://localhost:4000",
+        "Address on this computer: http://h-xeypbemm44chehc5.localhost:4000",
         "Certificate email: none",
         "Ports opened on this machine: none"
       ]
@@ -3879,9 +3709,10 @@
         "port": 8080,
         "profiles": []
       },
+      "private": "http://h-xeypbemm44chehc5.localhost:8080",
       "sentences": [
         "Who can reach CYFR: only this computer",
-        "Address: http://localhost:8080",
+        "Address on this computer: http://h-xeypbemm44chehc5.localhost:8080",
         "Certificate email: none",
         "Ports opened on this machine: none"
       ]
@@ -3897,9 +3728,11 @@
           "tailnet"
         ]
       },
+      "private": "http://h-xeypbemm44chehc5.localhost:4000",
       "sentences": [
         "Who can reach CYFR: your devices on Tailscale, and people you share this machine with",
-        "Address: https://cyfr.tail1a2b3c.ts.net",
+        "Address on this computer: http://h-xeypbemm44chehc5.localhost:4000",
+        "Browser address: https://cyfr.tail1a2b3c.ts.net",
         "Certificate email: none",
         "Ports opened on this machine: none"
       ]
@@ -3915,9 +3748,11 @@
           "domain"
         ]
       },
+      "private": "http://h-xeypbemm44chehc5.localhost:4000",
       "sentences": [
         "Who can reach CYFR: anyone on the internet, who still has to sign in",
-        "Address: https://cyfr.example.com",
+        "Address on this computer: http://h-xeypbemm44chehc5.localhost:4000",
+        "Browser address: https://cyfr.example.com",
         "Certificate email: ops@example.com",
         "Ports opened on this machine: 80 and 443"
       ]
@@ -3932,9 +3767,11 @@
           "domain"
         ]
       },
+      "private": "http://h-xeypbemm44chehc5.localhost:4000",
       "sentences": [
         "Who can reach CYFR: anyone on the internet, who still has to sign in",
-        "Address: https://cyfr.example.com",
+        "Address on this computer: http://h-xeypbemm44chehc5.localhost:4000",
+        "Browser address: https://cyfr.example.com",
         "Certificate email: none",
         "Ports opened on this machine: 80 and 443"
       ]
@@ -3948,9 +3785,11 @@
         "publish": "127.0.0.1:4001",
         "profiles": []
       },
+      "private": "http://h-xeypbemm44chehc5.localhost:4000",
       "sentences": [
         "Who can reach CYFR: whoever your own proxy lets through, who still has to sign in",
-        "Address: https://cyfr.example.com",
+        "Address on this computer: http://h-xeypbemm44chehc5.localhost:4000",
+        "Browser address: https://cyfr.example.com",
         "Certificate email: none",
         "Ports opened on this machine: none",
         "Your proxy sends CYFR's requests to: http://127.0.0.1:4001"
@@ -4058,6 +3897,36 @@
               "address": "x-address"
             },
             "sentence": "CYFR is already reached that way, at x-address. Nothing was changed."
+          }
+        }
+      ]
+    },
+    {
+      "code": "access_link_missing",
+      "class": "setup_required",
+      "variants": [
+        {
+          "fixed": {},
+          "slots": [],
+          "template": "CYFR_LINK_PUBLIC is not set in .env, so this CYFR has no private address. Nothing started. `cyfr init` writes it with the tunnel key it mints for a new CYFR; a CYFR installed by an earlier build is not carried across.",
+          "example": {
+            "payload": {},
+            "sentence": "CYFR_LINK_PUBLIC is not set in .env, so this CYFR has no private address. Nothing started. `cyfr init` writes it with the tunnel key it mints for a new CYFR; a CYFR installed by an earlier build is not carried across."
+          }
+        }
+      ]
+    },
+    {
+      "code": "access_link_invalid",
+      "class": "invalid_argument",
+      "variants": [
+        {
+          "fixed": {},
+          "slots": [],
+          "template": "CYFR_LINK_PUBLIC in .env is not a tunnel public key: it is 64 lowercase hexadecimal digits, as `cyfr init` writes it. Nothing started.",
+          "example": {
+            "payload": {},
+            "sentence": "CYFR_LINK_PUBLIC in .env is not a tunnel public key: it is 64 lowercase hexadecimal digits, as `cyfr init` writes it. Nothing started."
           }
         }
       ]

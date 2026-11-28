@@ -247,9 +247,21 @@ The address changes, so:
 $changes
 Error: Nothing changed: there is no terminal to confirm the change on. Run it again with --yes to make the change, or at a terminal
 LOG
-expect pass "the complete preview of none to proxy" preview_holds "$scratch/preview-proxy" "$none_head" "$proxy_head"
+private=http://h-xeypbemm44chehc5.localhost:4000
+expect pass "the complete preview of none to proxy" preview_holds "$scratch/preview-proxy" "$none_head" "$proxy_head" "$private"
+expect fail "a head with no browser address read without its private address" preview_holds "$scratch/preview-proxy" "$none_head" "$proxy_head"
 sed 's|forwards to http://127.0.0.1:4001|forwards to http://127.0.0.1:4002|' "$scratch/preview-proxy" >"$scratch/preview-proxy-port"
-expect fail "the preview naming another publication" preview_holds "$scratch/preview-proxy-port" "$none_head" "$proxy_head"
+expect fail "the preview naming another publication" preview_holds "$scratch/preview-proxy-port" "$none_head" "$proxy_head" "$private"
+cat >"$scratch/preview-none" <<LOG
+\$ cyfr access browser none
+CYFR will be reached from this computer at $private.
+The address changes, so:
+$changes
+Error: Nothing changed: there is no terminal to confirm the change on. Run it again with --yes to make the change, or at a terminal
+LOG
+expect pass "the complete preview of proxy to none, at the private address" preview_holds "$scratch/preview-none" "$proxy_head" "$none_head" "$private"
+sed 's|at http://h-xeypbemm44chehc5.localhost:4000\.$|at http://localhost:4000.|' "$scratch/preview-none" >"$scratch/preview-none-localhost"
+expect fail "the preview naming localhost as the address" preview_holds "$scratch/preview-none-localhost" "$proxy_head" "$none_head" "$private"
 # shellcheck disable=SC2016
 mutate_preview '$s/Nothing changed/The change was made/' made "a refusal saying the change was made"
 expect fail "the preview read against another new head" preview_holds "$scratch/preview" "$a" "${b//cyfr-1/cyfr-2}"

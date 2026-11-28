@@ -128,12 +128,15 @@
 
 require Ecto.Query
 
+# Its homes are a browser proof's, whose people's sessions are made at the
+# browser address (tests/release-boot/fixture.exs `person`): each is
+# established at the proxy listener.
 fn args ->
   answer = fn map -> "APPROVAL=" <> Jason.encode!(map) end
 
   # The person as their session establishes them, at Prism.
   person_ctx = fn token ->
-    {:ok, ctx} = Sanctum.Caller.establish({:session, token})
+    {:ok, ctx} = Sanctum.Caller.establish({:session, token}, entry: :proxy)
     %{ctx | origin: :interactive}
   end
 
@@ -208,7 +211,7 @@ fn args ->
       answer.(%{now: DateTime.to_iso8601(Arca.ServerMetaStorage.now!())})
 
     ["publish", token, dir, name, version] ->
-      {:ok, ctx} = Sanctum.Caller.establish({:session, token})
+      {:ok, ctx} = Sanctum.Caller.establish({:session, token}, entry: :proxy)
       actor = Sanctum.Context.actor(ctx)
       unit = ["components", "tinctures", "local", name, version]
 
@@ -630,7 +633,7 @@ fn args ->
       end
 
     ["thread", token] ->
-      {:ok, ctx} = Sanctum.Caller.establish({:session, token})
+      {:ok, ctx} = Sanctum.Caller.establish({:session, token}, entry: :proxy)
       {:ok, thread} = PrismWeb.Ops.call_tool(ctx, "thread", %{"action" => "today"})
       answer.(%{thread_id: Map.get(thread, :id) || Map.get(thread, "id")})
 

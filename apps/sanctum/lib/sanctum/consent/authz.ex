@@ -95,8 +95,8 @@ defmodule Sanctum.Consent.Authz do
 
   A record also names its asker, from what the opener already holds: a
   paired client's or an API key's name, a session's sign-in provider and
-  creation time, a frame's tincture, or this home for a context no
-  stored credential backs. So a person tells their own request from
+  creation time, a frame's tincture, or the address it was asked at for
+  a context no stored credential backs. So a person tells their own request from
   another's; the same credential yields the same name, so the secret,
   not the name, is the protection.
 
@@ -505,12 +505,13 @@ defmodule Sanctum.Consent.Authz do
     end
   end
 
-  # The secret-free preview the deciding site's request yields: this home,
+  # The secret-free preview the deciding site's request yields: the
+  # address the change was asked at,
   # the athanor by name, the operation, the resource by name and the
   # public facts the site passed. A detail named as a secret refuses.
   defp preview(ctx, change) do
     with {:ok, athanor} <- athanor_name(ctx.athanor_id),
-         {:ok, home} <- home() do
+         {:ok, home} <- home(ctx) do
       case Prima.Confirmation.Preview.new(
              home: home,
              athanor: athanor,
@@ -529,8 +530,8 @@ defmodule Sanctum.Consent.Authz do
   `operation` with `args`, the very call that runs once they approve it:
   the same `Prima.Confirmation.Preview` a sensitive change's record
   holds, built here from the request and never from anything the frame
-  wrote. It names this home, the athanor by name and the operation, the
-  `resource` the operation touches by name (the argument its declaration
+  wrote. It names the address it was asked at, the athanor by name and
+  the operation, the `resource` the operation touches by name (the argument its declaration
   names, `Sanctum.Catalog.action_declaration/1`, or nil), and each
   argument as a detail under its own name: text as it is, a list of
   text as a list, and any other value as JSON with its keys in order,
@@ -548,7 +549,7 @@ defmodule Sanctum.Consent.Authz do
       when is_binary(operation) and is_map(args) and not is_struct(args) and
              (is_nil(resource) or is_binary(resource)) do
     with {:ok, details} <- request_details(args),
-         {:ok, home} <- home(),
+         {:ok, home} <- home(ctx),
          {:ok, athanor} <- athanor_name(ctx.athanor_id) do
       case Prima.Confirmation.Preview.new(
              home: home,
@@ -742,7 +743,7 @@ defmodule Sanctum.Consent.Authz do
     secret = Prima.CredentialShape.mint(:confirmation_secret)
 
     with {:ok, seconds} <- confirmation_seconds(),
-         {:ok, home} <- home(),
+         {:ok, home} <- home(ctx),
          {:ok, record} <-
            Prima.Confirmation.new(
              id: Prima.Confirmation.ref(secret),
@@ -823,7 +824,8 @@ defmodule Sanctum.Consent.Authz do
   # in the order `opener/1` reads it: a paired client's name, a frame's
   # tincture, an API key's name or else a
   # session's sign-in provider, with the session's creation time, from its
-  # own row, or this home for a context no stored credential backs. A hint
+  # own row, or the address asked at for a context no stored credential
+  # backs. A hint
   # for the person reading the record: a name that cannot be read is left
   # out, never a refusal.
   defp asker(%Context{auth_method: :device, client_id: id})
@@ -849,16 +851,22 @@ defmodule Sanctum.Consent.Authz do
     end
   end
 
-  defp asker(%Context{}), do: named_asker("unbound", Sanctum.origin())
+  defp asker(%Context{} = ctx), do: named_asker("unbound", asked_at(ctx))
 
-  # This CYFR's origin in its one spelling, which a record and its preview
-  # name. An origin served under a path names no record.
-  defp home do
-    case Prima.Identity.Encoding.canonical_home(Sanctum.origin()) do
+  # The address the change was asked at, in its one spelling, which a
+  # record and its preview name: the address of the context's entry, or
+  # for a context no request carried, the server's shared address. A
+  # device of the person's may confirm it at the other address
+  # (`Sanctum.Providers.Confirmation`), and the record still names where
+  # it was asked. An address served under a path names no record.
+  defp home(ctx) do
+    case Prima.Identity.Encoding.canonical_home(asked_at(ctx)) do
       {:ok, home} -> {:ok, home}
       :error -> {:error, :unavailable}
     end
   end
+
+  defp asked_at(%Context{entry: entry}), do: Sanctum.address(entry) || Sanctum.shared_address()
 
   # The name is cut to at most 255 bytes at a UTF-8 boundary, never 255
   # graphemes, so however many bytes its characters take the asker stays

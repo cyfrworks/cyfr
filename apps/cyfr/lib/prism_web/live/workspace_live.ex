@@ -429,7 +429,11 @@ defmodule PrismWeb.WorkspaceLive do
 
           {live_render(@socket, PrismWeb.WorkspaceLive.BrowserLive,
             id: "workspace-browser-view",
-            session: %{"athanor_id" => @context.athanor_id, "thread_id" => @work.id}
+            session: %{
+              "athanor_id" => @context.athanor_id,
+              "thread_id" => @work.id,
+              "entry" => @request_entry
+            }
           )}
           <div>
             <h2 class="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">Steps</h2>
@@ -506,7 +510,8 @@ defmodule PrismWeb.WorkspaceLive do
               "athanor_id" => @context.athanor_id,
               "thread_id" => @work.id,
               "ui_mode" => @ui_mode,
-              "menu_toggle" => "workspace-menu-toggle"
+              "menu_toggle" => "workspace-menu-toggle",
+              "entry" => @request_entry
             }
           )}
         </aside>

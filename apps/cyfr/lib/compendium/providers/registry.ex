@@ -514,7 +514,11 @@ defmodule Compendium.Providers.Registry do
     with {:ok, binding, _opts} <- Sanctum.SignIn.binding(ctx),
          {:ok, answer} <- answer(answer),
          {:ok, outcome} <-
-           Sanctum.SignIn.answer(answer, binding, operation: operation, body: body) do
+           Sanctum.SignIn.answer(answer, binding,
+             operation: operation,
+             body: body,
+             entry: ctx.entry
+           ) do
       complete(ctx, outcome)
     else
       {:error, reason} -> refuse(refusal(reason))

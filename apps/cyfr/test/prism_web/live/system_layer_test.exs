@@ -264,7 +264,7 @@ defmodule PrismWeb.SystemLayerTest do
     answer = Authenticator.answer(authenticator, request, account.identifier)
 
     assert {:ok, %{purpose: :confirm, ref: ^ref}} =
-             Sanctum.SignIn.answer(answer, {:session, ctx.session_token_hash})
+             Sanctum.SignIn.answer(answer, {:session, ctx.session_token_hash}, entry: :loopback)
   end
 
   # Another session of the same person, in the same athanor.
@@ -272,7 +272,11 @@ defmodule PrismWeb.SystemLayerTest do
     {:ok, session} = Sanctum.TestContext.create_session(%{ctx | provider: "github"})
 
     {:ok, other} =
-      Sanctum.Caller.establish(session.token, focus: ctx.athanor_id, refresh: false)
+      Sanctum.Caller.establish(session.token,
+        focus: ctx.athanor_id,
+        refresh: false,
+        entry: :loopback
+      )
 
     other
   end
@@ -5060,7 +5064,9 @@ defmodule PrismWeb.SystemLayerTest do
       answer = Authenticator.answer(stranger, request, account.identifier)
 
       assert {:error, :answer_refused} =
-               Sanctum.SignIn.answer(answer, {:session, held.session_token_hash})
+               Sanctum.SignIn.answer(answer, {:session, held.session_token_hash},
+                 entry: :loopback
+               )
 
       assert render(view) =~ ~s(data-status="pending")
       assert {:ok, %{state: "pending"}} = Arca.PendingConfirmations.get(Context.actor(ctx), ref)
@@ -5356,7 +5362,11 @@ defmodule PrismWeb.SystemLayerTest do
       {:ok, session} = Sanctum.TestContext.create_session(%{built | provider: "github"})
 
       {:ok, ctx} =
-        Sanctum.Caller.establish(session.token, focus: athanor.id, refresh: false)
+        Sanctum.Caller.establish(session.token,
+          focus: athanor.id,
+          refresh: false,
+          entry: :loopback
+        )
 
       fallback =
         Prism.Fallback.enter(:gone, %{

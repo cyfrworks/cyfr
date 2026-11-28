@@ -111,13 +111,16 @@
 
 require Ecto.Query
 
+# Its homes are a browser proof's, whose people's sessions are made at the
+# browser address (tests/release-boot/fixture.exs `person`): each is
+# established at the proxy listener.
 fn args ->
   answer = fn map -> "SHARE=" <> Jason.encode!(map) end
   openai = "catalyst:local.openai"
 
   # The person as their session establishes them, focused where it is.
   person_ctx = fn token ->
-    {:ok, ctx} = Sanctum.Caller.establish({:session, token})
+    {:ok, ctx} = Sanctum.Caller.establish({:session, token}, entry: :proxy)
     %{ctx | origin: :interactive}
   end
 
@@ -562,7 +565,7 @@ fn args ->
       end
 
     ["focus", token, athanor_id] ->
-      {:ok, admin} = Sanctum.Caller.establish({:session, token})
+      {:ok, admin} = Sanctum.Caller.establish({:session, token}, entry: :proxy)
 
       decision = fn
         {:ok, _focused} -> "admitted"

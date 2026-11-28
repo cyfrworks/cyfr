@@ -127,6 +127,7 @@ defmodule Arca.CredentialIssuanceTest do
   defp session_attrs(user_id, athanor_id) do
     %{
       user_id: user_id,
+      address: "http://h-xeypbemm44chehc5.localhost:4002",
       provider: "github",
       athanor_id: athanor_id,
       expires_at: DateTime.add(DateTime.utc_now(), 3600, :second)

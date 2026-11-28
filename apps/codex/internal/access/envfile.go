@@ -14,6 +14,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/cyfr/codex/internal/link"
 )
 
 // composeKey is the first name, in byte order, of the COMPOSE_* settings
@@ -417,27 +419,32 @@ func checkEnv(data []byte) error {
 }
 
 // ReadProjectAlone is one reading of dir's .env from that file alone: its
-// values and the head they name. Unlike ReadEnvValues and Engine.Head,
-// which read as compose does under this process's environment, no value
-// is taken or interpolated from the environment, so whoever started this
-// process sets nothing of what is read.
-func ReadProjectAlone(dir string) (map[string]string, Head, error) {
+// values, the head they name and the server's private address. Unlike
+// ReadEnvValues and Engine.Head, which read as compose does under this
+// process's environment, no value is taken or interpolated from the
+// environment, so whoever started this process sets nothing of what is
+// read.
+func ReadProjectAlone(dir string) (map[string]string, Head, string, error) {
 	data, err := os.ReadFile(filepath.Join(dir, ".env"))
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return nil, Head{}, redactorFor(nil, nil).err(err)
+		return nil, Head{}, "", redactorFor(nil, nil).err(err)
 	}
 	refused := redactorFor(data, nil)
 	d, err := readDotenv(data, func(string) (string, bool) { return "", false })
 	if err != nil {
-		return nil, Head{}, refused.err(err)
+		return nil, Head{}, "", refused.err(err)
 	}
 	if ref := d.refusal(); ref != nil {
-		return nil, Head{}, ref
+		return nil, Head{}, "", ref
 	}
 	values := d.values()
 	head, err := headOf(values)
 	if err != nil {
-		return nil, Head{}, refused.err(err)
+		return nil, Head{}, "", refused.err(err)
 	}
-	return values, head, nil
+	private, err := ResolveLink(values[link.PublicVar], head.Port)
+	if err != nil {
+		return nil, Head{}, "", refused.err(err)
+	}
+	return values, head, private, nil
 }

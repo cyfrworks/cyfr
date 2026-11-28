@@ -46,7 +46,7 @@ defmodule Sanctum.DeviceHelloTest do
     dir = DirectoryServer.start!(tls)
 
     Prima.Test.Env.put_app_env(:sanctum, :setup_token, @token)
-    Prima.Test.Env.put_app_env(:sanctum, :public_url, @origin)
+    Prima.Test.Env.put_app_env(:sanctum, :browser_address, @origin)
     Prima.Test.Env.put_app_env(:sanctum, :directory_url, dir.url)
     Prima.Test.Env.put_app_env(:sanctum, :exposure, :public)
 
@@ -95,7 +95,7 @@ defmodule Sanctum.DeviceHelloTest do
       assert certificate.client_id == admitted.client_id
       assert certificate.identifier == account.identifier
       assert certificate.head == DirectoryServer.head(account)
-      assert certificate.audience == @origin
+      assert certificate.audience == Sanctum.private_address()
 
       assert admitted.standing == %{
                client_id: admitted.client_id,
@@ -108,7 +108,7 @@ defmodule Sanctum.DeviceHelloTest do
 
       assert {:ok, _} =
                DeviceCert.verify(certificate, installation,
-                 home: @origin,
+                 home: Sanctum.private_address(),
                  head: certificate.head,
                  now: System.system_time(:millisecond),
                  skew: 0
@@ -140,7 +140,7 @@ defmodule Sanctum.DeviceHelloTest do
             display_name: String.duplicate("é", 33)
           ] do
         assert {:error, {:invalid_argument, _sentence}} =
-                 DeviceUnlock.hello(client_id, Map.put(hello, field, value)),
+                 DeviceUnlock.hello(client_id, Map.put(hello, field, value), :loopback),
                inspect({field, value})
       end
 
@@ -163,20 +163,28 @@ defmodule Sanctum.DeviceHelloTest do
       client_id = Prima.UUID7.generate_id("pcl")
 
       assert {:error, :setup_closed} =
-               DeviceUnlock.hello(client_id, Map.put(hello, :admission, {:setup, "not-it"}))
+               DeviceUnlock.hello(
+                 client_id,
+                 Map.put(hello, :admission, {:setup, "not-it"}),
+                 :loopback
+               )
 
       # An invitation's code is no capability a hello brings.
       code = Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
 
       assert {:error, {:invalid_argument, _sentence}} =
-               DeviceUnlock.hello(client_id, Map.put(hello, :admission, {:invitation, code}))
+               DeviceUnlock.hello(
+                 client_id,
+                 Map.put(hello, :admission, {:invitation, code}),
+                 :loopback
+               )
 
       # The open admission without the door's * admits nobody: nothing is
       # written for the answer either.
       {client_id, request} = Devices.hello!(account, device(account))
 
       assert {:error, {:door, :not_allowed}} =
-               DeviceUnlock.admit(client_id, Devices.answer(request, device(account)))
+               DeviceUnlock.admit(client_id, Devices.answer(request, device(account)), :loopback)
 
       assert Arca.Repo.all(User) == []
       assert Arca.Repo.all(PairedClient) == []
@@ -200,10 +208,10 @@ defmodule Sanctum.DeviceHelloTest do
 
       # Another key of the account signs it: refused, and the request spent.
       assert {:error, :answer_refused} =
-               DeviceUnlock.admit(client_id, Devices.answer(request, other))
+               DeviceUnlock.admit(client_id, Devices.answer(request, other), :loopback)
 
       assert {:error, :answer_refused} =
-               DeviceUnlock.admit(client_id, Devices.answer(request, named))
+               DeviceUnlock.admit(client_id, Devices.answer(request, named), :loopback)
 
       assert Arca.Repo.all(PairedClient) == []
 
@@ -213,8 +221,63 @@ defmodule Sanctum.DeviceHelloTest do
       assert {:error, :answer_refused} =
                DeviceUnlock.admit(
                  Prima.UUID7.generate_id("pcl"),
-                 Devices.answer(request, named)
+                 Devices.answer(request, named),
+                 :loopback
                )
+    end
+  end
+
+  describe "a hello at the browser address" do
+    test "pairs the device with a certificate for the browser address, which connects there " <>
+           "and at no other address",
+         %{account: account} do
+      admitted =
+        Devices.admitted!(account, device(account), {:setup, @token}, Devices.holder(), :proxy)
+
+      assert admitted.certificate.audience == @origin
+      {_pub, priv} = admitted.key
+      challenge = Devices.challenge(admitted)
+      connection = %{client_id: admitted.client_id, certificate: admitted.certificate}
+
+      assert {:error, :proof_refused} =
+               DeviceCerts.verify_connect(
+                 Map.put(connection, :entry, :loopback),
+                 Proof.sign(challenge, priv),
+                 challenge
+               )
+
+      assert %Sanctum.Context{entry: :proxy} =
+               ctx = Devices.connected!(admitted, "198.51.100.40", :proxy)
+
+      assert {:ok, _ctx} = DeviceCerts.verify_request(admitted.certificate, ctx)
+
+      assert {:error, :wrong_audience} =
+               DeviceCerts.verify_request(admitted.certificate, %{ctx | entry: :loopback})
+    end
+
+    test "a boot that no longer has the browser address revokes its certificate, and one " <>
+           "issued at the private address stands",
+         %{account: account, dir: dir} do
+      browser =
+        Devices.admitted!(account, device(account), {:setup, @token}, Devices.holder(), :proxy)
+
+      account = DirectoryServer.add_device!(dir.dir, account)
+      private = Devices.admitted!(account, List.last(account.devices))
+      assert private.certificate.audience == Sanctum.private_address()
+
+      Prima.Test.Env.put_app_env(:sanctum, :browser_address, nil)
+      assert {:ok, %{certificates: 1}} = Sanctum.Session.retire_elsewhere()
+
+      state = fn admitted ->
+        Arca.Repo.one(
+          from(c in Arca.Schemas.DeviceCertificate,
+            where: c.paired_client_id == ^admitted.client_id,
+            select: c.state
+          )
+        )
+      end
+
+      assert {state.(browser), state.(private)} == {"revoked", "active"}
     end
   end
 
@@ -250,10 +313,38 @@ defmodule Sanctum.DeviceHelloTest do
 
       assert {:error, :proof_refused} =
                DeviceCerts.verify_connect(
-                 %{client_id: admitted.client_id, certificate: admitted.certificate},
+                 %{
+                   client_id: admitted.client_id,
+                   certificate: admitted.certificate,
+                   entry: :loopback
+                 },
                  Proof.sign(challenge, other),
                  challenge
                )
+    end
+
+    test "issued at the private address, it connects there and at no other address", %{
+      admitted: admitted
+    } do
+      assert admitted.certificate.audience == Sanctum.private_address()
+      {_pub, priv} = admitted.key
+      challenge = Devices.challenge(admitted)
+      connection = %{client_id: admitted.client_id, certificate: admitted.certificate}
+
+      assert {:error, :proof_refused} =
+               DeviceCerts.verify_connect(
+                 Map.put(connection, :entry, :proxy),
+                 Proof.sign(challenge, priv),
+                 challenge
+               )
+
+      ctx = Devices.connected!(admitted, "198.51.100.40", :loopback)
+      assert ctx.entry == :loopback
+
+      # The context a request carries is checked at its own entry: the
+      # certificate is for another audience at the browser address.
+      assert {:error, :wrong_audience} =
+               DeviceCerts.verify_request(admitted.certificate, %{ctx | entry: :proxy})
     end
 
     test "a renewal issues a new certificate under the head this CYFR holds now", %{
@@ -271,7 +362,7 @@ defmodule Sanctum.DeviceHelloTest do
 
       {:ok, renewal} =
         DeviceCerts.verify_connect(
-          %{client_id: admitted.client_id, certificate: admitted.certificate},
+          %{client_id: admitted.client_id, certificate: admitted.certificate, entry: :loopback},
           proof,
           challenge
         )
@@ -365,7 +456,7 @@ defmodule Sanctum.DeviceHelloTest do
       {client_id, request} = Devices.hello!(account, first.key)
 
       assert {:error, :answer_refused} =
-               DeviceUnlock.admit(client_id, Devices.answer(request, first.key))
+               DeviceUnlock.admit(client_id, Devices.answer(request, first.key), :loopback)
 
       assert standings(first.user.id) == [{first.client_id, "revoked", paired_at}]
     end

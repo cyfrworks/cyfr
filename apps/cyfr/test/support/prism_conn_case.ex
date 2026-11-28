@@ -31,9 +31,12 @@ defmodule PrismWeb.ConnCase do
     end
   end
 
+  # The case's conn comes in by the loopback listener, as a request on the
+  # server's own machine does (`CyfrWeb.Ingress`): a LiveView mounted on it,
+  # isolated or routed, reads that listener's tag from its connect info.
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
-    {:ok, conn: Phoenix.ConnTest.build_conn()}
+    {:ok, conn: Sanctum.ClientIp.put_ingress(Phoenix.ConnTest.build_conn(), :loopback)}
   end
 
   @doc """
@@ -164,8 +167,9 @@ defmodule PrismWeb.ConnCase do
 
   @doc """
   Sign `user` in: claim their namespace (unless `claim: false`), focus them
-  on their own athanor (or `opts[:athanor_id]`), create a `Sanctum.Session`,
-  and put the token in the Plug session. Returns the conn.
+  on their own athanor (or `opts[:athanor_id]`), create a `Sanctum.Session`
+  made at `opts[:address]` (the private address, the loopback listener's,
+  by default), and put the token in the Plug session. Returns the conn.
 
   The athanor is the person's own, as it is in production — no athanor is
   shared, so two signed-in test users are strangers to each other. The
@@ -194,7 +198,16 @@ defmodule PrismWeb.ConnCase do
         authenticated: true
       )
 
-    {:ok, session} = Sanctum.TestContext.create_session(ctx)
+    {:ok, session} =
+      Sanctum.TestContext.create_session(
+        ctx,
+        Keyword.get_lazy(opts, :address, &Sanctum.private_address/0)
+      )
+
+    conn =
+      if Sanctum.ClientIp.ingress(conn),
+        do: conn,
+        else: Sanctum.ClientIp.put_ingress(conn, :loopback)
 
     Plug.Test.init_test_session(conn, %{@session_key => session.token})
   end

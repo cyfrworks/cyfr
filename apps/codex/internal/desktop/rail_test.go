@@ -360,7 +360,7 @@ func TestAnApprovalBegunFromARowForgottenMeanwhileAddsNothing(t *testing.T) {
 // A press of a folder's row whose Forget ends while the folder is asked
 // whether its CYFR answers adds the folder's CYFR again on no road.
 func TestAFolderPressForgottenDuringItsCheckAddsNothing(t *testing.T) {
-	const home = "http://localhost:4100"
+	const home = "http://h-xeypbemm44chehc5.localhost:4100"
 	a := newApp(t, t.TempDir(), offline())
 	seed(t, a.Homes, home, shell.ClientRecord{Project: localFolder})
 	a.Local = func(string) (Local, error) {

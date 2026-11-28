@@ -90,7 +90,7 @@ defmodule PrismWeb.SystemLayerRestoreTest do
     answer = Authenticator.answer(authenticator, request, account.identifier)
 
     assert {:ok, %{purpose: :confirm, ref: ^ref}} =
-             Sanctum.SignIn.answer(answer, {:session, ctx.session_token_hash})
+             Sanctum.SignIn.answer(answer, {:session, ctx.session_token_hash}, entry: :loopback)
   end
 
   defp open_prompt(view) do

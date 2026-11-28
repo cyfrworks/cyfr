@@ -12,7 +12,7 @@ defmodule CyfrWeb.IngressTest do
   whose socket answers what a transport's `connect_info` carries, so the
   tag is read where every reader reads it: `Sanctum.ClientIp.ingress/1` on
   plain HTTP, and `Sanctum.ClientIp.ingress_from_connect_info/1` on the
-  WebSocket upgrade and on LiveView's long-poll transport. On each, a
+  WebSocket upgrade, every socket's one transport. On each, a
   forged, duplicated or missing tag reads as the listener that accepted
   the request: nothing that reaches the proxy listener is `:loopback`, and
   nothing that reaches the loopback listener is `:proxy`. The client
@@ -48,8 +48,7 @@ defmodule CyfrWeb.IngressTest do
     use Phoenix.Endpoint, otp_app: :cyfr
 
     socket "/live", CyfrWeb.IngressTest.Socket,
-      websocket: [connect_info: [:peer_data, :x_headers]],
-      longpoll: [connect_info: [:peer_data, :x_headers]]
+      websocket: [connect_info: [:peer_data, :x_headers]]
 
     plug :answer
 
@@ -68,6 +67,7 @@ defmodule CyfrWeb.IngressTest do
   end
 
   @loopback {127, 0, 0, 1}
+  @link Path.expand("../../../../tests/fixtures/link.json", __DIR__)
 
   setup do
     Process.register(self(), @observer)
@@ -92,12 +92,13 @@ defmodule CyfrWeb.IngressTest do
       proxy: [ip: @loopback, port: 0],
       secret_key_base: String.duplicate("ingress-test-", 6),
       pubsub_server: Cyfr.PubSub,
+      # As the product's endpoint: the ingress compares a socket's origin
+      # with its listener's address, and Phoenix's own check is off.
+      check_origin: false,
       server: true
     )
 
     start_supervised!(Endpoint)
-    sessions = longpoll_sessions()
-    on_exit(fn -> stop_sessions_since(sessions) end)
 
     {:ok, ports: ports(Endpoint)}
   end
@@ -116,17 +117,6 @@ defmodule CyfrWeb.IngressTest do
   defp port(server) do
     {:ok, {_ip, port}} = ThousandIsland.listener_info(server)
     port
-  end
-
-  defp longpoll_sessions do
-    for {_, pid, _, _} <- DynamicSupervisor.which_children(Phoenix.Transports.LongPoll.Supervisor),
-        is_pid(pid),
-        do: pid
-  end
-
-  defp stop_sessions_since(before) do
-    for pid <- longpoll_sessions() -- before,
-        do: DynamicSupervisor.terminate_child(Phoenix.Transports.LongPoll.Supervisor, pid)
   end
 
   # The forged tags a client may send: none, one naming either listener,
@@ -166,6 +156,20 @@ defmodule CyfrWeb.IngressTest do
       {:ok, bytes} -> read_to_close(socket, acc <> bytes)
       {:error, :closed} -> acc
     end
+  end
+
+  # The status line and the headers of the answer, read to the
+  # connection's close, each header name in lower case.
+  defp head(port, path, headers) do
+    socket = request(port, "GET", path, [{"connection", "close"} | headers])
+    [head, _body] = socket |> read_to_close("") |> String.split("\r\n\r\n", parts: 2)
+    [status | lines] = String.split(head, "\r\n")
+
+    {status,
+     for line <- lines do
+       [name, value] = String.split(line, ":", parts: 2)
+       {String.downcase(name), String.trim(value)}
+     end}
   end
 
   # The status line of the answer to a WebSocket upgrade, on a connection
@@ -257,18 +261,106 @@ defmodule CyfrWeb.IngressTest do
     end
   end
 
-  describe "the long-poll transport" do
-    test "carries the listener's one tag into connect_info, whatever the client sent",
+  describe "a socket transport's origin" do
+    @browser "https://cyfr.tail.ts.net"
+
+    setup do
+      Prima.Test.Env.put_app_env(:sanctum, :browser_address, @browser)
+      :ok
+    end
+
+    test "an upgrade carrying the other entry's address as its origin answers 403", %{
+      ports: ports
+    } do
+      private = Sanctum.private_address()
+
+      assert upgrade(ports.loopback, [{"origin", private}]) == "HTTP/1.1 101 Switching Protocols"
+      assert ClientIp.ingress_from_connect_info(connected()) == :loopback
+      assert upgrade(ports.proxy, [{"origin", @browser}]) == "HTTP/1.1 101 Switching Protocols"
+      assert ClientIp.ingress_from_connect_info(connected()) == :proxy
+
+      for {port, origin} <- [
+            {ports.loopback, @browser},
+            {ports.proxy, private},
+            {ports.loopback, "http://localhost:4002"},
+            {ports.loopback, "http://h-aaaaaaaaaaaaaaaa.localhost:4002"}
+          ] do
+        assert upgrade(port, [{"origin", origin}]) == "HTTP/1.1 403 Forbidden", origin
+        refute_received {:connected, _info}
+      end
+
+      # The refusal is the API's, in its one dialect.
+      assert {"HTTP/1.1 403 Forbidden", body} =
+               answer(ports.proxy, "/live/websocket?vsn=2.0.0", [{"origin", private}])
+
+      assert Jason.decode!(body) == %{"code" => "forbidden", "message" => "Origin not allowed"}
+    end
+
+    test "the refusal carries the endpoint's HSTS at the proxy listener and none at the loopback listener",
          %{ports: ports} do
-      for {listener, port} <- ports, forged <- @forgeries do
-        assert {"HTTP/1.1 200 OK", body} = answer(port, "/live/longpoll?vsn=2.0.0", forged)
-        assert %{"status" => 410, "token" => _} = Jason.decode!(body)
-        info = connected()
+      Prima.Test.Env.put_app_env(:cyfr, :hsts, :endpoint_on_proxy)
 
-        assert ClientIp.ingress_from_connect_info(info) == listener,
-               "#{listener}: #{inspect(forged)}"
+      for {port, origin, hsts} <- [
+            {ports.proxy, Sanctum.private_address(), ["max-age=63072000; includeSubDomains"]},
+            {ports.loopback, @browser, []}
+          ] do
+        {status, headers} = head(port, "/live/websocket?vsn=2.0.0", [{"origin", origin}])
+        assert status == "HTTP/1.1 403 Forbidden"
+        assert for({"strict-transport-security", value} <- headers, do: value) == hsts
+      end
+    end
 
-        assert ClientIp.from_connect_info(info) == "127.0.0.1"
+    # A browser serialises an http origin on port 80 with no port, and
+    # the private address the boot resolves for port 80 is that origin.
+    test "the private address on port 80 is the origin its page sends", %{ports: ports} do
+      %{"public" => public} = hd(Jason.decode!(File.read!(@link))["names"])
+      assert {:ok, private} = Cyfr.RuntimeConfig.resolve_link(public, 80, true)
+      Prima.Test.Env.put_app_env(:sanctum, :private_address, private)
+
+      origin = "http://" <> URI.parse(private).host
+      assert upgrade(ports.loopback, [{"origin", origin}]) == "HTTP/1.1 101 Switching Protocols"
+      assert ClientIp.ingress_from_connect_info(connected()) == :loopback
+      assert upgrade(ports.loopback, [{"origin", origin <> ":80"}]) == "HTTP/1.1 403 Forbidden"
+    end
+
+    test "a request to any other path is not held to its origin", %{ports: ports} do
+      assert {"HTTP/1.1 200 OK", _body} = answer(ports.loopback, "/", [{"origin", @browser}])
+    end
+  end
+
+  describe "the socket transports" do
+    defmodule LongPollEndpoint do
+      @moduledoc false
+      def __sockets__, do: [{"/live", CyfrWeb.IngressTest.Socket, [longpoll: true]}]
+    end
+
+    # A mount with long-poll alone, its WebSocket turned off.
+    defmodule LongPollOnlyEndpoint do
+      @moduledoc false
+      def __sockets__,
+        do: [{"/live", CyfrWeb.IngressTest.Socket, [websocket: false, longpoll: true]}]
+    end
+
+    test "are WebSockets alone: a mount that enables long-poll is refused" do
+      assert CyfrWeb.Ingress.socket_transports(Endpoint) == [["live", "websocket"]]
+
+      assert Enum.sort(CyfrWeb.Endpoint.socket_transports()) == [
+               ["device", "websocket"],
+               ["live", "websocket"]
+             ]
+
+      for endpoint <- [LongPollEndpoint, LongPollOnlyEndpoint] do
+        assert_raise ArgumentError, ~r/enables long-poll/, fn ->
+          CyfrWeb.Ingress.socket_transports(endpoint)
+        end
+      end
+    end
+
+    test "serve no long-poll path", %{ports: ports} do
+      for {_listener, port} <- ports do
+        assert {"HTTP/1.1 200 OK", body} = answer(port, "/live/longpoll?vsn=2.0.0", [])
+        refute body =~ "token"
+        refute_received {:connected, _info}
       end
     end
   end
@@ -307,7 +399,7 @@ defmodule CyfrWeb.IngressTest do
       assert options[:port] == 4001
       assert options[:thousand_island_options] == http[:thousand_island_options]
       assert options[:http_2_options] == [enabled: false]
-      assert options[:plug] == {CyfrWeb.Ingress, {:proxy, Endpoint}}
+      assert options[:plug] == {CyfrWeb.Ingress, {:proxy, Endpoint, Endpoint}}
     end
 
     test "an https listener is refused: the endpoint serves no TLS of its own" do

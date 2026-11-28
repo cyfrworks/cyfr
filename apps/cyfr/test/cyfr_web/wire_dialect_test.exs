@@ -54,7 +54,11 @@ defmodule CyfrWeb.WireDialectTest do
     # (`Prima.HandleAnswer.encode/1`), sent as encoded; its refusals render
     # as JSON.
     "emissary/web/controllers/handle_controller.ex" =>
-      "the handle answer's 200 body is the registry protocol's encoded bytes"
+      "the handle answer's 200 body is the registry protocol's encoded bytes",
+    # The 302 that sends a page to the private address. Phoenix's own
+    # `redirect/2` would add a text/html page to it.
+    "cyfr_web/plugs/private_name.ex" =>
+      "a redirect is not a refusal and has no body in any dialect"
   }
 
   test "every bare send_resp is on the roster with a reason" do

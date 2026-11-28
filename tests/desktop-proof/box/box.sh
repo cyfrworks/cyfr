@@ -129,7 +129,10 @@ fi
 
 # ---- inside labwc ----
 if [ "${1:-}" = --session ]; then
-  BOX_HOME="http://localhost:$BOX_PORT" X_HOME=https://x.test
+  # This box's private address, which its folder's tunnel key names
+  # (tests/setup-proof/folder.sh, seed).
+  : "${BOX_HOME:?the address of This box is not given}"
+  X_HOME=https://x.test
   verdict() { echo "$1 $2" >>"$FIX/verdict"; }
   app=^/opt/cyfr/CYFR\ --screen-project=
   finish() {
@@ -456,6 +459,7 @@ BOX_PORT="$(free_port)"
 SEED_MOUNTS="$FIX/authority.pem:/run/cyfr-proof/authority.pem:ro $FIX/inetrc:/run/cyfr-proof/inetrc:ro" \
   seed "$BOXDIR" "$BOX_PORT" CYFR_DIRECTORY_URL=https://dir.test CYFR_REGISTRY_URL=dir.test \
   ERL_INETRC=/run/cyfr-proof/inetrc "CYFR_PRIVATE_EGRESS_TARGETS=locus,$GATEWAY"
+BOX_HOME=$SEED_ADDRESS
 docker rm -f "$CLIENT" >/dev/null 2>&1 || true
 # The engine's sandbox and glycin's bwrap make namespaces of their own, so
 # the client runs unconfined and the app under its package's profile, as
@@ -486,7 +490,7 @@ CID="$(box_cyfr)"
 trusted="$(docker exec -u app "$CID" /app/bin/cyfr rpc ':public_key.cacerts_load("/run/cyfr-proof/authority.pem"); IO.puts("TRUST=ok")' | sed -n 's/^TRUST=//p' | tail -1)"
 [ "$trusted" = ok ] || fail "This box did not take the run's authority"
 identity_front_start "$DIR"
-echo "This box answers at http://localhost:$BOX_PORT; dir.test's front at $GATEWAY, x.test's at ${IDENTITY_FRONTS[x.test]}"
+echo "This box answers at $BOX_HOME; dir.test's front at $GATEWAY, x.test's at ${IDENTITY_FRONTS[x.test]}"
 
 # What This box holds, asked inside its container (fixture.exs).
 box_fixture() {
@@ -523,7 +527,7 @@ with open("/run/syslog.txt", "ab", 0) as f:
     while True:
         f.write(s.recv(65536) + b"\n")'
 docker exec -d -u proof "$CLIENT" python3 -s "$FIX/login1.py"
-docker exec -u proof -e HOME=/home/proof -e FIX="$FIX" -e BOXDIR="$BOXDIR" -e BOX_PORT="$BOX_PORT" "$CLIENT" \
+docker exec -u proof -e HOME=/home/proof -e FIX="$FIX" -e BOXDIR="$BOXDIR" -e BOX_PORT="$BOX_PORT" -e BOX_HOME="$BOX_HOME" "$CLIENT" \
   bash "$FIX/box.sh" --case >"$WORK/said" 2>&1 &
 PROOF_PID=$!
 OUT="$FIX" proof_await dispatch

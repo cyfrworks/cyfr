@@ -45,7 +45,7 @@ defmodule Sanctum.SignInTest do
     dir = DirectoryServer.start!(tls)
 
     Prima.Test.Env.put_app_env(:sanctum, :setup_token, @token)
-    Prima.Test.Env.put_app_env(:sanctum, :public_url, @origin)
+    Prima.Test.Env.put_app_env(:sanctum, :browser_address, @origin)
     Prima.Test.Env.put_app_env(:sanctum, :directory_url, dir.url)
     Prima.Test.Env.put_app_env(:sanctum, :exposure, :public)
 
@@ -57,10 +57,19 @@ defmodule Sanctum.SignInTest do
     %{dir: dir, account: account}
   end
 
+  # This CYFR answers at its browser address here (`@origin`): a request
+  # is minted, and its answer taken, at the proxy entry unless a test
+  # names another.
+  defp requested(purpose, binding, opts \\ []),
+    do: SignIn.request(purpose, binding, Keyword.put_new(opts, :entry, :proxy))
+
+  defp answered(answer, binding, opts \\ []),
+    do: SignIn.answer(answer, binding, Keyword.put_new(opts, :entry, :proxy))
+
   defp passkey!(account, dir), do: DirectoryServer.add_passkey!(dir.dir, account)
 
   defp minted(purpose, binding, opts \\ []) do
-    {:ok, %{request: request, url: url}} = SignIn.request(purpose, binding, opts)
+    {:ok, %{request: request, url: url}} = requested(purpose, binding, opts)
     {request, url}
   end
 
@@ -70,7 +79,7 @@ defmodule Sanctum.SignInTest do
   # The account's first person, made by setup through a sign-in.
   defp first!(account) do
     {request, _url} = minted(:sign_in, @browser, admission: {:setup, @token})
-    {:ok, %{user: user}} = SignIn.answer(answer(request, account), @browser)
+    {:ok, %{user: user}} = answered(answer(request, account), @browser)
     user
   end
 
@@ -110,14 +119,57 @@ defmodule Sanctum.SignInTest do
     test "a channel's request names the account it speaks for, and has no page", %{
       account: account
     } do
-      assert {:error, {:invalid_argument, _}} = SignIn.request(:sign_in, {:channel, "pcl_1"})
+      assert {:error, {:invalid_argument, _}} = requested(:sign_in, {:channel, "pcl_1"})
 
       assert {:ok, %{url: nil}} =
-               SignIn.request(:sign_in, {:channel, "pcl_1"}, identifier: account.identifier)
+               requested(:sign_in, {:channel, "pcl_1"}, identifier: account.identifier)
     end
   end
 
   describe "a sign-in" do
+    test "a request minted at the private address is refused at the browser address, and the " <>
+           "reverse; each is taken at its own",
+         %{account: account} do
+      user = first!(account)
+      before = length(sessions(user.id))
+
+      {private, _url} = minted(:sign_in, @browser, entry: :loopback)
+      assert private.audience == Sanctum.private_address()
+      assert private.return == Sanctum.private_address() <> "/login"
+
+      assert {:error, :answer_refused} =
+               answered(answer(private, account), @browser, entry: :proxy)
+
+      {browser, _url} = minted(:sign_in, @browser, entry: :proxy)
+      assert browser.audience == @origin
+
+      assert {:error, :answer_refused} =
+               answered(answer(browser, account), @browser, entry: :loopback)
+
+      assert length(sessions(user.id)) == before
+
+      {private, _url} = minted(:sign_in, @browser, entry: :loopback)
+
+      assert {:ok, %{purpose: :sign_in}} =
+               answered(answer(private, account), @browser, entry: :loopback)
+
+      {browser, _url} = minted(:sign_in, @browser, entry: :proxy)
+
+      assert {:ok, %{purpose: :sign_in}} =
+               answered(answer(browser, account), @browser, entry: :proxy)
+
+      # Each session records the address it was made at.
+      assert user.id |> sessions() |> Enum.map(& &1.address) |> Enum.frequencies() ==
+               Map.new([{Sanctum.private_address(), 1}, {@origin, 1 + before}])
+    end
+
+    test "a request at no entry, or at the proxy entry of a server with no browser address, " <>
+           "is not minted" do
+      assert {:error, :unavailable} = SignIn.request(:sign_in, @browser, [])
+      Prima.Test.Env.put_app_env(:sanctum, :browser_address, nil)
+      assert {:error, :unavailable} = SignIn.request(:sign_in, @browser, entry: :proxy)
+    end
+
     test "setup's admits the first person, bound to the key and head, and then opens nothing", %{
       account: account
     } do
@@ -147,7 +199,7 @@ defmodule Sanctum.SignInTest do
       {request, _url} = minted(:sign_in, @browser)
 
       assert {:ok, %{purpose: :sign_in, user: %{id: same}, session_token: token}} =
-               SignIn.answer(
+               answered(
                  DirectoryServer.passkey_answer(request, account, second),
                  @browser
                )
@@ -179,7 +231,7 @@ defmodule Sanctum.SignInTest do
       {request, _url} = minted(:sign_in, @browser)
 
       assert {:ok, %{purpose: :sign_in, user: %{id: same}, session_token: token}} =
-               SignIn.answer(answer(request, account), @browser)
+               answered(answer(request, account), @browser)
 
       assert same == user.id
       hash = Sanctum.Session.token_hash(token)
@@ -213,7 +265,7 @@ defmodule Sanctum.SignInTest do
           "(KHTML, like Gecko) Version/18.1 Mobile/15E148 Safari/604.1"
 
       assert {:ok, %{purpose: :sign_in, session_token: token}} =
-               SignIn.answer(
+               answered(
                  DirectoryServer.passkey_answer(request, account, List.last(account.passkeys)),
                  @browser,
                  user_agent: safari
@@ -234,13 +286,13 @@ defmodule Sanctum.SignInTest do
       {request, _url} = minted(:sign_in, @browser)
 
       assert {:error, {:door, :not_allowed}} =
-               SignIn.answer(answer(request, stranger), @browser)
+               answered(answer(request, stranger), @browser)
 
       {:ok, _entry} = Sanctum.Door.Store.allow("wildcard", "*", first.id)
       {request, _url} = minted(:sign_in, @browser)
 
       assert {:ok, %{user: %{admission: "open"}}} =
-               SignIn.answer(answer(request, stranger), @browser)
+               answered(answer(request, stranger), @browser)
     end
 
     test "the setup token admits no second account", %{dir: dir, account: account} do
@@ -249,7 +301,7 @@ defmodule Sanctum.SignInTest do
 
       {request, _url} = minted(:sign_in, @browser, admission: {:setup, @token})
 
-      assert {:error, :setup_closed} = SignIn.answer(answer(request, stranger), @browser)
+      assert {:error, :setup_closed} = answered(answer(request, stranger), @browser)
     end
   end
 
@@ -269,7 +321,7 @@ defmodule Sanctum.SignInTest do
       assert url =~ "/account/new#name=mira&request="
 
       assert {:ok, %{purpose: :sign_in, user: %{id: id, namespace: "mira"}}} =
-               SignIn.answer(answer(request, account), @browser)
+               answered(answer(request, account), @browser)
 
       assert {:ok, %{namespace: "mira"}} = Users.get(id)
       assert_received {:registry_request, %{path: "/v1/handles/mira"}}
@@ -287,7 +339,7 @@ defmodule Sanctum.SignInTest do
         {request, _url} = minted(:sign_in, @browser, page: {:new, name})
 
         assert {:ok, %{purpose: :sign_in, user: user, session_token: token}} =
-                 SignIn.answer(answer(request, newcomer), @browser),
+                 answered(answer(request, newcomer), @browser),
                name
 
         assert is_binary(token)
@@ -302,7 +354,7 @@ defmodule Sanctum.SignInTest do
       assert url =~ "/account/new#name=&request="
 
       assert {:ok, %{purpose: :sign_in, user: %{id: id, namespace: "mira"}}} =
-               SignIn.answer(answer(request, account), @browser)
+               answered(answer(request, account), @browser)
 
       assert {:ok, %{namespace: "mira"}} = Users.get(id)
       assert_received {:registry_request, %{path: "/v1/identities/" <> rest}}
@@ -313,7 +365,7 @@ defmodule Sanctum.SignInTest do
       {again, _url} = minted(:sign_in, @browser)
 
       assert {:ok, %{user: %{namespace: "mira"}}} =
-               SignIn.answer(answer(again, account), @browser)
+               answered(answer(again, account), @browser)
 
       refute_received {:registry_request, _}
     end
@@ -324,7 +376,7 @@ defmodule Sanctum.SignInTest do
       {request, _url} = minted(:sign_in, @browser, admission: {:setup, @token}, page: {:new, nil})
 
       assert {:ok, %{purpose: :sign_in, user: user, session_token: token}} =
-               SignIn.answer(answer(request, account), @browser)
+               answered(answer(request, account), @browser)
 
       assert is_binary(token)
       assert {:ok, %{namespace: nil}} = Users.get(user.id)
@@ -334,7 +386,7 @@ defmodule Sanctum.SignInTest do
       {again, _url} = minted(:sign_in, @browser)
 
       capture_log(fn ->
-        assert {:ok, %{user: %{namespace: nil}}} = SignIn.answer(answer(again, account), @browser)
+        assert {:ok, %{user: %{namespace: nil}}} = answered(answer(again, account), @browser)
       end)
     end
   end
@@ -345,8 +397,8 @@ defmodule Sanctum.SignInTest do
       {request, _url} = minted(:sign_in, @browser)
       answered = answer(request, account)
 
-      assert {:ok, _signed_in} = SignIn.answer(answered, @browser)
-      assert {:error, :answer_refused} = SignIn.answer(answered, @browser)
+      assert {:ok, _signed_in} = answered(answered, @browser)
+      assert {:error, :answer_refused} = answered(answered, @browser)
     end
 
     test "from another browser signs no one in, and spends the request", %{account: account} do
@@ -356,12 +408,12 @@ defmodule Sanctum.SignInTest do
       before = length(sessions(user.id))
 
       assert {:error, :answer_refused} =
-               SignIn.answer(answered, {:browser, "csrf-of-another-browser"})
+               answered(answered, {:browser, "csrf-of-another-browser"})
 
       assert {:error, :answer_refused} =
-               SignIn.answer(answered, {:session, :crypto.strong_rand_bytes(32)})
+               answered(answered, {:session, :crypto.strong_rand_bytes(32)})
 
-      assert {:error, :answer_refused} = SignIn.answer(answered, @browser)
+      assert {:error, :answer_refused} = answered(answered, @browser)
       assert length(sessions(user.id)) == before
     end
 
@@ -371,7 +423,7 @@ defmodule Sanctum.SignInTest do
       before = length(sessions(user.id))
 
       assert {:error, :answer_refused} =
-               SignIn.answer(answer(request, account), @browser, now: request.expires_at)
+               answered(answer(request, account), @browser, now: request.expires_at)
 
       assert length(sessions(user.id)) == before
     end
@@ -385,9 +437,9 @@ defmodule Sanctum.SignInTest do
 
       # The same request held, while this CYFR now answers at another origin:
       # the request's audience is no longer this CYFR's.
-      Prima.Test.Env.put_app_env(:sanctum, :public_url, "https://another.example")
+      Prima.Test.Env.put_app_env(:sanctum, :browser_address, "https://another.example")
 
-      assert {:error, :answer_refused} = SignIn.answer(answer(request, account), @browser)
+      assert {:error, :answer_refused} = answered(answer(request, account), @browser)
       assert length(sessions(user.id)) == before
     end
 
@@ -396,8 +448,8 @@ defmodule Sanctum.SignInTest do
       {request, _url} = minted(:sign_in, @browser)
       fragment = request |> answer(account) |> Prima.SignIn.fragment()
 
-      assert {:error, :answer_refused} = SignIn.answer(fragment <> "=", @browser)
-      assert {:ok, %{purpose: :sign_in}} = SignIn.answer(fragment, @browser)
+      assert {:error, :answer_refused} = answered(fragment <> "=", @browser)
+      assert {:ok, %{purpose: :sign_in}} = answered(fragment, @browser)
     end
 
     test "by a passkey at another origin, without user verification, or of another account, is refused",
@@ -414,7 +466,7 @@ defmodule Sanctum.SignInTest do
         {request, _url} = minted(:sign_in, @browser)
 
         assert {:error, :answer_refused} =
-                 SignIn.answer(answer(request, account, opts), @browser),
+                 answered(answer(request, account, opts), @browser),
                inspect(opts)
       end
     end
@@ -428,7 +480,7 @@ defmodule Sanctum.SignInTest do
       )
 
       {request, _url} = minted(:sign_in, @browser)
-      assert {:error, :identity_gone} = SignIn.answer(answer(request, account), @browser)
+      assert {:error, :identity_gone} = answered(answer(request, account), @browser)
     end
   end
 
@@ -507,7 +559,7 @@ defmodule Sanctum.SignInTest do
 
       # Returned as the account pages return it, the fragment of /login.
       assert {:ok, %{purpose: :sign_in, waiting: ^code}} =
-               SignIn.answer(Prima.SignIn.fragment(answer), [other])
+               answered(Prima.SignIn.fragment(answer), [other])
 
       assert {:ok, [%{ref: ref, identifier: identifier, key: key, code: ^code} = waiting]} =
                SignIn.waiting(ctx, nil)
@@ -541,7 +593,7 @@ defmodule Sanctum.SignInTest do
       {unapproved, _url} = minted(:sign_in, other)
 
       assert {:error, :answer_refused} =
-               SignIn.answer(answer(unapproved, %{account | passkeys: [passkey]}), other)
+               answered(answer(unapproved, %{account | passkeys: [passkey]}), other)
 
       assert length(DirectoryServer.log(dir.dir, account.identifier)) == length(account.log)
 
@@ -552,7 +604,7 @@ defmodule Sanctum.SignInTest do
       {again, _url} = minted(:sign_in, other)
 
       assert {:ok, %{purpose: :sign_in, user: %{id: user_id}, session_token: token}} =
-               SignIn.answer(answer(again, account), other)
+               answered(answer(again, account), other)
 
       assert user_id == ctx.user_id
       assert is_binary(token)
@@ -563,12 +615,12 @@ defmodule Sanctum.SignInTest do
          %{dir: dir, account: account, ctx: ctx, other: other} do
       {first, _url} = minted(:sign_in, other)
       {shown, shown_passkey} = offer(first, account)
-      {:ok, %{waiting: shown_code}} = SignIn.answer(shown, other)
+      {:ok, %{waiting: shown_code}} = answered(shown, other)
 
       stranger_browser = {:browser, "csrf-of-a-stranger"}
       {second, _url} = minted(:sign_in, stranger_browser)
       {approved, approved_passkey} = offer(second, account)
-      {:ok, %{waiting: approved_code}} = SignIn.answer(approved, stranger_browser)
+      {:ok, %{waiting: approved_code}} = answered(approved, stranger_browser)
       refute shown_code == approved_code
 
       # The device adds the passkey whose code the page did not show.
@@ -577,12 +629,12 @@ defmodule Sanctum.SignInTest do
       {again, _url} = minted(:sign_in, other)
 
       assert {:error, :answer_refused} =
-               SignIn.answer(answer(again, %{account | passkeys: [shown_passkey]}), other)
+               answered(answer(again, %{account | passkeys: [shown_passkey]}), other)
 
       {theirs, _url} = minted(:sign_in, stranger_browser)
 
       assert {:ok, %{purpose: :sign_in}} =
-               SignIn.answer(
+               answered(
                  answer(theirs, %{account | passkeys: [approved_passkey]}),
                  stranger_browser
                )
@@ -603,7 +655,7 @@ defmodule Sanctum.SignInTest do
           browser = {:browser, "csrf-#{n}-#{named.identifier}"}
           {request, _url} = minted(:sign_in, browser)
           {answer, _passkey} = offer(request, named)
-          result = SignIn.answer(answer, browser)
+          result = answered(answer, browser)
 
           if n <= SignIn.max_waiting(),
             do: assert({:ok, %{purpose: :sign_in, waiting: _code}} = result),
@@ -633,7 +685,7 @@ defmodule Sanctum.SignInTest do
         browser = {:browser, "csrf-outsider-#{n}"}
         {request, _url} = minted(:sign_in, browser)
 
-        SignIn.answer(
+        answered(
           %Prima.SignIn.NewPasskey{
             challenge: request.challenge,
             identifier: account.identifier,
@@ -651,7 +703,7 @@ defmodule Sanctum.SignInTest do
       {request, _url} = minted(:sign_in, other)
 
       assert {:ok, %{purpose: :sign_in, user: %{id: user_id}}} =
-               SignIn.answer(answer(request, account), other)
+               answered(answer(request, account), other)
 
       assert user_id == ctx.user_id
       assert offer_listed.(:after_the_sign_in) == {:error, :too_many_waiting}
@@ -668,7 +720,7 @@ defmodule Sanctum.SignInTest do
       {answer, _passkey} = offer(request, stranger)
       code = binary_part(answer.key.kid, 7, 16)
 
-      assert {:ok, %{purpose: :sign_in, waiting: ^code}} = SignIn.answer(answer, other)
+      assert {:ok, %{purpose: :sign_in, waiting: ^code}} = answered(answer, other)
       assert {:ok, []} = SignIn.waiting(ctx, nil)
 
       assert {:error, :unauthenticated} =
@@ -683,15 +735,15 @@ defmodule Sanctum.SignInTest do
       # From another browser: refused, and the request is spent.
       {request, _url} = minted(:sign_in, other)
       {answer, _passkey} = offer(request, account)
-      assert {:error, :answer_refused} = SignIn.answer(answer, @browser)
-      assert {:error, :answer_refused} = SignIn.answer(answer, other)
+      assert {:error, :answer_refused} = answered(answer, @browser)
+      assert {:error, :answer_refused} = answered(answer, other)
 
       # Past the request's expiry.
       {late, _url} = minted(:sign_in, other)
       {answer, _passkey} = offer(late, account)
 
       assert {:error, :answer_refused} =
-               SignIn.answer(answer, other, now: late.expires_at)
+               answered(answer, other, now: late.expires_at)
 
       # To any request but a sign-in: here a registry signature the
       # person's own session asked for.
@@ -705,14 +757,14 @@ defmodule Sanctum.SignInTest do
         )
 
       {answer, _passkey} = offer(registry, account)
-      assert {:error, :answer_refused} = SignIn.answer(answer, session)
+      assert {:error, :answer_refused} = answered(answer, session)
 
       # To a request this CYFR minted under another address.
       {elsewhere, _url} = minted(:sign_in, other)
-      Prima.Test.Env.put_app_env(:sanctum, :public_url, "https://other.example")
+      Prima.Test.Env.put_app_env(:sanctum, :browser_address, "https://other.example")
       {answer, _passkey} = offer(elsewhere, account)
-      assert {:error, :answer_refused} = SignIn.answer(answer, other)
-      Prima.Test.Env.put_app_env(:sanctum, :public_url, @origin)
+      assert {:error, :answer_refused} = answered(answer, other)
+      Prima.Test.Env.put_app_env(:sanctum, :browser_address, @origin)
 
       assert {:ok, []} = SignIn.waiting(ctx, nil)
     end
@@ -762,7 +814,7 @@ defmodule Sanctum.SignInTest do
       assert request.subject == row.digest
 
       assert {:ok, %{purpose: :confirm, ref: ref, back: "/a/x/vault"}} =
-               SignIn.answer(answer(request, account), binding)
+               answered(answer(request, account), binding)
 
       assert ref == row.ref
 
@@ -782,7 +834,7 @@ defmodule Sanctum.SignInTest do
       stranger = dir.dir |> DirectoryServer.account!(dir.url) |> passkey!(dir)
       {request, _url} = minted(:confirm, binding, ctx: ctx, ref: row.ref)
 
-      assert {:error, :answer_refused} = SignIn.answer(answer(request, stranger), binding)
+      assert {:error, :answer_refused} = answered(answer(request, stranger), binding)
 
       assert {:ok, %{state: "pending"}} =
                Arca.PendingConfirmations.get(Sanctum.Context.actor(ctx), row.ref)
@@ -803,15 +855,15 @@ defmodule Sanctum.SignInTest do
 
       # The proof names its client, which this test never paired: the store
       # holds a device's proof to its standing client.
-      assert {:error, :revoked} = SignIn.answer(answer, binding)
+      assert {:error, :revoked} = answered(answer, binding)
     end
 
     test "a request names only the context's own pending record", %{binding: binding, ctx: ctx} do
       assert {:error, {:not_found, "confirmation", "cnf_absent"}} =
-               SignIn.request(:confirm, binding, ctx: ctx, ref: "cnf_absent")
+               requested(:confirm, binding, ctx: ctx, ref: "cnf_absent")
 
       assert {:error, :unauthenticated} =
-               SignIn.request(:confirm, binding, ctx: %{ctx | athanor_id: nil}, ref: "cnf_absent")
+               requested(:confirm, binding, ctx: %{ctx | athanor_id: nil}, ref: "cnf_absent")
     end
   end
 
@@ -898,7 +950,7 @@ defmodule Sanctum.SignInTest do
                 signed: signed,
                 back: "/a/x/registry",
                 registry_request: registry_request
-              }} = SignIn.answer(answer(request, account), binding)
+              }} = answered(answer(request, account), binding)
 
       assert user_id == user.id
       assert registry_request == request.registry_request
@@ -916,13 +968,13 @@ defmodule Sanctum.SignInTest do
       {signed, bytes} = signed_by(hd(account.devices), request.registry_request)
 
       assert {:ok, %{purpose: :registry, signed: ^bytes, registry_request: held}} =
-               SignIn.answer(signed, channel, operation: "policy.accept", body: @accept)
+               answered(signed, channel, operation: "policy.accept", body: @accept)
 
       assert held == request.registry_request
       assert {:ok, _request} = registry_verifies(bytes, account)
 
       # Replayed, it meets a spent request.
-      assert {:error, :answer_refused} = SignIn.answer(signed, channel)
+      assert {:error, :answer_refused} = answered(signed, channel)
     end
 
     test "a terminal's request that is not the one held, or under another channel, or late, is refused and spends it",
@@ -937,23 +989,23 @@ defmodule Sanctum.SignInTest do
           ] do
         {request, nil} = registry(channel, ctx, identifier: account.identifier)
         {signed, _bytes} = signed_by(hd(account.devices), change.(request.registry_request))
-        assert {:error, :answer_refused} = SignIn.answer(signed, channel)
+        assert {:error, :answer_refused} = answered(signed, channel)
 
         # The nonce found the request, which is spent.
         {signed, _bytes} = signed_by(hd(account.devices), request.registry_request)
-        assert {:error, :answer_refused} = SignIn.answer(signed, channel)
+        assert {:error, :answer_refused} = answered(signed, channel)
       end
 
       {request, nil} = registry(channel, ctx, identifier: account.identifier)
       {signed, _bytes} = signed_by(hd(account.devices), request.registry_request)
-      assert {:error, :answer_refused} = SignIn.answer(signed, {:channel, "pcl_another"})
-      assert {:error, :answer_refused} = SignIn.answer(signed, channel)
+      assert {:error, :answer_refused} = answered(signed, {:channel, "pcl_another"})
+      assert {:error, :answer_refused} = answered(signed, channel)
 
       {request, nil} = registry(channel, ctx, identifier: account.identifier)
       {signed, _bytes} = signed_by(hd(account.devices), request.registry_request)
 
       assert {:error, :answer_refused} =
-               SignIn.answer(signed, channel, now: request.expires_at)
+               answered(signed, channel, now: request.expires_at)
     end
 
     test "an answer for another operation or body than the caller names does nothing", %{
@@ -965,7 +1017,7 @@ defmodule Sanctum.SignInTest do
       {request, _url} = registry(binding, ctx)
 
       assert {:error, :answer_refused} =
-               SignIn.answer(answer(request, account), binding,
+               answered(answer(request, account), binding,
                  operation: "policy.accept",
                  body: %{"policy_version" => "2026-10"}
                )
@@ -974,13 +1026,13 @@ defmodule Sanctum.SignInTest do
       {signed, _bytes} = signed_by(hd(account.devices), request.registry_request)
 
       assert {:error, :answer_refused} =
-               SignIn.answer(signed, channel, operation: "tokens.mint", body: @accept)
+               answered(signed, channel, operation: "tokens.mint", body: @accept)
 
       # A sign-in's answer is no registry signature.
       {request, _url} = minted(:sign_in, @browser)
 
       assert {:error, :answer_refused} =
-               SignIn.answer(answer(request, account), @browser,
+               answered(answer(request, account), @browser,
                  operation: "policy.accept",
                  body: @accept
                )
@@ -991,26 +1043,26 @@ defmodule Sanctum.SignInTest do
       stranger = dir.dir |> DirectoryServer.account!(dir.url) |> passkey!(dir)
 
       {request, _url} = registry(binding, ctx)
-      assert {:error, :answer_refused} = SignIn.answer(answer(request, stranger), binding)
+      assert {:error, :answer_refused} = answered(answer(request, stranger), binding)
 
       {request, _url} = registry(binding, ctx)
 
       assert {:error, :answer_refused} =
-               SignIn.answer(answer(request, account), {:session, :crypto.strong_rand_bytes(32)})
+               answered(answer(request, account), {:session, :crypto.strong_rand_bytes(32)})
 
-      assert {:error, :answer_refused} = SignIn.answer(answer(request, account), binding)
+      assert {:error, :answer_refused} = answered(answer(request, account), binding)
 
       {request, _url} = registry(binding, ctx)
 
       assert {:error, :answer_refused} =
-               SignIn.answer(answer(request, account), binding, now: request.expires_at)
+               answered(answer(request, account), binding, now: request.expires_at)
 
       # A device's answer to the request's digest is no registry signature.
       {request, nil} = registry({:channel, "pcl_device"}, ctx, identifier: account.identifier)
       {pub, priv} = hd(account.devices)
 
       assert {:error, :answer_refused} =
-               SignIn.answer(
+               answered(
                  %DeviceAnswer{
                    challenge: request.challenge,
                    kid: Prima.Identity.Key.kid(pub),
@@ -1025,14 +1077,14 @@ defmodule Sanctum.SignInTest do
       binding: binding
     } do
       assert {:error, {:invalid_argument, _}} =
-               SignIn.request(:registry, binding,
+               requested(:registry, binding,
                  ctx: ctx,
                  operation: "handle.rename",
                  body: %{}
                )
 
       assert {:error, {:invalid_argument, _}} =
-               SignIn.request(:registry, binding,
+               requested(:registry, binding,
                  ctx: ctx,
                  operation: "publisher.claim",
                  body: %{"slug" => "no-dot"}
@@ -1043,11 +1095,20 @@ defmodule Sanctum.SignInTest do
       ctx: ctx,
       account: account
     } do
-      device = %{ctx | auth_method: :device, client_id: "pcl_1", session_token_hash: nil}
-      assert {:ok, {:channel, "pcl_1"}, [identifier: identifier]} = SignIn.binding(device)
+      device = %{
+        ctx
+        | auth_method: :device,
+          client_id: "pcl_1",
+          session_token_hash: nil,
+          entry: :loopback
+      }
+
+      assert {:ok, {:channel, "pcl_1"}, [identifier: identifier, entry: :loopback]} =
+               SignIn.binding(device)
+
       assert identifier == account.identifier
 
-      assert {:ok, {:session, hash}, []} = SignIn.binding(ctx)
+      assert {:ok, {:session, hash}, [entry: :proxy]} = SignIn.binding(%{ctx | entry: :proxy})
       assert hash == ctx.session_token_hash
 
       assert {:error, :unauthenticated} =
@@ -1075,7 +1136,7 @@ defmodule Sanctum.SignInTest do
     {:ok, _entry} = Sanctum.Door.Store.allow("wildcard", "*", uid)
     other = dir.dir |> DirectoryServer.account!(dir.url) |> passkey!(dir)
     {request, _url} = minted(:sign_in, @browser)
-    {:ok, %{user: %{id: jid}}} = SignIn.answer(answer(request, other), @browser)
+    {:ok, %{user: %{id: jid}}} = answered(answer(request, other), @browser)
 
     assert {:error, :namespace_owned_by_another_identity} =
              SignIn.record_namespace(jid, "user6ns")

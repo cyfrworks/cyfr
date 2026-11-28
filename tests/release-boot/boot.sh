@@ -31,9 +31,11 @@
 #            writes on its own pool and takes write turns, and starts every
 #            switched process as it ships (tests/release-boot/test_seams.exs).
 #            Then the domain address `cyfr access browser domain
-#            --domain cyfr.example.com` writes answers as https://cyfr.example.com
-#            (`Sanctum.origin()`), with nothing written for it but the
-#            test's ports, and its proxy listener answers readiness.
+#            --domain cyfr.example.com` writes gives out https://cyfr.example.com
+#            (`Sanctum.shared_address()`), and its loopback listener keeps
+#            the private address the tunnel key `cyfr init` minted names
+#            (`Sanctum.address(:loopback)`), with nothing written for either
+#            but the test's ports, and its proxy listener answers readiness.
 #
 #   refuses  the same environment with the wildcard CORS allowlist, which a
 #            release with authentication configured must refuse at boot.
@@ -291,6 +293,18 @@ cd "$ROOT"
 # trap would end it before the removals, so the stop runs in a subshell,
 # whose exit ends only that subshell; the stop's failure still fails the
 # run.
+# The private address cell `$1`'s tunnel key names on that cell's own
+# port (apps/codex/internal/link's derivation), whatever its browser
+# address: both read from the cell's deployment file, so another cell's
+# port is never taken for it.
+private_of() {
+  python3 -I -c 'import base64, hashlib, sys
+public = bytes.fromhex(sys.argv[1])
+if len(public) != 32 or not sys.argv[2].isdigit(): sys.exit(1)
+name = base64.b32encode(hashlib.sha256(public).digest()).decode().lower()[:16]
+print("http://h-%s.localhost%s" % (name, "" if sys.argv[2] == "80" else ":" + sys.argv[2]))' "$(cell_value "$1" CYFR_LINK_PUBLIC)" "$(cell_port "$1")"
+}
+
 cleanup() {
   local code=$?
   # The cell started last is the one a failed step was asking.
@@ -380,11 +394,18 @@ grep -E "== (Running|Migrated)" "$CELL/boot.log"
 curl -fsS -m 10 "http://127.0.0.1:$PORT/api/health" >"$CELL/health.json"
 echo "GET /api/health -> 200 $(cat "$CELL/health.json")"
 
-step "the fresh cell serves its sign-in page, which says no one is set up yet"
-status="$(curl -sS -m 10 -o "$CELL/login.html" -w '%{http_code}' "http://127.0.0.1:$PORT/login")" || status=""
-[ "$status" = 200 ] || fail "GET /login answered ${status:-nothing}, not 200"
+step "the fresh cell serves its sign-in page at its private address, which says no one is set up yet"
+private="$(private_of "$CELL")" || fail "the cell's .env holds no tunnel key cyfr init minted, or no port"
+private_host="${private#http://}"
+private_host="${private_host%%:*}"
+# Asked for under the loopback's own name, the page is sent to the
+# private address (CyfrWeb.Plugs.PrivateName).
+sent="$(curl -sS -m 10 -o /dev/null -w '%{http_code} %{redirect_url}' "http://127.0.0.1:$PORT/login")" || sent=""
+[ "$sent" = "302 $private/login" ] || fail "GET http://127.0.0.1:$PORT/login answered '${sent:-nothing}', not 302 to $private/login"
+status="$(curl -sS -m 10 --resolve "$private_host:$PORT:127.0.0.1" -o "$CELL/login.html" -w '%{http_code}' "$private/login")" || status=""
+[ "$status" = 200 ] || fail "GET $private/login answered ${status:-nothing}, not 200"
 grep -q 'data-test="not-set-up"' "$CELL/login.html" || fail "the sign-in page does not say no one is set up yet"
-echo "GET /login -> 200, the sign-in page saying no one is set up yet"
+echo "GET /login -> 302 to $private/login -> 200, the sign-in page saying no one is set up yet"
 
 # The cell's live slots as `cyfr update` reads them, by the expression it
 # runs: the one `CYFR_LIVE_SLOTS=` line, holding this release and the
@@ -468,7 +489,7 @@ if [ "${after:-1}" -ne 0 ]; then
 fi
 echo "pending migrations after the boot: $after"
 
-step "a cell given a domain address answers at the https origin that name implies"
+step "a cell given a domain address gives out the https origin that name implies, and keeps its private address"
 ADDRESS="$WORK/address"
 ADDRESS_URL=""
 if [ "$ADAPTER" = postgres ]; then
@@ -479,10 +500,16 @@ fi
 cell_new "$ADDRESS" "$ADDRESS_URL"
 cell_hostname "$ADDRESS" cyfr.example.com
 server_start "$ADDRESS"
-home="$(cell_cyfr "$ADDRESS" rpc 'IO.puts("CYFR_HOME=" <> Sanctum.origin())' | sed -n 's/^CYFR_HOME=//p' | tail -1)"
+home="$(cell_cyfr "$ADDRESS" rpc 'IO.puts("CYFR_HOME=" <> Sanctum.shared_address())' | sed -n 's/^CYFR_HOME=//p' | tail -1)"
 [ "$home" = "https://cyfr.example.com" ] ||
-  fail "the cell given cyfr.example.com answers as '$home', not https://cyfr.example.com"
-echo "Sanctum.origin() -> $home"
+  fail "the cell given cyfr.example.com gives out '$home', not https://cyfr.example.com"
+echo "Sanctum.shared_address() -> $home"
+# The private address its tunnel key names, whatever its browser address.
+private="$(private_of "$ADDRESS")" || fail "the cell's .env holds no tunnel key cyfr init minted, or no port"
+loopback="$(cell_cyfr "$ADDRESS" rpc 'IO.puts("CYFR_PRIVATE=" <> Sanctum.address(:loopback))' | sed -n 's/^CYFR_PRIVATE=//p' | tail -1)"
+[ "$loopback" = "$private" ] ||
+  fail "the cell's loopback listener is at '$loopback', not its private address $private"
+echo "Sanctum.address(:loopback) -> $loopback"
 # The listener its TLS front forwards to, as a front forwards.
 proxied="$(curl -sS -m 10 -o "$ADDRESS/proxied.json" -w '%{http_code}' \
   -H 'host: cyfr.example.com' -H 'x-forwarded-proto: https' -H 'x-forwarded-for: 127.0.0.1' \
@@ -984,7 +1011,7 @@ fn args ->
   case args do
     ["device", token] ->
       # The device the person's hello paired with them.
-      {:ok, ctx} = Sanctum.Caller.establish({:session, token})
+      {:ok, ctx} = Sanctum.Caller.establish({:session, token}, entry: :loopback)
 
       [client_id] =
         Arca.Repo.all(
@@ -997,7 +1024,7 @@ fn args ->
       answer.(%{client_id: client_id})
 
     ["remove", root, token, client_id] ->
-      {:ok, ctx} = Sanctum.Caller.establish({:session, token})
+      {:ok, ctx} = Sanctum.Caller.establish({:session, token}, entry: :loopback)
       remove = %{"action" => "remove", "client_id" => client_id}
 
       {:error, {:confirmation_required, %{id: id}}} = call.(ctx, "pairing", remove)
@@ -1017,7 +1044,7 @@ fn args ->
       answer.(%{standing: standing})
 
     ["note", token] ->
-      {:ok, ctx} = Sanctum.Caller.establish({:session, token})
+      {:ok, ctx} = Sanctum.Caller.establish({:session, token}, entry: :loopback)
 
       case call.(ctx, "notes", %{"action" => "keep", "name" => "reserve", "content" => "a note"}) do
         {:ok, _kept} -> answer.(%{note: "kept"})

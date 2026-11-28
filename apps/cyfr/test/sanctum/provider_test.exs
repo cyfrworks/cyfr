@@ -232,7 +232,7 @@ defmodule Sanctum.ProviderTest do
     test "whoami names when the calling session ends: its row's expiry, as RFC 3339",
          %{ctx: ctx} do
       ctx = Sanctum.TestContext.issuer!(ctx)
-      {:ok, session} = Sanctum.Session.create(ctx)
+      {:ok, session} = Sanctum.Session.create(ctx, address: Sanctum.private_address())
       hash = Sanctum.Session.token_hash(session.token)
       session_ctx = %{ctx | session_token_hash: hash}
 
@@ -244,7 +244,7 @@ defmodule Sanctum.ProviderTest do
       assert DateTime.compare(answered, DateTime.utc_now()) == :gt
 
       # A session that ended answers none, as a key does.
-      {:ok, :removed} = Sanctum.Session.destroy(session.token)
+      {:ok, :removed} = Sanctum.Session.destroy(session.token, :loopback)
       {:ok, ended} = Provider.handle("session", session_ctx, %{"action" => "whoami"})
       assert ended.session_expires_at == nil
       assert Sanctum.Session.expires_at_by_hash(hash) == {:error, :invalid_session}
@@ -269,10 +269,14 @@ defmodule Sanctum.ProviderTest do
 
     test "logout retires the session that called it", %{ctx: ctx} do
       ctx = Sanctum.TestContext.issuer!(ctx)
-      {:ok, session} = Sanctum.Session.create(ctx)
+      {:ok, session} = Sanctum.Session.create(ctx, address: Sanctum.private_address())
       assert {:ok, _} = Sanctum.Session.load(session.token)
 
-      session_ctx = %{ctx | session_token_hash: Sanctum.Session.token_hash(session.token)}
+      session_ctx = %{
+        ctx
+        | session_token_hash: Sanctum.Session.token_hash(session.token),
+          session_address: Sanctum.private_address()
+      }
 
       {:ok, result} = Provider.handle("session", session_ctx, %{"action" => "logout"})
       assert result.message =~ "Logged out"
@@ -286,8 +290,8 @@ defmodule Sanctum.ProviderTest do
       {person, user} = Sanctum.TestContext.person!(ctx)
       own_athanor = Sanctum.Test.People.athanor!(user)
       ctx = Sanctum.TestContext.issuer!(%{person | athanor_id: own_athanor.id})
-      {:ok, own} = Sanctum.Session.create(ctx)
-      {:ok, other} = Sanctum.Session.create(ctx)
+      {:ok, own} = Sanctum.Session.create(ctx, address: Sanctum.private_address())
+      {:ok, other} = Sanctum.Session.create(ctx, address: Sanctum.private_address())
       {:ok, rows} = Arca.SessionStorage.list_live(ctx.user_id)
       hash = Sanctum.Session.token_hash(other.token)
       other_id = Enum.find(rows, &(&1.token_hash == hash)).id

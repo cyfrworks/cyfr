@@ -139,19 +139,27 @@ defmodule Emissary.Web.TinctureAssets do
   # opening exactly what the declared frame capabilities open. A document
   # is served only for a version whose manifest is a decoded object
   # (`holds_pages?/1`).
-  @spec csp(map(), String.t()) :: String.t()
-  defp csp(manifest, nonce) when is_map(manifest) and is_binary(nonce),
-    do: Compendium.tincture_frame_policy(manifest, %{endpoint: endpoint_origin(), nonce: nonce})
+  @spec csp(Plug.Conn.t(), map(), String.t()) :: String.t()
+  defp csp(conn, manifest, nonce) when is_map(manifest) and is_binary(nonce),
+    do:
+      Compendium.tincture_frame_policy(manifest, %{
+        endpoint: endpoint_origin(conn),
+        nonce: nonce
+      })
 
   @doc """
   The endpoint's origin as a tincture document's policy names it, from the
-  deployment's origin (`Sanctum.origin/0`): `scheme://host[:port]`, an IPv6
-  host in brackets, the port only when it is not the scheme's own. A
-  canvas's page names it too (`Emissary.Web.CanvasController`).
+  address of the listener that accepted `conn` (`Sanctum.address/1`), so a
+  frame served at one address is framed and fetches at that one alone:
+  `scheme://host[:port]`, an IPv6 host in brackets, the port only when it
+  is not the scheme's own. A canvas's page names it too
+  (`Emissary.Web.CanvasController`).
   """
-  @spec endpoint_origin() :: String.t()
-  def endpoint_origin do
-    %URI{scheme: scheme, host: host, port: port} = URI.parse(Sanctum.origin())
+  @spec endpoint_origin(Plug.Conn.t()) :: String.t()
+  def endpoint_origin(%Plug.Conn{} = conn) do
+    %URI{scheme: scheme, host: host, port: port} =
+      URI.parse(Sanctum.address(Sanctum.ClientIp.ingress(conn)))
+
     host = if String.contains?(host, ":"), do: "[#{host}]", else: host
 
     if port && port != URI.default_port(scheme),
@@ -258,7 +266,7 @@ defmodule Emissary.Web.TinctureAssets do
         content = if base, do: Compendium.tincture_head_tags(content, base, nonce), else: content
 
         conn
-        |> put_resp_header("content-security-policy", csp(tincture.manifest, nonce))
+        |> put_resp_header("content-security-policy", csp(conn, tincture.manifest, nonce))
         |> send_body("text/html", content)
 
       {:error, _} ->

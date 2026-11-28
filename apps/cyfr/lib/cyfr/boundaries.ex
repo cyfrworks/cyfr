@@ -478,6 +478,10 @@ defmodule Cyfr.Boundaries do
           "(`Opus.Programs`) posts to the backends service through `Sanctum.Egress` and " <>
           "checks a program's env templates from the vault's metadata " <>
           "(`Sanctum.Vault.disclosed?/2`) before it unseals any. " <>
+          "`Sanctum.Session` is the boot's sweep of the server's addresses before " <>
+          "the endpoint serves (`Cyfr.Application`): the end of every session and " <>
+          "certificate made at an address the server no longer has " <>
+          "(`retire_elsewhere/0`). " <>
           "`Sanctum` bare is the domain's own " <>
           "entry point — `system_context/0` mints the context the server's own work " <>
           "runs under, and `build_tincture_context/2` is a tincture " <>
@@ -625,7 +629,7 @@ defmodule Cyfr.Boundaries do
       ],
       into: "Sanctum",
       allow: ~w(
-        Sanctum.Annotations Sanctum.ApiKey Sanctum.BearerToken Sanctum.Caller
+        Sanctum Sanctum.Annotations Sanctum.ApiKey Sanctum.BearerToken Sanctum.Caller
         Sanctum.Catalog Sanctum.ClientIp Sanctum.Consent
         Sanctum.Context Sanctum.Decisions
         Sanctum.DeviceUnlock Sanctum.Door Sanctum.Gate Sanctum.Invitations
@@ -641,6 +645,10 @@ defmodule Cyfr.Boundaries do
           "`Sanctum.Caller` and `Sanctum.Context` alone) and the web tier's shared " <>
           "ingress plugs (`CyfrWeb.Plugs.*`), which are the auth fabric's own " <>
           "ingress — a wide roster is the entry point doing its job. " <>
+          "`Sanctum` bare is the address of the listener a request came in by " <>
+          "(`address/1`): the one origin the ingress lets a socket's request carry " <>
+          "(`CyfrWeb.Ingress`) and the MCP origin check allows beside its extras " <>
+          "(`CyfrWeb.Plugs.MCPOrigin`). " <>
           "`Sanctum.Consent` is the shell's read of whether a tincture has an active " <>
           "public profile (`Sanctum.Consent.profiles/2`). " <>
           "`Sanctum.SharedThreads` is the shared-thread download's seat check and read " <>
@@ -655,7 +663,8 @@ defmodule Cyfr.Boundaries do
           "(`restore_checklist/1`), what it lists for them to re-enable, re-consent and " <>
           "rotate; each re-enable it offers is an operation, decided there. " <>
           "`Sanctum.DeviceUnlock` is a protected device's unlock page: the ticket its " <>
-          "shell's channel was answered, spent once for the session (`redeem/1`), which " <>
+          "shell's channel was answered, spent once, at its own listener, for the " <>
+          "session (`redeem/2`), which " <>
           "decides in the issuance transaction. " <>
           "`Sanctum.Newcomer` is the setup page's read of whether the setup link's token " <>
           "opens setup now (`setup_open/1`), before it offers anything. " <>
@@ -667,10 +676,11 @@ defmodule Cyfr.Boundaries do
           "`Sanctum.Invitations` is the invitation page's read of who invited and to which " <>
           "athanor, or that the code admits no one (`lookup/1`), which grants nothing, " <>
           "and the hash it keeps (`code_hash/1`). " <>
-          "In the console, `Sanctum.ClientIp` is `PrismWeb.AuthHelpers.socket_client_ip/1` " <>
-          "alone: the `/live` socket is handled by the endpoint BEFORE the router, so " <>
+          "In the console, `Sanctum.ClientIp` is `PrismWeb.AuthHelpers.socket_client_ip/1`: " <>
+          "the `/live` socket is handled by the endpoint BEFORE the router, so " <>
           "it passes no rate-limit plug, which makes the console the only per-address " <>
-          "bound on the anonymous sign-in requests it mints. " <>
+          "bound on the anonymous sign-in requests it mints; and the guard's read of " <>
+          "the listener a page came in by (`CyfrWeb.ContextGuard.entry/1`). " <>
           "`Sanctum.Gate` is the gate the console's and the web tier's calls pass. " <>
           "`Sanctum.Catalog` is the stream ingress's read of a stream's declaration " <>
           "(`CyfrWeb.SSE`) and the Aqua page's read of the table's tools and of what a " <>
@@ -1868,11 +1878,18 @@ defmodule Cyfr.Boundaries do
   # reported stale. Boundary checks modules, never functions.
   @sanctum_exports %{
     "Sanctum" => [
+      # The address of a request's listener, which the ingress, the MCP
+      # origin check and a tincture's frame policy hold a request to.
+      address: 1,
       build_tincture_context: 2,
       # The sign-in page names the directory (`PrismWeb.LoginLive`).
       directory_url: 0,
-      origin: 0,
+      # A page asked for under another host is sent to the private address
+      # (`CyfrWeb.Plugs.PrivateName`).
+      private_address: 0,
       registry_base_url: 1,
+      # The one address a copied URL and the setup notice name.
+      shared_address: 0,
       system_context: 0
     ],
     "Sanctum.Annotations" => [
@@ -1891,7 +1908,7 @@ defmodule Cyfr.Boundaries do
     "Sanctum.Caller" => [
       drop_memo: 1,
       establish: 2,
-      establish_context: 1,
+      establish_context: 2,
       fresh?: 1,
       revalidate_session: 1,
       stands?: 1
@@ -1928,7 +1945,13 @@ defmodule Cyfr.Boundaries do
     ],
     "Sanctum.Cipher" => [keyring!: 0],
     "Sanctum.Cipher.Rotation" => [audit: 0, reencrypt_all: 1],
-    "Sanctum.ClientIp" => [from_connect_info: 1, ingress: 1, put_ingress: 2, resolve: 1],
+    "Sanctum.ClientIp" => [
+      from_connect_info: 1,
+      ingress: 1,
+      ingress_from_connect_info: 1,
+      put_ingress: 2,
+      resolve: 1
+    ],
     # A tincture version's frame opens, and its data routes answer, under
     # the grant held to that version by the decision a run is held to.
     # A component's setup plan reads whether each binding its grant carries
@@ -2006,10 +2029,10 @@ defmodule Cyfr.Boundaries do
     ],
     "Sanctum.DeviceCerts" => [challenge_key: 2, verify_connect: 3, verify_request: 2],
     "Sanctum.DeviceUnlock" => [
-      admit: 2,
+      admit: 3,
       closed: 3,
-      hello: 2,
-      redeem: 1,
+      hello: 3,
+      redeem: 2,
       report_storage: 2,
       slide: 2
     ],
@@ -2093,7 +2116,13 @@ defmodule Cyfr.Boundaries do
       wait: 4,
       waiting: 1
     ],
-    "Sanctum.Session" => [cleanup: 0, destroy: 1, load_by_hash: 1, token_hash: 1],
+    "Sanctum.Session" => [
+      cleanup: 0,
+      destroy: 2,
+      load_by_hash: 1,
+      retire_elsewhere: 0,
+      token_hash: 1
+    ],
     "Sanctum.Shares" => [announce_each: 3, sweep_usage: 0],
     "Sanctum.SharedThreads" => [
       attachment: 4,

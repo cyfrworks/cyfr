@@ -66,7 +66,10 @@ defmodule Sanctum.ValidationCredentialTest do
              } = Arca.Repo.get(FrameCredential, id)
 
       assert {:ok, %{id: ^id, frame_id: ^frame, mode: :validation, deadline: ^deadline}} =
-               TinctureAuth.verify_frame_credential(bearer, client_ip: "127.0.0.1")
+               TinctureAuth.verify_frame_credential(bearer,
+                 client_ip: "127.0.0.1",
+                 entry: :loopback
+               )
 
       {:ok, %{id: live_id, deadline: live}} =
         TinctureAuth.mint_frame_credential(ctx, @tincture, @digest, 3, frame_id())
@@ -103,7 +106,7 @@ defmodule Sanctum.ValidationCredentialTest do
       {:ok, %{credential: bearer}} =
         TinctureAuth.mint_validation_credential(ctx, @tincture, @digest, 1, frame_id())
 
-      {:ok, framed} = Sanctum.Caller.establish({:frame_credential, bearer})
+      {:ok, framed} = Sanctum.Caller.establish({:frame_credential, bearer}, entry: :loopback)
 
       assert {:error, :not_primary} =
                TinctureAuth.mint_validation_credential(framed, @tincture, @digest, 1, frame_id())
@@ -133,7 +136,10 @@ defmodule Sanctum.ValidationCredentialTest do
         TinctureAuth.mint_validation_credential(ctx, @tincture, @digest, 2, frame)
 
       assert {:ok, framed} =
-               Sanctum.Caller.establish({:frame_credential, bearer}, client_ip: "127.0.0.1")
+               Sanctum.Caller.establish({:frame_credential, bearer},
+                 client_ip: "127.0.0.1",
+                 entry: :loopback
+               )
 
       assert framed.frame == %{
                id: id,
@@ -151,7 +157,7 @@ defmodule Sanctum.ValidationCredentialTest do
         TinctureAuth.mint_frame_credential(ctx, @tincture, @digest, 2, frame_id())
 
       assert {:ok, %Context{frame: %{mode: :live}}} =
-               Sanctum.Caller.establish({:frame_credential, live})
+               Sanctum.Caller.establish({:frame_credential, live}, entry: :loopback)
     end
 
     test "is never suspended or resumed, and is revoked as any frame is", %{source: ctx} do
@@ -189,11 +195,13 @@ defmodule Sanctum.ValidationCredentialTest do
                TinctureAuth.consume_validation(ctx, frame, @other_digest)
 
       assert Arca.Repo.get(FrameCredential, id) == before
-      assert {:ok, %{mode: :validation}} = TinctureAuth.verify_frame_credential(bearer)
+
+      assert {:ok, %{mode: :validation}} =
+               TinctureAuth.verify_frame_credential(bearer, entry: :loopback)
 
       assert :ok = TinctureAuth.consume_validation(ctx, frame, @digest)
       assert %FrameCredential{state: "revoked"} = Arca.Repo.get(FrameCredential, id)
-      assert {:error, :revoked} = TinctureAuth.verify_frame_credential(bearer)
+      assert {:error, :revoked} = TinctureAuth.verify_frame_credential(bearer, entry: :loopback)
 
       # Spent once: the same consume again spends nothing.
       assert {:error, :not_validated} = TinctureAuth.consume_validation(ctx, frame, @digest)
@@ -305,7 +313,11 @@ defmodule Sanctum.ValidationCredentialTest do
   defp frame_id, do: "frm_#{System.unique_integer([:positive])}_trial"
 
   defp establish(bearer),
-    do: Sanctum.Caller.establish({:frame_credential, bearer}, client_ip: "127.0.0.1")
+    do:
+      Sanctum.Caller.establish({:frame_credential, bearer},
+        client_ip: "127.0.0.1",
+        entry: :loopback
+      )
 
   # The two settings the frame protocol reads, installed beside whatever
   # the run installed and restored after.
@@ -354,7 +366,10 @@ defmodule Sanctum.ValidationCredentialTest do
       )
 
     {:ok, session} = Sanctum.TestContext.create_session(ctx)
-    {:ok, established} = Sanctum.Caller.establish(session.token, focus: athanor_id)
+
+    {:ok, established} =
+      Sanctum.Caller.establish(session.token, focus: athanor_id, entry: :loopback)
+
     {session, %{established | client_ip: "127.0.0.1"}}
   end
 

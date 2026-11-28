@@ -12,7 +12,8 @@ defmodule PrismWeb.BrowserLogoutTest do
   afterwards; the same cookie signed out again is redirected again. When
   the store cannot delete it, the answer is `503` with no redirect, and
   that same cookie still signs the browser in, so the sign-out can be
-  sent again. A sign-out with no session redirects and retires nothing.
+  sent again. A sign-out with no session redirects and retires nothing,
+  and so does one at the server's other address than the session's.
   """
 
   # Installs a trigger on the sessions table, which is schema state every
@@ -163,6 +164,17 @@ defmodule PrismWeb.BrowserLogoutTest do
     again = sign_out(conn, browser)
     assert redirected_to(again) == "/login?error=signed_out"
     refute signs_in?(browser.cookie)
+  end
+
+  test "a sign-out at the other address lands signed out there and leaves the session standing",
+       %{conn: conn} do
+    Prima.Test.Env.put_app_env(:sanctum, :browser_address, "https://cyfr.example")
+    browser = signed_in!(conn)
+
+    elsewhere = sign_out(Sanctum.ClientIp.put_ingress(build_conn(), :proxy), browser)
+
+    assert redirected_to(elsewhere) == "/login?error=signed_out"
+    assert signs_in?(browser.cookie)
   end
 
   test "a sign-out with no session lands signed out and retires nothing",

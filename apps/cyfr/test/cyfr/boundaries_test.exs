@@ -3088,7 +3088,7 @@ defmodule Cyfr.BoundariesTest.CompilerPlants do
       "boundary_plant.ex",
       """
       defmodule Arca.BoundaryPlant do
-        def plant(token), do: Sanctum.Caller.establish(token, [])
+        def plant(token), do: Sanctum.Caller.establish(token, [entry: :loopback])
       end
       """,
       [

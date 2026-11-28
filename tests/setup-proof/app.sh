@@ -186,8 +186,9 @@ failed() { echo "FAIL $1"; exit 1; }
 source "$ROOT/tests/setup-proof/folder.sh"
 # The proof's inputs for a launch: the CYFR at ADDR in folder DIR.
 inputs() { printf '{"home": "%s", "directory": "%s", "fronts": {}, "folder": "%s", "docker_gid": %s}\n' "$1" "$1" "$2" "$GID" >"$W/fixture/inputs.json"; }
-PORT=$(free_port); ADDR="http://localhost:$PORT"
+PORT=$(free_port)
 seed "$D" "$PORT"
+ADDR=$SEED_ADDRESS
 GID=$(stat -c %g /var/run/docker.sock)
 inputs "$ADDR" "$D"
 node "$ROOT/tests/desktop-proof/pack.mjs" "$ROOT/tests/setup-proof/app/proof.js" "$W/fixture/proof.asar"
@@ -343,9 +344,10 @@ launch again "$(grep -cE "^(PASS|FAIL)" "$W/fixture/out/setup.txt")"
 # The passkey road, as on macOS and Windows, on a second folder seeded as
 # the first: the first CYFR taken down, its own port and Compose project.
 compose down -v --remove-orphans >/dev/null 2>&1 || failed "first_passkey: the first folder's CYFR could not be taken down"
-PORT2=$(free_port); ADDR2="http://localhost:$PORT2"; RUN2="$RUN-2"; D2="$W/$RUN2"
+PORT2=$(free_port); RUN2="$RUN-2"; D2="$W/$RUN2"
 mkdir -p "$D2"; PROJECTS="$PROJECTS $RUN2:$D2"
 seed "$D2" "$PORT2"
+ADDR2=$SEED_ADDRESS
 inputs "$ADDR2" "$D2"
 docker exec "$CLIENT_ID" touch /tmp/pull-done
 launch passkey "$(grep -cE "^(PASS|FAIL)" "$W/fixture/out/setup.txt")"

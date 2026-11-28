@@ -25,15 +25,17 @@ defmodule PrismWeb.AuthController do
 
   @doc """
   The browser's sign-out (`POST /auth/logout`): retires the Sanctum
-  session the cookie names, drops the cookie session, and lands on the
-  sign-in page.
+  session the cookie names where it was made at the address of the
+  listener the request came in by (`Sanctum.Session.destroy/2`), drops the
+  cookie session, and lands on the sign-in page. A cookie of a session
+  made at the other address signs out nothing there.
 
   POST, never GET, so signing someone out is not one `<img src>` away:
   the route's browser pipeline checks the forgery token first.
 
   The redirect follows the store's answer that it removed the session
   the cookie names or that there was none to remove
-  (`Sanctum.Session.destroy/1`), or a cookie that names no session at
+  (`Sanctum.Session.destroy/2`), or a cookie that names no session at
   all. Another member may go on honouring a removed session's cached
   authorization until the invalidation reaches it or the cache entry
   expires, the bound `Sanctum.Caller.invalidate_hash/1` documents. When
@@ -44,7 +46,7 @@ defmodule PrismWeb.AuthController do
   def browser_logout(conn, _params) do
     case get_session(conn, SignInResponse.session_key()) do
       token when is_binary(token) and token != "" ->
-        case Session.destroy(token) do
+        case Session.destroy(token, Sanctum.ClientIp.ingress(conn)) do
           {:ok, _removed_or_absent} ->
             signed_out(conn)
 

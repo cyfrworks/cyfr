@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/cyfr/codex/internal/link"
 )
 
 // Target is the browser address a person asks for.
@@ -217,16 +219,17 @@ type Trust struct {
 type Boot struct {
 	Head     Head
 	Exposure string // "public" for domain and proxy, "private" otherwise
-	Origin   string
-	Loopback Listener
-	Proxy    *Listener // nil with none, which has no proxy listener
+	// BrowserAddress is the browser address, CYFR_PUBLIC_URL, "" with
+	// none. The private address every server has is ResolveLink's.
+	BrowserAddress string
+	Loopback       Listener
+	Proxy          *Listener // nil with none, which has no proxy listener
 	// Published is where the proxy listener is published on this
 	// machine's loopback: with proxy alone, nil otherwise.
-	Published    *Listener
-	Trust        Trust
-	HSTS         string // "none", "endpoint_on_proxy" or "caddy"
-	CheckOrigins []string
-	Assertion    string // "absent" or "process"
+	Published *Listener
+	Trust     Trust
+	HSTS      string // "none", "endpoint_on_proxy" or "caddy"
+	Assertion string // "absent" or "process"
 }
 
 // accessKeys are every name the boot reads but the compose file's
@@ -330,26 +333,45 @@ func ResolveBoot(in BootInput) (Boot, error) {
 	}
 
 	b := Boot{
-		Head:      h,
-		Exposure:  exposure(browser),
-		Origin:    h.origin(),
-		Loopback:  Listener{bind, h.Port},
-		Published: published,
-		Trust:     Trust{Kind: "none"},
-		HSTS:      map[string]string{BrowserNone: "none", BrowserTailnet: "endpoint_on_proxy", BrowserDomain: "caddy", BrowserProxy: "endpoint_on_proxy"}[browser],
-		Assertion: assertion,
+		Head:           h,
+		Exposure:       exposure(browser),
+		BrowserAddress: h.PublicURL,
+		Loopback:       Listener{bind, h.Port},
+		Published:      published,
+		Trust:          Trust{Kind: "none"},
+		HSTS:           map[string]string{BrowserNone: "none", BrowserTailnet: "endpoint_on_proxy", BrowserDomain: "caddy", BrowserProxy: "endpoint_on_proxy"}[browser],
+		Assertion:      assertion,
 	}
 	if browser != BrowserNone {
 		b.Proxy = &Listener{proxyBind, proxyPort}
 		b.Trust = trust
-		b.CheckOrigins = append(b.CheckOrigins, "https://"+h.Host)
-	}
-	for _, host := range []string{"localhost", "127.0.0.1", "[::1]"} {
-		for _, scheme := range []string{"http", "https"} {
-			b.CheckOrigins = append(b.CheckOrigins, scheme+"://"+host+":"+strconv.Itoa(h.Port))
-		}
 	}
 	return b, nil
+}
+
+// ResolveLink answers what Cyfr.RuntimeConfig.resolve_link/3 answers for
+// CYFR_LINK_PUBLIC's text and the server's port, which the boot asks once
+// its access settings are coherent: the server's private address, or the
+// refusal of a boot whose tunnel key is missing (access_link_missing) or
+// is not a public key (access_link_invalid).
+func ResolveLink(text string, port int) (string, error) {
+	public, err := linkOf(text)
+	if err != nil {
+		return "", err
+	}
+	return public.Address(port), nil
+}
+
+func linkOf(text string) (link.Public, *Refusal) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return link.Public{}, Refuse("access_link_missing", nil)
+	}
+	public, ok := link.ParsePublic(text)
+	if !ok {
+		return link.Public{}, Refuse("access_link_invalid", nil)
+	}
+	return public, nil
 }
 
 // bootHead is the head the kind's settings make, once each is the one

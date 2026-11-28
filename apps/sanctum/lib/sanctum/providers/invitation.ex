@@ -11,11 +11,12 @@ defmodule Sanctum.Providers.Invitation do
   offering its newcomer a `name` their invitation page fills in, and
   answers its
   code once with the link that opens it, `invitation_url`:
-  `<this CYFR's address>/invite#<code>` (`Sanctum.origin/0`). The
-  code travels in the fragment, so no server log records it; both keys
-  are ones the request log redacts (`Prima.Sanitizer`), and the code is
-  never stored or shown again. While this CYFR's address is this
-  computer's loopback, the answer carries `local_only: true`, since the
+  `<this CYFR's shared address>/invite#<code>` (`Sanctum.shared_address/0`):
+  its browser address when it has one. The code travels in the fragment,
+  so no server log records it; both keys are ones the request log redacts
+  (`Prima.Sanitizer`), and the code is never stored or shown again. A
+  CYFR with no browser address shares its private address, which names
+  this computer alone: the answer carries `local_only: true`, since the
   link opens nowhere else; otherwise it has no such key. `revoke` closes one still open, as its
   issuer or the administrator; `list` answers every invitation to the
   administrator and the caller's own to anyone else. Each is a person's
@@ -87,7 +88,7 @@ defmodule Sanctum.Providers.Invitation do
   def handle(%Context{} = ctx, %{"action" => "create"} = args) do
     with {:ok, %{invitation: invitation, code: code}} <-
            Invitations.create(ctx, Map.get(args, "thread_id"), Map.get(args, "name")) do
-      origin = Sanctum.origin()
+      origin = Sanctum.shared_address()
 
       answer = %{
         invitation: render(invitation),

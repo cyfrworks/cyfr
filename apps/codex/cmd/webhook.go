@@ -367,15 +367,11 @@ func renderWebhookList(result map[string]any) {
 	output.Table(headers, rows)
 }
 
-// renderWebhookEndpoint prints the webhook's full URL (preferred) or its path.
+// renderWebhookEndpoint prints the webhook's URL, which the server always
+// answers absolute, at its shared address.
 func renderWebhookEndpoint(result map[string]any) {
 	if url, ok := result["url"].(string); ok && url != "" {
-		if strings.HasPrefix(url, "/") {
-			fmt.Printf("  Path:   %s\n", url)
-			fmt.Println("  (Set CYFR_PUBLIC_URL on the server to display the full URL.)")
-		} else {
-			fmt.Printf("  URL:    %s\n", url)
-		}
+		fmt.Printf("  URL:    %s\n", url)
 		return
 	}
 	if slug, ok := result["slug"].(string); ok && slug != "" {

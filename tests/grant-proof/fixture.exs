@@ -91,6 +91,9 @@
 
 require Ecto.Query
 
+# Its homes are a browser proof's, whose people's sessions are made at the
+# browser address (tests/release-boot/fixture.exs `person`): each is
+# established at the proxy listener.
 fn args ->
   answer = fn map -> "GRANT=" <> Jason.encode!(map) end
 
@@ -219,7 +222,7 @@ fn args ->
       end
 
     ["plan", token, ref] ->
-      {:ok, console} = Sanctum.Caller.establish({:session, token})
+      {:ok, console} = Sanctum.Caller.establish({:session, token}, entry: :proxy)
       {:ok, plan} = Sanctum.Consent.Plan.plan(%{console | origin: :interactive}, %{ref: ref})
 
       background =
@@ -239,7 +242,7 @@ fn args ->
 
     ["revoke", user_id, token, profile_id, ref] ->
       ctx = person_ctx.(user_id)
-      {:ok, console} = Sanctum.Caller.establish({:session, token})
+      {:ok, console} = Sanctum.Caller.establish({:session, token}, entry: :proxy)
       console = %{console | origin: :interactive}
       before = admit.(ctx, ref)
 
@@ -267,7 +270,7 @@ fn args ->
       })
 
     ["door", token] ->
-      {:ok, console} = Sanctum.Caller.establish({:session, token})
+      {:ok, console} = Sanctum.Caller.establish({:session, token}, entry: :proxy)
 
       case PrismWeb.Ops.call_tool(%{console | origin: :interactive}, "door", %{
              "action" => "allow",
@@ -351,7 +354,7 @@ fn args ->
       })
 
     ["attach", token, ref, owner_id, entry_id, url, method] ->
-      {:ok, console} = Sanctum.Caller.establish({:session, token})
+      {:ok, console} = Sanctum.Caller.establish({:session, token}, entry: :proxy)
       ctx = %{console | origin: :interactive}
 
       # The owner's key, unsealed as its owner unseals it; compared here

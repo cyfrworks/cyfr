@@ -32,7 +32,12 @@ defmodule Cyfr.Test.FrameSocket do
     pid =
       spawn_link(fn ->
         {:ok, state} =
-          FrameSocket.init(%{path: path, client_ip: "127.0.0.1", request_id: request_id})
+          FrameSocket.init(%{
+            path: path,
+            client_ip: "127.0.0.1",
+            entry: :loopback,
+            request_id: request_id
+          })
 
         loop(test, state)
       end)

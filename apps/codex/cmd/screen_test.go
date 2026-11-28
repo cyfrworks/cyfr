@@ -44,7 +44,7 @@ func screenProject(t *testing.T) *standIn {
 	// The CYFR app of this cyfr's version is installed, unless a test
 	// says otherwise, so screen on fetches nothing.
 	s.installed, s.app = []string{appPackage}, version.Version
-	for name, body := range map[string]string{"docker-compose.yml": "services: {}\n", ".env": "CYFR_BROWSER=none\nCYFR_PORT=4321\nCYFR_SETUP_TOKEN=the-token\n"} {
+	for name, body := range map[string]string{"docker-compose.yml": "services: {}\n", ".env": "CYFR_BROWSER=none\nCYFR_PORT=4321\nCYFR_SETUP_TOKEN=the-token\n" + testLinkLine} {
 		if err := os.WriteFile(name, []byte(body), 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -606,7 +606,7 @@ func TestInitScreenRefusals(t *testing.T) {
 		if err == nil || err.Error() != want {
 			t.Fatalf("err = %v, want %q\n%s", err, want, out.String())
 		}
-		if ending := "\n\n" + localEnding("http://localhost:4000") + setupLinkLine(t, "http://localhost:4000"); !strings.HasSuffix(out.String(), ending) {
+		if ending := "\n\n" + localEnding(projectPrivate(t)) + setupLinkLine(t, projectPrivate(t)); !strings.HasSuffix(out.String(), ending) {
 			t.Errorf("init printed:\n%s\nwant it to end on:\n%s", out.String(), ending)
 		}
 		if fileExists(screenDir) || !fileExists(".env") || s.applied != nil || s.authenticated != 0 {
@@ -734,11 +734,11 @@ func TestInitAsksForTheScreenBeforeWriting(t *testing.T) {
 			if strings.Contains(out.String(), "(yes/no)") {
 				t.Errorf("init asked twice:\n%s", out.String())
 			}
-			ending := "\n\n" + localEnding("http://localhost:4000")
+			ending := "\n\n" + localEnding(projectPrivate(t))
 			if c.screen {
 				ending += "Next: cyfr up, then sudo reboot.\nAt power-on this screen opens CYFR's setup page, which makes its first person's account with this box as its first device.\n"
 			} else {
-				ending += setupLinkLine(t, "http://localhost:4000")
+				ending += setupLinkLine(t, projectPrivate(t))
 			}
 			if !strings.HasSuffix(out.String(), ending) {
 				t.Errorf("init printed:\n%s\nwant it to end on:\n%s", out.String(), ending)
@@ -816,7 +816,7 @@ func TestInitEndsWithoutTheScreenWhenItsInstallFails(t *testing.T) {
 	if err == nil || err.Error() != "Showing CYFR on this screen failed. Fix what is shown above, then run `cyfr screen on` again" {
 		t.Fatalf("init answered %v\n%s", err, out.String())
 	}
-	if want := "\n\n" + localEnding("http://localhost:4000") + setupLinkLine(t, "http://localhost:4000"); !strings.HasSuffix(out.String(), want) {
+	if want := "\n\n" + localEnding(projectPrivate(t)) + setupLinkLine(t, projectPrivate(t)); !strings.HasSuffix(out.String(), want) {
 		t.Errorf("init printed:\n%s\nwant it to end on:\n%s", out.String(), want)
 	}
 }
@@ -903,15 +903,14 @@ func TestScreenSaysWhereTheAppIsAnotherRelease(t *testing.T) {
 }
 
 // The screen's launcher starts the app on its folder alone, whatever the
-// folder's access: the route to a tailnet folder's CYFR comes with its
-// proposal (screen_app.go), as on a desktop, and the app sets it on that
-// CYFR's own stores. A folder that cannot be read starts it the same way:
+// folder's browser address: the app opens the folder's CYFR at its private
+// address, as on a desktop. A folder that cannot be read starts it the same way:
 // there the shell fails before it shows anything, the reason goes to the
 // app's error stream, the app ends itself and the launcher tries again.
 func TestTheScreensAppStartsOnItsFolderAlone(t *testing.T) {
 	for _, c := range []struct{ name, env string }{
-		{"tailnet", "CYFR_BROWSER=tailnet\nCYFR_HOST=box.tail1234.ts.net\nCYFR_PUBLIC_URL=https://box.tail1234.ts.net\nCYFR_TAILNET_NODE_ID=nAAAAAAAAACNTRL\nCYFR_PORT=4000\n"},
-		{"local", "CYFR_BROWSER=none\nCYFR_PORT=4321\n"},
+		{"tailnet", "CYFR_BROWSER=tailnet\nCYFR_HOST=box.tail1234.ts.net\nCYFR_PUBLIC_URL=https://box.tail1234.ts.net\nCYFR_TAILNET_NODE_ID=nAAAAAAAAACNTRL\nCYFR_PORT=4000\n" + testLinkLine},
+		{"local", "CYFR_BROWSER=none\nCYFR_PORT=4321\n" + testLinkLine},
 		{"unreadable", ""},
 	} {
 		t.Run(c.name, func(t *testing.T) {

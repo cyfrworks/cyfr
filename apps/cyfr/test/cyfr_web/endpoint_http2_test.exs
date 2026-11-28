@@ -177,6 +177,15 @@ defmodule CyfrWeb.EndpointHTTP2Test do
       "RELEASE_NAME" => "cyfr",
       "RELEASE_ROOT" => dir,
       "CYFR_BROWSER" => "none",
+      # A release names its tunnel key's public half: tests/fixtures/link.json's first.
+      "CYFR_LINK_PUBLIC" =>
+        @root
+        |> Path.join("tests/fixtures/link.json")
+        |> File.read!()
+        |> Jason.decode!()
+        |> Map.fetch!("names")
+        |> hd()
+        |> Map.fetch!("public"),
       "CYFR_DATABASE" => nil
     }
 

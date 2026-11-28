@@ -249,7 +249,7 @@ defmodule Sanctum.TinctureAuth do
          {:ok, window} <- setting("asset_credential_window_s", :invalid_window),
          {:ok, claims} <- claims(ctx),
          {:ok, %{now: now, source_expires_at: source}} <-
-           Sanctum.Caller.derived_standing(claims, client_ip: ctx.client_ip) do
+           Sanctum.Caller.derived_standing(claims, client_ip: ctx.client_ip, entry: ctx.entry) do
       {start, expires} = asset_expiry(DateTime.to_unix(now), window, source)
 
       if expires > DateTime.to_unix(now) do
@@ -273,7 +273,8 @@ defmodule Sanctum.TinctureAuth do
   now: the person, the athanor, the version digest, the source binding and
   the seconds it has left, which a response's `Cache-Control: max-age`
   never exceeds. `client_ip:` is the request's address, for a key's
-  allowlist.
+  allowlist, and `entry:` the listener it came in by: a credential minted
+  under a session at one address opens nothing at the other.
 
   Refused with `:invalid_credential` for anything this server did not
   sign as an asset credential, `:expired_credential` past its window, and
@@ -296,7 +297,10 @@ defmodule Sanctum.TinctureAuth do
       when is_binary(credential) and is_list(opts) do
     with {:ok, claims, version_digest, expires} <- asset_claims(credential),
          {:ok, %{now: now}} <-
-           Sanctum.Caller.derived_standing(claims, client_ip: Keyword.get(opts, :client_ip)) do
+           Sanctum.Caller.derived_standing(claims,
+             client_ip: Keyword.get(opts, :client_ip),
+             entry: Keyword.get(opts, :entry)
+           ) do
       remaining = expires - DateTime.to_unix(now)
 
       if remaining > 0 do
@@ -492,7 +496,7 @@ defmodule Sanctum.TinctureAuth do
          {:ok, lifetime} <- frame_lifetime(mode),
          {:ok, claims} <- claims(ctx),
          {:ok, %{now: now, source_expires_at: source}} <-
-           Sanctum.Caller.derived_standing(claims, client_ip: ctx.client_ip),
+           Sanctum.Caller.derived_standing(claims, client_ip: ctx.client_ip, entry: ctx.entry),
          {:ok, deadline} <- frame_deadline(now, lifetime, source),
          {:ok, row} <-
            stored(
@@ -545,7 +549,8 @@ defmodule Sanctum.TinctureAuth do
   source's standing rests on, read from the store at every use and never
   from a memo: so no use outlives the session-freshness bound
   (`Sanctum.Caller.fresh?/1`). `client_ip:` is the request's address, for
-  a key's allowlist.
+  a key's allowlist, and `entry:` the listener it came in by: a credential
+  minted under a session at one address opens nothing at the other.
 
   `held: true` reads it for a stream it already opened, which is held to
   the row: the bearer's own signed deadline and age end nothing, and the
@@ -587,7 +592,10 @@ defmodule Sanctum.TinctureAuth do
          :ok <- frame_state(row),
          claims = frame_claims(row, bound),
          {:ok, %{now: now}} <-
-           Sanctum.Caller.derived_standing(claims, client_ip: Keyword.get(opts, :client_ip)) do
+           Sanctum.Caller.derived_standing(claims,
+             client_ip: Keyword.get(opts, :client_ip),
+             entry: Keyword.get(opts, :entry)
+           ) do
       deadline =
         if held?, do: row.deadline, else: Enum.min([row.deadline, bound.deadline], DateTime)
 
@@ -700,7 +708,7 @@ defmodule Sanctum.TinctureAuth do
          {:ok, lifetime} <- frame_lifetime(:live),
          {:ok, claims} <- claims(ctx),
          {:ok, %{now: now, source_expires_at: source}} <-
-           Sanctum.Caller.derived_standing(claims, client_ip: ctx.client_ip),
+           Sanctum.Caller.derived_standing(claims, client_ip: ctx.client_ip, entry: ctx.entry),
          {:ok, row} <- own_frame(ctx, id),
          :ok <- same_source(row, claims),
          {:ok, deadline} <- frame_deadline(now, lifetime, source),

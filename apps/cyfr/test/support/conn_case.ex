@@ -87,10 +87,15 @@ defmodule CyfrWeb.ConnCase do
       other -> raise ArgumentError, "unknown `auth` tag #{inspect(other)}: use :person or :none"
     end
 
-    %{
+    # Through the loopback listener, as a request on the server's own
+    # machine comes (`CyfrWeb.Ingress`), so a plug the test calls itself reads
+    # the listener's tag as the endpoint's would.
+    conn = %{
       Phoenix.ConnTest.build_conn()
       | secret_key_base: Application.fetch_env!(:cyfr, CyfrWeb.Endpoint)[:secret_key_base]
     }
+
+    Sanctum.ClientIp.put_ingress(conn, :loopback)
   end
 
   setup tags do

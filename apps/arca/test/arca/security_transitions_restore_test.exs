@@ -102,6 +102,7 @@ defmodule Arca.SecurityTransitionsRestoreTest do
       token_hash: hash,
       user_id: user_id,
       provider: "github",
+      address: "http://h-xeypbemm44chehc5.localhost:4002",
       expires_at: DateTime.add(now(), 3600, :second),
       inserted_at: now()
     })

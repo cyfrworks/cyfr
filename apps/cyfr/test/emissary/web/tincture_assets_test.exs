@@ -61,11 +61,17 @@ defmodule Emissary.Web.TinctureAssetsTest do
   end
 
   defp serve(ctx, tincture, file, opts \\ []) do
+    # As the listener `opts[:entry]` names tags it, the loopback listener by
+    # default.
     conn =
-      Enum.reduce(Keyword.get(opts, :headers, []), Plug.Test.conn(:get, "/_s/x"), fn {k, v},
-                                                                                     conn ->
-        Plug.Conn.put_req_header(conn, k, v)
-      end)
+      Enum.reduce(
+        Keyword.get(opts, :headers, []),
+        Sanctum.ClientIp.put_ingress(
+          Plug.Test.conn(:get, "/_s/x"),
+          Keyword.get(opts, :entry, :loopback)
+        ),
+        fn {k, v}, conn -> Plug.Conn.put_req_header(conn, k, v) end
+      )
 
     TinctureAssets.serve(conn, ctx, tincture, file,
       cache: Keyword.get(opts, :cache, {:private, 600}),
@@ -236,7 +242,10 @@ defmodule Emissary.Web.TinctureAssetsTest do
   defp policy(manifest, nonce),
     do:
       Compendium.tincture_frame_policy(manifest, %{
-        endpoint: TinctureAssets.endpoint_origin(),
+        endpoint:
+          TinctureAssets.endpoint_origin(
+            Sanctum.ClientIp.put_ingress(Plug.Test.conn(:get, "/"), :loopback)
+          ),
         nonce: nonce
       })
 
@@ -246,7 +255,7 @@ defmodule Emissary.Web.TinctureAssetsTest do
   end
 
   defp endpoint_origin do
-    %URI{scheme: scheme, host: host, port: port} = URI.parse(Sanctum.origin())
+    %URI{scheme: scheme, host: host, port: port} = URI.parse(Sanctum.private_address())
 
     if port == URI.default_port(scheme),
       do: "#{scheme}://#{host}",
@@ -254,6 +263,15 @@ defmodule Emissary.Web.TinctureAssetsTest do
   end
 
   describe "a document's policy" do
+    test "names the address of the listener it was asked at" do
+      Prima.Test.Env.put_app_env(:sanctum, :browser_address, "https://cyfr.example")
+      loopback = Sanctum.ClientIp.put_ingress(Plug.Test.conn(:get, "/_s/x"), :loopback)
+      proxy = Sanctum.ClientIp.put_ingress(Plug.Test.conn(:get, "/_s/x"), :proxy)
+
+      assert TinctureAssets.endpoint_origin(loopback) == endpoint_origin()
+      assert TinctureAssets.endpoint_origin(proxy) == "https://cyfr.example"
+    end
+
     test "is the frame's rules' derivation from the declaration, with a sandbox of what it declares",
          %{ctx: ctx, base: base} do
       page!(base, "index.html", "<html><head></head><body></body></html>")

@@ -30,7 +30,8 @@ fn
       |> Plug.Conn.fetch_session()
 
     token = Plug.Conn.get_session(conn, to_string(CyfrWeb.SignInResponse.session_key()))
-    {:ok, ctx} = Sanctum.Caller.establish({:session, token})
+    # A harness browser reaches its home through the proxy listener.
+    {:ok, ctx} = Sanctum.Caller.establish({:session, token}, entry: :proxy)
     {:ok, athanor} = Sanctum.Tenancy.Athanors.get(ctx.athanor_id)
 
     "SESSION=" <>

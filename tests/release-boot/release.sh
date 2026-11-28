@@ -18,7 +18,7 @@
 # deployment file names.
 #
 # A cell answers on the default listeners under the node name NODE, one at
-# a time, reached at its localhost address (CYFR_BROWSER=none). Its people's
+# a time, at its private address (CYFR_BROWSER=none). Its people's
 # accounts are at a directory of its own, which runs while its server does
 # (`cell_directory_start`). A cell given
 # a hostname of its own (`cell_hostname`) has a domain address of that name

@@ -59,7 +59,9 @@ if [ "${1:-}" = --inside ]; then
   useradd -m proof
   install -d -o proof -m 700 /home/proof/cyfr
   printf 'services: {}\n' >/home/proof/cyfr/docker-compose.yml
-  printf 'CYFR_BROWSER=none\nCYFR_PORT=4321\n' >/home/proof/cyfr/.env
+  # The private name vectors' first tunnel key: This box is at
+  # http://h-xeypbemm44chehc5.localhost:4321.
+  printf 'CYFR_BROWSER=none\nCYFR_PORT=4321\nCYFR_LINK_PUBLIC=6b6b937aca103230d149eb148efbcfb59e6d1f05bb04dc648ac3e92339eae74a\n' >/home/proof/cyfr/.env
   chown proof /home/proof/cyfr/docker-compose.yml /home/proof/cyfr/.env
   # The list keeps one CYFR elsewhere beside This box, whose entry the
   # screen's first start makes.
@@ -252,7 +254,7 @@ PY
   # takes on its 1280x720 scale. This box is the rail's first row, the CYFR
   # elsewhere its second.
   press() { TAP_AT="$OUT/pressed" python3 -I /fixture/tap.py $(($1 * 1280 / 1600)) $(($2 * 720 / 900)) 2>>"$OUT/tap.log"; }
-  proposals() { local n; n=$(grep -c '^CYFR: home: http://localhost:4321$' "$OUT/app.log" 2>/dev/null); echo "${n:-0}"; }
+  proposals() { local n; n=$(grep -c '^CYFR: home: http://h-xeypbemm44chehc5\.localhost:4321$' "$OUT/app.log" 2>/dev/null); echo "${n:-0}"; }
   BOX_AT="36 66" OTHER_AT="36 142"
   departures() { local n; n=$(grep -c '^CYFR: left: the person chose another$' "$OUT/app.log" 2>/dev/null); echo "${n:-0}"; }
   ends() { local n; n=$(grep -c '^ended' "$OUT/launches" 2>/dev/null); echo "${n:-0}"; }
@@ -269,10 +271,10 @@ PY
     hidden "$was" "$(cat "$OUT/pressed")" || { echo "the window shown ($was) did not close within $HIDE_MS ms of the press (took $(cat "$OUT/took" 2>/dev/null))" >"$OUT/why"; return 1; }
     opened=$(proposals)
     press $BOX_AT
-    within 30 sh -c "[ \$(grep -c '^CYFR: home: http://localhost:4321\$' $OUT/app.log) -gt $opened ]" || { echo "This box was not proposed" >"$OUT/why"; return 1; }
+    within 30 sh -c "[ \$(grep -c '^CYFR: home: http://h-xeypbemm44chehc5\.localhost:4321\$' $OUT/app.log) -gt $opened ]" || { echo "This box was not proposed" >"$OUT/why"; return 1; }
     [ "$(ends)" = "$ended" ] || { echo "the app ended" >"$OUT/why"; return 1; }
   }
-  within 30 sh -c "[ \$(grep -c '^CYFR: home: http://localhost:4321\$' $OUT/app.log) -ge 1 ]"
+  within 30 sh -c "[ \$(grep -c '^CYFR: home: http://h-xeypbemm44chehc5\.localhost:4321\$' $OUT/app.log) -ge 1 ]"
   if switched; then
     verdict PASS "the CYFR elsewhere pressed on the rail leaves This box: the window shown closed $(cat "$OUT/took") ms after the press, confirmed by labwc's list, a fresh one shows; This box pressed opens it again; no app ended"
     echo "switch to window closed: $(cat "$OUT/took") ms" >>"$OUT/timing"

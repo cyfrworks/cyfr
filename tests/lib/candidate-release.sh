@@ -89,6 +89,7 @@ release_schema() {
   local schema
   schema="$(docker run --rm ${PROOF_RUN_PREFIX:+--name "$RUN-schema-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"} \
     -e CYFR_BROWSER=none -e "CYFR_SECRET_KEY_BASE=$(od -An -N48 -tx1 /dev/urandom | tr -d ' \n')" \
+    -e "CYFR_LINK_PUBLIC=$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')" \
     "$1" bin/cyfr eval 'IO.puts("CYFR_SCHEMA=" <> Arca.SchemaFingerprint.current())' | sed -n 's/^CYFR_SCHEMA=//p')"
   [[ "$schema" =~ ^[0-9a-f]{64}$ ]] || fail "the image $1 answered no schema fingerprint: '$schema'"
   printf '%s\n' "$schema"

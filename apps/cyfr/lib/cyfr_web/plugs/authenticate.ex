@@ -144,7 +144,7 @@ defmodule CyfrWeb.Plugs.Authenticate do
       token ->
         if Sanctum.ApiKey.looks_like_key?(token),
           do: validate_api_key(conn, token),
-          else: validate_session_token(token)
+          else: validate_session_token(token, Sanctum.ClientIp.ingress(conn))
     end
   end
 
@@ -154,11 +154,13 @@ defmodule CyfrWeb.Plugs.Authenticate do
   # validating, so the context it answers is then revalidated against the
   # stored session and standing (`Caller.revalidate_session/1`) before it
   # admits anything — a revocation this member never heard of refuses here.
-  defp validate_session_token(token) do
+  # A session is good only at the address it was made at: the entry the
+  # request came in by decides (`Sanctum.Caller.establish/2`).
+  defp validate_session_token(token, entry) do
     # This surface never slides the session — the console hooks do.
     # The context arrives carrying its session row key and the binding that
     # names it (`Sanctum.Session`, the one place both are stamped).
-    case establish_session(token) do
+    case establish_session(token, entry) do
       {:ok, ctx} ->
         {:ok, ctx}
 
@@ -194,8 +196,8 @@ defmodule CyfrWeb.Plugs.Authenticate do
     end
   end
 
-  defp establish_session(token, retried? \\ false) do
-    with {:ok, ctx} <- Sanctum.Caller.establish(token, refresh: false) do
+  defp establish_session(token, entry, retried? \\ false) do
+    with {:ok, ctx} <- Sanctum.Caller.establish(token, refresh: false, entry: entry) do
       case Sanctum.Caller.revalidate_session(ctx) do
         {:ok, fresh} ->
           {:ok, fresh}
@@ -209,7 +211,7 @@ defmodule CyfrWeb.Plugs.Authenticate do
         # the session's standing athanor again.
         {:error, :not_member} when not retried? ->
           Sanctum.Caller.drop_memo(ctx.session_token_hash)
-          establish_session(token, true)
+          establish_session(token, entry, true)
 
         # Gone, expired or retired since the memo was filled: no longer a
         # session this server stands behind.
@@ -229,7 +231,10 @@ defmodule CyfrWeb.Plugs.Authenticate do
   # the wire. An archived athanor or a denied creator answers exactly like
   # a revoked key, so nothing about either leaks.
   defp validate_api_key(conn, key) do
-    case Sanctum.Caller.establish({:api_key, key}, client_ip: Sanctum.ClientIp.resolve(conn)) do
+    case Sanctum.Caller.establish({:api_key, key},
+           client_ip: Sanctum.ClientIp.resolve(conn),
+           entry: Sanctum.ClientIp.ingress(conn)
+         ) do
       {:ok, ctx} -> {:ok, ctx}
       {:error, :no_athanor} -> {:error, :missing_tenant}
       {:error, :invalid_credential} -> {:error, :invalid_api_key}

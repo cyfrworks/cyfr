@@ -134,7 +134,7 @@ cyfr -h
 
 ## Prism — the web face
 
-**Prism** is CYFR's one web face, at `http://localhost:4000` (the same origin as the API — one endpoint, one login), and it is one screen: `/` lands on your desktop, and everything else opens over it without leaving it. Your athanor is your own place, and nobody else sits in it, though whoever runs the machine CYFR runs on can read what it keeps there (Legal → Privacy says who can read what): in your daily thread with Aqua, one a day, every message addresses Aqua — the same thread on your phone and your laptop. People talk in shared threads: a title, its people, each equal, and their messages with attachments. Nothing runs in a shared thread — no Aqua answers there. A pair is a shared thread of two, made by clicking a person in the chat (anyone you share a thread with is there); it ends when either person leaves, and clicking again starts a new, empty one. Your own Aqua opens from the shelf in a panel over whatever you are looking at — a private thread in your own athanor that reads your shared threads when you ask about them, or the one the chat has open with each message when you tick it; what it reads there, other people's words included, goes to your model provider — and a line from it reaches a shared thread only when you say it aloud — a deliberate, attributed copy. Sign in on a phone and "Add to Home Screen" — Prism installs like a native app.
+**Prism** is CYFR's one web face, at CYFR's address, on its own machine `http://h-<16 letters and digits>.localhost:4000` (the same origin as the API — one endpoint, one login), and it is one screen: `/` lands on your desktop, and everything else opens over it without leaving it. Your athanor is your own place, and nobody else sits in it, though whoever runs the machine CYFR runs on can read what it keeps there (Legal → Privacy says who can read what): in your daily thread with Aqua, one a day, every message addresses Aqua — the same thread on your phone and your laptop. People talk in shared threads: a title, its people, each equal, and their messages with attachments. Nothing runs in a shared thread — no Aqua answers there. A pair is a shared thread of two, made by clicking a person in the chat (anyone you share a thread with is there); it ends when either person leaves, and clicking again starts a new, empty one. Your own Aqua opens from the shelf in a panel over whatever you are looking at — a private thread in your own athanor that reads your shared threads when you ask about them, or the one the chat has open with each message when you tick it; what it reads there, other people's words included, goes to your model provider — and a line from it reaches a shared thread only when you say it aloud — a deliberate, attributed copy. Sign in on a phone and "Add to Home Screen" — Prism installs like a native app.
 
 Around the desktop:
 
@@ -316,7 +316,7 @@ cyfr new tincture stock-dashboard --template react
 cyfr build compile t:local.stock-dashboard:0.1.0
 
 # Open it in Prism (the athanor in focus is in the URL)
-open http://localhost:4000/a/@alice/canvas
+open http://h-xxxxxxxxxxxxxxxx.localhost:4000/a/@alice/canvas   # your CYFR's private address, as cyfr up prints it
 
 # Check whether it is publicly reachable at /t/@alice/local/stock-dashboard
 cyfr tincture visibility get local stock-dashboard
@@ -403,8 +403,8 @@ CYFR is self-hosted as a small `docker compose` stack:
 | `caddy` *(profile: `domain`)* | TLS terminator and reverse proxy of a domain address, forwarding to cyfr's proxy listener. Started only when `CYFR_BROWSER=domain` in `.env` |
 | `tailscale` *(profile: `tailnet`)* | Tailscale Serve for a tailnet address: HTTPS at the machine's tailnet name, forwarding to cyfr's proxy listener; its loopback SOCKS5 proxy lets this device's own browser reach that address. Started only when `CYFR_BROWSER=tailnet` in `.env` |
 
-A server's browser address, `CYFR_BROWSER` in `.env`, is one of four kinds:
-- **none**: this computer only. Prism at `http://localhost:4000/`.
+Every server has a private address, `http://h-<16 letters and digits>.localhost:<CYFR_PORT>`, which the public half of the tunnel key `cyfr init` mints names (`CYFR_LINK_PUBLIC` in `.env`): its own machine reaches it there whatever its browser address, the box's screen and the CYFR app on that machine among them, and a browser there resolves every `.localhost` name to the machine itself. A server's browser address, `CYFR_BROWSER` in `.env`, is one of four kinds:
+- **none**: no browser address: this computer only, at its private address. Prism at `http://h-<16 letters and digits>.localhost:4000/`.
 - **tailnet**: your devices on Tailscale; also runs tailscale (`--profile tailnet`). Prism at `https://<machine>.<tailnet>.ts.net/`.
 - **domain**: a domain, for anyone who signs in; also runs caddy (`--profile domain`). Prism at `https://<your domain>/`.
 - **proxy**: a domain your own proxy serves (nginx, a tunnel, a NAS's proxy), for anyone it lets through, who signs in; runs no Caddy, and publishes cyfr's proxy listener on this machine's loopback at `CYFR_PROXY_PUBLISH` (default `127.0.0.1:4001`) for your proxy to forward to. Prism at `https://<your domain>/`.
@@ -439,14 +439,14 @@ cyfr up          # starts cyfr + locus and its guard (and the proxy of a tailnet
 `cyfr init` asks nothing about how CYFR is reached. It makes a CYFR reached from this machine and ends:
 
 ```
-CYFR is set up in this directory, reached from this computer at http://localhost:4000.
+CYFR is set up in this directory, reached from this computer at http://h-<16 letters and digits>.localhost:4000.
 Want it on your phone and laptop too? Run cyfr access browser tailnet first.
 Next: cyfr up. Then open <setup link> to set up its first person.
 ```
 
 Before it, each image it pulls is one line, `Pulling <image> ...`. `cyfr access browser tailnet` reaches CYFR from your other devices on Tailscale, `cyfr access browser domain --domain <your domain>` from the internet, and `cyfr access browser proxy --domain <your domain>` through a proxy of your own; each gives CYFR a new address.
 
-On a machine with no display it adds `From another computer: ssh -L 4000:127.0.0.1:4000 <account>@<this machine's name>, then open the link there.`, with your login name and the machine's name filled in. On a first start, with no one set up yet, `cyfr up` ends on the same step: `Open <setup link> to set up its first person.`, the ssh line beside it as above, or, with a tailnet address, `Open <setup link> on your phone or laptop, with Tailscale on, to set up its first person.` A later start prints `CYFR server started.` and Prism's address alone. Run again in a project whose `.env` exists, `cyfr init` prints `Added to .env: <names>.` when it added keys `.env` lacked, and ends `Next: cyfr up.`
+On a machine with no display it adds `From another computer: ssh -L 4000:127.0.0.1:4000 <account>@<this machine's name>, then open the link there.`, with your login name and the machine's name filled in. On a first start, with no one set up yet, `cyfr up` ends on the same step: `Open <setup link> to set up its first person.`, the ssh line beside it as above, or, with a tailnet address, `Open <setup link> on your phone or laptop, with Tailscale on, to set up its first person.` A later start prints `CYFR server started.` and Prism's addresses alone: on this computer, and in a browser when CYFR has a browser address. Run again in a project whose `.env` exists, `cyfr init` prints `Added to .env: <names>.` when it added keys `.env` lacked, and ends `Next: cyfr up.`
 
 `cyfr init` mints every key the stack needs into `.env`: `CYFR_SECRET_KEY_BASE`, `CYFR_LOCUS_BACKENDS_KEY`, the [execution worker](#execution-workers)'s root `CYFR_LOCUS_RUNTIME_ROOT` with the `LOCUS_RUNTIME_KEY` derived from it for the worker's service id (`wrk_locus` unless `.env` names another `LOCUS_RUNTIME_SERVICE_ID`), the [builds](#builds) key `CYFR_LOCUS_BUILDS_KEY`, and the setup token `CYFR_SETUP_TOKEN`, which nothing removes. It also assigns [`CYFR_CORS_ALLOWED_ORIGINS`](#cors-allowlist) the empty allowlist, which admits no cross-origin caller and which the shipped stack's same-origin clients never notice. Run in a project whose `.env` already exists, it adds only the keys `.env` lacks and never rewrites one: with no root and no service key it mints both, with a root alone it derives the service key from it. A service key with no root beside it, or one the root beside it does not derive, is refused with a sentence naming the fix, and nothing is written.
 
@@ -464,6 +464,8 @@ cp .env.example .env
 #   LOCUS_RUNTIME_KEY     — `env CYFR_LOCUS_RUNTIME_ROOT=… mix cyfr.locus.runtime_key wrk_locus`
 #                          (see "Execution workers" for the openssl equivalent)
 #   CYFR_LOCUS_BUILDS_KEY — `openssl rand -hex 32`
+#   CYFR_LINK_KEY, CYFR_LINK_PUBLIC — the tunnel key, which `cyfr init` alone mints:
+#                          run `cyfr init` in place of the copy above, and .env gets every key here
 
 # with the CLI, as for any CYFR:
 cyfr up
@@ -472,7 +474,7 @@ docker compose up -d
 ```
 </details>
 
-Once you are set up, open the address `cyfr up` prints (`http://localhost:4000/` with no browser address), sign in, and you're in your athanor's chat. "Add to Home Screen" installs it as a PWA (works on phones too). With a browser address the proxy forwards everything to cyfr's proxy listener — Prism, `/api`, `/mcp`, `/auth` and `/t` on the same origin. The `cyfr` endpoint (`:4000`) is always published on `127.0.0.1` so the `cyfr` CLI and a local browser work from the host.
+Once you are set up, open the address `cyfr up` prints (on the server's own machine its private address; from your other devices its browser address), sign in, and you're in your athanor's chat. "Add to Home Screen" installs it as a PWA (works on phones too). With a browser address the proxy forwards everything to cyfr's proxy listener — Prism, `/api`, `/mcp`, `/auth` and `/t` on the same origin. The `cyfr` endpoint (`:4000`) is always published on `127.0.0.1` so the `cyfr` CLI and a local browser work from the host.
 
 **CYFR on the machine's own screen.** On Ubuntu 26.04 LTS on amd64 or arm64 with no desktop, `cyfr init` asks before it writes anything:
 
@@ -505,13 +507,13 @@ A server whose release differs from a live server's is refused at boot, naming b
 
 ### How CYFR is reached
 
-CYFR starts with no browser address, reached from this machine alone, as `cyfr init` makes it. `cyfr access browser <kind>` chooses the browser address of the CYFR in the current directory: `cyfr access browser none`, `cyfr access browser tailnet`, `cyfr access browser domain --domain <your domain>` (and `--acme-email <email>` for the certificate authority's account, if you want one), or `cyfr access browser proxy --domain <your domain>` (and `--publish <address:port>` for where your proxy forwards to). It shows the change before making it: who will reach CYFR and at what address (`CYFR will be reached by your devices on Tailscale at https://cyfr.<tailnet>.ts.net.`), with the ports a domain opens, then each other setting that changes, before → after, and what changes when the address changes, unless no one is set up on CYFR yet: CYFR has never started in this directory, or cyfr's log since its start says no one is set up on it. Answering no changes nothing, says what stands (`Nothing changed.`, or after a join `Nothing changed. This machine stays on your tailnet as <name>; run cyfr access browser tailnet again when you want CYFR reached there.`) and exits 0. Once you confirm, or pass `--yes`, it stops the stack and checks it stopped, rewrites `.env`, and starts what was running with the new address, then prints that address and its QR code. When that start fails, it stops what the new address started, writes the previous one back and starts it, and reports what it reached: CYFR running as before (on this machine only, when its tailnet machine is not ready to serve it), CYFR left stopped when the previous address does not start either, or, when a stop cannot be checked or a write fails, a change to finish with `cyfr access --resume`. `cyfr access status` shows how CYFR is reached, what runs, the proxy's health and the last change's outcome, and changes nothing.
+CYFR starts with no browser address, reached from this machine alone, as `cyfr init` makes it. `cyfr access browser <kind>` chooses the browser address of the CYFR in the current directory: `cyfr access browser none`, `cyfr access browser tailnet`, `cyfr access browser domain --domain <your domain>` (and `--acme-email <email>` for the certificate authority's account, if you want one), or `cyfr access browser proxy --domain <your domain>` (and `--publish <address:port>` for where your proxy forwards to). It shows the change before making it: who will reach CYFR and at what address (`CYFR will be reached by your devices on Tailscale at https://cyfr.<tailnet>.ts.net.`), with the ports a domain opens, then each other setting that changes, before → after, and what changes when the address changes, unless no one is set up on CYFR yet: CYFR has never started in this directory, or cyfr's log since its start says no one is set up on it. Answering no changes nothing, says what stands (`Nothing changed.`, or after a join `Nothing changed. This machine stays on your tailnet as <name>; run cyfr access browser tailnet again when you want CYFR reached there.`) and exits 0. Once you confirm, or pass `--yes`, it stops the stack and checks it stopped, rewrites `.env`, and starts what was running with the new address, then prints CYFR's address on this computer and its browser address, when it has one, with its QR code. When that start fails, it stops what the new address started, writes the previous one back and starts it, and reports what it reached: CYFR running as before (on this machine only, when its tailnet machine is not ready to serve it), CYFR left stopped when the previous address does not start either, or, when a stop cannot be checked or a write fails, a change to finish with `cyfr access --resume`. `cyfr access status` shows how CYFR is reached, what runs, the proxy's health and the last change's outcome, and changes nothing.
 
 A change holds the stack's lock and keeps its progress in `.cyfr/` in the project directory. When one is interrupted, by a closed terminal or a restart, run `cyfr access --resume`: it finishes the interrupted change under the lock and reports what happened. The next `cyfr up`, `cyfr update`, `cyfr restore` or `cyfr access` does the same before anything else.
 
 A start that leaves CYFR answering on this machine only, because its tailnet machine is not the one `.env` names, has not joined, or has HTTPS certificates off, exits with status 3 and says what to do; Tailscale Serve stays closed until `cyfr access browser tailnet` serves CYFR on the tailnet again.
 
-**Choose the address once.** A new address, from another tailnet name, another domain or another kind, means every browser signs in again there and each command line connects to CYFR there anew; your people's accounts and passkeys stay as they are, since they live at the account service (a CYFR that serves its own account service keeps its address for good): [devices-guide.md](devices-guide.md#when-cyfrs-address-changes) lists what changes. On a CYFR that never started, the change ends on `Next: cyfr up. Then open <setup link at the new address> to set up its first person.`, and on a running CYFR no one is set up on, on the setup link at the new address as `cyfr up` says it. When the project shows CYFR on the machine's own screen, `cyfr access` changes nothing of the screen: the screen reads the folder each time it starts, and a running screen whose folder now names another address starts again there.
+**Choose the address once.** A new browser address, from another tailnet name, another domain or another kind, means every browser signed in at the old one signs in again and each command line that named it connects to CYFR at the new one anew; what is signed in at the private address, on the server's own machine, stays; your people's accounts and passkeys stay as they are, since they live at the account service (a CYFR that serves its own account service keeps its address for good): [devices-guide.md](devices-guide.md#when-cyfrs-address-changes) lists what changes. On a CYFR that never started, the change ends on `Next: cyfr up. Then open <setup link at the new address> to set up its first person.`, and on a running CYFR no one is set up on, on the setup link at the new address as `cyfr up` says it. When the project shows CYFR on the machine's own screen, `cyfr access` changes nothing of the screen: the screen reads the folder each time it starts, and a running screen whose folder now names another address starts again there.
 
 **A tailnet address.** These steps are yours, once:
 
@@ -522,6 +524,7 @@ A start that leaves CYFR answering on this machine only, because its tailnet mac
 
 - **Certificate names are public.** Every HTTPS certificate's name, the machine's full tailnet name included, is published in public certificate logs. Use a randomized tailnet name and a neutral machine name: `cyfr`, unless `--hostname` gives another.
 - **The name is the address.** Renaming the machine gives CYFR a new address (above). `cyfr access browser tailnet --new-node` replaces this machine's tailnet identity, so CYFR can take another name; remove the old machine on the admin console's Machines page.
+- **Your own account service here.** What signing in with the CYFR app on this machine needs, when CYFR serves its own accounts at its tailnet name: [devices-guide.md](devices-guide.md#the-cyfr-app).
 - **Tailscale's hosted service** hands out the tailnet's keys. Tailnet Lock limits that trust, and CYFR's own sign-in applies either way: CYFR reads no Tailscale identity header, so everyone who reaches CYFR still signs in.
 
 **A domain address.** `cyfr access browser domain --domain <your domain>` serves CYFR at `https://<your domain>/` through the `caddy` service, which obtains its certificate over ACME. The domain must point at this machine, and ports 80 and 443 must be open (see [Prerequisites](#prerequisites)). Once the change is made, `cyfr access browser domain` resolves the domain from this machine and says `Done.` only when it resolves; otherwise it says that no one reaches CYFR there, and no certificate is issued, until the domain's DNS names this machine.
@@ -607,16 +610,16 @@ Builds are on after `cyfr init`: it writes `CYFR_LOCUS_BUILDS_KEY` into `.env`, 
 
 ### Reaching Prism on the server
 
-Prism is served by the same endpoint as everything else, at CYFR's address: `https://<machine>.<tailnet>.ts.net/` from any device on your tailnet, or `https://<your domain>/` with a domain address, through Caddy or your own proxy. With no browser address, CYFR answers on the server's loopback alone; forward it over SSH:
+Prism is served by the same endpoint as everything else, at CYFR's address: `https://<machine>.<tailnet>.ts.net/` from any device on your tailnet, or `https://<your domain>/` with a domain address, through Caddy or your own proxy, and on the server's own machine at its private address. With no browser address, CYFR answers on the server's loopback alone; forward it over SSH:
 
 ```bash
-ssh -L 4000:localhost:4000 <user>@<server>
+ssh -L 4000:127.0.0.1:4000 <user>@<server>
 ```
 
-Then open `http://localhost:4000` locally — with the port, which is what the
-browser origin check trusts (a bare `http://localhost` is port 80, and a page
-served there is not this server). With a browser address the same
-tunnel reaches CYFR's loopback listener, but a sign-in returns the browser to CYFR's address.
+Then open its private address, `http://h-<16 letters and digits>.localhost:4000`, as `cyfr init` and `cyfr up` print it, locally: a browser takes every
+`.localhost` name to its own loopback, where the tunnel listens, and the
+private address, with its port, is the one CYFR answers as on its loopback listener. With a browser address the same
+tunnel reaches CYFR's loopback listener at its private address too.
 
 ## Production Configuration
 

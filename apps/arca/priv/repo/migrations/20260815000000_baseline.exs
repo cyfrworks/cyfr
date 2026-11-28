@@ -316,6 +316,11 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :email, :string
       add :provider, :string, null: false
       add :expires_at, :utc_datetime_usec, null: false
+      # The address of the entry that made the session
+      # (`Sanctum.address/1`): it is good at either entry of that address
+      # and at no other, and a boot whose server no longer has the address
+      # retires it (`Sanctum.Session.retire_elsewhere/0`).
+      add :address, :string, null: false
       # The athanor the session works in. Nullable: a session exists from
       # sign-in on, before the person's own athanor is resolved.
       add :athanor_id, :string
@@ -335,8 +340,8 @@ defmodule Arca.Repo.Migrations.Baseline do
       # The browser and system a browser's sign-in named in its user agent,
       # in words (`Sanctum.UserAgent`), never the user agent itself; null
       # when it named none. `last_seen_at` moves at most once a minute
-      # while the session is used (`Sanctum.Session.seen/1`). No address
-      # is stored.
+      # while the session is used (`Sanctum.Session.seen/1`). No network
+      # address of the browser is stored.
       add :browser, :string
       add :system, :string
       add :last_seen_at, :utc_datetime_usec

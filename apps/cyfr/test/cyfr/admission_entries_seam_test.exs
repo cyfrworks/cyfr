@@ -674,7 +674,7 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
   def device_channel_unproven(_conn, _ctx) do
     {device_key, _device_private} = :crypto.generate_key(:eddsa, :ed25519)
     {_public, installation} = Sanctum.Cipher.installation_key()
-    {:ok, home} = Sanctum.SignIn.audience()
+    {:ok, home} = Sanctum.SignIn.audience(:loopback)
     now = System.system_time(:millisecond)
     client_id = Prima.UUID7.generate_id("pcl")
 
@@ -699,7 +699,10 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
         transport: :websocket,
         options: [],
         params: %{},
-        connect_info: %{peer_data: %{address: {127, 0, 0, 1}, port: 50_000, ssl_cert: nil}}
+        connect_info: %{
+          peer_data: %{address: {127, 0, 0, 1}, port: 50_000, ssl_cert: nil},
+          x_headers: [{"x-cyfr-ingress", "loopback"}]
+        }
       })
 
     {:ok, state} = DeviceChannel.init(state)

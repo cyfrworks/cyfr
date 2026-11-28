@@ -1,0 +1,63 @@
+{
+  "about": "A server's tunnel key and the private name and address it gives. `cyfr init` mints the key: `key` is CYFR_LINK_KEY, the private half and the pre-shared key in the text forms the link service reads (`privkey:` and `psk:`, each 64 lowercase hexadecimal digits, joined by a comma), and `public` is CYFR_LINK_PUBLIC, the X25519 public half. The name is `h-` and the first 16 characters of the lowercase, unpadded base32 (RFC 4648) of the SHA-256 of the public half's 32 bytes; the address is `http://<name>.localhost:<port>`, the origin as a browser serialises it, with no port on port 80, http's default. Cyfr.RuntimeConfig (Elixir) and apps/codex/internal/link (Go) each derive every row; `refused` holds CYFR_LINK_PUBLIC values the boot refuses as not a public key.",
+  "names": [
+    {
+      "why": "the private key is the clamped sha256 of \"cyfr link vector 1\", the pre-shared key sha256 of \"cyfr psk vector 1\"",
+      "key": "privkey:b09562be8a0bfee65eaeef5555dad1576019560663ae4616a0cef7b3c5e8c872,psk:6a681bf4064665498645f666e39f9c3917071baecf8685b0923468fd769c47bc",
+      "public": "6b6b937aca103230d149eb148efbcfb59e6d1f05bb04dc648ac3e92339eae74a",
+      "name": "h-xeypbemm44chehc5",
+      "port": 4000,
+      "address": "http://h-xeypbemm44chehc5.localhost:4000"
+    },
+    {
+      "why": "the private key is the clamped sha256 of \"cyfr link vector 2\", the pre-shared key sha256 of \"cyfr psk vector 2\"",
+      "key": "privkey:f844138e8c9a51aa225459b275e5697ef85fbb4ba913fac5304410e1d6b2d26c,psk:5299a4d73c45958434f1faa0b9bd021786f2be1c3621beb9d381fc024db167a5",
+      "public": "527be3055d91803acc9a4c8cd16521654fc43affa3c89322edbaa20f9e5ced0a",
+      "name": "h-ookaajj2w5uapqdp",
+      "port": 4030,
+      "address": "http://h-ookaajj2w5uapqdp.localhost:4030"
+    },
+    {
+      "why": "the private key is the clamped sha256 of \"cyfr link vector 3\", the pre-shared key sha256 of \"cyfr psk vector 3\"",
+      "key": "privkey:00218c09adaf3c491494e26318e863771b833e17d98348be7c4f0b62bfb0406c,psk:f2a87f8123b8d8364ffab21d8f733c1c592bad28bbec4f310b3a18487b40d483",
+      "public": "285feb8081eb6a3100c78dadd7925e33e956499e1ebe80b85111368ddf63174e",
+      "name": "h-kmb7nuzlttehja4m",
+      "port": 65535,
+      "address": "http://h-kmb7nuzlttehja4m.localhost:65535"
+    },
+    {
+      "why": "the first row's key on port 80, http's default, which the address leaves out as a browser's origin does",
+      "key": "privkey:b09562be8a0bfee65eaeef5555dad1576019560663ae4616a0cef7b3c5e8c872,psk:6a681bf4064665498645f666e39f9c3917071baecf8685b0923468fd769c47bc",
+      "public": "6b6b937aca103230d149eb148efbcfb59e6d1f05bb04dc648ac3e92339eae74a",
+      "name": "h-xeypbemm44chehc5",
+      "port": 80,
+      "address": "http://h-xeypbemm44chehc5.localhost"
+    }
+  ],
+  "refused": [
+    {
+      "value": "6B6B937ACA103230D149EB148EFBCFB59E6D1F05BB04DC648AC3E92339EAE74A",
+      "why": "uppercase digits"
+    },
+    {
+      "value": "6b6b937aca103230d149eb148efbcfb59e6d1f05bb04dc648ac3e92339eae74",
+      "why": "63 digits"
+    },
+    {
+      "value": "6b6b937aca103230d149eb148efbcfb59e6d1f05bb04dc648ac3e92339eae74a0",
+      "why": "65 digits"
+    },
+    {
+      "value": "gb6b937aca103230d149eb148efbcfb59e6d1f05bb04dc648ac3e92339eae74a",
+      "why": "a letter that is not a hexadecimal digit"
+    },
+    {
+      "value": "nodekey:6b6b937aca103230d149eb148efbcfb59e6d1f05bb04dc648ac3e92339eae74a",
+      "why": "the key's text form, with its prefix"
+    },
+    {
+      "value": "6b6b937aca103230d149eb148efbcfb5 9e6d1f05bb04dc648ac3e92339eae74a",
+      "why": "a space inside"
+    }
+  ]
+}

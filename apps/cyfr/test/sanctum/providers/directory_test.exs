@@ -30,7 +30,7 @@ defmodule Sanctum.Providers.DirectoryTest do
   # An account registered at this CYFR's directory: a genesis naming its
   # origin, signed by a recovery key.
   defp registered! do
-    {:ok, directory} = Prima.Identity.Encoding.canonical_home(Sanctum.origin())
+    {:ok, directory} = Prima.Identity.Encoding.canonical_home(Sanctum.shared_address())
     {pub, priv} = :crypto.generate_key(:eddsa, :ed25519)
 
     {:ok, genesis} =

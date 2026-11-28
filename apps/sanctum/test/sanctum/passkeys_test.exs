@@ -40,7 +40,7 @@ defmodule Sanctum.PasskeysTest do
     dir = DirectoryServer.start!(tls)
 
     Prima.Test.Env.put_app_env(:sanctum, :setup_token, @token)
-    Prima.Test.Env.put_app_env(:sanctum, :public_url, @origin)
+    Prima.Test.Env.put_app_env(:sanctum, :browser_address, @origin)
     Prima.Test.Env.put_app_env(:sanctum, :directory_url, dir.url)
     Prima.Test.Env.put_app_env(:sanctum, :exposure, :public)
 
@@ -55,10 +55,20 @@ defmodule Sanctum.PasskeysTest do
 
   # A sign-in at this CYFR by the account's `passkey`: the person and the
   # session's token.
+
+  # This CYFR answers at its browser address here (`@origin`): a request
+  # is minted, and its answer taken, at the proxy entry unless a test
+  # names another.
+  defp requested(purpose, binding, opts),
+    do: SignIn.request(purpose, binding, Keyword.put_new(opts, :entry, :proxy))
+
+  defp answered(answer, binding, opts \\ []),
+    do: SignIn.answer(answer, binding, Keyword.put_new(opts, :entry, :proxy))
+
   defp signed_in!(account, passkey, opts \\ []) do
-    {:ok, %{request: request}} = SignIn.request(:sign_in, @browser, opts)
+    {:ok, %{request: request}} = requested(:sign_in, @browser, opts)
     answer = DirectoryServer.passkey_answer(request, account, passkey)
-    {:ok, %{user: user, session_token: token}} = SignIn.answer(answer, @browser)
+    {:ok, %{user: user, session_token: token}} = answered(answer, @browser)
     {user, token}
   end
 

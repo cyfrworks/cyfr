@@ -190,7 +190,7 @@ defmodule Cyfr.Cluster.Person do
   """
   @spec context!(String.t()) :: Sanctum.Context.t()
   def context!(token) do
-    {:ok, ctx} = Sanctum.Caller.establish(token)
+    {:ok, ctx} = Sanctum.Caller.establish(token, entry: :loopback)
     %{ctx | origin: :interactive}
   end
 

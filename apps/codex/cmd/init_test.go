@@ -185,7 +185,7 @@ func TestInitFollowsTheTemplatesPort(t *testing.T) {
 	if got := cfg.Contexts["local"].URL; got != "http://127.0.0.1:4123" {
 		t.Errorf("the local context is %s, want the home's loopback port", got)
 	}
-	if !strings.Contains(out.String(), "CYFR is set up in this directory, reached from this computer at http://localhost:4123.\n") || !strings.Contains(out.String(), setupLinkLine(t, "http://localhost:4123")) {
+	if !strings.Contains(out.String(), "CYFR is set up in this directory, reached from this computer at "+projectPrivate(t)+".\n") || !strings.HasSuffix(projectPrivate(t), ":4123") || !strings.Contains(out.String(), setupLinkLine(t, projectPrivate(t))) {
 		t.Errorf("init does not print the home's address and setup link at its port:\n%s", out.String())
 	}
 	if strings.Contains(out.String(), "CYFR is reached as:") {
@@ -289,13 +289,13 @@ func TestInitWritesTheSetupTokenAndPrintsTheSetupLink(t *testing.T) {
 	if err := runInit(context.Background(), initOptions{noPull: true}, &out, &out); err != nil {
 		t.Fatalf("init: %v\n%s", err, out.String())
 	}
-	line := setupLinkLine(t, "http://localhost:4000")
+	line := setupLinkLine(t, projectPrivate(t))
 	token := setupTokenOf(t)
 	if n := len(projectEnv(t).assignments(setupTokenVar)); n != 1 {
 		t.Errorf(".env assigns %s on %d lines, want one", setupTokenVar, n)
 	}
 	text := out.String()
-	if !strings.HasSuffix(text, "\n\n"+localEnding("http://localhost:4000")+line) || strings.Contains(text, "Prism:") {
+	if !strings.HasSuffix(text, "\n\n"+localEnding(projectPrivate(t))+line) || strings.Contains(text, "Prism:") {
 		t.Errorf("init printed:\n%s\nwant it to end on the setup link %q", text, line)
 	}
 
@@ -339,7 +339,7 @@ func TestInitEndsWithTheSSHLineOnAMachineWithNoDisplay(t *testing.T) {
 		if err := runInit(context.Background(), initOptions{noPull: true}, &out, &out); err != nil {
 			t.Fatalf("init: %v\n%s", err, out.String())
 		}
-		want := "\n\n" + localEnding("http://localhost:4000") + setupLinkLine(t, "http://localhost:4000")
+		want := "\n\n" + localEnding(projectPrivate(t)) + setupLinkLine(t, projectPrivate(t))
 		if !display {
 			want += "From another computer: ssh -L 4000:127.0.0.1:4000 " + account.Username + "@" + host + ", then open the link there.\n"
 		}

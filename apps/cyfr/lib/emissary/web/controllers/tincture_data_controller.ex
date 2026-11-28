@@ -186,7 +186,10 @@ defmodule Emissary.Web.TinctureDataController do
   defp caller(conn, request) do
     case {bearer(conn), Map.get(request, :public)} do
       {{:ok, bearer}, nil} ->
-        with {:ok, caller} <- FrameAdmission.frame(bearer, Sanctum.ClientIp.resolve(conn)) do
+        with {:ok, caller} <-
+               FrameAdmission.frame(bearer, Sanctum.ClientIp.resolve(conn),
+                 entry: Sanctum.ClientIp.ingress(conn)
+               ) do
           {:ok, %{caller | ctx: CallIdentity.stamp(conn, caller.ctx)}}
         end
 

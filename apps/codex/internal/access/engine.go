@@ -188,10 +188,24 @@ func (e *Engine) DeclaredProfiles(ctx context.Context) ([]string, error) {
 }
 
 // Head is the head .env holds now, or the boot refusal that says why it
-// holds none (ResolveBoot with .env's own read, Release true).
+// holds none (ResolveBoot with .env's own read, Release true, then
+// ResolveLink).
 func (e *Engine) Head() (Head, error) {
 	h, err := e.envHead()
 	return h, e.redactor().err(err)
+}
+
+// Words are how .env's head reads on this server, its private address
+// among them, refused as Head refuses.
+func (e *Engine) Words() (Words, error) {
+	st, err := e.readState()
+	if err == nil {
+		err = st.headErr
+	}
+	if err != nil {
+		return Words{}, e.redactor().err(err)
+	}
+	return st.describe(st.head), nil
 }
 
 // CheckStack checks what `docker compose config` resolves for the stack

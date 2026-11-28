@@ -186,7 +186,7 @@ defmodule Emissary.Web.DeviceChannelTest do
 
       assert challenge.purpose == :connect
       # This home as certificates name it.
-      assert challenge.home == Sanctum.origin()
+      assert challenge.home == Sanctum.private_address()
       assert challenge.athanor == glass.cert.athanor
       assert challenge.client_id == glass.client_id
       assert challenge.device_key == glass.pub
@@ -829,7 +829,7 @@ defmodule Emissary.Web.DeviceChannelTest do
       {state, ticket, session_id} = unlock!(state, device)
       assert state.sessions == [session_id]
 
-      {:ok, %{token: token}} = Sanctum.DeviceUnlock.redeem(ticket)
+      {:ok, %{token: token}} = Sanctum.DeviceUnlock.redeem(ticket, :loopback)
       before = Arca.Repo.get!(Arca.Schemas.Session, session_id).expires_at
       # sleep-ok: the clock ticks so the slide's expiry comes after the one read before it
       Process.sleep(5)
@@ -849,7 +849,7 @@ defmodule Emissary.Web.DeviceChannelTest do
          %{session_ctx: session_ctx} do
       device = protected!(session_ctx)
       {state, ticket, session_id} = unlock!(proven(device), device)
-      {:ok, %{token: token}} = Sanctum.DeviceUnlock.redeem(ticket)
+      {:ok, %{token: token}} = Sanctum.DeviceUnlock.redeem(ticket, :loopback)
 
       # The device was last heard now; its session ends a second later
       # unless it reports again.
@@ -878,7 +878,7 @@ defmodule Emissary.Web.DeviceChannelTest do
       device = protected!(session_ctx)
       {state, ticket, _session_id} = unlock!(proven(device), device)
       DeviceChannel.terminate({:shutdown, :closed}, state)
-      assert {:error, :invalid_ticket} = Sanctum.DeviceUnlock.redeem(ticket)
+      assert {:error, :invalid_ticket} = Sanctum.DeviceUnlock.redeem(ticket, :loopback)
     end
 
     test "the storage report is held for the person's devices, and two states of one volume are refused",
@@ -1549,7 +1549,7 @@ defmodule Emissary.Web.DeviceChannelTest do
 
       assert {:sign_in_request, %{request: request}} = decoded(json)
       assert request.purpose == :sign_in
-      assert request.audience == Sanctum.origin()
+      assert request.audience == Sanctum.private_address()
       assert {:asked, "pcl_" <> _, ^request} = state.hello
 
       # The wait is the request's own, not the challenge's: what is left of
@@ -2363,7 +2363,10 @@ defmodule Emissary.Web.DeviceChannelTest do
       )
 
     {:ok, session} = Sanctum.TestContext.create_session(built)
-    {:ok, ctx} = Sanctum.Caller.establish(session.token, focus: athanor_id, refresh: false)
+
+    {:ok, ctx} =
+      Sanctum.Caller.establish(session.token, focus: athanor_id, refresh: false, entry: :loopback)
+
     ctx
   end
 
@@ -2434,13 +2437,18 @@ defmodule Emissary.Web.DeviceChannelTest do
 
   defp vectors, do: @vectors |> File.read!() |> Jason.decode!()
 
-  defp transport_info(params \\ %{}) do
+  # The upgrade as the loopback listener hands it over (`CyfrWeb.Ingress`),
+  # its tag among the headers, or as `entry`'s.
+  defp transport_info(params \\ %{}, entry \\ :loopback) do
     %{
       endpoint: CyfrWeb.Endpoint,
       transport: :websocket,
       options: [],
       params: params,
-      connect_info: %{peer_data: %{address: {127, 0, 0, 1}, port: 50_000, ssl_cert: nil}}
+      connect_info: %{
+        peer_data: %{address: {127, 0, 0, 1}, port: 50_000, ssl_cert: nil},
+        x_headers: [{"x-cyfr-ingress", Atom.to_string(entry)}]
+      }
     }
   end
 
@@ -2491,7 +2499,7 @@ defmodule Emissary.Web.DeviceChannelTest do
     {:ok, session} = Sanctum.TestContext.create_session(built)
 
     {:ok, session_ctx} =
-      Sanctum.Caller.establish(session.token, focus: athanor.id, refresh: false)
+      Sanctum.Caller.establish(session.token, focus: athanor.id, refresh: false, entry: :loopback)
 
     %{user: user, athanor: athanor, session_ctx: session_ctx}
   end

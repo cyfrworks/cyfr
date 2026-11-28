@@ -46,6 +46,20 @@ defmodule PrismWeb.SharedAttachmentControllerTest do
      html: path.(html)}
   end
 
+  test "a session made at the private address is refused at the browser address", %{
+    conn: conn,
+    bob: bob,
+    text: text
+  } do
+    Prima.Test.Env.put_app_env(:sanctum, :browser_address, "https://cyfr.example")
+    conn = log_in_user(conn, bob)
+
+    assert get(conn, text).status == 200
+
+    at_browser = conn |> Sanctum.ClientIp.put_ingress(:proxy) |> get(text)
+    assert redirected_to(at_browser) == PrismWeb.AuthHelpers.sign_in_path()
+  end
+
   test "another person in the thread gets the file, as a download that is never sniffed or kept",
        %{conn: conn, bob: bob, text: text, html: html} do
     # Bob's session names his own athanor; the thread is none of its.

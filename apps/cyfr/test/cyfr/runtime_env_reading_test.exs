@@ -57,7 +57,10 @@ defmodule Cyfr.RuntimeEnvReadingTest do
     |> Map.merge(%{
       "CYFR_SECRET_KEY_BASE" => Base.encode64(:crypto.strong_rand_bytes(48)),
       "RELEASE_NAME" => "cyfr",
-      "CYFR_BROWSER" => "none"
+      "CYFR_BROWSER" => "none",
+      # A tunnel key's public half, which every release names:
+      # the first of the private name vectors.
+      "CYFR_LINK_PUBLIC" => "6b6b937aca103230d149eb148efbcfb59e6d1f05bb04dc648ac3e92339eae74a"
     })
   end
 
@@ -171,7 +174,7 @@ defmodule Cyfr.RuntimeEnvReadingTest do
     end)
 
     with_env(%{"CYFR_BROWSER" => "none"}, fn ->
-      assert is_list(read_prod_config!()[:cyfr][:mcp_allowed_origins])
+      assert is_binary(read_prod_config!()[:sanctum][:private_address])
     end)
   end
 

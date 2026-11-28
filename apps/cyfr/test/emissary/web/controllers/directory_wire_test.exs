@@ -24,7 +24,7 @@ defmodule Emissary.Web.DirectoryWireTest do
 
   setup do
     for {key, value} <- [
-          public_url: @vectors["directory"],
+          browser_address: @vectors["directory"],
           proxy_trust: {:cidrs, ["192.0.2.1"]}
         ] do
       previous = Application.fetch_env(:sanctum, key)
@@ -303,7 +303,7 @@ defmodule Emissary.Web.DirectoryWireTest do
   # An account registered at this CYFR's directory: a genesis naming its
   # origin, signed by a recovery key.
   defp registered! do
-    {:ok, directory} = Prima.Identity.Encoding.canonical_home(Sanctum.origin())
+    {:ok, directory} = Prima.Identity.Encoding.canonical_home(Sanctum.shared_address())
     {pub, priv} = :crypto.generate_key(:eddsa, :ed25519)
 
     {:ok, genesis} =

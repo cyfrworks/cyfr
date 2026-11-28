@@ -40,7 +40,12 @@ defmodule Sanctum.RestoreDeviceTest do
     challenge = Devices.challenge(device)
 
     Sanctum.DeviceCerts.verify_connect(
-      %{client_id: certificate.client_id, certificate: certificate, source: @source},
+      %{
+        client_id: certificate.client_id,
+        certificate: certificate,
+        source: @source,
+        entry: :loopback
+      },
       Prima.DeviceCert.Proof.sign(challenge, priv),
       challenge
     )

@@ -357,7 +357,7 @@ setup_in_the_app_before_the_group() {
   # of it is on the setup screen, and a setup that fails stays there.
   check "the app's setup opens the CYFR it set up at its first person's page" device_setup_shown 960
   guest_screenshot setup-app-done.png || fail "the setup's end was not captured"
-  check "CYFR answers at http://localhost:4000, from ~/setup-here's stack" guest_root \
+  check "CYFR answers on port 4000, from ~/setup-here's stack" guest_root \
     "curl -s -o /dev/null --max-time 5 http://localhost:4000/ && [ \"\$(docker inspect -f '{{index .Config.Labels \"com.docker.compose.project.working_dir\"}}' cyfr)\" = /home/proof/setup-here ]"
   guest_ssh 'pkill -TERM -u proof -x labwc' || fail "labwc was not asked to end"
   pane_converse 60 '^setup exit status [0-9]+' || fail "labwc did not end within 60 s of its TERM ($GUEST_DIR/transcript-setup.txt)"
@@ -498,7 +498,7 @@ box_install() {
   check "it never asks how CYFR is reached" sh -c '! grep -q "How will you reach CYFR" "$1"' sh "$GUEST_DIR/transcript-init.txt"
   check "it shows the screen's commands" transcript_has init '^  systemctl enable cyfr-screen$'
   check "it downloads no CYFR app: this release's is installed already" sh -c '! grep -q "^Downloading" "$1"' sh "$GUEST_DIR/transcript-init.txt"
-  check "it ends on the CYFR reached from this computer" transcript_has init '^CYFR is set up in this directory, reached from this computer at http://localhost:4000\.$'
+  check "it ends on the CYFR reached from this computer, at its private address" transcript_has init '^CYFR is set up in this directory, reached from this computer at http://h-[a-z2-7]{16}\.localhost:4000\.$'
   check "it gives the next step" transcript_has init '^Next: cyfr up, then sudo reboot\.$'
   check "nothing took the terminal: tty1's getty runs and the screen does not" guest_ssh 'systemctl is-active --quiet getty@tty1 && ! systemctl is-active --quiet cyfr-screen'
   check "no package is left behind, in the account's home or anywhere under /tmp, where root stages ($GUEST_DIR/left-packages.txt)" packages_left_none

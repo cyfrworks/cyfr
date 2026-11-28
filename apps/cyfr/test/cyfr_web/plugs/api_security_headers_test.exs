@@ -51,12 +51,13 @@ defmodule CyfrWeb.Plugs.ApiSecurityHeadersTest do
   end
 
   # A success, an error and a refusal: the health check, a route that does
-  # not exist, and a long-poll POST that declares no length, which the
-  # endpoint refuses before any pipeline, before it reads the body.
+  # not exist, and a POST to the LiveView socket's path that declares no
+  # length, which the endpoint refuses before any pipeline, before it reads
+  # the body.
   @answers [
     {"GET /api/health", 200},
     {"GET /api/no-such-route", 404},
-    {"POST /live/longpoll", 411}
+    {"POST /live/websocket", 411}
   ]
 
   # The status and the HSTS values of the answer to `request` for `host`.

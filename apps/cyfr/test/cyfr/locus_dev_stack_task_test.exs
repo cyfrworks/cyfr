@@ -152,18 +152,31 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
   defp service, do: @vectors["service"]
   defp root, do: @vectors["root_hex"]
 
+  # tests/fixtures/link.json's first tunnel key, and the private address it
+  # gives Prism's port.
+  @link_vector Path.expand("../../../../tests/fixtures/link.json", __DIR__)
+               |> File.read!()
+               |> Jason.decode!()
+               |> Map.fetch!("names")
+               |> hd()
+
+  defp private_address, do: "http://#{@link_vector["name"]}.localhost:4555"
+
   defp complete,
     do: """
     CYFR_SETUP_TOKEN=#{@setup_token}
     CYFR_LOCUS_RUNTIME_ROOT=#{root()}
     CYFR_LOCUS_BACKENDS_KEY=#{@backends_key}
     CYFR_LOCUS_BUILDS_KEY=#{@builds_key}
+    CYFR_LINK_KEY=#{@link_vector["key"]}
+    CYFR_LINK_PUBLIC=#{@link_vector["public"]}
     """
 
   # The server's settings and the services' keys, the builds key the
   # server's too.
   defp answered(backends \\ @backends_key, builds \\ @builds_key) do
-    server_lines() ++
+    ["address " <> private_address()] ++
+      server_lines() ++
       [
         "server CYFR_LOCUS_BUILDS_KEY=" <> builds,
         "compose LOCUS_RUNTIME_KEY=" <> @vectors["keys"]["worker_hex"],
@@ -214,8 +227,10 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
       settings!()
 
       assert [
-               "wrote CYFR_SETUP_TOKEN CYFR_LOCUS_RUNTIME_ROOT CYFR_LOCUS_BACKENDS_KEY",
-               "setup http://localhost:4555/setup#" <> link_token
+               "wrote CYFR_SETUP_TOKEN CYFR_LOCUS_RUNTIME_ROOT CYFR_LOCUS_BACKENDS_KEY " <>
+                 "CYFR_LINK_KEY CYFR_LINK_PUBLIC",
+               "address " <> address,
+               "setup " <> setup_link
                | rest
              ] = answers()
 
@@ -225,8 +240,24 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
                "CYFR_SETUP_TOKEN=" <> setup_token,
                "CYFR_LOCUS_RUNTIME_ROOT=" <> minted_root,
                "CYFR_LOCUS_BACKENDS_KEY=" <> backends,
+               "CYFR_LINK_KEY=privkey:" <> link_key,
+               "CYFR_LINK_PUBLIC=" <> public,
                ""
              ] = String.split(File.read!(".env"), "\n")
+
+      # The tunnel key as `cyfr init` mints it: the public half is the
+      # private half's, and the address is its private name on Prism's port.
+      [private, "psk:" <> psk] = String.split(link_key, ",")
+      private = Base.decode16!(private, case: :lower)
+      assert {pub, ^private} = :crypto.generate_key(:ecdh, :x25519, private)
+      assert Base.encode16(pub, case: :lower) == public
+      assert psk =~ ~r/\A[0-9a-f]{64}\z/ and psk != String.duplicate("0", 64)
+
+      assert address ==
+               "http://#{Cyfr.RuntimeConfig.private_name(pub)}.localhost:4555"
+
+      assert String.starts_with?(setup_link, address <> "/setup#")
+      link_token = String.replace_prefix(setup_link, address <> "/setup#", "")
 
       # Every other mix boot of the checkout reads this .env alone, and
       # accepts it: no builds key without the backends URL.
@@ -265,7 +296,8 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
       settings!()
       again = answers()
       refute Enum.any?(again, &String.starts_with?(&1, "setup "))
-      assert Enum.take(again, length(server_lines())) == server_lines()
+      assert hd(again) == "address " <> address
+      assert Enum.take(tl(again), length(server_lines())) == server_lines()
       refute ("server CYFR_LOCUS_BUILDS_KEY=" <> builds) in again
       assert ("compose CYFR_LOCUS_BACKENDS_KEY=" <> backends) in again
       assert File.read!(".env") == written
@@ -279,7 +311,7 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
       settings!()
 
       assert hd(answers()) ==
-               "wrote CYFR_LOCUS_BACKENDS_KEY"
+               "wrote CYFR_LOCUS_BACKENDS_KEY CYFR_LINK_KEY CYFR_LINK_PUBLIC"
 
       assert mode(".env") == 0o600
 
@@ -287,6 +319,8 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
                "# mine",
                ^kept,
                "CYFR_LOCUS_BACKENDS_KEY=" <> _,
+               "CYFR_LINK_KEY=" <> _,
+               "CYFR_LINK_PUBLIC=" <> _,
                ""
              ] = String.split(File.read!(".env"), "\n")
 

@@ -33,6 +33,14 @@ defmodule Cyfr.RuntimeConfigWiringTest do
                  CYFR_PROXY_PORT CYFR_PROXY_PUBLISH CYFR_TRUSTED_PROXY_HOPS
                  CYFR_TRUSTED_PROXY_CIDRS)
 
+  # The tunnel key of every boot below: tests/fixtures/link.json's first,
+  # whose private name a resolved boot names.
+  @link Path.expand("../../../../tests/fixtures/link.json", __DIR__)
+        |> File.read!()
+        |> Jason.decode!()
+        |> Map.fetch!("names")
+        |> hd()
+
   # Enough for the prod branch to reach the database section; everything else
   # has a default or is gated behind a knob this test does not set. A
   # server with no browser address, which a release must name: a case that
@@ -43,7 +51,9 @@ defmodule Cyfr.RuntimeConfigWiringTest do
     |> Map.merge(%{
       "CYFR_SECRET_KEY_BASE" => Base.encode64(:crypto.strong_rand_bytes(48)),
       "RELEASE_NAME" => "cyfr",
-      "CYFR_BROWSER" => "none"
+      "CYFR_BROWSER" => "none",
+      "CYFR_LINK_KEY" => @link["key"],
+      "CYFR_LINK_PUBLIC" => @link["public"]
     })
   end
 
@@ -386,7 +396,8 @@ defmodule Cyfr.RuntimeConfigWiringTest do
   # The boot a vector describes: its file map as RELEASE_ROOT's .env (none
   # when it read no file), and in the process environment each value the
   # merged read holds otherwise, so the file and the environment over it
-  # read as the vector's two maps.
+  # read as the vector's two maps, beside the tunnel key's public half
+  # (`base_env/0`), which every release names.
   defp boot_vector(%{"input" => %{"file" => file, "process" => process}} = vector, dir, fun) do
     assert vector["input"]["release?"] == true, vector["name"]
     env_file = Path.join(dir, ".env")
@@ -477,23 +488,33 @@ defmodule Cyfr.RuntimeConfigWiringTest do
               assert endpoint[:proxy] == [ip: address(proxy), port: proxy_port], name
           end
 
+          private = "http://#{@link["name"]}.localhost:#{port}"
+
           expected_url =
             case access["browser"] do
-              "none" -> [scheme: "http", host: "localhost", port: access["head"]["port"]]
+              "none" -> [scheme: "http", host: "#{@link["name"]}.localhost", port: port]
               _addressed -> [scheme: "https", host: access["head"]["host"], port: 443]
             end
 
           assert endpoint[:url] == expected_url, name
-          assert endpoint[:check_origin] == access["check_origins"], name
-          assert config[:cyfr][:mcp_allowed_origins] == access["check_origins"], name
+          # The ingress compares a socket's origin with its entry's address;
+          # the endpoint keeps no list and the MCP check no copy of one.
+          refute Keyword.has_key?(endpoint, :check_origin), name
+          refute Keyword.has_key?(config[:cyfr], :mcp_allowed_origins), name
           assert config[:sanctum][:proxy_trust] == trust(access["trust"]), name
           assert config[:cyfr][:hsts] == String.to_existing_atom(access["hsts"]), name
           assert config[:sanctum][:exposure] == String.to_existing_atom(access["exposure"]), name
 
-          # `Sanctum.origin/0`: the public URL, or the fallback where there
-          # is none, as a server with no browser address has none.
-          assert config[:sanctum][:public_url] == access["head"]["public_url"], name
-          assert config[:sanctum][:fallback_origin] == access["origin"], name
+          # The two addresses: the private address always, the browser
+          # address where the kind gives one.
+          assert config[:sanctum][:private_address] == private, name
+
+          assert config[:sanctum][:browser_address] ==
+                   if(access["browser_address"] == "none",
+                     do: nil,
+                     else: access["browser_address"]
+                   ),
+                 name
 
           # The session cookie is a secure one in a release, whatever the
           # browser address: a browser keeps it for https and for localhost
@@ -505,19 +526,60 @@ defmodule Cyfr.RuntimeConfigWiringTest do
 
     test "a development or test boot with no browser kind has no browser address, on the loopback" do
       for read <- [&read_dev_config!/0, &read_prod_config!/0] do
-        with_env(%{"CYFR_BROWSER" => nil, "RELEASE_ROOT" => nil}, fn ->
+        with_env(%{"CYFR_BROWSER" => nil, "CYFR_LINK_PUBLIC" => nil, "RELEASE_ROOT" => nil}, fn ->
           config = read.()
           endpoint = config[:cyfr][CyfrWeb.Endpoint]
 
           assert endpoint[:http][:ip] == {127, 0, 0, 1}
           assert endpoint[:http][:port] == 4000
           refute Keyword.has_key?(endpoint, :proxy)
-          assert endpoint[:url] == [scheme: "http", host: "localhost", port: 4000]
-          assert config[:sanctum][:fallback_origin] == "http://localhost:4000"
+          # With no tunnel key a development or test boot takes the
+          # development key's private address: link.json's first.
+          assert endpoint[:url] == [
+                   scheme: "http",
+                   host: "#{@link["name"]}.localhost",
+                   port: 4000
+                 ]
+
+          assert config[:sanctum][:private_address] == "http://#{@link["name"]}.localhost:4000"
+          assert config[:sanctum][:browser_address] == nil
           assert config[:sanctum][:proxy_trust] == :none
           assert config[:sanctum][:exposure] == :private
         end)
       end
+    end
+
+    test "a release names its tunnel key's public half in its one form, after its access " <>
+           "settings",
+         %{tmp_dir: dir} do
+      none = %{"CYFR_BROWSER" => "none", "RELEASE_ROOT" => dir}
+
+      for {key, code} <- [
+            {nil, :access_link_missing},
+            {"", :access_link_missing},
+            {String.upcase(@link["public"]), :access_link_invalid},
+            {"nodekey:" <> @link["public"], :access_link_invalid}
+          ] do
+        with_env(Map.put(none, "CYFR_LINK_PUBLIC", key), fn ->
+          message = Exception.message(assert_raise(RuntimeError, &read_prod_config!/0))
+          assert message == "[Cyfr] FATAL: " <> Prima.Refusal.message({code, %{}}), inspect(key)
+        end)
+      end
+
+      # The private half is not the server's: whatever it holds, the boot
+      # starts and keeps nothing of it.
+      for key <- [@link["key"], String.upcase(@link["key"]), "not a key"] do
+        with_env(Map.put(none, "CYFR_LINK_KEY", key), fn ->
+          config = read_prod_config!()
+          refute inspect(config, limit: :infinity, printable_limit: :infinity) =~ key
+        end)
+      end
+
+      # A refused access setting is answered first.
+      with_env(%{"CYFR_BROWSER" => nil, "CYFR_LINK_PUBLIC" => nil, "RELEASE_ROOT" => dir}, fn ->
+        message = Exception.message(assert_raise(RuntimeError, &read_prod_config!/0))
+        assert message == "[Cyfr] FATAL: " <> Prima.Refusal.message({:access_missing, %{}})
+      end)
     end
 
     test "a release names its browser kind, whatever else it sets", %{tmp_dir: dir} do

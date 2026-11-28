@@ -151,10 +151,12 @@ defmodule Sanctum.Context do
           call_id: String.t() | nil,
           api_key_id: String.t() | nil,
           session_token_hash: binary() | nil,
+          session_address: String.t() | nil,
           credential_binding: credential_binding() | nil,
           credential_deadline: DateTime.t() | nil,
           validated_at: DateTime.t() | nil,
           frame: frame() | nil,
+          entry: Sanctum.entry() | nil,
           client_id: String.t() | nil,
           confirmation_id: String.t() | nil,
           approved_entry: approved_entry() | nil,
@@ -185,6 +187,11 @@ defmodule Sanctum.Context do
     # identifier as :api_key_id, and what `session.logout` needs to retire
     # exactly the session that called it.
     :session_token_hash,
+    # The address the session behind this context was made at
+    # (`sessions.address`), or nil when no session backs it. Only
+    # `Sanctum.Session`'s assembly sets it, from the row: `Sanctum.Caller`
+    # refuses the context at an entry of any other address.
+    :session_address,
     # What this context's credential was issued against and the
     # generations it read (`t:credential_binding/0`). Stamped together
     # with `:session_token_hash` or `:api_key_id` by the one assembly path
@@ -209,6 +216,13 @@ defmodule Sanctum.Context do
     # (`Sanctum.ClientIp`). It is not identity and authorizes nothing — it
     # is what an anonymous, per-action budget can be charged to.
     :client_ip,
+    # The listener that accepted the request this context acts for
+    # (`Sanctum.ClientIp.ingress/1`), `:loopback` or `:proxy`, or nil for a
+    # context no request carried. Only the establishing caller sets it,
+    # from the listener's own tag (`Sanctum.Caller`): it decides the
+    # address a sign-in request, a confirmation's record and a device
+    # certificate made on the context's behalf name (`Sanctum.address/1`).
+    :entry,
     # The paired client the device channel authenticated this request
     # through (`auth_method: :device`), or nil for every other ingress.
     # Only that channel sets it; nothing a caller sends can name one.
@@ -315,6 +329,8 @@ defmodule Sanctum.Context do
   - `:request_id` - MCP request ID
   - `:call_id` - the admission the context is inside (`call_<uuid7>`)
   - `:client_id` - the paired client the device channel authenticated
+  - `:entry` - the listener the context's request came in by (`:loopback`
+    or `:proxy`)
   - `:confirmation_id` - the pending confirmation a repeated change names
   - `:origin` - how the run began (`Prima.Origin`), set by the admission entry
   - `:authenticated` - Boolean (default: false)
@@ -378,6 +394,7 @@ defmodule Sanctum.Context do
           :request_id,
           :call_id,
           :api_key_id,
+          :session_address,
           :client_ip,
           :client_id,
           :confirmation_id
@@ -440,11 +457,13 @@ defmodule Sanctum.Context do
       call_id: Map.get(attrs, :call_id),
       api_key_id: Map.get(attrs, :api_key_id),
       session_token_hash: Map.get(attrs, :session_token_hash),
+      session_address: Map.get(attrs, :session_address),
       credential_binding: binding!(Map.get(attrs, :credential_binding), attrs),
       credential_deadline: deadline!(Map.get(attrs, :credential_deadline)),
       validated_at: validated_at!(Map.get(attrs, :validated_at)),
       frame: frame!(Map.get(attrs, :frame)),
       client_ip: Map.get(attrs, :client_ip),
+      entry: entry!(Map.get(attrs, :entry)),
       client_id: Map.get(attrs, :client_id),
       confirmation_id: Map.get(attrs, :confirmation_id),
       origin: origin!(Map.get(attrs, :origin)),
@@ -540,6 +559,15 @@ defmodule Sanctum.Context do
 
   defp frame!(other),
     do: raise(ArgumentError, "frame is malformed: #{Prima.LoggerContext.shape(other)}")
+
+  defp entry!(entry) when entry in [nil, :loopback, :proxy], do: entry
+
+  defp entry!(entry),
+    do:
+      raise(
+        ArgumentError,
+        "entry must be :loopback, :proxy or nil, got: #{Prima.LoggerContext.shape(entry)}"
+      )
 
   defp origin!(nil), do: nil
 

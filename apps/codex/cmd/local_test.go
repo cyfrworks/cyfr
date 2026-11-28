@@ -144,15 +144,11 @@ func (a *localApp) form(path string, fields url.Values) string {
 	return a.post(path, "application/x-www-form-urlencoded", fields.Encode()).Body.String()
 }
 
-// open presses Connect at typed and takes it to the device's pages, main
-// told the engine's route there, its proxy, when there is one.
-func (a *localApp) open(typed, home string, route ...string) {
+// open presses Connect at typed and takes it to the device's pages.
+func (a *localApp) open(typed, home string) {
 	a.t.Helper()
 	a.proposed++
 	want := desktop.Message{Type: desktop.TypeHome, Home: home, Account: home, Attempt: a.proposed, Setup: a.setup}
-	if len(route) == 1 {
-		want.Proxy = route[0]
-	}
 	done := make(chan chooserAnswer, 1)
 	go func() { done <- a.chooser("/bootstrap/connect", map[string]string{"address": typed}) }()
 	select {
@@ -336,7 +332,7 @@ func servingAccounts(t *testing.T, home string) *listening {
 		t.Fatal(err)
 	}
 	l := newListening(t, httputil.NewSingleHostReverseProxy(raw))
-	accounts.ServedAt(cmp.Or(home, "http://localhost:"+strconv.Itoa(l.port)))
+	accounts.ServedAt(cmp.Or(home, testPrivateAt+strconv.Itoa(l.port)))
 	return l
 }
 
@@ -427,7 +423,8 @@ func newLocalStack(t *testing.T) localStack {
 
 // envReached writes the folder's .env for a browser address, domain,
 // proxy or tailnet, with port the one published here and its accounts its
-// own, and answers its address.
+// own at its private address, and answers that address, which this
+// computer reaches it at whatever its browser address.
 func (s localStack) envReached(browser string, port int) string {
 	s.t.Helper()
 	host, more := "cyfr.example.com", ""
@@ -437,9 +434,9 @@ func (s localStack) envReached(browser string, port int) string {
 	case access.BrowserProxy:
 		more = "CYFR_PROXY_PUBLISH=127.0.0.1:4001\nCYFR_TRUSTED_PROXY_HOPS=1\n"
 	}
-	home := "https://" + host
-	text := "CYFR_BROWSER=" + browser + "\nCYFR_HOST=" + host + "\nCYFR_PUBLIC_URL=" + home + "\n" + more +
-		"CYFR_PORT=" + strconv.Itoa(port) + "\n" +
+	home := testPrivateAt + strconv.Itoa(port)
+	text := "CYFR_BROWSER=" + browser + "\nCYFR_HOST=" + host + "\nCYFR_PUBLIC_URL=https://" + host + "\n" + more +
+		"CYFR_PORT=" + strconv.Itoa(port) + "\n" + testLinkLine +
 		"CYFR_DIRECTORY_URL=" + home + "\n" + setupTokenVar + "=" + testToken + "\n"
 	if err := os.WriteFile(filepath.Join(s.project, ".env"), []byte(text), 0o600); err != nil {
 		s.t.Fatal(err)
@@ -482,15 +479,15 @@ func onlyOnThisComputer(t *testing.T, at string, proxy *url.URL) (dialled, proxi
 	return copied(&to), copied(&asked)
 }
 
-// env writes the folder's .env: local at port, the accounts its own, with
-// the setup token and extra.
+// env writes the folder's .env: no browser address, at port, the accounts
+// its own at its private address, with the setup token and extra.
 func (s localStack) env(port int, extra ...string) {
 	s.t.Helper()
-	home := "http://localhost"
+	home := strings.TrimSuffix(testPrivateAt, ":")
 	if port != 80 {
 		home += ":" + strconv.Itoa(port)
 	}
-	text := "CYFR_BROWSER=none\nCYFR_PORT=" + strconv.Itoa(port) + "\n" +
+	text := "CYFR_BROWSER=none\nCYFR_PORT=" + strconv.Itoa(port) + "\n" + testLinkLine +
 		"CYFR_DIRECTORY_URL=" + home + "\n" + setupTokenVar + "=" + testToken + "\n" + strings.Join(extra, "")
 	if err := os.WriteFile(filepath.Join(s.project, ".env"), []byte(text), 0o600); err != nil {
 		s.t.Fatal(err)
@@ -595,7 +592,7 @@ func TestTheAppOpensTheRememberedFoldersCYFR(t *testing.T) {
 			t.Setenv(setupTokenVar, strings.Repeat("cd", 32))
 			t.Setenv("CYFR_PORT", "4999")
 
-			home := "http://localhost:" + strconv.Itoa(cyfr.port)
+			home := testPrivateAt + strconv.Itoa(cyfr.port)
 			a := newLocalApp(t, s.project)
 			if got := a.chooser("/bootstrap/state", nil); got.Home != home || got.Next != "" || got.Error != "" {
 				t.Fatalf("the chooser shows %+v", got)
@@ -673,7 +670,7 @@ func TestAStandInOnTheFoldersPortIsNotItsCYFR(t *testing.T) {
 				s.env(other.port)
 				docker.says(s, other.port)
 				a := newLocalApp(t, s.project)
-				a.refused("http://localhost:"+strconv.Itoa(other.port), docker.words)
+				a.refused(testPrivateAt+strconv.Itoa(other.port), docker.words)
 				if conns, requests := other.reached(); conns != 0 || requests != 0 {
 					t.Fatalf("the other program got %d connections, %d requests", conns, requests)
 				}
@@ -706,7 +703,7 @@ func TestAConnectionOutlivingItsContainerCarriesNothing(t *testing.T) {
 			s.runs("c0ffee", s.project, nil, other.port)
 			standInDial(t, "", nil, func() { c.change(s, other.port) })
 			a := newLocalApp(t, s.project)
-			a.refused("http://localhost:"+strconv.Itoa(other.port), c.words)
+			a.refused(testPrivateAt+strconv.Itoa(other.port), c.words)
 			if _, requests := other.reached(); requests != 0 {
 				t.Fatalf("%d requests were sent on it", requests)
 			}
@@ -740,7 +737,7 @@ func TestARetainedAddressNeverReceivesTheSetupToken(t *testing.T) {
 			first, second := servingAccounts(t, ""), newListening(t, http.NotFoundHandler())
 			s.env(first.port)
 			s.runs("c0ffee", s.project, nil, first.port)
-			home := "http://localhost:" + strconv.Itoa(first.port)
+			home := testPrivateAt + strconv.Itoa(first.port)
 			a := newLocalApp(t, s.project)
 			a.open(home, home)
 			passphrase := a.makeAccount()
@@ -771,7 +768,7 @@ func TestTheSetupTokenIsOnlyForTheAddressRead(t *testing.T) {
 	s.env(4100)
 	s.runs("c0ffee", s.project, nil, 4100, 4200)
 	l, err := readLocal(shell.NewWork(t.Context()), s.project, "the test")
-	if err != nil || l.Shell.Address != "http://localhost:4100" {
+	if err != nil || l.Shell.Address != testPrivateAt+"4100" {
 		t.Fatalf("read %+v, %v", l.Shell.Address, err)
 	}
 	if got, _ := l.Shell.SetupToken(t.Context()); got != testToken {
@@ -805,7 +802,7 @@ func TestTheTokensConnectionIsTheContainerRead(t *testing.T) {
 				cyfr := servingAccounts(t, "")
 				s.env(cyfr.port)
 				s.runs("c0ffee", s.project, nil, cyfr.port)
-				home := "http://localhost:" + strconv.Itoa(cyfr.port)
+				home := testPrivateAt + strconv.Itoa(cyfr.port)
 				var read bool
 				var conns, requests int
 				standInDial(t, "", nil, func() {
@@ -854,7 +851,7 @@ func TestTheTokensConnectionFollowsNoRedirect(t *testing.T) {
 		accounts.srv.Config.Handler.ServeHTTP(w, r)
 	}))
 	t.Cleanup(front.Close)
-	home := "http://localhost:" + strconv.Itoa(accounts.port)
+	home := testPrivateAt + strconv.Itoa(accounts.port)
 	s.env(accounts.port)
 	s.runs("c0ffee", s.project, nil, accounts.port)
 	saved := dialTCP
@@ -879,20 +876,14 @@ func TestTheTokensConnectionFollowsNoRedirect(t *testing.T) {
 }
 
 // With a domain, through Caddy or the person's own proxy, and with a
-// tailnet address everything cyfr sends that CYFR, the
-// setup token and the channel among it, goes to the loopback listener its
-// folder's container publishes, under the configured address's name, and
-// nothing to that name or through a proxy. The app's engine keeps its own
-// route, a tailnet CYFR's through the folder's SOCKS5 proxy.
+// tailnet address, this computer opens the CYFR at its private address:
+// everything cyfr sends that CYFR, the setup token and the channel among
+// it, goes to the loopback listener its folder's container publishes,
+// under the private address's name, and nothing to its browser address or
+// through a proxy, and main is told no route for its pages. Its own
+// account service at its private address is taken.
 func TestEveryBrowserAddressIsReachedOnThisComputer(t *testing.T) {
-	for _, c := range []struct {
-		mode  string
-		route []string
-	}{
-		{access.BrowserDomain, nil},
-		{access.BrowserProxy, nil},
-		{access.BrowserTailnet, []string{"socks5://127.0.0.1:1055"}},
-	} {
+	for _, c := range []struct{ mode string }{{access.BrowserDomain}, {access.BrowserProxy}, {access.BrowserTailnet}} {
 		t.Run(c.mode, func(t *testing.T) {
 			s := newLocalStack(t)
 			accounts := accounttest.New(t)
@@ -908,7 +899,10 @@ func TestEveryBrowserAddressIsReachedOnThisComputer(t *testing.T) {
 			here := "127.0.0.1:" + strconv.Itoa(cyfr.port)
 			dialled, proxied := onlyOnThisComputer(t, here, nil)
 			a := newLocalApp(t, s.project)
-			a.open(home, home, c.route...)
+			if !strings.HasPrefix(home, testPrivateAt) {
+				t.Fatalf("the folder is read at %s", home)
+			}
+			a.open(home, home)
 			a.makeAccount()
 			admission, _ := helloOf(t, cyfr)["admission"].(map[string]any)
 			if admission["setup"] != testToken {
@@ -931,7 +925,7 @@ func TestEveryBrowserAddressIsReachedOnThisComputer(t *testing.T) {
 			cyfr.mu.Lock()
 			defer cyfr.mu.Unlock()
 			for _, asked := range cyfr.asked {
-				if !strings.HasPrefix(asked, strings.TrimPrefix(home, "https://")+"/") {
+				if !strings.HasPrefix(asked, strings.TrimPrefix(home, "http://")+"/") {
 					t.Errorf("%s was asked under another name than %s", asked, home)
 				}
 			}
@@ -990,8 +984,8 @@ func TestAFirstPersonIsAdmittedAtABoxInTailnetAccess(t *testing.T) {
 // signs, in the chooser, at Connect however typed, to main, to the account
 // service and in the hello that carries the setup token.
 func TestAFolderOnPort80GoesAllTheWayThrough(t *testing.T) {
-	const home = "http://localhost"
-	for _, typed := range []string{"", "http://localhost:80"} {
+	const home = "http://h-xeypbemm44chehc5.localhost"
+	for _, typed := range []string{"", home + ":80"} {
 		t.Run("typed "+typed, func(t *testing.T) {
 			s := newLocalStack(t)
 			cyfr := servingAccounts(t, home)
@@ -1133,7 +1127,7 @@ func unlockedLocalApp(t *testing.T, restarted func()) (a *localApp, home string)
 	t.Helper()
 	s := newLocalStack(t)
 	cyfr := servingAccounts(t, "")
-	home = "http://localhost:" + strconv.Itoa(cyfr.port)
+	home = testPrivateAt + strconv.Itoa(cyfr.port)
 	cyfr.admitting, cyfr.holds = home, true
 	s.env(cyfr.port)
 	s.runs("c0ffee", s.project, nil, cyfr.port)

@@ -21,13 +21,13 @@ defmodule Sanctum.DeviceUnlock do
   the key (`holder_kind`) and the name it shows (`display_name`), each in
   `Prima.Device`'s grammar, and, when it comes with one, the capability
   that admits a new person: the setup token.
-  `hello/2` answers a `sign_in` request (`Prima.SignIn`) bound to the
+  `hello/3` answers a `sign_in` request (`Prima.SignIn`) bound to the
   channel that asked, by the client id it reserved for the device, and
-  held for the key, holder and name the hello named
-  (`Sanctum.SignIn.request/3`); a setup token that is not this CYFR's is
-  refused before anything is held.
+  held for the key, holder and name the hello named, at the channel's
+  entry (`Sanctum.SignIn.request/3`); a setup token that is not this
+  CYFR's is refused before anything is held.
   The device signs the request's digest after its local unlock, and
-  `admit/2` takes the answer: `Sanctum.SignIn.answer/3` spends the request
+  `admit/3` takes the answer at the same entry: `Sanctum.SignIn.answer/3` spends the request
   and verifies the answer against the account's log, by the key the hello
   named, then admits the person: a new one under the capability or the
   door (`Sanctum.Newcomer.admit/3`), one this CYFR holds by the door's
@@ -36,14 +36,15 @@ defmodule Sanctum.DeviceUnlock do
   (`pair/4`): the paired client, a key of the account at the head the
   answer was verified under, with the holder and name its hello reported,
   and its first certificate
-  (`Sanctum.DeviceCerts.issue/2`), under the issuance fence. A device
+  (`Sanctum.DeviceCerts.issue/3`), at the channel's entry, under the
+  issuance fence. A device
   whose key already stands here as an active client of the person is
   answered a new certificate for that client instead, so a hello asked
   again pairs nothing twice, and two at once pair it once. A device whose
   person removed it here (a client of that key is `removed`,
   `Sanctum.Pairing.remove/2`) is refused `:removed_here` and paired by
   nothing, until they allow it again (`Sanctum.Pairing.allow_again/2`). A capability that admits
-  nobody writes nothing. `admit/2` answers the paired client's id, its certificate and
+  nobody writes nothing. `admit/3` answers the paired client's id, its certificate and
   its standing; from then on the device connects with that certificate
   (`Sanctum.DeviceCerts`).
 
@@ -57,8 +58,10 @@ defmodule Sanctum.DeviceUnlock do
   that row still stands, a 32-byte single-use ticket, held 60 seconds with
   the reserved session, the client and the issuance expectation the
   channel's context read, and the row carried to the ticket's deadline.
-  `redeem/1`, the browser's exchange, spends the ticket once and
-  activates that row (`Sanctum.Session.create_unlocked/1`) in the issuance
+  Every challenge names the address of the channel's entry as its home,
+  and the reserved row records that address. The ticket holds the
+  channel's exact entry: `redeem/2`, the browser's exchange, spends it
+  once, refuses it at any other entry, and activates that row (`Sanctum.Session.create_unlocked/1`) in the issuance
   transaction that rereads the person, athanor, client and certificate the
   expectation names, under the client's lock and then the row's. The
   ticket is bearer authority for this brief exchange alone; a ticket this
@@ -104,9 +107,15 @@ defmodule Sanctum.DeviceUnlock do
 
   @typedoc """
   The device a hello pairs (`pair/4`): the client id the channel reserved
-  for it, what holds its key and the name it shows.
+  for it, what holds its key, the name it shows and the entry its channel
+  came in by, whose address its certificate is issued for.
   """
-  @type device :: %{client_id: String.t(), holder_kind: String.t(), display_name: String.t()}
+  @type device :: %{
+          client_id: String.t(),
+          holder_kind: String.t(),
+          display_name: String.t(),
+          entry: Sanctum.entry() | nil
+        }
 
   @typedoc "What `admit/2` answers: the paired client, its certificate and its standing."
   @type admitted :: %{
@@ -124,15 +133,18 @@ defmodule Sanctum.DeviceUnlock do
   # ===========================================================================
 
   @doc """
-  Answer a device's hello on the channel that reserved `client_id` for it
-  with a `sign_in` request held for that channel and the hello's key (the
-  module doc). Refusals: `:setup_closed` (a setup token that is not this
-  CYFR's), `{:invalid_argument, sentence}`, `:unavailable`.
+  Answer a device's hello on the channel that reserved `client_id` for it,
+  at the channel's `entry`, with a `sign_in` request held for that channel
+  and the hello's key (the module doc). Refusals: `:setup_closed` (a
+  setup token that is not this CYFR's), `{:invalid_argument, sentence}`,
+  `:unavailable`.
   """
-  @spec hello(String.t(), hello()) :: {:ok, Prima.SignIn.t()} | {:error, term()}
+  @spec hello(String.t(), hello(), Sanctum.entry() | nil) ::
+          {:ok, Prima.SignIn.t()} | {:error, term()}
   def hello(
         "pcl_" <> _ = client_id,
-        %{kid: kid, identifier: identifier, holder_kind: holder_kind, display_name: name} = hello
+        %{kid: kid, identifier: identifier, holder_kind: holder_kind, display_name: name} = hello,
+        entry
       ) do
     with :ok <- named(kid, identifier, holder_kind, name),
          {:ok, admission} <- admission(Map.get(hello, :admission)),
@@ -142,13 +154,14 @@ defmodule Sanctum.DeviceUnlock do
              kid: kid,
              holder_kind: holder_kind,
              display_name: name,
-             admission: admission
+             admission: admission,
+             entry: entry
            ) do
       {:ok, request}
     end
   end
 
-  def hello(_client_id, _hello), do: unnamed()
+  def hello(_client_id, _hello, _entry), do: unnamed()
 
   defp named(kid, identifier, holder_kind, name) do
     if Encoding.digest?(kid) and Encoding.identifier?(identifier) and
@@ -173,7 +186,8 @@ defmodule Sanctum.DeviceUnlock do
 
   @doc """
   Take the device's answer to the request its hello was answered, on the
-  channel that reserved `client_id` (the module doc): admit the person,
+  channel that reserved `client_id`, at its `entry` (the module doc):
+  admit the person,
   pair the device and issue its first certificate. Answers
   `t:admitted/0`. Refusals: `Sanctum.SignIn.answer/3`'s, among them
   `:answer_refused`, `:identity_stale`, `:identity_gone`, `:stale_head`,
@@ -181,17 +195,17 @@ defmodule Sanctum.DeviceUnlock do
   `:unavailable`; and `:removed_here` for a device its person removed
   from this CYFR.
   """
-  @spec admit(String.t(), Prima.SignIn.DeviceAnswer.t() | map()) ::
+  @spec admit(String.t(), Prima.SignIn.DeviceAnswer.t() | map(), Sanctum.entry() | nil) ::
           {:ok, admitted()} | {:error, term()}
-  def admit("pcl_" <> _ = client_id, answer) do
+  def admit("pcl_" <> _ = client_id, answer, entry) do
     with {:ok, answer} <- device_answer(answer),
          {:ok, %{purpose: :sign_in, user: user, kid: kid}} <-
-           Sanctum.SignIn.answer(answer, {:channel, client_id}) do
+           Sanctum.SignIn.answer(answer, {:channel, client_id}, entry: entry) do
       paired(user.id, kid)
     end
   end
 
-  def admit(_client_id, _answer), do: {:error, :answer_refused}
+  def admit(_client_id, _answer, _entry), do: {:error, :answer_refused}
 
   defp device_answer(%Prima.SignIn.DeviceAnswer{} = answer), do: {:ok, answer}
 
@@ -216,7 +230,12 @@ defmodule Sanctum.DeviceUnlock do
   @spec pair(map(), device(), Key.t(), String.t()) :: :ok | {:error, term()}
   def pair(
         %{id: user_id},
-        %{client_id: client_id, holder_kind: holder_kind, display_name: display_name},
+        %{
+          client_id: client_id,
+          holder_kind: holder_kind,
+          display_name: display_name,
+          entry: entry
+        },
         %Key{kind: :device, kid: kid, pub: pub},
         head
       ) do
@@ -239,14 +258,14 @@ defmodule Sanctum.DeviceUnlock do
           kid: kid,
           head: head
         },
-        also: &Sanctum.DeviceCerts.issue(&1, head)
+        also: &Sanctum.DeviceCerts.issue(&1, head, entry)
       )
       |> issued()
     end
   end
 
   # The enrollment's own refusals in the hello's vocabulary. A member that
-  # lost its slot is a pause, as `Sanctum.DeviceCerts.issue/2` says it, for
+  # lost its slot is a pause, as `Sanctum.DeviceCerts.issue/3` says it, for
   # a first hello and a returning one alike: the device retries, its key
   # never refused.
   defp issued({:ok, _issued}), do: :ok
@@ -311,7 +330,8 @@ defmodule Sanctum.DeviceUnlock do
   `unlock` challenge reserving one session id, `%{challenge}`; with
   `"proof"` alone, `%{ticket, session_id, expires_at}`, the ticket's
   deadline in ms. Refusals: `:not_a_device`, `:no_holder`,
-  `:proof_refused`, `:session_retired` (a lock or the channel's end retired
+  `:proof_refused` (a proof at another entry than its challenge's among
+  them), `:session_retired` (a lock or the channel's end retired
   the reserved session before the proof), `:invalid_request`,
   `:not_standing` and `:unavailable`.
   """
@@ -336,13 +356,20 @@ defmodule Sanctum.DeviceUnlock do
          {:ok, challenge} <-
            fresh(:unlock, ctx, client, now, session_id: Prima.UUID7.generate_id("ses")),
          :ok <- reserve(ctx, challenge.session_id, challenge.expires_at) do
-      hold({:device_unlock, ctx.client_id}, challenge, %{challenge: challenge}, now)
+      hold(
+        {:device_unlock, ctx.client_id},
+        challenge,
+        %{challenge: challenge, entry: ctx.entry},
+        now
+      )
+
       {:ok, %{challenge: challenge}}
     end
   end
 
   defp ticket(ctx, proof) do
     with {:ok, held} <- take_proven({:device_unlock, ctx.client_id}, proof),
+         :ok <- answered_at(held, ctx.entry),
          {:ok, expectation} <- Sanctum.Issuance.expectation(ctx, []),
          {:ok, now} <- db_now_ms(),
          session_id = held.challenge.session_id,
@@ -357,6 +384,7 @@ defmodule Sanctum.DeviceUnlock do
           user_id: ctx.user_id,
           athanor_id: ctx.athanor_id,
           email: ctx.email,
+          entry: ctx.entry,
           expectation: expectation,
           deadline: ctx.credential_deadline
         },
@@ -372,6 +400,12 @@ defmodule Sanctum.DeviceUnlock do
     end
   end
 
+  # A proof is taken at the entry its challenge was issued at, whose
+  # address the reservation holds, so the ticket's entry and the session
+  # it activates name one address.
+  defp answered_at(%{entry: entry}, entry) when entry in [:loopback, :proxy], do: :ok
+  defp answered_at(_held, _entry), do: {:error, :proof_refused}
+
   # The session the challenge names, reserved as a row no token loads and
   # expiring with the challenge: what a lock retires.
   defp reserve(ctx, session_id, expires_at_ms) do
@@ -380,6 +414,7 @@ defmodule Sanctum.DeviceUnlock do
            user_id: ctx.user_id,
            email: ctx.email,
            athanor_id: ctx.athanor_id,
+           address: Sanctum.address(ctx.entry),
            expires_at: DateTime.from_unix!(expires_at_ms, :millisecond)
          }) do
       :ok -> :ok
@@ -403,17 +438,20 @@ defmodule Sanctum.DeviceUnlock do
   end
 
   @doc """
-  Spend a ticket once and activate its session (the module doc): `%{token,
-  expires_at}`. Refusals: `:invalid_ticket` (malformed, spent, expired,
-  held by another member, or its reservation retired by a lock or the
-  channel's end), `:not_standing`, `:stale_generation`, `:unauthenticated`,
-  `:not_owner` and `:unavailable`.
+  Spend a ticket once, at the `entry` that redeems it, and activate its
+  session (the module doc): `%{token, expires_at}`. Refusals:
+  `:invalid_ticket` (malformed, spent, expired, held by another member,
+  minted on another entry, which spends it too, or its reservation
+  retired by a lock or the channel's end), `:not_standing`,
+  `:stale_generation`, `:unauthenticated`, `:not_owner` and `:unavailable`.
   """
-  @spec redeem(term()) :: {:ok, %{token: String.t(), expires_at: DateTime.t()}} | {:error, atom()}
-  def redeem(ticket) do
+  @spec redeem(term(), Sanctum.entry() | nil) ::
+          {:ok, %{token: String.t(), expires_at: DateTime.t()}} | {:error, atom()}
+  def redeem(ticket, entry) do
     with {:ok, raw} <- ticket_bytes(ticket),
          digest = ticket_digest(raw),
-         {:ok, held} <- take_ticket(digest) do
+         {:ok, held} <- take_ticket(digest),
+         :ok <- same_entry(held, entry) do
       case Sanctum.Session.create_unlocked(held) do
         {:error, :reservation_retired} -> {:error, :invalid_ticket}
         result -> result
@@ -434,6 +472,14 @@ defmodule Sanctum.DeviceUnlock do
       :miss -> {:error, :invalid_ticket}
     end
   end
+
+  # A ticket is spent at the exact entry its channel came in by: one
+  # minted on another listener, even one of the same address, redeems
+  # nothing.
+  defp same_entry(%{entry: held}, entry) when held in [:loopback, :proxy] and held == entry,
+    do: :ok
+
+  defp same_entry(_held, _entry), do: {:error, :invalid_ticket}
 
   @doc """
   Retire the session a `lock` proof names (the module doc): `%{locked:
@@ -459,7 +505,7 @@ defmodule Sanctum.DeviceUnlock do
   def lock(_ctx, _args), do: {:error, :invalid_request}
 
   defp lock_challenge(ctx, client, session_id) do
-    with {:ok, home} <- Sanctum.SignIn.audience() do
+    with {:ok, home} <- Sanctum.SignIn.audience(ctx.entry) do
       case Challenge.new(
              purpose: :lock,
              home: home,
@@ -589,7 +635,7 @@ defmodule Sanctum.DeviceUnlock do
   defp holder(%Context{}), do: {:error, :not_a_device}
 
   defp fresh(purpose, ctx, client, now, fields) do
-    with {:ok, home} <- Sanctum.SignIn.audience() do
+    with {:ok, home} <- Sanctum.SignIn.audience(ctx.entry) do
       case Challenge.new(
              [
                purpose: purpose,

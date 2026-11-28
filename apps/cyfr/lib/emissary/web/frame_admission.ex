@@ -71,6 +71,8 @@ defmodule Emissary.Web.FrameAdmission do
   the grant it was opened under, each read again now.
 
   Options: `path:` is `:shared` (the default) or `{:canvas, frame_id}`;
+  `entry:` is the listener the request or its stream came in by, which
+  the context carries and the credential's session source is held to;
   `held: true` reads the credential for what it already holds open, held
   to its row rather than to the bearer's own deadline
   (`Sanctum.TinctureAuth.verify_frame_credential/2`), never for a new
@@ -81,7 +83,7 @@ defmodule Emissary.Web.FrameAdmission do
   def frame(bearer, client_ip, opts \\ []) when is_binary(bearer) do
     path = Keyword.get(opts, :path, :shared)
 
-    with {:ok, ctx} <- establish(bearer, client_ip, Keyword.take(opts, [:held])),
+    with {:ok, ctx} <- establish(bearer, client_ip, Keyword.take(opts, [:held, :entry])),
          :ok <- on_path(ctx, path),
          {:ok, grant} <- frame_grant(ctx) do
       {:ok,

@@ -21,6 +21,7 @@ import (
 
 	"github.com/cyfr/codex/internal/access"
 	"github.com/cyfr/codex/internal/apparmor"
+	"github.com/cyfr/codex/internal/link"
 	"github.com/cyfr/codex/internal/release"
 	"github.com/cyfr/codex/internal/scaffold"
 	"github.com/sigstore/sigstore-go/pkg/root"
@@ -274,7 +275,7 @@ func TestRenderEnvFileShippedTemplate(t *testing.T) {
 		added = append(added, c.key)
 	}
 	// A fresh .env gets the builds key too, so a new home builds.
-	if want := []string{secretKeyBaseVar, backendsKeyVar, setupTokenVar, workerRootVar, serviceKeyVar, appArmorEnv, buildsKeyVar}; !slices.Equal(added, want) {
+	if want := []string{secretKeyBaseVar, backendsKeyVar, setupTokenVar, workerRootVar, serviceKeyVar, appArmorEnv, buildsKeyVar, link.KeyVar, link.PublicVar}; !slices.Equal(added, want) {
 		t.Errorf("added %v, want %v", added, want)
 	}
 	assertStackPairs(t, got, defaultServiceID)
@@ -294,8 +295,11 @@ func TestRenderEnvFileShippedTemplate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the .env init writes does not boot: %v", engineFailure(err))
 	}
-	if boot.Head.Browser != access.BrowserNone || boot.Origin != "http://localhost:4000" || len(boot.Head.Profiles) != 0 {
-		t.Errorf("a project fresh from init is reached as %+v at %s, want local at http://localhost:4000", boot.Head, boot.Origin)
+	if boot.Head.Browser != access.BrowserNone || boot.BrowserAddress != "" || boot.Head.Port != 4000 || len(boot.Head.Profiles) != 0 {
+		t.Errorf("a project fresh from init is reached as %+v at %q, want no browser address on port 4000", boot.Head, boot.BrowserAddress)
+	}
+	if private, err := access.ResolveLink(env[link.PublicVar], 4000); err != nil || !strings.HasPrefix(private, "http://h-") || !strings.HasSuffix(private, ".localhost:4000") {
+		t.Errorf("a project fresh from init has the private address %q (%v)", private, err)
 	}
 	if _, again, err := stackKeys(envValuesOf(got), false); err != nil || len(again) != 0 {
 		t.Errorf("a second init changes %v (%v)", again, err)

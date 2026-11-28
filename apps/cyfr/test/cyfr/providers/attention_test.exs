@@ -64,7 +64,10 @@ defmodule Cyfr.Providers.AttentionTest do
       )
 
     {:ok, session} = Sanctum.TestContext.create_session(built)
-    {:ok, ctx} = Sanctum.Caller.establish(session.token, focus: athanor.id, refresh: false)
+
+    {:ok, ctx} =
+      Sanctum.Caller.establish(session.token, focus: athanor.id, refresh: false, entry: :loopback)
+
     %{user: user, athanor: athanor, ctx: ctx}
   end
 

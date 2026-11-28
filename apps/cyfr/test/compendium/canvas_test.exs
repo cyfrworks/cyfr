@@ -838,7 +838,9 @@ defmodule Compendium.CanvasTest do
     test "the refusals of the credential's spend are the operation's", %{ctx: ctx} do
       v1 = write!(ctx)
       trial = trial!(ctx, v1)
-      {:ok, framed} = Sanctum.Caller.establish({:frame_credential, trial.bearer})
+
+      {:ok, framed} =
+        Sanctum.Caller.establish({:frame_credential, trial.bearer}, entry: :loopback)
 
       assert {:error, %Prima.Refusal{class: :forbidden, reason: :not_primary, message: message}} =
                activate(framed, v1, trial.frame)
@@ -1391,7 +1393,10 @@ defmodule Compendium.CanvasTest do
     {local, user} = Sanctum.TestContext.person!(Sanctum.TestContext.local())
     athanor_id = Sanctum.Test.People.athanor!(user).id
     {:ok, session} = Sanctum.TestContext.create_session(%{local | athanor_id: athanor_id})
-    {:ok, established} = Sanctum.Caller.establish(session.token, focus: athanor_id)
+
+    {:ok, established} =
+      Sanctum.Caller.establish(session.token, focus: athanor_id, entry: :loopback)
+
     %{established | client_ip: "127.0.0.1"}
   end
 

@@ -94,9 +94,13 @@ defmodule Emissary.Web.TinctureController do
          when file != [] <-
            Prima.TinctureUrl.parse_asset_path([Prima.TinctureUrl.asset_prefix() | segments]),
          client_ip = Sanctum.ClientIp.resolve(conn),
+         entry = Sanctum.ClientIp.ingress(conn),
          {:ok, authority} <-
-           Sanctum.TinctureAuth.verify_asset_credential(credential, client_ip: client_ip),
-         ctx = asset_context(authority, client_ip),
+           Sanctum.TinctureAuth.verify_asset_credential(credential,
+             client_ip: client_ip,
+             entry: entry
+           ),
+         ctx = asset_context(authority, client_ip, entry),
          {:ok, tincture} <- version(ctx, publisher, name, version, authority.version_digest) do
       TinctureAssets.serve(conn, ctx, tincture, file,
         cache: {:private, authority.remaining_s},
@@ -129,13 +133,14 @@ defmodule Emissary.Web.TinctureController do
   What an asset credential opens, as a context, for every route that
   serves under one (a tincture's files here, a canvas's page in
   `Emissary.Web.CanvasController`): reads in the person's athanor, bound
-  to the credential's source and deadline. It is not an authenticated
+  to the credential's source and deadline, at the entry the request came
+  in by. It is not an authenticated
   caller — only `Sanctum.Caller.establish/2` builds one — and carries no
   permission: it names whose rows and bytes are read, and nothing runs
   under it.
   """
-  @spec asset_context(map(), String.t() | nil) :: Sanctum.Context.t()
-  def asset_context(authority, client_ip) do
+  @spec asset_context(map(), String.t() | nil, Sanctum.entry() | nil) :: Sanctum.Context.t()
+  def asset_context(authority, client_ip, entry) do
     Sanctum.Context.build(
       user_id: authority.user_id,
       athanor_id: authority.athanor_id,
@@ -143,7 +148,8 @@ defmodule Emissary.Web.TinctureController do
       authenticated: false,
       credential_binding: authority.credential_binding,
       credential_deadline: authority.expires_at,
-      client_ip: client_ip
+      client_ip: client_ip,
+      entry: entry
     )
   end
 

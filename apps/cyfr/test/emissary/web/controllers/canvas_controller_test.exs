@@ -57,7 +57,7 @@ defmodule Emissary.Web.CanvasControllerTest do
 
     issuer = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
     {:ok, session} = Sanctum.TestContext.create_session(issuer)
-    {:ok, source} = Sanctum.Caller.establish(session.token)
+    {:ok, source} = Sanctum.Caller.establish(session.token, entry: :loopback)
 
     digest = canvas!(source, "page-canvas")
     lay!(source, "page-canvas", @files)
@@ -163,7 +163,12 @@ defmodule Emissary.Web.CanvasControllerTest do
   end
 
   # The endpoint's origin as a tincture document's policy names it.
-  defp endpoint_origin, do: TinctureAssets.endpoint_origin()
+  # The address of the loopback listener, which a test's request comes in by.
+  defp endpoint_origin,
+    do:
+      TinctureAssets.endpoint_origin(
+        Sanctum.ClientIp.put_ingress(Plug.Test.conn(:get, "/"), :loopback)
+      )
 
   # What a canvas page starts with, ahead of the entry's bytes: a doctype,
   # the `<base>` of the entry's directory under the version's served

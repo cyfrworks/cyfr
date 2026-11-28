@@ -30,6 +30,7 @@ defmodule Cyfr.ControlPlaneWorkersTest do
         hash,
         %{
           user_id: "user_1",
+          address: Sanctum.private_address(),
           email: "user@example.com",
           provider: "github",
           permissions: "[]",

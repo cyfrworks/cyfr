@@ -10,10 +10,11 @@ import Config
 
 import_config "../../arca/config/config.exs"
 
-# Where this deployment is reachable when the operator declared nothing.
-# `CYFR_PUBLIC_URL` overrides it (`:sanctum, :public_url`); an OAuth
-# `redirect_uri` needs an absolute origin either way.
-config :sanctum, :fallback_origin, "http://localhost:4000"
+# The server's private address (`Sanctum.private_address/0`), the first
+# tunnel key of tests/fixtures/link.json's, as the umbrella's suite names
+# it (`config/test.exs`); an umbrella boot resolves its own from
+# `CYFR_LINK_PUBLIC` (`config/runtime.exs`).
+config :sanctum, :private_address, "http://h-xeypbemm44chehc5.localhost:4000"
 
 # The two ports this domain declares — the component facts a consent rests
 # on (`Sanctum.Consent.Components`) and proxied tool resolution
@@ -27,7 +28,7 @@ config :sanctum, :fallback_origin, "http://localhost:4000"
 config :sanctum, ecto_repos: [Arca.Repo]
 
 if config_env() == :test do
-  config :sanctum, :fallback_origin, "http://localhost:4002"
+  config :sanctum, :private_address, "http://h-xeypbemm44chehc5.localhost:4002"
 
   # At-rest encryption needs a keyring before any row is sealed. A build
   # with no host resolves none, so the suite carries one of its own.

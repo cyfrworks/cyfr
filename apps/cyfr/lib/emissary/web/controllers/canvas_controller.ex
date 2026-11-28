@@ -49,7 +49,7 @@ defmodule Emissary.Web.CanvasController do
 
   use Emissary.Web, :controller
 
-  import Emissary.Web.TinctureController, only: [asset_context: 2]
+  import Emissary.Web.TinctureController, only: [asset_context: 3]
 
   alias Emissary.Web.TinctureAssets
 
@@ -88,12 +88,16 @@ defmodule Emissary.Web.CanvasController do
   @spec show(Plug.Conn.t(), map()) :: Plug.Conn.t()
   def show(conn, %{"credential" => credential, "frame_id" => frame_id}) do
     client_ip = Sanctum.ClientIp.resolve(conn)
+    entry = Sanctum.ClientIp.ingress(conn)
 
     with :ok <- grammar(credential, frame_id),
          {:ok, authority} <-
-           Sanctum.TinctureAuth.verify_asset_credential(credential, client_ip: client_ip),
+           Sanctum.TinctureAuth.verify_asset_credential(credential,
+             client_ip: client_ip,
+             entry: entry
+           ),
          {:ok, frame} <- Sanctum.TinctureAuth.page_frame(authority, frame_id),
-         ctx = asset_context(authority, client_ip),
+         ctx = asset_context(authority, client_ip, entry),
          {:ok, version} <- canvas_version(ctx, frame.reference, authority.version_digest) do
       page(conn, ctx, version, credential, frame_id)
     else
@@ -177,9 +181,9 @@ defmodule Emissary.Web.CanvasController do
   # apply here.
   # sobelow_skip ["XSS.SendResp"]
   defp page(conn, ctx, version, credential, frame_id) do
-    # The shell is framed from the endpoint's own origin, as a tincture
-    # document's policy reads it when it names no other.
-    endpoint = TinctureAssets.endpoint_origin()
+    # The shell is framed from the address the page was asked at, as a
+    # tincture document's policy reads it when it names no other.
+    endpoint = TinctureAssets.endpoint_origin(conn)
     sdk_path = TinctureAssets.canvas_sdk_path()
 
     base =

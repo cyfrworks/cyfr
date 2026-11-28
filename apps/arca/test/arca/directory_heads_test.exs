@@ -133,6 +133,7 @@ defmodule Arca.DirectoryHeadsTest do
       hash,
       %{
         user_id: user_id,
+        address: "http://h-xeypbemm44chehc5.localhost:4002",
         provider: "cyfr",
         kid: kid,
         head: head,
@@ -866,6 +867,7 @@ defmodule Arca.DirectoryHeadsRaceTest do
       hash,
       %{
         user_id: user_id,
+        address: "http://h-xeypbemm44chehc5.localhost:4002",
         provider: "cyfr",
         kid: kid,
         head: head,

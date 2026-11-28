@@ -876,13 +876,13 @@ func TestScreenShell_AChangedFolderIsOpenedAfreshByThisBox(t *testing.T) {
 	screenCompositor(t, idletest.Options{})
 	screenPrograms(t, quietScreen())
 	s := startScreen(t)
-	if err := os.WriteFile(".env", []byte("CYFR_BROWSER=none\nCYFR_PORT=4322\n"), 0o600); err != nil {
+	if err := os.WriteFile(".env", []byte("CYFR_BROWSER=none\nCYFR_PORT=4322\n"+testLinkLine), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	s.shows("changed after it was opened here")
 	s.app.send(`{"version":2,"type":"leave","id":1}`)
 	s.app.until("left")
-	if home := s.openBox(map[string]any{"url": s.readyURL}); home["home"] != "http://localhost:4322" {
+	if home := s.openBox(map[string]any{"url": s.readyURL}); home["home"] != testPrivateAt+"4322" {
 		t.Fatalf("This box pressed again opened %v", home["home"])
 	}
 }
@@ -911,7 +911,7 @@ func TestScreenShell_TheAppIsItsBrowser(t *testing.T) {
 	}
 	s := &runningScreen{t: t, app: app, address: address}
 	home := s.openBox(ready)
-	if home["home"] != "http://localhost:4321" || home["account"] == "" || home["attempt"] != float64(1) || home["setup"] != nil {
+	if home["home"] != testPrivateAt+"4321" || home["account"] == "" || home["attempt"] != float64(1) || home["setup"] != nil {
 		t.Fatalf("home was %v", home)
 	}
 	// The idle watch lost: what is on the screen gives way to the page

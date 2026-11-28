@@ -47,7 +47,7 @@ defmodule Sanctum.DeviceUnlockReview398Test do
 
     redemption =
       case issuance do
-        {:ok, ticket} -> DeviceUnlock.redeem(ticket.ticket)
+        {:ok, ticket} -> DeviceUnlock.redeem(ticket.ticket, :loopback)
         error -> error
       end
 
@@ -74,7 +74,7 @@ defmodule Sanctum.DeviceUnlockReview398Test do
       set: [expires_at: DateTime.add(Arca.ServerMetaStorage.now!(), -1, :second)]
     )
 
-    assert {:error, :invalid_ticket} = DeviceUnlock.redeem(answer.ticket)
+    assert {:error, :invalid_ticket} = DeviceUnlock.redeem(answer.ticket, :loopback)
     assert {:ok, []} = DeviceUnlock.slide(ctx, [id])
   end
 
@@ -84,7 +84,7 @@ defmodule Sanctum.DeviceUnlockReview398Test do
     ctx: ctx
   } do
     answer = unlocked!(ctx, device.key)
-    {:ok, %{token: token}} = DeviceUnlock.redeem(answer.ticket)
+    {:ok, %{token: token}} = DeviceUnlock.redeem(answer.ticket, :loopback)
     {:ok, row} = Arca.PairedClients.revoke(Sanctum.Context.actor(ctx), ctx.client_id)
     assert Arca.Repo.get(Arca.Schemas.Session, answer.session_id) == nil
 
@@ -95,13 +95,13 @@ defmodule Sanctum.DeviceUnlockReview398Test do
   test "review398 certificate revocation keeps another client's session and respects the actor",
        %{device: device, ctx: ctx} do
     first = unlocked!(ctx, device.key)
-    {:ok, %{token: first_token}} = DeviceUnlock.redeem(first.ticket)
+    {:ok, %{token: first_token}} = DeviceUnlock.redeem(first.ticket, :loopback)
     actor = Sanctum.Context.actor(ctx)
     account = Sanctum.Test.DirectoryServer.add_device!(device.dir.dir, device.account)
     paired = Sanctum.Test.Devices.admitted!(account, List.last(account.devices))
     other = connected!(paired)
     second = unlocked!(other, paired.key)
-    {:ok, %{token: second_token}} = DeviceUnlock.redeem(second.ticket)
+    {:ok, %{token: second_token}} = DeviceUnlock.redeem(second.ticket, :loopback)
     {:ok, mine} = Arca.DeviceCertificates.current(actor, ctx.client_id)
 
     assert {:error, :not_found} =

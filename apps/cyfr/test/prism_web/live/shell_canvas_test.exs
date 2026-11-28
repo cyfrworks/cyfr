@@ -323,7 +323,7 @@ defmodule PrismWeb.ShellCanvasTest do
       )
   end
 
-  defp verify(bearer), do: Sanctum.TinctureAuth.verify_frame_credential(bearer)
+  defp verify(bearer), do: Sanctum.TinctureAuth.verify_frame_credential(bearer, entry: :loopback)
 
   defp past?(at), do: DateTime.compare(at, DateTime.utc_now()) == :lt
 
@@ -724,7 +724,7 @@ defmodule PrismWeb.ShellCanvasTest do
       assert reply["canvas"]["data_path"] == Prima.TinctureWire.data_path(main.id)
 
       assert {:ok, %{frame_id: frame_id, mode: :live}} =
-               Sanctum.TinctureAuth.verify_frame_credential(reply["credential"])
+               Sanctum.TinctureAuth.verify_frame_credential(reply["credential"], entry: :loopback)
 
       assert frame_id == main.id
       refute render(view) =~ reply["credential"]

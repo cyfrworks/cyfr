@@ -918,14 +918,16 @@ func TestAFirstPersonWhereOnlySetupsWorkReachesDocker(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			p := newWorkProject(t)
 			cyfr := servingAccounts(t, "")
-			home := "http://localhost:" + strconv.Itoa(cyfr.port)
+			home := testPrivateAt + strconv.Itoa(cyfr.port)
 			var lines []string
 			for _, line := range strings.Split(readShippedTemplate(t), "\n") {
-				if !strings.HasPrefix(line, "CYFR_PORT=") && !strings.HasPrefix(line, directoryVar+"=") {
+				if !strings.HasPrefix(line, "CYFR_PORT=") && !strings.HasPrefix(line, directoryVar+"=") && !strings.HasPrefix(line, "CYFR_LINK_") {
 					lines = append(lines, line)
 				}
 			}
-			lines = append(lines, "CYFR_PORT="+strconv.Itoa(cyfr.port), directoryVar+"="+home, "")
+			// The tunnel key the template carries is kept, so the CYFR set
+			// up here is at the private address its accounts name.
+			lines = append(lines, "CYFR_PORT="+strconv.Itoa(cyfr.port), directoryVar+"="+home, "CYFR_LINK_KEY="+testLinkKey, strings.TrimSuffix(testLinkLine, "\n"), "")
 			if err := os.WriteFile(filepath.Join(p.project, ".env.example"), []byte(strings.Join(lines, "\n")), 0o644); err != nil {
 				t.Fatal(err)
 			}

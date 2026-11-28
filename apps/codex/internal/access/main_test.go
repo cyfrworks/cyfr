@@ -4,6 +4,7 @@
 package access
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -66,7 +67,7 @@ func newHome(t *testing.T) *testHome {
 		t.Fatal(err)
 	}
 	writeFile(t, filepath.Join(dir, "docker-compose.yml"), repoFile(t, "docker-compose.yml"))
-	writeFile(t, filepath.Join(dir, ".env"), repoFile(t, ".env.example"))
+	writeFile(t, filepath.Join(dir, ".env"), withLink(repoFile(t, ".env.example")))
 	// The container profile the scaffold lays down beside the compose file,
 	// which the tailnet join's container runs under.
 	writeFile(t, filepath.Join(dir, "container.seccomp.json"), repoFile(t, "apps/locus/keeper/seccomp/container.json"))
@@ -126,6 +127,24 @@ func (h *testHome) killAt(point string, op func(e *Engine)) bool {
 	h.crash()
 	h.open()
 	return reached
+}
+
+// testLink is a tunnel key's public half, the private name vectors' first
+// row's, and testPrivate the private address it gives on port 4000.
+const (
+	testLink    = "6b6b937aca103230d149eb148efbcfb59e6d1f05bb04dc648ac3e92339eae74a"
+	testPrivate = "http://h-xeypbemm44chehc5.localhost:4000"
+	linkLine    = "CYFR_LINK_PUBLIC=" + testLink + "\n"
+)
+
+// withLink is the shipped template with the tunnel key's public half
+// set, as cyfr init writes it.
+func withLink(template []byte) []byte {
+	out := bytes.Replace(template, []byte("\nCYFR_LINK_PUBLIC=\n"), []byte("\nCYFR_LINK_PUBLIC="+testLink+"\n"), 1)
+	if bytes.Equal(out, template) {
+		panic(".env.example assigns no empty CYFR_LINK_PUBLIC")
+	}
+	return out
 }
 
 func writeFile(t testing.TB, name string, data []byte) {

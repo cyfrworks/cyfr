@@ -256,6 +256,7 @@ defmodule Cyfr.AdmissionOriginTest do
       conn =
         conn
         |> CyfrWeb.Plugs.CallIdentity.call(CyfrWeb.Plugs.CallIdentity.init([]))
+        |> Sanctum.ClientIp.put_ingress(:loopback)
         |> CyfrWeb.Plugs.Authenticate.call(CyfrWeb.Plugs.Authenticate.init([]))
 
       refute conn.halted
@@ -328,7 +329,10 @@ defmodule Cyfr.AdmissionOriginTest do
           transport: :websocket,
           options: [],
           params: %{"origin" => origin},
-          connect_info: %{peer_data: %{address: {127, 0, 0, 1}, port: 50_000, ssl_cert: nil}}
+          connect_info: %{
+            peer_data: %{address: {127, 0, 0, 1}, port: 50_000, ssl_cert: nil},
+            x_headers: [{"x-cyfr-ingress", "loopback"}]
+          }
         })
 
       {:ok, state} = DeviceChannel.init(state)
@@ -365,10 +369,12 @@ defmodule Cyfr.AdmissionOriginTest do
       assert %{socket: %{assigns: %{context: %Sanctum.Context{origin: :interactive}}}} =
                :sys.get_state(view.pid)
 
-      token = Plug.Conn.get_session(conn, session_key())
+      assert is_binary(Plug.Conn.get_session(conn, session_key()))
 
       assert {:ok, %Sanctum.Context{origin: :interactive}} =
-               CyfrWeb.ContextGuard.authenticate(token, seated_athanor().id)
+               conn
+               |> Sanctum.ClientIp.put_ingress(:loopback)
+               |> CyfrWeb.ContextGuard.authenticate(seated_athanor().id)
 
       Cyfr.Test.Sandbox.end_views()
     end
@@ -498,7 +504,13 @@ defmodule Cyfr.AdmissionOriginTest do
         })
 
       runnable!(source, for(_ <- 1..4, do: %{"ran" => true}))
-      {:ok, page} = CyfrWeb.ContextGuard.authenticate(session.token, source.athanor_id)
+
+      {:ok, page} =
+        Plug.Test.conn(:get, "/")
+        |> Plug.Test.init_test_session(%{CyfrWeb.ContextGuard.session_key() => session.token})
+        |> Sanctum.ClientIp.put_ingress(:loopback)
+        |> CyfrWeb.ContextGuard.authenticate(source.athanor_id)
+
       keyed = api!(key.api_key)
       assert is_binary(keyed.api_key_id)
 
@@ -978,7 +990,7 @@ defmodule Cyfr.AdmissionOriginTest do
     Sanctum.TestContext.ready!(own.id)
     issuer = Sanctum.TestContext.issuer!(%{person | athanor_id: own.id})
     {:ok, session} = Sanctum.TestContext.create_session(issuer)
-    {:ok, source} = Sanctum.Caller.establish(session.token)
+    {:ok, source} = Sanctum.Caller.establish(session.token, entry: :loopback)
     %{source: source, user: user, session: session}
   end
 
@@ -988,6 +1000,7 @@ defmodule Cyfr.AdmissionOriginTest do
       build_conn(:post, "/api/v1/whoami")
       |> put_req_header("authorization", "Bearer " <> bearer)
       |> CyfrWeb.Plugs.CallIdentity.call(CyfrWeb.Plugs.CallIdentity.init([]))
+      |> Sanctum.ClientIp.put_ingress(:loopback)
       |> CyfrWeb.Plugs.Authenticate.call(CyfrWeb.Plugs.Authenticate.init([]))
 
     refute conn.halted
@@ -1017,7 +1030,10 @@ defmodule Cyfr.AdmissionOriginTest do
         transport: :websocket,
         options: [],
         params: %{},
-        connect_info: %{peer_data: %{address: {127, 0, 0, 1}, port: 50_000, ssl_cert: nil}}
+        connect_info: %{
+          peer_data: %{address: {127, 0, 0, 1}, port: 50_000, ssl_cert: nil},
+          x_headers: [{"x-cyfr-ingress", "loopback"}]
+        }
       })
 
     {:ok, state} = DeviceChannel.init(state)

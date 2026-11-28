@@ -77,6 +77,13 @@ defmodule Cyfr.Application do
     Cyfr.Platform.Settings.check_pins!()
     Cyfr.Platform.Settings.apply()
 
+    # The server's addresses, read once the settings are and before the
+    # endpoint serves anything: every session and device certificate made
+    # at an address the server no longer has is retired, so adding,
+    # changing or removing the browser address signs out only what was
+    # signed in there.
+    addresses_check!()
+
     # The operation table and its resource index, built from the
     # configured providers and written once into the gate's term — after
     # the ports its audit and its providers read, before any process that
@@ -970,6 +977,24 @@ defmodule Cyfr.Application do
     if database_checks?(), do: [Cyfr.KeyringFingerprint.Check], else: []
   end
 
+  # Read the store outside any test's sandbox, as the schema check does:
+  # the suite turns it off and calls it directly
+  # (`Sanctum.Session.retire_elsewhere/0`).
+  defp addresses_check! do
+    if database_checks?() do
+      case Sanctum.Session.retire_elsewhere() do
+        {:ok, _ended} ->
+          :ok
+
+        {:error, :unavailable} ->
+          raise "[Cyfr] FATAL: the sessions of an address this CYFR no longer has could not " <>
+                  "be retired: the database did not answer. Nothing started."
+      end
+    end
+
+    :ok
+  end
+
   defp database_checks?,
     do:
       Prima.TestSeam.value(true, fn ->
@@ -1096,7 +1121,7 @@ defmodule Cyfr.Application do
         "set it up: `cyfr init` writes one into .env."
     else
       "no one is set up on this CYFR yet. Its first person, who administers it, opens " <>
-        "the setup link `cyfr init` printed (#{Sanctum.origin()}/setup#…), or presses Open CYFR " <>
+        "the setup link `cyfr init` printed (#{Sanctum.shared_address()}/setup#…), or presses Open CYFR " <>
         "in the CYFR app that set it up."
     end
   end

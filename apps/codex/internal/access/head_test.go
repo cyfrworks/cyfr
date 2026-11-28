@@ -71,6 +71,7 @@ type nameVector struct {
 
 type wordsVector struct {
 	Head      Head     `json:"head"`
+	Private   string   `json:"private"`
 	Sentences []string `json:"sentences"`
 }
 

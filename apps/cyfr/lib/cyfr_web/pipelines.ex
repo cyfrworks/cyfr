@@ -14,7 +14,9 @@ defmodule CyfrWeb.Pipelines do
   @doc """
   The browser pipeline's plugs in order, each as `{plug, options}`.
 
-  A request a frame made is refused before the session is fetched.
+  A request a frame made is refused before the session is fetched, and a
+  page asked for at the loopback listener under another host than the
+  private name is sent there (`CyfrWeb.Plugs.PrivateName`).
   `:put_root_layout` is present only
   when `opts[:root_layout]` names a layout: a page rendered through
   `CyfrWeb.MinimalPage` takes none.
@@ -30,6 +32,7 @@ defmodule CyfrWeb.Pipelines do
     [
       # Before the session: a frame's request reaches none (`FrameRequest`).
       {CyfrWeb.Plugs.FrameRequest, []},
+      {CyfrWeb.Plugs.PrivateName, []},
       {:accepts, ["html"]},
       {:fetch_session, []},
       {:fetch_live_flash, []}

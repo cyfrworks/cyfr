@@ -195,7 +195,7 @@ func (e *Engine) recoverOld(ctx context.Context, j *journal) (Receipt, error) {
 	notApplied := e.completed(j, "not_applied", nil, j.OldHead)
 	if j.Reason != "" && j.OldHead != nil {
 		notApplied = e.completed(j, "rolled_back", Refuse("access_rolled_back", map[string]string{
-			"new": wordsText(Describe(*j.NewHead)), "old": wordsText(Describe(*j.OldHead)), "reason": j.Reason,
+			"new": wordsText(e.describe(*j.NewHead)), "old": wordsText(e.describe(*j.OldHead)), "reason": j.Reason,
 		}), j.OldHead)
 	}
 	if !j.Running || j.OldHead == nil {
@@ -206,12 +206,12 @@ func (e *Engine) recoverOld(ctx context.Context, j *journal) (Receipt, error) {
 	case s.ok:
 		return e.finishAnswer(j, notApplied)
 	case s.local != nil && j.Reason != "":
-		return e.finishAnswer(j, e.completed(j, "rolled_back", rolledBackLocal(j, j.Reason, s.local), j.OldHead))
+		return e.finishAnswer(j, e.completed(j, "rolled_back", e.rolledBackLocal(j, j.Reason, s.local), j.OldHead))
 	case s.local != nil:
 		return e.finishAnswer(j, e.completed(j, "started_local", s.local, j.OldHead))
 	}
 	if s := e.stopAndVerify(ctx, j.Services); !s.ok {
 		return e.uncertain(j, s)
 	}
-	return e.finishAnswer(j, e.failed(j, map[string]string{"new": wordsText(Describe(*j.NewHead)), "env": wordsText(Describe(*j.OldHead))}))
+	return e.finishAnswer(j, e.failed(j, map[string]string{"new": wordsText(e.describe(*j.NewHead)), "env": wordsText(e.describe(*j.OldHead))}))
 }

@@ -64,7 +64,7 @@ defmodule PrismWeb.SystemLayerDevicesTest do
     answer = Authenticator.answer(authenticator, request, account.identifier)
 
     assert {:ok, %{purpose: :confirm, ref: ^ref}} =
-             Sanctum.SignIn.answer(answer, {:session, ctx.session_token_hash})
+             Sanctum.SignIn.answer(answer, {:session, ctx.session_token_hash}, entry: :loopback)
   end
 
   # A device of the person's account paired here, as its hello writes it.

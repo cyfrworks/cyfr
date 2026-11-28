@@ -1803,7 +1803,7 @@ func TestRestoreStagedReadSelectsAsTheEngine(t *testing.T) {
 	t.Chdir(dir)
 	for name, content := range map[string]string{
 		"docker-compose.yml": "services:\n  cyfr:\n    image: alpine:3.22\n    env_file: [.env]\n  caddy:\n    image: alpine:3.22\n    profiles: [domain]\n",
-		".env":               "CYFR_BROWSER=domain\nCYFR_HOST=cyfr.example.com\nCYFR_PUBLIC_URL=https://cyfr.example.com\n",
+		".env":               "CYFR_BROWSER=domain\nCYFR_HOST=cyfr.example.com\nCYFR_PUBLIC_URL=https://cyfr.example.com\n" + testLinkLine,
 	} {
 		if err := os.WriteFile(name, []byte(content), 0600); err != nil {
 			t.Fatal(err)

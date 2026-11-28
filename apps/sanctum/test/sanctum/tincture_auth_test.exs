@@ -69,7 +69,10 @@ defmodule Sanctum.TinctureAuthTest do
       )
 
     {:ok, session} = Sanctum.TestContext.create_session(ctx)
-    {:ok, established} = Sanctum.Caller.establish(session.token, focus: athanor_id)
+
+    {:ok, established} =
+      Sanctum.Caller.establish(session.token, focus: athanor_id, entry: :loopback)
+
     {session, %{established | client_ip: "127.0.0.1"}}
   end
 
@@ -113,7 +116,10 @@ defmodule Sanctum.TinctureAuthTest do
       refute credential =~ ctx.user_id
 
       assert {:ok, opened} =
-               TinctureAuth.verify_asset_credential(credential, client_ip: "127.0.0.1")
+               TinctureAuth.verify_asset_credential(credential,
+                 client_ip: "127.0.0.1",
+                 entry: :loopback
+               )
 
       assert opened.user_id == ctx.user_id
       assert opened.athanor_id == ctx.athanor_id
@@ -154,7 +160,7 @@ defmodule Sanctum.TinctureAuthTest do
       assert DateTime.to_unix(expiry) <= after_mint + 60
 
       before_verify = System.system_time(:second)
-      {:ok, %{remaining_s: left}} = TinctureAuth.verify_asset_credential(short)
+      {:ok, %{remaining_s: left}} = TinctureAuth.verify_asset_credential(short, entry: :loopback)
       after_verify = System.system_time(:second)
       assert left >= DateTime.to_unix(expiry) - after_verify
       assert left <= DateTime.to_unix(expiry) - before_verify
@@ -167,7 +173,10 @@ defmodule Sanctum.TinctureAuthTest do
         TinctureAuth.mint_asset_credential(ctx, @digest)
 
       refute DateTime.compare(expires_at, ends) == :gt
-      {:ok, %{remaining_s: left}} = TinctureAuth.verify_asset_credential(credential)
+
+      {:ok, %{remaining_s: left}} =
+        TinctureAuth.verify_asset_credential(credential, entry: :loopback)
+
       assert left <= 100
     end
 
@@ -177,28 +186,82 @@ defmodule Sanctum.TinctureAuthTest do
       user: user
     } do
       {:ok, %{credential: credential}} = TinctureAuth.mint_asset_credential(ctx, @digest)
-      assert {:ok, _} = TinctureAuth.verify_asset_credential(credential)
+      assert {:ok, _} = TinctureAuth.verify_asset_credential(credential, entry: :loopback)
 
       end_session!(session)
-      assert {:error, :not_standing} = TinctureAuth.verify_asset_credential(credential)
+
+      assert {:error, :not_standing} =
+               TinctureAuth.verify_asset_credential(credential, entry: :loopback)
 
       {_session, fresh} = session_ctx!(user)
       {:ok, %{credential: second}} = TinctureAuth.mint_asset_credential(fresh, @digest)
       {:ok, _} = Sanctum.Tenancy.Users.deny(user)
-      assert {:error, _retired} = TinctureAuth.verify_asset_credential(second)
+      assert {:error, _retired} = TinctureAuth.verify_asset_credential(second, entry: :loopback)
     end
 
     test "anything else is not an asset credential", %{source: ctx} do
       {:ok, %{credential: credential}} = TinctureAuth.mint_asset_credential(ctx, @digest)
 
       assert {:error, :invalid_credential} =
-               TinctureAuth.verify_asset_credential(credential <> "x")
+               TinctureAuth.verify_asset_credential(credential <> "x", entry: :loopback)
 
       {:ok, %{credential: bearer}} =
         TinctureAuth.mint_frame_credential(ctx, @tincture, @digest, 1, "frm_asset_not")
 
-      assert {:error, :invalid_credential} = TinctureAuth.verify_asset_credential(bearer)
+      assert {:error, :invalid_credential} =
+               TinctureAuth.verify_asset_credential(bearer, entry: :loopback)
+
       assert {:error, :invalid_version} = TinctureAuth.mint_asset_credential(ctx, "sha256:nope")
+    end
+  end
+
+  describe "a credential minted under a session at one address" do
+    setup do
+      Arca.Cache.init()
+      settings!(3_600, 900)
+      Prima.Test.Env.put_app_env(:sanctum, :browser_address, "https://cyfr.example")
+      {_session, ctx} = session_ctx!(frame_person!())
+      {:ok, source: ctx}
+    end
+
+    test "opens nothing at the other, the asset credential and the frame credential alike", %{
+      source: ctx
+    } do
+      {:ok, %{credential: asset}} = TinctureAuth.mint_asset_credential(ctx, @digest)
+
+      {:ok, %{credential: bearer}} =
+        TinctureAuth.mint_frame_credential(ctx, @tincture, @digest, 0, "frm_other_address")
+
+      for entry <- [:proxy, nil] do
+        assert {:error, :not_standing} =
+                 TinctureAuth.verify_asset_credential(asset, client_ip: "127.0.0.1", entry: entry)
+
+        assert {:error, :not_standing} =
+                 TinctureAuth.verify_frame_credential(bearer,
+                   client_ip: "127.0.0.1",
+                   entry: entry
+                 )
+      end
+
+      assert {:ok, _} =
+               TinctureAuth.verify_asset_credential(asset,
+                 client_ip: "127.0.0.1",
+                 entry: :loopback
+               )
+
+      # The frame's context carries the entry it was established at, which
+      # a confirmation it asks records.
+      assert {:ok, %Context{entry: :loopback}} =
+               Sanctum.Caller.establish({:frame_credential, bearer},
+                 client_ip: "127.0.0.1",
+                 entry: :loopback
+               )
+
+      assert {:error, _refused} =
+               Sanctum.Caller.establish({:frame_credential, bearer},
+                 client_ip: "127.0.0.1",
+                 entry: :proxy
+               )
     end
   end
 
@@ -225,7 +288,10 @@ defmodule Sanctum.TinctureAuthTest do
       assert DateTime.diff(deadline, DateTime.utc_now()) in 890..900
 
       assert {:ok, authority} =
-               TinctureAuth.verify_frame_credential(bearer, client_ip: "127.0.0.1")
+               TinctureAuth.verify_frame_credential(bearer,
+                 client_ip: "127.0.0.1",
+                 entry: :loopback
+               )
 
       assert %{
                id: ^id,
@@ -270,13 +336,13 @@ defmodule Sanctum.TinctureAuthTest do
         TinctureAuth.mint_frame_credential(ctx, @tincture, @digest, 1, frame_id())
 
       assert {:ok, %{state: "suspended"}} = TinctureAuth.suspend_frame(ctx, id)
-      assert {:error, :suspended} = TinctureAuth.verify_frame_credential(bearer)
+      assert {:error, :suspended} = TinctureAuth.verify_frame_credential(bearer, entry: :loopback)
       assert {:ok, %{credential: resumed, id: ^id}} = TinctureAuth.resume_frame(ctx, id)
       assert %{state: "active"} = Arca.Repo.get(Arca.Schemas.FrameCredential, id)
-      assert {:ok, _} = TinctureAuth.verify_frame_credential(bearer)
-      assert {:ok, _} = TinctureAuth.verify_frame_credential(resumed)
+      assert {:ok, _} = TinctureAuth.verify_frame_credential(bearer, entry: :loopback)
+      assert {:ok, _} = TinctureAuth.verify_frame_credential(resumed, entry: :loopback)
       assert {:ok, %{state: "revoked"}} = TinctureAuth.revoke_frame(ctx, id)
-      assert {:error, :revoked} = TinctureAuth.verify_frame_credential(bearer)
+      assert {:error, :revoked} = TinctureAuth.verify_frame_credential(bearer, entry: :loopback)
       assert {:error, :revoked} = TinctureAuth.resume_frame(ctx, id)
     end
 
@@ -347,7 +413,8 @@ defmodule Sanctum.TinctureAuthTest do
           set: [deadline: DateTime.add(DateTime.utc_now(), -1, :second)]
         )
 
-      assert {:error, :expired_credential} = TinctureAuth.verify_frame_credential(bearer)
+      assert {:error, :expired_credential} =
+               TinctureAuth.verify_frame_credential(bearer, entry: :loopback)
     end
 
     test "a retired source and a standing transition each refuse it", %{
@@ -359,7 +426,9 @@ defmodule Sanctum.TinctureAuthTest do
         TinctureAuth.mint_frame_credential(ctx, @tincture, @digest, 1, frame_id())
 
       end_session!(session)
-      assert {:error, :not_standing} = TinctureAuth.verify_frame_credential(first)
+
+      assert {:error, :not_standing} =
+               TinctureAuth.verify_frame_credential(first, entry: :loopback)
 
       {_session, fresh} = session_ctx!(user)
 
@@ -367,7 +436,7 @@ defmodule Sanctum.TinctureAuthTest do
         TinctureAuth.mint_frame_credential(fresh, @tincture, @digest, 1, frame_id())
 
       {:ok, _} = Sanctum.Tenancy.Users.deny(user)
-      assert {:error, :revoked} = TinctureAuth.verify_frame_credential(second)
+      assert {:error, :revoked} = TinctureAuth.verify_frame_credential(second, entry: :loopback)
 
       assert %{state: "revoked"} = Arca.Repo.get(Arca.Schemas.FrameCredential, id)
     end
@@ -381,7 +450,10 @@ defmodule Sanctum.TinctureAuthTest do
         TinctureAuth.mint_frame_credential(ctx, @tincture, @digest, 2, frame)
 
       assert {:ok, framed} =
-               Sanctum.Caller.establish({:frame_credential, bearer}, client_ip: "127.0.0.1")
+               Sanctum.Caller.establish({:frame_credential, bearer},
+                 client_ip: "127.0.0.1",
+                 entry: :loopback
+               )
 
       assert framed.frame == %{
                id: id,
@@ -401,14 +473,19 @@ defmodule Sanctum.TinctureAuthTest do
       assert ctx.frame == nil
 
       {:ok, _} = TinctureAuth.suspend_frame(ctx, id)
-      assert {:error, :suspended} = Sanctum.Caller.establish({:frame_credential, bearer})
+
+      assert {:error, :suspended} =
+               Sanctum.Caller.establish({:frame_credential, bearer}, entry: :loopback)
+
       {:ok, _} = TinctureAuth.resume_frame(ctx, id)
-      assert {:ok, _} = Sanctum.Caller.establish({:frame_credential, bearer})
+      assert {:ok, _} = Sanctum.Caller.establish({:frame_credential, bearer}, entry: :loopback)
       {:ok, _} = TinctureAuth.revoke_frame(ctx, id)
-      assert {:error, :revoked} = Sanctum.Caller.establish({:frame_credential, bearer})
+
+      assert {:error, :revoked} =
+               Sanctum.Caller.establish({:frame_credential, bearer}, entry: :loopback)
 
       assert {:error, :invalid_credential} =
-               Sanctum.Caller.establish({:frame_credential, bearer <> "x"})
+               Sanctum.Caller.establish({:frame_credential, bearer <> "x"}, entry: :loopback)
     end
 
     test "a renew rotates the bearer, and the one it replaced ends at its own deadline", %{
@@ -431,17 +508,24 @@ defmodule Sanctum.TinctureAuthTest do
 
       # A stream opened with the old bearer is held to the old deadline.
       assert {:ok, %{credential_deadline: ^old_deadline}} =
-               Sanctum.Caller.establish({:frame_credential, old}, client_ip: "127.0.0.1")
+               Sanctum.Caller.establish({:frame_credential, old},
+                 client_ip: "127.0.0.1",
+                 entry: :loopback
+               )
 
       assert {:ok, %{credential_deadline: ^deadline}} =
-               Sanctum.Caller.establish({:frame_credential, new}, client_ip: "127.0.0.1")
+               Sanctum.Caller.establish({:frame_credential, new},
+                 client_ip: "127.0.0.1",
+                 entry: :loopback
+               )
 
       # Past the old bearer's own deadline it is refused, while the row and
       # the new bearer stand.
       Prima.Test.Wait.wait_until(
         fn ->
-          TinctureAuth.verify_frame_credential(old) == {:error, :expired_credential} and
-            match?({:ok, %{id: ^id}}, TinctureAuth.verify_frame_credential(new)) and
+          TinctureAuth.verify_frame_credential(old, entry: :loopback) ==
+            {:error, :expired_credential} and
+            match?({:ok, %{id: ^id}}, TinctureAuth.verify_frame_credential(new, entry: :loopback)) and
             DateTime.compare(frame_row(id).deadline, DateTime.utc_now()) == :gt
         end,
         5_000,
@@ -465,7 +549,7 @@ defmodule Sanctum.TinctureAuthTest do
                 version_digest: @digest,
                 grant_revision: 4,
                 mode: :live
-              }} = TinctureAuth.verify_frame_credential(renewed)
+              }} = TinctureAuth.verify_frame_credential(renewed, entry: :loopback)
 
       assert %{version_digest: @digest, grant_revision: 4} = frame_row(id)
     end
@@ -520,7 +604,9 @@ defmodule Sanctum.TinctureAuthTest do
       refute DateTime.compare(deadline, ends) == :gt
       assert DateTime.diff(ends, deadline, :millisecond) < 1_000
 
-      assert {:ok, %{deadline: bound}} = TinctureAuth.verify_frame_credential(renewed)
+      assert {:ok, %{deadline: bound}} =
+               TinctureAuth.verify_frame_credential(renewed, entry: :loopback)
+
       refute DateTime.compare(bound, ends) == :gt
     end
 
@@ -563,8 +649,12 @@ defmodule Sanctum.TinctureAuthTest do
 
       assert DateTime.diff(deadline, DateTime.utc_now()) in 890..900
       assert %{state: "active", deadline: ^deadline} = frame_row(id)
-      assert {:ok, %{id: ^id, deadline: ^deadline}} = TinctureAuth.verify_frame_credential(new)
-      assert {:error, :expired_credential} = TinctureAuth.verify_frame_credential(old)
+
+      assert {:ok, %{id: ^id, deadline: ^deadline}} =
+               TinctureAuth.verify_frame_credential(new, entry: :loopback)
+
+      assert {:error, :expired_credential} =
+               TinctureAuth.verify_frame_credential(old, entry: :loopback)
     end
 
     test "a resume after the deadline passed is refused once its session ended, and writes nothing",
@@ -588,7 +678,7 @@ defmodule Sanctum.TinctureAuthTest do
 
       assert {:error, :not_standing} = TinctureAuth.resume_frame(ctx, id)
       assert frame_row(id) == suspended
-      assert {:error, _refused} = TinctureAuth.verify_frame_credential(old)
+      assert {:error, _refused} = TinctureAuth.verify_frame_credential(old, entry: :loopback)
     end
 
     test "a resume of a revoked row, or of one retention removed, fails", %{source: ctx} do
@@ -613,10 +703,13 @@ defmodule Sanctum.TinctureAuthTest do
       {:ok, %{credential: bearer}} =
         TinctureAuth.mint_frame_credential(ctx, @tincture, @digest, 1, frame_id())
 
-      assert {:error, :invalid_credential} = TinctureAuth.verify_frame_credential(bearer <> "x")
+      assert {:error, :invalid_credential} =
+               TinctureAuth.verify_frame_credential(bearer <> "x", entry: :loopback)
 
       {:ok, %{credential: asset}} = TinctureAuth.mint_asset_credential(ctx, @digest)
-      assert {:error, :invalid_credential} = TinctureAuth.verify_frame_credential(asset)
+
+      assert {:error, :invalid_credential} =
+               TinctureAuth.verify_frame_credential(asset, entry: :loopback)
     end
 
     test "a context's frame names its mode, and a frame without a known one is refused" do
@@ -645,7 +738,10 @@ defmodule Sanctum.TinctureAuthTest do
       user = frame_person!()
       {_session, ctx} = session_ctx!(user)
       {:ok, %{credential: credential}} = TinctureAuth.mint_asset_credential(ctx, @digest)
-      {:ok, authority} = TinctureAuth.verify_asset_credential(credential, client_ip: "127.0.0.1")
+
+      {:ok, authority} =
+        TinctureAuth.verify_asset_credential(credential, client_ip: "127.0.0.1", entry: :loopback)
+
       {:ok, user: user, source: ctx, authority: authority}
     end
 

@@ -5,14 +5,12 @@ defmodule CyfrWeb.LiveSocket do
   @moduledoc """
   The console's LiveView socket, mounted at `/live`: `Phoenix.LiveView.Socket`
   with one refusal. Once this node drains (`drain/0`), every connect is
-  refused, over the WebSocket or the long-poll transport, on a new
-  connection or on one already open.
+  refused, on a new connection or on one already open.
 
   A graceful stop marks the drain before the endpoint stops accepting
   (`Cyfr.Application.prep_stop/1`). Closing the listening port refuses a
   new connection, but the connections already open stay open through the
-  drain, idle keep-alive ones included, and a tab whose WebSocket fails
-  falls back to long polling over whichever it can reach. With every
+  drain, idle keep-alive ones included. With every
   connect refused here too, a tab that rejoins reaches another member or
   the restarted server, never the node that is stopping.
   """

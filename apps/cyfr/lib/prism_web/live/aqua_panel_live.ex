@@ -1044,7 +1044,8 @@ defmodule PrismWeb.AquaPanelLive do
             "thread_id" => @thread && @thread.id,
             "ui_mode" => @ui_mode,
             "room_feed" => @room_feed,
-            "room" => @room
+            "room" => @room,
+            "entry" => @request_entry
           }
         )}
       </aside>

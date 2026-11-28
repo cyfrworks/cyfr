@@ -52,10 +52,13 @@ defmodule PrismWeb.LoginLiveTest do
     binding = {:browser, "first-browser"}
 
     {:ok, %{request: request}} =
-      Sanctum.SignIn.request(:sign_in, binding, admission: {:setup, @token})
+      Sanctum.SignIn.request(:sign_in, binding, admission: {:setup, @token}, entry: :loopback)
 
     answer = DirectoryServer.passkey_answer(request, account, hd(account.passkeys))
-    {:ok, %{user: user, session_token: token}} = Sanctum.SignIn.answer(answer, binding)
+
+    {:ok, %{user: user, session_token: token}} =
+      Sanctum.SignIn.answer(answer, binding, entry: :loopback)
+
     %{account: account, user: user, session_token: token}
   end
 
@@ -176,7 +179,7 @@ defmodule PrismWeb.LoginLiveTest do
     # Past the bound the page says so, as it would for any account.
     for _n <- 1..(Sanctum.SignIn.max_waiting() - 1) do
       binding = {:browser, "csrf-#{System.unique_integer([:positive])}"}
-      {:ok, %{request: request}} = Sanctum.SignIn.request(:sign_in, binding)
+      {:ok, %{request: request}} = Sanctum.SignIn.request(:sign_in, binding, entry: :loopback)
       {pub, _priv} = :crypto.generate_key(:ecdh, :secp256r1)
 
       {:ok, key} =
@@ -188,7 +191,7 @@ defmodule PrismWeb.LoginLiveTest do
         key: key
       }
 
-      {:ok, %{waiting: _code}} = Sanctum.SignIn.answer(answer, binding)
+      {:ok, %{waiting: _code}} = Sanctum.SignIn.answer(answer, binding, entry: :loopback)
     end
 
     {:ok, view, _html} = live(conn, ~p"/login")
@@ -302,7 +305,12 @@ defmodule PrismWeb.LoginLiveTest do
           )
         )
 
-      {:ok, ctx} = Sanctum.Caller.establish(session.token, focus: athanor_id, refresh: false)
+      {:ok, ctx} =
+        Sanctum.Caller.establish(session.token,
+          focus: athanor_id,
+          refresh: false,
+          entry: :loopback
+        )
 
       {:ok, %{request: map, url: url}} = Compendium.Providers.Registry.handle(ctx, args)
       assert String.starts_with?(url, dir.url <> "/account/sign#")
@@ -1146,10 +1154,14 @@ defmodule PrismWeb.LoginLiveTest do
     %{user: first} = first!(dir)
     {:ok, wildcard} = Sanctum.Door.Store.allow("wildcard", "*", first.id)
     denied = dir.dir |> DirectoryServer.account!(dir.url) |> passkey!(dir)
-    {:ok, %{request: request}} = Sanctum.SignIn.request(:sign_in, {:browser, "denied-browser"})
+
+    {:ok, %{request: request}} =
+      Sanctum.SignIn.request(:sign_in, {:browser, "denied-browser"}, entry: :loopback)
 
     {:ok, %{user: person}} =
-      Sanctum.SignIn.answer(answer_of(request, denied), {:browser, "denied-browser"})
+      Sanctum.SignIn.answer(answer_of(request, denied), {:browser, "denied-browser"},
+        entry: :loopback
+      )
 
     {:ok, _denied} = Sanctum.Tenancy.Users.deny(person)
     {:ok, _} = Sanctum.Door.Store.remove(wildcard.id)
@@ -1164,7 +1176,10 @@ defmodule PrismWeb.LoginLiveTest do
   test "a sign-in from a tab whose sign-in another tab replaced says this browser is signed in",
        %{conn: conn, dir: dir} do
     %{account: account, session_token: token} = first!(dir)
-    {:ok, %{request: request}} = Sanctum.SignIn.request(:sign_in, {:browser, "an-earlier-tab"})
+
+    {:ok, %{request: request}} =
+      Sanctum.SignIn.request(:sign_in, {:browser, "an-earlier-tab"}, entry: :loopback)
+
     {:ok, view, _html} = conn |> with_session(token) |> live(~p"/login")
 
     render_hook(view, "account_answer", %{"answer" => answer_of(request, account)})
@@ -1195,14 +1210,14 @@ defmodule PrismWeb.LoginLiveTest do
     {:ok, record} =
       Prima.Confirmation.new(
         id: Prima.Confirmation.ref("cnf_" <> Base.url_encode64(:crypto.strong_rand_bytes(32))),
-        home: Sanctum.origin(),
-        rp_id: URI.parse(Sanctum.origin()).host,
+        home: Sanctum.private_address(),
+        rp_id: URI.parse(Sanctum.private_address()).host,
         athanor: athanor_id,
         person: user.id,
         operation: "vault.create",
         args_digest: Prima.Digest.sha256("args"),
         action: "credential_entry",
-        preview: %{home: Sanctum.origin(), athanor: "Home", operation: "vault.create"},
+        preview: %{home: Sanctum.private_address(), athanor: "Home", operation: "vault.create"},
         challenge: :crypto.strong_rand_bytes(32),
         expires_at: System.system_time(:millisecond) + 300_000
       )
@@ -1215,7 +1230,7 @@ defmodule PrismWeb.LoginLiveTest do
       })
 
     {:ok, %{request: request}} =
-      Sanctum.SignIn.request(:confirm, {:session, hash}, ctx: ctx, ref: row.ref)
+      Sanctum.SignIn.request(:confirm, {:session, hash}, ctx: ctx, ref: row.ref, entry: :loopback)
 
     {:ok, view, _html} = conn |> with_session(token) |> live(~p"/login")
 

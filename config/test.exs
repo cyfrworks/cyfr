@@ -34,22 +34,15 @@ config :sanctum, directory_request_ms: 5_000
 # figure and read `Arca.DecisionLog.budget_ms/0`.
 config :arca, decision_log_budget_ms: 5_000
 
-# The origin an absolute URL falls back to, the endpoint's own above.
-config :sanctum, :fallback_origin, "http://localhost:4002"
+# The server's private address on the endpoint's port above, the first
+# tunnel key of tests/fixtures/link.json's, which `config/runtime.exs`
+# resolves for every other boot (`Cyfr.RuntimeConfig.resolve_link/3`), and
+# no browser address: a test that needs one sets `:browser_address`.
+config :sanctum, :private_address, "http://h-xeypbemm44chehc5.localhost:4002"
 
-# The MCP Origin allowlist of a server with no browser address, on the loopback, which
-# `config/runtime.exs` resolves from the access settings for every other
-# boot, with no extras.
-config :cyfr,
-  mcp_allowed_origins: [
-    "http://localhost",
-    "https://localhost",
-    "http://127.0.0.1",
-    "https://127.0.0.1",
-    "http://[::1]",
-    "https://[::1]"
-  ],
-  mcp_extra_origins: []
+# The MCP Origin check's extras beside the entry's own address
+# (`CyfrWeb.Plugs.MCPOrigin`): none.
+config :cyfr, mcp_extra_origins: []
 
 # The storage reserve's size, as `config/runtime.exs` sets it for a boot
 # that names none (`Cyfr.RuntimeConfig.resolve_storage_reserve/1`); the

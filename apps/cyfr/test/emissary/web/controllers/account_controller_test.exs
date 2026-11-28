@@ -27,7 +27,7 @@ defmodule Emissary.Web.AccountControllerTest do
   ]
 
   setup do
-    Prima.Test.Env.put_app_env(:sanctum, :public_url, @directory)
+    Prima.Test.Env.put_app_env(:sanctum, :browser_address, @directory)
     Cyfr.Test.Settings.put("directory_serve", "writer")
     :ok
   end

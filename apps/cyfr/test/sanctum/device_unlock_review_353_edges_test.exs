@@ -23,7 +23,7 @@ defmodule Sanctum.DeviceUnlockReview353EdgesTest do
     device = enrolled!(@token)
     ctx = connected!(device)
     answer = unlocked!(ctx, device.key)
-    {:ok, %{token: token}} = DeviceUnlock.redeem(answer.ticket)
+    {:ok, %{token: token}} = DeviceUnlock.redeem(answer.ticket, :loopback)
 
     Arca.Repo.update_all(from(s in Arca.Schemas.Session, where: s.id == ^answer.session_id),
       set: [client_id: "pcl_missing"]
@@ -36,7 +36,7 @@ defmodule Sanctum.DeviceUnlockReview353EdgesTest do
     device = enrolled!(@token)
     ctx = connected!(device)
     answer = unlocked!(ctx, device.key)
-    {:ok, %{token: token}} = DeviceUnlock.redeem(answer.ticket)
+    {:ok, %{token: token}} = DeviceUnlock.redeem(answer.ticket, :loopback)
     actor = Context.actor(ctx)
     {:ok, old} = Arca.DeviceCertificates.current(actor, ctx.client_id)
     {:ok, _} = Arca.DeviceCertificates.revoke(actor, old.id)
@@ -57,7 +57,12 @@ defmodule Sanctum.DeviceUnlockReview353EdgesTest do
 
     {:ok, renewal} =
       Sanctum.DeviceCerts.verify_connect(
-        %{client_id: ctx.client_id, certificate: device.certificate, source: "198.51.100.43"},
+        %{
+          client_id: ctx.client_id,
+          certificate: device.certificate,
+          source: "198.51.100.43",
+          entry: :loopback
+        },
         proof,
         challenge
       )

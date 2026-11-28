@@ -23,9 +23,9 @@ export const RUN_HEADER = "Cyfr-Run"
 
 const FIELDS = {
   ready: {required: ["url"], optional: ["rail", "update"]},
-  home: {required: ["home", "account", "attempt"], optional: ["proxy", "setup"]},
+  home: {required: ["home", "account", "attempt"], optional: ["setup"]},
   opened: {required: ["home", "attempt"]},
-  locked: {required: [], optional: ["home", "account", "proxy"], together: ["home", "account"]},
+  locked: {required: [], optional: ["home", "account"], together: ["home", "account"]},
   ending: {required: []},
   left: {required: ["id"]},
   erase: {required: ["id", "home"], optional: ["account"]},
@@ -91,11 +91,10 @@ export function readFromCyfr(line) {
     const valid = whole(key) ? Number.isSafeInteger(m[key]) && m[key] > 0 : typeof m[key] === "string" && m[key] !== ""
     if (!valid) throw new Refused("fields")
   }
-  // Fields that come together or not at all, and a route only beside them.
+  // Fields that come together or not at all.
   const {together = []} = FIELDS[m.type]
   const named = together.filter((k) => Object.hasOwn(m, k)).length
   if (named !== 0 && named !== together.length) throw new Refused("fields")
-  if (together.length && named === 0 && Object.hasOwn(m, "proxy")) throw new Refused("fields")
   // A setup token in its one form, which the CYFR's setup page reads.
   if (Object.hasOwn(m, "setup") && !/^[0-9a-f]{64}$/.test(m.setup)) throw new Refused("fields")
   // What an erase names is erased by its origin: nothing else is one.

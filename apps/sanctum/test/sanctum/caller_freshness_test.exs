@@ -73,7 +73,7 @@ defmodule Sanctum.CallerFreshnessTest do
       )
 
     {:ok, session} = Sanctum.TestContext.create_session(ctx)
-    {:ok, established} = Caller.establish(session.token, focus: athanor.id)
+    {:ok, established} = Caller.establish(session.token, focus: athanor.id, entry: :loopback)
     %{user: user, athanor: athanor, session: session, ctx: established}
   end
 
@@ -173,10 +173,10 @@ defmodule Sanctum.CallerFreshnessTest do
       Application.put_env(:sanctum, :caller_memo_ttl_ms, 60_000)
       %{session: session, athanor: athanor} = person!()
 
-      {:ok, first} = Caller.establish(session.token, focus: athanor.id)
+      {:ok, first} = Caller.establish(session.token, focus: athanor.id, entry: :loopback)
       # sleep-ok: the clock moves 20 ms, so a reuse that answered its own instant would differ
       Process.sleep(20)
-      {:ok, again} = Caller.establish(session.token, focus: athanor.id)
+      {:ok, again} = Caller.establish(session.token, focus: athanor.id, entry: :loopback)
 
       assert again.validated_at == first.validated_at
     end
@@ -203,12 +203,12 @@ defmodule Sanctum.CallerFreshnessTest do
     test "reads the rows, never the memo: a session deleted behind a warm memo refuses" do
       Application.put_env(:sanctum, :caller_memo_ttl_ms, 60_000)
       %{session: session, athanor: athanor, ctx: ctx} = person!()
-      {:ok, _} = Caller.establish(session.token, focus: athanor.id)
+      {:ok, _} = Caller.establish(session.token, focus: athanor.id, entry: :loopback)
 
       delete_session!(ctx.session_token_hash)
 
       # The memo still answers establish — the exposure the bound covers…
-      assert {:ok, _} = Caller.establish(session.token, focus: athanor.id)
+      assert {:ok, _} = Caller.establish(session.token, focus: athanor.id, entry: :loopback)
       # …and revalidation, which reads the rows, refuses.
       assert {:error, :unauthenticated} = Caller.revalidate_session(ctx)
     end
@@ -387,7 +387,7 @@ defmodule Sanctum.CallerFreshnessTest do
       Application.put_env(:sanctum, :caller_memo_ttl_ms, 60_000)
       %{session: session, athanor: athanor} = person!()
 
-      {:ok, ctx} = Caller.establish(session.token, focus: athanor.id)
+      {:ok, ctx} = Caller.establish(session.token, focus: athanor.id, entry: :loopback)
       assert Caller.fresh?(ctx)
 
       # Reused through the memo after the validation, as a busy socket
@@ -396,7 +396,7 @@ defmodule Sanctum.CallerFreshnessTest do
 
       reused =
         for _ <- 1..3 do
-          {:ok, reused} = Caller.establish(session.token, focus: athanor.id)
+          {:ok, reused} = Caller.establish(session.token, focus: athanor.id, entry: :loopback)
           assert reused.validated_at == ctx.validated_at
           assert Caller.fresh?(reused)
           reused
@@ -426,7 +426,7 @@ defmodule Sanctum.CallerFreshnessTest do
       # out with it: the establish after that reads the store and answers a
       # new validation, however soon it follows.
       poll!(fn -> not Caller.fresh?(ctx) end)
-      {:ok, again} = Caller.establish(session.token, focus: athanor.id)
+      {:ok, again} = Caller.establish(session.token, focus: athanor.id, entry: :loopback)
 
       assert DateTime.compare(again.validated_at, ctx.validated_at) == :gt
     end
@@ -436,7 +436,7 @@ defmodule Sanctum.CallerFreshnessTest do
       %{session: session, athanor: athanor, ctx: ctx} = person!()
 
       for _ <- 1..3 do
-        {:ok, again} = Caller.establish(session.token, focus: athanor.id)
+        {:ok, again} = Caller.establish(session.token, focus: athanor.id, entry: :loopback)
         assert again.validated_at == ctx.validated_at
         assert Caller.fresh?(again)
       end
@@ -478,7 +478,7 @@ defmodule Sanctum.CallerFreshnessTest do
   end
 
   defp establish(%{token: token, athanor: athanor}),
-    do: Caller.establish(token, focus: athanor.id, refresh: false)
+    do: Caller.establish(token, focus: athanor.id, refresh: false, entry: :loopback)
 
   defp session_row(%{token: token}),
     do: Arca.Repo.get_by(Arca.Schemas.Session, token_hash: Session.token_hash(token))
@@ -572,7 +572,7 @@ defmodule Sanctum.CallerFreshnessTest do
   end
 
   defp use_frame(bearer),
-    do: Caller.establish({:frame_credential, bearer}, client_ip: "127.0.0.1")
+    do: Caller.establish({:frame_credential, bearer}, client_ip: "127.0.0.1", entry: :loopback)
 
   describe "a frame credential a session minted" do
     setup do
@@ -592,7 +592,10 @@ defmodule Sanctum.CallerFreshnessTest do
           assert {:error, :identity_stale} = use_frame(bearer)
 
           assert {:error, :identity_stale} =
-                   Sanctum.TinctureAuth.verify_frame_credential(bearer, client_ip: "127.0.0.1")
+                   Sanctum.TinctureAuth.verify_frame_credential(bearer,
+                     client_ip: "127.0.0.1",
+                     entry: :loopback
+                   )
         end)
 
       assert log =~ "freshness bound"

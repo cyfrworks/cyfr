@@ -118,6 +118,9 @@ defmodule PrismWeb.LoginLive do
      # a confirmation are bound to.
      |> assign(:bindings, bindings(session))
      |> assign(:browser_binding, session["_csrf_token"])
+     # The listener this page came in by: a request is minted, and its
+     # answer taken, at that entry's address alone.
+     |> assign(:entry, CyfrWeb.ContextGuard.entry(socket))
      # `connect_info` is readable only here, so the address a request is
      # charged to is captured at mount and carried.
      |> assign(:client_ip, PrismWeb.AuthHelpers.socket_client_ip(socket))
@@ -159,7 +162,7 @@ defmodule PrismWeb.LoginLive do
 
   # Only what the page holds is used; the event's parameters are not read.
   def handle_event("terms_seen", _params, %{assigns: %{terms_changed: %{} = notice}} = socket) do
-    case session_caller(socket.assigns.bindings) do
+    case session_caller(socket.assigns.bindings, socket.assigns.entry) do
       {:ok, %{user_id: user_id}} when user_id == notice.user_id ->
         record_seen(user_id, notice.version)
         {:noreply, redirect(socket, to: notice.back)}
@@ -200,7 +203,8 @@ defmodule PrismWeb.LoginLive do
 
       true ->
         case Sanctum.SignIn.request(:sign_in, {:browser, socket.assigns.browser_binding},
-               page: page
+               page: page,
+               entry: socket.assigns.entry
              ) do
           {:ok, %{url: url}} -> {:ok, url}
           {:error, reason} -> {:error, sentence(reason)}
@@ -209,7 +213,7 @@ defmodule PrismWeb.LoginLive do
   end
 
   defp answered(socket, {:ok, %{purpose: :sign_in, session_token: token}}) do
-    ticket = mint_ticket(token, socket.assigns.browser_binding)
+    ticket = mint_ticket(token, socket.assigns.browser_binding, socket.assigns.entry)
     redirect(socket, to: ~p"/auth/passkey/complete/#{ticket}")
   end
 
@@ -267,25 +271,26 @@ defmodule PrismWeb.LoginLive do
   defp check(socket, answer) do
     bindings = socket.assigns.bindings
     user_agent = socket.assigns.user_agent
+    entry = socket.assigns.entry
 
     start_async(
       socket,
       :answer,
-      fn -> run_to_end(fn -> checked(answer, bindings, user_agent) end) end,
+      fn -> run_to_end(fn -> checked(answer, bindings, user_agent, entry) end) end,
       supervisor: Prism.TaskSupervisor
     )
   end
 
-  defp checked(answer, bindings, user_agent) do
-    case Sanctum.SignIn.answer(answer, bindings, user_agent: user_agent) do
+  defp checked(answer, bindings, user_agent, entry) do
+    case Sanctum.SignIn.answer(answer, bindings, user_agent: user_agent, entry: entry) do
       {:ok, %{purpose: :registry} = outcome} ->
-        {result, notice} = registered(bindings, outcome)
+        {result, notice} = registered(bindings, entry, outcome)
         {:registered, outcome.back || ~p"/", result, notice}
 
       # A sign-in begun in a tab whose binding another tab's sign-in
       # replaced: this browser holds a session now, which is said.
       {:error, :answer_refused} = refused ->
-        if match?({:ok, _}, session_caller(bindings)),
+        if match?({:ok, _}, session_caller(bindings, entry)),
           do: {:error, :signed_in_already},
           else: refused
 
@@ -294,8 +299,8 @@ defmodule PrismWeb.LoginLive do
     end
   end
 
-  defp registered(bindings, outcome) do
-    with {:ok, ctx} <- session_caller(bindings),
+  defp registered(bindings, entry, outcome) do
+    with {:ok, ctx} <- session_caller(bindings, entry),
          {:ok, result} <- Compendium.complete_registry(ctx, outcome) do
       {{:info, done(outcome.registry_request, result)}, terms_notice(ctx)}
     else
@@ -395,11 +400,12 @@ defmodule PrismWeb.LoginLive do
   # The caller a registry signature completes under: the session its
   # request was bound to, read from the store when the answer arrives, as
   # a holder of a session's row key reads it (`Sanctum.Session.load_by_hash/1`),
-  # then established and held to the person's standing as a session is.
-  defp session_caller(bindings) do
+  # then established at this page's entry and held to the person's
+  # standing as a session is.
+  defp session_caller(bindings, entry) do
     with {:session, hash} <- List.keyfind(bindings, :session, 0, {:error, :unauthenticated}),
          {:ok, stored} <- stored_session(hash),
-         {:ok, ctx} <- Sanctum.Caller.establish_context(stored) do
+         {:ok, ctx} <- Sanctum.Caller.establish_context(stored, entry: entry) do
       Sanctum.Caller.revalidate_session(ctx)
     end
   end
@@ -454,15 +460,16 @@ defmodule PrismWeb.LoginLive do
     end
   end
 
-  # A one-time ticket bound to this browser, which sets the session's
-  # cookie (`PrismWeb.PasskeyController`). Without the binding the ticket
-  # would be a bearer credential for a whole session.
-  defp mint_ticket(token, browser_binding) do
+  # A one-time ticket bound to this browser and to the entry the page came
+  # in by, which sets the session's cookie (`PrismWeb.PasskeyController`).
+  # Without the binding the ticket would be a bearer credential for a
+  # whole session.
+  defp mint_ticket(token, browser_binding, entry) do
     ticket = Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
 
     Arca.Cache.put(
       {:login_passkey_ticket, ticket},
-      %{session_token: token, browser_binding: browser_binding},
+      %{session_token: token, browser_binding: browser_binding, entry: entry},
       @ticket_ttl_ms
     )
 

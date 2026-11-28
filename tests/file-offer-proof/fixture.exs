@@ -62,6 +62,9 @@
 # A step that does not answer `{:ok, _}` raises, and the rpc exits non-zero
 # naming it.
 
+# Its homes are a browser proof's, whose people's sessions are made at the
+# browser address (tests/release-boot/fixture.exs `person`): each is
+# established at the proxy listener.
 fn args ->
   answer = fn map -> "OFFER=" <> Jason.encode!(map) end
 
@@ -95,7 +98,7 @@ fn args ->
   # A tool called as the console calls it for the session's person
   # (`PrismWeb.Ops.call_tool/3`, through the gate).
   console = fn token, tool, arguments ->
-    {:ok, ctx} = Sanctum.Caller.establish({:session, token})
+    {:ok, ctx} = Sanctum.Caller.establish({:session, token}, entry: :proxy)
 
     case PrismWeb.Ops.call_tool(ctx, tool, arguments) do
       {:ok, result} -> result

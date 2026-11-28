@@ -105,7 +105,7 @@ func TestSwitchFenceRefusesAStalePreview(t *testing.T) {
 		if refusalCode(err) != "access_stale" || rc.State != "rejected" {
 			t.Errorf("%s changed after the preview: answered %+v, %v", edit.name, rc, err)
 		}
-		if words := rc.Payload["words"]; !strings.Contains(words, "only this computer, at http://localhost:") {
+		if words := rc.Payload["words"]; !strings.Contains(words, "only this computer, at http://h-xeypbemm44chehc5.localhost:") {
 			t.Errorf("%s: access_stale names %q", edit.name, words)
 		}
 		if h.env() != before {
@@ -371,5 +371,42 @@ func TestTrustKeysTakeLiteralValuesOnly(t *testing.T) {
 	writeFile(t, path, []byte(h.env()+"CYFR_TRUSTED_PROXY_HOPS='2'\n"))
 	if err := CheckEnvFile(path); err != nil {
 		t.Errorf("a single-quoted literal trust is refused: %v", err)
+	}
+}
+
+// A .env without the tunnel key, or with one that is no public key,
+// holds no head, after any refusal of its access settings: the engine
+// refuses it as the boot does, and derives no head from it.
+func TestATunnelKeyIsRead(t *testing.T) {
+	h := newHome(t)
+	good := h.env()
+	for _, c := range []struct {
+		name, env, code string
+	}{
+		{"missing", strings.Replace(good, linkLine, "", 1), "access_link_missing"},
+		{"blank", strings.Replace(good, linkLine, "CYFR_LINK_PUBLIC= \n", 1), "access_link_missing"},
+		{"uppercase", strings.Replace(good, linkLine, strings.ToUpper(linkLine), 1), "access_link_invalid"},
+		{"an access refusal first", strings.Replace(strings.Replace(good, linkLine, "", 1), "CYFR_BROWSER=none", "CYFR_BROWSER=sideways", 1), "access_unknown_browser"},
+	} {
+		writeFile(t, filepath.Join(h.dir, ".env"), []byte(c.env))
+		if _, err := h.e.Head(); refusalCode(err) != c.code {
+			t.Errorf("%s: the head answered %v, want %s", c.name, err, c.code)
+		}
+		if _, err := h.e.Preview(bg, domainTarget, ""); c.code != "access_unknown_browser" && refusalCode(err) != c.code {
+			t.Errorf("%s: the preview answered %v, want %s", c.name, err, c.code)
+		}
+	}
+	for _, c := range []struct{ text, code string }{{"", "access_link_missing"}, {"  ", "access_link_missing"}, {"nodekey:" + testLink, "access_link_invalid"}} {
+		if _, err := ResolveLink(c.text, 4000); refusalCode(err) != c.code {
+			t.Errorf("ResolveLink(%q) answered %v, want %s", c.text, err, c.code)
+		}
+	}
+	if got, err := ResolveLink(" "+testLink+" ", 4000); err != nil || got != testPrivate {
+		t.Errorf("ResolveLink answered %q, %v", got, err)
+	}
+	for _, code := range []string{"access_link_missing", "access_link_invalid"} {
+		if class := Refuse(code, nil).Class; class != map[string]string{"access_link_missing": "setup_required", "access_link_invalid": "invalid_argument"}[code] {
+			t.Errorf("%s is class %s", code, class)
+		}
 	}
 }

@@ -54,7 +54,9 @@ defmodule Sanctum.CallerTest do
     %{user | user_id: row.id}
   end
 
-  defp session_for(user, attrs \\ []) do
+  # A session made at `address`, the private address by default: the
+  # loopback entry's.
+  defp session_for(user, attrs \\ [], address \\ Sanctum.private_address()) do
     ctx =
       Context.build(
         Keyword.merge(
@@ -71,7 +73,12 @@ defmodule Sanctum.CallerTest do
         )
       )
 
-    {:ok, session} = Session.create(ctx, generation_snapshot: Sanctum.TestContext.snapshot!(ctx))
+    {:ok, session} =
+      Session.create(ctx,
+        generation_snapshot: Sanctum.TestContext.snapshot!(ctx),
+        address: address
+      )
+
     session
   end
 
@@ -87,7 +94,7 @@ defmodule Sanctum.CallerTest do
       {user, home} = new_user() |> claim!() |> member!()
       session = session_for(Map.put(user, :namespace, user.slug))
 
-      assert {:ok, %Context{} = ctx} = Caller.establish(session.token)
+      assert {:ok, %Context{} = ctx} = Caller.establish(session.token, entry: :loopback)
       assert ctx.authenticated
       assert ctx.namespace == user.slug
       assert ctx.athanor_id == home.id
@@ -99,7 +106,7 @@ defmodule Sanctum.CallerTest do
       session = session_for(Map.put(user, :namespace, user.slug))
 
       assert {:ok, %Context{athanor_id: focused}} =
-               Caller.establish(session.token, focus: home.id)
+               Caller.establish(session.token, focus: home.id, entry: :loopback)
 
       assert focused == home.id
 
@@ -108,17 +115,18 @@ defmodule Sanctum.CallerTest do
 
       # `home` is not the other person's: an outsider is told what a
       # missing athanor tells them.
-      assert {:error, :not_found} = Caller.establish(other_session.token, focus: home.id)
+      assert {:error, :not_found} =
+               Caller.establish(other_session.token, focus: home.id, entry: :loopback)
 
       assert {:error, :not_found} =
-               Caller.establish(session.token, focus: "ath_does_not_exist")
+               Caller.establish(session.token, focus: "ath_does_not_exist", entry: :loopback)
     end
 
     test "a session whose person has no publisher namespace is established like any other" do
       {user, athanor} = new_user() |> known!() |> member!()
       session = session_for(user, namespace: nil)
 
-      assert {:ok, %Context{} = ctx} = Caller.establish(session.token)
+      assert {:ok, %Context{} = ctx} = Caller.establish(session.token, entry: :loopback)
       assert ctx.user_id == user.user_id
       assert ctx.authenticated
       assert ctx.namespace == nil
@@ -126,9 +134,11 @@ defmodule Sanctum.CallerTest do
     end
 
     test "no token, a blank token, and an unknown token are unauthenticated" do
-      assert {:error, :unauthenticated} = Caller.establish(nil)
-      assert {:error, :unauthenticated} = Caller.establish("")
-      assert {:error, :unauthenticated} = Caller.establish("cyfr_sess_not_a_real_token")
+      assert {:error, :unauthenticated} = Caller.establish(nil, entry: :loopback)
+      assert {:error, :unauthenticated} = Caller.establish("", entry: :loopback)
+
+      assert {:error, :unauthenticated} =
+               Caller.establish("cyfr_sess_not_a_real_token", entry: :loopback)
     end
 
     test "a person left with nowhere to work holds no session: a denial archives the athanor " <>
@@ -139,14 +149,68 @@ defmodule Sanctum.CallerTest do
       # signed out, never established into an athanor they no longer have.
       {user, home} = new_user() |> claim!() |> member!()
       session = session_for(Map.put(user, :namespace, user.slug))
-      assert {:ok, %Context{athanor_id: id}} = Caller.establish(session.token)
+      assert {:ok, %Context{athanor_id: id}} = Caller.establish(session.token, entry: :loopback)
       assert id == home.id
 
       {:ok, row} = Sanctum.Tenancy.Users.get(user.user_id)
       {:ok, _denied} = Sanctum.Tenancy.Users.deny(row)
 
       assert {:ok, %{status: "archived"}} = Sanctum.Tenancy.Athanors.get(home.id)
-      assert {:error, :unauthenticated} = Caller.establish(session.token)
+      assert {:error, :unauthenticated} = Caller.establish(session.token, entry: :loopback)
+    end
+  end
+
+  describe "a session's address" do
+    @browser_address "https://cyfr.example"
+
+    setup do
+      Prima.Test.Env.put_app_env(:sanctum, :browser_address, @browser_address)
+      :ok
+    end
+
+    test "a session made at the private address is refused at the browser address, and the " <>
+           "reverse" do
+      {user, _home} = new_user() |> claim!() |> member!()
+      user = Map.put(user, :namespace, user.slug)
+      private = session_for(user)
+      browser = session_for(user, [], @browser_address)
+
+      assert {:ok, %Context{entry: :loopback}} = Caller.establish(private.token, entry: :loopback)
+      assert {:error, :unauthenticated} = Caller.establish(private.token, entry: :proxy)
+
+      assert {:ok, %Context{entry: :proxy}} = Caller.establish(browser.token, entry: :proxy)
+      assert {:error, :unauthenticated} = Caller.establish(browser.token, entry: :loopback)
+
+      # A request no listener tagged is at no address.
+      assert {:error, :unauthenticated} = Caller.establish(private.token)
+    end
+
+    test "a session warm in the memo at its own address is still refused at the other" do
+      Prima.Test.Env.put_app_env(:sanctum, :caller_memo_ttl_ms, 60_000)
+      on_exit(fn -> Arca.Cache.delete_match({:established, :_, :_}) end)
+
+      {user, _home} = new_user() |> claim!() |> member!()
+      session = session_for(Map.put(user, :namespace, user.slug))
+      hash = Session.token_hash(session.token)
+
+      assert {:ok, _ctx} = Caller.establish(session.token, entry: :loopback)
+      refute Arca.Cache.match(Arca.Cache.Keys.match_established(hash)) == []
+
+      assert {:error, :unauthenticated} = Caller.establish(session.token, entry: :proxy)
+      # The memo answered and still holds the context: the refusal is the
+      # address's, not a miss.
+      refute Arca.Cache.match(Arca.Cache.Keys.match_established(hash)) == []
+      assert {:ok, %Context{entry: :loopback}} = Caller.establish(session.token, entry: :loopback)
+    end
+
+    test "a retained context is refused at revalidation once its entry is not its session's " <>
+           "address" do
+      {user, _home} = new_user() |> claim!() |> member!()
+      session = session_for(Map.put(user, :namespace, user.slug))
+
+      assert {:ok, ctx} = Caller.establish(session.token, entry: :loopback)
+      assert {:ok, %Context{entry: :loopback}} = Caller.revalidate_session(ctx)
+      assert {:error, :unauthenticated} = Caller.revalidate_session(%{ctx | entry: :proxy})
     end
   end
 
@@ -200,8 +264,8 @@ defmodule Sanctum.CallerTest do
       {user, _home} = new_user() |> claim!() |> member!()
       session = session_for(Map.put(user, :namespace, user.slug))
 
-      assert {:ok, ctx} = Caller.establish(session.token)
-      assert {:ok, %Context{user_id: user_id}} = Caller.establish(session.token)
+      assert {:ok, ctx} = Caller.establish(session.token, entry: :loopback)
+      assert {:ok, %Context{user_id: user_id}} = Caller.establish(session.token, entry: :loopback)
       assert user_id == ctx.user_id
       refute Arca.Cache.match({:established, :_, :_}) == []
     end
@@ -210,10 +274,10 @@ defmodule Sanctum.CallerTest do
       {user, _home} = new_user() |> claim!() |> member!()
       session = session_for(Map.put(user, :namespace, user.slug))
 
-      assert {:ok, _ctx} = Caller.establish(session.token)
+      assert {:ok, _ctx} = Caller.establish(session.token, entry: :loopback)
 
-      {:ok, :removed} = Sanctum.Session.destroy(session.token)
-      assert {:error, :unauthenticated} = Caller.establish(session.token)
+      {:ok, :removed} = Sanctum.Session.destroy(session.token, :loopback)
+      assert {:error, :unauthenticated} = Caller.establish(session.token, entry: :loopback)
     end
 
     test "revoke_all_for_user invalidates every memoized session of the person" do
@@ -222,17 +286,17 @@ defmodule Sanctum.CallerTest do
       s1 = session_for(user)
       s2 = session_for(user)
 
-      assert {:ok, _} = Caller.establish(s1.token)
-      assert {:ok, _} = Caller.establish(s2.token)
+      assert {:ok, _} = Caller.establish(s1.token, entry: :loopback)
+      assert {:ok, _} = Caller.establish(s2.token, entry: :loopback)
 
       assert {:ok, 2} = Sanctum.Session.revoke_all_for_user(user.user_id)
-      assert {:error, :unauthenticated} = Caller.establish(s1.token)
-      assert {:error, :unauthenticated} = Caller.establish(s2.token)
+      assert {:error, :unauthenticated} = Caller.establish(s1.token, entry: :loopback)
+      assert {:error, :unauthenticated} = Caller.establish(s2.token, entry: :loopback)
     end
 
     test "refusals are never cached" do
-      assert {:error, :unauthenticated} = Caller.establish("cyfr_sess_nope")
-      assert {:error, :unauthenticated} = Caller.establish("cyfr_sess_nope")
+      assert {:error, :unauthenticated} = Caller.establish("cyfr_sess_nope", entry: :loopback)
+      assert {:error, :unauthenticated} = Caller.establish("cyfr_sess_nope", entry: :loopback)
       assert Arca.Cache.match({:established, :_, :_}) == []
     end
 
@@ -241,10 +305,10 @@ defmodule Sanctum.CallerTest do
       session = session_for(Map.put(user, :namespace, user.slug))
       hash = Session.token_hash(session.token)
 
-      assert {:ok, _ctx} = Caller.establish(session.token)
+      assert {:ok, _ctx} = Caller.establish(session.token, entry: :loopback)
       announced!()
 
-      {:ok, :removed} = Session.destroy(session.token)
+      {:ok, :removed} = Session.destroy(session.token, :loopback)
 
       # The member that revoked dropped its own copy synchronously; this
       # is what reaches the rest of the cell.
@@ -257,7 +321,7 @@ defmodule Sanctum.CallerTest do
       session = session_for(Map.put(user, :namespace, user.slug))
       hash = Session.token_hash(session.token)
 
-      assert {:ok, _ctx} = Caller.establish(session.token)
+      assert {:ok, _ctx} = Caller.establish(session.token, entry: :loopback)
       announced!()
 
       assert :ok = Caller.drop_memo(hash)
@@ -277,17 +341,17 @@ defmodule Sanctum.CallerTest do
       session = session_for(Map.put(user, :namespace, user.slug))
       hash = Session.token_hash(session.token)
 
-      assert {:ok, _ctx} = Caller.establish(session.token)
+      assert {:ok, _ctx} = Caller.establish(session.token, entry: :loopback)
 
-      {:ok, :removed} = Arca.SessionStorage.delete_session(hash)
+      {:ok, :removed} = Arca.SessionStorage.delete_session(hash, Sanctum.private_address())
 
       # The window the TTL exists to bound: the row is gone and this
       # member has heard nothing.
-      assert {:ok, _stale} = Caller.establish(session.token)
+      assert {:ok, _stale} = Caller.establish(session.token, entry: :loopback)
 
       # sleep-ok: the member's memo TTL under test runs out, as the comment above says
       Process.sleep(200)
-      assert {:error, :unauthenticated} = Caller.establish(session.token)
+      assert {:error, :unauthenticated} = Caller.establish(session.token, entry: :loopback)
     end
   end
 
@@ -300,7 +364,7 @@ defmodule Sanctum.CallerTest do
       session = session_for(Map.put(user, :namespace, user.slug))
       hash = Session.token_hash(session.token)
 
-      assert {:ok, ctx} = Caller.establish(session.token)
+      assert {:ok, ctx} = Caller.establish(session.token, entry: :loopback)
 
       [{_key, %Context{}, expires_at}] =
         :ets.lookup(Arca.Cache.table_name(), Arca.Cache.Keys.established(hash, nil))
@@ -309,8 +373,8 @@ defmodule Sanctum.CallerTest do
       assert left > 0 and left < 2_000
 
       # A row removed below the memo, with no invalidation: the memo answers.
-      {:ok, :removed} = Arca.SessionStorage.delete_session(hash)
-      assert {:ok, %Context{user_id: user_id}} = Caller.establish(session.token)
+      {:ok, :removed} = Arca.SessionStorage.delete_session(hash, Sanctum.private_address())
+      assert {:ok, %Context{user_id: user_id}} = Caller.establish(session.token, entry: :loopback)
       assert user_id == ctx.user_id
     end
 
@@ -321,12 +385,12 @@ defmodule Sanctum.CallerTest do
       session = session_for(Map.put(user, :namespace, user.slug))
       hash = Session.token_hash(session.token)
 
-      assert {:ok, _ctx} = Caller.establish(session.token)
-      assert {:ok, _ctx} = Caller.establish(session.token)
+      assert {:ok, _ctx} = Caller.establish(session.token, entry: :loopback)
+      assert {:ok, _ctx} = Caller.establish(session.token, entry: :loopback)
       assert Arca.Cache.match(Arca.Cache.Keys.match_established(hash)) == []
 
-      {:ok, :removed} = Arca.SessionStorage.delete_session(hash)
-      assert {:error, :unauthenticated} = Caller.establish(session.token)
+      {:ok, :removed} = Arca.SessionStorage.delete_session(hash, Sanctum.private_address())
+      assert {:error, :unauthenticated} = Caller.establish(session.token, entry: :loopback)
     end
   end
 
@@ -344,7 +408,7 @@ defmodule Sanctum.CallerTest do
     test "a session's revalidation keeps the origin, the client and the confirmation" do
       {user, _home} = new_user() |> claim!() |> member!()
       session = session_for(Map.put(user, :namespace, user.slug))
-      {:ok, established} = Caller.establish(session.token)
+      {:ok, established} = Caller.establish(session.token, entry: :loopback)
 
       for {field, value} <- @admission do
         assert Map.fetch!(established, field) == nil
@@ -391,7 +455,9 @@ defmodule Sanctum.CallerTest do
         Map.merge(key.credential_binding, %{user_id: key.user_id, athanor_id: key.athanor_id})
 
       # Standing while the row reads: both paths admit.
-      assert {:ok, _} = Caller.derived_standing(claims, client_ip: "192.168.1.10")
+      assert {:ok, _} =
+               Caller.derived_standing(claims, client_ip: "192.168.1.10", entry: :loopback)
+
       assert {:ok, _} = Caller.revalidate_session(key)
 
       {:ok, name: name, key: key, claims: claims}
@@ -416,7 +482,7 @@ defmodule Sanctum.CallerTest do
 
         log =
           capture_log(fn ->
-            assert Caller.derived_standing(claims, client_ip: "192.168.1.10") ==
+            assert Caller.derived_standing(claims, client_ip: "192.168.1.10", entry: :loopback) ==
                      {:error, :ip_not_allowed}
 
             assert Caller.revalidate_session(key) == {:error, :unauthenticated}

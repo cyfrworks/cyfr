@@ -209,7 +209,7 @@ defmodule Emissary.Web.ExecutionEventsStreamTest do
       {person, user} = Sanctum.TestContext.person!(Sanctum.TestContext.local(:api))
       own = Sanctum.Test.People.athanor!(user)
       ctx = Sanctum.TestContext.issuer!(%{person | athanor_id: own.id})
-      {:ok, session} = Sanctum.Session.create(ctx)
+      {:ok, session} = Sanctum.Session.create(ctx, address: Sanctum.private_address())
       {:ok, session: session, person: ctx, exec: admit!(ctx)}
     end
 

@@ -23,7 +23,7 @@ defmodule Sanctum.DeviceUnlockReview353Test do
   end
 
   test "review353 a lost member cannot slide a device session", %{ctx: ctx, answer: answer} do
-    {:ok, _session} = DeviceUnlock.redeem(answer.ticket)
+    {:ok, _session} = DeviceUnlock.redeem(answer.ticket, :loopback)
     at = DateTime.add(DateTime.utc_now(), 10, :second)
 
     Arca.Repo.update_all(from(s in Arca.Schemas.Session, where: s.id == ^answer.session_id),

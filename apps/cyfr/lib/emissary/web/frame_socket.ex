@@ -201,6 +201,7 @@ defmodule Emissary.Web.FrameSocket do
     state = %{
       path: path,
       client_ip: Sanctum.ClientIp.resolve(conn),
+      entry: Sanctum.ClientIp.ingress(conn),
       request_id: conn.assigns[:request_id]
     }
 
@@ -394,7 +395,8 @@ defmodule Emissary.Web.FrameSocket do
 
   defp subscribe(%{sub: sub, credential: bearer} = fields, state) do
     with :ok <- room(state),
-         {:ok, caller} <- FrameAdmission.frame(bearer, state.client_ip, path: state.path) do
+         {:ok, caller} <-
+           FrameAdmission.frame(bearer, state.client_ip, path: state.path, entry: state.entry) do
       # A refusal of either leaves the connection as it was.
       with :ok <- placed(caller, state.path),
            {:ok, bound} <- bind(caller, state) do
@@ -928,7 +930,11 @@ defmodule Emissary.Web.FrameSocket do
   # newest bearer it sent, with its version and grant: a refusal ends every
   # subscription, and each grant's deadline follows the row's.
   defp revalidate(%{caller: caller} = state) do
-    case FrameAdmission.frame(caller.bearer, state.client_ip, path: state.path, held: true) do
+    case FrameAdmission.frame(caller.bearer, state.client_ip,
+           path: state.path,
+           entry: state.entry,
+           held: true
+         ) do
       {:ok, held} ->
         state = %{state | caller: held}
 

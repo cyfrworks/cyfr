@@ -113,9 +113,11 @@ PY
 
 # The preview the command line printed in `$1` (a log, its first line the
 # command) for the switch from head `$2` to head `$3` (JSON), on a CYFR
-# that has booted, so someone may be set up on it: exactly the preview
-# block, who will reach CYFR at the new head's address (the access vectors'
-# words for its kind; apps/codex/cmd/access.go reachedBy), a line for each
+# that has booted, so someone may be set up on it, whose private address is
+# `$4` (needed only where a head has no browser address): exactly the
+# preview block, who will reach CYFR at the new head's address, its browser
+# address or with none its private one (the access vectors' words for its
+# kind; apps/codex/cmd/access.go reachedBy), a line for each
 # other field that changes (a tailnet machine replaced, without its node
 # id, the certificate email, the ports unless the new head is a domain's, the
 # port on this computer; access.go changedRows), and,
@@ -130,6 +132,7 @@ preview_holds() {
     "$ROOT/apps/codex/cmd/access.go" "$@" <<'PY'
 import json, re, sys
 vectors, switch_go, access_go, log, old_text, new_text = sys.argv[1:7]
+private = sys.argv[7] if len(sys.argv) > 7 else ""
 words = json.load(open(vectors))["words"]
 def described(head):
     # The words of a head: the vectors' for a head of the same kind and
@@ -137,8 +140,14 @@ def described(head):
     shaped = [w for w in words if w["head"]["browser"] == head["browser"] and bool(w["head"].get("acme_email")) == bool(head.get("acme_email"))]
     if not shaped:
         sys.exit(print(f"the access vectors hold no words for a {head['browser']} head like {head}") or 1)
-    who, _, email, ports = (s.partition(": ")[2] for s in shaped[0]["sentences"][:4])
-    address = head["public_url"] if head["browser"] != "none" else f"http://localhost:{head['port']}"
+    said = dict(s.partition(": ")[::2] for s in shaped[0]["sentences"])
+    who, email, ports = said["Who can reach CYFR"], said["Certificate email"], said["Ports opened on this machine"]
+    if head["browser"] != "none":
+        address = head["public_url"]
+    elif private:
+        address = private
+    else:
+        sys.exit(print(f"a head with no browser address is read with its private address, and none was given: {head}") or 1)
     return {"who": who, "address": address, "email": head.get("acme_email") or email, "ports": ports,
             "forward": f"http://{head['publish']}" if head.get("publish") else ""}
 old, new = json.loads(old_text), json.loads(new_text)

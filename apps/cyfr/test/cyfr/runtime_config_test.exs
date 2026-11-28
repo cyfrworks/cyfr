@@ -541,7 +541,7 @@ defmodule Cyfr.RuntimeConfigTest do
         end
 
       assert Map.keys(access) |> Enum.sort() ==
-               ~w(assertion browser canonical check_origins digest exposure head hsts listeners origin trust)a
+               ~w(assertion browser browser_address canonical digest exposure head hsts listeners trust)a
 
       assert Map.keys(access.listeners) |> Enum.sort() == ~w(loopback proxy published)a
 
@@ -552,7 +552,7 @@ defmodule Cyfr.RuntimeConfigTest do
           "head" => access.head,
           "canonical" => access.canonical,
           "digest" => access.digest,
-          "origin" => access.origin,
+          "browser_address" => access.browser_address || "none",
           "listeners" => %{
             "loopback" => listener.(access.listeners.loopback),
             "proxy" => listener.(access.listeners.proxy),
@@ -560,7 +560,6 @@ defmodule Cyfr.RuntimeConfigTest do
           },
           "trust" => trust,
           "hsts" => Atom.to_string(access.hsts),
-          "check_origins" => access.check_origins,
           "assertion" => Atom.to_string(access.assertion)
         }
       }
@@ -704,6 +703,49 @@ defmodule Cyfr.RuntimeConfigTest do
                    process: process,
                    release?: true
                  })
+      end
+    end
+  end
+
+  describe "resolve_link/3, as tests/fixtures/link.json holds it" do
+    # The access engine (apps/codex/internal/link) derives every row alike.
+    @link_vectors Path.expand("../../../../tests/fixtures/link.json", __DIR__)
+
+    defp link_vectors, do: @link_vectors |> File.read!() |> Jason.decode!()
+
+    test "every tunnel key's public half gives its private name and address" do
+      names = link_vectors()["names"]
+      assert length(names) >= 3
+
+      for %{"key" => key, "public" => public, "name" => name, "port" => port} = row <- names do
+        # The public half is the X25519 public key of the private half.
+        ["privkey:" <> private, "psk:" <> psk] = String.split(key, ",")
+        assert byte_size(Base.decode16!(psk, case: :lower)) == 32
+        private = Base.decode16!(private, case: :lower)
+        assert {pub, ^private} = :crypto.generate_key(:ecdh, :x25519, private)
+        assert Base.encode16(pub, case: :lower) == public, row["why"]
+
+        assert RuntimeConfig.private_name(pub) == name, row["why"]
+        assert RuntimeConfig.resolve_link(public, port, true) == {:ok, row["address"]}, row["why"]
+      end
+    end
+
+    test "a value that is not a public key refuses the boot, and none refuses a release" do
+      for %{"value" => value, "why" => why} <- link_vectors()["refused"] do
+        assert {:error, %{code: :access_link_invalid, class: :invalid_argument, payload: %{}}} =
+                 RuntimeConfig.resolve_link(value, 4000, true),
+               why
+      end
+
+      for absent <- [nil, "", "  "] do
+        assert {:error, %{code: :access_link_missing, class: :setup_required, payload: %{}}} =
+                 RuntimeConfig.resolve_link(absent, 4000, true)
+
+        # A development or test boot takes the development key's: the
+        # first row's.
+        [first | _] = link_vectors()["names"]
+        assert {:ok, address} = RuntimeConfig.resolve_link(absent, first["port"], false)
+        assert address == first["address"]
       end
     end
   end

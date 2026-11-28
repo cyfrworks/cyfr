@@ -28,7 +28,7 @@ defmodule Sanctum.Directory.HandlesTest do
     Arca.Test.Sandbox.setup!(tags)
     Prima.Test.RateLimiter.reset!()
     on_exit(&Prima.Test.RateLimiter.reset!/0)
-    Prima.Test.Env.put_app_env(:sanctum, :public_url, @directory)
+    Prima.Test.Env.put_app_env(:sanctum, :browser_address, @directory)
     Sanctum.Test.Settings.put("directory_serve", "writer")
     :ok
   end

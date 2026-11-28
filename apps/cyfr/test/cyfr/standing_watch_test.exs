@@ -59,7 +59,7 @@ defmodule Cyfr.StandingWatchTest do
     session: session,
     hash: hash
   } do
-    assert {:ok, %Context{}} = Sanctum.Caller.establish(session.token)
+    assert {:ok, %Context{}} = Sanctum.Caller.establish(session.token, entry: :loopback)
 
     Cyfr.Bus.subscribe_global(Cyfr.Bus.caller_invalidated_global())
 
@@ -73,7 +73,9 @@ defmodule Cyfr.StandingWatchTest do
     session: session,
     hash: hash
   } do
-    assert {:ok, %Context{athanor_id: cached} = ctx} = Sanctum.Caller.establish(session.token)
+    assert {:ok, %Context{athanor_id: cached} = ctx} =
+             Sanctum.Caller.establish(session.token, entry: :loopback)
+
     assert cached == athanor.id
 
     # Member A archives. This VM is also member A, so it drops its own
@@ -85,7 +87,8 @@ defmodule Cyfr.StandingWatchTest do
     :sys.get_state(Cyfr.StandingWatch)
     Arca.Cache.put(Arca.Cache.Keys.established(hash, nil), ctx, 60_000)
 
-    assert {:ok, %Context{athanor_id: ^cached}} = Sanctum.Caller.establish(session.token),
+    assert {:ok, %Context{athanor_id: ^cached}} =
+             Sanctum.Caller.establish(session.token, entry: :loopback),
            "the memo under test is not the one a cached caller is served from"
 
     # The announcement arrives.
@@ -100,7 +103,10 @@ defmodule Cyfr.StandingWatchTest do
                5_000
              )
 
-    refute match?({:ok, %Context{athanor_id: ^cached}}, Sanctum.Caller.establish(session.token))
+    refute match?(
+             {:ok, %Context{athanor_id: ^cached}},
+             Sanctum.Caller.establish(session.token, entry: :loopback)
+           )
   end
 
   defp member_ctx(athanor_id, user_id) do

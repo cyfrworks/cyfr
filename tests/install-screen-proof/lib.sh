@@ -644,19 +644,34 @@ sys.exit(0 if named.count("cyfr") == 1 and named.count("cyfr-locus") >= 1 and le
 # The box serves its own account service (CYFR_DIRECTORY_SERVE=writer):
 # the directory an account's log lives at, the handle registry beside it
 # and /account/config.json, which names both and no policy. Its address is
-# the box's own, http://localhost:4000, the address the box's CYFR names
-# itself by and so the one a genesis made there names as its directory:
-# the screen on the guest reaches it through the port Docker publishes on
-# its loopback. The server never asks it over HTTP: it reads the logs of
-# the accounts it keeps in-process (Sanctum.Directory.Client), since in
-# the shipped stack nothing listens on its container's loopback.
-ACCOUNT_SERVICE=http://localhost:4000
+# the box's private address, http://<private name>.localhost:4000, the
+# name the tunnel key `cyfr init` minted in ~/cyfr/.env gives it
+# (apps/codex/internal/link), the address the box's CYFR gives out with no
+# browser address and so the one a genesis made there names as its
+# directory: the screen on the guest reaches it through the port Docker
+# publishes on its loopback. The server never asks it over HTTP: it reads
+# the logs of the accounts it keeps in-process (Sanctum.Directory.Client),
+# since in the shipped stack nothing listens on its container's loopback.
+# account_settings sets it, once init has written .env.
+ACCOUNT_SERVICE=""
+
+# box_address: the box's private address, from the public half of the
+# tunnel key in its ~/cyfr/.env.
+box_address() {
+  local public
+  public=$(guest_ssh "sed -n 's/^CYFR_LINK_PUBLIC=//p' ~/cyfr/.env" 2>/dev/null) || return 1
+  python3 -I -c 'import base64, hashlib, sys
+public = bytes.fromhex(sys.argv[1])
+if len(public) != 32: sys.exit(1)
+print("http://h-%s.localhost:4000" % base64.b32encode(hashlib.sha256(public).digest()).decode().lower()[:16])' "$public"
+}
 
 # account_settings: before cyfr up, .env makes the box its own account
-# service and names it as the directory and the registry, and lets the
-# server's calls reach its loopback, so the server never starts naming
-# cyfr.run.
+# service at its private address and names it as the directory and the
+# registry, and lets the server's calls reach its loopback, so the server
+# never starts naming cyfr.run.
 account_settings() {
+  ACCOUNT_SERVICE=$(box_address) || fail "~/cyfr/.env holds no tunnel key cyfr init minted"
   printf '%s\n' "CYFR_DIRECTORY_SERVE=writer" "CYFR_DIRECTORY_URL=$ACCOUNT_SERVICE" "CYFR_REGISTRY_URL=${ACCOUNT_SERVICE#http://}" \
     "CYFR_PRIVATE_EGRESS_TARGETS=locus,127.0.0.1" |
     guest_ssh_in 'cd ~/cyfr && sed -i -E "/^(CYFR_DIRECTORY_SERVE|CYFR_REGISTRY_URL|CYFR_DIRECTORY_URL|CYFR_PRIVATE_EGRESS_TARGETS)=/d" .env &&
@@ -791,7 +806,7 @@ screen_cookie() {
 # with this host's time.
 cookie_answer() {
   local got
-  got=$(guest_ssh "curl -s -o /dev/null --max-time 10 -w '%{http_code} %{redirect_url}' -H @\$HOME/proof-cookies/$1.header http://localhost:4000/chat" 2>&1)
+  got=$(guest_ssh "curl -s -o /dev/null --max-time 10 -w '%{http_code} %{redirect_url}' -H @\$HOME/proof-cookies/$1.header $ACCOUNT_SERVICE/chat" 2>&1)
   printf '%s %s\n' "$(date -u +%T)" "$got" >>"$GUEST_DIR/cookie-$1.txt"
   case $got in
     200* | 30[1237]\ *) case $got in *"/login"*) echo "out $got" ;; *) echo "in $got" ;; esac ;;

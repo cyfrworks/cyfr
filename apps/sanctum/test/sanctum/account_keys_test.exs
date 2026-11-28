@@ -59,6 +59,7 @@ defmodule Sanctum.AccountKeysTest do
         hash,
         %{
           user_id: person.id,
+          address: Sanctum.private_address(),
           provider: "passkey",
           kid: kid,
           head: DirectoryServer.head(account),

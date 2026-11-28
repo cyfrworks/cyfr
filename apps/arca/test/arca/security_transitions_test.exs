@@ -101,6 +101,7 @@ defmodule Arca.SecurityTransitions.Fixtures do
         hash,
         %{
           user_id: user_id,
+          address: "http://h-xeypbemm44chehc5.localhost:4002",
           provider: "github",
           athanor_id: athanor_id,
           expires_at: DateTime.add(DateTime.utc_now(), 3600, :second)
@@ -1454,6 +1455,7 @@ defmodule Arca.SecurityTransitionsLockTest do
           hash,
           %{
             user_id: user_id,
+            address: "http://h-xeypbemm44chehc5.localhost:4002",
             provider: "github",
             expires_at: DateTime.add(DateTime.utc_now(), 3600, :second)
           },

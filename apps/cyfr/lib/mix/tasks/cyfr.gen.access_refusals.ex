@@ -39,6 +39,8 @@ defmodule Mix.Tasks.Cyfr.Gen.AccessRefusals do
      ]},
     {:access_stale, [{%{}, ~w(words)}]},
     {:access_unchanged, [{%{}, ~w(address)}]},
+    {:access_link_missing, [{%{}, []}]},
+    {:access_link_invalid, [{%{}, []}]},
     {:access_invalid,
      for(kind <- ~w(domain tailnet_name email), do: {%{kind: kind}, ~w(input rule)})},
     {:access_option_outside_browser,

@@ -9,7 +9,7 @@ defmodule Cyfr.PlatformSettingsRosterTest do
   stale value refuses no one, and read through
   `Arca.PlatformSettings.effective/1`: no reader takes a live setting from
   the application environment, and no test puts one there. The
-  compose-only class derived from `docker-compose.yml`; every documented
+  compose-only class derived from `docker-compose.yml` and the tunnel key's minting owner; every documented
   and every read name declared. Then the boot itself, evaluated from
   `config/runtime.exs` the way a release evaluates it: presence recorded as
   pins, only the restart-scoped settings written to the application
@@ -237,13 +237,17 @@ defmodule Cyfr.PlatformSettingsRosterTest do
         do: {Path.relative_to(path, @root), File.read!(path)}
   end
 
-  # The names docker-compose.yml interpolates that nothing in the tree
-  # reads: every `${…}` name, less those a release's reader spells.
+  # The names a deployment's .env carries that nothing in the tree reads:
+  # every `${…}` name docker-compose.yml interpolates, and every name
+  # `cyfr init` mints for the tunnel key as its owner declares them
+  # (`minted_link_names/0`), less those a release's reader spells.
   defp derived_compose_only do
     compose = File.read!(Path.join(@root, "docker-compose.yml"))
 
     interpolated =
       ~r/\$\{([A-Z][A-Z0-9_]*)/ |> Regex.scan(compose, capture: :all_but_first) |> List.flatten()
+
+    carried = interpolated ++ minted_link_names()
 
     read =
       MapSet.new(
@@ -253,7 +257,18 @@ defmodule Cyfr.PlatformSettingsRosterTest do
           locus_variables()
       )
 
-    interpolated |> Enum.uniq() |> Enum.reject(&MapSet.member?(read, &1)) |> Enum.sort()
+    carried |> Enum.uniq() |> Enum.reject(&MapSet.member?(read, &1)) |> Enum.sort()
+  end
+
+  # The .env names of the tunnel key `cyfr init` mints, as their owner
+  # declares them (apps/codex/internal/link/name.go's `KeyVar` and
+  # `PublicVar`, which `cyfr init` writes).
+  defp minted_link_names do
+    ~r/^\s*(?:KeyVar|PublicVar)\s*=\s*"([A-Z][A-Z0-9_]*)"/m
+    |> Regex.scan(File.read!(Path.join(@root, "apps/codex/internal/link/name.go")),
+      capture: :all_but_first
+    )
+    |> List.flatten()
   end
 
   # Every name the locus release reads: the fixture's, and Locus.Config's
@@ -757,9 +772,16 @@ defmodule Cyfr.PlatformSettingsRosterTest do
   end
 
   describe "the inventory" do
-    test "the compose-only class is docker-compose.yml's names that no release reads" do
+    test "the compose-only class is the names docker-compose.yml interpolates or cyfr init " <>
+           "mints for the tunnel key that no release reads" do
       assert Roster.compose_only() |> Enum.sort() == derived_compose_only()
       assert "CYFR_CPU_LIMIT" in Roster.compose_only()
+
+      # The minting owner's two names are found, and the one the boot
+      # reads, the public half, is a deployment variable.
+      assert minted_link_names() == ["CYFR_LINK_KEY", "CYFR_LINK_PUBLIC"]
+      assert "CYFR_LINK_KEY" in Roster.compose_only()
+      assert "CYFR_LINK_PUBLIC" in Roster.deployment()
 
       # Caddy's certificate email is interpolated for Caddy and read by the
       # release, which refuses it with any browser address but `domain`: a
@@ -1076,9 +1098,22 @@ defmodule Cyfr.PlatformSettingsRosterTest do
     end
 
     test "a .env file may carry the server's names alone" do
-      with_env_file(["CYFR_MCP_RATE_LIMIT_MAX=240", "CYFR_CPU_LIMIT=2"], fn ->
-        assert {"mcp_rate_limit_max", 240} in read_prod_config!()[:cyfr][:deployment_pinned]
-      end)
+      link = Jason.decode!(File.read!(Path.join(@root, "tests/fixtures/link.json")))["names"]
+      [%{"key" => key, "public" => public, "address" => address} | _] = link
+
+      with_env_file(
+        [
+          "CYFR_MCP_RATE_LIMIT_MAX=240",
+          "CYFR_CPU_LIMIT=2",
+          "CYFR_LINK_KEY=" <> key,
+          "CYFR_LINK_PUBLIC=" <> public
+        ],
+        fn ->
+          config = read_prod_config!()
+          assert {"mcp_rate_limit_max", 240} in config[:cyfr][:deployment_pinned]
+          assert config[:sanctum][:private_address] == address
+        end
+      )
 
       with_env_file(["CYFR_RETIRED_KNOB=1"], fn ->
         assert refusal!() =~ "CYFR_RETIRED_KNOB is not a variable this server reads"

@@ -61,7 +61,7 @@ defmodule Sanctum.Providers.InvitationTest do
     assert {:ok, %{invitation: invitation, code: code, invitation_url: link} = created} =
              call(ctx(alice), %{"action" => "create", "thread_id" => thread.id})
 
-    assert link == Sanctum.origin() <> "/invite#" <> code
+    assert link == Sanctum.shared_address() <> "/invite#" <> code
     assert %{state: "pending", thread_id: thread_id, thread_title: title} = invitation
     assert {thread_id, title} == {thread.id, thread.title}
     assert nulls(created) == []
@@ -103,16 +103,17 @@ defmodule Sanctum.Providers.InvitationTest do
   test "create says when the link opens only on this computer, and says nothing where it opens elsewhere",
        %{ops: ops} do
     admin = ctx(ops, platform_admin: true)
+    private = Sanctum.private_address()
 
-    Prima.Test.Env.put_app_env(:sanctum, :public_url, "http://localhost:4010")
+    # With no browser address the link is at the private address, which
+    # names this computer alone.
+    Prima.Test.Env.put_app_env(:sanctum, :browser_address, nil)
 
-    assert {:ok, %{local_only: true, invitation_url: "http://localhost:4010/invite#" <> _}} =
+    assert {:ok, %{local_only: true, invitation_url: ^private <> "/invite#" <> _}} =
              call(admin, %{"action" => "create"})
 
-    Prima.Test.Env.put_app_env(:sanctum, :public_url, "http://127.0.0.1:4000")
-    assert {:ok, %{local_only: true}} = call(admin, %{"action" => "create"})
-
-    Prima.Test.Env.put_app_env(:sanctum, :public_url, "https://cyfr.example.com")
+    # A browser invitation is at the browser address, as before.
+    Prima.Test.Env.put_app_env(:sanctum, :browser_address, "https://cyfr.example.com")
 
     assert {:ok, %{invitation_url: "https://cyfr.example.com/invite#" <> _} = created} =
              call(admin, %{"action" => "create"})

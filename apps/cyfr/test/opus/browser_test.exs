@@ -1358,6 +1358,7 @@ defmodule Opus.BrowserTest do
       # apart: no head is put before the tincture's own.
       served =
         Plug.Test.conn(:get, "/")
+        |> Sanctum.ClientIp.put_ingress(:loopback)
         |> Emissary.Web.TinctureAssets.serve(
           ctx,
           %{segments: unit, manifest: manifest},
@@ -2954,7 +2955,12 @@ defmodule Opus.BrowserTest do
       paired = Sanctum.Test.Devices.paired!(ctx.user_id, "127.0.0.1")
       channel = Emissary.Web.DeviceChannel
       peer = %{address: {127, 0, 0, 1}, port: 50_000, ssl_cert: nil}
-      {:ok, state} = channel.connect(%{connect_info: %{peer_data: peer}})
+
+      {:ok, state} =
+        channel.connect(%{
+          connect_info: %{peer_data: peer, x_headers: [{"x-cyfr-ingress", "loopback"}]}
+        })
+
       {:ok, state} = channel.init(state)
 
       send_frame = fn state, message ->

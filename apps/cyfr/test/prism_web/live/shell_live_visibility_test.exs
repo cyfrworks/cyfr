@@ -195,17 +195,17 @@ defmodule PrismWeb.ShellLiveVisibilityTest do
   # never the endpoint's own listener address; a private one copies nothing.
   test "a public tincture's copied URL is at the home's own address, a private one's is none",
        %{conn: conn, ctx: ctx} do
-    original = Application.fetch_env(:sanctum, :public_url)
+    original = Application.fetch_env(:sanctum, :browser_address)
 
     on_exit(fn ->
       case original do
-        {:ok, value} -> Application.put_env(:sanctum, :public_url, value)
-        :error -> Application.delete_env(:sanctum, :public_url)
+        {:ok, value} -> Application.put_env(:sanctum, :browser_address, value)
+        :error -> Application.delete_env(:sanctum, :browser_address)
       end
     end)
 
     home = "https://cyfr.tail1a2b3c.ts.net"
-    Application.put_env(:sanctum, :public_url, home)
+    Application.put_env(:sanctum, :browser_address, home)
 
     {view, _html} = mount_desktop(conn)
     render_click(view, "copy_url", %{"publisher" => "local", "name" => @tincture})

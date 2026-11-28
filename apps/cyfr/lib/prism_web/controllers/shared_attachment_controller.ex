@@ -27,9 +27,7 @@ defmodule PrismWeb.SharedAttachmentController do
   @inline_types ~w(image/png image/jpeg image/gif image/webp application/pdf text/plain text/csv application/json)
 
   def show(conn, %{"thread" => thread_id, "message_id" => message_id, "filename" => stored}) do
-    token = get_session(conn, CyfrWeb.SignInResponse.session_key())
-
-    case CyfrWeb.ContextGuard.authenticate(token) do
+    case CyfrWeb.ContextGuard.authenticate(conn) do
       {:ok, %Sanctum.Context{user_id: user_id}} when is_binary(user_id) ->
         serve(conn, Sanctum.SharedThreads.attachment(user_id, thread_id, message_id, stored))
 

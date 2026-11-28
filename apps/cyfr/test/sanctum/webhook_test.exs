@@ -209,38 +209,22 @@ defmodule Sanctum.WebhookTest do
       assert String.ends_with?(result.url, "/hooks/" <> result.slug)
     end
 
-    test "the URL is absolute when the operator declares a public URL", %{ctx: ctx} do
-      # A sender needs an absolute URL, and behind a proxy or a tunnel only
-      # the operator knows the host. Both surfaces told users to set
-      # CYFR_PUBLIC_URL long before anything read it.
-      original = Application.get_env(:sanctum, :public_url)
-      Application.put_env(:sanctum, :public_url, "https://cyfr.example.com/")
-
-      on_exit(fn ->
-        if original,
-          do: Application.put_env(:sanctum, :public_url, original),
-          else: Application.delete_env(:sanctum, :public_url)
-      end)
+    test "the URL is at the browser address when the server has one", %{ctx: ctx} do
+      # A sender needs an absolute URL, at an address the settings name and
+      # never a request's host.
+      Prima.Test.Env.put_app_env(:sanctum, :browser_address, "https://cyfr.example.com")
 
       assert {:ok, result} = create(ctx, %{name: "absolute", target_ref: "f:local.handler"})
       assert result.url == "https://cyfr.example.com/hooks/" <> result.slug
     end
 
-    test "the URL is a bare path when no public URL is declared", %{ctx: ctx} do
-      original = Application.get_env(:sanctum, :public_url)
-      Application.delete_env(:sanctum, :public_url)
+    test "the URL is at the private address when the server has no browser address", %{
+      ctx: ctx
+    } do
+      Prima.Test.Env.put_app_env(:sanctum, :browser_address, nil)
 
-      on_exit(fn ->
-        if original, do: Application.put_env(:sanctum, :public_url, original)
-      end)
-
-      assert {:ok, result} = create(ctx, %{name: "relative", target_ref: "f:local.handler"})
-      assert result.url == "/hooks/" <> result.slug
-    end
-
-    test "url is path-only — clients prepend their own host", %{ctx: ctx} do
-      {:ok, result} = create(ctx, %{name: "url-shape", target_ref: "f:local.h"})
-      assert result.url == "/hooks/" <> result.slug
+      assert {:ok, result} = create(ctx, %{name: "private", target_ref: "f:local.handler"})
+      assert result.url == Sanctum.private_address() <> "/hooks/" <> result.slug
     end
 
     test "stores input_template and reads it back via get/2", %{ctx: ctx} do

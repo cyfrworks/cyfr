@@ -9,7 +9,9 @@ defmodule Arca.SessionStorage do
   It's called by `Sanctum.Session` which handles token hashing.
 
   Tokens are stored as SHA-256 hashes for indexed lookups.
-  Session metadata (user_id, email, provider) is stored as plaintext.
+  Session metadata (user_id, email, provider) is stored as plaintext, and
+  every session records the address of the entry that made it (`address`),
+  which a boot that no longer has it deletes it by (`delete_elsewhere/1`).
 
   A session an account's key signed for records that key's `kid` and the
   account head it was verified under (`head`), both or neither: the
@@ -53,6 +55,8 @@ defmodule Arca.SessionStorage do
   person or the athanor either commits first and is reread here, or waits
   for this session and then retires it.
 
+  `attrs.address` is the address of the entry that made the session, as
+  a reservation's is (`reserve_client_session/2`).
   `attrs[:kid]` and `attrs[:head]` name the key that signed for the
   session and the account head it was verified under, both or neither
   (`{:error, {:invalid, _}}`); a head that is not the cached head of the
@@ -97,6 +101,7 @@ defmodule Arca.SessionStorage do
       user_id: attrs.user_id,
       email: attrs[:email],
       provider: attrs.provider,
+      address: attrs.address,
       # A nil athanor is a real state: the session exists from sign-in on,
       # before the caller's athanor is resolved. The athanor is resolved
       # again on the next load; nothing is coerced.
@@ -175,6 +180,7 @@ defmodule Arca.SessionStorage do
             :user_id,
             :email,
             :provider,
+            :address,
             :athanor_id,
             :kid,
             :head,
@@ -318,6 +324,7 @@ defmodule Arca.SessionStorage do
         user_id: attrs.user_id,
         email: attrs[:email],
         provider: @reserved,
+        address: attrs.address,
         athanor_id: attrs[:athanor_id],
         client_id: client_id,
         expires_at: usec(attrs.expires_at),
@@ -514,17 +521,19 @@ defmodule Arca.SessionStorage do
   end
 
   @doc """
-  Delete a session by token_hash. Answers `{:ok, :removed}` when this
-  delete removed its row and `{:ok, :absent}` when there was none to
-  remove: either way no session row of that hash stands once it answers.
-  A store that cannot answer is `{:error, :database_error}`, which says
-  nothing about the row.
+  Delete the session of token_hash made at `address`. Answers
+  `{:ok, :removed}` when this delete removed its row and `{:ok, :absent}`
+  when there was none to remove: either way no session row of that hash
+  stands at that address once it answers, and one made at another address
+  stands as it was. A store that cannot answer is
+  `{:error, :database_error}`, which says nothing about the row.
   """
-  @spec delete_session(binary()) :: {:ok, :removed | :absent} | {:error, :database_error}
+  @spec delete_session(binary(), String.t()) ::
+          {:ok, :removed | :absent} | {:error, :database_error}
   # arca:unscoped-ok signing out is addressed by the token being retired.
-  def delete_session(token_hash) do
+  def delete_session(token_hash, address) when is_binary(address) do
     Arca.Repo.Errors.with_db_rescue("Arca.SessionStorage.delete_session", fn ->
-      query = from(s in Session, where: s.token_hash == ^token_hash)
+      query = from(s in Session, where: s.token_hash == ^token_hash and s.address == ^address)
 
       case Arca.Repo.delete_all(query) do
         {0, _} -> {:ok, :absent}
@@ -613,6 +622,25 @@ defmodule Arca.SessionStorage do
 
       {count, _} = Arca.Repo.delete_all(query)
       {:ok, count}
+    end)
+  end
+
+  @doc """
+  Delete every session made at an address that is not one of
+  `addresses`, the addresses the server has now: a boot after its browser
+  address was added, changed or removed signs out only what was signed
+  in at an address it no longer has. Answers the deleted sessions' token
+  hashes, for the caller to drop from its memo, or `{:error,
+  :database_error}`.
+  """
+  @spec delete_elsewhere([String.t(), ...]) :: {:ok, [binary()]} | {:error, :database_error}
+  # arca:unscoped-ok the server's own addresses are the scope: a session
+  # at an address the server no longer has is no one's to keep.
+  def delete_elsewhere([_ | _] = addresses) do
+    Arca.Repo.Errors.with_db_rescue("Arca.SessionStorage.delete_elsewhere", fn ->
+      query = from(s in Session, where: s.address not in ^addresses, select: s.token_hash)
+      {_count, hashes} = Arca.Repo.delete_all(query)
+      {:ok, hashes || []}
     end)
   end
 

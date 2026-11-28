@@ -137,27 +137,27 @@ func bootJSON(b Boot) map[string]any {
 			head[k] = v
 		}
 	}
-	profiles, origins := []any{}, []any{}
+	profiles := []any{}
 	for _, p := range b.Head.Profiles {
 		profiles = append(profiles, p)
 	}
-	for _, o := range b.CheckOrigins {
-		origins = append(origins, o)
-	}
 	head["profiles"] = profiles
+	browserAddress := "none"
+	if b.BrowserAddress != "" {
+		browserAddress = b.BrowserAddress
+	}
 	loopback := b.Loopback
 	return map[string]any{
-		"browser":       b.Head.Browser,
-		"exposure":      b.Exposure,
-		"head":          head,
-		"canonical":     string(b.Head.Canonical()),
-		"digest":        b.Head.Digest(),
-		"origin":        b.Origin,
-		"listeners":     map[string]any{"loopback": listener(&loopback), "proxy": listener(b.Proxy), "published": listener(b.Published)},
-		"trust":         trust,
-		"hsts":          b.HSTS,
-		"check_origins": origins,
-		"assertion":     b.Assertion,
+		"browser":         b.Head.Browser,
+		"exposure":        b.Exposure,
+		"head":            head,
+		"canonical":       string(b.Head.Canonical()),
+		"digest":          b.Head.Digest(),
+		"browser_address": browserAddress,
+		"listeners":       map[string]any{"loopback": listener(&loopback), "proxy": listener(b.Proxy), "published": listener(b.Published)},
+		"trust":           trust,
+		"hsts":            b.HSTS,
+		"assertion":       b.Assertion,
 	}
 }
 
@@ -370,8 +370,8 @@ func TestResolveBootProxy(t *testing.T) {
 		if !reflect.DeepEqual(b.Head, head) {
 			t.Errorf("%s: head %+v", c.name, b.Head)
 		}
-		if b.Exposure != "public" || b.Origin != "https://cyfr.example.com" || b.HSTS != "endpoint_on_proxy" {
-			t.Errorf("%s: exposure %s, origin %s, HSTS %s", c.name, b.Exposure, b.Origin, b.HSTS)
+		if b.Exposure != "public" || b.BrowserAddress != "https://cyfr.example.com" || b.HSTS != "endpoint_on_proxy" {
+			t.Errorf("%s: exposure %s, browser address %s, HSTS %s", c.name, b.Exposure, b.BrowserAddress, b.HSTS)
 		}
 		if b.Published == nil || *b.Published != c.published {
 			t.Errorf("%s: published at %v, want %v", c.name, b.Published, c.published)
@@ -381,9 +381,6 @@ func TestResolveBootProxy(t *testing.T) {
 		}
 		if !reflect.DeepEqual(b.Trust, c.trust) {
 			t.Errorf("%s: trust %+v, want %+v", c.name, b.Trust, c.trust)
-		}
-		if len(b.CheckOrigins) == 0 || b.CheckOrigins[0] != "https://cyfr.example.com" {
-			t.Errorf("%s: check origins %v", c.name, b.CheckOrigins)
 		}
 	}
 }

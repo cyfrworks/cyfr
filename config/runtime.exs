@@ -153,6 +153,27 @@ if config_env() != :test do
         raise "[Cyfr] FATAL: " <> Prima.Refusal.message({code, payload})
     end
 
+  # The private address every server has, after the access settings
+  # (`Cyfr.RuntimeConfig.resolve_link/3`): `http://<private name>.localhost:<CYFR_PORT>`,
+  # from CYFR_LINK_PUBLIC, the public half of the tunnel key `cyfr init`
+  # mints. A release without it, or a value that is no public key, refuses
+  # the boot with the sentence that names its fix; a development or test
+  # boot without it takes the development key's.
+  {_address, loopback_port} = access.listeners.loopback
+
+  private_address =
+    case Cyfr.RuntimeConfig.resolve_link(
+           sourced["CYFR_LINK_PUBLIC"],
+           loopback_port,
+           Cyfr.RuntimeConfig.release?()
+         ) do
+      {:ok, address} ->
+        address
+
+      {:error, %{code: code, payload: payload}} ->
+        raise "[Cyfr] FATAL: " <> Prima.Refusal.message({code, payload})
+    end
+
   # Every platform setting whose variable is set: read by the strict
   # reader, validated by the roster's validator (a set value that does
   # not pass refuses the boot naming it), and recorded as this member's
@@ -334,37 +355,35 @@ if config_env() != :test do
   # The endpoint serves on its loopback listener whatever the kind, and
   # with a browser address on the proxy listener too, the one its proxy
   # forwards to (`CyfrWeb.Ingress`): each at the address and port the
-  # access settings name. Its URL is the server's: `http://localhost:<CYFR_PORT>`
-  # with no browser address, `https://<CYFR_HOST>` on 443 otherwise.
+  # access settings name. Its URL is the server's shared address: the
+  # private address with no browser address, `https://<CYFR_HOST>` on 443
+  # otherwise. A socket's Origin is compared with its listener's own
+  # address by the ingress, not by the endpoint (`config/config.exs`).
   listener = fn {address, port} ->
     {:ok, ip} = :inet.parse_strict_address(String.to_charlist(address))
     [ip: ip, port: port]
   end
 
-  {_address, loopback_port} = access.listeners.loopback
-
   config :cyfr, CyfrWeb.Endpoint,
     url:
       if(access.browser == :none,
-        do: [scheme: "http", host: "localhost", port: loopback_port],
+        do: [scheme: "http", host: URI.parse(private_address).host, port: loopback_port],
         else: [scheme: "https", host: access.head["host"], port: 443]
       ),
     # HTTP/1.1 alone comes from config/config.exs's `http:`, which this
     # deep-merges over (endpoint_http2_test.exs holds the release to it).
     http:
       listener.(access.listeners.loopback) ++
-        [thousand_island_options: [read_timeout: 60_000]],
-    check_origin: access.check_origins
+        [thousand_island_options: [read_timeout: 60_000]]
 
   case access.listeners.proxy do
     :none -> :ok
     proxy -> config :cyfr, CyfrWeb.Endpoint, proxy: listener.(proxy)
   end
 
-  # The MCP Origin allowlist (CyfrWeb.Plugs.MCPOrigin) is the endpoint's
-  # `check_origin`, and the CYFR_MCP_ALLOWED_ORIGINS extras extend it
-  # (`Cyfr.RuntimeConfig.mcp_allowed_origins/0`).
-  config :cyfr, :mcp_allowed_origins, access.check_origins
+  # The MCP Origin check (CyfrWeb.Plugs.MCPOrigin) takes the address of the
+  # request's entry, and these extras beside it
+  # (`Cyfr.RuntimeConfig.mcp_extra_origins/0`).
   config :cyfr, :mcp_extra_origins, env_list.("CYFR_MCP_ALLOWED_ORIGINS")
 
   # The proxies whose forwarded headers the proxy listener trusts, and only
@@ -378,14 +397,16 @@ if config_env() != :test do
   # (`CyfrWeb.Plugs.ApiSecurityHeaders.maybe_hsts/1`).
   config :cyfr, :hsts, access.hsts
 
-  # The server's address (`Sanctum.origin/0`): its browser address,
-  # `https://<CYFR_HOST>`, and with none, `http://localhost:<CYFR_PORT>`.
-  # Every self-reference reads it: a tincture's frame-ancestors and
-  # connect-src, an OAuth `redirect_uri`, a copied URL. A webhook URL is
-  # absolute only where the public URL is set (`Sanctum.public_url/0`), a
-  # path with no browser address.
-  config :sanctum, :public_url, access.head["public_url"]
-  config :sanctum, :fallback_origin, access.origin
+  # The server's two addresses: the private address always
+  # (`Sanctum.private_address/0`), the loopback entry's, and the browser
+  # address, `https://<CYFR_HOST>`, when it has one
+  # (`Sanctum.browser_address/0`), the proxy entry's. A request's address
+  # is its entry's (`Sanctum.address/1`); a value no request names, a
+  # webhook's URL, a copied address, an invitation, reads the browser
+  # address when there is one and the private address otherwise
+  # (`Sanctum.shared_address/0`).
+  config :sanctum, :private_address, private_address
+  config :sanctum, :browser_address, access.browser_address
 
   # What freshness answers while a directory cannot be read follows the
   # server's exposure (`Sanctum.IdentityFreshness`).
@@ -561,11 +582,12 @@ if config_env() != :test do
   {:ok, directory_url} = Prima.EnvValue.text(getenv, "CYFR_DIRECTORY_URL")
   directory_url = directory_url || "https://cyfr.run"
 
-  unless Sanctum.enrollment_directory?(directory_url) do
+  unless Sanctum.enrollment_directory?(directory_url, private_address) do
     raise "[Cyfr] FATAL: CYFR_DIRECTORY_URL must be a directory URL: an origin and an " <>
             "optional path, with no user, query or fragment, at most " <>
             "#{Prima.Confirmation.Preview.max_text()} bytes long, over https, or over " <>
-            "http on this machine's loopback (localhost, 127.0.0.0/8 or ::1)."
+            "http on this machine's loopback (this CYFR's private name " <>
+            "#{URI.parse(private_address).host}, 127.0.0.0/8 or ::1)."
   end
 
   config :sanctum, :directory_url, directory_url

@@ -163,25 +163,21 @@ defmodule Cyfr.RuntimeConfig do
   def require_signed_pulls?, do: Application.get_env(:cyfr, :require_signed_pulls, false)
 
   @doc """
-  The home's origin (`Sanctum.origin/0`), as the console reads it: its
-  surface names no root `Sanctum` module (`Cyfr.Boundaries`), so the
-  host's glue carries this one value to it.
+  The server's shared address (`Sanctum.shared_address/0`), as the
+  console reads it: its surface names no root `Sanctum` module
+  (`Cyfr.Boundaries`), so the host's glue carries this one value to it.
   """
-  @spec origin() :: String.t()
-  defdelegate origin(), to: Sanctum
+  @spec shared_address() :: String.t()
+  defdelegate shared_address(), to: Sanctum
 
   @doc """
-  MCP Origin-header allowlist (DNS-rebinding guard), read by the Origin
-  plug: the origins the home's access settings resolve to
-  (`:mcp_allowed_origins`, `config/runtime.exs`), followed by the
-  `CYFR_MCP_ALLOWED_ORIGINS` extras (`:mcp_extra_origins`), which extend
-  it rather than replace it.
+  The MCP Origin check's extras (DNS-rebinding guard), read by the Origin
+  plug beside the address of the request's entry: the
+  `CYFR_MCP_ALLOWED_ORIGINS` origins (`:mcp_extra_origins`,
+  `config/runtime.exs`).
   """
-  @spec mcp_allowed_origins() :: [String.t()]
-  def mcp_allowed_origins do
-    Application.fetch_env!(:cyfr, :mcp_allowed_origins) ++
-      Application.fetch_env!(:cyfr, :mcp_extra_origins)
-  end
+  @spec mcp_extra_origins() :: [String.t()]
+  def mcp_extra_origins, do: Application.fetch_env!(:cyfr, :mcp_extra_origins)
 
   @doc "The default per-window tincture invocation budget, per client address."
   @spec tincture_default_invoke_max() :: pos_integer()
@@ -683,7 +679,7 @@ defmodule Cyfr.RuntimeConfig do
           head: access_head(),
           canonical: String.t(),
           digest: String.t(),
-          origin: String.t(),
+          browser_address: String.t() | nil,
           listeners: %{
             loopback: {String.t(), pos_integer()},
             proxy: {String.t(), pos_integer()} | :none,
@@ -691,7 +687,6 @@ defmodule Cyfr.RuntimeConfig do
           },
           trust: :none | {:cidrs, [String.t()]} | {:hops, 0..16},
           hsts: :none | :endpoint_on_proxy | :caddy,
-          check_origins: [String.t()],
           assertion: :absent | :process
         }
 
@@ -738,7 +733,8 @@ defmodule Cyfr.RuntimeConfig do
   answers; the access engine reads the same file.
 
   Exposure is `:public` for `domain` and `proxy`, `:private` for `none`
-  and `tailnet`.
+  and `tailnet`. The browser address is `CYFR_PUBLIC_URL`, and `nil` for
+  `none`; the private address every server has is `resolve_link/3`'s.
   """
   @spec resolve_access(access_input()) :: {:ok, access()} | {:error, access_refusal()}
   def resolve_access(%{file: file, process: process, release?: release?})
@@ -765,7 +761,7 @@ defmodule Cyfr.RuntimeConfig do
            head: head,
            canonical: canonical,
            digest: digest,
-           origin: access_origin(head),
+           browser_address: head["public_url"],
            listeners: %{
              loopback: settings.bind,
              proxy: settings.proxy,
@@ -782,7 +778,6 @@ defmodule Cyfr.RuntimeConfig do
                },
                browser
              ),
-           check_origins: access_check_origins(head),
            assertion: settings.assertion
          }}
       end
@@ -849,6 +844,72 @@ defmodule Cyfr.RuntimeConfig do
   end
 
   defp dns_label?(label), do: Regex.match?(@dns_label, label)
+
+  # ── the private address ────────────────────────────────────────────────────
+
+  @doc """
+  The private name a tunnel public key gives a server: `h-` and the first
+  16 characters of the lowercase, unpadded base32 (RFC 4648) of the
+  SHA-256 of the key's 32 bytes, 80 bits in 18 characters.
+  `tests/fixtures/link.json` holds the vectors the access engine
+  (`apps/codex/internal/link`) derives alike.
+  """
+  @spec private_name(<<_::256>>) :: String.t()
+  def private_name(<<_::256>> = public) do
+    digest = Base.encode32(:crypto.hash(:sha256, public), case: :lower, padding: false)
+    "h-" <> binary_part(digest, 0, 16)
+  end
+
+  # The public half of the development tunnel key, tests/fixtures/link.json's
+  # first: the private address of a development or test boot that names
+  # none, as one that names no browser address is `none`. A release never
+  # takes it.
+  @development_link_public "6b6b937aca103230d149eb148efbcfb59e6d1f05bb04dc648ac3e92339eae74a"
+
+  @doc """
+  The server's private address, `http://<private name>.localhost:<port>`
+  (with no port on port 80, as a browser serialises that origin), from
+  `CYFR_LINK_PUBLIC` as the boot read it (`nil` when unset or blank),
+  the server's port and whether this is a release: `{:ok, address}`, or a
+  `Prima.Refusal` row as `resolve_access/1` answers one. The key is the
+  64 lowercase hexadecimal digits of the public half of the tunnel key
+  `cyfr init` mints. A release without it is refused, since no address
+  then names the server on its own machine; a development or test boot
+  without it takes the development key's.
+  """
+  @spec resolve_link(String.t() | nil, pos_integer(), boolean()) ::
+          {:ok, String.t()} | {:error, access_refusal()}
+  def resolve_link(text, port, release?)
+      when is_integer(port) and port in 1..65_535 and is_boolean(release?) do
+    result =
+      case {blank_to_nil(text), release?} do
+        {nil, true} ->
+          {:error, {:access_link_missing, %{}}}
+
+        {nil, false} ->
+          {:ok, private_address(@development_link_public, port)}
+
+        {text, _release?} ->
+          if Regex.match?(~r/\A[0-9a-f]{64}\z/, text),
+            do: {:ok, private_address(text, port)},
+            else: {:error, {:access_link_invalid, %{}}}
+      end
+
+    case result do
+      {:error, {code, payload}} ->
+        {:error,
+         %{code: code, class: Prima.Refusal.classify({code, payload}).class, payload: payload}}
+
+      ok ->
+        ok
+    end
+  end
+
+  # The origin as a browser serialises it: http's default port is left out.
+  defp private_address(public, port) do
+    name = private_name(Base.decode16!(public, case: :lower))
+    if port == 80, do: "http://#{name}.localhost", else: "http://#{name}.localhost:#{port}"
+  end
 
   # Every value either map holds for a name the resolver reads is UTF-8,
   # or the first name in byte order that holds one that is not is refused.
@@ -1163,20 +1224,6 @@ defmodule Cyfr.RuntimeConfig do
       {0, 0, 0, 0, 0, 0, 0, 1} -> true
       _ -> false
     end
-  end
-
-  defp access_origin(%{"browser" => "none", "port" => port}), do: "http://localhost:#{port}"
-  defp access_origin(%{"public_url" => url}), do: url
-
-  # The loopback origins on the server's port, and its browser address
-  # when it has one.
-  defp access_check_origins(%{"port" => port} = head) do
-    own = if head["browser"] == "none", do: [], else: ["https://#{head["host"]}"]
-
-    own ++
-      for host <- ["localhost", "127.0.0.1", "[::1]"],
-          scheme <- ["http", "https"],
-          do: "#{scheme}://#{host}:#{port}"
   end
 
   defp reject_nil(map), do: Map.reject(map, fn {_key, value} -> is_nil(value) end)

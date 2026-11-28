@@ -345,7 +345,7 @@ test("main takes a home's account service by the rule cyfr holds", () => {
 })
 
 test("a local CYFR serving its own accounts hops to its sign-in route and the page that makes an account alone, and nothing else of this computer loads", () => {
-  const origin = "http://localhost:4000"
+  const origin = "http://h-xeypbemm44chehc5.localhost:4000"
   const local = {home: origin, account: origin, accountRoad: true}
   assert.equal(top(origin + "/threads", local, LOOPBACK + "/"), "allow")
   assert.equal(top(origin + "/account/sign#x", local, origin + "/login"), "hop")
@@ -357,7 +357,7 @@ test("a local CYFR serving its own accounts hops to its sign-in route and the pa
   assert.equal(accountLoad(origin + "/account/sign", local, "sign-in", now), "block", "a sign-in page with no request")
   assert.equal(accountLoad(origin + "/login#answer=x", local), "return")
   assert.equal(accountLoad(origin + "/threads", local), "block")
-  for (const elsewhere of ["http://localhost:4100/", "http://127.0.0.1:4000/", "http://localhost:4100/account/sign"]) {
+  for (const elsewhere of ["http://h-xeypbemm44chehc5.localhost:4100/", "http://localhost:4000/", "http://127.0.0.1:4000/", "http://h-xeypbemm44chehc5.localhost:4100/account/sign"]) {
     assert.equal(top(elsewhere, local, origin + "/login"), "block", elsewhere)
     assert.equal(accountLoad(elsewhere, local), "block", elsewhere)
   }

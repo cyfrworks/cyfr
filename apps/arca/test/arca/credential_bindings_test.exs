@@ -30,6 +30,7 @@ defmodule Arca.CredentialBindingsTest do
         hash,
         %{
           user_id: "usr_bound",
+          address: "http://h-xeypbemm44chehc5.localhost:4002",
           provider: "github",
           athanor_id: "ath_test",
           expires_at: DateTime.add(DateTime.utc_now(), 60, :second)

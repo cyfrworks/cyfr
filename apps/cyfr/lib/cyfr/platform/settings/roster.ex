@@ -22,7 +22,8 @@ defmodule Cyfr.Platform.Settings.Roster do
   downward.
 
   Two more classes complete the inventory. `compose_only/0` is the names
-  `docker-compose.yml` interpolates that no release reads. `foreign/0` is
+  a deployment's `.env` carries that no release reads: those
+  `docker-compose.yml` interpolates, and the tunnel key's private half. `foreign/0` is
   the `CYFR_*` names other programs own (the CLI, the installer, the test
   harness), which a shell may export beside a server. `unknown/2` is the
   refusal: a `CYFR_*` name in the boot's `.env` files that none of the
@@ -134,7 +135,7 @@ defmodule Cyfr.Platform.Settings.Roster do
     {"CYFR_BIND_ADDRESS",
      "The address the endpoint's loopback listener binds, whatever the browser address (default `127.0.0.1`): `127.0.0.1` or `::1`, since the boot refuses any other address without the compose file's `CYFR_LOCAL_INGRESS_ASSERTED`. The stack binds cyfr's fixed address on its `default` network, which no other container joins and Docker publishes on the host's loopback port alone."},
     {"CYFR_BROWSER",
-     "The browser address CYFR has: `none` (this computer alone, at `http://localhost:<CYFR_PORT>`), `tailnet` (your devices on Tailscale, through Tailscale Serve), `domain` (anyone on the internet, through Caddy on ports 80 and 443) or `proxy` (a domain your own proxy serves, forwarding to the proxy listener published at `CYFR_PROXY_PUBLISH`; it needs `CYFR_TRUSTED_PROXY_HOPS` or `CYFR_TRUSTED_PROXY_CIDRS`). `cyfr init` and `cyfr access browser <kind>` write it with every setting it implies, the boot refuses a setting that contradicts it and names the command that fixes it, and a release refuses to start without it; a development or test boot without it is `none`."},
+     "The browser address CYFR has: `none` (this computer alone, at its private address), `tailnet` (your devices on Tailscale, through Tailscale Serve), `domain` (anyone on the internet, through Caddy on ports 80 and 443) or `proxy` (a domain your own proxy serves, forwarding to the proxy listener published at `CYFR_PROXY_PUBLISH`; it needs `CYFR_TRUSTED_PROXY_HOPS` or `CYFR_TRUSTED_PROXY_CIDRS`). `cyfr init` and `cyfr access browser <kind>` write it with every setting it implies, the boot refuses a setting that contradicts it and names the command that fixes it, and a release refuses to start without it; a development or test boot without it is `none`."},
     {"CYFR_CELL_COOKIE",
      "A cluster's cookie: at least 32 characters (`openssl rand -hex 32`), the same on every server and the cookie each server's BEAM runs under (`RELEASE_COOKIE` or `-setcookie`)."},
     {"CYFR_CLUSTER",
@@ -167,7 +168,7 @@ defmodule Cyfr.Platform.Settings.Roster do
     {"CYFR_DB_POOL_SIZE", "The database connection pool's size (default 20)."},
     {"CYFR_DB_SSL", "TLS to the PostgreSQL server (default off)."},
     {"CYFR_DIRECTORY_URL",
-     "The account service this deployment's people sign in through, whose account pages a browser is sent to and whose accounts this CYFR reads: an `https` URL, or an `http` one on this machine's loopback (`localhost`, `127.0.0.0/8` or `::1`), since loopback has no network path for TLS to protect and an account service is trusted only to order signed entries; the address is still reached only when `CYFR_PRIVATE_EGRESS_TARGETS` lists it, and accounts made there sign in at no CYFR on another machine. Default `https://cyfr.run` in every build, the account service cyfr.run hosts, whose registry takes requests only from the accounts it keeps. Choosing another is a choice about how long an account lasts. A malformed value, `http` on any other host, or one longer than 1,024 bytes refuses the boot."},
+     "The account service this deployment's people sign in through, whose account pages a browser is sent to and whose accounts this CYFR reads: an `https` URL, or an `http` one on this machine's loopback (this CYFR's own private name, `127.0.0.0/8` or `::1`), since loopback has no network path for TLS to protect and an account service is trusted only to order signed entries; the address is still reached only when `CYFR_PRIVATE_EGRESS_TARGETS` lists it, and accounts made there sign in at no CYFR on another machine. Default `https://cyfr.run` in every build, the account service cyfr.run hosts, whose registry takes requests only from the accounts it keeps. Choosing another is a choice about how long an account lasts. A malformed value, `http` on any other host, or one longer than 1,024 bytes refuses the boot."},
     {"CYFR_HOST",
      "CYFR's hostname, which `cyfr access browser` writes with the kind: `localhost` with none, the tailnet machine's name (`<machine>.<tailnet>.ts.net`) with `tailnet`, and the domain with `domain` (the name Caddy's certificate names) and `proxy` (the name your own proxy serves). The boot refuses a host the kind does not allow."},
     {"CYFR_HOST_API_BIND",
@@ -175,6 +176,8 @@ defmodule Cyfr.Platform.Settings.Roster do
     {"CYFR_HOST_API_PORT", "The host API's port (default 4300)."},
     {"CYFR_HOST_API_URL",
      "The address a worker service reaches this server's host API at, carried by every assignment the server issues; unset, a worker uses its own `LOCUS_RUNTIME_HOST_API_URL`, and a cluster refuses to boot without it."},
+    {"CYFR_LINK_PUBLIC",
+     "The public half of this CYFR's tunnel key, 64 lowercase hexadecimal digits, which `cyfr init` writes with the key it mints: its private address, `http://h-<16 characters>.localhost:<CYFR_PORT>`, the address this computer reaches CYFR at whatever its browser address, is derived from it. A release refuses to start without it or with a value of another form; a development or test boot without it takes a fixed development key's."},
     {"CYFR_LIVE_SALT",
      "The LiveView socket's signing salt; unset, derived from `CYFR_SECRET_KEY_BASE`. Set it only to keep sessions across a key-base rotation."},
     {"CYFR_LOCAL_INGRESS_ASSERTED",
@@ -187,7 +190,7 @@ defmodule Cyfr.Platform.Settings.Roster do
      "The key every build request is signed with, 64 hexadecimal digits, which `cyfr init` mints and compose hands Locus as `LOCUS_BUILDS_KEY`, which starts its builds role. Set, builds run in the Locus `CYFR_LOCUS_BACKENDS_URL` names, at its host on port 4100, and the boot refuses it without that URL; empty, builds are off and every build is refused."},
     {"CYFR_LOG_FORMAT", "`json` for structured logs; unset, plain text."},
     {"CYFR_MCP_ALLOWED_ORIGINS",
-     "Extra origins, comma-separated, the MCP endpoint's Origin check accepts beside CYFR's own: `https://<CYFR_HOST>` with a browser address, and the localhost origins on `CYFR_PORT`."},
+     "Extra origins, comma-separated, the MCP endpoint's Origin check accepts beside the address the request came in at: the private address on this computer, the browser address through the proxy. A localhost origin without a port admits it on any port."},
     {"CYFR_METRICS_TOKEN",
      "The bearer token a `/metrics` scrape must present; unset, an enabled endpoint is unauthenticated, so bind it privately or allowlist it at the proxy."},
     {"CYFR_OCI_REGISTRY_URL",
@@ -199,7 +202,7 @@ defmodule Cyfr.Platform.Settings.Roster do
     {"CYFR_OTEL_ENABLED",
      "OpenTelemetry traces over OTLP to `OTEL_EXPORTER_OTLP_ENDPOINT` (default off). Each span is scrubbed of tincture credentials before export, and the boot refuses an `OTEL_TRACES_EXPORTER` that would replace the scrubbing exporter."},
     {"CYFR_PORT",
-     "The loopback listener's port (default 4000), which the stack publishes on this machine's loopback alone; CYFR's address with no browser address is `http://localhost:<CYFR_PORT>`."},
+     "The loopback listener's port (default 4000), which the stack publishes on this machine's loopback alone, and the port of CYFR's private address."},
     {"CYFR_PRIVATE_EGRESS_TARGETS",
      "The private hosts the server's own outbound calls may reach (MCP servers, OAuth token endpoints, registry pulls), comma-separated, each a name, an address written in full or a CIDR range; the stack names `locus`. Link-local addresses are always refused, and a run's egress never uses this list. The stack's builds reach public hosts and the hosts named here, and a program the hosts its row names or, with none, public hosts, and the hosts named here, and nothing else: Locus's egress guard (the `locus-guard` service) refuses every link-local and metadata address, the control plane, every other private address, and one space's reach into another's."},
     {"CYFR_PROMETHEUS_METRICS",
@@ -211,7 +214,7 @@ defmodule Cyfr.Platform.Settings.Roster do
     {"CYFR_PROXY_PUBLISH",
      "Where the stack publishes the proxy listener with a `proxy` browser address, for your own proxy to forward to: an IPv4 loopback address of this machine and a port (default `127.0.0.1:4001`), which `cyfr access browser proxy --publish` writes; any other kind refuses it, and so does an address off the IPv4 loopback (an IPv6 one included: Docker's IPv6 publication does not reach the listener) or the loopback listener's own `127.0.0.1` on `CYFR_PORT`. A stated limit: every program on this machine that can connect to the published port counts as your proxy: CYFR sees Docker's gateway as the peer and cannot tell one local program from another. With `CYFR_TRUSTED_PROXY_HOPS=0` no forwarded address is believed, and every caller counts as one address. With one hop or more, or a `CYFR_TRUSTED_PROXY_CIDRS` that covers Docker's gateway, any such program chooses the client address CYFR uses for its per-address limits and for an API key's address allowlist. Credentials are still required either way, and the scheme is the listener's, not a header's."},
     {"CYFR_PUBLIC_URL",
-     "CYFR's browser address, exactly `https://<CYFR_HOST>`, which `cyfr access browser` writes with the kind; with none CYFR has no such setting, and its address is `http://localhost:<CYFR_PORT>`. Webhook URLs are absolute when it is set and bare paths when it is not."},
+     "CYFR's browser address, exactly `https://<CYFR_HOST>`, which `cyfr access browser` writes with the kind; with none CYFR has no such setting and no browser address. A webhook's URL, a copied address and an invitation's link are at it when it is set, and at the private address when it is not."},
     {"CYFR_REGISTRY_URL",
      "The component registry: a host name or IPv4 address, with an optional port and an optional path a proxy serves it under, whose segments are not empty and which does not end in `/` (default `cyfr.run` in every build), which a person's registry requests are signed for and names resolve at. Every CYFR names one and calls it: cyfr.run, or its own, which an install cut off from the internet names. A CYFR that serves an account service (`CYFR_DIRECTORY_SERVE`) and names itself here answers its people's names and serves no components. A registry it cannot reach is answered as unavailable, and an athanor fills from what CYFR ships without it. An IPv6 address is not one, since a signed registry request names its registry by a host name's grammar; any other value, and `none` in any case, refuses the boot."},
     {"CYFR_REQUIRE_SIGNED_PULLS",
@@ -253,14 +256,17 @@ defmodule Cyfr.Platform.Settings.Roster do
      "The OTLP endpoint traces go to (default `http://localhost:4318`). Not under the prefix; listed so every name the boot reads is documented in one place."}
   ]
 
-  # The `${…}` names docker-compose.yml interpolates that no release reads:
-  # cyfr's CPU limit, the Locus pool's numbers and each role's processors,
-  # which cyfr-locus writes into its groups, Locus's AppArmor profile, and
-  # the two devices a person's VM needs, where the machine has them,
-  # each with the sentence `configuration-guide.md` gives it.
+  # The names a deployment's `.env` carries that no release reads: the
+  # `${…}` names docker-compose.yml interpolates (cyfr's CPU limit, the
+  # Locus pool's numbers and each role's processors, which cyfr-locus
+  # writes into its groups, Locus's AppArmor profile, and the two devices a
+  # person's VM needs, where the machine has them), and the tunnel key's
+  # private half, each with the sentence `configuration-guide.md` gives it.
   @compose_only [
     {"CYFR_CPU_LIMIT",
      "The cyfr container's CPU limit (default 4): the control plane's own share of the host, since components run in Locus's runtime role under `LOCUS_RUNTIME_CPU_LIMIT`."},
+    {"CYFR_LINK_KEY",
+     "The private half of this CYFR's tunnel key and its pre-shared key, `privkey:<64 hex>,psk:<64 hex>`, which `cyfr init` mints beside `CYFR_LINK_PUBLIC`: a secret, which no release reads."},
     {"CYFR_LOCUS_APPARMOR",
      "The AppArmor profile the Locus container runs under on a host with AppArmor, by its name, `cyfr-locus-` and 12 hex digits of its content's hash: `cyfr init` and `cyfr update` write the profile built into `cyfr` here and load it, and a host without AppArmor ignores it."},
     {"CYFR_LOCUS_KVM",
@@ -919,8 +925,9 @@ defmodule Cyfr.Platform.Settings.Roster do
   def deployment_docs, do: @deployment
 
   @doc """
-  The names `docker-compose.yml` interpolates that no release reads: the
-  containers' CPU and memory limits.
+  The names a deployment's `.env` carries that no release reads: those
+  `docker-compose.yml` interpolates (the containers' limits and devices)
+  and the tunnel key's private half, `CYFR_LINK_KEY`.
   """
   @spec compose_only() :: [String.t()]
   def compose_only, do: Enum.map(@compose_only, &elem(&1, 0))

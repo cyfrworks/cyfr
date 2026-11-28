@@ -135,8 +135,17 @@ defmodule Sanctum.Directory.ClientTest do
   end
 
   describe "the loopback rule" do
-    @loopback ~w(http://127.0.0.1 http://127.79.0.1:4702 http://localhost:4000)
-    @refused ~w(http://10.0.0.5 http://dir.example http://127.0.0.1.example)
+    # `localhost` is no longer a server's address, and another server's
+    # private name is not this one's: neither is this machine's loopback.
+    @loopback ~w(http://127.0.0.1 http://127.79.0.1:4702)
+    @refused ~w(http://10.0.0.5 http://dir.example http://127.0.0.1.example
+                http://localhost:4000 http://h-aaaaaaaaaaaaaaaa.localhost:4002)
+
+    test "this server's own private name is its loopback, for the transport" do
+      assert Sanctum.directory_transport?(Sanctum.private_address())
+      refute Sanctum.directory_transport?("http://localhost:4002")
+      refute Sanctum.directory_transport?("http://h-aaaaaaaaaaaaaaaa.localhost:4002")
+    end
 
     test "plain HTTP to any other host is insecure_directory, before any lookup or request",
          ctx do
@@ -430,7 +439,7 @@ defmodule Sanctum.Directory.ClientTest do
   describe "a log this node serves" do
     setup ctx do
       dir = DirectoryServer.start!(ctx.tls)
-      Prima.Test.Env.put_app_env(:sanctum, :public_url, dir.url)
+      Prima.Test.Env.put_app_env(:sanctum, :browser_address, dir.url)
       Sanctum.Test.Settings.put("directory_serve", "writer")
 
       # The account as this node's own directory holds it, and the
@@ -462,7 +471,7 @@ defmodule Sanctum.Directory.ClientTest do
 
       # This node's origin is compared in the one spelling a genesis names
       # its directory in, however it is configured.
-      Prima.Test.Env.put_app_env(:sanctum, :public_url, String.upcase(dir.url, :ascii))
+      Prima.Test.Env.put_app_env(:sanctum, :browser_address, String.upcase(dir.url, :ascii))
       assert {:ok, %{length: 2}} = Client.log(alice.identifier, dir.url, opts(ctx))
 
       at = Identity.hash(genesis(alice))

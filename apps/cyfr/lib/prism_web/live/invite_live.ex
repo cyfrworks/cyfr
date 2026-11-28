@@ -48,6 +48,9 @@ defmodule PrismWeb.InviteLive do
      |> assign(:page_title, "You are invited to CYFR")
      |> assign(:browser_binding, session["_csrf_token"])
      |> assign(:client_ip, PrismWeb.AuthHelpers.socket_client_ip(socket))
+     # The listener this page came in by: its sign-in request is minted
+     # at that entry's address alone.
+     |> assign(:entry, CyfrWeb.ContextGuard.entry(socket))
      |> assign(:step, :reading)
      |> assign(:hash, nil)
      |> assign(:invitation, nil)
@@ -89,7 +92,8 @@ defmodule PrismWeb.InviteLive do
       true ->
         case Sanctum.SignIn.request(:sign_in, {:browser, socket.assigns.browser_binding},
                admission: {:invitation, hash},
-               page: page
+               page: page,
+               entry: socket.assigns.entry
              ) do
           {:ok, %{url: url}} -> push_event(socket, "account:hop", %{url: url})
           {:error, reason} -> assign(socket, :error, PrismWeb.Ops.error_message(reason))

@@ -236,6 +236,15 @@ defmodule Prima.Refusal do
        "CYFR_BROWSER is not set in .env, so CYFR does not know what browser address it " <>
          "has. Nothing started. Run `cyfr init` for a new CYFR, or `cyfr access browser " <>
          "none|tailnet|domain|proxy` for this one."},
+    access_link_missing:
+      {:setup_required,
+       "CYFR_LINK_PUBLIC is not set in .env, so this CYFR has no private address. Nothing " <>
+         "started. `cyfr init` writes it with the tunnel key it mints for a new CYFR; a CYFR " <>
+         "installed by an earlier build is not carried across."},
+    access_link_invalid:
+      {:invalid_argument,
+       "CYFR_LINK_PUBLIC in .env is not a tunnel public key: it is 64 lowercase hexadecimal " <>
+         "digits, as `cyfr init` writes it. Nothing started."},
     access_proxy_trust_missing:
       {:setup_required,
        "CYFR_BROWSER is `proxy`, and .env states no trust in your proxy's forwarded " <>
@@ -1578,7 +1587,7 @@ defmodule Prima.Refusal do
     what = "#{key} is `#{value}`"
 
     {:invalid_argument,
-     "CYFR_BROWSER is `none`, which serves this computer alone at its localhost address, " <>
+     "CYFR_BROWSER is `none`, which serves this computer alone at its private address, " <>
        "but #{what}. Run `cyfr access browser none` to write the matching settings, or " <>
        "`cyfr access browser tailnet|domain|proxy` to reach it from other devices."}
   end

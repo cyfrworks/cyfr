@@ -181,7 +181,7 @@ expect_checks pass "the override is the shipped stack's shape, and every slot is
   "$scratch/real" "$ROOT" "$SLOTS"
 
 # The slot rule: slot 0 keeps the shipped-style addresses, a lone loop's
-# localhost:4000; slot 19 is the last; there is no slot 20.
+# port 4000; slot 19 is the last; there is no slot 20.
 want0="DEV_STACK_SLOT=0
 DEV_STACK_PRISM_PORT=4000
 DEV_STACK_PROXY_PORT=4001
@@ -285,6 +285,13 @@ want_id=wrk_local
 derived() { printf 'cyfr-locus/v1/runtime\n%s' "$want_id" | openssl dgst -sha256 -mac HMAC -macopt "hexkey:$1" 2>/dev/null | sed 's/^.*= //'; }
 # value K NAME: slot K's NAME.
 value() { slot_env "$1" | sed -n "s/^$2=//p"; }
+# private PUBLIC PORT: the private address the tunnel key's public half
+# PUBLIC names on PORT (apps/codex/internal/link).
+private() {
+  python3 -I -c 'import base64, hashlib, sys
+name = base64.b32encode(hashlib.sha256(bytes.fromhex(sys.argv[1])).digest()).decode().lower()[:16]
+print("http://h-%s.localhost:%s" % (name, sys.argv[2]))' "$1" "$2"
+}
 # host_free K: nothing on this host listens on slot K's ports.
 host_free() {
   python3 -I -c '
@@ -551,10 +558,15 @@ root_a="$(printf 'ab%.0s' {1..32})"
 setup_a="$(printf '5e%.0s' {1..32})"
 key_b="$(printf 'b1%.0s' {1..32})"
 key_c="$(printf 'c2%.0s' {1..32})"
+# The tunnel key of the private name's first vector (apps/codex/internal/link).
+link_a="privkey:b09562be8a0bfee65eaeef5555dad1576019560663ae4616a0cef7b3c5e8c872,psk:6a681bf4064665498645f666e39f9c3917071baecf8685b0923468fd769c47bc"
+public_a=6b6b937aca103230d149eb148efbcfb59e6d1f05bb04dc648ac3e92339eae74a
 complete="CYFR_SETUP_TOKEN=$setup_a
 CYFR_LOCUS_RUNTIME_ROOT=$root_a
 CYFR_LOCUS_BACKENDS_KEY=$key_b
 CYFR_LOCUS_BUILDS_KEY=$key_c
+CYFR_LINK_KEY=$link_a
+CYFR_LINK_PUBLIC=$public_a
 "
 services="locus locus-guard"
 unset_keys="LOCUS_RUNTIME_KEY=unset|CYFR_LOCUS_BACKENDS_KEY=unset|CYFR_LOCUS_BUILDS_KEY=unset"
@@ -786,25 +798,32 @@ case_provision() {
   stack "$1" provision "" none "" STUB_SERVER_STATUS=0
   status_is 0
   [ "$(mode_of "$case_dir/.env")" = 0o600 ] || echo ".env is $(mode_of "$case_dir/.env"), not 0o600"
-  local setup root backends builds port
+  local setup root backends builds port link public address
   port="$(value "$slot_a" DEV_STACK_PRISM_PORT)"
   setup="$(sed -n 's/^CYFR_SETUP_TOKEN=//p' "$case_dir/.env")"
   root="$(sed -n 's/^CYFR_LOCUS_RUNTIME_ROOT=//p' "$case_dir/.env")"
   backends="$(sed -n 's/^CYFR_LOCUS_BACKENDS_KEY=//p' "$case_dir/.env")"
+  link="$(sed -n 's/^CYFR_LINK_KEY=//p' "$case_dir/.env")"
+  public="$(sed -n 's/^CYFR_LINK_PUBLIC=//p' "$case_dir/.env")"
   # The builds key, which a boot refuses without the backends URL, is the
   # run's alone: the builds role's and the server's, never .env's.
   builds="$(record docker.calls | sed -n 's/^.* up .*|CYFR_LOCUS_BUILDS_KEY=\([0-9a-f]*\)|.*$/\1/p')"
   [ "$(cat "$case_dir/.env")" = "CYFR_SETUP_TOKEN=$setup
 CYFR_LOCUS_RUNTIME_ROOT=$root
-CYFR_LOCUS_BACKENDS_KEY=$backends" ] || echo ".env holds $(printf '%q' "$(cat "$case_dir/.env")")"
-  for key in "$setup" "$root" "$backends" "$builds"; do
+CYFR_LOCUS_BACKENDS_KEY=$backends
+CYFR_LINK_KEY=$link
+CYFR_LINK_PUBLIC=$public" ] || echo ".env holds $(printf '%q' "$(cat "$case_dir/.env")")"
+  for key in "$setup" "$root" "$backends" "$builds" "$public"; do
     [[ "$key" =~ ^[0-9a-f]{64}$ ]] || echo "a minted key is $(printf '%q' "$key"), not 64 lowercase hexadecimal digits"
   done
-  [ "$(printf '%s\n' "$setup" "$root" "$backends" "$builds" | sort -u | wc -l)" = 4 ] || echo "the minted keys are not four"
-  # The one secret printed: the setup link, as `cyfr init` prints it.
-  grep -qxF "dev-stack: set up its first person, who administers it, at http://localhost:$port/setup#$setup" "$case_dir/out" ||
+  [[ "$link" =~ ^privkey:[0-9a-f]{64},psk:[0-9a-f]{64}$ ]] || echo "the tunnel key is $(printf '%q' "$link"), not privkey:<hex>,psk:<hex>"
+  [ "$(printf '%s\n' "$setup" "$root" "$backends" "$builds" "$public" | sort -u | wc -l)" = 5 ] || echo "the minted keys are not five"
+  address="$(private "$public" "$port")"
+  # The one secret printed: the setup link, at the private address, as
+  # `cyfr init` prints it.
+  grep -qxF "dev-stack: set up its first person, who administers it, at $address/setup#$setup" "$case_dir/out" ||
     echo "the run did not print the setup link: $(cat "$case_dir/out")"
-  grep -qxF "dev-stack: .env is mode 0600 and now sets CYFR_SETUP_TOKEN, CYFR_LOCUS_RUNTIME_ROOT, CYFR_LOCUS_BACKENDS_KEY." "$case_dir/out" ||
+  grep -qxF "dev-stack: .env is mode 0600 and now sets CYFR_SETUP_TOKEN, CYFR_LOCUS_RUNTIME_ROOT, CYFR_LOCUS_BACKENDS_KEY, CYFR_LINK_KEY, CYFR_LINK_PUBLIC." "$case_dir/out" ||
     echo "the run did not say what it wrote: $(cat "$case_dir/out")"
   [ "$(calls)" = "$(full_run "$slot_a" "$root" "$backends" "$builds")" ] || echo "docker was handed: $(calls)"
   [ "$(stack_calls)" = "$(started_stack)" ] || echo "the local cyfr.run's docker calls: $(stack_calls)"
@@ -828,9 +847,9 @@ CYFR_LOCUS_BACKENDS_KEY=$backends" ] || echo ".env holds $(printf '%q' "$(cat "$
     echo "the server's settings: $(server_settings)"
   record server.env | grep -qE "^(LOCUS_RUNTIME_KEY|CYFR_LOCUS_(RUNTIME_ROOT|BACKENDS_KEY)|DEV_STACK_(SLOT|PROJECT|IMAGE|[A-Z_]*_(PORT|NET)))=" &&
     echo "a key or a slot's value reached the server's environment"
-  grep -qxF "dev-stack: CYFR starts at http://localhost:$port and reloads as its files change." "$case_dir/out" ||
-    echo "the run did not print Prism's address: $(cat "$case_dir/out")"
-  for key in "$root" "$backends" "$builds" "$(derived "$root")"; do
+  grep -qxF "dev-stack: CYFR starts at $address and reloads as its files change." "$case_dir/out" ||
+    echo "the run did not print Prism's private address: $(cat "$case_dir/out")"
+  for key in "$root" "$backends" "$builds" "$(derived "$root")" "${link%%,*}" "${link#*,}"; do
     if grep -qF "$key" "$case_dir/out" "$case_dir/err"; then echo "a key reached the output"; fi
   done
   remembers "$slot_a"
@@ -910,7 +929,7 @@ case_port_held() {
   status_is 0
   grep -qxF "dev-stack: slot $slot_a is taken (127.0.0.1:$port, held by python3 (pid $holder)), so this worktree's loop takes slot $slot_b." "$case_dir/out" ||
     echo "the run did not say why it passed slot $slot_a: $(cat "$case_dir/out")"
-  grep -qxF "dev-stack: CYFR starts at http://localhost:$(value "$slot_b" DEV_STACK_PRISM_PORT) and reloads as its files change." "$case_dir/out" ||
+  grep -qxF "dev-stack: CYFR starts at $(private "$public_a" "$(value "$slot_b" DEV_STACK_PRISM_PORT)") and reloads as its files change." "$case_dir/out" ||
     echo "the run did not print slot $slot_b's address: $(cat "$case_dir/out")"
   [ "$(calls)" = "$(full_run "$slot_b" "$root_a" "$key_b" "$key_c" "$slot_a")" ] || echo "docker was handed: $(calls)"
   remembers "$slot_b"

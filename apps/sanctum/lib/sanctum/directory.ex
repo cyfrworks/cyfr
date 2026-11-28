@@ -28,13 +28,13 @@ defmodule Sanctum.Directory do
   `writer` serves reads and writes, and `mirror` is this module read-only,
   answering `:read_only` to every write before anything else is done.
 
-  The directory a node serves is its origin (`Sanctum.origin/0`) and
-  nothing else. Its routes are mounted at the root, `/directory/v1`, never
-  under a path a proxy adds. The origin as configured need not be in the
-  one spelling a genesis names its directory in (a server on localhost port 80
-  is `http://localhost:80`, named `http://localhost`), so it is compared
-  in that spelling (`Prima.Identity.Encoding.canonical_home/1`), byte for
-  byte with the decoded genesis's directory. A genesis naming anything
+  The directory a node serves is its shared address
+  (`Sanctum.shared_address/0`), its browser address when it has one and
+  otherwise its private address, and nothing else. Its routes are mounted
+  at the root, `/directory/v1`, never under a path a proxy adds. It is
+  compared in the one spelling a genesis names its directory in
+  (`Prima.Identity.Encoding.canonical_home/1`), byte for byte with the
+  decoded genesis's directory. A genesis naming anything
   else, such as another host, this host on another port or scheme, or
   this host under a path, is refused `:wrong_directory` once it decodes,
   before its signature is checked and before anything is stored. An
@@ -348,7 +348,7 @@ defmodule Sanctum.Directory do
   # it, or `:error` for an origin that is no home.
   @spec served() :: {:ok, String.t()} | :error
   def served do
-    case Encoding.canonical_home(Sanctum.origin()) do
+    case Encoding.canonical_home(Sanctum.shared_address()) do
       {:ok, directory} -> {:ok, directory}
       _other -> :error
     end
@@ -539,7 +539,7 @@ defmodule Sanctum.Directory do
   defp position(_after_seq), do: {:error, {:invalid, {:invalid_field, "after"}}}
 
   defp served_here(%Entry{directory: directory}) do
-    case Encoding.canonical_home(Sanctum.origin()) do
+    case Encoding.canonical_home(Sanctum.shared_address()) do
       {:ok, ^directory} -> :ok
       _ -> {:error, :wrong_directory}
     end

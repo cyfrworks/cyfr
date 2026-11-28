@@ -47,6 +47,23 @@ defmodule PrismWeb.DownloadOutsiderTest do
         end
       end
 
+      test "refuses a session made at the browser address on the loopback listener, and " <>
+             "takes it on the proxy listener",
+           %{conn: conn} do
+        Prima.Test.Env.put_app_env(:sanctum, :browser_address, "https://cyfr.example")
+        user = test_user()
+        conn = log_in_user(conn, user, address: "https://cyfr.example")
+        route = Athanors.route_slug(Sanctum.Test.People.athanor!(user.user_id))
+
+        # Signed in at its own address, the session finds nothing there.
+        at_browser = conn |> Sanctum.ClientIp.put_ingress(:proxy) |> get("/a/#{route}" <> @suffix)
+        assert at_browser.status == 404
+
+        # At the private address it is no one's session.
+        at_private = get(conn, "/a/#{route}" <> @suffix)
+        assert redirected_to(at_private) == PrismWeb.AuthHelpers.sign_in_path()
+      end
+
       test "answers a signed-in person with no seat 404 whether the athanor exists or not", %{
         conn: conn,
         routes: routes

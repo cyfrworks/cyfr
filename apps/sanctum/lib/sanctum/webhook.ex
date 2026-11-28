@@ -946,19 +946,13 @@ defmodule Sanctum.Webhook do
     end
   end
 
-  # The sender needs an absolute URL, and only the operator knows the host
-  # this instance is reachable at — behind a proxy or a tunnel it is not the
-  # bind address. `CYFR_PUBLIC_URL` supplies it; without it the URL is the
-  # path alone, which a client prefixes with the host it reaches the
-  # deployment on, and the console and the CLI say what to set.
-  defp build_url(slug) when is_binary(slug) and slug != "" do
-    path = "/hooks/" <> slug
-
-    case Sanctum.public_url() do
-      nil -> path
-      base -> base <> path
-    end
-  end
+  # The sender needs an absolute URL at an address the settings name,
+  # never the bind address or a request's `Host`: the server's shared
+  # address (`Sanctum.shared_address/0`), its browser address when it has
+  # one, otherwise its private address, which a sender on this machine
+  # alone reaches.
+  defp build_url(slug) when is_binary(slug) and slug != "",
+    do: Sanctum.shared_address() <> "/hooks/" <> slug
 
   defp build_url(_), do: nil
 

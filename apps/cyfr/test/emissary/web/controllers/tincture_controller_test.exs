@@ -390,7 +390,10 @@ defmodule Emissary.Web.TinctureControllerTest do
       # endpoint's origin, its WebSocket origin (`ws` for `http`, `wss` for
       # `https`) and the declared domains, never `'self'`, and the document
       # is sandboxed.
-      endpoint = Emissary.Web.TinctureAssets.endpoint_origin()
+      endpoint =
+        Emissary.Web.TinctureAssets.endpoint_origin(
+          Sanctum.ClientIp.put_ingress(Plug.Test.conn(:get, "/"), :loopback)
+        )
 
       assert csp ==
                Compendium.tincture_frame_policy(manifest, %{endpoint: endpoint, nonce: nonce})
@@ -657,7 +660,7 @@ defmodule Emissary.Web.TinctureControllerTest do
       own = Sanctum.Test.People.athanor!(user)
       reader = Sanctum.TestContext.issuer!(%{person | athanor_id: own.id})
       {:ok, session} = Sanctum.TestContext.create_session(reader)
-      {:ok, ctx} = Sanctum.Caller.establish(session.token)
+      {:ok, ctx} = Sanctum.Caller.establish(session.token, entry: :loopback)
       versions!(ctx)
 
       {:ok, reader: reader, session: session, ctx: ctx}
@@ -721,12 +724,26 @@ defmodule Emissary.Web.TinctureControllerTest do
 
       assert csp ==
                Compendium.tincture_frame_policy(manifest, %{
-                 endpoint: Emissary.Web.TinctureAssets.endpoint_origin(),
+                 endpoint:
+                   Emissary.Web.TinctureAssets.endpoint_origin(
+                     Sanctum.ClientIp.put_ingress(Plug.Test.conn(:get, "/"), :loopback)
+                   ),
                  nonce: nonce
                })
 
       assert String.ends_with?(csp, "; sandbox allow-scripts")
       assert get_resp_header(page, "referrer-policy") == ["no-referrer"]
+    end
+
+    test "a credential minted under a session at the private address serves nothing at the " <>
+           "browser address",
+         %{ctx: ctx} do
+      Prima.Test.Env.put_app_env(:sanctum, :browser_address, "https://cyfr.example")
+      path = served(credential(ctx), ["index.html"])
+
+      # Refused as a credential whose source no longer stands.
+      assert get(Sanctum.ClientIp.put_ingress(build_conn(), :proxy), path).status == 403
+      assert get(Sanctum.ClientIp.put_ingress(build_conn(), :loopback), path).status == 200
     end
 
     test "its pages, its files and their refusals refuse the camera, the microphone and screen capture",
@@ -748,7 +765,9 @@ defmodule Emissary.Web.TinctureControllerTest do
     test "serves the version's files, cached for no longer than the credential has left",
          %{conn: conn, ctx: ctx} do
       credential = credential(ctx)
-      {:ok, %{remaining_s: left}} = Sanctum.TinctureAuth.verify_asset_credential(credential)
+
+      {:ok, %{remaining_s: left}} =
+        Sanctum.TinctureAuth.verify_asset_credential(credential, entry: :loopback)
 
       asset = get(conn, served(credential, ["app.js"]))
       assert asset.status == 200
@@ -887,7 +906,7 @@ defmodule Emissary.Web.TinctureControllerTest do
       credential = credential(ctx)
       assert get(conn, served(credential, ["app.js"])).status == 200
 
-      {:ok, :removed} = Sanctum.Session.destroy(session.token)
+      {:ok, :removed} = Sanctum.Session.destroy(session.token, :loopback)
       gone = get(build_conn(), served(credential, ["app.js"]))
       assert json_response(gone, 403)["code"] == "forbidden"
       refute gone.resp_body =~ "auth app"

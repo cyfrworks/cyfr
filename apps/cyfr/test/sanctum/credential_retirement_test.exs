@@ -69,8 +69,8 @@ defmodule Sanctum.CredentialRetirementTest do
 
   # A session signed in and established, as a console request holds it.
   defp signed_in!(user) do
-    {:ok, session} = Session.create(admitted!(user))
-    {:ok, ctx} = Caller.establish(session.token)
+    {:ok, session} = Session.create(admitted!(user), address: Sanctum.private_address())
+    {:ok, ctx} = Caller.establish(session.token, entry: :loopback)
     {session, ctx}
   end
 
@@ -115,7 +115,9 @@ defmodule Sanctum.CredentialRetirementTest do
           authenticated: true
         )
 
-      assert {:error, :missing_generation} = Session.create(bare)
+      assert {:error, :missing_generation} =
+               Session.create(bare, address: Sanctum.private_address())
+
       assert {:error, :missing_generation} = issue(bare, %{name: "unbound"})
 
       # A person focused on an athanor that is not theirs has no standing to
@@ -134,22 +136,30 @@ defmodule Sanctum.CredentialRetirementTest do
           }
       }
 
-      assert {:error, :unauthenticated} = Session.create(unbacked)
+      assert {:error, :unauthenticated} =
+               Session.create(unbacked, address: Sanctum.private_address())
+
       assert {:error, :unauthenticated} = issue(unbacked, %{name: "unbacked"})
 
       assert {:ok, _} =
-               Session.create(%{
-                 unbacked
-                 | athanor_id: nil,
-                   credential_binding: %{unbacked.credential_binding | athanor_generation: nil}
-               })
+               Session.create(
+                 %{
+                   unbacked
+                   | athanor_id: nil,
+                     credential_binding: %{unbacked.credential_binding | athanor_generation: nil}
+                 },
+                 address: Sanctum.private_address()
+               )
 
       # A snapshot of another person proves nothing about this context.
       other = person!("other")
       {:ok, snapshot} = Sanctum.Tenancy.generation_snapshot(other.id, nil)
 
       assert {:error, :missing_generation} =
-               Session.create(%{bare | athanor_id: nil}, generation_snapshot: snapshot)
+               Session.create(%{bare | athanor_id: nil},
+                 generation_snapshot: snapshot,
+                 address: Sanctum.private_address()
+               )
 
       # A key the server's own principal created stands as a key and can
       # issue nothing.
@@ -194,10 +204,11 @@ defmodule Sanctum.CredentialRetirementTest do
       {:ok, denied} = Users.deny(user)
       {:ok, _} = Users.allow(denied)
 
-      assert {:error, :stale_generation} = Session.create(identity)
+      assert {:error, :stale_generation} =
+               Session.create(identity, address: Sanctum.private_address())
 
       # A sign-in after the allow reads the new generation and is admitted.
-      assert {:ok, _} = Session.create(admitted!(user))
+      assert {:ok, _} = Session.create(admitted!(user), address: Sanctum.private_address())
     end
 
     test "a session context established before a denial cannot issue a key after the allow" do
@@ -438,7 +449,12 @@ defmodule Sanctum.CredentialRetirementLockTest do
 
     kill_on_exit(denier.pid)
     assert_receive :denial_holds, 5_000
-    issuer = Task.async(fn -> unboxed(fn -> Session.create(identity) end) end)
+
+    issuer =
+      Task.async(fn ->
+        unboxed(fn -> Session.create(identity, address: Sanctum.private_address()) end)
+      end)
+
     kill_on_exit(issuer.pid)
     refute Task.yield(issuer, 300), "the session was decided while the denial held the person"
 

@@ -32,11 +32,9 @@ defmodule PrismWeb.FileController do
   @inline_types ~w(image/png image/jpeg image/gif image/webp application/pdf text/plain text/csv text/markdown application/json)
 
   def show(conn, %{"athanor" => route, "path" => segments}) when is_list(segments) do
-    token = get_session(conn, CyfrWeb.SignInResponse.session_key())
-
-    with {:ok, _person} <- authenticate(token, nil),
+    with {:ok, _person} <- authenticate(conn, nil),
          {:ok, athanor} <- Athanors.by_route_slug(route),
-         {:ok, ctx} <- authenticate(token, athanor.id),
+         {:ok, ctx} <- authenticate(conn, athanor.id),
          {:ok, physical} <- located(ctx, Enum.join(segments, "/")) do
       name = List.last(segments)
 
@@ -56,11 +54,9 @@ defmodule PrismWeb.FileController do
   def show(conn, _params), do: send_resp(conn, 404, "Not found")
 
   def pack(conn, %{"athanor" => route, "pack" => pack}) when is_binary(pack) do
-    token = get_session(conn, CyfrWeb.SignInResponse.session_key())
-
-    with {:ok, _person} <- authenticate(token, nil),
+    with {:ok, _person} <- authenticate(conn, nil),
          {:ok, athanor} <- Athanors.by_route_slug(route),
-         {:ok, ctx} <- authenticate(token, athanor.id),
+         {:ok, ctx} <- authenticate(conn, athanor.id),
          {:ok, %{filename: filename, stream: stream}} <- packed(ctx, pack) do
       conn
       |> put_resp_header("content-type", "application/gzip")
@@ -98,8 +94,8 @@ defmodule PrismWeb.FileController do
 
   # A session refusal is rendered by its disposition; a path the tree does
   # not show is simply not found, whatever the reason.
-  defp authenticate(token, athanor_id) do
-    case CyfrWeb.ContextGuard.authenticate(token, athanor_id) do
+  defp authenticate(conn, athanor_id) do
+    case CyfrWeb.ContextGuard.authenticate(conn, athanor_id) do
       {:ok, ctx} -> {:ok, ctx}
       {:error, refusal} -> PrismWeb.AuthHelpers.disposition(refusal)
     end

@@ -59,9 +59,6 @@ const AUTHORITY = "/authority";
 // The harness's own pages, which the front answers on every home.
 export const HARNESS = "/__harness";
 
-// The LiveView socket's long-poll transport, which the client falls back to
-// when its WebSocket is refused.
-const LONGPOLL = /^\/live\/longpoll/;
 const MAX_BODY = 256 * 1024;
 // How long a home has to answer the check that it answers at all.
 const HOME_ANSWER_MS = 10_000;
@@ -182,7 +179,7 @@ function relay(req, res, account, errors, options, peer, answered = () => {}) {
 // home. With `bodies`, each request's body (its first 256 KiB, as text) is
 // kept in its account as `body`. `proxy.cut(host)` refuses the LiveView
 // socket of `host`, or of every host without one — every WebSocket tunnel
-// open or asked for, and its long-poll fallback — until
+// open or asked for — until
 // `proxy.restore(host)`; every other request still goes through.
 //
 // `homes` and `unsigned` are `readHomes`'s; the proxy is returned once
@@ -365,10 +362,6 @@ function startFront(proxy, routes, { answer, bodies, isCut, hold }) {
     if (url.pathname.startsWith(`${HARNESS}/`)) {
       account.harness = url.pathname.slice(HARNESS.length + 1);
       reply(...harnessPage(url));
-      return;
-    }
-    if (isCut(host) && LONGPOLL.test(url.pathname)) {
-      reply(503, { "content-type": "text/plain" }, "proxy: the socket is cut");
       return;
     }
     const answered = answer(req, url);

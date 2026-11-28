@@ -37,18 +37,27 @@ defmodule CyfrWeb.Ingress do
   before the endpoint's `call/2`, and so before `socket_dispatch` hands
   the request to a socket transport.
 
-  On the proxy listener it then sets the request's scheme and port to
+  Every socket transport is a WebSocket upgrade (`socket_transports/1`),
+  and one whose `Origin` is not its listener's address (`Sanctum.address/1`:
+  the private address on the loopback listener, the browser address on the
+  proxy listener) is refused 403 through `CyfrWeb.ApiError`
+  (`:origin_rejected`, the MCP origin check's refusal), so a page at one
+  address opens no socket at the other. An upgrade with no `Origin`, a program's and not a browser's,
+  passes, as Phoenix's own check passes it; the endpoint's `check_origin`
+  is off, since it cannot see the listener.
+
+  On the proxy listener it also sets the request's scheme and port to
   `https` and 443: the proxy terminated the TLS the client spoke, so a URL
   the request names itself by (`Plug.Conn.request_url/1`, the OAuth
   grant callback's) is the home's own address. And it registers the
   endpoint's HSTS (`CyfrWeb.Plugs.ApiSecurityHeaders.maybe_hsts/1`) on
   every response the listener sends, success, error and a refusal made
-  before any pipeline alike.
+  before any pipeline alike, its own socket refusal among them.
   """
 
   @behaviour Plug
 
-  import Plug.Conn, only: [register_before_send: 2]
+  import Plug.Conn, only: [get_req_header: 2, register_before_send: 2]
 
   alias CyfrWeb.Plugs.ApiSecurityHeaders
 
@@ -73,7 +82,7 @@ defmodule CyfrWeb.Ingress do
     base = [display_plug: endpoint, scheme: :http, otp_app: Keyword.fetch!(config, :otp_app)]
 
     loopback =
-      [plug: {__MODULE__, {:loopback, plug}}]
+      [plug: {__MODULE__, {:loopback, plug, endpoint}}]
       |> Kernel.++(base)
       |> Kernel.++(http)
       |> Bandit.child_spec()
@@ -86,7 +95,7 @@ defmodule CyfrWeb.Ingress do
 
         address ->
           server =
-            [plug: {__MODULE__, {:proxy, plug}}]
+            [plug: {__MODULE__, {:proxy, plug, endpoint}}]
             |> Kernel.++(base)
             |> Kernel.++(Keyword.drop(http, [:ip, :port]))
             |> Kernel.++(Keyword.take(address, [:ip, :port]))
@@ -117,23 +126,76 @@ defmodule CyfrWeb.Ingress do
     if code_reload?, do: {Phoenix.Endpoint.SyncCodeReloadPlug, {endpoint, []}}, else: endpoint
   end
 
+  @doc """
+  The routed path (`path_info`) of each socket transport `endpoint`
+  mounts (its `__sockets__/0`): a mount's path joined with its WebSocket's
+  `:path`. Every one is a WebSocket. A long-poll transport resumes its
+  socket by a token from any listener, with no `Origin` a page at its own
+  address sends, so a mount that enables one is refused here, at the
+  endpoint's start.
+  """
+  @spec socket_transports(module()) :: [[String.t()]]
+  def socket_transports(endpoint) do
+    # Long-poll is looked for on every mount, whatever its WebSocket says:
+    # Phoenix enables the two transports apart.
+    Enum.flat_map(endpoint.__sockets__(), fn {path, _socket, opts} ->
+      if transport_config(opts, :longpoll, false) != false,
+        do:
+          raise(
+            ArgumentError,
+            "the socket #{path} enables long-poll: every socket is a WebSocket"
+          )
+
+      case transport_config(opts, :websocket, true) do
+        false ->
+          []
+
+        config ->
+          [String.split(path <> Keyword.get(config, :path, "/websocket"), "/", trim: true)]
+      end
+    end)
+  end
+
+  defp transport_config(opts, transport, default) do
+    case Keyword.get(opts, transport, default) do
+      true -> []
+      config -> config
+    end
+  end
+
   @impl Plug
-  def init({ingress, plug}) when ingress in [:loopback, :proxy] do
+  def init({ingress, plug, endpoint}) when ingress in [:loopback, :proxy] do
     {module, opts} =
       case plug do
         {module, opts} -> {module, opts}
         module -> {module, []}
       end
 
-    {ingress, module, module.init(opts)}
+    sockets = socket_transports(endpoint)
+
+    {ingress, module, module.init(opts), sockets}
   end
 
   @impl Plug
-  def call(conn, {ingress, module, opts}) do
-    conn
-    |> Sanctum.ClientIp.put_ingress(ingress)
-    |> listener(ingress)
-    |> module.call(opts)
+  def call(conn, {ingress, module, opts, sockets}) do
+    conn = conn |> Sanctum.ClientIp.put_ingress(ingress) |> listener(ingress)
+
+    if socket_origin?(conn, ingress, sockets) do
+      module.call(conn, opts)
+    else
+      CyfrWeb.ApiError.halt(conn, 403, :origin_rejected, nil)
+    end
+  end
+
+  # A socket's upgrade from a page at another address than its listener's:
+  # the origin is compared with the entry's address alone.
+  defp socket_origin?(conn, ingress, sockets) do
+    with true <- conn.path_info in sockets,
+         [origin | _] <- get_req_header(conn, "origin") do
+      origin == Sanctum.address(ingress)
+    else
+      _not_a_socket_or_no_origin -> true
+    end
   end
 
   defp listener(conn, :loopback), do: conn

@@ -70,13 +70,22 @@ defmodule Sanctum.DeviceUnlockTest do
   defp b64(bytes), do: Base.url_encode64(bytes, padding: false)
   defp signed(challenge, private), do: Proof.encode(Proof.sign(challenge, private))
 
-  # The box's setup: its key admitted by its hello as the first person's device.
-  defp enrolled!(%{dir: dir}) do
+  # The box's setup: its key admitted by its hello as the first person's
+  # device, on a channel that came in by `entry`.
+  defp enrolled!(%{dir: dir}, entry \\ :loopback) do
     account = DirectoryServer.account!(dir.dir, dir.url)
-    Devices.admitted!(account, List.last(account.devices), {:setup, @token})
+
+    Devices.admitted!(
+      account,
+      List.last(account.devices),
+      {:setup, @token},
+      Devices.holder(),
+      entry
+    )
   end
 
-  defp connected!(device), do: Devices.connected!(device)
+  defp connected!(device, entry \\ :loopback),
+    do: Devices.connected!(device, "198.51.100.40", entry)
 
   defp unlocked!(ctx, {_public, private}) do
     {:ok, %{challenge: challenge}} = DeviceUnlock.unlock(ctx, %{})
@@ -120,6 +129,21 @@ defmodule Sanctum.DeviceUnlockTest do
   # Unlock
   # ---------------------------------------------------------------------------
 
+  describe "unlock through the proxy listener" do
+    test "a ticket minted on the proxy entry is refused on the loopback entry", %{dir: dir} do
+      Prima.Test.Env.put_app_env(:sanctum, :browser_address, "https://cyfr.example")
+      device = enrolled!(%{dir: dir}, :proxy)
+      ctx = connected!(device, :proxy)
+      answer = unlocked!(ctx, device.key)
+
+      assert {:error, :invalid_ticket} = DeviceUnlock.redeem(answer.ticket, :loopback)
+
+      answer = unlocked!(ctx, device.key)
+      assert {:ok, %{token: _token}} = DeviceUnlock.redeem(answer.ticket, :proxy)
+      assert session_row(answer.session_id).address == "https://cyfr.example"
+    end
+  end
+
   describe "unlock" do
     setup context do
       device = enrolled!(context)
@@ -138,8 +162,10 @@ defmodule Sanctum.DeviceUnlockTest do
       assert %Session{provider: "unlock_reserved", token_prefix: nil} =
                session_row(answer.session_id)
 
-      assert {:ok, %{token: token, expires_at: expires_at}} = DeviceUnlock.redeem(answer.ticket)
-      assert {:error, :invalid_ticket} = DeviceUnlock.redeem(answer.ticket)
+      assert {:ok, %{token: token, expires_at: expires_at}} =
+               DeviceUnlock.redeem(answer.ticket, :loopback)
+
+      assert {:error, :invalid_ticket} = DeviceUnlock.redeem(answer.ticket, :loopback)
 
       row = session_row(answer.session_id)
       assert row.client_id == device.certificate.client_id
@@ -153,11 +179,51 @@ defmodule Sanctum.DeviceUnlockTest do
       assert session_ctx.credential_deadline == row.expires_at
     end
 
+    test "a ticket minted on the loopback entry is refused on the proxy entry, and spent", %{
+      device: device,
+      ctx: ctx
+    } do
+      Prima.Test.Env.put_app_env(:sanctum, :browser_address, "https://cyfr.example")
+      answer = unlocked!(ctx, device.key)
+
+      assert {:error, :invalid_ticket} = DeviceUnlock.redeem(answer.ticket, :proxy)
+      # The attempt spent it: the entry it was minted on redeems it no more.
+      assert {:error, :invalid_ticket} = DeviceUnlock.redeem(answer.ticket, :loopback)
+
+      # One redeemed on its own entry stands, its session at that entry's
+      # address.
+      answer = unlocked!(ctx, device.key)
+      assert {:ok, %{token: _token}} = DeviceUnlock.redeem(answer.ticket, :loopback)
+      assert session_row(answer.session_id).address == Sanctum.private_address()
+    end
+
+    test "a proof answers its challenge only at the entry the challenge was issued at", %{
+      device: device,
+      ctx: ctx
+    } do
+      Prima.Test.Env.put_app_env(:sanctum, :browser_address, "https://cyfr.example")
+      {_public, private} = device.key
+      {:ok, %{challenge: challenge}} = DeviceUnlock.unlock(ctx, %{})
+      proof = signed(challenge, private)
+
+      assert {:error, :proof_refused} =
+               DeviceUnlock.unlock(%{ctx | entry: :proxy}, %{"proof" => proof})
+
+      # Taken by that refusal: its own entry issues no ticket for it either,
+      # and the session it reserved at the private address stays reserved.
+      assert {:error, :proof_refused} = DeviceUnlock.unlock(ctx, %{"proof" => proof})
+
+      assert %Session{provider: "unlock_reserved", address: address} =
+               session_row(challenge.session_id)
+
+      assert address == Sanctum.private_address()
+    end
+
     test "a ticket that is not one, or another's, redeems nothing", %{device: device, ctx: ctx} do
       _answer = unlocked!(ctx, device.key)
 
       for ticket <- [nil, "", "short", b64(:crypto.strong_rand_bytes(32))] do
-        assert {:error, :invalid_ticket} = DeviceUnlock.redeem(ticket), inspect(ticket)
+        assert {:error, :invalid_ticket} = DeviceUnlock.redeem(ticket, :loopback), inspect(ticket)
       end
     end
 
@@ -186,7 +252,7 @@ defmodule Sanctum.DeviceUnlockTest do
     } do
       :ok = Sanctum.Test.Settings.put("session_ttl_hours", 0)
       answer = unlocked!(ctx, device.key)
-      {:ok, %{expires_at: expires_at}} = DeviceUnlock.redeem(answer.ticket)
+      {:ok, %{expires_at: expires_at}} = DeviceUnlock.redeem(answer.ticket, :loopback)
       assert DateTime.compare(expires_at, DateTime.add(DateTime.utc_now(), 61, :second)) == :lt
 
       assert DateTime.compare(session_row(answer.session_id).expires_at, ~U[9999-01-01 00:00:00Z]) ==
@@ -196,12 +262,12 @@ defmodule Sanctum.DeviceUnlockTest do
     test "a browser's refresh never moves a device's session; its channel slides it, never past the certificate and never reviving",
          %{device: device, ctx: ctx} do
       answer = unlocked!(ctx, device.key)
-      {:ok, %{token: token}} = DeviceUnlock.redeem(answer.ticket)
+      {:ok, %{token: token}} = DeviceUnlock.redeem(answer.ticket, :loopback)
       before = session_row(answer.session_id).expires_at
 
       assert {:error, :invalid_session} = Sanctum.Session.refresh(token)
       assert :ok = Sanctum.Session.refresh_if_stale(token)
-      assert {:ok, _ctx} = Sanctum.Caller.establish(token)
+      assert {:ok, _ctx} = Sanctum.Caller.establish(token, entry: :loopback)
       assert session_row(answer.session_id).expires_at == before
 
       # sleep-ok: the clock ticks, so the slid expiry is later than the one read before
@@ -225,7 +291,7 @@ defmodule Sanctum.DeviceUnlockTest do
     test "a browser's session and a context of no device unlock nothing",
          %{device: device, ctx: ctx} do
       answer = unlocked!(ctx, device.key)
-      {:ok, %{token: token}} = DeviceUnlock.redeem(answer.ticket)
+      {:ok, %{token: token}} = DeviceUnlock.redeem(answer.ticket, :loopback)
       {:ok, browser} = Sanctum.Session.load(token)
 
       assert {:error, :not_a_device} = DeviceUnlock.unlock(browser, %{})
@@ -243,7 +309,7 @@ defmodule Sanctum.DeviceUnlockTest do
       device = enrolled!(context)
       ctx = connected!(device)
       answer = unlocked!(ctx, device.key)
-      {:ok, %{token: token}} = DeviceUnlock.redeem(answer.ticket)
+      {:ok, %{token: token}} = DeviceUnlock.redeem(answer.ticket, :loopback)
       %{device: device, ctx: ctx, session_id: answer.session_id, token: token}
     end
 
@@ -251,7 +317,7 @@ defmodule Sanctum.DeviceUnlockTest do
          %{device: device, ctx: ctx, session_id: session_id, token: token} do
       proof = lock_proof(device, session_id)
       successor = unlocked!(ctx, device.key)
-      {:ok, %{token: successor_token}} = DeviceUnlock.redeem(successor.ticket)
+      {:ok, %{token: successor_token}} = DeviceUnlock.redeem(successor.ticket, :loopback)
 
       assert {:ok, %{locked: true}} = DeviceUnlock.lock(ctx, %{"proof" => proof})
       assert session_row(session_id) == nil
@@ -285,7 +351,7 @@ defmodule Sanctum.DeviceUnlockTest do
       assert {:ok, %{locked: true}} =
                DeviceUnlock.lock(ctx, %{"proof" => lock_proof(device, answer.session_id)})
 
-      assert {:error, :invalid_ticket} = DeviceUnlock.redeem(answer.ticket)
+      assert {:error, :invalid_ticket} = DeviceUnlock.redeem(answer.ticket, :loopback)
       assert session_row(answer.session_id) == nil
     end
 
@@ -298,7 +364,7 @@ defmodule Sanctum.DeviceUnlockTest do
       pending = unlocked!(ctx, device.key)
       :ok = DeviceUnlock.closed(ctx.user_id, ctx.client_id, [session_id, pending.session_id])
       assert {:error, :invalid_session} = Sanctum.Session.load(token)
-      assert {:error, :invalid_ticket} = DeviceUnlock.redeem(pending.ticket)
+      assert {:error, :invalid_ticket} = DeviceUnlock.redeem(pending.ticket, :loopback)
     end
   end
 
@@ -314,13 +380,13 @@ defmodule Sanctum.DeviceUnlockTest do
     } do
       first = unlocked!(ctx, device.key)
       second = unlocked!(ctx, device.key)
-      {:ok, %{token: token}} = DeviceUnlock.redeem(first.ticket)
+      {:ok, %{token: token}} = DeviceUnlock.redeem(first.ticket, :loopback)
 
       revoke_client!(device)
 
       assert session_row(first.session_id) == nil
       assert {:error, :invalid_session} = Sanctum.Session.load(token)
-      assert {:error, :not_standing} = DeviceUnlock.redeem(second.ticket)
+      assert {:error, :not_standing} = DeviceUnlock.redeem(second.ticket, :loopback)
       assert session_row(second.session_id) == nil
     end
 
@@ -328,12 +394,12 @@ defmodule Sanctum.DeviceUnlockTest do
          %{device: device, ctx: ctx} do
       first = unlocked!(ctx, device.key)
       second = unlocked!(ctx, device.key)
-      {:ok, %{token: token}} = DeviceUnlock.redeem(first.ticket)
+      {:ok, %{token: token}} = DeviceUnlock.redeem(first.ticket, :loopback)
 
       revoke_certificate!(device.certificate.athanor, device.certificate.client_id)
 
       assert {:error, :invalid_session} = Sanctum.Session.load(token)
-      assert {:error, :not_standing} = DeviceUnlock.redeem(second.ticket)
+      assert {:error, :not_standing} = DeviceUnlock.redeem(second.ticket, :loopback)
     end
   end
 

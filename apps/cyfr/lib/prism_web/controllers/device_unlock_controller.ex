@@ -16,7 +16,8 @@ defmodule PrismWeb.DeviceUnlockController do
   Both answers are `no-store` and `no-referrer`, so neither the page nor
   the way it was reached is kept or passed on. The ticket is bearer
   authority for this brief exchange alone, as a pairing link's fragment
-  is; it is bound to no browser. A ticket spent, past its 60 seconds,
+  is; it is bound to no browser, and to the listener its device's channel
+  came in by: one posted at another entry is refused. A ticket spent, past its 60 seconds,
   locked before it was spent, held by another member, or of a device
   whose standing ended signs no one in: the page says so, and the shell
   unlocks again.
@@ -71,7 +72,7 @@ defmodule PrismWeb.DeviceUnlockController do
   def redeem(conn, %{"ticket" => ticket}) when is_binary(ticket) do
     conn = private_headers(conn)
 
-    case Sanctum.DeviceUnlock.redeem(ticket) do
+    case Sanctum.DeviceUnlock.redeem(ticket, Sanctum.ClientIp.ingress(conn)) do
       {:ok, %{token: token}} ->
         SignInResponse.respond(conn, :proceed, session: {:token, token})
 
