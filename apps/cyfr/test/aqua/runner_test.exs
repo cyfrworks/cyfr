@@ -317,11 +317,9 @@ defmodule Aqua.RunnerTest do
     # The refused send starts the athanor's fill, which writes its tree.
     remove_on_exit(own_tree!(fresh_ctx))
     {:ok, fresh_thread} = Arca.Test.Days.thread(Sanctum.Context.actor(fresh_ctx))
-    # The roster is handed in: reading it would itself start the fill.
+
     assert {:error, :not_provisioned} =
-             Runner.send_message(fresh_ctx, fresh_thread.id, "@aqua hi",
-               agents: [%{"name" => "aqua", "title" => "Aqua"}]
-             )
+             Runner.send_message(fresh_ctx, fresh_thread.id, "@aqua hi")
 
     assert [] = Threads.messages(Sanctum.Context.actor(fresh_ctx), fresh_thread.id)
 
@@ -492,25 +490,29 @@ defmodule Aqua.RunnerTest do
     assert %{turn_id: ^first} = Enum.find(rows, &(&1.content == "steered"))
   end
 
-  test "the sender's line to a crew member is a request beside the running turn, never a steer of it",
+  test "the sender's line naming a crew member steers Aqua's running turn, and asks the member nothing",
        %{ctx: ctx, thread: thread} do
     member!(ctx, "planner")
-    script!([{:probe, self()}, reply("first")])
+    script!([{:probe, self()}, reply("first"), reply("first, and the planner")])
 
     {:ok, %{turn_id: first}} = Runner.send_message(ctx, thread.id, "@aqua go")
     assert_receive {:scripted_probe, worker, _}, 30_000
 
-    assert {:ok, %{admitted: :request, turn_id: nil, message_id: request}} =
-             Runner.send_message(ctx, thread.id, "also this", agent: "planner")
+    assert {:ok, %{admitted: :steer, turn_id: ^first, message_id: line}} =
+             Runner.send_message(ctx, thread.id, "@planner also this")
 
-    assert %{running: true, queued: 0} = Runner.state(thread.id, ctx.athanor_id)
+    assert {:ok, %{addressee: "aqua", status: nil, turn_id: ^first}} = Tape.message(ctx, line)
 
     send(worker, :continue)
     assert_receive %ThreadEvent{kind: :turn_finished}, 60_000
     assert {:ok, %{status: "completed", agent: "aqua"}} = Tape.turn(ctx, first)
 
-    assert {:ok, %{addressee: "planner", status: "pending", turn_id: nil}} =
-             Tape.message(ctx, request)
+    refute Enum.any?(
+             Threads.messages(Sanctum.Context.actor(ctx), thread.id),
+             &(&1.addressee == "planner")
+           )
+
+    assert Threads.children(Sanctum.Context.actor(ctx), thread.id) == []
   end
 
   test "a viewer joining mid-answer reads the text streamed so far, until the step's row lands",
@@ -829,20 +831,29 @@ defmodule Aqua.RunnerTest do
 
     user = ctx.user_id
 
-    for {room, agent, member} <- [{thread, "aqua", "Aqua"}, {child, "planner", "Planner"}] do
+    revoked = "You revoked your grant of what Aqua and its crew members may use. "
+
+    # Aqua's turn is the person's message to send again; a member's, even
+    # one the person's line opened, is its job to ask for again, since its
+    # thread takes no message.
+    for {room, agent, member, then, said} <- [
+          {thread, "aqua", "Aqua", :message,
+           revoked <>
+             "Your message was not answered: grant it again here when it is asked, or on " <>
+             "your Aqua page, then send your message again."},
+          {child, "planner", "Planner", :ask,
+           revoked <>
+             "Planner did not do this job: grant it again on your Aqua page, then ask " <>
+             "Planner for it again."}
+        ] do
       {:ok, %{turn: turn, message: message}} =
         Tape.accept(ctx, room.id, %{
           message: %{author: ctx.user_id, sent_by: "person", content: "go"},
           turn: %{agent: agent, requested_by: ctx.user_id}
         })
 
-      assert {:failed, {:grant_revoked, ^member, :message}} =
+      assert {:failed, {:grant_revoked, ^member, ^then}} =
                Aqua.Loop.run(ctx: ctx, turn_id: turn.id)
-
-      said =
-        "You revoked your grant of what Aqua and its crew members may use. Your message was " <>
-          "not answered: grant it again here when it is asked, or on your Aqua page, then send " <>
-          "your message again."
 
       assert {:ok, %{status: "failed", error: ^said, root_execution_id: nil, profile_id: nil}} =
                Tape.turn(ctx, turn.id)
@@ -852,12 +863,19 @@ defmodule Aqua.RunnerTest do
       room_id = room.id
       message_id = message.id
 
-      assert_receive %ThreadEvent{
-                       thread_id: ^room_id,
-                       kind: :consent_required,
-                       data: %{ref: "agent:local.aqua", user_id: ^user, message_id: ^message_id}
-                     },
-                     5_000
+      # Only Aqua's thread offers the message again once the grant is
+      # given; a member's thread takes no message to offer. The refusal is
+      # announced before the loop answers, so it is in the mailbox by now.
+      if then == :message do
+        assert_receive %ThreadEvent{
+                         thread_id: ^room_id,
+                         kind: :consent_required,
+                         data: %{ref: "agent:local.aqua", user_id: ^user, message_id: ^message_id}
+                       },
+                       5_000
+      else
+        refute_received %ThreadEvent{thread_id: ^room_id, kind: :consent_required}
+      end
     end
 
     assert ScriptedWorker.calls() == ran
@@ -1100,7 +1118,7 @@ defmodule Aqua.RunnerTest do
     assert ScriptedWorker.calls() == ran
   end
 
-  test "a crew member asked by name works in its child thread under the crew's one grant, with its brain's key",
+  test "a crew member Aqua asks works in its child thread under the crew's one grant, with its brain's key",
        %{ctx: ctx, thread: thread} do
     entry =
       Sanctum.Test.ConsentFixtures.bind_key!(ctx, @model, %{"ANTHROPIC_API_KEY" => "sk-test"})
@@ -1109,8 +1127,24 @@ defmodule Aqua.RunnerTest do
 
     script!([reply("Step one.")])
 
-    {:ok, %{admitted: :request, message_id: request}} =
-      Runner.send_message(ctx, thread.id, "@planner plan")
+    # The request as `crew.ask` writes it.
+    {:ok, %{message: %{id: request}}} =
+      Tape.accept(ctx, thread.id, %{
+        message: %{
+          author: Prima.Author.agent(),
+          sent_by: "aqua",
+          addressee: "planner",
+          status: "pending",
+          content: "plan"
+        },
+        request: %{
+          member: "planner",
+          task: "plan",
+          options: %{},
+          person_id: ctx.user_id,
+          origin: :interactive
+        }
+      })
 
     assert {:ok, %{"applied" => 1}} = Aqua.Crew.drain(ctx.athanor_id)
     [child] = Threads.children(Sanctum.Context.actor(ctx), thread.id)
@@ -1879,7 +1913,7 @@ defmodule Aqua.RunnerTest do
 
       request =
         case unquote(operation) do
-          :send -> {:send, ctx, "@aqua late", [agents: [%{"name" => "aqua"}]]}
+          :send -> {:send, ctx, "@aqua late", []}
           :stop -> {:stop, ctx}
           :restart_for_consent -> {:restart_for_consent, ctx, %{}}
         end

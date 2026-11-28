@@ -337,6 +337,52 @@ defmodule Aqua.ChoicesTest do
       assert {:ok, %{agent: "aqua", sent_by: "person"}} = Aqua.Tape.turn(ctx, opened)
     end
 
+    # Admission makes every person's line in a room Aqua's turn
+    # (`Aqua.Runner.Admission`), a press among them: a label naming a crew
+    # member of the athanor asks that member nothing.
+    test "whose label names a crew member is Aqua's turn and asks the member nothing",
+         %{ctx: ctx, today: today} do
+      :ok =
+        Arca.put(
+          actor(ctx),
+          Compendium.AquaPath.crew_file("builder"),
+          "---\ntitle: builder\ndescription: Builds.\navoid: Nothing.\n" <>
+            "catalyst_ref: catalyst:local.claude\nmodel: claude-sonnet-5-5\n---\n"
+        )
+
+      {:ok, _} = Compendium.AgentIndex.sync(ctx)
+      assert "builder" in Enum.map(Aqua.Roster.roster(ctx), & &1["name"])
+
+      turn = turn!(ctx, today)
+      card = said!(ctx, today, turn, block(turn.id, "Who?", ["- @builder, build it", "- Wait"]))
+
+      assert {:ok, %{message_id: id, turn_id: opened}} = press(ctx, card, 0)
+      assert {:ok, %{agent: "aqua", sent_by: "person"}} = Aqua.Tape.turn(ctx, opened)
+
+      assert {:ok, %{addressee: "aqua", content: "@builder, build it"}} =
+               Threads.get_message(actor(ctx), id)
+
+      refute Enum.any?(Threads.messages(actor(ctx), today.id), &(&1.addressee == "builder"))
+      assert Threads.children(actor(ctx), today.id) == []
+    end
+
+    # The runner takes a press only in a room, where its card is
+    # (`Aqua.Runner.chosen/4`), before admission reads the thread.
+    test "sent straight to a member's thread's runner is refused and writes nothing",
+         %{ctx: ctx, today: today} do
+      turn = turn!(ctx, today)
+      card = said!(ctx, today, turn, block(turn.id))
+      {:ok, child} = Aqua.Tape.crew_thread(ctx, today.id, "builder")
+
+      assert {:error, :no_choice} =
+               Aqua.Runner.send_message(ctx, child.id, "PostgreSQL",
+                 choice: %{"row" => card.id, "index" => 0}
+               )
+
+      assert Threads.messages(actor(ctx), child.id) == []
+      refute Enum.any?(Threads.messages(actor(ctx), today.id), &Choices.pressed/1)
+    end
+
     test "of a card pressed already, of a card Aqua has moved on from, and of a card in a past " <>
            "day's thread each write the person's line and open Aqua's turn",
          %{ctx: ctx, today: today} do
@@ -448,7 +494,19 @@ defmodule Aqua.ChoicesTest do
 
         refused = {:error, {:invalid_argument, "A press carries only its choice."}}
         assert Tool.handle("thread", ctx, args) == refused, inspect({key, value})
-        assert Sanctum.Gate.call_external("thread", ctx, args) == refused
+
+        # A send names no agent: the gate refuses one as no field of the
+        # declaration, before the press is read.
+        if key == "agent" do
+          assert {:error,
+                  %Prima.Refusal{
+                    stage: :admission,
+                    reason: {:invalid_argument, "Unknown field: agent"}
+                  }} =
+                   Sanctum.Gate.call_external("thread", ctx, args)
+        else
+          assert Sanctum.Gate.call_external("thread", ctx, args) == refused
+        end
       end
 
       assert {Threads.list(actor(ctx)), Arca.Repo.aggregate(Arca.Schemas.Message, :count)} ==
@@ -578,7 +636,6 @@ defmodule Aqua.ChoicesTest do
         Tool.handle("thread", ctx, %{
           "action" => "send",
           "message" => text,
-          "agent" => "aqua",
           "client_id" => client_id
         })
 
@@ -681,8 +738,7 @@ defmodule Aqua.ChoicesTest do
                  "action" => "send",
                  "thread" => today.id,
                  "id" => mid,
-                 "attachments" => refs,
-                 "agent" => "aqua"
+                 "attachments" => refs
                })
 
       refused =

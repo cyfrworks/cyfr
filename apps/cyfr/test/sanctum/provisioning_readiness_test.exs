@@ -80,11 +80,7 @@ defmodule Sanctum.ProvisioningReadinessTest do
     ctx = %{Sanctum.TestContext.local() | user_id: user.id, athanor_id: own.id}
     {:ok, thread} = Arca.Test.Days.thread(Sanctum.Context.actor(ctx))
 
-    # The roster is handed in: reading it would itself start the fill.
-    assert {:error, :not_provisioned} =
-             Aqua.Runner.send_message(ctx, thread.id, "@aqua hello",
-               agents: [%{"name" => "aqua", "title" => "Aqua"}]
-             )
+    assert {:error, :not_provisioned} = Aqua.Runner.send_message(ctx, thread.id, "@aqua hello")
 
     # Before acceptance: the thread holds no message, so nothing was taken
     # in and left to fail later.

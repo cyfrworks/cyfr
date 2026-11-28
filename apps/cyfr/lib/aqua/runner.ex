@@ -17,15 +17,13 @@ defmodule Aqua.Runner do
   ## Admission
 
   A send is held to, in order: the text and its size; the sender's
-  standing; the addressing (`Aqua.Runner.Admission`), which makes it a
-  turn, a request to a crew member, or room content; then, for a turn,
-  the athanor being filled (`:not_provisioned`, nothing written), the
-  engine being up (`:execution_unavailable`), and the queue having room
-  (`:busy`). Only then is the message accepted, atomically with the
-  turn — or attached to the running or paused turn as a steer
-  (`steer?/2`), or queued behind it as a turn of its own. A request is
-  accepted with the outbox record that delivers it (`Aqua.Crew`), and
-  room content opens nothing.
+  standing; the addressing (`Aqua.Runner.Admission`), which names the
+  agent whose turn it is; then the athanor being filled
+  (`:not_provisioned`, nothing written), the engine being up
+  (`:execution_unavailable`), and the queue having room (`:busy`). Only
+  then is the message accepted, atomically with the turn — or attached
+  to the running or paused turn as a steer (`steer?/2`), or queued behind
+  it as a turn of its own.
   A `client_id` the thread already accepted answers the same identity.
 
   A send the crew's delivery consumer makes carries its receipt, which
@@ -157,7 +155,7 @@ defmodule Aqua.Runner do
           seq: non_neg_integer(),
           turn_id: String.t() | nil,
           replayed: boolean(),
-          admitted: :turn | :steer | :request | :content
+          admitted: :turn | :steer | :content
         }
 
   # ---------------------------------------------------------------------------
@@ -285,12 +283,10 @@ defmodule Aqua.Runner do
   @doc """
   Send a message: accepted on the tape and shown to every member; a turn
   is opened when it addresses an agent. `opts`: `:id` (a pre-minted
-  message id), `:client_id`, `:attachments` (refs), `:model`,
-  `:agent` (a pick; an `@name` in the text wins), `:room` (the
-  room the sender had open, `%{"athanor_id", "thread_id", ...}`),
-  `:agents` (the roster, read here when absent), `:choice` (a press of a
-  question's choice, `%{"row", "index"}`: a turn of Aqua's whatever the
-  text names, its line the label as `Aqua.Choices.press/2` reads it).
+  message id), `:client_id`, `:attachments` (refs), `:model`, `:room`
+  (the room the sender had open, `%{"athanor_id", "thread_id", ...}`)
+  and `:choice` (a press of a question's choice, `%{"row", "index"}`,
+  its line the label as `Aqua.Choices.press/2` reads it).
 
   The crew's delivery consumer (`Aqua.Crew`) sends with `:sent_by` (the
   sender's name; `"person"` when absent), `:request` (the request row a
@@ -334,10 +330,7 @@ defmodule Aqua.Runner do
   @spec send_message(Context.t(), String.t(), String.t(), keyword()) ::
           {:ok, send_result()} | {:error, term()}
   def send_message(%Context{} = ctx, thread_id, text, opts \\ []) do
-    with :ok <- held() do
-      opts = Keyword.put_new_lazy(opts, :agents, fn -> Aqua.Roster.roster(ctx) end)
-      call(ctx, thread_id, {:send, ctx, text, opts})
-    end
+    with :ok <- held(), do: call(ctx, thread_id, {:send, ctx, text, opts})
   end
 
   @doc """
@@ -574,17 +567,10 @@ defmodule Aqua.Runner do
   end
 
   defp handle_owned_call({:send, ctx, text, opts}, _from, state) do
-    opts = Keyword.put(opts, :last, state.agent)
-
     with {:ok, text, opts} <- chosen(ctx, state, text, opts),
-         {:ok, decision, text} <- Admission.check(ctx, state.athanor_id, state.thread, text, opts),
-         decision = if(Keyword.has_key?(opts, :choice), do: {:turn, @aqua}, else: decision),
-         :ok <- crew_ready(ctx, decision, opts) do
-      case decision do
-        {:turn, name} -> admit_turn(state, ctx, name, text, opts)
-        {:request, member} -> accept_request(state, ctx, member, text, opts)
-        :content -> accept_content(state, ctx, text, opts)
-      end
+         {:ok, {:turn, name}, text} <-
+           Admission.check(ctx, state.athanor_id, state.thread, text, opts) do
+      admit_turn(state, ctx, name, text, opts)
     else
       {:error, reason} -> {:reply, {:error, reason}, state}
     end
@@ -810,35 +796,24 @@ defmodule Aqua.Runner do
       sent_by: Keyword.get(opts, :sent_by, @person),
       agent: name,
       origin: ctx.origin,
-      job: job(Keyword.get(opts, :crew)),
-      direct?: not Keyword.has_key?(opts, :request)
+      job: job(Keyword.get(opts, :crew))
     }
   end
 
   @doc """
   Whether a send steers `turn`, the running or paused turn as the runner
-  holds it from its row. The user, agent and origin match. Ordinarily
-  the sender and job options also match. A person's direct interactive
-  post to a member can join a job Aqua handed to that member for them,
-  using the turn's pinned options. Each job Aqua hands over opens its
-  own turn. A paused or recovered turn uses the same rule.
+  holds it from its row: the user, sender, agent, origin and job options
+  all match. Each job Aqua hands over opens its own turn. A paused or
+  recovered turn uses the same rule.
   """
   @spec steer?(map(), %{
           user_id: String.t(),
           sent_by: String.t(),
           agent: String.t(),
           origin: atom(),
-          job: job(),
-          direct?: boolean()
+          job: job()
         }) ::
           boolean()
-  def steer?(
-        %{user_id: user_id, sent_by: @aqua, agent: agent} = turn,
-        %{user_id: user_id, sent_by: @person, agent: agent, origin: :interactive, direct?: true}
-      )
-      when is_binary(user_id) and agent != @aqua,
-      do: same_origin?(:interactive, turn)
-
   def steer?(
         %{user_id: user_id, sent_by: sent_by, agent: agent, job: job} = turn,
         %{user_id: user_id, sent_by: sent_by, agent: agent, origin: origin, job: job}
@@ -988,61 +963,6 @@ defmodule Aqua.Runner do
       Sanctum.Provisioning.ready(ctx) != :ok -> {:error, :not_provisioned}
       not Opus.available?() -> {:error, :execution_unavailable}
       true -> :ok
-    end
-  end
-
-  # A request to a crew member: the row with the outbox record that
-  # delivers it, and no turn here.
-  # A person's line that addresses a crew member — a request to it from a
-  # room, or a turn of it in its own thread — is held to the member's
-  # readiness (`Aqua.Crew.ready/2`) before anything is written. A request
-  # delivered into the thread was held to it by its delivery, before its
-  # thread was made; the soul and room content are no member's.
-  defp crew_ready(ctx, {:request, member}, _opts), do: Aqua.Crew.ready(ctx, member)
-
-  defp crew_ready(ctx, {:turn, name}, opts) do
-    if Prima.AgentRef.soul?(name) or Keyword.has_key?(opts, :request),
-      do: :ok,
-      else: Aqua.Crew.ready(ctx, name)
-  end
-
-  defp crew_ready(_ctx, :content, _opts), do: :ok
-
-  defp accept_request(state, ctx, member, text, opts) do
-    attrs =
-      crew_attrs(
-        %{
-          message: Map.put(message(ctx, text, opts, member), :status, "pending"),
-          request: %{
-            member: member,
-            task: text,
-            options: %{},
-            person_id: ctx.user_id,
-            origin: ctx.origin
-          }
-        },
-        opts
-      )
-
-    case Tape.accept(ctx, state.id, attrs) do
-      {:ok, %{message: row, replayed: replayed}} ->
-        {:reply, {:ok, result(row, nil, replayed, :request)}, touch(state)}
-
-      {:error, reason} ->
-        {:reply, {:error, reason}, state}
-    end
-  end
-
-  # Room content: a reply addressed to the person, which wakes nothing.
-  defp accept_content(state, ctx, text, opts) do
-    attrs = crew_attrs(%{message: message(ctx, text, opts, Admission.person())}, opts)
-
-    case Tape.accept(ctx, state.id, attrs) do
-      {:ok, %{message: row, replayed: replayed}} ->
-        {:reply, {:ok, result(row, nil, replayed, :content)}, touch(state)}
-
-      {:error, reason} ->
-        {:reply, {:error, reason}, state}
     end
   end
 

@@ -78,7 +78,8 @@ defmodule Aqua.Runner.AdmissionRoomsTest do
   @moduledoc """
   Where a send is admitted, by the kind of the thread it lands in: a
   person's rooms are daily and workspace threads, which take their
-  person's address, a crew member's reply and the soul's requests alike;
+  person's line to the soul, a crew member's reply and the soul's
+  requests alike; a crew member's thread takes no line of the person's;
   a schedule's fire is admitted in a daily thread and in no other kind.
   Admission reads the athanor's standing, so the sender is a person in
   their own athanor.
@@ -92,6 +93,7 @@ defmodule Aqua.Runner.AdmissionRoomsTest do
     %{"name" => "aqua", "title" => "Aqua"},
     %{"name" => "planner", "title" => "Planner"}
   ]
+  @names "@planner look into it"
 
   @daily %{id: "thread_daily", kind: "daily", parent_id: nil, agent: nil}
   @workspace %{id: "thread_workspace", kind: "workspace", parent_id: nil, agent: nil}
@@ -117,7 +119,7 @@ defmodule Aqua.Runner.AdmissionRoomsTest do
 
       # Whatever names its line holds: nobody present asks no crew member.
       assert {:ok, {:turn, "aqua"}, _} =
-               check(fired, room, "@planner summarise", [{:agents, @roster} | @fire])
+               check(fired, room, "@planner summarise", @fire)
     end
 
     assert {:error, :not_addressable} = check(fired, @crew, "summarise", @fire)
@@ -126,20 +128,26 @@ defmodule Aqua.Runner.AdmissionRoomsTest do
     assert {:error, :not_addressable} = check(ctx, @daily, "summarise", @fire)
   end
 
-  test "a person's line in a daily or a workspace thread addresses the soul, or the crew member it names",
+  test "a person's line in a daily or a workspace thread is the soul's turn, whatever names it holds",
        %{ctx: ctx} do
     for room <- [@daily, @workspace] do
-      assert {:ok, {:turn, "aqua"}, "hello"} = check(ctx, room, "hello", agents: @roster)
+      assert {:ok, {:turn, "aqua"}, "hello"} = check(ctx, room, "hello", [])
 
-      assert {:ok, {:request, "planner"}, _} =
-               check(ctx, room, "@planner look into it", agents: @roster)
+      # A member's name is words to the soul, kept as they are: only the
+      # soul's hand-off asks the member.
+      assert {:ok, {:turn, "aqua"}, @names} = check(ctx, room, @names, [])
+      assert {:ok, {:turn, "aqua"}, "plan it"} = check(ctx, room, "plan it", agent: "planner")
 
       assert :ok = Admission.request(room, "aqua", "planner", @roster)
     end
+  end
 
-    # In a crew member's thread the person speaks to that member alone.
-    assert {:ok, {:turn, "planner"}, _} = check(ctx, @crew, "go on", agents: @roster)
-    assert {:error, :not_addressable} = check(ctx, @crew, "@aqua hello", agents: @roster)
+  test "a crew member's thread admits no line of the person's", %{ctx: ctx} do
+    for text <- ["go on", "@planner go on", "@aqua hello"] do
+      assert {:error, :not_addressable} = check(ctx, @crew, text, [])
+    end
+
+    assert {:error, :not_addressable} = check(ctx, @crew, "go on", agent: "planner")
   end
 
   test "a crew member's reply lands in the daily or workspace thread that asked it, and in no crew thread",
@@ -152,9 +160,11 @@ defmodule Aqua.Runner.AdmissionRoomsTest do
         ]
       end
 
-      # A reply to the person is the room's content; to the soul, its turn.
-      assert {:ok, :content, "done"} = check(ctx, room, "done", asked_by.("person"))
+      # Every reply is the soul's turn: to a request of the soul's, and to
+      # a request row the person sent a member themselves.
+      assert {:ok, {:turn, "aqua"}, "done"} = check(ctx, room, "done", asked_by.("person"))
       assert {:ok, {:turn, "aqua"}, "done"} = check(ctx, room, "done", asked_by.("aqua"))
+      assert {:error, :not_addressable} = check(ctx, room, "done", asked_by.("builder"))
 
       # A reply to a request of another thread, or by another member, is
       # nowhere to land.

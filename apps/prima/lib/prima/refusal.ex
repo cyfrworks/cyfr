@@ -672,15 +672,15 @@ defmodule Prima.Refusal do
   defp row(:not_member), do: {:forbidden, "Only the athanor's person can act in its threads"}
   defp row(:archived), do: {:forbidden, "This athanor is archived — nothing runs in it"}
 
-  defp row(:no_agent),
-    do: {:setup_required, "This athanor has no assistant to address — reset its Aqua tree"}
-
   # Who may post where (`Aqua.Runner.Admission`), and a crew member's
-  # retired thread.
+  # retired thread: true of every sender it refuses, a person, a client,
+  # a member or a turn's call.
   defp row(:not_addressable),
     do:
       {:forbidden,
-       "That cannot be addressed from here — a crew member answers only the thread that asked it"}
+       "That thread or crew member cannot be reached from here: a person writes to Aqua in a " <>
+         "daily or workspace thread, only Aqua hands a job to a crew member, and a crew " <>
+         "member answers only the thread that asked it"}
 
   # A person's shared threads are read by their own Aqua, from a turn of
   # its own (`Aqua.Tape.calling_turn/2`), and by no other chain.

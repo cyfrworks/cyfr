@@ -120,7 +120,6 @@ defmodule Aqua.AttachmentWriteRaceTest do
                    "action" => "send",
                    "thread" => thread.id,
                    "message" => "with a file",
-                   "agent" => "aqua",
                    "id" => message,
                    "attachments" => [ref],
                    "client_id" => "race-sent"
