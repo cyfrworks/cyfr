@@ -300,8 +300,8 @@ defmodule Aqua.Providers.Thread do
                 "send: a workspace thread or a crew member's thread; with none, or a daily thread, the send joins today's daily thread"
             ),
             Arg.new("message", :string,
-              required: true,
-              description: "send: the text to say (at most 32 KiB of text)",
+              description:
+                "send: the text to say (at most 32 KiB of text); a send that is no press says a line or carries files",
               max: 32768
             ),
             Arg.new("agent", :string,
@@ -331,6 +331,16 @@ defmodule Aqua.Providers.Thread do
                 "send: a pre-minted message id (mint one, attach the files under it, then send)"
             ),
             Arg.new("model", :string, description: "send: a model override for this turn"),
+            Arg.new(
+              "choice",
+              {:record,
+               [
+                 Arg.new("row", :string, required: true),
+                 Arg.new("index", :integer, required: true, min: 0)
+               ]},
+              description:
+                "send: a press of a choice on Aqua's question (row, index): the message row the question is in and the choice's place, from 0. A press names nothing else but a client_id: it lands where the question is, a daily thread's question in today's daily thread, and says the choice's label, read on the server, to Aqua"
+            ),
             Arg.new(
               "room",
               {:record,
@@ -731,25 +741,49 @@ defmodule Aqua.Providers.Thread do
     end
   end
 
-  # A send joins the daily thread current when it is accepted: one that
-  # names no thread, or names a daily thread, of today or another day. Its
-  # files are stored under the thread they were attached to, so a send
-  # that carries files names that thread: a crew member's, or a daily
-  # thread that is still today's. One whose day has turned since is
-  # refused and leaves nothing behind: no row, no new day's thread, and
-  # none of the files this caller stored under the message, so a message
-  # never names files another thread holds.
+  # A send that is no press and says nothing, refused before a thread is
+  # chosen, and by admission (`:empty`) for a line that trims to nothing.
+  @says_nothing "A send that is no press says a line or carries files."
+
+  # A press of Aqua's question names its choice and a client id, and
+  # nothing else: no argument the card did not show, and no destination.
+  # It is checked before anything is written, today's thread included, and
+  # it lands where its card is (`press_lands/2`).
+  defp dispatch(ctx, %{"action" => "send", "choice" => %{} = choice} = args) do
+    with :ok <- press_only(args),
+         {:ok, id} <- press_lands(ctx, choice, args["client_id"]) do
+      act("send", ctx, id, args)
+    else
+      {:error, {:invalid_argument, _} = refused} -> {:error, refused}
+      {:error, reason} -> {:error, refusal(reason, nil)}
+    end
+  end
+
+  # A send that names no thread, or names a daily thread of today or
+  # another day, joins the daily thread its client id was accepted in, or
+  # else the one current when it is accepted (`daily_lands/2`). Its files
+  # are stored under the thread they were attached to, so a send that
+  # carries files names that thread: a crew member's, or a daily thread
+  # that is still today's. One whose day has turned since is refused and
+  # leaves nothing behind: no row, no new day's thread, and none of the
+  # files this caller stored under the message, so a message never names
+  # files another thread holds. A send that says nothing is refused before
+  # a thread is chosen, so it makes no thread.
   defp dispatch(ctx, %{"action" => "send"} = args) do
-    case sends_to(ctx, args["thread"], args["attachments"] || []) do
-      {:ok, id} ->
-        act("send", ctx, id, args)
+    if String.trim(args["message"] || "") == "" and (args["attachments"] || []) == [] do
+      {:error, {:invalid_argument, @says_nothing}}
+    else
+      case sends_to(ctx, args["thread"], args["attachments"] || [], args["client_id"]) do
+        {:ok, id} ->
+          act("send", ctx, id, args)
 
-      {:error, :day_turned} ->
-        _ = discard_files(ctx, args)
-        {:error, refusal(:day_turned, args["thread"])}
+        {:error, :day_turned} ->
+          _ = discard_files(ctx, args)
+          {:error, refusal(:day_turned, args["thread"])}
 
-      {:error, reason} ->
-        {:error, refusal(reason, args["thread"])}
+        {:error, reason} ->
+          {:error, refusal(reason, args["thread"])}
+      end
     end
   end
 
@@ -761,13 +795,51 @@ defmodule Aqua.Providers.Thread do
   defp dispatch(_ctx, _args),
     do: {:error, {:invalid_argument, "thread requires an 'action' and a 'thread'"}}
 
-  defp sends_to(ctx, id, files) when is_binary(id) and id != "" do
+  # What a press may name: its choice and the sender's client id. An
+  # argument supplied counts, however empty.
+  @press ~w(action choice client_id)
+
+  defp press_only(args) do
+    if args |> Map.reject(fn {_, v} -> is_nil(v) end) |> Map.keys() |> Enum.all?(&(&1 in @press)),
+      do: :ok,
+      else: {:error, {:invalid_argument, "A press carries only its choice."}}
+  end
+
+  # Where a press lands, from its card alone: the workspace thread the card
+  # is in, or the daily thread a daily card's press lands in
+  # (`daily_lands/2`), as a line typed there lands.
+  defp press_lands(ctx, choice, client_id) do
+    with {:ok, room} <- Aqua.Choices.room(ctx, choice) do
+      case room do
+        %{kind: "daily"} -> daily_lands(ctx, client_id)
+        %{id: id} -> {:ok, id}
+      end
+    end
+  end
+
+  # The one way a send bound for a daily thread, a press or not, is given
+  # its thread: where its client id was already accepted across the
+  # person's daily threads (`Arca.ThreadStorage.daily_message/2`), else
+  # today's. So the day's turning never splits one send in two: the runner
+  # there answers the same send's receipt and refuses any other under that
+  # id, a plain line under a press's included.
+  defp daily_lands(ctx, client_id) when is_binary(client_id) do
+    case Arca.ThreadStorage.daily_message(Sanctum.Context.actor(ctx), client_id) do
+      {:ok, %{thread_id: id}} -> {:ok, id}
+      {:error, :not_found} -> today_id(ctx)
+      {:error, _} -> {:error, :unavailable}
+    end
+  end
+
+  defp daily_lands(ctx, _none), do: today_id(ctx)
+
+  defp sends_to(ctx, id, files, client_id) when is_binary(id) and id != "" do
     case Arca.ThreadStorage.get(Sanctum.Context.actor(ctx), id) do
       {:ok, %{kind: "daily", day: day}} when files != [] ->
         if day == Aqua.Day.today(ctx), do: {:ok, id}, else: {:error, :day_turned}
 
       {:ok, %{kind: "daily"}} ->
-        today_id(ctx)
+        daily_lands(ctx, client_id)
 
       {:ok, %{id: id}} ->
         {:ok, id}
@@ -777,8 +849,8 @@ defmodule Aqua.Providers.Thread do
     end
   end
 
-  defp sends_to(_ctx, _none, [_ | _]), do: {:error, :files_need_thread}
-  defp sends_to(ctx, _none, []), do: today_id(ctx)
+  defp sends_to(_ctx, _none, [_ | _], _client_id), do: {:error, :files_need_thread}
+  defp sends_to(ctx, _none, [], client_id), do: daily_lands(ctx, client_id)
 
   # What this caller's own session stored under the refused message, and
   # nothing anyone else stored (`Aqua.Attachments.discard_unsent/3`).
@@ -796,32 +868,35 @@ defmodule Aqua.Providers.Thread do
   # attached under it, the agent and model, the sender's client id, and
   # the shared thread open beside it — read server-side under the
   # sender's seat into the text the turn reads beside the task
-  # (`Aqua.Loop.Turn`), never stored. The gate has cast every argument
-  # against the declaration, so only an empty send is refused here.
+  # (`Aqua.Loop.Turn`), never stored; and a press of Aqua's question,
+  # which names only its row and index, is read again where the thread's
+  # sends are taken (`Aqua.Choices.press/2`), and carries nothing the card
+  # did not show. The gate has cast every argument against the
+  # declaration, and an empty send was refused before a thread was chosen.
   defp act("send", ctx, id, args) do
-    text = args["message"]
+    text = args["message"] || ""
     attachments = args["attachments"] || []
 
-    if String.trim(text) == "" and attachments == [] do
-      {:error, {:invalid_argument, "send requires a non-empty 'message'"}}
-    else
-      message_id =
-        case args["id"] do
-          mid when is_binary(mid) and mid != "" -> mid
-          _ -> Prima.UUID7.generate_id("msg")
-        end
-
-      opts =
-        [id: message_id, attachments: attachments]
-        |> put_opt(:client_id, args["client_id"])
-        |> put_opt(:model, args["model"])
-        |> put_opt(:agent, args["agent"])
-        |> put_opt(:room, args["room"])
-
-      case Runner.send_message(ctx, id, text, opts) do
-        {:ok, accepted} -> {:ok, accepted |> Map.merge(waiting(ctx, id)) |> Map.put(:thread, id)}
-        {:error, reason} -> {:error, refusal(reason, id)}
+    message_id =
+      case args["id"] do
+        mid when is_binary(mid) and mid != "" -> mid
+        _ -> Prima.UUID7.generate_id("msg")
       end
+
+    opts =
+      [id: message_id, attachments: attachments]
+      |> put_opt(:client_id, args["client_id"])
+      |> put_opt(:model, args["model"])
+      |> put_opt(:agent, args["agent"])
+      |> put_opt(:room, args["room"])
+      |> put_opt(:choice, args["choice"])
+
+    case Runner.send_message(ctx, id, text, opts) do
+      {:ok, accepted} ->
+        {:ok, accepted |> Map.merge(waiting(ctx, id)) |> Map.put(:thread, id)}
+
+      {:error, reason} ->
+        {:error, refusal(reason, id)}
     end
   end
 
@@ -1091,7 +1166,7 @@ defmodule Aqua.Providers.Thread do
 
   defp translate(:not_found, id), do: {:not_found, "thread", id}
 
-  defp translate(:empty, _id), do: {:invalid_argument, "send requires a non-empty 'message'"}
+  defp translate(:empty, _id), do: {:invalid_argument, @says_nothing}
 
   defp translate(:day_turned, _id),
     do:
@@ -1100,6 +1175,9 @@ defmodule Aqua.Providers.Thread do
 
   defp translate(:files_need_thread, _id),
     do: {:invalid_argument, "A send with files names the thread they were attached to."}
+
+  defp translate(:no_choice, _id),
+    do: {:invalid_argument, "No question of Aqua's offers that choice."}
 
   defp translate(:unavailable, _id), do: {:unavailable, "Threads"}
   defp translate(:database_error, _id), do: {:unavailable, "Storage"}

@@ -293,7 +293,9 @@ defmodule Aqua.Providers.ThreadTest do
     end
 
     test "refusals are the typed vocabulary, not sentences", %{ctx: ctx, thread: thread} do
-      assert {:refused, {:invalid_argument, _}} =
+      # A send that names no line: the declaration lets a press go without
+      # one, and the handler refuses every other send that says nothing.
+      assert {:error, {:invalid_argument, _}} =
                admission(ctx, "thread", %{"action" => "send", "thread" => thread.id})
 
       assert {:refused, {:unknown_action, "thread.dance"}} =
