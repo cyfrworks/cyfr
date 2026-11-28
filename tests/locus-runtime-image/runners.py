@@ -59,8 +59,8 @@ scrubbed, the container's CPU flat).
   `metadata` or `resolution` reaches the guest as the engine's refusal
   and opens no connection. A stream and a redirect's next hop across
   origin are not driven here, since no shipped guest makes either to a
-  URL a test chooses: `apps/locus/test/locus/runtime/http_handler_test.exs` and the
-  stream handler's boundary test cover them.
+  URL a test chooses: the runner's own tests cover them
+  (`apps/locus/runner/tests/requests.rs`).
 - A guest's request naming a connection is made by the control plane,
   never by the runner or the service: the hostile `attached_header_probe`
   sends its input as its one request, naming the connection `api_key`;
