@@ -131,8 +131,7 @@ func refuseEnv(format string, args ...any) error {
 // stackKeys answers the assignments that give a .env whose values are
 // values the keys the stack needs and it lacks, and nothing else; the
 // caller writes them through the engine's editor (access.EditEnv). A key that is
-// present is never rewritten, but the AppArmor profile's name and the
-// devices this machine has, cyfr's own; a malformed root or service id, and a
+// present is never rewritten, but the AppArmor profile's name, cyfr's own; a malformed root or service id, and a
 // service key that does not derive from the root beside it, are refused,
 // since writing around them would leave cyfr and Locus's runtime role
 // unable to authenticate each other. Each key reads as its last
@@ -224,14 +223,6 @@ func stackKeys(values map[string]string, fresh bool) (map[string]string, []envCh
 		set(appArmorEnv, apparmor.ProfileName)
 	}
 
-	// So are the devices a person's computer of their own runs through,
-	// written as this machine has them (vmDevices).
-	for _, d := range vmDevices {
-		if want := d.setting(); values[d.env] != want {
-			set(d.env, want)
-		}
-	}
-
 	if fresh && values[buildsKeyVar] == "" {
 		if err := mint(buildsKeyVar, generateHexKey); err != nil {
 			return nil, nil, err
@@ -262,9 +253,9 @@ func ensureEnvFileKeys(path string) ([]envChange, error) {
 
 // newEnv is the .env init writes for a new home from the template at
 // path, through the engine's editor (access.EditEnv): the stack's keys
-// (stackKeys) and the local head's access settings, every other line of the
-// template kept.
-func newEnv(path string) ([]byte, []envChange, access.Derivation, error) {
+// (stackKeys), the device settings as devices gives them (deviceEdits) and
+// the local head's access settings, every other line of the template kept.
+func newEnv(path string, devices map[string]string) ([]byte, []envChange, access.Derivation, error) {
 	tmpl, err := os.ReadFile(path)
 	if err != nil {
 		return nil, nil, access.Derivation{}, fmt.Errorf("Failed to read %s: %w", path, err)
@@ -279,6 +270,7 @@ func newEnv(path string) ([]byte, []envChange, access.Derivation, error) {
 		return nil, nil, access.Derivation{}, err
 	}
 	maps.Copy(set, add)
+	maps.Copy(set, deviceEdits(values, devices))
 	maps.Copy(values, add)
 	d, err := localHead(values)
 	if err != nil {
@@ -655,7 +647,7 @@ func initProject(ctx context.Context, o initOptions, step func(name string), out
 			return interruption{errors.New("Interrupted before .env was written. Run it again to go on.")}
 		}
 		begin(initStepSettings)
-		text, _, d, err := newEnv(".env.example")
+		text, _, d, err := newEnv(".env.example", newDevices(ctx, o.project))
 		if err != nil {
 			return err
 		}
@@ -731,6 +723,12 @@ func initProject(ctx context.Context, o initOptions, step func(name string), out
 	// makes.
 	if len(envChanges) > 0 {
 		fmt.Fprintf(out, "Added to .env: %s.\n", describeChanges(envChanges))
+	}
+	// Only cyfr update first gives the Locus services the devices, saying
+	// what that removes; init says so where this machine could run them
+	// and .env does not pass them.
+	if values, err := access.ReadEnvValues(".env"); err == nil && passes(machineDevices()) && !passes(values) {
+		fmt.Fprintln(out, devicesUpdateGives)
 	}
 
 	if !releaseBuild {
@@ -953,7 +951,7 @@ func readAnswer(r *bufio.Reader, def string) (string, bool) {
 
 var upCmd = &cobra.Command{
 	Use:         "up",
-	Annotations: map[string]string{dockerAnnotation: "yes"},
+	Annotations: map[string]string{dockerAnnotation: "yes", startsAnnotation: "yes"},
 	Short:       "Start the CYFR stack (cyfr, locus, locus-guard; the proxy of tailnet or public access)",
 	GroupID:     "server",
 	Long: `Start the CYFR stack with Docker Compose in detached mode, as .env says CYFR is reached. Requires a docker-compose.yml in the current directory (run 'cyfr init' first).

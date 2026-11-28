@@ -401,6 +401,9 @@ type restorer struct {
 	// made are the sources of binds, and their mount points, this restore
 	// made as the person (makeSources), removed again on a refusal.
 	made []string
+	// devices are the device settings the restored .env takes in place of
+	// the snapshot's, for each the snapshot's .env assigns (restoreDevices).
+	devices map[string]string
 }
 
 // restoreFiles are the configuration files the restore replaces with the
@@ -413,6 +416,9 @@ var restoreFiles = append([]string{"docker-compose.yml", ".env"}, scaffold.Secco
 func (r *restorer) run() error {
 	m := r.snap.manifest
 	fmt.Fprintf(r.out, "Restoring the snapshot of release %s taken at %s (%s).\n", m.Version, m.TakenAt, r.snap.dir)
+	if err := r.restoreDevices(); err != nil {
+		return err
+	}
 	if m.StorageAdapter == "s3" {
 		fmt.Fprintln(r.out, s3OutsideSnapshot+" Objects written since the snapshot stay in the bucket.")
 	}
@@ -642,9 +648,10 @@ func (r *restorer) raiseBarrier() error {
 }
 
 // lowerBarrier puts the snapshot's .env back as the snapshot holds it,
-// without restoreBarrier, once the restore is declared.
+// with this machine's devices (restoredEnv) and without restoreBarrier,
+// once the restore is declared.
 func (r *restorer) lowerBarrier() error {
-	data, err := os.ReadFile(r.snap.path(".env"))
+	data, err := r.restoredEnv()
 	if err != nil {
 		return err
 	}
@@ -657,13 +664,70 @@ func (r *restorer) lowerBarrier() error {
 // compose file in place delivers the bar at every step.
 const stagedCompose = ".docker-compose.yml.restore"
 
-// putConfigFiles writes the snapshot's .env over the project's, with the
-// barrier, and the snapshot's compose file at stagedCompose: the
-// configuration they give cyfr is the one the snapshot was taken under,
-// whose mounts the storage part follows. .env is 0600; the compose file
-// keeps docker-compose.yml's mode.
-func (r *restorer) putConfigFiles() error {
+// restoreDevices settles the device settings the restored .env holds and
+// says, before anything stops, what they do here. A snapshot's .env is the
+// machine's it was taken on, so each device line it assigns takes this
+// machine's as its stack ran before the restore: the device's path where
+// the .env before passed both and this machine still has both, empty
+// otherwise. A line the snapshot's .env does not assign stays unassigned,
+// as a release before them declares none and its boot refuses a setting it
+// does not declare. A restore never first gives the devices: it asks no
+// question, and only cyfr update, which asks, removes the folders that
+// does; where this machine could run them, it says so.
+func (r *restorer) restoreDevices() error {
+	snapshot, err := os.ReadFile(r.snap.path(".env"))
+	if err != nil {
+		return err
+	}
+	restored, err := access.EnvValues(snapshot)
+	if err != nil {
+		return engineFailure(err)
+	}
+	before, err := access.ReadEnvValues(".env")
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return engineFailure(err)
+	}
+	have := machineDevices()
+	want := noDevices()
+	if passes(before) && passes(have) {
+		want = have
+	}
+	r.devices = map[string]string{}
+	for _, d := range vmDevices {
+		if _, assigned := restored[d.env]; assigned {
+			r.devices[d.env], restored[d.env] = want[d.env], want[d.env]
+		}
+	}
+	switch {
+	case passes(have) && !passes(restored):
+		fmt.Fprintln(r.out, devicesUpdateGives)
+	case passes(before) && !passes(have):
+		fmt.Fprintln(r.out, devicesGone)
+	}
+	return nil
+}
+
+// restoredEnv is the snapshot's .env with this machine's device settings
+// (restoreDevices), every other line as the snapshot holds it.
+func (r *restorer) restoredEnv() ([]byte, error) {
 	env, err := os.ReadFile(r.snap.path(".env"))
+	if err != nil {
+		return nil, err
+	}
+	if len(r.devices) == 0 {
+		return env, nil
+	}
+	out, err := access.EditEnv(env, r.devices, nil)
+	return out, engineFailure(err)
+}
+
+// putConfigFiles writes the snapshot's .env over the project's, with this
+// machine's devices and the barrier, and the snapshot's compose file at
+// stagedCompose: the configuration they give cyfr is the one the snapshot
+// was taken under, whose mounts the storage part follows. .env is 0600;
+// the compose file keeps docker-compose.yml's mode.
+func (r *restorer) putConfigFiles() error {
+	env, err := r.restoredEnv()
 	if err != nil {
 		return err
 	}

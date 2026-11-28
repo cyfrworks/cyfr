@@ -17,123 +17,309 @@ import (
 )
 
 const (
-	kvmEnv = "CYFR_LOCUS_KVM"
-	tunEnv = "CYFR_LOCUS_TUN"
+	kvmEnv = access.KVMSetting
+	tunEnv = access.TunSetting
 )
 
-// devicesHere stands in for a machine that has the devices at paths, each
-// asked for by its own misc minor, and no other.
-func devicesHere(t *testing.T, paths ...string) {
+// devicesHere stands in for a machine that has both devices a person's
+// computer of their own needs, or lacks them.
+func devicesHere(t *testing.T, has bool) {
 	t.Helper()
-	minors := map[string]uint32{"/dev/kvm": 232, "/dev/net/tun": 200}
-	saved := machine.device
-	t.Cleanup(func() { machine.device = saved })
-	machine.device = func(path string, minor uint32) bool {
-		return slices.Contains(paths, path) && minors[path] == minor
-	}
+	saved := machine.devices
+	t.Cleanup(func() { machine.devices = saved })
+	machine.devices = func() bool { return has }
 }
 
-// deviceLines is .env's device settings as values give them, unset or
-// empty, or a path: kvm, then tun.
+// deviceLines is .env's device settings as values give them: kvm, then
+// tun.
 func deviceLines(kvm, tun string) string {
 	return kvmEnv + "=" + kvm + "\n" + tunEnv + "=" + tun + "\n"
 }
 
-// deviceMachines are machines with both devices, with the tun device
-// alone, as a Linux host without KVM, and with neither, as Docker
-// Desktop: the settings each writes, and their opposites, which another
-// machine's .env would hold.
-var deviceMachines = map[string]struct {
-	has                []string
-	kvm, tun           string
-	otherKVM, otherTUN string
-}{
-	"both":      {[]string{"/dev/kvm", "/dev/net/tun"}, "/dev/kvm", "/dev/net/tun", "", ""},
-	"tun alone": {[]string{"/dev/net/tun"}, "", "/dev/net/tun", "/dev/kvm", ""},
-	"none":      {nil, "", "", "/dev/kvm", "/dev/net/tun"},
-}
-
-// devicesAre fails unless .env holds kvm and tun as its device settings.
+// devicesAre fails unless .env holds kvm and tun as its device settings,
+// "<unset>" for a setting it does not assign.
 func devicesAre(t *testing.T, kvm, tun string) {
 	t.Helper()
 	values, err := access.ReadEnvValues(".env")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if values[kvmEnv] != kvm || values[tunEnv] != tun {
-		t.Errorf(".env's devices are %s=%q and %s=%q, want %q and %q", kvmEnv, values[kvmEnv], tunEnv, values[tunEnv], kvm, tun)
+	got := func(name string) string {
+		if v, ok := values[name]; ok {
+			return v
+		}
+		return "<unset>"
+	}
+	if got(kvmEnv) != kvm || got(tunEnv) != tun {
+		t.Errorf(".env's devices are %s=%q and %s=%q, want %q and %q", kvmEnv, got(kvmEnv), tunEnv, got(tunEnv), kvm, tun)
 	}
 }
 
-// init writes each device the machine has as its own path and each it
-// lacks as empty, into a new .env and over what an existing one held.
-func TestInitWritesTheDevicesThisMachineHas(t *testing.T) {
-	for name, m := range deviceMachines {
-		t.Run(name, func(t *testing.T) {
-			devicesHere(t, m.has...)
-			newInitProject(t)
-			useFakeEngine(t)
-			var out bytes.Buffer
-			if err := runInit(context.Background(), initOptions{noPull: true}, &out, &out); err != nil {
-				t.Fatalf("init: %v\n%s", err, out.String())
-			}
-			devicesAre(t, m.kvm, m.tun)
+// initDocker stands a docker in for init's one question, through the
+// engine's runner: the volumes of the project's name it lists, and its
+// exit status. It answers the log of its calls.
+func initDocker(t *testing.T, volumes string, exit int) func() []string {
+	t.Helper()
+	fake := t.TempDir()
+	for name, data := range map[string]string{"docker": fakeDocker, "volume.out": volumes, "volume.exit": strings.Repeat("1", min(exit, 1))} {
+		if name == "volume.exit" && exit == 0 {
+			continue
+		}
+		if err := os.WriteFile(filepath.Join(fake, name), []byte(data), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", fake+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("FAKE_DOCKER_DIR", fake)
+	return func() []string {
+		data, _ := os.ReadFile(filepath.Join(fake, "log"))
+		return strings.Split(strings.TrimSpace(string(data)), "\n")
+	}
+}
 
-			if err := os.WriteFile(".env", []byte("CYFR_ACCESS=local\nCYFR_PORT=4000\n"+deviceLines(m.otherKVM, m.otherTUN)), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			out.Reset()
-			if err := runInit(context.Background(), initOptions{noPull: true}, &out, &out); err != nil {
-				t.Fatalf("init on an existing .env: %v\n%s", err, out.String())
-			}
+// volumesAsked is the one docker call init makes before it gives a new
+// project the devices: the volumes Docker holds of the project's name.
+func volumesAsked(dir string) string {
+	return "volume ls -q --filter label=com.docker.compose.project=" + access.ProjectName(dir)
+}
+
+// runInitHere runs cyfr init in the working directory and answers its
+// output.
+func runInitHere(t *testing.T) string {
+	t.Helper()
+	var out bytes.Buffer
+	if err := runInit(context.Background(), initOptions{noPull: true}, &out, &out); err != nil {
+		t.Fatalf("init: %v\n%s", err, out.String())
+	}
+	return out.String()
+}
+
+// init gives the devices only to a project it makes: there each is the
+// machine's, both or neither. In a project that exists it writes no device
+// line, whatever the machine has, and leaves the lines it finds as they
+// are: where the machine could run each person's programs in a computer of
+// their own and .env does not give the devices, it says that cyfr update
+// turns that on.
+func TestInitGivesTheDevicesOnlyToAProjectItMakes(t *testing.T) {
+	for name, m := range map[string]struct {
+		has      bool
+		kvm, tun string
+	}{
+		"both here": {true, "/dev/kvm", "/dev/net/tun"},
+		"none here": {false, "", ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			devicesHere(t, m.has)
+			dir := newInitProject(t)
+			useFakeEngine(t)
+			asked := initDocker(t, "", 0)
+			out := runInitHere(t)
 			devicesAre(t, m.kvm, m.tun)
+			if strings.Contains(out, devicesUpdateGives) {
+				t.Errorf("init of a new project says cyfr update gives the devices:\n%s", out)
+			}
+			if want := []string{volumesAsked(dir)}; m.has && !slices.Equal(asked(), want) {
+				t.Errorf("init asked docker %q, want %q", asked(), want)
+			}
+
+			for env, says := range map[string]bool{
+				"CYFR_ACCESS=local\nCYFR_PORT=4000\n":                                           m.has,
+				"CYFR_ACCESS=local\nCYFR_PORT=4000\n" + deviceLines("", ""):                     m.has,
+				"CYFR_ACCESS=local\nCYFR_PORT=4000\n" + deviceLines("/dev/sda", ""):             m.has,
+				"CYFR_ACCESS=local\nCYFR_PORT=4000\n" + deviceLines("/dev/kvm", "/dev/net/tun"): false,
+			} {
+				if err := os.WriteFile(".env", []byte(env), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				before, _ := access.EnvValues([]byte(env))
+				out := runInitHere(t)
+				after, err := access.ReadEnvValues(".env")
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, d := range vmDevices {
+					v, assigned := after[d.env]
+					w, was := before[d.env]
+					if v != w || assigned != was {
+						t.Errorf("init in a project whose .env is %q left %s as %q (assigned %t)", env, d.env, v, assigned)
+					}
+				}
+				if strings.Contains(out, kvmEnv) || strings.Contains(out, tunEnv) {
+					t.Errorf("init in a project whose .env is %q names a device setting:\n%s", env, out)
+				}
+				if got := strings.Contains(out, devicesUpdateGives+"\n"); got != says {
+					t.Errorf("init in a project whose .env is %q says cyfr update gives the devices: %t, want %t:\n%s", env, got, says, out)
+				}
+			}
 		})
 	}
 }
 
-// cyfr update writes them so too, at the switch and on a home on its
-// release already.
+// A project whose folder holds no .env but whose volumes Docker still
+// holds, which a person's data outlives the folder's files in (cyfr
+// uninstall keeps them), is no new project: init gives it no device, so
+// no start removes their kept folders unasked, and says cyfr update turns
+// them on; so too where Docker answers the question with a failure. A
+// Docker not installed holds none.
+func TestInitGivesNoDeviceToAProjectDockerHoldsVolumesOf(t *testing.T) {
+	for name, c := range map[string]struct {
+		volumes string
+		exit    int
+		noPath  bool
+		given   bool
+	}{
+		"volumes of its name": {"cyfr_homes\ncyfr_data\n", 0, false, false},
+		"none":                {"", 0, false, true},
+		"Docker refuses":      {"", 1, false, false},
+		"Docker not here":     {"", 0, true, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			devicesHere(t, true)
+			dir := newInitProject(t)
+			useFakeEngine(t)
+			asked := initDocker(t, c.volumes, c.exit)
+			if c.noPath {
+				t.Setenv("PATH", t.TempDir())
+			}
+			out := runInitHere(t)
+			if c.given {
+				devicesAre(t, "/dev/kvm", "/dev/net/tun")
+			} else {
+				devicesAre(t, "", "")
+			}
+			if got := strings.Contains(out, devicesUpdateGives+"\n"); got == c.given {
+				t.Errorf("init says cyfr update gives the devices: %t, want %t:\n%s", got, !c.given, out)
+			}
+			if want := []string{volumesAsked(dir)}; !c.noPath && !slices.Equal(asked(), want) {
+				t.Errorf("init asked docker %q, want %q", asked(), want)
+			}
+		})
+	}
+}
+
+// The commands that start the stack as .env stands refuse a device .env
+// names that this machine does not have, by the sentence that says what
+// mends it, never naming the value.
+func TestADeviceThisMachineLacksIsNotPassedToDocker(t *testing.T) {
+	devicesHere(t, false)
+	t.Chdir(t.TempDir())
+	if err := os.WriteFile(".env", []byte("CYFR_ACCESS=local\n"+deviceLines("/dev/kvm", "/dev/net/tun")), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	want := kvmEnv + " in .env is not a device this machine has for CYFR, so nothing was started. Run `cyfr update` here, which writes what this machine has, then run `cyfr up` again"
+	if err := refuseDevices("cyfr up"); err == nil || err.Error() != want {
+		t.Fatalf("a .env naming devices this machine lacks answered %v, want %q", err, want)
+	}
+}
+
+// cyfr init run again in a project that exists, which its help calls safe,
+// writes no device: the update that first gives them says what that
+// removes, and init says it is cyfr update that does.
+func TestInitInAProjectThatExistsLeavesTheDevicesToTheUpdate(t *testing.T) {
+	devicesHere(t, true)
+	newInitProject(t)
+	useFakeEngine(t)
+	if err := os.WriteFile(".env", []byte("CYFR_ACCESS=local\nCYFR_PORT=4000\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out := runInitHere(t)
+	devicesAre(t, "<unset>", "<unset>")
+	if !strings.Contains(out, devicesUpdateGives+"\n") || strings.Contains(out, devicesSignInAgain) {
+		t.Fatalf("init in a project that exists does not say cyfr update gives the devices, or says what the update says:\n%s", out)
+	}
+}
+
+// cyfr init run in the folder before the update that first gives the
+// devices leaves that update its sentence.
+func TestInitBeforeTheUpdateLeavesTheSentenceToIt(t *testing.T) {
+	devicesHere(t, true)
+	newUpdateScenario(t, shippedCompose(t), nil)
+	said := func() bool {
+		askWith(t, true, strings.NewReader("no\n"))
+		var out bytes.Buffer
+		if err := runHomeUpdate(context.Background(), &out, &out, updateOptions{}); err != nil {
+			t.Fatalf("a declined update answered %v:\n%s", err, out.String())
+		}
+		return strings.Contains(out.String(), devicesSignInAgain+"\n")
+	}
+	if !said() {
+		t.Fatal("before cyfr init, the offer does not say programs sign in again")
+	}
+	if _, err := ensureEnvFileKeys(".env"); err != nil {
+		t.Fatal(err)
+	}
+	devicesAre(t, "<unset>", "<unset>")
+	if !said() {
+		t.Error("after cyfr init, the update that first gives the devices says nothing of signing in again")
+	}
+}
+
+// cyfr update writes the devices as this machine has them over whatever
+// .env held, at the switch and on a home on its release already.
 func TestUpdateWritesTheDevicesThisMachineHas(t *testing.T) {
-	for name, m := range deviceMachines {
+	for name, m := range map[string]struct {
+		has      bool
+		kvm, tun string
+		others   []string
+	}{
+		"both here": {true, "/dev/kvm", "/dev/net/tun", []string{"", deviceLines("", ""), deviceLines("", "/dev/net/tun"), deviceLines("/dev/sda", "/dev/net/tun")}},
+		"none here": {false, "", "", []string{deviceLines("/dev/kvm", "/dev/net/tun"), deviceLines("/dev/kvm", ""), deviceLines("/dev/sda", "")}},
+	} {
 		for release, compose := range map[string]func(*testing.T) []byte{
 			"switch":         shippedCompose,
 			"on its release": func(t *testing.T) []byte { return switched(shippedCompose(t)) },
 		} {
-			t.Run(name+", "+release, func(t *testing.T) {
-				devicesHere(t, m.has...)
-				s := newUpdateScenario(t, compose(t), nil)
-				s.edit(".env", scenarioEnv+deviceLines(m.otherKVM, m.otherTUN))
-				if out, err := s.run(context.Background()); err != nil {
-					t.Fatalf("update: %v\n%s", err, out)
-				}
-				devicesAre(t, m.kvm, m.tun)
-			})
+			for _, other := range m.others {
+				t.Run(name+", "+release+", "+strings.ReplaceAll(other, "\n", " "), func(t *testing.T) {
+					devicesHere(t, m.has)
+					s := newUpdateScenario(t, compose(t), nil)
+					s.edit(".env", scenarioEnv+other)
+					if out, err := s.run(context.Background()); err != nil {
+						t.Fatalf("update: %v\n%s", err, out)
+					}
+					devicesAre(t, m.kvm, m.tun)
+				})
+			}
 		}
 	}
 }
 
-// The update that first gives the Locus services both devices, where
-// .env named not both of them and the machine has both, says before it
-// changes anything that each person's programs sign in again: in the
-// change it shows before its question, so declined it has changed
-// nothing, in the change the CYFR app's page shows, and on a home on its
-// release, before its start. No other update says it.
-func TestUpdateSaysProgramsSignInAgainWhenItFirstPassesTheDevices(t *testing.T) {
+// What an update says of the devices, before it changes anything: the
+// update that first gives the Locus services both devices, which only an
+// update does, that each person signs their programs in again, in the
+// change it shows before its question, in the change the CYFR app's page
+// shows, and on a home on its release before its question; the update
+// that takes them away, since the machine no longer has them, that a
+// program kept in a person's own computer does not start, said and not
+// asked. No other update says either.
+func TestUpdateSaysWhatItDoesToTheDevices(t *testing.T) {
+	const on, off, neither = "on", "off", ""
 	for name, c := range map[string]struct {
-		has  []string
+		has  bool
 		env  string
-		says bool
+		says string
 	}{
-		"none named, both here": {[]string{"/dev/kvm", "/dev/net/tun"}, "", true},
-		"tun named, both here":  {[]string{"/dev/kvm", "/dev/net/tun"}, deviceLines("", "/dev/net/tun"), true},
-		"both named, both here": {[]string{"/dev/kvm", "/dev/net/tun"}, deviceLines("/dev/kvm", "/dev/net/tun"), false},
-		"none named, tun here":  {[]string{"/dev/net/tun"}, "", false},
-		"none named, none here": {nil, "", false},
-		"both named, none here": {nil, deviceLines("/dev/kvm", "/dev/net/tun"), false},
+		"none named, both here":         {true, "", on},
+		"tun named, both here":          {true, deviceLines("", "/dev/net/tun"), on},
+		"another path named, both here": {true, deviceLines("/dev/sda", "/dev/net/tun"), on},
+		"both named, both here":         {true, deviceLines("/dev/kvm", "/dev/net/tun"), neither},
+		"none named, none here":         {false, "", neither},
+		"tun named, none here":          {false, deviceLines("", "/dev/net/tun"), neither},
+		"both named, none here":         {false, deviceLines("/dev/kvm", "/dev/net/tun"), off},
 	} {
 		t.Run(name, func(t *testing.T) {
-			devicesHere(t, c.has...)
-			said := func(out string) bool { return strings.Contains(out, devicesSignInAgain+"\n") }
+			devicesHere(t, c.has)
+			said := func(out string) string {
+				switch {
+				case strings.Contains(out, devicesSignInAgain+"\n") && !strings.Contains(out, devicesGone):
+					return on
+				case strings.Contains(out, devicesGone+"\n") && !strings.Contains(out, devicesSignInAgain):
+					return off
+				case !strings.Contains(out, devicesGone) && !strings.Contains(out, devicesSignInAgain):
+					return neither
+				}
+				return "both"
+			}
 
 			s := newUpdateScenario(t, shippedCompose(t), nil)
 			s.edit(".env", scenarioEnv+c.env)
@@ -142,8 +328,8 @@ func TestUpdateSaysProgramsSignInAgainWhenItFirstPassesTheDevices(t *testing.T) 
 			if err := runHomeUpdate(context.Background(), &out, &out, updateOptions{}); err != nil || !strings.HasSuffix(out.String(), "Update this CYFR? (yes/no) [no]: Nothing changed. Run cyfr update again when you want this release.\n") {
 				t.Fatalf("a declined update answered %v:\n%s", err, out.String())
 			}
-			if said(out.String()) != c.says {
-				t.Errorf("the offer says programs sign in again: %t, want %t:\n%s", said(out.String()), c.says, out.String())
+			if got := said(out.String()); got != c.says {
+				t.Errorf("the offer says %q of the devices, want %q:\n%s", got, c.says, out.String())
 			}
 			s.onlyReadTheSchema()
 			if got := read(t, filepath.Join(s.project, ".env")); got != scenarioEnv+c.env {
@@ -154,13 +340,8 @@ func TestUpdateSaysProgramsSignInAgainWhenItFirstPassesTheDevices(t *testing.T) 
 			if err := runHomeUpdate(context.Background(), &out, &out, updateOptions{offer: true}); err != nil {
 				t.Fatalf("the app's offer answered %v:\n%s", err, out.String())
 			}
-			lines := strings.Split(strings.TrimSpace(out.String()), "\n")
-			var shown shownChange
-			if err := json.Unmarshal([]byte(lines[len(lines)-1]), &shown); err != nil {
-				t.Fatalf("the app's offer is %q (%v)", out.String(), err)
-			}
-			if said(shown.Change) != c.says {
-				t.Errorf("the app's offer says programs sign in again: %t, want %t:\n%s", said(shown.Change), c.says, shown.Change)
+			if got := said(offered(t, out.String()).Change); got != c.says {
+				t.Errorf("the app's offer says %q of the devices, want %q:\n%s", got, c.says, out.String())
 			}
 
 			s = newUpdateScenario(t, switched(shippedCompose(t)), nil)
@@ -170,13 +351,155 @@ func TestUpdateSaysProgramsSignInAgainWhenItFirstPassesTheDevices(t *testing.T) 
 				t.Fatalf("an update on its release answered %v:\n%s", err, got)
 			}
 			first := "This CYFR is on release 0.9.0 already, so there is nothing to switch; cyfr update starts it and waits for every service of its stack.\n"
-			want := first + "Starting release 0.9.0...\n"
-			if c.says {
-				want = first + devicesSignInAgain + "\nStarting release 0.9.0...\n"
-			}
-			if !strings.Contains(got, want) {
-				t.Errorf("an update on its release does not say %q before its start:\n%s", want, got)
+			want := "Verifying the manifest of release 0.9.0...\n" + map[string]string{
+				on:      "This CYFR is on release 0.9.0 already, so there is nothing to switch; cyfr update writes this machine's devices to .env, starts it and waits for every service of its stack.\n" + devicesSignInAgain + "\n",
+				off:     first + devicesGone + "\n",
+				neither: first,
+			}[c.says] + "Starting release 0.9.0...\n"
+			if !strings.HasPrefix(got, want) {
+				t.Errorf("an update on its release does not begin %q:\n%s", want, got)
 			}
 		})
+	}
+}
+
+// offered is the app's offer an --offer run printed last.
+func offered(t *testing.T, out string) shownChange {
+	t.Helper()
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	var shown shownChange
+	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &shown); err != nil {
+		t.Fatalf("the app's offer is %q (%v)", out, err)
+	}
+	return shown
+}
+
+// An update on its release that would first give the devices asks before
+// it changes anything, as an offered update does: declined, or with no
+// terminal and no --yes, nothing changes and nothing starts; answered yes,
+// it writes them and starts. One on its release with nothing to give asks
+// nothing.
+func TestAnUpdateOnItsReleaseAsksBeforeItFirstGivesTheDevices(t *testing.T) {
+	text := "Verifying the manifest of release 0.9.0...\nThis CYFR is on release 0.9.0 already, so there is nothing to switch; cyfr update writes this machine's devices to .env, starts it and waits for every service of its stack.\n" + devicesSignInAgain + "\n"
+	for name, c := range map[string]struct {
+		terminal bool
+		answer   string
+		yes      bool
+		err      string
+		out      string
+		given    bool
+	}{
+		"declined":     {true, "no\n", false, "", text + "Update this CYFR? (yes/no) [no]: Nothing changed. Run cyfr update again when you want each person's programs in a computer of their own.\n", false},
+		"no terminal":  {false, "", false, "Nothing changed: there is no terminal to confirm the update on. Run it again with --yes to make it, or at a terminal", text, false},
+		"answered yes": {true, "yes\n", false, "", text + "Update this CYFR? (yes/no) [no]: Starting release 0.9.0...\n", true},
+		"--yes":        {false, "", true, "", text + "Starting release 0.9.0...\n", true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			devicesHere(t, true)
+			s := newUpdateScenario(t, switched(shippedCompose(t)), nil)
+			askWith(t, c.terminal, strings.NewReader(c.answer))
+			var out bytes.Buffer
+			err := runHomeUpdate(context.Background(), &out, &out, updateOptions{yes: c.yes})
+			if (err == nil) != (c.err == "") || (err != nil && err.Error() != c.err) {
+				t.Fatalf("the update answered %v, want %q:\n%s", err, c.err, out.String())
+			}
+			if !strings.HasPrefix(out.String(), c.out) {
+				t.Errorf("the update said %q, want it to begin %q", out.String(), c.out)
+			}
+			if c.given {
+				devicesAre(t, "/dev/kvm", "/dev/net/tun")
+				return
+			}
+			if got := read(t, filepath.Join(s.project, ".env")); got != scenarioEnv {
+				t.Errorf("the update left .env as %q", got)
+			}
+			s.nothingStopped()
+		})
+	}
+
+	devicesHere(t, true)
+	s := newUpdateScenario(t, switched(shippedCompose(t)), nil)
+	s.edit(".env", scenarioEnv+deviceLines("/dev/kvm", "/dev/net/tun"))
+	askWith(t, true, strings.NewReader("no\n"))
+	var out bytes.Buffer
+	if err := runHomeUpdate(context.Background(), &out, &out, updateOptions{}); err != nil || strings.Contains(out.String(), "(yes/no)") {
+		t.Fatalf("an update on its release with the devices given answered %v, or asked:\n%s", err, out.String())
+	}
+}
+
+// The devices an update writes are the ones it read when it began, which
+// its offer showed: never read again at the write.
+func TestTheUpdateWritesTheDevicesItShowed(t *testing.T) {
+	for release, compose := range map[string]func(*testing.T) []byte{
+		"switch":         shippedCompose,
+		"on its release": func(t *testing.T) []byte { return switched(shippedCompose(t)) },
+	} {
+		t.Run(release, func(t *testing.T) {
+			saved := machine.devices
+			t.Cleanup(func() { machine.devices = saved })
+			reads := 0
+			machine.devices = func() bool { reads++; return reads == 1 }
+			s := newUpdateScenario(t, compose(t), nil)
+			out, err := s.run(context.Background())
+			if err != nil {
+				t.Fatalf("update: %v\n%s", err, out)
+			}
+			if !strings.Contains(out, devicesSignInAgain+"\n") {
+				t.Errorf("the update did not say what giving the devices removes:\n%s", out)
+			}
+			devicesAre(t, "/dev/kvm", "/dev/net/tun")
+			if reads != 1 {
+				t.Errorf("the update read the machine's devices %d times, want once", reads)
+			}
+		})
+	}
+}
+
+// The CYFR app's confirmed update holds to the devices its offer showed:
+// where this machine's devices, or .env's, changed since, it changes
+// nothing and the app offers again; where neither did, it is made, the
+// devices with it. On a home on its release, the offer that would first
+// give the devices shows that change.
+func TestTheAppsConfirmedUpdateHoldsToTheDevicesItShowed(t *testing.T) {
+	refused := "What updating this CYFR changes is not the change the CYFR app showed, so nothing was changed. Open Update CYFR in the app again to see the change as it is now"
+	for release, compose := range map[string]func(*testing.T) []byte{
+		"switch":         shippedCompose,
+		"on its release": func(t *testing.T) []byte { return switched(shippedCompose(t)) },
+	} {
+		for name, change := range map[string]func(t *testing.T, s *updateScenario){
+			"the machine's devices changed": func(t *testing.T, s *updateScenario) { devicesHere(t, false) },
+			".env's devices changed":        func(t *testing.T, s *updateScenario) { s.edit(".env", scenarioEnv+deviceLines("", "/dev/net/tun")) },
+			"nothing changed":               func(t *testing.T, s *updateScenario) {},
+		} {
+			t.Run(release+", "+name, func(t *testing.T) {
+				devicesHere(t, true)
+				s := newUpdateScenario(t, compose(t), nil)
+				var out bytes.Buffer
+				if err := runHomeUpdate(context.Background(), &out, &out, updateOptions{offer: true}); err != nil {
+					t.Fatalf("the app's offer answered %v:\n%s", err, out.String())
+				}
+				shown := offered(t, out.String())
+				if shown.Confirmation == "" || !strings.Contains(shown.Change, devicesSignInAgain+"\n") {
+					t.Fatalf("the app's offer shows %+v, want a change that says what giving the devices removes", shown)
+				}
+				change(t, s)
+				before := read(t, filepath.Join(s.project, ".env"))
+				out.Reset()
+				err := runHomeUpdate(context.Background(), &out, &out, updateOptions{confirmed: shown.Confirmation})
+				if name == "nothing changed" {
+					if err != nil {
+						t.Fatalf("the confirmed update answered %v:\n%s", err, out.String())
+					}
+					devicesAre(t, "/dev/kvm", "/dev/net/tun")
+					return
+				}
+				if err == nil || err.Error() != refused {
+					t.Fatalf("the confirmed update answered %v, want %q:\n%s", err, refused, out.String())
+				}
+				if got := read(t, filepath.Join(s.project, ".env")); got != before {
+					t.Errorf("the refused update left .env as %q, want %q", got, before)
+				}
+			})
+		}
 	}
 }

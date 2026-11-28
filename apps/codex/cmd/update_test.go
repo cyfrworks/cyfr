@@ -115,6 +115,7 @@ if [ "$1" = compose ]; then
 fi
 case "$1" in
   inspect) answer inspect ;;
+  volume) answer volume ;;
   network)
     last="${@: -1}"
     case "$2" in

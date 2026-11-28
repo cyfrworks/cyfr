@@ -54,17 +54,20 @@ joined, or HTTPS off; the message says what to do);
 	// cobra so a prompt abort (prompt.ErrAborted) can exit 130 silently.
 	SilenceUsage:  true,
 	SilenceErrors: true,
-	// A command that reaches Docker refuses a .env naming a device cyfr
-	// does not pass (refuseDevices), before Docker is asked anything; in a
-	// terminal older than the account's docker group, it runs again
-	// through it (withDockerGroup); that run printed its own outcome, and
-	// its status is this one's.
+	// A command that starts the stack as .env stands refuses a .env naming
+	// a device this machine does not have (refuseDevices), before Docker is
+	// asked anything; a command that reaches Docker, in a terminal older
+	// than the account's docker group, runs again through it
+	// (withDockerGroup); that run printed its own outcome, and its status
+	// is this one's.
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 		if !needsDocker(cmd) {
 			return nil
 		}
-		if err := refuseDevices(commandSaid(continued(cmd, args).said)); err != nil {
-			return err
+		if cmd.Annotations[startsAnnotation] != "" {
+			if err := refuseDevices(commandSaid(continued(cmd, args).said)); err != nil {
+				return err
+			}
 		}
 		ctx := cmd.Context()
 		if ctx == nil {

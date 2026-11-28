@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -662,58 +663,102 @@ func TestSaysLogInAgainForEachCommandWhereThereIsNoSg(t *testing.T) {
 	}
 }
 
-// Every command that reaches Docker refuses a .env whose device setting
-// is neither empty nor its device's own path, as the person gave the
-// command, before Docker is asked anything and before the group's second
-// run, changing nothing; empty and the device's own path go on to that
+// The commands that start the stack as .env stands refuse a .env that
+// names, at a device setting, anything but empty or the device this
+// machine has, as the person gave the command, before Docker is asked
+// anything and before the group's second run, changing nothing: Docker
+// refuses to start a container given a device the machine lacks. Empty,
+// and the device's own path on a machine that has both, go on to that
 // step, which here runs the command again through sg.
-func TestEveryDockerCommandRefusesADeviceCyfrDoesNotPass(t *testing.T) {
+func TestEveryCommandThatStartsTheStackRefusesADeviceThisMachineLacks(t *testing.T) {
 	for _, c := range dockerCommands {
-		for _, d := range vmDevices {
-			for _, value := range []string{"/dev/null", "/dev/sda", "", d.path} {
-				refused := value != "" && value != d.path
-				t.Run(strings.Join(c.args, " ")+", "+d.env+"="+value, func(t *testing.T) {
-					s := standInMachine(t)
-					s.member = []string{"docker"}
-					record := sgStandIn(t, "0")
-					asked := 0
-					reachable := machine.reachable
-					machine.reachable = func(ctx context.Context) bool {
-						asked++
-						return reachable(ctx)
-					}
-					t.Chdir(t.TempDir())
-					env := "CYFR_ACCESS=local\n" + d.env + "=" + value + "\n"
-					if err := os.WriteFile(".env", []byte(env), 0o600); err != nil {
-						t.Fatal(err)
-					}
-					err := runCommandLine(t, c.args...)
-					if !refused {
-						if !errors.As(err, new(handedOver)) || ExitStatus(err) != 0 {
-							t.Fatalf("err %v, want the second run's status 0", err)
+		if !slices.Contains(startingCommands, c.args[0]) || slices.Equal(c.args, []string{"access", "status"}) {
+			continue
+		}
+		for _, has := range []bool{true, false} {
+			for _, d := range vmDevices {
+				for _, value := range []string{"/dev/null", "/dev/sda", "", d.path} {
+					refused := value != "" && (value != d.path || !has)
+					t.Run(fmt.Sprintf("%s, %s=%s, devices here %t", strings.Join(c.args, " "), d.env, value, has), func(t *testing.T) {
+						s := standInMachine(t)
+						s.member = []string{"docker"}
+						machine.devices = func() bool { return has }
+						record := sgStandIn(t, "0")
+						asked := 0
+						reachable := machine.reachable
+						machine.reachable = func(ctx context.Context) bool {
+							asked++
+							return reachable(ctx)
 						}
-						if got := sgRan(t, record); !slices.Equal(got, c.again) {
-							t.Errorf("sg ran %q, want %q", got, c.again)
+						t.Chdir(t.TempDir())
+						env := "CYFR_ACCESS=local\n" + d.env + "=" + value + "\n"
+						if err := os.WriteFile(".env", []byte(env), 0o600); err != nil {
+							t.Fatal(err)
 						}
-						return
-					}
-					want := d.env + " in .env is neither empty nor " + d.path + ", and cyfr writes it from what this machine has, so nothing was changed. Run `cyfr init` here, which writes it again, then run `" + commandSaid(c.again) + "` again"
-					if err == nil || err.Error() != want {
-						t.Fatalf("err %v, want %q", err, want)
-					}
-					if asked != 0 {
-						t.Errorf("Docker was asked %d times", asked)
-					}
-					if _, err := os.Stat(record); err == nil {
-						t.Error("sg ran")
-					}
-					if got := read(t, ".env"); got != env {
-						t.Errorf(".env is %q, want %q", got, env)
-					}
-					nothingWritten(t, ".env")
-				})
+						err := runCommandLine(t, c.args...)
+						if !refused {
+							if !errors.As(err, new(handedOver)) || ExitStatus(err) != 0 {
+								t.Fatalf("err %v, want the second run's status 0", err)
+							}
+							if got := sgRan(t, record); !slices.Equal(got, c.again) {
+								t.Errorf("sg ran %q, want %q", got, c.again)
+							}
+							return
+						}
+						want := d.env + " in .env is not a device this machine has for CYFR, so nothing was started. Run `cyfr update` here, which writes what this machine has, then run `" + commandSaid(c.again) + "` again"
+						if err == nil || err.Error() != want {
+							t.Fatalf("err %v, want %q", err, want)
+						}
+						if asked != 0 {
+							t.Errorf("Docker was asked %d times", asked)
+						}
+						if _, err := os.Stat(record); err == nil {
+							t.Error("sg ran")
+						}
+						if got := read(t, ".env"); got != env {
+							t.Errorf(".env is %q, want %q", got, env)
+						}
+						nothingWritten(t, ".env")
+					})
+				}
 			}
 		}
+	}
+}
+
+// startingCommands are the commands that start the stack as .env stands,
+// which alone refuse a device this machine lacks; access status starts
+// nothing.
+var startingCommands = []string{"up", "backup", "access"}
+
+// The commands that start nothing, down, uninstall and access status, and
+// those that write .env's devices from what the machine has before they
+// start anything, update and restore, are never refused for a device: a
+// machine that lost one is still stopped, uninstalled, updated and
+// restored. Each goes on to the group's step with a .env naming both
+// devices on a machine with neither.
+func TestTheCommandsThatStartNothingOrWriteTheDevicesAreNeverRefusedForOne(t *testing.T) {
+	for _, c := range dockerCommands {
+		if slices.Contains(startingCommands, c.args[0]) && !slices.Equal(c.args, []string{"access", "status"}) {
+			continue
+		}
+		t.Run(strings.Join(c.args, " "), func(t *testing.T) {
+			s := standInMachine(t)
+			s.member = []string{"docker"}
+			machine.devices = func() bool { return false }
+			record := sgStandIn(t, "0")
+			t.Chdir(t.TempDir())
+			if err := os.WriteFile(".env", []byte("CYFR_ACCESS=local\n"+deviceLines("/dev/kvm", "/dev/net/tun")), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			err := runCommandLine(t, c.args...)
+			if !errors.As(err, new(handedOver)) || ExitStatus(err) != 0 {
+				t.Fatalf("err %v, want the second run's status 0", err)
+			}
+			if got := sgRan(t, record); !slices.Equal(got, c.again) {
+				t.Errorf("sg ran %q, want %q", got, c.again)
+			}
+		})
 	}
 }
 

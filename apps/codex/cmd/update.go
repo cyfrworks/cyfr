@@ -305,7 +305,7 @@ func runHomeUpdate(ctx context.Context, out, errOut io.Writer, o updateOptions) 
 	if !release.IsVersion(v) {
 		return errors.New("This cyfr is a development build, which has no signed release to install; run 'cyfr update' with a released cyfr")
 	}
-	u := &updater{ctx: ctx, command: "update", version: v, out: out, errOut: errOut}
+	u := &updater{ctx: ctx, command: "update", version: v, out: out, errOut: errOut, devices: machineDevices()}
 	if err := u.fetchManifest(); err != nil {
 		return err
 	}
@@ -321,7 +321,16 @@ func runHomeUpdate(ctx context.Context, out, errOut io.Writer, o updateOptions) 
 		return u.showChange()
 	}
 	if plan.onRelease() {
-		return u.upOnRelease()
+		// Only an update gives the Locus services the devices first, and it
+		// asks first, as an offered update does; the CYFR app's confirmed
+		// change is made only as its offer read it.
+		on, _ := u.devicesTurn()
+		if on || o.confirmed != "" {
+			if done, err := u.offer(o.yes, o.confirmed); done || err != nil {
+				return err
+			}
+		}
+		return u.upOnRelease(on)
 	}
 	if done, err := u.offer(o.yes, o.confirmed); done || err != nil {
 		return err
@@ -355,13 +364,18 @@ func runHomeUpdate(ctx context.Context, out, errOut io.Writer, o updateOptions) 
 
 // upOnRelease is the update of a home whose compose file names this
 // release's digests already: nothing to switch, no stop and no snapshot,
-// but its stack is started as 'cyfr up' starts it and waited for whole
-// (up), so an update run again after one whose services did not come up
-// waits again.
-func (u *updater) upOnRelease() error {
-	fmt.Fprintf(u.out, "This CYFR is on release %s already, so there is nothing to switch; cyfr update starts it and waits for every service of its stack.\n", u.version)
-	if values, err := access.ReadEnvValues(".env"); err == nil && devicesFirstPassed(values) {
-		fmt.Fprintln(u.out, devicesSignInAgain)
+// but its devices are written as this machine has them (u.devices) and its
+// stack is started as 'cyfr up' starts it and waited for whole (up), so an
+// update run again after one whose services did not come up waits again.
+// offered says the offer said what it does, the devices it first gives
+// among it (change); otherwise it is said here, and where the devices go,
+// that too.
+func (u *updater) upOnRelease(offered bool) error {
+	if !offered {
+		fmt.Fprintf(u.out, "This CYFR is on release %s already, so there is nothing to switch; cyfr update starts it and waits for every service of its stack.\n", u.version)
+		if _, off := u.devicesTurn(); off {
+			fmt.Fprintln(u.out, devicesGone)
+		}
 	}
 	if err := refuseUndeclaredRestore(); err != nil {
 		return err
@@ -377,10 +391,10 @@ func (u *updater) upOnRelease() error {
 	if err := refuseUnfinished(receipts); err != nil {
 		return err
 	}
-	// The devices are this machine's on every update (vmDevices), written
-	// under the stack's lock, as the switch writes them.
+	// The devices are this machine's as the update read them (u.devices),
+	// written under the stack's lock, as the switch writes them.
 	if values, err := access.ReadEnvValues(".env"); err == nil {
-		if set := deviceEdits(values); len(set) > 0 {
+		if set := deviceEdits(values, u.devices); len(set) > 0 {
 			if err := access.EditEnvFile(".env", set, nil); err != nil {
 				return fmt.Errorf("Writing this machine's devices in .env failed (%v); nothing was started", err)
 			}
@@ -466,6 +480,10 @@ type updater struct {
 	// oldAppArmor is the AppArmor profile .env named before the switch,
 	// which the machine loses once the release runs (retireAppArmor).
 	oldAppArmor string
+	// devices are the device settings the update writes, as this machine
+	// gave them when the update began (machineDevices): the ones its offer
+	// shows and its confirmation holds, never read again at the write.
+	devices map[string]string
 	// offlineEnv are the settings each offline eval sets in its one-off
 	// container: a restore's lifts its own bar (restoreBarrier).
 	offlineEnv []string
@@ -623,9 +641,15 @@ func (u *updater) fetchManifest() error {
 // since the update asks of it apart.
 func (u *updater) change() (text, edits, none string, err error) {
 	plan := u.compose
+	on, off := u.devicesTurn()
 	if plan.onRelease() {
-		// Only --offer reads this: the run itself starts and waits on such
-		// a home before it offers (upOnRelease).
+		// The devices this update would first give are the one change to
+		// such a home, asked as any change is; with none, only --offer
+		// reads this: the run itself starts and waits on such a home with
+		// no question (upOnRelease).
+		if on {
+			return fmt.Sprintf("This CYFR is on release %s already, so there is nothing to switch; cyfr update writes this machine's devices to .env, starts it and waits for every service of its stack.\n%s\n", u.version, devicesSignInAgain), "", "", nil
+		}
 		return "", "", fmt.Sprintf("This CYFR is on release %s already, so there is nothing to update; 'cyfr up' starts it if it is stopped.", u.version), nil
 	}
 	from := plan.homeRelease()
@@ -665,26 +689,35 @@ func (u *updater) change() (text, edits, none string, err error) {
 			fmt.Fprintf(&b, "  %s: %s\n", line.service, line.value)
 		}
 	}
-	if values, err := access.ReadEnvValues(".env"); err == nil && devicesFirstPassed(values) {
+	switch {
+	case on:
 		fmt.Fprintln(&b, devicesSignInAgain)
+	case off:
+		fmt.Fprintln(&b, devicesGone)
 	}
 	fmt.Fprintf(&b, "Before it stops anything it checks that this CYFR's database was built from release %s's schema, since there is no upgrade path between schemas; once it has started the release, only the snapshot takes CYFR back. Read the release notes first: %s/tag/%s\n", u.version, releasesPage, u.version)
 	return b.String(), edits, "", nil
 }
 
 // confirmation is what --confirmed names: the digest of the folder, the
-// exact release and the compose file's bytes, as this update read them
-// for the change it shows. A run confirmed with it makes the change only
-// where it reads the same three itself, so the change made is worked out
-// from what the person was shown, a changed compose file's differences
+// exact release, the compose file's bytes and the devices, .env's and this
+// machine's (u.devices), as this update read them for the change it shows.
+// A run confirmed with it makes the change only where it reads the same
+// itself, so the change made is worked out from what the person was shown,
+// a changed compose file's differences and the devices it gives or takes
 // among it.
 func (u *updater) confirmation() (string, error) {
 	folder, err := os.Getwd()
 	if err != nil {
 		return "", fmt.Errorf("cyfr update could not tell which folder it runs in (%v); nothing was changed", err)
 	}
+	values, _ := access.ReadEnvValues(".env")
+	parts := [][]byte{[]byte(folder), []byte(u.version), u.compose.original}
+	for _, d := range vmDevices {
+		parts = append(parts, []byte(values[d.env]), []byte(u.devices[d.env]))
+	}
 	h := sha256.New()
-	for _, part := range [][]byte{[]byte(folder), []byte(u.version), u.compose.original} {
+	for _, part := range parts {
 		fmt.Fprintf(h, "%d\n", len(part))
 		h.Write(part)
 	}
@@ -717,6 +750,10 @@ func (u *updater) showChange() error {
 	return json.NewEncoder(u.out).Encode(shown)
 }
 
+// changedSinceOffer refuses a change the CYFR app confirmed that is not the
+// one its offer read.
+const changedSinceOffer = "What updating this CYFR changes is not the change the CYFR app showed, so nothing was changed. Open Update CYFR in the app again to see the change as it is now"
+
 // offer shows what the update changes and asks to make it, answering done
 // when the update ends here (change): a change not confirmed is not made.
 // yes makes the change without asking, but for a compose file the person
@@ -728,6 +765,11 @@ func (u *updater) showChange() error {
 // shown and not made.
 func (u *updater) offer(yes bool, confirmed string) (bool, error) {
 	text, edits, none, err := u.change()
+	if none != "" && confirmed != "" {
+		// The CYFR app offers only a change: one confirmed where there is
+		// none to make now is not the one it showed.
+		return true, errors.New(changedSinceOffer)
+	}
 	if none != "" {
 		fmt.Fprintln(u.out, none)
 		return true, nil
@@ -742,7 +784,7 @@ func (u *updater) offer(yes bool, confirmed string) (bool, error) {
 			return true, err
 		}
 		if read != confirmed {
-			return true, errors.New("What updating this CYFR changes is not the change the CYFR app showed, so nothing was changed. Open Update CYFR in the app again to see the change as it is now")
+			return true, errors.New(changedSinceOffer)
 		}
 		return false, nil
 	}
@@ -768,7 +810,11 @@ func (u *updater) offer(yes bool, confirmed string) (bool, error) {
 		return true, interruption{errUpdateInterrupted}
 	}
 	if a = strings.ToLower(a); a != "yes" && a != "y" {
-		fmt.Fprintln(u.out, "Nothing changed. Run cyfr update again when you want this release.")
+		if u.compose.onRelease() {
+			fmt.Fprintln(u.out, "Nothing changed. Run cyfr update again when you want each person's programs in a computer of their own.")
+		} else {
+			fmt.Fprintln(u.out, "Nothing changed. Run cyfr update again when you want this release.")
+		}
 		return true, nil
 	}
 	return false, nil
@@ -1998,9 +2044,9 @@ func (u *updater) writeScaffold() error {
 			return fmt.Errorf("Naming release %s's AppArmor profile in .env failed (%v)", u.version, err)
 		}
 	}
-	// It names the devices as this machine has them (vmDevices), which the
-	// snapshot holds as they stood too.
-	if set := deviceEdits(held); len(set) > 0 {
+	// It names the devices as this machine had them when the update read
+	// them (u.devices), which the snapshot holds as they stood too.
+	if set := deviceEdits(held, u.devices); len(set) > 0 {
 		u.envChanged = true
 		if err := access.EditEnvFile(".env", set, nil); err != nil {
 			return fmt.Errorf("Writing this machine's devices in .env failed (%v)", err)
@@ -3309,4 +3355,16 @@ func mapValue(m *yaml.Node, key string) *yaml.Node {
 		}
 	}
 	return nil
+}
+
+// devicesTurn is what writing u.devices over .env's device settings does
+// to the Locus services: on where it first gives them both devices, off
+// where it takes both away. A .env that does not read does neither; the
+// update refuses it with its own sentence.
+func (u *updater) devicesTurn() (on, off bool) {
+	values, err := access.ReadEnvValues(".env")
+	if err != nil {
+		return false, false
+	}
+	return passes(u.devices) && !passes(values), passes(values) && !passes(u.devices)
 }
