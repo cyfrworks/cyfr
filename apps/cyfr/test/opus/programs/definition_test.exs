@@ -334,6 +334,10 @@ defmodule Opus.Programs.DefinitionTest do
     assert Definition.brain("opencode").title == "OpenCode"
     assert Definition.brain("cursor").title == "Cursor"
     assert Definition.brain("nope") == nil
+
+    # OpenCode alone answers unsigned, on its own free models.
+    assert for(%{name: name, sign_in: :optional} <- Definition.brains(), do: name) == ["opencode"]
+    assert Enum.all?(Definition.brains(), &(&1.sign_in in [:required, :optional]))
   end
 
   describe "loads_packs?/1" do
