@@ -5,6 +5,7 @@ package access
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -129,48 +130,67 @@ func TestSwitchToProxy(t *testing.T) {
 }
 
 // cyfr's final published ports are held to the kind's, from the flattened
-// configuration alone, whatever file put a binding there: the proxy
-// listener is published with proxy alone, once, at CYFR_PROXY_PUBLISH, and
-// with proxy nothing else is published but the loopback listener.
+// configuration alone, whatever file put a binding there, judged by the
+// listener each binding reaches: the proxy listener is published with
+// proxy alone, once, at CYFR_PROXY_PUBLISH; with proxy the loopback
+// listener is published once on 127.0.0.1 too, and nothing else; a cyfr in
+// the host's network is refused whatever the kind.
 func TestCheckPublishedHoldsTheFinalPublications(t *testing.T) {
-	loopback := "- {target: 4000, host_ip: 127.0.0.1, published: \"4000\", protocol: tcp}\n"
-	picked := "- {target: 4000, host_ip: 127.0.0.1, protocol: tcp}\n"
-	publication := "- {target: 4001, host_ip: 127.0.0.1, published: \"4001\", protocol: tcp}\n"
-	boot := func(browser string) Boot {
-		b := Boot{Loopback: Listener{"172.16.230.2", 4000}}
-		if browser != BrowserNone {
-			b.Proxy = &Listener{"172.16.234.2", 4001}
-		}
-		if browser == BrowserProxy {
+	bind := func(target int, host, published string) string {
+		return fmt.Sprintf("- {target: %d, host_ip: %q, published: %q, protocol: tcp}\n", target, host, published)
+	}
+	loopback, publication := bind(4000, "127.0.0.1", "4000"), bind(4001, "127.0.0.1", "4001")
+	// boot is a kind's listeners as the shipped stack binds them: the
+	// loopback listener on the default network, the proxy listener on the
+	// edge network, or beside the loopback listener with proxy.
+	boot := func(browser string, port, proxyPort int) Boot {
+		b := Boot{Loopback: Listener{"172.16.230.2", port}}
+		switch browser {
+		case BrowserTailnet, BrowserDomain:
+			b.Proxy = &Listener{"172.16.234.2", proxyPort}
+		case BrowserProxy:
+			b.Proxy = &Listener{"172.16.230.2", proxyPort}
 			b.Published = &Listener{"127.0.0.1", 4001}
 		}
 		return b
 	}
 	for _, c := range []struct {
-		name, browser, ports string
-		refused              bool
+		name, browser   string
+		port, proxyPort int
+		ports, extra    string
+		refused         bool
 	}{
-		{"none, the loopback listener alone", BrowserNone, loopback, false},
-		{"tailnet, the loopback listener alone", BrowserTailnet, loopback, false},
-		{"domain, the loopback listener alone", BrowserDomain, loopback, false},
-		{"proxy, the loopback listener and the publication", BrowserProxy, loopback + publication, false},
-		{"proxy, the loopback listener at a port Docker picks", BrowserProxy, picked + publication, false},
-		{"proxy, a second binding of the proxy listener", BrowserProxy, loopback + publication + "- {target: 4001, host_ip: 127.0.0.1, published: \"4002\", protocol: tcp}\n", true},
-		{"proxy, the proxy listener on every address", BrowserProxy, loopback + "- {target: 4001, host_ip: 0.0.0.0, published: \"4001\", protocol: tcp}\n", true},
-		{"proxy, the proxy listener off its publication", BrowserProxy, loopback + "- {target: 4001, host_ip: 127.0.0.2, published: \"4001\", protocol: tcp}\n", true},
-		{"proxy, the proxy listener unpublished", BrowserProxy, loopback, true},
-		{"proxy, another port published", BrowserProxy, loopback + publication + "- {target: 4300, host_ip: 127.0.0.1, published: \"4300\", protocol: tcp}\n", true},
-		{"proxy, the loopback listener on every address too", BrowserProxy, loopback + publication + "- {target: 4000, host_ip: 0.0.0.0, published: \"4000\", protocol: tcp}\n", true},
-		{"none, the proxy port published", BrowserNone, loopback + publication, true},
-		{"tailnet, the proxy port published", BrowserTailnet, loopback + publication, true},
-		{"domain, the proxy port published", BrowserDomain, loopback + publication, true},
-		{"domain, the proxy port on every address", BrowserDomain, loopback + "- {target: 4001, host_ip: 0.0.0.0, published: \"8001\", protocol: tcp}\n", true},
+		{"none, the loopback listener alone", BrowserNone, 4000, 4001, loopback, "", false},
+		{"none on CYFR_PORT 4001, where no proxy listener is", BrowserNone, 4001, 4001, bind(4001, "127.0.0.1", "4001"), "", false},
+		{"none, a binding of the port no proxy listener takes", BrowserNone, 4000, 4001, loopback + publication, "", false},
+		{"tailnet, the loopback listener alone", BrowserTailnet, 4000, 4001, loopback, "", false},
+		{"domain, the loopback listener alone", BrowserDomain, 4000, 4001, loopback, "", false},
+		{"tailnet, both listeners on one port number at different addresses", BrowserTailnet, 4100, 4100, bind(4100, "127.0.0.1", "4100"), "", false},
+		{"domain, both listeners on one port number at different addresses", BrowserDomain, 4100, 4100, bind(4100, "127.0.0.1", "4100"), "", false},
+		{"tailnet, the proxy listener published", BrowserTailnet, 4000, 4001, loopback + publication, "", true},
+		{"domain, the proxy listener published", BrowserDomain, 4000, 4001, loopback + publication, "", true},
+		{"domain, the proxy listener on every address", BrowserDomain, 4000, 4001, loopback + bind(4001, "0.0.0.0", "8001"), "", true},
+		{"proxy, the loopback listener and the publication", BrowserProxy, 4000, 4001, loopback + publication, "", false},
+		{"proxy, the loopback listener at a port Docker picks", BrowserProxy, 4000, 4001, "- {target: 4000, host_ip: 127.0.0.1, protocol: tcp}\n" + publication, "", false},
+		{"proxy, the proxy binding alone", BrowserProxy, 4000, 4001, publication, "", true},
+		{"proxy, the loopback listener alone", BrowserProxy, 4000, 4001, loopback, "", true},
+		{"proxy, a second binding of the proxy listener", BrowserProxy, 4000, 4001, loopback + publication + bind(4001, "127.0.0.1", "4002"), "", true},
+		{"proxy, the proxy listener on every address", BrowserProxy, 4000, 4001, loopback + bind(4001, "0.0.0.0", "4001"), "", true},
+		{"proxy, the proxy listener off its publication", BrowserProxy, 4000, 4001, loopback + bind(4001, "127.0.0.2", "4001"), "", true},
+		{"proxy, another port published", BrowserProxy, 4000, 4001, loopback + publication + bind(4300, "127.0.0.1", "4300"), "", true},
+		{"proxy, the loopback listener on every address too", BrowserProxy, 4000, 4001, loopback + publication + bind(4000, "0.0.0.0", "4000"), "", true},
+		{"proxy, the loopback listener on every address instead", BrowserProxy, 4000, 4001, bind(4000, "0.0.0.0", "4000") + publication, "", true},
+		{"proxy, both listeners on one port", BrowserProxy, 4001, 4001, publication, "", true},
+		{"none in the host's network", BrowserNone, 4000, 4001, loopback, "    network_mode: host\n", true},
+		{"tailnet in the host's network", BrowserTailnet, 4000, 4001, loopback, "    network_mode: host\n", true},
+		{"domain in the host's network", BrowserDomain, 4000, 4001, loopback, "    network_mode: host\n", true},
+		{"proxy in the host's network", BrowserProxy, 4000, 4001, loopback + publication, "    network_mode: host\n", true},
 	} {
 		var cfg config
-		if err := yaml.Unmarshal([]byte("services:\n  cyfr:\n    ports:\n"+indent(c.ports, "      ")), &cfg); err != nil {
+		if err := yaml.Unmarshal([]byte("services:\n  cyfr:\n"+c.extra+"    ports:\n"+indent(c.ports, "      ")), &cfg); err != nil {
 			t.Fatalf("%s: %v", c.name, err)
 		}
-		err := checkPublished(cfg, boot(c.browser), 4001)
+		err := checkPublished(cfg, boot(c.browser, c.port, c.proxyPort))
 		if (err != nil) != c.refused {
 			t.Errorf("%s: checkPublished answered %v", c.name, err)
 		}
@@ -186,4 +206,19 @@ func indent(text, by string) string {
 		lines[i] = by + lines[i]
 	}
 	return strings.Join(lines, "\n") + "\n"
+}
+
+// The fake merges the files' ports as compose does (the real one is
+// TestRealComposeRepeatedBindingIsOneEntry's): an override repeating the
+// shipped loopback binding leaves one binding, and a switch to proxy over
+// it starts.
+func TestSwitchToProxyOverARepeatedBinding(t *testing.T) {
+	h := newHome(t)
+	writeFile(t, filepath.Join(h.dir, "docker-compose.override.yml"), []byte("services:\n  cyfr:\n    ports:\n      - \"127.0.0.1:${CYFR_PORT:-4000}:${CYFR_PORT:-4000}\"\n"))
+	h.fake.startStack(t, h.head())
+	writeFile(t, filepath.Join(h.dir, ".env"), []byte(h.env()+"CYFR_TRUSTED_PROXY_HOPS=1\n"))
+	r := h.request(id(1), Target{Browser: BrowserProxy, Domain: "cyfr.example.com"}, "")
+	if rc, err := h.e.Switch(bg, r); err != nil || rc.Outcome != "ok" {
+		t.Fatalf("switch answered %+v, %v", rc, err)
+	}
 }
