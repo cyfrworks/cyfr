@@ -16,8 +16,6 @@ defmodule Emissary.Web.HandleControllerTest do
   # counters are process-wide.
   use CyfrWeb.ConnCase, async: false
 
-  require Ecto.Query
-
   alias Prima.{HandleAnswer, RegistryRequest}
   alias Prima.Identity
   alias Prima.Identity.{Entry, Key}
@@ -365,12 +363,6 @@ defmodule Emissary.Web.HandleControllerTest do
 
     for {{why, home, registry, where}, n} <- Enum.with_index(cases) do
       handle = "case-#{n}"
-      # Each case a node of its own, whose account service has pinned no
-      # origin yet.
-      Arca.Repo.delete_all(
-        Ecto.Query.from(m in Arca.Schemas.ServerMeta, where: m.key == "directory_origin")
-      )
-
       self_named!(home)
       account = named_account!(home, handle)
       registry!(registry)

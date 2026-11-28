@@ -32,7 +32,6 @@ var addressChanges = []string{
 // new head keeps of it.
 type envState struct {
 	env     *dotenv
-	values  map[string]string
 	head    Head
 	headErr error
 	link    link.Public
@@ -46,11 +45,11 @@ func (e *Engine) readState() (envState, error) {
 	if err != nil {
 		return envState{}, err
 	}
-	st := envState{env: env, values: map[string]string{}}
+	st := envState{env: env}
+	values := map[string]string{}
 	if env != nil {
-		st.values = env.values()
+		values = env.values()
 	}
-	values := st.values
 	st.head, st.headErr = headOf(values)
 	st.link, st.linkErr = linkOf(values[link.PublicVar])
 	if st.headErr == nil && st.head.Browser == BrowserProxy {
@@ -134,55 +133,6 @@ func (e *Engine) describe(h Head) Words {
 		return Describe(h, "")
 	}
 	return st.describe(h)
-}
-
-// pinned refuses next when it would move the shared address of a server
-// that serves its own account service (CYFR_DIRECTORY_SERVE=writer), which
-// keeps the origin it first served it at for good: .env's head's shared
-// address against next's, before anything changes. The boot itself holds
-// the origin it stored at its first boot as a writer; this machine cannot
-// read it, so a .env that holds no head has nothing to compare here.
-func (st envState) pinned(next Head) *Refusal {
-	if !st.writer() {
-		return nil
-	}
-	if before, after := st.head.shared(st.link), next.shared(st.link); before != after {
-		return Refuse("access_origin_pinned", map[string]string{"pinned": before, "origin": after})
-	}
-	return nil
-}
-
-// unjoinedTailnet is the address a tailnet change gives a machine that has
-// not joined yet, whose name only its join tells.
-const unjoinedTailnet = "https://<machine>.<tailnet>.ts.net"
-
-// pinnedBeforeJoin refuses a tailnet address to a server that serves its
-// own account service and has none, before the join that would name it:
-// any tailnet name moves the address it gives out, and the join changes
-// this machine.
-func (st envState) pinnedBeforeJoin() *Refusal {
-	if !st.writer() || st.head.Browser == BrowserTailnet {
-		return nil
-	}
-	return Refuse("access_origin_pinned", map[string]string{"pinned": st.head.shared(st.link), "origin": unjoinedTailnet})
-}
-
-// pinnedNewNode refuses a new node to a server that serves its own
-// account service: the join replaces this machine's tailnet identity, and
-// the name the new node is given, which only its join tells, moves the
-// address the server gives out. It is asked before the join changes
-// anything.
-func (st envState) pinnedNewNode() *Refusal {
-	if !st.writer() {
-		return nil
-	}
-	return Refuse("access_origin_pinned", map[string]string{"pinned": st.head.shared(st.link), "origin": unjoinedTailnet})
-}
-
-// writer reports whether .env's coherent head is a server's that serves
-// its own account service (CYFR_DIRECTORY_SERVE=writer).
-func (st envState) writer() bool {
-	return st.headErr == nil && strings.TrimSpace(st.values["CYFR_DIRECTORY_SERVE"]) == "writer"
 }
 
 // heldKeys are .env's head keys now, "" for each it does not assign.
@@ -279,8 +229,7 @@ func (e *Engine) servesHead(ctx context.Context, content []byte) bool {
 // derive is the head t makes from .env's settings and, for tailnet, the
 // machine: the one join joinID froze, or with no join id the machine
 // this home has now (machine). A .env without the tunnel key that names
-// its private address boots on no head, and one that serves its own
-// account service keeps the address it gives out (pinned).
+// its private address boots on no head.
 func (e *Engine) derive(ctx context.Context, st envState, t Target, joinID string) (Derivation, error) {
 	if st.curErr != nil {
 		return Derivation{}, st.curErr
@@ -309,18 +258,8 @@ func (e *Engine) derive(ctx context.Context, st envState, t Target, joinID strin
 		if join, err = e.machine(ctx); err != nil {
 			return Derivation{}, err
 		}
-		if ref := st.pinnedBeforeJoin(); join == nil && ref != nil {
-			return Derivation{}, ref
-		}
 	}
-	d, err := Derive(t, st.cur, join)
-	if err != nil {
-		return Derivation{}, err
-	}
-	if ref := st.pinned(d.Head); ref != nil {
-		return Derivation{}, ref
-	}
-	return d, nil
+	return Derive(t, st.cur, join)
 }
 
 // machine is this home's tailnet machine, nil when it has none: the one

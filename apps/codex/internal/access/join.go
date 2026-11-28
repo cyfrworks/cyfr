@@ -191,9 +191,6 @@ func (e *Engine) doJoin(ctx context.Context, r JoinRequest) (Receipt, error) {
 	if err != nil {
 		return refuse(err)
 	}
-	if ref := st.pinnedNewNode(); r.NewNode && ref != nil {
-		return refuse(ref)
-	}
 	if e.tailnetActive(ctx, st) {
 		return refuse(Refuse("tailnet_active", map[string]string{"name": st.head.Host}))
 	}

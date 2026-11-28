@@ -1104,6 +1104,12 @@ func setupNext(out io.Writer, head access.Head, words access.Words) {
 	}
 }
 
+// bootFatalMarker matches the start of the line a refused boot prints,
+// whichever service and part refused (`[Cyfr] FATAL:`, `[Arca] FATAL:` for
+// a database another schema built, `[Locus] FATAL:`), its sentence after
+// it.
+var bootFatalMarker = regexp.MustCompile(`\[[A-Z][A-Za-z.]*\] FATAL:`)
+
 // withBootFatal is a failed start with the refusal a boot of the stack
 // last logged (bootFatal).
 func withBootFatal(ctx context.Context, e stackEngine, head access.Head, startErr error) error {
@@ -1123,7 +1129,12 @@ func bootFatal(ctx context.Context, e stackEngine, head access.Head) string {
 	if err != nil {
 		return ""
 	}
-	fatal := access.BootFatal(string(res.Stdout) + "\n" + string(res.Stderr))
+	fatal := ""
+	for _, line := range strings.Split(string(res.Stdout)+"\n"+string(res.Stderr), "\n") {
+		if loc := bootFatalMarker.FindStringIndex(line); loc != nil {
+			fatal = strings.TrimSpace(line[loc[0]:])
+		}
+	}
 	if fatal == "" {
 		return ""
 	}

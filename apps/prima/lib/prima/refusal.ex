@@ -1836,25 +1836,6 @@ defmodule Prima.Refusal do
     do:
       {:invalid_argument, "CYFR is already reached that way, at #{address}. Nothing was changed."}
 
-  # A server that serves its own account service keeps the address it
-  # first served it at (`Sanctum.Directory.hold_origin/0`): `cyfr access`
-  # refuses a change that moves it, and the boot one that finds it moved.
-  defp row({:access_origin_pinned, %{pinned: pinned, origin: origin}})
-       when is_binary(pinned) and is_binary(origin),
-       do:
-         {:conflict,
-          "This CYFR serves its own account service at #{pinned}, and an account service " <>
-            "keeps its address for good. This change would move it to #{origin}. Nothing was " <>
-            "changed."}
-
-  defp row({:directory_origin_moved, %{pinned: pinned, origin: origin}})
-       when is_binary(pinned) and is_binary(origin),
-       do:
-         {:conflict,
-          "This CYFR serves its own account service, which keeps its address for good: it was " <>
-            "first served at #{pinned}, and these settings give #{origin}. Nothing started. " <>
-            "Put back the settings that give #{pinned}#{put_back(pinned)}."}
-
   defp row({:access_invalid, %{input: input, kind: kind, rule: rule}})
        when is_binary(input) and is_map_key(@access_input_kinds, kind) and is_binary(rule),
        do:
@@ -2201,20 +2182,4 @@ defmodule Prima.Refusal do
 
   # A sentence carried on after a colon: its first letter in lower case.
   defp lower_first(<<first::utf8, rest::binary>>), do: String.downcase(<<first::utf8>>) <> rest
-
-  # The command that gives a pinned account service's origin back, by the
-  # kind of address it is: a tailnet name, a domain, or the private
-  # address of a server with no browser address.
-  defp put_back("https://" <> host) do
-    if String.ends_with?(host, ".ts.net"),
-      do: ": run `cyfr access browser tailnet` on the machine of that name",
-      else:
-        ": run `cyfr access browser domain --domain #{host}`, or `cyfr access browser " <>
-          "proxy --domain #{host}` behind a proxy of your own"
-  end
-
-  defp put_back("http://" <> _private),
-    do: ": run `cyfr access browser none`, with CYFR_PORT as it was"
-
-  defp put_back(_origin), do: ""
 end

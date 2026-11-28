@@ -465,8 +465,7 @@ defmodule Cyfr.Boundaries do
       allow: ~w(
         Sanctum Sanctum.ApiKey Sanctum.Attach Sanctum.Authority Sanctum.Caller
         Sanctum.Catalog Sanctum.Cipher Sanctum.Consent Sanctum.Context Sanctum.Decisions
-        Sanctum.Directory Sanctum.Egress Sanctum.ExecutionStanding Sanctum.Gate
-        Sanctum.IdentityFreshness
+        Sanctum.Egress Sanctum.ExecutionStanding Sanctum.Gate Sanctum.IdentityFreshness
         Sanctum.Network Sanctum.Policy Sanctum.Provisioning Sanctum.Proxy
         Sanctum.Questions Sanctum.Refusals Sanctum.RunningTasks
         Sanctum.Session Sanctum.Shares Sanctum.SharedThreads Sanctum.Tenancy
@@ -479,10 +478,9 @@ defmodule Cyfr.Boundaries do
           "(`Opus.Programs`) posts to the backends service through `Sanctum.Egress` and " <>
           "checks a program's env templates from the vault's metadata " <>
           "(`Sanctum.Vault.disclosed?/2`) before it unseals any. " <>
-          "`Sanctum.Directory` and `Sanctum.Session` are the boot's hold of the " <>
-          "server's addresses before the endpoint serves (`Cyfr.Application`): the " <>
-          "account service's pinned origin (`hold_origin/0`) and the end of every " <>
-          "session and certificate made at an address the server no longer has " <>
+          "`Sanctum.Session` is the boot's sweep of the server's addresses before " <>
+          "the endpoint serves (`Cyfr.Application`): the end of every session and " <>
+          "certificate made at an address the server no longer has " <>
           "(`retire_elsewhere/0`). " <>
           "`Sanctum` bare is the domain's own " <>
           "entry point — `system_context/0` mints the context the server's own work " <>
@@ -2041,7 +2039,6 @@ defmodule Cyfr.Boundaries do
     "Sanctum.Directory" => [
       append: 2,
       from: 1,
-      hold_origin: 0,
       register: 1,
       resolve: 1,
       served: 0,

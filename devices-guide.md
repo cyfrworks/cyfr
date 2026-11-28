@@ -135,4 +135,4 @@ Every CYFR has a private address, `http://h-<16 letters and digits>.localhost:<p
 3. **Clients and callbacks.** Update the redirect address in OAuth apps you registered (vault credentials), the URL your webhook senders call, the command line's contexts and MCP clients.
 4. **Saved addresses.** Every device that saved the old address needs the new one.
 
-A CYFR that serves its own account service is the exception: its people's passkeys live at the address it gives out, and every account made there names it, so it keeps that address for good, and `cyfr access` refuses a change that would move it (adding or removing its browser address, or another host for it). With a tailnet address, choose CYFR's machine name once: a new name is a new address.
+A CYFR that serves its own account service is the exception: its people's passkeys live at the address it gives out, and every account made there names it, so it keeps that address for good, and losing it loses every account it serves: adding or removing its browser address, or another host for it, moves it. With a tailnet address, choose CYFR's machine name once: a new name is a new address.

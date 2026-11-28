@@ -78,12 +78,10 @@ defmodule Cyfr.Application do
     Cyfr.Platform.Settings.apply()
 
     # The server's addresses, read once the settings are and before the
-    # endpoint serves anything: an account service this server serves
-    # keeps the origin it was first served at, and a boot whose settings
-    # give another refuses, naming it; then every session and device
-    # certificate made at an address the server no longer has is retired,
-    # so adding, changing or removing the browser address signs out only
-    # what was signed in there.
+    # endpoint serves anything: every session and device certificate made
+    # at an address the server no longer has is retired, so adding,
+    # changing or removing the browser address signs out only what was
+    # signed in there.
     addresses_check!()
 
     # The operation table and its resource index, built from the
@@ -980,22 +978,10 @@ defmodule Cyfr.Application do
   end
 
   # Read the store outside any test's sandbox, as the schema check does:
-  # the suite turns it off and calls both directly
-  # (`Sanctum.Directory.hold_origin/0`, `Sanctum.Session.retire_elsewhere/0`).
+  # the suite turns it off and calls it directly
+  # (`Sanctum.Session.retire_elsewhere/0`).
   defp addresses_check! do
     if database_checks?() do
-      case Sanctum.Directory.hold_origin() do
-        :ok ->
-          :ok
-
-        {:error, {:directory_origin_moved, _payload} = moved} ->
-          raise "[Cyfr] FATAL: " <> Prima.Refusal.message(moved)
-
-        {:error, reason} ->
-          raise "[Cyfr] FATAL: the account service's address could not be held (" <>
-                  Atom.to_string(reason) <> "): nothing started."
-      end
-
       case Sanctum.Session.retire_elsewhere() do
         {:ok, _ended} ->
           :ok

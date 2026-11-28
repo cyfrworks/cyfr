@@ -39,7 +39,6 @@ defmodule Mix.Tasks.Cyfr.Gen.AccessRefusals do
      ]},
     {:access_stale, [{%{}, ~w(words)}]},
     {:access_unchanged, [{%{}, ~w(address)}]},
-    {:access_origin_pinned, [{%{}, ~w(pinned origin)}]},
     {:access_link_missing, [{%{}, []}]},
     {:access_link_invalid, [{%{}, []}]},
     {:access_invalid,

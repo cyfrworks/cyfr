@@ -56,11 +56,9 @@ type fakeStack struct {
 	stopErr              error
 	switchErr            error
 	switchReceipt        *access.Receipt
-	// previewErr is the refusal of a preview no join made yet.
-	previewErr     error
-	addressChanges []string
-	join           func(ctx context.Context, r access.JoinRequest) (access.Receipt, error)
-	joined         map[string]access.Join
+	addressChanges       []string
+	join                 func(ctx context.Context, r access.JoinRequest) (access.Receipt, error)
+	joined               map[string]access.Join
 	// serveClosed is a tailnet server's Serve closed, which a preview of the
 	// head .env holds answers as a reopen; reopenReceipt, when set, is the
 	// reopen's answer.
@@ -396,9 +394,6 @@ func (e *fakeEngine) Status(ctx context.Context) (access.Status, error) {
 // its proxy publication and whether it states a trust, as the engine
 // reads them, and for tailnet from the join joinID completed.
 func (e *fakeEngine) Preview(ctx context.Context, t access.Target, joinID string) (access.Preview, error) {
-	if err := e.s.previewErr; err != nil && joinID == "" {
-		return access.Preview{}, err
-	}
 	old, _ := e.Head()
 	d, err := e.derive(t, joinID)
 	if err != nil {

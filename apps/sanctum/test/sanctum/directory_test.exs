@@ -244,104 +244,6 @@ defmodule Sanctum.DirectoryTest do
     end
   end
 
-  describe "the pinned origin" do
-    # The pin as the store holds it.
-    defp pinned, do: Arca.ServerMetaStorage.get("directory_origin")
-
-    defp moved(pinned, origin),
-      do: {:error, {:directory_origin_moved, %{pinned: pinned, origin: origin}}}
-
-    test "a writer's first boot stores its origin, which it serves from then on" do
-      assert pinned() == {:error, :not_found}
-      assert :ok = Directory.hold_origin()
-      assert pinned() == {:ok, @directory}
-      assert Directory.served() == {:ok, @directory}
-
-      # Held again on every boot that finds the same setting.
-      assert :ok = Directory.hold_origin()
-      assert pinned() == {:ok, @directory}
-    end
-
-    test "a boot whose browser address gives another host is refused, and the pin stands" do
-      :ok = Directory.hold_origin()
-      serve_at("https://elsewhere.example")
-
-      assert moved(@directory, "https://elsewhere.example") == Directory.hold_origin()
-      assert pinned() == {:ok, @directory}
-      assert Directory.served() == {:ok, @directory}
-
-      {:error, refusal} = Directory.hold_origin()
-
-      assert Prima.Refusal.message(refusal) ==
-               "This CYFR serves its own account service, which keeps its address for good: " <>
-                 "it was first served at #{@directory}, and these settings give " <>
-                 "https://elsewhere.example. Nothing started. Put back the settings that give " <>
-                 "#{@directory}: run `cyfr access browser domain --domain dir.example`, or " <>
-                 "`cyfr access browser proxy --domain dir.example` behind a proxy of your own."
-    end
-
-    test "a boot whose browser address is removed, leaving the private address, is refused" do
-      :ok = Directory.hold_origin()
-      serve_locally_at("http://#{@private_name}:4000")
-
-      assert moved(@directory, "http://#{@private_name}:4000") == Directory.hold_origin()
-    end
-
-    test "a writer pinned to its private address refuses a boot that moves its port alone" do
-      serve_locally_at("http://#{@private_name}:4000")
-      :ok = Directory.hold_origin()
-      assert pinned() == {:ok, "http://#{@private_name}:4000"}
-
-      serve_locally_at("http://#{@private_name}:4010")
-
-      assert moved("http://#{@private_name}:4000", "http://#{@private_name}:4010") ==
-               Directory.hold_origin()
-    end
-
-    test "the boot after a restore compares against the restored pin, and refuses a setting " <>
-           "that differs" do
-      # This server, at elsewhere, pinned its own origin; the restored
-      # database brings back the pin it was taken under.
-      serve_at("https://elsewhere.example")
-      :ok = Directory.hold_origin()
-
-      {1, _} =
-        Arca.Repo.update_all(
-          from(m in Arca.Schemas.ServerMeta, where: m.key == "directory_origin"),
-          set: [value: @directory]
-        )
-
-      assert moved(@directory, "https://elsewhere.example") == Directory.hold_origin()
-    end
-
-    test "a node the live setting makes the writer pins its address before its first write, " <>
-           "and a boot at another address is refused" do
-      Sanctum.Test.Settings.put("directory_serve", "off")
-      assert :ok = Directory.hold_origin()
-      assert pinned() == {:error, :not_found}
-
-      Sanctum.Test.Settings.put("directory_serve", "writer")
-      alice = account()
-
-      assert {:ok, %{result: :created}} =
-               Directory.register(%{genesis: Entry.encode(alice.genesis), source: source()})
-
-      assert pinned() == {:ok, @directory}
-
-      serve_at("https://elsewhere.example")
-      assert moved(@directory, "https://elsewhere.example") == Directory.hold_origin()
-      assert pinned() == {:ok, @directory}
-    end
-
-    test "a node that does not serve as the writer pins nothing" do
-      for mode <- ["off", "mirror"] do
-        Sanctum.Test.Settings.put("directory_serve", mode)
-        assert :ok = Directory.hold_origin()
-        assert pinned() == {:error, :not_found}
-      end
-    end
-  end
-
   # ---- registration ------------------------------------------------------------
 
   describe "register/1" do
@@ -397,13 +299,12 @@ defmodule Sanctum.DirectoryTest do
         "https://dir.example/directory"
       ])
 
-      # A node that wrote serves the origin it pinned then, however its
-      # address moves after: a genesis at the new one is served no write.
+      # The served directory is read from the node's origin as it stands.
       serve_at("https://elsewhere.example")
-      elsewhere = account(directory: "https://elsewhere.example")
+      register!(account(directory: "https://elsewhere.example"))
 
-      assert {:error, :not_served} =
-               Directory.register(%{genesis: Entry.encode(elsewhere.genesis), source: source()})
+      assert {:error, :wrong_directory} =
+               Directory.register(%{genesis: Entry.encode(account().genesis), source: source()})
     end
 
     test "a server with no browser address on port 80, whose private address is " <>
@@ -436,11 +337,6 @@ defmodule Sanctum.DirectoryTest do
                "https://dir.example/directory"
              ]}
           ] do
-        # Each case a node of its own, which has pinned nothing yet.
-        Arca.Repo.delete_all(
-          from(m in Arca.Schemas.ServerMeta, where: m.key == "directory_origin")
-        )
-
         serve.(origin)
         genesis = Entry.encode(account(directory: served).genesis)
 

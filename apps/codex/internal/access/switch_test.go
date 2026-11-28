@@ -6,7 +6,6 @@ package access
 import (
 	"context"
 	"errors"
-	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -119,36 +118,6 @@ func TestSwitchFenceRefusesAStalePreview(t *testing.T) {
 	}
 	if calls := h.fake.calls(); slices.ContainsFunc(calls, func(c fakeCall) bool { return c.Args[0] != "ps" && c.Args[0] != "compose" }) {
 		t.Errorf("a refused switch ran docker beyond its reads: %v", calls)
-	}
-}
-
-// A start the boot refused says the boot's own refusal in its rolled-back
-// sentence, read before the container that logged it is stopped: an
-// account service's origin, which only the database holds, is refused
-// there, and the person reads why and that CYFR was put back.
-func TestAFailedStartSaysTheRefusalItsBootLogged(t *testing.T) {
-	h := newHome(t)
-	h.fake.startStack(t, h.head())
-	fatal := "[Cyfr] FATAL: This CYFR serves its own account service, which keeps its address for good: it was first served at " + testPrivate + ", and these settings give https://home.example.com. Nothing started."
-	h.fake.hook = func(_ context.Context, c *fakeCall) *fakeAnswer {
-		h.fake.mu.Lock()
-		defer h.fake.mu.Unlock()
-		domain := envNow(h.dir, "CYFR_BROWSER=domain")
-		if slices.Contains(c.Args, "logs") && domain {
-			return &fakeAnswer{Stdout: "starting\n" + fatal + "\n"}
-		}
-		h.fake.st.Health = "healthy"
-		if domain {
-			h.fake.st.Health = "unhealthy"
-		}
-		return nil
-	}
-	rc, err := h.e.Switch(bg, h.request(id(1), Target{Browser: BrowserDomain, Domain: "home.example.com"}, ""))
-	if refusalCode(err) != "access_rolled_back" || rc.Outcome != "rolled_back" {
-		t.Fatalf("switch answered %+v, %v", rc, err)
-	}
-	if !strings.Contains(err.(*Refusal).Message(), "health check failed: "+fatal) || !strings.Contains(err.(*Refusal).Message(), "CYFR was put back") {
-		t.Errorf("the sentence reads %q", err.(*Refusal).Message())
 	}
 }
 
@@ -402,64 +371,6 @@ func TestTrustKeysTakeLiteralValuesOnly(t *testing.T) {
 	writeFile(t, path, []byte(h.env()+"CYFR_TRUSTED_PROXY_HOPS='2'\n"))
 	if err := CheckEnvFile(path); err != nil {
 		t.Errorf("a single-quoted literal trust is refused: %v", err)
-	}
-}
-
-// A server that serves its own account service keeps the address it gives
-// out: a change that adds its browser address, removes it or moves it to
-// another host is refused before anything changes, by the preview and by
-// the switch, naming the address it keeps and the one it would move to;
-// a change that moves no address, a certificate email, is made.
-func TestAWriterKeepsTheAddressItGivesOut(t *testing.T) {
-	h := newHome(t)
-	writer := func() { writeFile(t, filepath.Join(h.dir, ".env"), []byte(h.env()+"CYFR_DIRECTORY_SERVE=writer\n")) }
-	refused := func(n int, target Target, pinned, origin string) {
-		t.Helper()
-		_, err := h.e.Preview(bg, target, "")
-		var r *Refusal
-		want := map[string]string{"pinned": pinned, "origin": origin}
-		if !errors.As(err, &r) || r.Code != "access_origin_pinned" || r.Class != "conflict" || !maps.Equal(r.Payload, want) {
-			t.Errorf("preview of %+v answered %v, want access_origin_pinned %v", target, err, want)
-		}
-		d, err := Derive(target, Current{Port: 4000}, nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		before, calls := h.env(), len(h.fake.calls())
-		rc, err := h.e.Switch(bg, SwitchRequest{ID: id(n), Target: target, OldDigest: h.head().Digest(), NewDigest: d.Head.Digest()})
-		if refusalCode(err) != "access_origin_pinned" || rc.State != "rejected" || !maps.Equal(rc.Payload, want) {
-			t.Errorf("switch to %+v answered %+v, %v", target, rc, err)
-		}
-		if h.env() != before || len(h.fake.calls()) != calls {
-			t.Errorf("a refused switch to %+v changed .env or called docker", target)
-		}
-		if r != nil && (!strings.Contains(r.Message(), pinned) || !strings.Contains(r.Message(), origin)) {
-			t.Errorf("the refusal reads %q", r.Message())
-		}
-	}
-
-	// Pinned to its private address, as a writer with no browser address;
-	// a tailnet address is refused before the join that would name it.
-	writer()
-	refused(1, domainTarget, testPrivate, "https://home.example.com")
-	_, err := h.e.Preview(bg, Target{Browser: BrowserTailnet}, "")
-	if r := (*Refusal)(nil); !errors.As(err, &r) || r.Code != "access_origin_pinned" || !maps.Equal(r.Payload, map[string]string{"pinned": testPrivate, "origin": unjoinedTailnet}) {
-		t.Errorf("a tailnet address for a writer that has not joined answered %v", err)
-	}
-
-	// Pinned to its browser address, as one that became a writer there.
-	h2 := newHome(t)
-	h = h2
-	if rc, err := h.e.Switch(bg, h.request(id(2), domainTarget, "")); err != nil || rc.Outcome != "ok" {
-		t.Fatalf("switch answered %+v, %v", rc, err)
-	}
-	writer()
-	refused(3, Target{Browser: BrowserNone}, "https://home.example.com", testPrivate)
-	refused(4, Target{Browser: BrowserDomain, Domain: "other.example.com"}, "https://home.example.com", "https://other.example.com")
-
-	email := Target{Browser: BrowserDomain, Domain: "home.example.com", ACMEEmail: "ops@example.com"}
-	if rc, err := h.e.Switch(bg, h.request(id(5), email, "")); err != nil || rc.Outcome != "ok" {
-		t.Errorf("a writer's certificate email change answered %+v, %v", rc, err)
 	}
 }
 
