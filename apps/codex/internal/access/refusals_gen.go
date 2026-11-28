@@ -135,7 +135,7 @@ var refusalRows = map[string]refusalRow{
 	"access_failed": {
 		Class: "unavailable",
 		Variants: []refusalVariant{
-			{Fixed: map[string]string{}, Slots: []string{"new", "env"}, Template: "CYFR could not start as {new}, nor as before; everything was stopped and checked stopped. .env says: {env}. Run `cyfr up` to start it as .env says, or `cyfr access browser <kind>` to choose again."},
+			{Fixed: map[string]string{}, Slots: []string{"new", "env"}, Template: "CYFR could not start as {new}, nor as before; cyfr and the proxy services a browser address starts were stopped and checked stopped, and the rest of the stack was left as it was. .env says: {env}. Run `cyfr up` to start it as .env says, or `cyfr access browser <kind>` to choose again."},
 		},
 	},
 	"access_env_edited": {

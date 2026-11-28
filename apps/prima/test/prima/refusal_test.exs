@@ -158,7 +158,7 @@ defmodule Prima.RefusalTest do
      "CYFR could not start as x (y). What it started was stopped and checked stopped, and CYFR was put back as before, your devices on Tailscale, but it answers on this machine only, because your tailnet has HTTPS certificates turned off. Fix what the reason names, then run the command again; turn on HTTPS on the DNS page of the Tailscale admin console, then run `cyfr access browser tailnet`."},
     {{:access_failed, %{new: "your devices on Tailscale", env: "only this computer"}},
      :unavailable,
-     "CYFR could not start as your devices on Tailscale, nor as before; everything was stopped and checked stopped. .env says: only this computer. Run `cyfr up` to start it as .env says, or `cyfr access browser <kind>` to choose again."},
+     "CYFR could not start as your devices on Tailscale, nor as before; cyfr and the proxy services a browser address starts were stopped and checked stopped, and the rest of the stack was left as it was. .env says: only this computer. Run `cyfr up` to start it as .env says, or `cyfr access browser <kind>` to choose again."},
     {{:access_uncertain, %{observed: "cyfr and tailscale"}}, :uncertain,
      "CYFR could not be brought to a known state: cyfr and tailscale were still running after the stop. It may be partly reachable. Nothing more was done. On the machine, run `cyfr access --resume`, which stops what is running, checks, and starts CYFR as .env says; if it reports the same, run `cyfr down`, check `docker ps`, then `cyfr up`."},
     {{:access_outcome_unknown, %{reason: "the command was interrupted"}}, :uncertain,

@@ -1878,8 +1878,9 @@ defmodule Prima.Refusal do
   defp row({:access_failed, %{new: new, env: env}}) when is_binary(new) and is_binary(env),
     do:
       {:unavailable,
-       "CYFR could not start as #{new}, nor as before; everything was stopped and " <>
-         "checked stopped. .env says: #{env}. Run `cyfr up` to start it as .env says, or " <>
+       "CYFR could not start as #{new}, nor as before; cyfr and the proxy services a " <>
+         "browser address starts were stopped and checked stopped, and the rest of the " <>
+         "stack was left as it was. .env says: #{env}. Run `cyfr up` to start it as .env says, or " <>
          "`cyfr access browser <kind>` to choose again."}
 
   # A switch interrupted, then recovered after .env was edited meanwhile:
