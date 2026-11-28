@@ -60,9 +60,12 @@ defmodule Aqua.Harness.Program do
   written, never stored (`Aqua.Loop.Stream`), once its batch committed:
   each native message streams as a step of its own, settled by its `said`
   row and withdrawn when no row will land, at its native turn's end or
-  the session's. Its own tools of the open work, by the name it gives,
-  are told to the turn's loop as they start and end, which shows them in
-  the one list of what runs (`Aqua.Loop`); nothing of them is stored. The
+  the session's. Its reasoning streams the same way apart from its text,
+  and stays shown until the turn ends. Its own tools of the open work, by
+  the name it gives and each run by its call, are told to the turn's loop
+  as they start and end, with what the harness says each runs and then
+  changed, which shows them in the one list of what runs (`Aqua.Loop`);
+  nothing of them is stored. The
   native turn's `idle` and the session's end are told the same way, and
   the loop settles what still shows running then, while a call runs too.
 
@@ -706,6 +709,7 @@ defmodule Aqua.Harness.Program do
           else:
             state
             |> stream(of_work(lines, "text", turn), effects.commit.said)
+            |> think(of_work(lines, "thought", turn))
             |> own(of_work(lines, "own", turn))
             |> tell_usage(effects.commit.usage)
             |> act(effects)
@@ -875,6 +879,25 @@ defmodule Aqua.Harness.Program do
     end)
   end
 
+  # The open work's reasoning, announced as it is written, apart from its
+  # text (`Aqua.Loop.Stream`): no row lands it, so it stays shown until
+  # the turn ends, and it takes no ordinal from the text it may share a
+  # message with.
+  defp think(state, thoughts) do
+    Enum.each(thoughts, fn {seq, %{"message" => message, "delta" => delta}} ->
+      if delta != "",
+        do:
+          Aqua.Loop.Stream.announce_thought(
+            state.work.guest,
+            Map.put(streamed_by(state), :step_id, message),
+            {0, seq},
+            delta
+          )
+    end)
+
+    state
+  end
+
   # A message first streamed takes the next ordinal, so a later message
   # outranks it while both are kept.
   defp streaming(%{streams: streams} = state, message) when is_map_key(streams, message),
@@ -887,14 +910,19 @@ defmodule Aqua.Harness.Program do
         ordinal: state.ordinal + 1
     }
 
-  defp streamed(%{work: work} = state, message),
+  defp streamed(state, message),
+    do:
+      Map.merge(streamed_by(state), %{
+        step_id: message,
+        ordinal: Map.fetch!(state.streams, message)
+      })
+
+  defp streamed_by(%{work: work} = state),
     do: %{
       thread_id: state.thread_id,
       turn_id: work.turn.id,
       fence: work.turn.fence,
       source: work.turn.id,
-      step_id: message,
-      ordinal: Map.fetch!(state.streams, message),
       role: if(Prima.AgentRef.soul?(work.agent), do: nil, else: work.agent)
     }
 
@@ -908,11 +936,13 @@ defmodule Aqua.Harness.Program do
   end
 
   # The open work's own tools of the program, told to the loop as they
-  # start and end: the loop keeps the one list of what runs, and nothing
-  # of them is stored.
+  # start and end, each run by its `call` and with what the harness said
+  # it runs or changed: the loop keeps the one list of what runs, and
+  # nothing of them is stored.
   defp own(state, owns) do
-    Enum.reduce(owns, state, fn {_seq, %{"name" => name, "phase" => phase}}, state ->
-      tell(state, {:activity, {:own, own_name(name), phase}})
+    Enum.reduce(owns, state, fn {_seq, %{"call" => call, "name" => name, "phase" => phase} = own},
+                                state ->
+      tell(state, {:activity, {:own, call, own_name(name), phase, own["detail"]}})
     end)
   end
 

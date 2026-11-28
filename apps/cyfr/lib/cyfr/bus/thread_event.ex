@@ -32,9 +32,10 @@ defmodule Cyfr.Bus.ThreadEvent do
       the models it ran and whether all of it was counted (`:complete`),
       some (`:partial`) or none (`:unavailable`); a thread with no turn
       yet tells `%{input: 0, output: 0}`;
-    * `:tool_activity` — the running tool calls;
-    * `:delta`, `:delta_abandoned` — a chat step's streamed text and
-      its withdrawal (`Aqua.Loop.Stream`);
+    * `:tool_activity` — the running turn's list of calls, `%{turn_id:,
+      fence:, entries:}`, whole each time it changes (`Aqua.Loop.Stream`);
+    * `:delta`, `:delta_abandoned` — a chat step's streamed text or a
+      program's reasoning, and a text's withdrawal (`Aqua.Loop.Stream`);
     * `:error` — a sentence for the person.
   """
 

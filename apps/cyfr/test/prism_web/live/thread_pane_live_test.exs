@@ -1057,8 +1057,18 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     # A turn running for this person with a message queued behind it, its
     # tools at work and the prompt to send again.
     event.(:turn_starting, user.user_id)
+    event.(:turn_started, "trn_drawn")
+    event.(:turn_fence, %{turn_id: "trn_drawn", fence: 1})
     event.(:queued, 2)
-    event.(:tool_activity, [%{tool: "files.read", status: :running, preview: "notes.md"}])
+
+    event.(:tool_activity, %{
+      turn_id: "trn_drawn",
+      fence: 1,
+      entries: [
+        %{tool: "files.read", sentence: "Used a tool", status: :running, details: ["notes.md"]}
+      ]
+    })
+
     event.(:restart_prompt, %{text: "two files", user_id: user.user_id})
 
     # A file on its way up.
@@ -4027,6 +4037,147 @@ defmodule PrismWeb.ThreadPaneLiveTest do
       end
 
       Cyfr.Test.Sandbox.end_views()
+    end
+  end
+
+  describe "a harness at work" do
+    defp told(pane, thread) do
+      fn kind, data ->
+        send(pane.pid, %Cyfr.Bus.ThreadEvent{
+          athanor_id: thread.athanor_id,
+          thread_id: thread.id,
+          kind: kind,
+          data: data
+        })
+      end
+    end
+
+    defp runs(told, user, turn_id) do
+      told.(:turn_starting, user.user_id)
+      told.(:turn_started, turn_id)
+      told.(:turn_fence, %{turn_id: turn_id, fence: 1})
+    end
+
+    defp listed(turn_id, fence, entries), do: %{turn_id: turn_id, fence: fence, entries: entries}
+
+    defp ran(tool, status, details \\ []),
+      do: %{tool: tool, sentence: "Used a tool", status: status, details: details}
+
+    @rows ~s([data-test="tool-activity"])
+    @fold ~s([data-test="thinking"])
+
+    test "a list of an ended turn, of another turn or of an earlier holder of the running one " <>
+           "shows no rows; the running turn's own does",
+         %{conn: conn, athanor: athanor, thread: thread, user: user} do
+      pane = open_pane(conn, athanor, thread)
+      told = told(pane, thread)
+
+      runs(told, user, "trn_a")
+      told.(:tool_activity, listed("trn_a", 1, [ran("Read", :running)]))
+      assert has_element?(pane, @rows, "Read")
+
+      # After A's end.
+      told.(:turn_finished, nil)
+      told.(:tool_activity, listed("trn_a", 1, [ran("Read", :done)]))
+      refute has_element?(pane, @rows)
+
+      # Again after B starts.
+      runs(told, user, "trn_b")
+      told.(:tool_activity, listed("trn_a", 1, [ran("Read", :done)]))
+      refute has_element?(pane, @rows)
+      told.(:tool_activity, listed("trn_b", 1, [ran("Bash", :running)]))
+      assert has_element?(pane, @rows, "Bash")
+
+      # B taken over under a new fence: the earlier holder's list is not B's.
+      told.(:turn_fence, %{turn_id: "trn_b", fence: 2})
+      refute has_element?(pane, @rows)
+      told.(:tool_activity, listed("trn_b", 1, [ran("Bash", :done)]))
+      refute has_element?(pane, @rows)
+      told.(:tool_activity, listed("trn_b", 2, [ran("Grep", :running)]))
+      assert has_element?(pane, @rows, "Grep")
+      refute has_element?(pane, @rows, "Bash")
+    end
+
+    test "a run says what it ran and then what it changed, a harness's words drawn as text " <>
+           "and never as markup",
+         %{conn: conn, athanor: athanor, thread: thread, user: user} do
+      pane = open_pane(conn, athanor, thread)
+      told = told(pane, thread)
+      runs(told, user, "trn_a")
+      start = ~s(echo "<img src=x onerror=alert(1)>")
+      change = "-<b>old</b>\n+<script>alert(2)</script>"
+      told.(:tool_activity, listed("trn_a", 1, [ran("<i>Bash</i>", :done, [start, change])]))
+
+      assert [ran, changed] =
+               pane |> render() |> LazyHTML.from_fragment() |> LazyHTML.query(@rows <> " pre")
+               |> Enum.map(&LazyHTML.text/1)
+
+      assert {ran, changed} == {start, change}
+      assert has_element?(pane, @rows <> " span", "<i>Bash</i>")
+      html = pane |> element(@rows) |> render()
+
+      for tag <- ~w(img b script i), do: refute(html =~ "<#{tag}")
+    end
+
+    test "reasoning folds under Thinking apart from the answer it shares a message with, " <>
+           "outlives the answer's row while the turn goes on, and goes with the rows at its " <>
+           "end while the final answer stays",
+         %{conn: conn, athanor: athanor, here: here, user: user} do
+      Sanctum.TestContext.ready!(athanor.id)
+      Cyfr.Test.Sandbox.stop_work_on_exit()
+      {:ok, today} = Aqua.Day.current(here)
+      # The pane's runner is up before the turn is, so it recovers none.
+      pane = open_pane(conn, athanor, today)
+      turn = soul_turn!(here, today, "running")
+      told = told(pane, today)
+      runs(told, user, turn.id)
+
+      piece = fn seq, text ->
+        %{
+          turn_id: turn.id,
+          fence: 1,
+          source: turn.id,
+          step_id: "msg_1",
+          role: nil,
+          seq: {0, seq},
+          text: text
+        }
+      end
+
+      reasoning = &Map.put(piece.(&1, &2), :kind, :thought)
+      answer = &Map.put(piece.(&1, &2), :ordinal, 0)
+
+      told.(:delta, answer.(1, "The answer "))
+      told.(:delta, reasoning.(2, "weighing"))
+      told.(:delta, answer.(3, "is 42."))
+      told.(:delta, reasoning.(4, " it"))
+      told.(:tool_activity, listed(turn.id, 1, [ran("Read", :done, ["notes.md"])]))
+
+      streaming = ~s([id$="-streaming-msg_1"])
+      assert has_element?(pane, @fold <> " summary", "Thinking")
+      assert pane |> element(@fold <> " p") |> render() =~ "weighing it"
+      refute pane |> element(@fold) |> render() =~ "answer"
+      assert pane |> element(streaming) |> render() =~ "The answer is 42."
+      refute pane |> element(streaming) |> render() =~ "weighing"
+
+      # The answer's row lands in place of what streamed; the fold stays.
+      row = brain_said!(here, today, turn, "The answer is 42.", %{"brain_message" => "msg_1"})
+      Prima.Test.Wait.wait_until(fn -> not has_element?(pane, streaming) end)
+      assert has_element?(pane, ~s([id$="-msg-#{row.id}"]), "The answer is 42.")
+      assert has_element?(pane, @fold, "weighing it")
+      assert has_element?(pane, @rows, "notes.md")
+
+      turn_status!(turn, "completed")
+      turn_finished(pane, athanor, today)
+      Prima.Test.Wait.wait_until(fn -> not has_element?(pane, @fold) end)
+      refute has_element?(pane, @rows)
+      assert has_element?(pane, ~s([id$="-msg-#{row.id}"]), "The answer is 42.")
+
+      # Opened again, the thread holds the answer and nothing of the work.
+      again = open_pane(conn, athanor, today)
+      assert has_element?(again, ~s([id$="-msg-#{row.id}"]), "The answer is 42.")
+      refute has_element?(again, @fold)
+      refute has_element?(again, @rows)
     end
   end
 end

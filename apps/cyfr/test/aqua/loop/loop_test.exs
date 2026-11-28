@@ -712,7 +712,7 @@ defmodule Aqua.LoopTest do
     # Nothing stays charged against the turn's reservation.
     {:ok, %{budget_id: budget_id}} = Tape.turn(ctx, turn.id)
     assert {:ok, []} = Arca.BudgetReservations.charges(Sanctum.Context.actor(ctx), budget_id)
-    assert_receive %ThreadEvent{kind: :tool_activity, data: [_ | _]}, 5_000
+    assert_receive %ThreadEvent{kind: :tool_activity, data: %{entries: [_ | _]}}, 5_000
   end
 
   # ---------------------------------------------------------------------------

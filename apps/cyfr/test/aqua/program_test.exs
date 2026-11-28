@@ -2411,6 +2411,128 @@ defmodule Aqua.ProgramTest do
       say(fake, row, idle(turn, [input.id]))
       assert :completed = Task.await(loop, 30_000)
     end
+    test "two runs of one tool ending in reverse order end their own rows, each saying what " <>
+           "it ran and then what it changed, under the turn and its fence",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      watch!(ctx, thread)
+      turn = accept!(ctx, thread, row, "run both")
+      loop = run(ctx, turn)
+      started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+      assert [activity!(), activity!()] == [[start_entry(:running)], [start_entry(:done)]]
+
+      # Cursor's ids hold a newline: a row is keyed by the whole id.
+      say(fake, row, own_run(turn, "call-1\nfc_1", "Shell", "start", "mix test"))
+      say(fake, row, own_run(turn, "call-2\nfc_2", "Shell", "start", "mix format"))
+      first = own_entry("Shell", :running, ["mix test"])
+      second = own_entry("Shell", :running, ["mix format"])
+
+      assert [activity!(), activity!()] == [
+               [start_entry(:done), first],
+               [start_entry(:done), first, second]
+             ]
+
+      say(fake, row, own_run(turn, "call-2\nfc_2", "Shell", "end", "+formatted"))
+      {:ok, %{fence: fence}} = Tape.turn(ctx, turn.id)
+      turn_id = turn.id
+      formatted = own_entry("Shell", :done, ["mix format", "+formatted"])
+
+      assert_receive %Cyfr.Bus.ThreadEvent{
+                       kind: :tool_activity,
+                       data: %{turn_id: ^turn_id, fence: ^fence, entries: entries}
+                     },
+                     10_000
+
+      assert entries == [start_entry(:done), first, formatted]
+
+      say(fake, row, own_run(turn, "call-1\nfc_1", "Shell", "end"))
+
+      assert activity!() ==
+               [start_entry(:done), own_entry("Shell", :done, ["mix test"]), formatted]
+
+      say(fake, row, idle(turn, [input.id]))
+      assert :completed = Task.await(loop, 30_000)
+      refute_received %Cyfr.Bus.ThreadEvent{kind: :tool_activity}
+    end
+
+    test "an own end of a run the native turn's end already settled shows nothing, whether " <>
+           "it names the work or none",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      watch!(ctx, thread)
+      turn = accept!(ctx, thread, row, "work in parallel")
+      loop = run(ctx, turn)
+      started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+      assert [activity!(), activity!()] == [[start_entry(:running)], [start_entry(:done)]]
+
+      # A CYFR call holds the turn open past the native turn's end.
+      opening = held_start!(fake, row, turn, "ask-1")
+      on_exit(fn -> send(opening, :go) end)
+      assert activity!() == [start_entry(:done), ask_start_entry(:running)]
+      say(fake, row, own_run(turn, "item_7", "commandExecution", "start", "sleep 12"))
+      bash = own_entry("commandExecution", :running, ["sleep 12"])
+      assert activity!() == [start_entry(:done), ask_start_entry(:running), bash]
+      say(fake, row, idle(turn, [input.id]))
+      settled = %{bash | status: :done}
+      assert activity!() == [start_entry(:done), ask_start_entry(:running), settled]
+
+      # Codex's background command ends after its native turn did, of no
+      # work; another run's late end names the work.
+      say(fake, row, own_run(turn, "item_7", "commandExecution", "end", "done", :none))
+      say(fake, row, own_run(turn, "item_7", "commandExecution", "end", "done"))
+      say(fake, row, own_run(turn, "item_8", "commandExecution", "end", "done"))
+
+      # The next list is the CYFR call's end: no late end showed.
+      send(opening, :go)
+      assert activity!() == [start_entry(:done), ask_start_entry(:done), settled]
+      _answer = accept_next!(fake, row)
+      say(fake, row, idle(turn, [input.id]))
+      assert :completed = Task.await(loop, 30_000)
+      refute_received %Cyfr.Bus.ThreadEvent{kind: :tool_activity}
+    end
+
+    test "the program's reasoning streams apart from its text, as thought of the open work " <>
+           "only, and no row lands it",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      watch!(ctx, thread)
+      turn = accept!(ctx, thread, row, "think it over")
+      loop = run(ctx, turn)
+      started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+      say(fake, row, thought(turn, "msg_other", "for other work", "trn_other"))
+      say(fake, row, thought(turn, "msg_none", "for no work", :none))
+      say(fake, row, text(turn, "msg_1", "The answer "))
+      {:ok, %{fence: fence}} = Tape.turn(ctx, turn.id)
+      assert delta!() == streamed(turn, fence, "msg_1", 0, {0, 7}, "The answer ")
+      say(fake, row, thought(turn, "msg_1", "weighing"))
+
+      reasoned =
+        turn
+        |> streamed(fence, "msg_1", 0, {0, 8}, "weighing")
+        |> Map.delete(:ordinal)
+        |> Map.put(:kind, :thought)
+
+      assert delta!() == reasoned
+      say(fake, row, text(turn, "msg_1", "is 42."))
+      assert delta!() == streamed(turn, fence, "msg_1", 0, {0, 9}, "is 42.")
+      say(fake, row, said(turn, "msg_1", "The answer is 42."))
+      say(fake, row, idle(turn, [input.id]))
+      assert :completed = Task.await(loop, 30_000)
+
+      assert said_rows(ctx, thread, turn) == [
+               {Arca.Schemas.Message.agent_author(), "aqua", "text", "The answer is 42.",
+                %{"brain_message" => "msg_1"}}
+             ]
+
+      refute_received %Cyfr.Bus.ThreadEvent{kind: :delta}
+      refute_received %Cyfr.Bus.ThreadEvent{kind: :delta_abandoned}
+    end
   end
 
   describe "the program's asks" do
@@ -3165,7 +3287,7 @@ defmodule Aqua.ProgramTest do
 
       assert_receive %Cyfr.Bus.ThreadEvent{
                        kind: :tool_activity,
-                       data: [%{tool: "Work handed to #{@title}", status: :done}]
+                       data: %{entries: [%{tool: "Work handed to #{@title}", status: :done}]}
                      },
                      10_000
 
@@ -10480,14 +10602,30 @@ defmodule Aqua.ProgramTest do
     |> then(&if(work == :none, do: &1, else: Map.put(&1, "work", work || turn.id)))
   end
 
+  # An own event of one run, `call`, of `turn`'s work, of `work` when
+  # one is named, or of none (`:none`), with what it ran or changed.
+  defp own_run(turn, call, name, phase, detail \\ nil, work \\ nil) do
+    turn
+    |> own(name, phase, work)
+    |> Map.put("call", call)
+    |> then(&if(detail, do: Map.put(&1, "detail", detail), else: &1))
+  end
+
+  # A thought event of `turn`'s work, of `work` when one is named, or of
+  # none (`:none`).
+  defp thought(turn, message, delta, work \\ nil),
+    do: %{text(turn, message, delta, work) | "t" => "thought"}
+
   # The next list of what runs the turn announced.
   defp activity! do
-    assert_receive %Cyfr.Bus.ThreadEvent{kind: :tool_activity, data: activity}, 10_000
+    assert_receive %Cyfr.Bus.ThreadEvent{kind: :tool_activity, data: %{entries: activity}},
+                   10_000
+
     activity
   end
 
   defp entry(tool, sentence),
-    do: fn status -> %{tool: tool, sentence: sentence, status: status, preview: nil} end
+    do: fn status -> %{tool: tool, sentence: sentence, status: status, details: []} end
 
   # The host's start of the program, an entry of the turn's list, labelled
   # as the hand-over of its work.
@@ -10500,7 +10638,8 @@ defmodule Aqua.ProgramTest do
     do: entry("program", Aqua.Steps.sentence("program", "start", "brain")).(status)
 
   # The program's own tool, worded as a tool no step names.
-  defp own_entry(name, status), do: entry(name, "Used a tool").(status)
+  defp own_entry(name, status, details \\ []),
+    do: %{entry(name, "Used a tool").(status) | details: details}
 
   # The thread's events reach the test as they reach a viewer.
   defp watch!(ctx, thread) do
