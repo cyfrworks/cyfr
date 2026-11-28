@@ -337,8 +337,8 @@ defmodule Aqua.Reader do
       # The reader's own post is its call's to show (`thread.post`).
       posted?(row) and own?(row, me) -> :none
       is_binary(Map.get(row, :reply_to)) -> {:said, reply_text(row)}
-      Arca.ThreadStorage.request?(row) and own?(row, me) -> :none
-      Arca.ThreadStorage.request?(row) -> {:said, request_text(row, reading)}
+      Tape.request?(row) and own?(row, me) -> :none
+      Tape.request?(row) -> {:said, request_text(row, reading)}
       # Before the reader's own speech: a line in the server's voice, a
       # schedule's or the server's own post, which a reading that names no
       # reader reads as its own.

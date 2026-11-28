@@ -3111,7 +3111,7 @@ defmodule PrismWeb.ThreadPaneLive do
   # What a row is on the tape, as `Aqua.Tape` announces it: a request to a
   # crew member, a reply to one, or neither.
   defp crew(%{reply_to: id}) when is_binary(id), do: :reply
-  defp crew(row), do: if(Threads.request?(row), do: :request)
+  defp crew(row), do: if(Aqua.request?(row), do: :request)
 
   # How a request stands as a person reads it: pending, then the outcome
   # of the reply that resolved it; answered, when that reply cannot be

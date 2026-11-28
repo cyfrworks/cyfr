@@ -1213,6 +1213,18 @@ defmodule Aqua.Tape do
   def announce(%Context{} = ctx, thread_id, kind, data \\ nil),
     do: broadcast(ctx, thread_id, kind, data)
 
+  @doc """
+  Whether a row is a request to a crew member: it names its addressee and
+  stands `pending`, `answered` or `expired` (`Arca.Schemas.Message`). Any
+  other message that names an addressee has no status, and an opening,
+  which has one, names none.
+  """
+  @spec request?(row()) :: boolean()
+  def request?(%{addressee: addressee, status: status}),
+    do: is_binary(addressee) and status in ~w(pending answered expired)
+
+  def request?(_row), do: false
+
   @doc "The decoded `payload` of a message row."
   @spec payload(row()) :: map()
   def payload(row), do: Threads.payload(row)
@@ -1319,7 +1331,7 @@ defmodule Aqua.Tape do
   # What a row is to a viewer: a request to a crew member, a reply
   # answering one, or any other row.
   defp row_kind(%{reply_to: reply_to}) when is_binary(reply_to), do: :reply
-  defp row_kind(row), do: if(Threads.request?(row), do: :request, else: :message)
+  defp row_kind(row), do: if(request?(row), do: :request, else: :message)
 
   # A workspace thread's turn ending may have recorded a report
   # (`Arca.TurnStorage`'s host moves); a read that fails wakes nobody, and

@@ -1920,18 +1920,6 @@ defmodule Arca.ThreadStorage do
 
   def update_message(%Prima.Actor{}, _id, _attrs), do: {:error, :no_athanor}
 
-  @doc """
-  Whether a message is a request to a crew member: it names its
-  addressee and stands `pending`, `answered` or `expired`
-  (`Arca.Schemas.Message`). Any other message that names an addressee has
-  no status, and an opening, which has one, names none.
-  """
-  @spec request?(map()) :: boolean()
-  def request?(%{addressee: addressee, status: status}),
-    do: is_binary(addressee) and status in ~w(pending answered expired)
-
-  def request?(_row), do: false
-
   @doc "A message's `payload` decoded (`%{}` when none)."
   @spec payload(map()) :: map()
   def payload(%{payload: nil}), do: %{}
