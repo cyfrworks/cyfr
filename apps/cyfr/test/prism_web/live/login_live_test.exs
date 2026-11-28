@@ -1112,6 +1112,22 @@ defmodule PrismWeb.LoginLiveTest do
     refute_vocabulary(html)
   end
 
+  test "the account pages the CYFR app could not load are named on the sign-in page, the address " <>
+         "its sign-in goes to",
+       %{conn: conn, dir: dir} do
+    first!(dir)
+    {:ok, view, html} = live(conn, ~p"/login?error=account_unreachable")
+
+    assert view |> element(~s([data-test="sign-in-error"])) |> render() =~
+             "The account pages at #{dir.url} could not be reached from this computer."
+
+    refute_vocabulary(html)
+
+    view |> element(~s([data-test="sign-in"])) |> render_click()
+    assert_push_event(view, "account:hop", %{url: url})
+    assert String.starts_with?(url, dir.url <> "/account/")
+  end
+
   test "a person this CYFR has not let in reads who can, in one sentence whatever the reason",
        %{conn: conn, dir: dir} do
     first!(dir)

@@ -19,7 +19,7 @@ import {after, mock, test} from "node:test"
 
 import {fragment} from "../../../cyfr/assets/account/sign_in.js"
 import {VERSION} from "../src/process.js"
-import {DEPARTURE_MS} from "../src/states.js"
+import {DEPARTURE_MS, UNREACHABLE} from "../src/states.js"
 
 const signIn = JSON.parse(readFileSync(new URL("../../../../tests/fixtures/sign_in.json", import.meta.url)))
 const HOME = signIn["home"]
@@ -1877,17 +1877,43 @@ function fragmentTo(page, url) {
 }
 
 test("an account window whose page is lost or failed to load ends the ceremony, the person back on the CYFR's sign-in page", async () => {
-  for (const [end, made] of Object.entries({
-    lost: (w) => w.webContents.emit("render-process-gone", {}, {reason: "killed"}),
-    failed: (w) => fails(w, ACCOUNT + "/account/sign")
-  })) {
+  for (const [end, made, shown] of [
+    ["lost", (w) => w.webContents.emit("render-process-gone", {}, {reason: "killed"}), HOME + "/login"],
+    ["failed", (w) => fails(w, ACCOUNT + "/account/sign"), HOME + UNREACHABLE]
+  ]) {
     const {page} = await hopped()
     const account = live().find((w) => w.webContents.url.startsWith(ACCOUNT + "/account/sign"))
     made(account)
     await settled()
     assert.ok(account.destroyed, `${end}: the ceremony ended`)
-    assert.ok(!page.destroyed && page.webContents.url === HOME + "/login", end)
+    assert.ok(!page.destroyed && page.webContents.url === shown, `${end}: ${page.webContents.url}`)
   }
+})
+
+test("a sign-in whose account pages could not be loaded is told so on the sign-in page; an aborted load and a completed sign-in are told nothing", async () => {
+  // Failed: the sign-in ends, and the CYFR's sign-in page shows why.
+  let {page} = await hopped()
+  let account = live().find((w) => w.webContents.url.startsWith(ACCOUNT + "/account/sign"))
+  fails(account, ACCOUNT + "/account/sign", -105)
+  await settled()
+  assert.ok(account.destroyed, "a failed load ends the sign-in")
+  assert.equal(page.webContents.url, HOME + UNREACHABLE)
+
+  // Aborted: a load given up is no failure; the sign-in goes on, and the
+  // page stays as it was.
+  ;({page} = await hopped())
+  account = live().find((w) => w.webContents.url.startsWith(ACCOUNT + "/account/sign"))
+  fails(account, ACCOUNT + "/account/sign", -3)
+  await settled()
+  assert.ok(!account.destroyed, "an aborted load ends nothing")
+  assert.equal(page.webContents.url, HOME + "/login")
+
+  // Completed: the answer goes back, and no reason with it.
+  const done = await hopped()
+  done.answer()
+  await settled()
+  await settled()
+  assert.equal(done.page.webContents.url, ANSWER)
 })
 
 test("the account window and a confirmation window are the app's window's own, centred over the content beside the rail", async () => {

@@ -154,9 +154,11 @@
 //                            shut cyfr down and quit; on the box's screen
 //                            the app's one end, at once (app.js)
 //   hop {url, kind}, unhop
-//   deliver {url}            load a sign-in's answer into the content
-//                            window; answers delivered as that call
-//                            returns, and load-ended as its promise settles
+//   deliver {url}            load a sign-in's answer, or its sign-in page
+//                            told why it ended (UNREACHABLE), into the
+//                            content window; answers delivered as that
+//                            call returns, and load-ended as its promise
+//                            settles
 //   reload                   load the content window's page again
 //   confirmation {url}       open a confirmation's answer in a window of
 //                            the content's session
@@ -251,6 +253,11 @@ function pickAsked(url) {
 export const EXTERNAL = ["https://www.docker.com/products/docker-desktop/", "https://docs.docker.com/engine/install/"]
 // The engine's code for a load given up: replaced, stopped or refused.
 export const ABORTED = -3
+
+// The CYFR's sign-in page as it is told that the account pages its
+// sign-in sent this computer to could not be reached
+// (PrismWeb.LoginLive's `?error=` banner, which names their address).
+export const UNREACHABLE = "/login?error=account_unreachable"
 
 /**
  * Every decision main takes from a navigation as the person pressing
@@ -598,6 +605,13 @@ function advance(s, e) {
       const where = ["starting", "locking"].includes(s.name) ? "block" : accountLoad(e.url, kept(s), e.kind)
       return where === "allow" || where === "return" ? same(s) : same(s, [{unhop: true}])
     }
+    // The account window's top-frame load failed (main passes no ABORTED
+    // one): the ceremony ends, and a sign-in's page, still the CYFR's
+    // sign-in page, is told the account pages could not be reached.
+    case "account-failed":
+      return e.kind === "sign-in" && s.name === "open"
+        ? same(s, [{unhop: true}, {deliver: {url: s.home + UNREACHABLE}}])
+        : same(s, [{unhop: true}])
     case "account-navigate": {
       if (e.target !== "top") return {state: s, allow: false, do: []}
       if (["starting", "locking"].includes(s.name)) return {state: s, allow: false, do: [{unhop: true}]}

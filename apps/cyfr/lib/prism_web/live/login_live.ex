@@ -495,6 +495,12 @@ defmodule PrismWeb.LoginLive do
   defp error_from_params(%{"error" => "unavailable"}),
     do: "The server could not read your account just now. Try again in a moment."
 
+  # The CYFR app's account window could not load the account pages this
+  # page's sign-in sent it to (the app's `UNREACHABLE`): their address is
+  # this CYFR's account service's, never one the address bar gives.
+  defp error_from_params(%{"error" => "account_unreachable"}),
+    do: "The account pages at #{Sanctum.directory_url()} could not be reached from this computer."
+
   defp error_from_params(_), do: nil
 
   defp notice_from_params(%{"error" => "signed_out"}), do: "You signed out."

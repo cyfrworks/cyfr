@@ -773,16 +773,23 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
   function openAccount(address) {
     const {home, account} = kept(state)
     const ses = kept_(accountPartition(home, account), "account")
-    // Its page failed or lost, the hop ends, which closes it.
+    const ceremony = () => hop && content && hop.from === content ? hop.kind : null
+    // Its page lost, the hop ends, which closes it; its page failed to
+    // load (a refused or replaced load, ABORTED, is none), step ends the
+    // hop too and says why on the CYFR's sign-in page.
     const w = window(ses, {...overContent(560, 760), parent: frame ?? undefined}, (w) => {
       const gone = () => {
         if (accountWindow === w) endHop()
       }
-      return {failed: closingLoad(gone), lost: gone}
+      const failed = (code, url) => {
+        if (code !== ABORTED) setImmediate(() => {
+          if (accountWindow === w) on({type: "account-failed", url, kind: ceremony()})
+        })
+      }
+      return {failed, lost: gone}
     })
     accountWindow = w
     const contents = w.webContents
-    const ceremony = () => hop && content && hop.from === content ? hop.kind : null
     // Every navigation of the top frame, however it began (the page's own,
     // main's load or reload, a history move, a change of fragment), starts
     // here: the one reader decides it, and a refused one ends the ceremony.

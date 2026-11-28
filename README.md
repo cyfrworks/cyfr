@@ -524,6 +524,7 @@ A start that leaves CYFR answering on this machine only, because its tailnet mac
 
 - **Certificate names are public.** Every HTTPS certificate's name, the machine's full tailnet name included, is published in public certificate logs. Use a randomized tailnet name and a neutral machine name: `cyfr`, unless `--hostname` gives another.
 - **The name is the address.** Renaming the machine gives CYFR a new address (above). `cyfr access browser tailnet --new-node` replaces this machine's tailnet identity, so CYFR can take another name; remove the old machine on the admin console's Machines page.
+- **Your own account service here.** What signing in with the CYFR app on this machine needs, when CYFR serves its own accounts at its tailnet name: [devices-guide.md](devices-guide.md#the-cyfr-app).
 - **Tailscale's hosted service** hands out the tailnet's keys. Tailnet Lock limits that trust, and CYFR's own sign-in applies either way: CYFR reads no Tailscale identity header, so everyone who reaches CYFR still signs in.
 
 **A domain address.** `cyfr access browser domain --domain <your domain>` serves CYFR at `https://<your domain>/` through the `caddy` service, which obtains its certificate over ACME. The domain must point at this machine, and ports 80 and 443 must be open (see [Prerequisites](#prerequisites)). Once the change is made, `cyfr access browser domain` resolves the domain from this machine and says `Done.` only when it resolves; otherwise it says that no one reaches CYFR there, and no certificate is issued, until the domain's DNS names this machine.
