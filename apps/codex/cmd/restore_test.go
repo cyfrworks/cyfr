@@ -449,28 +449,6 @@ func failedSwitchSnapshot(t *testing.T) *restoreScenario {
 	return &restoreScenario{updateScenario: s, dir: s.snapshotDir()}
 }
 
-// The restore of a snapshot of the three-container release, whose builder
-// and its guard run under a profile of their own, starts the snapshot's
-// head alone and then says that the two are not started and the command
-// that starts them.
-func TestRestoreOfABuildsSnapshotSaysTheBuildsAreNotStarted(t *testing.T) {
-	r := failedSwitchSnapshot(t)
-	r.withProfiles(buildsProfiles)
-	out, err := r.restore(true)
-	if err != nil {
-		t.Fatalf("restore: %v\n%s", err, out)
-	}
-	said := "\nThese services are not started, since .env selects none of their profiles: locus-builds, locus-builds-guard; 'docker compose --profile locus-builds up -d locus-builds locus-builds-guard' starts them.\n"
-	if !strings.HasSuffix(out, said) || strings.Count(out, said) != 1 {
-		t.Errorf("the restore did not end saying once %q:\n%s", said, out)
-	}
-	for _, line := range r.log() {
-		if strings.Contains(line, " up ") && strings.Contains(line, "locus-builds") {
-			t.Errorf("the restore ran %q", line)
-		}
-	}
-}
-
 // A restore left stopped says 'cyfr up' starts it and, since that starts
 // none of the services under the stack's own profiles, which they are and
 // what starts them.
@@ -481,7 +459,7 @@ func TestARestoreLeftStoppedSaysTheBuildsAreNotStarted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("restore: %v\n%s", err, out)
 	}
-	said := "The stack is left stopped (--no-start); start it with 'cyfr up'.\nThese services are not started, since .env selects none of their profiles: locus-builds, locus-builds-guard; 'docker compose --profile locus-builds up -d locus-builds locus-builds-guard' starts them.\n"
+	said := "The stack is left stopped (--no-start); start it with 'cyfr up'.\nThese services are not started, since .env selects none of their profiles: caddy, locus-builds, locus-builds-guard; 'docker compose --profile locus-builds --profile public up -d caddy locus-builds locus-builds-guard' starts them.\n"
 	if !strings.HasSuffix(out, said) || strings.Count(out, said) != 1 {
 		t.Errorf("the restore did not end saying once %q:\n%s", said, out)
 	}

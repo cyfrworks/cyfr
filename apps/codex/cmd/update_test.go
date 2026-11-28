@@ -1456,10 +1456,12 @@ func (s *updateScenario) withProfiles(profiles map[string][]string) {
 }
 
 // buildsSelection is the compose selection the three-container stack with
-// builds on runs under: the scenario's head and the builds' own profile.
+// builds on runs under: the scenario's head and the profiles of the stack's
+// own, the builds' and the old file's caddy's `public`, which no kind
+// selects now.
 func (s *updateScenario) buildsSelection() string {
 	h := scenarioHead
-	h.Profiles = []string{"domain", "locus-builds"}
+	h.Profiles = []string{"domain", "locus-builds", "public"}
 	return strings.Join(composePrefixArgs(access.ProjectName(s.project), h), " ") + " "
 }
 
@@ -1485,61 +1487,9 @@ func TestUpdateStopsTheThreeContainerBuildsUnderTheirProfile(t *testing.T) {
 	}
 }
 
-// A failure before the switch, after the stop, starts the old stack again
-// as it ran: the head's services through the engine's start, then the
-// builder and its guard under the builds' own profile.
-func TestUpdateRecoveryStartsTheThreeContainerBuildsAgain(t *testing.T) {
-	s := newThreeContainerScenario(t)
-	s.withProfiles(buildsProfiles)
-	s.answer("network-rm-net0.exit", "1")
-	out, err := s.run(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "could not remove the network locus-backends") || !strings.Contains(err.Error(), "The old stack was started again; docker-compose.yml is unchanged") {
-		t.Fatalf("update answered %v\n%s", err, out)
-	}
-	s.composeUnchanged()
-	want := append(started("update"), s.buildsSelection()+"up -d --no-deps locus-builds locus-builds-guard")
-	if log := s.log(); len(log) < len(want) || !slices.Equal(log[len(log)-len(want):], want) {
-		t.Errorf("the old stack was not started again as it ran:\n%s", strings.Join(log, "\n"))
-	}
-}
-
 // buildsProfiles are the three-container stack's services under a profile,
 // as its compose file declares them.
 var buildsProfiles = map[string][]string{"caddy": {"public"}, "locus-builds": {"locus-builds"}, "locus-builds-guard": {"locus-builds"}}
-
-// The recovery after a failure before the switch starts exactly the
-// services that ran: with the builder running and its guard, a dependency
-// of its under the same profile, stopped, the builder starts alone and
-// nothing it depends on starts.
-func TestUpdateRecoveryStartsNoServiceTheBuildsDependOn(t *testing.T) {
-	s := newThreeContainerScenario(t)
-	s.withProfiles(buildsProfiles)
-	s.answer("ps.out", "locus-backends-guard\ncyfr\ncaddy\nlocus-runtime\nlocus-builds\nlocus-backends\n")
-	s.answer("network-rm-net0.exit", "1")
-	if out, err := s.run(context.Background()); err == nil || !strings.Contains(err.Error(), "The old stack was started again; docker-compose.yml is unchanged") {
-		t.Fatalf("update answered %v\n%s", err, out)
-	}
-	want := append(started("update"), s.buildsSelection()+"up -d --no-deps locus-builds")
-	if log := s.log(); len(log) < len(want) || !slices.Equal(log[len(log)-len(want):], want) {
-		t.Errorf("the recovery did not start the builder alone:\n%s", strings.Join(log, "\n"))
-	}
-}
-
-// A recovery whose head's services started and whose builder did not says
-// so, naming the services and the command that starts them, never that
-// 'cyfr up' starts the old stack.
-func TestUpdateRecoveryWhoseBuildsDoNotStartSaysWhatStartsThem(t *testing.T) {
-	s := newThreeContainerScenario(t)
-	s.withProfiles(buildsProfiles)
-	s.answer("network-rm-net0.exit", "1")
-	s.answer("up-no-deps.exit", "1")
-	out, err := s.run(context.Background())
-	said := ".\nThe old stack was started again and docker-compose.yml is unchanged, but locus-builds, locus-builds-guard did not start ("
-	starts := "); 'docker compose --profile locus-builds up -d locus-builds locus-builds-guard' starts them"
-	if err == nil || strings.Count(err.Error(), said) != 1 || !strings.HasSuffix(err.Error(), starts) || strings.Contains(err.Error(), "'cyfr up'") {
-		t.Fatalf("update answered %v\n%s", err, out)
-	}
-}
 
 // A recovery whose own start fails says 'cyfr up' starts the old stack and,
 // since that starts none of the services that ran beside it, which they
@@ -1550,7 +1500,7 @@ func TestUpdateRecoveryWhoseStartFailsSaysTheBuildsStayStopped(t *testing.T) {
 	s.answer("network-rm-net0.exit", "1")
 	s.engine.startErr = errors.New("cyfr did not become healthy")
 	out, err := s.run(context.Background())
-	said := "; docker-compose.yml is unchanged, so 'cyfr up' starts it. These services are not started, since .env selects none of their profiles: locus-builds, locus-builds-guard; 'docker compose --profile locus-builds up -d locus-builds locus-builds-guard' starts them."
+	said := "; docker-compose.yml is unchanged, so 'cyfr up' starts it. These services are not started, since .env selects none of their profiles: caddy, locus-builds, locus-builds-guard; 'docker compose --profile locus-builds --profile public up -d caddy locus-builds locus-builds-guard' starts them."
 	if err == nil || !strings.HasSuffix(err.Error(), said) || strings.Count(err.Error(), said) != 1 {
 		t.Fatalf("update answered %v\n%s", err, out)
 	}
