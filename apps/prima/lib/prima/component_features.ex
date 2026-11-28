@@ -24,8 +24,9 @@ defmodule Prima.ComponentFeatures do
 
   Wasmtime 51.0.0's defaults turn on `gc`, `gc-types`, `exceptions`,
   `cm-async` and `threads`; the runner builds its engine without
-  Wasmtime's `gc`, `component-model-async` and `threads` features and
-  turns each of these off by name, so none is on there. The other five
+  Wasmtime's `gc`, `component-model-async` and `threads` features, which
+  leaves all five off, and turns GC, threads and the component model's
+  error context off by name besides, so none is on there. The other five
   are a variant of one of those or build on it, and the engine leaves
   them off, so refusing them here keeps the validator's answer and the
   engine's the same. The advisories these refusals once answered
