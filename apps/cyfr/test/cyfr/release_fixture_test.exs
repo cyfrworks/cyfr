@@ -8,8 +8,10 @@ defmodule Cyfr.ReleaseFixtureTest do
   publishes an account at the deployment's directory and brings its
   person in by the device's hello, the installation's first under a setup
   token and every later one by the door, held to the open admission's
-  caps, each with a paired device whose record it keeps; a person made
-  before comes in again by the same hello, and every person's session
+  caps, each with a paired device whose record it keeps; a person this
+  CYFR holds already is not admitted again and is given a session at the
+  entry asked, whether their account is published or cached here alone
+  and whether their record is kept or gone, and every person's session
   stands past the freshness bound on a public server; a kept record is the
   device a first person made again comes in with; `device_confirm` and
   `confirmed` confirm a record by the person's own device answering this
@@ -84,8 +86,8 @@ defmodule Cyfr.ReleaseFixtureTest do
     %{fixture: fixture, dir: dir, directory: directory}
   end
 
-  defp person!(fixture, sub) do
-    "FIXTURE=" <> json = fixture.(["person", sub])
+  defp person!(fixture, sub, at \\ []) do
+    "FIXTURE=" <> json = fixture.(["person", sub | at])
     Jason.decode!(json)
   end
 
@@ -188,7 +190,7 @@ defmodule Cyfr.ReleaseFixtureTest do
     end
   end
 
-  test "a person made before comes in again by the same hello, in a new session, their device paired once",
+  test "a person made before comes in again in a new session, not admitted again, their device paired once",
        %{fixture: fixture} do
     first = person!(fixture, "fixture-first")
     again = person!(fixture, "fixture-first")
@@ -202,6 +204,36 @@ defmodule Cyfr.ReleaseFixtureTest do
                Sanctum.Caller.establish({:session, person["token"]}, entry: :loopback)
 
       assert user_id == first["user_id"]
+    end
+  end
+
+  # The compose proof's deployment: an account cached here alone, as the
+  # fixture caches one where the directory is cyfr.run or one the egress
+  # refuses (the compose proof's), and a stack replaced between modes,
+  # whose container takes the device's record with it.
+  test "a person held where the account is cached here alone and the device's record is gone gets a session at the entry asked",
+       %{fixture: fixture, dir: dir} do
+    Sanctum.Test.Newcomers.directory!("https://cyfr.run")
+    Prima.Test.Env.put_app_env(:sanctum, :browser_address, "https://cyfr.example")
+
+    first = person!(fixture, "fixture-first", ["loopback"])
+    record = Path.join(dir, "device-#{identifier_of(first)}.json")
+    File.rm!(record)
+    again = person!(fixture, "fixture-first", ["proxy"])
+
+    assert again["user_id"] == first["user_id"]
+    assert again["athanor_id"] == first["athanor_id"]
+    assert [_one] = paired(first)
+    refute File.exists?(record)
+
+    for {person, at, elsewhere} <- [{first, :loopback, :proxy}, {again, :proxy, :loopback}] do
+      assert {:ok, %{user_id: user_id}} =
+               Sanctum.Caller.establish({:session, person["token"]}, entry: at)
+
+      assert user_id == first["user_id"]
+
+      assert {:error, :unauthenticated} =
+               Sanctum.Caller.establish({:session, person["token"]}, entry: elsewhere)
     end
   end
 
@@ -251,6 +283,12 @@ defmodule Cyfr.ReleaseFixtureTest do
       "certificate" => %{}
     }
 
+    File.write!(path, Jason.encode!(%{kept | "home" => "https://another.example"}))
+
+    assert_raise RuntimeError, ~r/names no device of this home/, fn ->
+      fixture.(["person", "fixture-first"])
+    end
+
     File.write!(path, Jason.encode!(kept))
     first = person!(fixture, "fixture-first")
     assert identifier_of(first) == identifier
@@ -264,12 +302,6 @@ defmodule Cyfr.ReleaseFixtureTest do
     assert written["certificate"]["client_id"] == client_id
     assert {:ok, %{id: athanor_id}} = Sanctum.Tenancy.Athanors.get_by_owner(first["user_id"])
     assert written["athanor_id"] == athanor_id
-
-    File.write!(path, Jason.encode!(%{kept | "home" => "https://another.example"}))
-
-    assert_raise RuntimeError, ~r/names no device of this home/, fn ->
-      fixture.(["person", "fixture-first"])
-    end
   end
 
   test "device_confirm confirms a record by its own person's device, refuses one made wrong, and another person's key confirms nothing",

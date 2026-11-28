@@ -8,7 +8,8 @@
 #
 #   person SUB [ENTRY]
 #       The person of the account SUB names, made as the product makes a
-#       device-first person, and signed in again by the same door. The
+#       device-first person where this CYFR holds none, and a session of
+#       theirs. The
 #       account is built here as the box's Set up CYFR builds one: a genesis
 #       signed by a recovery key SUB derives, at this deployment's
 #       directory (`Sanctum.directory_url/0`), and one device key added;
@@ -28,16 +29,18 @@
 #       comes in under the setup token (one the fixture puts for the call
 #       and takes away after); every later one through the door, once its
 #       `*` admits newcomers, which the proof opens as an administrator
-#       does (`door.allow`). A person made before comes in by the same
-#       hello: the door admits them and their standing device is given a
-#       new certificate. Nothing is sent to cyfr.run, which holds real
-#       people's accounts: where the deployment's directory is cyfr.run, or
-#       one its egress refuses (the compose proof's and the Locus image
-#       tests' deployments name one, so that no read of theirs leaves the
-#       machine), the account is cached here alone, as a first read leaves
-#       it, and its person pauses past the bound on a public server; where its
-#       registry is cyfr.run, or its directory holds no account, no name is
-#       claimed.
+#       does (`door.allow`). A person this CYFR holds already is neither
+#       made nor admitted again, whether their device record is here or
+#       went with a replaced container: only the session below is minted,
+#       under the head this CYFR holds and the one device key it lists, so
+#       a proof can ask for one at each entry. Nothing is sent to
+#       cyfr.run, which holds real people's accounts: where the
+#       deployment's directory is cyfr.run, or one its egress refuses (the
+#       compose proof's and the Locus image tests' deployments name one,
+#       so that no read of theirs leaves the machine), the account is
+#       cached here alone, as a first read leaves it, and its person pauses
+#       past the bound on a public server; where its registry is cyfr.run,
+#       or its directory holds no account, no name is claimed.
 #
 #       The device's key is an Ed25519 seed: drawn here for the
 #       installation's first person, and SUB's own for every later one, so
@@ -426,11 +429,12 @@ fn args ->
   end
 
   # The person of the account SUB names (the `person` command above), and
-  # the account. The installation's first person
-  # (`Arca.InstallationClaims.setup/1` says whether this is it) comes in
-  # under a setup token put for this call alone, the installation's own,
-  # if it has one, put back however the hello ends; every later one by
-  # the door.
+  # the account: the head this CYFR holds and the one device key it lists.
+  # A person this CYFR holds already is not admitted again. A new one is:
+  # the installation's first person (`Arca.InstallationClaims.setup/1`
+  # says whether this is it) under a setup token put for this call alone,
+  # the installation's own, if it has one, put back however the hello
+  # ends; every later one by the door.
   admitted = fn sub ->
     system = Prima.Actor.system()
 
@@ -438,38 +442,49 @@ fn args ->
       :crypto.generate_key(:eddsa, :ed25519, :crypto.hash(:sha256, ["release-device|", sub]))
 
     identifier = account.(sub, derived_pub).identifier
-    first? = Arca.InstallationClaims.setup(system) == {:ok, :first}
 
-    seed =
-      kept_seed.(identifier) ||
-        if(first?, do: :crypto.strong_rand_bytes(32), else: derived)
+    person =
+      case Sanctum.Tenancy.Users.get_by_identifier(identifier) do
+        {:ok, person} ->
+          person
 
-    {device_pub, ^seed} = :crypto.generate_key(:eddsa, :ed25519, seed)
-    account = published.(account.(sub, device_pub))
-    :ok = named.(account, sub)
+        {:error, :not_found} ->
+          first? = Arca.InstallationClaims.setup(system) == {:ok, :first}
 
-    client_id =
-      if first? do
-        token = Base.encode16(:crypto.strong_rand_bytes(32), case: :lower)
-        configured = Application.fetch_env(:sanctum, :setup_token)
-        Application.put_env(:sanctum, :setup_token, token)
+          seed =
+            kept_seed.(identifier) ||
+              if(first?, do: :crypto.strong_rand_bytes(32), else: derived)
 
-        try do
-          hello.(account, seed, {:setup, token})
-        after
-          case configured do
-            {:ok, value} -> Application.put_env(:sanctum, :setup_token, value)
-            :error -> Application.delete_env(:sanctum, :setup_token)
-          end
-        end
-      else
-        hello.(account, seed, nil)
+          {device_pub, ^seed} = :crypto.generate_key(:eddsa, :ed25519, seed)
+          account = published.(account.(sub, device_pub))
+          :ok = named.(account, sub)
+
+          client_id =
+            if first? do
+              token = Base.encode16(:crypto.strong_rand_bytes(32), case: :lower)
+              configured = Application.fetch_env(:sanctum, :setup_token)
+              Application.put_env(:sanctum, :setup_token, token)
+
+              try do
+                hello.(account, seed, {:setup, token})
+              after
+                case configured do
+                  {:ok, value} -> Application.put_env(:sanctum, :setup_token, value)
+                  :error -> Application.delete_env(:sanctum, :setup_token)
+                end
+              end
+            else
+              hello.(account, seed, nil)
+            end
+
+          {:ok, person} = Sanctum.Tenancy.Users.get_by_identifier(identifier)
+          :ok = keep_device.(person, identifier, client_id, seed)
+          person
       end
 
-    {:ok, person} = Sanctum.Tenancy.Users.get_by_identifier(identifier)
-    :ok = keep_device.(person, identifier, client_id, seed)
     {:ok, head} = Arca.DirectoryHeads.get(system, identifier)
-    {person, %{identifier: identifier, head_hash: head.head_hash, key: account.key}}
+    {:ok, %{keys: [key]}} = head.state |> Jason.decode!() |> Prima.Identity.State.decode()
+    {person, %{identifier: identifier, head_hash: head.head_hash, key: key}}
   end
 
   # Returns once no fill holds the context's athanor. The sign-in takes
