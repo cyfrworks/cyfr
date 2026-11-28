@@ -299,7 +299,7 @@ defmodule Aqua.SeatTest do
              seat_prompt() <>
                "\n\n---\n\n" <>
                Aqua.Reader.deliver(
-                 Aqua.Prompt.briefing(false, false, false),
+                 Aqua.Prompt.briefing(false, false, false, true),
                  Aqua.Reader.mark(room.id)
                )
 
@@ -371,7 +371,7 @@ defmodule Aqua.SeatTest do
 
     assert opening ==
              Aqua.Reader.deliver(
-               Aqua.Prompt.crew_briefing(false, false, false),
+               Aqua.Prompt.crew_briefing(false, false, false, true),
                Aqua.Reader.mark(child.id)
              )
 
