@@ -281,9 +281,18 @@ func TestAnOwedClearKeepsTheIDItWasOwedUnder(t *testing.T) {
 	k.guard.mu.Lock()
 	k.guard.refuse = true
 	k.guard.mu.Unlock()
+	asked := len(k.guard.taken())
 	k.s.handleSpawn(k.c, k.spawnReq("s2", "p-s2", "vlt_a2", nil))
 	if got := k.next(t); got["type"] != "error" || got["code"] != protocol.CodeGuardUnavailable {
 		t.Fatalf("a start whose route the guard refused answered %v", got)
+	}
+	k.s.mu.Lock()
+	second := m.id
+	k.s.mu.Unlock()
+	for _, c := range k.guard.taken()[asked:] {
+		if c.op == guard.TypeClear && c.spawnID == second {
+			t.Fatalf("the boot whose route was refused asked a clear under its own id %s, for the first boot's hold", second)
+		}
 	}
 	k.s.mu.Lock()
 	var owed []string
