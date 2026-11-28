@@ -578,6 +578,7 @@ func TestTheWallIsGivenOnlyWhereAFirstSessionInAVMFits(t *testing.T) {
 	}
 	wallSeams(t)
 	guestFiles = files
+	openDevice = func(string) error { return nil }
 	// The least rest, by whole MiB, that holds a first session and its VM's
 	// own allowance, which follows the guest's size, that same rest.
 	fits := admission.Allowance(admission.Session) + admission.MachineBaseBytes

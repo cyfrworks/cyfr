@@ -156,13 +156,13 @@ func TestAVMsGroupThatOutlivesItsKillAtTheGuardsLossEndsTheKeeper(t *testing.T) 
 	k := newVMKeeper(t)
 	k.disk(t, "ath_a", "vlt_a1")
 	k.session(t, "s1", "ath_a", "vlt_a1", nil)
-	g, err := k.c.role.groups.Create("vm-left", 0, 0)
+	g, err := k.c.role.groups.Create("keeper-40999", 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	// A pid no process has (past the kernel's most), which no kill
 	// reaches, in the group's folder: its leaf, "bound", under its mark.
-	if err := os.WriteFile(filepath.Join(k.c.role.groups.Dir(), "vm-left", "bound", "cgroup.procs"), []byte("4194305\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(k.c.role.groups.Dir(), "keeper-40999", "bound", "cgroup.procs"), []byte("4194305\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	f := k.guest.booted()[0]
@@ -225,6 +225,8 @@ func TestAGuestRefusedSpawnLeavesNoFollower(t *testing.T) {
 		if m := k.expect(t, "error"); m["code"] != protocol.CodeExecFailed {
 			t.Fatalf("a spawn the guest refused answered %v", m)
 		}
+		// A spawn refused once made is released, as on the host.
+		k.expect(t, "released")
 	}
 	vmEventually(t, "the refused spawns' followers' end", func() bool { return runtime.NumGoroutine() < before+5 })
 }

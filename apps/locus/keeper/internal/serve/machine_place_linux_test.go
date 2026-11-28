@@ -6,6 +6,7 @@ package serve
 import (
 	"errors"
 	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 	"time"
@@ -94,15 +95,24 @@ func TestAScratchSessionRunsInItsPersonsVMOnADiskMadeForIt(t *testing.T) {
 	if _, err := os.Stat(home.Mke2fs); err != nil {
 		t.Skipf("this host has no %s for the person's image: %v", home.Mke2fs, err)
 	}
+	// The keeper's own processes hold this test's one kept uid.
+	saved := keptTaken
+	t.Cleanup(func() { keptTaken = saved })
+	keptTaken = func(*home.Kept) (map[int]bool, error) { return map[int]bool{}, nil }
 	k := newVMKeeper(t)
 	k.place(t, "p-s1", "ath_a")
 	k.s.handleSpawn(k.c, k.scratchReq("s1", "p-s1"))
 	if m := k.next(t); m["type"] != "spawned" {
 		t.Fatalf("the scratch session answered %v", m)
 	}
-	d, err := k.kept.ReadDisk("ath_a")
-	if err != nil || d.Form != home.FormImage || len(d.Homes) != 0 || d.UID != os.Getuid() {
-		t.Fatalf("the person's disk is %+v, %v: want an image of their uid holding no home", d, err)
+	k.s.mu.Lock()
+	d := k.s.disks["ath_a"]
+	k.s.mu.Unlock()
+	if d == nil || d.Form != home.FormImage || len(d.Homes) != 0 || d.UID != os.Getuid() {
+		t.Fatalf("the person's disk is %+v: want an image of their uid holding no home", d)
+	}
+	if _, err := os.Stat(filepath.Join(k.kept.Root, home.DisksDir, home.Person("ath_a")+".json")); err != nil {
+		t.Fatalf("the person's disk's record: %v", err)
 	}
 	if err := home.CheckImage(k.kept.ImagePath("ath_a"), d.UID); err != nil {
 		t.Fatalf("the person's image: %v", err)

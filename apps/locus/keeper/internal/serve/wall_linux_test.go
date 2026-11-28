@@ -169,8 +169,11 @@ func TestAKeeperThatGivesNoWallSaysWhyAndTouchesNoDisk(t *testing.T) {
 		if _, err := os.Stat(folder); err != nil {
 			t.Errorf("%s: the directory disk's home is gone: %v", c.why, err)
 		}
-		if got, err := k.s.cfg.Kept.ReadDisk("ath_dir"); err != nil || got.Form != home.FormDirectory {
-			t.Errorf("%s: the directory disk's record is %+v, %v", c.why, got, err)
+		k.s.mu.Lock()
+		got := k.s.disks["ath_dir"]
+		k.s.mu.Unlock()
+		if got == nil || got.Form != home.FormDirectory {
+			t.Errorf("%s: the keeper's index of the directory disk is %+v", c.why, got)
 		}
 	}
 }

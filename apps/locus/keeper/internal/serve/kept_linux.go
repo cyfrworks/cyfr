@@ -852,6 +852,10 @@ func (s *server) makeHome(c *client, req *protocol.Request) {
 	s.send(c, protocol.NewHomeMade(req.ID, d.UID))
 }
 
+// keptTaken reads which kept uids are taken (home.Kept.Taken of /proc), a
+// variable the tests of a keeper running as one uid replace.
+var keptTaken = func(k *home.Kept) (map[int]bool, error) { return k.Taken("/proc") }
+
 // recordDisk is athanor's disk, its record written first where none is,
 // holding homeID where one is given, with the disk's lock held (lockDisk):
 // a new disk draws its uid (drawKept) and takes this keeper's form
@@ -867,7 +871,7 @@ func (s *server) recordDisk(what, athanor, homeID string) (home.Disk, string) {
 	}
 	s.mu.Unlock()
 	if !recorded {
-		uid, ok, err := s.drawKept(func() (map[int]bool, error) { return s.cfg.Kept.Taken("/proc") })
+		uid, ok, err := s.drawKept(func() (map[int]bool, error) { return keptTaken(s.cfg.Kept) })
 		if err != nil {
 			s.log.Error("%s: reading the kept homes' root and /proc: %v", what, err)
 			return d, protocol.CodeUnavailable
