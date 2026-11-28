@@ -60,7 +60,7 @@ defmodule Cyfr.DeclaredOperationsTest do
       refute Map.has_key?(Sanctum.Catalog.operations(), "person")
       refute Map.has_key?(Sanctum.Catalog.operations(), "passkey")
 
-      assert operation("pairing", "revoke").kind == :destructive
+      assert operation("pairing", "remove").kind == :destructive
       assert operation("session", "end").kind == :destructive
     end
 

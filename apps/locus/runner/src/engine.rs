@@ -46,7 +46,7 @@ use wasmtime::component::{Component, HasSelf, Linker};
 use wasmtime::wasmparser::{Validator, WasmFeatures};
 use wasmtime::{Config, OptLevel, Store, Trap};
 
-use crate::imports::{Ended, Guest, Run, catalyst, reagent};
+use crate::imports::{Ended, Guest, Run, catalyst, formula_world, reagent};
 use crate::wire::STACK_BYTES;
 use crate::words;
 
@@ -81,6 +81,7 @@ pub const REFUSED: [(&str, WasmFeatures); 9] = [
 pub enum Kind {
     Reagent,
     Catalyst,
+    Formula,
 }
 
 impl Kind {
@@ -89,6 +90,7 @@ impl Kind {
         match name {
             "reagent" => Some(Kind::Reagent),
             "catalyst" => Some(Kind::Catalyst),
+            "formula" => Some(Kind::Formula),
             _ => None,
         }
     }
@@ -98,6 +100,7 @@ impl Kind {
         match self {
             Kind::Reagent => "cyfr:reagent/compute@0.1.0",
             Kind::Catalyst => "cyfr:catalyst/run@0.1.0",
+            Kind::Formula => "cyfr:formula/run@0.1.0",
         }
     }
 }
@@ -166,10 +169,14 @@ pub fn digest(bytes: &[u8]) -> String {
 pub struct Engine {
     engine: wasmtime::Engine,
     catalyst: Linker<Guest>,
+    formula: Linker<Guest>,
     reagent: Linker<Guest>,
     compiler: Compiler,
     kept: Arc<Mutex<HashMap<String, (Component, u64)>>>,
     compiles: std::sync::atomic::AtomicU64,
+    /// Each digest whose bytes are being fetched or compiled, by the one
+    /// attempt doing so; the others wait for its compile.
+    fetching: Mutex<HashMap<String, std::sync::Weak<tokio::sync::Mutex<()>>>>,
 }
 
 impl Engine {
@@ -182,6 +189,9 @@ impl Engine {
         let mut catalyst = Linker::new(&engine);
         wasmtime_wasi::p2::add_to_linker_async(&mut catalyst)?;
         catalyst::Catalyst::add_to_linker::<_, HasSelf<_>>(&mut catalyst, |guest| guest)?;
+        let mut formula = Linker::new(&engine);
+        wasmtime_wasi::p2::add_to_linker_async(&mut formula)?;
+        formula_world::Formula::add_to_linker::<_, HasSelf<_>>(&mut formula, |guest| guest)?;
         let ticker = engine.clone();
         std::thread::Builder::new()
             .name("epoch".to_owned())
@@ -195,16 +205,38 @@ impl Engine {
         Ok(Arc::new(Engine {
             engine,
             catalyst,
+            formula,
             reagent,
             compiler,
             kept: Arc::new(Mutex::new(HashMap::new())),
             compiles: std::sync::atomic::AtomicU64::new(0),
+            fetching: Mutex::new(HashMap::new()),
         }))
     }
 
     /// How many compiles the engine holds.
     pub fn kept_count(&self) -> usize {
         self.kept.lock().expect("the kept compiles").len()
+    }
+
+    /// Wait until no other attempt fetches or compiles `digest`, and hold
+    /// that turn until the guard is dropped: N attempts of one new digest
+    /// make one fetch and one compile, the rest finding it kept. An attempt
+    /// stopped while it holds the turn gives it up as it is dropped.
+    pub async fn turn(&self, digest: &str) -> tokio::sync::OwnedMutexGuard<()> {
+        let turn = {
+            let mut fetching = self.fetching.lock().expect("the digests fetched");
+            fetching.retain(|_digest, turn| turn.strong_count() > 0);
+            match fetching.get(digest).and_then(std::sync::Weak::upgrade) {
+                Some(turn) => turn,
+                None => {
+                    let turn = Arc::new(tokio::sync::Mutex::new(()));
+                    fetching.insert(digest.to_owned(), Arc::downgrade(&turn));
+                    turn
+                }
+            }
+        };
+        turn.lock_owned().await
     }
 
     /// The compile kept for `digest`, if one is.
@@ -280,6 +312,16 @@ impl Engine {
                         .map_err(not_instantiated)?;
                 instance
                     .cyfr_catalyst_run()
+                    .call_run(&mut store, input)
+                    .await
+            }
+            Kind::Formula => {
+                let instance =
+                    formula_world::Formula::instantiate_async(&mut store, component, &self.formula)
+                        .await
+                        .map_err(not_instantiated)?;
+                instance
+                    .cyfr_formula_run()
                     .call_run(&mut store, input)
                     .await
             }

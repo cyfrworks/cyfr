@@ -4,7 +4,9 @@
 #
 # Check or build the WASM runner's crate (apps/locus/runner):
 #   scripts/runner.sh check   rustfmt's check, clippy with every warning an
-#                             error, and the crate's tests
+#                             error, the crate's tests, and its formula
+#                             tests again with each runner held to one
+#                             processor (taskset), a runner's default
 #   scripts/runner.sh build   the release binary; prints its path
 #
 # Every cargo step is --locked to the committed Cargo.lock, under the Rust
@@ -15,7 +17,7 @@
 # build.
 #
 # Exit 0 when every step passed, cargo's status at the first that failed,
-# 64 on usage, 69 without cargo, rustfmt or clippy.
+# 64 on usage, 69 without cargo, rustfmt, clippy or (for check) taskset.
 set -uo pipefail
 
 usage() { echo "usage: $0 check|build" >&2; exit 64; }
@@ -29,9 +31,11 @@ case "$1" in
       cargo "$tool" --version >/dev/null 2>&1 ||
         { echo "runner: cargo $tool is not installed for rust-toolchain.toml's release" >&2; exit 69; }
     done
+    command -v taskset >/dev/null || { echo "runner: no taskset on PATH (util-linux)" >&2; exit 69; }
     cargo fmt --check || exit
     cargo clippy --locked --all-targets -- -D warnings || exit
-    cargo test --locked
+    cargo test --locked || exit
+    CYFR_TEST_RUNNER_CPUS=1 cargo test --locked --test formula
     ;;
   build)
     cargo build --locked --release || exit

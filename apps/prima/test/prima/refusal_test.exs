@@ -330,6 +330,7 @@ defmodule Prima.RefusalTest do
     {:answer_refused, :unauthenticated},
     {:stale_head, :conflict},
     {:setup_closed, :forbidden},
+    {:removed_here, :forbidden},
     {:not_set_up, :setup_required},
     {:no_person, :not_found},
     {:invitation_invalid, :not_found},

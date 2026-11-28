@@ -474,7 +474,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     # table constraint, so each rule is spelled once per adapter.
     standing_known = %{
       name: "paired_clients_standing_known",
-      expr: "standing IN ('active', 'suspended', 'revoked')"
+      expr: "standing IN ('active', 'suspended', 'revoked', 'removed')"
     }
 
     holder_kind_known = %{
@@ -496,9 +496,11 @@ defmodule Arca.Repo.Migrations.Baseline do
     # (`device_public_key`, for a `device_cert` client) and its standing,
     # which alone decides what the client may do. A revoked row is
     # terminal; a standing transition revokes a person's rows in its own
-    # transaction (`Arca.SecurityTransitions`). A declared restore
-    # suspends every standing row for good: a device comes back by a fresh
-    # hello, as a new row. A protected device enrolled with a local unlock reports what holds its
+    # transaction (`Arca.SecurityTransitions`). A removed row is a device
+    # its person removed from this CYFR: its hello is refused here until
+    # they allow it again, which makes the row revoked, and no standing
+    # transition touches it. A declared restore suspends every active row
+    # for good: a device comes back by a fresh hello, as a new row. A protected device enrolled with a local unlock reports what holds its
     # key (`holder_kind`: a TPM `chip` or a passphrase-wrapped `software`
     # file) and the name it shows (`display_name`): information a person
     # reads, never an input to a decision. A passkey of the person's account
@@ -538,6 +540,13 @@ defmodule Arca.Repo.Migrations.Baseline do
 
     # A credential is one client in its athanor.
     create unique_index(:paired_clients, [:athanor_id, :source_kind, :source_id])
+    # A person holds at most one row of a device key that is active or
+    # removed in an athanor: a second hello of the key finds that row, and
+    # a removed one keeps the key out until it is allowed again.
+    create unique_index(:paired_clients, [:athanor_id, :user_id, :device_public_key],
+             where: "source_kind = 'device_cert' AND standing IN ('active', 'removed')"
+           )
+
     create index(:paired_clients, [:user_id, :standing])
     create index(:paired_clients, [:athanor_id, :standing])
     create index(:paired_clients, [:kid], where: "kid IS NOT NULL")

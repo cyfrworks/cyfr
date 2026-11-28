@@ -91,8 +91,9 @@ func TestDeviceVectors_TheFirstConnection(t *testing.T) {
 	}
 }
 
-// A refused hello as device.json pins it: the message vector is read as
-// its class and the sentence a person reads, and every refusal of a
+// A refused hello or answer as device.json pins it: each message vector,
+// a setup token that is not the CYFR's and a device removed from that
+// CYFR, is read as its class and the sentence a person reads, and every refusal of a
 // refused message the CYFR sends (no error, an error that is no object, an
 // error with no message, a field it does not carry) is not read as one.
 func TestDeviceVectors_ARefusalIsReadAsItsSentence(t *testing.T) {
@@ -131,7 +132,7 @@ func TestDeviceVectors_ARefusalIsReadAsItsSentence(t *testing.T) {
 		}
 		refused++
 	}
-	if read != 1 || refused < 4 {
+	if read != 2 || refused < 4 {
 		t.Fatalf("the fixture held %d refused messages and %d refusals of one", read, refused)
 	}
 }

@@ -65,7 +65,8 @@ defmodule PrismWeb.SystemLayer.Prompt do
       sheet's choice on it as `choice` (`Share.choice/2`); an arriving
       prompt carrying one is refused, so a choice ends with its prompt;
     * `:pairing` — nothing: the prompt reads the person's paired clients
-      itself and revokes one through `pairing.revoke` when the person asks
+      itself, and removes one through `pairing.remove` or allows a removed
+      device again through `pairing.allow_again` when the person asks
       (`PrismWeb.SystemLayer.Pairing`);
     * `:request` — a frame's request of one of the person's own acts,
       under the action `:approval`: `operation`, its name (`tool.action`),

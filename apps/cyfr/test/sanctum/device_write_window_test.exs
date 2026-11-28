@@ -126,7 +126,7 @@ defmodule Sanctum.DeviceWriteWindowTest do
       :pairing_revocation,
       Sanctum.TestContext.pairing_revocation(session_ctx, client_id)
     )
-    |> Pairing.revoke(client_id)
+    |> Pairing.remove(client_id)
   end
 
   # A handler on the repo's statements and on a confirmation's consumption:
@@ -187,7 +187,7 @@ defmodule Sanctum.DeviceWriteWindowTest do
       end)
 
     assert_receive {:window_held, held}, 5_000
-    assert {:ok, %{standing: "revoked"}} = revoke!(session_ctx, client_id)
+    assert {:ok, %{standing: "removed"}} = revoke!(session_ctx, client_id)
     send(held, :release)
     Task.await(task, 25_000)
   end

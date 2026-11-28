@@ -101,7 +101,7 @@
 #            set up with a paired device (the release fixture's `person`),
 #            and the filesystem is filled below the mark: the cell latches
 #            `depleted` and frees the file, a note write is refused, and the
-#            device's revocation is opened, listed, confirmed by that
+#            device's removal is opened, listed, confirmed by that
 #            device's answer to the CYFR's request and committed through
 #            the gate, and is still there once the cell, still depleted,
 #            has restarted.
@@ -996,11 +996,11 @@ fn args ->
 
       answer.(%{client_id: client_id})
 
-    ["revoke", root, token, client_id] ->
+    ["remove", root, token, client_id] ->
       {:ok, ctx} = Sanctum.Caller.establish({:session, token})
-      revoke = %{"action" => "revoke", "client_id" => client_id}
+      remove = %{"action" => "remove", "client_id" => client_id}
 
-      {:error, {:confirmation_required, %{id: id}}} = call.(ctx, "pairing", revoke)
+      {:error, {:confirmation_required, %{id: id}}} = call.(ctx, "pairing", remove)
       ref = Prima.Confirmation.ref(id)
 
       # The list answers only records of an authority-reducing change.
@@ -1013,7 +1013,7 @@ fn args ->
       "FIXTURE=" <> confirmed = release_fixture.(["device_confirm", ref])
       %{"ok" => %{"state" => "confirmed"}} = Jason.decode!(confirmed)
 
-      {:ok, %{standing: standing}} = call.(%{ctx | confirmation_id: id}, "pairing", revoke)
+      {:ok, %{standing: standing}} = call.(%{ctx | confirmation_id: id}, "pairing", remove)
       answer.(%{standing: standing})
 
     ["note", token] ->
@@ -1149,19 +1149,19 @@ note="$(field "$(reserve note "$reserve_token")" note)"
 [ "$note" = "{:unavailable, :storage_reserve}" ] || fail "a note write was not refused: $note"
 echo "notes.keep -> $note"
 
-standing="$(field "$(reserve revoke "$ROOT" "$reserve_token" "$client_id")" standing)" ||
-  fail "the device's revocation did not complete while depleted"
-[ "$standing" = revoked ] || fail "the revocation answered $standing"
+standing="$(field "$(reserve remove "$ROOT" "$reserve_token" "$client_id")" standing)" ||
+  fail "the device's removal did not complete while depleted"
+[ "$standing" = removed ] || fail "the removal answered $standing"
 after="$(free_bytes "$LIMITED")"
-echo "pairing.revoke, confirmed by the device's answer to its request -> $standing; it spent $((before - after)) bytes of the reserve"
+echo "pairing.remove, confirmed by the device's answer to its request -> $standing; it spent $((before - after)) bytes of the reserve"
 
-step "the depleted cell restarted: still depleted, the revocation still there"
+step "the depleted cell restarted: still depleted, the removal still there"
 reserve_stop
 reserve_start
 [ "$(field "$(reserve state)" state)" = depleted ] || fail "the restart reopened ordinary admission"
-[ "$(field "$(reserve standing "$client_id")" standing)" = revoked ] ||
-  fail "the revocation is not there after the restart"
-echo "restarted depleted; $client_id is revoked"
+[ "$(field "$(reserve standing "$client_id")" standing)" = removed ] ||
+  fail "the removal is not there after the restart"
+echo "restarted depleted; $client_id is removed"
 reserve_stop
 docker rm -f "$RESERVE_HOLDER" >/dev/null
 RESERVE_HOLDER=""

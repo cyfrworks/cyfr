@@ -81,6 +81,13 @@ pub const MAX_URL_BYTES: usize = 8192;
 pub const MAX_CALLS: usize = 64;
 pub const MAX_FETCHES: usize = 16;
 
+/// The most of those calls that guests' imports hold at once
+/// (`crate::host::Op::guest`): the other 16 places are only the runner's
+/// own calls', so no number of calls guests start keeps an attach, a
+/// renewal, a close, a fetch of a component, a denial's report or a
+/// release from a place; those wait only for each other.
+pub const MAX_GUEST_CALLS: usize = 48;
+
 /// The codes a service ends a fetch with, each with what it means
 /// (`Prima.RunnerRelay.fetch_end_codes/0`); a `fetch_end` naming any other
 /// code ends it for the transport's own failure, which that code names.
@@ -345,6 +352,9 @@ struct Open {
 #[derive(Debug, Clone)]
 pub struct Channel {
     attempts: BTreeSet<String>,
+    /// Attempts that ended with a call or fetch still outstanding: each
+    /// leaves `attempts` when its last one ends.
+    retiring: BTreeSet<String>,
     sent: u64,
     received: u64,
     calls: BTreeMap<u64, String>,
@@ -371,6 +381,7 @@ impl Channel {
         }
         Ok(Channel {
             attempts: BTreeSet::from([attempt.to_owned()]),
+            retiring: BTreeSet::new(),
             sent: 0,
             received: 0,
             calls: BTreeMap::new(),
@@ -398,7 +409,33 @@ impl Channel {
             return Err(Rebind::Busy);
         }
         self.attempts = BTreeSet::from([attempt.to_owned()]);
+        self.retiring.clear();
         Ok(())
+    }
+
+    /// The channel no longer carrying `attempt`, an attempt of the subtree
+    /// that ended: at once when nothing of it is outstanding, else when
+    /// its last call or fetch ends, whose answer is still read.
+    pub fn retire(&mut self, attempt: &str) {
+        self.retiring.insert(attempt.to_owned());
+        self.settle(attempt);
+    }
+
+    /// How many attempts the channel carries.
+    pub fn carried(&self) -> usize {
+        self.attempts.len()
+    }
+
+    // `attempt` leaves the channel if it is retiring and nothing of it is
+    // outstanding.
+    fn settle(&mut self, attempt: &str) {
+        if self.retiring.contains(attempt)
+            && !self.calls.values().any(|caller| caller == attempt)
+            && !self.fetches.values().any(|fetch| fetch.attempt == attempt)
+        {
+            self.retiring.remove(attempt);
+            self.attempts.remove(attempt);
+        }
     }
 
     /// Whether nothing is outstanding: no call unanswered, no fetch open.
@@ -619,6 +656,7 @@ impl Channel {
             Incoming::HostAnswer { re, attempt, .. } => match self.calls.get(re) {
                 Some(caller) if caller == attempt => {
                     self.calls.remove(re);
+                    self.settle(attempt);
                     Ok(())
                 }
                 Some(_other) => Err(Refusal::UnknownAttempt),
@@ -650,6 +688,7 @@ impl Channel {
             Incoming::FetchEnd { re, attempt, .. } => {
                 self.open_fetch(*re, attempt)?;
                 self.fetches.remove(re);
+                self.settle(attempt);
                 Ok(())
             }
             Incoming::AttachedFrame {
@@ -1108,12 +1147,23 @@ pub struct Relay {
     commands: tokio::sync::mpsc::UnboundedSender<Command>,
     closed: tokio::sync::watch::Receiver<bool>,
     places: std::sync::Arc<tokio::sync::Semaphore>,
+    guest_places: std::sync::Arc<tokio::sync::Semaphore>,
 }
 
 enum Command {
     Bind {
         attempt: String,
         reply: tokio::sync::oneshot::Sender<Result<(), Rebind>>,
+    },
+    Admit {
+        attempt: String,
+        reply: tokio::sync::oneshot::Sender<bool>,
+    },
+    Retire {
+        attempt: String,
+    },
+    Carried {
+        reply: tokio::sync::oneshot::Sender<usize>,
     },
     Call {
         attempt: String,
@@ -1410,6 +1460,7 @@ impl Relay {
             commands,
             closed,
             places,
+            guest_places: std::sync::Arc::new(tokio::sync::Semaphore::new(MAX_GUEST_CALLS)),
         }
     }
 
@@ -1425,6 +1476,38 @@ impl Relay {
             return Err(Rebind::Busy);
         }
         answer.await.unwrap_or(Err(Rebind::Busy))
+    }
+
+    /// Carry `attempt` too, another attempt of the subtree it carries (a
+    /// formula's child); whether it does: never on a relay that carries no
+    /// subtree or is closed.
+    pub async fn admit(&self, attempt: &str) -> bool {
+        let (reply, answer) = tokio::sync::oneshot::channel();
+        let command = Command::Admit {
+            attempt: attempt.to_owned(),
+            reply,
+        };
+        if self.commands.send(command).is_err() {
+            return false;
+        }
+        answer.await.unwrap_or(false)
+    }
+
+    /// Carry `attempt` no longer once nothing of it is outstanding: a
+    /// child that ended.
+    pub fn retire(&self, attempt: &str) {
+        let _ = self.commands.send(Command::Retire {
+            attempt: attempt.to_owned(),
+        });
+    }
+
+    /// How many attempts the relay carries: none once it is closed.
+    pub async fn carried(&self) -> usize {
+        let (reply, answer) = tokio::sync::oneshot::channel();
+        if self.commands.send(Command::Carried { reply }).is_err() {
+            return 0;
+        }
+        answer.await.unwrap_or(0)
     }
 
     /// Whether nothing is outstanding on the channel and nothing of the
@@ -1489,14 +1572,21 @@ pub struct Poster {
 }
 
 impl crate::host::Post for Poster {
-    fn place(&mut self) -> impl std::future::Future<Output = Option<crate::host::Place>> {
+    fn place(&mut self, op: Op) -> impl std::future::Future<Output = Option<crate::host::Place>> {
         let places = self.relay.places.clone();
+        let guest_places = op.guest().then(|| self.relay.guest_places.clone());
         async move {
-            places
-                .acquire_owned()
-                .await
-                .ok()
-                .map(crate::host::Place::held)
+            // A guest's call takes its share's place first, so the places
+            // past that share stay the runner's own.
+            let guest = match guest_places {
+                Some(guest_places) => Some(guest_places.acquire_owned().await.ok()?),
+                None => None,
+            };
+            let permit = places.acquire_owned().await.ok()?;
+            Some(match guest {
+                Some(guest) => crate::host::Place::held_for_guest(permit, guest),
+                None => crate::host::Place::held(permit),
+            })
         }
     }
 
@@ -1969,6 +2059,24 @@ async fn serve<R>(
                         let _ = reply.send(bound);
                         Ok(())
                     }
+                    Command::Admit { attempt, reply } => {
+                        let admitted = serving
+                            .channel
+                            .as_mut()
+                            .is_some_and(|open| open.admit(&attempt).is_ok());
+                        let _ = reply.send(admitted);
+                        Ok(())
+                    }
+                    Command::Retire { attempt } => {
+                        if let Some(open) = serving.channel.as_mut() {
+                            open.retire(&attempt);
+                        }
+                        Ok(())
+                    }
+                    Command::Carried { reply } => {
+                        let _ = reply.send(serving.channel.as_ref().map_or(0, Channel::carried));
+                        Ok(())
+                    }
                     Command::Idle { reply } => {
                         let idle = !serving.doubtful
                             && serving.channel.as_ref().is_none_or(Channel::idle);
@@ -2052,9 +2160,13 @@ async fn serve<R>(
             Command::Bind { reply, .. } => {
                 let _ = reply.send(Err(Rebind::Busy));
             }
-            Command::Idle { reply } | Command::Room { reply } => {
+            Command::Idle { reply } | Command::Room { reply } | Command::Admit { reply, .. } => {
                 let _ = reply.send(false);
             }
+            Command::Carried { reply } => {
+                let _ = reply.send(0);
+            }
+            Command::Retire { .. } => {}
             Command::Call { reply, .. } => {
                 let _ = reply.send(None);
             }

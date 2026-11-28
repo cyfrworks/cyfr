@@ -5977,7 +5977,7 @@ defmodule PrismWeb.SystemLayerTest do
            }, "Offer this key to everyone on this CYFR or to one of your threads"},
         pairing:
           {%{id: "k-pairing", kind: :pairing, action: :pairing_revocation, subject: %{}},
-           "Sign a device out of this CYFR"},
+           "Remove a device from this CYFR"},
         request: {request_prompt("k-request"), "Nothing runs until you approve."},
         confirmation: {confirmation, "A client of yours asked for a change"},
         # A question's card says what its cross does in the cross alone.
@@ -6045,36 +6045,83 @@ defmodule PrismWeb.SystemLayerTest do
   end
 
   describe "the Devices list" do
-    # This CYFR owns only its own bindings: each row signs its client out
-    # here, and the list says the key stays on the account until it is
-    # removed there.
-    test "names each row's sign-out by its kind and says removing the key ends it everywhere" do
+    # This CYFR owns only its own bindings: each row removes its client
+    # here, a removed device is allowed again beside it, and the list names
+    # the two removals apart: from this CYFR, and its key from the account.
+    test "names this CYFR's removal by each row's kind apart from removing the key everywhere" do
       device = %{
         client_id: "pcl_device",
+        standing: "active",
         source: "device_cert",
         display_name: "cyfr on mira-laptop",
         paired_at: "2026-11-07T09:00:00Z"
       }
 
-      passkey = %{client_id: "pcl_passkey", source: "passkey", paired_at: "2026-11-07T09:00:00Z"}
+      removed = %{
+        client_id: "pcl_removed",
+        standing: "removed",
+        source: "device_cert",
+        display_name: "old box",
+        paired_at: "2026-11-06T09:00:00Z"
+      }
+
+      passkey = %{
+        client_id: "pcl_passkey",
+        standing: "active",
+        source: "passkey",
+        paired_at: "2026-11-07T09:00:00Z"
+      }
 
       html =
         render_component(&PrismWeb.SystemLayer.Pairing.devices/1,
           prompt_id: "pairing-1",
-          pairing: %{clients: {:ok, [device, passkey]}},
+          pairing: %{clients: {:ok, [device, removed, passkey]}},
           myself: nil,
           button_class: ""
         )
 
-      rows = html |> LazyHTML.from_fragment() |> LazyHTML.query(~s([data-test="pairing-revoke"]))
+      doc = LazyHTML.from_fragment(html)
 
-      assert Enum.map(rows, &String.trim(LazyHTML.text(&1))) == [
-               "Sign out this device",
-               "Sign out this passkey"
+      controls =
+        for row <- Enum.to_list(LazyHTML.query(doc, ~s([data-test="pairing-client"]))) do
+          [id] = LazyHTML.attribute(row, "data-client")
+
+          buttons =
+            for button <- Enum.to_list(LazyHTML.query(row, "button")),
+                do:
+                  {hd(LazyHTML.attribute(button, "phx-click")),
+                   String.trim(LazyHTML.text(button))}
+
+          {id, buttons}
+        end
+
+      assert controls == [
+               {"pcl_device", [{"pairing_remove", "Remove from this CYFR"}]},
+               {"pcl_removed", [{"pairing_allow_again", "Allow again"}]},
+               {"pcl_passkey", [{"pairing_remove", "Sign out this passkey"}]}
              ]
 
-      assert String.replace(html, ~r/\s+/, " ") =~
-               "Removing its key from your account ends it everywhere."
+      [scope] =
+        doc
+        |> LazyHTML.query(~s([data-client="pcl_removed"] [data-test="pairing-scope"]))
+        |> Enum.to_list()
+
+      assert String.trim(LazyHTML.text(scope)) ==
+               "Removed from this CYFR: its key cannot connect here until you allow it again. " <>
+                 "Your passkey still signs you in here on that device."
+
+      assert doc
+             |> LazyHTML.query(~s([data-test="pairing-account"]))
+             |> LazyHTML.text()
+             |> String.replace(~r/\s+/, " ")
+             |> String.trim() ==
+               "Removing a device from this CYFR keeps that device's key out of this CYFR " <>
+                 "alone, until you allow it again. It signs no one out of your account: the " <>
+                 "key stays on it, and on that device your passkey still signs you in here. A " <>
+                 "device that was offline is first told this CYFR no longer takes it, and at " <>
+                 "its next unlock that it was removed here. Removing its key from your account " <>
+                 "ends it everywhere: Keys on your account, in Settings, links to your account " <>
+                 "page, where you do that."
 
       refute html =~ "Revoke"
       PrismWeb.Vocabulary.refute_vocabulary(html)
@@ -6142,6 +6189,7 @@ defmodule PrismWeb.SystemLayerTest do
     test "the times are the browser's to show in its own time zone, and an unencrypted box is told what to do" do
       device = %{
         client_id: "pcl_box",
+        standing: "active",
         source: "device_cert",
         display_name: "CYFR box",
         holder_kind: "chip",
