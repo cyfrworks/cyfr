@@ -106,7 +106,7 @@ func (s *server) handlePlace(c *client, req *protocol.Request) {
 			e.AthanorMax = *req.AthanorMax
 		}
 		p := &place{whose: whoseOf(req), entry: e}
-		// On a keeper that gives the wall a person's kept sessions run in
+		// On a keeper that gives the wall every session of a person runs in
 		// their VM, charged once by it.
 		if s.wall && c.role.spec.Kept && admission.Kinds[req.Kind] == admission.Session && req.Athanor != "" {
 			p.machine = s.machineFor(c.role, req.Athanor)
@@ -145,19 +145,6 @@ func (s *server) freePlace(c *client, id string) {
 		if p.machine != nil {
 			s.unplaced(p.machine)
 		}
-	}
-}
-
-// detachPlace takes c's place id out of its person's VM, its spawn running
-// on the host after all: from here it is charged by itself; s.mu is not
-// held.
-func (s *server) detachPlace(c *client, id string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if p := c.places[id]; p != nil && p.machine != nil {
-		s.admit(s.ledger.Detach(p.entry, now()))
-		s.unplaced(p.machine)
-		p.machine = nil
 	}
 }
 

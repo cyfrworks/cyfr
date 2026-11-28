@@ -372,21 +372,6 @@ func (l *Ledger) Drop(e *Entry, now time.Time) Events {
 	return l.step(now, false)
 }
 
-// Detach takes a session placed in a VM out of it, as when its spawn runs
-// on the host after all: from now it is charged by itself, its start's
-// allowance from its admission as any session's.
-func (l *Ledger) Detach(e *Entry, now time.Time) Events {
-	m := e.Machine
-	if m == nil {
-		return Events{}
-	}
-	e.Machine, e.base = nil, 0
-	if e.admitted && l.sessionsIn(m) == 0 {
-		m.assignedAt, m.asked = now, false
-	}
-	return l.step(now, false)
-}
-
 // Sessions is how many places are admitted in the VM m: none is a VM at
 // rest.
 func (l *Ledger) Sessions(m *Entry) int { return l.sessionsIn(m) }

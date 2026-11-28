@@ -35,9 +35,9 @@ import (
 )
 
 // A person's machine (plan V2). Where the keeper gives the VM wall (wall),
-// every disk is an image and each person's kept sessions run in a VM of
-// their own, which boots at their first session the keeper admits: the
-// person's disk is its one writable drive, the guard's machine route its
+// every disk is an image and every session of a person runs in a VM of
+// their own, a scratch one too, which boots at their first session the
+// keeper admits: the person's disk is its one writable drive, the guard's machine route its
 // one card, and the guest's keeper, under the guest's own guard, makes each
 // session's space and route inside it as this keeper makes a space on the
 // host. This keeper is the guest's keeper's one client: over the VM's
@@ -755,11 +755,40 @@ func (s *server) retryNarrowing() {
 	}
 }
 
-// startMachineSpawn starts a kept spawn of an image disk in its person's
-// VM, booting it where none runs: the VM's route widened to hold it, its
-// place and home made in the guest, its packs put there where the guest
-// holds none, its spawn there, and its standard streams joined to its
-// role's attach socket. It answers as startSpawn does.
+// startScratchInMachine starts a spawn of no kept home whose place is in
+// its person's VM there, as every session of theirs runs: the person's
+// disk is the VM's drive, so where they have none, their programs all
+// scratch, its record and its image are made first, as a home's first make
+// makes them, with no home. The guest's keeper runs the session in its own
+// pool, its home on the guest's own tmpfs, and scrubs it at the release
+// (vm.GuestPersonPoolSpec). It answers as startSpawn does.
+func (s *server) startScratchInMachine(c *client, req *protocol.Request, athanor, reach string, e egress, limits admission.Limits) (*spawn, string) {
+	unlock := s.lockDisk(athanor)
+	d, code := s.recordDisk("spawn "+req.ID, athanor, "")
+	switch {
+	case code != "":
+	case d.Form != home.FormImage:
+		s.log.Warn("spawn %s refused: its person's disk is of the directory form, which this machine retires at its start, and its retirement has not finished", req.ID)
+		code = protocol.CodeUnavailable
+	default:
+		if err := s.cfg.Kept.EnsureImage(athanor, d.UID, s.startTool); err != nil {
+			s.log.Error("spawn %s: its person's disk: %v", req.ID, err)
+			code = protocol.CodeInternal
+		}
+	}
+	unlock()
+	if code != "" {
+		return nil, code
+	}
+	at := keptAt{athanor: athanor, disk: s.cfg.Kept.DiskPath(athanor), uid: d.UID, image: true}
+	return s.startMachineSpawn(c, req, at, reach, e, limits)
+}
+
+// startMachineSpawn starts a spawn of an image disk's person in their VM,
+// booting it where none runs: the VM's route widened to hold it, its place
+// made in the guest and its home where it is kept, its packs put there
+// where the guest holds none, its spawn there, and its standard streams
+// joined to its role's attach socket. It answers as startSpawn does.
 func (s *server) startMachineSpawn(c *client, req *protocol.Request, at keptAt, reach string, e egress, limits admission.Limits) (*spawn, string) {
 	sp, code := s.startInMachine(c, req, at, reach, e, limits)
 	if sp != nil && code != "" {
@@ -786,7 +815,7 @@ func (s *server) startInMachine(c *client, req *protocol.Request, at keptAt, rea
 	if code := s.bootMachine(m, at, c.role); code != "" {
 		return nil, code
 	}
-	sp := &spawn{id: randomHex(16), client: c, kept: true, machine: m, account: KeptAccount(at.uid), keptHome: req.Home,
+	sp := &spawn{id: randomHex(16), client: c, kept: req.HomeMode == protocol.HomeKept, machine: m, account: KeptAccount(at.uid), keptHome: req.Home,
 		home: at.path, work: at.work, disk: at.disk, reach: reach, egress: e, limits: limits,
 		retired: make(chan struct{}), guestEnded: make(chan struct{}), announced: make(chan struct{}),
 		guestEvents: make(chan []byte, 4)}
@@ -852,15 +881,17 @@ func (s *server) guestStart(l *guestLink, sp *spawn, req *protocol.Request, at k
 	sp.guestPlace = place
 	s.mu.Unlock()
 	drop := func() { _ = l.ctl.Send(protocol.Request{V: protocol.Version, Type: protocol.TypeDrop, Place: place}) }
-	answer, err = l.ask(protocol.Request{V: protocol.Version, Type: protocol.TypeHomeMake, ID: randomHex(16), Home: req.Home,
-		Athanor: at.athanor}, l.guestWait)
-	if err != nil {
-		return s.guestLost(l, sp, "making its home", err)
-	}
-	if answer.Type != "home_made" {
-		drop()
-		s.log.Warn("spawn %s refused: its VM's keeper refused its home: %s", sp.id, answer.Code)
-		return guestCode(answer.Code)
+	if req.HomeMode == protocol.HomeKept {
+		answer, err = l.ask(protocol.Request{V: protocol.Version, Type: protocol.TypeHomeMake, ID: randomHex(16), Home: req.Home,
+			Athanor: at.athanor}, l.guestWait)
+		if err != nil {
+			return s.guestLost(l, sp, "making its home", err)
+		}
+		if answer.Type != "home_made" {
+			drop()
+			s.log.Warn("spawn %s refused: its VM's keeper refused its home: %s", sp.id, answer.Code)
+			return guestCode(answer.Code)
+		}
 	}
 	var packs *protocol.SpawnPacks
 	if req.Packs != nil {
@@ -884,7 +915,7 @@ func (s *server) guestStart(l *guestLink, sp *spawn, req *protocol.Request, at k
 	token := randomHex(32)
 	spawnReq := protocol.Request{V: protocol.Version, Type: protocol.TypeSpawn, ID: randomHex(16), Place: place,
 		Pool: vm.GuestPool, Argv: req.Argv, Env: req.Env, Rlimits: req.Rlimits, Control: req.Control,
-		Attach: &protocol.Attach{Path: vm.GuestAttachPath, Token: token}, HomeMode: protocol.HomeKept, Home: req.Home,
+		Attach: &protocol.Attach{Path: vm.GuestAttachPath, Token: token}, HomeMode: req.HomeMode, Home: req.Home,
 		HomeMaxBytes: req.HomeMaxBytes, Pty: req.Pty, Hosts: req.Hosts, Packs: packs}
 	wait := l.expectSpawn(spawnReq.ID, sp)
 	if err := l.ctl.Send(spawnReq); err != nil {

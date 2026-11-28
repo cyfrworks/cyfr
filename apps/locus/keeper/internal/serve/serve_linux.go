@@ -912,7 +912,7 @@ type server struct {
 	imageDisks bool
 	// wall says this keeper gives the VM wall (plan D18): it was given KVM
 	// and the image's guest, and a first session in a VM fits rest; then
-	// imageDisks too, and every kept session of a person runs in their VM.
+	// imageDisks too, and every session of a person runs in their VM.
 	// vms is each person's VM by their athanor (machine_linux.go), and
 	// bootVM starts one, startVM in production.
 	wall      bool
@@ -1527,9 +1527,20 @@ func (s *server) startSpawn(c *client, req *protocol.Request, limits admission.L
 	if req.HomeMode == protocol.HomeKept {
 		return s.startKeptSpawn(c, req, spec.Reach, reach, known, limits)
 	}
-	// A place in a person's VM whose spawn runs on the host is charged by
-	// itself from here.
-	s.detachPlace(c, req.Place)
+	// Every session of a person runs in their VM where the keeper gives the
+	// wall, a scratch one too: its place names the VM.
+	s.mu.Lock()
+	var m *machine
+	if p := c.places[req.Place]; p != nil {
+		m = p.machine
+	}
+	s.mu.Unlock()
+	if m != nil {
+		if !known {
+			return nil, protocol.CodeUnknownPool
+		}
+		return s.startScratchInMachine(c, req, m.athanor, spec.Reach, reach, limits)
+	}
 	s.mu.Lock()
 	var p *pool.Pool
 	if known {

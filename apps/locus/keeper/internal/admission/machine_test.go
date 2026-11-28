@@ -203,22 +203,6 @@ func TestARefusalCountsAPersonsVMAsTheirsThroughTheirSessions(t *testing.T) {
 	}
 }
 
-// A session placed in a VM whose spawn runs on the host after all is
-// charged by itself from then on, and leaves the VM at rest.
-func TestADetachedSessionIsChargedByItself(t *testing.T) {
-	l := New(4096*mib, false)
-	m := NewMachine("backends", "ath_a", testGuest, nil)
-	a := inVM(m, "p1")
-	admitted(t, l.Place(a, at(0)), a)
-	l.Detach(a, at(1))
-	if a.Machine != nil || l.Sessions(m) != 0 {
-		t.Fatal("the session is still the VM's")
-	}
-	if got := l.charge(a, at(1)); got != 384*mib {
-		t.Fatalf("the detached session is charged %d, want its allowance", got)
-	}
-}
-
 // The start that boots a person's VM needs room for its allowance and the
 // VM's own together: in a pool that holds one but not both it waits, and
 // is refused at once where no pool of W could hold both; a start in a VM
