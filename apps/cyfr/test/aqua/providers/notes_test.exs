@@ -269,7 +269,7 @@ defmodule Aqua.Providers.NotesTest do
     end
   end
 
-  test "a turn's call keeps a note from inside the chain, kept by Aqua, and only an OIDC session's chain may",
+  test "a turn's call keeps a note from inside the chain, kept by Aqua, and only a signed-in session's chain may",
        %{ctx: ctx, mine: mine} do
     auth = granting([{"notes", "keep"}, {"notes", "read"}])
 

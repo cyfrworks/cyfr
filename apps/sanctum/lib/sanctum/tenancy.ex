@@ -305,7 +305,7 @@ defmodule Sanctum.Tenancy do
 
   @doc """
   The context a recovered turn continues under: the person-shaped
-  context the sender's sign-in would carry (`auth_method: :oidc`, the
+  context the sender's sign-in would carry (`auth_method: :session`, the
   person's full permission vocabulary), rebuilt from the turn's rows when
   the sender's own context is gone, and carrying `origin`, the origin
   stored with the work it continues (`Prima.Origin`'s wire spelling, as
@@ -381,7 +381,7 @@ defmodule Sanctum.Tenancy do
       athanor_id: athanor_id,
       permissions: Sanctum.Atoms.person_permissions(),
       scope: :athanor,
-      auth_method: :oidc,
+      auth_method: :session,
       origin: origin,
       authenticated: true
     )

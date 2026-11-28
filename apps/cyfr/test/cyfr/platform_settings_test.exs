@@ -52,7 +52,7 @@ defmodule Cyfr.PlatformSettingsTest do
         user_id: "ops-#{System.unique_integer([:positive])}",
         provider: "github",
         permissions: [:*],
-        auth_method: :oidc,
+        auth_method: :session,
         authenticated: true,
         platform_admin: true
       )

@@ -53,7 +53,7 @@ defmodule Sanctum.EstablishBoundaryTest do
     # prove one cannot read the other.
     "apps/sanctum/test/support/test_context.ex" => 2,
     # `PrismConnCase`'s signed-in caller: the context a LiveView test's
-    # session would have carried had a real OIDC sign-in produced it.
+    # session would have carried had a real sign-in produced it.
     "apps/cyfr/test/support/prism_conn_case.ex" => 1
   }
 

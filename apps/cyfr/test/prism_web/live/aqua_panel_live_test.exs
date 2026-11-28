@@ -1208,7 +1208,7 @@ defmodule PrismWeb.AquaPanelLiveTest do
       athanor_id: athanor.id,
       permissions: [:*],
       scope: :athanor,
-      auth_method: :oidc,
+      auth_method: :session,
       authenticated: true
     )
   end

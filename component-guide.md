@@ -772,10 +772,10 @@ Shapes nest at most 8 deep, and a manifest whose `results` does not hold this gr
 ### `cyfr:http/fetch` — `request(json) -> string`
 Request: `{"connection": "api_key", "method": "POST", "url": "...", "headers": {...}, "body": "..."}`
 Success: `{"status": 200, "headers": {...}, "body": "..."}`
-Error: `{"error": {"type": "invalid_json|invalid_request|domain_blocked|method_blocked|scheme_blocked|rate_limited|timeout|private_ip_blocked|dns_error|redirect_credentials|request_too_large|response_too_large|http_error", "message": "..."}}`
-(`invalid_json`/`invalid_request` are the same malformed-input types every host interface uses; `http_error` is a transport failure after validation passed.)
+Error: `{"error": {"type": "invalid_json|invalid_request|credential_header_refused|domain_blocked|method_blocked|scheme_blocked|rate_limited|timeout|private_ip_blocked|dns_error|redirect_credentials|request_too_large|response_too_large|request_failed|http_error", "message": "..."}}`
+(`invalid_json`/`invalid_request` are the same malformed-input types every host interface uses; `credential_header_refused` is an attached request carrying a credential header of its own; `request_failed` is a request the runner could not send, its execution already having as many requests in flight as its relay carries; `http_error` is a transport failure after the request was sent. CYFR's refusal of an attached request answers CYFR's own type and sentence.)
 
-The engine resolves no name: CYFR resolves each request's host and pins the address it connects to under the run's consent, deciding every request again as it is sent, and a pin it refuses reaches the component as `private_ip_blocked` (a metadata address, or a private one the consent does not grant), `dns_error` (a host that resolves to nothing) or `redirect_credentials`. The host follows no redirect: a `3xx` answer is the component's, and its next request to the `Location` is the redirect's next hop, pinned from the request it came from. A hop to another scheme or host is refused as `redirect_credentials`, since it would carry the request's credentials to another origin, and the engine never sends `Authorization` or `Cookie` across origins.
+The engine resolves no name: CYFR resolves each request's host and pins the address it connects to under the run's consent, deciding every request again as it is sent, and a pin it refuses reaches the component as `domain_blocked` (a host outside the consent's domains, refused before it is resolved), `private_ip_blocked` (a metadata address, or a private one the consent does not grant), `dns_error` (a host that resolves to nothing) or `redirect_credentials`. The host follows no redirect: a `3xx` answer is the component's, and its next request to the `Location` is the redirect's next hop, pinned from the request it came from. A hop to another scheme or host is refused as `redirect_credentials`, since it would carry the request's credentials to another origin, and the engine never sends `Authorization` or `Cookie` across origins.
 
 **Binary data** — base64 encode request body and/or request base64 response:
 ```json
@@ -874,12 +874,17 @@ streaming::close(handle);
 
 | Error | Cause |
 |-------|-------|
-| `stream_limit` | Max 3 concurrent streams per execution |
-| `timeout` | The stream outlasted the component's consented `timeout`, or no data arrived for that long |
-| `request_failed` | The request failed before any response (connection refused, TLS, DNS) |
+| `stream_limit` | Max 3 concurrent streams per execution, or as many requests in flight as the execution's relay carries: a stream closed before its answer ended counts until the answer has drained |
+| `timeout` | The stream outlasted the component's consented `timeout`, or no data arrived for that long, or its connection could not be made in time |
+| `request_failed` | The request failed before any response (connection refused, TLS, DNS), or after it was sent |
 | `stream_error` | The transport broke mid-stream |
 | `invalid_handle` | Unknown or already-closed handle |
 | `response_too_large` | Cumulative data exceeds `max_response_size` |
+| `encoding_error` | A piece of the answer that is not UTF-8 text |
+| `http_error` | CYFR's own failure of an attached stream's upstream |
+
+A stream's request is refused as a fetch's is.
+Request refusals: `invalid_json|invalid_request|credential_header_refused|domain_blocked|method_blocked|scheme_blocked|rate_limited|private_ip_blocked|dns_error|redirect_credentials|request_too_large`
 
 ### `cyfr:vault/read` — `get(name) -> result<string, string>`
 Returns `Ok(value)` or `Err("access-denied: {name}")`. Requires a granted profile whose projection includes `name`. Private vault material is served from an entry that permits disclosure, projected to the `fields` the need declared: each name answers the value of the entry field the grant maps it to. An attach-only entry refuses the read. Public `provides` values are also readable through this interface without a vault entry.

@@ -294,6 +294,41 @@ defmodule Opus.HostListenerTest do
       assert row(fixture).status == "running"
     end
 
+    # A host outside the edge's domains is refused by CYFR's pin, for its
+    # domain, and recorded there once, as the domain refusal it is: no
+    # runner records a pin's refusal again.
+    test "a pin for a host outside the edge's domains is answered domain, recorded once as domain_blocked",
+         %{url: url} do
+      fixture =
+        AttemptFixtures.attached!(
+          ctx: Sanctum.TestContext.local(:api),
+          service_id: @service,
+          authority: %{
+            Prima.Authority.zero()
+            | resources: %Prima.Authority.Blob.Edge{
+                egress: %{
+                  domains: ["api.example.test"],
+                  methods: ["GET"],
+                  schemes: ["https"],
+                  private_ips: []
+                }
+              }
+          }
+        )
+
+      assert {200, %{"v" => 3, "error" => "domain"}} =
+               call(url, fixture, "egress_pin", %{
+                 "url" => "https://outside.example.org/v1/items?token=sk-outside",
+                 "purpose" => "fetch"
+               })
+
+      {:ok, rows} = Arca.PolicyLog.list(Prima.Actor.in_athanor(fixture.athanor_id), limit: 100)
+      assert [row] = Enum.filter(rows, &(&1.component_ref == fixture.component_ref))
+      assert row.event_type == "domain_blocked" and row.decision == "denied"
+      assert row.decision_reason == "fetch: host outside.example.org is not in the egress domains"
+      assert row(fixture).status == "running"
+    end
+
     test "a report lapses the reporting service's attempts", %{url: url} do
       fixture =
         AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api), service_id: @service)

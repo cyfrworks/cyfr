@@ -39,8 +39,8 @@ defmodule CyfrWeb.Ingress do
 
   On the proxy listener it then sets the request's scheme and port to
   `https` and 443: the proxy terminated the TLS the client spoke, so a URL
-  the request names itself by (`Plug.Conn.request_url/1`, an OpenID
-  Connect callback's) is the home's own address. And it registers the
+  the request names itself by (`Plug.Conn.request_url/1`, the OAuth
+  grant callback's) is the home's own address. And it registers the
   endpoint's HSTS (`CyfrWeb.Plugs.ApiSecurityHeaders.maybe_hsts/1`) on
   every response the listener sends, success, error and a refusal made
   before any pipeline alike.

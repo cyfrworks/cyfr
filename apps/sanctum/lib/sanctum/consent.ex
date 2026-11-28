@@ -336,7 +336,7 @@ defmodule Sanctum.Consent do
   @doc """
   Whether `ctx` is a person at a screen: the gate's own reading of an
   action declared `consent: :interactive` (`Sanctum.Consent.Authz`), an
-  authenticated `:oidc` session or a paired device outside the guest
+  authenticated signed-in session (`:session`) or a paired device outside the guest
   plane, and never a key.
   """
   @spec authorize_interactive(Sanctum.Context.t()) ::
@@ -346,7 +346,7 @@ defmodule Sanctum.Consent do
   @doc """
   Whether `ctx`, a call inside a running chain, is a person's own: the
   gate's reading of an action declared `consent: :interactive` on the
-  in-chain plane (`Sanctum.Consent.Authz`), an authenticated `:oidc`
+  in-chain plane (`Sanctum.Consent.Authz`), an authenticated `:session`
   chain, and never a key's.
   """
   @spec authorize_interactive_in_chain(Sanctum.Context.t()) ::

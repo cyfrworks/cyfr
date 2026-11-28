@@ -205,7 +205,7 @@ defmodule Sanctum.ContextTest do
           permissions: [:storage_read],
           namespace: "testns",
           authenticated: true,
-          auth_method: :oidc
+          auth_method: :session
         )
 
       assert {:error, {:missing_permission, :execute} = reason} =
@@ -239,7 +239,7 @@ defmodule Sanctum.ContextTest do
           permissions: [:execute],
           namespace: "testns",
           authenticated: true,
-          auth_method: :oidc
+          auth_method: :session
         )
 
       assert :ok == Context.authorize(ctx, :execute)
@@ -253,7 +253,7 @@ defmodule Sanctum.ContextTest do
           permissions: [:storage_read],
           namespace: "testns",
           authenticated: true,
-          auth_method: :oidc
+          auth_method: :session
         )
 
       assert {:error, _} = Context.authorize(ctx, :execute)
@@ -267,7 +267,7 @@ defmodule Sanctum.ContextTest do
           permissions: [:storage_read],
           namespace: "testns",
           authenticated: true,
-          auth_method: :oidc
+          auth_method: :session
         )
 
       record = %{user_id: "u1", athanor_id: "ath_test"}
@@ -282,7 +282,7 @@ defmodule Sanctum.ContextTest do
           permissions: [:storage_read],
           namespace: "testns",
           authenticated: true,
-          auth_method: :oidc
+          auth_method: :session
         )
 
       # u2's record, same athanor — there is no owner gate, so u1 is
@@ -299,7 +299,7 @@ defmodule Sanctum.ContextTest do
           permissions: [:storage_read, :admin],
           namespace: "testns",
           authenticated: true,
-          auth_method: :oidc
+          auth_method: :session
         )
 
       record = %{user_id: "other_user", athanor_id: "ath_test"}
@@ -319,7 +319,7 @@ defmodule Sanctum.ContextTest do
           permissions: [:storage_read],
           namespace: "testns",
           authenticated: true,
-          auth_method: :oidc
+          auth_method: :session
         )
 
       resource = %{user_id: "u1", athanor_id: "ath_test"}
@@ -334,7 +334,7 @@ defmodule Sanctum.ContextTest do
           permissions: [:storage_read],
           namespace: "testns",
           authenticated: true,
-          auth_method: :oidc
+          auth_method: :session
         )
 
       resource = %{user_id: "u2", athanor_id: "ath_test"}
@@ -351,7 +351,7 @@ defmodule Sanctum.ContextTest do
           permissions: [:storage_read],
           namespace: "testns",
           authenticated: true,
-          auth_method: :oidc
+          auth_method: :session
         )
 
       record = %{user_id: "u1", athanor_id: "ath_b"}
@@ -368,7 +368,7 @@ defmodule Sanctum.ContextTest do
           permissions: [:storage_read, :admin],
           namespace: "testns",
           authenticated: true,
-          auth_method: :oidc
+          auth_method: :session
         )
 
       record = %{user_id: "other_user", athanor_id: "ath_a"}
@@ -381,7 +381,7 @@ defmodule Sanctum.ContextTest do
           user_id: "platform_admin",
           permissions: [:storage_read, :*],
           namespace: "testns",
-          auth_method: :oidc
+          auth_method: :session
         )
 
       record = %{user_id: "other_user", athanor_id: "ath_x"}
@@ -396,7 +396,7 @@ defmodule Sanctum.ContextTest do
           permissions: [:storage_read],
           namespace: "testns",
           authenticated: true,
-          auth_method: :oidc
+          auth_method: :session
         )
 
       record = %{user_id: "u1", athanor_id: "ath_test"}
@@ -413,7 +413,7 @@ defmodule Sanctum.ContextTest do
           permissions: [:storage_read],
           namespace: "testns",
           authenticated: true,
-          auth_method: :oidc
+          auth_method: :session
         )
 
       assert {:error, {:malformed_resource, :execution}} =
@@ -428,7 +428,7 @@ defmodule Sanctum.ContextTest do
           permissions: [:storage_read],
           namespace: "testns",
           authenticated: true,
-          auth_method: :oidc
+          auth_method: :session
         )
 
       # An untagged tenant-owned record is refused, never read as untenanted.
@@ -447,7 +447,7 @@ defmodule Sanctum.ContextTest do
           permissions: [:storage_read],
           namespace: "testns",
           authenticated: true,
-          auth_method: :oidc
+          auth_method: :session
         )
 
       assert {:error, {:malformed_resource, :execution}} =
@@ -462,7 +462,7 @@ defmodule Sanctum.ContextTest do
           permissions: [:storage_read],
           namespace: "testns",
           authenticated: true,
-          auth_method: :oidc
+          auth_method: :session
         )
 
       assert {:error, {:malformed_resource, :tenant}} =
@@ -477,7 +477,7 @@ defmodule Sanctum.ContextTest do
           permissions: [:storage_read, :*, :admin],
           namespace: "testns",
           authenticated: true,
-          auth_method: :oidc
+          auth_method: :session
         )
 
       record = %{user_id: "other_user", athanor_id: "ath_b"}
@@ -494,7 +494,7 @@ defmodule Sanctum.ContextTest do
           permissions: [:storage_read],
           namespace: "testns",
           authenticated: true,
-          auth_method: :oidc
+          auth_method: :session
         )
 
       record = %{user_id: "u1", athanor_id: "ath_test"}
@@ -608,7 +608,7 @@ defmodule Sanctum.ContextTest do
           athanor_id: Sanctum.TestContext.athanor_id(),
           permissions: Context.person_permissions(),
           scope: :athanor,
-          auth_method: :oidc,
+          auth_method: :session,
           authenticated: true
         )
 
@@ -708,7 +708,7 @@ defmodule Sanctum.ContextTest do
       assert {ctx.auth_method, ctx.client_id, ctx.confirmation_id, ctx.origin} ==
                {:device, "pcl_1", "cnf_1", :interactive}
 
-      plain = Context.build(user_id: "usr_1", auth_method: :oidc, authenticated: true)
+      plain = Context.build(user_id: "usr_1", auth_method: :session, authenticated: true)
       assert {plain.client_id, plain.confirmation_id, plain.origin} == {nil, nil, nil}
 
       assert_raise ArgumentError, ~r/origin must be a Prima.Origin/, fn ->
@@ -723,8 +723,8 @@ defmodule Sanctum.ContextTest do
       assert Context.internal().origin == nil
     end
 
-    test "TestContext.local/0 impersonates a logged-in user (:oidc)" do
-      assert Sanctum.TestContext.local().auth_method == :oidc
+    test "TestContext.local/0 impersonates a logged-in user (:session)" do
+      assert Sanctum.TestContext.local().auth_method == :session
     end
   end
 
@@ -735,7 +735,7 @@ defmodule Sanctum.ContextTest do
       request_id: "req_1",
       client_ip: "203.0.113.7",
       permissions: [:execute],
-      auth_method: :oidc,
+      auth_method: :session,
       authenticated: true
     ]
 

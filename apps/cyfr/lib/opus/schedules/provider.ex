@@ -1038,7 +1038,7 @@ defmodule Opus.Schedules.Provider do
   # never an API key or a tincture's frame credential, and never under an
   # origin that is no person's own act.
   defp aqua_writer(%Context{auth_method: method, api_key_id: nil, frame: nil, origin: origin})
-       when method in [:oidc, :device] and origin in [nil, :interactive],
+       when method in [:session, :device] and origin in [nil, :interactive],
        do: :ok
 
   defp aqua_writer(_ctx), do: {:error, :aqua_line_by_person}
@@ -1049,7 +1049,7 @@ defmodule Opus.Schedules.Provider do
   # records it. A crew member's job turn and the soul's turn its reply
   # opens carry the origin of the work they belong to (`Aqua.Crew`).
   defp turn_writer?(
-         %Context{authenticated: true, auth_method: :oidc, api_key_id: nil, frame: nil},
+         %Context{authenticated: true, auth_method: :session, api_key_id: nil, frame: nil},
          turn
        ),
        do: turn.origin in ["interactive", "schedule"]

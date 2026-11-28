@@ -1101,7 +1101,7 @@ defmodule Compendium.OCI.ClientTest do
       athanor_id: Sanctum.TestContext.local().athanor_id,
       permissions: [:*],
       scope: :athanor,
-      auth_method: :oidc,
+      auth_method: :session,
       namespace: "alice",
       authenticated: true
     )

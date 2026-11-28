@@ -321,7 +321,7 @@ defmodule Cyfr.ConsentPreviewRenderTest do
         athanor_id: "ath_test",
         permissions: [:*],
         scope: :athanor,
-        auth_method: :oidc,
+        auth_method: :session,
         authenticated: true
       )
 

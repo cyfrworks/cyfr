@@ -56,7 +56,7 @@ defmodule Compendium.OCI.BlobTest do
       athanor_id: "ath_test",
       permissions: [:*],
       scope: :athanor,
-      auth_method: :oidc,
+      auth_method: :session,
       namespace: @namespace,
       authenticated: true
     )
