@@ -46,13 +46,13 @@ defmodule CyfrWeb.Ingress do
   passes, as Phoenix's own check passes it; the endpoint's `check_origin`
   is off, since it cannot see the listener.
 
-  On the proxy listener it then sets the request's scheme and port to
+  On the proxy listener it also sets the request's scheme and port to
   `https` and 443: the proxy terminated the TLS the client spoke, so a URL
   the request names itself by (`Plug.Conn.request_url/1`, the OAuth
   grant callback's) is the home's own address. And it registers the
   endpoint's HSTS (`CyfrWeb.Plugs.ApiSecurityHeaders.maybe_hsts/1`) on
   every response the listener sends, success, error and a refusal made
-  before any pipeline alike.
+  before any pipeline alike, its own socket refusal among them.
   """
 
   @behaviour Plug
@@ -178,12 +178,10 @@ defmodule CyfrWeb.Ingress do
 
   @impl Plug
   def call(conn, {ingress, module, opts, sockets}) do
-    conn = Sanctum.ClientIp.put_ingress(conn, ingress)
+    conn = conn |> Sanctum.ClientIp.put_ingress(ingress) |> listener(ingress)
 
     if socket_origin?(conn, ingress, sockets) do
-      conn
-      |> listener(ingress)
-      |> module.call(opts)
+      module.call(conn, opts)
     else
       CyfrWeb.ApiError.halt(conn, 403, :origin_rejected, nil)
     end

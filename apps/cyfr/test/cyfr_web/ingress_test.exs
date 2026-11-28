@@ -158,6 +158,20 @@ defmodule CyfrWeb.IngressTest do
     end
   end
 
+  # The status line and the headers of the answer, read to the
+  # connection's close, each header name in lower case.
+  defp head(port, path, headers) do
+    socket = request(port, "GET", path, [{"connection", "close"} | headers])
+    [head, _body] = socket |> read_to_close("") |> String.split("\r\n\r\n", parts: 2)
+    [status | lines] = String.split(head, "\r\n")
+
+    {status,
+     for line <- lines do
+       [name, value] = String.split(line, ":", parts: 2)
+       {String.downcase(name), String.trim(value)}
+     end}
+  end
+
   # The status line of the answer to a WebSocket upgrade, on a connection
   # this closes once it is read.
   defp upgrade(port, headers) do
@@ -280,6 +294,20 @@ defmodule CyfrWeb.IngressTest do
                answer(ports.proxy, "/live/websocket?vsn=2.0.0", [{"origin", private}])
 
       assert Jason.decode!(body) == %{"code" => "forbidden", "message" => "Origin not allowed"}
+    end
+
+    test "the refusal carries the endpoint's HSTS at the proxy listener and none at the loopback listener",
+         %{ports: ports} do
+      Prima.Test.Env.put_app_env(:cyfr, :hsts, :endpoint_on_proxy)
+
+      for {port, origin, hsts} <- [
+            {ports.proxy, Sanctum.private_address(), ["max-age=63072000; includeSubDomains"]},
+            {ports.loopback, @browser, []}
+          ] do
+        {status, headers} = head(port, "/live/websocket?vsn=2.0.0", [{"origin", origin}])
+        assert status == "HTTP/1.1 403 Forbidden"
+        assert for({"strict-transport-security", value} <- headers, do: value) == hsts
+      end
     end
 
     # A browser serialises an http origin on port 80 with no port, and
