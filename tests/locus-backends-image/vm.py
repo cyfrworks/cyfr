@@ -65,7 +65,11 @@ which hold nothing of the container's /probe mount.
   container's. Started again on the same kept volume without the devices,
   the keeper says it gives spaces, and the person's next session is
   refused, the keeper naming the disk image that runs only in a VM, with
-  no VM booted and nothing of the image changed.
+  no VM booted and nothing of the image changed. Then the README's way out
+  on such a machine: with Locus stopped, that person's disk's record in
+  `.disks` and its image beside it removed from the homes volume, the next
+  start makes them a new disk, of the directory form, and their session
+  opens on it.
 - Boot identity: one person's two sessions, each a space of its own, read
   one boot identity, and a second person's session another, each person's
   VM under their own disk's uid.
@@ -635,6 +639,28 @@ def disk_and_boot(image):
         expect(after == before and not folder, "nothing of the image changes, and no disk folder is made",
                [before, after])
         expect(disk_record(stack, owner) == record, "the disk's record is as it was")
+
+        # The README's way out on a machine that no longer gives the devices: with Locus stopped, the person's disk
+        # removed by hand from the homes volume, its record in .disks and its image beside it, as root removes them;
+        # the next start makes the person a new disk, of the directory form, and their session opens on it.
+        stack.compose("stop", SERVICE)
+        removed = run("docker", "run", "--rm", *imagesuite.run_name(f"{stack.project}-remove"), "--network", "none",
+                      "-u", "0", "--mount", f"type=volume,source={stack.project}_homes,target={KEPT_ROOT}",
+                      "--entrypoint", "rm", image, f"{KEPT_ROOT}/.disks/{person_of(owner)}.json", image_of(owner),
+                      check=False)
+        expect(removed.returncode == 0, "the person's disk's record and image are removed from the homes volume",
+               removed.stderr)
+        stack.up(work_bytes=WORK)
+        eventually(lambda: SPACES_SAID in stack.logs(), "the keeper's next start without the devices", timeout_s=30)
+        c = synced(stack, [(owner, [vm_probe()])])
+        again = sh(c, owner, 'id -u; ls -A "$HOME"', "again")
+        renewed = disk_record(stack, owner)
+        expect(again["status"] == 0 and renewed["form"] == "directory" and renewed["homes"] == [row_of(owner)],
+               "the person's next session opens on a new disk, of the directory form", [again, renewed])
+        image_left = read_output(stack.observe(f"test -e {image_of(owner)} && echo present || echo absent"),
+                                 "the probe of the old image").strip()
+        expect(image_left == "absent" and not vmms(stack), "the old image stays gone and no VM boots",
+               [image_left, vmms(stack)])
     finally:
         stack.down()
 
