@@ -516,7 +516,6 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
     const f = new BaseWindow({width: 1280, height: 860, show: false, title: "CYFR", autoHideMenuBar: true, backgroundColor: "#071013",
       ...(screen ? {frame: false} : {})})
     frame = f
-    f.on("focus", keyboardToContent)
     f.on("resize", layout)
     f.on("closed", () => {
       if (frame === f) frame = null
@@ -540,18 +539,6 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
       retired.add(f)
       f.destroy()
     }
-  }
-
-  // The keyboard goes to the content's page whenever the app's window gains
-  // focus, and to a content opened in a window that has it (openContent),
-  // as a BrowserWindow gives its own page the keyboard: a BaseWindow gives
-  // none of its views focus. Without it a page whose document committed
-  // before the compositor activated its window, as the chooser's move on
-  // to the device's lock page does in the fresh window every lock on the
-  // box's screen opens, would not take the keys typed to it until a press
-  // inside it. The rail is never given the keyboard this way.
-  function keyboardToContent() {
-    if (content && !content.webContents.isDestroyed()) content.webContents.focus()
   }
 
   // Where the content is: the window's content area beside the rail.
@@ -755,7 +742,6 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
     })
     frame.contentView.addChildView(v)
     layout()
-    if (frame.isFocused()) contents.focus()
     // Its route's answer belongs to this view: one that comes once the
     // view has gone or been replaced does nothing.
     routedThen(ses, proxy, () => {

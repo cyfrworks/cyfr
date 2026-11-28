@@ -33,6 +33,13 @@
 #   5 x.test stopped, This box pressed on the rail shows This box's lock
 #     page, and the six words open This box's Prism there, its Lock read
 #     in its top bar: This box holds a session of the box's key again
+#   6 Prism's Lock at This box, the window it opens activated only once
+#     its lock page shows: the six words typed with no press in the field
+#     open This box's Prism again. On a box labwc activates that window a
+#     few milliseconds before or after the page loads, by chance; the row
+#     forces the later order, labwc mapping the window unfocused (a rule
+#     the row adds to its own copy of the screen's rc.xml) and the row
+#     activating it (wlrctl), as a person types at a keyboard
 #
 # No idle row: the idle lock reaches the same lock entry Prism's Lock does
 # (internal/desktop.Service.lockStep; TestEveryLockOnABoxIsOneStep moves
@@ -316,11 +323,30 @@ if [ "${1:-}" = --session ]; then
       failed 5 "This box's sessions are not of the box's key: $(cat "$OUT/held-box")"
     fi
   }
+  # ---- 6: a lock page activated after it loaded takes the words typed ----
+  row6() {
+    sed -i 's#<action name="Maximize"/>#<action name="Maximize"/><action name="Unfocus"/>#' "$OUT/labwc/rc.xml" &&
+      grep -q 'name="Unfocus"' "$OUT/labwc/rc.xml" && labwc --reconfigure ||
+      { failed 6 "labwc did not take the rule that maps a window unfocused"; return; }
+    within 60 sees "Lock" || { failed 6 "This box's Prism shows no Lock"; return; }
+    push "Lock" || { failed 6 "This box's Lock could not be pressed"; return; }
+    within 30 live box -eq 0 || { failed 6 "This box still holds a session after its Lock: $(cat "$OUT/held-box")"; return; }
+    within 30 sees "CYFR is locked" || { failed 6 "no lock page showed after This box's Lock"; return; }
+    ! wlrctl toplevel find title:CYFR state:focused ||
+      { failed 6 "the lock page's window was activated before the row did: the later order was not forced"; return; }
+    wlrctl toplevel focus title:CYFR || { failed 6 "the lock page's window could not be activated"; return; }
+    within 10 wlrctl toplevel find title:CYFR state:focused || { failed 6 "the lock page's window was not activated"; return; }
+    typed "$WORDS" && key Return || { failed 6 "wtype did not type"; return; }
+    within 60 live box -ge 1 || { failed 6 "the six words typed to the lock page with no press opened nothing: This box holds no session: $(cat "$OUT/held-box" 2>/dev/null)"; return; }
+    within 60 prism || { failed 6 "This box's Prism did not show: its Lock was not read in its top bar"; return; }
+    verdict PASS "row 6: This box locked by its Prism's Lock, the window it opened activated only once its lock page showed, and the six words typed there with no press opened This box's Prism: it holds $(py "$(cat "$OUT/held-box")" 'len(d["live"])') session(s) of the box's key"
+  }
   row1
   row2
   row3
   row4
   row5
+  row6
   finish
 fi
 
