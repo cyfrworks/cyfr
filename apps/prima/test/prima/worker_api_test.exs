@@ -117,8 +117,8 @@ defmodule Prima.WorkerAPITest do
   end
 
   test "the vectors' body bound and window are the wire's" do
-    assert @vectors["max_body_bytes"] == Prima.HostAPI.max_body_bytes()
-    assert @vectors["window_ms"] == WorkerAuth.window_ms()
+    assert @vectors["max_body_bytes"] === Prima.HostAPI.max_body_bytes()
+    assert @vectors["window_ms"] === WorkerAuth.window_ms()
   end
 
   test "the keeper's refusal of a runner is held as the reason, sentence and held its vector names" do
@@ -137,7 +137,7 @@ defmodule Prima.WorkerAPITest do
         %{reason: c["reason"], message: c["message"]}
         |> then(&if Map.has_key?(c, "held"), do: Map.put(&1, :held, c["held"]), else: &1)
 
-      assert WorkerAPI.keeper_refusal(refused) == expected, c["why"]
+      assert WorkerAPI.keeper_refusal(refused) === expected, c["why"]
       assert WorkerAPI.valid_refusal_message?(c["message"]), c["why"]
     end
   end
@@ -146,7 +146,7 @@ defmodule Prima.WorkerAPITest do
     %{"carried" => carried, "not_carried" => not_carried} = @vectors["report_refusals"]
     assert carried != [] and not_carried != []
     for code <- carried, do: assert(is_binary(WorkerAPI.runner_refusal(code)), code)
-    for code <- not_carried, do: assert(WorkerAPI.runner_refusal(code) == nil, code)
+    for code <- not_carried, do: assert(WorkerAPI.runner_refusal(code) === nil, code)
   end
 
   # A runner holds one of its machine's runtime uids, so a refusal for want

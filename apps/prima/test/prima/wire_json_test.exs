@@ -43,7 +43,7 @@ defmodule Prima.WireJsonTest do
     assert length(@vectors["writes"]) >= 14
 
     for %{"why" => why, "value_json" => json, "bytes_b64" => bytes} <- @vectors["writes"] do
-      assert Jason.encode!(Jason.decode!(json)) == Base.decode64!(bytes), why
+      assert Jason.encode!(Jason.decode!(json)) === Base.decode64!(bytes), why
     end
   end
 
@@ -57,10 +57,10 @@ defmodule Prima.WireJsonTest do
         %{"text" => text, "bytes_hex" => bytes} <- cases do
       case bytes do
         nil ->
-          assert :error == decode.(text), "#{section} #{inspect(text)}"
+          assert :error === decode.(text), "#{section} #{inspect(text)}"
 
         hex ->
-          assert {:ok, Base.decode16!(hex, case: :lower)} == decode.(text),
+          assert {:ok, Base.decode16!(hex, case: :lower)} === decode.(text),
                  "#{section} #{inspect(text)}"
       end
     end

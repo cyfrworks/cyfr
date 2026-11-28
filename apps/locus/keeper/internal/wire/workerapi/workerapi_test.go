@@ -172,10 +172,19 @@ func TestTheKeepersRefusalsAreHeldInTheVectorsWords(t *testing.T) {
 			}
 			h = decoded.(map[string]any)
 		}
+		// The held expected is taken before the call, and the case's own
+		// read again after it: a refusal that changes the keeper's held in
+		// place differs from both.
+		wantHeld, _ := wirejson.Write(h)
 		got := KeeperRefusal(*c.Code, h)
 		gotHeld, _ := wirejson.Write(got.Held)
-		wantHeld, _ := wirejson.Write(h)
-		if got.Reason != c.Reason || got.Message != c.Message || string(gotHeld) != string(wantHeld) {
+		var again map[string]any
+		if len(c.Held) > 0 {
+			read, _ := wirejson.Read(c.Held)
+			again = read.(map[string]any)
+		}
+		caseHeld, _ := wirejson.Write(again)
+		if got.Reason != c.Reason || got.Message != c.Message || string(gotHeld) != string(wantHeld) || string(gotHeld) != string(caseHeld) {
 			t.Errorf("%s: %+v", c.Why, got)
 		}
 	}

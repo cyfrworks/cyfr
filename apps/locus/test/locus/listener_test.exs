@@ -467,7 +467,7 @@ defmodule Locus.ListenerTest do
     client =
       Enum.reduce(requests, connect(ctx.port), fn request, client ->
         {answer, client} = listener_request(ctx, request, client)
-        assert {answer.status, answer.body} == {request["status"], request["answer"]}, c["name"]
+        assert {answer.status, answer.body} === {request["status"], request["answer"]}, c["name"]
         assert answer.headers["connection"] == nil, c["name"]
         client
       end)
@@ -481,12 +481,12 @@ defmodule Locus.ListenerTest do
 
     case {c["answer"], c["reading"]} do
       {nil, "ok"} ->
-        assert answer.status == c["status"], c["name"]
+        assert answer.status === c["status"], c["name"]
         assert %{"v" => 3, "ok" => %{"service" => "wrk_local"}} = Jason.decode!(answer.body)
         assert answer.headers["connection"] == nil, c["name"]
 
       {bytes, nil} when is_binary(bytes) ->
-        assert {answer.status, answer.body} == {c["status"], bytes}, c["name"]
+        assert {answer.status, answer.body} === {c["status"], bytes}, c["name"]
         assert_answer(answer, c["status"], bytes, connection)
     end
 
@@ -1567,12 +1567,12 @@ defmodule Locus.ListenerTest do
 
     test "a nonce is fresh or replayed at each presentation as worker_api.json says" do
       table = nonce_table()
-      assert @worker_api["window_ms"] == @window_ms
+      assert @worker_api["window_ms"] === @window_ms
       assert length(@worker_api["nonces"]) >= 7
 
       for %{"nonce" => nonce, "now" => now, "fresh" => fresh} <- @worker_api["nonces"] do
         expected = if fresh, do: :ok, else: {:error, :replayed}
-        assert Listener.fresh(table, nonce, now, @window_ms) == expected, "#{nonce} at #{now}"
+        assert Listener.fresh(table, nonce, now, @window_ms) === expected, "#{nonce} at #{now}"
       end
     end
 
