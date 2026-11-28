@@ -79,6 +79,16 @@ which hold nothing of the container's /probe mount.
   executable runs from there, and nothing there is written, made or
   renamed. A newer generation put while that session runs reaches a new
   session in the same VM, while the old session still reads its own.
+- Scratch sessions in a VM: a person whose programs are all scratch has no
+  disk until their first session makes its record and image and boots
+  their VM in it, the image's allocated size printed. That session is
+  refused the Locus container's own address, cyfr's host API and
+  endpoint, the VM's names address off its port 53 and the VM's gateway.
+  Beside a person's kept session a scratch one runs in the same VM. A
+  scratch session released leaves the next of the person's nothing: no
+  marker in the first's home, its own or /tmp, no process of the first's
+  uid, and none of the first's home's bytes on the guest's filesystem of
+  scratch homes.
 - The ledger (plan native-locus section 23), on the pool report: while a
   person's first session starts, `used` holds at least a session's
   allowance and the VM's own; past the allowance's time it is the VMM's
@@ -92,13 +102,17 @@ which hold nothing of the container's /probe mount.
   `free` are what they were before its boot, beside the second VM's own
   charge.
 - Losses on the host's side: the VMM killed with two sessions running ends
-  both, the VM is released, and the person's next session boots a new VM;
-  the guard killed during a session's start refuses that start and ends
-  the VM, and the keeper, whose role's route went with the guard, ends and
-  its container starts again behind the guard's successor, where the
-  person's next session boots a VM; the keeper killed while a VM holds the
-  disk is started again, and the person's next session boots a VM on the
-  same image, finding what the last one wrote.
+  both, each told it ended by a signal with no exit status and no memory
+  cause, the program's status naming SIGKILL; the VM is released, and the
+  person's next session boots a new VM. The guard killed during a
+  session's start ends the VM, which the keeper says before it says it
+  ends, its role's route gone with the guard; the start is refused 503 or
+  its connection cut, and once the container starts again behind the
+  guard's successor the person's next session boots a VM. The keeper
+  killed while a VM holds the disk ends its container's life, and every
+  VMM with it: the next life finds no VMM and no group of the VM, and the
+  person's next session boots a VM on the same image, finding what the
+  last one synced.
 - Measurements, printed. At a guest of 2,560 MiB: the guest's memory and
   processors as the keeper configured the VMM, the VMM's resident memory
   and its group's memory after a person's first boot and after an idle
@@ -130,8 +144,8 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from harness import (  # noqa: E402
-    CONNECT_PROBE, GUARD, HERE, KEPT_ROOT, POOL_FIRST, POOL_LAST, REFUSED, RELEASE, ROLE, SERVICE, Stack,
-    disk_of, eventually, expect, home_of, owner_of, require_docker,
+    CONNECT_PROBE, ENDPOINT_ADDRESS, GUARD, HERE, HOME_ROOT, KEPT_ROOT, NETWORK, POOL_FIRST, POOL_LAST, PORT, REFUSED,
+    RELEASE, ROLE, SERVICE, VERSION, Stack, disk_of, eventually, expect, home_of, owner_of, require_docker,
 )
 import imagesuite  # noqa: E402
 from imagesuite import PROJECT_PREFIX, read_output, run  # noqa: E402
@@ -372,7 +386,18 @@ NO_VM_SAID = "is on a disk image, which runs only in its person's VM, and this m
 BOOTED_SAID = "booted, its VMM pid"
 GIVE_WAY_SAID = "a person's VM ends: it held no session, and a start needs its room"
 RELEASED_SAID = "a person's VM is released: its group is empty, its route withdrawn and its device let go"
-GUARD_LOST_SAID = re.compile(r"egress: the guard's connection \d+ ended")
+SESSION_RELEASED_SAID = "released in its person's VM"
+# The guard's connection ended (serve's guardLost): the VMs routed over it are killed, each group found empty, and
+# then, the role's route having gone too, the keeper says it ends.
+VMS_KILLED_SAID = re.compile(r"egress: the guard's connection (\d+) ended; (\d+) people's VMs are killed")
+# A VM whose boot ended after the guard's loss found the VMs routed over its connection is killed by its boot, which
+# sees the connection lost once the VM is set (serve's bootMachine).
+BOOT_LOST_SAID = "a person's VM ends: the guard's connection its route was made over ended as it booted"
+KEEPER_ENDS_SAID = re.compile(r"egress: the guard's connection (\d+) ended under the routes of roles .*; "
+                              r"the keeper ends")
+# A keeper that could not end or remove a group an earlier one left refuses to start (cgroup.Tree.Role), which ends
+# them silently otherwise.
+EARLIER_GROUPS_SAID = re.compile(r"the groups? an earlier keeper left")
 # The VMM, as its stage executes it (internal/vm's Firecracker).
 FIRECRACKER = "/usr/lib/cyfr/guest/firecracker"
 
@@ -389,8 +414,9 @@ with open(os.path.join(HERE, "probe-backend.mjs"), encoding="utf-8") as _probe:
 
 
 def vm_probe(name="probe", **program):
-    """The probe program, a kept one, as a session in a VM runs it: its source carried in its environment, since a
-    VM's root is the image's programs alone and holds nothing of the container's /probe mount."""
+    """The probe program, a kept one unless `program` names its home, as a session in a VM runs it: its source carried
+    in its environment, since a VM's root is the image's programs alone and holds nothing of the container's /probe
+    mount."""
     return {"name": name, "command": 'exec node --input-type=module -e "$PROBE_SOURCE"',
             "env": {"PROBE_SOURCE": PROBE_SOURCE}, "home": "kept", **program}
 
@@ -421,6 +447,12 @@ def sh(c, owner, script, key="k", row=None, program="probe"):
     """`script` run by `sh -c` in the session of `key` of the owner's program, in its home `row` (`row_of` by
     default): the probe's answer."""
     return packs.run_in(c.mcp(owner, program, key=key, home_id=row or row_of(owner)), script)
+
+
+def scratch_sh(c, owner, script, key="k", program="scratch"):
+    """`script` run by `sh -c` in the scratch session of `key` of the owner's program, opened with no home: the probe's
+    answer."""
+    return packs.run_in(c.mcp(owner, program, key=key), script)
 
 
 def boot_id(c, owner, key="k", row=None, program="probe"):
@@ -724,6 +756,131 @@ def packs_in_vm(image):
         stack.down()
 
 
+# What a scratch session writes in its home, to find on the guest's filesystem of scratch homes.
+MARKER_BYTES = 4 * MIB
+# The filesystem that holds $HOME: its blocks, free blocks and block size.
+STATFS = "stat -f -c '%b %f %S' \"$HOME\""
+
+
+def statfs_used(line):
+    """The bytes a filesystem holds, from its STATFS line."""
+    blocks, free, size = (int(field) for field in line.split())
+    return (blocks - free) * size
+
+
+def scratch_in_vm(image):
+    """A person's scratch sessions run in their VM: a scratch-only person's first one makes their disk and boots it,
+    reaching nothing of the host; beside a kept session one joins the same VM, and one released leaves the next
+    nothing of it."""
+    stack = wall_stack("scratch", image)
+    alone, both = owner_of("vm-scratch-only"), owner_of("vm-scratch-kept")
+    # The probe with no home and no hosts: a scratch program of the island's reach.
+    scratch = vm_probe("scratch", home="scratch")
+    try:
+        up_wall(stack)
+        c = synced(stack, [(alone, [scratch])])
+
+        def scratch_boot(owner, key):
+            read = scratch_sh(c, owner, "cat /proc/sys/kernel/random/boot_id", key)["stdout"].strip()
+            if not BOOT_ID.match(read):
+                sys.exit(f"FAIL: {owner['athanor']}'s scratch session {key} reads no boot identity: {read!r}")
+            return read
+
+        record_path = f"{KEPT_ROOT}/.disks/{person_of(alone)}.json"
+        expect(imagesuite.read_word(stack.observe(f"test -e {record_path} || test -e {image_of(alone)} && echo present "
+                                                  "|| echo absent"), ("present", "absent"),
+                                    "the probe of the disk's record and image") == "absent",
+               "a person whose programs are all scratch has no disk: no record and no image")
+        guest = scratch_boot(alone, "a")
+        record = disk_record(stack, alone)
+        stat, folder = image_stat(stack, alone)
+        machines = vmms(stack)
+        expect(guest != container_boot(stack), "the scratch-only person's first session runs in a VM: its boot "
+               "identity is not the container's", guest)
+        expect(record["form"] == "image" and record["athanor"] == alone["athanor"] and stat["type"] == "regular file"
+               and stat["uid"] == record["uid"] and not folder,
+               "their first session made their disk's record, of the image form, and its image", [record, stat, folder])
+        expect(list(machines.values()) == [record["uid"]], "their one VMM runs under the disk's uid", machines)
+        print(f"a scratch-only person's image after its first boot: {allocated(stack, alone)} MiB allocated of "
+              f"{stat['size'] >> 30} GiB", flush=True)
+
+        guard = stack.inspect(stack.guard)
+        own = guard["NetworkSettings"]["Networks"][f"{stack.project}_{NETWORK}"]["IPAddress"]
+        host_api = next(e.split("=", 1)[1] for e in guard["Config"]["Env"] if e.startswith("CYFR_GUARD_HOST_API="))
+        _pid, api = vmm_process(stack)
+        targets = {
+            # The Locus container's address on the locus network, its guard's, whose namespace it shares, at the
+            # backends role's port, which the guard forwards to the role's listener: the wire that starts every session.
+            f"{own}:{PORT}": "the Locus container's own address",
+            # cyfr's address on the locus network, at its host API, the one port of cyfr's the guard opens to a route
+            # (the runtime role's).
+            host_api: "cyfr's host API",
+            # cyfr's fixed endpoint address, the control plane's, which the guard refuses every route.
+            f"{ENDPOINT_ADDRESS}:4000": "cyfr's endpoint",
+            # The address the guard's name sockets answer the VM at, on the bridge in the VMM's own namespace on the
+            # host, off the one port they serve.
+            "169.254.0.53:80": "the VM's names address off its port 53",
+            # The guard's end of the VM's route, in the namespace the Locus container shares, at the backends role's
+            # port.
+            f"{vm_gateway(stack, api)}:{PORT}": "the VM's gateway",
+        }
+        codes = connects(c, alone, list(targets), "a", None, "scratch")
+        for target, what in targets.items():
+            expect(codes.get(target) in REFUSED, f"the scratch session is refused {what}, {target}, at once", codes)
+
+        status, answer, _ = c.sync(both, [vm_probe(), scratch], lease_ms=60_000)
+        expect(status == 200, f"{both['athanor']}'s programs are synced", answer)
+        kept = boot_id(c, both, "k")
+        uid = disk_record(stack, both)["uid"]
+        theirs = [pid for pid, u in vmms(stack).items() if u == uid]
+        first_boot = scratch_boot(both, "first")
+        expect(first_boot == kept and [pid for pid, u in vmms(stack).items() if u == uid] == theirs
+               and len(theirs) == 1,
+               "beside the person's kept session their scratch session runs in the same VM, its place needing no "
+               "second", [kept, first_boot, theirs, vmms(stack)])
+
+        marked = scratch_sh(c, both, f"id -u; echo \"$HOME\"; {STATFS}; head -c {MARKER_BYTES} /dev/urandom > "
+                                     f"\"$HOME/marker\" && echo marked > /tmp/marker && {STATFS}", "first")
+        lines = marked["stdout"].splitlines()
+        expect(marked["status"] == 0 and len(lines) == 4, "the first scratch session writes its markers", marked)
+        first_uid, first_home = int(lines[0]), lines[1]
+        before, written = statfs_used(lines[2]), statfs_used(lines[3])
+        expect(POOL_FIRST <= first_uid <= POOL_LAST and first_home.startswith(HOME_ROOT + "/"),
+               "the scratch session runs under a uid of the guest's pool, its home under the scratch homes' root",
+               lines[:2])
+        expect(written - before >= MARKER_BYTES, "the guest's filesystem of scratch homes holds the marker's bytes",
+               [before, written])
+        session = c.mcp(both, "scratch", key="first").session
+        released = stack.logs().count(SESSION_RELEASED_SAID)
+        expect(c.close(both, session)[0] == 200, "the first scratch session is closed")
+        eventually(lambda: stack.logs().count(SESSION_RELEASED_SAID) > released,
+                   "the first scratch session's release in its VM", timeout_s=30)
+
+        looked = scratch_sh(c, both, f"id -u; echo \"$HOME\"; cat /proc/sys/kernel/random/boot_id; {STATFS}; "
+                                     f"for p in '{first_home}/marker' \"$HOME/marker\" /tmp/marker; do "
+                                     "test -e \"$p\" && echo \"found $p\" || echo \"no $p\"; done; "
+                                     "for d in /proc/[0-9]*; do awk '/^Uid:/ {print \"proc\", $2}' \"$d/status\" "
+                                     "2>/dev/null; done", "second")
+        lines = looked["stdout"].splitlines()
+        expect(looked["status"] == 0 and len(lines) > 7, "a second scratch session of the person looks", looked)
+        second_uid, second_home, second_boot = int(lines[0]), lines[1], lines[2]
+        after = statfs_used(lines[3])
+        uids = [line.split()[1] for line in lines[7:] if line.startswith("proc ")]
+        expect(second_boot == first_boot, "the second scratch session runs in the same VM", [first_boot, second_boot])
+        expect(lines[4:7] == [f"no {first_home}/marker", f"no {second_home}/marker", "no /tmp/marker"],
+               "it finds neither of the first's markers, in the first's home, its own or /tmp", lines[4:7])
+        # A space's /proc is its own pid namespace's: every process it lists is the second session's own.
+        expect(uids and (second_uid == first_uid or str(first_uid) not in uids),
+               f"it sees no process of the first's uid {first_uid} but its own", uids)
+        expect(after <= before + MIB, "the guest's filesystem of scratch homes holds no more than before the first's "
+               "marker: the first's home went at its release", [before, written, after])
+        print(f"the second scratch session ran under uid {second_uid}, the first under {first_uid}; the guest's "
+              f"scratch homes held {before / MIB:.1f} MiB before the first's marker, {written / MIB:.1f} MiB with it "
+              f"and {after / MIB:.1f} MiB after its release", flush=True)
+    finally:
+        stack.down()
+
+
 class Sampler(threading.Thread):
     """Reads the pool report's `used` and whether a VMM runs, every fifth of a second until stopped: (monotonic time,
     used, a VMM running) each time, or the failure that stopped it."""
@@ -878,7 +1035,8 @@ def ledger_pressure(image):
 
 
 def vmm_killed(image):
-    """The VMM killed with two sessions running ends both and releases the VM; the next session boots a new one."""
+    """The VMM killed with two sessions running ends both, each told it ended by a signal and the program's status
+    naming SIGKILL, and releases the VM; the next session boots a new one."""
     stack = wall_stack("vmm-killed", image)
     owner = owner_of("vm-killed")
     try:
@@ -895,13 +1053,25 @@ def vmm_killed(image):
         killed = run("docker", "exec", "-u", "0", stack.container, "kill", "-KILL", str(pid), check=False)
         expect(killed.returncode == 0, "the VMM is killed by the container's root", killed.stderr)
         answers = [eventually(lambda s=s: ended(c, owner, s), "a session to end with its VM") for s in sessions]
-        print(f"the sessions' last answers: {[{k: v for k, v in a.items() if k != 'lines'} for a in answers]}",
-              flush=True)
-        expect(all(not a["running"] for a in answers), "both sessions end with their VMM", answers)
+        told = [{k: v for k, v in a.items() if k != "lines"} for a in answers]
+        print(f"the sessions' last answers: {told}", flush=True)
+        # The VMM's end is each session's `exited` with signal SIGKILL and, its group's counters showing no OOM kill,
+        # memory null (serve's machineEnded and followGuest). The backends role takes it as an end by a signal
+        # (Locus.Backends.Backend's exit_end): a recv answers `running: false` with no `exit_code`, which only an
+        # exit of the process's own accord with a status carries, and no `ended_by`, which only a memory cause does.
+        expect(all(not a["running"] and "exit_code" not in a and "ended_by" not in a for a in answers),
+               "both sessions end with their VMM, each told it ended by a signal, with no exit status and no memory "
+               "cause", told)
         eventually(lambda: stack.logs().count(RELEASED_SAID) > said and not vmms(stack) and group_gone(stack, uid),
                    "the VM to be released, its VMM and its group gone")
         program = c.program(owner)
         print(f"the program's status after the VMM's kill: {program}", flush=True)
+        # Each session's end counts as a crash of its key, whose error is the program's (Locus.Backends.Owners'
+        # crashed): the end by SIGKILL spelled as the role spells an exit with no status.
+        expect(program["error"] == "exited code=null signal=SIGKILL" and program["restarts"] == 2
+               and program["sessions"] == 0 and program["status"] == "idle",
+               "the program's status names the sessions' end by SIGKILL, counts both, and runs no session, no key "
+               "failed", program)
         again = boot_id(c, owner, "c")
         expect(again != first and container_boot(stack) != again,
                "the person's next session boots a new VM", [first, again])
@@ -910,8 +1080,9 @@ def vmm_killed(image):
 
 
 def guard_lost_at_start(image):
-    """The guard killed during a session's start refuses the start and ends the VM; the keeper ends with its role's
-    route, and once its container is started again behind the guard's successor, the person's next session boots."""
+    """The guard killed during a session's start ends the VM, which the keeper says before it says it ends with its
+    role's route; the start is refused or its connection cut, and once the container is started again behind the
+    guard's successor, the person's next session boots."""
     stack = wall_stack("guard-lost", image)
     owner = owner_of("vm-guard-lost")
     try:
@@ -924,7 +1095,7 @@ def guard_lost_at_start(image):
             try:
                 result["open"] = c.open(owner, "probe", key="a", home_id=row_of(owner), timeout=90)
             except Exception as error:  # the guard's loss cuts the request's connection, in whatever form
-                result["error"] = repr(error)
+                result["error"] = error
         opening = threading.Thread(target=start, daemon=True)
         opening.start()
         eventually(lambda: vmms(stack) or "open" in result or "error" in result, "the VMM to start", timeout_s=60)
@@ -936,18 +1107,46 @@ def guard_lost_at_start(image):
         stack.guard_exec(f"kill -KILL {' '.join(pids)}")
         opening.join(120)
         print(f"the start's answer: {result}", flush=True)
-        expect("error" in result or result.get("open", (200,))[0] != 200, "the start under way is refused", result)
+        # The start meets the guard's loss one of two ways, by timing. Most often its connection is cut: the guard's
+        # end takes its container's published port and the card of the namespace the role listens in, and the
+        # keeper's guardLost kills the backends role's group, whose listener holds the request; the client reads an
+        # OSError, a reset, a close with no answer or its timeout. Or the role answers the keeper's refusal first,
+        # within the 20 ms the keeper's kill of the VM's group polls for its end (cgroup.Group.KillBy) before it kills
+        # the role's: 503 guard_unavailable where the session's widening of the VM's route or the start's last check
+        # met the guard's loss (serve's joinMachine, startInMachine), 503 unavailable where the start's link to the
+        # guest met the VM's end (serve's machineLink, guestLost), each the role's refusal by its code
+        # (Locus.Backends.Owners' spawn_refusal; the statuses of tests/fixtures/locus_backends.json).
+        refusals = [(503, {"error": code, "version": VERSION}) for code in ("guard_unavailable", "unavailable")]
+        expect(isinstance(result.get("error"), OSError) or result.get("open") in refusals,
+               "the start under way is refused 503 guard_unavailable or unavailable, or its connection is cut", result)
 
         def again():
             info = stack.inspect(stack.container)
             return info["RestartCount"] > restarts and info["State"]["Running"]
         eventually(again, "the Locus container to start again", timeout_s=120)
-        logs = stack.logs()
-        print("the keeper said: " + " | ".join(line.split("|", 1)[-1].strip() for line in logs.splitlines()
-                                              if GUARD_LOST_SAID.search(line) or "keeper ends" in line), flush=True)
-        expect(GUARD_LOST_SAID.search(logs), "the keeper says the guard's connection ended", logs[-3000:])
         stack.published()
-        expect(not vmms(stack), "the VM ended with the guard", vmms(stack))
+        # The container's first life: its lines before the next life's keeper says it gives the wall, as each says
+        # at its start (serve's giveWall).
+        lines = stack.logs().splitlines()
+        starts = [i for i, line in enumerate(lines) if WALL_SAID in line]
+        first = lines[:starts[1]] if len(starts) > 1 else lines
+
+        def said(pattern):
+            return [(i, found) for i, line in enumerate(first) if (found := pattern.search(line))]
+        killed, ends = said(VMS_KILLED_SAID), said(KEEPER_ENDS_SAID)
+        at_boot = [i for i, line in enumerate(first) if BOOT_LOST_SAID in line]
+        print("the keeper's first life said: " + " | ".join(
+            first[i].split("|", 1)[-1].strip() for i in sorted([i for i, _ in killed + ends] + at_boot)), flush=True)
+        # guardLost says the VMs are killed only once each one's group is empty, and says the keeper ends after it;
+        # a VM whose boot had not yet set it when the loss looked is killed by its boot instead, before the keeper
+        # ends.
+        by_loss = len(killed) == 1 and killed[0][1].group(2) == "1" and killed[0][1].group(1) == ends[0][1].group(1) \
+            if len(ends) == 1 else False
+        by_boot = not killed and len(at_boot) == 1 and len(ends) == 1 and at_boot[0] < ends[0][0]
+        expect(len(ends) == 1 and (by_loss and killed[0][0] < ends[0][0] or by_boot),
+               "in the container's first life the keeper says the guard's connection ended and its one VM is killed, "
+               "and then that it ends: the VM ended with the guard, before the container started again",
+               "\n".join(first[-60:]))
         c = synced(stack, [(owner, [vm_probe()])])
         booted = boot_id(c, owner, "b")
         expect(booted != container_boot(stack) and len(vmms(stack)) == 1,
@@ -957,13 +1156,16 @@ def guard_lost_at_start(image):
 
 
 def keeper_lost(image):
-    """The keeper killed while a VM holds the disk: started again, the person's next session boots a VM on the same
-    image and finds what the last one wrote."""
+    """The keeper killed while a VM holds the disk ends its container's life, and every VMM with it: the next life
+    finds no VMM and no group of the VM, and the person's next session boots a VM on the same image and finds what the
+    last one synced."""
     stack = wall_stack("keeper-lost", image)
     owner = owner_of("vm-keeper-lost")
     try:
         up_wall(stack)
         c = synced(stack, [(owner, [vm_probe()])])
+        # The guest's page cache ends with its VMM: what the session wrote is on the image for the next VM to find
+        # only once the guest has synced it to its disk.
         wrote = sh(c, owner, 'echo kept > "$HOME/kept.txt" && sync && echo written', "a")
         expect(wrote["stdout"] == "written\n", "a session writes a file in its home", wrote)
         first = boot_id(c, owner, "a")
@@ -979,6 +1181,14 @@ def keeper_lost(image):
             return info["RestartCount"] > restarts and info["State"]["Running"]
         eventually(again, "the Locus container to start again", timeout_s=60)
         stack.published()
+        # The keeper is the one child of the container's PID 1, docker-init (docker-compose.yml's `init: true`), which
+        # exits as its child does: the kernel then ends the container's PID namespace and every VMM in it, as the
+        # stage's parent-death signal ends each VMM with its keeper besides (keeper_killed). The next life's keeper
+        # ends any group the last one left before it admits anything, and says so only where it cannot.
+        logs = stack.logs()
+        expect(not vmms(stack) and group_gone(stack, record["uid"]) and not EARLIER_GROUPS_SAID.search(logs),
+               "before the next life admits anything no VMM of the last one runs and the VM's group is gone, and its "
+               "keeper meets no group of the last it cannot end", [vmms(stack), logs[-3000:]])
         c = synced(stack, [(owner, [vm_probe()])])
         later = boot_id(c, owner, "b")
         kept = sh(c, owner, 'cat "$HOME/kept.txt"', "b")
@@ -1032,10 +1242,21 @@ def vmm_resident(stack, pid):
 
 
 def vmm_config(stack, api):
-    """The guest's processors and memory as the keeper configured its VMM, read from the VMM's own API."""
+    """The VMM's configuration as the keeper made it, read from the VMM's own API: the guest's processors and memory
+    (`machine-config`) and its kernel's command line (`boot-source`) among it."""
     text = read_output(stack.observe(f"curl -sS --max-time 5 --unix-socket {api} http://localhost/vm/config"),
                        "the VMM's configuration")
-    return json.loads(text)["machine-config"]
+    return json.loads(text)
+
+
+def vm_gateway(stack, api):
+    """The VM's gateway, the guard's end of the VM's route, as the keeper gives it to the guest's kernel: the
+    `cyfr.net=<inner>,<gateway>` of its command line (internal/vm's NetArg)."""
+    args = vmm_config(stack, api)["boot-source"]["boot_args"]
+    found = re.search(r"(?:^| )cyfr\.net=[0-9.]+,([0-9.]+)(?: |$)", args)
+    if not found:
+        sys.exit(f"FAIL: the guest's command line names no route: {args!r}")
+    return found.group(1)
 
 
 def idle_minute(c, owner):
@@ -1066,7 +1287,7 @@ def measured_at(stack, c, owner, put_largest):
     guest = int(sh(c, owner, "awk '/^MemTotal:/ {print $2}' /proc/meminfo", "a")["stdout"].strip()) // 1024
     uid = disk_record(stack, owner)["uid"]
     pid, api = vmm_process(stack)
-    config = vmm_config(stack, api)
+    config = vmm_config(stack, api)["machine-config"]
     booted = memory_line(stack, uid, pid)
     disk = allocated(stack, owner)
     peak = read_output(stack.guard_exec("cat /sys/fs/cgroup/memory.peak /sys/fs/cgroup/memory.current"),
@@ -1128,16 +1349,16 @@ def vm_cost(stack, c, owner, size, run_number):
     expect(sh(c, owner, "echo answered", "a")["stdout"] == "answered\n", "the person's first session answers")
     uid = disk_record(stack, owner)["uid"]
     pid, api = vmm_process(stack)
-    config = vmm_config(stack, api)
+    config = vmm_config(stack, api)["machine-config"]
     time.sleep(20)  # sleep-ok: reading (a) is of the VM at rest, nothing asked of it for 20 s
     at_rest = cost_reading(stack, uid, pid)
     meminfo = sh(c, owner, "cat /proc/meminfo", "a")["stdout"]
     answering = cost_reading(stack, uid, pid)
     mem_total = int(next(line.split()[1] for line in meminfo.splitlines() if line.startswith("MemTotal:"))) * 1024
-    released = stack.logs().count("released in its person's VM")
+    released = stack.logs().count(SESSION_RELEASED_SAID)
     session = c.mcp(owner, "probe", key="a", home_id=row_of(owner)).session
     expect(c.close(owner, session)[0] == 200, "the session is closed")
-    eventually(lambda: stack.logs().count("released in its person's VM") > released, "the session's release")
+    eventually(lambda: stack.logs().count(SESSION_RELEASED_SAID) > released, "the session's release")
     time.sleep(3)  # sleep-ok: the guest reports the pages its session freed within its reporting delay
     after = cost_reading(stack, uid, pid)
     readings = {"size": size, "run": run_number, "mem_size_mib": config["mem_size_mib"],
@@ -1295,8 +1516,8 @@ def main():
             run("docker", "volume", "rm", "--force", volume, check=False)
     print("ok: a person's machine boots from the image's programs, as the keeper makes them", flush=True)
 
-    for case in (disk_and_boot, boot_identity, routes_and_names, packs_in_vm, ledger_one_vm, ledger_pressure,
-                 vmm_killed, guard_lost_at_start, keeper_lost, measurements):
+    for case in (disk_and_boot, boot_identity, routes_and_names, packs_in_vm, scratch_in_vm, ledger_one_vm,
+                 ledger_pressure, vmm_killed, guard_lost_at_start, keeper_lost, measurements):
         print(f"== {case.__name__}: {case.__doc__.split(chr(10))[0]}", flush=True)
         case(image)
     print("PASS: a person's machine boots from the image's programs, and a person's sessions run in their own VM")
