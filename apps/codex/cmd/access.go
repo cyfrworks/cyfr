@@ -639,7 +639,7 @@ func init() {
 
 var accessCmd = &cobra.Command{
 	Use:         "access <local|tailnet|public>",
-	Annotations: map[string]string{dockerAnnotation: "yes"},
+	Annotations: map[string]string{dockerAnnotation: "yes", startsAnnotation: "yes"},
 	Short:       "Choose how CYFR is reached: this computer only, your tailnet, or a public domain",
 	GroupID:     "server",
 	Long: `Change how the CYFR in the current directory is reached, and every setting that follows from it in .env (CYFR_ACCESS, CYFR_HOST, CYFR_PUBLIC_URL, CYFR_TAILNET_NODE_ID, CADDY_ACME_EMAIL).

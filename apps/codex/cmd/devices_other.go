@@ -5,5 +5,5 @@
 
 package cmd
 
-// hasDevice is false: only Linux runs a person's computer of their own.
-func hasDevice(string, uint32) bool { return false }
+// hasDevices is false: only Linux runs a person's computer of their own.
+func hasDevices() bool { return false }

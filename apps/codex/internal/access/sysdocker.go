@@ -36,8 +36,8 @@ func (c *CallError) Error() string {
 func (c *CallError) Is(target error) bool { return c.Deadline && target == ErrDeadline }
 
 // systemDocker runs the docker binary on this machine. Every call's
-// environment is cyfr's with every COMPOSE_* variable removed, DOCKER_*
-// kept; it runs in the project directory, in a process group of its own,
+// environment is cyfr's with every variable keptFromDocker names removed,
+// DOCKER_* kept; it runs in the project directory, in a process group of its own,
 // bounded by its deadline (StartDeadline when the call names none).
 // While the engine holds the lock, a Unix call runs under the watchdog,
 // which inherits the lock's descriptor and passes it to docker, so the
@@ -93,13 +93,30 @@ func (s *systemDocker) Run(ctx context.Context, c Call) (Result, error) {
 	return Result{ExitCode: code, Stdout: stdout.Bytes(), Stderr: stderr.Bytes()}, err
 }
 
-// sanitizedEnv is env without any COMPOSE_* variable, matched without
-// case, as Windows matches names.
+// KVMSetting and TunSetting are the .env settings that name the devices a
+// person's computer of their own runs through, which cyfr writes from what
+// the machine has: compose reads them from .env alone (keptFromDocker).
+const (
+	KVMSetting = "CYFR_LOCUS_KVM"
+	TunSetting = "CYFR_LOCUS_TUN"
+)
+
+// keptFromDocker says the variable name never reaches a docker call's
+// environment, matched without case, as Windows matches names: every
+// COMPOSE_* variable, and the two device settings, which compose would
+// otherwise read from the environment ahead of .env, so a shell could hand
+// the Locus services a device cyfr refuses, or none.
+func keptFromDocker(name string) bool {
+	upper := strings.ToUpper(name)
+	return strings.HasPrefix(upper, "COMPOSE_") || upper == KVMSetting || upper == TunSetting
+}
+
+// sanitizedEnv is env without any variable keptFromDocker names.
 func sanitizedEnv(env []string) []string {
 	out := make([]string, 0, len(env))
 	for _, kv := range env {
 		name, _, _ := strings.Cut(kv, "=")
-		if strings.HasPrefix(strings.ToUpper(name), "COMPOSE_") {
+		if keptFromDocker(name) {
 			continue
 		}
 		out = append(out, kv)

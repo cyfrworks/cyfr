@@ -85,9 +85,9 @@ type machineSeams struct {
 	// by its own list of loaded policy, and whether that list is visible
 	// here: a container sees no host's.
 	appArmorLoaded func(name string) (loaded, visible bool)
-	// device is whether this machine has, at path, the misc character
-	// device of minor (vmDevices).
-	device func(path string, minor uint32) bool
+	// devices is whether this machine has both devices a person's
+	// computer of their own needs (vmDevices, hasDevices).
+	devices func() bool
 	// apply runs the commands as root through one sudo.
 	apply func(commands []string) error
 	// applyInput runs the commands as root through one sudo, input on
@@ -183,8 +183,8 @@ var machine = machineSeams{
 		out, _ := exec.CommandContext(ctx, "id", args...).Output()
 		return strings.Fields(string(out))
 	},
-	system: func() string { return runtime.GOOS },
-	device: hasDevice,
+	system:  func() string { return runtime.GOOS },
+	devices: hasDevices,
 	// sudo -n -v fails rather than ask, and passes without a password only
 	// with the login cached or every entry of the account's NOPASSWD:
 	// sudoers' verifypw at its default (all) in sudo's manual, and sudo-rs's
@@ -508,6 +508,13 @@ func awaitDockerDesktop(ctx context.Context, system string, out io.Writer) (bool
 // dockerAnnotation marks a command that reaches Docker, and with it each
 // command under it: the root's one step (withDockerGroup) runs before it.
 const dockerAnnotation = "cyfr.docker"
+
+// startsAnnotation marks a command that starts the stack as .env stands,
+// itself and none under it: the root's one step refuses a device .env names
+// that this machine does not have (refuseDevices) before it. A command
+// that writes .env's devices before its start (update, restore), or starts
+// nothing (down, uninstall, access status), carries none.
+const startsAnnotation = "cyfr.starts"
 
 // needsDocker is whether c or a command above it carries dockerAnnotation.
 func needsDocker(c *cobra.Command) bool {

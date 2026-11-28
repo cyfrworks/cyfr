@@ -1989,8 +1989,9 @@ jobs:
       # locus service's runtime role, on the Locus image above, runs a seed
       # catalyst for a signed-in person, cyfr dispatching to the worker URL
       # and the runtime calling the host API the shipped file names under
-      # the keys `cyfr init` wrote, and the app image carries the pinned
-      # cosign. Each run fails when its teardown leaves the project behind,
+      # the keys `cyfr init` wrote, the devices `cyfr init` found on the
+      # runner given to Locus and the keeper's start line saying what they
+      # give, and the app image carries the pinned cosign. Each run fails when its teardown leaves the project behind,
       # which the teardown's stand-in cases hold.
       - name: The Compose proof's image
         run: docker tag cyfr:push cyfr:compose-proof

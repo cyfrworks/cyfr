@@ -20,6 +20,8 @@
 #                       of its kind
 #   capabilities_hold   each proxy's capabilities and security options
 #   published_ports_hold every binding a mode publishes, including loopback SOCKS5
+#   keeper_wall_holds   the devices cyfr init writes from the machine's, and
+#                       the keeper's start line under them
 #
 # Usage: bash tests/compose-proof/predicates-test.sh
 set -uo pipefail
@@ -312,6 +314,31 @@ expect fail "tailscale under Docker's default seccomp profile" \
 expect fail "tailscale under another seccomp profile" \
   capabilities_hold tailscale "$(host_config '["ALL"]' null no-new-privileges:true 'seccomp={"defaultAction":"SCMP_ACT_ALLOW"}')" "$(status_with 0000000000000000)" "$profile"
 expect fail "a process status with no CapEff" capabilities_hold tailscale "$tailscale" "Name: x" "$profile"
+
+# ---- keeper_wall_holds -------------------------------------------------------
+
+kvm_node='character special file a e8 992 660'
+tun_node='character special file a c8 0 666'
+wall="[cyfr-locus] info: each person's work runs in a separate small computer on this machine: a VM of their own, booted at their first session"
+spaces="[cyfr-locus] info: each person's work runs in its own space on this machine: the container was given no /dev/kvm"
+expect pass "both devices here, both named, the wall given" keeper_wall_holds "$kvm_node" "$tun_node" /dev/kvm /dev/net/tun "booting
+$wall"
+expect pass "no KVM here, neither named, spaces for want of it" keeper_wall_holds "" "$tun_node" "" "" "$spaces"
+expect pass "KVM here and no tun, neither named" keeper_wall_holds "$kvm_node" "" "" "" "$spaces"
+expect fail "both here, neither named" keeper_wall_holds "$kvm_node" "$tun_node" "" "" "$spaces"
+expect fail "none here, both named" keeper_wall_holds "" "" /dev/kvm /dev/net/tun "$spaces"
+expect fail "KVM here and no tun, KVM named" keeper_wall_holds "$kvm_node" "" /dev/kvm "" "$spaces"
+expect fail "KVM's group root's, both named" keeper_wall_holds "${kvm_node/ 992 / 0 }" "$tun_node" /dev/kvm /dev/net/tun "$wall"
+expect fail "KVM read and written by its owner alone, both named" keeper_wall_holds "${kvm_node/ 660/ 600}" "$tun_node" /dev/kvm /dev/net/tun "$wall"
+expect fail "tun not read and written by everyone, both named" keeper_wall_holds "$kvm_node" "${tun_node/ 666/ 660}" /dev/kvm /dev/net/tun "$wall"
+expect fail "another misc device at /dev/kvm" keeper_wall_holds "${kvm_node/ e8 / e9 }" "$tun_node" /dev/kvm /dev/net/tun "$wall"
+expect fail "both named, the keeper giving spaces" keeper_wall_holds "$kvm_node" "$tun_node" /dev/kvm /dev/net/tun "$spaces"
+expect fail "both named, the keeper giving spaces for want of room" keeper_wall_holds "$kvm_node" "$tun_node" /dev/kvm /dev/net/tun \
+  "[cyfr-locus] info: each person's work runs in its own space on this machine: a first session in a VM, 1 GiB, does not fit the work pool's 512 MiB beside the floor"
+expect fail "neither named, the keeper giving the wall" keeper_wall_holds "" "" "" "" "$wall"
+expect fail "the keeper said no start line" keeper_wall_holds "$kvm_node" "$tun_node" /dev/kvm /dev/net/tun "booting"
+expect fail "a later start line other than the first" keeper_wall_holds "$kvm_node" "$tun_node" /dev/kvm /dev/net/tun "$wall
+$spaces"
 
 echo "$cases cases, $failures failed"
 [ "$failures" -eq 0 ]

@@ -50,7 +50,8 @@ type Result struct {
 
 // Docker is every docker call the engine and the commands holding its lock
 // make. The system implementation runs each call with every COMPOSE_*
-// variable removed from the environment and DOCKER_* kept, in a process
+// variable and the two device settings removed from the environment
+// (keptFromDocker) and DOCKER_* kept, in a process
 // group of its own, and, while the lock is held, passes the lock's
 // descriptor to a watchdog re-exec of cyfr (`cyfr internal docker-run`)
 // that kills the call at its deadline (Unix), or starts it in the
