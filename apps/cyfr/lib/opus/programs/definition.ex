@@ -212,11 +212,13 @@ defmodule Opus.Programs.Definition do
     %{
       name: "claude-code",
       title: "Claude Code",
+      sign_in: :required,
       command: "cyfr-claude-code npx -y @anthropic-ai/claude-code@2.1.323"
     },
     %{
       name: "openai-codex",
       title: "OpenAI Codex",
+      sign_in: :required,
       command: "cyfr-codex npx -y @openai/codex@0.169.0"
     },
     # Antigravity is no npm package: `cyfr-fetch` fetches Google's release of
@@ -224,6 +226,7 @@ defmodule Opus.Programs.Definition do
     %{
       name: "antigravity",
       title: "Antigravity",
+      sign_in: :required,
       command:
         "cyfr-antigravity cyfr-fetch agy 1.5.16 " <>
           "amd64=https://storage.googleapis.com/antigravity-public/antigravity-cli/1.5.16-5250855658717184/linux-x64/cli_linux_x64.tar.gz" <>
@@ -236,6 +239,7 @@ defmodule Opus.Programs.Definition do
     %{
       name: "opencode",
       title: "OpenCode",
+      sign_in: :optional,
       command:
         "cyfr-opencode cyfr-fetch opencode 2.4.1 " <>
           "amd64=https://github.com/anomalyco/opencode/releases/download/v2.4.1/opencode-linux-x64.tar.gz" <>
@@ -249,6 +253,7 @@ defmodule Opus.Programs.Definition do
     %{
       name: "cursor",
       title: "Cursor",
+      sign_in: :required,
       command:
         "cyfr-cursor cyfr-fetch cursor-agent 2026.11.22-e9042b2 --tree=cursor-agent " <>
           "amd64=https://downloads.cursor.com/lab/2026.11.22-e9042b2/linux/x64/agent-cli-package.tar.gz" <>
@@ -276,12 +281,19 @@ defmodule Opus.Programs.Definition do
   def loads_packs?(driver), do: driver in @pack_drivers
 
   @typedoc "A program brain CYFR ships a driver for (`brains/0`)."
-  @type brain :: %{name: String.t(), title: String.t(), command: String.t()}
+  @type brain :: %{
+          name: String.t(),
+          title: String.t(),
+          sign_in: :required | :optional,
+          command: String.t()
+        }
 
   @doc """
   The program brains a person can connect, in the order Aqua's setup
   lists them: each a driven row with a kept folder, named `name`, whose
-  command is `command`. The one source of a brain's install: the Programs
+  command is `command`. `sign_in` says whether the program answers only
+  once signed in to the person's own plan (`:required`), or also unsigned,
+  on models of its own that cost nothing (`:optional`). The one source of a brain's install: the Programs
   page's form is prefilled from it (`/programs?add=<name>`) for the person
   to confirm or change, and it runs nothing itself.
   """

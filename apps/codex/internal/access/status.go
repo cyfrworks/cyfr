@@ -38,7 +38,7 @@ func (e *Engine) status(ctx context.Context) (Status, error) {
 	s.Last, _ = e.latestReceipt()
 	cs, err := e.observe(ctx)
 	if err != nil {
-		s.Health = append(s.Health, "Docker did not answer: "+err.Error())
+		s.Unobserved = err
 		return s, nil
 	}
 	s.Containers = cs

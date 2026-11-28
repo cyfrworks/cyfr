@@ -27,7 +27,7 @@ defmodule Aqua.Harness do
   the calls not yet started when `supersedes?` holds, and a harness whose
   brain has tools of its own, acting in a folder of its own, says its
   work needs the briefing for them (`own_tools?`, whose words are
-  `Aqua.Prompt.briefing/3`'s); a harness whose program loads the
+  `Aqua.Prompt.briefing/4`'s); a harness whose program loads the
   athanor's packs as its own skills says so (`loader?`,
   `Opus.loads_packs?/1`). They belong to the
   harness the turn pins, so they are known before `open/1` (`facts/1`), and

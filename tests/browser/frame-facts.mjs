@@ -46,7 +46,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  BROWSERS, SITE, launch, launchBrowser, openShell, readHomes, signedIn, sleep, startProxy,
+  BROWSERS, SITE, launchBrowser, openApp, readHomes, signedIn, sleep, startProxy,
 } from "./lib.mjs";
 
 const PROBES = [
@@ -123,8 +123,7 @@ async function observe(name, base, proxy, probePath, segment, cookie) {
         consoleLines.push({ type: message.type(), text: message.text(), url: message.location().url });
       }
     });
-    await openShell(page, base, segment, "frame-probe");
-    const { frame, attributes } = await launch(page, "frame-probe");
+    const { frame, attributes } = await openApp(page, base, segment, "frame-probe");
     if (!frame.url().includes(probePath)) throw new Error(`the shell framed ${frame.url()}, not ${probePath}`);
     await frame.waitForFunction(DONE, null, { timeout: 60_000 });
     const results = JSON.parse(await frame.evaluate(READ));

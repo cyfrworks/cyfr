@@ -63,11 +63,22 @@
 #   tests/install-screen-proof/run.sh [--out DIR] [--no-tpm]
 #
 # After the script, this tree's cyfr takes the installed one's place, and
-# after init this tree's server image (scripts/image.sh's) takes the
-# release's in docker-compose.yml and this tree's seed/aqua the release's
-# aqua/, stand-ins for a signed candidate, which
-# results.txt says (lib.sh, candidate_build and candidate_server_use);
-# candidate.txt records the tree's commit and each artifact. Nothing reaches cyfr.run: each guest drops every packet to its
+# cyfr init lays down this tree's scaffold (scripts/scaffold-tarball.sh),
+# which that cyfr, built with the releaseproof tag as the update proofs
+# build theirs, reads from a folder on the guest; after init this tree's
+# server and Locus images (scripts/image.sh's) take the place of the ones
+# that scaffold's docker-compose.yml names. These are stand-ins for a
+# signed candidate, which results.txt says (lib.sh, candidate_build and
+# candidate_server_use); candidate.txt records the tree's commit and each
+# artifact. So a tree that has outgrown the last release's scaffold is
+# still proved, and the proof no longer carries what only a published
+# release shows: cyfr init fetching and verifying a signed scaffold, and
+# pulling the images it names. The person's plain cyfr init is typed: its
+# pulls of the :latest images this tree's docker-compose.yml names find
+# none on ghcr.io, where no release that is not a pre-release has moved
+# :latest, and each only warns. Then, in the terminal that predates the
+# docker group, cyfr down, cyfr up again, cyfr backup and cyfr access
+# status each reach Docker as cyfr up does. Nothing reaches cyfr.run: each guest drops every packet to its
 # addresses, and the box serves its own account service, the directory and
 # registry it names (lib.sh, cyfr_run_guard, account_settings and
 # account_service).
@@ -80,9 +91,10 @@
 # token: the teardown removes it, and scripts/janitor.sh's rule 1 removes
 # a killed run's. The
 # base image is the host's cache and the proof image is shared, each made
-# by tests/install-screen-proof/prepare.sh, and this tree's server image
-# is shared too, made by scripts/image.sh --undated app, all outside the
-# queue before the run; without one the run exits 69, naming its command.
+# by tests/install-screen-proof/prepare.sh, and this tree's server and
+# Locus images are shared too, made by scripts/image.sh --undated app and
+# locus, all outside the queue before the run; without one the run exits
+# 69, naming its command.
 # The guests' overlays are in the Docker volume ${PROOF_RUN_PREFIX}disk.
 #
 # Every name the run gives Docker begins with PROOF_RUN_PREFIX, which
@@ -117,9 +129,8 @@ proof_traps
 
 # The published release the guests install, INSTALL_VERSION, is the one
 # the bare install line takes, read below by the installer's own
-# resolve_version before anything starts. This tree's server image runs
-# under its docker-compose.yml and beside its locus images, so its stack
-# files are this tree's.
+# resolve_version before anything starts; its install script and cyfr
+# are what the guest installs before this tree's cyfr takes its place.
 
 usage() { echo "usage: $0 [--out DIR] [--no-tpm]"; }
 # The guest's TPM: an isolated swtpm of its own, or none (--no-tpm).
@@ -401,6 +412,38 @@ requirements_refused() {
   guest_root 'userdel -r visitor 2>/dev/null; rm -f /tmp/cyfr-visitor; ! id visitor' || fail "the second account was not removed ($GUEST_DIR/root.txt)"
 }
 
+# docker_from_that_terminal: in the terminal cyfr up ran in, older than
+# the account's docker group, each command a person runs next reaches
+# Docker as cyfr up does: cyfr down stops the stack, cyfr up starts it
+# again, cyfr backup makes its snapshot, and cyfr access status lists the
+# containers that run, never that nothing does.
+docker_from_that_terminal() {
+  local name
+  step "cyfr down, cyfr up, cyfr backup and cyfr access status, in the terminal that started before the group"
+  check "that terminal's shell lacks the docker group the account has" guest_ssh \
+    'pid=$(tmux display-message -p -t proof "#{pane_pid}") && gid=$(getent group docker | cut -d: -f3) &&
+      id -nG proof | tr " " "\n" | grep -qx docker && ! sed -n "s/^Groups:[[:space:]]*//p" /proc/$pid/status | tr " " "\n" | grep -qx "$gid"'
+  pane_step down 'cyfr down' 300
+  check "cyfr down exits 0 (it exited $PANE_STATUS)" test "$PANE_STATUS" = 0
+  check "it stopped the stack: no container runs" guest_root '[ -z "$(docker ps -q)" ]'
+  pane_step_end down
+  pane_step up-again 'cyfr up' 900
+  check "cyfr up again exits 0 (it exited $PANE_STATUS)" test "$PANE_STATUS" = 0
+  pane_step_end up-again
+  pane_step backup 'cyfr backup' 600
+  check "cyfr backup exits 0 (it exited $PANE_STATUS)" test "$PANE_STATUS" = 0
+  pane_step_end backup
+  pane_step access-status 'cyfr access status' 120
+  check "cyfr access status exits 0 (it exited $PANE_STATUS)" test "$PANE_STATUS" = 0
+  check "it lists the cyfr container running, and never says nothing runs" \
+    sh -c '! grep -q "Nothing of the stack runs" "$1" && grep -qE "^  cyfr \(cyfr\): running$" "$1"' sh "$GUEST_DIR/transcript-access-status.txt"
+  pane_step_end access-status
+  for name in down up-again backup access-status; do
+    check "none of them says the account may not use Docker or to log in again ($name)" \
+      sh -c '! grep -qE "may not use the Docker daemon|log out and in again" "$1"' sh "$GUEST_DIR/transcript-$name.txt"
+  done
+}
+
 # box_install: on the guest under way, the install script typed into
 # tty1's terminal, cyfr init with its screen, this tree's server in the
 # release's place and the box made its own account service in .env, cyfr
@@ -428,6 +471,7 @@ box_install() {
   pane_step_end script
 
   guest_copy_in "$CANDIDATE_BIN" .local/bin/cyfr || fail "the candidate was not copied into the guest"
+  candidate_scaffold_load
   guest_copy_in "$CANDIDATE_DEB" cyfr-desktop.deb || fail "the candidate app was not copied into the guest"
   guest_root 'apt-get -o Acquire::Retries=3 install -y -qq /home/proof/cyfr-desktop.deb && rm /home/proof/cyfr-desktop.deb' ||
     fail "the candidate app was not installed ($GUEST_DIR/root.txt)"
@@ -458,7 +502,7 @@ box_install() {
   check "no package is left behind, in the account's home or anywhere under /tmp, where root stages ($GUEST_DIR/left-packages.txt)" packages_left_none
   pane_step_end init
 
-  step "this tree's server in the release's place, and the box its own account service in .env"
+  step "this tree's server and Locus images in the scaffold's place, and the box its own account service in .env"
   candidate_server_load
   account_settings
 
@@ -472,6 +516,7 @@ box_install() {
   pane_step_end up
   running=$(guest_root_out "docker inspect -f '{{.Image}}' cyfr")
   check "the cyfr container runs this tree's image ($running)" test "$running" = "$APP_IMAGE_ID"
+  docker_from_that_terminal
   code=$(guest_ssh "curl -s -o /dev/null -w '%{http_code}' http://localhost:4000/" 2>&1)
   check "CYFR answers on its port (HTTP $code)" sh -c '[ "$1" -ge 200 ] && [ "$1" -lt 400 ]' sh "$code"
   check "screenshot ready.png" guest_screenshot ready.png
@@ -1165,7 +1210,7 @@ active" ]' sh "$GUEST_DIR/vt-after.txt"
   volumes_seen after-the-uninstall
   check "the folder, the volumes, the settings and the device key are as cyfr down left them" cmp -s "$GUEST_DIR/left-before.txt" "$GUEST_DIR/left-after.txt"
   check "no container and no custom network of CYFR is left" guest_ssh '[ -z "$(docker ps -aq)$(docker network ls -q --filter type=custom)" ]'
-  check "no CYFR image is left" guest_ssh "[ -z \"\$(docker images -q ghcr.io/cyfrworks/cyfr-locus)\" ] && ! docker image inspect $APP_IMAGE >/dev/null 2>&1"
+  check "no CYFR image is left" guest_ssh "! docker image inspect $APP_IMAGE >/dev/null 2>&1 && ! docker image inspect $LOCUS_IMAGE >/dev/null 2>&1"
   check "the program and its link onto PATH are gone" guest_ssh '! ls -d ~/.local/bin/cyfr /usr/local/bin/cyfr 2>/dev/null'
   check "the screen is given back to tty1's login prompt" guest_ssh 'systemctl is-active --quiet getty@tty1 && ! systemctl is-enabled --quiet cyfr-screen && [ ! -e /etc/systemd/system/cyfr-screen.service ]'
   check "the CYFR app's package is removed, its program with it" guest_ssh '[ "$(dpkg-query -W -f "\${db:Status-Status}" cyfr-desktop 2>/dev/null)" != installed ] && [ ! -e /opt/cyfr/CYFR ]'

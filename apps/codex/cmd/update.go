@@ -59,8 +59,9 @@ func init() {
 }
 
 var updateCmd = &cobra.Command{
-	Use:   "update",
-	Short: "Update this cyfr to the newest release, then the CYFR in this directory to it",
+	Use:         "update",
+	Annotations: map[string]string{dockerAnnotation: "yes"},
+	Short:       "Update this cyfr to the newest release, then the CYFR in this directory to it",
 	Long: `Update this program to the newest release, then the CYFR in the current directory to the program's release, in one command.
 
 The program: when the newest release is newer than this one, cyfr update installs it. The newest is the newest published release that is not a pre-release and, while none is published, the newest pre-release. A Homebrew cask install is updated through brew. Where the CYFR app is installed, whichever cyfr runs this, the app is updated by its own installer: its installer for this machine is downloaded and verified against the release's checksums.txt signed by the release workflow for that tag, then the elevation it needs is asked for, then the running app is closed (on the box's own screen, the screen's service is stopped), then the system's installer replaces it (apt for the DEB, the whole signed app for macOS, Windows Installer for the MSI), then the release its own cyfr answers is checked, and the app is opened again as it was. A cyfr installed any other way replaces its own file, once the release's archive for this platform verifies the same way; both downloads verify before anything changes. A refusal at any step leaves the app working at its release and the CYFR in the directory untouched. It then goes on as the new program. --version names the exact release to install instead, a pre-release or an older release included; a Homebrew install takes only its tap's release. A development build is not replaced. In a directory that holds no compose file the update stops here.

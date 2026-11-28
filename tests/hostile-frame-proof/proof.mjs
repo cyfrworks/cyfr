@@ -41,7 +41,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  ATTACKER, BROWSERS, SITE, ask as askRunSh, askHome, awaitFrame, homeOf, launch, launchBrowser, openShell,
+  ATTACKER, BROWSERS, SITE, ask as askRunSh, askHome, awaitFrame, homeOf, launchBrowser, openApp,
   pointerReaches, readHomes, redact, signedIn, sleep, startProxy, startReceiver, waitFor,
 } from "../browser/lib.mjs";
 
@@ -153,9 +153,8 @@ async function phase(browser, browserName, phaseName, tincture, base, proxy, rec
   const context = await signedIn(browser, base, cookie);
   try {
     const page = await context.newPage();
-    await openShell(page, base, segment, tincture);
+    const { frame, attributes } = await openApp(page, base, segment, tincture);
     const shellUrl = page.url();
-    const { frame, attributes } = await launch(page, tincture);
     await frame.waitForFunction(ready, null, { timeout: 60_000 });
 
     const sandbox = (attributes.sandbox || "").split(/\s+/).filter(Boolean).sort();
@@ -277,8 +276,7 @@ async function phase(browser, browserName, phaseName, tincture, base, proxy, rec
     // ---- navigating itself within the site origin: the open route ---------
     // A second open of the probe, whose only attempt this is.
     const second = await context.newPage();
-    await openShell(second, base, segment, tincture);
-    const again = await launch(second, tincture);
+    const again = await openApp(second, base, segment, tincture);
     await again.frame.waitForFunction(ready, null, { timeout: 60_000 });
     const ownAgain = await again.frame.evaluate(() => window.location.pathname);
     const mark = proxy.seen.length;
@@ -313,8 +311,7 @@ async function phase(browser, browserName, phaseName, tincture, base, proxy, rec
     // secure origin, is answered a refusal before the session is read
     // (frame_request_refused).
     const third = await context.newPage();
-    await openShell(third, base, segment, tincture);
-    const last = await launch(third, tincture);
+    const last = await openApp(third, base, segment, tincture);
     await last.frame.waitForFunction(ready, null, { timeout: 60_000 });
     const shellPath = new URL(shellUrl).pathname;
     const from = proxy.seen.length;
@@ -668,8 +665,7 @@ async function prompts(browser, browserName, base, segment, cookie, outDir) {
   await context.addInitScript(recordShows);
   try {
     const page = await context.newPage();
-    await openShell(page, base, segment, "fullscreen-probe");
-    const { frame, attributes } = await launch(page, "fullscreen-probe");
+    const { frame, attributes } = await openApp(page, base, segment, "fullscreen-probe");
     await frame.waitForFunction(() => document.getElementById("state")?.dataset.ready === "yes", null, { timeout: 60_000 });
     record.frame = { sandbox: attributes.sandbox, allow: attributes.allow };
     // The frame was opened a moment ago: its first click waits until the
@@ -707,8 +703,7 @@ async function declaredOrigin(browser, browserName, base, proxy, receiver, segme
     proxy.seen = [];
     receiver.log = [];
     const page = await context.newPage();
-    await openShell(page, base, segment, DECLARED.tincture);
-    const { frame } = await launch(page, DECLARED.tincture);
+    const { frame } = await openApp(page, base, segment, DECLARED.tincture);
     await frame.waitForFunction(declaredReady, null, { timeout: 60_000 });
     const result = await frame.evaluate(() => window.__declared.run());
     await sleep(SETTLE_MS);
