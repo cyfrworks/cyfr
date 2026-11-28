@@ -5,6 +5,7 @@ package access
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"fmt"
 	"maps"
@@ -256,6 +257,7 @@ type config struct {
 		Image       string             `yaml:"image"`
 		Profiles    []string           `yaml:"profiles"`
 		Environment map[string]*string `yaml:"environment"`
+		Ports       []publication      `yaml:"ports"`
 	} `yaml:"services"`
 	// Networks are the subnets the stack fixes (heldBy).
 	Networks map[string]struct {
@@ -265,6 +267,62 @@ type config struct {
 			} `yaml:"config"`
 		} `yaml:"ipam"`
 	} `yaml:"networks"`
+}
+
+// publication is one published port of a flattened service, as compose
+// writes it: the container port, the host address and port (an empty one
+// Docker picks), and the protocol.
+type publication struct {
+	Target    int    `yaml:"target"`
+	HostIP    string `yaml:"host_ip"`
+	Published string `yaml:"published"`
+	Protocol  string `yaml:"protocol"`
+}
+
+func (p publication) String() string {
+	host := p.HostIP
+	if host == "" {
+		host = "every address"
+	}
+	published := p.Published
+	if published == "" {
+		published = "a port Docker picks"
+	}
+	return fmt.Sprintf("%d/%s on %s at %s", p.Target, cmp.Or(p.Protocol, "tcp"), host, published)
+}
+
+// checkPublished holds cyfr's final published ports, whatever file put
+// them there, to exactly what b's kind allows: the proxy listener is
+// published with proxy alone, once, at CYFR_PROXY_PUBLISH; with proxy
+// nothing else is published but the loopback listener, once, on the IPv4
+// loopback. The proxy listener, at proxyPort (CYFR_PROXY_PORT, which a
+// kind with no proxy listener reserves all the same), is the one whose
+// forwarded headers are trusted, so no other binding may reach it.
+func checkPublished(c config, b Boot, proxyPort int) error {
+	refused := func(p publication, why string) error {
+		return fmt.Errorf("access: the stack's configuration publishes cyfr's port %s, and %s. Nothing started. Remove that publication from the compose file that adds it", p, why)
+	}
+	var loopbacks, proxies int
+	for _, p := range c.Services[cyfrService].Ports {
+		switch {
+		case b.Published != nil && p.Target == proxyPort:
+			proxies++
+			if p.HostIP != b.Published.Address || p.Published != strconv.Itoa(b.Published.Port) || cmp.Or(p.Protocol, "tcp") != "tcp" || proxies > 1 {
+				return refused(p, "the proxy listener is published only at CYFR_PROXY_PUBLISH, "+b.Published.Address+":"+strconv.Itoa(b.Published.Port)+", once")
+			}
+		case p.Target == proxyPort:
+			return refused(p, "the proxy listener, whose forwarded headers are trusted, is published only with CYFR_BROWSER=proxy, at CYFR_PROXY_PUBLISH")
+		case b.Published == nil:
+		case p.Target == b.Loopback.Port && p.HostIP == "127.0.0.1" && cmp.Or(p.Protocol, "tcp") == "tcp" && loopbacks == 0:
+			loopbacks++
+		default:
+			return refused(p, "with proxy cyfr publishes its loopback listener on 127.0.0.1 and its proxy listener at CYFR_PROXY_PUBLISH, and nothing else")
+		}
+	}
+	if b.Published != nil && proxies == 0 {
+		return fmt.Errorf("access: the stack's configuration does not publish cyfr's proxy listener at CYFR_PROXY_PUBLISH, %s:%d, so your proxy cannot reach it. Nothing started", b.Published.Address, b.Published.Port)
+	}
+	return nil
 }
 
 var yamlLine = regexp.MustCompile(`line ([0-9]+)`)
@@ -378,7 +436,12 @@ func (e *Engine) checkEffective(h Head, content []byte) error {
 	if b.Head.Digest() != reach.Digest() {
 		return fmt.Errorf("access: the stack's configuration starts cyfr reached as %s, not as %s", wordsText(Describe(b.Head)), wordsText(Describe(h)))
 	}
-	return nil
+	process := cyfrEnv(c)
+	proxyPort, err := port(func(key string) string { return strings.TrimSpace(process[key]) }, "CYFR_PROXY_PORT", 4001)
+	if err != nil {
+		return err
+	}
+	return checkPublished(c, b, proxyPort)
 }
 
 // checkStack is CheckStack: the sources, then the effective values of

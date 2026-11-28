@@ -127,3 +127,63 @@ func TestSwitchToProxy(t *testing.T) {
 		t.Error("the proxy configuration runs caddy")
 	}
 }
+
+// cyfr's final published ports are held to the kind's, from the flattened
+// configuration alone, whatever file put a binding there: the proxy
+// listener is published with proxy alone, once, at CYFR_PROXY_PUBLISH, and
+// with proxy nothing else is published but the loopback listener.
+func TestCheckPublishedHoldsTheFinalPublications(t *testing.T) {
+	loopback := "- {target: 4000, host_ip: 127.0.0.1, published: \"4000\", protocol: tcp}\n"
+	picked := "- {target: 4000, host_ip: 127.0.0.1, protocol: tcp}\n"
+	publication := "- {target: 4001, host_ip: 127.0.0.1, published: \"4001\", protocol: tcp}\n"
+	boot := func(browser string) Boot {
+		b := Boot{Loopback: Listener{"172.16.230.2", 4000}}
+		if browser != BrowserNone {
+			b.Proxy = &Listener{"172.16.234.2", 4001}
+		}
+		if browser == BrowserProxy {
+			b.Published = &Listener{"127.0.0.1", 4001}
+		}
+		return b
+	}
+	for _, c := range []struct {
+		name, browser, ports string
+		refused              bool
+	}{
+		{"none, the loopback listener alone", BrowserNone, loopback, false},
+		{"tailnet, the loopback listener alone", BrowserTailnet, loopback, false},
+		{"domain, the loopback listener alone", BrowserDomain, loopback, false},
+		{"proxy, the loopback listener and the publication", BrowserProxy, loopback + publication, false},
+		{"proxy, the loopback listener at a port Docker picks", BrowserProxy, picked + publication, false},
+		{"proxy, a second binding of the proxy listener", BrowserProxy, loopback + publication + "- {target: 4001, host_ip: 127.0.0.1, published: \"4002\", protocol: tcp}\n", true},
+		{"proxy, the proxy listener on every address", BrowserProxy, loopback + "- {target: 4001, host_ip: 0.0.0.0, published: \"4001\", protocol: tcp}\n", true},
+		{"proxy, the proxy listener off its publication", BrowserProxy, loopback + "- {target: 4001, host_ip: 127.0.0.2, published: \"4001\", protocol: tcp}\n", true},
+		{"proxy, the proxy listener unpublished", BrowserProxy, loopback, true},
+		{"proxy, another port published", BrowserProxy, loopback + publication + "- {target: 4300, host_ip: 127.0.0.1, published: \"4300\", protocol: tcp}\n", true},
+		{"proxy, the loopback listener on every address too", BrowserProxy, loopback + publication + "- {target: 4000, host_ip: 0.0.0.0, published: \"4000\", protocol: tcp}\n", true},
+		{"none, the proxy port published", BrowserNone, loopback + publication, true},
+		{"tailnet, the proxy port published", BrowserTailnet, loopback + publication, true},
+		{"domain, the proxy port published", BrowserDomain, loopback + publication, true},
+		{"domain, the proxy port on every address", BrowserDomain, loopback + "- {target: 4001, host_ip: 0.0.0.0, published: \"8001\", protocol: tcp}\n", true},
+	} {
+		var cfg config
+		if err := yaml.Unmarshal([]byte("services:\n  cyfr:\n    ports:\n"+indent(c.ports, "      ")), &cfg); err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		err := checkPublished(cfg, boot(c.browser), 4001)
+		if (err != nil) != c.refused {
+			t.Errorf("%s: checkPublished answered %v", c.name, err)
+		}
+		if err != nil && !strings.Contains(err.Error(), "Nothing started") {
+			t.Errorf("%s: the refusal does not say nothing started: %v", c.name, err)
+		}
+	}
+}
+
+func indent(text, by string) string {
+	lines := strings.Split(strings.TrimSuffix(text, "\n"), "\n")
+	for i := range lines {
+		lines[i] = by + lines[i]
+	}
+	return strings.Join(lines, "\n") + "\n"
+}

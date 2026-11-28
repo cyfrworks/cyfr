@@ -4,6 +4,7 @@
 package access
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -586,6 +588,45 @@ type fakeService struct {
 	Image         string            `yaml:"image,omitempty"`
 	Profiles      []string          `yaml:"profiles,omitempty"`
 	Environment   map[string]string `yaml:"environment,omitempty"`
+	Ports         []fakePort        `yaml:"ports,omitempty"`
+}
+
+// fakePort is a published port as compose flattens it, whichever syntax
+// the file wrote it in.
+type fakePort struct {
+	Target    int    `yaml:"target"`
+	HostIP    string `yaml:"host_ip,omitempty"`
+	Published string `yaml:"published,omitempty"`
+	Protocol  string `yaml:"protocol"`
+}
+
+// fakePorts reads a service's ports: as compose does, each file's are
+// added to the ones before it, short syntax (`[ip:]published:target[/proto]`)
+// and long alike, interpolated.
+func fakePorts(raw any, lookup func(string) (string, bool)) []fakePort {
+	items, _ := raw.([]any)
+	var out []fakePort
+	for _, item := range items {
+		switch v := item.(type) {
+		case string:
+			text, proto, _ := strings.Cut(interpolate(v, lookup), "/")
+			parts := strings.Split(text, ":")
+			p := fakePort{Protocol: cmp.Or(proto, "tcp")}
+			p.Target, _ = strconv.Atoi(parts[len(parts)-1])
+			if len(parts) > 1 {
+				p.Published = parts[len(parts)-2]
+			}
+			if len(parts) > 2 {
+				p.HostIP = strings.Join(parts[:len(parts)-2], ":")
+			}
+			out = append(out, p)
+		case map[string]any:
+			p := fakePort{HostIP: fmt.Sprint(cmp.Or(v["host_ip"], any(""))), Published: interpolate(fmt.Sprint(cmp.Or(v["published"], any(""))), lookup), Protocol: fmt.Sprint(cmp.Or(v["protocol"], any("tcp")))}
+			p.Target, _ = strconv.Atoi(interpolate(fmt.Sprint(v["target"]), lookup))
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // load reads the compose files and flattens them for the profiles: a
@@ -658,6 +699,7 @@ func (f *fakeDocker) load(files, profiles []string, env []string, stdin string) 
 			if v, ok := raw["image"].(string); ok {
 				svc.Image = interpolate(v, lookup)
 			}
+			svc.Ports = append(svc.Ports, fakePorts(raw["ports"], lookup)...)
 			if v, ok := raw["profiles"].([]any); ok {
 				svc.Profiles = nil
 				for _, p := range v {
