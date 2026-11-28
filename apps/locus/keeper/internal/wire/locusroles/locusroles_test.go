@@ -4,59 +4,28 @@
 package locusroles
 
 import (
-	"bytes"
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"reflect"
 	"testing"
+
+	"github.com/cyfr/locus/keeper/internal/wire/wiretest"
 )
 
-// The runtime row of tests/fixtures/locus_roles.json, read strictly into
-// Role: a member Role lacks, or one it has that the row lacks, fails.
+// The runtime row of tests/fixtures/locus_roles.json, every row read
+// strictly into Role: a member Role lacks, or one it has that a row lacks,
+// fails.
 func runtimeRow(t *testing.T) Role {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "..", "..", "tests", "fixtures", "locus_roles.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
 	var table struct {
 		Roles []json.RawMessage `json:"roles"`
 	}
-	if err := json.Unmarshal(data, &table); err != nil {
-		t.Fatal(err)
-	}
+	wiretest.Load(t, "locus_roles.json", &table)
 	for _, raw := range table.Roles {
-		var named struct {
-			Name string `json:"name"`
-		}
-		if err := json.Unmarshal(raw, &named); err != nil {
-			t.Fatal(err)
-		}
-		if named.Name != "runtime" {
-			continue
-		}
-		var members map[string]json.RawMessage
-		if err := json.Unmarshal(raw, &members); err != nil {
-			t.Fatal(err)
-		}
-		if n := reflect.TypeOf(Role{}).NumField(); len(members) != n {
-			t.Fatalf("the runtime row has %d members, Role %d", len(members), n)
-		}
-		var memory map[string]json.RawMessage
-		if err := json.Unmarshal(members["memory"], &memory); err != nil {
-			t.Fatal(err)
-		}
-		if n := reflect.TypeOf(Memory{}).NumField(); len(memory) != n {
-			t.Fatalf("the runtime row's memory has %d members, Memory %d", len(memory), n)
-		}
 		var role Role
-		decoder := json.NewDecoder(bytes.NewReader(raw))
-		decoder.DisallowUnknownFields()
-		if err := decoder.Decode(&role); err != nil {
-			t.Fatal(err)
+		wiretest.Value(t, raw, &role)
+		if role.Name == "runtime" {
+			return role
 		}
-		return role
 	}
 	t.Fatal("locus_roles.json names no runtime role")
 	return Role{}

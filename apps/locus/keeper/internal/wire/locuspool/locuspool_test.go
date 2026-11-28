@@ -89,7 +89,7 @@ func load(t *testing.T) wireSection {
 	var v struct {
 		Wire wireSection `json:"wire"`
 	}
-	wiretest.LoadStrict(t, "locus_pool.json", &v)
+	wiretest.Load(t, "locus_pool.json", &v)
 	return v.Wire
 }
 

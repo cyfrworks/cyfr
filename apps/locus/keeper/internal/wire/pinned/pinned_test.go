@@ -17,8 +17,8 @@ type hostSections struct {
 	PinAnswerRefusals json.RawMessage `json:"pin_answer_refusals"`
 	PinExpiry         json.RawMessage `json:"pin_expiry"`
 	PinRequests       json.RawMessage `json:"pin_requests"`
-	PinPurposes       json.RawMessage `json:"pin_purposes"`
-	PinRefusalNames   json.RawMessage `json:"pin_refusal_names"`
+	PinPurposes       []string        `json:"pin_purposes"`
+	PinRefusalNames   []string        `json:"pin_refusal_names"`
 }
 
 func hostVectors(t *testing.T) hostSections {
@@ -139,13 +139,7 @@ func TestEveryPinRequestReadsAsPrimaReadsIt(t *testing.T) {
 // list of its own.
 func TestThePurposesAndRefusalsArePrimas(t *testing.T) {
 	top := hostVectors(t)
-	var purposes, refusals []string
-	if err := json.Unmarshal(top.PinPurposes, &purposes); err != nil {
-		t.Fatal(err)
-	}
-	if err := json.Unmarshal(top.PinRefusalNames, &refusals); err != nil {
-		t.Fatal(err)
-	}
+	purposes, refusals := top.PinPurposes, top.PinRefusalNames
 	if len(purposes) == 0 || !reflect.DeepEqual(Purposes(), purposes) || len(refusals) == 0 || !reflect.DeepEqual(Refusals(), refusals) {
 		t.Errorf("purposes %v, refusals %v; the vector's %v, %v", Purposes(), Refusals(), purposes, refusals)
 	}

@@ -17,7 +17,7 @@ import (
 
 // wireSections are the sections of tests/fixtures/authority_wire.json this test reads.
 type wireSections struct {
-	Version json.RawMessage `json:"version"`
+	Version int             `json:"version"`
 	Read    json.RawMessage `json:"read"`
 	Refused json.RawMessage `json:"refused"`
 	Egress  json.RawMessage `json:"egress"`
@@ -70,9 +70,8 @@ func read(t *testing.T, raw json.RawMessage) (Authority, error) {
 func wire(t *testing.T) wireSections {
 	t.Helper()
 	top := wireVectors(t)
-	var version int
-	if err := json.Unmarshal(top.Version, &version); err != nil || version != 1 {
-		t.Fatalf("the vector file's version: %d, %v", version, err)
+	if top.Version != 1 {
+		t.Fatalf("the vector file's version: %d", top.Version)
 	}
 	return top
 }

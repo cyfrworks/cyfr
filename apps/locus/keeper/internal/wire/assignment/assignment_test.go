@@ -16,9 +16,23 @@ import (
 
 // authSections are the sections of tests/fixtures/worker_auth.json this test reads.
 type authSections struct {
-	Assignment             json.RawMessage `json:"assignment"`
-	AssignmentReads        json.RawMessage `json:"assignment_reads"`
-	AssignmentServiceReads json.RawMessage `json:"assignment_service_reads"`
+	Assignment struct {
+		Token string `json:"token"`
+		// The token's MAC, the clock it was made at and its payload,
+		// which Prima's test reads.
+		MAC     json.RawMessage `json:"mac"`
+		Now     json.RawMessage `json:"now"`
+		Payload json.RawMessage `json:"payload"`
+	} `json:"assignment"`
+	AssignmentReads struct {
+		Valid   json.RawMessage `json:"valid"`
+		Invalid json.RawMessage `json:"invalid"`
+	} `json:"assignment_reads"`
+	AssignmentServiceReads struct {
+		Refused json.RawMessage `json:"refused"`
+		Read    json.RawMessage `json:"read"`
+		Carried json.RawMessage `json:"carried"`
+	} `json:"assignment_service_reads"`
 }
 
 func authVectors(t *testing.T) authSections {
@@ -162,23 +176,8 @@ func read(t *testing.T, why, token string, casePayload json.RawMessage) error {
 // read, is read and carried, the token as given.
 func TestEveryAssignmentReadsAsTheServiceReadsIt(t *testing.T) {
 	top := authVectors(t)
-	var signed struct {
-		Token string `json:"token"`
-	}
-	if err := json.Unmarshal(top.Assignment, &signed); err != nil {
-		t.Fatal(err)
-	}
-	var reads, service struct {
-		Valid, Invalid         json.RawMessage
-		Refused, Read, Carried json.RawMessage
-	}
-	if err := json.Unmarshal(top.AssignmentReads, &reads); err != nil {
-		t.Fatal(err)
-	}
-	if err := json.Unmarshal(top.AssignmentServiceReads, &service); err != nil {
-		t.Fatal(err)
-	}
-	all := append([]tokenCase{{Why: "the signed token", Token: signed.Token}},
+	reads, service := top.AssignmentReads, top.AssignmentServiceReads
+	all := append([]tokenCase{{Why: "the signed token", Token: top.Assignment.Token}},
 		cases(t, reads.Valid, 6, []string{"why", "token", "payload"}, false)...)
 	all = append(all, cases(t, service.Read, 4, []string{"why", "token"}, true)...)
 	all = append(all, cases(t, service.Carried, 8, []string{"why", "token"}, false)...)

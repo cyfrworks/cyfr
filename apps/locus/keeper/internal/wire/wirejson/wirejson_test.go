@@ -55,7 +55,7 @@ type wireVectors struct {
 func vectors(t *testing.T) wireVectors {
 	t.Helper()
 	var v wireVectors
-	wiretest.LoadStrict(t, "wire_json.json", &v)
+	wiretest.Load(t, "wire_json.json", &v)
 	if v.Version != 1 {
 		t.Fatalf("the vector file's version %d", v.Version)
 	}
