@@ -19,7 +19,7 @@ import {after, mock, test} from "node:test"
 
 import {fragment} from "../../../cyfr/assets/account/sign_in.js"
 import {VERSION} from "../src/process.js"
-import {DEPARTURE_MS, UNREACHABLE} from "../src/states.js"
+import {DEPARTURE_MS} from "../src/states.js"
 
 const signIn = JSON.parse(readFileSync(new URL("../../../../tests/fixtures/sign_in.json", import.meta.url)))
 const HOME = signIn["home"]
@@ -1843,19 +1843,23 @@ test("a confirmation window loads the address it was opened for, whatever frame 
 
 const ANSWER = HOME + "/login#answer"
 
-// The content window at the CYFR's sign-in page, hopped to the account
-// window, which then sends the answer back (`answer`).
-async function hopped() {
+// The content window at the CYFR's page `from` (its sign-in page unless
+// said), hopped to the account window, to the account pages' sign-in or,
+// with `via` "new", the page that makes an account, which then sends the
+// answer back (`answer`).
+async function hopped(from = "/login", via = "sign") {
   await started(true)
   assert.ok(await opens())
   const page = content()
   page.webContents.url = "http://127.0.0.1:7340/bootstrap/#road=passkey"
-  navigate(page, HOME + "/login")
-  page.webContents.loadURL(HOME + "/login")
+  navigate(page, HOME + from)
+  page.webContents.loadURL(HOME + from)
   await settled()
   const request = {...signIn["requests"]["another_sign_in"]["request"], return: HOME + "/login", expires_at: Date.now() + 60_000}
-  const hop = `${ACCOUNT}/account/sign#${fragment(request)}`
-  assert.ok(navigate(page, hop).prevented, "the hop leaves the content window at the sign-in page")
+  const hop = via === "new"
+    ? `${ACCOUNT}/account/new#${new URLSearchParams({name: "Ada", request: fragment(request)})}`
+    : `${ACCOUNT}/account/sign#${fragment(request)}`
+  assert.ok(navigate(page, hop).prevented, `the hop leaves the content window at ${from}`)
   const account = live().find((w) => w.webContents.url === hop)
   // The page's own navigation to the answer, as the engine raises it:
   // did-start-navigation first, then will-navigate.
@@ -1877,43 +1881,66 @@ function fragmentTo(page, url) {
 }
 
 test("an account window whose page is lost or failed to load ends the ceremony, the person back on the CYFR's sign-in page", async () => {
-  for (const [end, made, shown] of [
-    ["lost", (w) => w.webContents.emit("render-process-gone", {}, {reason: "killed"}), HOME + "/login"],
-    ["failed", (w) => fails(w, ACCOUNT + "/account/sign"), HOME + UNREACHABLE]
-  ]) {
+  for (const [end, made] of Object.entries({
+    lost: (w) => w.webContents.emit("render-process-gone", {}, {reason: "killed"}),
+    failed: (w) => fails(w, ACCOUNT + "/account/sign")
+  })) {
     const {page} = await hopped()
     const account = live().find((w) => w.webContents.url.startsWith(ACCOUNT + "/account/sign"))
     made(account)
     await settled()
     assert.ok(account.destroyed, `${end}: the ceremony ended`)
-    assert.ok(!page.destroyed && page.webContents.url === shown, `${end}: ${page.webContents.url}`)
+    assert.ok(!page.destroyed && page.webContents.url === HOME + "/login", end)
   }
 })
 
-test("a sign-in whose account pages could not be loaded is told so on the sign-in page; an aborted load and a completed sign-in are told nothing", async () => {
-  // Failed: the sign-in ends, and the CYFR's sign-in page shows why.
-  let {page} = await hopped()
-  let account = live().find((w) => w.webContents.url.startsWith(ACCOUNT + "/account/sign"))
-  fails(account, ACCOUNT + "/account/sign", -105)
-  await settled()
-  assert.ok(account.destroyed, "a failed load ends the sign-in")
-  assert.equal(page.webContents.url, HOME + UNREACHABLE)
+// What the app says, over its window, when a sign-in's account pages did
+// not load: spelled here as a person reads it.
+const UNREACHED = "The account pages at https://accounts.example.com could not be reached from this computer."
+const unreachedBoxes = () => world.boxes.filter((b) => b.options.message === UNREACHED)
 
-  // Aborted: a load given up is no failure; the sign-in goes on, and the
-  // page stays as it was.
-  ;({page} = await hopped())
-  account = live().find((w) => w.webContents.url.startsWith(ACCOUNT + "/account/sign"))
+test("a sign-in whose account pages could not be loaded is told so over the page it began on, which stays as it was, from the sign-in page, set-up and an invitation", async () => {
+  for (const [from, via] of [["/login", "sign"], ["/setup", "new"], ["/invite", "sign"]]) {
+    const {page} = await hopped(from, via)
+    const account = live().find((w) => w.webContents.url.startsWith(ACCOUNT + "/account/"))
+    const told = world.boxes.length
+    fails(account, account.webContents.url, -105)
+    await settled()
+    assert.ok(account.destroyed, `${from}: a failed load ends the sign-in`)
+    assert.equal(page.webContents.url, HOME + from, `${from}: the page stays`)
+    assert.equal(world.boxes.length, told + 1, `${from}: one box`)
+    const {parent, options} = world.boxes.at(-1)
+    assert.equal(parent, frame(), `${from}: over the app's window`)
+    assert.equal(options.message, UNREACHED, from)
+  }
+})
+
+test("an aborted account load and a completed sign-in tell nothing, and no page can have the app say it", async () => {
+  // Aborted: a load given up is no failure; the sign-in goes on.
+  let {page} = await hopped()
+  const account = live().find((w) => w.webContents.url.startsWith(ACCOUNT + "/account/sign"))
   fails(account, ACCOUNT + "/account/sign", -3)
   await settled()
   assert.ok(!account.destroyed, "an aborted load ends nothing")
   assert.equal(page.webContents.url, HOME + "/login")
+  assert.deepEqual(unreachedBoxes(), [], "an aborted load says nothing")
 
-  // Completed: the answer goes back, and no reason with it.
+  // Completed: the answer goes back, and nothing is said.
   const done = await hopped()
   done.answer()
   await settled()
   await settled()
   assert.equal(done.page.webContents.url, ANSWER)
+  assert.deepEqual(unreachedBoxes(), [], "a completed sign-in says nothing")
+
+  // The navigations the sign-in page is allowed say nothing either,
+  // whatever their address says.
+  ;({page} = await hopped())
+  for (const url of [HOME + "/login?error=account_unreachable", HOME + "/login#account_unreachable"]) {
+    navigate(page, url)
+    await settled()
+  }
+  assert.deepEqual(unreachedBoxes(), [], "a page's own navigation says nothing")
 })
 
 test("the account window and a confirmation window are the app's window's own, centred over the content beside the rail", async () => {

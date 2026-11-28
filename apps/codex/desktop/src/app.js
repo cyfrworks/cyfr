@@ -256,6 +256,7 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
     }
     if (effect.hop) startHop(effect.hop.url, effect.hop.kind)
     if (effect.unhop) endHop()
+    if (effect.unreachable) unreachable(effect.unreachable.account)
     if (effect.deliver && content) {
       const {url} = effect.deliver
       // The engine settles the call after its landing when it succeeds;
@@ -776,7 +777,7 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
     const ceremony = () => hop && content && hop.from === content ? hop.kind : null
     // Its page lost, the hop ends, which closes it; its page failed to
     // load (a refused or replaced load, ABORTED, is none), step ends the
-    // hop too and says why on the CYFR's sign-in page.
+    // hop too and has main say why (unreachable).
     const w = window(ses, {...overContent(560, 760), parent: frame ?? undefined}, (w) => {
       const gone = () => {
         if (accountWindow === w) endHop()
@@ -909,6 +910,17 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
     w.on("closed", () => children.delete(w))
     confine(w.webContents, "child")
     w.loadURL(url)
+  }
+
+  // A sign-in whose account pages did not load, said over the app's window
+  // by main, which saw it fail: the page the sign-in began on stays.
+  function unreachable(account) {
+    if (!frame || frame.isDestroyed()) return
+    dialog.showMessageBox(frame, {
+      type: "warning", title: "CYFR",
+      message: `The account pages at ${account} could not be reached from this computer.`,
+      buttons: ["OK"], noLink: true
+    }).catch(() => {})
   }
 
   function endHop() {
