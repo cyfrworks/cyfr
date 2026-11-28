@@ -80,6 +80,8 @@ func init() {
 	rootCmd.PersistentFlags().BoolVar(&flagNoInteractive, "no-interactive", false, "Disable interactive prompts")
 	rootCmd.PersistentFlags().StringVar(&flagToken, "token", "",
 		"The API key this invocation uses (cyfr_sk_…), made on CYFR's API Keys page; CYFR_TOKEN works too.")
+	// Its value is never said back to a person (continued).
+	_ = rootCmd.PersistentFlags().SetAnnotation("token", credentialFlag, []string{"true"})
 
 	rootCmd.AddGroup(
 		&cobra.Group{ID: "server", Title: "Server:"},

@@ -433,17 +433,17 @@ Re-running in an existing project is safe: docker-compose.yml, Caddyfile and .en
 		var o initOptions
 		o.force, _ = cmd.Flags().GetBool("force")
 		o.noPull, _ = cmd.Flags().GetBool("no-pull")
-		o.continuation = continuationArgs(cmd)
+		o.continuation = continued(cmd, nil)
 		return runInit(ctx, o, cmd.OutOrStdout(), cmd.ErrOrStderr())
 	},
 }
 
-// initOptions are cyfr init's flags. continuation is the flags given, for
+// initOptions are cyfr init's flags. continuation is init as given, for
 // the init run that continues once the requirements are installed
 // (prepareMachine).
 type initOptions struct {
 	force, noPull bool
-	continuation  []string
+	continuation  continuation
 	// project is the compose project's name where the caller chose it,
 	// setup's work in a folder it entered; otherwise the working
 	// directory's name.
