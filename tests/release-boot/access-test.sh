@@ -42,7 +42,7 @@ chmod +x "$scratch/release/bin/cyfr"
 # A cell's settings as cyfr init writes them, access settings among them.
 cat >"$scratch/cell/.env" <<'ENV'
 CYFR_SECRET_KEY_BASE=key-base
-CYFR_ACCESS=local
+CYFR_BROWSER=none
 CYFR_HOST=localhost
 CYFR_PORT=4399
 CYFR_CORS_ALLOWED_ORIGINS=
@@ -55,7 +55,7 @@ ADAPTER=sqlite WORK="$scratch" bash -c '
   fail() { echo "FAIL: $*" >&2; exit 1; }
   source "$1/tests/release-boot/boot.sh"
   source "$1/tests/release-boot/release.sh"
-  count="$(access_vectors "$1/tests/fixtures/access_modes.json" "$2/vectors")"
+  count="$(access_vectors "$1/tests/fixtures/access.json" "$2/vectors")"
   [ "$count" -gt 0 ] || fail "no vector was staged"
   access_settings "$2/cell/.env" "$2/vectors/strip" >"$2/access.env"
   cp "$2/access.env" "$2/cell/.env"
@@ -65,7 +65,7 @@ ADAPTER=sqlite WORK="$scratch" bash -c '
   done
   echo "$count"' _ "$root" "$scratch" >"$scratch/count"
 
-python3 -I - "$root/tests/fixtures/access_modes.json" "$scratch" <<'PY'
+python3 -I - "$root/tests/fixtures/access.json" "$scratch" <<'PY'
 import json, os, sys
 vectors, scratch = json.load(open(sys.argv[1]))["boot"], sys.argv[2]
 strip = open(os.path.join(scratch, "vectors", "strip")).read().split()

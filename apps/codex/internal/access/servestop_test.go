@@ -61,11 +61,11 @@ func TestEveryStopOfTheHomeFindsServeClosed(t *testing.T) {
 	run("down", func() { h.e.Stop(bg, "down", true) })
 	h.e.Start(bg, "up")
 	run("start removing a service its head does not select", func() {
-		h.fake.startStack(t, Head{Profiles: []string{ModePublic}})
+		h.fake.startStack(t, Head{Profiles: []string{BrowserDomain}})
 		h.e.Start(bg, "up")
 	})
 	run("switch", func() {
-		if rc, err := h.e.Switch(bg, h.request(id(10), Target{Mode: ModeLocal}, "")); err != nil || rc.Outcome != "ok" {
+		if rc, err := h.e.Switch(bg, h.request(id(10), Target{Browser: BrowserNone}, "")); err != nil || rc.Outcome != "ok" {
 			t.Fatalf("the switch to local answered %+v, %v", rc, err)
 		}
 	})
@@ -76,13 +76,13 @@ func TestEveryStopOfTheHomeFindsServeClosed(t *testing.T) {
 				open()
 			}
 		}
-		if rc, _ := h.e.Switch(bg, h.request(id(11), publicTarget, "")); rc.Outcome != "rolled_back" {
+		if rc, _ := h.e.Switch(bg, h.request(id(11), domainTarget, "")); rc.Outcome != "rolled_back" {
 			t.Errorf("the failed switch answered %+v", rc)
 		}
 		failCaddy, h.e.hook = false, nil
 	})
 	run("join replacing the machine's service", func() {
-		h.fake.startStack(t, Head{Profiles: []string{ModeTailnet}})
+		h.fake.startStack(t, Head{Profiles: []string{BrowserTailnet}})
 		h.e.hook = func(point string) {
 			if point == "journal:join:accepted" {
 				open()
@@ -92,7 +92,7 @@ func TestEveryStopOfTheHomeFindsServeClosed(t *testing.T) {
 		h.e.hook = nil
 	})
 	h.e.Start(bg, "up")
-	r := h.request(id(14), publicTarget, "")
+	r := h.request(id(14), domainTarget, "")
 	run("recovery", func() {
 		if !h.killAt("journal:switch:accepted", func(e *Engine) { e.Switch(bg, r) }) {
 			t.Fatal("the switch never reached its acceptance")

@@ -57,7 +57,7 @@ func TestRealComposeDiagnosticNamesNoFileAnEnvValueNames(t *testing.T) {
 	requireCompose(t)
 	const secret = "review-secret-as-env-filename"
 	e := realProject(t, t.TempDir(), map[string]string{
-		".env":        "CYFR_ACCESS=local\nCYFR_HOST=localhost\nCYFR_PORT=4000\nCYFR_SECRET_KEY_BASE=" + secret + "\n",
+		".env":        "CYFR_BROWSER=none\nCYFR_HOST=localhost\nCYFR_PORT=4000\nCYFR_SECRET_KEY_BASE=" + secret + "\n",
 		"compose.yml": "services:\n  cyfr:\n    image: busybox:latest\n    env_file:\n      - .env\n      - ${CYFR_SECRET_KEY_BASE}\n",
 		secret:        "BROKEN! sentinel =value\n",
 	})
@@ -85,7 +85,7 @@ func TestRealComposeDiagnosticReadsNoTextInsideAQuotedValue(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			e := realProject(t, filepath.Join(t.TempDir(), "home with spaces"), map[string]string{
-				".env":        "CYFR_ACCESS=local\nCYFR_HOST=localhost\nCYFR_PORT=4000\n" + c.env,
+				".env":        "CYFR_BROWSER=none\nCYFR_HOST=localhost\nCYFR_PORT=4000\n" + c.env,
 				"compose.yml": "services:\n  cyfr:\n    image: busybox:latest\n    env_file:\n      - .env\n      - extra.env\n",
 				"extra.env":   c.extra,
 			})
@@ -106,7 +106,7 @@ func TestRealComposeConversionDiagnosticCarriesNoEnvValue(t *testing.T) {
 	requireCompose(t)
 	const secret = "review-secret-that-must-stay-private"
 	e := realProject(t, t.TempDir(), map[string]string{
-		".env":        "CYFR_ACCESS=local\nCYFR_HOST=localhost\nCYFR_PORT=4000\nCYFR_SECRET_KEY_BASE=" + secret + "\n",
+		".env":        "CYFR_BROWSER=none\nCYFR_HOST=localhost\nCYFR_PORT=4000\nCYFR_SECRET_KEY_BASE=" + secret + "\n",
 		"compose.yml": "services:\n  cyfr:\n    image: busybox:latest\n    env_file: .env\n    deploy:\n      resources:\n        limits:\n          cpus: ${CYFR_SECRET_KEY_BASE}\n",
 	})
 	err := e.CheckStack(bg)
@@ -129,7 +129,7 @@ type leakCheck struct {
 	// keys (CYFR_BIND_ADDRESS, CYFR_PROXY_*, CYFR_TRUSTED_PROXY_*): an
 	// invalid one fills access_setting_invalid's value slot under the
 	// cross-language boot-refusal contract (Prima.Refusal, the ResolveBoot
-	// vectors of access_modes.json), so raw does not check them; they are
+	// vectors of access.json), so raw does not check them; they are
 	// redacted at the engine's boundary, which out checks.
 	boot []string
 }
@@ -294,7 +294,7 @@ func TestRealComposeNoEnvSecretLeavesTheEngine(t *testing.T) {
 	plant("DATABASE_URL", "postgres://alice:"+dbTok+"@db/cyfr", dbTok)
 	insideTok := token()
 	tokens = append(tokens, insideTok)
-	env, err := EditEnv([]byte("CYFR_ACCESS=local\nCYFR_HOST=localhost\nCYFR_PORT=4000\n"), secrets, nil)
+	env, err := EditEnv([]byte("CYFR_BROWSER=none\nCYFR_HOST=localhost\nCYFR_PORT=4000\n"), secrets, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -320,7 +320,7 @@ func TestRealComposeNoEnvSecretLeavesTheEngine(t *testing.T) {
     image: busybox:latest
     init: true
     command: ["sleep", "600"]
-    profiles: ["public"]
+    profiles: ["domain"]
     ports:
       - "127.0.0.1:%d:80"
 `, port)
@@ -350,7 +350,7 @@ func TestRealComposeNoEnvSecretLeavesTheEngine(t *testing.T) {
 		t.Cleanup(unlock)
 		return e, &leakCheck{t: t, tokens: tokens}
 	}
-	public := Target{Mode: ModePublic, Domain: "home.example.com"}
+	public := Target{Browser: BrowserDomain, Domain: "home.example.com"}
 
 	// reads are the engine's answers that change nothing, before its last
 	// pass and as they leave it.

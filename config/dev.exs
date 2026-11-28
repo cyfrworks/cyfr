@@ -7,7 +7,7 @@ config :cyfr, :prometheus_metrics_enabled, true
 
 # Development enables debugging and code reloading. The listeners, the URL and the origins are
 # the access settings', which `config/runtime.exs` writes in development as in a
-# release: a checkout whose .env sets no CYFR_ACCESS is `local`, on
+# release: a checkout whose .env sets no CYFR_BROWSER has none, on
 # 127.0.0.1:4000 unless CYFR_BIND_ADDRESS or CYFR_PORT says otherwise.
 config :cyfr, CyfrWeb.Endpoint,
   code_reloader: true,

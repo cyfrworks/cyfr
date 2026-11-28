@@ -23,7 +23,7 @@ defmodule Sanctum.AccountKeysTest do
 
   setup tags do
     Arca.Test.Sandbox.setup!(tags)
-    Prima.Test.Env.put_app_env(:sanctum, :access_mode, :public)
+    Prima.Test.Env.put_app_env(:sanctum, :exposure, :public)
 
     person = person!()
     %{account: account, dir: dir} = DirectoryServer.member!(person.id)

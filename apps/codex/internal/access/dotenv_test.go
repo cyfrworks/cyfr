@@ -79,7 +79,7 @@ func TestEngineRefusesAnEnvComposeCannotRead(t *testing.T) {
 	}
 	_, err := h.e.Start(bg, "up")
 	check("Start", err)
-	_, err = h.e.Switch(bg, SwitchRequest{ID: id(1), Target: publicTarget})
+	_, err = h.e.Switch(bg, SwitchRequest{ID: id(1), Target: domainTarget})
 	check("Switch", err)
 	_, err = h.e.Join(bg, JoinRequest{ID: id(2)})
 	check("Join", err)

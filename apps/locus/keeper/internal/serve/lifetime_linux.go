@@ -33,12 +33,14 @@ var machineIdleFor = 10 * time.Minute
 // is killed.
 const machineCloseWait = admission.RoomWait
 
-// endMachine ends m, at rest, for why: only one no place names, whose end
-// has not begun, so no session of the person is cut short, and a start of
-// theirs from here boots a VM of its own once this one is released.
+// endMachine ends m, at rest, for why: only one at rest in the ledger
+// (admission's Rests: no session's place in it or waiting for it, and no
+// folder's operation holding it), whose end has not begun, so no session or
+// operation of the person is cut short, and a start of theirs from here
+// boots a VM of its own once this one is released.
 func (s *server) endMachine(m *machine, why string) {
 	s.mu.Lock()
-	idle := m.vm != nil && !m.ending && m.places == 0 && len(m.sessions) == 0
+	idle := m.vm != nil && !m.ending && s.ledger.Rests(m.entry)
 	if idle {
 		m.ending = true
 	}
@@ -60,13 +62,13 @@ func (s *server) giveWay(m *machine) {
 	s.endMachine(m, "it held no session, and a start needs its room")
 }
 
-// endIdleMachines ends every VM that has held no session for
-// machineIdleFor, and no place names (endMachine).
+// endIdleMachines ends every VM idle for machineIdleFor, of those at rest
+// (endMachine decides).
 func (s *server) endIdleMachines() {
 	s.mu.Lock()
 	var idle []*machine
 	for _, m := range s.vms {
-		if m.vm != nil && !m.ending && len(m.sessions) == 0 && now().Sub(m.idleSince) >= machineIdleFor {
+		if m.vm != nil && !m.ending && now().Sub(m.idleSince) >= machineIdleFor {
 			idle = append(idle, m)
 		}
 	}

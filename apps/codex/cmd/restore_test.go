@@ -167,7 +167,7 @@ func (r *restoreScenario) stagedConfig(overrides ...string) string {
 	for _, o := range overrides {
 		files += " -f " + o
 	}
-	return "compose -p " + access.ProjectName(r.project) + " " + files + " --project-directory . --profile public config --format json"
+	return "compose -p " + access.ProjectName(r.project) + " " + files + " --project-directory . --profile domain config --format json"
 }
 
 // restoreScenario is an update scenario whose update has taken a snapshot,
@@ -447,44 +447,6 @@ func failedSwitchSnapshot(t *testing.T) *restoreScenario {
 	}
 	s.answer("mark.out", "CYFR_RESTORE_ID="+testRestored+"\n")
 	return &restoreScenario{updateScenario: s, dir: s.snapshotDir()}
-}
-
-// The restore of a snapshot of the three-container release, whose builder
-// and its guard run under a profile of their own, starts the snapshot's
-// head alone and then says that the two are not started and the command
-// that starts them.
-func TestRestoreOfABuildsSnapshotSaysTheBuildsAreNotStarted(t *testing.T) {
-	r := failedSwitchSnapshot(t)
-	r.withProfiles(buildsProfiles)
-	out, err := r.restore(true)
-	if err != nil {
-		t.Fatalf("restore: %v\n%s", err, out)
-	}
-	said := "\nThese services are not started, since .env selects none of their profiles: locus-builds, locus-builds-guard; 'docker compose --profile locus-builds up -d locus-builds locus-builds-guard' starts them.\n"
-	if !strings.HasSuffix(out, said) || strings.Count(out, said) != 1 {
-		t.Errorf("the restore did not end saying once %q:\n%s", said, out)
-	}
-	for _, line := range r.log() {
-		if strings.Contains(line, " up ") && strings.Contains(line, "locus-builds") {
-			t.Errorf("the restore ran %q", line)
-		}
-	}
-}
-
-// A restore left stopped says 'cyfr up' starts it and, since that starts
-// none of the services under the stack's own profiles, which they are and
-// what starts them.
-func TestARestoreLeftStoppedSaysTheBuildsAreNotStarted(t *testing.T) {
-	r := failedSwitchSnapshot(t)
-	r.withProfiles(buildsProfiles)
-	out, err := r.restore(false)
-	if err != nil {
-		t.Fatalf("restore: %v\n%s", err, out)
-	}
-	said := "The stack is left stopped (--no-start); start it with 'cyfr up'.\nThese services are not started, since .env selects none of their profiles: locus-builds, locus-builds-guard; 'docker compose --profile locus-builds up -d locus-builds locus-builds-guard' starts them.\n"
-	if !strings.HasSuffix(out, said) || strings.Count(out, said) != 1 {
-		t.Errorf("the restore did not end saying once %q:\n%s", said, out)
-	}
 }
 
 // What a restore removes is this project's networks, listed by its compose
@@ -1749,17 +1711,17 @@ func TestRestoreReadsTheStagedConfigurationAsComposeWill(t *testing.T) {
 // the engine refuses a home's .env (access.CheckEnvFile), with its
 // sentence, before anything stops: a COMPOSE_* setting in any form, and a
 // head that does not boot, its CYFR_PUBLIC_URL not its host's, or no
-// CYFR_ACCESS at all.
+// CYFR_BROWSER at all.
 func TestRestoreRefusesASnapshotEnvTheEngineRefusesBeforeAnythingStops(t *testing.T) {
 	compose := shippedCompose(t)
 	for name, edit := range map[string]func(env string) string{
 		"COMPOSE_FILE":                func(env string) string { return env + "COMPOSE_FILE=other.yml\n" },
-		"export COMPOSE_PROFILES":     func(env string) string { return env + "export COMPOSE_PROFILES=public\n" },
+		"export COMPOSE_PROFILES":     func(env string) string { return env + "export COMPOSE_PROFILES=domain\n" },
 		"COMPOSE_PROJECT_NAME: other": func(env string) string { return env + "COMPOSE_PROJECT_NAME: other\n" },
 		"a public URL not the host's": func(env string) string {
 			return strings.Replace(env, "CYFR_PUBLIC_URL=https://cyfr.example.com\n", "CYFR_PUBLIC_URL=https://elsewhere.example.com\n", 1)
 		},
-		"no CYFR_ACCESS": func(env string) string { return strings.Replace(env, "CYFR_ACCESS=public\n", "", 1) },
+		"no CYFR_BROWSER": func(env string) string { return strings.Replace(env, "CYFR_BROWSER=domain\n", "", 1) },
 	} {
 		t.Run(name, func(t *testing.T) {
 			r := newRestoreScenario(t, compose, nil, nil)
@@ -1840,8 +1802,8 @@ func TestRestoreStagedReadSelectsAsTheEngine(t *testing.T) {
 	}
 	t.Chdir(dir)
 	for name, content := range map[string]string{
-		"docker-compose.yml": "services:\n  cyfr:\n    image: alpine:3.22\n    env_file: [.env]\n  caddy:\n    image: alpine:3.22\n    profiles: [public]\n",
-		".env":               "CYFR_ACCESS=public\nCYFR_HOST=cyfr.example.com\nCYFR_PUBLIC_URL=https://cyfr.example.com\n",
+		"docker-compose.yml": "services:\n  cyfr:\n    image: alpine:3.22\n    env_file: [.env]\n  caddy:\n    image: alpine:3.22\n    profiles: [domain]\n",
+		".env":               "CYFR_BROWSER=domain\nCYFR_HOST=cyfr.example.com\nCYFR_PUBLIC_URL=https://cyfr.example.com\n",
 	} {
 		if err := os.WriteFile(name, []byte(content), 0600); err != nil {
 			t.Fatal(err)
@@ -1879,7 +1841,7 @@ func TestRestoreStagedReadSelectsAsTheEngine(t *testing.T) {
 		}
 		return kept
 	}
-	if got, want := selection(staged), selection(engine); !slices.Equal(got, want) || !slices.Contains(want, "public") {
+	if got, want := selection(staged), selection(engine); !slices.Equal(got, want) || !slices.Contains(want, "domain") {
 		t.Errorf("the staged read selects %v, the engine's compose calls %v", got, want)
 	}
 }
@@ -1941,5 +1903,66 @@ func TestRestoreRefusesAPostgresMajorWithoutAPinnedClient(t *testing.T) {
 		return strings.Contains(line, "pg_restore") || strings.Contains(line, "postgres:13")
 	}) {
 		t.Errorf("the restore loaded the dump or ran an image for the unpinned major:\n%s", strings.Join(r.log(), "\n"))
+	}
+}
+
+// ownerFailedSwitchSnapshot is an update of the owner-profile stack
+// (newOwnerProfileScenario) that failed after its switch, its snapshot to
+// restore, with the fake docker swapped for restoreFakeDocker and its log
+// cleared.
+func ownerFailedSwitchSnapshot(t *testing.T) *restoreScenario {
+	s := newOwnerProfileScenario(t)
+	s.edit("data/cyfr.db", sqliteBytes)
+	s.answer("up.exit", "1")
+	if out, err := s.run(context.Background()); err == nil || !strings.Contains(err.Error(), "cyfr restore "+s.snapshotDir()) {
+		t.Fatalf("update answered %v\n%s", err, out)
+	}
+	if err := os.WriteFile(filepath.Join(s.fake, "docker"), []byte(restoreFakeDocker), 0755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"log", "state", "up.exit"} {
+		if err := os.Remove(filepath.Join(s.fake, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s.answer("mark.out", "CYFR_RESTORE_ID="+testRestored+"\n")
+	return &restoreScenario{updateScenario: s, dir: s.snapshotDir()}
+}
+
+// The restore of a snapshot of the owner-profile stack, whose builder
+// and its guard run under a profile of their own, starts the snapshot's
+// head alone and then says that the two are not started and the command
+// that starts them.
+func TestRestoreOfABuildsSnapshotSaysTheBuildsAreNotStarted(t *testing.T) {
+	r := ownerFailedSwitchSnapshot(t)
+	r.withProfiles(ownerProfiles)
+	out, err := r.restore(true)
+	if err != nil {
+		t.Fatalf("restore: %v\n%s", err, out)
+	}
+	said := "\nThese services are not started, since .env selects none of their profiles: builder, builder-guard; 'docker compose --profile builds up -d builder builder-guard' starts them.\n"
+	if !strings.HasSuffix(out, said) || strings.Count(out, said) != 1 {
+		t.Errorf("the restore did not end saying once %q:\n%s", said, out)
+	}
+	for _, line := range r.log() {
+		if strings.Contains(line, " up ") && strings.Contains(line, "builder") {
+			t.Errorf("the restore ran %q", line)
+		}
+	}
+}
+
+// A restore left stopped says 'cyfr up' starts it and, since that starts
+// none of the services under the stack's own profiles, which they are and
+// what starts them.
+func TestARestoreLeftStoppedSaysTheBuildsAreNotStarted(t *testing.T) {
+	r := ownerFailedSwitchSnapshot(t)
+	r.withProfiles(ownerProfiles)
+	out, err := r.restore(false)
+	if err != nil {
+		t.Fatalf("restore: %v\n%s", err, out)
+	}
+	said := "The stack is left stopped (--no-start); start it with 'cyfr up'.\nThese services are not started, since .env selects none of their profiles: builder, builder-guard; 'docker compose --profile builds up -d builder builder-guard' starts them.\n"
+	if !strings.HasSuffix(out, said) || strings.Count(out, said) != 1 {
+		t.Errorf("the restore did not end saying once %q:\n%s", said, out)
 	}
 }

@@ -69,10 +69,10 @@ var (
 const stateMarker = ".cyfr"
 
 // isCYFRProject reports whether the working directory is a CYFR cyfr init
-// made: a compose file, .cyfr/, and a .env that names CYFR_ACCESS.
+// made: a compose file, .cyfr/, and a .env that names CYFR_BROWSER.
 func isCYFRProject() bool {
 	values, err := access.ReadEnvValues(".env")
-	return err == nil && values["CYFR_ACCESS"] != "" && access.HasComposeFile(".") && fileExists(stateMarker)
+	return err == nil && values["CYFR_BROWSER"] != "" && access.HasComposeFile(".") && fileExists(stateMarker)
 }
 
 // uninstallPlan is what cyfr uninstall removes and leaves, read before
@@ -140,7 +140,7 @@ func readUninstallPlan() (*uninstallPlan, error) {
 	}
 	for _, name := range access.ComposeMainFiles {
 		if fileExists(name) {
-			p.images = imagesFromCompose(name, []string{access.ModePublic, access.ModeTailnet})
+			p.images = imagesFromCompose(name, access.BrowserProfiles())
 			break
 		}
 	}
@@ -286,7 +286,7 @@ func (p *uninstallPlan) show(out io.Writer) {
 // shown, one question, then each removal in turn, and what is left named.
 func runUninstall(ctx context.Context, out io.Writer, yes bool) error {
 	if !isCYFRProject() {
-		return errors.New("This directory is not a CYFR that cyfr init made, so nothing was removed: it lacks a compose file, .cyfr/ or a .env that names CYFR_ACCESS. Run 'cyfr uninstall' in CYFR's directory")
+		return errors.New("This directory is not a CYFR that cyfr init made, so nothing was removed: it lacks a compose file, .cyfr/ or a .env that names CYFR_BROWSER. Run 'cyfr uninstall' in CYFR's directory")
 	}
 	p, err := readUninstallPlan()
 	if err != nil {

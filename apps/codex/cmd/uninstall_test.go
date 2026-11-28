@@ -178,8 +178,8 @@ func (s *uninstallScenario) fill(dir string) {
 	for name, data := range map[string]string{
 		"docker-compose.yml":                string(s.compose),
 		"Caddyfile":                         "",
-		".env":                              "CYFR_ACCESS=local\n",
-		".env.example":                      "CYFR_ACCESS=\n",
+		".env":                              "CYFR_BROWSER=none\n",
+		".env.example":                      "CYFR_BROWSER=\n",
 		".env.locus.example":                "",
 		"keeper.seccomp.json":               "{}",
 		"configuration-guide.md":            "# guide\n",
@@ -313,7 +313,7 @@ func exists(path string) bool {
 func (s *uninstallScenario) images() []string {
 	path := filepath.Join(s.t.TempDir(), "docker-compose.yml")
 	s.write(path, string(s.compose))
-	return imagesFromCompose(path, []string{access.ModePublic, access.ModeTailnet})
+	return imagesFromCompose(path, access.BrowserProfiles())
 }
 
 // ownCalls are the docker calls the uninstall makes after the stop: its
@@ -601,7 +601,7 @@ func TestUninstallRefusesWhatIsNotACYFR(t *testing.T) {
 	s.write(filepath.Join(s.dir, ".env"), "OTHER=1\n")
 	before := listing(t, s.dir)
 	_, err := s.run(true)
-	want := "This directory is not a CYFR that cyfr init made, so nothing was removed: it lacks a compose file, .cyfr/ or a .env that names CYFR_ACCESS. Run 'cyfr uninstall' in CYFR's directory"
+	want := "This directory is not a CYFR that cyfr init made, so nothing was removed: it lacks a compose file, .cyfr/ or a .env that names CYFR_BROWSER. Run 'cyfr uninstall' in CYFR's directory"
 	if err == nil || err.Error() != want {
 		t.Fatalf("cyfr uninstall answered %v, want %q", err, want)
 	}

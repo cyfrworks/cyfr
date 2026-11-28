@@ -5,7 +5,7 @@ defmodule Cyfr.GracefulStopTest do
   @moduledoc """
   A graceful stop refuses before it drains: `Cyfr.Application.prep_stop/1`
   marks the LiveView socket draining and closes the endpoint's listening
-  ports, its loopback listener's and, in a tailnet or public home, its
+  ports, its loopback listener's and, with a browser address, its
   proxy listener's, before the supervision tree stops. A new connection, a tab the
   LiveView drainer tells to reconnect included, is refused by the member
   that is stopping, and so is a LiveView connect over either transport on
@@ -447,7 +447,7 @@ defmodule Cyfr.GracefulStopTest do
     end
   end
 
-  # A tailnet or public home's endpoint serves two listeners
+  # With a browser address the endpoint serves two listeners
   # (`CyfrWeb.Ingress`): the stop closes both, and a LiveView connect is
   # refused over a connection already open to either.
   describe "an endpoint's two listeners" do

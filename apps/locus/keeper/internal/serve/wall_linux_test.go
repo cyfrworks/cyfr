@@ -179,22 +179,14 @@ func TestAKeeperThatGivesNoWallSaysWhyAndTouchesNoDisk(t *testing.T) {
 }
 
 // Where the wall is not given, a session of an image is refused with the
-// start line's reason in its log line; where it is, a home's reset on an
-// image is refused as one this keeper does not yet make through the VM,
-// never as a machine that runs none (4742 fail 6).
+// start line's reason in its log line, never as advice to give a device
+// (4742 fail 6); where it is, a reset of an image's home goes through the
+// person's VM (homeInMachine's tests).
 func TestAnImagesRefusalsSayWhatIsTrue(t *testing.T) {
 	k := newVMKeeper(t)
 	var log bytes.Buffer
 	k.s.log = logx.NewWriter(&log, "cyfr-locus", false)
 	k.disk(t, "ath_a", "vlt_a1")
-	k.s.handle(k.c, &protocol.Request{V: protocol.Version, Type: protocol.TypeHomeReset, ID: "r1", Home: "vlt_a1"})
-	if m := k.next(t); m["type"] != "error" || m["code"] != protocol.CodeUnavailable {
-		t.Fatalf("a reset of an image's home answered %v", m)
-	}
-	if said := log.String(); !strings.Contains(said, "this keeper does not yet reset or retire a home through its person's VM") || strings.Contains(said, "runs none") {
-		t.Fatalf("a reset refused where the wall is given said %q", said)
-	}
-	log.Reset()
 	k.s.wall, k.s.wallWhy = false, "the container was given no /dev/net/tun"
 	k.place(t, "p-s1", "ath_a")
 	k.s.handleSpawn(k.c, k.spawnReq("s1", "p-s1", "vlt_a1", nil))
@@ -203,5 +195,42 @@ func TestAnImagesRefusalsSayWhatIsTrue(t *testing.T) {
 	}
 	if said := log.String(); !strings.Contains(said, "this machine runs none: the container was given no /dev/net/tun") {
 		t.Fatalf("a session of an image refused without the wall said %q", said)
+	}
+}
+
+// At the start of a keeper that gives the wall, every never-kept disk is
+// retired, no VM running: one whole, and one whose image a keeper killed in
+// its retirement already took; a disk with no mark, as every record made
+// before it was written is, stays.
+func TestTheKeepersStartRetiresEveryNeverKeptDisk(t *testing.T) {
+	dev := t.TempDir()
+	files := []string{filepath.Join(dev, "firecracker"), filepath.Join(dev, "vmlinux")}
+	for _, f := range files {
+		if err := os.WriteFile(f, nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	wallSeams(t)
+	usableDevices(t)
+	kvmPath, tunPath, guestFiles = vm.KVM, tunDevice, files
+	openDevice = func(string) error { return nil }
+	k := newVMKeeper(t)
+	k.s.wall, k.s.imageDisks = false, false
+	k.s.roles = []*role{k.c.role}
+	unkeptDisk(t, k, "ath_whole")
+	unkeptDisk(t, k, "ath_halfway")
+	if err := os.Remove(k.kept.ImagePath("ath_halfway")); err != nil {
+		t.Fatal(err)
+	}
+	k.disk(t, "ath_before")
+	k.s.giveWall()
+	if !k.s.wall {
+		t.Fatal("the test's premise: the keeper gives the wall")
+	}
+	if diskOf(k, "ath_whole") != nil || diskOf(k, "ath_halfway") != nil {
+		t.Fatal("a never-kept disk outlived the keeper's start")
+	}
+	if diskOf(k, "ath_before") == nil {
+		t.Fatal("a disk with no mark was retired at the keeper's start")
 	}
 }

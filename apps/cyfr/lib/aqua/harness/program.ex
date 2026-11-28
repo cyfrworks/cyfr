@@ -60,9 +60,12 @@ defmodule Aqua.Harness.Program do
   written, never stored (`Aqua.Loop.Stream`), once its batch committed:
   each native message streams as a step of its own, settled by its `said`
   row and withdrawn when no row will land, at its native turn's end or
-  the session's. Its own tools of the open work, by the name it gives,
-  are told to the turn's loop as they start and end, which shows them in
-  the one list of what runs (`Aqua.Loop`); nothing of them is stored. The
+  the session's. Its reasoning streams the same way apart from its text,
+  and stays shown until the turn ends. Its own tools of the open work, by
+  the name it gives and each run by its call, are told to the turn's loop
+  as they start and end, with what the harness says each runs and then
+  changed, which shows them in the one list of what runs (`Aqua.Loop`);
+  nothing of them is stored. The
   native turn's `idle` and the session's end are told the same way, and
   the loop settles what still shows running then, while a call runs too.
 
@@ -706,7 +709,8 @@ defmodule Aqua.Harness.Program do
           else:
             state
             |> stream(of_work(lines, "text", turn), effects.commit.said)
-            |> own(of_work(lines, "own", turn))
+            |> think(of_work(lines, "thought", turn))
+            |> own(of_activity(lines, turn))
             |> tell_usage(effects.commit.usage)
             |> act(effects)
             |> arm()
@@ -734,6 +738,12 @@ defmodule Aqua.Harness.Program do
   # its line's number.
   defp of_work(lines, t, %{id: work_id}),
     do: for({seq, %{"t" => ^t, "work" => ^work_id} = event} <- lines, do: {seq, event})
+
+  # The batch's own tools of the turn's work and the idles that end its
+  # native turns, in the order of their lines (`own/2`).
+  defp of_activity(lines, %{id: work_id}),
+    do:
+      for({_seq, %{"t" => t, "work" => ^work_id} = event} <- lines, t in ~w(own idle), do: event)
 
   # What a batch's events do, judged here: the commit's attrs, and what
   # this process acts on once they are committed.
@@ -875,6 +885,25 @@ defmodule Aqua.Harness.Program do
     end)
   end
 
+  # The open work's reasoning, announced as it is written, apart from its
+  # text (`Aqua.Loop.Stream`): no row lands it, so it stays shown until
+  # the turn ends, and it takes no ordinal from the text it may share a
+  # message with.
+  defp think(state, thoughts) do
+    Enum.each(thoughts, fn {seq, %{"message" => message, "delta" => delta}} ->
+      if delta != "",
+        do:
+          Aqua.Loop.Stream.announce_thought(
+            state.work.guest,
+            Map.put(streamed_by(state), :step_id, message),
+            {0, seq},
+            delta
+          )
+    end)
+
+    state
+  end
+
   # A message first streamed takes the next ordinal, so a later message
   # outranks it while both are kept.
   defp streaming(%{streams: streams} = state, message) when is_map_key(streams, message),
@@ -887,14 +916,19 @@ defmodule Aqua.Harness.Program do
         ordinal: state.ordinal + 1
     }
 
-  defp streamed(%{work: work} = state, message),
+  defp streamed(state, message),
+    do:
+      Map.merge(streamed_by(state), %{
+        step_id: message,
+        ordinal: Map.fetch!(state.streams, message)
+      })
+
+  defp streamed_by(%{work: work} = state),
     do: %{
       thread_id: state.thread_id,
       turn_id: work.turn.id,
       fence: work.turn.fence,
       source: work.turn.id,
-      step_id: message,
-      ordinal: Map.fetch!(state.streams, message),
       role: if(Prima.AgentRef.soul?(work.agent), do: nil, else: work.agent)
     }
 
@@ -908,21 +942,44 @@ defmodule Aqua.Harness.Program do
   end
 
   # The open work's own tools of the program, told to the loop as they
-  # start and end: the loop keeps the one list of what runs, and nothing
-  # of them is stored.
-  defp own(state, owns) do
-    Enum.reduce(owns, state, fn {_seq, %{"name" => name, "phase" => phase}}, state ->
-      tell(state, {:activity, {:own, own_name(name), phase}})
+  # start and end, each run by its `call` and with what the harness said
+  # it runs or changed, and its native turn's end, after which none of
+  # them runs: in the order of their lines, so an end that follows the
+  # idle is as late in one read as in two. The loop keeps the one list of
+  # what runs, and nothing of them is stored.
+  defp own(state, events) do
+    Enum.reduce(events, state, fn
+      %{"t" => "idle"}, state ->
+        tell(state, {:activity, :idle})
+
+      %{"call" => call, "name" => name, "phase" => phase} = own, state ->
+        tell(state, {:activity, {:own, call, own_name(name), phase, shown(own["detail"])}})
     end)
   end
+
+  # The characters a harness's words never show by their effect: every
+  # control or format character.
+  defp unshown, do: ~r/\p{C}/u
 
   # The program's word for its tool is shown as text: a name as long as
   # the wire holds a tool's name to and with no control or format
   # character, or else a fixed word.
   defp own_name(name) do
-    if Opus.Brain.tool_name?(name) and not String.match?(name, ~r/\p{C}/u),
+    if Opus.Brain.tool_name?(name) and not String.match?(name, unshown()),
       do: name,
       else: "tool"
+  end
+
+  # What a run did, as the harness said it, shown as what is there: each
+  # control or format character but a line feed and a tab is shown as
+  # its escape, so an override reads as one rather than turning the text.
+  defp shown(nil), do: nil
+
+  defp shown(detail) do
+    Regex.replace(unshown(), detail, fn
+      char when char in ["\n", "\t"] -> char
+      <<code::utf8>> -> "\\u{" <> String.pad_leading(Integer.to_string(code, 16), 4, "0") <> "}"
+    end)
   end
 
   # What this process does once a batch is committed.
@@ -1049,13 +1106,12 @@ defmodule Aqua.Harness.Program do
   defp on_errors(%{work: work} = state, %{errors: [error | _]}),
     do: fail(state, lost(work, {:provider, error["type"], error["message"]}))
 
-  # The native turn ended: none of its own tools runs any more, which the
-  # loop settles wherever it waits (`{:native, :idle}`), and the loop finds
-  # whether its turn is done. Only the idle that names the turn's work is
-  # its end: a resumed harness may send one of none first.
+  # The native turn ended, which the loop was told in the order of the
+  # lines (`own/2`), and the loop finds whether its turn is done. Only the
+  # idle that names the turn's work is its end: a resumed harness may send
+  # one of none first.
   defp on_idle(%{work: %{turn: %{id: id}} = work} = state, %{idle: %{"work" => id} = idle}) do
     state = withdraw(state)
-    state = tell(state, {:activity, :idle})
 
     cond do
       state.phase == :over -> state

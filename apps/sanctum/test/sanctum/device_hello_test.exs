@@ -19,7 +19,7 @@ defmodule Sanctum.DeviceHelloTest do
   """
 
   # The directory seam, the setup token, the public URL, the directory
-  # setting and the access mode are process-wide.
+  # setting and the exposure are process-wide.
   use ExUnit.Case, async: false
 
   import Ecto.Query, only: [from: 2]
@@ -48,7 +48,7 @@ defmodule Sanctum.DeviceHelloTest do
     Prima.Test.Env.put_app_env(:sanctum, :setup_token, @token)
     Prima.Test.Env.put_app_env(:sanctum, :public_url, @origin)
     Prima.Test.Env.put_app_env(:sanctum, :directory_url, dir.url)
-    Prima.Test.Env.put_app_env(:sanctum, :access_mode, :public)
+    Prima.Test.Env.put_app_env(:sanctum, :exposure, :public)
 
     # The installation holds no person inside this test's transaction.
     Arca.Repo.delete_all(User)

@@ -8,8 +8,8 @@ defmodule CyfrWeb.Endpoint do
   `check_origin` — so a CM5 kiosk, a phone and a laptop each need exactly
   one URL.
 
-  It serves on two listeners, the loopback listener in every mode and the
-  proxy listener in a tailnet or public home, and each hands it a request
+  It serves on two listeners, the loopback listener whatever the browser
+  address and the proxy listener with one, and each hands it a request
   tagged with the listener that accepted it before `call/2` below runs
   (`CyfrWeb.Ingress`): the tag, never a header, `Host` or `Origin`, is the
   boundary.

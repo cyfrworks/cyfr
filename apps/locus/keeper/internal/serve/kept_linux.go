@@ -761,8 +761,7 @@ func (s *server) handleHome(c *client, req *protocol.Request) {
 	case at.image && s.wall:
 		// An image's homes are inside it, which the host never walks: only
 		// its person's VM measures, resets or retires one.
-		s.log.Warn("%s %s refused: kept home %s is on a disk image, and this keeper does not yet reset or retire a home through its person's VM", req.Type, req.ID, req.Home)
-		s.send(c, protocol.NewError(req.ID, "", protocol.CodeUnavailable))
+		s.homeInMachine(c, req, at)
 	case at.image:
 		s.log.Warn("%s %s refused: kept home %s is on a disk image, which only its person's VM reaches, and this machine runs none: %s", req.Type, req.ID, req.Home, s.wallWhy)
 		s.send(c, protocol.NewError(req.ID, "", protocol.CodeUnavailable))
@@ -856,6 +855,36 @@ func (s *server) makeHome(c *client, req *protocol.Request) {
 // variable the tests of a keeper running as one uid replace.
 var keptTaken = func(k *home.Kept) (map[int]bool, error) { return k.Taken("/proc") }
 
+// retireUnkept retires athanor's disk where it has never held a kept home
+// (home.Disk.Unkept) and no VM of its person stands or is placed, under the
+// disk's lock, which a first spawn's making of the disk takes too: its
+// image, then its record, then its uid, each step one the next release or
+// start finishes where a keeper killed after it left the rest. A step that
+// fails leaves the disk as it is, for its next session to use and its next
+// release or start to retire. A disk that has ever held a home is never
+// retired so.
+func (s *server) retireUnkept(athanor string) {
+	unlock := s.lockDisk(athanor)
+	defer unlock()
+	s.mu.Lock()
+	d := s.disks[athanor]
+	used := s.vms[athanor] != nil
+	s.mu.Unlock()
+	if d == nil || !d.Unkept || used {
+		return
+	}
+	if err := s.cfg.Kept.RemoveImage(athanor, d.UID); err != nil {
+		s.log.Warn("the never-kept disk of uid %d is not yet retired, its image stays: %v", d.UID, err)
+		return
+	}
+	if err := s.cfg.Kept.RemoveDisk(athanor); err != nil {
+		s.log.Warn("the never-kept disk of uid %d is not yet retired, its record stays: %v", d.UID, err)
+		return
+	}
+	s.indexDisk(athanor, nil)
+	s.log.Info("the disk of uid %d, which held no kept home, is retired with its VM: its image, its record and its uid", d.UID)
+}
+
 // recordDisk is athanor's disk, its record written first where none is,
 // holding homeID where one is given, with the disk's lock held (lockDisk):
 // a new disk draws its uid (drawKept) and takes this keeper's form
@@ -886,6 +915,9 @@ func (s *server) recordDisk(what, athanor, homeID string) (home.Disk, string) {
 	}
 	if homeID == "" {
 		if !recorded {
+			// Made for a scratch session's first spawn, it has held no kept
+			// home, and goes with its VM until one is made on it.
+			d.Unkept = d.Form == home.FormImage
 			if err := s.putDisk(d); err != nil {
 				s.log.Error("%s: recording the person's disk: %v", what, err)
 				return d, protocol.CodeInternal
@@ -939,6 +971,12 @@ func (s *server) retireHome(c *client, req *protocol.Request, at keptAt) {
 		s.send(c, protocol.NewHomeMade(req.ID, at.uid))
 		return
 	}
+	s.homeRetired(c, req, at)
+}
+
+// homeRetired takes a retired home out of its disk's record and answers
+// req: the disk, its work folder and its uid stay.
+func (s *server) homeRetired(c *client, req *protocol.Request, at keptAt) {
 	defer s.lockDisk(at.athanor)()
 	s.mu.Lock()
 	recorded := s.disks[at.athanor]
@@ -965,7 +1003,10 @@ func (s *server) retireHome(c *client, req *protocol.Request, at keptAt) {
 // a release with homeRetireGrace does, and waits for each one's group to
 // end, by its kill's own bound: its relay drains, and its `released`
 // follows, on its reader's time, which the home's lock never waits for. It
-// answers whether every one's group was found empty.
+// answers whether every one's group was found empty. A session in a VM has
+// its group in the guest, whose keeper ends what is left of the home's
+// sessions there before it resets or retires the home: here it is ended
+// once it is retired.
 func (s *server) endHomeSessions(id string) bool {
 	s.mu.Lock()
 	var sessions []*spawn
@@ -986,7 +1027,7 @@ func (s *server) endHomeSessions(id string) bool {
 			<-sp.retired
 		}
 		s.mu.Lock()
-		ended = ended && sp.ended
+		ended = ended && (sp.machine != nil || sp.ended)
 		s.mu.Unlock()
 	}
 	return ended

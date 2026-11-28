@@ -1434,13 +1434,13 @@ defmodule Cyfr.DocsDriftTest do
   # ==========================================================================
 
   # The names `.env.example` assigns: the keys and addresses `cyfr init`
-  # mints, writes or completes, and the access mode every deployment decides,
-  # `local` until `cyfr init` or `cyfr access` writes another.
+  # mints, writes or completes, and the browser address every deployment
+  # decides, `none` until `cyfr init` or `cyfr access browser` writes another.
   @deployment_file_assignments ~w(
-    CYFR_SECRET_KEY_BASE CYFR_ACCESS CYFR_HOST CYFR_PORT
+    CYFR_SECRET_KEY_BASE CYFR_BROWSER CYFR_HOST CYFR_PORT
     CYFR_CORS_ALLOWED_ORIGINS CYFR_PRIVATE_EGRESS_TARGETS CYFR_LOCUS_RUNTIME_ROOT
     LOCUS_RUNTIME_KEY CYFR_LOCUS_BACKENDS_KEY
-    CYFR_LOCUS_BUILDS_KEY CYFR_LOCUS_APPARMOR CYFR_SETUP_TOKEN
+    CYFR_LOCUS_BUILDS_KEY CYFR_LOCUS_APPARMOR CYFR_LOCUS_KVM CYFR_LOCUS_TUN CYFR_SETUP_TOKEN
   )
 
   test "the deployment file assigns init's lines, keeps its anchor and holds no platform setting" do

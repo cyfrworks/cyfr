@@ -119,9 +119,9 @@ defmodule Aqua.Loop do
       :clock,
       activity: [],
       # The places in `activity` of a program brain's own tools still shown
-      # running (`own_activity/3`), settled when its native turn or its
-      # session ends (`settle_own/1`).
-      own: [],
+      # running, by the harness's id for each run (`own_activity/5`),
+      # settled when its native turn or its session ends (`settle_own/1`).
+      own: %{},
       # A call's outcome is unknown: only replay-safe reads run from here.
       restricted?: false,
       # The turn's harness (`Aqua.Harness`), `{module, handle}`, and this
@@ -2807,15 +2807,14 @@ defmodule Aqua.Loop do
         :running ->
           state.activity ++
             Enum.map(named, fn {tool, sentence} ->
-              %{tool: tool, sentence: sentence, status: :running, preview: nil}
+              %{tool: tool, sentence: sentence, status: :running, details: []}
             end)
 
         :done ->
-          Enum.reduce(named, state.activity, &(&2 |> mark_done(&1, cyfr?(state)) |> elem(0)))
+          Enum.reduce(named, state.activity, &mark_done(&2, &1, cyfr?(state)))
       end
 
-    announce(state, :tool_activity, activity)
-    %{state | activity: activity}
+    shown(state, activity)
   end
 
   # An entry's label is its call's tool, but for a program brain's host
@@ -2833,50 +2832,73 @@ defmodule Aqua.Loop do
   # turn waits on it or on a call (`Aqua.Harness.Program`): its own tools as they
   # start and end, and the native turn's end and the session's, after
   # either of which none of them runs.
-  defp native(%State{} = state, {:own, name, phase}), do: own_activity(state, name, phase)
+  defp native(%State{} = state, {:own, call, name, phase, detail}),
+    do: own_activity(state, call, name, phase, detail)
+
   defp native(%State{} = state, :idle), do: settle_own(state)
   defp native(%State{} = state, :session_ended), do: settle_own(state)
 
   # A program brain's own tool, by the name its attendant gives, running
-  # from its start to its end: an entry of the same list, worded as a tool
-  # no step names, since none is kept of it (`Aqua.Harness.Program`).
-  defp own_activity(%State{} = state, name, phase) do
-    sentence = Aqua.Steps.sentence(nil, nil, nil)
+  # from its start to the end of the same run, its `call`: an entry of the
+  # same list, worded as a tool no step names, since none is kept of it
+  # (`Aqua.Harness.Program`), with what the harness said the run does and
+  # then what it changed. An end of no run still shown running is late,
+  # after the native turn that ran it ended, and shows nothing.
+  defp own_activity(%State{} = state, call, name, "start", detail) do
+    entry = %{
+      tool: name,
+      sentence: Aqua.Steps.sentence(nil, nil, nil),
+      status: :running,
+      details: List.wrap(detail)
+    }
 
-    {activity, own} =
-      case phase do
-        "start" ->
-          {state.activity ++ [%{tool: name, sentence: sentence, status: :running, preview: nil}],
-           state.own ++ [length(state.activity)]}
-
-        "end" ->
-          {activity, place} = mark_done(state.activity, {name, sentence}, &(&1 in state.own))
-          {activity, List.delete(state.own, place)}
-      end
-
-    announce(state, :tool_activity, activity)
-    %{state | activity: activity, own: own}
+    state = %{state | own: Map.put(state.own, call, length(state.activity))}
+    shown(state, state.activity ++ [entry])
   end
+
+  defp own_activity(%State{own: own} = state, call, _name, "end", detail)
+       when is_map_key(own, call) do
+    {place, own} = Map.pop!(own, call)
+
+    activity =
+      List.update_at(state.activity, place, fn entry ->
+        %{entry | status: :done, details: entry.details ++ List.wrap(detail)}
+      end)
+
+    shown(%{state | own: own}, activity)
+  end
+
+  defp own_activity(%State{} = state, _call, _name, "end", _detail), do: state
 
   # The program brain's native turn or its session ended: none of its own
   # tools runs any more, and each still shown running is done.
-  defp settle_own(%State{own: []} = state), do: state
+  defp settle_own(%State{own: own} = state) when map_size(own) == 0, do: state
 
   defp settle_own(%State{own: own} = state) do
     activity =
-      Enum.reduce(own, state.activity, fn place, activity ->
+      Enum.reduce(Map.values(own), state.activity, fn place, activity ->
         List.update_at(activity, place, &%{&1 | status: :done})
       end)
 
-    announce(state, :tool_activity, activity)
-    %{state | activity: activity, own: []}
+    shown(%{state | own: %{}}, activity)
+  end
+
+  # The turn's list as it now stands, announced under the turn and its
+  # fence, so a viewer keeps only the running turn's under the fence it
+  # holds (`Aqua.Loop.Stream.put_activity/2`).
+  defp shown(%State{turn: turn} = state, activity) do
+    announce(state, :tool_activity, %{turn_id: turn.id, fence: turn.fence, entries: activity})
+    %{state | activity: activity}
   end
 
   # The places of the list that are CYFR's calls, not a program's own tools.
-  defp cyfr?(%State{own: own}), do: &(&1 not in own)
+  defp cyfr?(%State{own: own}) do
+    own = own |> Map.values() |> MapSet.new()
+    &(not MapSet.member?(own, &1))
+  end
 
   # The newest running entry for `tool` at a place `among?` takes is done;
-  # none running adds a done one. Answers the list and the place marked.
+  # none running adds a done one.
   defp mark_done(activity, {tool, sentence}, among?) do
     place =
       activity
@@ -2887,12 +2909,8 @@ defmodule Aqua.Loop do
       end)
 
     case place do
-      nil ->
-        {activity ++ [%{tool: tool, sentence: sentence, status: :done, preview: nil}],
-         length(activity)}
-
-      i ->
-        {List.update_at(activity, i, &%{&1 | status: :done}), i}
+      nil -> activity ++ [%{tool: tool, sentence: sentence, status: :done, details: []}]
+      i -> List.update_at(activity, i, &%{&1 | status: :done})
     end
   end
 

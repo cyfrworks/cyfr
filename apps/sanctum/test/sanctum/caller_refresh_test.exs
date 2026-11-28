@@ -10,7 +10,7 @@ defmodule Sanctum.CallerRefreshTest do
   never stands for the context loaded before it.
   """
 
-  # The access mode, the directory client's seam and the establish memo
+  # The exposure, the directory client's seam and the establish memo
   # are process-wide.
   use ExUnit.Case, async: false
 
@@ -29,7 +29,7 @@ defmodule Sanctum.CallerRefreshTest do
     Arca.Cache.init()
     DirectoryServer.listen!()
     DirectoryServer.seam!(tls)
-    Prima.Test.Env.put_app_env(:sanctum, :access_mode, :public)
+    Prima.Test.Env.put_app_env(:sanctum, :exposure, :public)
     Prima.Test.Env.put_app_env(:sanctum, :caller_memo_ttl_ms, 0)
     on_exit(fn -> Arca.Cache.delete_match({:established, :_, :_}) end)
 

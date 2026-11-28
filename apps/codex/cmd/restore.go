@@ -49,6 +49,8 @@ var restoreCmd = &cobra.Command{
 7. Declare the restore: bin/cyfr eval 'IO.puts("CYFR_RESTORE_ID=" <> Cyfr.Release.mark_restore())' in the snapshot's image, then take CYFR_RESTORE_INCOMPLETE out of .env. A restore that is not declared never starts.
 8. Forget the record of the machine's last tailnet join, since the snapshot's .env names its own tailnet machine, then start the stack as every cyfr start runs, waiting for cyfr's health, unless --no-start.
 
+A snapshot's .env is the machine's it was taken on: the restored .env takes this machine's devices at each of CYFR_LOCUS_KVM and CYFR_LOCUS_TUN the snapshot's assigns, /dev/kvm and /dev/net/tun only where the .env before the restore named both and this machine still has both, both empty otherwise. A restore never first runs each person's programs in a computer of their own: before anything stops it says that 'cyfr update' turns that on, where this machine could, and that a program whose folder was made in a person's own computer does not start, where this machine no longer has the devices.
+
 A restored .env names the AppArmor profile of the snapshot's release, which an update since may have taken off the machine; where this machine enforces AppArmor and has not loaded it, the restore says so before it starts the stack, with the command that loads it through that release's own cyfr ('cyfr apparmor-profile | sudo sh -c ...' run by the cyfr of the restored release, which the install script installs with CYFR_VERSION=<release>).
 
 Exit status 3: the restore is declared and CYFR started, but on this machine only, because the tailnet machine is not ready to serve it (not the one the snapshot's .env names, not joined, or HTTPS off); the message says what to do. A failure leaves the stack stopped and says what to do; from step 3 until the declaration, a crash leaves it barred, and 'cyfr restore <snapshot>' run again puts every part back from the start. An object store (S3) is outside the snapshot: objects written since it was taken stay, and objects deleted since come back only from the bucket's own versioning.`,
@@ -401,6 +403,9 @@ type restorer struct {
 	// made are the sources of binds, and their mount points, this restore
 	// made as the person (makeSources), removed again on a refusal.
 	made []string
+	// devices are the device settings the restored .env takes in place of
+	// the snapshot's, for each the snapshot's .env assigns (restoreDevices).
+	devices map[string]string
 }
 
 // restoreFiles are the configuration files the restore replaces with the
@@ -413,6 +418,9 @@ var restoreFiles = append([]string{"docker-compose.yml", ".env"}, scaffold.Secco
 func (r *restorer) run() error {
 	m := r.snap.manifest
 	fmt.Fprintf(r.out, "Restoring the snapshot of release %s taken at %s (%s).\n", m.Version, m.TakenAt, r.snap.dir)
+	if err := r.restoreDevices(); err != nil {
+		return err
+	}
 	if m.StorageAdapter == "s3" {
 		fmt.Fprintln(r.out, s3OutsideSnapshot+" Objects written since the snapshot stay in the bucket.")
 	}
@@ -472,7 +480,7 @@ func (r *restorer) run() error {
 	// the restore: the snapshot's .env names its own node, which the start
 	// validates against the machine before Serve opens.
 	if err := r.engine.ForgetJoin(); err != nil {
-		fmt.Fprintf(r.errOut, "Warning: the record of this machine's last tailnet join could not be removed (%v); `cyfr access tailnet` may offer it again.\n", engineFailure(err))
+		fmt.Fprintf(r.errOut, "Warning: the record of this machine's last tailnet join could not be removed (%v); `cyfr access browser tailnet` may offer it again.\n", engineFailure(err))
 	}
 	if !r.start {
 		fmt.Fprintln(r.out, "The stack is left stopped (--no-start); start it with 'cyfr up'.")
@@ -642,9 +650,10 @@ func (r *restorer) raiseBarrier() error {
 }
 
 // lowerBarrier puts the snapshot's .env back as the snapshot holds it,
-// without restoreBarrier, once the restore is declared.
+// with this machine's devices (restoredEnv) and without restoreBarrier,
+// once the restore is declared.
 func (r *restorer) lowerBarrier() error {
-	data, err := os.ReadFile(r.snap.path(".env"))
+	data, err := r.restoredEnv()
 	if err != nil {
 		return err
 	}
@@ -657,13 +666,70 @@ func (r *restorer) lowerBarrier() error {
 // compose file in place delivers the bar at every step.
 const stagedCompose = ".docker-compose.yml.restore"
 
-// putConfigFiles writes the snapshot's .env over the project's, with the
-// barrier, and the snapshot's compose file at stagedCompose: the
-// configuration they give cyfr is the one the snapshot was taken under,
-// whose mounts the storage part follows. .env is 0600; the compose file
-// keeps docker-compose.yml's mode.
-func (r *restorer) putConfigFiles() error {
+// restoreDevices settles the device settings the restored .env holds and
+// says, before anything stops, what they do here. A snapshot's .env is the
+// machine's it was taken on, so each device line it assigns takes this
+// machine's as its stack ran before the restore: the device's path where
+// the .env before passed both and this machine still has both, empty
+// otherwise. A line the snapshot's .env does not assign stays unassigned,
+// as a release before them declares none and its boot refuses a setting it
+// does not declare. A restore never first gives the devices: it asks no
+// question, and only cyfr update, which asks, removes the folders that
+// does; where this machine could run them, it says so.
+func (r *restorer) restoreDevices() error {
+	snapshot, err := os.ReadFile(r.snap.path(".env"))
+	if err != nil {
+		return err
+	}
+	restored, err := access.EnvValues(snapshot)
+	if err != nil {
+		return engineFailure(err)
+	}
+	before, err := access.ReadEnvValues(".env")
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return engineFailure(err)
+	}
+	have := machineDevices()
+	want := noDevices()
+	if passes(before) && passes(have) {
+		want = have
+	}
+	r.devices = map[string]string{}
+	for _, d := range vmDevices {
+		if _, assigned := restored[d.env]; assigned {
+			r.devices[d.env], restored[d.env] = want[d.env], want[d.env]
+		}
+	}
+	switch {
+	case passes(have) && !passes(restored):
+		fmt.Fprintln(r.out, devicesUpdateGives)
+	case passes(before) && !passes(have):
+		fmt.Fprintln(r.out, devicesGone("restore"))
+	}
+	return nil
+}
+
+// restoredEnv is the snapshot's .env with this machine's device settings
+// (restoreDevices), every other line as the snapshot holds it.
+func (r *restorer) restoredEnv() ([]byte, error) {
 	env, err := os.ReadFile(r.snap.path(".env"))
+	if err != nil {
+		return nil, err
+	}
+	if len(r.devices) == 0 {
+		return env, nil
+	}
+	out, err := access.EditEnv(env, r.devices, nil)
+	return out, engineFailure(err)
+}
+
+// putConfigFiles writes the snapshot's .env over the project's, with this
+// machine's devices and the barrier, and the snapshot's compose file at
+// stagedCompose: the configuration they give cyfr is the one the snapshot
+// was taken under, whose mounts the storage part follows. .env is 0600;
+// the compose file keeps docker-compose.yml's mode.
+func (r *restorer) putConfigFiles() error {
+	env, err := r.restoredEnv()
 	if err != nil {
 		return err
 	}

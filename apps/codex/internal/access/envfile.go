@@ -19,6 +19,34 @@ import (
 // composeKey is the first name, in byte order, of the COMPOSE_* settings
 // .env names, which Docker Compose would read to choose the stack's
 // files, project or profiles, or "".
+// refusal is the refusal of a .env no cyfr command reads: one that sets a
+// COMPOSE_* variable, then one whose proxy trust is not its own word.
+func (d *dotenv) refusal() *Refusal {
+	if key := d.composeKey(); key != "" {
+		return Refuse("compose_env_refused", map[string]string{"key": key})
+	}
+	if key := d.interpolatedTrust(); key != "" {
+		return Refuse("access_trust_interpolated", map[string]string{"key": key})
+	}
+	return nil
+}
+
+// interpolatedTrust is the first trust key, in byte order, whose value .env
+// takes from elsewhere: a bare name, inherited from the environment, or a
+// value outside single quotes holding a `$`, which compose interpolates
+// from the caller's environment before .env. The proxy trust is .env's
+// own word alone, so its keys take literal values only.
+func (d *dotenv) interpolatedTrust() string {
+	for _, key := range trustKeys {
+		for _, st := range d.statements {
+			if st.key == key && (st.inherit || st.quote != '\'' && strings.Contains(st.text, "$")) {
+				return key
+			}
+		}
+	}
+	return ""
+}
+
 func (d *dotenv) composeKey() string {
 	var keys []string
 	for _, st := range d.statements {
@@ -302,8 +330,8 @@ func (e *Engine) readEnv() (*dotenv, error) {
 	if err != nil {
 		return nil, err
 	}
-	if key := d.composeKey(); key != "" {
-		return nil, Refuse("compose_env_refused", map[string]string{"key": key})
+	if ref := d.refusal(); ref != nil {
+		return nil, ref
 	}
 	return d, nil
 }
@@ -381,8 +409,8 @@ func checkEnv(data []byte) error {
 	if err != nil {
 		return err
 	}
-	if key := d.composeKey(); key != "" {
-		return Refuse("compose_env_refused", map[string]string{"key": key})
+	if ref := d.refusal(); ref != nil {
+		return ref
 	}
 	_, err = headOf(d.values())
 	return err
@@ -403,8 +431,8 @@ func ReadProjectAlone(dir string) (map[string]string, Head, error) {
 	if err != nil {
 		return nil, Head{}, refused.err(err)
 	}
-	if key := d.composeKey(); key != "" {
-		return nil, Head{}, Refuse("compose_env_refused", map[string]string{"key": key})
+	if ref := d.refusal(); ref != nil {
+		return nil, Head{}, ref
 	}
 	values := d.values()
 	head, err := headOf(values)

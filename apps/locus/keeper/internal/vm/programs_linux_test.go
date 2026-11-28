@@ -555,19 +555,30 @@ func TestABindOfTheRootsOwnFilesystemStaysOutOfTheDevice(t *testing.T) {
 	if want := []string{"", "a *[x]", "a x", "a x/kept", "etc", "etc/hosts", "etc/kept", "etc/resolv.conf"}; !slices.Equal(got, want) {
 		t.Fatalf("the device holds %q, want %q", got, want)
 	}
-	guestFilesHeld(t, device)
+	guestFilesHeld(t, proc.Own, device)
 }
 
 // guestFilesHeld fails unless the device at path holds each of the guest's
-// own files with its body, of root's, mode 0644.
-func guestFilesHeld(t *testing.T, path string) {
+// own files with its body, of root's, mode 0644. It reads them with
+// unsquashfs started through start, which a test whose reaper takes every
+// child's end must give, as the keeper starts every tool of its own.
+func guestFilesHeld(t *testing.T, start proc.Start, path string) {
 	t.Helper()
+	unsquashfs, err := exec.LookPath("unsquashfs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := func(args ...string) ([]byte, error) {
+		var out bytes.Buffer
+		err := proc.Run(start, unsquashfs, append([]string{"unsquashfs"}, args...), os.Environ(), &syscall.SysProcAttr{Setpgid: true}, &out, time.Minute, time.Second)
+		return out.Bytes(), err
+	}
 	for _, f := range guestFiles {
-		body, err := exec.Command("unsquashfs", "-cat", path, f.Path).Output()
+		body, err := run("-cat", path, f.Path)
 		if err != nil || string(body) != f.Body {
 			t.Errorf("the device's %s is %q (%v), want the guest's %q", f.Path, body, err, f.Body)
 		}
-		line, err := exec.Command("unsquashfs", "-lln", path, f.Path).Output()
+		line, err := run("-lln", path, f.Path)
 		if err != nil || !strings.Contains(string(line), "-rw-r--r-- 0/0 ") {
 			t.Errorf("the device's %s is listed %q (%v), want root's, mode 0644", f.Path, line, err)
 		}
@@ -598,7 +609,7 @@ func TestTheDeviceHoldsTheGuestsOwnFiles(t *testing.T) {
 	if err := mk.run(MakeArgs(root, device, nil)); err != nil {
 		t.Fatal(err)
 	}
-	guestFilesHeld(t, device)
+	guestFilesHeld(t, start, device)
 }
 
 // A machine's VMM reads the device under a uid of its own, in no group of

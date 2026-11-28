@@ -33,13 +33,13 @@ defmodule CyfrWeb.Plugs.MCPOriginTest do
     assert conn.status == nil
   end
 
-  test "the suite's local-home allowlist admits localhost variants" do
+  test "the suite's allowlist, with no browser address, admits localhost variants" do
     for origin <- ["http://localhost", "https://localhost", "http://127.0.0.1:4000"] do
       refute call(origin).halted, "expected #{origin} to be allowed"
     end
   end
 
-  test "the suite's local-home allowlist refuses a non-localhost origin" do
+  test "the suite's allowlist, with no browser address, refuses a non-localhost origin" do
     conn = call("https://test.otakuent.net")
     assert conn.halted
     assert conn.status == 403
@@ -63,20 +63,20 @@ defmodule CyfrWeb.Plugs.MCPOriginTest do
     refute call("http://localhost:5173").halted
   end
 
-  # The allowlist a home boots with is its access settings' origins, which
-  # `config/runtime.exs` writes (`Cyfr.RuntimeConfigWiringTest`): its own
-  # https origin in a tailnet or public home, and the localhost origins on
-  # its port.
-  defp home_origins(process) do
+  # The allowlist a server boots with is its access settings' origins,
+  # which `config/runtime.exs` writes (`Cyfr.RuntimeConfigWiringTest`): its
+  # own https origin when it has a browser address, and the localhost
+  # origins on its port.
+  defp server_origins(process) do
     {:ok, access} =
       Cyfr.RuntimeConfig.resolve_access(%{file: nil, process: process, release?: true})
 
     put_origins(access.check_origins)
   end
 
-  test "a tailnet home allows its own https origin and the localhost ones on its port alone" do
-    home_origins(%{
-      "CYFR_ACCESS" => "tailnet",
+  test "a server with a tailnet address allows its own https origin and the localhost ones on its port alone" do
+    server_origins(%{
+      "CYFR_BROWSER" => "tailnet",
       "CYFR_HOST" => "cyfr.tail1a2b3c.ts.net",
       "CYFR_TAILNET_NODE_ID" => "nAbc123XYZ1CNTRL",
       "CYFR_PUBLIC_URL" => "https://cyfr.tail1a2b3c.ts.net"
@@ -96,8 +96,8 @@ defmodule CyfrWeb.Plugs.MCPOriginTest do
     end
   end
 
-  test "a local home allows the localhost origins on its port alone" do
-    home_origins(%{"CYFR_ACCESS" => "local", "CYFR_PORT" => "4005"})
+  test "a server with no browser address allows the localhost origins on its port alone" do
+    server_origins(%{"CYFR_BROWSER" => "none", "CYFR_PORT" => "4005"})
 
     refute call("http://localhost:4005").halted
     refute call("https://127.0.0.1:4005").halted

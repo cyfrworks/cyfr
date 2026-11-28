@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -595,7 +596,7 @@ var dockerCommands = []struct{ args, again []string }{
 	{[]string{"restore", "--", "-weird"}, []string{"restore", "--", "-weird"}},
 	{[]string{"update", "--yes", "--version", "0.6.0-alpha.12"}, []string{"update", "--version=0.6.0-alpha.12", "--yes"}},
 	{[]string{"uninstall"}, []string{"uninstall"}},
-	{[]string{"access", "local", "--yes"}, []string{"access", "--yes", "local"}},
+	{[]string{"access", "browser", "none", "--yes"}, []string{"access", "browser", "--yes", "none"}},
 	{[]string{"access", "--resume"}, []string{"access", "--resume"}},
 	{[]string{"access", "status"}, []string{"access", "status"}},
 }
@@ -662,6 +663,105 @@ func TestSaysLogInAgainForEachCommandWhereThereIsNoSg(t *testing.T) {
 	}
 }
 
+// The commands that start the stack as .env stands refuse a .env that
+// names, at a device setting, anything but empty or the device this
+// machine has, as the person gave the command, before Docker is asked
+// anything and before the group's second run, changing nothing: Docker
+// refuses to start a container given a device the machine lacks. Empty,
+// and the device's own path on a machine that has both, go on to that
+// step, which here runs the command again through sg.
+func TestEveryCommandThatStartsTheStackRefusesADeviceThisMachineLacks(t *testing.T) {
+	for _, c := range dockerCommands {
+		if !slices.Contains(startingCommands, c.args[0]) || slices.Equal(c.args, []string{"access", "status"}) {
+			continue
+		}
+		for _, has := range []bool{true, false} {
+			for _, d := range vmDevices {
+				for _, value := range []string{"/dev/null", "/dev/sda", "", d.path} {
+					refused := value != "" && (value != d.path || !has)
+					t.Run(fmt.Sprintf("%s, %s=%s, devices here %t", strings.Join(c.args, " "), d.env, value, has), func(t *testing.T) {
+						s := standInMachine(t)
+						s.member = []string{"docker"}
+						machine.devices = func() bool { return has }
+						record := sgStandIn(t, "0")
+						asked := 0
+						reachable := machine.reachable
+						machine.reachable = func(ctx context.Context) bool {
+							asked++
+							return reachable(ctx)
+						}
+						t.Chdir(t.TempDir())
+						env := "CYFR_BROWSER=none\n" + d.env + "=" + value + "\n"
+						if err := os.WriteFile(".env", []byte(env), 0o600); err != nil {
+							t.Fatal(err)
+						}
+						err := runCommandLine(t, c.args...)
+						if !refused {
+							if !errors.As(err, new(handedOver)) || ExitStatus(err) != 0 {
+								t.Fatalf("err %v, want the second run's status 0", err)
+							}
+							if got := sgRan(t, record); !slices.Equal(got, c.again) {
+								t.Errorf("sg ran %q, want %q", got, c.again)
+							}
+							return
+						}
+						want := d.env + " in .env is not a device this machine has for CYFR, so nothing was started. Run `cyfr update` here, which writes what this machine has, then run `" + commandSaid(c.again) + "` again"
+						if err == nil || err.Error() != want {
+							t.Fatalf("err %v, want %q", err, want)
+						}
+						if asked != 0 {
+							t.Errorf("Docker was asked %d times", asked)
+						}
+						if _, err := os.Stat(record); err == nil {
+							t.Error("sg ran")
+						}
+						if got := read(t, ".env"); got != env {
+							t.Errorf(".env is %q, want %q", got, env)
+						}
+						nothingWritten(t, ".env")
+					})
+				}
+			}
+		}
+	}
+}
+
+// startingCommands are the commands that start the stack as .env stands,
+// which alone refuse a device this machine lacks; access status starts
+// nothing.
+var startingCommands = []string{"up", "backup", "access"}
+
+// The commands that start nothing, down, uninstall and access status, and
+// those that write .env's devices from what the machine has before they
+// start anything, update and restore, are never refused for a device: a
+// machine that lost one is still stopped, uninstalled, updated and
+// restored. Each goes on to the group's step with a .env naming both
+// devices on a machine with neither.
+func TestTheCommandsThatStartNothingOrWriteTheDevicesAreNeverRefusedForOne(t *testing.T) {
+	for _, c := range dockerCommands {
+		if slices.Contains(startingCommands, c.args[0]) && !slices.Equal(c.args, []string{"access", "status"}) {
+			continue
+		}
+		t.Run(strings.Join(c.args, " "), func(t *testing.T) {
+			s := standInMachine(t)
+			s.member = []string{"docker"}
+			machine.devices = func() bool { return false }
+			record := sgStandIn(t, "0")
+			t.Chdir(t.TempDir())
+			if err := os.WriteFile(".env", []byte("CYFR_BROWSER=none\n"+deviceLines("/dev/kvm", "/dev/net/tun")), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			err := runCommandLine(t, c.args...)
+			if !errors.As(err, new(handedOver)) || ExitStatus(err) != 0 {
+				t.Fatalf("err %v, want the second run's status 0", err)
+			}
+			if got := sgRan(t, record); !slices.Equal(got, c.again) {
+				t.Errorf("sg ran %q, want %q", got, c.again)
+			}
+		})
+	}
+}
+
 // The sentence names what changes the command: a person who runs it gets
 // the command they gave.
 func TestLogInSentenceNamesTheFlagsThatMatter(t *testing.T) {
@@ -672,7 +772,7 @@ func TestLogInSentenceNamesTheFlagsThatMatter(t *testing.T) {
 		{[]string{"update", "--version", "0.6.0-alpha.12"}, "`cyfr update --version=0.6.0-alpha.12`"},
 		{[]string{"restore", "--no-start", "backups/2026"}, "`cyfr restore --no-start backups/2026`"},
 		{[]string{"access", "--resume"}, "`cyfr access --resume`"},
-		{[]string{"access", "tailnet", "--tailscale-auth-key-file", "key"}, "`cyfr access --tailscale-auth-key-file=key tailnet`"},
+		{[]string{"access", "browser", "tailnet", "--tailscale-auth-key-file", "key"}, "`cyfr access browser --tailscale-auth-key-file=key tailnet`"},
 		{[]string{"restore", "backups/my snap"}, "`cyfr restore 'backups/my snap'`"},
 	} {
 		t.Run(strings.Join(c.args, " "), func(t *testing.T) {
@@ -765,12 +865,13 @@ func TestSecondRunIsTheSameCommandInEachLoginShell(t *testing.T) {
 		{"restore", "--", "-weird"},
 		{"restore", ""},
 		{"restore", "snap!1"},
-		{"access", "public", "--domain", `ex'ample.com`, "--acme-email", `a"b$c`},
-		{"access", "tailnet", "--hostname", "", "--tailscale-auth-key-file", "my keys/key"},
+		{"access", "browser", "domain", "--domain", `ex'ample.com`, "--acme-email", `a"b$c`},
+		{"access", "browser", "tailnet", "--hostname", "", "--tailscale-auth-key-file", "my keys/key"},
+		{"access", "browser", "proxy", "--domain", "cyfr.example.com", "--publish", "127.0.0.1:4001"},
 		{"access", "status", "--json"},
 		{"update", "--version", "0.6.0-alpha.12"},
 		{"backup", `--context=a\\b`},
-		{"access", "public", "--acme-email", `a\`, "--domain", "; touch PWNED; #"},
+		{"access", "browser", "domain", "--acme-email", `a\`, "--domain", "; touch PWNED; #"},
 	} {
 		t.Run(strings.Join(line, " "), func(t *testing.T) {
 			s := standInMachine(t)

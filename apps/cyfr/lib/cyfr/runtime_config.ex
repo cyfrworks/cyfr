@@ -667,7 +667,7 @@ defmodule Cyfr.RuntimeConfig do
   `side_effect: false`), or `nil` when it read none, as in the compose
   container, where `.env` arrives through `env_file`; the environment as
   `config/runtime.exs` merges it; and whether this is a release, or a dev
-  or test run, where an unset mode is `local`.
+  or test run, where an unset kind is `none`.
   """
   @type access_input :: %{
           file: %{optional(String.t()) => String.t()} | nil,
@@ -678,14 +678,16 @@ defmodule Cyfr.RuntimeConfig do
   @type access_head :: %{optional(String.t()) => String.t() | pos_integer() | [String.t()]}
 
   @type access :: %{
-          mode: :local | :tailnet | :public,
+          browser: :none | :tailnet | :domain | :proxy,
+          exposure: :public | :private,
           head: access_head(),
           canonical: String.t(),
           digest: String.t(),
           origin: String.t(),
           listeners: %{
             loopback: {String.t(), pos_integer()},
-            proxy: {String.t(), pos_integer()} | :none
+            proxy: {String.t(), pos_integer()} | :none,
+            published: {String.t(), pos_integer()} | :none
           },
           trust: :none | {:cidrs, [String.t()]} | {:hops, 0..16},
           hsts: :none | :endpoint_on_proxy | :caddy,
@@ -698,8 +700,8 @@ defmodule Cyfr.RuntimeConfig do
   # Every name the resolver reads. A name `.env` and the merged environment
   # assign differently is a source conflict; the compose file's assertion
   # has its own rule.
-  @access_keys ~w(CADDY_ACME_EMAIL CYFR_BIND_ADDRESS CYFR_HOST CYFR_PORT
-                 CYFR_PROXY_BIND_ADDRESS CYFR_PROXY_PORT CYFR_PUBLIC_URL CYFR_ACCESS
+  @access_keys ~w(CADDY_ACME_EMAIL CYFR_BIND_ADDRESS CYFR_BROWSER CYFR_HOST CYFR_PORT
+                 CYFR_PROXY_BIND_ADDRESS CYFR_PROXY_PORT CYFR_PROXY_PUBLISH CYFR_PUBLIC_URL
                  CYFR_TAILNET_NODE_ID CYFR_TRUSTED_PROXY_CIDRS CYFR_TRUSTED_PROXY_HOPS)
   @assertion "CYFR_LOCAL_INGRESS_ASSERTED"
 
@@ -707,13 +709,15 @@ defmodule Cyfr.RuntimeConfig do
   @default_bind "127.0.0.1"
   @default_proxy_port 4001
   @default_proxy_hops 1
+  @default_publish "127.0.0.1:4001"
+  @browsers ~w(none tailnet domain proxy)
 
   @dns_label ~r/\A[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\z/
   @node_id ~r/\A[A-Za-z0-9._-]{1,128}\z/
   @digits ~r/\A[0-9]{1,5}\z/
 
   @doc """
-  Resolve how this home is reached from what the boot read
+  Resolve how this server is reached from what the boot read
   (`t:access_input/0`): `{:ok, access}`, or `{:error, %{code, class,
   payload}}`, a `Prima.Refusal` row whose sentence
   (`Prima.Refusal.message({code, payload})`) the boot prints after
@@ -724,12 +728,17 @@ defmodule Cyfr.RuntimeConfig do
   value, since no other rule can read it. Then, when several refusals
   apply, the first in this order is answered: a source conflict (the
   first such name in byte order), the assertion assigned in `.env`, the
-  mode (unset in a release, then unknown), the host, the node id, the
-  public URL, a key outside its mode (the email before the node id), a
-  malformed port, address, assertion or proxy trust, a proxy
-  listener on the loopback listener's port at an address it overlaps, and
-  the loopback listener's bind. `tests/fixtures/access_modes.json`
-  holds the answers; the access engine reads the same file.
+  kind, `CYFR_BROWSER` (unset in a release, then unknown), the host, the
+  node id, the public URL, a key outside its kind (the email, the node
+  id, then where the proxy listener is published), a malformed port,
+  address, assertion or proxy trust, with `proxy` where the proxy
+  listener is published and then a trust left unstated, a proxy listener
+  on the loopback listener's port at an address it overlaps, and the
+  loopback listener's bind. `tests/fixtures/access.json` holds the
+  answers; the access engine reads the same file.
+
+  Exposure is `:public` for `domain` and `proxy`, `:private` for `none`
+  and `tailnet`.
   """
   @spec resolve_access(access_input()) :: {:ok, access()} | {:error, access_refusal()}
   def resolve_access(%{file: file, process: process, release?: release?})
@@ -739,26 +748,39 @@ defmodule Cyfr.RuntimeConfig do
     result =
       with :ok <- access_encoding(file || %{}, process),
            :ok <- access_sources(file || %{}, process),
-           {:ok, mode} <- access_mode(get.("CYFR_ACCESS"), release?),
-           {:ok, head} <- access_head(mode, get),
-           {:ok, settings} <- access_settings(mode, head["port"], get),
+           {:ok, browser} <- access_browser(get.("CYFR_BROWSER"), release?),
+           {:ok, head} <- access_head(browser, get),
+           {:ok, settings} <- access_settings(head, get),
            :ok <- access_bind(settings) do
         %{canonical: canonical, digest: digest} = access_digest(head)
 
         {:ok,
          %{
-           mode:
-             Map.fetch!(%{"local" => :local, "tailnet" => :tailnet, "public" => :public}, mode),
+           browser:
+             Map.fetch!(
+               %{"none" => :none, "tailnet" => :tailnet, "domain" => :domain, "proxy" => :proxy},
+               browser
+             ),
+           exposure: if(browser in ["domain", "proxy"], do: :public, else: :private),
            head: head,
            canonical: canonical,
            digest: digest,
            origin: access_origin(head),
-           listeners: %{loopback: settings.bind, proxy: settings.proxy},
+           listeners: %{
+             loopback: settings.bind,
+             proxy: settings.proxy,
+             published: settings.published
+           },
            trust: settings.trust,
            hsts:
              Map.fetch!(
-               %{"local" => :none, "tailnet" => :endpoint_on_proxy, "public" => :caddy},
-               mode
+               %{
+                 "none" => :none,
+                 "tailnet" => :endpoint_on_proxy,
+                 "domain" => :caddy,
+                 "proxy" => :endpoint_on_proxy
+               },
+               browser
              ),
            check_origins: access_check_origins(head),
            assertion: settings.assertion
@@ -775,10 +797,14 @@ defmodule Cyfr.RuntimeConfig do
     end
   end
 
-  @doc "A head's complete compose selection: the mode's proxy profile, none for `local`."
+  @doc """
+  A head's complete compose selection: the profile of the proxy the stack
+  runs for the kind, `tailnet` or `domain`; none for `none` and for
+  `proxy`, whose proxy is the person's own.
+  """
   @spec access_profiles(String.t()) :: [String.t()]
-  def access_profiles(mode) when mode in ["local", "tailnet", "public"],
-    do: if(mode == "local", do: [], else: [mode])
+  def access_profiles(browser) when browser in @browsers,
+    do: if(browser in ["tailnet", "domain"], do: [browser], else: [])
 
   @doc """
   An access head's canonical JSON (`Prima.JCS`) and its digest,
@@ -800,7 +826,7 @@ defmodule Cyfr.RuntimeConfig do
   end
 
   @doc """
-  Whether `id` is a node id this home stores: 1 to 128 bytes of
+  Whether `id` is a node id this server stores: 1 to 128 bytes of
   `[A-Za-z0-9._-]`, compared byte for byte. Tailscale's stable node id has
   no format of its own, so the grammar is CYFR's.
   """
@@ -865,33 +891,36 @@ defmodule Cyfr.RuntimeConfig do
     end
   end
 
-  defp access_mode(nil, true), do: {:error, {:access_missing, %{}}}
-  defp access_mode(nil, false), do: {:ok, "local"}
-  defp access_mode(mode, _) when mode in ["local", "tailnet", "public"], do: {:ok, mode}
-  defp access_mode(other, _), do: {:error, {:access_unknown_mode, %{value: other}}}
+  defp access_browser(nil, true), do: {:error, {:access_missing, %{}}}
+  defp access_browser(nil, false), do: {:ok, "none"}
+  defp access_browser(browser, _) when browser in @browsers, do: {:ok, browser}
+  defp access_browser(other, _), do: {:error, {:access_unknown_browser, %{value: other}}}
 
-  # The head the mode's settings make, once each is the one the mode allows.
-  defp access_head(mode, get) do
+  # The head the kind's settings make, once each is the one the kind allows.
+  defp access_head(browser, get) do
     host = get.("CYFR_HOST")
     node_id = get.("CYFR_TAILNET_NODE_ID")
     url = get.("CYFR_PUBLIC_URL")
     email = get.("CADDY_ACME_EMAIL")
+    publish = get.("CYFR_PROXY_PUBLISH")
 
-    with :ok <- access_host(mode, host),
-         :ok <- access_node_id(mode, node_id),
-         :ok <- access_url(mode, host, url),
-         :ok <- access_outside(mode, "CADDY_ACME_EMAIL", email, "public"),
-         :ok <- access_outside(mode, "CYFR_TAILNET_NODE_ID", node_id, "tailnet"),
+    with :ok <- access_host(browser, host),
+         :ok <- access_node_id(browser, node_id),
+         :ok <- access_url(browser, host, url),
+         :ok <- access_outside(browser, "CADDY_ACME_EMAIL", email, "domain"),
+         :ok <- access_outside(browser, "CYFR_TAILNET_NODE_ID", node_id, "tailnet"),
+         :ok <- access_outside(browser, "CYFR_PROXY_PUBLISH", publish, "proxy"),
          {:ok, port} <- access_port(get, "CYFR_PORT", @default_port) do
       head =
         %{
-          "mode" => mode,
+          "browser" => browser,
           "host" => host || "localhost",
           "port" => port,
           "node_id" => node_id,
           "public_url" => url,
           "acme_email" => email,
-          "profiles" => access_profiles(mode)
+          "publish" => if(browser == "proxy", do: publish || @default_publish),
+          "profiles" => access_profiles(browser)
         }
         |> reject_nil()
 
@@ -899,10 +928,10 @@ defmodule Cyfr.RuntimeConfig do
     end
   end
 
-  defp access_host("local", host) when host in [nil, "localhost"], do: :ok
+  defp access_host("none", host) when host in [nil, "localhost"], do: :ok
 
-  defp access_host("local", host),
-    do: {:error, {:access_local_mismatch, %{key: "CYFR_HOST", value: host}}}
+  defp access_host("none", host),
+    do: {:error, {:access_none_mismatch, %{key: "CYFR_HOST", value: host}}}
 
   defp access_host("tailnet", host) do
     if is_binary(host) and tailnet_name?(host),
@@ -910,10 +939,10 @@ defmodule Cyfr.RuntimeConfig do
       else: {:error, {:access_tailnet_host_invalid, reject_nil(%{host: host})}}
   end
 
-  defp access_host("public", host) do
+  defp access_host(browser, host) when browser in ["domain", "proxy"] do
     if is_binary(host) and public_domain?(host),
       do: :ok,
-      else: {:error, {:access_public_host_invalid, reject_nil(%{host: host})}}
+      else: {:error, {:access_domain_host_invalid, reject_nil(%{browser: browser, host: host})}}
   end
 
   defp access_node_id("tailnet", id) do
@@ -922,48 +951,84 @@ defmodule Cyfr.RuntimeConfig do
       else: {:error, {:access_tailnet_node_invalid, reject_nil(%{value: id})}}
   end
 
-  defp access_node_id(_mode, _id), do: :ok
+  defp access_node_id(_browser, _id), do: :ok
 
-  defp access_url("local", _host, nil), do: :ok
+  defp access_url("none", _host, nil), do: :ok
 
-  defp access_url("local", _host, url),
-    do: {:error, {:access_local_mismatch, %{key: "CYFR_PUBLIC_URL", value: url}}}
+  defp access_url("none", _host, url),
+    do: {:error, {:access_none_mismatch, %{key: "CYFR_PUBLIC_URL", value: url}}}
 
-  defp access_url(mode, host, url) do
+  defp access_url(browser, host, url) do
     expected = "https://" <> host
 
     if url == expected,
       do: :ok,
       else:
         {:error,
-         {:access_public_url_mismatch, reject_nil(%{mode: mode, expected: expected, value: url})}}
+         {:access_public_url_mismatch,
+          reject_nil(%{browser: browser, expected: expected, value: url})}}
   end
 
-  defp access_outside(mode, _key, _value, mode), do: :ok
-  defp access_outside(_mode, _key, nil, _needs), do: :ok
+  defp access_outside(browser, _key, _value, browser), do: :ok
+  defp access_outside(_browser, _key, nil, _needs), do: :ok
 
-  defp access_outside(mode, key, _value, needs),
-    do: {:error, {:access_key_outside_mode, %{key: key, mode: mode, needs: needs}}}
+  defp access_outside(browser, key, _value, needs),
+    do: {:error, {:access_key_outside_browser, %{key: key, browser: browser, needs: needs}}}
 
-  # The listeners, the assertion and the proxy trust, each strictly read.
-  defp access_settings(mode, port, get) do
-    proxied? = mode != "local"
+  # The listeners, the assertion and the proxy trust, each strictly read;
+  # with `proxy`, where the proxy listener is published and a trust the
+  # settings state, since no default may stand in for it.
+  defp access_settings(%{"browser" => browser, "port" => port} = head, get) do
+    proxied? = browser != "none"
 
     with {:ok, bind} <- access_address(get, "CYFR_BIND_ADDRESS", @default_bind),
          {:ok, assertion} <- access_assertion(get.(@assertion)),
          {:ok, proxy_bind} <- access_address(get, "CYFR_PROXY_BIND_ADDRESS", @default_bind),
          {:ok, proxy_port} <- access_port(get, "CYFR_PROXY_PORT", @default_proxy_port),
          {:ok, trust} <- access_trust(get),
+         {:ok, published} <- access_published(browser, head["publish"], port),
+         {:ok, trust} <- access_stated_trust(browser, trust),
          :ok <- access_listeners_apart(proxied?, {bind, port}, {proxy_bind, proxy_port}) do
       {:ok,
        %{
          bind: {bind, port},
          assertion: assertion,
          proxy: if(proxied?, do: {proxy_bind, proxy_port}, else: :none),
+         published: published,
          trust: if(proxied?, do: trust, else: :none)
        }}
     end
   end
+
+  defp access_published("proxy", publish, port), do: access_publish(publish, port)
+  defp access_published(_browser, _publish, _port), do: {:ok, :none}
+
+  # Where the proxy listener is published: an IPv4 loopback address and a
+  # port, apart from the loopback listener's own publication at 127.0.0.1
+  # on `port`. IPv4 alone: the listener binds the container's IPv4
+  # address, which Docker's IPv6 publication of [::1] does not reach.
+  defp access_publish(text, port) do
+    with [_, address, digits] <- Regex.run(~r/\A([^:]+):([0-9]{1,5})\z/, text),
+         {127, _, _, _} <- ip_literal(address),
+         published when published in 1..65_535 <- String.to_integer(digits) do
+      if published == port and ip_literal(address) == {127, 0, 0, 1},
+        do:
+          {:error,
+           {:access_setting_invalid,
+            %{key: "CYFR_PROXY_PUBLISH", value: text, port: Integer.to_string(port)}}},
+        else: {:ok, {address, published}}
+    else
+      _ -> {:error, {:access_setting_invalid, %{key: "CYFR_PROXY_PUBLISH", value: text}}}
+    end
+  end
+
+  # `proxy` takes only a trust the settings state; every other kind with a
+  # proxy listener takes the default hops when they state none.
+  defp access_stated_trust("proxy", :unstated),
+    do: {:error, {:access_proxy_trust_missing, %{}}}
+
+  defp access_stated_trust(_browser, :unstated), do: {:ok, {:hops, @default_proxy_hops}}
+  defp access_stated_trust(_browser, trust), do: {:ok, trust}
 
   # The proxy listener cannot take the loopback listener's port on an
   # address the loopback listener's overlaps: the same address (an
@@ -1034,13 +1099,14 @@ defmodule Cyfr.RuntimeConfig do
   end
 
   # The proxies whose forwarded headers are trusted: the listed addresses
-  # and CIDRs when there are any, otherwise a count of hops (default 1).
+  # and CIDRs when there are any, otherwise a count of hops, `:unstated`
+  # when the settings state neither.
   defp access_trust(get) do
     case get.("CYFR_TRUSTED_PROXY_CIDRS") do
       nil ->
         case get.("CYFR_TRUSTED_PROXY_HOPS") do
           nil ->
-            {:ok, {:hops, @default_proxy_hops}}
+            {:ok, :unstated}
 
           text ->
             if Regex.match?(@digits, text) and String.to_integer(text) in 0..16,
@@ -1099,13 +1165,13 @@ defmodule Cyfr.RuntimeConfig do
     end
   end
 
-  defp access_origin(%{"mode" => "local", "port" => port}), do: "http://localhost:#{port}"
+  defp access_origin(%{"browser" => "none", "port" => port}), do: "http://localhost:#{port}"
   defp access_origin(%{"public_url" => url}), do: url
 
-  # The loopback origins on the home's port, and its own address when it
-  # has a public one.
+  # The loopback origins on the server's port, and its browser address
+  # when it has one.
   defp access_check_origins(%{"port" => port} = head) do
-    own = if head["mode"] == "local", do: [], else: ["https://#{head["host"]}"]
+    own = if head["browser"] == "none", do: [], else: ["https://#{head["host"]}"]
 
     own ++
       for host <- ["localhost", "127.0.0.1", "[::1]"],

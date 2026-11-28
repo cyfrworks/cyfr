@@ -4,6 +4,7 @@
 package access
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -505,7 +507,7 @@ func (f *fakeDocker) compose(c *fakeCall) fakeAnswer {
 		return fail(1, "fake compose: no command")
 	}
 	cmd, rest := args[i], args[i+1:]
-	cfg, err := f.load(files, profiles, c.Env)
+	cfg, err := f.load(files, profiles, c.Env, c.Stdin)
 	if err != nil {
 		return fail(1, "%v", err)
 	}
@@ -586,13 +588,95 @@ type fakeService struct {
 	Image         string            `yaml:"image,omitempty"`
 	Profiles      []string          `yaml:"profiles,omitempty"`
 	Environment   map[string]string `yaml:"environment,omitempty"`
+	Ports         []fakePort        `yaml:"ports,omitempty"`
+}
+
+// fakePort is a published port as compose flattens it, whichever syntax
+// the file wrote it in.
+type fakePort struct {
+	Target    int    `yaml:"target"`
+	HostIP    string `yaml:"host_ip,omitempty"`
+	Published string `yaml:"published,omitempty"`
+	Protocol  string `yaml:"protocol"`
+}
+
+// fakePorts reads a service's ports as compose flattens them: short syntax
+// (`[ip:][published:]target[/proto]`, either port a range, and a bare
+// integer) and long alike, interpolated, a range one entry per port.
+func fakePorts(raw any, lookup func(string) (string, bool)) []fakePort {
+	items, _ := raw.([]any)
+	var out []fakePort
+	for _, item := range items {
+		switch v := item.(type) {
+		case int:
+			out = append(out, fakePort{Target: v, Protocol: "tcp"})
+		case string:
+			text, proto, _ := strings.Cut(interpolate(v, lookup), "/")
+			parts := strings.Split(text, ":")
+			host, published := "", ""
+			if len(parts) > 1 {
+				published = parts[len(parts)-2]
+			}
+			if len(parts) > 2 {
+				host = strings.Join(parts[:len(parts)-2], ":")
+			}
+			targets, publishes := portRange(parts[len(parts)-1]), portRange(published)
+			for i, target := range targets {
+				p := fakePort{Target: target, HostIP: host, Protocol: cmp.Or(proto, "tcp")}
+				if i < len(publishes) {
+					p.Published = strconv.Itoa(publishes[i])
+				} else if published != "" && len(publishes) == 0 {
+					p.Published = published
+				}
+				out = append(out, p)
+			}
+		case map[string]any:
+			p := fakePort{HostIP: fmt.Sprint(cmp.Or(v["host_ip"], any(""))), Published: interpolate(fmt.Sprint(cmp.Or(v["published"], any(""))), lookup), Protocol: fmt.Sprint(cmp.Or(v["protocol"], any("tcp")))}
+			p.Target, _ = strconv.Atoi(interpolate(fmt.Sprint(v["target"]), lookup))
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// portRange is a short syntax port, `n` or `n-m`, as its ports; none for
+// text that is neither.
+func portRange(text string) []int {
+	from, to, ranged := strings.Cut(text, "-")
+	a, err := strconv.Atoi(from)
+	if err != nil {
+		return nil
+	}
+	b := a
+	if ranged {
+		if b, err = strconv.Atoi(to); err != nil || b < a {
+			return nil
+		}
+	}
+	var out []int
+	for n := a; n <= b; n++ {
+		out = append(out, n)
+	}
+	return out
+}
+
+// mergePorts adds ports to a service's, as compose merges the files of a
+// stack: one entry per host address, published port, target and
+// protocol, the first kept.
+func mergePorts(have, add []fakePort) []fakePort {
+	for _, p := range add {
+		if !slices.Contains(have, p) {
+			have = append(have, p)
+		}
+	}
+	return have
 }
 
 // load reads the compose files and flattens them for the profiles: a
-// materialized file as it is, a source set merged service by service, its
-// env_file .env inlined and its ${…} interpolated from .env and the
-// environment.
-func (f *fakeDocker) load(files, profiles []string, env []string) (*fakeConfig, error) {
+// materialized file as it is, a source set merged service by service (the
+// file - read from stdin, as compose reads it), its env_file .env inlined
+// and its ${…} interpolated from .env and the environment.
+func (f *fakeDocker) load(files, profiles []string, env []string, stdin string) (*fakeConfig, error) {
 	if len(files) == 0 {
 		return nil, fmt.Errorf("fake compose: no file named")
 	}
@@ -625,6 +709,9 @@ func (f *fakeDocker) load(files, profiles []string, env []string) (*fakeConfig, 
 	cfg := &fakeConfig{Name: f.st.Project, Services: map[string]*fakeService{}}
 	for i := 0; i < len(files); i++ {
 		data, err := os.ReadFile(filepath.Join(f.dir, files[i]))
+		if files[i] == "-" {
+			data, err = []byte(stdin), nil
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -655,6 +742,7 @@ func (f *fakeDocker) load(files, profiles []string, env []string) (*fakeConfig, 
 			if v, ok := raw["image"].(string); ok {
 				svc.Image = interpolate(v, lookup)
 			}
+			svc.Ports = mergePorts(svc.Ports, fakePorts(raw["ports"], lookup))
 			if v, ok := raw["profiles"].([]any); ok {
 				svc.Profiles = nil
 				for _, p := range v {

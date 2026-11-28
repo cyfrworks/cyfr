@@ -14,12 +14,12 @@ defmodule Sanctum.IdentityFreshnessTest do
   head, where a binding named at the old head is refused. A log that does
   not hold the cached head, or does not verify, pauses the work. A gone
   account retires everything and is answered gone. A directory that
-  cannot be read pauses a public home's work and leaves a local or tailnet
-  home on the keys it last read; an account never read is refused in
-  every mode.
+  cannot be read pauses a public server's work and leaves a private
+  server on the keys it last read; an account never read is refused
+  whatever the exposure.
   """
 
-  # The access mode, the private-egress configuration, the resolver's
+  # The exposure, the private-egress configuration, the resolver's
   # observer, the directory client's seam and the head cache are
   # process-wide.
   use ExUnit.Case, async: false
@@ -42,7 +42,7 @@ defmodule Sanctum.IdentityFreshnessTest do
     Prima.Test.RateLimiter.reset!()
     DirectoryServer.listen!()
     DirectoryServer.seam!(tls)
-    mode!(:public)
+    exposure!(:public)
     Arca.Cache.delete_match(Arca.Cache.Keys.match_identity_unreachable())
 
     on_exit(fn ->
@@ -56,8 +56,8 @@ defmodule Sanctum.IdentityFreshnessTest do
 
   # ---- fixtures ----------------------------------------------------------------
 
-  # How this home is reached, restored after the case.
-  defp mode!(mode), do: Prima.Test.Env.put_app_env(:sanctum, :access_mode, mode)
+  # How far this server reaches, restored after the case.
+  defp exposure!(exposure), do: Prima.Test.Env.put_app_env(:sanctum, :exposure, exposure)
 
   defp system, do: Prima.Actor.system()
 
@@ -217,19 +217,19 @@ defmodule Sanctum.IdentityFreshnessTest do
       assert cached(alice.identifier) == nil
     end
 
-    test "an account never read is refused in every mode, whatever the directory", %{
+    test "an account never read is refused whatever the exposure, whatever the directory", %{
       dir: dir,
       account: alice
     } do
       Server.stop(dir.server)
 
-      for mode <- [:public, :local, :tailnet] do
-        mode!(mode)
+      for exposure <- [:public, :private] do
+        exposure!(exposure)
 
         capture_log(fn ->
           assert {:refused, :identity_stale} =
                    IdentityFreshness.fresh!(alice.identifier, directory: dir.url),
-                 "#{mode}"
+                 "#{exposure}"
 
           assert {:refused, :identity_stale} = IdentityFreshness.fresh?(alice.identifier)
         end)
@@ -340,7 +340,7 @@ defmodule Sanctum.IdentityFreshnessTest do
       assert DirectoryServer.log(dir.dir, alice.identifier) == alice.log
     end
 
-    test "a log that does not hold the cached head, or does not verify, pauses the work in every mode",
+    test "a log that does not hold the cached head, or does not verify, pauses the work whatever the exposure",
          %{dir: dir, account: alice} do
       member!(alice)
       held = cached(alice.identifier)
@@ -350,15 +350,15 @@ defmodule Sanctum.IdentityFreshnessTest do
       DirectoryServer.publish(dir.dir, alice.identifier, other.log)
       aged!(alice.identifier)
 
-      for mode <- [:public, :local] do
-        mode!(mode)
+      for exposure <- [:public, :private] do
+        exposure!(exposure)
 
         log =
           capture_log(fn ->
             assert {:refused, :identity_stale} = IdentityFreshness.fresh?(alice.identifier)
           end)
 
-        assert log =~ "not_descendant", "#{mode}"
+        assert log =~ "not_descendant", "#{exposure}"
       end
 
       assert cached(alice.identifier).head_hash == held.head_hash
@@ -375,15 +375,15 @@ defmodule Sanctum.IdentityFreshnessTest do
       forged = Prima.Identity.sign(%{List.last(next.log) | sig: nil}, stranger)
       DirectoryServer.publish(dir.dir, alice.identifier, alice.log ++ [forged])
 
-      for mode <- [:public, :local] do
-        mode!(mode)
+      for exposure <- [:public, :private] do
+        exposure!(exposure)
 
         log =
           capture_log(fn ->
             assert {:refused, :identity_stale} = IdentityFreshness.fresh?(alice.identifier)
           end)
 
-        assert log =~ "unverified", "#{mode}"
+        assert log =~ "unverified", "#{exposure}"
       end
 
       assert cached(alice.identifier).head_hash == held.head_hash
@@ -486,7 +486,7 @@ defmodule Sanctum.IdentityFreshnessTest do
   # ---- an unreachable directory ------------------------------------------------
 
   describe "an unreachable directory, past the bound" do
-    test "a public home pauses the work; a local or tailnet one answers the keys it last read",
+    test "a public server pauses the work; a private one answers the keys it last read",
          %{dir: dir, account: alice} do
       member!(alice)
       head = DirectoryServer.head(alice)
@@ -500,20 +500,18 @@ defmodule Sanctum.IdentityFreshnessTest do
 
       assert log =~ "freshness bound"
 
-      for mode <- [:local, :tailnet] do
-        mode!(mode)
-        Arca.Cache.delete_match(Arca.Cache.Keys.match_identity_unreachable())
+      exposure!(:private)
+      Arca.Cache.delete_match(Arca.Cache.Keys.match_identity_unreachable())
 
-        assert {:ok, %{head_hash: ^head}} = IdentityFreshness.fresh?(alice.identifier), "#{mode}"
-        assert {:ok, %{head_hash: ^head}} = IdentityFreshness.fresh!(alice.identifier), "#{mode}"
-      end
+      assert {:ok, %{head_hash: ^head}} = IdentityFreshness.fresh?(alice.identifier)
+      assert {:ok, %{head_hash: ^head}} = IdentityFreshness.fresh!(alice.identifier)
     end
 
     test "only a directory that did not answer is an outage: a transport failure, a 5xx or a 429",
          %{dir: dir, account: alice} do
       member!(alice)
       head = DirectoryServer.head(alice)
-      mode!(:local)
+      exposure!(:private)
 
       outages = [
         {503, [], ~s({"error":"unavailable"})},
@@ -533,8 +531,8 @@ defmodule Sanctum.IdentityFreshnessTest do
         end)
       end
 
-      # An answering directory that served no log this home can verify
-      # pauses the work in a local home too.
+      # An answering directory that served no log this server can verify
+      # pauses the work on a private server too.
       answered = [
         {500, [], ~s({"error":"corrupt"})},
         {200, [], "not a page"},
@@ -573,13 +571,13 @@ defmodule Sanctum.IdentityFreshnessTest do
       assert {:refused, :identity_stale} = IdentityFreshness.fresh?(alice.identifier)
       refute_received {:resolved, _}
 
-      mode!(:local)
+      exposure!(:private)
       head = DirectoryServer.head(alice)
       assert {:ok, %{head_hash: ^head}} = IdentityFreshness.fresh?(alice.identifier)
       refute_received {:resolved, _}
     end
 
-    test "inside a transaction nothing is read: the mode decides on what is cached", %{
+    test "inside a transaction nothing is read: the exposure decides on what is cached", %{
       account: alice
     } do
       member!(alice)
@@ -592,7 +590,7 @@ defmodule Sanctum.IdentityFreshnessTest do
           assert {:refused, :identity_stale} = IdentityFreshness.fresh?(alice.identifier)
         end)
 
-        mode!(:tailnet)
+        exposure!(:private)
         assert {:ok, %{head_hash: ^head}} = IdentityFreshness.fresh?(alice.identifier)
       end)
 

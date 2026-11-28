@@ -126,10 +126,10 @@ A link that has expired, been used or been revoked, whose issuer has since left 
 
 A CYFR reads your account's keys again once `identity_freshness_seconds` (five minutes by default) have passed since it last read them, and at once for a key it has not seen on your account before, so a passkey or device you just added signs in straight away. Removing a key reaches each CYFR at its next read: within that bound it ends there every session, certificate and pending confirmation the key signed for, and replacing everything ends all of yours.
 
-When the account service cannot be reached past that bound, what a CYFR does follows how it is reached (`CYFR_ACCESS`):
+When the account service cannot be reached past that bound, what a CYFR does follows its browser address (`CYFR_BROWSER`):
 
-- **A public CYFR** pauses your protected work there, with a sentence saying so, and a new sign-in waits, until the account service answers again.
-- **A local or tailnet CYFR** keeps admitting the people it holds on the keys it last read, and reads them again the next time the account service answers, so a key removed meanwhile keeps working there until then. A device signs in as always. A browser signs in only if it opened the account pages before, since it keeps them from that visit. An account that CYFR never read is refused until the service answers.
+- **A CYFR at a domain**, through Caddy or your own proxy, pauses your protected work there, with a sentence saying so, and a new sign-in waits, until the account service answers again.
+- **A CYFR with no browser address or a tailnet one** keeps admitting the people it holds on the keys it last read, and reads them again the next time the account service answers, so a key removed meanwhile keeps working there until then. A device signs in as always. A browser signs in only if it opened the account pages before, since it keeps them from that visit. An account that CYFR never read is refused until the service answers.
 
 ---
 

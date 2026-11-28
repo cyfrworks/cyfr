@@ -164,11 +164,21 @@ func (s *server) ending(sp *spawn) {
 // only its own lines.
 func (s *server) admit(ev admission.Events) {
 	for _, e := range ev.Admitted {
+		if vm, ok := e.Ref.(machineRef); ok {
+			s.aloneAnswered(vm.m, true)
+			continue
+		}
 		ref := e.Ref.(placeRef)
 		limits := limitsOf(e.Kind, s.ledger.Work())
 		ref.c.queue(protocol.NewPlaced(ref.id, limits.MemoryBytes))
 	}
 	for _, r := range ev.Refused {
+		if vm, ok := r.Entry.Ref.(machineRef); ok {
+			s.log.Warn("a person's VM for a folder's operation refused: no room in the pool for it (needs %s, %s free)",
+				describeBytes(r.Held.Need), describeBytes(r.Held.Free))
+			s.aloneAnswered(vm.m, false)
+			continue
+		}
 		ref := r.Entry.Ref.(placeRef)
 		p := ref.c.places[ref.id]
 		delete(ref.c.places, ref.id)
@@ -186,6 +196,14 @@ func (s *server) admit(ev admission.Events) {
 		}
 		ref := e.Ref.(placeRef)
 		ref.c.queue(protocol.NewGiveWay(ref.id))
+	}
+}
+
+// aloneAnswered tells a folder's operation waiting on m, placed alone
+// (holdMachine), whether it was admitted; s.mu is held.
+func (s *server) aloneAnswered(m *machine, admitted bool) {
+	if m.alone != nil {
+		m.alone <- admitted
 	}
 }
 

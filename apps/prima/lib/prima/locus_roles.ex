@@ -28,8 +28,8 @@ defmodule Prima.LocusRoles do
   `endpoint_subnet` and whose other containers take addresses from
   `endpoint_ip_range` alone, so nothing started first can hold cyfr's.
   Docker publishes the host's loopback port to that address, and the
-  network Locus joins never reaches the endpoint. Its proxy listener, in a
-  tailnet or public home, binds `edge_address` on the network
+  network Locus joins never reaches the endpoint. Its proxy listener, with
+  `tailnet` or `domain`, binds `edge_address` on the network
   `edge_network`, whose subnet is `edge_subnet` and whose dynamic range is
   `edge_ip_range`; the two proxies that forward to it sit there at fixed
   addresses of their own, Caddy at `edge_caddy_address` and Tailscale at

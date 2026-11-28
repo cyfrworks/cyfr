@@ -5,6 +5,7 @@ package setup
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -77,4 +78,66 @@ func abs(v int) int {
 		return -v
 	}
 	return v
+}
+
+// A terminal's QR code is the same code as the image's, read back from
+// its half blocks: a line per two module rows, a cell per module column,
+// the quiet zone light all round, and each module light exactly where the
+// code's is light, so a camera reads it as it reads the image. Text no
+// code holds is refused.
+func TestQRTextDrawsTheCodeWithAQuietZone(t *testing.T) {
+	for _, text := range []string{"https://cyfr.example.com", "http://localhost:4000", "https://" + strings.Repeat("a", 60) + ".example.com"} {
+		m, err := qrModules(text)
+		if err != nil {
+			t.Fatal(err)
+		}
+		drawn, err := QRText(text)
+		if err != nil {
+			t.Fatal(err)
+		}
+		size := len(m) + 2*quietZone
+		lines := strings.Split(strings.TrimSuffix(drawn, "\n"), "\n")
+		if !strings.HasSuffix(drawn, "\n") || len(lines) != (size+1)/2 {
+			t.Fatalf("%q: %d lines for %d module rows", text, len(lines), size)
+		}
+		light := make([][]bool, len(lines)*2)
+		for y, line := range lines {
+			cells := []rune(line)
+			if len(cells) != size {
+				t.Fatalf("%q: line %d is %d cells, want %d", text, y, len(cells), size)
+			}
+			light[2*y], light[2*y+1] = make([]bool, size), make([]bool, size)
+			for x, c := range cells {
+				switch c {
+				case '█':
+					light[2*y][x], light[2*y+1][x] = true, true
+				case '▀':
+					light[2*y][x] = true
+				case '▄':
+					light[2*y+1][x] = true
+				case ' ':
+				default:
+					t.Fatalf("%q: line %d draws %q", text, y, c)
+				}
+			}
+		}
+		for y := 0; y < size; y++ {
+			for x := 0; x < size; x++ {
+				want := true
+				if mx, my := x-quietZone, y-quietZone; mx >= 0 && my >= 0 && mx < len(m) && my < len(m) {
+					want = !m[my][mx]
+				}
+				if light[y][x] != want {
+					t.Fatalf("%q: module (%d, %d) is light=%v, want %v", text, x, y, light[y][x], want)
+				}
+			}
+		}
+		// The row past an odd size is no module and draws nothing.
+		if size%2 == 1 && slices.Contains(light[size], true) {
+			t.Errorf("%q: the half row past the code is drawn", text)
+		}
+	}
+	if _, err := QRText(strings.Repeat("x", 4000)); err == nil {
+		t.Error("text no QR code holds is drawn")
+	}
 }

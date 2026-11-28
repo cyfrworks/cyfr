@@ -50,7 +50,8 @@ type Result struct {
 
 // Docker is every docker call the engine and the commands holding its lock
 // make. The system implementation runs each call with every COMPOSE_*
-// variable removed from the environment and DOCKER_* kept, in a process
+// variable, the proxy trust and the two device settings removed from the
+// environment (environFiltered) and DOCKER_* kept, in a process
 // group of its own, and, while the lock is held, passes the lock's
 // descriptor to a watchdog re-exec of cyfr (`cyfr internal docker-run`)
 // that kills the call at its deadline (Unix), or starts it in the
@@ -162,8 +163,8 @@ func (e *Engine) Docker() Docker { return e.docker }
 // configuration of h is materialized and validated on first use within
 // the operation (`docker compose config` over the default file set, with
 // the sanitized environment and h's selection), and every later call runs
-// on that file. h may name, beside its access mode's profiles, profiles of
-// the stack's own that no access mode selects (DeclaredProfiles); the
+// on that file. h may name, beside its kind's profiles, profiles of the
+// stack's own that no kind selects (DeclaredProfiles); the
 // configuration's check holds .env's head to h without them.
 func (e *Engine) ComposeArgs(ctx context.Context, h Head, args ...string) ([]string, error) {
 	if err := e.requireLock(); err != nil {
@@ -405,7 +406,7 @@ func (e *Engine) StartWithin(ctx context.Context, cause string, health time.Dura
 }
 
 // Stop cancels a waiting join, then stops and verifies cyfr and every
-// service of every access mode's profile, whatever .env's head or an
+// service of every kind's profile, whatever .env's head or an
 // unfinished operation says, writing Serve's empty configuration first;
 // with all, it takes every service of the project down (`cyfr down`). A
 // stop that cannot be verified answers access_uncertain with what was

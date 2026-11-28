@@ -95,10 +95,10 @@ func TestAccessQuestionsEndOnAnInterrupt(t *testing.T) {
 		want    string
 		joins   int
 	}{
-		{"the change", access.ModePublic, accessOptions{domain: "cyfr.example.com"}, nil, "Interrupted; nothing was written.", 0},
-		{"the join", access.ModeTailnet, accessOptions{hostname: "home"}, nil, "Interrupted; nothing was written.", 0},
-		{"the change after the join", access.ModeTailnet, accessOptions{}, []string{"yes"},
-			"Interrupted. Nothing changed. This machine stays on your tailnet as cyfr.tail1234.ts.net; run cyfr access tailnet again when you want CYFR reached there.", 1},
+		{"the change", access.BrowserDomain, accessOptions{domain: "cyfr.example.com"}, nil, "Interrupted; nothing was written.", 0},
+		{"the join", access.BrowserTailnet, accessOptions{hostname: "home"}, nil, "Interrupted; nothing was written.", 0},
+		{"the change after the join", access.BrowserTailnet, accessOptions{}, []string{"yes"},
+			"Interrupted. Nothing changed. This machine stays on your tailnet as cyfr.tail1234.ts.net; run cyfr access browser tailnet again when you want CYFR reached there.", 1},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			s := newAccessProject(t)

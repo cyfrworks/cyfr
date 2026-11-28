@@ -18,11 +18,11 @@
 # deployment file names.
 #
 # A cell answers on the default listeners under the node name NODE, one at
-# a time, reached at its localhost address (CYFR_ACCESS=local). Its people's
+# a time, reached at its localhost address (CYFR_BROWSER=none). Its people's
 # accounts are at a directory of its own, which runs while its server does
 # (`cell_directory_start`). A cell given
-# a hostname of its own (`cell_hostname`) is a public home of that name
-# (CYFR_ACCESS=public), behind a TLS-terminating front that forwards to its
+# a hostname of its own (`cell_hostname`) has a domain address of that name
+# (CYFR_BROWSER=domain), behind a TLS-terminating front that forwards to its
 # proxy listener, on listeners and under a node name of its own, so
 # several such cells run at once.
 #
@@ -265,7 +265,7 @@ cell_value() {
 # seed tree, and the deployment file `cyfr init --no-interactive --no-pull`
 # writes: the stack's keys minted for this cell alone, the builds key among
 # them, the empty CORS allowlist, the client ids .env.example ships, and
-# the access mode `local` with every setting it implies. Beside it the
+# the browser address `none` with every setting it implies. Beside it the
 # backends' URL as docker-compose.yml's cyfr service sets it, read from
 # that file, whose host builds are run at, as every compose boot has it,
 # and the cell's own settings, each init writes none of: the
@@ -362,12 +362,12 @@ cell_directory_stop() {
   rm -f "$cell/directory/pid"
 }
 
-# Cell `$1` is a public home at the hostname `$2`, as `cyfr access public
-# --domain` makes one: what the command line writes for the name is its
-# mode, its host and its public URL, and nothing here writes those itself.
-# A cell public at that name already is one; any other cell is switched
-# with `cyfr access`, which keeps every other line of its deployment file,
-# its keys among them.
+# Cell `$1` has a domain address at the hostname `$2`, as `cyfr access
+# browser domain --domain` makes one: what the command line writes for the
+# name is its browser address, its host and its public URL, and nothing here
+# writes those itself. A cell at that domain already has one; any other cell
+# is switched with `cyfr access browser`, which keeps every other line of its
+# deployment file, its keys among them.
 # The cell then answers on three listener ports picked free, or given by
 # `$3`, `$4` and `$5`: its loopback listener, host API and proxy listener,
 # where the front that terminates TLS forwards (tests/browser/lib.mjs).
@@ -385,14 +385,14 @@ cell_hostname() {
     [[ "$value" =~ ^[0-9]+$ ]] && [ "$value" -ge 1024 ] && [ "$value" -le 65535 ] ||
       fail "cell $cell needs listener ports from 1024 to 65535, not '$value'"
   done
-  if [ "$(cell_value "$cell" CYFR_ACCESS)" != public ] || [ "$(cell_value "$cell" CYFR_HOST)" != "$host" ]; then
-    cell_cli "$cell" access public --domain "$host" --yes
+  if [ "$(cell_value "$cell" CYFR_BROWSER)" != domain ] || [ "$(cell_value "$cell" CYFR_HOST)" != "$host" ]; then
+    cell_cli "$cell" access browser domain --domain "$host" --yes
   fi
   cell_set "$cell" CYFR_PORT "$port"
   cell_set "$cell" CYFR_HOST_API_PORT "$host_api_port"
   cell_set "$cell" CYFR_PROXY_PORT "$proxy_port"
-  [ "$(cell_value "$cell" CYFR_ACCESS)" = public ] && [ "$(cell_value "$cell" CYFR_HOST)" = "$host" ] ||
-    fail "cell $cell is not a public home at $host"
+  [ "$(cell_value "$cell" CYFR_BROWSER)" = domain ] && [ "$(cell_value "$cell" CYFR_HOST)" = "$host" ] ||
+    fail "cell $cell has no domain address at $host"
   printf 'cyfr-%s-%s-%s\n' "${host//./-}" "$ADAPTER" "$$" >"$cell/node"
 }
 
@@ -402,12 +402,12 @@ cell_port() {
   sed -n 's/^CYFR_PORT=//p' "$1/.env" | tail -1
 }
 
-# The port cell `$1`'s proxy listener answers on, which a public cell has
-# (`cell_hostname`): the one its deployment file names.
+# The port cell `$1`'s proxy listener answers on, which a cell with a domain
+# address has (`cell_hostname`): the one its deployment file names.
 cell_proxy_port() {
   local port
   port="$(sed -n 's/^CYFR_PROXY_PORT=//p' "$1/.env" | tail -1)"
-  [ -n "$port" ] || fail "cell $1 names no proxy listener port: make it a public home first (cell_hostname)"
+  [ -n "$port" ] || fail "cell $1 names no proxy listener port: give it a domain address first (cell_hostname)"
   printf '%s\n' "$port"
 }
 

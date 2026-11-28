@@ -19,7 +19,11 @@
 #                       refused as the home refuses an anonymous request
 #                       of its kind
 #   capabilities_hold   each proxy's capabilities and security options
-#   published_ports_hold every binding a mode publishes, including loopback SOCKS5
+#   published_ports_hold every binding a kind publishes, including loopback SOCKS5
+#   proxy_publication_holds the proxy listener published, and answering,
+#                       with proxy alone, at the head's address
+#   keeper_wall_holds   the devices cyfr init writes from the machine's, and
+#                       the keeper's start line under them
 #
 # Usage: bash tests/compose-proof/predicates-test.sh
 set -uo pipefail
@@ -71,16 +75,47 @@ $local_ports" "$tailnet_ports"
 expect fail "an added service publication" published_ports_hold "$tailnet_ports
 planted 127.0.0.1:1234:1234/tcp" "$tailnet_ports"
 
+# ---- proxy_publication_holds -------------------------------------------------
+
+loop='"4000/tcp":[{"HostIp":"127.0.0.1","HostPort":"4000"}]'
+none_ports='{'"$loop"',"4001/tcp":null,"4300/tcp":null}'
+proxy_ports='{'"$loop"',"4001/tcp":[{"HostIp":"127.0.0.1","HostPort":"4001"}],"4300/tcp":null}'
+other_ports='{'"$loop"',"4001/tcp":[{"HostIp":"127.0.0.2","HostPort":"8443"}],"4300/tcp":null}'
+refused='{"refused":true}'
+answered='{"status":302}'
+for kind in none tailnet domain; do
+  expect pass "$kind publishes no proxy listener, and nothing answers there" proxy_publication_holds "$kind" "" "$none_ports" 4000 4001 "$refused"
+  expect fail "$kind with the proxy listener published" proxy_publication_holds "$kind" "" "$proxy_ports" 4000 4001 "$refused"
+  expect fail "$kind with something answering where proxy publishes" proxy_publication_holds "$kind" "" "$none_ports" 4000 4001 "$answered"
+done
+expect pass "proxy publishes its proxy listener at the head's address, and it answers" proxy_publication_holds proxy 127.0.0.1:4001 "$proxy_ports" 4000 4001 "$answered"
+expect pass "proxy at another IPv4 loopback address" proxy_publication_holds proxy 127.0.0.2:8443 "$other_ports" 4000 4001 "$answered"
+expect fail "proxy with the proxy listener unpublished" proxy_publication_holds proxy 127.0.0.1:4001 "$none_ports" 4000 4001 "$answered"
+expect fail "proxy with nothing answering at the publication" proxy_publication_holds proxy 127.0.0.1:4001 "$proxy_ports" 4000 4001 "$refused"
+wide_ports='{'"$loop"',"4001/tcp":[{"HostIp":"0.0.0.0","HostPort":"4001"}],"4300/tcp":null}'
+expect fail "proxy published at another address than the head's" proxy_publication_holds proxy 127.0.0.1:4001 "$wide_ports" 4000 4001 "$answered"
+expect fail "proxy published at another port than the head's" proxy_publication_holds proxy 127.0.0.1:4002 "$proxy_ports" 4000 4001 "$answered"
+twice_ports='{'"$loop"',"4001/tcp":[{"HostIp":"127.0.0.1","HostPort":"4001"},{"HostIp":"::1","HostPort":"4001"}],"4300/tcp":null}'
+expect fail "proxy publishing a second address too" proxy_publication_holds proxy 127.0.0.1:4001 "$twice_ports" 4000 4001 "$answered"
+expect fail "proxy with the loopback listener unpublished" proxy_publication_holds proxy 127.0.0.1:4001 '{"4001/tcp":[{"HostIp":"127.0.0.1","HostPort":"4001"}]}' 4000 4001 "$answered"
+expect fail "an answer that is no HTTP status" proxy_publication_holds proxy 127.0.0.1:4001 "$proxy_ports" 4000 4001 '{"status":"302"}'
+expect fail "a head of no kind" proxy_publication_holds local "" "$none_ports" 4000 4001 "$refused"
+expect fail "a proxy head without a publication" proxy_publication_holds proxy "" "$proxy_ports" 4000 4001 "$answered"
+expect fail "unreadable bindings" proxy_publication_holds none "" "not json" 4000 4001 "$refused"
+picked='{"4000/tcp":[{"HostIp":"127.0.0.1","HostPort":"32801"}],"4001/tcp":[{"HostIp":"127.0.0.1","HostPort":"41234"}],"4300/tcp":null}'
+expect pass "proxy with the loopback listener at a host port Docker picked" proxy_publication_holds proxy 127.0.0.1:41234 "$picked" 4000 4001 "$answered" 32801
+expect fail "the loopback listener at another host port than the one read" proxy_publication_holds proxy 127.0.0.1:41234 "$picked" 4000 4001 "$answered" 32802
+
 # ---- head_holds --------------------------------------------------------------
 
 # A tailnet head as the proof expects one, .env as cyfr access writes it,
 # and the running cyfr's environment from it.
 node=nProofB1CNTRL
-tailnet_head='{"mode":"tailnet","host":"cyfr-1.proof.ts.net","port":4000,"public_url":"https://cyfr-1.proof.ts.net","node_id":"'"$node"'","profiles":["tailnet"]}'
+tailnet_head='{"browser":"tailnet","host":"cyfr-1.proof.ts.net","port":4000,"public_url":"https://cyfr-1.proof.ts.net","node_id":"'"$node"'","profiles":["tailnet"]}'
 cat >"$scratch/env" <<ENV
 # a comment
 CYFR_SECRET_KEY_BASE='kept'
-CYFR_ACCESS=tailnet
+CYFR_BROWSER=tailnet
 CYFR_HOST=cyfr-1.proof.ts.net
 CYFR_PORT=4000
 CYFR_PUBLIC_URL=https://cyfr-1.proof.ts.net
@@ -122,23 +157,23 @@ edit '/^CYFR_PUBLIC_URL=/d' nourl
 expect fail "the head's public URL missing" holds "$tailnet_head" "$scratch/nourl"
 edit 's/^CYFR_HOST=.*/CYFR_HOST=cyfr.proof.ts.net/' host
 expect fail "another host" holds "$tailnet_head" "$scratch/host"
-edit 's/^CYFR_ACCESS=.*/CYFR_ACCESS=public/' mode
-expect fail "another mode" holds "$tailnet_head" "$scratch/mode"
+edit 's/^CYFR_BROWSER=.*/CYFR_BROWSER=domain/' mode
+expect fail "another kind" holds "$tailnet_head" "$scratch/mode"
 edit "s/^CYFR_TAILNET_NODE_ID=.*/CYFR_TAILNET_NODE_ID=nOtherCNTRL/" nodeid
 expect fail "a node id in .env other than the state's" holds "$tailnet_head" "$scratch/nodeid" "$scratch/nodeid"
 expect fail "a state holding another node" holds "$tailnet_head" "$scratch/env" "$scratch/env" "cyfr tailscale" nOtherCNTRL
 expect fail "a proxy running that no profile starts" holds "$tailnet_head" "$scratch/env" "$scratch/env" "caddy cyfr tailscale"
 expect fail "the profile's proxy not running" holds "$tailnet_head" "$scratch/env" "$scratch/env" "cyfr"
 expect fail "an expected head with a profile the proof knows no proxy of" \
-  holds '{"mode":"tailnet","host":"cyfr-1.proof.ts.net","port":4000,"public_url":"https://cyfr-1.proof.ts.net","node_id":"'"$node"'","profiles":["proof-never","tailnet"]}' "$scratch/env"
+  holds '{"browser":"tailnet","host":"cyfr-1.proof.ts.net","port":4000,"public_url":"https://cyfr-1.proof.ts.net","node_id":"'"$node"'","profiles":["proof-never","tailnet"]}' "$scratch/env"
 expect fail "an expected head with a field no access setting holds" holds "${tailnet_head%\}},\"extra\":1}" "$scratch/env"
 expect fail "a running cyfr whose environment cannot be read" \
   head_holds "$tailnet_head" "$scratch/env" "not json" "cyfr tailscale" "$node"
-local_head='{"mode":"local","host":"localhost","port":4000,"profiles":[]}'
-printf 'CYFR_ACCESS=local\nCYFR_HOST=localhost\nCYFR_PORT=4000\n' >"$scratch/local"
-expect pass "a local head" holds "$local_head" "$scratch/local" "$scratch/local" cyfr ""
-printf 'CYFR_ACCESS=local\nCYFR_HOST=localhost\nCYFR_PORT=4000\nCYFR_PUBLIC_URL=http://localhost:4000\n' >"$scratch/local-url"
-expect fail "a local .env with a public URL added" holds "$local_head" "$scratch/local-url" "$scratch/local-url" cyfr ""
+local_head='{"browser":"none","host":"localhost","port":4000,"profiles":[]}'
+printf 'CYFR_BROWSER=none\nCYFR_HOST=localhost\nCYFR_PORT=4000\n' >"$scratch/local"
+expect pass "a head with no browser address" holds "$local_head" "$scratch/local" "$scratch/local" cyfr ""
+printf 'CYFR_BROWSER=none\nCYFR_HOST=localhost\nCYFR_PORT=4000\nCYFR_PUBLIC_URL=http://localhost:4000\n' >"$scratch/local-url"
+expect fail "a .env with no browser address and a public URL added" holds "$local_head" "$scratch/local-url" "$scratch/local-url" cyfr ""
 
 # ---- serve_config_holds ------------------------------------------------------
 
@@ -155,10 +190,17 @@ for mutated in \
   expect fail "a Serve configuration other than the engine's: ${mutated:0:90}" serve_config_holds "$mutated" cyfr.proof.ts.net 4401
 done
 
+proxy_head='{"browser":"proxy","host":"cyfr.example.com","port":4000,"public_url":"https://cyfr.example.com","publish":"127.0.0.1:4001","profiles":[]}'
+printf 'CYFR_BROWSER=proxy\nCYFR_HOST=cyfr.example.com\nCYFR_PORT=4000\nCYFR_PUBLIC_URL=https://cyfr.example.com\nCYFR_PROXY_PUBLISH=127.0.0.1:4001\nCYFR_TRUSTED_PROXY_HOPS=1\n' >"$scratch/proxy"
+expect pass "a proxy head, its publication held, no proxy of the stack's running" holds "$proxy_head" "$scratch/proxy" "$scratch/proxy" cyfr ""
+sed '/^CYFR_PROXY_PUBLISH=/d' "$scratch/proxy" >"$scratch/proxy-unpublished"
+expect fail "a proxy head whose publication .env lacks" holds "$proxy_head" "$scratch/proxy-unpublished" "$scratch/proxy" cyfr ""
+expect fail "a proxy head with Caddy running" holds "$proxy_head" "$scratch/proxy" "$scratch/proxy" "caddy cyfr" ""
+
 # ---- preview_holds -----------------------------------------------------------
 
-a='{"mode":"tailnet","host":"cyfr.proof.ts.net","port":4000,"public_url":"https://cyfr.proof.ts.net","node_id":"nA","profiles":["tailnet"]}'
-b='{"mode":"tailnet","host":"cyfr-1.proof.ts.net","port":4000,"public_url":"https://cyfr-1.proof.ts.net","node_id":"nB","profiles":["tailnet"]}'
+a='{"browser":"tailnet","host":"cyfr.proof.ts.net","port":4000,"public_url":"https://cyfr.proof.ts.net","node_id":"nA","profiles":["tailnet"]}'
+b='{"browser":"tailnet","host":"cyfr-1.proof.ts.net","port":4000,"public_url":"https://cyfr-1.proof.ts.net","node_id":"nB","profiles":["tailnet"]}'
 changes="$(python3 -I -c '
 import json, re, sys
 source = open(sys.argv[1]).read()
@@ -167,7 +209,7 @@ for i, s in enumerate(re.findall(r"\"(?:[^\"\\\\]|\\\\.)*\"", m.group(1)), 1):
     print(f"  {i}. {json.loads(s)}")
 print(json.loads(re.search(r"^const AccountsUnchanged = (\".*\")$", source, re.M).group(1)))' "$ROOT/apps/codex/internal/access/switch.go")"
 cat >"$scratch/preview" <<LOG
-\$ cyfr access tailnet
+\$ cyfr access browser tailnet
 CYFR will be reached by your devices on Tailscale at https://cyfr-1.proof.ts.net.
   Tailnet machine: cyfr.proof.ts.net → a new machine, cyfr-1.proof.ts.net
 The address changes, so:
@@ -197,6 +239,17 @@ mutate_preview '$c\panic: failed while parsing --yes' panic "a failure naming --
 mutate_preview '$s/, or at a terminal$//' cut "the refusal cut short"
 # shellcheck disable=SC2016
 mutate_preview '$s/^Error: //' bare "the refusal not printed as the command's error"
+none_head='{"browser":"none","host":"localhost","port":4000,"profiles":[]}'
+cat >"$scratch/preview-proxy" <<LOG
+\$ cyfr access browser proxy --domain cyfr.example.com
+CYFR will be reached by whoever your own proxy lets through, who still has to sign in, at https://cyfr.example.com, through your proxy, which forwards to http://127.0.0.1:4001.
+The address changes, so:
+$changes
+Error: Nothing changed: there is no terminal to confirm the change on. Run it again with --yes to make the change, or at a terminal
+LOG
+expect pass "the complete preview of none to proxy" preview_holds "$scratch/preview-proxy" "$none_head" "$proxy_head"
+sed 's|forwards to http://127.0.0.1:4001|forwards to http://127.0.0.1:4002|' "$scratch/preview-proxy" >"$scratch/preview-proxy-port"
+expect fail "the preview naming another publication" preview_holds "$scratch/preview-proxy-port" "$none_head" "$proxy_head"
 # shellcheck disable=SC2016
 mutate_preview '$s/Nothing changed/The change was made/' made "a refusal saying the change was made"
 expect fail "the preview read against another new head" preview_holds "$scratch/preview" "$a" "${b//cyfr-1/cyfr-2}"
@@ -312,6 +365,31 @@ expect fail "tailscale under Docker's default seccomp profile" \
 expect fail "tailscale under another seccomp profile" \
   capabilities_hold tailscale "$(host_config '["ALL"]' null no-new-privileges:true 'seccomp={"defaultAction":"SCMP_ACT_ALLOW"}')" "$(status_with 0000000000000000)" "$profile"
 expect fail "a process status with no CapEff" capabilities_hold tailscale "$tailscale" "Name: x" "$profile"
+
+# ---- keeper_wall_holds -------------------------------------------------------
+
+kvm_node='character special file a e8 992 660'
+tun_node='character special file a c8 0 666'
+wall="[cyfr-locus] info: each person's work runs in a separate small computer on this machine: a VM of their own, booted at their first session"
+spaces="[cyfr-locus] info: each person's work runs in its own space on this machine: the container was given no /dev/kvm"
+expect pass "both devices here, both named, the wall given" keeper_wall_holds "$kvm_node" "$tun_node" /dev/kvm /dev/net/tun "booting
+$wall"
+expect pass "no KVM here, neither named, spaces for want of it" keeper_wall_holds "" "$tun_node" "" "" "$spaces"
+expect pass "KVM here and no tun, neither named" keeper_wall_holds "$kvm_node" "" "" "" "$spaces"
+expect fail "both here, neither named" keeper_wall_holds "$kvm_node" "$tun_node" "" "" "$spaces"
+expect fail "none here, both named" keeper_wall_holds "" "" /dev/kvm /dev/net/tun "$spaces"
+expect fail "KVM here and no tun, KVM named" keeper_wall_holds "$kvm_node" "" /dev/kvm "" "$spaces"
+expect fail "KVM's group root's, both named" keeper_wall_holds "${kvm_node/ 992 / 0 }" "$tun_node" /dev/kvm /dev/net/tun "$wall"
+expect fail "KVM read and written by its owner alone, both named" keeper_wall_holds "${kvm_node/ 660/ 600}" "$tun_node" /dev/kvm /dev/net/tun "$wall"
+expect fail "tun not read and written by everyone, both named" keeper_wall_holds "$kvm_node" "${tun_node/ 666/ 660}" /dev/kvm /dev/net/tun "$wall"
+expect fail "another misc device at /dev/kvm" keeper_wall_holds "${kvm_node/ e8 / e9 }" "$tun_node" /dev/kvm /dev/net/tun "$wall"
+expect fail "both named, the keeper giving spaces" keeper_wall_holds "$kvm_node" "$tun_node" /dev/kvm /dev/net/tun "$spaces"
+expect fail "both named, the keeper giving spaces for want of room" keeper_wall_holds "$kvm_node" "$tun_node" /dev/kvm /dev/net/tun \
+  "[cyfr-locus] info: each person's work runs in its own space on this machine: a first session in a VM, 1 GiB, does not fit the work pool's 512 MiB beside the floor"
+expect fail "neither named, the keeper giving the wall" keeper_wall_holds "" "" "" "" "$wall"
+expect fail "the keeper said no start line" keeper_wall_holds "$kvm_node" "$tun_node" /dev/kvm /dev/net/tun "booting"
+expect fail "a later start line other than the first" keeper_wall_holds "$kvm_node" "$tun_node" /dev/kvm /dev/net/tun "$wall
+$spaces"
 
 echo "$cases cases, $failures failed"
 [ "$failures" -eq 0 ]

@@ -12,7 +12,7 @@ import (
 	"testing"
 )
 
-// vectors is tests/fixtures/access_modes.json, which binds this package to
+// vectors is tests/fixtures/access.json, which binds this package to
 // Cyfr.RuntimeConfig: Elixir generated every canonical, digest and boot
 // answer in it, and every section is read here.
 type vectors struct {
@@ -59,7 +59,7 @@ type bootVector struct {
 }
 
 type profileVector struct {
-	Mode     string   `json:"mode"`
+	Browser  string   `json:"browser"`
 	Profiles []string `json:"profiles"`
 }
 
@@ -76,10 +76,12 @@ type wordsVector struct {
 
 func (c *Current) UnmarshalJSON(b []byte) error {
 	var raw struct {
-		Port int `json:"port"`
+		Port    int    `json:"port"`
+		Publish string `json:"publish"`
+		Trusted bool   `json:"trusted"`
 	}
 	err := json.Unmarshal(b, &raw)
-	c.Port = raw.Port
+	c.Port, c.Publish, c.Trusted = raw.Port, raw.Publish, raw.Trusted
 	return err
 }
 
@@ -95,27 +97,47 @@ func (j *Join) UnmarshalJSON(b []byte) error {
 
 func readVectors(t *testing.T) vectors {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "tests", "fixtures", "access_modes.json"))
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "tests", "fixtures", "access.json"))
 	if err != nil {
-		t.Fatalf("read access_modes.json: %v", err)
+		t.Fatalf("read access.json: %v", err)
 	}
 	var v vectors
 	dec := json.NewDecoder(strings.NewReader(string(raw)))
 	if err := dec.Decode(&v); err != nil {
-		t.Fatalf("decode access_modes.json: %v", err)
+		t.Fatalf("decode access.json: %v", err)
 	}
 	if len(v.Derive) == 0 || len(v.Boot) == 0 || len(v.Profiles) == 0 || len(v.Words) == 0 ||
 		len(v.Names.TailnetNames) == 0 || len(v.Names.NodeIDs) == 0 || len(v.Names.Domains) == 0 {
-		t.Fatal("access_modes.json has an empty or missing section")
+		t.Fatal("access.json has an empty or missing section")
 	}
 	return v
 }
 
 func TestProfilesVectors(t *testing.T) {
 	for _, v := range readVectors(t).Profiles {
-		if got := Profiles(v.Mode); !reflect.DeepEqual(got, v.Profiles) {
-			t.Errorf("Profiles(%q) = %v, want %v", v.Mode, got, v.Profiles)
+		if got := Profiles(v.Browser); !reflect.DeepEqual(got, v.Profiles) {
+			t.Errorf("Profiles(%q) = %v, want %v", v.Browser, got, v.Profiles)
 		}
+	}
+}
+
+// Each kind selects its own proxy's profile, and none and proxy, whose
+// proxy is not the stack's, select none; BrowserProfiles is their union,
+// in byte order.
+func TestProfilesOfEveryKind(t *testing.T) {
+	want := map[string][]string{
+		BrowserNone: {}, BrowserTailnet: {"tailnet"}, BrowserDomain: {"domain"}, BrowserProxy: {},
+	}
+	if len(want) != len(Browsers) {
+		t.Fatalf("Browsers is %v", Browsers)
+	}
+	for _, browser := range Browsers {
+		if got := Profiles(browser); !reflect.DeepEqual(got, want[browser]) {
+			t.Errorf("Profiles(%q) = %#v, want %#v", browser, got, want[browser])
+		}
+	}
+	if got := BrowserProfiles(); !reflect.DeepEqual(got, []string{"domain", "tailnet"}) {
+		t.Errorf("BrowserProfiles() = %v", got)
 	}
 }
 
@@ -171,16 +193,17 @@ func TestHeadCanonicalAgreesWithElixir(t *testing.T) {
 // A change to any one field of a head changes its digest, and the digest
 // is over the bytes, not the struct.
 func TestDigestBindsEveryField(t *testing.T) {
-	base := Head{Mode: ModePublic, Host: "cyfr.example.com", PublicURL: "https://cyfr.example.com", Port: 4000,
-		ACMEEmail: "ops@example.com", Profiles: []string{"public"}}
+	base := Head{Browser: BrowserDomain, Host: "cyfr.example.com", PublicURL: "https://cyfr.example.com", Port: 4000,
+		ACMEEmail: "ops@example.com", Profiles: []string{"domain"}}
 	changes := map[string]func(*Head){
-		"mode":       func(h *Head) { h.Mode = ModeTailnet },
+		"browser":    func(h *Head) { h.Browser = BrowserTailnet },
 		"host":       func(h *Head) { h.Host = "other.example.com" },
 		"node_id":    func(h *Head) { h.NodeID = "n1" },
 		"public_url": func(h *Head) { h.PublicURL = "https://other.example.com" },
 		"port":       func(h *Head) { h.Port = 4001 },
 		"acme_email": func(h *Head) { h.ACMEEmail = "admin@example.com" },
 		"profiles":   func(h *Head) { h.Profiles = []string{} },
+		"publish":    func(h *Head) { h.Publish = DefaultPublish },
 	}
 	for field, change := range changes {
 		h := base
@@ -198,8 +221,8 @@ func TestDigestBindsEveryField(t *testing.T) {
 // RFC 8785 escapes only what JSON requires: HTML characters and U+2028
 // stay as they are, unlike encoding/json's default.
 func TestCanonicalEscapesOnlyWhatJSONRequires(t *testing.T) {
-	h := Head{Mode: ModeLocal, Host: "localhost", Port: 4000, PublicURL: "http://b/?a=1&b=< \"\\\x01>", Profiles: []string{}}
-	want := `{"host":"localhost","mode":"local","port":4000,"profiles":[],"public_url":"http://b/?a=1&b=<` + " " + `\"\\\u0001>"}`
+	h := Head{Browser: BrowserNone, Host: "localhost", Port: 4000, PublicURL: "http://b/?a=1&b=< \"\\\x01>", Profiles: []string{}}
+	want := `{"browser":"none","host":"localhost","port":4000,"profiles":[],"public_url":"http://b/?a=1&b=<` + " " + `\"\\\u0001>"}`
 	if got := string(h.Canonical()); got != want {
 		t.Errorf("canonical\n got %s\nwant %s", got, want)
 	}

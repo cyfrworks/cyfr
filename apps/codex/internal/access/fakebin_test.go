@@ -180,12 +180,12 @@ func holderMain(args []string) int {
 			result = err.Error()
 			break
 		}
-		p, err := e.Preview(ctx, Target{Mode: args[3], Domain: os.Getenv("ACCESS_HOLDER_DOMAIN")}, "")
+		p, err := e.Preview(ctx, Target{Browser: args[3], Domain: os.Getenv("ACCESS_HOLDER_DOMAIN")}, "")
 		if err != nil {
 			result = err.Error()
 			break
 		}
-		rc, err := e.Switch(ctx, SwitchRequest{ID: args[4], Target: Target{Mode: args[3], Domain: os.Getenv("ACCESS_HOLDER_DOMAIN")}, OldDigest: p.OldDigest, NewDigest: p.NewDigest})
+		rc, err := e.Switch(ctx, SwitchRequest{ID: args[4], Target: Target{Browser: args[3], Domain: os.Getenv("ACCESS_HOLDER_DOMAIN")}, OldDigest: p.OldDigest, NewDigest: p.NewDigest})
 		result = fmt.Sprintf("%s %s %v", rc.State, rc.Outcome, err)
 	}
 	os.WriteFile(ready+".done", []byte(result), 0o600)

@@ -37,7 +37,7 @@ config :arca, decision_log_budget_ms: 5_000
 # The origin an absolute URL falls back to, the endpoint's own above.
 config :sanctum, :fallback_origin, "http://localhost:4002"
 
-# The MCP Origin allowlist of a local home on the loopback, which
+# The MCP Origin allowlist of a server with no browser address, on the loopback, which
 # `config/runtime.exs` resolves from the access settings for every other
 # boot, with no extras.
 config :cyfr,

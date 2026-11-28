@@ -133,6 +133,21 @@ func (s *server) giveWall() {
 	}
 	s.log.Info("each person's work runs in a separate small computer on this machine: a VM of their own, booted at their first session")
 	s.retireDirectories()
+	// No VM runs at the start: every disk that has never held a kept home
+	// goes, one a keeper killed while retiring it left among them.
+	s.mu.Lock()
+	s.keptMaps()
+	var unkept []string
+	for a, d := range s.disks {
+		if d.Unkept {
+			unkept = append(unkept, a)
+		}
+	}
+	s.mu.Unlock()
+	sort.Strings(unkept)
+	for _, a := range unkept {
+		s.retireUnkept(a)
+	}
 }
 
 // retireDirectories retires every disk of the directory form, on a keeper

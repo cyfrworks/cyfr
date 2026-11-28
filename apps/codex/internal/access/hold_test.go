@@ -202,7 +202,7 @@ func TestRecoveryOfAHoldWhoseStartFailsFinishesIt(t *testing.T) {
 func TestHoldRefusesOverAnotherOperationAndWithoutTheLock(t *testing.T) {
 	h := newHome(t)
 	h.fake.startStack(t, h.head())
-	r := h.request(id(1), publicTarget, "")
+	r := h.request(id(1), domainTarget, "")
 	if !h.killAt("journal:switch:stopped", func(e *Engine) { e.Switch(bg, r) }) {
 		t.Fatal("the switch never stopped")
 	}
