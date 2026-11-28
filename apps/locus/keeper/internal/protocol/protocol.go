@@ -163,9 +163,10 @@
 // its start of whether it gives each person a VM of their own, WallGiven,
 // or spaces on the shared kernel, WallNoRoom where a first session in a VM
 // does not fit and WallLacking for anything else it lacks (package serve's
-// wallOf). Nothing a client sends sets it. Each change of a counter takes its role's next
-// rev, from 1 at each boot, which is why every report carries the boot. A
-// counter goes 48 hours after its last change, never while it holds bytes.
+// wallOf). Nothing a client sends sets it. Each change of a counter takes
+// its role's next rev, from 1 at each boot, which is why every report
+// carries the boot. A counter goes 48 hours after its last change, never
+// while it holds bytes.
 //
 // A spawn with `"control": true` also gets a control channel: the keeper
 // makes an AF_UNIX stream socketpair, installs one end as the command's file
