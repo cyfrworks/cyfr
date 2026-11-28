@@ -227,7 +227,7 @@ MANIFEST_OUT = '> "$RUNNER_TEMP/release/release.json"\n'
 # The manifest step reads the schema fingerprint from the release's own
 # cyfr image, by the merged digest, and writes it as schema_fingerprint.
 SCHEMA_READ = (
-    """schema=$(docker run --rm -e CYFR_BROWSER=none -e "CYFR_SECRET_KEY_BASE=$(openssl rand -hex 48)" """
+    """schema=$(docker run --rm -e CYFR_BROWSER=none -e "CYFR_SECRET_KEY_BASE=$(openssl rand -hex 48)" -e "CYFR_LINK_PUBLIC=$(openssl rand -hex 32)" """
     """"ghcr.io/cyfrworks/cyfr@$cyfr" bin/cyfr eval 'IO.puts("CYFR_SCHEMA=" <> Arca.SchemaFingerprint.current())' """
     """| sed -n 's/^CYFR_SCHEMA=//p')"""
 )

@@ -153,7 +153,8 @@ func TestAccountServiceVectors(t *testing.T) {
 			}
 		})
 	}
-	if got, ok := ServiceOf("http://localhost:4000", "http://localhost:4000/accounts"); !ok || got.Origin != "http://localhost:4000" {
+	const private = "http://h-xeypbemm44chehc5.localhost:4000"
+	if got, ok := ServiceOf(private, private+"/accounts"); !ok || got.Origin != private {
 		t.Fatalf("a local CYFR's own directory under a path: %+v, %v", got, ok)
 	}
 }

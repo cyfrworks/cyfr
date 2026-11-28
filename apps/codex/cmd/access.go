@@ -37,6 +37,7 @@ type stackEngine interface {
 	ComposeArgs(ctx context.Context, h access.Head, args ...string) ([]string, error)
 	DeclaredProfiles(ctx context.Context) ([]string, error)
 	Head() (access.Head, error)
+	Words() (access.Words, error)
 	CheckStack(ctx context.Context) error
 	Status(ctx context.Context) (access.Status, error)
 	Preview(ctx context.Context, t access.Target, joinID string) (access.Preview, error)
@@ -568,10 +569,10 @@ func printPreview(out io.Writer, p access.Preview, consequences bool) {
 	if p.Reopen {
 		// The head is .env's already: what changes is that the home is
 		// served on the tailnet again, once the machine is checked.
-		fmt.Fprintf(out, "CYFR answers on this computer only right now. Once the tailnet machine checks out, CYFR will be reached %s.\n", reachedBy(p.New))
+		fmt.Fprintf(out, "CYFR answers on this computer only right now. Once the tailnet machine checks out, CYFR will be reached %s.\n", reachedBy(p.New, p.NewWords))
 		return
 	}
-	fmt.Fprintf(out, "CYFR will be reached %s.\n", reachedBy(p.New))
+	fmt.Fprintf(out, "CYFR will be reached %s.\n", reachedBy(p.New, p.NewWords))
 	for _, line := range changedRows(p) {
 		fmt.Fprintln(out, "  "+line)
 	}
@@ -584,21 +585,21 @@ func printPreview(out io.Writer, p access.Preview, consequences bool) {
 	}
 }
 
-// reachedBy is how CYFR at head h is reached, as "CYFR will be reached"
-// and "CYFR is reached" go on: who reaches it and at what address, for
-// domain the ports it opens on this machine, and for proxy where the
-// person's proxy forwards to.
-func reachedBy(h access.Head) string {
-	w := access.Describe(h)
+// reachedBy is how CYFR at head h, whose words are w, is reached, as
+// "CYFR will be reached" and "CYFR is reached" go on: who reaches it and
+// at what address, its browser address when it has one and its private
+// address when it has none, for domain the ports it opens on this
+// machine, and for proxy where the person's proxy forwards to.
+func reachedBy(h access.Head, w access.Words) string {
 	switch h.Browser {
 	case access.BrowserTailnet:
-		return "by your devices on Tailscale at " + w.Address
+		return "by your devices on Tailscale at " + w.Browser
 	case access.BrowserDomain:
-		return "by " + w.Who + ", at " + w.Address + ", through ports " + w.Ports + " on this machine"
+		return "by " + w.Who + ", at " + w.Browser + ", through ports " + w.Ports + " on this machine"
 	case access.BrowserProxy:
-		return "by " + w.Who + ", at " + w.Address + ", through your proxy, which forwards to " + w.Forward
+		return "by " + w.Who + ", at " + w.Browser + ", through your proxy, which forwards to " + w.Forward
 	}
-	return "from this computer at " + w.Address
+	return "from this computer at " + w.Private
 }
 
 // changedRows are the settings a change makes other than who reaches CYFR
@@ -675,12 +676,12 @@ var accessBrowserCmd = &cobra.Command{
 	Short:       "Choose CYFR's browser address: none, your tailnet, a domain, or a domain your own proxy serves",
 	Long: `Choose the browser address of the CYFR in the current directory, and every setting that follows from it in .env (CYFR_BROWSER, CYFR_HOST, CYFR_PUBLIC_URL, CYFR_TAILNET_NODE_ID, CADDY_ACME_EMAIL, CYFR_PROXY_PUBLISH).
 
-  none     no browser address: this computer only, at http://localhost:<CYFR_PORT>
+  none     no browser address: this computer only, at its private address, http://h-<16 letters and digits>.localhost:<CYFR_PORT>, which every CYFR keeps whatever its browser address
   tailnet  your devices on Tailscale, at https://<machine>.<tailnet>.ts.net; the machine joins your tailnet first (the link it prints approves it, and on a machine with a display it opens in the default browser unless --no-open is given; --tailscale-auth-key-file joins it without one)
   domain   anyone on the internet, who still has to sign in, at https://<--domain>, through Caddy on ports 80 and 443
   proxy    a domain your own proxy serves (nginx, a tunnel, a NAS's proxy), at https://<--domain>: CYFR starts no Caddy and publishes its proxy listener on this machine's loopback at --publish (default ` + access.DefaultPublish + `), for your proxy to forward to. Your proxy's forwarded headers are trusted only as .env states: set CYFR_TRUSTED_PROXY_HOPS (1 for your proxy alone) or CYFR_TRUSTED_PROXY_CIDRS there first, or the change is refused
 
-It shows the change first: who will reach CYFR and at what address, with the ports a domain opens, then each other setting that changes, as before → after (the certificate email, the ports opened on this machine, the port on this computer, the builds service). When the address changes it also lists what changes with it for browsers, command lines, OAuth apps, webhook senders and saved addresses, unless no one is set up on CYFR yet; accounts and their passkeys do not change. Confirm it (or pass --yes), and the access containers are stopped, removed and checked stopped, keeping the networks, .env is rewritten, and what was running is started again with the new address; a start that fails puts CYFR back as it was. Once made, it prints the address and its QR code. A domain change then resolves the domain from this machine: it ends on Done only when the domain resolves, and otherwise says that no one reaches CYFR there, and no certificate is issued, until the domain's DNS names this machine. With no terminal to confirm on and no --yes, it shows the change and makes none, and a tailnet change that needs this machine joined first is refused before the join.
+It shows the change first: who will reach CYFR and at what address, with the ports a domain opens, then each other setting that changes, as before → after (the certificate email, the ports opened on this machine, the port on this computer, the builds service). When the address changes it also lists what changes with it for browsers, command lines, OAuth apps, webhook senders and saved addresses, unless no one is set up on CYFR yet; accounts and their passkeys do not change. Confirm it (or pass --yes), and the access containers are stopped, removed and checked stopped, keeping the networks, .env is rewritten, and what was running is started again with the new address; a start that fails puts CYFR back as it was. Once made, it prints CYFR's address on this computer and, with a browser address, that address and its QR code. A domain change then resolves the domain from this machine: it ends on Done only when the domain resolves, and otherwise says that no one reaches CYFR there, and no certificate is issued, until the domain's DNS names this machine. With no terminal to confirm on and no --yes, it shows the change and makes none, and a tailnet change that needs this machine joined first is refused before the join.
 
 When CYFR has a tailnet address and its Tailscale Serve is closed, because the machine was not ready when it started (HTTPS certificates off, say), 'cyfr access browser tailnet' serves it on the tailnet again: it shows that, and once confirmed checks the machine again and opens Serve without stopping anything or rewriting .env.
 
@@ -800,11 +801,11 @@ func runAccess(ctx context.Context, browser string, o accessOptions, yes bool, o
 		return err
 	}
 	if err == nil {
-		fmt.Fprintln(out, switchedSentence(ctx, p.New))
+		fmt.Fprintln(out, switchedSentence(ctx, p.New, p.NewWords))
 		if p.Reopen {
 			printTailscale(ctx, e, out)
 		}
-		printAddress(out, p.NewWords.Address)
+		printAddress(out, p.NewWords)
 		if p.New.Browser == access.BrowserProxy {
 			fmt.Fprintln(out, proxyTrustLimit(p.New.Publish))
 		}
@@ -818,9 +819,9 @@ func runAccess(ctx context.Context, browser string, o accessOptions, yes bool, o
 		values, _ := access.ReadEnvValues(".env")
 		switch {
 		case fresh:
-			fmt.Fprintln(out, upThenSetup(hyperlink(out, setupLink(p.NewWords.Address, values))))
+			fmt.Fprintln(out, upThenSetup(hyperlink(out, setupLink(p.NewWords.Shared(), values))))
 		case read == setUpNone:
-			setupNext(out, p.New)
+			setupNext(out, p.New, p.NewWords)
 		}
 	}
 	return err
@@ -845,11 +846,17 @@ func proxyTrustLimit(publish string) string {
 		"Credentials are still required either way, and the scheme is the listener's, not a header's."
 }
 
-// printAddress prints the address a change gave CYFR and its QR code, for
-// a phone to open it from; an address no QR code holds is printed alone.
-func printAddress(out io.Writer, address string) {
-	fmt.Fprintln(out, "CYFR's address: "+hyperlink(out, address))
-	if code, err := setup.QRText(address); err == nil {
+// printAddress prints CYFR's addresses after a change: its private
+// address, which this computer opens, and its browser address when it has
+// one, with its QR code for a phone to open it from; an address no QR code
+// holds is printed alone.
+func printAddress(out io.Writer, w access.Words) {
+	fmt.Fprintln(out, "CYFR's address on this computer: "+hyperlink(out, w.Private))
+	if w.Browser == "" {
+		return
+	}
+	fmt.Fprintln(out, "CYFR's browser address: "+hyperlink(out, w.Browser))
+	if code, err := setup.QRText(w.Browser); err == nil {
 		fmt.Fprint(out, code)
 	}
 }
@@ -861,18 +868,18 @@ func printAddress(out io.Writer, address string) {
 // this machine; a lookup that times out or fails otherwise proves neither,
 // and is said as a check this machine could not make. A proxy's domain
 // names the person's proxy, which this machine cannot check.
-func switchedSentence(ctx context.Context, head access.Head) string {
+func switchedSentence(ctx context.Context, head access.Head, w access.Words) string {
 	if head.Browser == access.BrowserDomain {
 		err := lookupDomain(ctx, head.Host)
 		var dns *net.DNSError
 		switch {
 		case errors.As(err, &dns) && dns.IsNotFound:
-			return fmt.Sprintf("CYFR is set to be reached %s, but %s does not resolve from this machine (%v). No one reaches CYFR there, and no certificate is issued, until the domain's DNS names this machine's public address; CYFR takes its certificate once it does, and cyfr access status shows it.", reachedBy(head), head.Host, err)
+			return fmt.Sprintf("CYFR is set to be reached %s, but %s does not resolve from this machine (%v). No one reaches CYFR there, and no certificate is issued, until the domain's DNS names this machine's public address; CYFR takes its certificate once it does, and cyfr access status shows it.", reachedBy(head, w), head.Host, err)
 		case err != nil:
-			return fmt.Sprintf("CYFR is set to be reached %s, but this machine could not check whether %s resolves (%v). CYFR takes its certificate once the domain's DNS names this machine's public address; cyfr access status shows whether it has one.", reachedBy(head), head.Host, err)
+			return fmt.Sprintf("CYFR is set to be reached %s, but this machine could not check whether %s resolves (%v). CYFR takes its certificate once the domain's DNS names this machine's public address; cyfr access status shows whether it has one.", reachedBy(head, w), head.Host, err)
 		}
 	}
-	return "Done. CYFR is reached " + reachedBy(head) + "."
+	return "Done. CYFR is reached " + reachedBy(head, w) + "."
 }
 
 // joinStands is what a join made before a change that was not made leaves

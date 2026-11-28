@@ -34,9 +34,6 @@ type Local struct {
 	// there: its address, the client that reaches it, the account service
 	// it names, its data directory and its setup capability.
 	Shell shell.Config
-	// Proxy is the engine's route to its pages, set on that CYFR's own
-	// stores alone, empty on this computer's own.
-	Proxy string
 	// Answers is nil when that CYFR itself answers now, and otherwise why
 	// it is not opened, in a sentence for the person. Asking starts
 	// nothing.
@@ -823,7 +820,7 @@ func (s *Service) openLocal(run context.Context, epoch uint64, project string, l
 	cfg := l.Shell
 	cfg.KeyElsewhere = s.keyElsewhere(project)
 	return s.selectHome(run, epoch, sel, cfg, l,
-		Message{Type: TypeHome, Home: home, Account: found.Origin, Proxy: l.Proxy, Setup: setup})
+		Message{Type: TypeHome, Home: home, Account: found.Origin, Setup: setup})
 }
 
 // selectRemote selects the CYFR elsewhere at home, with the account

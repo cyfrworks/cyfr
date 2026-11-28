@@ -4,15 +4,18 @@
 package access
 
 // Words are what a person reads for a head, each shown as before → after
-// when a change is previewed. None names a compose term. Forward is said
-// with proxy alone.
+// when a change is previewed. None names a compose term. Private is the
+// address the server's own machine reaches it at, which every server has;
+// Browser is its browser address, "" with none, and said only when it has
+// one, as Forward is said with proxy alone.
 type Words struct {
-	Who, Address, CertificateEmail, Ports, Forward string
+	Who, Private, Browser, CertificateEmail, Ports, Forward string
 }
 
-// Describe is the words a head reads as.
-func Describe(h Head) Words {
-	w := Words{Address: h.origin(), CertificateEmail: "none", Ports: "none"}
+// Describe is the words a head reads as, on a server whose private
+// address is private.
+func Describe(h Head, private string) Words {
+	w := Words{Private: private, Browser: h.PublicURL, CertificateEmail: "none", Ports: "none"}
 	switch h.Browser {
 	case BrowserNone:
 		w.Who = "only this computer"
@@ -31,16 +34,25 @@ func Describe(h Head) Words {
 	return w
 }
 
-// Sentences are the lines the words are printed as, in the order shown:
-// four, and with proxy a fifth, where the person's proxy sends CYFR's
-// requests.
-func (w Words) Sentences() []string {
-	lines := []string{
-		"Who can reach CYFR: " + w.Who,
-		"Address: " + w.Address,
-		"Certificate email: " + w.CertificateEmail,
-		"Ports opened on this machine: " + w.Ports,
+// Shared is the address the server gives out: its browser address when it
+// has one, otherwise its private address.
+func (w Words) Shared() string {
+	if w.Browser != "" {
+		return w.Browser
 	}
+	return w.Private
+}
+
+// Sentences are the lines the words are printed as, in the order shown:
+// who reaches CYFR, its address on this computer, its browser address when
+// it has one, the certificate email, the ports, and with proxy where the
+// person's proxy sends CYFR's requests.
+func (w Words) Sentences() []string {
+	lines := []string{"Who can reach CYFR: " + w.Who, "Address on this computer: " + w.Private}
+	if w.Browser != "" {
+		lines = append(lines, "Browser address: "+w.Browser)
+	}
+	lines = append(lines, "Certificate email: "+w.CertificateEmail, "Ports opened on this machine: "+w.Ports)
 	if w.Forward != "" {
 		lines = append(lines, "Your proxy sends CYFR's requests to: "+w.Forward)
 	}
@@ -89,7 +101,7 @@ func (r *Refusal) Sentence() string {
 	case "access_unknown_browser":
 		return "CYFR_BROWSER is `" + p["value"] + "`; it must be `none`, `tailnet`, `domain` or `proxy`. Run `cyfr access browser <kind>` to set it with the address it implies."
 	case "access_none_mismatch":
-		return "CYFR_BROWSER is `none`, which serves this computer alone at its localhost address, but " + p["key"] + " is `" + p["value"] + "`. Run `cyfr access browser none` to write the matching settings, or `cyfr access browser tailnet|domain|proxy` to reach it from other devices."
+		return "CYFR_BROWSER is `none`, which serves this computer alone at its private address, but " + p["key"] + " is `" + p["value"] + "`. Run `cyfr access browser none` to write the matching settings, or `cyfr access browser tailnet|domain|proxy` to reach it from other devices."
 	case "access_tailnet_host_invalid":
 		return tailnet(hostIs("CYFR_HOST is not set to") + " a tailnet machine name (<machine>.<tailnet>.ts.net)")
 	case "access_tailnet_node_invalid":

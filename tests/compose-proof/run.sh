@@ -1747,9 +1747,9 @@ hsts_checks() {
 tsnet_checks() {
   local name origin answer signed unsigned key why
   name="$(env_value CYFR_HOST)"
-  origin="$(cyfr_rpc 'IO.puts("ORIGIN=" <> Sanctum.origin())' | sed -n 's/^ORIGIN=//p' | tail -1)"
-  [ "$origin" = "https://$name" ] || fail "Sanctum.origin() is '$origin', not https://$name"
-  ok "the home's origin is https://$name"
+  origin="$(cyfr_rpc 'IO.puts("ORIGIN=" <> Sanctum.address(:proxy))' | sed -n 's/^ORIGIN=//p' | tail -1)"
+  [ "$origin" = "https://$name" ] || fail "the proxy listener's address (Sanctum.address(:proxy)) is '$origin', not https://$name"
+  ok "the home's browser address is https://$name"
   answer="$(fetched "$(probe_serve "$(mark)" "origin: https://$name")")"
   [ "$(jget "$answer" status)" = 200 ] || fail "MCP at https://$name refused its own origin: $answer"
   answer="$(fetched "$(probe_serve "$(mark)" "origin: https://evil.example")")"
@@ -2847,7 +2847,7 @@ print(env.get(sys.argv[1]) or "")' "$2" "$3"
 # fails.
 files_run() {
   local answer
-  answer="$(cyfr_rpc "{:ok, console} = Sanctum.Caller.establish({:session, \"$1\"})
+  answer="$(cyfr_rpc "{:ok, console} = Sanctum.Caller.establish({:session, \"$1\"}, entry: :loopback)
     input = Jason.decode!(~S($2))
     answer =
       case PrismWeb.Ops.call_tool(%{console | origin: :interactive}, \"execution/run\",
@@ -2905,7 +2905,7 @@ runtime_case() {
   step "the person's athanor reads filled, as the sign-in's fill leaves it"
   # Polled through the product's own reading (Sanctum.Provisioning.status/1)
   # under one deadline; nothing but :ready lets the runs start.
-  fill="$(cyfr_rpc "{:ok, ctx} = Sanctum.Caller.establish({:session, \"$token\"})
+  fill="$(cyfr_rpc "{:ok, ctx} = Sanctum.Caller.establish({:session, \"$token\"}, entry: :loopback)
     deadline = System.monotonic_time(:millisecond) + 120_000
     settle = fn settle ->
       case Sanctum.Provisioning.status(ctx) do
@@ -2924,7 +2924,7 @@ runtime_case() {
   # The plan, its preview and the commit (Sanctum.Consent), for the
   # person's interactive origin: the grant every run of the catalyst is
   # admitted under.
-  granted="$(cyfr_rpc "{:ok, console} = Sanctum.Caller.establish({:session, \"$token\"})
+  granted="$(cyfr_rpc "{:ok, console} = Sanctum.Caller.establish({:session, \"$token\"}, entry: :loopback)
     ctx = %{console | origin: :interactive}
     decisions = %{ref: \"catalyst:local.files\", origins: [:interactive]}
     {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, %{ref: \"catalyst:local.files\"})

@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"testing"
 )
 
@@ -152,18 +153,18 @@ func TestReadProjectAloneTakesNothingFromTheEnvironment(t *testing.T) {
 		port int
 		want map[string]string
 	}{
-		{"CYFR_BROWSER=none\nCYFR_PORT=4100\n", 4100, map[string]string{"CYFR_DIRECTORY_URL": "", "CYFR_SETUP_TOKEN": ""}},
-		{"CYFR_BROWSER=none\nINFILE=4300\nCYFR_PORT=${INFILE}\n", 4300, map[string]string{"INFILE": "4300"}},
-		{"CYFR_BROWSER=none\nCYFR_PORT=${LAUNCHER}\nCYFR_DIRECTORY_URL\nCYFR_SETUP_TOKEN\n", 4000,
+		{"CYFR_BROWSER=none\nCYFR_PORT=4100\nCYFR_LINK_PUBLIC=" + testLink + "\n", 4100, map[string]string{"CYFR_DIRECTORY_URL": "", "CYFR_SETUP_TOKEN": ""}},
+		{"CYFR_BROWSER=none\nINFILE=4300\nCYFR_PORT=${INFILE}\nCYFR_LINK_PUBLIC=" + testLink + "\n", 4300, map[string]string{"INFILE": "4300"}},
+		{"CYFR_BROWSER=none\nCYFR_PORT=${LAUNCHER}\nCYFR_DIRECTORY_URL\nCYFR_SETUP_TOKEN\nCYFR_LINK_PUBLIC=" + testLink + "\n", 4000,
 			map[string]string{"CYFR_DIRECTORY_URL": "", "CYFR_SETUP_TOKEN": ""}},
 	} {
 		dir := t.TempDir()
 		if err := os.WriteFile(filepath.Join(dir, ".env"), []byte(tc.env), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		values, head, err := ReadProjectAlone(dir)
-		if err != nil || head.Browser != BrowserNone || head.Port != tc.port {
-			t.Fatalf("%q read as %+v, %v", tc.env, head, err)
+		values, head, private, err := ReadProjectAlone(dir)
+		if err != nil || head.Browser != BrowserNone || head.Port != tc.port || private != "http://h-xeypbemm44chehc5.localhost:"+strconv.Itoa(tc.port) {
+			t.Fatalf("%q read as %+v at %s, %v", tc.env, head, private, err)
 		}
 		for k, v := range tc.want {
 			if values[k] != v {
@@ -171,7 +172,7 @@ func TestReadProjectAloneTakesNothingFromTheEnvironment(t *testing.T) {
 			}
 		}
 	}
-	if _, _, err := ReadProjectAlone(t.TempDir()); err == nil {
+	if _, _, _, err := ReadProjectAlone(t.TempDir()); err == nil {
 		t.Error("a folder with no .env read as a CYFR")
 	}
 }

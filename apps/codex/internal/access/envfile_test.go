@@ -106,10 +106,10 @@ func TestEnvWriterChangesOnlyTheHeadsKeys(t *testing.T) {
 	}
 
 	// A key .env lacks entirely goes right after CYFR_BROWSER.
-	minimal := "A=1\nCYFR_BROWSER=none\nCYFR_HOST=localhost\nB=2\n"
+	minimal := "A=1\nCYFR_BROWSER=none\nCYFR_HOST=localhost\nB=2\n" + linkLine
 	pub, _ := Derive(Target{Browser: BrowserDomain, Domain: "home.example.com"}, Current{Port: 4000}, nil)
 	got := edit(minimal, pub.Head)
-	if want := "A=1\nCYFR_BROWSER=domain\nCYFR_HOST=home.example.com\nB=2\nCYFR_PORT=4000\nCYFR_PUBLIC_URL=https://home.example.com\n"; got != want {
+	if want := "A=1\nCYFR_BROWSER=domain\nCYFR_HOST=home.example.com\nB=2\n" + linkLine + "CYFR_PORT=4000\nCYFR_PUBLIC_URL=https://home.example.com\n"; got != want {
 		t.Errorf("a minimal .env became\n%s\nwant\n%s", got, want)
 	}
 	read, err := readDotenv([]byte(got), noEnv)
@@ -129,7 +129,7 @@ func TestComposeSettingsInEnvAreRefused(t *testing.T) {
 	for _, line := range []string{"COMPOSE_PROFILES=domain,tailnet", "COMPOSE_PROFILES: domain", "  export COMPOSE_FILE = x.yml\nCOMPOSE_PROFILES=domain", "COMPOSE_PROJECT_NAME"} {
 		dir := filepath.Join(t.TempDir(), "home")
 		os.Mkdir(dir, 0o755)
-		writeFile(t, filepath.Join(dir, ".env"), append(repoFile(t, ".env.example"), []byte(line+"\n")...))
+		writeFile(t, filepath.Join(dir, ".env"), append(withLink(repoFile(t, ".env.example")), []byte(line+"\n")...))
 		writeFile(t, filepath.Join(dir, "docker-compose.yml"), repoFile(t, "docker-compose.yml"))
 		fake := newFakeDocker(dir, nil)
 		e, err := Open(dir, fake)
@@ -190,7 +190,7 @@ func TestReadEnvValues(t *testing.T) {
 // COMPOSE_* setting in any form first, then the head's boot refusal, a
 // later assignment deciding it; a coherent home's .env passes.
 func TestCheckEnvFile(t *testing.T) {
-	base := string(repoFile(t, ".env.example"))
+	base := string(withLink(repoFile(t, ".env.example")))
 	for _, c := range []struct {
 		name, extra, code, sentence string
 	}{

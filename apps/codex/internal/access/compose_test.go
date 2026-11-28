@@ -257,11 +257,11 @@ func TestCheckStackReadsTheSourcesProvenance(t *testing.T) {
 // against what compose gives cyfr.
 func TestCheckStackValidatesTheEffectiveValues(t *testing.T) {
 	h := newHome(t)
-	writeFile(t, filepath.Join(h.dir, ".env"), append(repoFile(t, ".env.example"), []byte("CYFR_BIND_ADDRESS=127.0.0.1\n")...))
+	writeFile(t, filepath.Join(h.dir, ".env"), append(withLink(repoFile(t, ".env.example")), []byte("CYFR_BIND_ADDRESS=127.0.0.1\n")...))
 	if err := h.e.CheckStack(bg); refusalCode(err) != "access_source_conflict" {
 		t.Errorf("a .env bind the compose file overrides answered %v", err)
 	}
-	writeFile(t, filepath.Join(h.dir, ".env"), append(repoFile(t, ".env.example"), []byte("CYFR_LOCAL_INGRESS_ASSERTED=true\n")...))
+	writeFile(t, filepath.Join(h.dir, ".env"), append(withLink(repoFile(t, ".env.example")), []byte("CYFR_LOCAL_INGRESS_ASSERTED=true\n")...))
 	if err := h.e.CheckStack(bg); refusalCode(err) != "access_source_conflict" && refusalCode(err) != "access_assertion_from_file" {
 		t.Errorf("the assertion from .env answered %v", err)
 	}

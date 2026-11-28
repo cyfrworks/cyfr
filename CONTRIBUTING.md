@@ -119,15 +119,17 @@ is done:
 
 **A start.** On its first run the loop makes `.env` mode 0600 and writes
 into it what a `mix` boot needs and nothing sets: `CYFR_SETUP_TOKEN`, the
-runtime root and the backends key, minted as `cyfr init` mints them. Later
-runs keep every value. The builds key, which a `mix` boot refuses without
+runtime root, the backends key and the tunnel key (`CYFR_LINK_KEY` and
+`CYFR_LINK_PUBLIC`), minted as `cyfr init` mints them. Later runs keep
+every value, so a worktree keeps its private name. The builds key, which a `mix` boot refuses without
 the backends' URL only the stack sets, is minted for each run unless `.env`
 sets one. It then builds the tree's Locus image with `scripts/image.sh`
 when the host does not hold it already (every worktree at the same inputs
 shares one), starts the containers, and runs `mix phx.server` in the
-foreground at http://localhost:4000. The run that writes the setup token
-prints the setup link, `http://localhost:4000/setup#<token>`, as `cyfr
-init` does: it asks for a name and a passkey at the local cyfr.run's
+foreground at its private address, `http://h-<16 letters and
+digits>.localhost:4000`, which it prints. The run that writes the setup
+token prints the setup link there, `<private address>/setup#<token>`, as
+`cyfr init` does: it asks for a name and a passkey at the local cyfr.run's
 account pages, which set up CYFR's first person, who administers it, and
 shows their recovery code. Prism and the server reload as their files
 change; a change under `apps/locus` or to the Locus image's other inputs
@@ -156,10 +158,10 @@ both; every other worktree's database then refuses in the same way.
 Each worktree runs a loop of its own, beside the others, a test suite, a
 proof or a CI-style run on the same host. Its containers are named
 `cyfr-dev-<seed>`, the worktree's seed, and its ports and networks are a
-slot's, one of twenty. The first loop on a host keeps
-http://localhost:4000, so a lone worktree sees no change; a second
-worktree's loop takes the next free slot, Prism on 4010 and so on, and
-prints its address, which the worktree remembers in
+slot's, one of twenty. The first loop on a host keeps port 4000, so a
+lone worktree sees no change; a second worktree's loop takes the next
+free slot, Prism on 4010 and so on, and prints its private address on
+that port, which the worktree remembers in
 `data/dev-stack.slot` for its next run. A `.env` that sets `CYFR_PORT` or
 another address of the stack refuses a slot it disagrees with, by name.
 With an API key made on Prism's API Keys page,

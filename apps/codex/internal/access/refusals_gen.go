@@ -36,6 +36,18 @@ var refusalRows = map[string]refusalRow{
 			{Fixed: map[string]string{}, Slots: []string{"pinned", "origin"}, Template: "This CYFR serves its own account service at {pinned}, and an account service keeps its address for good. This change would move it to {origin}. Nothing was changed."},
 		},
 	},
+	"access_link_missing": {
+		Class: "setup_required",
+		Variants: []refusalVariant{
+			{Fixed: map[string]string{}, Slots: []string{}, Template: "CYFR_LINK_PUBLIC is not set in .env, so this CYFR has no private address. Nothing started. `cyfr init` writes it with the tunnel key it mints for a new CYFR; a CYFR installed by an earlier build is not carried across."},
+		},
+	},
+	"access_link_invalid": {
+		Class: "invalid_argument",
+		Variants: []refusalVariant{
+			{Fixed: map[string]string{}, Slots: []string{}, Template: "CYFR_LINK_PUBLIC in .env is not a tunnel public key: it is 64 lowercase hexadecimal digits, as `cyfr init` writes it. Nothing started."},
+		},
+	},
 	"access_invalid": {
 		Class: "invalid_argument",
 		Variants: []refusalVariant{

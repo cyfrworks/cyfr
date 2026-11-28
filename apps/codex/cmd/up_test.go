@@ -128,8 +128,8 @@ func TestUpSaysHowTheFirstPersonIsSetUp(t *testing.T) {
 	const startedAt = "2026-10-28T00:01:02.123456789Z"
 	const line = "[Cyfr] Not set up: no one is set up on this CYFR yet. Its first person, who administers it, opens the setup link.\n"
 	const token = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-	const local = "CYFR_BROWSER=none\nCYFR_HOST=localhost\nCYFR_PORT=4123\n"
-	const tailnet = "CYFR_BROWSER=tailnet\nCYFR_HOST=cyfr.tail1234.ts.net\nCYFR_PUBLIC_URL=https://cyfr.tail1234.ts.net\nCYFR_TAILNET_NODE_ID=nTESTNODE1CNTRL\nCYFR_PORT=4000\n"
+	const local = "CYFR_BROWSER=none\nCYFR_HOST=localhost\nCYFR_PORT=4123\n" + testLinkLine
+	const tailnet = "CYFR_BROWSER=tailnet\nCYFR_HOST=cyfr.tail1234.ts.net\nCYFR_PUBLIC_URL=https://cyfr.tail1234.ts.net\nCYFR_TAILNET_NODE_ID=nTESTNODE1CNTRL\nCYFR_PORT=4000\n" + testLinkLine
 	account, err := user.Current()
 	if err != nil {
 		t.Fatal(err)
@@ -150,9 +150,9 @@ func TestUpSaysHowTheFirstPersonIsSetUp(t *testing.T) {
 		{name: "tailnet", env: tailnet, log: line, exit: "0", container: true,
 			after: "\nOpen https://cyfr.tail1234.ts.net/setup#" + token + " on your phone or laptop, with Tailscale on, to set up its first person.\n"},
 		{name: "local with a display", env: local, log: line, exit: "0", container: true, display: true,
-			after: "\nOpen http://localhost:4123/setup#" + token + " to set up its first person.\n"},
+			after: "\nOpen " + testPrivateAt + "4123/setup#" + token + " to set up its first person.\n"},
 		{name: "local with no display", env: local, log: line, exit: "0", container: true,
-			after: "\nOpen http://localhost:4123/setup#" + token + " to set up its first person.\n" +
+			after: "\nOpen " + testPrivateAt + "4123/setup#" + token + " to set up its first person.\n" +
 				"From another computer: ssh -L 4123:127.0.0.1:4123 " + account.Username + "@" + host + ", then open the link there.\n"},
 		{name: "a screen to reboot into", env: local, log: line, exit: "0", container: true, enabled: true,
 			after: "\nNow run sudo reboot. This screen opens setup at power-on.\n"},
@@ -185,7 +185,11 @@ func TestUpSaysHowTheFirstPersonIsSetUp(t *testing.T) {
 			if err := runUp(context.Background(), &out); err != nil {
 				t.Fatalf("cyfr up: %v", err)
 			}
-			want := "CYFR server started.\n  Prism:           " + access.Describe(head).Address + "/\n" + c.after
+			want := "CYFR server started.\n  Prism on this computer: " + testPrivateAt + strconv.Itoa(head.Port) + "/\n"
+			if head.PublicURL != "" {
+				want += "  Prism in a browser:     " + head.PublicURL + "/\n"
+			}
+			want += c.after
 			if out.String() != want {
 				t.Errorf("cyfr up printed\n%s\nwant\n%s", out.String(), want)
 			}
@@ -220,7 +224,7 @@ func TestUpStartsThroughTheEngine(t *testing.T) {
 	if log := s.log(); !slices.Equal(log, want) {
 		t.Errorf("cyfr up ran\n%s\nwant\n%s", strings.Join(log, "\n"), strings.Join(want, "\n"))
 	}
-	if !strings.Contains(out.String(), "Prism:           https://cyfr.example.com/") || strings.Contains(out.String(), "CYFR_HOST") {
+	if !strings.Contains(out.String(), "  Prism on this computer: "+testPrivate+"/\n  Prism in a browser:     https://cyfr.example.com/\n") || strings.Contains(out.String(), "CYFR_HOST") {
 		t.Errorf("cyfr up does not print the home's address:\n%s", out.String())
 	}
 	if holder := s.engine.held(); holder != "" {

@@ -138,7 +138,7 @@ func TestEditEnvWritesALiteralDollarAndQuoteComposeReadsBack(t *testing.T) {
 	t.Setenv("SOL_REVIEW_EXPAND", "unexpected-expansion")
 	dir := t.TempDir()
 	const value = "it's ${SOL_REVIEW_EXPAND}"
-	env, err := EditEnv([]byte("CYFR_BROWSER=none\nCYFR_HOST=localhost\nCYFR_PORT=4000\n"), map[string]string{"CUSTOM": value}, nil)
+	env, err := EditEnv([]byte("CYFR_BROWSER=none\nCYFR_HOST=localhost\nCYFR_PORT=4000\n"+linkLine), map[string]string{"CUSTOM": value}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -190,7 +190,7 @@ func TestEditEnvWritesEveryKeyComposeReadsBack(t *testing.T) {
 		"two\nlines", "three\nlines\n", "trailing space ", " leading space", "# hash", "a #b", "a\t#b",
 		"x\\\\'y", "ünïcode ✓", "=leading", ": colon", "tab\tin",
 	}
-	base := string(repoFile(t, ".env.example"))
+	base := string(withLink(repoFile(t, ".env.example")))
 	for i, key := range written {
 		for j, value := range values {
 			// Each key takes each value, a few keys at a time.

@@ -31,7 +31,10 @@
 # 10K, the host API on 4701 + 10K at the locus network's gateway, and the
 # locus network on 172.16.(100 + K).0/24. A loop takes the slot
 # data/dev-stack.slot remembers while it is free, else the first free one
-# from 0, so a lone loop keeps localhost:4000, and it remembers the slot it
+# from 0, so a lone loop keeps port 4000, and it remembers the slot it
+# takes. CYFR is at its private address on the slot's port, the name the
+# tunnel key in .env gives it (`mix cyfr.locus.dev_stack` mints the key
+# once, as `cyfr init` does), so a worktree keeps its name whatever slot it
 # takes. A slot is free when no other loop holds its claim (a lock under
 # XDG_RUNTIME_DIR, else TMPDIR, held for the loop's life), nothing listens
 # on its ports and no Docker network overlaps its subnet; when none is, the
@@ -711,7 +714,7 @@ run() {
   take_slot
   declarations
 
-  local out status line wrote="" setup="" server=() keys=() port="" registry="" oci="" directory=""
+  local out status line wrote="" setup="" address="" server=() keys=() port="" registry="" oci="" directory=""
   out="$(task settings "$PRIVATE/stack.json" "$DOMAIN" "$STACK_ROOT" 2>&1)" &&
     status=0 || status=$?
   [ "$status" = 0 ] || die "$(refusal "$out")"
@@ -719,6 +722,7 @@ run() {
     case "$line" in
       "wrote "*) wrote="${line#wrote }" ;;
       "setup "*) setup="${line#setup }" ;;
+      "address "*) address="${line#address }" ;;
       "server "*) server+=("${line#server }") ;;
       "compose "*) keys+=("${line#compose }") ;;
     esac
@@ -731,7 +735,7 @@ run() {
       CYFR_DIRECTORY_URL=*) directory="${line#*=}" ;;
     esac
   done
-  [ -n "$port" ] && [ -n "$registry" ] && [ -n "$oci" ] && [ -n "$directory" ] && [ "${#keys[@]}" = 3 ] ||
+  [ -n "$port" ] && [ -n "$address" ] && [ -n "$registry" ] && [ -n "$oci" ] && [ -n "$directory" ] && [ "${#keys[@]}" = 3 ] ||
     die "mix cyfr.locus.dev_stack printed no settings."
   [ -z "$wrote" ] || echo "dev-stack: .env is mode 0600 and now sets ${wrote// /, }."
 
@@ -746,7 +750,7 @@ run() {
 
   printf '\n%s\n%s\n%s\n' \
     "dev-stack: Locus's runtime, backends and builds roles run from this tree." \
-    "dev-stack: CYFR starts at http://localhost:$port and reloads as its files change." \
+    "dev-stack: CYFR starts at $address and reloads as its files change." \
     "dev-stack: its registry is $registry, its OCI registry $oci and its account service $directory: the local cyfr.run."
   [ -z "$setup" ] || echo "dev-stack: set up its first person, who administers it, at $setup"
   printf '%s\n\n' "dev-stack: Ctrl-C stops it and removes this worktree's containers."

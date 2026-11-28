@@ -331,11 +331,20 @@ export function setupProject(present, value, platform) {
 }
 
 /**
- * The engine's resolver rule, the app's whole run: localhost is 127.0.0.1 alone, where Docker publishes a local CYFR, and
- * never ::1, where any other program may listen on the same port and be
- * given that CYFR's pages, tickets and cookies (cmd/local.go).
+ * The engine's resolver rule, the app's whole run: localhost and every name
+ * under it, a CYFR's private address among them, are 127.0.0.1 alone, where
+ * Docker publishes a CYFR on this computer, and never ::1, where any other
+ * program may listen on the same port and be given that CYFR's pages,
+ * tickets and cookies (cmd/local.go).
  */
-export const LOCALHOST_IS_IPV4 = "MAP localhost 127.0.0.1"
+export const LOCALHOST_IS_IPV4 = "MAP localhost 127.0.0.1, MAP *.localhost 127.0.0.1"
+
+/**
+ * A private name under localhost, `h-` and 16 characters of base32 (a-z,
+ * 2-7), as a CYFR's tunnel key names its private address
+ * (internal/link PrivateHost).
+ */
+const PRIVATE_HOST = /^h-[a-z2-7]{16}\.localhost$/
 
 /**
  * The first switch of `args` (the command line after the executable) the
@@ -356,15 +365,16 @@ export function unlistedSwitch(args, platform) {
 
 /**
  * Whether `home` and `account` name a CYFR and an account service's origin
- * main takes for it: https, or plain http for a local CYFR alone
- * (http://localhost, with its port) and only at exactly that CYFR's own
- * origin. cyfr holds the same rule (internal/account ServiceOf;
- * tests/fixtures/desktop-process.json, account_services).
+ * main takes for it: https, or plain http for a CYFR on this computer
+ * alone, at its private address (http://<private name>.localhost, with its
+ * port), and only at exactly that address. cyfr holds the same rule
+ * (internal/account ServiceOf; tests/fixtures/desktop-process.json,
+ * account_services).
  */
 export function homeMessage(m) {
   if (!isHome(m.home) || !isHome(m.account)) return false
   if (parse(m.account)?.protocol === "https:") return true
-  return m.account === m.home && parse(m.home)?.hostname === "localhost"
+  return m.account === m.home && PRIVATE_HOST.test(parse(m.home)?.hostname ?? "")
 }
 
 /** The relying party of the account service at `account`: its host. */

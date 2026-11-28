@@ -495,7 +495,7 @@ func TestReopenRefusesAHomeThatStopsBeforeItIsAccepted(t *testing.T) {
 	if reads < 3 {
 		t.Fatal("the switch never read the stack it would accept")
 	}
-	if rc.State != "rejected" || refusalCode(err) != "access_stale" || rc.Payload["words"] != wordsText(Describe(h.head())) {
+	if rc.State != "rejected" || refusalCode(err) != "access_stale" || rc.Payload["words"] != wordsText(Describe(h.head(), testPrivate)) {
 		got, _ := os.ReadFile(h.e.servePath())
 		t.Fatalf("a home stopped before acceptance answered %+v, %v, Serve %s", rc, err, got)
 	}
@@ -553,7 +553,7 @@ func TestReopenClosesServeUnlessTheHomeStillRunsAsTheHeadSays(t *testing.T) {
 			if !opened {
 				t.Fatal("the reopen never opened Serve")
 			}
-			if rc.State != "completed" || rc.Outcome != "not_applied" || refusalCode(err) != "access_stale" || rc.Payload["words"] != wordsText(Describe(head)) || rc.FinalHead == nil || rc.FinalHead.Digest() != head.Digest() {
+			if rc.State != "completed" || rc.Outcome != "not_applied" || refusalCode(err) != "access_stale" || rc.Payload["words"] != wordsText(Describe(head, testPrivate)) || rc.FinalHead == nil || rc.FinalHead.Digest() != head.Digest() {
 				t.Fatalf("the reopen answered %+v, %v", rc, err)
 			}
 			if got, _ := os.ReadFile(h.e.servePath()); string(got) != serveClosed {

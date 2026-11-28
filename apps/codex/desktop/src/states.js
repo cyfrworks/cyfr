@@ -80,11 +80,7 @@
 //
 // A CYFR's page whose load failed, as the engine reports it, is no lock:
 // the content window shows the chooser saying so (`unanswered`), and
-// nothing is closed or forgotten. A CYFR whose route could not be set on
-// the store that would load it loads nothing there, and the chooser says
-// that (`unrouted`): once it was committed as that page's load failing,
-// before (on the six-word road and the box's screen, where the route is
-// set as cyfr proposes it) as the proposal failing, offered again. That notice is that chooser's alone: a
+// nothing is closed or forgotten. That notice is that chooser's alone: a
 // lock's own load can fail just before the lock is heard, and the lock's
 // chooser has nothing of it to tell.
 //
@@ -146,22 +142,12 @@
 //                            storage, or with setup its setup page, the
 //                            token in the fragment alone
 //   send {type, fields}      a message to cyfr
-//   prepare {home, attempt, proxy}  answer home-ready: on the six-word
-//                            road and the box's screen once that CYFR's
-//                            route (its proxy, none when empty) is set
-//                            on the content's store showing, at once on
-//                            the passkey road
 //   chooser {notices}        open the content at the chooser; with
 //                            connect, connecting to that CYFR; with way
-//                            "setup", at setting up on this computer;
-//                            with proxy, the route of the CYFR main
-//                            keeps to set on its store first, which goes
-//                            on to that CYFR's pages by the device's
-//                            (Try with words)
-//   back {notices, retry}    show the chooser, a document of main's load,
+//                            "setup", at setting up on this computer
+//   back {notices}           show the chooser, a document of main's load,
 //                            in the content window as it stands where its
-//                            store is memory's, the route taken off it
-//                            first; with retry, offering that CYFR again
+//                            store is memory's
 //   end {why}                kill cyfr and tell the person (never on the
 //                            box's screen)
 //   quit                     once forgotten, or the wait for it is up,
@@ -191,14 +177,14 @@ export const DEPARTURE_MS = 20_000
  * opened the app (--updated), which opens Update CYFR on its record once.
  */
 export function initial(accountRoad, screen = "", updated = false) {
-  return {name: "starting", accountRoad: accountRoad && !screen, screen, readyURL: "", home: "", account: "", proxy: "", returning: null,
+  return {name: "starting", accountRoad: accountRoad && !screen, screen, readyURL: "", home: "", account: "", returning: null,
     notices: [], picks: 0, picking: 0, pickFor: null, leaves: 0, seen: 0, updated: updated && !screen}
 }
 
 /** What main keeps to in state `s`, as the policies read it. */
 export const kept = (s) => s.name === "open"
-  ? {home: s.home, account: s.account, proxy: s.proxy ?? "", accountRoad: s.accountRoad}
-  : {home: "", account: "", proxy: "", accountRoad: s.accountRoad}
+  ? {home: s.home, account: s.account, accountRoad: s.accountRoad}
+  : {home: "", account: "", accountRoad: s.accountRoad}
 
 // The pick outstanding, if any, answered with none: the state without it
 // and the answer.
@@ -265,9 +251,6 @@ function pickAsked(url) {
 export const EXTERNAL = ["https://www.docker.com/products/docker-desktop/", "https://docs.docker.com/engine/install/"]
 // The engine's code for a load given up: replaced, stopped or refused.
 export const ABORTED = -3
-// A load main did not begin because the route of the CYFR it is for could
-// not be set on its store (app.js routedThen).
-export const UNROUTED = "unrouted"
 
 /**
  * Every decision main takes from a navigation as the person pressing
@@ -368,12 +351,12 @@ function sentToSignIn(s, e) {
 // A lock from state s: the content closes at once. cyfr is told, unless
 // it said locked itself (`heard`, its message): that is then the barrier
 // passed and the device's session ended, which is forgotten. A lock while
-// a CYFR is proposed holds on to that proposal, its route included: cyfr
+// a CYFR is proposed holds on to that proposal: cyfr
 // may have committed it as the lock began, its opened crossing the lock,
 // and its locked then names it, which main keeps to (settle) as cyfr does.
 function lock(s, why, heard = null) {
   const [t, answer] = unpicked(s)
-  const before = s.name === "proposed" ? {home: s.home, account: s.account, proxy: s.proxy ?? "", accountRoad: s.accountRoad} : kept(s)
+  const before = s.name === "proposed" ? {home: s.home, account: s.account, accountRoad: s.accountRoad} : kept(s)
   const next = {...t, name: "locking", before, barrier: heard !== null,
     keep: heard, forgotten: heard === null, returning: null}
   return {state: next, do: [{say: `locked: ${why}`}, ...answer, {close: true}, ...(s.screen ? [{unupdate: true}] : []),
@@ -399,7 +382,7 @@ function away(s, then) {
 
 // What follows a way away from the content, in chooser state `s`.
 function beyond(s, then, effects = []) {
-  const next = {...s, name: "chooser", home: "", account: "", proxy: "", notices: []}
+  const next = {...s, name: "chooser", home: "", account: "", notices: []}
   if (then.forget) return {state: next, do: [...effects, {send: {type: "forget", fields: {home: then.forget}}}, {chooser: []}]}
   return {state: next, do: [...effects, {chooser: [], ...then}]}
 }
@@ -414,9 +397,9 @@ function settle(s) {
   const m = s.keep
   const again = !!m.home && m.home === s.before.home && m.account === s.before.account
   const next = {name: again ? "open" : "chooser", accountRoad: s.accountRoad, screen: s.screen, readyURL: s.readyURL,
-    railURL: s.railURL, updateURL: s.updateURL, home: again ? m.home : "", account: again ? m.account : "", proxy: again ? s.before.proxy : "",
+    railURL: s.railURL, updateURL: s.updateURL, home: again ? m.home : "", account: again ? m.account : "",
     returning: null, notices: s.notices, picks: s.picks, picking: 0, pickFor: null, leaves: s.leaves, seen: s.seen}
-  const shown = {chooser: s.notices, ...(next.proxy ? {proxy: next.proxy} : {})}
+  const shown = {chooser: s.notices}
   if (!s.wanted) return {state: next, do: [shown]}
   const taken = step(next, {type: "home", message: s.wanted})
   return {state: taken.state, do: [shown, ...taken.do]}
@@ -424,7 +407,7 @@ function settle(s) {
 
 // The chooser's state after a departure: main keeps to none.
 const chooserOf = (s) => ({name: "chooser", accountRoad: s.accountRoad, screen: s.screen, readyURL: s.readyURL, railURL: s.railURL,
-  updateURL: s.updateURL, home: "", account: "", proxy: "", returning: null, notices: s.notices, picks: s.picks, picking: 0, pickFor: null,
+  updateURL: s.updateURL, home: "", account: "", returning: null, notices: s.notices, picks: s.picks, picking: 0, pickFor: null,
   leaves: s.leaves, seen: s.seen})
 
 /**
@@ -472,9 +455,9 @@ function advance(s, e) {
       if (!["chooser", "proposed"].includes(s.name) || !homeMessage(m)) {
         return stopped(s, "it named a CYFR this app does not open")
       }
-      return {state: {...s, name: "proposed", home: m.home, account: m.account, proxy: m.proxy ?? "", attempt: m.attempt, seen, setup: m.setup ?? "",
+      return {state: {...s, name: "proposed", home: m.home, account: m.account, attempt: m.attempt, seen, setup: m.setup ?? "",
         returning: null},
-        do: [{say: `home: ${m.home}`}, {prepare: {home: m.home, attempt: m.attempt, proxy: m.proxy ?? ""}}]}
+        do: [{say: `home: ${m.home}`}, {send: {type: "home-ready", fields: {home: m.home, attempt: m.attempt}}}]}
     }
     case "opened":
       if (s.name === "locking") return same(s) // from before the lock
@@ -566,19 +549,11 @@ function advance(s, e) {
       const [t, answer] = unpicked(s)
       return withdrawn(t, answer)
     }
-    // The proposal's route could not be set on the store that would load
-    // it (app.js prepare): no home-ready went, nothing of it loaded, and
-    // the chooser says why, offering it again.
-    case "unrouted":
-      if (s.name !== "proposed" || e.home !== s.home || e.attempt !== s.attempt) return same(s)
-      return same({...s, name: "chooser", home: "", account: "", proxy: "", setup: ""},
-        [{say: `unrouted: the route of ${e.home} could not be set`}, {back: adding(s.notices, "unrouted"), retry: e.home}])
     case "load-failed":
       if (s.screen && e.code !== ABORTED && parse(e.url)?.origin === LOOPBACK && !["starting", "locking"].includes(s.name)) {
         return lock(s, `the device's own page did not load (${e.code})`)
       }
       if (e.code === ABORTED || s.name !== "open" || parse(e.url)?.origin !== s.home) return withdrawn(s)
-      if (e.code === UNROUTED) return withdrawn(s, [{say: "unrouted: the CYFR's route could not be set"}, {back: adding(s.notices, "unrouted")}])
       return withdrawn(s, [{say: `unanswered: the CYFR's page did not load (${e.code})`}, {back: adding(s.notices, "unanswered")}])
     case "load-ended":
       return e.url === s.returning?.url ? withdrawn(s) : same(s)

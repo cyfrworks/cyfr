@@ -11,26 +11,32 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/cyfr/codex/internal/link"
 )
 
 // AccountsUnchanged closes the list of what changes with the address.
 const AccountsUnchanged = "Accounts and their passkeys do not change: they live at the account service, not at CYFR's address. A CYFR that serves the account service itself must keep its address."
 
-// addressChanges is what changes when the home's address changes, shown
-// before the change is made.
+// addressChanges is what changes when the address the server gives out
+// changes with its browser address, shown before the change is made.
 var addressChanges = []string{
-	"Every browser signs in again at the new address, with the same passkey.",
+	"Every browser signed in at the browser address signs in again, with the same passkey. Sign-ins at this computer's own address stay.",
 	"Update the redirect address in OAuth apps you registered (vault credentials), the URL your webhook senders call, CLI contexts and MCP clients.",
 	"Every device that saved the old address needs the new one.",
 }
 
 // envState is .env as an operation reads it: the head it holds, or the
-// boot refusal that says why it holds none, and what a new head keeps of
-// it.
+// boot refusal that says why it holds none, the tunnel key that names its
+// private address, or the boot's refusal of the one it holds, and what a
+// new head keeps of it.
 type envState struct {
 	env     *dotenv
+	values  map[string]string
 	head    Head
 	headErr error
+	link    link.Public
+	linkErr *Refusal
 	cur     Current
 	curErr  *Refusal
 }
@@ -40,12 +46,13 @@ func (e *Engine) readState() (envState, error) {
 	if err != nil {
 		return envState{}, err
 	}
-	st := envState{env: env}
-	values := map[string]string{}
+	st := envState{env: env, values: map[string]string{}}
 	if env != nil {
-		values = env.values()
+		st.values = env.values()
 	}
+	values := st.values
 	st.head, st.headErr = headOf(values)
+	st.link, st.linkErr = linkOf(values[link.PublicVar])
 	if st.headErr == nil && st.head.Browser == BrowserProxy {
 		st.cur.Publish = st.head.Publish
 	}
@@ -66,10 +73,15 @@ func (e *Engine) readState() (envState, error) {
 	return st, nil
 }
 
-// headOf is the head a .env's own read holds, as a release would boot it.
+// headOf is the head a .env's own read holds, as a release would boot it:
+// its access settings, then the tunnel key that names its private
+// address, whose refusal comes after any of theirs.
 func headOf(values map[string]string) (Head, error) {
 	b, err := ResolveBoot(BootInput{File: values, Process: values, Release: true})
 	if err != nil {
+		return Head{}, err
+	}
+	if _, err := linkOf(values[link.PublicVar]); err != nil {
 		return Head{}, err
 	}
 	return b.Head, nil
@@ -101,7 +113,64 @@ func (st envState) words() string {
 		}
 		return st.headErr.Error()
 	}
-	return wordsText(Describe(st.head))
+	return wordsText(st.describe(st.head))
+}
+
+// describe is head h's words on the server .env's tunnel key names, which
+// name no private address when .env holds no key that reads.
+func (st envState) describe(h Head) Words {
+	if st.linkErr != nil {
+		return Describe(h, "")
+	}
+	return Describe(h, st.link.Address(h.Port))
+}
+
+// describe is head h's words on this server, from the tunnel key .env
+// holds now: no switch changes the key, so a journal's heads read on it
+// too.
+func (e *Engine) describe(h Head) Words {
+	st, err := e.readState()
+	if err != nil {
+		return Describe(h, "")
+	}
+	return st.describe(h)
+}
+
+// pinned refuses next when it would move the shared address of a server
+// that serves its own account service (CYFR_DIRECTORY_SERVE=writer), which
+// keeps the origin it first served it at for good: .env's head's shared
+// address against next's, before anything changes. The boot itself holds
+// the origin it stored at its first boot as a writer; this machine cannot
+// read it, so a .env that holds no head has nothing to compare here.
+func (st envState) pinned(next Head) *Refusal {
+	if !st.writer() {
+		return nil
+	}
+	if before, after := st.head.shared(st.link), next.shared(st.link); before != after {
+		return Refuse("access_origin_pinned", map[string]string{"pinned": before, "origin": after})
+	}
+	return nil
+}
+
+// unjoinedTailnet is the address a tailnet change gives a machine that has
+// not joined yet, whose name only its join tells.
+const unjoinedTailnet = "https://<machine>.<tailnet>.ts.net"
+
+// pinnedBeforeJoin refuses a tailnet address to a server that serves its
+// own account service and has none, before the join that would name it:
+// any tailnet name moves the address it gives out, and the join changes
+// this machine.
+func (st envState) pinnedBeforeJoin() *Refusal {
+	if !st.writer() || st.head.Browser == BrowserTailnet {
+		return nil
+	}
+	return Refuse("access_origin_pinned", map[string]string{"pinned": st.head.shared(st.link), "origin": unjoinedTailnet})
+}
+
+// writer reports whether .env's coherent head is a server's that serves
+// its own account service (CYFR_DIRECTORY_SERVE=writer).
+func (st envState) writer() bool {
+	return st.headErr == nil && strings.TrimSpace(st.values["CYFR_DIRECTORY_SERVE"]) == "writer"
 }
 
 // heldKeys are .env's head keys now, "" for each it does not assign.
@@ -112,9 +181,14 @@ func (st envState) heldKeys() map[string]string {
 	return st.env.heldKeys()
 }
 
-// wordsText is a head's words in one line, as a refusal names it.
+// wordsText is a head's words in one line, as a refusal names it: who
+// reaches CYFR, at the address it gives out, and a certificate email
+// when one is given.
 func wordsText(w Words) string {
-	text := w.Who + ", at " + w.Address
+	text := w.Who
+	if address := w.Shared(); address != "" {
+		text += ", at " + address
+	}
 	if w.CertificateEmail != "none" {
 		text += ", certificate email " + w.CertificateEmail
 	}
@@ -144,18 +218,18 @@ func (e *Engine) preview(ctx context.Context, t Target, joinID string) (Preview,
 	if err != nil {
 		return Preview{}, err
 	}
-	p := Preview{New: d.Head, NewDigest: d.Head.Digest(), NewWords: Describe(d.Head), OldDigest: st.digest()}
+	p := Preview{New: d.Head, NewDigest: d.Head.Digest(), NewWords: st.describe(d.Head), OldDigest: st.digest()}
 	if st.headErr == nil {
-		p.Old, p.OldWords = st.head, Describe(st.head)
+		p.Old, p.OldWords = st.head, st.describe(st.head)
 		if p.OldDigest == p.NewDigest {
 			if !e.reopens(ctx, st) {
-				return Preview{}, Refuse("access_unchanged", map[string]string{"address": st.head.origin()})
+				return Preview{}, Refuse("access_unchanged", map[string]string{"address": st.head.shared(st.link)})
 			}
 			p.Reopen = true
 			return p, nil
 		}
 	}
-	if st.headErr != nil || st.head.origin() != d.Head.origin() {
+	if st.headErr != nil || st.head.shared(st.link) != d.Head.shared(st.link) {
 		p.AddressChanges = slices.Clone(addressChanges)
 	}
 	return p, nil
@@ -192,10 +266,15 @@ func (e *Engine) servesHead(ctx context.Context, content []byte) bool {
 
 // derive is the head t makes from .env's settings and, for tailnet, the
 // machine: the one join joinID froze, or with no join id the machine
-// this home has now (machine).
+// this home has now (machine). A .env without the tunnel key that names
+// its private address boots on no head, and one that serves its own
+// account service keeps the address it gives out (pinned).
 func (e *Engine) derive(ctx context.Context, st envState, t Target, joinID string) (Derivation, error) {
 	if st.curErr != nil {
 		return Derivation{}, st.curErr
+	}
+	if st.linkErr != nil {
+		return Derivation{}, st.linkErr
 	}
 	var join *Join
 	switch {
@@ -218,8 +297,18 @@ func (e *Engine) derive(ctx context.Context, st envState, t Target, joinID strin
 		if join, err = e.machine(ctx); err != nil {
 			return Derivation{}, err
 		}
+		if ref := st.pinnedBeforeJoin(); join == nil && ref != nil {
+			return Derivation{}, ref
+		}
 	}
-	return Derive(t, st.cur, join)
+	d, err := Derive(t, st.cur, join)
+	if err != nil {
+		return Derivation{}, err
+	}
+	if ref := st.pinned(d.Head); ref != nil {
+		return Derivation{}, ref
+	}
+	return d, nil
 }
 
 // machine is this home's tailnet machine, nil when it has none: the one
@@ -303,7 +392,7 @@ func (e *Engine) doSwitch(ctx context.Context, r SwitchRequest) (Receipt, error)
 	reopen := st.headErr == nil && st.head.Digest() == d.Head.Digest()
 	switch {
 	case reopen && !e.closedTailnet(st):
-		return refuse(Refuse("access_unchanged", map[string]string{"address": st.head.origin()}))
+		return refuse(Refuse("access_unchanged", map[string]string{"address": st.head.shared(st.link)}))
 	case reopen && !e.reopens(ctx, st):
 		// The preview was a reopen of a running home, which has stopped
 		// since: nothing would open Serve.
@@ -396,7 +485,7 @@ func (e *Engine) startTarget(ctx context.Context, j *journal) (Receipt, error) {
 		if err := e.closeServe(); err != nil {
 			return e.outcomeUnknown(j, err)
 		}
-		return e.finishAnswer(j, e.completed(j, "not_applied", Refuse("access_stale", map[string]string{"words": wordsText(Describe(*j.NewHead))}), j.NewHead))
+		return e.finishAnswer(j, e.completed(j, "not_applied", Refuse("access_stale", map[string]string{"words": wordsText(e.describe(*j.NewHead))}), j.NewHead))
 	case s.ok:
 		return e.finishAnswer(j, done)
 	case s.identityMismatch() || j.Reopen && s.local != nil:
@@ -433,18 +522,18 @@ func (e *Engine) rollback(ctx context.Context, j *journal, why string, content [
 	if err := e.setPhase(j, "restored"); err != nil {
 		return e.outcomeUnknown(j, err)
 	}
-	newWords := wordsText(Describe(*j.NewHead))
+	newWords := wordsText(e.describe(*j.NewHead))
 	if j.OldHead == nil {
 		st, _ := e.readState()
 		return e.finishAnswer(j, e.failed(j, map[string]string{"new": newWords, "env": st.words()}))
 	}
-	oldWords := wordsText(Describe(*j.OldHead))
+	oldWords := wordsText(e.describe(*j.OldHead))
 	s := e.startHead(ctx, *j.OldHead, j, false, HealthDeadline)
 	switch {
 	case s.ok:
 		return e.finishAnswer(j, e.completed(j, "rolled_back", Refuse("access_rolled_back", map[string]string{"new": newWords, "old": oldWords, "reason": why}), j.OldHead))
 	case s.local != nil:
-		return e.finishAnswer(j, e.completed(j, "rolled_back", rolledBackLocal(j, why, s.local), j.OldHead))
+		return e.finishAnswer(j, e.completed(j, "rolled_back", e.rolledBackLocal(j, why, s.local), j.OldHead))
 	}
 	if s := e.stopAndVerify(ctx, j.Services); !s.ok {
 		return e.uncertain(j, s)
@@ -455,9 +544,9 @@ func (e *Engine) rollback(ctx context.Context, j *journal, why string, content [
 // rolledBackLocal is access_rolled_back for a rollback whose old head
 // answers on this machine only: the change that failed, its reason, and
 // why the old head serves no further.
-func rolledBackLocal(j *journal, why string, local *Refusal) *Refusal {
+func (e *Engine) rolledBackLocal(j *journal, why string, local *Refusal) *Refusal {
 	return Refuse("access_rolled_back", map[string]string{
-		"new": wordsText(Describe(*j.NewHead)), "old": wordsText(Describe(*j.OldHead)), "reason": why, "local": local.Code,
+		"new": wordsText(e.describe(*j.NewHead)), "old": wordsText(e.describe(*j.OldHead)), "reason": why, "local": local.Code,
 	})
 }
 

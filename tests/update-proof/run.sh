@@ -381,7 +381,7 @@ fixture() {
 # product's own readiness) within 120 s, under the session TOKEN.
 fill_ready() {
   local fill
-  fill="$(docker exec -u app "$cyfr_id" /app/bin/cyfr rpc "{:ok, ctx} = Sanctum.Caller.establish({:session, \"$TOKEN\"})
+  fill="$(docker exec -u app "$cyfr_id" /app/bin/cyfr rpc "{:ok, ctx} = Sanctum.Caller.establish({:session, \"$TOKEN\"}, entry: :loopback)
     deadline = System.monotonic_time(:millisecond) + 120_000
     settle = fn settle ->
       case Sanctum.Provisioning.status(ctx) do

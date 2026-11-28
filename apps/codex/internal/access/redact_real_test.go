@@ -20,6 +20,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/cyfr/codex/internal/link"
 )
 
 // realProject writes files into a new project directory dir, which may
@@ -57,7 +59,7 @@ func TestRealComposeDiagnosticNamesNoFileAnEnvValueNames(t *testing.T) {
 	requireCompose(t)
 	const secret = "review-secret-as-env-filename"
 	e := realProject(t, t.TempDir(), map[string]string{
-		".env":        "CYFR_BROWSER=none\nCYFR_HOST=localhost\nCYFR_PORT=4000\nCYFR_SECRET_KEY_BASE=" + secret + "\n",
+		".env":        "CYFR_BROWSER=none\nCYFR_HOST=localhost\nCYFR_PORT=4000\n" + linkLine + "CYFR_SECRET_KEY_BASE=" + secret + "\n",
 		"compose.yml": "services:\n  cyfr:\n    image: busybox:latest\n    env_file:\n      - .env\n      - ${CYFR_SECRET_KEY_BASE}\n",
 		secret:        "BROKEN! sentinel =value\n",
 	})
@@ -85,7 +87,7 @@ func TestRealComposeDiagnosticReadsNoTextInsideAQuotedValue(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			e := realProject(t, filepath.Join(t.TempDir(), "home with spaces"), map[string]string{
-				".env":        "CYFR_BROWSER=none\nCYFR_HOST=localhost\nCYFR_PORT=4000\n" + c.env,
+				".env":        "CYFR_BROWSER=none\nCYFR_HOST=localhost\nCYFR_PORT=4000\n" + linkLine + c.env,
 				"compose.yml": "services:\n  cyfr:\n    image: busybox:latest\n    env_file:\n      - .env\n      - extra.env\n",
 				"extra.env":   c.extra,
 			})
@@ -106,7 +108,7 @@ func TestRealComposeConversionDiagnosticCarriesNoEnvValue(t *testing.T) {
 	requireCompose(t)
 	const secret = "review-secret-that-must-stay-private"
 	e := realProject(t, t.TempDir(), map[string]string{
-		".env":        "CYFR_BROWSER=none\nCYFR_HOST=localhost\nCYFR_PORT=4000\nCYFR_SECRET_KEY_BASE=" + secret + "\n",
+		".env":        "CYFR_BROWSER=none\nCYFR_HOST=localhost\nCYFR_PORT=4000\n" + linkLine + "CYFR_SECRET_KEY_BASE=" + secret + "\n",
 		"compose.yml": "services:\n  cyfr:\n    image: busybox:latest\n    env_file: .env\n    deploy:\n      resources:\n        limits:\n          cpus: ${CYFR_SECRET_KEY_BASE}\n",
 	})
 	err := e.CheckStack(bg)
@@ -269,6 +271,7 @@ func TestRealComposeNoEnvSecretLeavesTheEngine(t *testing.T) {
 	for _, k := range readKeys {
 		head[k] = true
 	}
+	head[link.PublicVar] = true
 	secrets := map[string]string{}
 	var tokens []string
 	plant := func(key, value, tok string) {
@@ -294,7 +297,7 @@ func TestRealComposeNoEnvSecretLeavesTheEngine(t *testing.T) {
 	plant("DATABASE_URL", "postgres://alice:"+dbTok+"@db/cyfr", dbTok)
 	insideTok := token()
 	tokens = append(tokens, insideTok)
-	env, err := EditEnv([]byte("CYFR_BROWSER=none\nCYFR_HOST=localhost\nCYFR_PORT=4000\n"), secrets, nil)
+	env, err := EditEnv([]byte("CYFR_BROWSER=none\nCYFR_HOST=localhost\nCYFR_PORT=4000\n"+linkLine), secrets, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

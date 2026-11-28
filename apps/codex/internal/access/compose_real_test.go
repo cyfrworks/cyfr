@@ -42,7 +42,7 @@ func realHome(t *testing.T) (*Engine, string) {
 	dir := filepath.Join(t.TempDir(), "home")
 	os.Mkdir(dir, 0o755)
 	writeFile(t, filepath.Join(dir, "docker-compose.yml"), repoFile(t, "docker-compose.yml"))
-	writeFile(t, filepath.Join(dir, ".env"), repoFile(t, ".env.example"))
+	writeFile(t, filepath.Join(dir, ".env"), withLink(repoFile(t, ".env.example")))
 	e, err := Open(dir, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -108,7 +108,7 @@ func TestRealComposeProvenanceReadsNamesNotValues(t *testing.T) {
 	home := func(t *testing.T, env, override string) *Engine {
 		t.Helper()
 		dir := t.TempDir()
-		writeFile(t, filepath.Join(dir, ".env"), []byte("CYFR_BROWSER=none\nCYFR_HOST=localhost\nCYFR_PORT=4000\n"+env))
+		writeFile(t, filepath.Join(dir, ".env"), []byte("CYFR_BROWSER=none\nCYFR_HOST=localhost\nCYFR_PORT=4000\n"+linkLine+env))
 		writeFile(t, filepath.Join(dir, "compose.yml"), []byte("services:\n  cyfr:\n    image: busybox:latest\n    env_file: .env\n"))
 		writeFile(t, filepath.Join(dir, "compose.override.yml"), []byte(override))
 		e, err := Open(dir, nil)
@@ -233,7 +233,7 @@ func boxProject(t *testing.T, compose, env string) (string, string) {
 func TestRealComposeProxyTrustIsEnvsAlone(t *testing.T) {
 	requireCompose(t)
 	e, dir := realHome(t)
-	env := strings.Replace(strings.Replace(string(repoFile(t, ".env.example")), "CYFR_BROWSER=none\n", "CYFR_BROWSER=proxy\n", 1), "CYFR_HOST=localhost\n", "CYFR_HOST=cyfr.example.com\n", 1)
+	env := strings.Replace(strings.Replace(string(withLink(repoFile(t, ".env.example"))), "CYFR_BROWSER=none\n", "CYFR_BROWSER=proxy\n", 1), "CYFR_HOST=localhost\n", "CYFR_HOST=cyfr.example.com\n", 1)
 	env += "CYFR_PUBLIC_URL=https://cyfr.example.com\nCYFR_PROXY_PUBLISH=127.0.0.2:4101\nCYFR_TRUSTED_PROXY_HOPS=0\n"
 	writeFile(t, filepath.Join(dir, ".env"), []byte(env))
 	sys := e.docker.(*systemDocker)
@@ -278,7 +278,7 @@ func TestRealComposeProxyTrustIsEnvsAlone(t *testing.T) {
 func TestRealComposeProxyOverlay(t *testing.T) {
 	requireCompose(t)
 	e, dir := realHome(t)
-	env := strings.Replace(strings.Replace(string(repoFile(t, ".env.example")), "CYFR_BROWSER=none\n", "CYFR_BROWSER=proxy\n", 1), "CYFR_HOST=localhost\n", "CYFR_HOST=cyfr.example.com\n", 1)
+	env := strings.Replace(strings.Replace(string(withLink(repoFile(t, ".env.example"))), "CYFR_BROWSER=none\n", "CYFR_BROWSER=proxy\n", 1), "CYFR_HOST=localhost\n", "CYFR_HOST=cyfr.example.com\n", 1)
 	env += "CYFR_PUBLIC_URL=https://cyfr.example.com\nCYFR_PROXY_PUBLISH=127.0.0.2:4101\nCYFR_TRUSTED_PROXY_HOPS=1\n"
 	writeFile(t, filepath.Join(dir, ".env"), []byte(env))
 	sys := e.docker.(*systemDocker)
@@ -355,7 +355,7 @@ func TestRealComposeProxyOverlay(t *testing.T) {
 func TestRealComposeRepeatedBindingIsOneEntry(t *testing.T) {
 	requireCompose(t)
 	e, dir := realHome(t)
-	env := strings.Replace(strings.Replace(string(repoFile(t, ".env.example")), "CYFR_BROWSER=none\n", "CYFR_BROWSER=proxy\n", 1), "CYFR_HOST=localhost\n", "CYFR_HOST=cyfr.example.com\n", 1)
+	env := strings.Replace(strings.Replace(string(withLink(repoFile(t, ".env.example"))), "CYFR_BROWSER=none\n", "CYFR_BROWSER=proxy\n", 1), "CYFR_HOST=localhost\n", "CYFR_HOST=cyfr.example.com\n", 1)
 	env += "CYFR_PUBLIC_URL=https://cyfr.example.com\nCYFR_PROXY_PUBLISH=127.0.0.2:4101\nCYFR_TRUSTED_PROXY_HOPS=1\n"
 	writeFile(t, filepath.Join(dir, ".env"), []byte(env))
 	writeFile(t, filepath.Join(dir, "docker-compose.override.yml"), []byte("services:\n  cyfr:\n    ports:\n      - \"127.0.0.1:${CYFR_PORT:-4000}:${CYFR_PORT:-4000}\"\n"))
@@ -403,7 +403,7 @@ func TestRealComposeSelectsTheStacksOwnProfiles(t *testing.T) {
 	os.Mkdir(dir, 0o755)
 	writeFile(t, filepath.Join(dir, "compose.yml"), []byte("services:\n  cyfr:\n    image: busybox:latest\n    env_file: .env\n"+
 		"  builds:\n    image: busybox:latest\n    profiles: [\"builds\"]\n  proxy:\n    image: busybox:latest\n    profiles: [\"domain\"]\n"))
-	writeFile(t, filepath.Join(dir, ".env"), []byte("CYFR_BROWSER=none\nCYFR_HOST=localhost\nCYFR_PORT=4000\n"))
+	writeFile(t, filepath.Join(dir, ".env"), []byte("CYFR_BROWSER=none\nCYFR_HOST=localhost\nCYFR_PORT=4000\n"+linkLine))
 	e, err := Open(dir, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -508,7 +508,7 @@ networks:
   default: {}
   edge: {}
 `
-	dir, name := boxProject(t, compose, "CYFR_BROWSER=none\nCYFR_HOST=localhost\nCYFR_PORT=4000\n")
+	dir, name := boxProject(t, compose, "CYFR_BROWSER=none\nCYFR_HOST=localhost\nCYFR_PORT=4000\n"+linkLine)
 	e, err := Open(dir, nil)
 	if err != nil {
 		t.Fatal(err)

@@ -189,7 +189,7 @@ func TestThisBoxOpensWhatItsFolderNamesNow(t *testing.T) {
 	}
 	old, _ := held(t, b.Homes, localAddress)
 
-	const moved = "http://localhost:4402"
+	const moved = "http://h-xeypbemm44chehc5.localhost:4402"
 	b.Leave(1)
 	b.next(t)
 	b.next(t)
@@ -454,7 +454,7 @@ func TestABoxsSelectionsStartLockedAndGiveACYFRElsewhereNothing(t *testing.T) {
 	read := b.Local
 	b.Local = func(project string) (Local, error) { reads++; return read(project) }
 	done = b.connect(t, "/bootstrap/connect", map[string]string{"address": "https://work.example.com"})
-	if m := b.next(t); m.Type != TypeHome || m.Setup != "" || m.Proxy != "" {
+	if m := b.next(t); m.Type != TypeHome || m.Setup != "" {
 		t.Fatalf("a CYFR elsewhere was proposed %+v", m)
 	}
 	b.ready("https://work.example.com")
@@ -650,7 +650,7 @@ func TestEveryLockOnABoxIsOneStep(t *testing.T) {
 // A list that cannot be read still shows This box; a folder that cannot be
 // read protects every entry set up in it.
 func TestThisBoxIsWhatItsFolderNamesNow(t *testing.T) {
-	const moved = "http://localhost:4402"
+	const moved = "http://h-xeypbemm44chehc5.localhost:4402"
 	var open atomic.Bool
 	unlockedAs(t, &open)
 	b := newOnBox(t)

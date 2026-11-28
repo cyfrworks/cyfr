@@ -1,5 +1,5 @@
 {
-  "about": "The access head, its derivation, its canonical bytes and digest, the boot's resolution of a deployment's access settings, the compose selections, the name grammars and the words a person reads. Cyfr.RuntimeConfig (Elixir) generates every canonical, digest, class and boot answer; apps/codex/internal/access (Go) agrees with them. The derive vectors' .env assignments and removals are Go's alone.",
+  "about": "The access head, its derivation, its canonical bytes and digest, the boot's resolution of a deployment's access settings, the compose selections, the name grammars and the words a person reads, on a server whose private address is the row's `private` (the first name of the private name's vectors). Cyfr.RuntimeConfig (Elixir) generates every canonical, digest, class and boot answer; apps/codex/internal/access (Go) agrees with them. The derive vectors' .env assignments and removals are Go's alone.",
   "derive": [
     {
       "name": "none, default port",
@@ -3694,9 +3694,10 @@
         "port": 4000,
         "profiles": []
       },
+      "private": "http://h-xeypbemm44chehc5.localhost:4000",
       "sentences": [
         "Who can reach CYFR: only this computer",
-        "Address: http://localhost:4000",
+        "Address on this computer: http://h-xeypbemm44chehc5.localhost:4000",
         "Certificate email: none",
         "Ports opened on this machine: none"
       ]
@@ -3708,9 +3709,10 @@
         "port": 8080,
         "profiles": []
       },
+      "private": "http://h-xeypbemm44chehc5.localhost:8080",
       "sentences": [
         "Who can reach CYFR: only this computer",
-        "Address: http://localhost:8080",
+        "Address on this computer: http://h-xeypbemm44chehc5.localhost:8080",
         "Certificate email: none",
         "Ports opened on this machine: none"
       ]
@@ -3726,9 +3728,11 @@
           "tailnet"
         ]
       },
+      "private": "http://h-xeypbemm44chehc5.localhost:4000",
       "sentences": [
         "Who can reach CYFR: your devices on Tailscale, and people you share this machine with",
-        "Address: https://cyfr.tail1a2b3c.ts.net",
+        "Address on this computer: http://h-xeypbemm44chehc5.localhost:4000",
+        "Browser address: https://cyfr.tail1a2b3c.ts.net",
         "Certificate email: none",
         "Ports opened on this machine: none"
       ]
@@ -3744,9 +3748,11 @@
           "domain"
         ]
       },
+      "private": "http://h-xeypbemm44chehc5.localhost:4000",
       "sentences": [
         "Who can reach CYFR: anyone on the internet, who still has to sign in",
-        "Address: https://cyfr.example.com",
+        "Address on this computer: http://h-xeypbemm44chehc5.localhost:4000",
+        "Browser address: https://cyfr.example.com",
         "Certificate email: ops@example.com",
         "Ports opened on this machine: 80 and 443"
       ]
@@ -3761,9 +3767,11 @@
           "domain"
         ]
       },
+      "private": "http://h-xeypbemm44chehc5.localhost:4000",
       "sentences": [
         "Who can reach CYFR: anyone on the internet, who still has to sign in",
-        "Address: https://cyfr.example.com",
+        "Address on this computer: http://h-xeypbemm44chehc5.localhost:4000",
+        "Browser address: https://cyfr.example.com",
         "Certificate email: none",
         "Ports opened on this machine: 80 and 443"
       ]
@@ -3777,9 +3785,11 @@
         "publish": "127.0.0.1:4001",
         "profiles": []
       },
+      "private": "http://h-xeypbemm44chehc5.localhost:4000",
       "sentences": [
         "Who can reach CYFR: whoever your own proxy lets through, who still has to sign in",
-        "Address: https://cyfr.example.com",
+        "Address on this computer: http://h-xeypbemm44chehc5.localhost:4000",
+        "Browser address: https://cyfr.example.com",
         "Certificate email: none",
         "Ports opened on this machine: none",
         "Your proxy sends CYFR's requests to: http://127.0.0.1:4001"
@@ -3908,6 +3918,36 @@
               "pinned": "x-pinned"
             },
             "sentence": "This CYFR serves its own account service at x-pinned, and an account service keeps its address for good. This change would move it to x-origin. Nothing was changed."
+          }
+        }
+      ]
+    },
+    {
+      "code": "access_link_missing",
+      "class": "setup_required",
+      "variants": [
+        {
+          "fixed": {},
+          "slots": [],
+          "template": "CYFR_LINK_PUBLIC is not set in .env, so this CYFR has no private address. Nothing started. `cyfr init` writes it with the tunnel key it mints for a new CYFR; a CYFR installed by an earlier build is not carried across.",
+          "example": {
+            "payload": {},
+            "sentence": "CYFR_LINK_PUBLIC is not set in .env, so this CYFR has no private address. Nothing started. `cyfr init` writes it with the tunnel key it mints for a new CYFR; a CYFR installed by an earlier build is not carried across."
+          }
+        }
+      ]
+    },
+    {
+      "code": "access_link_invalid",
+      "class": "invalid_argument",
+      "variants": [
+        {
+          "fixed": {},
+          "slots": [],
+          "template": "CYFR_LINK_PUBLIC in .env is not a tunnel public key: it is 64 lowercase hexadecimal digits, as `cyfr init` writes it. Nothing started.",
+          "example": {
+            "payload": {},
+            "sentence": "CYFR_LINK_PUBLIC in .env is not a tunnel public key: it is 64 lowercase hexadecimal digits, as `cyfr init` writes it. Nothing started."
           }
         }
       ]

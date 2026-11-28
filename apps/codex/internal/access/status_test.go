@@ -47,7 +47,7 @@ func TestStatusTakesNoLockAndChangesNothing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.HeadErr != nil || s.Head.Browser != BrowserTailnet || s.Words.Address != "https://cyfr.tail1234.ts.net" {
+	if s.HeadErr != nil || s.Head.Browser != BrowserTailnet || s.Words.Browser != "https://cyfr.tail1234.ts.net" || s.Words.Private != testPrivate {
 		t.Errorf("status shows %+v (%v)", s.Head, s.HeadErr)
 	}
 	if s.Last == nil || s.Last.Op != "switch" || s.Unfinished != nil {
@@ -125,10 +125,10 @@ func TestPreviewShowsBothHeadsAndTheAddressChange(t *testing.T) {
 	if p.Old.Browser != BrowserNone || p.New.Host != "home.example.com" || p.OldDigest != h.head().Digest() || p.NewDigest != p.New.Digest() {
 		t.Errorf("preview %+v", p)
 	}
-	if p.OldWords.Who != "only this computer" || p.NewWords.Ports != "80 and 443" || p.NewWords.Address != "https://home.example.com" {
+	if p.OldWords.Who != "only this computer" || p.NewWords.Ports != "80 and 443" || p.NewWords.Browser != "https://home.example.com" || p.OldWords.Private != testPrivate {
 		t.Errorf("words %+v → %+v", p.OldWords, p.NewWords)
 	}
-	if len(p.AddressChanges) != 3 || p.AddressChanges[0] != "Every browser signs in again at the new address, with the same passkey." {
+	if len(p.AddressChanges) != 3 || p.AddressChanges[0] != "Every browser signed in at the browser address signs in again, with the same passkey. Sign-ins at this computer's own address stay." {
 		t.Errorf("address changes %v", p.AddressChanges)
 	}
 	for _, change := range p.AddressChanges {

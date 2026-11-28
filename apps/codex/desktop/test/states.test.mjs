@@ -74,29 +74,13 @@ test("cyfr's ready shows the chooser; a second ready, or another first page, end
 test("a proposal is answered home-ready and replaced by the next until cyfr says it opened", () => {
   const {s, effects} = run(proposed)
   assert.equal(s.name, "proposed")
-  assert.deepEqual(effects.at(-1), {prepare: {home: HOME, attempt: 1, proxy: ""}})
+  assert.deepEqual(effects.at(-1), {send: {type: "home-ready", fields: {home: HOME, attempt: 1}}})
   assert.equal(run([...proposed, home("https://bob.example", 2), taken]).s.home, "https://bob.example", "after a failure")
   assert.equal(run(open).s.name, "open")
   assert.equal(run([...open, home("https://bob.example", 2)]).s.name, "ended", "a proposal after a commit")
   assert.equal(run([...proposed, openedAt("https://bob.example")]).s.name, "ended")
   assert.equal(run([...proposed, openedAt(HOME, 2)]).s.name, "ended", "an opened of another attempt")
   assert.equal(run([ready, openedAt(HOME)]).s.name, "ended", "opened with nothing proposed")
-})
-
-// A CYFR reached by its proxy is proposed as any other: main is told to
-// set that route on its stores before it answers (prepare), and nothing
-// closes, ends or starts again for it, on a desktop or on the box's screen.
-test("a home with a route is prepared with it, as any other, on a desktop and on the screen", () => {
-  const routed = {type: "home", message: {type: "home", home: "https://bob.example", account: ACCOUNT, attempt: 2,
-    proxy: "socks5://127.0.0.1:1055"}}
-  const {s, effects} = run([...proposed, routed])
-  assert.equal(s.name, "proposed")
-  assert.deepEqual(effects.at(-1), {prepare: {home: "https://bob.example", attempt: 2, proxy: "socks5://127.0.0.1:1055"}})
-  assert.ok(!effects.some((e) => e.close || e.end || e.forget || e.quit))
-  let screen = step(initial(false, "/home/alice/cyfr"), boxReady).state
-  const told = step(screen, {...routed, message: {...routed.message, attempt: 1}})
-  assert.equal(told.state.name, "proposed")
-  assert.deepEqual(told.do.at(-1), {prepare: {home: "https://bob.example", attempt: 1, proxy: "socks5://127.0.0.1:1055"}})
 })
 
 test("nothing loads and no window opens before ready", () => {
@@ -200,7 +184,7 @@ test("the sign-in page as a way on, its own loads, and the six-word road are nev
 test("main answers a proposal home-ready at once and keeps to a CYFR only once cyfr opened it, whichever road", () => {
   for (const road of [false, true]) {
     const waiting = run([ready, home()], road)
-    assert.deepEqual(waiting.effects.at(-1), {prepare: {home: HOME, attempt: 1, proxy: ""}})
+    assert.deepEqual(waiting.effects.at(-1), {send: {type: "home-ready", fields: {home: HOME, attempt: 1}}})
     assert.ok(!waiting.effects.some((e) => e.root || e.forget), "nothing opened or cleared for a proposal")
     for (const url of [HOME + "/", HOME + "/login", HOME + "/auth/device/complete/x"]) {
       assert.equal(step(waiting.s, navigate({url})).allow, false, url)
@@ -213,7 +197,7 @@ test("main answers a proposal home-ready at once and keeps to a CYFR only once c
 test("each proposal is answered as it comes, and only the last one's opened opens", () => {
   const bob = "https://bob.example"
   const over = run([ready, home(HOME, 1), home(bob, 2), home(HOME, 3)], true)
-  assert.deepEqual(over.effects.filter((e) => e.prepare).map((e) => e.prepare.attempt), [1, 2, 3])
+  assert.deepEqual(over.effects.filter((e) => e.send?.type === "home-ready").map((e) => e.send.fields.attempt), [1, 2, 3])
   assert.equal(step(over.s, openedAt(HOME, 1)).state.name, "ended", "an opened of an earlier proposal")
   assert.equal(step(over.s, openedAt(HOME, 3)).state.name, "open")
 })
@@ -461,7 +445,7 @@ test("the screen shell's ending closes at once and quits, settling no lock, so n
     return {s: st, effects}
   }
   const LOOP = boxReady
-  const LOCAL = "http://localhost:4000"
+  const LOCAL = "http://h-xeypbemm44chehc5.localhost:4000"
   const mine = (attempt) => ({type: "home", message: {type: "home", home: LOCAL, account: LOCAL, attempt}})
   const shown = [LOOP, mine(1), taken, openedAt(LOCAL)]
   const ending = {type: "ending", message: {type: "ending"}}
@@ -904,7 +888,7 @@ test("the chooser's links open in the person's browser: Docker's pages, as the v
 // what is still on the way: main ends showing nothing, and opens no window
 // once it read ending.
 test("the screen ends on the CYFR its cyfr committed whatever the order of their messages", () => {
-  const CYFR = "http://localhost:4000"
+  const CYFR = "http://h-xeypbemm44chehc5.localhost:4000"
   // split models a cyfr whose lock moves its epoch in one step and tells
   // main in a later one (what review 9900 found): a selection begun between
   // the two is told before the lock's locked, which names what was
@@ -931,7 +915,6 @@ test("the screen ends on the CYFR its cyfr committed whatever the order of their
     w.main = next.state
     for (const effect of next.do) {
       if (effect.send) w.toGo.push({type: effect.send.type, ...(effect.send.fields ?? {})})
-      if (effect.prepare) w.toGo.push({type: "home-ready", home: effect.prepare.home, attempt: effect.prepare.attempt})
       if (effect.forget) w.pending.push({type: "forgot", cleared: true})
       if (effect.part) w.pending.push({type: "parted", id: effect.part.id})
       if (effect.chooser) w.showing = "chooser"
@@ -1045,7 +1028,7 @@ test("the screen ends on the CYFR its cyfr committed whatever the order of their
   assert.ok(endings > 0, "no walk ended with cyfr's end")
   // The model tells the split lock apart: some order strands main.
   seen.clear()
-  assert.throws(() => walk(initialWorld(false, true)), /keeping to "" \(cyfr: "http:\/\/localhost:4000"\)/,
+  assert.throws(() => walk(initialWorld(false, true)), /keeping to "" \(cyfr: "http:\/\/h-xeypbemm44chehc5\.localhost:4000"\)/,
     "a lock told apart from its epoch's move strands no selection in this model, so it would not see one")
 })
 
@@ -1145,15 +1128,10 @@ test("on the box's screen a home's setup token is dropped as it arrives, so no s
   }
 })
 
-// A lock while a CYFR reached by its route is proposed holds that route
-// with the proposal: its opened crossing the lock, and the locked naming
-// it, keep main to that CYFR and to its route, which the fresh store then
-// carries.
-test("a proposal crossed by a lock keeps its route when main keeps to it", () => {
-  const proxy = "socks5://127.0.0.1:1055"
-  const proposal = home()
-  proposal.message.proxy = proxy
+// A lock while a CYFR is proposed holds the proposal: its opened crossing
+// the lock, and the locked naming it, keep main to that CYFR.
+test("a proposal crossed by a lock is kept when main keeps to it", () => {
   let s = initial(false, "/fixture/cyfr")
-  for (const e of [boxReady, proposal, {type: "lost"}, openedAt(), locked(HOME), {type: "forgot", cleared: true}]) s = step(s, e).state
-  assert.deepEqual({name: s.name, home: s.home, proxy: s.proxy}, {name: "open", home: HOME, proxy})
+  for (const e of [boxReady, home(), {type: "lost"}, openedAt(), locked(HOME), {type: "forgot", cleared: true}]) s = step(s, e).state
+  assert.deepEqual({name: s.name, home: s.home}, {name: "open", home: HOME})
 })

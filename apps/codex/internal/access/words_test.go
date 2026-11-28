@@ -11,12 +11,12 @@ import (
 
 func TestWordsVectors(t *testing.T) {
 	for _, v := range readVectors(t).Words {
-		got := Describe(v.Head).Sentences()
+		got := Describe(v.Head, v.Private).Sentences()
 		if !reflect.DeepEqual(got, v.Sentences) {
 			t.Errorf("%s: words\n got %q\nwant %q", v.Head.Digest(), got, v.Sentences)
 		}
 		for _, s := range got {
-			for _, term := range []string{"profile", "compose", "caddy", "tailscale_", "CYFR_", "node_id", "<", "%"} {
+			for _, term := range []string{"profile", "compose", "caddy", "tailscale_", "CYFR_", "node_id", "<", "%", "http://localhost"} {
 				if strings.Contains(s, term) {
 					t.Errorf("%q names %q", s, term)
 				}

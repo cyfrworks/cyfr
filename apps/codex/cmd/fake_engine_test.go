@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/cyfr/codex/internal/access"
+	"github.com/cyfr/codex/internal/link"
 	"gopkg.in/yaml.v3"
 )
 
@@ -348,6 +349,20 @@ func (e *fakeEngine) Head() (access.Head, error) {
 	return b.Head, err
 }
 
+// Words are .env's head's words on the private address its tunnel key
+// names, refused as the engine's Words are.
+func (e *fakeEngine) Words() (access.Words, error) {
+	h, err := e.Head()
+	if err != nil {
+		return access.Words{}, err
+	}
+	private, err := access.ResolveLink(envAssignments(filepath.Join(e.dir, ".env"))[link.PublicVar], h.Port)
+	if err != nil {
+		return access.Words{}, err
+	}
+	return access.Describe(h, private), nil
+}
+
 // envAssignments are the names and values the dotenv file at path assigns,
 // as the engine reads them (access.ReadEnvValues); none when it does not
 // read.
@@ -384,21 +399,24 @@ func (e *fakeEngine) Preview(ctx context.Context, t access.Target, joinID string
 	if err != nil {
 		return access.Preview{}, err
 	}
+	public := envAssignments(filepath.Join(e.dir, ".env"))[link.PublicVar]
+	oldPrivate, _ := access.ResolveLink(public, old.Port)
+	newPrivate, _ := access.ResolveLink(public, d.Head.Port)
 	p := access.Preview{
 		Old: old, New: d.Head, OldDigest: old.Digest(), NewDigest: d.Head.Digest(),
-		OldWords: access.Describe(old), NewWords: access.Describe(d.Head),
+		OldWords: access.Describe(old, oldPrivate), NewWords: access.Describe(d.Head, newPrivate),
 	}
 	if p.OldDigest == p.NewDigest {
 		e.s.mu.Lock()
 		reopen := e.s.serveClosed && t.Browser == access.BrowserTailnet
 		e.s.mu.Unlock()
 		if !reopen {
-			return access.Preview{}, access.Refuse("access_unchanged", map[string]string{"address": p.NewWords.Address})
+			return access.Preview{}, access.Refuse("access_unchanged", map[string]string{"address": p.NewWords.Shared()})
 		}
 		p.Reopen = true
 		return p, nil
 	}
-	if p.OldWords.Address != p.NewWords.Address {
+	if p.OldWords.Shared() != p.NewWords.Shared() {
 		p.AddressChanges = e.s.addressChanges
 	}
 	return p, nil

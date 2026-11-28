@@ -5,6 +5,7 @@ package cmd
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -14,11 +15,13 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/cyfr/codex/internal/access"
+	"github.com/cyfr/codex/internal/link"
 	"github.com/cyfr/codex/internal/setup"
 	"github.com/spf13/cobra"
 )
@@ -307,7 +310,7 @@ func TestAccessRefusalsAreTheirSentences(t *testing.T) {
 		want    string
 	}{
 		{"a rolled-back switch", func(s *fakeStack) { s.switchReceipt = &rolled }, access.BrowserDomain, accessOptions{domain: "cyfr.example.com"}, access.Refuse(rolled.Code, rolled.Payload).Message()},
-		{"no change", nil, access.BrowserNone, accessOptions{}, access.Refuse("access_unchanged", map[string]string{"address": "http://localhost:4000"}).Message()},
+		{"no change", nil, access.BrowserNone, accessOptions{}, "CYFR is already reached that way, at http://h-"},
 		{"an option of another kind", nil, access.BrowserNone, accessOptions{domain: "cyfr.example.com"}, access.Refuse("access_option_outside_browser", map[string]string{"option": "--domain", "browser": "none"}).Message()},
 		{"a publication for a domain", nil, access.BrowserDomain, accessOptions{domain: "cyfr.example.com", publish: access.DefaultPublish}, access.Refuse("access_option_outside_browser", map[string]string{"option": "--publish", "browser": "domain"}).Message()},
 		{"proxy with no stated trust", nil, access.BrowserProxy, accessOptions{domain: "cyfr.example.com"}, access.Refuse("access_proxy_trust_missing", nil).Message()},
@@ -355,14 +358,14 @@ func TestAccessStatusTakesNoLock(t *testing.T) {
 	last := access.Receipt{RequestID: strings.Repeat("a", 32), Op: "switch", State: "completed", Outcome: "ok", At: time.Date(2026, 10, 19, 8, 0, 0, 0, time.UTC)}
 	unfinished := access.Receipt{RequestID: strings.Repeat("b", 32), Op: "switch", State: "accepted", Phase: "stopped"}
 	head := access.Head{Browser: "none", Host: "localhost", Port: 4000, Profiles: []string{}}
-	s.status = access.Status{Head: head, Words: access.Describe(head), Containers: []access.Container{{Service: "cyfr", Name: "p-cyfr-1", State: "running"}}, Health: []string{"cyfr: healthy"}, Unfinished: &unfinished, Last: &last}
+	s.status = access.Status{Head: head, Words: access.Describe(head, testPrivate), Containers: []access.Container{{Service: "cyfr", Name: "p-cyfr-1", State: "running"}}, Health: []string{"cyfr: healthy"}, Unfinished: &unfinished, Last: &last}
 	var out bytes.Buffer
 	if err := runAccessStatus(context.Background(), &out); err != nil {
 		t.Fatalf("cyfr access status: %v", err)
 	}
 	for _, line := range []string{
 		"  Who can reach CYFR: only this computer\n",
-		"  Address: http://localhost:4000\n",
+		"  Address on this computer: " + testPrivate + "\n",
 		"  cyfr (p-cyfr-1): running\n",
 		"  cyfr: healthy\n",
 		"Unfinished: The change of how CYFR is reached (request " + strings.Repeat("b", 32) + ") is unfinished (stopped). Run `cyfr access --resume` to finish it.\n",
@@ -376,7 +379,7 @@ func TestAccessStatusTakesNoLock(t *testing.T) {
 		t.Errorf("status took the lock")
 	}
 
-	s.status = access.Status{Head: head, Words: access.Describe(head), Unobserved: errors.New("docker ps failed (docker exited with status 1: this user may not use the Docker daemon)")}
+	s.status = access.Status{Head: head, Words: access.Describe(head, testPrivate), Unobserved: errors.New("docker ps failed (docker exited with status 1: this user may not use the Docker daemon)")}
 	out.Reset()
 	if err := runAccessStatus(context.Background(), &out); err != nil || strings.Contains(out.String(), "Nothing of the stack runs.") ||
 		!strings.Contains(out.String(), "\nDocker did not answer: docker ps failed (docker exited with status 1: this user may not use the Docker daemon)\n") {
@@ -642,7 +645,7 @@ func TestAccessPreviewShowsEveryChangedField(t *testing.T) {
 				t.Fatal("the change does not change the head")
 			}
 			var out bytes.Buffer
-			printPreview(&out, access.Preview{Old: tailnet, New: next, OldDigest: tailnet.Digest(), NewDigest: next.Digest(), OldWords: access.Describe(tailnet), NewWords: access.Describe(next)}, true)
+			printPreview(&out, access.Preview{Old: tailnet, New: next, OldDigest: tailnet.Digest(), NewDigest: next.Digest(), OldWords: access.Describe(tailnet, testPrivate), NewWords: access.Describe(next, testPrivateAt+strconv.Itoa(next.Port))}, true)
 			if !strings.Contains(out.String(), c.line) {
 				t.Errorf("the preview lacks %q:\n%s", c.line, out.String())
 			}
@@ -661,17 +664,17 @@ func TestAccessPreviewShowsEveryChangedField(t *testing.T) {
 	}
 	// A machine joined for the first time shows who will reach CYFR and
 	// where, and nothing that stays as it was.
-	local := access.Head{Browser: access.BrowserNone, Host: "localhost", PublicURL: "http://localhost:4000", Port: 4000, Profiles: []string{}}
+	local := access.Head{Browser: access.BrowserNone, Host: "localhost", Port: 4000, Profiles: []string{}}
 	var out bytes.Buffer
-	printPreview(&out, access.Preview{Old: local, New: tailnet, OldWords: access.Describe(local), NewWords: access.Describe(tailnet), AddressChanges: []string{"Every browser signs in again."}}, false)
+	printPreview(&out, access.Preview{Old: local, New: tailnet, OldWords: access.Describe(local, testPrivate), NewWords: access.Describe(tailnet, testPrivate), AddressChanges: []string{"Every browser signs in again."}}, false)
 	if want := "CYFR will be reached by your devices on Tailscale at https://cyfr.tail1234.ts.net.\n"; out.String() != want {
 		t.Errorf("the preview of a first join on a CYFR no one is set up on is\n%s\nwant\n%s", out.String(), want)
 	}
 	// Leaving a domain closes its ports.
 	public := access.Head{Browser: access.BrowserDomain, Host: "cyfr.example.com", PublicURL: "https://cyfr.example.com", Port: 4000, ACMEEmail: "ops@example.com", Profiles: []string{access.BrowserDomain}}
 	out.Reset()
-	printPreview(&out, access.Preview{Old: public, New: local, OldWords: access.Describe(public), NewWords: access.Describe(local)}, true)
-	if want := "CYFR will be reached from this computer at http://localhost:4000.\n  Certificate email: ops@example.com → none\n  Ports opened on this machine: 80 and 443 → none\n"; out.String() != want {
+	printPreview(&out, access.Preview{Old: public, New: local, OldWords: access.Describe(public, testPrivate), NewWords: access.Describe(local, testPrivate)}, true)
+	if want := "CYFR will be reached from this computer at " + testPrivate + ".\n  Certificate email: ops@example.com → none\n  Ports opened on this machine: 80 and 443 → none\n"; out.String() != want {
 		t.Errorf("the preview of leaving a domain is\n%s\nwant\n%s", out.String(), want)
 	}
 }
@@ -927,13 +930,13 @@ func TestAccessReadsWhetherAnyoneIsSetUpFromTheLog(t *testing.T) {
 	const notSetUp = "[Cyfr] Not set up: no one is set up on this CYFR yet.\n"
 	const setUp = "[Cyfr] Set up: this CYFR has its first person.\n"
 	const token = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-	lead := "CYFR will be reached from this computer at http://localhost:4000.\n  Ports opened on this machine: 80 and 443 → none\n"
+	lead := "CYFR will be reached from this computer at " + testPrivate + ".\n  Ports opened on this machine: 80 and 443 → none\n"
 	list := "The address changes, so:\n  1. Every browser signs in again.\n" + access.AccountsUnchanged + "\n"
-	done := "Done. CYFR is reached from this computer at http://localhost:4000.\n" + addressShown(t, "http://localhost:4000")
+	done := "Done. CYFR is reached from this computer at " + testPrivate + ".\n" + "CYFR's address on this computer: " + testPrivate + "\n"
 	for _, c := range []struct {
 		name, log, exit, want string
 	}{
-		{"no one set up", "booting\n" + notSetUp, "0", lead + done + "Open http://localhost:4000/setup#" + token + " to set up its first person.\n"},
+		{"no one set up", "booting\n" + notSetUp, "0", lead + done + "Open " + testPrivate + "/setup#" + token + " to set up its first person.\n"},
 		{"set up since the boot", notSetUp + setUp, "0", lead + list + done},
 		{"set up at the boot", "booting\n", "0", lead + list + done},
 		{"a log unread", notSetUp, "1", lead + list + done},
@@ -964,7 +967,7 @@ func TestAccessReadsWhetherAnyoneIsSetUpFromTheLog(t *testing.T) {
 func TestAccessPreviewWithoutATerminalKeepsTheListUnlessNeverBooted(t *testing.T) {
 	const startedAt = "2026-10-28T00:01:02.123456789Z"
 	const notSetUp = "[Cyfr] Not set up: no one is set up on this CYFR yet.\n"
-	lead := "CYFR will be reached from this computer at http://localhost:4000.\n  Ports opened on this machine: 80 and 443 → none\n"
+	lead := "CYFR will be reached from this computer at " + testPrivate + ".\n  Ports opened on this machine: 80 and 443 → none\n"
 	list := "The address changes, so:\n  1. Every browser signs in again.\n" + access.AccountsUnchanged + "\n"
 	for _, c := range []struct {
 		name, log string
@@ -1003,13 +1006,33 @@ func TestAccessPreviewWithoutATerminalKeepsTheListUnlessNeverBooted(t *testing.T
 
 // addressShown is what a change that took prints after its Done line: the
 // address and its QR code.
-func addressShown(t *testing.T, address string) string {
+func addressShown(t *testing.T, browser string) string {
 	t.Helper()
-	code, err := setup.QRText(address)
+	text := "CYFR's address on this computer: " + projectPrivate(t) + "\n"
+	if browser == "" {
+		return text
+	}
+	code, err := setup.QRText(browser)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return "CYFR's address: " + address + "\n" + code
+	return text + "CYFR's browser address: " + browser + "\n" + code
+}
+
+// projectPrivate is the private address of the CYFR in the working
+// directory: the one its .env's tunnel key names on its port.
+func projectPrivate(t *testing.T) string {
+	t.Helper()
+	values := envAssignments(".env")
+	port, err := strconv.Atoi(cmp.Or(values["CYFR_PORT"], "4000"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	private, err := access.ResolveLink(values[link.PublicVar], port)
+	if err != nil {
+		t.Fatalf("the project has no private address: %v", err)
+	}
+	return private
 }
 
 // `cyfr access browser proxy` refuses a .env that states no trust in the

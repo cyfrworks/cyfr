@@ -9,6 +9,17 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// testLinkPublic is a tunnel key's public half, the private name vectors'
+// first row's, testPrivate the private address it names on port 4000,
+// and testLinkLine the .env line cyfr init writes for it.
+const (
+	testLinkKey    = "privkey:b09562be8a0bfee65eaeef5555dad1576019560663ae4616a0cef7b3c5e8c872,psk:6a681bf4064665498645f666e39f9c3917071baecf8685b0923468fd769c47bc"
+	testLinkPublic = "6b6b937aca103230d149eb148efbcfb59e6d1f05bb04dc648ac3e92339eae74a"
+	testPrivateAt  = "http://h-xeypbemm44chehc5.localhost:"
+	testPrivate    = testPrivateAt + "4000"
+	testLinkLine   = "CYFR_LINK_PUBLIC=" + testLinkPublic + "\n"
+)
+
 // runCLI runs the cyfr command line with args against srv, with a
 // credential and no config file of the person's, and answers what it
 // printed and the error main maps to its exit code.

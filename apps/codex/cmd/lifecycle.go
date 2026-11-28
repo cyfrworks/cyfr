@@ -31,6 +31,7 @@ import (
 	"github.com/cyfr/codex/internal/access"
 	"github.com/cyfr/codex/internal/apparmor"
 	"github.com/cyfr/codex/internal/config"
+	"github.com/cyfr/codex/internal/link"
 	"github.com/cyfr/codex/internal/release"
 	"github.com/cyfr/codex/internal/scaffold"
 	"github.com/cyfr/codex/internal/version"
@@ -143,7 +144,9 @@ func refuseEnv(format string, args ...any) error {
 // LOCUS_RUNTIME_SERVICE_ID (wrk_locus when .env names none). The builds
 // key is minted for a fresh .env alone, so a new home builds; in a .env
 // that exists, an empty or absent builds key is builds turned off, and is
-// left so.
+// left so. The tunnel key is minted for a fresh .env alone too: a server
+// keeps its private address for good, and a .env from an earlier build is
+// not carried across.
 func stackKeys(values map[string]string, fresh bool) (map[string]string, []envChange, error) {
 	add := map[string]string{}
 	var changes []envChange
@@ -227,6 +230,18 @@ func stackKeys(values map[string]string, fresh bool) (map[string]string, []envCh
 		if err := mint(buildsKeyVar, generateHexKey); err != nil {
 			return nil, nil, err
 		}
+	}
+
+	// The tunnel key, minted once for a new .env: its private half and
+	// pre-shared key, which only the link service reads, and its public
+	// half, which names the server's private address.
+	if fresh && values[link.KeyVar] == "" && values[link.PublicVar] == "" {
+		key, public, err := link.Mint()
+		if err != nil {
+			return nil, nil, fmt.Errorf("generate %s: %w", link.KeyVar, err)
+		}
+		set(link.KeyVar, key)
+		set(link.PublicVar, public.String())
 	}
 
 	return add, changes, nil
@@ -416,9 +431,9 @@ On Ubuntu 26.04 LTS at a terminal, when this account cannot reach Docker, init f
 
 On macOS and Windows at a terminal, while Docker does not answer, init offers to open Docker's installer page for Docker Desktop and says what the system's prompt will be (a Mac's login password or Touch ID; Windows asking to allow the app to make changes), or, with Docker Desktop installed, says to start it; then it waits, writing nothing, until Docker answers, and goes on. Answered no, init opens and writes nothing and exits 0.
 
-The CYFR init makes has no browser address: it is reached from this machine, at http://localhost:<CYFR_PORT>. 'cyfr access browser tailnet' reaches it from your phone and laptop too, 'cyfr access browser domain --domain <your domain>' from the internet, and 'cyfr access browser proxy --domain <your domain>' through a proxy of your own. On Ubuntu 26.04 LTS on amd64 or arm64 at a terminal, on a machine with no desktop, init asks before it writes anything whether this machine's screen shows CYFR (1, the default) or keeps its login prompt (2); the first installs what 'cyfr screen on' installs, once .env is written. With --no-interactive nothing is asked, and the screen keeps its login prompt.
+The CYFR init makes has no browser address: it is reached from this machine, at its private address, http://h-<16 letters and digits>.localhost:<CYFR_PORT>, which its tunnel key names and which it keeps whatever browser address it is given. 'cyfr access browser tailnet' reaches it from your phone and laptop too, 'cyfr access browser domain --domain <your domain>' from the internet, and 'cyfr access browser proxy --domain <your domain>' through a proxy of your own. On Ubuntu 26.04 LTS on amd64 or arm64 at a terminal, on a machine with no desktop, init asks before it writes anything whether this machine's screen shows CYFR (1, the default) or keeps its login prompt (2); the first installs what 'cyfr screen on' installs, once .env is written. With --no-interactive nothing is asked, and the screen keeps its login prompt.
 
-.env gets the stack's keys: CYFR_SECRET_KEY_BASE, CYFR_LOCUS_BACKENDS_KEY, CYFR_SETUP_TOKEN, the runtime root CYFR_LOCUS_RUNTIME_ROOT with the LOCUS_RUNTIME_KEY derived from it for LOCUS_RUNTIME_SERVICE_ID (wrk_locus unless .env names another), and CYFR_LOCUS_BUILDS_KEY, so builds are on. CYFR_SETUP_TOKEN is the key of the setup link init prints last when it writes a new .env, <CYFR address>/setup#<token>: opened once CYFR is up, it sets up CYFR's first person, who administers it, with their account, and once someone is set up it opens nothing. Without the screen, on a machine with no display, init also prints the ssh command that brings the address to another computer. It also assigns CYFR_CORS_ALLOWED_ORIGINS the empty allowlist, since cyfr serves Prism, the API, /mcp and the tinctures from its own origin and no browser client of this stack is cross-origin; an allowlist .env assigns is the one that stands.
+.env gets the stack's keys: CYFR_SECRET_KEY_BASE, CYFR_LOCUS_BACKENDS_KEY, CYFR_SETUP_TOKEN, the runtime root CYFR_LOCUS_RUNTIME_ROOT with the LOCUS_RUNTIME_KEY derived from it for LOCUS_RUNTIME_SERVICE_ID (wrk_locus unless .env names another), and CYFR_LOCUS_BUILDS_KEY, so builds are on. A new .env also gets the tunnel key, minted once: CYFR_LINK_KEY, its private half and pre-shared key, and CYFR_LINK_PUBLIC, its public half, which names the private address; a .env from an earlier build is not given one. CYFR_SETUP_TOKEN is the key of the setup link init prints last when it writes a new .env, <CYFR address>/setup#<token>: opened once CYFR is up, it sets up CYFR's first person, who administers it, with their account, and once someone is set up it opens nothing. Without the screen, on a machine with no display, init also prints the ssh command that brings the address to another computer. It also assigns CYFR_CORS_ALLOWED_ORIGINS the empty allowlist, since cyfr serves Prism, the API, /mcp and the tinctures from its own origin and no browser client of this stack is cross-origin; an allowlist .env assigns is the one that stands.
 
 Re-running in an existing project is safe: docker-compose.yml, Caddyfile and .env.example are kept if they already exist, and .env gains only the keys it lacks. A key already in .env is never rewritten, and neither is how CYFR is reached, which 'cyfr access' changes; a .env that does not say CYFR's browser address (no CYFR_BROWSER) is refused, and nothing is written. A service key without the root it derives from, or one that does not derive from the root beside it, is refused with a sentence naming the fix, and nothing is written. An empty or absent CYFR_LOCUS_BUILDS_KEY in an existing .env is builds turned off, and stays off. Use --force to re-fetch docker-compose.yml, Caddyfile, keeper.seccomp.json and container.seccomp.json.`,
 	Example: `  cyfr init
@@ -511,15 +526,16 @@ func runInit(ctx context.Context, o initOptions, out, errOut io.Writer) error {
 }
 
 // initEnding is init's last word on the new CYFR in the working directory,
-// reached from this machine: its address, the offer to reach it from the
-// person's other devices, made before anyone is set up, while a new
-// address signs no one out, and the next step, which on screen is the
-// reboot that shows setup there, and otherwise the setup link
+// reached from this machine: its private address, the offer to reach it
+// from the person's other devices, made before anyone is set up, while a
+// new address signs no one out, and the next step, which on screen is the
+// reboot that shows setup there, and otherwise the setup link at the
+// private address, the one a server with no browser address gives out
 // (sshTunnel's line beside it on a machine with no display).
 func initEnding(out io.Writer, screen bool) {
 	values, _ := access.ReadEnvValues(".env")
 	port := existingSelection(".env").port
-	address := access.Describe(access.Head{Browser: access.BrowserNone, Port: port}).Address
+	address, _ := access.ResolveLink(values[link.PublicVar], port)
 	fmt.Fprintln(out, "")
 	fmt.Fprintf(out, "CYFR is set up in this directory, reached from this computer at %s.\n", address)
 	fmt.Fprintln(out, "Want it on your phone and laptop too? Run cyfr access browser tailnet first.")
@@ -535,8 +551,10 @@ func initEnding(out io.Writer, screen bool) {
 }
 
 // sshTunnel is the line that brings this machine's loopback port, where a
-// local CYFR answers, to another computer, whose browser then opens the
-// link at the same localhost address, the one CYFR serves itself under.
+// CYFR with no browser address answers, to another computer, whose
+// browser then opens the link at the same private address, a name under
+// localhost that a browser takes to its own loopback, where the tunnel
+// listens.
 func sshTunnel(port int) string {
 	account := ""
 	if u, err := user.Current(); err == nil {
@@ -949,7 +967,7 @@ var upCmd = &cobra.Command{
 
 The stack is cyfr (the one endpoint: Prism, API, MCP, tinctures), locus (the one Locus: its runtime role runs components, its builds role compiles components and tinctures, and its backends role runs the stdio/npx MCP servers an athanor adds on Prism's "MCP Servers" page, each backend under a uid and a memory bound of its own; cyfr tells it what to run), locus-guard (Locus's egress guard), and the proxy of its browser address: tailscale for a tailnet address (Tailscale Serve, HTTPS at the machine's tailnet name) and caddy for a domain (TLS on :80/:443).
 
-cyfr, locus and locus-guard always start; Locus starts its builds role when .env sets CYFR_LOCUS_BUILDS_KEY, which 'cyfr init' writes. CYFR_BROWSER in .env chooses the proxy: tailscale for tailnet and caddy for domain; none starts with none, where Prism is at http://localhost:<CYFR_PORT>, nor with proxy, where cyfr's proxy listener is published on this machine's loopback at CYFR_PROXY_PUBLISH for your own proxy. On Linux with AppArmor on, before anything starts, cyfr up on Ubuntu 26.04 with AppArmor on, where the kernel has not loaded the profile built into this cyfr by its name, at a terminal it shows the two commands that install and load it, asks, and runs them through one sudo, giving root the profile from cyfr itself, and without one it refuses, naming the one command to run; elsewhere it leaves that to the keeper, which proves at its boot that it runs under its release's profile. cyfr up then takes the stack's lock and finishes a change an interrupted command left, then refuses a .env whose settings contradict how CYFR is reached, with the sentence the server would refuse it with, before anything starts. With a tailnet address, CYFR is served on the tailnet only once the machine's tailnet identity is the one .env names. A start that fails says why, with the server's own refusal from its log when it gave one, and exits 1. A start prints Prism's address; when cyfr's log says no one is set up on it yet, cyfr up then says how its first person is set up: with this machine's screen showing CYFR (the cyfr-screen service), by a reboot when the screen has not started yet, or on that screen (Ctrl+Alt+F1); otherwise by opening the setup link, from a phone or laptop with Tailscale on for a tailnet address, and with no browser address on a machine with no display through the ssh command it prints.
+cyfr, locus and locus-guard always start; Locus starts its builds role when .env sets CYFR_LOCUS_BUILDS_KEY, which 'cyfr init' writes. CYFR_BROWSER in .env chooses the proxy: tailscale for tailnet and caddy for domain; none starts with none, where Prism is at the private address alone, nor with proxy, where cyfr's proxy listener is published on this machine's loopback at CYFR_PROXY_PUBLISH for your own proxy. On Linux with AppArmor on, before anything starts, cyfr up on Ubuntu 26.04 with AppArmor on, where the kernel has not loaded the profile built into this cyfr by its name, at a terminal it shows the two commands that install and load it, asks, and runs them through one sudo, giving root the profile from cyfr itself, and without one it refuses, naming the one command to run; elsewhere it leaves that to the keeper, which proves at its boot that it runs under its release's profile. cyfr up then takes the stack's lock and finishes a change an interrupted command left, then refuses a .env whose settings contradict how CYFR is reached, with the sentence the server would refuse it with, before anything starts. With a tailnet address, CYFR is served on the tailnet only once the machine's tailnet identity is the one .env names. A start that fails says why, with the server's own refusal from its log when it gave one, and exits 1. A start prints Prism's address on this computer, the private address, and its browser address when it has one; when cyfr's log says no one is set up on it yet, cyfr up then says how its first person is set up: with this machine's screen showing CYFR (the cyfr-screen service), by a reboot when the screen has not started yet, or on that screen (Ctrl+Alt+F1); otherwise by opening the setup link, from a phone or laptop with Tailscale on for a tailnet address, and with no browser address on a machine with no display through the ssh command it prints.
 
 Exit status 3: cyfr started, but on this machine only, because the tailnet machine is not ready to serve it (not the one .env names, not joined, or HTTPS off); Serve stays closed, and the message says what to do.`,
 	Example: `  cyfr up`,
@@ -1015,6 +1033,10 @@ func upWith(ctx context.Context, opened stackEngine, out io.Writer) error {
 	if err != nil {
 		return engineFailure(err)
 	}
+	words, err := e.Words()
+	if err != nil {
+		return engineFailure(err)
+	}
 	if err := e.CheckStack(ctx); err != nil {
 		return engineFailure(err)
 	}
@@ -1035,32 +1057,36 @@ func upWith(ctx context.Context, opened stackEngine, out io.Writer) error {
 		return startErr
 	}
 	fmt.Fprintln(out, "CYFR server started.")
-	fmt.Fprintln(out, "  Prism:           "+hyperlink(out, access.Describe(head).Address+"/"))
+	fmt.Fprintln(out, "  Prism on this computer: "+hyperlink(out, words.Private+"/"))
+	if words.Browser != "" {
+		fmt.Fprintln(out, "  Prism in a browser:     "+hyperlink(out, words.Browser+"/"))
+	}
 	if firstStart {
 		fmt.Fprintln(out, "")
-		setupNext(out, head)
+		setupNext(out, head, words)
 	}
 	return nil
 }
 
-// setupNext is how the first person of the CYFR at head, which no one is
-// set up on yet, is set up, said after its start: on this machine's own
-// screen when the cyfr-screen service shows it, a reboot away when it is
-// enabled and has not started or whether it runs went unread; otherwise
-// through the setup link, which a CYFR with no browser address on a
-// machine with no display reaches through sshTunnel's line.
-func setupNext(out io.Writer, head access.Head) {
+// setupNext is how the first person of the CYFR at head, whose words are
+// words, which no one is set up on yet, is set up, said after its start:
+// on this machine's own screen when the cyfr-screen service shows it, a
+// reboot away when it is enabled and has not started or whether it runs
+// went unread; otherwise through the setup link at the address it gives
+// out, which a CYFR with no browser address on a machine with no display
+// reaches through sshTunnel's line.
+func setupNext(out io.Writer, head access.Head, words access.Words) {
 	values, _ := access.ReadEnvValues(".env")
-	link := hyperlink(out, setupLink(access.Describe(head).Address, values))
+	opens := hyperlink(out, setupLink(words.Shared(), values))
 	switch enabled, active, _ := machine.screenService(); {
 	case active:
 		fmt.Fprintln(out, "Setup is on this screen (Ctrl+Alt+F1).")
 	case enabled:
 		fmt.Fprintln(out, "Now run sudo reboot. This screen opens setup at power-on.")
 	case head.Browser == access.BrowserTailnet:
-		fmt.Fprintf(out, "Open %s on your phone or laptop, with Tailscale on, to set up its first person.\n", link)
+		fmt.Fprintf(out, "Open %s on your phone or laptop, with Tailscale on, to set up its first person.\n", opens)
 	default:
-		fmt.Fprintf(out, "Open %s to set up its first person.\n", link)
+		fmt.Fprintf(out, "Open %s to set up its first person.\n", opens)
 		if head.Browser == access.BrowserNone && !hasDisplay() {
 			fmt.Fprintln(out, sshTunnel(head.Port))
 		}

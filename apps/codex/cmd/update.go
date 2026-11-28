@@ -2523,10 +2523,11 @@ func readRunningSchema(ctx context.Context, image string) (string, error) {
 	case image == "":
 		return "", errors.New("docker-compose.yml names no image for cyfr")
 	default:
-		// The release's runtime configuration needs a browser address and a
-		// key base to load; the key is a throwaway, given through the
-		// environment so it is on no argv.
-		key := make([]byte, 48)
+		// The release's runtime configuration needs a browser address, a
+		// key base and a tunnel key's public half to load; the key base is a
+		// throwaway, given through the environment so it is on no argv, and
+		// the public half one too, which names no address this read serves.
+		key := make([]byte, 48+32)
 		if _, err := rand.Read(key); err != nil {
 			return "", err
 		}
@@ -2536,9 +2537,9 @@ func readRunningSchema(ctx context.Context, image string) (string, error) {
 		// before it can remove it.
 		name := schemaContainerName()
 		defer removeSchemaContainer(name)
-		output, err = schemaDocker(ctx, []string{"CYFR_SECRET_KEY_BASE=" + hex.EncodeToString(key)},
+		output, err = schemaDocker(ctx, []string{"CYFR_SECRET_KEY_BASE=" + hex.EncodeToString(key[:48]), "CYFR_LINK_PUBLIC=" + hex.EncodeToString(key[48:])},
 			"run", "--rm", "--name", name, "--pull", "never", "--network", "none", "--read-only", "--user", "app",
-			"--entrypoint", "/usr/bin/timeout", "-e", "CYFR_BROWSER=none", "-e", "CYFR_SECRET_KEY_BASE",
+			"--entrypoint", "/usr/bin/timeout", "-e", "CYFR_BROWSER=none", "-e", "CYFR_SECRET_KEY_BASE", "-e", "CYFR_LINK_PUBLIC",
 			image, schemaReadLife, "/app/bin/cyfr", "eval", schemaExpr)
 	}
 	return output, err

@@ -6,6 +6,7 @@ package access
 import (
 	"context"
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -105,7 +106,7 @@ func TestSwitchFenceRefusesAStalePreview(t *testing.T) {
 		if refusalCode(err) != "access_stale" || rc.State != "rejected" {
 			t.Errorf("%s changed after the preview: answered %+v, %v", edit.name, rc, err)
 		}
-		if words := rc.Payload["words"]; !strings.Contains(words, "only this computer, at http://localhost:") {
+		if words := rc.Payload["words"]; !strings.Contains(words, "only this computer, at http://h-xeypbemm44chehc5.localhost:") {
 			t.Errorf("%s: access_stale names %q", edit.name, words)
 		}
 		if h.env() != before {
@@ -371,5 +372,100 @@ func TestTrustKeysTakeLiteralValuesOnly(t *testing.T) {
 	writeFile(t, path, []byte(h.env()+"CYFR_TRUSTED_PROXY_HOPS='2'\n"))
 	if err := CheckEnvFile(path); err != nil {
 		t.Errorf("a single-quoted literal trust is refused: %v", err)
+	}
+}
+
+// A server that serves its own account service keeps the address it gives
+// out: a change that adds its browser address, removes it or moves it to
+// another host is refused before anything changes, by the preview and by
+// the switch, naming the address it keeps and the one it would move to;
+// a change that moves no address, a certificate email, is made.
+func TestAWriterKeepsTheAddressItGivesOut(t *testing.T) {
+	h := newHome(t)
+	writer := func() { writeFile(t, filepath.Join(h.dir, ".env"), []byte(h.env()+"CYFR_DIRECTORY_SERVE=writer\n")) }
+	refused := func(n int, target Target, pinned, origin string) {
+		t.Helper()
+		_, err := h.e.Preview(bg, target, "")
+		var r *Refusal
+		want := map[string]string{"pinned": pinned, "origin": origin}
+		if !errors.As(err, &r) || r.Code != "access_origin_pinned" || r.Class != "conflict" || !maps.Equal(r.Payload, want) {
+			t.Errorf("preview of %+v answered %v, want access_origin_pinned %v", target, err, want)
+		}
+		d, err := Derive(target, Current{Port: 4000}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		before, calls := h.env(), len(h.fake.calls())
+		rc, err := h.e.Switch(bg, SwitchRequest{ID: id(n), Target: target, OldDigest: h.head().Digest(), NewDigest: d.Head.Digest()})
+		if refusalCode(err) != "access_origin_pinned" || rc.State != "rejected" || !maps.Equal(rc.Payload, want) {
+			t.Errorf("switch to %+v answered %+v, %v", target, rc, err)
+		}
+		if h.env() != before || len(h.fake.calls()) != calls {
+			t.Errorf("a refused switch to %+v changed .env or called docker", target)
+		}
+		if r != nil && (!strings.Contains(r.Message(), pinned) || !strings.Contains(r.Message(), origin)) {
+			t.Errorf("the refusal reads %q", r.Message())
+		}
+	}
+
+	// Pinned to its private address, as a writer with no browser address;
+	// a tailnet address is refused before the join that would name it.
+	writer()
+	refused(1, domainTarget, testPrivate, "https://home.example.com")
+	_, err := h.e.Preview(bg, Target{Browser: BrowserTailnet}, "")
+	if r := (*Refusal)(nil); !errors.As(err, &r) || r.Code != "access_origin_pinned" || !maps.Equal(r.Payload, map[string]string{"pinned": testPrivate, "origin": unjoinedTailnet}) {
+		t.Errorf("a tailnet address for a writer that has not joined answered %v", err)
+	}
+
+	// Pinned to its browser address, as one that became a writer there.
+	h2 := newHome(t)
+	h = h2
+	if rc, err := h.e.Switch(bg, h.request(id(2), domainTarget, "")); err != nil || rc.Outcome != "ok" {
+		t.Fatalf("switch answered %+v, %v", rc, err)
+	}
+	writer()
+	refused(3, Target{Browser: BrowserNone}, "https://home.example.com", testPrivate)
+	refused(4, Target{Browser: BrowserDomain, Domain: "other.example.com"}, "https://home.example.com", "https://other.example.com")
+
+	email := Target{Browser: BrowserDomain, Domain: "home.example.com", ACMEEmail: "ops@example.com"}
+	if rc, err := h.e.Switch(bg, h.request(id(5), email, "")); err != nil || rc.Outcome != "ok" {
+		t.Errorf("a writer's certificate email change answered %+v, %v", rc, err)
+	}
+}
+
+// A .env without the tunnel key, or with one that is no public key,
+// holds no head, after any refusal of its access settings: the engine
+// refuses it as the boot does, and derives no head from it.
+func TestATunnelKeyIsRead(t *testing.T) {
+	h := newHome(t)
+	good := h.env()
+	for _, c := range []struct {
+		name, env, code string
+	}{
+		{"missing", strings.Replace(good, linkLine, "", 1), "access_link_missing"},
+		{"blank", strings.Replace(good, linkLine, "CYFR_LINK_PUBLIC= \n", 1), "access_link_missing"},
+		{"uppercase", strings.Replace(good, linkLine, strings.ToUpper(linkLine), 1), "access_link_invalid"},
+		{"an access refusal first", strings.Replace(strings.Replace(good, linkLine, "", 1), "CYFR_BROWSER=none", "CYFR_BROWSER=sideways", 1), "access_unknown_browser"},
+	} {
+		writeFile(t, filepath.Join(h.dir, ".env"), []byte(c.env))
+		if _, err := h.e.Head(); refusalCode(err) != c.code {
+			t.Errorf("%s: the head answered %v, want %s", c.name, err, c.code)
+		}
+		if _, err := h.e.Preview(bg, domainTarget, ""); c.code != "access_unknown_browser" && refusalCode(err) != c.code {
+			t.Errorf("%s: the preview answered %v, want %s", c.name, err, c.code)
+		}
+	}
+	for _, c := range []struct{ text, code string }{{"", "access_link_missing"}, {"  ", "access_link_missing"}, {"nodekey:" + testLink, "access_link_invalid"}} {
+		if _, err := ResolveLink(c.text, 4000); refusalCode(err) != c.code {
+			t.Errorf("ResolveLink(%q) answered %v, want %s", c.text, err, c.code)
+		}
+	}
+	if got, err := ResolveLink(" "+testLink+" ", 4000); err != nil || got != testPrivate {
+		t.Errorf("ResolveLink answered %q, %v", got, err)
+	}
+	for _, code := range []string{"access_link_missing", "access_link_invalid"} {
+		if class := Refuse(code, nil).Class; class != map[string]string{"access_link_missing": "setup_required", "access_link_invalid": "invalid_argument"}[code] {
+			t.Errorf("%s is class %s", code, class)
+		}
 	}
 }

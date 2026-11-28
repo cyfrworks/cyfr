@@ -469,7 +469,7 @@ func (e *Engine) checkEffective(h Head, content []byte) error {
 	reach := h
 	reach.Profiles = slices.DeleteFunc(slices.Clone(h.Profiles), func(p string) bool { return !slices.Contains(BrowserProfiles(), p) })
 	if b.Head.Digest() != reach.Digest() {
-		return fmt.Errorf("access: the stack's configuration starts cyfr reached as %s, not as %s", wordsText(Describe(b.Head)), wordsText(Describe(h)))
+		return fmt.Errorf("access: the stack's configuration starts cyfr reached as %s, not as %s", wordsText(e.describe(b.Head)), wordsText(e.describe(h)))
 	}
 	return checkPublished(c, b)
 }

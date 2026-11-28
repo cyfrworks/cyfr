@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"golang.org/x/net/html"
+
+	"github.com/cyfr/codex/internal/link"
 )
 
 // Discovered is the directory a CYFR names, on its sign-in page or, a
@@ -27,12 +29,15 @@ type Discovered struct {
 
 // ServiceOf is directory as the account service of the CYFR at home, when
 // the app may open that CYFR with it. An account service is https, with
-// one exception, the one place plain http is taken: a local CYFR
-// (http://localhost, with its port) that serves its accounts at exactly its
-// own origin, since loopback has no network path for TLS to protect and no
-// other program's origin is trusted with them. A CYFR elsewhere naming an
-// http one, and a local one naming any other http origin, loopback
-// included, have none. The app's main process holds the same rule
+// one exception, the one place plain http is taken: a CYFR on this
+// computer, at its private address (http://<private name>.localhost, with
+// its port, link.PrivateHost), that serves its accounts at exactly that
+// address, since loopback has no network path for TLS to protect and no
+// other program's origin is trusted with them. home is the private
+// address the folder's own tunnel key names (cmd readFolder), never a
+// server's word. A CYFR elsewhere naming an http one, and one on this
+// computer naming any other http origin, localhost and loopback included,
+// have none. The app's main process holds the same rule
 // (apps/codex/desktop/src/policy.js homeMessage;
 // tests/fixtures/desktop-process.json, account_services).
 func ServiceOf(home, directory string) (Discovered, bool) {
@@ -42,7 +47,7 @@ func ServiceOf(home, directory string) (Discovered, bool) {
 	}
 	if !strings.HasPrefix(directory, "https://") {
 		u, err := url.Parse(home)
-		if err != nil || u.Hostname() != "localhost" || origin != home {
+		if err != nil || !link.PrivateHost(u.Hostname()) || origin != home {
 			return Discovered{}, false
 		}
 	}

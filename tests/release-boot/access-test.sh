@@ -48,6 +48,7 @@ CYFR_PORT=4399
 CYFR_CORS_ALLOWED_ORIGINS=
 CYFR_LOCUS_BUILDS_KEY=builds-key
 CYFR_BIND_ADDRESS=127.0.0.1
+CYFR_LINK_PUBLIC=6b6b937aca103230d149eb148efbcfb59e6d1f05bb04dc648ac3e92339eae74a
 ENV
 
 ADAPTER=sqlite WORK="$scratch" bash -c '
@@ -73,7 +74,8 @@ cell = dict(l.split("=", 1) for l in open(os.path.join(scratch, "access.env")).r
 leaked = [k for k in cell if k in strip]
 if leaked:
     sys.exit(f"FAIL: the cell's settings keep vector names: {leaked}")
-if cell.get("CYFR_SECRET_KEY_BASE") != "key-base" or cell.get("CYFR_LOCUS_BUILDS_KEY") != "builds-key":
+if cell.get("CYFR_SECRET_KEY_BASE") != "key-base" or cell.get("CYFR_LOCUS_BUILDS_KEY") != "builds-key" or \
+        cell.get("CYFR_LINK_PUBLIC") != "6b6b937aca103230d149eb148efbcfb59e6d1f05bb04dc648ac3e92339eae74a":
     sys.exit(f"FAIL: the cell's own settings were lost: {cell}")
 refused = [v for v in vectors if v["input"]["release?"] and "refusal" in v]
 dirs = sorted(d for d in os.listdir(os.path.join(scratch, "vectors")) if d != "strip")

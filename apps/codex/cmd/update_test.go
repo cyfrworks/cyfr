@@ -174,7 +174,7 @@ var (
 
 // scenarioEnv is the .env of the scenarios' home: public at
 // cyfr.example.com, builds on.
-const scenarioEnv = "CYFR_BROWSER=domain\nCYFR_HOST=cyfr.example.com\nCYFR_PUBLIC_URL=https://cyfr.example.com\nCYFR_PORT=4000\n"
+const scenarioEnv = "CYFR_BROWSER=domain\nCYFR_HOST=cyfr.example.com\nCYFR_PUBLIC_URL=https://cyfr.example.com\nCYFR_PORT=4000\n" + testLinkLine
 
 // stackImage is the image the scenarios' cyfr service runs, through which
 // a snapshot reads the storage.
@@ -577,7 +577,7 @@ func (s *updateScenario) schemaRead(running bool) []string {
 	}
 	image := imagesFromCompose(original, nil)[0]
 	return append(reads,
-		"run --rm --name "+testSchemaContainer+" --pull never --network none --read-only --user app --entrypoint /usr/bin/timeout -e CYFR_BROWSER=none -e CYFR_SECRET_KEY_BASE "+image+" 90 /app/bin/cyfr eval "+testSchema+" {env CYFR_SECRET_KEY_BASE set}",
+		"run --rm --name "+testSchemaContainer+" --pull never --network none --read-only --user app --entrypoint /usr/bin/timeout -e CYFR_BROWSER=none -e CYFR_SECRET_KEY_BASE -e CYFR_LINK_PUBLIC "+image+" 90 /app/bin/cyfr eval "+testSchema+" {env CYFR_SECRET_KEY_BASE set} {env CYFR_LINK_PUBLIC set}",
 		"rm -f "+testSchemaContainer)
 }
 
@@ -1598,7 +1598,7 @@ func TestUpdateFromThreeContainers(t *testing.T) {
 		"Its images change:\n  ghcr.io/cyfrworks/cyfr: 0.8.0@sha256:" + strings.Repeat("c", 12) + "… → 0.9.0@sha256:" + strings.Repeat("a", 12) + "…\n" +
 			"  ghcr.io/cyfrworks/cyfr-locus: 0.8.0@sha256:" + strings.Repeat("c", 12) + "… → 0.9.0@sha256:" + strings.Repeat("b", 12) + "…\n  caddy: ",
 		"These .env settings name a service release 0.9.0's docker-compose.yml no longer runs, and cyfr update left them as you set them:\n" +
-			"  CYFR_LOCUS_RUNTIME_WORKERS, line 7, names locus-runtime: put locus in place of locus-runtime in its URL, keeping the rest of the line as it is\n" +
+			"  CYFR_LOCUS_RUNTIME_WORKERS, line 8, names locus-runtime: put locus in place of locus-runtime in its URL, keeping the rest of the line as it is\n" +
 			"Until each of these lines is changed so and 'cyfr up' is run, CYFR cannot reach locus.\n",
 		"docker-compose.yml is now release 0.9.0's own file; the one it replaced, with any edits you made to it, is " + filepath.Join(s.snapshotDir(), "compose") + ", to copy back from what you still need.\n",
 	} {
@@ -1627,8 +1627,8 @@ func TestUpdateSaysTheEditOfAListAndOfAURLLine(t *testing.T) {
 		t.Fatalf("update: %v\n%s", err, out)
 	}
 	report := "These .env settings name a service release 0.9.0's docker-compose.yml no longer runs, and cyfr update left them as you set them:\n" +
-		"  CYFR_LOCUS_RUNTIME_WORKERS, line 7, names locus-runtime: put locus in place of locus-runtime in its URL, keeping the rest of the line as it is\n" +
-		"  CYFR_PRIVATE_EGRESS_TARGETS, line 6, names locus-backends: put locus in place of locus-backends in that line, keeping the rest of it as it is\n" +
+		"  CYFR_LOCUS_RUNTIME_WORKERS, line 8, names locus-runtime: put locus in place of locus-runtime in its URL, keeping the rest of the line as it is\n" +
+		"  CYFR_PRIVATE_EGRESS_TARGETS, line 7, names locus-backends: put locus in place of locus-backends in that line, keeping the rest of it as it is\n" +
 		"Until each of these lines is changed so and 'cyfr up' is run, CYFR cannot reach locus.\n"
 	if n := strings.Count(out, report); n != 1 {
 		t.Errorf("the update reported %d times %q:\n%s", n, report, out)
@@ -1856,15 +1856,15 @@ func TestUpdateRewritesTheReleasesDefaultsInEnv(t *testing.T) {
 		t.Errorf("the update said %d times %q:\n%s", n, said, out)
 	}
 	report := "These .env settings name a service release 0.9.0's docker-compose.yml no longer runs, and cyfr update left them as you set them:\n" +
-		"  CYFR_LEGACY_URL, line 8, names locus-legacy: put locus in place of locus-legacy in its URL, keeping the rest of the line as it is\n" +
-		"  CYFR_NAMED_URLS, line 12, names locus-legacy: name a service release 0.9.0's docker-compose.yml runs there\n" +
-		"  CYFR_PEER, line 10, names locus-legacy: name a service release 0.9.0's docker-compose.yml runs there\n" +
+		"  CYFR_LEGACY_URL, line 9, names locus-legacy: put locus in place of locus-legacy in its URL, keeping the rest of the line as it is\n" +
+		"  CYFR_NAMED_URLS, line 13, names locus-legacy: name a service release 0.9.0's docker-compose.yml runs there\n" +
+		"  CYFR_PEER, line 11, names locus-legacy: name a service release 0.9.0's docker-compose.yml runs there\n" +
 		"Until each of these lines is changed so and 'cyfr up' is run, CYFR cannot reach locus.\n"
 	if n := strings.Count(out, report); n != 1 {
 		t.Errorf("the update reported %d times %q:\n%s", n, report, out)
 	}
 	twice := "These .env settings are assigned more than once, so they are yours and cyfr update changed none of their lines:\n" +
-		"  CYFR_TWICE, lines 13 and 14: release 0.9.0 ships CYFR_TWICE=new\n"
+		"  CYFR_TWICE, lines 14 and 15: release 0.9.0 ships CYFR_TWICE=new\n"
 	if n := strings.Count(out, twice); n != 1 {
 		t.Errorf("the update reported %d times %q:\n%s", n, twice, out)
 	}

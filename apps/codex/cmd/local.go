@@ -28,14 +28,16 @@ import (
 // from an earlier reading and nothing comes from outside the folder.
 //
 // A reading is the folder's .env read once and alone (readFolder): the
-// address, the account service, the engine's route and the setup token,
-// with no value taken or interpolated from this process's environment.
+// private address, the account service and the setup token, with no value
+// taken or interpolated from this process's environment.
 //
-// The binding is the one way cyfr itself reaches that CYFR, the same in
-// every kind of browser address (localFolder.transport): the loopback listener, which
-// the folder's cyfr container publishes at 127.0.0.1 and CYFR_PORT, under
-// the configured address's name. That name is what is signed and shown,
-// and is never looked up or connected to. As each connection opens the
+// The binding is the one way cyfr itself reaches that CYFR, the same
+// whatever browser address it has (localFolder.transport): the loopback
+// listener, which the folder's cyfr container publishes at 127.0.0.1 and
+// CYFR_PORT, under the private address's name, which the folder's tunnel
+// key names. That name is what is signed and shown, and is never looked up
+// or connected to; the engine's pages reach it at loopback too
+// (apps/codex/desktop/src/policy.js LOCALHOST_IS_IPV4). As each connection opens the
 // folder is read again, a reading naming another CYFR than the one opened
 // sends nothing, and Docker names the container publishing that port, by
 // its id and its start: the same before the connection was made and
@@ -50,18 +52,13 @@ import (
 // has the docker group and Docker Desktop's docker where this one lacks
 // them, and none of this one's settings.
 
-// The engine's route to a CYFR with a tailnet address from the computer it
-// runs on, for CYFR's own pages alone: its SOCKS5 proxy on loopback, the
-// one way to that name. The engine asks the proxy for each name, and
-// looks none of them up itself.
-const localProxy = "socks5://127.0.0.1:1055"
-
 const directoryVar = "CYFR_DIRECTORY_URL"
 
 // localBound is what a connection to a folder's CYFR is bound to: what a
-// reading names of it.
+// reading names of it. Its browser address is not among it: this computer
+// reaches the CYFR at its private address whatever that is.
 type localBound struct {
-	Browser   string `json:"browser"`
+	// Address is the private address.
 	Address   string `json:"address"`
 	Directory string `json:"directory"`
 	// Port is the one its cyfr container publishes on loopback.
@@ -89,19 +86,18 @@ type localReading struct {
 
 // readFolder is one reading of dir: its .env, once and alone.
 func readFolder(dir string) (localReading, error) {
-	values, head, err := access.ReadProjectAlone(dir)
+	values, head, private, err := access.ReadProjectAlone(dir)
 	if err != nil {
 		return localReading{}, err
 	}
 	// The spelling the CYFR signs and is signed to in
 	// (Prima.Identity.Encoding.canonical_home): a default port is dropped.
-	address, ok := account.CanonicalHome(access.Describe(head).Address)
+	address, ok := account.CanonicalHome(private)
 	if !ok {
-		return localReading{}, fmt.Errorf("%s is not an address a device can open", access.Describe(head).Address)
+		return localReading{}, fmt.Errorf("%s is not an address a device can open", private)
 	}
 	return localReading{
 		localBound: localBound{
-			Browser:   head.Browser,
 			Address:   address,
 			Directory: cmp.Or(strings.TrimSpace(values[directoryVar]), account.DefaultDirectory),
 			Port:      head.Port,
@@ -154,15 +150,6 @@ func openFolder(work *shell.Work, dir, holder string) (*localFolder, localReadin
 		work: work, begin: beginUnder(work, preparer())}, read, nil
 }
 
-// localRoute is the engine's route to a CYFR of browser address kind on
-// the computer it runs on: a tailnet one's proxy, none for any other.
-func localRoute(browser string) string {
-	if browser == access.BrowserTailnet {
-		return localProxy
-	}
-	return ""
-}
-
 // readLocal is the CYFR set up in dir, as the screen and the CYFR app open
 // it: one reading (readFolder), with no call to Docker and nothing
 // started, and the client bound to it, which asks Docker through setup's
@@ -175,7 +162,6 @@ func readLocal(work *shell.Work, dir, holder string) (desktop.Local, error) {
 	}
 	client := &http.Client{Transport: f.transport(nil)}
 	l := desktop.Local{Work: work}
-	l.Proxy = localRoute(read.Browser)
 	l.Shell = shell.Config{
 		Address:    read.Address,
 		Client:     client,

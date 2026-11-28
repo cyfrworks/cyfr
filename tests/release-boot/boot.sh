@@ -31,9 +31,11 @@
 #            writes on its own pool and takes write turns, and starts every
 #            switched process as it ships (tests/release-boot/test_seams.exs).
 #            Then the domain address `cyfr access browser domain
-#            --domain cyfr.example.com` writes answers as https://cyfr.example.com
-#            (`Sanctum.origin()`), with nothing written for it but the
-#            test's ports, and its proxy listener answers readiness.
+#            --domain cyfr.example.com` writes gives out https://cyfr.example.com
+#            (`Sanctum.shared_address()`), and its loopback listener keeps
+#            the private address the tunnel key `cyfr init` minted names
+#            (`Sanctum.address(:loopback)`), with nothing written for either
+#            but the test's ports, and its proxy listener answers readiness.
 #
 #   refuses  the same environment with the wildcard CORS allowlist, which a
 #            release with authentication configured must refuse at boot.
@@ -468,7 +470,7 @@ if [ "${after:-1}" -ne 0 ]; then
 fi
 echo "pending migrations after the boot: $after"
 
-step "a cell given a domain address answers at the https origin that name implies"
+step "a cell given a domain address gives out the https origin that name implies, and keeps its private address"
 ADDRESS="$WORK/address"
 ADDRESS_URL=""
 if [ "$ADAPTER" = postgres ]; then
@@ -479,10 +481,22 @@ fi
 cell_new "$ADDRESS" "$ADDRESS_URL"
 cell_hostname "$ADDRESS" cyfr.example.com
 server_start "$ADDRESS"
-home="$(cell_cyfr "$ADDRESS" rpc 'IO.puts("CYFR_HOME=" <> Sanctum.origin())' | sed -n 's/^CYFR_HOME=//p' | tail -1)"
+home="$(cell_cyfr "$ADDRESS" rpc 'IO.puts("CYFR_HOME=" <> Sanctum.shared_address())' | sed -n 's/^CYFR_HOME=//p' | tail -1)"
 [ "$home" = "https://cyfr.example.com" ] ||
-  fail "the cell given cyfr.example.com answers as '$home', not https://cyfr.example.com"
-echo "Sanctum.origin() -> $home"
+  fail "the cell given cyfr.example.com gives out '$home', not https://cyfr.example.com"
+echo "Sanctum.shared_address() -> $home"
+# The private address its tunnel key names (apps/codex/internal/link's
+# derivation), whatever its browser address.
+private="$(python3 -I -c 'import base64, hashlib, sys
+public = bytes.fromhex(sys.argv[1])
+if len(public) != 32: sys.exit(1)
+name = base64.b32encode(hashlib.sha256(public).digest()).decode().lower()[:16]
+print("http://h-%s.localhost:%s" % (name, sys.argv[2]))' "$(cell_value "$ADDRESS" CYFR_LINK_PUBLIC)" "$PORT")" ||
+  fail "the cell's .env holds no tunnel key cyfr init minted"
+loopback="$(cell_cyfr "$ADDRESS" rpc 'IO.puts("CYFR_PRIVATE=" <> Sanctum.address(:loopback))' | sed -n 's/^CYFR_PRIVATE=//p' | tail -1)"
+[ "$loopback" = "$private" ] ||
+  fail "the cell's loopback listener is at '$loopback', not its private address $private"
+echo "Sanctum.address(:loopback) -> $loopback"
 # The listener its TLS front forwards to, as a front forwards.
 proxied="$(curl -sS -m 10 -o "$ADDRESS/proxied.json" -w '%{http_code}' \
   -H 'host: cyfr.example.com' -H 'x-forwarded-proto: https' -H 'x-forwarded-for: 127.0.0.1' \
@@ -984,7 +998,7 @@ fn args ->
   case args do
     ["device", token] ->
       # The device the person's hello paired with them.
-      {:ok, ctx} = Sanctum.Caller.establish({:session, token})
+      {:ok, ctx} = Sanctum.Caller.establish({:session, token}, entry: :loopback)
 
       [client_id] =
         Arca.Repo.all(
@@ -997,7 +1011,7 @@ fn args ->
       answer.(%{client_id: client_id})
 
     ["remove", root, token, client_id] ->
-      {:ok, ctx} = Sanctum.Caller.establish({:session, token})
+      {:ok, ctx} = Sanctum.Caller.establish({:session, token}, entry: :loopback)
       remove = %{"action" => "remove", "client_id" => client_id}
 
       {:error, {:confirmation_required, %{id: id}}} = call.(ctx, "pairing", remove)
@@ -1017,7 +1031,7 @@ fn args ->
       answer.(%{standing: standing})
 
     ["note", token] ->
-      {:ok, ctx} = Sanctum.Caller.establish({:session, token})
+      {:ok, ctx} = Sanctum.Caller.establish({:session, token}, entry: :loopback)
 
       case call.(ctx, "notes", %{"action" => "keep", "name" => "reserve", "content" => "a note"}) do
         {:ok, _kept} -> answer.(%{note: "kept"})

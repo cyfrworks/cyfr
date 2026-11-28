@@ -3,8 +3,10 @@
 
 // Package access owns how a server is reached: the access head every
 // derived setting comes from, its canonical form and digest, the words a
-// person reads for it, and the coherence check of a deployment's settings
-// that the release applies at boot (Cyfr.RuntimeConfig.resolve_access/1).
+// person reads for it, its two addresses (the private address its tunnel
+// key names and the browser address the head holds), and the coherence
+// check of a deployment's settings that the release applies at boot
+// (Cyfr.RuntimeConfig.resolve_access/1, then resolve_link/2).
 // tests/fixtures/access.json binds this package and the release to one
 // answer.
 package access
@@ -16,6 +18,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/cyfr/codex/internal/link"
 )
 
 // The kinds of browser address a server has (CYFR_BROWSER): none, its
@@ -75,6 +79,8 @@ var classes = map[string]string{
 	"access_setting_invalid":        "invalid_argument",
 	"access_bind_not_loopback":      "forbidden",
 	"access_proxy_trust_missing":    "setup_required",
+	"access_link_missing":           "setup_required",
+	"access_link_invalid":           "invalid_argument",
 	"access_invalid":                "invalid_argument",
 	"access_option_outside_browser": "invalid_argument",
 	"tailnet_not_joined":            "setup_required",
@@ -250,11 +256,13 @@ func PublicDomain(host string) bool {
 	return !allDigit.MatchString(last) && last != "localhost" && !strings.HasSuffix("."+host, ".ts.net")
 }
 
-// origin is the server's address: http://localhost:<port> with no browser
-// address, the browser address otherwise.
-func (h Head) origin() string {
-	if h.Browser == BrowserNone {
-		return "http://localhost:" + strconv.Itoa(h.Port)
+// shared is the address a server with head h and the tunnel key public
+// gives out, in a copied address, a webhook's, an invitation and the setup
+// link: its browser address when it has one, otherwise its private
+// address.
+func (h Head) shared(public link.Public) string {
+	if h.PublicURL != "" {
+		return h.PublicURL
 	}
-	return h.PublicURL
+	return public.Address(h.Port)
 }
