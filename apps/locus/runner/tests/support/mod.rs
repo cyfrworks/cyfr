@@ -71,6 +71,44 @@ pub fn now_ms() -> u64 {
     .expect("a time in range")
 }
 
+/// The first `count` processors this process may run on, as `taskset -c`
+/// names them.
+pub fn allowed_cpus(count: usize) -> String {
+    let status = std::fs::read_to_string("/proc/self/status").expect("the process's status");
+    let list = status
+        .lines()
+        .find_map(|line| line.strip_prefix("Cpus_allowed_list:"))
+        .expect("the allowed processors")
+        .trim()
+        .to_owned();
+    let mut cpus = Vec::new();
+    for part in list.split(',') {
+        match part.split_once('-') {
+            Some((from, to)) => {
+                let (from, to): (u32, u32) = (
+                    from.parse().expect("a processor"),
+                    to.parse().expect("a processor"),
+                );
+                cpus.extend((from..=to).map(|cpu| cpu.to_string()));
+            }
+            None => cpus.push(part.to_owned()),
+        }
+    }
+    assert!(cpus.len() >= count, "{count} processors of {list}");
+    cpus[..count].join(",")
+}
+
+/// The runner's peak resident memory, in KiB.
+pub fn peak_kib(pid: u32) -> u64 {
+    std::fs::read_to_string(format!("/proc/{pid}/status"))
+        .unwrap_or_default()
+        .lines()
+        .find_map(|line| line.strip_prefix("VmHWM:"))
+        .and_then(|rest| rest.split_whitespace().next())
+        .and_then(|kib| kib.parse().ok())
+        .unwrap_or(0)
+}
+
 /// One job: what its assignment says, its input and its component.
 #[derive(Clone)]
 pub struct Job {
@@ -86,6 +124,23 @@ pub struct Job {
     /// memory looks for.
     pub call_key: [u8; 32],
     pub seal_key: [u8; 32],
+    /// What its assignment names beside the attempt: its athanor, service,
+    /// boot and member, and the actions its host intercepts.
+    pub athanor: String,
+    pub service: String,
+    pub boot: String,
+    pub member: String,
+    pub intercepted: Vec<String>,
+    /// The attempt its keys name, when it is not its assignment's.
+    pub keys_attempt: Option<Attempt>,
+    /// The jobs of its subtree the service admitted as children, shared by
+    /// every copy: the service end opens each one's calls under its keys.
+    pub family: Arc<Mutex<Vec<Job>>>,
+    /// The vault fields CYFR admits it with, as a child.
+    pub secrets: Value,
+    /// The executions of its subtree the service cancelled, shared by every
+    /// copy: CYFR refuses each one's `fail`, the cancel having fenced it.
+    pub cancelled: Arc<Mutex<Vec<String>>>,
 }
 
 impl Job {
@@ -123,7 +178,69 @@ impl Job {
                               "activation": {}, "budget": {"id": "bgt_test"}, "chain": []}),
             call_key: random_key(),
             seal_key: random_key(),
+            athanor: ATHANOR.to_owned(),
+            service: SERVICE.to_owned(),
+            boot: BOOT.to_owned(),
+            member: MEMBER.to_owned(),
+            intercepted: Vec::new(),
+            keys_attempt: None,
+            family: Arc::new(Mutex::new(Vec::new())),
+            secrets: json!({}),
+            cancelled: Arc::new(Mutex::new(Vec::new())),
         }
+    }
+
+    /// A child of this job's subtree, running the component at `path` as
+    /// `kind` on `input`: of the same athanor and member, sharing its
+    /// family.
+    pub fn child(&self, kind: &'static str, path: &str, input: &str) -> Job {
+        let mut child = Job::new(kind, path, input);
+        child.athanor.clone_from(&self.athanor);
+        child.family = self.family.clone();
+        child.cancelled = self.cancelled.clone();
+        child
+    }
+
+    /// The job whose attempt is `attempt`: this one or a child admitted.
+    pub fn of(&self, attempt: &str) -> Job {
+        if attempt == self.attempt {
+            return self.clone();
+        }
+        self.family
+            .lock()
+            .expect("the family")
+            .iter()
+            .find(|child| child.attempt == attempt)
+            .cloned()
+            .unwrap_or_else(|| self.clone())
+    }
+
+    /// CYFR's answer to an `admit_child` of this job's for `child`: its
+    /// assignment, its keys sealed under this job's seal key, its input
+    /// and its vault fields. The child joins the family.
+    pub fn admitted(&self, child: &Job) -> Value {
+        self.family.lock().expect("the family").push(child.clone());
+        json!({"assignment": child.token(), "attempt_keys": self.sealed_keys(child),
+               "input": String::from_utf8(child.input.clone()).expect("a text input"),
+               "secrets": child.secrets})
+    }
+
+    /// The `cancel_child` line for `child`, which CYFR then holds fenced.
+    pub fn cancel(&self, child: &Job) -> Vec<u8> {
+        self.cancelled
+            .lock()
+            .expect("the cancelled")
+            .push(child.execution_id.clone());
+        control::encode(&Message::CancelChild {
+            execution_id: child.execution_id.clone(),
+        })
+        .expect("a cancel_child frame")
+    }
+
+    /// `child`'s keys sealed for this job's runner under its seal key, as
+    /// `Prima.WorkerAuth.seal_attempt_keys/3` seals them.
+    pub fn sealed_keys(&self, child: &Job) -> String {
+        sealed_attempt_keys(&self.seal_key, &child.keys())
     }
 
     pub fn digest(&self) -> String {
@@ -132,18 +249,18 @@ impl Job {
 
     pub fn attempt(&self) -> Attempt {
         Attempt {
-            athanor_id: ATHANOR.to_owned(),
+            athanor_id: self.athanor.clone(),
             execution_id: self.execution_id.clone(),
             attempt: self.attempt.clone(),
             fence: 2,
             generation: 7,
-            service: SERVICE.to_owned(),
+            service: self.service.clone(),
         }
     }
 
     pub fn keys(&self) -> AttemptKeys {
         AttemptKeys {
-            attempt: self.attempt(),
+            attempt: self.keys_attempt.clone().unwrap_or_else(|| self.attempt()),
             call: self.call_key.into(),
             seal: self.seal_key.into(),
         }
@@ -154,17 +271,18 @@ impl Job {
     pub fn token(&self) -> String {
         let now = now_ms();
         let payload = json!({
-            "v": 1, "generation": 7, "service": SERVICE, "boot": BOOT, "member": MEMBER,
+            "v": 1, "generation": 7, "service": self.service, "boot": self.boot,
+            "member": self.member,
             "issued_at": now, "claim_by": now + 30_000,
             "execution_id": self.execution_id, "attempt": self.attempt, "fence": 2,
-            "root_execution_id": self.execution_id, "athanor_id": ATHANOR,
+            "root_execution_id": self.execution_id, "athanor_id": self.athanor,
             "actor": {"authenticated": true, "user_id": "usr_test"},
             "authority": self.authority,
             "component": {"ref": self.reference, "type": self.kind, "digest": self.digest(),
                           "declared_needs": []},
             "input_digest": format!("sha256:{}", auth::sha256_hex(&self.input)),
             "timeout_ms": self.timeout_ms, "deadline": now + self.timeout_ms + 60_000,
-            "lease_until": now + 180_000, "intercepted": [],
+            "lease_until": now + 180_000, "intercepted": self.intercepted,
         });
         format!(
             "{}.{}",
@@ -214,6 +332,9 @@ pub enum Reply {
     /// own while the service reads on; its writing is logged, just before
     /// it is written, as a call of op `answered:<op>`.
     Later(Duration, Value),
+    /// `{"v": 3, "ok": value}` once the condition holds, written from a
+    /// thread of its own, and logged as `Later`'s is once it is written.
+    When(Box<dyn Fn() -> bool + Send>, Value),
 }
 
 pub type Script = Box<dyn FnMut(&Call, &Job) -> Reply + Send>;
@@ -250,9 +371,23 @@ pub fn silent_fetches() -> Fetches {
 
 /// The answers CYFR gives a job that runs and closes as asked.
 pub fn standard(call: &Call, job: &Job) -> Reply {
+    let of = job.of(&call.attempt);
+    if call.op == "fail"
+        && of.attempt != job.attempt
+        && job
+            .cancelled
+            .lock()
+            .expect("the cancelled")
+            .contains(&of.execution_id)
+    {
+        // The cancel fenced the attempt: CYFR no longer takes its close.
+        return Reply::Error("lost", json!({}));
+    }
     match call.op.as_str() {
         "attach" => Reply::Ok(json!({})),
-        "fetch_artifact" => Reply::Ok(Value::String(wire::encode_base64(&job.component))),
+        "fetch_artifact" => Reply::Ok(Value::String(wire::encode_base64(
+            &job.of(&call.attempt).component,
+        ))),
         "complete" => Reply::Ok(call.args["outcome"]["output"].clone()),
         "fail" => Reply::Ok(call.args["outcome"]["error"].clone()),
         "renew" => Reply::Ok(json!({ call.attempt.clone(): {"lease_until": now_ms() + 180_000} })),
@@ -296,7 +431,24 @@ impl Service {
         Service::start_on(Control::Stdio, variables)
     }
 
+    /// Start the binary held to the first `cpus` processors this test may
+    /// use, as a runner's quota holds it.
+    pub fn start_held(cpus: usize) -> Service {
+        Service::start_held_on(Control::Stdio, &[], Some(cpus))
+    }
+
+    /// Start the binary on `control` with `variables`, held to as many
+    /// processors as `CYFR_TEST_RUNNER_CPUS` names when it names any (the
+    /// crate's check runs the formula suite so, at a runner's default of
+    /// one).
     pub fn start_on(control: Control, variables: &[(&str, &str)]) -> Service {
+        let held = std::env::var("CYFR_TEST_RUNNER_CPUS")
+            .ok()
+            .map(|cpus| cpus.parse().expect("CYFR_TEST_RUNNER_CPUS is a count"));
+        Service::start_held_on(control, variables, held)
+    }
+
+    fn start_held_on(control: Control, variables: &[(&str, &str)], held: Option<usize>) -> Service {
         static NEXT: AtomicU64 = AtomicU64::new(1);
         let dir = std::env::temp_dir().join(format!(
             "cyfr-runner-{}-{}",
@@ -307,15 +459,24 @@ impl Service {
         let socket = dir.join("relay.sock");
         let listener = UnixListener::bind(&socket).expect("the relay socket");
         let runner = env!("CARGO_BIN_EXE_cyfr-runner");
+        // Held, the runner runs under `taskset` on the processors named.
+        let program = |program: &str| match held {
+            Some(cpus) => {
+                let mut command = Command::new("taskset");
+                command.arg("-c").arg(allowed_cpus(cpus)).arg(program);
+                command
+            }
+            None => Command::new(program),
+        };
         let (mut command, ours) = match control {
             Control::Stdio => {
-                let mut command = Command::new(runner);
+                let mut command = program(runner);
                 command.stdin(Stdio::piped()).stdout(Stdio::piped());
                 (command, None)
             }
             Control::Descriptor3 => {
                 let (ours, theirs) = UnixStream::pair().expect("a socket pair");
-                let mut command = Command::new("/bin/sh");
+                let mut command = program("/bin/sh");
                 command
                     .arg("-c")
                     .arg(r#"exec "$0" 3<&0 0</dev/null"#)
@@ -455,6 +616,13 @@ impl Service {
         });
     }
 
+    /// End the control channel, then wait up to `within` for the runner
+    /// to exit, collecting its stderr.
+    pub fn exit_after_close(&mut self, within: Duration) -> ExitStatus {
+        self.close_control();
+        self.exit(within)
+    }
+
     /// End the control channel.
     pub fn close_control(&mut self) {
         self.stdin = None;
@@ -590,7 +758,6 @@ pub fn relay_fetching(
     calls: Arc<Mutex<Vec<Call>>>,
     frames: Arc<Mutex<Vec<Value>>>,
 ) {
-    let keys = job.keys();
     // What the service writes, and the seq of its next frame, shared with
     // the threads that answer later.
     let out = Arc::new(Mutex::new((stream.try_clone().expect("the stream"), 0u64)));
@@ -664,6 +831,27 @@ pub fn relay_fetching(
         }
         let header = frame["header"].as_str().expect("a header");
         let fields = call_fields(header);
+        let keys = job.of(&fields.attempt.attempt).keys();
+        // As CYFR's listener does: a header that is not its attempt's own
+        // call key's is refused, unopened.
+        if auth::verify_call_header(&keys.call, header, now_ms()).is_err() {
+            calls.lock().expect("the calls").push(Call {
+                op: "bad_mac".to_owned(),
+                args: Value::Null,
+                attempt: fields.attempt.attempt.clone(),
+                header: header.to_owned(),
+            });
+            let re = frame["seq"].as_u64().expect("a seq");
+            let mut writing = out.lock().expect("the writer");
+            let answer = json!({"v": 1, "attempt": fields.attempt.attempt, "seq": writing.1,
+                "kind": "host_answer", "re": re, "status": 401,
+                "body": wire::encode_base64(b"{\"v\":3,\"error\":\"bad_mac\"}")});
+            writing.1 += 1;
+            if write_frame(&mut writing.0, &answer).is_err() {
+                return;
+            }
+            continue;
+        }
         let sealed = wire::decode_base64(frame["body"].as_str().expect("a body")).expect("base64");
         let plain = auth::open_call(&keys.seal, Direction::Body, &fields, &sealed)
             .expect("a body sealed under the attempt's key");
@@ -678,6 +866,30 @@ pub fn relay_fetching(
         let re = frame["seq"].as_u64().expect("a seq");
         let (status, body) = match script(&call, &job) {
             Reply::Silent => continue,
+            Reply::When(holds, value) => {
+                let body = seal(
+                    &keys,
+                    &fields,
+                    json!({"v": 3, "ok": value}).to_string().into_bytes(),
+                );
+                let (out, calls, call) = (out.clone(), calls.clone(), call.clone());
+                std::thread::spawn(move || {
+                    eventually(holds);
+                    let mut writing = out.lock().expect("the writer");
+                    let answer = json!({"v": 1, "attempt": call.attempt, "seq": writing.1,
+                        "kind": "host_answer", "re": re, "status": 200,
+                        "body": wire::encode_base64(&body)});
+                    writing.1 += 1;
+                    let _ = write_frame(&mut writing.0, &answer);
+                    // Logged once it is written: a test can wait for what
+                    // the runner has been sent.
+                    calls.lock().expect("the calls").push(Call {
+                        op: format!("answered:{}", call.op),
+                        ..call
+                    });
+                });
+                continue;
+            }
             Reply::Later(after, value) => {
                 let body = seal(
                     &keys,
@@ -852,6 +1064,49 @@ pub fn refusal_as(
     Upstream::Refusal(header, body)
 }
 
+/// `keys` sealed under `seal_key` for the runner of their attempt
+/// (`Prima.WorkerAuth.seal_attempt_keys/3`): the attempt as base64url JSON,
+/// `.`, and the two keys sealed under the attempt-keys label and the
+/// attempt's values.
+pub fn sealed_attempt_keys(seal_key: &[u8; 32], keys: &AttemptKeys) -> String {
+    use aes_gcm::aead::{Aead, KeyInit, Payload};
+    let a = &keys.attempt;
+    let named = json!({"athanor_id": a.athanor_id, "execution_id": a.execution_id,
+        "attempt": a.attempt, "fence": a.fence, "generation": a.generation,
+        "service": a.service});
+    let aad = [
+        auth::ATTEMPT_KEYS_LABEL.to_owned(),
+        a.athanor_id.clone(),
+        a.execution_id.clone(),
+        a.attempt.clone(),
+        a.fence.to_string(),
+        a.generation.to_string(),
+        a.service.clone(),
+    ]
+    .join("\n");
+    let mut plain = keys.call.to_vec();
+    plain.extend_from_slice(&keys.seal[..]);
+    let iv = random_iv();
+    let sealed = aes_gcm::Aes256Gcm::new(seal_key.into())
+        .encrypt(
+            &aes_gcm::Nonce::from(iv),
+            Payload {
+                msg: &plain,
+                aad: aad.as_bytes(),
+            },
+        )
+        .expect("the keys seal");
+    let (ciphertext, tag) = sealed.split_at(sealed.len() - 16);
+    let mut bytes = iv.to_vec();
+    bytes.extend_from_slice(tag);
+    bytes.extend_from_slice(ciphertext);
+    format!(
+        "{}.{}",
+        wire::encode_base64url(named.to_string().as_bytes()),
+        wire::encode_base64url(&bytes)
+    )
+}
+
 fn random_iv() -> [u8; 12] {
     let random = "the operating system's random source answers";
     let [a, b, c, d, e, f, g, h] = getrandom::u64().expect(random).to_le_bytes();
@@ -920,7 +1175,7 @@ pub struct Scripted {
 }
 
 impl cyfr_runner::host::Post for Scripted {
-    async fn place(&mut self) -> Option<cyfr_runner::host::Place> {
+    async fn place(&mut self, _op: cyfr_runner::host::Op) -> Option<cyfr_runner::host::Place> {
         Some(cyfr_runner::host::Place::free())
     }
 
