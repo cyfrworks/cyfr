@@ -178,7 +178,7 @@ defmodule Cyfr.ReleaseFixtureTest do
       assert [%{id: client_id, device_public_key: pub, holder_kind: "software"}] = paired(person)
       kept = record(dir, identifier)
       assert kept["client_id"] == client_id
-      assert kept["home"] == Sanctum.origin()
+      assert kept["home"] == Sanctum.private_address()
       assert kept["certificate"]["client_id"] == client_id
       {:ok, seed} = Base.url_decode64(kept["seed"], padding: false)
       assert {^pub, ^seed} = :crypto.generate_key(:eddsa, :ed25519, seed)
@@ -198,7 +198,9 @@ defmodule Cyfr.ReleaseFixtureTest do
     assert [_one] = paired(first)
 
     for person <- [first, again] do
-      assert {:ok, %{user_id: user_id}} = Sanctum.Caller.establish({:session, person["token"]})
+      assert {:ok, %{user_id: user_id}} =
+               Sanctum.Caller.establish({:session, person["token"]}, entry: :loopback)
+
       assert user_id == first["user_id"]
     end
   end
@@ -224,7 +226,9 @@ defmodule Cyfr.ReleaseFixtureTest do
                  set: [verified_at: DateTime.add(Arca.ServerMetaStorage.now!(), -3600, :second)]
                )
 
-      assert {:ok, %{user_id: user_id}} = Sanctum.Caller.establish({:session, person["token"]})
+      assert {:ok, %{user_id: user_id}} =
+               Sanctum.Caller.establish({:session, person["token"]}, entry: :loopback)
+
       assert user_id == person["user_id"]
 
       assert {:ok, %{fresh: true}} =
@@ -243,7 +247,7 @@ defmodule Cyfr.ReleaseFixtureTest do
       "seed" => Base.url_encode64(seed, padding: false),
       "client_id" => Prima.UUID7.generate_id("pcl"),
       "athanor_id" => Prima.UUID7.generate_id("ath"),
-      "home" => Sanctum.origin(),
+      "home" => Sanctum.private_address(),
       "certificate" => %{}
     }
 
@@ -273,7 +277,7 @@ defmodule Cyfr.ReleaseFixtureTest do
     first = person!(fixture, "fixture-first")
     {:ok, _} = Sanctum.Door.Store.allow("wildcard", "*", "test")
     second = person!(fixture, "fixture-second")
-    {:ok, ctx} = Sanctum.Caller.establish({:session, first["token"]})
+    {:ok, ctx} = Sanctum.Caller.establish({:session, first["token"]}, entry: :loopback)
 
     # An answer over a changed record, or by a key of no device, is refused
     # as the home refuses an answer; one under another ref names no record
@@ -321,7 +325,7 @@ defmodule Cyfr.ReleaseFixtureTest do
   test "confirmed makes a sensitive change under the person's own device's confirmation once the wrong answers are refused, and vault enters an entry by it",
        %{fixture: fixture} do
     first = person!(fixture, "fixture-first")
-    {:ok, ctx} = Sanctum.Caller.establish({:session, first["token"]})
+    {:ok, ctx} = Sanctum.Caller.establish({:session, first["token"]}, entry: :loopback)
 
     arguments =
       Jason.encode!(%{

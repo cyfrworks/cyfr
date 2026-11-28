@@ -28,13 +28,17 @@ defmodule Sanctum.Directory do
   `writer` serves reads and writes, and `mirror` is this module read-only,
   answering `:read_only` to every write before anything else is done.
 
-  The directory a node serves is its origin (`Sanctum.origin/0`) and
-  nothing else. Its routes are mounted at the root, `/directory/v1`, never
-  under a path a proxy adds. The origin as configured need not be in the
-  one spelling a genesis names its directory in (a server on localhost port 80
-  is `http://localhost:80`, named `http://localhost`), so it is compared
-  in that spelling (`Prima.Identity.Encoding.canonical_home/1`), byte for
-  byte with the decoded genesis's directory. A genesis naming anything
+  The directory a node serves is at its origin (`origin/0`) and nothing
+  else: the origin it was first served at as a writer, pinned for good
+  (`hold_origin/0`), and before that the server's shared address
+  (`Sanctum.shared_address/0`), its browser address when it has one and
+  otherwise its private address. Its routes are mounted at the root,
+  `/directory/v1`, never under a path a proxy adds. The address as
+  configured need not be in the one spelling a genesis names its
+  directory in (a server on port 80 is `http://h-….localhost:80`, named
+  `http://h-….localhost`), so it is compared in that spelling
+  (`Prima.Identity.Encoding.canonical_home/1`), byte for byte with the
+  decoded genesis's directory. A genesis naming anything
   else, such as another host, this host on another port or scheme, or
   this host under a path, is refused `:wrong_directory` once it decodes,
   before its signature is checked and before anything is stored. An
@@ -345,12 +349,94 @@ defmodule Sanctum.Directory do
 
   @doc false
   # The directory this node serves, in the one spelling a genesis names
-  # it, or `:error` for an origin that is no home.
+  # it, or `:error` for an origin that is no home or a store that cannot
+  # say which is pinned.
   @spec served() :: {:ok, String.t()} | :error
   def served do
-    case Encoding.canonical_home(Sanctum.origin()) do
+    case origin() do
       {:ok, directory} -> {:ok, directory}
       _other -> :error
+    end
+  end
+
+  @origin_key "directory_origin"
+
+  @doc """
+  The origin this node serves its directory at, in the one spelling a
+  genesis names it (`Prima.Identity.Encoding.canonical_home/1`): the one
+  pinned at its first boot as a writer (`hold_origin/0`), and before any
+  is pinned, the server's shared address (`Sanctum.shared_address/0`).
+  `{:error, :no_home}` for an address that is no home however it is
+  spelled, `{:error, :unavailable}` when the store cannot answer.
+  """
+  @spec origin() :: {:ok, String.t()} | {:error, :no_home | :unavailable}
+  def origin do
+    case Arca.ServerMetaStorage.get(@origin_key) do
+      {:ok, pinned} -> {:ok, pinned}
+      {:error, :not_found} -> shared()
+      {:error, _unanswered} -> {:error, :unavailable}
+    end
+  end
+
+  @doc """
+  Hold the directory's origin at boot, before the endpoint serves
+  anything: an account service keeps the address it was first served at
+  for good, since every log it registered names it. A boot that finds an
+  origin pinned compares the shared address with it, whatever this boot
+  serves, and answers `{:error, {:directory_origin_moved, %{pinned,
+  origin}}}` when they differ (a `Prima.Refusal` row the boot raises);
+  one that finds none pins the shared address when this node serves as
+  the writer. A restore brings the pinned origin back with the database,
+  so the boot after it compares against that. `{:error, :unavailable}`
+  when the store or the setting cannot answer.
+  """
+  @spec hold_origin() ::
+          :ok
+          | {:error,
+             {:directory_origin_moved, %{pinned: String.t(), origin: String.t()}}
+             | :no_home
+             | :unavailable}
+  def hold_origin do
+    with {:ok, current} <- shared() do
+      case Arca.ServerMetaStorage.get(@origin_key) do
+        {:ok, ^current} ->
+          :ok
+
+        {:ok, pinned} ->
+          {:error, {:directory_origin_moved, %{pinned: pinned, origin: current}}}
+
+        {:error, :not_found} ->
+          pin_when_writer(current)
+
+        {:error, _unanswered} ->
+          {:error, :unavailable}
+      end
+    end
+  end
+
+  defp pin_when_writer(current) do
+    case mode() do
+      {:ok, :writer} ->
+        case Arca.ServerMetaStorage.put_new(@origin_key, current) do
+          {:ok, :recorded} -> :ok
+          # Another member pinned first: this boot holds to that one.
+          {:error, :exists} -> hold_origin()
+          {:error, _unanswered} -> {:error, :unavailable}
+        end
+
+      {:ok, _not_writer} ->
+        :ok
+
+      {:error, _reason} = refused ->
+        refused
+    end
+  end
+
+  # The shared address in its one spelling.
+  defp shared do
+    case Encoding.canonical_home(Sanctum.shared_address()) do
+      {:ok, home} -> {:ok, home}
+      _other -> {:error, :no_home}
     end
   end
 
@@ -539,8 +625,9 @@ defmodule Sanctum.Directory do
   defp position(_after_seq), do: {:error, {:invalid, {:invalid_field, "after"}}}
 
   defp served_here(%Entry{directory: directory}) do
-    case Encoding.canonical_home(Sanctum.origin()) do
+    case origin() do
       {:ok, ^directory} -> :ok
+      {:error, :unavailable} -> {:error, :unavailable}
       _ -> {:error, :wrong_directory}
     end
   end

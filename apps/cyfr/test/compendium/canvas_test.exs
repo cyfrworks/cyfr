@@ -1391,7 +1391,10 @@ defmodule Compendium.CanvasTest do
     {local, user} = Sanctum.TestContext.person!(Sanctum.TestContext.local())
     athanor_id = Sanctum.Test.People.athanor!(user).id
     {:ok, session} = Sanctum.TestContext.create_session(%{local | athanor_id: athanor_id})
-    {:ok, established} = Sanctum.Caller.establish(session.token, focus: athanor_id)
+
+    {:ok, established} =
+      Sanctum.Caller.establish(session.token, focus: athanor_id, entry: :loopback)
+
     %{established | client_ip: "127.0.0.1"}
   end
 

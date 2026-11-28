@@ -4,7 +4,9 @@
 defmodule Arca.Schemas.Session do
   @moduledoc """
   Ecto schema for the `sessions` table (backs `Arca.SessionStorage`).
-  A session an account's key signed for records that key's `kid` and the
+  A session records the address of the entry that made it (`address`),
+  the only address it is good at. A session an account's key signed for
+  records that key's `kid` and the
   account head it was verified under. A protected device's unlock
   records its paired `client_id`: that session's expiry is the device
   channel's. A browser's sign-in records its `browser` and `system` in
@@ -25,6 +27,7 @@ defmodule Arca.Schemas.Session do
     field :email, :string
     field :provider, :string
     field :expires_at, :utc_datetime_usec
+    field :address, :string
     field :athanor_id, :string
     # The key that signed for the session and the account head it was
     # verified under: both set, or both nil for a session no key signed.

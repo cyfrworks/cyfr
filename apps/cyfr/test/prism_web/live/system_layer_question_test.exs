@@ -195,7 +195,7 @@ defmodule PrismWeb.SystemLayerQuestionTest do
     answer = Authenticator.answer(authenticator, request, account.identifier)
 
     assert {:ok, %{purpose: :confirm, ref: ^ref}} =
-             Sanctum.SignIn.answer(answer, {:session, ctx.session_token_hash})
+             Sanctum.SignIn.answer(answer, {:session, ctx.session_token_hash}, entry: :loopback)
   end
 
   # The open card's heading as a person reads it.
@@ -732,7 +732,11 @@ defmodule PrismWeb.SystemLayerQuestionTest do
       {:ok, session} = Sanctum.TestContext.create_session(%{ctx | provider: "github"})
 
       {:ok, other} =
-        Sanctum.Caller.establish(session.token, focus: ctx.athanor_id, refresh: false)
+        Sanctum.Caller.establish(session.token,
+          focus: ctx.athanor_id,
+          refresh: false,
+          entry: :loopback
+        )
 
       other
     end

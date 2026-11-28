@@ -656,11 +656,12 @@ defmodule Sanctum.Test.DirectoryServer do
       Sanctum.SignIn.request(:confirm, binding,
         ctx: ctx,
         ref: Prima.Confirmation.ref(id),
-        identifier: account.identifier
+        identifier: account.identifier,
+        entry: :loopback
       )
 
     {:ok, %{purpose: :confirm}} =
-      Sanctum.SignIn.answer(passkey_answer(request, account, passkey), binding)
+      Sanctum.SignIn.answer(passkey_answer(request, account, passkey), binding, entry: :loopback)
 
     tombstone(dir.dir, account.identifier)
     aged = DateTime.add(Arca.ServerMetaStorage.now!(), -3_600, :second)

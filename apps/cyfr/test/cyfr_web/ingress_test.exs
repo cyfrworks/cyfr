@@ -92,6 +92,9 @@ defmodule CyfrWeb.IngressTest do
       proxy: [ip: @loopback, port: 0],
       secret_key_base: String.duplicate("ingress-test-", 6),
       pubsub_server: Cyfr.PubSub,
+      # As the product's endpoint: the ingress compares a socket's origin
+      # with its listener's address, and Phoenix's own check is off.
+      check_origin: false,
       server: true
     )
 
@@ -257,6 +260,54 @@ defmodule CyfrWeb.IngressTest do
     end
   end
 
+  describe "a socket transport's origin" do
+    @browser "https://cyfr.tail.ts.net"
+
+    setup do
+      Prima.Test.Env.put_app_env(:sanctum, :browser_address, @browser)
+      :ok
+    end
+
+    test "an upgrade carrying the other entry's address as its origin answers 403", %{
+      ports: ports
+    } do
+      private = Sanctum.private_address()
+
+      assert upgrade(ports.loopback, [{"origin", private}]) == "HTTP/1.1 101 Switching Protocols"
+      assert ClientIp.ingress_from_connect_info(connected()) == :loopback
+      assert upgrade(ports.proxy, [{"origin", @browser}]) == "HTTP/1.1 101 Switching Protocols"
+      assert ClientIp.ingress_from_connect_info(connected()) == :proxy
+
+      for {port, origin} <- [
+            {ports.loopback, @browser},
+            {ports.proxy, private},
+            {ports.loopback, "http://localhost:4002"},
+            {ports.loopback, "http://h-aaaaaaaaaaaaaaaa.localhost:4002"}
+          ] do
+        assert upgrade(port, [{"origin", origin}]) == "HTTP/1.1 403 Forbidden", origin
+        refute_received {:connected, _info}
+      end
+    end
+
+    test "a long-poll request carrying the other entry's address as its origin answers 403", %{
+      ports: ports
+    } do
+      assert {"HTTP/1.1 403 Forbidden", ""} =
+               answer(ports.loopback, "/live/longpoll?vsn=2.0.0", [{"origin", @browser}])
+
+      assert {"HTTP/1.1 200 OK", _body} =
+               answer(ports.loopback, "/live/longpoll?vsn=2.0.0", [
+                 {"origin", Sanctum.private_address()}
+               ])
+
+      assert %{} = connected()
+    end
+
+    test "a request to any other path is not held to its origin", %{ports: ports} do
+      assert {"HTTP/1.1 200 OK", _body} = answer(ports.loopback, "/", [{"origin", @browser}])
+    end
+  end
+
   describe "the long-poll transport" do
     test "carries the listener's one tag into connect_info, whatever the client sent",
          %{ports: ports} do
@@ -307,7 +358,7 @@ defmodule CyfrWeb.IngressTest do
       assert options[:port] == 4001
       assert options[:thousand_island_options] == http[:thousand_island_options]
       assert options[:http_2_options] == [enabled: false]
-      assert options[:plug] == {CyfrWeb.Ingress, {:proxy, Endpoint}}
+      assert options[:plug] == {CyfrWeb.Ingress, {:proxy, Endpoint, Endpoint}}
     end
 
     test "an https listener is refused: the endpoint serves no TLS of its own" do

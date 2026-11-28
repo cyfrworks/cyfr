@@ -19,11 +19,13 @@ defmodule CyfrWeb.Plugs.MCPOrigin do
 
   ## Configuration
 
-  The allowlist is `Cyfr.RuntimeConfig.mcp_allowed_origins/0`: the
-  origins `config/runtime.exs` writes from the home's access settings
-  (`:mcp_allowed_origins`, the endpoint's `check_origin` list), extended by
-  `CYFR_MCP_ALLOWED_ORIGINS` (`:mcp_extra_origins`). An allowed localhost
-  origin without a port admits that origin on any port.
+  An origin is allowed when it is the address of the listener that
+  accepted the request (`Sanctum.address/1` of `Sanctum.ClientIp.ingress/1`):
+  the private address on the loopback listener, the browser address on the
+  proxy listener. Never `Host` or any other header: the entry decides.
+  Beside it, `CYFR_MCP_ALLOWED_ORIGINS` names extras
+  (`Cyfr.RuntimeConfig.mcp_extra_origins/0`), where a localhost origin
+  without a port admits that origin on any port.
   """
 
   import Plug.Conn
@@ -38,7 +40,7 @@ defmodule CyfrWeb.Plugs.MCPOrigin do
 
     case get_req_header(conn, "origin") do
       [origin | _] ->
-        if valid_origin?(origin) do
+        if valid_origin?(origin, Sanctum.address(Sanctum.ClientIp.ingress(conn))) do
           conn
         else
           Logger.warning("[MCP Origin] Rejected origin: #{origin}")
@@ -51,12 +53,9 @@ defmodule CyfrWeb.Plugs.MCPOrigin do
     end
   end
 
-  defp valid_origin?(origin) do
-    allowed = Cyfr.RuntimeConfig.mcp_allowed_origins()
-
-    Enum.any?(allowed, fn allowed_origin ->
-      origin_matches?(origin, allowed_origin)
-    end)
+  defp valid_origin?(origin, own) do
+    (is_binary(own) and origin == own) or
+      Enum.any?(Cyfr.RuntimeConfig.mcp_extra_origins(), &origin_matches?(origin, &1))
   end
 
   # Exact match or localhost with any port

@@ -163,25 +163,21 @@ defmodule Cyfr.RuntimeConfig do
   def require_signed_pulls?, do: Application.get_env(:cyfr, :require_signed_pulls, false)
 
   @doc """
-  The home's origin (`Sanctum.origin/0`), as the console reads it: its
-  surface names no root `Sanctum` module (`Cyfr.Boundaries`), so the
-  host's glue carries this one value to it.
+  The server's shared address (`Sanctum.shared_address/0`), as the
+  console reads it: its surface names no root `Sanctum` module
+  (`Cyfr.Boundaries`), so the host's glue carries this one value to it.
   """
-  @spec origin() :: String.t()
-  defdelegate origin(), to: Sanctum
+  @spec shared_address() :: String.t()
+  defdelegate shared_address(), to: Sanctum
 
   @doc """
-  MCP Origin-header allowlist (DNS-rebinding guard), read by the Origin
-  plug: the origins the home's access settings resolve to
-  (`:mcp_allowed_origins`, `config/runtime.exs`), followed by the
-  `CYFR_MCP_ALLOWED_ORIGINS` extras (`:mcp_extra_origins`), which extend
-  it rather than replace it.
+  The MCP Origin check's extras (DNS-rebinding guard), read by the Origin
+  plug beside the address of the request's entry: the
+  `CYFR_MCP_ALLOWED_ORIGINS` origins (`:mcp_extra_origins`,
+  `config/runtime.exs`).
   """
-  @spec mcp_allowed_origins() :: [String.t()]
-  def mcp_allowed_origins do
-    Application.fetch_env!(:cyfr, :mcp_allowed_origins) ++
-      Application.fetch_env!(:cyfr, :mcp_extra_origins)
-  end
+  @spec mcp_extra_origins() :: [String.t()]
+  def mcp_extra_origins, do: Application.fetch_env!(:cyfr, :mcp_extra_origins)
 
   @doc "The default per-window tincture invocation budget, per client address."
   @spec tincture_default_invoke_max() :: pos_integer()
@@ -864,26 +860,37 @@ defmodule Cyfr.RuntimeConfig do
     "h-" <> binary_part(digest, 0, 16)
   end
 
+  # The public half of the development tunnel key, tests/fixtures/link.json's
+  # first: the private address of a development or test boot that names
+  # none, as one that names no browser address is `none`. A release never
+  # takes it.
+  @development_link_public "6b6b937aca103230d149eb148efbcfb59e6d1f05bb04dc648ac3e92339eae74a"
+
   @doc """
   The server's private address, `http://<private name>.localhost:<port>`,
-  from `CYFR_LINK_PUBLIC` as the boot read it (`nil` when unset or blank)
-  and the server's port: `{:ok, address}`, or a `Prima.Refusal` row as
-  `resolve_access/1` answers one. Every boot that resolves its access
-  needs the key, the 64 lowercase hexadecimal digits of the public half
-  of the tunnel key `cyfr init` mints: without it no address names the
-  server on its own machine.
+  from `CYFR_LINK_PUBLIC` as the boot read it (`nil` when unset or blank),
+  the server's port and whether this is a release: `{:ok, address}`, or a
+  `Prima.Refusal` row as `resolve_access/1` answers one. The key is the
+  64 lowercase hexadecimal digits of the public half of the tunnel key
+  `cyfr init` mints. A release without it is refused, since no address
+  then names the server on its own machine; a development or test boot
+  without it takes the development key's.
   """
-  @spec resolve_link(String.t() | nil, pos_integer()) ::
+  @spec resolve_link(String.t() | nil, pos_integer(), boolean()) ::
           {:ok, String.t()} | {:error, access_refusal()}
-  def resolve_link(text, port) when is_integer(port) and port in 1..65_535 do
+  def resolve_link(text, port, release?)
+      when is_integer(port) and port in 1..65_535 and is_boolean(release?) do
     result =
-      case blank_to_nil(text) do
-        nil ->
+      case {blank_to_nil(text), release?} do
+        {nil, true} ->
           {:error, {:access_link_missing, %{}}}
 
-        text ->
+        {nil, false} ->
+          {:ok, private_address(@development_link_public, port)}
+
+        {text, _release?} ->
           if Regex.match?(~r/\A[0-9a-f]{64}\z/, text),
-            do: {:ok, "http://#{private_name(Base.decode16!(text, case: :lower))}.localhost:#{port}"},
+            do: {:ok, private_address(text, port)},
             else: {:error, {:access_link_invalid, %{}}}
       end
 
@@ -896,6 +903,9 @@ defmodule Cyfr.RuntimeConfig do
         ok
     end
   end
+
+  defp private_address(public, port),
+    do: "http://#{private_name(Base.decode16!(public, case: :lower))}.localhost:#{port}"
 
   # Every value either map holds for a name the resolver reads is UTF-8,
   # or the first name in byte order that holds one that is not is refused.

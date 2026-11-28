@@ -904,7 +904,8 @@ defmodule PrismWeb.ComponentDetailLiveTest do
       assert {:ok, %{purpose: :confirm}} =
                Sanctum.SignIn.answer(
                  Authenticator.answer(authenticator, request, account.identifier),
-                 {:session, ctx.session_token_hash}
+                 {:session, ctx.session_token_hash},
+                 entry: :loopback
                )
 
       Prima.Test.Wait.wait_until(

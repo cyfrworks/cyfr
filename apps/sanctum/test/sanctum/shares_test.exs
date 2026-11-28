@@ -241,7 +241,7 @@ defmodule Sanctum.SharesTest do
   # What every preview of `ctx`'s change names besides its resource and
   # details: this home, the athanor by name and the operation.
   defp preview_frame(ctx, operation) do
-    {:ok, home} = Prima.Identity.Encoding.canonical_home(Sanctum.origin())
+    {:ok, home} = Prima.Identity.Encoding.canonical_home(Sanctum.private_address())
     {:ok, athanor} = Sanctum.Tenancy.Athanors.get(ctx.athanor_id)
     %{"home" => home, "athanor" => athanor.name, "operation" => operation}
   end

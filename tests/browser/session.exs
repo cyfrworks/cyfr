@@ -30,7 +30,7 @@ fn
       |> Plug.Conn.fetch_session()
 
     token = Plug.Conn.get_session(conn, to_string(CyfrWeb.SignInResponse.session_key()))
-    {:ok, ctx} = Sanctum.Caller.establish({:session, token})
+    {:ok, ctx} = Sanctum.Caller.establish({:session, token}, entry: :loopback)
     {:ok, athanor} = Sanctum.Tenancy.Athanors.get(ctx.athanor_id)
 
     "SESSION=" <>

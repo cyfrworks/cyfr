@@ -11,7 +11,8 @@
       id: "topbar",
       session: %{
         "athanor_id" => assigns[:athanor] && @athanor.id,
-        "ui_mode" => mode
+        "ui_mode" => mode,
+        "entry" => assigns[:request_entry]
       }
     )}
   </div>

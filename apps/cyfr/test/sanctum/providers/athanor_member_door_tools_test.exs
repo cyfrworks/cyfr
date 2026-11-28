@@ -267,7 +267,10 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
       )
 
     {:ok, session} =
-      Sanctum.Session.create(ctx, generation_snapshot: Sanctum.TestContext.snapshot!(ctx))
+      Sanctum.Session.create(ctx,
+        generation_snapshot: Sanctum.TestContext.snapshot!(ctx),
+        address: Sanctum.private_address()
+      )
 
     session
   end

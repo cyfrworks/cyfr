@@ -12,7 +12,7 @@ defmodule Emissary.Web.DirectoryPrivacyTest do
   use CyfrWeb.ConnCase, async: false
 
   setup do
-    Prima.Test.Env.put_app_env(:sanctum, :public_url, "https://dir.example")
+    Prima.Test.Env.put_app_env(:sanctum, :browser_address, "https://dir.example")
     Cyfr.Test.Settings.put("directory_serve", "writer")
     Prima.Test.RateLimiter.reset!()
     on_exit(&Prima.Test.RateLimiter.reset!/0)

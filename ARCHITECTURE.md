@@ -1,6 +1,6 @@
 # CYFR architecture
 
-This document outlines CYFR's architecture in the present tense of its end state: the layers, what each part owns, how the parts talk, the guarantees two or more parts keep, and why. A **Not built yet** line names what the code lacks, so a sentence without one describes the code as built. A sentence belongs here only if it says who owns a thing, who may reach or trust whom, which channel joins two parts, or a guarantee two parts must both keep; the rest lives once, in its owner's documentation. Names, directories, binaries and prefixes are in the [glossary in `README.md`](README.md#glossary).
+This document outlines CYFR's architecture in the present tense of its end state: the layers, what each part owns, how the parts talk, the guarantees two or more parts keep, and why. A **Not built yet** line names what the code lacks, so a sentence without one describes the code as built. A sentence belongs here only if it says who owns a thing, who may reach or trust whom, which channel joins two parts, or a guarantee two parts must both keep; the rest lives once, in its owner's documentation. Names, directories, binaries and prefixes are in [`README.md`'s glossary](README.md#glossary).
 
 ## 1. Purpose and principles
 
@@ -74,8 +74,8 @@ The order describes dependencies, not a request's path. Codex shares no code wit
 ### Cyfr (Host): the machine
 
 - Supervision, boot, the cell claim and the composition root.
-- The bus (`Cyfr.Bus`), the telemetry bridge, configuration, the browser address and platform settings (§6.8).
-- The endpoint: the listener that accepted a request is its ingress, never a header (`CyfrWeb.Ingress`).
+- The bus (`Cyfr.Bus`), the telemetry bridge, configuration, the addresses and platform settings (§6.8).
+- The endpoint: the listener that accepted a request is its ingress and address, never a header (`CyfrWeb.Ingress`).
 - The admission roster of every path an intent enters by (`Cyfr.Admission`) and the boundary catalog (`Cyfr.Boundaries`). *Not built yet:* the local socket and the compositor, which the roster declares and defers.
 
 ### Compendium: components
@@ -191,7 +191,7 @@ The person decides; Sanctum validates, records and checks; and the place that re
 
 ### 5.2 Identity and standing
 
-Identity and standing are established at the authentication boundary (`Sanctum.Caller`), and a long-lived context revalidates them before protected work. A session, a device certificate and a pending confirmation are bound to the key that signed for them, so removing the key from the account ends each at every home that reads the removal (§9.1). A standing channel, such as an API key or a schedule, acts under its creator's standing.
+Identity and standing are established at the authentication boundary (`Sanctum.Caller`), and a long-lived context revalidates them before protected work. A session, a device certificate and a pending confirmation are bound to the key that signed for them, and the first two to their address, so removing the key ends each at every home that reads the removal (§9.1). A standing channel, an API key or a schedule, acts under its creator's standing.
 
 ### 5.3 One gate
 
@@ -199,7 +199,7 @@ The screen, the command line, the wire and the assistant share one operation dec
 
 ### 5.4 Consent
 
-A consent binds to the exact action and resources its preview showed. Who may consent follows how the caller authenticated, never what it holds. Human approval unblocks an action already authorized and grants nothing more, and neither does what a turn is offered or a harness's access setting: the gate admits every call under the authority as it stands when the call is made. The one consent no person gives is provisioning's, for the shipped seed components, revoked like any other (`Sanctum.Consent.Bootstrap`). A fresh confirmation is a held key's: the person's passkey at the account pages or a protected device of theirs after its unlock, signing the home's request that names the stored record.
+A consent binds to the exact action and resources its preview showed. Who may consent follows how the caller authenticated, never what it holds. Human approval unblocks an action already authorized and grants nothing more, and neither does what a turn is offered or a harness's access setting: the gate admits every call under the authority as it stands when the call is made. The one consent no person gives is provisioning's, for the shipped seed components, revoked like any other (`Sanctum.Consent.Bootstrap`). A fresh confirmation is a held key's: the person's passkey at the account pages or their protected device after its unlock, signing at either address the home's request that names the stored record.
 
 ### 5.5 Credentials
 
@@ -251,7 +251,7 @@ One baseline migration is the schema, on both adapters alike, and a database run
 
 ### 6.8 Configuration and settings
 
-Configuration is parsed explicitly, and an invalid security-relevant value is refused. An unreadable settings store refuses the boot. The browser address is a deployment setting from which the server's address, listeners, origins, exposure and proxy trust follow (`Cyfr.RuntimeConfig`): only the machine's own `cyfr` writes it, and the boot refuses a setting that contradicts it.
+Configuration is parsed explicitly, and an invalid security-relevant value is refused. An unreadable settings store refuses the boot. Beside its private address, a server's browser address is a deployment setting its listeners, exposure and proxy trust follow (`Cyfr.RuntimeConfig`): only the machine's own `cyfr` writes it, and the boot refuses a setting that contradicts it.
 
 ### 6.9 Backup, runtime and budgets
 
@@ -292,11 +292,11 @@ A person has one account: an identifier and a log of public keys that only the a
 
 ### 9.2 Joining a home that is not your own
 
-At sign-in the home mints a request bound to the browser that asked; a key of the account signs it, a passkey at the directory's account pages or a device over its channel; and the home verifies the answer against the account's log and asks its own rules (`Sanctum.SignIn`). The account page returns only to the home that asked and tells its server nothing, so the directory never learns where a person signs in.
+At sign-in the home mints a request bound to the browser that asked; a key of the account signs it, a passkey at the directory's account pages or a device over its channel; and the home verifies the answer against the account's log and asks its own rules (`Sanctum.SignIn`). The account page returns only to the address that asked and tells its server nothing, so the directory never learns where a person signs in.
 
 ### 9.3 Devices and fresh confirmation
 
-Who a person is, which devices they connected and whether a change needs a fresh confirmation are separate facts, and no client holds a rank. Everyday work, a grant and an approval need only the session. Which changes need a fresh confirmation is one table of Sanctum's (`Sanctum.Pairing`), and the deciding home decides each (§5.4). A home admits a device by its first hello over the device channel, verified against the account's log, and issues it a certificate no other home reads. One device key, bound to one account at one directory, is admitted at each home separately and, once removed there, stays out until readmitted; its shell refuses a home whose account directory is another.
+Who a person is, which devices they connected and whether a change needs a fresh confirmation are separate facts; no client holds a rank. Everyday work, a grant and an approval need only the session. Which changes need a fresh confirmation is one table of Sanctum's (`Sanctum.Pairing`), and the deciding home decides each (§5.4). A home admits a device by its first hello over the device channel, verified against the account's log, and issues it a certificate no other home reads. One device key, bound to one account at one directory, is admitted at each home separately and, once removed there, stays out until readmitted; its shell refuses a home whose account directory is another.
 
 ### 9.4 Communication
 

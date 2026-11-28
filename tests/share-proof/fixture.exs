@@ -117,7 +117,7 @@ fn args ->
 
   # The person as their session establishes them, focused where it is.
   person_ctx = fn token ->
-    {:ok, ctx} = Sanctum.Caller.establish({:session, token})
+    {:ok, ctx} = Sanctum.Caller.establish({:session, token}, entry: :loopback)
     %{ctx | origin: :interactive}
   end
 
@@ -562,7 +562,7 @@ fn args ->
       end
 
     ["focus", token, athanor_id] ->
-      {:ok, admin} = Sanctum.Caller.establish({:session, token})
+      {:ok, admin} = Sanctum.Caller.establish({:session, token}, entry: :loopback)
 
       decision = fn
         {:ok, _focused} -> "admitted"

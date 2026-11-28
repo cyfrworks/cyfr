@@ -239,6 +239,28 @@ defmodule Arca.DeviceCertificates do
     revoke_all(from(c in DeviceCertificate, where: c.identifier == ^identifier and c.kid == ^kid))
   end
 
+  @doc """
+  Revoke every certificate issued for an audience that is not one of
+  `homes`, the canonical spellings of the addresses the server has now
+  (`Prima.Identity.Encoding.canonical_home/1`), in one transaction: a
+  boot after the browser address was added, changed or removed retires
+  only the certificates issued at an address it no longer has, with the
+  sessions that stand on them. Answers the ids revoked and the token
+  hashes of the sessions deleted, or `{:error, :database_error}`.
+  """
+  @spec revoke_elsewhere([String.t(), ...]) ::
+          {:ok, %{certificate_ids: [String.t()], session_hashes: [binary()]}}
+          | {:error, :database_error}
+  # arca:unscoped-ok the server's own addresses are the scope: a
+  # certificate for an audience the server no longer is, is no one's to keep.
+  def revoke_elsewhere([_ | _] = homes) do
+    Arca.Repo.Errors.with_db_rescue("Arca.DeviceCertificates.revoke_elsewhere", fn ->
+      Arca.Repo.transaction(fn ->
+        revoke_all(from(c in DeviceCertificate, where: c.audience_home not in ^homes))
+      end)
+    end)
+  end
+
   # ---- internals -------------------------------------------------------------
 
   # The person first, then the cached head, then the client: the standing

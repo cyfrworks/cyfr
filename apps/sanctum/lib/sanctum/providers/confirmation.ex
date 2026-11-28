@@ -19,7 +19,12 @@ defmodule Sanctum.Providers.Confirmation do
 
   A record is confirmed by a key of the person's account signing this
   CYFR's `confirm` request that names it (`Sanctum.SignIn`), and by
-  nothing else: no sign-in method, emailed code or other CYFR's word.
+  nothing else: no sign-in method, emailed code or other CYFR's word. The
+  request is minted, and its answer taken, at the address of the
+  caller's own entry; the record names the address where the change was
+  asked, which may be the other one: a change asked at the browser
+  address is confirmed by a device of the person's at the private
+  address, the one flow that crosses the server's two addresses.
 
     * `request` mints that request for one pending record of the caller's
       own person, bound to what asked: a person's browser by their
@@ -153,7 +158,7 @@ defmodule Sanctum.Providers.Confirmation do
          {:ok, _row} <- own(Context.actor(ctx), ref, user_id),
          {:ok, binding, _opts} <- Sanctum.SignIn.binding(ctx),
          {:ok, answer} <- answer(answer) do
-      case Sanctum.SignIn.answer(answer, binding, ref: ref) do
+      case Sanctum.SignIn.answer(answer, binding, ref: ref, entry: ctx.entry) do
         {:ok, %{purpose: :confirm, ref: ^ref}} ->
           confirmed(ctx, ref)
 

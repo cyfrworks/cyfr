@@ -116,6 +116,10 @@ config :cyfr, :hsts, :none
 config :cyfr, CyfrWeb.Endpoint,
   url: [host: "localhost"],
   adapter: CyfrWeb.Ingress,
+  # A socket's Origin is compared with the address of the listener that
+  # accepted it, before socket dispatch (`CyfrWeb.Ingress`): Phoenix's own
+  # check sees no listener, so it is off in every environment.
+  check_origin: false,
   render_errors: [
     formats: [html: PrismWeb.ErrorHTML, json: CyfrWeb.ErrorJSON],
     layout: false

@@ -646,13 +646,16 @@ defmodule Sanctum.Vault.OAuthGrant do
   @doc """
   The `redirect_uri` this deployment registers with a provider.
 
-  Uses `Sanctum.origin/0`: `CYFR_PUBLIC_URL` when the operator declared
-  one, otherwise this deployment's own origin. Absolute either way — a
-  provider cannot redirect to a path.
+  Uses `Sanctum.oauth_return_address/0`: the browser address when the
+  server has one, otherwise `http://localhost:<port>`, which a provider
+  takes over plain HTTP where it likely refuses the private name. The
+  callback needs its single-use state and no session, so it completes on
+  the loopback listener under that name, in a browser on the server's
+  own machine. Absolute either way — a provider cannot redirect to a path.
   """
   @spec redirect_uri() :: String.t()
   def redirect_uri do
-    Sanctum.origin() <> callback_path()
+    Sanctum.oauth_return_address() <> callback_path()
   end
 
   defp decode_map(nil), do: %{}

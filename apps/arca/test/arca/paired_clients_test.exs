@@ -361,6 +361,7 @@ defmodule Arca.PairedClientsTest do
         Arca.SessionStorage.reserve_client_session(id, %{
           client_id: row.id,
           user_id: "usr_pcl",
+          address: "http://h-xeypbemm44chehc5.localhost:4002",
           expires_at: DateTime.add(DateTime.utc_now(), 60, :second)
         })
 

@@ -675,8 +675,8 @@ defmodule Sanctum.Gate.AdmissionLatencyTest do
     athanor = Sanctum.Test.People.athanor!(user)
     ctx = Sanctum.TestContext.issuer!(%{person | athanor_id: athanor.id})
 
-    {:ok, session} = Sanctum.Session.create(ctx)
-    {:ok, dead} = Sanctum.Session.create(ctx)
+    {:ok, session} = Sanctum.Session.create(ctx, address: Sanctum.private_address())
+    {:ok, dead} = Sanctum.Session.create(ctx, address: Sanctum.private_address())
     Sanctum.Session.destroy(dead.token)
 
     guest = Sanctum.Context.enter_guest(ctx)

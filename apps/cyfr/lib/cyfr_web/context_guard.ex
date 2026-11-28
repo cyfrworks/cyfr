@@ -20,7 +20,9 @@ defmodule CyfrWeb.ContextGuard do
   The surfaces:
 
     * `on_mount(:protected, …)` — routed and nested LiveViews. It
-      establishes the cookie's session, subscribes to the standing
+      establishes the cookie's session at the entry the page came in by
+      (`entry/1`; a nested view takes the one its parent hands it),
+      subscribes to the standing
       announcements, and only then revalidates, so a revocation between
       establishing and subscribing is still read. It attaches hooks that
       run the rule before every `handle_event`, `handle_info` and (for a
@@ -46,6 +48,11 @@ defmodule CyfrWeb.ContextGuard do
   way: the action halts with the refusal's own sentence and the person
   stays signed in on the page. A mount, which has no page to stay on,
   shows the sentence where it lands, and the session stands.
+
+  A session is good only at the address it was made at
+  (`Sanctum.Caller.establish/2`): every cookie this module reads is read
+  with the entry of its request, so a cookie from the other address
+  signs in nobody.
 
   A context this module establishes — a mounted console's, and a
   per-request read's (`authenticate/2`) — is a person acting on an
@@ -121,9 +128,18 @@ defmodule CyfrWeb.ContextGuard do
   def on_mount(:protected, _params, session, socket) do
     token = session[to_string(@session_key)]
 
+    # A nested view comes in by its parent's request or socket, so it takes
+    # the entry its parent hands it in the session the server signs for it
+    # (`"entry"`, from the parent's `:request_entry`); a root view reads its
+    # listener's tag.
+    socket = assign(socket, :request_entry, mounted_entry(socket, session))
+
     # The mount slides the session when it is due, on Sanctum's own task
     # pool (`Sanctum.Caller.establish/2`), never on this process.
-    case Caller.establish(token, focus: session["athanor_id"]) do
+    case Caller.establish(token,
+           focus: session["athanor_id"],
+           entry: socket.assigns.request_entry
+         ) do
       {:ok, ctx} ->
         case admit(socket, ctx) do
           {:ok, socket} -> {:cont, attach(socket)}
@@ -406,6 +422,30 @@ defmodule CyfrWeb.ContextGuard do
   # Bare contexts
   # ---------------------------------------------------------------------------
 
+  # A nested view's entry is its parent's, handed in its signed session: a
+  # nested static render reads no connect info, and a nested view added
+  # while connected reads only what its parent's socket carries.
+  defp mounted_entry(%Socket{parent_pid: nil} = socket, _session), do: entry(socket)
+
+  defp mounted_entry(%Socket{}, %{"entry" => entry}) when entry in [:loopback, :proxy],
+    do: entry
+
+  defp mounted_entry(%Socket{}, _session), do: nil
+
+  @doc """
+  The listener a root LiveView's request came in by (`Sanctum.ClientIp`),
+  read from its connect info's `x-cyfr-ingress` header: the static
+  render's request and the live socket both carry the listener's own tag.
+  A nested view takes its parent's (`on_mount/4`): the parent hands its
+  `:request_entry` assign to the child's session as `"entry"`.
+  """
+  @spec entry(Socket.t()) :: Sanctum.entry() | nil
+  def entry(%Socket{} = socket),
+    do:
+      Sanctum.ClientIp.ingress_from_connect_info(%{
+        x_headers: LiveView.get_connect_info(socket, :x_headers)
+      })
+
   @doc """
   The freshness rule for a context with no socket around it: `{:ok, ctx}`
   as it is while fresh, else the revalidated context or its refusal.
@@ -416,14 +456,19 @@ defmodule CyfrWeb.ContextGuard do
   end
 
   @doc """
-  Establish the session behind a browser cookie token for a per-request
-  read, focused on `athanor_id` when one is given, and hold it to the
-  freshness rule. Answers the context or `Sanctum.Caller`'s refusal.
+  Establish the session behind the request's browser cookie for a
+  per-request read, at the entry the request came in by
+  (`Sanctum.ClientIp.ingress/1`), focused on `athanor_id` when one is
+  given, and hold it to the freshness rule. Answers the context or
+  `Sanctum.Caller`'s refusal.
   """
-  @spec authenticate(String.t() | nil, String.t() | nil) ::
+  @spec authenticate(Plug.Conn.t(), String.t() | nil) ::
           {:ok, Context.t()} | {:error, Caller.refusal()}
-  def authenticate(token, athanor_id \\ nil) do
-    with {:ok, ctx} <- Caller.establish(token, focus: athanor_id),
+  def authenticate(%Plug.Conn{} = conn, athanor_id \\ nil) do
+    token = Plug.Conn.get_session(conn, @session_key)
+
+    with {:ok, ctx} <-
+           Caller.establish(token, focus: athanor_id, entry: Sanctum.ClientIp.ingress(conn)),
          {:ok, ctx} <- check(interactive(ctx)) do
       Prima.LoggerContext.set_from_context(ctx)
       {:ok, ctx}

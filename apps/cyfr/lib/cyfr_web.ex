@@ -33,6 +33,7 @@ defmodule CyfrWeb do
       ContextGuard,
       ErrorJSON,
       ErrorRenderer,
+      Ingress,
       LiveSocket,
       MetricsPlug,
       MinimalPage,

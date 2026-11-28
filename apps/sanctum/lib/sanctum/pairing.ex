@@ -217,7 +217,7 @@ defmodule Sanctum.Pairing do
   proof consumed by an issuance that then fails is spent: the glass asks
   for another challenge. The certificate is issued under the account head
   this CYFR holds for the person now and recorded under the issuance
-  fence (`Sanctum.DeviceCerts.issue/2`): a head that moves meanwhile is
+  fence (`Sanctum.DeviceCerts.issue/3`): a head that moves meanwhile is
   `:stale_head`. Answers `t:paired/0`.
   """
   @spec renew(Context.t(), renewal()) :: {:ok, paired()} | {:error, refusal()}
@@ -243,7 +243,7 @@ defmodule Sanctum.Pairing do
          {:ok, _standing} <- DeviceCerts.standing(user_id, a),
          {:ok, head} <- account_head(user_id),
          :ok <- consumed(proof),
-         {:ok, certificate} <- DeviceCerts.issue(client, head) do
+         {:ok, certificate} <- DeviceCerts.issue(client, head, ctx.entry) do
       {:ok, %{client_id: client_id, certificate: certificate}}
     end
   end
@@ -251,7 +251,7 @@ defmodule Sanctum.Pairing do
   def renew(%Context{}, _renewal), do: {:error, :renewal_exchange_only}
 
   defp renewal_proof(%Proof{challenge: %Challenge{} = presented} = proof, ctx, device_key, now) do
-    with {:ok, home} <- Sanctum.SignIn.audience() do
+    with {:ok, home} <- Sanctum.SignIn.audience(ctx.entry) do
       expected = %Challenge{
         presented
         | purpose: :renew,

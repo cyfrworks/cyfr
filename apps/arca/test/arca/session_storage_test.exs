@@ -21,6 +21,7 @@ defmodule Arca.SessionStorageTest do
     Map.merge(
       %{
         user_id: "user_1",
+        address: "http://h-xeypbemm44chehc5.localhost:4002",
         email: "user@example.com",
         provider: "github",
         permissions: "[\"execute\",\"component:read\"]",
@@ -126,6 +127,7 @@ defmodule Arca.SessionStorageTest do
         SessionStorage.reserve_client_session(id, %{
           client_id: client_id,
           user_id: "user_1",
+          address: "http://h-xeypbemm44chehc5.localhost:4002",
           expires_at: DateTime.add(DateTime.utc_now(), 60, :second)
         })
 
@@ -274,6 +276,36 @@ defmodule Arca.SessionStorageTest do
       assert {:ok, :removed} = SessionStorage.delete_session(hash)
       assert {:ok, :absent} = SessionStorage.delete_session(hash)
       assert {:ok, :absent} = SessionStorage.delete_session(make_token_hash("delete_missing"))
+    end
+  end
+
+  describe "delete_elsewhere/1" do
+    test "deletes every session made at an address not among those given, and answers its hash" do
+      here = make_token_hash("here")
+      there = make_token_hash("there")
+
+      :ok = SessionStorage.create_session(here, session_attrs(), Arca.Test.Actor.issuance())
+
+      :ok =
+        SessionStorage.create_session(
+          there,
+          session_attrs(%{address: "https://cyfr.example"}),
+          Arca.Test.Actor.issuance()
+        )
+
+      assert {:ok, []} =
+               SessionStorage.delete_elsewhere([
+                 "http://h-xeypbemm44chehc5.localhost:4002",
+                 "https://cyfr.example"
+               ])
+
+      assert {:ok, [^there]} =
+               SessionStorage.delete_elsewhere(["http://h-xeypbemm44chehc5.localhost:4002"])
+
+      assert {:ok, %{address: "http://h-xeypbemm44chehc5.localhost:4002"}} =
+               SessionStorage.get_session(here)
+
+      assert {:error, :not_found} = SessionStorage.get_session(there)
     end
   end
 

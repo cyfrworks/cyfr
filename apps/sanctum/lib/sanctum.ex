@@ -108,44 +108,79 @@ defmodule Sanctum do
 
   alias Sanctum.Context
 
-  @doc """
-  The externally reachable base URL of this instance, without a trailing
-  slash, or `nil` when the operator has not declared one
-  (`:sanctum, :public_url`, from `CYFR_PUBLIC_URL`).
-
-  Only the operator knows it: behind a proxy or a tunnel it is neither
-  the bind address nor the `Host` of any particular request. Two of this
-  domain's surfaces face outward and need it — the URL a webhook sender
-  is handed (`Sanctum.Webhook`) and the `redirect_uri` an OAuth provider
-  returns to (`Sanctum.Vault.OAuthGrant`) — so it is read here once.
+  @typedoc """
+  The listener that accepted a request (`Sanctum.ClientIp.ingress/1`):
+  the machine's own loopback listener, or the proxy listener a browser
+  address forwards to. The entry decides the request's address; nothing
+  the caller sends does.
   """
-  @spec public_url() :: String.t() | nil
-  def public_url do
-    case Application.get_env(:sanctum, :public_url) do
-      url when is_binary(url) ->
-        case String.trim_trailing(String.trim(url), "/") do
-          "" -> nil
-          trimmed -> trimmed
-        end
+  @type entry :: :loopback | :proxy
 
-      _ ->
-        nil
+  @doc """
+  The server's private address, `http://<private name>.localhost:<port>`
+  (`:sanctum, :private_address`): the address of its loopback entry,
+  which every server has whatever browser address it has.
+  `config/runtime.exs` resolves it from the tunnel key's public half
+  (`Cyfr.RuntimeConfig.resolve_link/2`).
+  """
+  @spec private_address() :: String.t()
+  def private_address, do: Application.fetch_env!(:sanctum, :private_address)
+
+  @doc """
+  The server's browser address, `https://<CYFR_HOST>` (`:sanctum,
+  :browser_address`), or `nil` for a server with none: the address of
+  its proxy entry.
+  """
+  @spec browser_address() :: String.t() | nil
+  def browser_address do
+    case Application.get_env(:sanctum, :browser_address) do
+      url when is_binary(url) and url != "" -> url
+      _none -> nil
     end
   end
 
   @doc """
-  `public_url/0` when the operator declared one, otherwise the
-  deployment's own origin (`:sanctum, :fallback_origin`, the endpoint's
-  scheme, host and port).
-
-  Distinct from `public_url/0` on purpose: a webhook URL is a *path* when
-  nothing is declared, because handing a sender a guessed host is worse
-  than handing it nothing, while an OAuth `redirect_uri` must be absolute
-  or the flow cannot start at all. TLS deployments set `CYFR_PUBLIC_URL`.
+  The address of an entry: the private address for the loopback entry,
+  the browser address for the proxy entry, and `nil` for no entry or a
+  proxy entry on a server with no browser address, which every caller
+  refuses. A sign-in request, a session and a device certificate are
+  bound to the address they were made at, and good at no other.
   """
-  @spec origin() :: String.t()
-  def origin do
-    public_url() || Application.get_env(:sanctum, :fallback_origin, "http://localhost:4000")
+  @spec address(entry() | nil) :: String.t() | nil
+  def address(:loopback), do: private_address()
+  def address(:proxy), do: browser_address()
+  def address(_none), do: nil
+
+  @doc """
+  Every address the server has: the private address, and the browser
+  address when it has one.
+  """
+  @spec addresses() :: [String.t()]
+  def addresses, do: [private_address() | List.wrap(browser_address())]
+
+  @doc """
+  The one address a value that is not tied to a request names: the
+  browser address when the server has one, otherwise the private
+  address. A webhook's address, an address a person copies, a browser
+  invitation and the setup link read it.
+  """
+  @spec shared_address() :: String.t()
+  def shared_address, do: browser_address() || private_address()
+
+  @doc """
+  The address an OAuth provider returns a connect to: the browser
+  address when the server has one; otherwise `http://localhost:<port>`
+  on the private address's port, which a provider accepts over plain
+  HTTP and the private name likely not. It is the one use of the bare
+  name left: the callback needs only its single-use state, and the server
+  signs nothing for this address (`Sanctum.Vault.OAuthGrant`).
+  """
+  @spec oauth_return_address() :: String.t()
+  def oauth_return_address do
+    case browser_address() do
+      nil -> "http://localhost:#{URI.parse(private_address()).port}"
+      browser -> browser
+    end
   end
 
   @doc """
@@ -278,8 +313,8 @@ defmodule Sanctum do
 
   @doc """
   The base URL of a registry host (a name or address with an optional
-  port): `http://` for a loopback host, `localhost`, `127.0.0.0/8` or
-  `::1`, a registry on this machine, and `https://` for every other.
+  port): `http://` for a loopback host (`loopback_host?/1`), a registry on
+  this machine, and `https://` for every other.
   """
   @spec registry_base_url(String.t()) :: String.t()
   def registry_base_url(host) when is_binary(host) do
@@ -288,25 +323,36 @@ defmodule Sanctum do
 
   @doc """
   Whether `host` (a name or address with an optional port) is this
-  machine's loopback: `localhost`, an address in `127.0.0.0/8`, or `::1`.
-  A name that only begins like one, such as `127.0.0.1.example`, is not.
+  machine's loopback as this server names it: its own private name
+  (`private_address/0`'s host, or `own`'s when given), an address in
+  `127.0.0.0/8`, or `::1`. No other name is: not `localhost`, which is no
+  longer a server's address, and not another server's private name. A
+  name that only begins like one, such as `127.0.0.1.example`, is not.
   """
-  @spec loopback_host?(String.t()) :: boolean()
-  def loopback_host?(host) when is_binary(host) do
+  @spec loopback_host?(String.t(), String.t() | nil) :: boolean()
+  def loopback_host?(host, own \\ own_address()) when is_binary(host) do
     case URI.parse("//" <> host) do
-      %URI{host: name} when is_binary(name) -> loopback_name?(name)
+      %URI{host: name} when is_binary(name) -> loopback_name?(name, own)
       _ -> false
     end
   end
 
-  # A host as a URI holds it: no port, an IPv6 address without brackets.
-  defp loopback_name?("localhost"), do: true
+  # The private address as configured, `nil` before the boot wrote it.
+  defp own_address, do: Application.get_env(:sanctum, :private_address)
 
-  defp loopback_name?(name) do
+  # A host as a URI holds it: no port, an IPv6 address without brackets.
+  defp loopback_name?(name, own) do
+    own_name =
+      case is_binary(own) and URI.parse(own) do
+        %URI{host: host} when is_binary(host) -> host
+        _none -> nil
+      end
+
     case :inet.parse_address(String.to_charlist(name)) do
       {:ok, {127, _, _, _}} -> true
       {:ok, {0, 0, 0, 0, 0, 0, 0, 1}} -> true
-      _ -> false
+      {:ok, _other} -> false
+      {:error, _name} -> own_name != nil and String.downcase(name) == own_name
     end
   end
 
@@ -314,7 +360,8 @@ defmodule Sanctum do
   Whether `value` is a directory this deployment may pin for registering
   its people: a directory URL (`Prima.Identity.Encoding.directory_url?/1`)
   served over `https`, or over `http` on a loopback host
-  (`loopback_host?/1`), no longer than a confirmation preview's text
+  (`loopback_host?/2`, of the private address `own`, by default the one
+  configured), no longer than a confirmation preview's text
   (`Prima.Confirmation.Preview.max_text/0`, 1,024 bytes).
 
   Plain HTTP is allowed on loopback alone because TLS protects a network
@@ -325,22 +372,22 @@ defmodule Sanctum do
   An identity whose genesis names a loopback directory cannot be resolved
   by any other CYFR, which then fails closed.
   """
-  @spec enrollment_directory?(term()) :: boolean()
-  def enrollment_directory?(value) do
-    Prima.Identity.Encoding.directory_url?(value) and directory_transport?(value) and
+  @spec enrollment_directory?(term(), String.t() | nil) :: boolean()
+  def enrollment_directory?(value, own \\ own_address()) do
+    Prima.Identity.Encoding.directory_url?(value) and directory_transport?(value, own) and
       byte_size(value) <= Prima.Confirmation.Preview.max_text()
   end
 
   @doc """
   Whether a directory URL is spoken to over a transport this deployment
-  accepts: `https`, or `http` on a loopback host (`enrollment_directory?/1`
+  accepts: `https`, or `http` on a loopback host (`enrollment_directory?/2`
   says why).
   """
-  @spec directory_transport?(String.t()) :: boolean()
-  def directory_transport?(url) when is_binary(url) do
+  @spec directory_transport?(String.t(), String.t() | nil) :: boolean()
+  def directory_transport?(url, own \\ own_address()) when is_binary(url) do
     case URI.parse(url) do
       %URI{scheme: "https", host: host} when is_binary(host) and host != "" -> true
-      %URI{scheme: "http", host: host} when is_binary(host) -> loopback_name?(host)
+      %URI{scheme: "http", host: host} when is_binary(host) -> loopback_name?(host, own)
       _other -> false
     end
   end

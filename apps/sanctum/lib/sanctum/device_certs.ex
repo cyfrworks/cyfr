@@ -10,10 +10,10 @@ defmodule Sanctum.DeviceCerts do
 
   ## Issuing
 
-  `issue/2` signs a certificate for a paired client that is a key of its
+  `issue/3` signs a certificate for a paired client that is a key of its
   person's account, naming the client's `kid`, the account's identifier
-  and the account head it is issued under, for this CYFR as audience
-  (`Sanctum.SignIn.audience/0`), valid `device_cert_seconds` from now, and
+  and the account head it is issued under, for the address of the entry
+  it is issued at as audience (`Sanctum.SignIn.audience/1`), valid `device_cert_seconds` from now, and
   records it on the client's row under the issuance fence
   (`Arca.DeviceCertificates.record/2`, `Arca.DirectoryHeads.fence!/2`): a
   head that is no longer the cached head of the person's account is
@@ -42,9 +42,10 @@ defmodule Sanctum.DeviceCerts do
       which carries no certificate and so no deadline: the channel uses it
       for the one renewal operation (`pairing/renew`) and nothing else.
 
-  A challenge is bound to this CYFR, the athanor, the client and the
-  device key, so a connect proof is never taken as a renewal proof, or a
-  proof for one client as another's.
+  A challenge is bound to this CYFR's address at the connection's entry,
+  the athanor, the client and the device key, so a connect proof is never
+  taken as a renewal proof, a proof for one client as another's, or one
+  made at one address at the other.
 
   ## On every request
 
@@ -60,7 +61,9 @@ defmodule Sanctum.DeviceCerts do
   whose walk retires what a removed key or a recovery ends before
   anything else is read; the certificate is one this CYFR recorded for
   the client and still holds, and verifies under the installation key
-  with the head its row names, its audience, its not-before with the
+  with the head its row names, its audience (the address of the
+  request's entry: a certificate issued at one address is good at no
+  other), its not-before with the
   clock tolerance (`clock_skew_seconds`) and its expiry strictly on this
   CYFR's clock (`Prima.DeviceCert.verify/3`); the client is read again,
   and then the person's standing: not denied, the athanor open and
@@ -147,7 +150,8 @@ defmodule Sanctum.DeviceCerts do
   @type connection :: %{
           required(:client_id) => String.t(),
           optional(:certificate) => DeviceCert.t() | nil,
-          optional(:source) => String.t() | nil
+          optional(:source) => String.t() | nil,
+          optional(:entry) => Sanctum.entry() | nil
         }
 
   @typedoc "Why a proof, a certificate or a client's standing was refused (the module doc)."
@@ -184,15 +188,21 @@ defmodule Sanctum.DeviceCerts do
   @doc """
   Issue and record a certificate for the paired client `client` (its
   row, a key of its person's account: `kid` set) under the account head
-  `head` (the module doc). Refusals: `:stale_head`, `:not_standing` (the
-  client no longer stands), `:unavailable`, and the store's own.
+  `head`, at `entry`, whose address is its audience (the module doc).
+  Refusals: `:stale_head`, `:not_standing` (the client no longer stands),
+  `:unavailable` (no entry among them), and the store's own.
   """
-  @spec issue(map(), String.t()) :: {:ok, DeviceCert.t()} | {:error, term()}
-  def issue(%{id: client_id, kid: kid, athanor_id: athanor_id, user_id: user_id} = client, head)
+  @spec issue(map(), String.t(), Sanctum.entry() | nil) ::
+          {:ok, DeviceCert.t()} | {:error, term()}
+  def issue(
+        %{id: client_id, kid: kid, athanor_id: athanor_id, user_id: user_id} = client,
+        head,
+        entry
+      )
       when is_binary(kid) and is_binary(head) do
     with {:ok, identifier} <- Sanctum.Caller.holder_identity(user_id, :not_standing),
          {:ok, seconds} <- cert_seconds(),
-         {:ok, home} <- Sanctum.SignIn.audience(),
+         {:ok, home} <- Sanctum.SignIn.audience(entry),
          now = System.os_time(:millisecond),
          {:ok, unsigned} <-
            DeviceCert.new(
@@ -218,7 +228,7 @@ defmodule Sanctum.DeviceCerts do
     end
   end
 
-  def issue(_client, _head), do: {:error, :not_standing}
+  def issue(_client, _head, _entry), do: {:error, :not_standing}
 
   # The certificate on the client's row, as signed: its JCS bytes and
   # their digest, under the member's live ownership, the person's lock and
@@ -333,10 +343,12 @@ defmodule Sanctum.DeviceCerts do
 
     # The address's bound is read before any signature is checked, and a
     # spent one refuses with nothing verified and nothing counted.
+    entry = Map.get(connection, :entry)
+
     with :ok <- source_room(:device_connect, source) do
-      case connect_attribution(certificate, client_id, proof, challenge, now) do
-        {:ok, row} -> attributed_connect(row, certificate, client_id, source, now)
-        :not_the_clients -> unattributed_connect(certificate, client_id, source, now)
+      case connect_attribution(certificate, client_id, proof, challenge, entry, now) do
+        {:ok, row} -> attributed_connect(row, certificate, client_id, source, entry, now)
+        :not_the_clients -> unattributed_connect(certificate, client_id, source, entry, now)
         {:unattributed, refused} -> unattributed(:device_connect, source, refused)
         {:error, :unavailable} = unanswered -> unanswered
       end
@@ -348,9 +360,11 @@ defmodule Sanctum.DeviceCerts do
     now = now_ms()
     source = Map.get(connection, :source)
 
+    entry = Map.get(connection, :entry)
+
     with :ok <- source_room(:device_verification, source) do
-      case renewal_attribution(c, client_id, proof, now) do
-        {:ok, row} -> attributed_renewal(row, source)
+      case renewal_attribution(c, client_id, proof, entry, now) do
+        {:ok, row} -> attributed_renewal(row, source, entry)
         {:unattributed, refused} -> unattributed(:device_verification, source, refused)
         {:error, :unavailable} = unanswered -> unanswered
       end
@@ -364,8 +378,8 @@ defmodule Sanctum.DeviceCerts do
   # the one the client's row stores. A proof or a challenge that fails
   # first is no one's, refused with its own word; one the client's row
   # does not stand behind is no one's either (`:not_the_clients`).
-  defp connect_attribution(certificate, client_id, proof, challenge, now) do
-    with :ok <- held(challenge, client_id, certificate),
+  defp connect_attribution(certificate, client_id, proof, challenge, entry, now) do
+    with :ok <- held(challenge, client_id, certificate, entry),
          :ok <- possession(proof, challenge, now),
          :ok <- names_client(certificate, %{client_id: client_id}) do
       case attribution(certificate.athanor, client_id, challenge.device_key) do
@@ -382,10 +396,16 @@ defmodule Sanctum.DeviceCerts do
   # and the installation first, so past either bound it is refused having
   # cost nothing more. Under them it is answered the word its certificate's
   # own check gives, as every connect is checked.
-  defp unattributed_connect(certificate, client_id, source, now) do
+  defp unattributed_connect(certificate, client_id, source, entry, now) do
     case claim_unattributed(:device_connect, source) do
-      {:error, {:rate_limited, _retry_after_ms}} = spent -> spent
-      _counted -> checked_request(certificate, %{client_id: client_id}, now, client_ip: source)
+      {:error, {:rate_limited, _retry_after_ms}} = spent ->
+        spent
+
+      _counted ->
+        checked_request(certificate, %{client_id: client_id}, now,
+          client_ip: source,
+          entry: entry
+        )
     end
   end
 
@@ -393,11 +413,14 @@ defmodule Sanctum.DeviceCerts do
   # checked, and counts only a failure: a paired device reconnecting is
   # no guess. The row read to attribute the connect only attributes it:
   # its standing is read again once the certificate is checked.
-  defp attributed_connect(row, certificate, client_id, source, now) do
+  defp attributed_connect(row, certificate, client_id, source, entry, now) do
     name = {:client, row.id}
 
     with :ok <- device_bound(named_room(:device_connect, name)) do
-      case checked_request(certificate, %{client_id: client_id}, now, client_ip: source) do
+      case checked_request(certificate, %{client_id: client_id}, now,
+             client_ip: source,
+             entry: entry
+           ) do
         {:ok, ctx} ->
           {:ok, ctx}
 
@@ -417,8 +440,8 @@ defmodule Sanctum.DeviceCerts do
   # A renewal is the named client's once its proof shows the device key
   # the client's row stores; the certificate the device brought only
   # located the client.
-  defp renewal_attribution(%Challenge{} = challenge, client_id, proof, now) do
-    with :ok <- renewal_held(challenge, client_id),
+  defp renewal_attribution(%Challenge{} = challenge, client_id, proof, entry, now) do
+    with :ok <- renewal_held(challenge, client_id, entry),
          :ok <- possession(proof, challenge, now) do
       attribution(challenge.athanor, client_id, challenge.device_key)
     else
@@ -429,13 +452,13 @@ defmodule Sanctum.DeviceCerts do
   # Counted against the client's own budget before anything more is read;
   # the account's head is read before the client again, so a walk that
   # retired the client is seen.
-  defp attributed_renewal(row, source) do
+  defp attributed_renewal(row, source, entry) do
     with :ok <- device_bound(claim_named(:device_verification, {:client, row.id})),
          {:ok, identifier} <- Sanctum.Caller.holder_identity(row.user_id, :not_standing),
          :ok <- fresh(identifier),
          {:ok, row} <- paired_client(row.athanor_id, row.user_id, row.id),
          {:ok, standing} <- standing(row.user_id, row.athanor_id) do
-      established(row, standing, nil, identifier, client_ip: source)
+      established(row, standing, nil, identifier, client_ip: source, entry: entry)
     end
   end
 
@@ -472,21 +495,21 @@ defmodule Sanctum.DeviceCerts do
   # The challenge the channel holds for this connect: this CYFR's, for
   # this client, bound to the certificate's athanor and to the device key
   # whose kid the certificate names.
-  defp held(%Challenge{} = challenge, client_id, %DeviceCert{} = certificate) do
-    if this_home?(challenge.home) and challenge.client_id == client_id and
+  defp held(%Challenge{} = challenge, client_id, %DeviceCert{} = certificate, entry) do
+    if this_home?(challenge.home, entry) and challenge.client_id == client_id and
          challenge.athanor == certificate.athanor and
          Key.kid(challenge.device_key) == certificate.kid,
        do: :ok,
        else: {:error, :proof_refused}
   end
 
-  defp renewal_held(%Challenge{} = challenge, client_id) do
-    if this_home?(challenge.home) and challenge.client_id == client_id,
+  defp renewal_held(%Challenge{} = challenge, client_id, entry) do
+    if this_home?(challenge.home, entry) and challenge.client_id == client_id,
       do: :ok,
       else: {:error, :proof_refused}
   end
 
-  defp this_home?(home), do: Sanctum.SignIn.audience() == {:ok, home}
+  defp this_home?(home, entry), do: Sanctum.SignIn.audience(entry) == {:ok, home}
 
   defp possession(proof, %Challenge{} = challenge, now) do
     case Proof.verify(proof, challenge, now) do
@@ -521,7 +544,8 @@ defmodule Sanctum.DeviceCerts do
          {:ok, %Context{user_id: user_id} = checked} <-
            checked_request(certificate, ctx, now_ms(),
              request_id: ctx.request_id,
-             client_ip: ctx.client_ip
+             client_ip: ctx.client_ip,
+             entry: ctx.entry
            ) do
       if user_id == ctx.user_id, do: {:ok, checked}, else: {:error, :client_mismatch}
     end
@@ -544,7 +568,7 @@ defmodule Sanctum.DeviceCerts do
          :ok <- same(identifier, certificate.identifier),
          :ok <- fresh(identifier),
          {:ok, head} <- recorded(row, certificate),
-         {:ok, certificate} <- checked(certificate, head, now),
+         {:ok, certificate} <- checked(certificate, head, Keyword.get(carried, :entry), now),
          {:ok, row} <- paired_client(row.athanor_id, row.user_id, row.id),
          {:ok, standing} <- standing(row.user_id, certificate.athanor) do
       established(row, standing, certificate, identifier, carried)
@@ -625,12 +649,13 @@ defmodule Sanctum.DeviceCerts do
     end
   end
 
-  # The certificate under the installation key, for this CYFR, at the head
-  # its row names, within its window.
-  defp checked(certificate, head, now) do
+  # The certificate under the installation key, for the address of the
+  # entry it is presented at, at the head its row names, within its window.
+  # An entry with no address refuses it as for another audience.
+  defp checked(certificate, head, entry, now) do
     {public, _private} = Sanctum.Cipher.installation_key()
 
-    with {:ok, home} <- Sanctum.SignIn.audience(),
+    with {:ok, home} <- audience_at(entry),
          {:ok, skew_ms} <- skew_ms() do
       case DeviceCert.verify(certificate, public,
              home: home,
@@ -654,6 +679,13 @@ defmodule Sanctum.DeviceCerts do
         {:error, _malformed} ->
           {:error, :bad_signature}
       end
+    end
+  end
+
+  defp audience_at(entry) do
+    case Sanctum.SignIn.audience(entry) do
+      {:ok, home} -> {:ok, home}
+      {:error, :unavailable} -> {:error, :wrong_audience}
     end
   end
 

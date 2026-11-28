@@ -56,8 +56,8 @@ defmodule Emissary.Web.OAuthCallbackControllerTest do
     Application.put_env(:sanctum, :scripted_oauth_provider, CallbackIdp)
 
     person = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
-    {:ok, session} = Sanctum.Session.create(person)
-    {:ok, ctx} = Caller.establish(session.token)
+    {:ok, session} = Sanctum.Session.create(person, address: Sanctum.private_address())
+    {:ok, ctx} = Caller.establish(session.token, entry: :loopback)
 
     :ok =
       Sanctum.TestContext.put_provider_credentials(
@@ -121,6 +121,28 @@ defmodule Emissary.Web.OAuthCallbackControllerTest do
     conn = get(conn, "/auth/oauth/callback", %{"code" => "code-1", "state" => state})
 
     assert conn.status == 200
+    assert entry_named?(ctx, name)
+  end
+
+  test "with no browser address the return is localhost on the private address's port, and " <>
+         "the callback completes there on the loopback listener with no cookie",
+       %{conn: conn, ctx: ctx} do
+    Prima.Test.Env.put_app_env(:sanctum, :browser_address, nil)
+    %URI{port: port} = URI.parse(Sanctum.private_address())
+    assert OAuthGrant.redirect_uri() == "http://localhost:#{port}/auth/oauth/callback"
+
+    name = "Mail #{System.unique_integer([:positive])}"
+    state = pending!(ctx, name)
+    token_endpoint(fn -> :ok end)
+
+    # A browser on the server's own machine, sent back by the provider to
+    # the bare name, holding no session there.
+    returned = Sanctum.ClientIp.put_ingress(%{conn | host: "localhost", port: port}, :loopback)
+    assert List.keyfind(returned.req_headers, "cookie", 0) == nil
+
+    assert get(returned, "/auth/oauth/callback", %{"code" => "code-1", "state" => state}).status ==
+             200
+
     assert entry_named?(ctx, name)
   end
 

@@ -93,7 +93,7 @@ defmodule PrismWeb.SettingsLiveTest do
       view |> form("#invitation-form", %{"name" => "uj-wren"}) |> render_submit()
 
       link = view |> element(~s([data-test="invitation-link"])) |> render() |> text()
-      assert String.starts_with?(link, Sanctum.origin() <> "/invite#")
+      assert String.starts_with?(link, Sanctum.shared_address() <> "/invite#")
       code = link |> String.split("#") |> List.last()
       assert has_element?(view, ~s([data-test="invitation-copy"]))
 
@@ -631,6 +631,7 @@ defmodule PrismWeb.SettingsLiveTest do
           hash,
           %{
             user_id: person.user_id,
+            address: Sanctum.private_address(),
             email: person.email,
             provider: "passkey",
             athanor_id: athanor.id,

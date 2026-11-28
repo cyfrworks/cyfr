@@ -31,7 +31,7 @@ defmodule CyfrWeb.DeviceSessionPageTest do
     device = enrolled!(@token)
     ctx = connected!(device)
     answer = unlocked!(ctx, device.key)
-    {:ok, %{token: token}} = Sanctum.DeviceUnlock.redeem(answer.ticket)
+    {:ok, %{token: token}} = Sanctum.DeviceUnlock.redeem(answer.ticket, :loopback)
     {:ok, athanor} = Sanctum.Tenancy.Athanors.get(ctx.athanor_id)
     %{ctx: ctx, session_id: answer.session_id, token: token, athanor: athanor}
   end

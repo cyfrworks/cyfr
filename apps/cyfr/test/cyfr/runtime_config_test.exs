@@ -707,7 +707,7 @@ defmodule Cyfr.RuntimeConfigTest do
     end
   end
 
-  describe "resolve_link/2, as tests/fixtures/link.json holds it" do
+  describe "resolve_link/3, as tests/fixtures/link.json holds it" do
     # The access engine (apps/codex/internal/link) derives every row alike.
     @link_vectors Path.expand("../../../../tests/fixtures/link.json", __DIR__)
 
@@ -726,20 +726,26 @@ defmodule Cyfr.RuntimeConfigTest do
         assert Base.encode16(pub, case: :lower) == public, row["why"]
 
         assert RuntimeConfig.private_name(pub) == name, row["why"]
-        assert RuntimeConfig.resolve_link(public, port) == {:ok, row["address"]}, row["why"]
+        assert RuntimeConfig.resolve_link(public, port, true) == {:ok, row["address"]}, row["why"]
       end
     end
 
-    test "a value that is not a public key, and none, refuse the boot" do
+    test "a value that is not a public key refuses the boot, and none refuses a release" do
       for %{"value" => value, "why" => why} <- link_vectors()["refused"] do
         assert {:error, %{code: :access_link_invalid, class: :invalid_argument, payload: %{}}} =
-                 RuntimeConfig.resolve_link(value, 4000),
+                 RuntimeConfig.resolve_link(value, 4000, true),
                why
       end
 
       for absent <- [nil, "", "  "] do
         assert {:error, %{code: :access_link_missing, class: :setup_required, payload: %{}}} =
-                 RuntimeConfig.resolve_link(absent, 4000)
+                 RuntimeConfig.resolve_link(absent, 4000, true)
+
+        # A development or test boot takes the development key's: the
+        # first row's.
+        [first | _] = link_vectors()["names"]
+        assert {:ok, address} = RuntimeConfig.resolve_link(absent, first["port"], false)
+        assert address == first["address"]
       end
     end
   end

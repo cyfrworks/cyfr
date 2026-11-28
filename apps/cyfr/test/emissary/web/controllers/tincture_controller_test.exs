@@ -390,7 +390,10 @@ defmodule Emissary.Web.TinctureControllerTest do
       # endpoint's origin, its WebSocket origin (`ws` for `http`, `wss` for
       # `https`) and the declared domains, never `'self'`, and the document
       # is sandboxed.
-      endpoint = Emissary.Web.TinctureAssets.endpoint_origin()
+      endpoint =
+        Emissary.Web.TinctureAssets.endpoint_origin(
+          Sanctum.ClientIp.put_ingress(Plug.Test.conn(:get, "/"), :loopback)
+        )
 
       assert csp ==
                Compendium.tincture_frame_policy(manifest, %{endpoint: endpoint, nonce: nonce})
@@ -657,7 +660,7 @@ defmodule Emissary.Web.TinctureControllerTest do
       own = Sanctum.Test.People.athanor!(user)
       reader = Sanctum.TestContext.issuer!(%{person | athanor_id: own.id})
       {:ok, session} = Sanctum.TestContext.create_session(reader)
-      {:ok, ctx} = Sanctum.Caller.establish(session.token)
+      {:ok, ctx} = Sanctum.Caller.establish(session.token, entry: :loopback)
       versions!(ctx)
 
       {:ok, reader: reader, session: session, ctx: ctx}
@@ -721,7 +724,10 @@ defmodule Emissary.Web.TinctureControllerTest do
 
       assert csp ==
                Compendium.tincture_frame_policy(manifest, %{
-                 endpoint: Emissary.Web.TinctureAssets.endpoint_origin(),
+                 endpoint:
+                   Emissary.Web.TinctureAssets.endpoint_origin(
+                     Sanctum.ClientIp.put_ingress(Plug.Test.conn(:get, "/"), :loopback)
+                   ),
                  nonce: nonce
                })
 

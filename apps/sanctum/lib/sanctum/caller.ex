@@ -156,6 +156,12 @@ defmodule Sanctum.Caller do
 
   Options:
 
+    * `:entry` — the listener that accepted the request
+      (`Sanctum.ClientIp.ingress/1`), which the established context
+      carries. A session is good only at its own address
+      (`Sanctum.address/1`): one made at the other address, or a request
+      with no entry, is `{:error, :unauthenticated}`, on a warm memo as on
+      a cold read.
     * `:focus` — an athanor id to focus the established context on
       (`Context.focus/2`); how a nested view follows the page's focus.
     * `:refresh` — slide the session's expiry when due (default `true`),
@@ -191,22 +197,28 @@ defmodule Sanctum.Caller do
     # (`memoize/3`), so every establish runs the pipeline.
     key = memo_key(token, opts)
 
-    case Arca.Cache.get(key) do
-      {:ok, %Context{} = ctx} ->
-        {:ok, ctx}
+    result =
+      case Arca.Cache.get(key) do
+        {:ok, %Context{} = ctx} ->
+          {:ok, ctx}
 
-      :miss ->
-        result = do_establish(token, opts)
+        :miss ->
+          result = do_establish(token, opts)
 
-        with {:ok, ctx} <- result, do: memoize(key, ctx, ttl)
-        result
-    end
+          with {:ok, ctx} <- result, do: memoize(key, ctx, ttl)
+          result
+      end
+
+    # The memo answers before the pipeline, so the session's address is
+    # compared after both: a context memoized at one address answers no
+    # request at the other.
+    with {:ok, ctx} <- result, do: at_entry(ctx, Keyword.get(opts, :entry))
   end
 
   def establish({:api_key, raw}, opts) when is_binary(raw) do
     case Sanctum.ApiKey.validate(raw, client_ip: Keyword.get(opts, :client_ip)) do
       {:ok, metadata} ->
-        ctx = Sanctum.ApiKey.context_from_metadata(metadata)
+        ctx = entered(Sanctum.ApiKey.context_from_metadata(metadata), opts)
 
         with :ok <- tenant_ok(ctx), do: {:ok, validated(ctx)}
 
@@ -232,6 +244,7 @@ defmodule Sanctum.Caller do
             credential_binding: authority.credential_binding,
             credential_deadline: authority.deadline,
             client_ip: Keyword.get(opts, :client_ip),
+            entry: Keyword.get(opts, :entry),
             frame: %{
               id: authority.id,
               frame_id: authority.frame_id,
@@ -267,7 +280,8 @@ defmodule Sanctum.Caller do
           # executions may read their vault material.
           authenticated: true,
           anonymous: false,
-          request_id: Keyword.get(opts, :request_id)
+          request_id: Keyword.get(opts, :request_id),
+          entry: Keyword.get(opts, :entry)
         )
 
       with :ok <- tenant_ok(ctx), do: {:ok, validated(ctx)}
@@ -339,6 +353,7 @@ defmodule Sanctum.Caller do
           origin: :interactive,
           request_id: Keyword.get(opts, :request_id),
           client_ip: Keyword.get(opts, :client_ip),
+          entry: Keyword.get(opts, :entry),
           authenticated: true
         )
 
@@ -624,6 +639,10 @@ defmodule Sanctum.Caller do
   An unauthenticated context is `{:denied, ctx}` — the door stopped
   admitting its person after the session was minted — and so is one whose
   id names nobody (`Sanctum.Tenancy.resolve_status/2`'s `:not_standing`).
+  `opts`: `:focus`, and `:entry`, the listener of the request it is
+  established for, which the context carries: a session made at another
+  address, or a request with no entry, is `{:error, :unauthenticated}`
+  (`establish/2`).
   """
   @spec establish_context(Context.t(), keyword()) :: {:ok, Context.t()} | {:error, refusal()}
   def establish_context(ctx, opts \\ [])
@@ -634,7 +653,8 @@ defmodule Sanctum.Caller do
 
   def establish_context(%Context{} = ctx, opts) do
     # Distinguish a retryable read failure from having no athanor.
-    with {:ok, ctx} <- resolve(ctx),
+    with {:ok, ctx} <- at_entry(ctx, Keyword.get(opts, :entry)),
+         {:ok, ctx} <- resolve(ctx),
          ctx = ensure_namespace(ctx),
          :ok <- tenant_ok(ctx),
          {:ok, ctx} <- focus(ctx, Keyword.get(opts, :focus)) do
@@ -847,6 +867,7 @@ defmodule Sanctum.Caller do
   defp revalidate_stored(ctx, hash) do
     with :ok <- stored_standing(ctx, hash),
          {:ok, rebuilt} <- reload(hash),
+         {:ok, rebuilt} <- at_entry(rebuilt, ctx.entry),
          :ok <- same_person(rebuilt, ctx),
          :ok <- identity_current(rebuilt.user_id, hash),
          {:ok, focused} <- refocus(rebuilt, ctx) do
@@ -1122,6 +1143,7 @@ defmodule Sanctum.Caller do
         client_id: held.client_id,
         confirmation_id: held.confirmation_id,
         client_ip: held.client_ip,
+        entry: held.entry,
         permissions: narrowed(fresh.permissions, held.permissions),
         validated_at: now()
     }
@@ -1214,6 +1236,17 @@ defmodule Sanctum.Caller do
   defp memo_key(token, opts) do
     Arca.Cache.Keys.established(Session.token_hash(token), Keyword.get(opts, :focus))
   end
+
+  # A session is good at either entry of the address it was made at and
+  # at no other (`Sanctum.address/1`); a request with no entry has no
+  # address and stands on no session.
+  defp at_entry(%Context{session_address: address} = ctx, entry) do
+    if is_binary(address) and address == Sanctum.address(entry),
+      do: {:ok, %{ctx | entry: entry}},
+      else: {:error, :unauthenticated}
+  end
+
+  defp entered(%Context{} = ctx, opts), do: %{ctx | entry: Keyword.get(opts, :entry)}
 
   defp tenant_ok(ctx) do
     case Context.tenant_ok(ctx) do

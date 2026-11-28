@@ -29,6 +29,9 @@ defmodule Sanctum.DirectoryTest do
   alias Sanctum.Directory
 
   @directory "https://dir.example"
+  # The private name of the test configuration's tunnel key
+  # (tests/fixtures/link.json's first).
+  @private_name "h-xeypbemm44chehc5.localhost"
   @policy %{max_identities: 100_000, log_bytes: 1_073_741_824, recovery_reserve_bytes: 10_485_760}
 
   setup tags do
@@ -40,15 +43,15 @@ defmodule Sanctum.DirectoryTest do
     :ok
   end
 
-  # This node's public URL, and so the directory it serves
-  # (`Sanctum.origin/0`), restored when the test ends.
-  defp serve_at(url), do: put_sanctum_env(:public_url, url)
+  # This node's browser address, and so the directory it serves
+  # (`Sanctum.shared_address/0`), restored when the test ends.
+  defp serve_at(url), do: put_sanctum_env(:browser_address, url)
 
-  # A server with no browser address declares no public URL: its origin
-  # is the fallback the runtime builds from its port (`Cyfr.RuntimeConfig`).
-  defp serve_locally_at(origin) do
-    put_sanctum_env(:public_url, nil)
-    put_sanctum_env(:fallback_origin, origin)
+  # A server with no browser address serves its directory at its private
+  # address (`Cyfr.RuntimeConfig.resolve_link/3`).
+  defp serve_locally_at(address) do
+    put_sanctum_env(:browser_address, nil)
+    put_sanctum_env(:private_address, address)
   end
 
   # A `:sanctum` setting for the rest of the test, nil unsetting it, its
@@ -241,6 +244,84 @@ defmodule Sanctum.DirectoryTest do
     end
   end
 
+  describe "the pinned origin" do
+    # The pin as the store holds it.
+    defp pinned, do: Arca.ServerMetaStorage.get("directory_origin")
+
+    defp moved(pinned, origin),
+      do: {:error, {:directory_origin_moved, %{pinned: pinned, origin: origin}}}
+
+    test "a writer's first boot stores its origin, which it serves from then on" do
+      assert pinned() == {:error, :not_found}
+      assert :ok = Directory.hold_origin()
+      assert pinned() == {:ok, @directory}
+      assert Directory.served() == {:ok, @directory}
+
+      # Held again on every boot that finds the same setting.
+      assert :ok = Directory.hold_origin()
+      assert pinned() == {:ok, @directory}
+    end
+
+    test "a boot whose browser address gives another host is refused, and the pin stands" do
+      :ok = Directory.hold_origin()
+      serve_at("https://elsewhere.example")
+
+      assert moved(@directory, "https://elsewhere.example") == Directory.hold_origin()
+      assert pinned() == {:ok, @directory}
+      assert Directory.served() == {:ok, @directory}
+
+      {:error, refusal} = Directory.hold_origin()
+
+      assert Prima.Refusal.message(refusal) ==
+               "This CYFR serves its own account service, which keeps its address for good: " <>
+                 "it was first served at #{@directory}, and these settings give " <>
+                 "https://elsewhere.example. Nothing started. Put back the settings that give " <>
+                 "#{@directory}."
+    end
+
+    test "a boot whose browser address is removed, leaving the private address, is refused" do
+      :ok = Directory.hold_origin()
+      serve_locally_at("http://#{@private_name}:4000")
+
+      assert moved(@directory, "http://#{@private_name}:4000") == Directory.hold_origin()
+    end
+
+    test "a writer pinned to its private address refuses a boot that moves its port alone" do
+      serve_locally_at("http://#{@private_name}:4000")
+      :ok = Directory.hold_origin()
+      assert pinned() == {:ok, "http://#{@private_name}:4000"}
+
+      serve_locally_at("http://#{@private_name}:4001")
+
+      assert moved("http://#{@private_name}:4000", "http://#{@private_name}:4001") ==
+               Directory.hold_origin()
+    end
+
+    test "the boot after a restore compares against the restored pin, and refuses a setting " <>
+           "that differs" do
+      # This server, at elsewhere, pinned its own origin; the restored
+      # database brings back the pin it was taken under.
+      serve_at("https://elsewhere.example")
+      :ok = Directory.hold_origin()
+
+      {1, _} =
+        Arca.Repo.update_all(
+          from(m in Arca.Schemas.ServerMeta, where: m.key == "directory_origin"),
+          set: [value: @directory]
+        )
+
+      assert moved(@directory, "https://elsewhere.example") == Directory.hold_origin()
+    end
+
+    test "a node that does not serve as the writer pins nothing" do
+      for mode <- ["off", "mirror"] do
+        Sanctum.Test.Settings.put("directory_serve", mode)
+        assert :ok = Directory.hold_origin()
+        assert pinned() == {:error, :not_found}
+      end
+    end
+  end
+
   # ---- registration ------------------------------------------------------------
 
   describe "register/1" do
@@ -304,27 +385,28 @@ defmodule Sanctum.DirectoryTest do
                Directory.register(%{genesis: Entry.encode(account().genesis), source: source()})
     end
 
-    test "a server with no browser address on port 80, whose origin is http://localhost:80, registers a genesis " <>
-           "naming http://localhost" do
-      serve_locally_at("http://localhost:80")
-      assert Sanctum.origin() == "http://localhost:80"
+    test "a server with no browser address on port 80, whose private address is " <>
+           "http://#{@private_name}:80, registers a genesis naming http://#{@private_name}" do
+      serve_locally_at("http://#{@private_name}:80")
+      assert Sanctum.shared_address() == "http://#{@private_name}:80"
 
-      # A genesis cannot name the origin as configured: its directory is
+      # A genesis cannot name the address as configured: its directory is
       # in the one spelling, which drops the scheme's default port.
-      refute Prima.Identity.Encoding.directory_url?("http://localhost:80")
+      refute Prima.Identity.Encoding.directory_url?("http://#{@private_name}:80")
 
-      register!(account(directory: "http://localhost"))
+      register!(account(directory: "http://#{@private_name}"))
     end
 
     test "serves its origin with the scheme's default port dropped, and still refuses another " <>
            "scheme, host, port or path, storing nothing" do
       for {serve, origin, served, others} <- [
-            {&serve_locally_at/1, "http://localhost:80", "http://localhost",
+            {&serve_locally_at/1, "http://#{@private_name}:80", "http://#{@private_name}",
              [
-               "https://localhost",
+               "https://#{@private_name}",
                "http://elsewhere.example",
-               "http://localhost:4000",
-               "http://localhost/directory"
+               "http://#{@private_name}:4000",
+               "http://#{@private_name}/directory",
+               "http://localhost"
              ]},
             {&serve_at/1, "https://dir.example:443", "https://dir.example",
              [

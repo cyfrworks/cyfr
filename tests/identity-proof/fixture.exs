@@ -111,7 +111,7 @@ fn args ->
       identifier |> Sanctum.IdentityFreshness.fresh?() |> head_answer.() |> answer.()
 
     ["tombstone", identifier, token] ->
-      {:ok, ctx} = Sanctum.Caller.establish({:session, token})
+      {:ok, ctx} = Sanctum.Caller.establish({:session, token}, entry: :loopback)
       tombstone = %{"action" => "tombstone", "identifier" => identifier}
       call = fn ctx -> Sanctum.Gate.call_external("directory", ctx, tombstone) end
 

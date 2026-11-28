@@ -329,10 +329,11 @@ defmodule Sanctum.TestContext do
 
   @doc """
   `Sanctum.Session.create/2` for a context a fixture built by hand, with
-  the `generation_snapshot:` its rows stand at now (`snapshot!/1`).
+  the `generation_snapshot:` its rows stand at now (`snapshot!/1`), made
+  at `address` (the private address by default, the loopback entry's).
   """
-  def create_session(%Context{} = ctx),
-    do: Sanctum.Session.create(ctx, generation_snapshot: snapshot!(ctx))
+  def create_session(%Context{} = ctx, address \\ Sanctum.private_address()),
+    do: Sanctum.Session.create(ctx, generation_snapshot: snapshot!(ctx), address: address)
 
   @doc """
   `Sanctum.ApiKey.create/3` for a context a fixture built by hand, with
@@ -661,7 +662,8 @@ defmodule Sanctum.TestContext do
     case Sanctum.SignIn.request(:confirm, binding,
            ctx: interactive(ctx),
            ref: ref,
-           identifier: account.identifier
+           identifier: account.identifier,
+           entry: :loopback
          ) do
       {:ok, %{request: request}} ->
         answer =
@@ -671,7 +673,8 @@ defmodule Sanctum.TestContext do
             account.identifier
           )
 
-        with {:ok, %{purpose: :confirm}} <- Sanctum.SignIn.answer(answer, binding) do
+        with {:ok, %{purpose: :confirm}} <-
+               Sanctum.SignIn.answer(answer, binding, entry: :loopback) do
           Arca.PendingConfirmations.get(Context.actor(ctx), ref)
         end
 
@@ -851,9 +854,9 @@ defmodule Sanctum.TestContext do
         auth_method: :session
       )
 
-    {:ok, session} = Sanctum.Session.create(base, generation_snapshot: snapshot!(base))
+    {:ok, session} = create_session(base)
     {:ok, loaded} = Sanctum.Session.load(session.token)
-    loaded
+    %{loaded | entry: :loopback}
   end
 
   @doc """

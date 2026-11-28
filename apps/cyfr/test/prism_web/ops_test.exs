@@ -126,7 +126,7 @@ defmodule PrismWeb.OpsTest do
         )
 
       {:ok, session} = Sanctum.TestContext.create_session(ctx)
-      {:ok, established} = Sanctum.Caller.establish(session.token)
+      {:ok, established} = Sanctum.Caller.establish(session.token, entry: :loopback)
       {:ok, person: person, home: home, established: established}
     end
 

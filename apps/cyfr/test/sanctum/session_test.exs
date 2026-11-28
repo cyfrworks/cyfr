@@ -27,7 +27,7 @@ defmodule Sanctum.SessionTest do
 
   describe "create/1" do
     test "creates session with valid token", %{ctx: ctx} do
-      {:ok, session} = Session.create(ctx)
+      {:ok, session} = Session.create(ctx, address: Sanctum.private_address())
 
       assert session.token != nil
       assert byte_size(session.token) > 30
@@ -37,7 +37,7 @@ defmodule Sanctum.SessionTest do
     end
 
     test "sets expiration in the future", %{ctx: ctx} do
-      {:ok, session} = Session.create(ctx)
+      {:ok, session} = Session.create(ctx, address: Sanctum.private_address())
 
       {:ok, expires_at, _} = DateTime.from_iso8601(session.expires_at)
       now = DateTime.utc_now()
@@ -52,21 +52,25 @@ defmodule Sanctum.SessionTest do
     test "takes the session_ttl_hours setting, with no restart", %{ctx: ctx} do
       Cyfr.Test.Settings.put("session_ttl_hours", 1)
 
-      {:ok, session} = Session.create(ctx)
+      {:ok, session} = Session.create(ctx, address: Sanctum.private_address())
       {:ok, expires_at, _} = DateTime.from_iso8601(session.expires_at)
       diff = DateTime.diff(expires_at, DateTime.utc_now(), :hour)
       assert diff in [0, 1]
     end
 
     test "each session has unique token", %{ctx: ctx} do
-      {:ok, session1} = Session.create(ctx)
-      {:ok, session2} = Session.create(ctx)
+      {:ok, session1} = Session.create(ctx, address: Sanctum.private_address())
+      {:ok, session2} = Session.create(ctx, address: Sanctum.private_address())
 
       assert session1.token != session2.token
     end
 
     test "carries no permission bag: a person's session holds every permission", %{ctx: ctx} do
-      {:ok, session} = Session.create(%{ctx | permissions: MapSet.new([:read])})
+      {:ok, session} =
+        Session.create(%{ctx | permissions: MapSet.new([:read])},
+          address: Sanctum.private_address()
+        )
+
       refute Map.has_key?(session, :permissions)
 
       assert {:ok, %{permissions: permissions}} = Session.load(session.token)
@@ -75,10 +79,47 @@ defmodule Sanctum.SessionTest do
     end
   end
 
+  describe "the address it was made at" do
+    test "is recorded, and one the server does not have is refused", %{ctx: ctx} do
+      {:ok, session} = Session.create(ctx, address: Sanctum.private_address())
+      {:ok, loaded} = Session.load(session.token)
+      assert loaded.session_address == Sanctum.private_address()
+
+      for address <- [nil, "https://cyfr.example", "http://localhost:4002"] do
+        assert {:error, :invalid_request} = Session.create(ctx, address: address),
+               inspect(address)
+      end
+    end
+
+    test "a boot that no longer has the browser address ends what was signed in there and " <>
+           "nothing else",
+         %{ctx: ctx} do
+      Prima.Test.Env.put_app_env(:sanctum, :browser_address, "https://cyfr.example")
+      {:ok, browser} = Session.create(ctx, address: "https://cyfr.example")
+      {:ok, private} = Session.create(ctx, address: Sanctum.private_address())
+
+      # Nothing moved: nothing ends.
+      assert {:ok, %{sessions: 0, certificates: 0}} = Session.retire_elsewhere()
+      assert {:ok, _ctx} = Session.load(browser.token)
+
+      # The browser address changed: what was signed in at it ends, and
+      # what was signed in at the private address stands.
+      Prima.Test.Env.put_app_env(:sanctum, :browser_address, "https://elsewhere.example")
+      assert {:ok, %{sessions: 1, certificates: 0}} = Session.retire_elsewhere()
+      assert {:error, :invalid_session} = Session.load(browser.token)
+      assert {:ok, _ctx} = Session.load(private.token)
+
+      # Removing the browser address ends nothing more.
+      Prima.Test.Env.put_app_env(:sanctum, :browser_address, nil)
+      assert {:ok, %{sessions: 0}} = Session.retire_elsewhere()
+      assert {:ok, _ctx} = Session.load(private.token)
+    end
+  end
+
   describe "load/1" do
     test "returns context for a valid session; a person with no publisher namespace is signed in",
          %{ctx: ctx} do
-      {:ok, session} = Session.create(ctx)
+      {:ok, session} = Session.create(ctx, address: Sanctum.private_address())
       {:ok, retrieved_ctx} = Session.load(session.token)
 
       assert retrieved_ctx.user_id == ctx.user_id
@@ -146,12 +187,12 @@ defmodule Sanctum.SessionTest do
     end
 
     test "a loaded session carries the interactive class", %{ctx: ctx} do
-      {:ok, session} = Session.create(ctx)
+      {:ok, session} = Session.create(ctx, address: Sanctum.private_address())
       assert {:ok, %{auth_method: :session}} = Session.load(session.token)
     end
 
     test "returns error for expired session", %{ctx: ctx} do
-      {:ok, session} = Session.create(ctx)
+      {:ok, session} = Session.create(ctx, address: Sanctum.private_address())
 
       # Manually expire the session by updating the DB directly
       token_hash = :crypto.hash(:sha256, session.token)
@@ -168,7 +209,7 @@ defmodule Sanctum.SessionTest do
 
   describe "refresh/1" do
     test "extends session expiration", %{ctx: ctx} do
-      {:ok, session} = Session.create(ctx)
+      {:ok, session} = Session.create(ctx, address: Sanctum.private_address())
       {:ok, original_expires, _} = DateTime.from_iso8601(session.expires_at)
 
       # Wait a tiny bit to ensure different timestamp
@@ -190,7 +231,7 @@ defmodule Sanctum.SessionTest do
 
   describe "refresh_if_stale/1" do
     test "no-ops for a freshly created session", %{ctx: ctx} do
-      {:ok, session} = Session.create(ctx)
+      {:ok, session} = Session.create(ctx, address: Sanctum.private_address())
       {:ok, before, _} = DateTime.from_iso8601(session.expires_at)
 
       assert :ok = Session.refresh_if_stale(session.token)
@@ -200,7 +241,7 @@ defmodule Sanctum.SessionTest do
     end
 
     test "extends a session that is due for refresh", %{ctx: ctx} do
-      {:ok, session} = Session.create(ctx)
+      {:ok, session} = Session.create(ctx, address: Sanctum.private_address())
 
       # Move expires_at close to now so the session looks stale (last refreshed ~30d ago).
       import Ecto.Query
@@ -225,7 +266,12 @@ defmodule Sanctum.SessionTest do
       # Focused on the person's own athanor, so the session establishes.
       {local, user} = Sanctum.TestContext.person!(Sanctum.TestContext.local())
       own = Sanctum.Test.People.athanor!(user)
-      {:ok, session} = Session.create(Sanctum.TestContext.issuer!(%{local | athanor_id: own.id}))
+
+      {:ok, session} =
+        Session.create(Sanctum.TestContext.issuer!(%{local | athanor_id: own.id}),
+          address: Sanctum.private_address()
+        )
+
       token_hash = :crypto.hash(:sha256, session.token)
       expiry = fn -> elem(Session.expires_at_by_hash(token_hash), 1) end
       refresh = {Task.Supervisor, :start_child, 2}
@@ -235,7 +281,7 @@ defmodule Sanctum.SessionTest do
 
       {_ok, calls} =
         traced([refresh], fn ->
-          {:ok, _} = Sanctum.Caller.establish(session.token)
+          {:ok, _} = Sanctum.Caller.establish(session.token, entry: :loopback)
         end)
 
       refute started_refresh?(calls)
@@ -250,7 +296,7 @@ defmodule Sanctum.SessionTest do
 
       {_ok, calls} =
         traced([refresh], fn ->
-          {:ok, _} = Sanctum.Caller.establish(session.token)
+          {:ok, _} = Sanctum.Caller.establish(session.token, entry: :loopback)
         end)
 
       assert started_refresh?(calls)
@@ -261,7 +307,7 @@ defmodule Sanctum.SessionTest do
     end
 
     test "no-ops when TTL is infinite", %{ctx: ctx} do
-      {:ok, session} = Session.create(ctx)
+      {:ok, session} = Session.create(ctx, address: Sanctum.private_address())
       Cyfr.Test.Settings.put("session_ttl_hours", 0)
 
       assert :ok = Session.refresh_if_stale(session.token)
@@ -294,14 +340,16 @@ defmodule Sanctum.SessionTest do
 
     test "a session records the browser and system its user agent names, never the user agent, and was last seen at its sign-in",
          %{ctx: ctx} do
-      {:ok, session} = Session.create(ctx, user_agent: @safari)
+      {:ok, session} =
+        Session.create(ctx, user_agent: @safari, address: Sanctum.private_address())
+
       row = row(session.token)
 
       assert {row.browser, row.system} == {"Safari", "macOS"}
       assert row.last_seen_at == row.inserted_at
       refute inspect(Map.from_struct(row)) =~ "Mozilla"
 
-      {:ok, unnamed} = Session.create(ctx)
+      {:ok, unnamed} = Session.create(ctx, address: Sanctum.private_address())
       assert {row(unnamed.token).browser, row(unnamed.token).system} == {nil, nil}
     end
 
@@ -309,7 +357,11 @@ defmodule Sanctum.SessionTest do
       import Ecto.Query
       {local, user} = Sanctum.TestContext.person!(Sanctum.TestContext.local())
       own = Sanctum.Test.People.athanor!(user)
-      {:ok, session} = Session.create(Sanctum.TestContext.issuer!(%{local | athanor_id: own.id}))
+
+      {:ok, session} =
+        Session.create(Sanctum.TestContext.issuer!(%{local | athanor_id: own.id}),
+          address: Sanctum.private_address()
+        )
 
       # Seen within the minute: not due, and a sighting writes nothing.
       recent = seen_ago!(session.token, 30)
@@ -320,7 +372,7 @@ defmodule Sanctum.SessionTest do
       # Over a minute ago: due, and the establish that read it records it, once.
       stale = seen_ago!(session.token, 120)
       assert {:ok, %Context{}, [:seen]} = Session.load_sliding(session.token)
-      {:ok, _} = Sanctum.Caller.establish(session.token, refresh: false)
+      {:ok, _} = Sanctum.Caller.establish(session.token, refresh: false, entry: :loopback)
 
       Prima.Test.Wait.wait_until(fn ->
         DateTime.compare(row(session.token).last_seen_at, stale) == :gt
@@ -335,7 +387,7 @@ defmodule Sanctum.SessionTest do
 
   describe "destroy/1" do
     test "removes session", %{ctx: ctx} do
-      {:ok, session} = Session.create(ctx)
+      {:ok, session} = Session.create(ctx, address: Sanctum.private_address())
 
       # Session should exist
       {:ok, _} = Session.load(session.token)
@@ -355,10 +407,10 @@ defmodule Sanctum.SessionTest do
   describe "cleanup/0" do
     test "removes expired sessions", %{ctx: ctx} do
       # Create a valid session
-      {:ok, valid_session} = Session.create(ctx)
+      {:ok, valid_session} = Session.create(ctx, address: Sanctum.private_address())
 
       # Create and manually expire another session
-      {:ok, expired_session} = Session.create(ctx)
+      {:ok, expired_session} = Session.create(ctx, address: Sanctum.private_address())
 
       token_hash = :crypto.hash(:sha256, expired_session.token)
       past = DateTime.utc_now() |> DateTime.add(-3600, :second) |> DateTime.truncate(:microsecond)
@@ -413,7 +465,9 @@ defmodule Sanctum.SessionTest do
       kid = DirectoryServer.kid(hd(account.devices))
       verified = DirectoryServer.head(account)
 
-      assert {:ok, session} = Session.create(ctx, kid: kid, head: verified)
+      assert {:ok, session} =
+               Session.create(ctx, kid: kid, head: verified, address: Sanctum.private_address())
+
       assert bound(session) == {kid, verified}
 
       # A key lands after the sign-in verified under `verified`, and a
@@ -423,11 +477,16 @@ defmodule Sanctum.SessionTest do
       assert current == DirectoryServer.head(moved)
 
       before = sessions(ctx.user_id)
-      assert {:error, :stale_head} = Session.create(ctx, kid: kid, head: verified)
+
+      assert {:error, :stale_head} =
+               Session.create(ctx, kid: kid, head: verified, address: Sanctum.private_address())
+
       assert sessions(ctx.user_id) == before
 
       # Verified again under the new head, it mints.
-      assert {:ok, again} = Session.create(ctx, kid: kid, head: current)
+      assert {:ok, again} =
+               Session.create(ctx, kid: kid, head: current, address: Sanctum.private_address())
+
       assert bound(again) == {kid, current}
     end
 
@@ -436,11 +495,14 @@ defmodule Sanctum.SessionTest do
       kid = DirectoryServer.kid(hd(account.devices))
       head = DirectoryServer.head(account)
 
-      assert {:error, :invalid_request} = Session.create(ctx, kid: kid)
-      assert {:error, :invalid_request} = Session.create(ctx, head: head)
+      assert {:error, :invalid_request} =
+               Session.create(ctx, kid: kid, address: Sanctum.private_address())
+
+      assert {:error, :invalid_request} =
+               Session.create(ctx, head: head, address: Sanctum.private_address())
 
       # A session no key signed.
-      assert {:ok, unsigned} = Session.create(ctx)
+      assert {:ok, unsigned} = Session.create(ctx, address: Sanctum.private_address())
       assert bound(unsigned) == {nil, nil}
 
       local =
@@ -452,7 +514,9 @@ defmodule Sanctum.SessionTest do
         )
         |> Sanctum.TestContext.issuer!()
 
-      assert {:error, :stale_head} = Session.create(local, kid: kid, head: head)
+      assert {:error, :stale_head} =
+               Session.create(local, kid: kid, head: head, address: Sanctum.private_address())
+
       assert sessions(local.user_id) == []
     end
   end

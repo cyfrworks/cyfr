@@ -215,7 +215,9 @@ defmodule Sanctum.Tenancy.ArchiveTest do
           email: owner.email
       })
 
-    assert {:ok, %Context{athanor_id: cached}} = Sanctum.Caller.establish(session.token)
+    assert {:ok, %Context{athanor_id: cached}} =
+             Sanctum.Caller.establish(session.token, entry: :loopback)
+
     assert cached == own.id
 
     # The member's memos, by their session: the cache is the node's, and
@@ -228,7 +230,10 @@ defmodule Sanctum.Tenancy.ArchiveTest do
     assert Arca.Cache.match(memos) == [],
            "the archive left a member's caller memoized inside the athanor it just shut"
 
-    refute match?({:ok, %Context{athanor_id: ^cached}}, Sanctum.Caller.establish(session.token))
+    refute match?(
+             {:ok, %Context{athanor_id: ^cached}},
+             Sanctum.Caller.establish(session.token, entry: :loopback)
+           )
   end
 
   test "denying a person archives their own athanor: its keys revoked, its running work cancelled as the server, its members told" do

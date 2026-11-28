@@ -17,7 +17,16 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
   alias CyfrWeb.Plugs.Authenticate
 
   # The plug as a pipeline mounts it: its options through `init/1`.
-  defp authenticate(conn, opts \\ []), do: Authenticate.call(conn, Authenticate.init(opts))
+  # The plug as a request reaches it through the loopback listener, which
+  # tags it (`CyfrWeb.Ingress`) unless the test tagged it itself.
+  defp authenticate(conn, opts \\ []) do
+    conn =
+      if Sanctum.ClientIp.ingress(conn),
+        do: conn,
+        else: Sanctum.ClientIp.put_ingress(conn, :loopback)
+
+    Authenticate.call(conn, Authenticate.init(opts))
+  end
 
   # A person admitted by their account, their head cached here
   # (`Sanctum.TestContext.account!/1`) at the suite's directory, which this
@@ -112,8 +121,8 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
       end)
 
       ctx = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
-      {:ok, session} = Sanctum.Session.create(ctx)
-      assert {:ok, _} = Sanctum.Caller.establish(session.token, refresh: false)
+      {:ok, session} = Sanctum.Session.create(ctx, address: Sanctum.private_address())
+      assert {:ok, _} = Sanctum.Caller.establish(session.token, refresh: false, entry: :loopback)
       session
     end
 
@@ -125,7 +134,7 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
       # Revoked with nobody told: the memo still holds the context.
       hash = Sanctum.Session.token_hash(session.token)
       Arca.Repo.delete_all(from(s in Arca.Schemas.Session, where: s.token_hash == ^hash))
-      assert {:ok, _} = Sanctum.Caller.establish(session.token, refresh: false)
+      assert {:ok, _} = Sanctum.Caller.establish(session.token, refresh: false, entry: :loopback)
 
       conn =
         conn
@@ -154,7 +163,7 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
       Arca.Repo.query!("ALTER TABLE sessions RENAME TO sessions_unavailable")
 
       # The memo still answers establish; the revalidation cannot be answered.
-      assert {:ok, _} = Sanctum.Caller.establish(session.token, refresh: false)
+      assert {:ok, _} = Sanctum.Caller.establish(session.token, refresh: false, entry: :loopback)
 
       conn =
         conn
@@ -250,7 +259,7 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
     @tag auth: :person
     test "the case's conn carries a session's bearer only under `auth: :person`", %{conn: conn} do
       assert ["Bearer " <> token] = get_req_header(conn, "authorization")
-      assert {:ok, ctx} = Sanctum.Caller.establish(token, refresh: false)
+      assert {:ok, ctx} = Sanctum.Caller.establish(token, refresh: false, entry: :loopback)
       assert ctx.user_id == Arca.Test.Actor.owner_id()
 
       assert get_req_header(conn_for(%{async: false, auth: :none}), "authorization") == []
@@ -377,7 +386,7 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
       # Stateless auth: the credential travels on the request itself, so no
       # server-side MCP session is created and nothing is cached.
       ctx = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
-      {:ok, session} = Sanctum.Session.create(ctx)
+      {:ok, session} = Sanctum.Session.create(ctx, address: Sanctum.private_address())
 
       conn =
         conn
@@ -394,7 +403,7 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
       # The bearer path reads the row on every request, so revocation takes
       # effect on the next call rather than when a cache entry expires.
       ctx = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
-      {:ok, session} = Sanctum.Session.create(ctx)
+      {:ok, session} = Sanctum.Session.create(ctx, address: Sanctum.private_address())
       {:ok, :removed} = Sanctum.Session.destroy(session.token)
 
       conn =

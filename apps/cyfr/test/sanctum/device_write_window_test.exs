@@ -79,7 +79,7 @@ defmodule Sanctum.DeviceWriteWindowTest do
       )
 
     {:ok, session_ctx} =
-      Sanctum.Caller.establish(session.token, focus: athanor.id, refresh: false)
+      Sanctum.Caller.establish(session.token, focus: athanor.id, refresh: false, entry: :loopback)
 
     {:ok, _component} =
       Sanctum.Test.ComponentHelpers.register_test_component(

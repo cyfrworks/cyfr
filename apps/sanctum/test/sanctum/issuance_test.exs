@@ -38,14 +38,14 @@ defmodule Sanctum.IssuanceTest do
     Arca.Test.Sandbox.setup!(tags)
     Prima.Test.RateLimiter.reset!()
 
-    public_url = Application.get_env(:sanctum, :public_url)
+    browser_address = Application.get_env(:sanctum, :browser_address)
 
     on_exit(fn ->
       Prima.Test.RateLimiter.reset!()
 
-      if public_url,
-        do: Application.put_env(:sanctum, :public_url, public_url),
-        else: Application.delete_env(:sanctum, :public_url)
+      if browser_address,
+        do: Application.put_env(:sanctum, :browser_address, browser_address),
+        else: Application.delete_env(:sanctum, :browser_address)
     end)
 
     person!()
@@ -84,7 +84,7 @@ defmodule Sanctum.IssuanceTest do
     {:ok, session} = Sanctum.TestContext.create_session(built)
 
     {:ok, session_ctx} =
-      Sanctum.Caller.establish(session.token, focus: athanor.id, refresh: false)
+      Sanctum.Caller.establish(session.token, focus: athanor.id, refresh: false, entry: :loopback)
 
     %{user: user, athanor: athanor, session_ctx: session_ctx}
   end
@@ -116,7 +116,12 @@ defmodule Sanctum.IssuanceTest do
 
     {:ok, ctx} =
       DeviceCerts.verify_connect(
-        %{client_id: device.client_id, certificate: device.certificate, source: @source},
+        %{
+          client_id: device.client_id,
+          certificate: device.certificate,
+          source: @source,
+          entry: :loopback
+        },
         Proof.sign(challenge, device.private),
         challenge
       )
@@ -1038,7 +1043,7 @@ defmodule Sanctum.IssuanceRaceTest do
         client_id: client_id,
         identifier: identifier,
         head: Prima.Digest.sha256("the head the certificate was issued under"),
-        audience: Sanctum.origin(),
+        audience: Sanctum.private_address(),
         athanor: athanor_id,
         not_before: now,
         expires_at: now + 3_600_000

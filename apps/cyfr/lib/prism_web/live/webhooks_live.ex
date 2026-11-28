@@ -9,8 +9,9 @@ defmodule PrismWeb.WebhooksLive do
   via the `webhook` MCP tool. Secrets are surfaced exactly once on create
   or rotate via the same `@new_secret` reveal card; never thereafter.
 
-  The webhook URL is rendered against `CYFR_PUBLIC_URL` so users can copy
-  the full URL into their external service (GitHub, Stripe, etc).
+  The webhook URL is absolute, at the server's shared address
+  (`Sanctum.Webhook`), so users can copy the full URL into their external
+  service (GitHub, Stripe, etc).
 
   Creating a webhook and rotating its secret are sensitive changes: the
   page asks for a fresh confirmation through its system layer
@@ -405,14 +406,11 @@ defmodule PrismWeb.WebhooksLive do
     assign(socket, :webhooks, list)
   end
 
-  # Display the URL exactly as the server returned it (a path — clients
-  # prepend their own host). The LiveView never reconstructs it.
+  # Display the URL exactly as the server returned it. The LiveView never
+  # reconstructs it.
   defp display_url(%{url: url}) when is_binary(url) and url != "", do: url
   defp display_url(%{slug: slug}) when is_binary(slug) and slug != "", do: "/hooks/" <> slug
   defp display_url(_), do: ""
-
-  defp path_only?(url) when is_binary(url), do: String.starts_with?(url, "/")
-  defp path_only?(_), do: true
 
   # ============================================================================
   # Render
@@ -441,9 +439,6 @@ defmodule PrismWeb.WebhooksLive do
             <code class="block bg-gray-950 rounded p-3 text-sm text-blue-300 font-mono break-all">
               {@new_secret[:url]}
             </code>
-            <p :if={path_only?(@new_secret[:url])} class="text-xs text-gray-500 mt-1">
-              Set <code>CYFR_PUBLIC_URL</code> on the server to display the full URL.
-            </p>
           </div>
           <p
             :if={@new_secret[:previous_expires_at]}

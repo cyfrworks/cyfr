@@ -70,6 +70,7 @@ defmodule Sanctum.CallerRefreshTest do
         Sanctum.Session.token_hash(token),
         %{
           user_id: person.id,
+          address: Sanctum.private_address(),
           provider: "device",
           kid: kid,
           head: head,
@@ -95,27 +96,31 @@ defmodule Sanctum.CallerRefreshTest do
     do: Arca.Repo.get_by(Session, token_hash: Sanctum.Session.token_hash(token))
 
   test "a request whose own refresh removes its key is refused", ctx do
-    assert {:ok, _ctx} = Caller.establish(ctx.token, refresh: false)
+    assert {:ok, _ctx} = Caller.establish(ctx.token, refresh: false, entry: :loopback)
 
     DirectoryServer.remove_key!(ctx.dir.dir, ctx.account, DirectoryServer.kid(ctx.device))
     aged!(ctx.account.identifier)
 
-    assert {:error, :unauthenticated} = Caller.establish(ctx.token, refresh: false)
+    assert {:error, :unauthenticated} =
+             Caller.establish(ctx.token, refresh: false, entry: :loopback)
+
     refute session_row(ctx.token)
   end
 
   test "a request whose own refresh recovers its account is refused", ctx do
-    assert {:ok, _ctx} = Caller.establish(ctx.token, refresh: false)
+    assert {:ok, _ctx} = Caller.establish(ctx.token, refresh: false, entry: :loopback)
 
     DirectoryServer.recover!(ctx.dir.dir, ctx.account)
     aged!(ctx.account.identifier)
 
-    assert {:error, :unauthenticated} = Caller.establish(ctx.token, refresh: false)
+    assert {:error, :unauthenticated} =
+             Caller.establish(ctx.token, refresh: false, entry: :loopback)
+
     refute session_row(ctx.token)
   end
 
   test "a retained context whose revalidation's refresh removes its key is refused", ctx do
-    assert {:ok, held} = Caller.establish(ctx.token, refresh: false)
+    assert {:ok, held} = Caller.establish(ctx.token, refresh: false, entry: :loopback)
 
     DirectoryServer.remove_key!(ctx.dir.dir, ctx.account, DirectoryServer.kid(ctx.device))
     aged!(ctx.account.identifier)
@@ -128,7 +133,7 @@ defmodule Sanctum.CallerRefreshTest do
     DirectoryServer.add_device!(ctx.dir.dir, ctx.account)
     aged!(ctx.account.identifier)
 
-    assert {:ok, held} = Caller.establish(ctx.token, refresh: false)
+    assert {:ok, held} = Caller.establish(ctx.token, refresh: false, entry: :loopback)
     assert {:ok, _ctx} = Caller.revalidate_session(held)
     assert session_row(ctx.token)
   end

@@ -354,7 +354,10 @@ defmodule Sanctum.ValidationCredentialTest do
       )
 
     {:ok, session} = Sanctum.TestContext.create_session(ctx)
-    {:ok, established} = Sanctum.Caller.establish(session.token, focus: athanor_id)
+
+    {:ok, established} =
+      Sanctum.Caller.establish(session.token, focus: athanor_id, entry: :loopback)
+
     {session, %{established | client_ip: "127.0.0.1"}}
   end
 

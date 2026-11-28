@@ -1454,7 +1454,7 @@ defmodule Cyfr.DocsDriftTest do
   # mints, writes or completes, and the browser address every deployment
   # decides, `none` until `cyfr init` or `cyfr access browser` writes another.
   @deployment_file_assignments ~w(
-    CYFR_SECRET_KEY_BASE CYFR_BROWSER CYFR_HOST CYFR_PORT
+    CYFR_SECRET_KEY_BASE CYFR_BROWSER CYFR_HOST CYFR_PORT CYFR_LINK_KEY CYFR_LINK_PUBLIC
     CYFR_CORS_ALLOWED_ORIGINS CYFR_PRIVATE_EGRESS_TARGETS CYFR_LOCUS_RUNTIME_ROOT
     LOCUS_RUNTIME_KEY CYFR_LOCUS_BACKENDS_KEY
     CYFR_LOCUS_BUILDS_KEY CYFR_LOCUS_APPARMOR CYFR_SETUP_TOKEN

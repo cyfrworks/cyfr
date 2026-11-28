@@ -39,7 +39,13 @@ defmodule PrismWeb.SystemLayerDocumentTest do
   # confirmation; it alone holds the secret.
   defp asked_elsewhere!(ctx) do
     {:ok, session} = Sanctum.TestContext.create_session(%{ctx | provider: "github"})
-    {:ok, other} = Sanctum.Caller.establish(session.token, focus: ctx.athanor_id, refresh: false)
+
+    {:ok, other} =
+      Sanctum.Caller.establish(session.token,
+        focus: ctx.athanor_id,
+        refresh: false,
+        entry: :loopback
+      )
 
     assert {:error, {:confirmation_required, %{id: id}}} =
              PrismWeb.Ops.call_tool(other, "vault/create", %{

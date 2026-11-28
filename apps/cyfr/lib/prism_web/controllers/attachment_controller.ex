@@ -32,11 +32,9 @@ defmodule PrismWeb.AttachmentController do
   @inline_types ~w(image/png image/jpeg image/gif image/webp application/pdf text/plain text/csv application/json)
 
   def show(conn, %{"athanor" => route, "message_id" => message_id, "filename" => filename}) do
-    token = get_session(conn, CyfrWeb.SignInResponse.session_key())
-
-    with {:ok, _person} <- CyfrWeb.ContextGuard.authenticate(token),
+    with {:ok, _person} <- CyfrWeb.ContextGuard.authenticate(conn),
          {:ok, athanor} <- Athanors.by_route_slug(route),
-         {:ok, ctx} <- CyfrWeb.ContextGuard.authenticate(token, athanor.id),
+         {:ok, ctx} <- CyfrWeb.ContextGuard.authenticate(conn, athanor.id),
          {:ok, msg} <- Threads.get_message(Sanctum.Context.actor(ctx), message_id),
          {:ok, ref} <- find_ref(msg, filename),
          {:ok, path} <- Aqua.attachment_blob_path(msg.thread_id, msg.id, ref) do

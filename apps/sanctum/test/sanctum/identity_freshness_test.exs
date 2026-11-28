@@ -106,6 +106,7 @@ defmodule Sanctum.IdentityFreshnessTest do
            hash,
            %{
              user_id: user_id,
+             address: Sanctum.private_address(),
              provider: "cyfr",
              kid: kid,
              head: head,

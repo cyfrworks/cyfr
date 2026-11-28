@@ -13,7 +13,7 @@ defmodule Sanctum.Session do
 
       # Create a session — only after the door admitted the person
       # (`Sanctum.SignIn`)
-      {:ok, session} = Sanctum.Session.create(ctx, kid: kid, head: head)
+      {:ok, session} = Sanctum.Session.create(ctx, address: address, kid: kid, head: head)
 
       # Load context from session token
       {:ok, ctx} = Sanctum.Session.load(session.token)
@@ -129,6 +129,11 @@ defmodule Sanctum.Session do
 
   ## Where and when
 
+  A session records the address of the entry that made it (`address:`,
+  `Sanctum.address/1`), required: it is good at either entry of that
+  address and at no other (`Sanctum.Caller.establish/2`), and a boot
+  whose server no longer has the address retires it (`retire_elsewhere/0`).
+
   A browser's sign-in hands its user agent (`user_agent:`), and the
   session records the browser and system it names in words
   (`Sanctum.UserAgent`), never the user agent itself. A session is last
@@ -141,6 +146,7 @@ defmodule Sanctum.Session do
   @spec create(Context.t(), keyword()) :: {:ok, session()} | {:error, term()}
   def create(%Context{} = ctx, opts \\ []) when is_list(opts) do
     with {:ok, binding} <- key_binding(opts),
+         {:ok, address} <- address(opts),
          {:ok, expectation} <- Sanctum.Issuance.expectation(ctx, opts) do
       token = generate_token()
 
@@ -148,6 +154,7 @@ defmodule Sanctum.Session do
         Map.merge(binding, %{
           token_hash: hash_token(token),
           token_prefix: String.slice(token, 0, 8),
+          address: address,
           client_id: Keyword.get(opts, :client_id)
         })
         |> Map.merge(where_from(Keyword.get(opts, :user_agent)))
@@ -160,6 +167,15 @@ defmodule Sanctum.Session do
   defp where_from(user_agent) do
     {browser, system} = Sanctum.UserAgent.words(user_agent)
     %{browser: browser, system: system}
+  end
+
+  # The address the session is made at: one the server has.
+  defp address(opts) do
+    address = Keyword.get(opts, :address)
+
+    if is_binary(address) and address in Sanctum.addresses(),
+      do: {:ok, address},
+      else: {:error, :invalid_request}
   end
 
   # The key that signed for the session and the head it was verified
@@ -273,6 +289,7 @@ defmodule Sanctum.Session do
       user_id: ctx.user_id,
       email: ctx.email,
       provider: ctx.provider,
+      address: minting.address,
       # A resolved context carries its athanor; a nil marks a not-yet-resolved
       # session (user with no athanor) and is re-resolved on load. No
       # scope is persisted: every session works inside its athanor, and the
@@ -601,6 +618,38 @@ defmodule Sanctum.Session do
     Arca.SessionStorage.cleanup_expired_sessions()
   end
 
+  @doc """
+  End every session made at an address the server no longer has
+  (`Sanctum.addresses/0`), and every device certificate issued for one
+  (`Sanctum.DeviceCerts.audience/1`), with the sessions that stand on it:
+  the boot's step before the endpoint serves, so adding, changing or
+  removing the browser address signs out only what was signed in there.
+  Each ended session's memo is dropped here and announced to the rest of
+  the cell (`Sanctum.Caller.invalidate_hash/1`). Answers how many of each
+  it ended, or `{:error, :unavailable}` when the store cannot answer.
+  """
+  @spec retire_elsewhere() ::
+          {:ok, %{sessions: non_neg_integer(), certificates: non_neg_integer()}}
+          | {:error, :unavailable}
+  def retire_elsewhere do
+    addresses = Sanctum.addresses()
+
+    homes =
+      for address <- addresses,
+          {:ok, home} <- [Prima.Identity.Encoding.canonical_home(address)],
+          do: home
+
+    with {:ok, hashes} <- Arca.SessionStorage.delete_elsewhere(addresses),
+         {:ok, %{certificate_ids: ids, session_hashes: standing}} <-
+           Arca.DeviceCertificates.revoke_elsewhere(homes) do
+      ended = Enum.uniq(hashes ++ standing)
+      Enum.each(ended, &Sanctum.Caller.invalidate_hash/1)
+      {:ok, %{sessions: length(ended), certificates: length(ids)}}
+    else
+      {:error, _unanswered} -> {:error, :unavailable}
+    end
+  end
+
   # ============================================================================
   # Internal
   # ============================================================================
@@ -699,6 +748,7 @@ defmodule Sanctum.Session do
             scope: :athanor,
             auth_method: :session,
             session_token_hash: token_hash,
+            session_address: row.address,
             # A protected device's session ends at its row's expiry unless
             # the device's channel slides it: a holder of this context, a
             # mounted page or an open stream, is bounded by it.

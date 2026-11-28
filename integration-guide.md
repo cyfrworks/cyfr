@@ -316,7 +316,9 @@ Every request authenticates itself and declares its own version, so:
   Sanctum session token are accepted in that header, and both are checked
   against the database on each call: revoking either takes effect on the very
   next call to the server that revoked it, and within two seconds on the other
-  servers of a cluster.
+  servers of a cluster. A session token is accepted only at the address it was
+  signed in at: one from the browser address is refused on this machine's
+  loopback, and one from the private address is refused through the proxy.
 
 ### Discovering What A Server Speaks
 
@@ -1012,7 +1014,7 @@ A rebind that narrows the binding, a grant that binds an existing entry
 and a provider default change need only the session; none enters
 material or grants an unbound component access.
 
-**OAuth is entry-keyed, not component-keyed.** Provider endpoints live on the vault entry (`google` is a built-in preset), and your OAuth app's client credentials are set once per provider with `oauth.set_client` (`provider`, `client_id`, `client_secret`) — operator configuration, not a manifest concern. The app lists `<origin>/auth/oauth/callback` as its redirect URI; the Vault page shows it, and `oauth.list` answers it beside the stored clients and the preset providers. A grant for a provider with no client set is refused for it before anything is confirmed. The component declares a need of type `oauth:<provider>` with the scopes it requires. With `attach`, it names the connection on its request and CYFR attaches the token; a need that reads `get_access_token("<provider>")` requires an explicitly disclosed entry and receives short-lived, auto-refreshed tokens. The endpoints are immutable after creation. A projection narrower than the entry's scopes is refused.
+**OAuth is entry-keyed, not component-keyed.** Provider endpoints live on the vault entry (`google` is a built-in preset), and your OAuth app's client credentials are set once per provider with `oauth.set_client` (`provider`, `client_id`, `client_secret`) — operator configuration, not a manifest concern. The app lists `<return address>/auth/oauth/callback` as its redirect URI: the browser address when the server has one, otherwise `http://localhost:<CYFR_PORT>`, where the connect is finished in a browser on the server's own machine; the Vault page shows it, and `oauth.list` answers it beside the stored clients and the preset providers. A grant for a provider with no client set is refused for it before anything is confirmed. The component declares a need of type `oauth:<provider>` with the scopes it requires. With `attach`, it names the connection on its request and CYFR attaches the token; a need that reads `get_access_token("<provider>")` requires an explicitly disclosed entry and receives short-lived, auto-refreshed tokens. The endpoints are immutable after creation. A projection narrower than the entry's scopes is refused.
 
 ### Shares (`share` tool)
 
@@ -1484,7 +1486,7 @@ cyfr key create --name "my-app"
 #    Authorization: Bearer cyfr_sk_...
 ```
 
-The Prism console is served at `http://localhost:4000`, the same endpoint as the API: the desktop at `/`, and each athanor's pages under `/a/<athanor>/…`, each opening over the desktop, among them its executions, activities, builds and components, each updating as a run progresses.
+The Prism console is served at the server's private address, `http://h-<16 characters>.localhost:4000` on its own machine (`cyfr status` prints it), and at its browser address when it has one, the same endpoint as the API: the desktop at `/`, and each athanor's pages under `/a/<athanor>/…`, each opening over the desktop, among them its executions, activities, builds and components, each updating as a run progresses.
 
 From here, your app can POST to `/mcp` with the API key and execute any component you've configured.
 

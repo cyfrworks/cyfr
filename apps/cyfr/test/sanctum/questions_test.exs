@@ -108,7 +108,10 @@ defmodule Sanctum.QuestionsTest do
       )
 
     {:ok, session} = TestContext.create_session(built)
-    {:ok, ctx} = Sanctum.Caller.establish(session.token, focus: athanor.id, refresh: false)
+
+    {:ok, ctx} =
+      Sanctum.Caller.establish(session.token, focus: athanor.id, refresh: false, entry: :loopback)
+
     {ctx, session.token}
   end
 
@@ -2018,7 +2021,7 @@ defmodule Sanctum.QuestionsTest do
 
       {:ok, device_key} = Prima.Identity.Key.new(alg: :ed25519, kind: :device, pub: pub)
       client_id = Prima.UUID7.generate_id("pcl")
-      holder = Map.put(Sanctum.Test.Devices.holder(), :client_id, client_id)
+      holder = Map.merge(Sanctum.Test.Devices.holder(), %{client_id: client_id, entry: :loopback})
       :ok = Sanctum.DeviceUnlock.pair(%{id: user.id}, holder, device_key, account.head)
 
       {:ok, %{certificate: bytes}} =

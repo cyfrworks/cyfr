@@ -569,7 +569,7 @@ defmodule PrismWeb.ChatOverlayLive do
               {live_render(@socket, PrismWeb.SharedThreadLive,
                 id: "chat-thread-" <> @shared.id,
                 container: {:div, class: "flex min-h-0 flex-1 flex-col"},
-                session: %{"thread_id" => @shared.id}
+                session: %{"thread_id" => @shared.id, "entry" => @request_entry}
               )}
             <% else %>
               <div class="flex flex-1 items-center justify-center px-6 text-center text-xs text-text-muted">

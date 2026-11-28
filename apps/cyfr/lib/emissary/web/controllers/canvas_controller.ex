@@ -177,9 +177,9 @@ defmodule Emissary.Web.CanvasController do
   # apply here.
   # sobelow_skip ["XSS.SendResp"]
   defp page(conn, ctx, version, credential, frame_id) do
-    # The shell is framed from the endpoint's own origin, as a tincture
-    # document's policy reads it when it names no other.
-    endpoint = TinctureAssets.endpoint_origin()
+    # The shell is framed from the address the page was asked at, as a
+    # tincture document's policy reads it when it names no other.
+    endpoint = TinctureAssets.endpoint_origin(conn)
     sdk_path = TinctureAssets.canvas_sdk_path()
 
     base =

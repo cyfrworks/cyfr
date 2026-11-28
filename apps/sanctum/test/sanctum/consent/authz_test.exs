@@ -95,7 +95,7 @@ defmodule Sanctum.Consent.AuthzTest do
     {:ok, session} = Sanctum.TestContext.create_session(built)
 
     {:ok, session_ctx} =
-      Sanctum.Caller.establish(session.token, focus: athanor.id, refresh: false)
+      Sanctum.Caller.establish(session.token, focus: athanor.id, refresh: false, entry: :loopback)
 
     %{user: user, athanor: athanor, session: session, session_ctx: session_ctx}
   end
@@ -721,10 +721,18 @@ defmodule Sanctum.Consent.AuthzTest do
       # Two contexts built from one session token: the thief's, which asks
       # first, and the person's, which asks for the identical change.
       {:ok, thief} =
-        Sanctum.Caller.establish(session.token, focus: athanor.id, refresh: false)
+        Sanctum.Caller.establish(session.token,
+          focus: athanor.id,
+          refresh: false,
+          entry: :loopback
+        )
 
       {:ok, person} =
-        Sanctum.Caller.establish(session.token, focus: athanor.id, refresh: false)
+        Sanctum.Caller.establish(session.token,
+          focus: athanor.id,
+          refresh: false,
+          entry: :loopback
+        )
 
       assert thief.session_token_hash == person.session_token_hash
 
@@ -880,7 +888,11 @@ defmodule Sanctum.Consent.AuthzTest do
       {:ok, session} = Sanctum.TestContext.create_session(built)
 
       {:ok, other} =
-        Sanctum.Caller.establish(session.token, focus: athanor.id, refresh: false)
+        Sanctum.Caller.establish(session.token,
+          focus: athanor.id,
+          refresh: false,
+          entry: :loopback
+        )
 
       assert {:error, {:confirmation_required, %{id: own}}} =
                Authz.check(%{other | confirmation_id: id}, :credential_entry, change())
@@ -1104,7 +1116,7 @@ defmodule Sanctum.Consent.AuthzTest do
 
       # A context no stored credential backs is named by this home.
       assert Jason.decode!(record(theirs, own).asker) ==
-               %{"kind" => "unbound", "name" => Sanctum.origin()}
+               %{"kind" => "unbound", "name" => Sanctum.private_address()}
     end
 
     test "another session of the same person never takes a record this one opened, even proven",
@@ -1125,7 +1137,11 @@ defmodule Sanctum.Consent.AuthzTest do
       {:ok, session} = Sanctum.TestContext.create_session(built)
 
       {:ok, stolen} =
-        Sanctum.Caller.establish(session.token, focus: athanor.id, refresh: false)
+        Sanctum.Caller.establish(session.token,
+          focus: athanor.id,
+          refresh: false,
+          entry: :loopback
+        )
 
       refute stolen.session_token_hash == asking.session_token_hash
 
@@ -1552,7 +1568,7 @@ defmodule Sanctum.Consent.AuthzRaceTest do
         client_id: client_id,
         identifier: account.identifier,
         head: account.head,
-        audience: Sanctum.origin(),
+        audience: Sanctum.private_address(),
         athanor: athanor_id,
         not_before: now,
         expires_at: now + 3_600_000

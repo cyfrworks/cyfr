@@ -97,7 +97,7 @@ defmodule Sanctum.DeviceUnlockReview353RaceTest do
       Task.async(fn ->
         unboxed(fn ->
           Process.put(:review353_redemption, true)
-          DeviceUnlock.redeem(answer.ticket)
+          DeviceUnlock.redeem(answer.ticket, :loopback)
         end)
       end)
 

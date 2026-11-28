@@ -20,12 +20,12 @@ defmodule Emissary.Web.DeviceChannel do
   what holds the key, the name it shows and, when it brings one, the
   setup token: only a connection that has sent
   nothing may. The channel reserves a paired-client id for it and asks
-  `Sanctum.DeviceUnlock.hello/2`, which answers a `sign_in` request bound
+  `Sanctum.DeviceUnlock.hello/3`, which answers a `sign_in` request bound
   to this channel by that id, held for the key the hello named; the
   channel answers `sign_in_request`. While the request is out the channel
   takes `sign_in_answer` and nothing else, and waits until the request
   expires (a person may be typing a PIN), not the challenge's lifetime.
-  The answer goes to `Sanctum.DeviceUnlock.admit/2`, which verifies it
+  The answer goes to `Sanctum.DeviceUnlock.admit/3`, which verifies it
   against the account's log, admits the person and pairs the device with
   its first certificate, and the channel answers `admitted`: the client
   id, the certificate and the client's standing. From then on the
@@ -45,9 +45,11 @@ defmodule Emissary.Web.DeviceChannel do
   (`Sanctum.DeviceCerts.challenge_key/2`; a client this home does not hold
   is `unchallengeable`). The glass answers with a `proof`, which
   `Sanctum.DeviceCerts.verify_connect/3` decides with the connect and the
-  challenge held for this connection: the proof of possession of that
-  device key, then the certificate, under this home's installation key,
-  and the paired client's standing. Until a proof verifies, the channel takes
+  challenge held for this connection: the challenge's home the address of
+  the listener the channel came in by (a certificate issued at the other
+  address connects nothing), the proof of possession of that device key,
+  then the certificate, under this home's installation key, and the
+  paired client's standing. Until a proof verifies, the channel takes
   `connect`, `renew` and `proof` and nothing else, a hello's exchange
   apart; the challenge's lifetime bounds how long it waits, from the
   upgrade and again from the challenge. A verified proof sets the client's context
@@ -178,7 +180,7 @@ defmodule Emissary.Web.DeviceChannel do
   with what was refused: the message's type and its field names, and an
   intent's argument names, never a value, so a hello's setup token and an
   answer's signature reach no row. A refusal of a
-  hello or of its answer, by `Sanctum.DeviceUnlock.hello/2` or `admit/2`,
+  hello or of its answer, by `Sanctum.DeviceUnlock.hello/3` or `admit/3`,
   is told first: `refused`, carrying the refusal's class and its sentence
   (`Prima.Refusal`'s), as an answer's `error` carries them; nothing else
   sends it. Then the socket closes with a WebSocket close code whose
@@ -349,6 +351,7 @@ defmodule Emissary.Web.DeviceChannel do
       Context.build(
         request_id: Prima.UUID7.request_id(),
         client_ip: Sanctum.ClientIp.from_connect_info(connect_info),
+        entry: Sanctum.ClientIp.ingress_from_connect_info(connect_info),
         origin: :interactive
       )
 
@@ -561,12 +564,12 @@ defmodule Emissary.Web.DeviceChannel do
   defp receive_message({_type, _body}, state), do: refuse(state, :not_accepted)
 
   # A hello: a paired-client id reserved for the device, made as every
-  # client id is, and the request `Sanctum.DeviceUnlock.hello/2` holds for
+  # client id is, and the request `Sanctum.DeviceUnlock.hello/3` holds for
   # it, which the channel waits on until it expires.
   defp hello(hello, state) do
     client_id = Prima.UUID7.generate_id("pcl")
 
-    case Sanctum.DeviceUnlock.hello(client_id, hello) do
+    case Sanctum.DeviceUnlock.hello(client_id, hello, state.ctx.entry) do
       {:ok, request} ->
         state = arm(%{state | hello: {:asked, client_id, request}}, request.expires_at - now())
         {:reply, :ok, {:text, wire({:sign_in_request, %{request: request}})}, state}
@@ -580,7 +583,7 @@ defmodule Emissary.Web.DeviceChannel do
   # the device paired, and the connection fresh again, bounded by the
   # challenge's lifetime, for the `connect` under its new certificate.
   defp admit_device(client_id, answer, state) do
-    case Sanctum.DeviceUnlock.admit(client_id, answer) do
+    case Sanctum.DeviceUnlock.admit(client_id, answer, state.ctx.entry) do
       {:ok, admitted} ->
         state = arm(%{state | hello: :admitted}, Challenge.lifetime_ms())
         {:reply, :ok, {:text, wire({:admitted, admitted})}, state}
@@ -598,7 +601,7 @@ defmodule Emissary.Web.DeviceChannel do
   # client: the verifier holds the proof to the device key the client's
   # row stores.
   defp challenge(purpose, %{client_id: client_id, certificate: certificate} = body, state) do
-    connection = Map.put(body, :source, state.ctx.client_ip)
+    connection = Map.merge(body, %{source: state.ctx.client_ip, entry: state.ctx.entry})
 
     with {:ok, device_key} <- Sanctum.DeviceCerts.challenge_key(purpose, connection),
          {:ok, challenge} <-
@@ -622,7 +625,7 @@ defmodule Emissary.Web.DeviceChannel do
   # A proof goes to the verifier with the message and the challenge held
   # for it; the challenge is answered once, whatever the verdict.
   defp prove(proof, %{challenge: %Challenge{purpose: purpose} = challenge} = state) do
-    connection = Map.put(state.connect, :source, state.ctx.client_ip)
+    connection = Map.merge(state.connect, %{source: state.ctx.client_ip, entry: state.ctx.entry})
 
     case Sanctum.DeviceCerts.verify_connect(connection, proof, challenge) do
       {:ok, client} when purpose == :connect ->

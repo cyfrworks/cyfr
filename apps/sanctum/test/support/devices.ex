@@ -30,14 +30,15 @@ defmodule Sanctum.Test.Devices do
 
   @doc """
   The request the hello of `device` (a key pair of `account`'s) is
-  answered, on a channel that reserved a new client id: `{client_id,
-  request}`. `admission` and `holder` are `hello/4`'s.
+  answered, on a channel that reserved a new client id and came in by
+  `entry` (the loopback listener by default): `{client_id, request}`.
+  `admission` and `holder` are `hello/4`'s.
   """
-  def hello!(account, device, admission \\ nil, holder \\ @holder) do
+  def hello!(account, device, admission \\ nil, holder \\ @holder, entry \\ :loopback) do
     client_id = Prima.UUID7.generate_id("pcl")
 
     {:ok, request} =
-      Sanctum.DeviceUnlock.hello(client_id, hello(account, device, admission, holder))
+      Sanctum.DeviceUnlock.hello(client_id, hello(account, device, admission, holder), entry)
 
     {client_id, request}
   end
@@ -46,12 +47,13 @@ defmodule Sanctum.Test.Devices do
   def answer(request, {pub, priv}), do: DeviceAnswer.sign(request, Key.kid(pub), priv)
 
   @doc """
-  `device` of `account` admitted by its hello under `admission`: what
-  `Sanctum.DeviceUnlock.admit/2` answers, with the key and the person.
+  `device` of `account` admitted by its hello under `admission`, on a
+  channel that came in by `entry` (the loopback listener by default):
+  what `Sanctum.DeviceUnlock.admit/3` answers, with the key and the person.
   """
-  def admitted!(account, device, admission \\ nil, holder \\ @holder) do
-    {client_id, request} = hello!(account, device, admission, holder)
-    {:ok, admitted} = Sanctum.DeviceUnlock.admit(client_id, answer(request, device))
+  def admitted!(account, device, admission \\ nil, holder \\ @holder, entry \\ :loopback) do
+    {client_id, request} = hello!(account, device, admission, holder, entry)
+    {:ok, admitted} = Sanctum.DeviceUnlock.admit(client_id, answer(request, device), entry)
     {:ok, user} = Sanctum.Tenancy.Users.get_by_identifier(account.identifier)
     Map.merge(admitted, %{key: device, user: user})
   end
@@ -72,16 +74,26 @@ defmodule Sanctum.Test.Devices do
     challenge
   end
 
-  @doc "The device's channel context, as a connect proof from `source` establishes it."
+  @doc """
+  The device's channel context, as a connect proof from `source`, on a
+  channel that came in by `entry` (the loopback listener by default),
+  establishes it.
+  """
   def connected!(
         %{certificate: certificate, key: {_pub, priv}} = admitted,
-        source \\ "198.51.100.40"
+        source \\ "198.51.100.40",
+        entry \\ :loopback
       ) do
     challenge = challenge(admitted)
 
     {:ok, ctx} =
       Sanctum.DeviceCerts.verify_connect(
-        %{client_id: certificate.client_id, certificate: certificate, source: source},
+        %{
+          client_id: certificate.client_id,
+          certificate: certificate,
+          source: source,
+          entry: entry
+        },
         Proof.sign(challenge, priv),
         challenge
       )
@@ -104,7 +116,7 @@ defmodule Sanctum.Test.Devices do
     {pub, priv} = :crypto.generate_key(:eddsa, :ed25519)
     {:ok, key} = Key.new(alg: :ed25519, kind: :device, pub: pub)
     client_id = Prima.UUID7.generate_id("pcl")
-    device = Map.put(holder, :client_id, client_id)
+    device = Map.merge(holder, %{client_id: client_id, entry: :loopback})
     :ok = Sanctum.DeviceUnlock.pair(%{id: user_id}, device, key, account.head)
 
     {:ok, %{id: athanor_id}} = Sanctum.Tenancy.Athanors.get_by_owner(user_id)

@@ -23,7 +23,7 @@ defmodule Cyfr.NotSetUpNoticeTest do
 
     assert Cyfr.Application.not_set_up_notice() ==
              "no one is set up on this CYFR yet. Its first person, who administers it, opens " <>
-               "the setup link `cyfr init` printed (#{Sanctum.origin()}/setup#…), or presses Open CYFR " <>
+               "the setup link `cyfr init` printed (#{Sanctum.shared_address()}/setup#…), or presses Open CYFR " <>
                "in the CYFR app that set it up."
   end
 

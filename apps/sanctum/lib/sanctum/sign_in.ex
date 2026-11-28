@@ -12,9 +12,11 @@ defmodule Sanctum.SignIn do
   ## The request
 
   `request/3` mints a request for one purpose, `:sign_in`, `:confirm` or
-  `:registry`, with this CYFR's origin (`Sanctum.origin/0`, in its one
-  spelling) as its audience and the sign-in page on it, `/login`, as its
-  return. It is held here, keyed by its challenge, for its lifetime
+  `:registry`, at the entry that asked for it: the address of that entry
+  (`Sanctum.address/1`, in its one spelling) is its audience and the
+  sign-in page on it, `/login`, its return. A request minted at one
+  address is answered at no other: `answer/3` takes the entry that
+  delivered the answer and refuses an audience that is not its address. It is held here, keyed by its challenge, for its lifetime
   (`Prima.SignIn.lifetime_ms/0`, five minutes), bound to what asked for
   it, as its browser's session cookie or its channel holds it: a browser
   not signed in yet, by its session's forgery token (`{:browser, token}`,
@@ -64,9 +66,10 @@ defmodule Sanctum.SignIn do
        otherwise: unknown, spent, or past its lifetime);
     2. the request is bound to what delivered the answer, is for the
        confirmation the caller names when it names one (`:ref`), and is
-       unexpired and for this audience (`:answer_refused`): a replayed
-       answer meets a spent request, and an answer from another browser
-       or channel, or one past the request's expiry, signs no one in;
+       unexpired and for the address of the entry that delivered the
+       answer (`:answer_refused`): a replayed answer meets a spent
+       request, and an answer from another browser or channel, at the
+       other address, or past the request's expiry, signs no one in;
     3. the answering account's log (`:identity_stale`, `:identity_gone`,
        `:unavailable`). A sign-in's is read now
        (`Sanctum.IdentityFreshness.fresh!/2`), the entries after the
@@ -238,6 +241,10 @@ defmodule Sanctum.SignIn do
   Mint and hold a request for `purpose`, bound to `binding` (the module
   doc). `opts`:
 
+    * `:entry` — the listener that asked (`Sanctum.ClientIp.ingress/1`),
+      whose address is the request's audience; required, and a request
+      with none, or at the proxy entry of a server with no browser
+      address, is `:unavailable`;
     * `:admission` — `:sign_in`'s `t:admission/0`;
     * `:page` — the account page a browser is sent to (`t:page/0`,
       `:sign` by default);
@@ -262,7 +269,7 @@ defmodule Sanctum.SignIn do
           {:ok, minted()} | {:error, term()}
   def request(purpose, binding, opts \\ []) when is_list(opts) do
     with :ok <- binding(binding, opts),
-         {:ok, home} <- home(),
+         {:ok, home} <- home(Keyword.get(opts, :entry)),
          {:ok, held} <- held(purpose, opts),
          {:ok, request} <- minted(purpose, home, held),
          url = url(binding, request, Keyword.get(opts, :page, :sign)),
@@ -286,22 +293,23 @@ defmodule Sanctum.SignIn do
 
   @doc """
   What a request the caller's own client asks for is bound to, and its
-  answer taken under, with the options `request/3` takes for it: a
-  protected device's own channel, with the account it speaks for
-  (`identifier:`), or the person's browser by their session.
+  answer taken under, with the options `request/3` and `answer/3` take
+  for it: a protected device's own channel, with the account it speaks
+  for (`identifier:`), or the person's browser by their session; each
+  with the context's entry (`entry:`).
   `:unauthenticated` for any other caller, `:unavailable` when the store
   cannot answer.
   """
   @spec binding(Context.t()) ::
           {:ok, binding(), keyword()} | {:error, :unauthenticated | :unavailable}
-  def binding(%Context{auth_method: :device, client_id: client_id, user_id: user_id})
+  def binding(%Context{auth_method: :device, client_id: client_id, user_id: user_id} = ctx)
       when is_binary(client_id) and is_binary(user_id) do
     with {:ok, identifier} <- account_of(user_id),
-         do: {:ok, {:channel, client_id}, [identifier: identifier]}
+         do: {:ok, {:channel, client_id}, [identifier: identifier, entry: ctx.entry]}
   end
 
-  def binding(%Context{session_token_hash: hash}) when is_binary(hash) and hash != "",
-    do: {:ok, {:session, hash}, []}
+  def binding(%Context{session_token_hash: hash} = ctx) when is_binary(hash) and hash != "",
+    do: {:ok, {:session, hash}, [entry: ctx.entry]}
 
   def binding(%Context{}), do: {:error, :unauthenticated}
 
@@ -316,27 +324,35 @@ defmodule Sanctum.SignIn do
   end
 
   @doc """
-  This CYFR's origin in its one spelling (`Sanctum.origin/0`, its scheme
-  and host lowercased, a default port and any path dropped): the audience
-  of every request it mints and of every device certificate it issues.
-  `:unavailable`, logged, for an origin that names no scheme and host.
+  The address of `entry` (`Sanctum.address/1`) in its one spelling (its
+  scheme and host lowercased, a default port and any path dropped): the
+  audience of every request this CYFR mints there and of every device
+  certificate it issues there. `:unavailable` for no entry, the proxy
+  entry of a server with no browser address, and, logged, an address that
+  names no scheme and host.
   """
-  @spec audience() :: {:ok, String.t()} | {:error, :unavailable}
-  def audience, do: home()
+  @spec audience(Sanctum.entry() | nil) :: {:ok, String.t()} | {:error, :unavailable}
+  def audience(entry), do: home(entry)
 
-  # An origin served under a path names no audience a request can carry.
-  defp home do
-    case Encoding.canonical_home(Sanctum.origin()) do
-      {:ok, home} ->
-        {:ok, home}
-
-      :error ->
-        Logger.error(
-          "[Sanctum.SignIn] this CYFR's origin is no scheme and host a request can name as its " <>
-            "audience; no request is minted"
-        )
-
+  # An address served under a path names no audience a request can carry.
+  defp home(entry) do
+    case Sanctum.address(entry) do
+      nil ->
         {:error, :unavailable}
+
+      address ->
+        case Encoding.canonical_home(address) do
+          {:ok, home} ->
+            {:ok, home}
+
+          :error ->
+            Logger.error(
+              "[Sanctum.SignIn] this CYFR's address is no scheme and host a request can name " <>
+                "as its audience; no request is minted"
+            )
+
+            {:error, :unavailable}
+        end
     end
   end
 
@@ -561,7 +577,9 @@ defmodule Sanctum.SignIn do
   code}`). `opts`:
   `:ref`, the confirmation the answer must be for, and `:operation` with
   `:body`, the registry operation and body it must be for, so an answer
-  to any other request is refused before it does anything; `:now`, the
+  to any other request is refused before it does anything; `:entry`, the
+  listener that delivered the answer, whose address must be the request's
+  audience (required: none refuses the answer); `:now`, the
   clock in milliseconds, the system's by default; `:user_agent`, the
   user agent of the browser a sign-in's session is for, whose browser and
   system the session records (`Sanctum.Session.create/2`). A terminal's answer to
@@ -601,7 +619,7 @@ defmodule Sanctum.SignIn do
     with {:ok, held} <- spent(answer.challenge),
          :ok <- bound(held.binding, binding),
          :ok <- expected(held, opts),
-         {:ok, home} <- home(),
+         {:ok, home} <- answered_at(opts),
          {:ok, key} <- offered(answer, held.request, home, now),
          :ok <- wait(answer.identifier, key, now) do
       {:ok, %{purpose: :sign_in, waiting: NewPasskey.code(key)}}
@@ -615,9 +633,10 @@ defmodule Sanctum.SignIn do
     with {:ok, held} <- spent(answer.challenge),
          :ok <- bound(held.binding, binding),
          :ok <- expected(held, opts),
-         :ok <- current(held.request, now),
+         {:ok, home} <- answered_at(opts),
+         :ok <- current(held.request, home, now),
          {:ok, identifier} <- answering(answer, held),
-         {:ok, key, head} <- signed_by(answer, held.request, identifier, now) do
+         {:ok, key, head} <- signed_by(answer, held.request, identifier, home, now) do
       done(held, answer, identifier, key, head, opts)
     end
   end
@@ -628,7 +647,8 @@ defmodule Sanctum.SignIn do
     with {:ok, held} <- spent_by_nonce(signed.nonce),
          :ok <- bound(held.binding, binding),
          :ok <- expected(held, opts),
-         :ok <- current(held.request, now),
+         {:ok, home} <- answered_at(opts),
+         :ok <- current(held.request, home, now),
          :ok <- composed(held.request, signed),
          {:ok, bytes} <- sent(signed) do
       {:ok, registry_outcome(held, bytes)}
@@ -784,11 +804,21 @@ defmodule Sanctum.SignIn do
 
   defp for_operation?(_request, _opts), do: false
 
-  # Unexpired and for this CYFR, before any log is read for it.
-  defp current(%Prima.SignIn{expires_at: expires_at, audience: audience}, now) do
+  # The audience of the entry that delivered the answer: an answer at no
+  # address, or at one this CYFR cannot spell, signs no one in.
+  defp answered_at(opts) do
+    case home(Keyword.get(opts, :entry)) do
+      {:ok, home} -> {:ok, home}
+      {:error, :unavailable} -> refused(:wrong_audience)
+    end
+  end
+
+  # Unexpired and for the address that delivered it, before any log is
+  # read for it.
+  defp current(%Prima.SignIn{expires_at: expires_at, audience: audience}, home, now) do
     cond do
       now >= expires_at -> refused(:expired)
-      home() != {:ok, audience} -> refused(:wrong_audience)
+      home != audience -> refused(:wrong_audience)
       true -> :ok
     end
   end
@@ -811,24 +841,29 @@ defmodule Sanctum.SignIn do
   # directory; a key the cached log does not list yet is looked for once
   # more in the log read now, so a passkey or device just added to the
   # account answers at once.
-  defp signed_by(answer, request, identifier, now) do
+  defp signed_by(answer, request, identifier, home, now) do
     with {:ok, head, state, read} <- account(identifier, request.purpose) do
-      case verify(answer, request, state, now) do
-        {:ok, key} -> {:ok, key, head}
-        {:error, :unknown_key} when read == :cached -> signed_now(answer, request, head, now)
-        {:error, reason} -> refused(reason)
+      case verify(answer, request, state, home, now) do
+        {:ok, key} ->
+          {:ok, key, head}
+
+        {:error, :unknown_key} when read == :cached ->
+          signed_now(answer, request, head, home, now)
+
+        {:error, reason} ->
+          refused(reason)
       end
     end
   end
 
-  defp signed_now(answer, request, cached, now) do
+  defp signed_now(answer, request, cached, home, now) do
     case Sanctum.IdentityFreshness.fresh!(cached.identifier) do
       {:ok, %{head_hash: same}} when same == cached.head_hash ->
         refused(:unknown_key)
 
       {:ok, head} ->
         with {:ok, state} <- state(head) do
-          case verify(answer, request, state, now) do
+          case verify(answer, request, state, home, now) do
             {:ok, key} -> {:ok, key, head}
             {:error, reason} -> refused(reason)
           end
@@ -883,11 +918,8 @@ defmodule Sanctum.SignIn do
     end
   end
 
-  defp verify(answer, request, state, now) do
-    with {:ok, home} <- home() do
-      Prima.SignIn.verify(answer, request, state, home: home, now: now)
-    end
-  end
+  defp verify(answer, request, state, home, now),
+    do: Prima.SignIn.verify(answer, request, state, home: home, now: now)
 
   defp refused(reason) do
     Logger.info("[Sanctum.SignIn] an answer was refused: " <> Prima.LoggerContext.shape(reason))
@@ -905,13 +937,14 @@ defmodule Sanctum.SignIn do
          identifier,
          %Prima.Identity.Key{kind: :device, kid: kid} = key,
          head,
-         _opts
+         opts
        ) do
     if held[:kid] == kid do
       device = %{
         client_id: client_id,
         holder_kind: held[:holder_kind],
-        display_name: held[:display_name]
+        display_name: held[:display_name],
+        entry: opts[:entry]
       }
 
       pair = &Sanctum.DeviceUnlock.pair(&1, device, key, head.head_hash)
@@ -935,7 +968,7 @@ defmodule Sanctum.SignIn do
 
   defp done(%{request: %{purpose: :sign_in}} = held, _answer, identifier, key, head, opts) do
     with {:ok, user} <- signed_in(identifier, held.admission, head, nil),
-         {:ok, token} <- session(user, key, head, opts[:user_agent]) do
+         {:ok, token} <- session(user, key, head, opts) do
       {:ok, %{purpose: :sign_in, user: named(user, held[:name]), session_token: token}}
     end
   end
@@ -1159,7 +1192,7 @@ defmodule Sanctum.SignIn do
   # first, so a revocation of it that commits before the session leaves
   # the session unminted (`Arca.SessionStorage.create_session/3`). It
   # records the browser and system the browser's user agent names.
-  defp session(user, key, head, user_agent) do
+  defp session(user, key, head, opts) do
     ctx =
       Context.build(
         user_id: user.id,
@@ -1174,10 +1207,11 @@ defmodule Sanctum.SignIn do
            Sanctum.Tenancy.resolve_status(%{ctx | namespace: user[:namespace]}, force: true),
          {:ok, session} <-
            Sanctum.Session.create(ctx,
+             address: Sanctum.address(opts[:entry]),
              kid: key.kid,
              head: head.head_hash,
              client_id: client.id,
-             user_agent: user_agent
+             user_agent: opts[:user_agent]
            ) do
       Sanctum.Telemetry.auth_event(key.kind, :success)
       {:ok, session.token}

@@ -53,7 +53,7 @@ defmodule Emissary.Web.PulledTinctureTest do
     {reader, user} = Sanctum.TestContext.person!(Sanctum.TestContext.local())
     reader = %{reader | athanor_id: Sanctum.Test.People.athanor!(user).id}
     {:ok, session} = Sanctum.TestContext.create_session(Sanctum.TestContext.issuer!(reader))
-    {:ok, rctx} = Sanctum.Caller.establish(session.token)
+    {:ok, rctx} = Sanctum.Caller.establish(session.token, entry: :loopback)
     {:ok, rctx: rctx, ctx: reader}
   end
 

@@ -18,8 +18,8 @@
 #       this deployment's registry (`handle.claim` signed by the recovery
 #       key, the registry's policy accepted first when the registry asks,
 #       `Compendium.Registry.Client.signed/2`). Then the device's hello,
-#       as its channel takes one (`Sanctum.DeviceUnlock.hello/2` and
-#       `admit/2`, the calls `Emissary.Web.DeviceChannel` makes, under a
+#       as its channel takes one (`Sanctum.DeviceUnlock.hello/3` and
+#       `admit/3`, the calls `Emissary.Web.DeviceChannel` makes, under a
 #       client id reserved as it reserves one): the device signs the
 #       sign-in request with its key, and the CYFR verifies the answer
 #       against the account's log, admits the person, learns their name
@@ -211,7 +211,7 @@ fn args ->
       with {:ok, text} <- File.read(path),
            {:ok, %{"seed" => seed} = kept} <- Jason.decode(text),
            {:ok, <<_::binary-size(32)>> = seed} <- Base.url_decode64(seed, padding: false),
-           true <- kept["home"] == Sanctum.origin() do
+           true <- kept["home"] == Sanctum.private_address() do
         seed
       else
         _another ->
@@ -229,7 +229,7 @@ fn args ->
       seed: Base.url_encode64(seed, padding: false),
       client_id: client_id,
       athanor_id: athanor_id,
-      home: Sanctum.origin(),
+      home: Sanctum.private_address(),
       certificate: Jason.decode!(row.certificate)
     })
   end
@@ -400,9 +400,11 @@ fn args ->
       admission: admission
     }
 
-    with {:ok, request} <- Sanctum.DeviceUnlock.hello(client_id, said),
+    # A device on this machine, as its channel takes it on the loopback
+    # listener.
+    with {:ok, request} <- Sanctum.DeviceUnlock.hello(client_id, said, :loopback),
          answer = Prima.SignIn.DeviceAnswer.sign(request, account.key.kid, seed),
-         {:ok, %{client_id: paired}} <- Sanctum.DeviceUnlock.admit(client_id, answer) do
+         {:ok, %{client_id: paired}} <- Sanctum.DeviceUnlock.admit(client_id, answer, :loopback) do
       paired
     else
       {:error, {:door, reason}} ->
@@ -551,7 +553,12 @@ fn args ->
         )
 
       proof = Proof.sign(challenge, seed)
-      connection = %{client_id: client_id, certificate: certificate, source: base.client_ip}
+      connection = %{
+        client_id: client_id,
+        certificate: certificate,
+        source: base.client_ip,
+        entry: :loopback
+      }
       {Sanctum.DeviceCerts.verify_connect(connection, proof, challenge), proof}
     end
 
@@ -636,7 +643,7 @@ fn args ->
     |> Path.join("device-per_*.json")
     |> Path.wildcard()
     |> Enum.filter(
-      &(&1 |> File.read!() |> Jason.decode!() |> Map.get("home") == Sanctum.origin())
+      &(&1 |> File.read!() |> Jason.decode!() |> Map.get("home") == Sanctum.private_address())
     )
   end
 
@@ -744,7 +751,7 @@ fn args ->
   # `refused?`, the two wrong answers are given first and their refusals
   # kept: another person's device's, and one over a changed record.
   confirmed_call = fn token, tool, arguments, refused? ->
-    {:ok, ctx} = Sanctum.Caller.establish({:session, token})
+    {:ok, ctx} = Sanctum.Caller.establish({:session, token}, entry: :loopback)
 
     case PrismWeb.Ops.call_tool(ctx, tool, arguments) do
       {:error, {:confirmation_required, %{id: id}}} ->
@@ -791,7 +798,11 @@ fn args ->
       ctx = person_ctx.(person.id)
 
       {:ok, session} =
-        Sanctum.Session.create(ctx, kid: account.key.kid, head: account.head_hash)
+        Sanctum.Session.create(ctx,
+          address: Sanctum.private_address(),
+          kid: account.key.kid,
+          head: account.head_hash
+        )
 
       answer.(%{
         user_id: person.id,
@@ -868,7 +879,7 @@ fn args ->
       })
 
     ["grant", token, name | version] when length(version) <= 1 ->
-      {:ok, console} = Sanctum.Caller.establish({:session, token})
+      {:ok, console} = Sanctum.Caller.establish({:session, token}, entry: :loopback)
       ctx = %{console | origin: :interactive}
       ref = "tincture:local." <> name
       pinned = ref <> ":" <> List.first(version, "1.0.0")
@@ -927,7 +938,7 @@ fn args ->
       # What the console does when the person runs a tool: the session
       # established as a request establishes it, then the console's adapter
       # onto the operation catalog, through the one gate.
-      {:ok, ctx} = Sanctum.Caller.establish({:session, token})
+      {:ok, ctx} = Sanctum.Caller.establish({:session, token}, entry: :loopback)
 
       case PrismWeb.Ops.call_tool(ctx, tool, Jason.decode!(arguments)) do
         {:ok, result} -> answer.(%{ok: result})
@@ -975,7 +986,7 @@ fn args ->
       answer.(%{contents: Enum.map(messages, & &1.content)})
 
     ["session_thread_read", token, thread_id] ->
-      {:ok, ctx} = Sanctum.Caller.establish({:session, token})
+      {:ok, ctx} = Sanctum.Caller.establish({:session, token}, entry: :loopback)
       messages = Arca.ThreadStorage.messages(Sanctum.Context.actor(ctx), thread_id)
       answer.(%{user_id: ctx.user_id, contents: Enum.map(messages, & &1.content)})
   end

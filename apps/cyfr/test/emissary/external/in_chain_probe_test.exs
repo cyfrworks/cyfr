@@ -59,7 +59,7 @@ defmodule Emissary.External.InChainProbeTest do
     {person, user} = Sanctum.TestContext.person!(Sanctum.TestContext.local(:api))
     own = Sanctum.Test.People.athanor!(user)
     issuer = Sanctum.TestContext.issuer!(%{person | athanor_id: own.id})
-    {:ok, session} = Sanctum.Session.create(issuer)
+    {:ok, session} = Sanctum.Session.create(issuer, address: Sanctum.private_address())
 
     {:ok, server} =
       Arca.McpServerStorage.insert(Sanctum.Context.actor(issuer), %{
@@ -113,7 +113,7 @@ defmodule Emissary.External.InChainProbeTest do
     assert %{kind: "component", status: "completed"} =
              Arca.Repo.get(Arca.Schemas.Execution, root_id)
 
-    {:ok, ctx} = Sanctum.Caller.establish(token)
+    {:ok, ctx} = Sanctum.Caller.establish(token, entry: :loopback)
     actor = Sanctum.Context.actor(ctx)
     assert {:ok, grant} = Sanctum.ExecutionStanding.capture(ctx)
     assert {:ok, ^grant} = Arca.ExecutionAttempts.grant(actor, root_id)
@@ -122,7 +122,7 @@ defmodule Emissary.External.InChainProbeTest do
 
   test "an in-chain call that names no parent is refused missing_grant and admits nothing",
        %{token: token} do
-    {:ok, ctx} = Sanctum.Caller.establish(token)
+    {:ok, ctx} = Sanctum.Caller.establish(token, entry: :loopback)
 
     assert {:ok, target} = Proxy.resolve(@tool, ctx, :in_chain)
 
@@ -139,7 +139,7 @@ defmodule Emissary.External.InChainProbeTest do
   defp in_chain(token, name, arguments) do
     args = %{"token" => token, "name" => name, "arguments" => arguments, "plane" => "in_chain"}
     # The probe's chain is a run over the API.
-    {:ok, ctx} = Sanctum.Caller.establish(args["token"])
+    {:ok, ctx} = Sanctum.Caller.establish(args["token"], entry: :loopback)
     ctx = Sanctum.TestContext.via(ctx, :api)
 
     {:ok, grant} = Sanctum.ExecutionStanding.capture(ctx)
@@ -197,7 +197,7 @@ defmodule Emissary.External.InChainProbeTest do
       Enum.map(result.rows, fn row -> result.columns |> Enum.zip(row) |> Map.new() end)
     end
 
-    {:ok, ctx} = Sanctum.Caller.establish(token)
+    {:ok, ctx} = Sanctum.Caller.establish(token, entry: :loopback)
 
     payloads =
       for row <- rows.("SELECT * FROM execution_payloads") do

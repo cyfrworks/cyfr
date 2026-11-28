@@ -116,7 +116,10 @@ defmodule Locus.Runtime.QuestionTest do
       )
 
     {:ok, session} = Sanctum.TestContext.create_session(built)
-    {:ok, ctx} = Sanctum.Caller.establish(session.token, focus: athanor.id, refresh: false)
+
+    {:ok, ctx} =
+      Sanctum.Caller.establish(session.token, focus: athanor.id, refresh: false, entry: :loopback)
+
     %{ctx: Sanctum.TestContext.via(ctx, :prism)}
   end
 

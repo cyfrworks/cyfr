@@ -65,7 +65,10 @@ defmodule Emissary.Web.WebhookController do
     # delivery's decision and its execution row carry.
     request_id = conn.assigns.request_id
 
-    case Sanctum.Caller.establish({:webhook, webhook}, request_id: request_id) do
+    case Sanctum.Caller.establish({:webhook, webhook},
+           request_id: request_id,
+           entry: Sanctum.ClientIp.ingress(conn)
+         ) do
       {:ok, ctx} ->
         # A delivery's run is a webhook's, whatever the request says.
         ctx = %{CyfrWeb.Plugs.CallIdentity.stamp(conn, ctx) | origin: :webhook}

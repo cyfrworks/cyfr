@@ -26,7 +26,7 @@ defmodule Emissary.Web.HandleControllerTest do
   setup do
     Prima.Test.RateLimiter.reset!()
     on_exit(&Prima.Test.RateLimiter.reset!/0)
-    Prima.Test.Env.put_app_env(:sanctum, :public_url, @directory)
+    Prima.Test.Env.put_app_env(:sanctum, :browser_address, @directory)
     Cyfr.Test.Settings.put("directory_serve", "writer")
     :ok
   end
@@ -213,7 +213,7 @@ defmodule Emissary.Web.HandleControllerTest do
   # directory and the registry as their writer, at its origin, and names
   # that origin as its directory and its registry.
   defp self_named!(home) do
-    Prima.Test.Env.put_app_env(:sanctum, :public_url, home)
+    Prima.Test.Env.put_app_env(:sanctum, :browser_address, home)
     Prima.Test.Env.put_app_env(:sanctum, :directory_url, home)
     Prima.Test.Env.put_app_env(:sanctum, :setup_token, @token)
     registry = URI.parse(home) |> then(&"#{&1.host}:#{&1.port}")

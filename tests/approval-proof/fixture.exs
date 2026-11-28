@@ -133,7 +133,7 @@ fn args ->
 
   # The person as their session establishes them, at Prism.
   person_ctx = fn token ->
-    {:ok, ctx} = Sanctum.Caller.establish({:session, token})
+    {:ok, ctx} = Sanctum.Caller.establish({:session, token}, entry: :loopback)
     %{ctx | origin: :interactive}
   end
 
@@ -208,7 +208,7 @@ fn args ->
       answer.(%{now: DateTime.to_iso8601(Arca.ServerMetaStorage.now!())})
 
     ["publish", token, dir, name, version] ->
-      {:ok, ctx} = Sanctum.Caller.establish({:session, token})
+      {:ok, ctx} = Sanctum.Caller.establish({:session, token}, entry: :loopback)
       actor = Sanctum.Context.actor(ctx)
       unit = ["components", "tinctures", "local", name, version]
 
@@ -630,7 +630,7 @@ fn args ->
       end
 
     ["thread", token] ->
-      {:ok, ctx} = Sanctum.Caller.establish({:session, token})
+      {:ok, ctx} = Sanctum.Caller.establish({:session, token}, entry: :loopback)
       {:ok, thread} = PrismWeb.Ops.call_tool(ctx, "thread", %{"action" => "today"})
       answer.(%{thread_id: Map.get(thread, :id) || Map.get(thread, "id")})
 

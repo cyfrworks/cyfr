@@ -75,7 +75,7 @@ defmodule Emissary.Web.TinctureDataControllerTest do
     own = Sanctum.Test.People.athanor!(user)
     issuer = Sanctum.TestContext.issuer!(%{person | athanor_id: own.id})
     {:ok, session} = Sanctum.TestContext.create_session(issuer)
-    {:ok, source} = Sanctum.Caller.establish(session.token)
+    {:ok, source} = Sanctum.Caller.establish(session.token, entry: :loopback)
     echo!(source)
 
     {:ok, source: source, session: session}

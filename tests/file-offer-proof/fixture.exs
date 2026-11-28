@@ -95,7 +95,7 @@ fn args ->
   # A tool called as the console calls it for the session's person
   # (`PrismWeb.Ops.call_tool/3`, through the gate).
   console = fn token, tool, arguments ->
-    {:ok, ctx} = Sanctum.Caller.establish({:session, token})
+    {:ok, ctx} = Sanctum.Caller.establish({:session, token}, entry: :loopback)
 
     case PrismWeb.Ops.call_tool(ctx, tool, arguments) do
       {:ok, result} -> result

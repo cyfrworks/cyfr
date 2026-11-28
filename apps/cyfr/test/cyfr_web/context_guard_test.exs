@@ -89,7 +89,7 @@ defmodule CyfrWeb.ContextGuardTest do
     test "a captured context and a mounted /settings are both refused, and nothing is written",
          %{conn: conn} do
       {_ops, conn, token, hash} = operator!(conn)
-      {:ok, captured} = Caller.establish(token)
+      {:ok, captured} = Caller.establish(token, entry: :loopback)
       assert captured.platform_admin
 
       {view, html} = mount_athanor(conn, "/settings")
@@ -137,7 +137,7 @@ defmodule CyfrWeb.ContextGuardTest do
       # be answered from it, as if the revocation came after it.
       bound!(60_000)
       {conn, token, hash} = signed_in(conn, test_user())
-      {:ok, _} = Caller.establish(token)
+      {:ok, _} = Caller.establish(token, entry: :loopback)
 
       delete_session!(hash)
 
@@ -487,14 +487,16 @@ defmodule CyfrWeb.ContextGuardTest do
       user = test_user()
       {conn, identifier, _hash} = remote!(conn, user)
       token = Plug.Conn.get_session(conn, session_key())
-      {:ok, ctx} = Caller.establish(token, refresh: false)
+      {:ok, ctx} = Caller.establish(token, refresh: false, entry: :loopback)
 
       stale!(identifier)
       bound!(0)
 
       ExUnit.CaptureLog.capture_log(fn ->
         assert {:error, :identity_stale} = ContextGuard.check(ctx)
-        assert {:error, :identity_stale} = ContextGuard.authenticate(token)
+
+        assert {:error, :identity_stale} =
+                 conn |> Sanctum.ClientIp.put_ingress(:loopback) |> ContextGuard.authenticate()
       end)
 
       assert PrismWeb.AuthHelpers.disposition(:identity_stale) == :unavailable
@@ -551,7 +553,7 @@ defmodule CyfrWeb.ContextGuardTest do
     test "a fresh context is delivered without reading the store", %{conn: conn} do
       bound!(60_000)
       {_conn, token, _hash} = signed_in(conn, test_user())
-      {:ok, ctx} = Caller.establish(token)
+      {:ok, ctx} = Caller.establish(token, entry: :loopback)
       assert Caller.fresh?(ctx)
       tag = ContextGuard.capture(ctx)
       socket = %{socket_with(ctx) | private: %{live_temp: %{}}}
@@ -577,7 +579,7 @@ defmodule CyfrWeb.ContextGuardTest do
       bound!(0)
       user = test_user()
       {_conn, token, _hash} = signed_in(conn, user)
-      {:ok, ctx} = Caller.establish(token)
+      {:ok, ctx} = Caller.establish(token, entry: :loopback)
 
       socket =
         Phoenix.Component.assign(socket_with(ctx), open: true, submitting: true, error: nil)
@@ -600,7 +602,7 @@ defmodule CyfrWeb.ContextGuardTest do
     } do
       bound!(0)
       {_conn, token, _hash} = signed_in(conn, test_user())
-      {:ok, ctx} = Caller.establish(token)
+      {:ok, ctx} = Caller.establish(token, entry: :loopback)
 
       socket =
         Phoenix.Component.assign(%{socket_with(ctx) | private: %{live_temp: %{}}},
@@ -676,7 +678,7 @@ defmodule CyfrWeb.ContextGuardTest do
           Arca.Repo.query!("ALTER TABLE sessions_unavailable RENAME TO sessions")
         end
 
-      assert {:ok, ctx} = Caller.establish(token)
+      assert {:ok, ctx} = Caller.establish(token, entry: :loopback)
       assert {:ok, _still_stands} = Caller.revalidate_session(ctx)
 
       refute html =~ "Failed to pull review-result 1.0.0"
@@ -704,7 +706,7 @@ defmodule CyfrWeb.ContextGuardTest do
   describe "a stream's watch" do
     test "leaves no recheck behind once it ends, whether it stood or was refused", %{conn: conn} do
       {_conn, token, hash} = signed_in(conn, test_user())
-      {:ok, ctx} = Caller.establish(token)
+      {:ok, ctx} = Caller.establish(token, entry: :loopback)
       recheck = ContextGuard.recheck_message()
 
       # Standing: the recheck revalidates and arms the next one; the watch
@@ -733,7 +735,7 @@ defmodule CyfrWeb.ContextGuardTest do
     test "ends on its own athanor's archive and stands through another's", %{conn: conn} do
       user = test_user()
       {_conn, token, _hash} = signed_in(conn, user)
-      {:ok, ctx} = Caller.establish(token)
+      {:ok, ctx} = Caller.establish(token, entry: :loopback)
       own = Sanctum.Test.People.athanor!(user.user_id)
       watch = ContextGuard.watch(ctx, every: 60_000)
 
@@ -753,7 +755,7 @@ defmodule CyfrWeb.ContextGuardTest do
     test "fresh is used as it is; stale is revalidated; retired is refused", %{conn: conn} do
       bound!(2_000)
       {_conn, token, hash} = signed_in(conn, test_user())
-      {:ok, ctx} = Caller.establish(token)
+      {:ok, ctx} = Caller.establish(token, entry: :loopback)
 
       assert {:ok, ^ctx} = ContextGuard.check(ctx)
 

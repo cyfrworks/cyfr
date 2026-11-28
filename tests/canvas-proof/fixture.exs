@@ -127,7 +127,7 @@ fn args ->
   answer = fn map -> "CANVAS=" <> Jason.encode!(map) end
 
   establish = fn token ->
-    {:ok, ctx} = Sanctum.Caller.establish({:session, token})
+    {:ok, ctx} = Sanctum.Caller.establish({:session, token}, entry: :loopback)
     ctx
   end
 

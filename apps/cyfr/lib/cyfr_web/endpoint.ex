@@ -4,15 +4,15 @@
 defmodule CyfrWeb.Endpoint do
   @moduledoc """
   The one endpoint. The API, the MCP transport, tinctures and the Prism
-  LiveViews all answer here — one origin, one cookie, one login, one
-  `check_origin` — so a CM5 kiosk, a phone and a laptop each need exactly
-  one URL.
+  LiveViews all answer here, at each of the server's addresses: the
+  private address on this machine always, and the browser address when
+  it has one.
 
   It serves on two listeners, the loopback listener whatever the browser
   address and the proxy listener with one, and each hands it a request
   tagged with the listener that accepted it before `call/2` below runs
   (`CyfrWeb.Ingress`): the tag, never a header, `Host` or `Origin`, is the
-  boundary.
+  boundary, and decides the request's address (`Sanctum.address/1`).
 
   Every answer starts refusing the camera, the microphone and screen
   capture (`call/2`): this is the one place that refusal lives, and
@@ -44,6 +44,8 @@ defmodule CyfrWeb.Endpoint do
     check: [aliases: true]
 
   use Phoenix.Endpoint, otp_app: :cyfr
+
+  require Prima.TestSeam
 
   # The session is stored in the cookie and signed: its contents can be
   # read but not tampered with. The salt is a domain separator, not a key
@@ -139,7 +141,10 @@ defmodule CyfrWeb.Endpoint do
   # a socket's refusal carries it as a route's answer does.
   @impl Plug
   def call(conn, opts) do
-    conn = put_resp_header(conn, "permissions-policy", @devices_refused)
+    conn =
+      conn
+      |> untagged()
+      |> put_resp_header("permissions-policy", @devices_refused)
 
     case socket_body(conn) do
       :ok -> super(conn, opts)
@@ -147,49 +152,27 @@ defmodule CyfrWeb.Endpoint do
     end
   end
 
+  # Every request a release serves was tagged by the listener that
+  # accepted it (`CyfrWeb.Ingress`), and one no listener tagged comes in at
+  # no address. A test build's request that `Phoenix.ConnTest` hands the
+  # endpoint straight, past every listener, came in by the loopback
+  # listener unless the test tagged it itself (`Prima.TestSeam.value/2`):
+  # a release never reads this.
+  defp untagged(conn) do
+    Prima.TestSeam.value(conn, fn ->
+      if Sanctum.ClientIp.ingress(conn) == nil,
+        do: Sanctum.ClientIp.put_ingress(conn, :loopback),
+        else: conn
+    end)
+  end
+
   @doc """
-  Each socket transport the endpoint mounts, with the routed path
-  (`path_info`) Phoenix dispatches it on, a mount's path joined with each
-  enabled transport's `:path` (`__sockets__/0`), and the most bytes a
-  POST to it may declare. A long-poll POST carries the messages its
-  mount's WebSocket frames would, so it is held to that frame bound
-  (`:max_frame_size`), or to a host call's body
-  (`Prima.HostAPI.max_body_bytes/0`) when the mount names none; a POST to
-  a WebSocket's path carries no message and is held to a host call's body.
+  Each socket transport the endpoint mounts, with the routed path it is
+  dispatched on and the most bytes a POST to it may declare
+  (`CyfrWeb.Ingress.socket_transports/1`, the one reading of them).
   """
   @spec socket_transports() :: [{:websocket | :longpoll, [String.t()], pos_integer()}]
-  def socket_transports do
-    for {path, _socket, opts} <- __sockets__(),
-        {transport, default, transport_path} <- [
-          {:websocket, true, "/websocket"},
-          {:longpoll, false, "/longpoll"}
-        ],
-        config = transport_config(opts, transport, default),
-        config != false do
-      {transport,
-       String.split(path <> Keyword.get(config, :path, transport_path), "/", trim: true),
-       post_bound(transport, opts)}
-    end
-  end
-
-  defp transport_config(opts, transport, default) do
-    case Keyword.get(opts, transport, default) do
-      true -> []
-      config -> config
-    end
-  end
-
-  defp post_bound(:longpoll, opts) do
-    case transport_config(opts, :websocket, true) do
-      config when is_list(config) ->
-        Keyword.get(config, :max_frame_size, Prima.HostAPI.max_body_bytes())
-
-      false ->
-        Prima.HostAPI.max_body_bytes()
-    end
-  end
-
-  defp post_bound(:websocket, _opts), do: Prima.HostAPI.max_body_bytes()
+  def socket_transports, do: CyfrWeb.Ingress.socket_transports(__MODULE__)
 
   # First, so every answer carries it, a refusal raised while parsing
   # among them (`close_unread/2`).

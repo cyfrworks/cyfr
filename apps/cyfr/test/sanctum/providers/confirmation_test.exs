@@ -73,7 +73,10 @@ defmodule Sanctum.Providers.ConfirmationTest do
       )
 
     {:ok, session} = TestContext.create_session(built)
-    {:ok, ctx} = Sanctum.Caller.establish(session.token, focus: athanor.id, refresh: false)
+
+    {:ok, ctx} =
+      Sanctum.Caller.establish(session.token, focus: athanor.id, refresh: false, entry: :loopback)
+
     ctx
   end
 

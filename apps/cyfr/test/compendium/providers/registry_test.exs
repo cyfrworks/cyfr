@@ -563,7 +563,13 @@ defmodule Compendium.Providers.RegistryTest do
           )
         )
 
-      {:ok, ctx} = Sanctum.Caller.establish(session.token, focus: athanor.id, refresh: false)
+      {:ok, ctx} =
+        Sanctum.Caller.establish(session.token,
+          focus: athanor.id,
+          refresh: false,
+          entry: :loopback
+        )
+
       %{ctx: ctx, account: account, dir: dir}
     end
 

@@ -33,7 +33,7 @@ defmodule Emissary.Web.DirectoryControllerTest do
 
   # This node's public URL, and so the directory it serves
   # (`Sanctum.origin/0`), restored when the test ends.
-  defp serve_at(url), do: Prima.Test.Env.put_app_env(:sanctum, :public_url, url)
+  defp serve_at(url), do: Prima.Test.Env.put_app_env(:sanctum, :browser_address, url)
 
   # ---- fixtures ----------------------------------------------------------------
 

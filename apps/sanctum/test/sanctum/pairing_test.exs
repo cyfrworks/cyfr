@@ -71,8 +71,9 @@ defmodule Sanctum.PairingTest do
     )
   end
 
-  # The device's person's own browser session, focused on their athanor.
-  defp session_ctx!(%{user: user, certificate: certificate}) do
+  # The device's person's own browser session, focused on their athanor,
+  # made and established at `entry` (the loopback listener by default).
+  defp session_ctx!(%{user: user, certificate: certificate}, entry \\ :loopback) do
     built =
       Context.build(
         user_id: user.id,
@@ -83,10 +84,14 @@ defmodule Sanctum.PairingTest do
         authenticated: true
       )
 
-    {:ok, session} = Sanctum.TestContext.create_session(built)
+    {:ok, session} = Sanctum.TestContext.create_session(built, Sanctum.address(entry))
 
     {:ok, session_ctx} =
-      Sanctum.Caller.establish(session.token, focus: certificate.athanor, refresh: false)
+      Sanctum.Caller.establish(session.token,
+        focus: certificate.athanor,
+        refresh: false,
+        entry: entry
+      )
 
     session_ctx
   end
@@ -115,7 +120,12 @@ defmodule Sanctum.PairingTest do
   defp renewing!(device, challenge) do
     {:ok, ctx} =
       DeviceCerts.verify_connect(
-        %{client_id: device.client_id, certificate: device.certificate, source: @source},
+        %{
+          client_id: device.client_id,
+          certificate: device.certificate,
+          source: @source,
+          entry: :loopback
+        },
         Proof.sign(challenge, elem(device.key, 1)),
         challenge
       )
@@ -161,7 +171,7 @@ defmodule Sanctum.PairingTest do
       Sanctum.SignIn.request(:confirm, binding, [ctx: device_ctx, ref: ref] ++ opts)
 
     {:ok, %{purpose: :confirm, ref: ^ref}} =
-      Sanctum.SignIn.answer(Devices.answer(request, by.key), binding, ref: ref)
+      Sanctum.SignIn.answer(Devices.answer(request, by.key), binding, ref: ref, entry: :loopback)
 
     %{session_ctx | confirmation_id: id}
   end
@@ -350,7 +360,7 @@ defmodule Sanctum.PairingTest do
       {:ok, record} =
         Arca.PendingConfirmations.get(Context.actor(session_ctx), Prima.Confirmation.ref(id))
 
-      {:ok, home} = Prima.Identity.Encoding.canonical_home(Sanctum.origin())
+      {:ok, home} = Prima.Identity.Encoding.canonical_home(Sanctum.private_address())
       {:ok, athanor} = Sanctum.Tenancy.Athanors.get(session_ctx.athanor_id)
 
       assert Jason.decode!(record.preview) == %{
@@ -379,7 +389,7 @@ defmodule Sanctum.PairingTest do
       {:ok, record} =
         Arca.PendingConfirmations.get(Context.actor(session_ctx), Prima.Confirmation.ref(id))
 
-      {:ok, home} = Prima.Identity.Encoding.canonical_home(Sanctum.origin())
+      {:ok, home} = Prima.Identity.Encoding.canonical_home(Sanctum.private_address())
       {:ok, athanor} = Sanctum.Tenancy.Athanors.get(session_ctx.athanor_id)
 
       assert Jason.decode!(record.preview) == %{
@@ -419,6 +429,51 @@ defmodule Sanctum.PairingTest do
     end
   end
 
+  describe "a confirmation across the server's two addresses" do
+    test "a change asked at the browser address is confirmed by a device at the private " <>
+           "address, and its record names the browser address",
+         %{account: account, dir: dir, device: device} do
+      Prima.Test.Env.put_app_env(:sanctum, :browser_address, "https://cyfr.example")
+      session_ctx = session_ctx!(device, :proxy)
+      assert session_ctx.entry == :proxy
+
+      account = DirectoryServer.add_device!(dir.dir, account)
+      other = Devices.admitted!(account, List.last(account.devices))
+      assert other.certificate.audience == Sanctum.private_address()
+      change = &Pairing.remove(&1, device.client_id)
+
+      {:error, {:confirmation_required, %{id: id}}} = change.(session_ctx)
+      ref = Prima.Confirmation.ref(id)
+
+      {:ok, asked} = Arca.PendingConfirmations.get(Context.actor(session_ctx), ref)
+      assert {asked.home, asked.rp_id} == {"https://cyfr.example", "cyfr.example"}
+
+      # The device on its own channel, at the private address, answers the
+      # confirm request this CYFR mints there.
+      device_ctx = Devices.connected!(other)
+      assert device_ctx.entry == :loopback
+      {:ok, binding, opts} = Sanctum.SignIn.binding(device_ctx)
+
+      {:ok, %{request: request}} =
+        Sanctum.SignIn.request(:confirm, binding, [ctx: device_ctx, ref: ref] ++ opts)
+
+      assert request.audience == Sanctum.private_address()
+
+      assert {:ok, %{purpose: :confirm, ref: ^ref}} =
+               Sanctum.SignIn.answer(Devices.answer(request, other.key), binding,
+                 ref: ref,
+                 entry: :loopback
+               )
+
+      {:ok, confirmed} = Arca.PendingConfirmations.get(Context.actor(session_ctx), ref)
+      assert confirmed.state == "confirmed"
+      assert confirmed.home == "https://cyfr.example"
+
+      # The browser repeats the change at its own address.
+      assert {:ok, %{standing: "removed"}} = change.(%{session_ctx | confirmation_id: id})
+    end
+  end
+
   describe "a device removed here" do
     # The person's outcome: a device they removed does not come back at its
     # next unlock, its hello's answer refused here until they allow it
@@ -452,7 +507,11 @@ defmodule Sanctum.PairingTest do
       {client_id, request} = Devices.hello!(account, device.key)
 
       assert {:error, :removed_here} =
-               Sanctum.DeviceUnlock.admit(client_id, Devices.answer(request, device.key))
+               Sanctum.DeviceUnlock.admit(
+                 client_id,
+                 Devices.answer(request, device.key),
+                 :loopback
+               )
 
       assert standings(device.user.id) == [
                {device.client_id, "device_cert", "removed"},
@@ -563,7 +622,7 @@ defmodule Sanctum.PairingTest do
           Prima.Confirmation.ref(confirmation)
         )
 
-      {:ok, home} = Prima.Identity.Encoding.canonical_home(Sanctum.origin())
+      {:ok, home} = Prima.Identity.Encoding.canonical_home(Sanctum.private_address())
       {:ok, athanor} = Sanctum.Tenancy.Athanors.get(session_ctx.athanor_id)
 
       assert Jason.decode!(record.preview) == %{
