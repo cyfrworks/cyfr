@@ -29,7 +29,7 @@ defmodule Emissary.MCP.MessageTest do
       assert code({:not_found, "component", "x"}, :tools_call) == -32602
       assert code(:unauthenticated) == -33001
       assert code({:missing_permission, :execute}) == -33004
-      assert code(:no_agent) == -33501
+      assert code(:not_set_up) == -33501
       assert code({:consent_required, %{}}) == -33502
       assert code(:rate_limited) == -33304
       assert code({:cancelled, "stopped"}) == -33305

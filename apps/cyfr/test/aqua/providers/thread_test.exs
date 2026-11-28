@@ -513,7 +513,7 @@ defmodule Aqua.Providers.ThreadTest do
     setup %{ctx: ctx} do
       # Every send starts a turn, which the sender's own filled athanor
       # admits: the sender is a person of their own, working there. Each
-      # send here names its agent, and the turns it starts stop with the
+      # send here is Aqua's turn, and the turns it starts stop with the
       # test.
       {ctx, user} = Sanctum.TestContext.person!(ctx)
       ctx = %{ctx | athanor_id: Sanctum.Test.People.athanor!(user).id}
@@ -522,6 +522,38 @@ defmodule Aqua.Providers.ThreadTest do
       # Today's daily thread, which a send naming it joins as named.
       {:ok, thread} = Aqua.Day.current(ctx)
       {:ok, ctx: ctx, thread: thread}
+    end
+
+    # This athanor's tree holds no assistant: the send is Aqua's turn all
+    # the same, and the turn says why it cannot answer.
+    test "a send in an athanor with no assistant opens Aqua's turn, which says why", %{
+      ctx: ctx,
+      thread: thread
+    } do
+      assert {:ok, %{admitted: :turn, turn_id: turn_id}} =
+               call(ctx, %{"action" => "send", "message" => "anyone there?"})
+
+      Prima.Test.Wait.wait_until(
+        fn -> match?({:ok, %{status: "failed"}}, Aqua.Tape.turn(ctx, turn_id)) end,
+        30_000,
+        "the turn to fail"
+      )
+
+      {:ok, %{error: said}} = Aqua.Tape.turn(ctx, turn_id)
+
+      assert [^said] =
+               for(
+                 %{kind: "system", turn_id: ^turn_id, content: line} <-
+                   Threads.messages(Sanctum.Context.actor(ctx), thread.id),
+                 do: line
+               )
+
+      # Here neither the tree nor Aqua's grant was made: the start meets
+      # the grant first.
+      assert said ==
+               "You have not granted yet what Aqua and its crew members may use. Your message " <>
+                 "was not answered: grant it here when it is asked, or on your Aqua page, then " <>
+                 "send your message again."
     end
 
     test "a send naming no thread joins today's daily thread and answers its id", %{

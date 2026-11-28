@@ -94,13 +94,13 @@ defmodule CyfrWeb.ApiErrorTest do
   end
 
   test "a refusal answers at its class's status with its class and sentence" do
-    conn = answer(conn(:get, "/"), :no_agent)
+    conn = answer(conn(:get, "/"), :not_set_up)
 
     assert conn.status == 503
 
     assert body(conn) == %{
              "code" => "setup_required",
-             "message" => Prima.Refusal.message(:no_agent)
+             "message" => Prima.Refusal.message(:not_set_up)
            }
   end
 

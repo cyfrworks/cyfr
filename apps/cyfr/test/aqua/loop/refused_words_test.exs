@@ -13,7 +13,7 @@ defmodule Aqua.Loop.RefusedWordsTest do
   alias Aqua.Loop.Turn
 
   test "a refused turn's action follows what opened it" do
-    person = %{origin: "interactive", sent_by: "person", request_id: nil}
+    person = %{agent: "aqua", origin: "interactive", sent_by: "person", request_id: nil}
 
     assert Turn.again(person) == :message
     assert Turn.again(%{person | request_id: "msg_req"}) == :ask
@@ -26,6 +26,13 @@ defmodule Aqua.Loop.RefusedWordsTest do
     # A schedule's line is sent as the person's, under the schedule's origin.
     assert Turn.again(%{person | origin: "schedule"}) == :none
     assert Turn.again(%{person | origin: "programmatic"}) == :none
+
+    # A crew member's turn is asked for again, whoever opened it: its
+    # thread takes no message, and a job reaches it only from Aqua.
+    member = %{person | agent: "planner"}
+    assert Turn.again(member) == :ask
+    assert Turn.again(%{member | origin: "programmatic"}) == :ask
+    assert Turn.again(%{member | sent_by: "aqua", request_id: "msg_req"}) == :ask
   end
 
   # A turn refused for Aqua's grant, by the grant's state, reads as its
