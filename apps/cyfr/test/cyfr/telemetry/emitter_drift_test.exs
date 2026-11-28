@@ -225,7 +225,10 @@ defmodule Cyfr.Telemetry.EmitterDriftTest do
 
     assert Enum.sort(catalogued) == Enum.sort(roster)
     assert roster -- Catalog.consumed_by(:operator) == []
-    assert Enum.map(RunnerControl.event_roster(), &Opus.Host.RunnerEvents.event(&1.name)) == roster
+
+    assert Enum.map(RunnerControl.event_roster(), &Opus.Host.RunnerEvents.event(&1.name)) ==
+             roster
+
     assert Enum.all?(roster, &MapSet.member?(emitted["apps/cyfr/lib"], &1))
 
     for event <- Catalog.consumed_by(:audit) ++ Catalog.consumed_by(:bridge) do

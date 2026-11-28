@@ -137,7 +137,10 @@ defmodule Locus.Runtime.RunnerControlVectorsTest do
       for vector <- @vectors["events"]["invalid"] do
         reason = reason(vector["refusal"])
         :ok = ScriptedKeeper.write(spawn, line(vector) <> "\n")
-        assert_receive {RunnerProcess, ^handle, {:error, {:protocol, ^reason}}}, 5_000, vector["why"]
+
+        assert_receive {RunnerProcess, ^handle, {:error, {:protocol, ^reason}}},
+                       5_000,
+                       vector["why"]
       end
 
       refute_received {:"$gen_cast", {:event, _event}}

@@ -1176,7 +1176,12 @@ defmodule Opus.HostListenerTest do
       {header, body} = events_report(report["body"])
 
       assert Enum.sort(Enum.map(report["emitted"], &emitted_event/1)) ==
-               Enum.sort(Enum.map(Prima.RunnerControl.event_roster(), &Opus.Host.RunnerEvents.event(&1.name)))
+               Enum.sort(
+                 Enum.map(
+                   Prima.RunnerControl.event_roster(),
+                   &Opus.Host.RunnerEvents.event(&1.name)
+                 )
+               )
 
       assert {200, Jason.decode!(report["answer"])} ==
                post(url, WorkerWire.host_route(:report_events), [header], body)

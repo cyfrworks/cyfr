@@ -1385,6 +1385,7 @@ defmodule Locus.DirectLauncher.Runner do
     case :persistent_term.get({__MODULE__, :pair}, nil) do
       nil ->
         case System.cmd("/bin/bash", [Path.join(@root, "scripts/runner.sh"), "pair"],
+               env: Locus.Test.ProcessFamily.without_cyfr(),
                stderr_to_stdout: true
              ) do
           {path, 0} ->

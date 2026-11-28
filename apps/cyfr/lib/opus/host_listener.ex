@@ -687,7 +687,11 @@ defmodule Opus.HostListener do
     its attempt, or for a report's worker service and boot, remembering it
     if so.
     """
-    @spec fresh?(:ets.table(), Prima.WorkerAuth.host_call() | Prima.WorkerAuth.dispatch(), integer()) ::
+    @spec fresh?(
+            :ets.table(),
+            Prima.WorkerAuth.host_call() | Prima.WorkerAuth.dispatch(),
+            integer()
+          ) ::
             boolean()
     def fresh?(table, %{attempt: attempt, nonce: nonce}, now),
       do: :ets.insert_new(table, {{attempt, nonce}, now + 2 * @window_ms})

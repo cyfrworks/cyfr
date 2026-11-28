@@ -254,7 +254,9 @@ defmodule Prima.HostAPITest do
       assert length(events) == length(report["emitted"])
 
       # The service writes the same body from the events it read.
-      assert Jason.encode!(WorkerWire.request_body(:report_events, HostAPI.report_events_args(events))) ==
+      assert Jason.encode!(
+               WorkerWire.request_body(:report_events, HostAPI.report_events_args(events))
+             ) ==
                report["body"]
 
       assert Enum.map(events, & &1.name) ==

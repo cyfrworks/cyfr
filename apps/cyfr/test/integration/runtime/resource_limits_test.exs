@@ -106,6 +106,7 @@ defmodule Locus.Runtime.ResourceLimitsTest do
 
       assert error_msg ==
                "Component instantiation failed: memory minimum size of 1 pages exceeds memory limits"
+
       {:ok, records} = Opus.Record.list(ctx)
       assert Enum.any?(records, &(&1.status == :failed))
     end

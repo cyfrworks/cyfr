@@ -142,7 +142,8 @@ defmodule Locus.Runtime.MemoryBoundTest do
     # A second linear memory: refused at instantiation, nothing of it run.
     {result, row, runner} = run!(ctx, "extra_memory", 64 * @mib)
 
-    refused = "Component instantiation failed: resource limit exceeded: memory count too high at 2"
+    refused =
+      "Component instantiation failed: resource limit exceeded: memory count too high at 2"
 
     assert result == {:error, refused}
     assert row.status == "failed"

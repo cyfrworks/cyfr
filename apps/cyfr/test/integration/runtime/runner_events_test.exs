@@ -117,7 +117,10 @@ defmodule Locus.Runtime.RunnerEventsTest do
         ctx,
         :default,
         Probe.probe_ref(),
-        %{"op" => "steps", "steps" => Enum.map(names, fn {tool, action} -> call(tool, action) end)},
+        %{
+          "op" => "steps",
+          "steps" => Enum.map(names, fn {tool, action} -> call(tool, action) end)
+        },
         execution_id: execution_id
       )
 

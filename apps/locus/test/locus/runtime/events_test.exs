@@ -101,7 +101,11 @@ defmodule Locus.Runtime.EventsTest do
 
     log =
       capture_log(fn ->
-        answer(again, {:error, {:uncertain, "The call's answer was lost and its effect is unknown"}})
+        answer(
+          again,
+          {:error, {:uncertain, "The call's answer was lost and its effect is unknown"}}
+        )
+
         refute_receive {:posted, _, _, _, _}, 300
       end)
 

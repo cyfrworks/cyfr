@@ -389,7 +389,12 @@ defmodule Locus.Runtime.RunnerBoundaryTest do
 
     # A stopped call makes the completion unclean: the runner is never kept
     # idle for its athanor, and the service ends its process.
-    wait_until(fn -> not alive?(os_pid) end, 10_000, "the runner with the stopped call to be gone")
+    wait_until(
+      fn -> not alive?(os_pid) end,
+      10_000,
+      "the runner with the stopped call to be gone"
+    )
+
     wait_until(fn -> match?(%{busy: 0, idle: 0, tainted: 0}, runners()) end, 10_000)
     assert ScriptedHost.requests(host, "complete") == []
     assert ScriptedHost.requests(host, "runner_exited") == []

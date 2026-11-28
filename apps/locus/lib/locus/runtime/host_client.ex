@@ -328,9 +328,7 @@ defmodule Locus.Runtime.HostClient do
   def report_events(%Locus.Runtime.Credentials{} = credentials, boot, events)
       when is_binary(boot) and is_list(events) do
     body =
-      Jason.encode!(
-        WorkerWire.request_body(:report_events, HostAPI.report_events_args(events))
-      )
+      Jason.encode!(WorkerWire.request_body(:report_events, HostAPI.report_events_args(events)))
 
     try = fn ->
       report = %{
