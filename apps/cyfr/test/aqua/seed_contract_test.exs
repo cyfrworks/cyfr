@@ -466,7 +466,7 @@ defmodule Aqua.SeedContractTest do
   end
 
   # What Aqua is taught: its file's body, which opens its prompt, CYFR's
-  # part that follows it on every brain (`Aqua.Prompt.briefing/2`), and
+  # part that follows it on every brain (`Aqua.Prompt.briefing/4`), and
   # each shipped scroll, which the prompt's scroll index lists and Aqua
   # reads before doing what it describes.
   defp taught do
@@ -479,7 +479,7 @@ defmodule Aqua.SeedContractTest do
         body
       end
 
-    Enum.join([soul_body(), Aqua.Prompt.briefing(true, true, false) | scrolls], "\n")
+    Enum.join([soul_body(), Aqua.Prompt.briefing(true, true, false, true) | scrolls], "\n")
   end
 
   # `component(action: "search")` is how a body teaches `component.search`.

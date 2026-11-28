@@ -366,6 +366,7 @@ func (r *redactor) receipts(rcs []Receipt) []Receipt {
 // the head keys' and the engine's.
 func (r *redactor) status(s Status) Status {
 	s.HeadErr = r.err(s.HeadErr)
+	s.Unobserved = r.err(s.Unobserved)
 	if s.Unfinished != nil {
 		u := r.receipt(*s.Unfinished)
 		s.Unfinished = &u

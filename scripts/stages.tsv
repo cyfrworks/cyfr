@@ -109,6 +109,6 @@ nightly	janitor	1	1800	-	always	scripts/janitor.sh
 # timer's unit sets (CONTRIBUTING.md); the update proof updates an install
 # of the newest published release on main's schema, or of that schema's
 # base, to main's head (tests/update-proof/run.sh).
-nightly	install-screen-proof	1	3600	-	always	tests/install-screen-proof/prepare.sh && scripts/image.sh --undated app && tests/install-screen-proof/run.sh
+nightly	install-screen-proof	1	3600	-	always	tests/install-screen-proof/prepare.sh && scripts/image.sh --undated app && scripts/image.sh --undated locus && tests/install-screen-proof/run.sh
 nightly	handle-proof	1	3600	-	always	tests/handle-proof/run.sh
 nightly	update-proof	1	3600	-	always	tests/update-proof/run.sh

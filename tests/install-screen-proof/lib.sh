@@ -14,8 +14,9 @@
 # for evidence and files apart from the terminal; guest_screenshot; and
 # proof_guest_stop (cleanup.sh). check records each verdict. Around the
 # stack: candidate_build and candidate_server_use once per run, this
-# tree's cyfr, server image and seed/aqua; per guest cyfr_run_guard, which
-# keeps it from cyfr.run, candidate_server_load, account_settings and
+# tree's cyfr with its scaffold, and its server and Locus images; per
+# guest cyfr_run_guard, which keeps it from cyfr.run,
+# candidate_scaffold_load, candidate_server_load, account_settings and
 # account_service, the box's own account service. On the screen:
 # guest_chord types on its keyboard, screen_press and screen_tap press what
 # its display shows and screen_shows reads it (guest/screen.py), and
@@ -499,28 +500,47 @@ pane_step() {
   pane_save "transcript-$name.txt"
 }
 
-# This tree's cyfr for the guests, built once per run, stamped as the
-# published release INSTALL_VERSION so that cyfr init fetches and verifies
-# that release's scaffold under production trust. Its own bytes are not a
-# signed release: the case runs it in place of the program the installer
-# put down, a stand-in for a signed candidate, and says so in candidate.txt
-# and in results.txt.
-CANDIDATE_BIN=""
+# This tree's cyfr for the guests, built once per run and stamped as the
+# published release INSTALL_VERSION, with the releaseproof tag as the
+# update proofs build theirs (apps/codex/cmd/release_proof.go): it reads
+# its releases from GUEST_RELEASES on the guest, unsigned, so cyfr init
+# lays down this tree's scaffold (scripts/scaffold-tarball.sh), which
+# candidate_build makes beside it and candidate_scaffold_load puts there.
+# Its own bytes are not a signed release: the case runs it in place of the
+# program the installer put down, a stand-in for a signed candidate, and
+# says so in candidate.txt and in results.txt.
+CANDIDATE_BIN="" CANDIDATE_SCAFFOLD=""
+GUEST_RELEASES=/opt/cyfr-proof/releases
 candidate_build() {
   [ -z "$CANDIDATE_BIN" ] || return 0
-  step "this tree's cyfr for linux/amd64, stamped $INSTALL_VERSION (stand-in for a signed candidate)"
+  step "this tree's cyfr for linux/amd64 and its scaffold, stamped $INSTALL_VERSION (stand-in for a signed candidate)"
   CANDIDATE_BIN="$WORK/cyfr"
-  proof_fg timeout 300 env CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -C "$ROOT/apps/codex" -trimpath \
-    -ldflags "-s -w -X github.com/cyfr/codex/internal/version.Version=$INSTALL_VERSION -X github.com/cyfr/codex/internal/version.Commit=$(git -C "$ROOT" rev-parse --short HEAD)" \
+  proof_fg timeout 300 env CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -C "$ROOT/apps/codex" -trimpath -tags releaseproof \
+    -ldflags "-s -w -X github.com/cyfr/codex/internal/version.Version=$INSTALL_VERSION -X github.com/cyfr/codex/internal/version.Commit=$(git -C "$ROOT" rev-parse --short HEAD) -X github.com/cyfr/codex/cmd.proofReleases=$GUEST_RELEASES" \
     -o "$CANDIDATE_BIN" . >"$OUT/candidate-build.log" 2>&1 || fail "the candidate did not build within 300 s ($OUT/candidate-build.log)"
-  STAND_IN="stand-in: after the installer ran, cyfr is this tree's, built here and stamped $INSTALL_VERSION, not a signed release's delivery"
+  CANDIDATE_SCAFFOLD="$WORK/cyfr-scaffold.tar.gz"
+  "$ROOT/scripts/scaffold-tarball.sh" "$CANDIDATE_SCAFFOLD" >>"$OUT/candidate-build.log" 2>&1 ||
+    fail "this tree's scaffold did not build ($OUT/candidate-build.log)"
+  STAND_IN="stand-in: after the installer ran, cyfr is this tree's, built here with the releaseproof tag and stamped $INSTALL_VERSION, not a signed release's delivery; cyfr init lays down this tree's scaffold from $GUEST_RELEASES, unsigned"
   {
     echo "$STAND_IN"
     echo "built from $ROOT at $(git -C "$ROOT" rev-parse HEAD), with these changes:"
-    git -C "$ROOT" status --short -- apps/codex
+    git -C "$ROOT" status --short
     echo "sha256: $(sha256sum <"$CANDIDATE_BIN" | cut -d ' ' -f 1)"
+    echo "scaffold sha256: $(sha256sum <"$CANDIDATE_SCAFFOLD" | cut -d ' ' -f 1)"
   } >"$OUT/candidate.txt"
   ok "built the candidate, $(sed -n 's/^sha256: //p' "$OUT/candidate.txt")"
+}
+
+# candidate_scaffold_load: the guest under way holds this tree's scaffold
+# as release INSTALL_VERSION's, and names it the newest, in
+# GUEST_RELEASES, root's and readable by every account, before cyfr init.
+candidate_scaffold_load() {
+  guest_copy_in "$CANDIDATE_SCAFFOLD" cyfr-scaffold.tar.gz || fail "the scaffold was not copied into the guest"
+  guest_root "install -d -m 0755 $GUEST_RELEASES/$INSTALL_VERSION &&
+    install -m 0644 /home/proof/cyfr-scaffold.tar.gz $GUEST_RELEASES/$INSTALL_VERSION/ && rm /home/proof/cyfr-scaffold.tar.gz &&
+    echo $INSTALL_VERSION >$GUEST_RELEASES/latest && chmod 0644 $GUEST_RELEASES/latest" ||
+    fail "the scaffold was not put in $GUEST_RELEASES ($GUEST_DIR/root.txt)"
 }
 
 # candidate_app_build: the CYFR app's package around that cyfr, built from
@@ -547,39 +567,38 @@ candidate_app_build() {
   ok "built the candidate app"
 }
 
-# This tree's server image for the guests, which scripts/image.sh --undated
-# app builds outside the queue before the run, its use by this run recorded
-# so the janitor keeps it while the run lives; without it the run exits
-# 69, naming that command, and it never builds it. candidate_server_load
-# puts it in each guest in place of the release's cyfr image, a stand-in
-# for a signed candidate server, which candidate.txt and results.txt say,
-# with the tree's commit and the image's id; the release's locus images
-# run beside it. The server reads its seed's Aqua files from the aqua/
-# folder beside docker-compose.yml, which a release ships from its own
-# seed/aqua (scripts/scaffold-tarball.sh), so this tree's seed/aqua goes
-# in with this tree's server, the third stand-in: a server reading
-# another release's soul may refuse it, and then fills no athanor.
-APP_IMAGE="" APP_IMAGE_ID=""
-candidate_server_use() {
+# This tree's server and Locus images for the guests, which
+# scripts/image.sh --undated app and locus build outside the queue before
+# the run, their use by this run recorded so the janitor keeps them while
+# the run lives; without one the run exits 69, naming its command, and it
+# never builds them. candidate_server_load puts them in each guest in
+# place of the images the scaffold's docker-compose.yml names, a stand-in
+# for a signed candidate's, which candidate.txt and results.txt say, with
+# the tree's commit and each image's id.
+APP_IMAGE="" APP_IMAGE_ID="" LOCUS_IMAGE="" LOCUS_IMAGE_ID=""
+candidate_image() {
   local tag
-  step "this tree's server image, built by scripts/image.sh --undated app (stand-in for a signed candidate)"
-  tag=$("$ROOT/scripts/image.sh" --undated --tag-only app) || fail "scripts/image.sh named no server image for this tree"
-  if [ "$(docker image inspect -f '{{index .Config.Labels "works.cyfr.image-inputs"}}' "$tag" 2>/dev/null)" != "${tag#cyfr:in-}" ]; then
-    echo "install-screen proof: this tree's server image $tag is not built; run scripts/image.sh --undated app first, outside the queue" >&2
+  tag=$("$ROOT/scripts/image.sh" --undated --tag-only "$1") || fail "scripts/image.sh named no $1 image for this tree"
+  if [ "$(docker image inspect -f '{{index .Config.Labels "works.cyfr.image-inputs"}}' "$tag" 2>/dev/null)" != "${tag#*:in-}" ]; then
+    echo "install-screen proof: this tree's $1 image $tag is not built; run scripts/image.sh --undated $1 first, outside the queue" >&2
     exit 69
   fi
-  "$ROOT/scripts/image.sh" --undated --for "$$" app >/dev/null 2>>"$OUT/candidate-server.log" ||
+  "$ROOT/scripts/image.sh" --undated --for "$$" "$1" >/dev/null 2>>"$OUT/candidate-server.log" ||
     fail "the run's use of $tag was not recorded ($OUT/candidate-server.log)"
-  APP_IMAGE=$tag
-  APP_IMAGE_ID=$(docker image inspect -f '{{.Id}}' "$tag") || fail "$tag has no id"
-  STAND_IN="$STAND_IN; the cyfr service runs this tree's image $APP_IMAGE in place of the release's, reading this tree's seed/aqua in place of the release's aqua/, beside the release's locus images"
+  printf '%s\n' "$tag"
+}
+candidate_server_use() {
+  step "this tree's server and Locus images, built by scripts/image.sh --undated (stand-in for a signed candidate)"
+  APP_IMAGE=$(candidate_image app) || exit $?
+  LOCUS_IMAGE=$(candidate_image locus) || exit $?
+  APP_IMAGE_ID=$(docker image inspect -f '{{.Id}}' "$APP_IMAGE") || fail "$APP_IMAGE has no id"
+  LOCUS_IMAGE_ID=$(docker image inspect -f '{{.Id}}' "$LOCUS_IMAGE") || fail "$LOCUS_IMAGE has no id"
+  STAND_IN="$STAND_IN; the stack runs this tree's images $APP_IMAGE and $LOCUS_IMAGE in place of the ones its docker-compose.yml names"
   {
-    echo "stand-in: the cyfr service runs $APP_IMAGE, image id $APP_IMAGE_ID, in place of the release's image"
-    echo "built by scripts/image.sh --undated app from $ROOT at $(git -C "$ROOT" rev-parse HEAD), with these changes:"
-    git -C "$ROOT" status --short
-    echo "stand-in: the cyfr service reads that tree's seed/aqua, digest $(aqua_digest "$ROOT/seed"), in place of the release's aqua/"
+    echo "stand-in: the cyfr service runs $APP_IMAGE, image id $APP_IMAGE_ID, and the Locus services $LOCUS_IMAGE, image id $LOCUS_IMAGE_ID"
+    echo "built by scripts/image.sh --undated from $ROOT at $(git -C "$ROOT" rev-parse HEAD)"
   } >>"$OUT/candidate.txt"
-  ok "using $APP_IMAGE ($APP_IMAGE_ID)"
+  ok "using $APP_IMAGE ($APP_IMAGE_ID) and $LOCUS_IMAGE ($LOCUS_IMAGE_ID)"
 }
 
 # aqua_digest DIR: one digest over every file of DIR/aqua, by its path
@@ -587,28 +606,38 @@ candidate_server_use() {
 FOLDER_DIGEST='find aqua -type f | LC_ALL=C sort | xargs -d "\n" sha256sum | sha256sum | cut -d " " -f 1'
 aqua_digest() { (cd "$1" && sh -c "$FOLDER_DIGEST"); }
 
-# Loads the server image into the guest under way, whose Docker cyfr init
-# installed, and points the release's docker-compose.yml at it: the one
-# line naming the release's cyfr image changes, and nothing else. cyfr up
-# starts what that file names and pulls nothing the host holds. Then this
-# tree's seed/aqua takes the place of the aqua/ cyfr init wrote from the
-# release.
+# Loads the server and Locus images into the guest under way, whose
+# Docker cyfr init installed, and points the docker-compose.yml init laid
+# down at them: each line naming a cyfr or cyfr-locus image changes, and
+# nothing else. cyfr up starts what that file names and pulls nothing the
+# host holds. The aqua/ init wrote is this tree's seed/aqua, as the
+# scaffold ships it.
 candidate_server_load() {
-  local loaded
-  docker save "$APP_IMAGE" | GUEST_SSH_TIMEOUT=600 guest_ssh_in 'cat >cyfr-candidate.tar' ||
-    fail "the server image was not copied into the guest"
+  local loaded image id
+  docker save "$APP_IMAGE" "$LOCUS_IMAGE" | GUEST_SSH_TIMEOUT=600 guest_ssh_in 'cat >cyfr-candidate.tar' ||
+    fail "the server and Locus images were not copied into the guest"
   guest_root 'docker load -i /home/proof/cyfr-candidate.tar; status=$?; rm -f /home/proof/cyfr-candidate.tar; exit $status' ||
-    fail "the guest's Docker did not load the server image ($GUEST_DIR/root.txt)"
-  loaded=$(guest_root_out "docker image inspect -f '{{.Id}}' $APP_IMAGE")
-  check "the guest holds this tree's server image, id $APP_IMAGE_ID (it holds ${loaded:-none})" test "$loaded" = "$APP_IMAGE_ID"
-  guest_ssh "cd ~/cyfr && cp docker-compose.yml ~/docker-compose.release.yml &&
-    sed -i -E 's#^([[:space:]]*image:[[:space:]]*)ghcr\.io/cyfrworks/cyfr:[^[:space:]]+#\1$APP_IMAGE#' docker-compose.yml
-    diff ~/docker-compose.release.yml docker-compose.yml" >"$GUEST_DIR/compose-candidate.diff" 2>&1
-  check "docker-compose.yml names this tree's image for cyfr, its one changed line" \
-    sh -c '[ "$(grep -c "^>" "$1")" = 1 ] && grep -qx ">.*image: $2" "$1" && grep -q "^<.*image: ghcr.io/cyfrworks/cyfr:" "$1"' sh "$GUEST_DIR/compose-candidate.diff" "$APP_IMAGE"
-  tar -C "$ROOT/seed" -cf - aqua | guest_ssh_in 'rm -rf ~/cyfr/aqua && tar -C ~/cyfr -xf -' ||
-    fail "this tree's seed/aqua was not copied into the guest"
-  check "the guest's aqua/ is this tree's seed/aqua, file for file" \
+    fail "the guest's Docker did not load the server and Locus images ($GUEST_DIR/root.txt)"
+  for image in "$APP_IMAGE=$APP_IMAGE_ID" "$LOCUS_IMAGE=$LOCUS_IMAGE_ID"; do
+    id=${image#*=} image=${image%%=*}
+    loaded=$(guest_root_out "docker image inspect -f '{{.Id}}' $image")
+    check "the guest holds this tree's image $image, id $id (it holds ${loaded:-none})" test "$loaded" = "$id"
+  done
+  guest_ssh "cd ~/cyfr && cp docker-compose.yml ~/docker-compose.scaffold.yml &&
+    sed -i -E 's#^([[:space:]]*image:[[:space:]]*)ghcr\.io/cyfrworks/cyfr:[^[:space:]]+#\1$APP_IMAGE#; s#^([[:space:]]*image:[[:space:]]*)ghcr\.io/cyfrworks/cyfr-locus:[^[:space:]]+#\1$LOCUS_IMAGE#' docker-compose.yml
+    diff ~/docker-compose.scaffold.yml docker-compose.yml" >"$GUEST_DIR/compose-candidate.diff" 2>&1
+  check "docker-compose.yml names this tree's images for cyfr and Locus, its only changed lines, one for each the scaffold names" \
+    python3 -I -c '
+import re, sys
+diff, compose, app, locus = open(sys.argv[1]).read().splitlines(), open(sys.argv[2]).read(), sys.argv[3], sys.argv[4]
+named = [m.group(1) for m in re.finditer(r"^\s*image:\s*ghcr\.io/cyfrworks/(cyfr|cyfr-locus):\S+\s*$", compose, re.M)]
+old = [l for l in diff if l.startswith("<")]
+new = [l for l in diff if l.startswith(">")]
+want = [app if n == "cyfr" else locus for n in named]
+sys.exit(0 if named.count("cyfr") == 1 and named.count("cyfr-locus") >= 1 and len(old) == len(named)
+         and [l.split("image:")[1].strip() for l in new] == want else 1)' \
+    "$GUEST_DIR/compose-candidate.diff" "$ROOT/docker-compose.yml" "$APP_IMAGE" "$LOCUS_IMAGE"
+  check "the guest's aqua/ is this tree's seed/aqua, file for file, as cyfr init laid it down" \
     test "$(guest_ssh "cd ~/cyfr && $FOLDER_DIGEST")" = "$(aqua_digest "$ROOT/seed")"
 }
 
@@ -626,21 +655,15 @@ ACCOUNT_SERVICE=http://localhost:4000
 # account_settings: before cyfr up, .env makes the box its own account
 # service and names it as the directory and the registry, and lets the
 # server's calls reach its loopback, so the server never starts naming
-# cyfr.run. It also drops CYFR_GITHUB_CLIENT_ID and CYFR_GOOGLE_CLIENT_ID:
-# the proof installs the published release, whose .env.example ships
-# them, and swaps in the candidate without cyfr update, which removes the
-# settings a release retired; the candidate's server refuses to boot on a
-# name it does not read, so they are removed here by hand.
+# cyfr.run.
 account_settings() {
   printf '%s\n' "CYFR_DIRECTORY_SERVE=writer" "CYFR_DIRECTORY_URL=$ACCOUNT_SERVICE" "CYFR_REGISTRY_URL=${ACCOUNT_SERVICE#http://}" \
     "CYFR_PRIVATE_EGRESS_TARGETS=locus,127.0.0.1" |
-    guest_ssh_in 'cd ~/cyfr && sed -i -E "/^(CYFR_DIRECTORY_SERVE|CYFR_REGISTRY_URL|CYFR_DIRECTORY_URL|CYFR_PRIVATE_EGRESS_TARGETS|CYFR_GITHUB_CLIENT_ID|CYFR_GOOGLE_CLIENT_ID)=/d" .env &&
+    guest_ssh_in 'cd ~/cyfr && sed -i -E "/^(CYFR_DIRECTORY_SERVE|CYFR_REGISTRY_URL|CYFR_DIRECTORY_URL|CYFR_PRIVATE_EGRESS_TARGETS)=/d" .env &&
     { [ -z "$(tail -c 1 .env)" ] || echo; cat; } >>.env' || fail ".env was not made the box's own account service"
   guest_ssh "grep -E '^(CYFR_DIRECTORY_SERVE|CYFR_REGISTRY_URL|CYFR_DIRECTORY_URL|CYFR_PRIVATE_EGRESS_TARGETS)=' ~/cyfr/.env" >"$GUEST_DIR/env-account.txt" 2>&1
   check ".env makes the box its own account service, its directory and registry at $ACCOUNT_SERVICE" \
     sh -c 'grep -qx CYFR_DIRECTORY_SERVE=writer "$1" && grep -qx "CYFR_DIRECTORY_URL=$2" "$1"' sh "$GUEST_DIR/env-account.txt" "$ACCOUNT_SERVICE"
-  check ".env names neither setting the release shipped and the candidate retired" \
-    guest_ssh '! grep -qE "^(CYFR_GITHUB_CLIENT_ID|CYFR_GOOGLE_CLIENT_ID)=" ~/cyfr/.env'
 }
 
 # account_service WHEN: the box's account service answers the screen's
@@ -775,6 +798,18 @@ cookie_answer() {
     401* | 403*) echo "out $got" ;;
     *) echo "unknown $got" ;;
   esac
+}
+
+# uncaptured NAME: " (no cookie was captured)" when screen_cookie NAME
+# captured none, which a check's name then says in place of a reading of
+# a cookie that does not exist; nothing otherwise.
+uncaptured() { [ -n "${COOKIE_DIGEST[$1]:-}" ] || printf ' (no cookie was captured)'; }
+
+# took_said NAME TOOK MOST: what a check reading the cookie NAME saw: "in
+# TOOK s", "in more than MOST s", or that no cookie was captured.
+took_said() {
+  if [ -z "${COOKIE_DIGEST[$1]:-}" ]; then printf 'no cookie was captured'
+  else printf 'in %s s' "${2:-more than $3}"; fi
 }
 
 # cookie_out_within NAME SECONDS: the seconds until the home sends the

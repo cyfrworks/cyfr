@@ -34,11 +34,14 @@ frame-facts experiment's and the containment proof's to decide:
   holds it to fetching them again (`ASSETS_CACHED`), as a change of answer
   is read before it is accepted. The pointer lock and
   fullscreen a click and a key in the frame obtain are recorded, not held.
-- **Measured.** Frame-open (launch in the shell to the game's ready: first
-  rendered frame after physics stepped and the sound decoded) and asset-fetch
-  (each `/_s/` resource's Resource Timing duration) over OPENS warm opens (one
-  signed-in context, the shell closing and launching again; the first open is
-  not counted) and OPENS cold opens (a new context each).
+- **Measured.** Frame-open (the open asked for in the shell to the game's
+  ready: first rendered frame after physics stepped and the sound decoded)
+  and asset-fetch (each `/_s/` resource's Resource Timing duration) over
+  OPENS warm opens (one signed-in context, opened first by the desktop's
+  address and then closed and launched again from the picker; the first
+  open is not counted) and OPENS cold opens (a new context each, opened by
+  the address). An open by the address is timed from the shell's
+  connection, a launch from its press.
 
 ## Limits
 

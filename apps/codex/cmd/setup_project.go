@@ -400,12 +400,16 @@ func (l *workLauncher) prepare(ctx context.Context, args []string) (workBegin, e
 	if err != nil {
 		return nil, fmt.Errorf("cyfr could not find its own program (%w)", err)
 	}
-	argv := append([]string{self, internalCmd.Name(), setupProjectCmd.Name()}, args...)
-	cmd := exec.Command(argv[0], argv[1:]...)
-	if l.throughGroup(ctx) {
-		cmd = exec.Command(l.sg, dockerGroup, "-c", "exec "+shellQuote(argv))
-	}
+	argv := append([]string{internalCmd.Name(), setupProjectCmd.Name()}, args...)
+	cmd := exec.Command(self, argv...)
 	cmd.Env = l.environment(os.Environ())
+	if l.throughGroup(ctx) {
+		// As every second run through the group (groupRun); a path sg's
+		// string cannot carry runs as it is, and Docker says why.
+		if grouped, err := groupRun(l.sg, self, argv, cmd.Env); err == nil {
+			cmd = grouped
+		}
+	}
 	return func() (*workProcess, error) {
 		in, err := cmd.StdinPipe()
 		if err != nil {

@@ -206,7 +206,7 @@ defmodule Cyfr.Test.SeedBundleTest do
   # and its newest.
   @desktops [
     {"canvas", ~w(0.4.0 0.5.0 0.6.0), "0.6.5"},
-    {"line", ~w(0.1.0 0.2.0), "0.3.5"},
+    {"line", ~w(0.1.0 0.2.0), "0.3.6"},
     {"night", ~w(0.1.0 0.2.0), "0.3.4"},
     {"road", ~w(0.1.0 0.2.0), "0.3.4"},
     {"street", ~w(0.1.0 0.2.0), "0.3.4"},
@@ -262,10 +262,10 @@ defmodule Cyfr.Test.SeedBundleTest do
     end
   end
 
-  test "the line desktop is 0.3.5 on the vanilla template, and the publish check accepts it" do
+  test "the line desktop is 0.3.6 on the vanilla template, and the publish check accepts it" do
     line = SeedBundle.local_unit!("tinctures", "line")
     assert line.ref == "tincture:local.line"
-    assert line.version == "0.3.5"
+    assert line.version == "0.3.6"
     dir = Path.join(Path.expand("../../../../seed/components", __DIR__), line.rel)
 
     assert Prima.Manifest.validate(line.manifest, fn _ -> true end) == :ok

@@ -1980,7 +1980,6 @@ defmodule Cyfr.Boundaries do
     "Sanctum.Context" => [
       actor: 1,
       athanor!: 1,
-      authorize: 2,
       authorize: 3,
       build: 1,
       enter_guest: 1,
