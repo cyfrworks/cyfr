@@ -233,7 +233,7 @@ defmodule Cyfr.EnvFilesTest do
       "RELEASE_ROOT" => dir,
       "CYFR_BROWSER" => "none",
       # A tunnel key's public half, which every release names:
-      # tests/fixtures/link.json's first.
+      # the first of the private name vectors.
       "CYFR_LINK_PUBLIC" => "6b6b937aca103230d149eb148efbcfb59e6d1f05bb04dc648ac3e92339eae74a",
       "CYFR_DATABASE" => nil,
       "CYFR_COSIGN_KEY" => nil,

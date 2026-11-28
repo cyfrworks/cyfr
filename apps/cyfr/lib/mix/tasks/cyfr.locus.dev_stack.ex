@@ -62,9 +62,12 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
   run. A value already set is
   kept; one the environment sets empty over the file, or one its reader
   at boot refuses, is refused. Nothing is written when anything is
-  refused. It then prints `wrote NAME...` when it wrote, and `setup <link>`,
-  the setup link at Prism's address (`/setup#<token>`), when it wrote the
-  setup token, as `cyfr init` prints it; a `server NAME=VALUE` line for
+  refused. It mints the tunnel key, `CYFR_LINK_KEY` and `CYFR_LINK_PUBLIC`,
+  as `cyfr init` does when neither is set, and refuses one set alone. It
+  then prints `wrote NAME...` when it wrote, `address <url>`, the private
+  address the server boots at (`Cyfr.RuntimeConfig.resolve_link/3`), and
+  `setup <link>`, the setup link at that address (`/setup#<token>`), when
+  it wrote the setup token, as `cyfr init` prints it; a `server NAME=VALUE` line for
   each of CYFR's settings above and the builds key; and `compose
   NAME=VALUE` lines for the three keys compose hands the services:
   `LOCUS_RUNTIME_KEY`, the runtime's id's key derived from the root
@@ -101,6 +104,8 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
   @backends_key "CYFR_LOCUS_BACKENDS_KEY"
   @builds_key "CYFR_LOCUS_BUILDS_KEY"
   @setup "CYFR_SETUP_TOKEN"
+  @link_key "CYFR_LINK_KEY"
+  @link_public "CYFR_LINK_PUBLIC"
   @host_api_url "CYFR_HOST_API_URL"
   @bind "CYFR_BIND_ADDRESS"
 
@@ -143,14 +148,18 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
          :ok <- resolves(stack.names),
          :ok <- trusted(root),
          {:ok, lines} <- provision(env),
+         {:ok, link} <- link(env),
+         lines = lines ++ link,
          {:ok, builds_key} <- builds_key(env),
          :ok <- write(lines),
          env = environment(),
+         {:ok, address} <- private_address(env, stack.prism_port),
          {:ok, keys} <- keys(env, stack.service_id, builds_key) do
       if lines != [], do: info("wrote " <> Enum.map_join(lines, " ", &elem(&1, 0)))
+      info("address " <> address)
 
       for {@setup, token} <- lines,
-          do: info("setup http://localhost:#{stack.prism_port}/setup##{token}")
+          do: info("setup #{address}/setup##{token}")
 
       for {name, value} <- stack.server ++ stack.registry, do: info("server #{name}=#{value}")
       info("server #{@builds_key}=#{builds_key}")
@@ -601,6 +610,54 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
 
   defp minted(_key),
     do: {:write, Base.encode16(:crypto.strong_rand_bytes(32), case: :lower)}
+
+  # The tunnel key, minted as `cyfr init` mints it when neither half is
+  # set (tests/fixtures/link.json): an X25519 private key clamped as
+  # WireGuard's are and a pre-shared key, never zero, as `CYFR_LINK_KEY`,
+  # and the public half as `CYFR_LINK_PUBLIC`. One half set without the
+  # other is refused: they are one key.
+  defp link(env) do
+    case {set(env, @link_key), set(env, @link_public)} do
+      {nil, nil} ->
+        <<first, middle::binary-size(30), last>> = :crypto.strong_rand_bytes(32)
+        private = <<band(first, 248), middle::binary, bor(band(last, 127), 64)>>
+        {public, ^private} = :crypto.generate_key(:ecdh, :x25519, private)
+        psk = nonzero_psk()
+
+        {:ok,
+         [
+           {@link_key,
+            "privkey:" <>
+              Base.encode16(private, case: :lower) <> ",psk:" <> Base.encode16(psk, case: :lower)},
+           {@link_public, Base.encode16(public, case: :lower)}
+         ]}
+
+      {key, public} when is_binary(key) and is_binary(public) ->
+        {:ok, []}
+
+      _one ->
+        {:error,
+         "#{@link_key} and #{@link_public} are one tunnel key, and .env or the environment " <>
+           "sets one of them alone. Remove the other's line too, and scripts/dev-stack.sh " <>
+           "mints the pair."}
+    end
+  end
+
+  defp nonzero_psk do
+    psk = :crypto.strong_rand_bytes(32)
+    if psk == <<0::256>>, do: nonzero_psk(), else: psk
+  end
+
+  # The private address the server boots at, as the boot resolves it.
+  defp private_address(env, port) do
+    case Cyfr.RuntimeConfig.resolve_link(set(env, @link_public), String.to_integer(port), true) do
+      {:ok, address} ->
+        {:ok, address}
+
+      {:error, %{code: code, payload: payload}} ->
+        {:error, Prima.Refusal.message({code, payload})}
+    end
+  end
 
   # The refusal of a key its reader did not decode.
   defp hex_key(name, read) do

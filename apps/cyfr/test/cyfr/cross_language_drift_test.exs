@@ -602,6 +602,12 @@ defmodule Cyfr.CrossLanguageDriftTest do
     "layout.json" => [
       {"apps/prima/test/prima/layout_test.exs", ~w(valid canonical digest invalid unsupported)}
     ],
+    "link.json" => [
+      {"apps/codex/internal/link/name_test.go", ~w(names refused)},
+      {"apps/cyfr/test/cyfr/locus_dev_stack_task_test.exs", ~w(names)},
+      {"apps/cyfr/test/cyfr/runtime_config_test.exs", ~w(names refused)},
+      {"apps/cyfr/test/cyfr/runtime_config_wiring_test.exs", ~w(names)}
+    ],
     "locus_backends.json" => [
       {"apps/cyfr/test/opus/programs/definition_test.exs",
        ~w(reserved_env_prefixes literal_env_names)},

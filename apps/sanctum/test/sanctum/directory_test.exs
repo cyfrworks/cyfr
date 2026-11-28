@@ -30,7 +30,7 @@ defmodule Sanctum.DirectoryTest do
 
   @directory "https://dir.example"
   # The private name of the test configuration's tunnel key
-  # (tests/fixtures/link.json's first).
+  # (the first of the private name vectors).
   @private_name "h-xeypbemm44chehc5.localhost"
   @policy %{max_identities: 100_000, log_bytes: 1_073_741_824, recovery_reserve_bytes: 10_485_760}
 
@@ -291,9 +291,9 @@ defmodule Sanctum.DirectoryTest do
       :ok = Directory.hold_origin()
       assert pinned() == {:ok, "http://#{@private_name}:4000"}
 
-      serve_locally_at("http://#{@private_name}:4001")
+      serve_locally_at("http://#{@private_name}:4010")
 
-      assert moved("http://#{@private_name}:4000", "http://#{@private_name}:4001") ==
+      assert moved("http://#{@private_name}:4000", "http://#{@private_name}:4010") ==
                Directory.hold_origin()
     end
 

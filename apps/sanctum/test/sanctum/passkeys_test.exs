@@ -59,7 +59,7 @@ defmodule Sanctum.PasskeysTest do
   # This CYFR answers at its browser address here (`@origin`): a request
   # is minted, and its answer taken, at the proxy entry unless a test
   # names another.
-  defp requested(purpose, binding, opts \\ []),
+  defp requested(purpose, binding, opts),
     do: SignIn.request(purpose, binding, Keyword.put_new(opts, :entry, :proxy))
 
   defp answered(answer, binding, opts \\ []),

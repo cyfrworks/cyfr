@@ -54,7 +54,7 @@ defmodule Cyfr.EnvExampleSecretsTest do
 
     for key <-
           ~w(CYFR_SECRET_KEY_BASE CYFR_LOCUS_RUNTIME_ROOT CYFR_LOCUS_BACKENDS_KEY LOCUS_RUNTIME_KEY
-             CYFR_LOCUS_BUILDS_KEY) do
+             CYFR_LOCUS_BUILDS_KEY CYFR_LINK_KEY CYFR_LINK_PUBLIC) do
       assert text =~ ~r/^#{key}=$/m, ".env.example must assign #{key} empty"
     end
   end
