@@ -45,14 +45,15 @@ var tinctureCmd = &cobra.Command{
 	Use:     "tincture",
 	Short:   "Manage tincture frontends",
 	GroupID: "component",
-	Long:    "Commands for managing tincture frontends — visibility, public access, etc.",
+	Long:    "Commands for tincture frontends: whether one is public.",
 }
 
 var tinctureVisibilityCmd = &cobra.Command{
 	Use:   "visibility",
 	Short: "Show whether a tincture is public",
 	Long: `Show whether a tincture is publicly accessible at /t/:athanor/:publisher/:name
-without signing in. Tinctures are private (opened only in Prism); an app cannot be made public yet.`,
+without signing in. Tinctures are private (opened only in Prism) until a public profile is
+published; no page in Prism, the CYFR app or the command line makes an app public yet.`,
 }
 
 var tinctureVisibilityGetCmd = &cobra.Command{

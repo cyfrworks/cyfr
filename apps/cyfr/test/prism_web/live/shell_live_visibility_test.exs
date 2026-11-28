@@ -7,8 +7,8 @@ defmodule PrismWeb.ShellLiveVisibilityTest do
   and a read that cannot answer renders a third state — "unavailable" —
   never "private". A store that is down, or a profile row that cannot be
   decoded, says nothing about whether the tincture is published. No
-  control offers to make an app public or to copy a public address: an
-  app cannot be made public yet.
+  control offers to make an app public; a public app's address, at the
+  home's own origin, is offered to copy, and a private app's never.
   """
 
   use PrismWeb.ConnCase, async: false
@@ -88,10 +88,10 @@ defmodule PrismWeb.ShellLiveVisibilityTest do
     end
   end
 
-  # Nothing a person can reach finishes a publish, so the picker offers
-  # no step toward one and no public address to copy.
-  defp offers_publishing?(html),
-    do: html =~ ~r/Make Public|Make Private|Copy URL|toggle_visibility|copy_url/
+  # No page makes an app public, so the picker offers no step toward one.
+  defp offers_publishing?(html), do: html =~ ~r/Make Public|Make Private|toggle_visibility/
+
+  defp copies_url?(html), do: html =~ "Copy URL"
 
   test "a tincture with no public profile reads private, with nothing offering to publish it",
        %{conn: conn} do
@@ -99,6 +99,7 @@ defmodule PrismWeb.ShellLiveVisibilityTest do
 
     assert visibility(html) == "private"
     refute offers_publishing?(html)
+    refute copies_url?(html)
   end
 
   test "an active public profile reads public", %{conn: conn, ctx: ctx} do
@@ -108,6 +109,7 @@ defmodule PrismWeb.ShellLiveVisibilityTest do
 
     assert visibility(html) == "public"
     refute offers_publishing?(html)
+    assert copies_url?(html)
   end
 
   @tag :capture_log
@@ -121,6 +123,7 @@ defmodule PrismWeb.ShellLiveVisibilityTest do
 
     assert visibility(html) == "unavailable"
     refute offers_publishing?(html)
+    refute copies_url?(html)
   end
 
   test "a public profile row that cannot be decoded reads unavailable", %{conn: conn, ctx: ctx} do
@@ -186,5 +189,35 @@ defmodule PrismWeb.ShellLiveVisibilityTest do
     html = render(view)
     assert html =~ "Your report goes to the registry&#39;s moderators."
     refute html =~ "cyfr.run"
+  end
+
+  # The address a person copies to share a public tincture is the home's
+  # own (`Sanctum.origin/0`), its public URL in a tailnet or public home,
+  # never the endpoint's own listener address; a private one copies nothing.
+  test "a public tincture's copied URL is at the home's own address, a private one's is none",
+       %{conn: conn, ctx: ctx} do
+    original = Application.fetch_env(:sanctum, :public_url)
+
+    on_exit(fn ->
+      case original do
+        {:ok, value} -> Application.put_env(:sanctum, :public_url, value)
+        :error -> Application.delete_env(:sanctum, :public_url)
+      end
+    end)
+
+    home = "https://cyfr.tail1a2b3c.ts.net"
+    Application.put_env(:sanctum, :public_url, home)
+
+    {view, _html} = mount_desktop(conn)
+    render_click(view, "copy_url", %{"tincture" => "iframe_#{@tincture}"})
+    refute_push_event(view, "clipboard", %{})
+
+    public_profile!(ctx)
+    {view, _html} = mount_desktop(conn)
+    render_click(view, "copy_url", %{"tincture" => "iframe_#{@tincture}"})
+
+    assert_push_event(view, "clipboard", %{text: url})
+    assert String.starts_with?(url, home <> "/")
+    assert String.ends_with?(url, "/local/#{@tincture}")
   end
 end

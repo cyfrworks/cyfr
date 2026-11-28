@@ -23,7 +23,7 @@ A frame hidden behind another is **suspended** unless it declares `frame.backgro
 
 ### Private and Public
 
-A tincture is private unless it has an active public consent profile, and an app cannot be made public yet: `profile.publish` stages one, but nothing in Prism, the CYFR app or the command line finishes its consent walk. `profile.revoke` revokes one, and `tincture_visibility.get` reports the current answer. The manifest's `tincture.public` is a metadata hint only. A canvas is never public: it is the person's own data page, so no public profile is staged for one and the public route serves none. `profile.publish` refuses to stage one (`invalid_argument`), and its address answers not found, as a private tincture's does.
+A tincture is private unless it has an active public consent profile. `profile.publish` makes one through the consent walk under a person's own signed-in session ([integration guide](integration-guide.md), the `profile` tool), never an API key, and `profile.revoke` revokes it; `tincture_visibility.get` reports the current answer. No page in Prism, the CYFR app or the command line makes an app public yet. The manifest's `tincture.public` is a metadata hint only. A canvas is never public: it is the person's own data page, so no public profile is staged for one and the public route serves none. `profile.publish` refuses to stage one (`invalid_argument`), and its address answers not found, as a private tincture's does.
 
 | | Private | Public |
 |---|---|---|
@@ -646,4 +646,4 @@ RECOMMENDED:
 - [ ] A `package.json` ships with its `package-lock.json`, regenerated after every dependency change
 - [ ] Built tinctures: `vite.config.js` keeps `base: "./"`, and `cyfr build compile t:local.<name>:<version>` succeeds before registering
 - [ ] No secret, key or token in any file of the version
-- [ ] Public tinctures: the page works at its address with no session
+- [ ] Public tinctures: the page works at its address with no session. No page in Prism, the CYFR app or the command line makes an app public yet.

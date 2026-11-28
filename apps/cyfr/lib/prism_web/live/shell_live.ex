@@ -623,6 +623,25 @@ defmodule PrismWeb.ShellLive do
     end
   end
 
+  # Only a public app has an address to share: the home's own origin
+  # (`Sanctum.origin/0`) plus its path. A private one copies nothing.
+  def handle_event("copy_url", %{"tincture" => tincture_id}, socket) do
+    case Enum.find(socket.assigns.tinctures, &(&1.id == tincture_id)) do
+      %{public: true} = tincture ->
+        url =
+          Cyfr.RuntimeConfig.origin() <>
+            Prima.TinctureUrl.path(tincture.athanor_segment, tincture.publisher, tincture.name)
+
+        {:noreply,
+         socket
+         |> push_event("clipboard", %{text: url})
+         |> put_flash(:info, "URL copied to clipboard")}
+
+      _private_or_none ->
+        {:noreply, socket}
+    end
+  end
+
   def handle_event("open_report", %{"tincture" => tincture_id}, socket) do
     case Enum.find(socket.assigns.tinctures, &(&1.id == tincture_id)) do
       nil ->
@@ -4101,6 +4120,15 @@ defmodule PrismWeb.ShellLive do
           class="rounded-lg bg-accent-primary px-4 py-1.5 text-xs font-medium text-white transition-colors hover:bg-accent-hover"
         >
           Launch
+        </button>
+        <button
+          :if={@tincture.public == true}
+          phx-click="copy_url"
+          phx-value-tincture={@tincture.id}
+          class="rounded-lg border border-border-default bg-surface-raised px-3 py-1.5 text-xs text-text-secondary transition-colors hover:text-text-primary"
+          title="Copy public URL"
+        >
+          Copy URL
         </button>
         <button
           phx-click="open_report"
