@@ -1798,6 +1798,8 @@ fn requests_a_pin_is_read_as_prima_reads_one() {
     let v = fixture("host_api.json");
     let cases = &v["pin_answer_refusals"];
     assert!(read_pin(&cases["pin"]).is_some());
+    assert!(cases_of(&cases["reads"]).len() >= 13, "the pins read");
+    assert!(cases_of(&cases["refusals"]).len() >= 36, "the pins refused");
     for case in cases_of(&cases["reads"]) {
         assert!(read_pin(&case["pin"]).is_some(), "{}", case["why"]);
     }

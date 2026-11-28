@@ -60,9 +60,13 @@ defmodule Locus.Runtime.EdgeGuardTest do
 
   describe "the relay's checks as host_api.json holds them" do
     test "every method, scheme and host is checked against its edge as the vector says" do
-      assert length(@host_api["edge_checks"]) >= 10
+      assert length(@host_api["edge_checks"]) >= 13
 
       for c <- @host_api["edge_checks"] do
+        assert Map.keys(c) |> Enum.sort() ===
+                 ~w(domain_allowed egress host method method_allowed scheme scheme_allowed why),
+               inspect(c)
+
         {:ok, edge} = Prima.Authority.Blob.parse_edge(%{"egress" => c["egress"]})
         assert EdgeGuard.check_method(edge, c["method"]) == :ok === c["method_allowed"], c["why"]
         assert EdgeGuard.check_scheme(edge, c["scheme"]) == :ok === c["scheme_allowed"], c["why"]
@@ -74,6 +78,10 @@ defmodule Locus.Runtime.EdgeGuardTest do
       assert length(@host_api["request_sizes"]) >= 5
 
       for c <- @host_api["request_sizes"] do
+        assert Map.keys(c) |> Enum.sort() ===
+                 ~w(body_b64 headers max_request_size url why within),
+               inspect(c)
+
         {:ok, limits} =
           Prima.Limits.new(%{
             "timeout" => "30s",
@@ -92,6 +100,18 @@ defmodule Locus.Runtime.EdgeGuardTest do
         }
 
         assert EdgeGuard.check_request_size(limits, request) == :ok === c["within"], c["why"]
+      end
+    end
+
+    test "every method of bytes that are no UTF-8, or of special characters, is checked as the vector says" do
+      assert length(@host_api["method_bytes"]) >= 15
+
+      for c <- @host_api["method_bytes"] do
+        assert Map.keys(c) |> Enum.sort() === ~w(allowed allowed_hex method_hex), inspect(c)
+        allowed = Base.decode16!(c["allowed_hex"], case: :lower)
+        {:ok, edge} = Prima.Authority.Blob.parse_edge(%{"egress" => %{"methods" => [allowed]}})
+        method = Base.decode16!(c["method_hex"], case: :lower)
+        assert EdgeGuard.check_method(edge, method) == :ok === c["allowed"], inspect(c)
       end
     end
   end

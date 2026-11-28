@@ -14,15 +14,18 @@ import (
 	"encoding/base64"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 // Methods are the HTTP methods a destination admits and a relay frame
-// carries (Prima.Destination.methods/0).
-var Methods = []string{"DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT"}
+// carries (Prima.Destination.methods/0), a fresh list each call.
+func Methods() []string { return []string{"DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT"} }
 
 // URI is a URL's parts as URI.parse/1 reads them: Scheme lowercased, a
-// part absent nil, Host without its brackets, Port the decimal digits
-// after the host's colon without leading zeros.
+// part absent nil (a Path absent is empty), Host without its brackets,
+// Port the port in decimal without leading zeros: the digits after the
+// host's colon, or the scheme's default port (URI.default_port/1) where
+// there are none.
 type URI struct {
 	Scheme   string
 	Userinfo *string
@@ -36,12 +39,19 @@ type URI struct {
 func alpha(c byte) bool { return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' }
 func digit(c byte) bool { return c >= '0' && c <= '9' }
 
+// defaultPort is URI.default_port/1: the port a scheme's URL names when
+// it names none.
+var defaultPort = map[string]string{
+	"ftp": "21", "sftp": "22", "tftp": "69", "http": "80", "https": "443", "ldap": "389", "ws": "80", "wss": "443",
+}
+
 // ParseURI reads text as URI.parse/1 does, by RFC 3986's appendix B,
 // ^(([a-z][a-z0-9+\-.]*):)?(//([^/?#]*))?([^?#]*)(\?([^#]*))?(#(.*))?
 // without case, the fragment's . stopping at a line feed; and an
 // authority as (^(.*)@)?(\[[a-zA-Z0-9:.]*\]|[^:]*)(:(\d*))?, its
 // userinfo's . likewise, an empty userinfo none, a host its brackets
-// trimmed, and an empty port none.
+// trimmed, an empty host none but in an empty authority, whose host is
+// empty, and an empty port the scheme's default.
 func ParseURI(text string) URI {
 	var u URI
 	rest := text
@@ -63,6 +73,9 @@ func ParseURI(text string) URI {
 		}
 		u.Userinfo, u.Host, u.Port = splitAuthority(after[:end])
 		rest = after[end:]
+	}
+	if port, known := defaultPort[u.Scheme]; known && u.Port == nil {
+		u.Port = &port
 	}
 	end := strings.IndexAny(rest, "?#")
 	if end < 0 {
@@ -89,6 +102,10 @@ func ParseURI(text string) URI {
 }
 
 func splitAuthority(authority string) (userinfo, host, port *string) {
+	if authority == "" {
+		empty := ""
+		return nil, &empty, nil
+	}
 	rest := authority
 	line := authority
 	if i := strings.IndexByte(line, '\n'); i >= 0 {
@@ -153,15 +170,21 @@ func ParseURL(text string) (URI, bool) {
 // Downcase is s lowercased as Elixir's String.downcase/1 does in its
 // default mode: each character's simple lowercase, but İ (U+0130), which
 // Unicode's SpecialCasing lowercases to i and a combining dot above where
-// Go's unicode.ToLower gives a plain i.
+// Go's unicode.ToLower gives a plain i; and a byte that is no UTF-8 kept
+// as it is, as Elixir keeps it, never read as U+FFFD.
 func Downcase(s string) string {
 	var b strings.Builder
-	for _, r := range s {
-		if r == 'İ' {
-			b.WriteString("i̇")
-			continue
+	for i := 0; i < len(s); {
+		r, size := utf8.DecodeRuneInString(s[i:])
+		switch {
+		case r == utf8.RuneError && size == 1:
+			b.WriteByte(s[i])
+		case r == 'İ':
+			b.WriteString("i\u0307")
+		default:
+			b.WriteRune(unicode.ToLower(r))
 		}
-		b.WriteRune(unicode.ToLower(r))
+		i += size
 	}
 	return b.String()
 }
@@ -193,20 +216,36 @@ func DomainAllowed(host string, patterns []string) bool {
 	return false
 }
 
-// FramingHeaders, OverrideHeaders, OverridePrefixes and CredentialHeaders
-// are Prima.Network's rosters, lowercase and in order.
+// The rosters of Prima.Network, lowercase and in order.
 var (
-	FramingHeaders = []string{"host", "content-length", "transfer-encoding", "connection", "keep-alive",
+	framingHeaders = []string{"host", "content-length", "transfer-encoding", "connection", "keep-alive",
 		"te", "trailer", "upgrade", "proxy-connection", "expect"}
-	OverrideHeaders = []string{"x-http-method-override", "x-http-method", "x-method-override",
+	overrideHeaders = []string{"x-http-method-override", "x-http-method", "x-method-override",
 		"x-original-url", "x-rewrite-url", "x-original-host", "x-host", "x-forwarded-host",
 		"x-forwarded-proto", "x-forwarded-port", "x-forwarded-prefix", "x-forwarded-server",
 		"forwarded", "via", "x-real-ip", "true-client-ip"}
-	OverridePrefixes  = []string{"x-forwarded-"}
-	CredentialHeaders = []string{"authorization", "cookie", "proxy-authorization", "x-api-key",
+	overridePrefixes  = []string{"x-forwarded-"}
+	credentialHeaders = []string{"authorization", "cookie", "proxy-authorization", "x-api-key",
 		"x-auth-token", "x-access-token", "x-csrf-token"}
 	credentialSuffixes = []string{"-token", "-key", "-secret"}
 )
+
+// FramingHeaders are the headers that route or frame a request, a fresh
+// list each call (Prima.Network.framing_headers/0).
+func FramingHeaders() []string { return append([]string(nil), framingHeaders...) }
+
+// OverrideHeaders are the headers that override a request's method or
+// target or claim its origin, a fresh list each call
+// (Prima.Network.override_headers/0).
+func OverrideHeaders() []string { return append([]string(nil), overrideHeaders...) }
+
+// OverridePrefixes are the prefixes any name starting with which is an
+// override header too, a fresh list each call.
+func OverridePrefixes() []string { return append([]string(nil), overridePrefixes...) }
+
+// CredentialHeaders are the headers that carry a credential, a fresh list
+// each call (Prima.Network.credential_headers/0).
+func CredentialHeaders() []string { return append([]string(nil), credentialHeaders...) }
 
 func in(name string, roster []string) bool {
 	for _, r := range roster {
@@ -222,10 +261,10 @@ func in(name string, roster []string) bool {
 // a name starting with an override prefix.
 func FramingOrOverrideHeader(name string) bool {
 	name = Downcase(name)
-	if in(name, FramingHeaders) || in(name, OverrideHeaders) {
+	if in(name, framingHeaders) || in(name, overrideHeaders) {
 		return true
 	}
-	for _, p := range OverridePrefixes {
+	for _, p := range overridePrefixes {
 		if strings.HasPrefix(name, p) {
 			return true
 		}
@@ -238,7 +277,7 @@ func FramingOrOverrideHeader(name string) bool {
 // or -secret.
 func CredentialHeader(name string) bool {
 	name = Downcase(name)
-	if in(name, CredentialHeaders) {
+	if in(name, credentialHeaders) {
 		return true
 	}
 	for _, s := range credentialSuffixes {

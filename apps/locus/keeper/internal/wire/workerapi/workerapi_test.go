@@ -60,8 +60,8 @@ func load(t *testing.T) vectors {
 
 func TestEveryCallbacksRetryAndTimeoutAreTheVectors(t *testing.T) {
 	v := load(t)
-	if len(v.Retries) != len(Callbacks()) || !reflect.DeepEqual(v.Retries, Retry) || !reflect.DeepEqual(v.TimeoutsMs, TimeoutMs) {
-		t.Fatalf("the vector's retries %v and timeouts %v, the package's %v and %v", v.Retries, v.TimeoutsMs, Retry, TimeoutMs)
+	if len(v.Retries) != len(Callbacks()) || !reflect.DeepEqual(v.Retries, Retry()) || !reflect.DeepEqual(v.TimeoutsMs, TimeoutMs()) {
+		t.Fatalf("the vector's retries %v and timeouts %v, the package's %v and %v", v.Retries, v.TimeoutsMs, Retry(), TimeoutMs())
 	}
 	for _, c := range Callbacks() {
 		if v.Routes[c] != "/worker/v1/"+c {
@@ -191,8 +191,8 @@ func TestTheKeepersRefusalsAreHeldInTheVectorsWords(t *testing.T) {
 	if held == 0 {
 		t.Error("no refusal carries the keeper's held")
 	}
-	if !reflect.DeepEqual(v.ReportRefusals.Carried, ReportRefusals) || len(v.ReportRefusals.NotCarried) == 0 {
-		t.Errorf("a report carries %v, the vector's %v", ReportRefusals, v.ReportRefusals.Carried)
+	if !reflect.DeepEqual(v.ReportRefusals.Carried, ReportRefusals()) || len(v.ReportRefusals.NotCarried) == 0 {
+		t.Errorf("a report carries %v, the vector's %v", ReportRefusals(), v.ReportRefusals.Carried)
 	}
 	for _, c := range v.ReportRefusals.NotCarried {
 		if Reported(c) {

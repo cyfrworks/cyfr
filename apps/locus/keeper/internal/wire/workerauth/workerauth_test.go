@@ -130,11 +130,11 @@ func workerKey(root macenvelope.Key, service string) (macenvelope.Key, error) {
 }
 
 func attemptCallKey(root macenvelope.Key, attempt macenvelope.Message) (macenvelope.Key, error) {
-	return deriveOver(root, label+"/call", AttemptFields, attempt)
+	return deriveOver(root, label+"/call", AttemptFields(), attempt)
 }
 
 func attemptSealKey(root macenvelope.Key, attempt macenvelope.Message) (macenvelope.Key, error) {
-	return deriveOver(root, label+"/seal", AttemptFields, attempt)
+	return deriveOver(root, label+"/seal", AttemptFields(), attempt)
 }
 
 func requestHeader(dispatchKey macenvelope.Key, d macenvelope.Message, body []byte) (string, error) {
@@ -228,7 +228,7 @@ func message(t *testing.T, e macenvelope.Envelope, raw map[string]json.RawMessag
 	return m
 }
 
-func attemptFields() macenvelope.Envelope { return macenvelope.Envelope{Fields: AttemptFields} }
+func attemptFields() macenvelope.Envelope { return macenvelope.Envelope{Fields: AttemptFields()} }
 
 func (v vectors) call(t *testing.T) macenvelope.Message {
 	m := message(t, attemptFields(), v.Attempt)

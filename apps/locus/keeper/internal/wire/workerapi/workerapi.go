@@ -20,16 +20,21 @@ import (
 func Callbacks() []string { return []string{"start", "kill", "status"} }
 
 // Retry is what CYFR may do when a callback's answer is lost: kill and
-// status again, start never.
-var Retry = map[string]string{"start": "never", "kill": "idempotent", "status": "idempotent"}
+// status again, start never; a fresh map each call.
+func Retry() map[string]string {
+	return map[string]string{"start": "never", "kill": "idempotent", "status": "idempotent"}
+}
 
 // TimeoutMs is how long CYFR waits for each callback's answer: the
-// assignment's claim window for start, five seconds for kill and status.
-var TimeoutMs = map[string]int{"start": 30_000, "kill": 5_000, "status": 5_000}
+// assignment's claim window for start, five seconds for kill and status;
+// a fresh map each call.
+func TimeoutMs() map[string]int {
+	return map[string]int{"start": 30_000, "kill": 5_000, "status": 5_000}
+}
 
 // RunnerStates are the states a status counts its runners in, each runner
-// in exactly one.
-var RunnerStates = []string{"fresh", "idle", "busy", "tainted"}
+// in exactly one; a fresh list each call.
+func RunnerStates() []string { return []string{"fresh", "idle", "busy", "tainted"} }
 
 // MaxMessageBytes is the most bytes a refusal's sentence spans.
 const MaxMessageBytes = 1024
@@ -83,11 +88,11 @@ var ErrInvalid = errors.New("invalid_status")
 // 2^53 − 1, or a refusal whose reason is no code, whose sentence is not
 // one a refusal carries, or that carries held.
 func (s Status) Wire() (map[string]any, error) {
-	if len(s.Runners) != len(RunnerStates) || s.MemoryBytes > MaxMemoryBytes {
+	if len(s.Runners) != len(RunnerStates()) || s.MemoryBytes > MaxMemoryBytes {
 		return nil, ErrInvalid
 	}
 	runners := map[string]any{}
-	for _, state := range RunnerStates {
+	for _, state := range RunnerStates() {
 		n, counted := s.Runners[state]
 		if !counted {
 			return nil, ErrInvalid
@@ -116,12 +121,14 @@ func (s Status) Wire() (map[string]any, error) {
 
 // ReportRefusals are the codes of a keeper's refusal a worker service's
 // report carries (Prima.WorkerAPI.runner_refusal/1 names a sentence of
-// CYFR's for each); it carries no other.
-var ReportRefusals = []string{"capacity", "memory_unavailable", "exec_failed", "guard_unavailable", "hosts_unresolved"}
+// CYFR's for each); it carries no other. A fresh list each call.
+func ReportRefusals() []string {
+	return []string{"capacity", "memory_unavailable", "exec_failed", "guard_unavailable", "hosts_unresolved"}
+}
 
 // Reported is whether a report carries a refusal of code.
 func Reported(c string) bool {
-	for _, r := range ReportRefusals {
+	for _, r := range ReportRefusals() {
 		if r == c {
 			return true
 		}

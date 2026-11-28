@@ -16,12 +16,15 @@ import (
 	"github.com/cyfr/locus/keeper/internal/wire/wirejson"
 )
 
-// Purposes are the purposes a runner asks a pin for; attached is CYFR's
-// own and not among them.
-var Purposes = []string{"fetch", "stream", "redirect"}
+// Purposes are the purposes a runner asks a pin for, a fresh list each
+// call; attached is CYFR's own and not among them.
+func Purposes() []string { return []string{"fetch", "stream", "redirect"} }
 
-// Refusals are the refusals an egress_pin answer names.
-var Refusals = []string{"domain", "denied", "metadata", "resolution", "redirect_credentials", "malformed"}
+// Refusals are the refusals an egress_pin answer names, a fresh list each
+// call.
+func Refusals() []string {
+	return []string{"domain", "denied", "metadata", "resolution", "redirect_credentials", "malformed"}
+}
 
 // Pin is a pin as its answer spells it.
 type Pin struct {
@@ -45,45 +48,46 @@ var (
 // base64url text.
 func ValidID(id string) bool { return idPattern.MatchString(id) }
 
-// Family is the family of an IP literal as Erlang's
-// inet:parse_strict_address/1 reads one: 4 for a dotted quad of four
-// decimal octets without leading zeros, 6 for an IPv6 address, which may
-// carry a zone after its first % only when its first group is fe80 or
-// ff02, its second 0, and it embeds no IPv4 address; a zone that begins
-// with 0 is a decimal number up to 65535, and any other zone any text.
-// It answers 0 for anything else.
-func Family(ip string) int {
+// Family is the family of an IP literal as Prima.PinnedTarget reads one,
+// and ok false for text that is no IP literal, which has none: 4 for a
+// dotted quad of four decimal octets without leading zeros, 6 for an IPv6
+// address, which may carry a zone after its first % only when its first
+// group is fe80 or ff02, its second 0, and it embeds no IPv4 address; a
+// zone that begins with 0 is a decimal number up to 65535, and any other
+// zone any text. That is Erlang's inet:parse_strict_address/1, without
+// the sign it reads in a field, which Prima refuses before any zone.
+func Family(ip string) (family int, ok bool) {
 	address, zone, zoned := strings.Cut(ip, "%")
 	a, err := netip.ParseAddr(address)
 	if err != nil || a.Zone() != "" {
-		return 0
+		return 0, false
 	}
 	if !zoned {
 		if a.Is4() {
-			return 4
+			return 4, true
 		}
-		return 6
+		return 6, true
 	}
 	if a.Is4() || strings.Contains(address, ".") {
-		return 0
+		return 0, false
 	}
 	b := a.As16()
 	first, second := uint16(b[0])<<8|uint16(b[1]), uint16(b[2])<<8|uint16(b[3])
 	if (first != 0xfe80 && first != 0xff02) || second != 0 {
-		return 0
+		return 0, false
 	}
 	if strings.HasPrefix(zone, "0") {
 		n := 0
 		for i := 0; i < len(zone); i++ {
 			if zone[i] < '0' || zone[i] > '9' {
-				return 0
+				return 0, false
 			}
 			if n = n*10 + int(zone[i]-'0'); n > 65535 {
-				return 0
+				return 0, false
 			}
 		}
 	}
-	return 6
+	return 6, true
 }
 
 // validHost is whether host is a pin's host: a hostname of labels of
@@ -94,7 +98,8 @@ func Family(ip string) int {
 func validHost(host string) bool {
 	if rest, bracketed := strings.CutPrefix(host, "["); bracketed && len(rest) > 1 {
 		literal, after, closed := strings.Cut(rest, "]")
-		return closed && after == "" && Family(literal) == 6
+		family, ok := Family(literal)
+		return closed && after == "" && ok && family == 6
 	}
 	return len(host) >= 1 && len(host) <= 253 && !strings.Contains(host, "\n") && hostname.MatchString(host)
 }
@@ -122,11 +127,15 @@ func Read(v any) (Pin, bool) {
 	family, okFamily := wirejson.Uint(o["family"], 6)
 	port, okPort := wirejson.Uint(o["port"], 65535)
 	expires, okExpires := wirejson.Uint(o["expires_at"], wirejson.MaxSafeInteger)
-	if !(okID && okIP && okScheme && okHost && okFamily && okPort && okExpires) {
+	// Uint bounds both; the bound is said again where each is converted.
+	if !(okID && okIP && okScheme && okHost && okFamily && okPort && okExpires) || family > 6 || port > 65535 {
 		return Pin{}, false
 	}
 	p.Family, p.Port, p.ExpiresAt = int(family), int(port), expires
-	if !ValidID(p.ID) || Family(p.IP) != p.Family || (p.Scheme != "http" && p.Scheme != "https") ||
+	// A pin is read only when its address parsed: an ip that is no IP
+	// literal has no family, whatever family the pin declares.
+	parsed, isAddress := Family(p.IP)
+	if !isAddress || parsed != p.Family || !ValidID(p.ID) || (p.Scheme != "http" && p.Scheme != "https") ||
 		p.Port < 1 || !validHost(p.Host) {
 		return Pin{}, false
 	}
@@ -163,7 +172,7 @@ func ReadRequest(args map[string]any) bool {
 		return false
 	}
 	known := false
-	for _, p := range Purposes {
+	for _, p := range Purposes() {
 		known = known || p == purpose
 	}
 	if !known {

@@ -260,13 +260,19 @@ defmodule Prima.WorkerAuthTest do
          %{v: v} do
       %{"valid" => valid, "invalid" => invalid} = v["assignment_reads"]
 
-      for %{"why" => why, "token" => token, "payload" => payload} <- valid do
+      assert length(valid) >= 6 and length(invalid) >= 50
+
+      for c <- valid do
+        assert %{"why" => why, "token" => token, "payload" => payload} = c
+        assert map_size(c) == 3, why
         assert {:ok, %Assignment{} = read} = Assignment.read(token), why
-        assert read_wire(read) == payload, why
+        assert read_wire(read) === payload, why
       end
 
-      for %{"why" => why, "token" => token, "reason" => reason} <- invalid do
-        assert Assignment.read(token) == {:error, String.to_existing_atom(reason)}, why
+      for c <- invalid do
+        assert %{"why" => why, "token" => token, "reason" => reason} = c
+        assert map_size(c) == 3, why
+        assert Assignment.read(token) === {:error, String.to_existing_atom(reason)}, why
       end
     end
 
@@ -353,11 +359,26 @@ defmodule Prima.WorkerAuthTest do
 
       assert length(refused) >= 12 and length(carried) >= 8 and length(read) >= 4
 
-      for %{"token" => token, "why" => why} <- refused ++ carried,
-          do: assert({:error, :malformed} = Assignment.read(token), why)
+      # Each case is its why and token; the one marker, go, is on a read
+      # case alone, and names the Go reader's refusal.
+      for c <- refused ++ carried do
+        assert %{"token" => token, "why" => why} = c
+        assert map_size(c) == 2, why
+        assert {:error, :malformed} = Assignment.read(token), why
+      end
 
-      for %{"token" => token, "why" => why} <- read,
-          do: assert({:ok, %Assignment{}} = Assignment.read(token), why)
+      for c <- read do
+        assert %{"token" => token, "why" => why} = c
+
+        case Map.keys(c) |> Enum.sort() do
+          ~w(token why) -> :ok
+          ~w(go token why) -> assert c["go"] === %{"error" => "malformed"}, why
+        end
+
+        assert {:ok, %Assignment{}} = Assignment.read(token), why
+      end
+
+      assert Enum.count(read, &Map.has_key?(&1, "go")) == 1
     end
 
     test "every sealed attempt keys open as the attempt they name, or are refused" do
