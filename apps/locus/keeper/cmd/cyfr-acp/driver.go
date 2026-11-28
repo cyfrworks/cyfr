@@ -137,11 +137,10 @@ type driver struct {
 	ending   *ending
 	message  string
 	text     strings.Builder
-	// ownIDs holds the ids the driver named the turn's messages under, the
-	// program having named none, each true once said: a tool's frame ends
-	// such a message, and the next is named afresh, since a viewer settles
-	// a message by its id once its row lands.
-	ownIDs map[string]bool
+	// broken says a tool call started since the message under way last
+	// said anything, in a message the driver named (the program named
+	// none): its next text begins a paragraph (chunk).
+	broken bool
 	// output counts what the native turn said or called, and held is its
 	// first message chunk while it may be the program's report of a failed
 	// turn (profile's failure), with its message id: shown once anything
@@ -738,13 +737,12 @@ func (d *driver) update(params json.RawMessage) error {
 		if err := d.release(); err != nil {
 			return err
 		}
-		// What a program that names no message said before a tool call is
-		// one message, and what it says after is the next; where a program
-		// names its messages, its ids alone decide.
-		if _, mine := d.ownIDs[d.message]; mine {
-			if err := d.said(); err != nil {
-				return err
-			}
+		// A program that names no message gives no end to one: the words
+		// it says after a tool call starts stay in the message under way,
+		// a paragraph of their own. An update of a call already started
+		// breaks nothing.
+		if _, started := d.own[u.CallID]; !started && u.CallID != "" && d.ownMessage(d.message) {
+			d.broken = true
 		}
 		return d.ownUpdate(u.CallID, u.Status, u.ToolKind, u.Name, u.RawInput, u.Content)
 	}
@@ -763,40 +761,45 @@ func (d *driver) release() error {
 }
 
 // messageID is the id a message chunk is said under: the program's where
-// it gives one, else the message under way's, else one the driver names
-// from the turn's prompt, never one a message of the turn was said under.
+// it gives one, else the message under way's, else the turn's prompt's.
 func (d *driver) messageID(given string) string {
 	if brainwire.IsID(given) {
 		return given
 	}
-	if d.message != "" {
-		return d.message
+	id := d.message
+	if id == "" && len(d.turn.open) > 0 {
+		id = fmt.Sprintf("%s-%d", d.c.Boot, d.turn.open[len(d.turn.open)-1].id)
 	}
-	base := d.c.Boot
-	if len(d.turn.open) > 0 {
-		base = fmt.Sprintf("%s-%d", d.c.Boot, d.turn.open[len(d.turn.open)-1].id)
-	}
-	id := base
-	for n := 1; d.ownIDs[id]; n++ {
-		id = fmt.Sprintf("%s-%d", base, n)
-	}
-	if _, ok := d.ownIDs[id]; !ok {
-		if d.ownIDs == nil {
-			d.ownIDs = map[string]bool{}
-		}
-		d.ownIDs[id] = false
+	if id == "" {
+		id = d.c.Boot
 	}
 	return id
 }
 
+// ownMessage says the message id is one the driver named (messageID).
+func (d *driver) ownMessage(id string) bool {
+	return id == d.c.Boot || strings.HasPrefix(id, d.c.Boot+"-")
+}
+
 // chunk is one message chunk's text, said under the message id: a new id
-// says the message under way whole first.
+// says the message under way whole first. Text after a tool call that
+// broke the message begins with the line feeds that make one blank line
+// between it and what came before, in the delta itself, so what streams
+// is what is said.
 func (d *driver) chunk(id, text string) error {
 	if d.message != "" && id != d.message {
 		if err := d.said(); err != nil {
 			return err
 		}
 	}
+	if d.broken && id == d.message {
+		before := d.text.String()
+		feeds := len(before) - len(strings.TrimRight(before, "\n")) + len(text) - len(strings.TrimLeft(text, "\n"))
+		if feeds < 2 {
+			text = strings.Repeat("\n", 2-feeds) + text
+		}
+	}
+	d.broken = false
 	d.message = id
 	d.text.WriteString(text)
 	return d.c.EmitText(d.event("text").Set("message", id), "delta", text)
@@ -819,9 +822,7 @@ func (d *driver) said() error {
 	id, text := d.message, d.text.String()
 	d.message = ""
 	d.text.Reset()
-	if _, mine := d.ownIDs[id]; mine {
-		d.ownIDs[id] = true
-	}
+	d.broken = false
 	return d.c.EmitText(d.event("said").Set("message", id), "text", text)
 }
 
@@ -987,7 +988,6 @@ func (d *driver) ended(t *nativeTurn, p *prompt, m rpc) error {
 	idle := d.event("idle").Set("answered", t.posts).Set("stop", stop)
 	d.turn = nil
 	d.output = 0
-	d.ownIDs = nil
 	d.own = map[string]*ownCall{}
 	d.unclaimed = nil
 	return d.c.Emit(idle)
@@ -1037,7 +1037,7 @@ func (d *driver) Close() {
 	d.ending = nil
 	d.message = ""
 	d.text.Reset()
-	d.ownIDs = nil
+	d.broken = false
 	d.output = 0
 	d.held, d.heldMessage = "", ""
 	d.own = map[string]*ownCall{}

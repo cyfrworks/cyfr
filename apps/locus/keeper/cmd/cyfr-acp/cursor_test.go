@@ -277,17 +277,48 @@ func TestCursorsActivityIsItsCallsThoughtsAndOwnWords(t *testing.T) {
 	s := startCursor(t, "")
 	freshCursor(s)
 	postText(s, "stp_act", "trn_1", "activity")
-	activityHolds(t, s, [2]string{"call-a-0\nfc_a_0", "call-b-1\nfc_b_0"}, "call-t-3\nfc_t_0")
+	// Cursor names no message, so its words after the tools begin a
+	// paragraph of the one message.
+	activityHolds(t, s, [2]string{"call-a-0\nfc_a_0", "call-b-1\nfc_b_0"}, "call-t-3\nfc_t_0", "The member \n\nsaid its own words.")
 }
 
 // Cursor names no message: its words before its own tool and after it are
-// two messages (aroundHolds), as the walk's "…and verify it.Wrote and
-// verified…" was not.
-func TestCursorsWordsAroundItsToolAreTwoMessages(t *testing.T) {
+// one message, the later words a paragraph of their own, where the walk's
+// ran together ("…and verify it.Wrote and verified…").
+func TestCursorsWordsAroundItsToolAreOneMessageWithABreak(t *testing.T) {
 	s := startCursor(t, "")
 	freshCursor(s)
 	postText(s, "stp_around", "trn_1", "around")
-	aroundHolds(t, s)
+	saidHolds(t, s.until("idle"), []string{"Before the tool.\n\nAfter it."})
+}
+
+// The break is the only change: a call's later update adds none, two tools
+// in a row add one, text that ends in a line feed gets one blank line, a
+// tool with nothing after adds nothing, a sub-agent's frame is none of the
+// turn's, and a program's own message ids decide alone. The reply, the
+// turn's last message, holds every word, a question before the last tool
+// and a choices block's text among them.
+func TestCursorsWordsAroundItsToolsBreakOnceInOneMessage(t *testing.T) {
+	for _, tc := range []struct {
+		post string
+		want []string
+	}{
+		{"aroundquestion", []string{"Which database should I use?\n\nI checked the defaults."}},
+		{"aroundchoices", []string{"```choices trn_0193a6a0-7f00-7000-8000-00000000000a\nWhich database?\n\n- SQLite\n```"}},
+		{"aroundupdate", []string{"Before.\n\nWhich database should I use?"}},
+		{"aroundtwo", []string{"Before.\n\nAfter."}},
+		{"aroundline", []string{"Before.\n\nAfter."}},
+		{"aroundend", []string{"Before."}},
+		{"aroundchild", []string{"Before and after."}},
+		{"aroundnamed", []string{"Before and after."}},
+	} {
+		t.Run(tc.post, func(t *testing.T) {
+			s := startCursor(t, "")
+			freshCursor(s)
+			postText(s, "stp_around", "trn_1", tc.post)
+			saidHolds(t, s.until("idle"), tc.want)
+		})
+	}
 }
 
 func TestCursorTakesNoMessageMidTurnAndReportsNoUsage(t *testing.T) {
