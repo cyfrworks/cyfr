@@ -85,6 +85,9 @@ type machineSeams struct {
 	// by its own list of loaded policy, and whether that list is visible
 	// here: a container sees no host's.
 	appArmorLoaded func(name string) (loaded, visible bool)
+	// device is whether this machine has, at path, the misc character
+	// device of minor (vmDevices).
+	device func(path string, minor uint32) bool
 	// apply runs the commands as root through one sudo.
 	apply func(commands []string) error
 	// applyInput runs the commands as root through one sudo, input on
@@ -181,6 +184,7 @@ var machine = machineSeams{
 		return strings.Fields(string(out))
 	},
 	system: func() string { return runtime.GOOS },
+	device: hasDevice,
 	// sudo -n -v fails rather than ask, and passes without a password only
 	// with the login cached or every entry of the account's NOPASSWD:
 	// sudoers' verifypw at its default (all) in sudo's manual, and sudo-rs's

@@ -662,6 +662,61 @@ func TestSaysLogInAgainForEachCommandWhereThereIsNoSg(t *testing.T) {
 	}
 }
 
+// Every command that reaches Docker refuses a .env whose device setting
+// is neither empty nor its device's own path, as the person gave the
+// command, before Docker is asked anything and before the group's second
+// run, changing nothing; empty and the device's own path go on to that
+// step, which here runs the command again through sg.
+func TestEveryDockerCommandRefusesADeviceCyfrDoesNotPass(t *testing.T) {
+	for _, c := range dockerCommands {
+		for _, d := range vmDevices {
+			for _, value := range []string{"/dev/null", "/dev/sda", "", d.path} {
+				refused := value != "" && value != d.path
+				t.Run(strings.Join(c.args, " ")+", "+d.env+"="+value, func(t *testing.T) {
+					s := standInMachine(t)
+					s.member = []string{"docker"}
+					record := sgStandIn(t, "0")
+					asked := 0
+					reachable := machine.reachable
+					machine.reachable = func(ctx context.Context) bool {
+						asked++
+						return reachable(ctx)
+					}
+					t.Chdir(t.TempDir())
+					env := "CYFR_ACCESS=local\n" + d.env + "=" + value + "\n"
+					if err := os.WriteFile(".env", []byte(env), 0o600); err != nil {
+						t.Fatal(err)
+					}
+					err := runCommandLine(t, c.args...)
+					if !refused {
+						if !errors.As(err, new(handedOver)) || ExitStatus(err) != 0 {
+							t.Fatalf("err %v, want the second run's status 0", err)
+						}
+						if got := sgRan(t, record); !slices.Equal(got, c.again) {
+							t.Errorf("sg ran %q, want %q", got, c.again)
+						}
+						return
+					}
+					want := d.env + " in .env is neither empty nor " + d.path + ", and cyfr writes it from what this machine has, so nothing was changed. Run `cyfr init` here, which writes it again, then run `" + commandSaid(c.again) + "` again"
+					if err == nil || err.Error() != want {
+						t.Fatalf("err %v, want %q", err, want)
+					}
+					if asked != 0 {
+						t.Errorf("Docker was asked %d times", asked)
+					}
+					if _, err := os.Stat(record); err == nil {
+						t.Error("sg ran")
+					}
+					if got := read(t, ".env"); got != env {
+						t.Errorf(".env is %q, want %q", got, env)
+					}
+					nothingWritten(t, ".env")
+				})
+			}
+		}
+	}
+}
+
 // The sentence names what changes the command: a person who runs it gets
 // the command they gave.
 func TestLogInSentenceNamesTheFlagsThatMatter(t *testing.T) {
