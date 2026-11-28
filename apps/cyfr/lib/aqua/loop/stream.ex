@@ -113,6 +113,16 @@ defmodule Aqua.Loop.Stream do
           role: String.t() | nil
         }
 
+  @typedoc "A message's reasoning, which takes no ordinal: no row settles it."
+  @type thought_attrs :: %{
+          thread_id: String.t(),
+          turn_id: String.t(),
+          fence: pos_integer(),
+          source: String.t(),
+          step_id: String.t(),
+          role: String.t() | nil
+        }
+
   @doc "Announce the fence `turn`'s streamed answers are kept under."
   @spec announce_fence(Context.t(), Tape.turn()) :: :ok
   def announce_fence(%Context{} = ctx, turn),
@@ -124,15 +134,19 @@ defmodule Aqua.Loop.Stream do
     do: Tape.announce(ctx, attrs.thread_id, :delta, delta(attrs, seq, text))
 
   @doc "Announce reasoning `text`, streamed at `seq` for the message `attrs` names."
-  @spec announce_thought(Context.t(), attrs(), {non_neg_integer(), non_neg_integer()}, String.t()) ::
-          :ok
+  @spec announce_thought(
+          Context.t(),
+          thought_attrs(),
+          {non_neg_integer(), non_neg_integer()},
+          String.t()
+        ) :: :ok
   def announce_thought(%Context{} = ctx, attrs, seq, text),
     do:
       Tape.announce(
         ctx,
         attrs.thread_id,
         :delta,
-        attrs |> delta(seq, text) |> Map.delete(:ordinal) |> Map.put(:kind, :thought)
+        Map.put(delta(attrs, seq, text), :kind, :thought)
       )
 
   @doc "Announce that the step `attrs` names lands no text row: what it streamed is withdrawn."
