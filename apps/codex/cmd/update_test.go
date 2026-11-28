@@ -1408,6 +1408,31 @@ func newThreeContainerScenario(t *testing.T) *updateScenario {
 	return s
 }
 
+// An install of the three-container release whose .env is as that release
+// left it, how it is reached in the retired CYFR_ACCESS and no
+// CYFR_BROWSER, is refused at the offer, as every start would refuse that
+// .env (access_missing), before any docker call: nothing stops, nothing is
+// snapshot, and docker-compose.yml and .env stay as they were.
+func TestUpdateRefusesTheThreeContainerReleasesEnvBeforeAnythingChanges(t *testing.T) {
+	s := newThreeContainerScenario(t)
+	old := "CYFR_ACCESS=public\nCYFR_HOST=cyfr.example.com\nCYFR_PUBLIC_URL=https://cyfr.example.com\nCYFR_PORT=4000\n" +
+		"CYFR_LOCUS_BUILDS_KEY=" + threeContainerBuildsKey + "\n"
+	s.edit(".env", old)
+	out, err := s.run(context.Background())
+	want := "CYFR_BROWSER is not set in .env, so CYFR does not know what browser address it has. Nothing started. Run `cyfr init` for a new CYFR, or `cyfr access browser none|tailnet|domain|proxy` for this one."
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("the update of a .env naming CYFR_ACCESS answered %v, not %q\n%s", err, want, out)
+	}
+	if log := s.dockerLog(); log != nil {
+		t.Errorf("docker ran before the refusal:\n%s", strings.Join(log, "\n"))
+	}
+	s.composeUnchanged()
+	s.noBackups()
+	if got := read(t, filepath.Join(s.project, ".env")); got != old {
+		t.Errorf("the refused update changed .env:\n%s", got)
+	}
+}
+
 // withProfiles adds to the scenario's `compose config` answer each named
 // service with its profiles, as compose writes the services its selection
 // runs.
