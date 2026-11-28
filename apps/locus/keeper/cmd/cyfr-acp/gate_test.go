@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -296,5 +297,35 @@ func TestAReflushedCallKeepsOnePlace(t *testing.T) {
 	update("same", "completed", "tool_call_update")
 	if wire.Len() != 0 {
 		t.Fatalf("the reflushed call is still remembered with %d distinct calls: %s", flushedKept, wire.String())
+	}
+}
+
+// The end's detail passes the same gate as the start's: a completion that
+// names no tool and carries a diff shows a start and an end with no detail,
+// on both profiles, while a call its frames name keeps its end's diff
+// (review #2507).
+func TestAnUnnamedCallsEndShowsNoDiff(t *testing.T) {
+	for _, p := range []*profile{antigravity, cursor} {
+		t.Run(p.name, func(t *testing.T) {
+			var wire bytes.Buffer
+			d := testDriver(t, p, &wire)
+			d.turn = &nativeTurn{work: "trn_1"}
+			diff := `"content":[{"type":"diff","path":"a","oldText":"one","newText":"two"}]`
+			sessionUpdate(t, d, `{"sessionUpdate":"tool_call","toolCallId":"unnamed","kind":"other","status":"in_progress"}`)
+			sessionUpdate(t, d, `{"sessionUpdate":"tool_call_update","toolCallId":"unnamed","status":"completed",`+diff+`}`)
+			sessionUpdate(t, d, `{"sessionUpdate":"tool_call","toolCallId":"named","kind":"edit","status":"in_progress","rawInput":{"`+p.subjectInput+`":"a"}}`)
+			sessionUpdate(t, d, `{"sessionUpdate":"tool_call_update","toolCallId":"named","status":"completed",`+diff+`}`)
+			var own []string
+			for _, line := range strings.Split(strings.TrimSpace(wire.String()), "\n") {
+				var e map[string]any
+				if json.Unmarshal([]byte(line), &e) == nil && e["t"] == "own" {
+					own = append(own, fmt.Sprintf("%v:%v:%v", e["call"], e["phase"], e["detail"]))
+				}
+			}
+			want := []string{"unnamed:start:<nil>", "unnamed:end:<nil>", "named:start:a", "named:end:a\n-one\n+two"}
+			if !reflect.DeepEqual(own, want) {
+				t.Fatalf("an unnamed call's start and end carry no detail, and a named call's end its diff: %q", own)
+			}
+		})
 	}
 }

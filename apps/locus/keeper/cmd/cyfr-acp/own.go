@@ -191,14 +191,20 @@ func (d *driver) named(name, kind string, rawInput json.RawMessage) bool {
 	return json.Unmarshal(rawInput, &input) == nil && json.Unmarshal(input[d.p.nameInput], &tool) == nil && tool != ""
 }
 
-// inputDetail is what a call's input says it runs, as its program puts it,
-// for a call some update named: a call no frame says what tool it is has
-// no detail of any kind, its command, its path and its input alike.
-func (d *driver) inputDetail(call *ownCall) string {
-	if !call.named {
+// detail is the one gate a call's detail passes, at its start and at its
+// end: a call no frame says what tool it is has no detail of any kind, not
+// its command, its path, its input or its diff. A start says what its input
+// runs, as its program puts it; an end the changes it made.
+func (d *driver) detail(call *ownCall, phase string, made []brainwire.Change) string {
+	switch {
+	case !call.named:
 		return ""
+	case phase == "start":
+		return brainwire.InputDetail(call.input, d.p.commandInput, d.p.subjectInput)
+	case len(made) > 0:
+		return brainwire.ChangeDetail(made)
 	}
-	return brainwire.InputDetail(call.input, d.p.commandInput, d.p.subjectInput)
+	return ""
 }
 
 // late says an update is of a call the turn's end ended, and so shows and
@@ -314,7 +320,7 @@ func (d *driver) claim(arguments json.RawMessage) {
 func (d *driver) startOwn(call *ownCall) error {
 	call.started = true
 	return d.c.Emit(d.event("own").Set("call", brainwire.CallID(call.id)).Set("name", call.name).Set("phase", "start").
-		SetOptional("detail", d.inputDetail(call)))
+		SetOptional("detail", d.detail(call, "start", nil)))
 }
 
 // showOwn shows a call's end, and its start first if it was not shown, the
@@ -328,12 +334,8 @@ func (d *driver) showOwn(call *ownCall, made []brainwire.Change) error {
 			return err
 		}
 	}
-	detail := ""
-	if len(made) > 0 {
-		detail = brainwire.ChangeDetail(made)
-	}
 	return d.c.Emit(d.event("own").Set("call", brainwire.CallID(call.id)).Set("name", call.name).Set("phase", "end").
-		SetOptional("detail", detail))
+		SetOptional("detail", d.detail(call, "end", made)))
 }
 
 // flushOwn shows each own call still open, in the order they were first
