@@ -101,8 +101,8 @@ defmodule Arca.TurnStorage do
 
   A turn of a page's call (`page_call`) is never the thread's work and
   never speaks for it (`work_state!/2`). A crew member's answer to a
-  request the person's stop ended is a row and opens no turn, whatever
-  the thread reads when it lands (`accept_message/3`).
+  request the person's stop ended is a row that opens no turn and steers
+  none, whatever the thread reads when it lands (`accept_message/3`).
 
   A row that names a workspace thread (a report delivered to a daily
   thread) lands only while that thread stands. Taking more than one
@@ -261,9 +261,9 @@ defmodule Arca.TurnStorage do
   A retired crew thread admits nothing (`{:error, :thread_retired}`). A
   person's message in a workspace thread is new work there: how its work
   ended no longer ends it. A crew member's answer (`:answers`) to a
-  request the person's stop ended (`expired`) opens no turn, whatever
-  the thread reads now: it lands as a row, and the acceptance answers
-  `turn: nil`. A request delivered into
+  request the person's stop ended (`expired`) opens no turn and steers
+  none, whatever the thread reads now: it lands as a row of no turn, and
+  the acceptance answers `turn: nil`. A request delivered into
   its member's thread (`:reply_address`) lands only while the request
   still waits for its answer (`{:error, :request_ended}`), and a
   workspace thread's opening only while it waits for its turn
@@ -309,7 +309,12 @@ defmodule Arca.TurnStorage do
 
           still_waits!(workspace, thread, Map.get(attrs, :wait))
           still_asked!(athanor_id, Map.get(attrs, :reply_address))
-          opens = if stopped_answer?(athanor_id, thread, attrs), do: nil, else: opens
+          # What a stopped answer would open or join the person stopped:
+          # the steered turn's row, held above, keeps nothing of it.
+          stopped = stopped_answer?(athanor_id, thread, attrs)
+
+          {opens, steered, steer_id} =
+            if stopped, do: {nil, nil, nil}, else: {opens, steered, steer_id}
 
           if (opens && Map.get(message, :kind) != "page_call") ||
                (steered && not page_call?(athanor_id, steered)),
@@ -409,8 +414,8 @@ defmodule Arca.TurnStorage do
   defp still_asked!(_athanor_id, _reply_address), do: :ok
 
   # A crew member's answer to a request the person's stop ended: what it
-  # would start the person stopped, so it opens nothing, whatever the
-  # thread reads now. The request says so, which new work there since
+  # would start or join the person stopped, so it opens and steers
+  # nothing, whatever the thread reads now. The request says so, which new work there since
   # does not change.
   # arca:db-raise-ok inside the caller's transaction
   defp stopped_answer?(athanor_id, %Thread{id: thread_id}, attrs) do
@@ -829,7 +834,9 @@ defmodule Arca.TurnStorage do
   rows together; a turn that opened in between sends the stop round
   again, at most three times, and then it is `{:error, :thread_in_use}`.
   `attrs` carry the root's grant as `finish/4` takes it and `:error`,
-  the cancelled turns' error. Answers the cancelled turns with the steps
+  the cancelled turns' error. The member's slot is judged last, so a
+  member that lost it while the stop ran writes none of it (`{:error,
+  :not_owner}`). Answers the cancelled turns with the steps
   their holders' runtime stops after the commit (`cancel_open!/4`); a
   thread that is neither, a daily thread, is `{:error, :not_a_workspace}`.
   """
@@ -849,11 +856,32 @@ defmodule Arca.TurnStorage do
   defp stop_round(%Prima.Actor{athanor_id: athanor_id} = actor, workspace_id, attrs, tries) do
     chosen = Arca.Repo.all(work_turns(athanor_id, workspace_id))
 
-    case Arca.Repo.locking_transaction(fn -> stopped!(actor, workspace_id, attrs, chosen) end) do
+    stop = fn ->
+      cancelled = stopped!(actor, workspace_id, attrs, chosen)
+      slot_held!()
+      cancelled
+    end
+
+    case Arca.Repo.locking_transaction(stop) do
       {:ok, cancelled} -> {:ok, %{cancelled: cancelled}}
       {:error, :turns_moved} when tries > 1 -> stop_round(actor, workspace_id, attrs, tries - 1)
       {:error, :turns_moved} -> {:error, :thread_in_use}
       {:error, _} = refused -> refused
+    end
+  end
+
+  # This member's slot, judged last in a stop's transaction as a
+  # delivery's receipt judges it (`claimed!/1`): read where this member
+  # stands now and verified live on the database's clock, whose lease row
+  # a takeover then waits on. A member that lost it while the stop ran
+  # writes none of the stop (`{:error, :not_owner}`).
+  # arca:db-raise-ok inside the caller's transaction
+  defp slot_held! do
+    with {:ok, slot} <- Arca.ControlPlane.member_slot(),
+         :ok <- Arca.ControlPlane.verify_held(slot) do
+      :ok
+    else
+      _lost -> Arca.Repo.rollback(:not_owner)
     end
   end
 

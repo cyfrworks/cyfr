@@ -863,6 +863,11 @@ defmodule Aqua.Runner do
     attrs = crew_attrs(%{message: message(ctx, text, opts, name), steer_turn_id: turn_id}, opts)
 
     case Tape.accept(ctx, state.id, attrs) do
+      # A crew member's answer to a request the person's stop ended: a
+      # row that joins no turn (`Arca.TurnStorage.accept_message/3`).
+      {:ok, %{message: row, turn: nil, replayed: replayed}} ->
+        {:reply, {:ok, result(row, nil, replayed, :content)}, touch(state)}
+
       {:ok, %{message: row, replayed: replayed}} ->
         {:reply, {:ok, result(row, turn_id, replayed, :steer)}, touch(acknowledge(state, ctx))}
 
@@ -1458,10 +1463,17 @@ defmodule Aqua.Runner do
          {:ok, stopped} <- stop_entries(state, own) do
       {:reply, {:ok, elsewhere}, drop_pages(stopped, Tape.stopped())}
     else
-      # A runtime that could not stop what it held retires; a stop storage
-      # refused leaves the runner as it was.
-      {:error, reason, held} -> {:stop, :normal, {:error, reason}, retire_runtime(held)}
-      {:error, reason} -> {:reply, {:error, reason}, state}
+      # A runtime that could not stop what it held retires, as does one
+      # whose member lost its slot while the stop ran, which wrote none of
+      # it; any other stop storage refused leaves the runner as it was.
+      {:error, reason, held} ->
+        {:stop, :normal, {:error, reason}, retire_runtime(held)}
+
+      {:error, :not_owner} ->
+        {:stop, :normal, {:error, :control_plane_lost}, retire_runtime(state)}
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
     end
   end
 

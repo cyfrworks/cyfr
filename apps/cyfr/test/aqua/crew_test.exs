@@ -2192,6 +2192,48 @@ defmodule Aqua.CrewTest do
     assert [%{snapshot: %{"outcome" => "cancelled"}}] = replies_of(ctx, turn_id)
   end
 
+  # Runs `fun` with this member's slot lost while `runner` writes a
+  # request's or an opening's end (an UPDATE of messages that sets
+  # `resolved_at`), inside the stop's own transaction, and the slot given
+  # back after, whatever `fun` answers.
+  defp losing_inside(runner, fun) do
+    handler = {:lose_inside_stop, make_ref()}
+    on_exit(fn -> Arca.ControlPlane.record(:unclaimed) end)
+
+    :ok =
+      :telemetry.attach(
+        handler,
+        [:arca, :repo, :query],
+        &__MODULE__.lose_on_end/4,
+        {runner, self()}
+      )
+
+    try do
+      outcome = fun.()
+      assert_received :slot_lost_inside_stop
+      outcome
+    after
+      :telemetry.detach(handler)
+      Arca.ControlPlane.record(:unclaimed)
+    end
+  end
+
+  @doc false
+  def lose_on_end(
+        _event,
+        _measurements,
+        %{source: "messages", query: "UPDATE " <> query},
+        {runner, test}
+      )
+      when runner == self() do
+    if String.contains?(query, "resolved_at") do
+      :ok = Arca.ControlPlane.record(:lost)
+      send(test, :slot_lost_inside_stop)
+    end
+  end
+
+  def lose_on_end(_event, _measurements, _metadata, _config), do: :ok
+
   describe "the person's Stop in a member's thread" do
     # What the person's stop says of the work it ended (`Aqua.Tape.stopped/0`).
     @stopped "the person stopped it"
@@ -2269,6 +2311,45 @@ defmodule Aqua.CrewTest do
       end
 
       assert room_turns(ctx, room) == []
+    end
+
+    test "a stopped answer steers no running turn of Aqua's", %{ctx: ctx, room: room} do
+      # The first job's answer opens Aqua's turn, held running; the second
+      # job, held too, is the one the person stops.
+      script!([reply("First done."), {:hold, self()}, {:hold, self()}])
+      first = soul_request!(ctx, room, "planner", "first job")
+      assert {:ok, %{"applied" => 1}} = drain(ctx)
+      child = child!(ctx, room, "planner")
+      await_status(ctx, delivered_turn(ctx, child, first.id), "completed")
+      assert {:ok, %{"applied" => 1}} = drain(ctx)
+      assert_receive {:scripted_probe, _, _}, 60_000
+      assert %{running: true, turn_id: live} = Runner.state(room.id, ctx.athanor_id)
+
+      {second, same_child, _} = held_job!(ctx, room, "second job")
+      assert same_child.id == child.id
+      assert :ok = Runner.stop_turn(ctx, child.id)
+      assert %{status: "expired"} = row(ctx, second.id)
+      assert {:ok, %{"applied" => 1}} = drain(ctx)
+
+      assert %{outcome: "cancelled", content: @stopped, turn_id: nil} =
+               Enum.find(rows(ctx, room.id), &(&1.reply_to == second.id))
+
+      assert {:ok, %{} = turn} = Tape.turn(ctx, live)
+      refute Tape.steer_pending?(ctx, turn)
+    end
+
+    test "with the member's slot lost inside it, the stop writes nothing and the runner retires",
+         %{ctx: ctx, room: room} do
+      script!([{:hold, self()}])
+      {request, child, turn} = held_job!(ctx, room, "take a while")
+      assert {:ok, runner} = Runner.ensure(child.id, ctx.athanor_id)
+
+      outcome = losing_inside(runner, fn -> Runner.stop_turn(ctx, child.id) end)
+
+      assert {:ok, landed} = Tape.turn(ctx, turn)
+
+      assert {{:error, :control_plane_lost}, "pending", "running", []} ==
+               {outcome, row(ctx, request.id).status, landed.status, replies_of(ctx, turn)}
     end
 
     test "pressed in the member's pane does what the direct stop does", %{ctx: ctx, room: room} do
@@ -2931,6 +3012,26 @@ defmodule Aqua.CrewTest do
       assert %{status: "expired"} = row(ctx, request.id)
       assert work_state(ctx, workspace.id) == "stopped"
       assert reports(ctx) == []
+    end
+
+    test "with the member's slot lost inside the workspace thread's stop, it writes nothing",
+         %{ctx: ctx, room: daily} do
+      script!([ask("plan it"), reply("Asked the planner."), {:hold, self()}])
+      workspace = workspace!(ctx, daily)
+      {_aqua, request} = asked!(ctx, workspace)
+      assert {:ok, %{"applied" => 1}} = drain(ctx)
+      assert_receive {:scripted_probe, _worker, _}, 60_000
+      child = child!(ctx, workspace, "planner")
+      member = delivered_turn(ctx, child, request.id)
+      assert {:ok, runner} = Runner.ensure(workspace.id, ctx.athanor_id)
+
+      outcome = losing_inside(runner, fn -> Runner.stop_turn(ctx, workspace.id) end)
+
+      assert {:ok, landed} = Tape.turn(ctx, member)
+
+      assert {{:error, :control_plane_lost}, "pending", "running", "open"} ==
+               {outcome, row(ctx, request.id).status, landed.status,
+                work_state(ctx, workspace.id)}
     end
 
     test "the person's stop of the workspace thread ends its member's running job with no " <>

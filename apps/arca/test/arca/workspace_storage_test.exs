@@ -789,6 +789,33 @@ defmodule Arca.WorkspaceStorageTest do
     assert row.reply_to == request.id
   end
 
+  test "an answer to a request the stop ended steers no turn running after new work reopens the thread",
+       %{actor: actor, daily: daily} do
+    {workspace, turn} = at_work!(actor, daily)
+    request = asked!(actor, workspace, "planner")
+    assert {:ok, _} = ended!(actor, turn, "completed")
+    assert {:ok, _} = stop!(actor, workspace)
+    newer = running!(actor, workspace)
+
+    assert {:ok, %{message: row, turn: nil}} =
+             TurnStorage.accept_message(actor, workspace.id, %{
+               message: %{
+                 author: "aqua",
+                 sent_by: "planner",
+                 addressee: "aqua",
+                 reply_to: request.id,
+                 outcome: "done",
+                 content: "the plan"
+               },
+               answers: [request.id],
+               steer_turn_id: newer.id
+             })
+
+    assert {row.reply_to, row.turn_id} == {request.id, nil}
+    refute TurnStorage.steer_pending?(actor, newer.id)
+    assert {:ok, %{status: "expired"}} = Threads.get_message(actor, request.id)
+  end
+
   test "an opening stamped ahead of the report written after it leaves that report the thread's word",
        %{actor: actor, daily: daily} do
     {workspace, turn} = at_work!(actor, daily)
