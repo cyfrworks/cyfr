@@ -1124,6 +1124,9 @@ def guard_lost_at_start(image):
             info = stack.inspect(stack.container)
             return info["RestartCount"] > restarts and info["State"]["Running"]
         eventually(again, "the Locus container to start again", timeout_s=120)
+        # The guard's container starts again too, its port published once it does.
+        eventually(lambda: stack.compose("port", GUARD, str(PORT), check=False).stdout.strip(),
+                   "the guard's port to be published again", timeout_s=120)
         stack.published()
         # The container's first life: its lines before the next life's keeper says it gives the wall, as each says
         # at its start (serve's giveWall).
