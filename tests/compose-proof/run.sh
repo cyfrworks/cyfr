@@ -158,7 +158,13 @@
 #          the worker URL the shipped file names and the runtime calls back
 #          at the host API address it names, each side checking the other's
 #          signature. The worker URL and the host API URL resolve to the
-#          shipped file's values. Locus runs under the keeper's seccomp
+#          shipped file's values. The devices of a person's own computer
+#          are cyfr init's own reading of the runner (both its paths where
+#          the runner has /dev/kvm and /dev/net/tun as a VM needs them,
+#          both empty where it lacks either), read apart from cyfr's reader,
+#          and the keeper's start line in the locus service's log says
+#          what they give: a computer of each person's own, or their own
+#          space for want of /dev/kvm (predicates.sh keeper_wall_holds). Locus runs under the keeper's seccomp
 #          profile and its guard under the container profile, held as the
 #          bind case holds cyfr. A signed-in person grants the seed's
 #          catalyst:local.files through the consent walk (plan, preview,
@@ -2866,7 +2872,7 @@ print(json.dumps(json.loads(result) if isinstance(result, str) else result))' ||
 }
 
 runtime_case() {
-  local shipped project workers host_api runtime_id health signed_in token cosign fill granted mark written read_back
+  local shipped project workers host_api runtime_id health signed_in token cosign fill granted mark written read_back why kvm_node tun_node
   step "the runtime's wiring is the shipped file's"
   shipped="$(cd "$WORK" && docker compose --project-name "$RUN-shipped" -f "$WORK/docker-compose.yml" config --format json)"
   project="$(compose config --format json)"
@@ -2891,6 +2897,13 @@ runtime_case() {
   [ "$health" = healthy ] ||
     fail "Locus is ${health:-not running} after 120 s: $(docker logs --tail 30 "$runtime_id" 2>&1 || true)"
   ok "Locus runs $LOCUS_IMAGE and is healthy, its runtime among its roles"
+
+  step "cyfr init named the devices this runner has for a person's own computer, and the keeper gives what they make possible"
+  kvm_node="$(stat -L -c '%F %t %T %g %a' /dev/kvm 2>/dev/null || true)"
+  tun_node="$(stat -L -c '%F %t %T %g %a' /dev/net/tun 2>/dev/null || true)"
+  why="$(keeper_wall_holds "$kvm_node" "$tun_node" "$(env_value CYFR_LOCUS_KVM)" "$(env_value CYFR_LOCUS_TUN)" "$(docker logs "$runtime_id" 2>&1)")" ||
+    fail "$why"
+  ok "CYFR_LOCUS_KVM='$(env_value CYFR_LOCUS_KVM)' and CYFR_LOCUS_TUN='$(env_value CYFR_LOCUS_TUN)' for /dev/kvm '${kvm_node:-none}' and /dev/net/tun '${tun_node:-none}'; the keeper's start line agrees"
 
   step "Locus runs under the keeper's seccomp profile, its guard under the stack's container profile"
   seccomp_holds "$(table service)" "$KEEPER_PROFILE"

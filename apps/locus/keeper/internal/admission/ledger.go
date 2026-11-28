@@ -36,10 +36,14 @@ type Entry struct {
 	vm bool
 	// own is, for a VM's place, its own allowance (MachineBytes of its
 	// guest's size), which its first session's start holds beside its own;
-	// kind its last session's kind, which a refusal names it by once it
-	// holds none.
+	// kind its last session's kind, a program's before any (a VM placed
+	// alone for a folder's operation, whose folders are programs'), which
+	// a refusal names it by once it holds none.
 	own  uint64
 	kind string
+	// holds counts, for a VM's place, the folder operations that hold it
+	// (Hold): a VM held is not at rest.
+	holds int
 	// base is, for a session in a VM, the VM's reading at the session's
 	// admission: while its allowance's time runs, the VM is charged at
 	// least that and the allowances of its sessions still starting.
@@ -71,7 +75,9 @@ func (e *Entry) Admitted() bool { return e.admitted }
 
 // NewMachine is the place of athanor's VM, which role's sessions of that
 // athanor run in: each such session's place names it as its Machine before
-// it is placed. It is no role's kind and is in no counter: the host is
+// it is placed. It may be placed alone, for a folder's reset or
+// retirement: then it waits for its own allowance's room as any start
+// waits, and its sessions join it after. It is no role's kind and is in no counter: the host is
 // charged once for the VM, by its reading, and its sessions' readings are
 // subjects under it, never added to it. It is admitted with the first of
 // its sessions that is, its own allowance, MachineBytes of guest, its
@@ -79,7 +85,7 @@ func (e *Entry) Admitted() bool { return e.admitted }
 // AllowanceFor after its Spawned, the VMM's start; Drop takes it out at the
 // VM's release.
 func NewMachine(role, athanor string, guest uint64, ref any) *Entry {
-	return &Entry{Role: role, Athanor: athanor, Ref: ref, vm: true, own: MachineBytes(guest)}
+	return &Entry{Role: role, Athanor: athanor, Ref: ref, vm: true, own: MachineBytes(guest), kind: "program"}
 }
 
 // IsMachine says the place is a person's VM's own.
@@ -89,8 +95,12 @@ func (e *Entry) class() Class { return Kinds[e.Kind] }
 
 // startNeed is the room e's start needs: its class's allowance, and the
 // VM's own beside it for a session whose VM is not yet admitted, the start
-// that boots it.
+// that boots it; a VM placed alone, booted for a folder's reset or
+// retirement, its own alone.
 func (e *Entry) startNeed() uint64 {
+	if e.vm {
+		return e.own
+	}
 	need := Allowance(e.class())
 	if e.Machine != nil && !e.Machine.admitted {
 		need += e.Machine.own
@@ -369,7 +379,7 @@ func (l *Ledger) Drop(e *Entry, now time.Time) Events {
 	was := e.admitted
 	l.admitted = slices.DeleteFunc(l.admitted, func(o *Entry) bool { return o == e })
 	l.counters.withdraw(e, now)
-	if m := e.Machine; m != nil && was && l.sessionsIn(m) == 0 {
+	if m := e.Machine; m != nil && was && l.Rests(m) {
 		m.assignedAt, m.asked = now, false
 	}
 	return l.step(now, false)
@@ -378,6 +388,31 @@ func (l *Ledger) Drop(e *Entry, now time.Time) Events {
 // Sessions is how many places are admitted in the VM m: none is a VM at
 // rest.
 func (l *Ledger) Sessions(m *Entry) int { return l.sessionsIn(m) }
+
+// Rests says the VM m is at rest: admitted, with no session's place
+// admitted in it or waiting for it, and no folder's operation holding it.
+// It is the one test of a VM's rest: only a VM at rest is asked to give way
+// to a start, and the keeper ends only one at rest, for room or idle.
+func (l *Ledger) Rests(m *Entry) bool {
+	if !m.vm || !m.admitted || m.holds > 0 || l.sessionsIn(m) > 0 {
+		return false
+	}
+	return !slices.ContainsFunc(l.waiting, func(e *Entry) bool { return e.Machine == m })
+}
+
+// Hold holds the VM m for a folder's operation, admitted or not yet: until
+// its LetGo it is not at rest.
+func (l *Ledger) Hold(m *Entry) { m.holds++ }
+
+// LetGo lets go of a hold of the VM m: one then at rest is at rest from
+// now, as when its last session leaves, and the last of the VMs at rest to
+// be asked to give way.
+func (l *Ledger) LetGo(m *Entry, now time.Time) {
+	m.holds--
+	if l.Rests(m) {
+		m.assignedAt, m.asked = now, false
+	}
+}
 
 // Spawned starts e's allowance's time.
 func (l *Ledger) Spawned(e *Entry, now time.Time) { e.spawnedAt = now }
@@ -508,9 +543,9 @@ func (l *Ledger) step(now time.Time, second bool) Events {
 
 // giveWay asks, of the idle work not yet asked, enough to cover what the
 // waiting starts need beyond what is free and what those already asked
-// will give: kept runners and VMs at rest, which hold no session, oldest at
-// rest first, then fresh runners above the floor. A VM a waiting start
-// would run in is not asked: that start needs it. A second with less than a
+// will give: kept runners and VMs at rest (Rests), oldest at rest first,
+// then fresh runners above the floor. A VM a waiting start would run in, or
+// a folder's operation holds, is not at rest. A second with less than a
 // program's allowance free asks alike.
 func (l *Ledger) giveWay(in map[*Entry]bool, now time.Time, second bool) []*Entry {
 	var need uint64
@@ -531,17 +566,11 @@ func (l *Ledger) giveWay(in map[*Entry]bool, now time.Time, second bool) []*Entr
 		return nil
 	}
 	short := need - free
-	needed := map[*Entry]bool{}
-	for _, e := range l.waiting {
-		if e.Machine != nil {
-			needed[e.Machine] = true
-		}
-	}
 	var kept, fresh []*Entry
 	for _, e := range l.admitted {
 		switch {
 		case e.ending || in[e]:
-		case e.kept(), e.vm && !needed[e] && l.sessionsIn(e) == 0:
+		case e.kept(), l.Rests(e):
 			kept = append(kept, e)
 		case e.fresh():
 			fresh = append(fresh, e)

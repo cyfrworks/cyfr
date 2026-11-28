@@ -154,3 +154,20 @@ func syncDir(dir string) error {
 	}
 	return err
 }
+
+// RemoveImage removes athanor's image, as its uid, which owns it in the
+// kept root's sticky folder; an image already gone is no error. The folder
+// is synced, so a keeper killed after it finds the image gone and the
+// record still there (RemoveDisk follows).
+func (k Kept) RemoveImage(athanor string, uid int) error {
+	path := k.ImagePath(athanor)
+	if err := AsFileIDs(uid, uid, func() error { return os.Remove(path) }); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	f, err := os.Open(k.Root)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return f.Sync()
+}

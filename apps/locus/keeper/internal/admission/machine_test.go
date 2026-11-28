@@ -239,6 +239,46 @@ func TestABootingStartNeedsTheVMsOwnRoomBesideItsAllowance(t *testing.T) {
 	}
 }
 
+// A VM placed alone, booted for a folder's reset or retirement, needs its
+// own allowance alone: it is refused at once where no pool of W holds it,
+// waits where W is full, and once admitted its sessions join it on their
+// allowances alone. Its charge counts toward its person's ceiling as any
+// VM's does.
+func TestAVMPlacedAloneNeedsItsOwnAndCountsToItsPersonsCeiling(t *testing.T) {
+	own := MachineBytes(testGuest)
+	if ev := New(own-mib, false).Place(NewMachine("backends", "ath_a", testGuest, nil), at(0)); len(ev.Refused) != 1 {
+		t.Fatalf("a VM no pool of W holds was not refused at once: %+v", ev)
+	}
+	l := New(own+383*mib, false)
+	held := session("ath_b", "q1")
+	spawned(t, l, held, 0, 384*mib)
+	m := NewMachine("backends", "ath_a", testGuest, nil)
+	if ev := l.Place(m, at(1)); len(ev.Admitted) != 0 {
+		t.Fatalf("a VM was admitted with %d free beside its own %d: %+v", free(l, 1), own, ev)
+	}
+	l.Drop(held, at(2))
+	if !m.Admitted() {
+		t.Fatal("a VM placed alone was not admitted once its room came")
+	}
+	if got := used(l, 2); got != own {
+		t.Fatalf("the pool holds %d with the VM alone, want its own %d", got, own)
+	}
+	join := inVM(m, "p1")
+	if got := join.startNeed(); got != 384*mib {
+		t.Fatalf("a session joining the VM needs %d, want its allowance alone", got)
+	}
+	// Its person's ceiling: a session of theirs on the host that would fit
+	// beside nothing is refused beside the VM.
+	l2 := New(8192*mib, false)
+	m2 := NewMachine("backends", "ath_c", testGuest, nil)
+	admitted(t, l2.Place(m2, at(0)), m2)
+	capped := session("ath_c", "r1")
+	capped.AthanorMax = own + 100*mib
+	if ev := l2.Place(capped, at(0)); len(ev.Admitted) != 0 {
+		t.Fatalf("a session past its person's ceiling beside their VM was admitted: %+v", ev)
+	}
+}
+
 // Each start under way in a VM holds its allowance above the VM's reading
 // at its own admission (@Fable3's, 4742 fail 3): a later start admitted
 // while an earlier one's allowance time runs, the earlier grown past its
@@ -347,6 +387,30 @@ func TestARefusalCountsThePersonsVMAtRestAsTheirs(t *testing.T) {
 	}
 }
 
+// A VM placed alone for a folder's operation, before any session of its,
+// is named in a refusal by a program's kind, a kind a refusal's holdings
+// may carry (Prima.LocusPool.read_held refuses any other).
+func TestARefusalNamesAVMPlacedAloneAsAProgram(t *testing.T) {
+	l := New(8192*mib, false)
+	m := NewMachine("backends", "ath_a", testGuest, nil)
+	admitted(t, l.Place(m, at(0)), m)
+	b := inVM(m, "p1")
+	b.AthanorMax = MachineBytes(testGuest)
+	ev := l.Place(b, at(1))
+	if len(ev.Admitted) != 0 {
+		t.Fatalf("a start past its person's ceiling was admitted: %+v", ev)
+	}
+	if len(ev.Refused) == 0 {
+		ev = l.Tick(at(1).Add(RoomWait + time.Second))
+	}
+	if len(ev.Refused) != 1 {
+		t.Fatalf("the start past its ceiling was not refused: %+v", ev)
+	}
+	if h := ev.Refused[0].Held; len(h.Mine) != 1 || h.Mine[0].Kind != "program" {
+		t.Fatalf("the refusal holds %+v, want the person's VM placed alone as a program's", h.Mine)
+	}
+}
+
 // Two starts under way in a running VM, the first not yet grown, each hold
 // their allowance above the VM's reading, the later one's and the earlier
 // one's together (5499's second note): the VM at rest reads 450 MiB, and
@@ -367,5 +431,42 @@ func TestTwoStartsInARunningVMHoldBothAllowances(t *testing.T) {
 	admitted(t, l.Place(b, at(31)), b)
 	if got, want := used(l, 31.5), uint64((450+384+384)*mib); got != want {
 		t.Fatalf("two starts under way in a VM at rest hold %d MiB, want the VM's reading and both allowances, %d", got/mib, want/mib)
+	}
+}
+
+// A VM a folder's operation holds is not at rest: a start that needs room
+// asks the other VM at rest, though the held one has rested longer. Let go,
+// it is at rest from then, so the VM that has rested longer is asked first.
+func TestAHeldVMIsNotAtRestAndRestsFromItsLetGo(t *testing.T) {
+	l := New(4096*mib, false)
+	a := NewMachine("backends", "ath_a", testGuest, "vm-a")
+	b := NewMachine("backends", "ath_b", testGuest, "vm-b")
+	for i, m := range []*Entry{a, b} {
+		s := inVM(m, "p1")
+		spawned(t, l, s, float64(i), 100*mib)
+		l.Spawned(m, at(float64(i)))
+		l.Read(m, 1900*mib, false, at(20))
+		l.Drop(s, at(21+float64(i)))
+	}
+	if !l.Rests(a) || !l.Rests(b) {
+		t.Fatalf("two VMs whose sessions left: a at rest %t, b %t", l.Rests(a), l.Rests(b))
+	}
+	l.Hold(a)
+	if l.Rests(a) {
+		t.Fatal("a VM a folder's operation holds is at rest")
+	}
+	c := session("ath_c", "q1")
+	if ev := l.Place(c, at(23)); !slices.Equal(ev.GiveWay, []*Entry{b}) {
+		t.Fatalf("asked %v to give way while a was held, want b alone", ev.GiveWay)
+	}
+	l.Drop(c, at(23))
+	l.LetGo(a, at(24))
+	if !l.Rests(a) {
+		t.Fatal("a VM let go with no session is not at rest")
+	}
+	// A second with less than a program's allowance free asks the VM at
+	// rest longest: b, at rest since 22, before a, at rest since 24.
+	if ev := l.Tick(at(25)); !slices.Equal(ev.GiveWay, []*Entry{b}) {
+		t.Fatalf("asked %v to give way, want b, at rest longer than a let go at 24", ev.GiveWay)
 	}
 }

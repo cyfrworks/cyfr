@@ -26,7 +26,7 @@ func init() {
 
 var backupCmd = &cobra.Command{
 	Use:         "backup",
-	Annotations: map[string]string{dockerAnnotation: "yes"},
+	Annotations: map[string]string{dockerAnnotation: "yes", startsAnnotation: "yes"},
 	Short:       "Take a snapshot of the CYFR in this directory into backups/, which cyfr restore puts back",
 	GroupID:     "server",
 	Long: `Take a snapshot of the CYFR in this directory into backups/<UTC timestamp>/, the one cyfr update takes before it changes anything, which 'cyfr restore backups/<timestamp>' puts back.

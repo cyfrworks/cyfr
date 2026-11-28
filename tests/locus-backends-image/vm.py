@@ -50,9 +50,11 @@ else beyond its role's own confinement, on a kept-homes volume and a
 
 Then a person's sessions run in their own VM (plan V2), each case on a
 stack of its own: docker-compose.yml's locus service, as harness.py runs
-it, with compose.kvm.yml layered last, which gives the locus container
-/dev/kvm and /dev/net/tun and the guard /dev/net/tun, and a pool whose work
-is sized as memory.py sizes it. Every session runs the probe program from
+it, given the two devices as cyfr writes them to .env on a machine that
+has them (CYFR_LOCUS_KVM, CYFR_LOCUS_TUN): /dev/kvm and /dev/net/tun for
+the locus container and /dev/net/tun for the guard; without them the same
+file gives /dev/null at those paths, as on a machine with none. Its pool's
+work is sized as memory.py sizes it. Every session runs the probe program from
 its environment (`vm_probe`): a VM's root is the image's programs alone,
 which hold nothing of the container's /probe mount.
 
@@ -63,7 +65,11 @@ which hold nothing of the container's /probe mount.
   container's. Started again on the same kept volume without the devices,
   the keeper says it gives spaces, and the person's next session is
   refused, the keeper naming the disk image that runs only in a VM, with
-  no VM booted and nothing of the image changed.
+  no VM booted and nothing of the image changed. Then the README's way out
+  on such a machine: with Locus stopped, that person's disk's record in
+  `.disks` and its image beside it removed from the homes volume, the next
+  start makes them a new disk, of the directory form, and their session
+  opens on it.
 - Boot identity: one person's two sessions, each a space of its own, read
   one boot identity, and a second person's session another, each person's
   VM under their own disk's uid.
@@ -113,6 +119,12 @@ which hold nothing of the container's /probe mount.
   VMM with it: the next life finds no VMM and no group of the VM, and the
   person's next session boots a VM on the same image, finding what the
   last one synced.
+- Folders: with the person's VM ended, a reset of one of their homes boots
+  their VM for it, which the keeper's log says is for a folder's reset,
+  and answers the home empty; a retirement of another home then needs no
+  boot of its own, answers it absent and takes it out of the disk's
+  record, which still holds the first; the next session in the reset home
+  joins the VM the reset booted and finds the home empty under its uid.
 - Measurements, printed. At a guest of 2,560 MiB: the guest's memory and
   processors as the keeper configured the VMM, the VMM's resident memory
   and its group's memory after a person's first boot and after an idle
@@ -359,7 +371,6 @@ def keeper_killed(stack, image, kept, guest, project):
 
 # ————— a person's sessions in their VM (plan V2) —————
 
-KVM_LAYER = os.path.join(HERE, "compose.kvm.yml")
 SESSION_ALLOWANCE = imagesuite.ALLOWANCE_BYTES["session"]
 MIB = 1 << 20
 
@@ -383,10 +394,13 @@ CHARGE_SLACK = 16 * MIB
 WALL_SAID = "each person's work runs in a separate small computer on this machine"
 SPACES_SAID = "each person's work runs in its own space on this machine: the container was given no /dev/kvm"
 NO_VM_SAID = "is on a disk image, which runs only in its person's VM, and this machine runs none"
-BOOTED_SAID = "booted, its VMM pid"
+# Every boot of a person's VM, whatever it is for, and one for a folder's reset.
+BOOTED_SAID = ", its VMM pid"
+RESET_BOOT_SAID = "booted for a folder's reset, its VMM pid"
 GIVE_WAY_SAID = "a person's VM ends: it held no session, and a start needs its room"
 RELEASED_SAID = "a person's VM is released: its group is empty, its route withdrawn and its device let go"
 SESSION_RELEASED_SAID = "released in its person's VM"
+UNKEPT_RETIRED_SAID = "which held no kept home, is retired with its VM"
 # The guard's connection ended (serve's guardLost): the VMs routed over it are killed, each group found empty, and
 # then, the role's route having gone too, the keeper says it ends.
 VMS_KILLED_SAID = re.compile(r"egress: the guard's connection (\d+) ended; (\d+) people's VMs are killed")
@@ -422,8 +436,8 @@ def vm_probe(name="probe", **program):
 
 
 def wall_stack(name, image):
-    """A stack of its own that gives the wall: compose.kvm.yml layered last."""
-    return Stack(f"locus-backends-vm-{name}", image, layers=[KVM_LAYER])
+    """A stack of its own that gives the wall: given the two devices, as cyfr writes them where the machine has them."""
+    return Stack(f"locus-backends-vm-{name}", image, devices=True)
 
 
 def up_wall(stack, work=WORK):
@@ -610,7 +624,7 @@ def disk_and_boot(image):
 
         stack.compose("stop", SERVICE)
         before = volume_image_stat(stack, image, owner)
-        stack.layers = []
+        stack.devices = False
         stack.up(work_bytes=WORK)
         eventually(lambda: SPACES_SAID in stack.logs(), "the keeper without the devices to say it gives spaces",
                    timeout_s=30)
@@ -625,6 +639,28 @@ def disk_and_boot(image):
         expect(after == before and not folder, "nothing of the image changes, and no disk folder is made",
                [before, after])
         expect(disk_record(stack, owner) == record, "the disk's record is as it was")
+
+        # The README's way out on a machine that no longer gives the devices: with Locus stopped, the person's disk
+        # removed by hand from the homes volume, its record in .disks and its image beside it, as root removes them;
+        # the next start makes the person a new disk, of the directory form, and their session opens on it.
+        stack.compose("stop", SERVICE)
+        removed = run("docker", "run", "--rm", *imagesuite.run_name(f"{stack.project}-remove"), "--network", "none",
+                      "-u", "0", "--mount", f"type=volume,source={stack.project}_homes,target={KEPT_ROOT}",
+                      "--entrypoint", "rm", image, f"{KEPT_ROOT}/.disks/{person_of(owner)}.json", image_of(owner),
+                      check=False)
+        expect(removed.returncode == 0, "the person's disk's record and image are removed from the homes volume",
+               removed.stderr)
+        stack.up(work_bytes=WORK)
+        eventually(lambda: SPACES_SAID in stack.logs(), "the keeper's next start without the devices", timeout_s=30)
+        c = synced(stack, [(owner, [vm_probe()])])
+        again = sh(c, owner, 'id -u; ls -A "$HOME"', "again")
+        renewed = disk_record(stack, owner)
+        expect(again["status"] == 0 and renewed["form"] == "directory" and renewed["homes"] == [row_of(owner)],
+               "the person's next session opens on a new disk, of the directory form", [again, renewed])
+        image_left = read_output(stack.observe(f"test -e {image_of(owner)} && echo present || echo absent"),
+                                 "the probe of the old image").strip()
+        expect(image_left == "absent" and not vmms(stack), "the old image stays gone and no VM boots",
+               [image_left, vmms(stack)])
     finally:
         stack.down()
 
@@ -839,6 +875,28 @@ def scratch_in_vm(image):
         for target, what in targets.items():
             expect(codes.get(target) in REFUSED, f"the scratch session is refused {what}, {target}, at once", codes)
 
+        # A disk that has never held a kept home goes with its VM (the keeper's retireUnkept): the VMM killed, the
+        # VM's release retires its record and its image, and the person's next first session makes both again within
+        # the role's bound.
+        said = stack.logs().count(RELEASED_SAID)
+        killed = run("docker", "exec", "-u", "0", stack.container, "kill", "-KILL",
+                     str(next(pid for pid, u in vmms(stack).items() if u == record["uid"])), check=False)
+        expect(killed.returncode == 0, "the scratch-only person's VMM is killed", killed.stderr)
+        eventually(lambda: stack.logs().count(RELEASED_SAID) > said, "the scratch-only person's VM's release")
+        eventually(lambda: imagesuite.read_word(stack.observe(f"test -e {record_path} || test -e {image_of(alone)} && "
+                                                              "echo present || echo absent"), ("present", "absent"),
+                                                "the probe of the disk's record and image") == "absent",
+                   "the never-kept disk's retirement with its VM, its record and its image gone")
+        expect(UNKEPT_RETIRED_SAID in stack.logs(), "the keeper says the never-kept disk is retired with its VM")
+        began = time.monotonic()
+        again = scratch_boot(alone, "b")
+        again_s = time.monotonic() - began
+        expect(again != guest and again_s < 15 and disk_record(stack, alone)["uid"] > 0,
+               "the person's next first session makes their disk again and boots a new VM within the role's 15 s",
+               f"{again_s:.1f} s")
+        print(f"after its retirement, the scratch-only person's next first session answered in {again_s:.1f} s",
+              flush=True)
+
         status, answer, _ = c.sync(both, [vm_probe(), scratch], lease_ms=60_000)
         expect(status == 200, f"{both['athanor']}'s programs are synced", answer)
         kept = boot_id(c, both, "k")
@@ -849,6 +907,20 @@ def scratch_in_vm(image):
                and len(theirs) == 1,
                "beside the person's kept session their scratch session runs in the same VM, its place needing no "
                "second", [kept, first_boot, theirs, vmms(stack)])
+
+        # The disk's work folder is its kept programs' alone: a scratch session of the same person, in the same VM,
+        # neither reads nor writes it, nor sees the kept homes' root it lies under.
+        wrote = sh(c, both, "echo kept > /work/kept-marker && cat /work/kept-marker && echo written", "k")
+        expect(wrote["stdout"] == "kept\nwritten\n", "the kept session writes in the disk's work folder", wrote)
+        tried = scratch_sh(c, both, "cat /work/kept-marker 2>&1 && echo read; touch /work/scratch-marker 2>&1 && "
+                                    f"echo wrote; ls {KEPT_ROOT} 2>&1 && echo listed; true", "first")
+        steps = tried["stdout"].splitlines()
+        expect(tried["status"] == 0 and not {"read", "wrote", "listed"} & set(steps) and "kept" not in steps,
+               "a scratch session neither reads nor writes the disk's work folder, nor lists the kept homes' root",
+               tried)
+        looked_back = sh(c, both, "ls /work", "k")
+        expect("scratch-marker" not in looked_back["stdout"].split(), "nothing a scratch session did is in the work "
+               "folder", looked_back)
 
         marked = scratch_sh(c, both, f"id -u; echo \"$HOME\"; {STATFS}; head -c {MARKER_BYTES} /dev/urandom > "
                                      f"\"$HOME/marker\" && echo marked > /tmp/marker && {STATFS}", "first")
@@ -1086,6 +1158,52 @@ def vmm_killed(image):
         again = boot_id(c, owner, "c")
         expect(again != first and container_boot(stack) != again,
                "the person's next session boots a new VM", [first, again])
+    finally:
+        stack.down()
+
+
+def folders_in_vm(image):
+    """A folder's reset with no VM of its person's running boots their VM for it, which the keeper's log names as
+    such, and leaves the home empty under its uid for the next session, which joins that VM; a retirement then needs
+    no boot of its own, and takes the home out of the disk's record, which still holds the other."""
+    stack = wall_stack("folders", image)
+    owner = owner_of("vm-folders")
+    reset_row, retired_row = row_of(owner), row_of(owner) + "-retired"
+    try:
+        up_wall(stack)
+        c = synced(stack, [(owner, [vm_probe()])])
+        for key, row in (("a", reset_row), ("b", retired_row)):
+            wrote = sh(c, owner, f'echo {key} > "$HOME/marker" && cat "$HOME/marker"', key, row)
+            expect(wrote["status"] == 0 and wrote["stdout"].strip() == key, f"a session writes into the home {row}",
+                   wrote)
+        uid = disk_record(stack, owner)["uid"]
+        released = stack.logs().count(RELEASED_SAID)
+        pid = next(iter(vmms(stack)))
+        killed = run("docker", "exec", "-u", "0", stack.container, "kill", "-KILL", str(pid), check=False)
+        expect(killed.returncode == 0, "the VMM is killed by the container's root", killed.stderr)
+        eventually(lambda: stack.logs().count(RELEASED_SAID) > released and not vmms(stack) and group_gone(stack, uid),
+                   "the VM to be released, its VMM and its group gone")
+
+        said = stack.logs().count(RESET_BOOT_SAID)
+        status, reset, _ = c.home(owner["athanor"], reset_row, "reset")
+        expect((status, reset) == (200, {"version": VERSION, "home_id": reset_row, "state": "empty"}),
+               "a folder's reset with no VM running answers the home empty", reset)
+        booted = vmms(stack)
+        expect(stack.logs().count(RESET_BOOT_SAID) == said + 1 and len(booted) == 1,
+               "the reset booted the person's VM, and the keeper's log says it was for a folder's reset", booted)
+
+        status, retired, _ = c.home(owner["athanor"], retired_row, "retire")
+        expect((status, retired) == (200, {"version": VERSION, "home_id": retired_row, "state": "absent"}),
+               "a folder's retirement answers the home absent", retired)
+        expect(vmms(stack) == booted, "the retirement needed no boot of its own", vmms(stack))
+        homes = disk_record(stack, owner)["homes"]
+        expect(retired_row not in homes and reset_row in homes,
+               "the retired home is out of the disk's record, the reset one in it", homes)
+
+        after = sh(c, owner, 'id -u; ls -A "$HOME"; cat /proc/sys/kernel/random/boot_id', "c", reset_row)
+        lines = after["stdout"].split()
+        expect(after["status"] == 0 and lines[0] == str(uid) and "marker" not in lines and vmms(stack) == booted,
+               "the next session finds the reset home empty under its uid, in the VM the reset booted", after)
     finally:
         stack.down()
 
@@ -1531,7 +1649,7 @@ def main():
     print("ok: a person's machine boots from the image's programs, as the keeper makes them", flush=True)
 
     for case in (disk_and_boot, boot_identity, routes_and_names, packs_in_vm, scratch_in_vm, ledger_one_vm,
-                 ledger_pressure, vmm_killed, guard_lost_at_start, keeper_lost, measurements):
+                 ledger_pressure, vmm_killed, folders_in_vm, guard_lost_at_start, keeper_lost, measurements):
         print(f"== {case.__name__}: {case.__doc__.split(chr(10))[0]}", flush=True)
         case(image)
     print("PASS: a person's machine boots from the image's programs, and a person's sessions run in their own VM")

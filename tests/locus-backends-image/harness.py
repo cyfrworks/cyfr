@@ -992,15 +992,17 @@ def require_docker():
 
 
 class Stack(imagesuite.Stack):
-    def __init__(self, project, image, canary_dir=None, guard_tools_dir=None, names=False, layers=()):
+    def __init__(self, project, image, canary_dir=None, guard_tools_dir=None, names=False, devices=False):
         super().__init__(project)
         # With names, the guard's resolver asks the suites' name listener
         # (compose.names.yml), which starts beside it.
         self.names = names
-        # Compose files a suite layers last, paths of its own; a suite may
-        # change them between two `up`s, and the next `up` recreates the
-        # containers as they say.
-        self.layers = list(layers)
+        # With devices, the stack is given the two devices of a person's VM,
+        # as cyfr writes them to .env where the machine has them
+        # (CYFR_LOCUS_KVM, CYFR_LOCUS_TUN); without, docker-compose.yml gives
+        # /dev/null at their paths. A suite may change it between two `up`s,
+        # and the next `up` recreates the containers as it says.
+        self.devices = devices
         self.image = image
         self.canary_dir = canary_dir or HERE
         # The directory first on the guard's PATH: empty, so the guard runs
@@ -1030,6 +1032,8 @@ class Stack(imagesuite.Stack):
             "CYFR_LOCUS_BACKENDS_KEY": self.key.hex(),
             "BACKENDS_POOL": self.pool,
             "KEPT_HOMES": f"{KEPT_ROOT}:{KEPT_FIRST}-{KEPT_LAST}",
+            "CYFR_LOCUS_KVM": "/dev/kvm" if self.devices else "",
+            "CYFR_LOCUS_TUN": "/dev/net/tun" if self.devices else "",
             **self.pool_settings,
             **extra,
         }
@@ -1038,7 +1042,6 @@ class Stack(imagesuite.Stack):
         files = [os.path.join(ROOT, "docker-compose.yml"), os.path.join(HERE, "compose.backends.yml")]
         if self.names:
             files.append(os.path.join(HERE, "compose.names.yml"))
-        files += self.layers
         return run(
             "docker", "compose", "--project-name", self.project, "--project-directory", self.project_dir,
             *[arg for file in files for arg in ("-f", file)], *args,

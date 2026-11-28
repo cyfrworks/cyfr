@@ -37,8 +37,8 @@ func (c *CallError) Error() string {
 func (c *CallError) Is(target error) bool { return c.Deadline && target == ErrDeadline }
 
 // systemDocker runs the docker binary on this machine. Every call's
-// environment is cyfr's with every COMPOSE_* variable removed, DOCKER_*
-// kept; it runs in the project directory, in a process group of its own,
+// environment is cyfr's with every variable environFiltered names removed,
+// DOCKER_* kept; it runs in the project directory, in a process group of its own,
 // bounded by its deadline (StartDeadline when the call names none).
 // While the engine holds the lock, a Unix call runs under the watchdog,
 // which inherits the lock's descriptor and passes it to docker, so the
@@ -94,8 +94,17 @@ func (s *systemDocker) Run(ctx context.Context, c Call) (Result, error) {
 	return Result{ExitCode: code, Stdout: stdout.Bytes(), Stderr: stderr.Bytes()}, err
 }
 
-// sanitizedEnv is env without any COMPOSE_* variable and without the proxy
-// trust, matched without case, as Windows matches names (environFiltered).
+// KVMSetting and TunSetting are the .env settings that name the devices a
+// person's computer of their own runs through, which cyfr writes from what
+// the machine has: compose reads them from .env alone (environFiltered).
+const (
+	KVMSetting = "CYFR_LOCUS_KVM"
+	TunSetting = "CYFR_LOCUS_TUN"
+)
+
+// sanitizedEnv is env without any COMPOSE_* variable, the proxy trust and
+// the device settings, matched without case, as Windows matches names
+// (environFiltered).
 func sanitizedEnv(env []string) []string {
 	out := make([]string, 0, len(env))
 	for _, kv := range env {
@@ -116,10 +125,12 @@ var trustKeys = []string{"CYFR_TRUSTED_PROXY_CIDRS", "CYFR_TRUSTED_PROXY_HOPS"}
 
 // environFiltered reports whether a variable of this process's environment
 // is kept from every compose call: every COMPOSE_* variable, which would
-// choose the stack's files, project or services, and the proxy trust.
+// choose the stack's files, project or services, the proxy trust, and the
+// two device settings, which compose would otherwise read ahead of .env, so
+// a shell could hand the Locus services a device cyfr refuses, or none.
 func environFiltered(name string) bool {
 	upper := strings.ToUpper(name)
-	return strings.HasPrefix(upper, "COMPOSE_") || slices.Contains(trustKeys, upper)
+	return strings.HasPrefix(upper, "COMPOSE_") || slices.Contains(trustKeys, upper) || upper == KVMSetting || upper == TunSetting
 }
 
 // watchdogArgv is the argv that runs WatchdogMain from this executable.

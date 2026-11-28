@@ -70,6 +70,7 @@ func testMachine(system string) machineSeams {
 		terminal:       func() bool { return false },
 		appArmor:       func() bool { return false },
 		appArmorLoaded: func(string) (bool, bool) { return false, false },
+		devices:        func() bool { return false },
 		authenticate:   func() error { return refused },
 		apply:          func([]string) error { return refused },
 		applyInput:     func([]string, []byte) error { return refused },
