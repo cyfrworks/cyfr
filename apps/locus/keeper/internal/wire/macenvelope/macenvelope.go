@@ -7,8 +7,8 @@
 // (package locuspool) are built on. Prima's module is the one definition;
 // the vector files under tests/fixtures hold this package to it.
 //
-//   - A key is HMAC-SHA256 of the root over a label, or over a label
-//     followed by field values one per line (Derive, DeriveFields).
+//   - A key is HMAC-SHA256 of the root over a label (Derive); a key
+//     derived over field values too is CYFR's, which holds the root.
 //   - A signature is the unpadded base64url HMAC-SHA256 of the canonical
 //     string: "<prefix>/<kind>", each field's value in the envelope's
 //     order, then the hex SHA-256 of the raw body, one per line.
@@ -268,19 +268,6 @@ func lines(label string, fields []Field, m Message) (string, error) {
 		return "", err
 	}
 	return strings.Join(append([]string{label}, vs...), "\n"), nil
-}
-
-// DeriveFields is the key derived from key over label and the message's
-// fields, one per line.
-func DeriveFields(key Key, label string, fields []Field, m Message) (Key, error) {
-	if key.Zero() {
-		return Key{}, ErrNoKey
-	}
-	text, err := lines(label, fields, m)
-	if err != nil {
-		return Key{}, err
-	}
-	return Derive(key, text), nil
 }
 
 // BodyHash is the hex SHA-256 of body, as a header names it.

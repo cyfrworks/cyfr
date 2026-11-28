@@ -172,9 +172,6 @@ func TestTheZeroKeyIsNoKey(t *testing.T) {
 		if !Derive(k, "label").Zero() {
 			t.Errorf("%s derives a key", name)
 		}
-		if d, err := DeriveFields(k, "label", e.Fields, m); !errors.Is(err, ErrNoKey) || !d.Zero() {
-			t.Errorf("%s derives a key over fields: %v", name, err)
-		}
 		if _, err := Seal(k, "label", e.Fields, m, []byte("x")); err == nil {
 			t.Errorf("%s seals", name)
 		}

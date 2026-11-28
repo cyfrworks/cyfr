@@ -74,21 +74,6 @@ func (n Number) Integer() bool {
 	return true
 }
 
-// Float is the number as a float, as Jason reads it: its text parsed
-// whole, but for a zero with an exponent and no fraction, which Jason
-// reads as 0.0 whatever its sign ("-0e5" is 0.0, where "-0.0e5" and
-// "-1e-400" are -0.0). No wire of the protocol reads a float; this is the
-// one reading a caller makes of one.
-func (n Number) Float() (float64, bool) {
-	text := string(n)
-	mantissa, _, exponent := strings.Cut(strings.ToLower(text), "e")
-	if exponent && strings.TrimPrefix(mantissa, "-") == "0" {
-		return 0, true
-	}
-	f, err := strconv.ParseFloat(text, 64)
-	return f, err == nil
-}
-
 // Uint is the integer v is when it is an integer from 0 to max; ok is false
 // for any other value, a float or a negative integer included.
 func Uint(v any, max uint64) (n uint64, ok bool) {

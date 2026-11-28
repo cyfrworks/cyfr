@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -54,6 +55,21 @@ func vectors(t *testing.T) wireVectors {
 // same is whether a and b are one value as Prima compares what it read: an
 // integer equal to an integer, a float to a float, each member and item
 // alike.
+// float is the number a float's text is as Jason reads it: the text
+// parsed whole, but for a zero with an exponent and no fraction, which
+// Jason reads as 0.0 whatever its sign ("-0e5" is 0.0, where "-0.0e5" and
+// "-1e-400" are -0.0). No wire of the protocol reads a float: the vectors
+// compare the floats Prima reads.
+func float(n Number) (float64, bool) {
+	text := string(n)
+	mantissa, _, exponent := strings.Cut(strings.ToLower(text), "e")
+	if exponent && strings.TrimPrefix(mantissa, "-") == "0" {
+		return 0, true
+	}
+	f, err := strconv.ParseFloat(text, 64)
+	return f, err == nil
+}
+
 func same(a, b any) bool {
 	switch a := a.(type) {
 	case Number:
@@ -66,8 +82,8 @@ func same(a, b any) bool {
 			y, _ := new(big.Int).SetString(string(b), 10)
 			return x.Cmp(y) == 0
 		}
-		x, okA := a.Float()
-		y, okB := b.Float()
+		x, okA := float(a)
+		y, okB := float(b)
 		return okA && okB && x == y && math.Signbit(x) == math.Signbit(y)
 	case []any:
 		b, ok := b.([]any)
