@@ -808,13 +808,15 @@ class PoolWire(unittest.TestCase):
 
     def test_a_report_is_asked_on_the_route_under_the_signers_key(self):
         seen = []
+        # The wall the stand-in's report names; a report naming none fails the suite.
+        walls = ["lacking"]
 
         class Handler(http.server.BaseHTTPRequestHandler):
             def do_POST(self):
                 body = self.rfile.read(int(self.headers["content-length"]))
                 seen.append((self.path, self.headers[imagesuite.POOL_WIRE["auth_header"]], body))
                 answer = json.dumps({"v": 1, "report": {"boot": "0" * 32, "budget": 0, "work": 0, "floor": 0, "used": 0,
-                                                        "counters": []}}).encode()
+                                                        "wall": walls[0], "counters": []}}).encode()
                 self.send_response(200)
                 self.send_header("content-length", str(len(answer)))
                 self.end_headers()
@@ -830,10 +832,14 @@ class PoolWire(unittest.TestCase):
             base = f"http://127.0.0.1:{server.server_port}"
             self.assertEqual(imagesuite.pool_reports(base, "builds", key), ("0" * 32, []))
             imagesuite.pool_ask(base, "builds", key, after=7, signer="backends")
+            for wall in (None, "vm"):
+                walls[0] = wall
+                with self.assertRaises(SystemExit):
+                    imagesuite.pool_reports(base, "builds", key)
         finally:
             server.shutdown()
             server.server_close()
-        (path, header, body), (_, other, _) = seen
+        (path, header, body), (_, other, _) = seen[:2]
         self.assertEqual(path, imagesuite.POOL_WIRE["route"])
         self.assertEqual(body, b'{"v":1,"after":0}')
         ts = int(header.split("ts=")[1].split()[0])

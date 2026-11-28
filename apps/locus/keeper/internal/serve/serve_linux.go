@@ -913,11 +913,14 @@ type server struct {
 	// wall says this keeper gives the VM wall (plan D18): it was given KVM
 	// and the image's guest, and a first session in a VM fits rest; then
 	// imageDisks too, and every session of a person runs in their VM;
-	// wallWhy is why it gives none, as its start line says.
+	// wallWhy is why it gives none, as its start line says; wallGiven is
+	// the decision as every report carries it (protocol.WallGiven,
+	// WallNoRoom, WallLacking), "" before giveWall, which no reader takes.
 	// vms is each person's VM by their athanor (machine_linux.go), and
 	// bootVM starts one, startVM in production.
 	wall      bool
 	wallWhy   string
+	wallGiven string
 	vms       map[string]*machine
 	vmsEnding map[*machine]bool
 	bootVM    func(vmBoot) (guestVM, error)

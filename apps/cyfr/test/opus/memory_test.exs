@@ -71,6 +71,7 @@ defmodule Opus.MemoryTest do
       work: 6_000_000,
       floor: 164,
       used: 2_000,
+      wall: Keyword.get(opts, :wall, :given),
       counters: counters,
       next: Keyword.get(opts, :next)
     }
@@ -514,6 +515,65 @@ defmodule Opus.MemoryTest do
       assert machine.others == 0
       assert %{endpoint: "local", heard_at: heard_at} = unanswered
       assert DateTime.diff(heard_at, silent, :second) == 0
+    end
+
+    test "the programs' wall is the programs service's keeper's while it answers, and not yet known after",
+         %{admin: admin, alice: alice, claim: claim} do
+      ask = fn programs ->
+        Opus.Memory.poll(
+          [
+            endpoint("wrk_local", :runtime, once(report([], wall: :lacking))),
+            endpoint("local", :backends, once(programs))
+          ],
+          claim,
+          :none
+        )
+
+        {:ok, read} = Opus.Memory.read(admin, :everyone)
+        {:ok, mine} = Opus.Memory.read(alice.ctx, :mine)
+        assert mine.programs_wall == read.programs_wall
+        read.programs_wall
+      end
+
+      # The machine's other endpoint, a runtime of no kept role, names its
+      # own: the programs' is the backends service's alone.
+      assert ask.(report([], wall: :given)) == :given
+
+      # A keeper that started again without the wall answers its new boot.
+      assert ask.(report([], boot: @new_boot, wall: :no_room)) == :no_room
+      assert ask.(report([], boot: @new_boot, wall: :lacking)) == :lacking
+      assert ask.(report([], boot: @new_boot, wall: :given)) == :given
+
+      # Its last answer older than the bound says nothing of now, though the
+      # runtime still answers.
+      Arca.Repo.update_all(
+        from(e in Arca.Schemas.MemoryEndpoint, where: e.endpoint == "local"),
+        set: [heard_at: DateTime.add(DateTime.utc_now(), -60, :second)]
+      )
+
+      assert {:ok, %{programs_wall: :unknown, machines: [%{machine: "wrk_local"}]}} =
+               Opus.Memory.read(admin, :everyone)
+    end
+
+    test "with no programs service nothing is said of the programs' wall, and a programs service never heard is not yet known",
+         %{admin: admin, claim: claim} do
+      Opus.Memory.poll(
+        [endpoint("wrk_local", :runtime, once(report([], wall: :given)))],
+        claim,
+        :none
+      )
+
+      assert {:ok, %{programs_wall: nil, machines: [%{machine: "wrk_local"}]}} =
+               Opus.Memory.read(admin, :everyone)
+
+      # A box under the local name is what `Opus.Programs.running?/0` reads.
+      start_supervised!(%{
+        id: :programs_box,
+        start:
+          {Agent, :start_link, [fn -> nil end, [name: Opus.Programs.via(Opus.Programs.local())]]}
+      })
+
+      assert {:ok, %{programs_wall: :unknown}} = Opus.Memory.read(admin, :everyone)
     end
   end
 

@@ -62,7 +62,13 @@ defmodule Opus.Memory do
   has not answered within it holds nothing now and joins no machine: the
   read names it under `unanswered` with when it last answered, and a
   machine's `others` is then the others' use at the services that did
-  answer. A counter of
+  answer. A machine's wall is its keeper's (`Prima.LocusPool.t:wall/0`),
+  and `programs_wall` is the one of the machine the programs service
+  (`Opus.Programs.local/0`) answered for within the bound: the record's
+  alone, which only the keeper's report writes, never a setting. While
+  that service has not answered within it, or ever, the wall is
+  `:unknown`, whatever it last said: its keeper may since have started
+  without one. With no programs service on this boot it is nil. A counter of
   no athanor (the warm floor's fresh runners) was never stored, so a
   machine's holders need not add up to its `used`. A day is a UTC day,
   counted at the keeper.
@@ -137,7 +143,8 @@ defmodule Opus.Memory do
   everyone else's as one sum, or `:everyone`, the platform
   administrator's. `machines` are the endpoints that answered within
   `Prima.LocusPool.fresh_ms/0`, joined by keeper boot; `unanswered` the others, each by
-  its name and when it last answered, holding nothing now.
+  its name and when it last answered, holding nothing now; `programs_wall`
+  the wall of the machine people's programs run on (below).
 
   `:mine` reads only a context scoped to one athanor, and only that
   athanor's rows: any other is `{:error, :forbidden}`. `:everyone` reads
@@ -148,7 +155,13 @@ defmodule Opus.Memory do
   cannot say.
   """
   @spec read(Sanctum.Context.t(), :mine | :everyone) ::
-          {:ok, %{machines: [machine()], days: [day()], unanswered: [unanswered()]}}
+          {:ok,
+           %{
+             machines: [machine()],
+             days: [day()],
+             unanswered: [unanswered()],
+             programs_wall: Prima.LocusPool.wall() | :unknown | nil
+           }}
           | {:error, term()}
   def read(%Sanctum.Context{scope: :athanor, athanor_id: athanor_id}, :mine)
       when is_binary(athanor_id) and athanor_id != "" do
@@ -193,8 +206,22 @@ defmodule Opus.Memory do
     %{
       machines: machines(answering, counters, others, people),
       days: days(counters, people),
-      unanswered: for(e <- silent, do: %{endpoint: e.endpoint, heard_at: e.heard_at})
+      unanswered: for(e <- silent, do: %{endpoint: e.endpoint, heard_at: e.heard_at}),
+      programs_wall: programs_wall(answering, silent)
     }
+  end
+
+  # The wall of the machine the programs run on, as its keeper's last
+  # answer within the bound said it; `:unknown` while the programs service
+  # has not answered within it, and nil where this boot has none.
+  defp programs_wall(answering, silent) do
+    local = Opus.Programs.local()
+
+    cond do
+      programs = Enum.find(answering, &(&1.endpoint == local)) -> programs.wall
+      Enum.any?(silent, &(&1.endpoint == local)) or Opus.Programs.running?() -> :unknown
+      true -> nil
+    end
   end
 
   defp people(counters) do
