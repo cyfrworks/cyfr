@@ -191,6 +191,9 @@ func TestAReleaseAsAnotherStartsLeavesTheRouteToTheLiveSession(t *testing.T) {
 		if strings.Contains(last, "203.0.113.7") && !narrowing {
 			wider++
 		}
+		if got, want := routeOf(k, m); !slices.Equal(got, want) && !narrowing {
+			t.Fatalf("try %d: the route allows %v, its live session's union is %v", i, got, want)
+		}
 	}
 	if wider > 0 {
 		t.Fatalf("in %d of %d tries a person's VM's route allows a released session's host (203.0.113.7) beside the live one's, with no narrowing owed; the last try's: %s", wider, tries, last)

@@ -174,3 +174,31 @@ func TestAKeeperThatGivesNoWallSaysWhyAndTouchesNoDisk(t *testing.T) {
 		}
 	}
 }
+
+// Where the wall is not given, a session of an image is refused with the
+// start line's reason in its log line; where it is, a home's reset on an
+// image is refused as one this keeper does not yet make through the VM,
+// never as a machine that runs none (4742 fail 6).
+func TestAnImagesRefusalsSayWhatIsTrue(t *testing.T) {
+	k := newVMKeeper(t)
+	var log bytes.Buffer
+	k.s.log = logx.NewWriter(&log, "cyfr-locus", false)
+	k.disk(t, "ath_a", "vlt_a1")
+	k.s.handle(k.c, &protocol.Request{V: protocol.Version, Type: protocol.TypeHomeReset, ID: "r1", Home: "vlt_a1"})
+	if m := k.next(t); m["type"] != "error" || m["code"] != protocol.CodeUnavailable {
+		t.Fatalf("a reset of an image's home answered %v", m)
+	}
+	if said := log.String(); !strings.Contains(said, "this keeper does not yet reset or retire a home through its person's VM") || strings.Contains(said, "runs none") {
+		t.Fatalf("a reset refused where the wall is given said %q", said)
+	}
+	log.Reset()
+	k.s.wall, k.s.wallWhy = false, "the container was given no /dev/net/tun"
+	k.place(t, "p-s1", "ath_a")
+	k.s.handleSpawn(k.c, k.spawnReq("s1", "p-s1", "vlt_a1", nil))
+	if m := k.next(t); m["type"] != "error" || m["code"] != protocol.CodeUnavailable {
+		t.Fatalf("a session of an image without the wall answered %v", m)
+	}
+	if said := log.String(); !strings.Contains(said, "this machine runs none: the container was given no /dev/net/tun") {
+		t.Fatalf("a session of an image refused without the wall said %q", said)
+	}
+}
