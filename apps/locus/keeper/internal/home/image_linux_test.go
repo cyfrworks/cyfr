@@ -5,6 +5,7 @@ package home
 
 import (
 	"encoding/binary"
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -12,6 +13,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/cyfr/locus/keeper/internal/proc"
 )
 
 // needMke2fs skips where the host has no mke2fs (the real-kernel step's Go
@@ -41,7 +44,7 @@ func temporaries(t *testing.T, root string) []string {
 func TestADisksImageIsASparseExt4FileMadeOnce(t *testing.T) {
 	needMke2fs(t)
 	k := keptOfMine(t, 1)
-	if err := k.EnsureImage("ath_1", os.Getuid()); err != nil {
+	if err := k.EnsureImage("ath_1", os.Getuid(), proc.Own); err != nil {
 		t.Fatal(err)
 	}
 	path := k.ImagePath("ath_1")
@@ -75,7 +78,7 @@ func TestADisksImageIsASparseExt4FileMadeOnce(t *testing.T) {
 	}
 	before := st.Ino
 	mtime := info.ModTime()
-	if err := k.EnsureImage("ath_1", os.Getuid()); err != nil {
+	if err := k.EnsureImage("ath_1", os.Getuid(), proc.Own); err != nil {
 		t.Fatal(err)
 	}
 	again, err := os.Lstat(path)
@@ -109,7 +112,7 @@ func TestAFailedMakingLeavesNoImage(t *testing.T) {
 		Mke2fs, MakeImageWait = c.maker, c.wait
 		k := keptOfMine(t, 1)
 		began := time.Now()
-		err := k.EnsureImage("ath_1", os.Getuid())
+		err := k.EnsureImage("ath_1", os.Getuid(), proc.Own)
 		if err == nil || !strings.Contains(err.Error(), c.why) {
 			t.Fatalf("%s: the making answered %v", c.maker, err)
 		}
@@ -165,7 +168,7 @@ func TestAnImagesPathThatIsNoRegularFileIsRefused(t *testing.T) {
 	if err := os.Symlink(target, k.ImagePath("ath_1")); err != nil {
 		t.Fatal(err)
 	}
-	err := k.EnsureImage("ath_1", os.Getuid())
+	err := k.EnsureImage("ath_1", os.Getuid(), proc.Own)
 	if err == nil || !strings.Contains(err.Error(), "is not a regular file") {
 		t.Fatalf("a link at the image's path answered %v", err)
 	}
@@ -178,7 +181,7 @@ func TestAnImagesPathThatIsNoRegularFileIsRefused(t *testing.T) {
 	if err := os.Mkdir(k.ImagePath("ath_1"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := k.EnsureImage("ath_1", os.Getuid()); err == nil || !strings.Contains(err.Error(), "is not a regular file") {
+	if err := k.EnsureImage("ath_1", os.Getuid(), proc.Own); err == nil || !strings.Contains(err.Error(), "is not a regular file") {
 		t.Fatalf("a folder at the image's path answered %v", err)
 	}
 }
@@ -188,7 +191,7 @@ func TestAnImagesPathThatIsNoRegularFileIsRefused(t *testing.T) {
 func TestAnImageOfNoUIDIsRefused(t *testing.T) {
 	k := keptOfMine(t, 1)
 	for _, uid := range []int{-1, 1 << 31, 1 << 32} {
-		if err := k.EnsureImage("ath_1", uid); err == nil || !strings.Contains(err.Error(), "is not a uid") {
+		if err := k.EnsureImage("ath_1", uid, proc.Own); err == nil || !strings.Contains(err.Error(), "is not a uid") {
 			t.Fatalf("uid %d answered %v", uid, err)
 		}
 		if _, err := os.Lstat(k.ImagePath("ath_1")); !os.IsNotExist(err) {
@@ -237,5 +240,51 @@ func TestTheRecordsTakeAnImageAndRemoveADeadMakingsTemporary(t *testing.T) {
 	}
 	if _, err := k.LoadDisks(); err == nil || !strings.Contains(err.Error(), `has form "volume"`) {
 		t.Fatalf("a record of an unknown form answered %v", err)
+	}
+}
+
+// An image is given its VM only as its disk's uid's alone: a regular file,
+// not a link, of that uid and its group, mode 0600. Here the disk's uid is
+// the test's own, whose group is its own uid's number only where they
+// agree; a test run otherwise checks the refusals alone.
+func TestAnImageIsCheckedAsItsUIDsAloneAtEachStart(t *testing.T) {
+	k := keptOfMine(t, 1)
+	uid := os.Getuid()
+	path := k.ImagePath("ath_1")
+	if err := CheckImage(path, uid); !os.IsNotExist(err) {
+		t.Fatalf("an absent image answered %v", err)
+	}
+	if err := os.WriteFile(path, nil, ImageMode); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, ImageMode); err != nil {
+		t.Fatal(err)
+	}
+	if uid == os.Getgid() {
+		if err := CheckImage(path, uid); err != nil {
+			t.Fatalf("the uid's own image answered %v", err)
+		}
+	}
+	if err := CheckImage(path, uid+1); !errors.Is(err, ErrNotImage) {
+		t.Fatalf("an image of another uid answered %v", err)
+	}
+	if err := os.Chmod(path, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckImage(path, uid); !errors.Is(err, ErrNotImage) {
+		t.Fatalf("an image its group reads answered %v", err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(t.TempDir(), "elsewhere")
+	if err := os.WriteFile(target, nil, ImageMode); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, path); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckImage(path, uid); !errors.Is(err, ErrNotImage) {
+		t.Fatalf("a link at the image's path answered %v", err)
 	}
 }

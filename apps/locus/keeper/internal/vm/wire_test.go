@@ -108,3 +108,15 @@ func contains(list []string, s string) bool {
 	}
 	return false
 }
+
+// A hello refused carries the guest's line in its error quoted and cut, so
+// the keeper's log line that names the error holds no byte of the guest's
+// raw (logx.Untrusted): here a carriage return, which JSON allows between
+// members, before a forged line, and a megabyte beside it.
+func TestARefusedHelloCarriesTheGuestsLineQuoted(t *testing.T) {
+	line := `{"v":1,"type":"hullo",` + "\r" + `"x":"[cyfr-locus] error: forged","pad":"` + strings.Repeat("x", 1<<20) + `"}`
+	_, err := ParseHello([]byte(line))
+	if err == nil || strings.ContainsAny(err.Error(), "\r\n") || len(err.Error()) > 300 {
+		t.Fatalf("the refusal is %d bytes: %.120q", len(err.Error()), err)
+	}
+}

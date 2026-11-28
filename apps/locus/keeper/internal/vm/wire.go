@@ -50,6 +50,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/cyfr/locus/keeper/internal/logx"
 	"github.com/cyfr/locus/keeper/internal/pool"
 )
 
@@ -202,10 +203,10 @@ func ParseHello(line []byte) (Hello, error) {
 		return Hello{}, fmt.Errorf("the guest agent's hello: %w", err)
 	}
 	if h.V != HelloVersion || h.Type != HelloType {
-		return Hello{}, fmt.Errorf("the guest agent's hello is %s, not a version %d %s", strings.TrimSpace(string(line)), HelloVersion, HelloType)
+		return Hello{}, fmt.Errorf("the guest agent's hello is %s, not a version %d %s", logx.Untrusted(strings.TrimSpace(string(line))), HelloVersion, HelloType)
 	}
 	if !bootIDPattern.MatchString(h.BootID) {
-		return Hello{}, fmt.Errorf("the guest agent's boot identity %q is not a UUID", h.BootID)
+		return Hello{}, fmt.Errorf("the guest agent's boot identity %s is not a UUID", logx.Untrusted(h.BootID))
 	}
 	return h, nil
 }

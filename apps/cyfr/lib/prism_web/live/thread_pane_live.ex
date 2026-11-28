@@ -318,6 +318,7 @@ defmodule PrismWeb.ThreadPaneLive do
       |> assign(:seen, thread && thread.read_seq)
       |> assign(:any_messages, false)
       |> assign(:cards, %{})
+      |> assign(:choices, %{})
       |> assign(:proposals, %{})
       |> assign(:works, %{})
       |> reset_live()
@@ -345,6 +346,7 @@ defmodule PrismWeb.ThreadPaneLive do
           end
 
         rows = with_proposals(rows, ctx, thread.id)
+        {rows, choices} = read_choices(rows, ctx)
 
         {shown, requests} = file_replies(rows, ctx)
 
@@ -359,6 +361,7 @@ defmodule PrismWeb.ThreadPaneLive do
 
         socket
         |> hold_cards(rows)
+        |> assign(:choices, choices)
         |> stream(:messages, shown, reset: true)
         |> assign(:requests, requests)
         |> assign(:any_messages, rows != [])
@@ -428,6 +431,36 @@ defmodule PrismWeb.ThreadPaneLive do
   end
 
   defp hold_card(socket, _row), do: socket
+
+  # Aqua's question as buttons (`Aqua.Choices.read/2`): a row that gives
+  # them carries its card, read once, since a card never changes once its
+  # turn is over. A row of a turn still open may yet be one: the pane holds
+  # it by id and reads it again when a turn ends.
+  defp read_choices(rows, ctx) do
+    Enum.map_reduce(rows, %{}, fn row, pending ->
+      case Aqua.Choices.read(ctx, row) do
+        {:ok, card} -> {Map.put(row, :card, card), pending}
+        :pending -> {row, Map.put(pending, row.id, row)}
+        :none -> {row, pending}
+      end
+    end)
+  end
+
+  defp hold_choice(socket, row) do
+    {[row], pending} = read_choices([row], socket.assigns.context)
+    {row, assign(socket, :choices, Map.merge(socket.assigns.choices, pending))}
+  end
+
+  # The rows still pending, read again as a turn ends: one that is a card
+  # now is drawn again with it (the stream draws a row once), and one its
+  # turn left as text is let go.
+  defp reread_pending(socket) do
+    {cards, pending} = read_choices(Map.values(socket.assigns.choices), socket.assigns.context)
+
+    cards
+    |> Enum.filter(&Map.has_key?(&1, :card))
+    |> Enum.reduce(assign(socket, :choices, pending), &stream_insert(&2, :messages, &1))
+  end
 
   # The outcome of the reply that resolved a request, read among the rows
   # shown or, past them, by its id; nil while it is pending, or when that
@@ -741,6 +774,31 @@ defmodule PrismWeb.ThreadPaneLive do
            &PrismWeb.Ops.call_tool(&1, "thread/stop", %{"thread" => thread.id}),
            cancel_requested: true
          )}
+    end
+  end
+
+  # A press of a choice on Aqua's question is the person's answer to Aqua:
+  # the row and the index are all the send names, and the server reads the
+  # question and the label again and lands it where the card is
+  # (`Aqua.Choices`), today's daily thread for a daily card, which the pane
+  # then shows.
+  def handle_event("choose", %{"row" => row_id, "index" => index}, socket)
+      when is_binary(row_id) do
+    with {at, ""} <- Integer.parse(to_string(index)) do
+      args = %{
+        "choice" => %{"row" => row_id, "index" => at},
+        "client_id" => Prima.UUID7.generate_id("snd")
+      }
+
+      case PrismWeb.Ops.call_tool(socket.assigns.context, "thread/send", args) do
+        {:ok, answer} ->
+          {:noreply, joined(socket, answer[:thread])}
+
+        {:error, reason} ->
+          {:noreply, put_flash(socket, :error, PrismWeb.Ops.error_message(reason))}
+      end
+    else
+      _ -> {:noreply, socket}
     end
   end
 
@@ -1083,6 +1141,7 @@ defmodule PrismWeb.ThreadPaneLive do
   defp handle_thread_event(socket, :message, row) do
     if result = result(row), do: tell_host(socket, {:result, row.thread_id, result})
     if answer?(row), do: tell_host(socket, {:answer, row.thread_id, post(row)})
+    {row, socket} = hold_choice(socket, row)
 
     socket
     |> hold_card(row)
@@ -1179,6 +1238,7 @@ defmodule PrismWeb.ThreadPaneLive do
     |> assign(:partials, Aqua.stream_new())
     |> assign(:tool_activity, [])
     |> assign(:cancel_requested, false)
+    |> reread_pending()
   end
 
   # Streamed text belongs to the running turn alone: an announcement or a
@@ -2226,13 +2286,21 @@ defmodule PrismWeb.ThreadPaneLive do
                 <% true -> %>
                   <div class="group/aloud">
                     <.message_bubble
+                      :if={shown_content(msg) != "" or is_nil(Map.get(msg, :card))}
                       id={@dom <> "-msg-" <> msg.id}
                       role={role_of(msg)}
-                      content={msg.content}
+                      content={shown_content(msg)}
                       author={author_label(msg, @members, @context)}
                       attachments={attachments(msg)}
                       attachment_href={&attachment_path(@athanor_route, msg.id, &1)}
                       links={Threads.payload(msg)["links"] || []}
+                    />
+                    <.choices_card
+                      :if={Map.get(msg, :card)}
+                      id={@dom <> "-choices-" <> msg.id}
+                      card={msg.card}
+                      author={msg.card.prose == "" && author_label(msg, @members, @context)}
+                      athanor_route={@athanor_route}
                     />
                     <%!-- A line you may paste onto the shared thread beside
                         the pane: yours, or your assistant's in your own
@@ -2891,6 +2959,83 @@ defmodule PrismWeb.ThreadPaneLive do
       </div>
     </div>
     """
+  end
+
+  attr :id, :string, required: true
+  attr :card, :map, required: true
+  attr :author, :any, default: nil
+  attr :athanor_route, :any, required: true
+
+  # Aqua's question in plain text, as a press records it, and one button
+  # for each of its choices, which stays as it is after a press; a button
+  # pressed waits in the browser for the server's answer, so a double
+  # click is one press. And its file, while Files lists it.
+  defp choices_card(assigns) do
+    ~H"""
+    <div id={@id} class="mt-1 space-y-1 px-1 text-xs">
+      <span :if={@author} class="text-xs text-gray-500">{@author}</span>
+      <p id={@id <> "-question"} class="whitespace-pre-wrap text-sm text-gray-200">
+        {@card.question}
+      </p>
+      <div class="flex flex-wrap items-center gap-2">
+        <button
+          :for={{label, at} <- Enum.with_index(@card.choices)}
+          id={@id <> "-" <> Integer.to_string(at)}
+          type="button"
+          phx-click="choose"
+          phx-value-row={@card.row}
+          phx-value-index={at}
+          phx-disable-with={label}
+          class="min-h-6 rounded bg-blue-600 hover:bg-blue-500 px-3 py-1 font-medium text-white disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          {label}
+        </button>
+      </div>
+      <div :if={@card.file} id={@id <> "-file"} class="flex flex-wrap items-center gap-2">
+        <span class="font-mono text-gray-400">{@card.file}</span>
+        <%= case @card.file_state do %>
+          <% :present -> %>
+            <a
+              id={@id <> "-download"}
+              href={file_href(@athanor_route, @card.file)}
+              class="min-h-6 text-blue-400 hover:text-blue-300"
+            >
+              Download
+            </a>
+          <% :missing -> %>
+            <span id={@id <> "-missing"} class="text-gray-500">This file is not in Files</span>
+          <% _unavailable -> %>
+            <span id={@id <> "-unread"} class="text-gray-500">
+              Files could not be read just now
+            </span>
+        <% end %>
+      </div>
+    </div>
+    """
+  end
+
+  # A card's reply shows its words before the block, which the card
+  # follows with its question; a press shows what was chosen; any other
+  # row its text.
+  defp shown_content(%{card: %{prose: prose}}), do: prose
+
+  defp shown_content(%{kind: "text", sent_by: "person"} = row) do
+    case Threads.payload(row)["choice"] do
+      %{"label" => label} when is_binary(label) -> "You chose «#{label}»"
+      _ -> row.content
+    end
+  end
+
+  defp shown_content(row), do: row.content
+
+  # A file of the athanor's as Files downloads it.
+  defp file_href(route, path) do
+    encoded =
+      path
+      |> String.split("/")
+      |> Enum.map_join("/", fn segment -> URI.encode(segment, &URI.char_unreserved?/1) end)
+
+    PrismWeb.Focus.path(route, "/files/download/" <> encoded)
   end
 
   defp role_align_row("user"), do: "justify-end"
