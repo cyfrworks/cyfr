@@ -129,7 +129,7 @@ The order describes dependencies, not a request's path. Codex shares no code wit
 
 ### Apps and releases
 
-Two releases: `cyfr` (the apps `prima`, `arca`, `sanctum` and `cyfr`) and `locus` (`prima` and `locus`). Sanctum is an app of its own because its licence boundary is an application directory; `cyfr` hosts Host, the domains and the surfaces under Boundary declarations. The keeper with its drivers and `codex` are Go modules, and the CYFR app wraps `codex`'s binary.
+Two releases: `cyfr` (`prima`, `arca`, `sanctum`, `cyfr`) and `locus` (`prima`, `locus`). Sanctum is an app apart because its licence boundary is an application directory; `cyfr` hosts Host, the domains and the surfaces under Boundary declarations. The keeper, its drivers and `codex` are Go modules, the CYFR app wrapping `codex`'s binary; the runner, `cyfr-runner`, is a Rust crate.
 
 ## 4. How modules talk
 
