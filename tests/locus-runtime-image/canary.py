@@ -81,9 +81,9 @@ RULE = {"in": "header", "name": "x-api-key", "template": "{value}"}
 FIELD = "CANARY_KEY"
 MASK = "[REDACTED]"
 BOOT_S = 60
-# The memory a dump must have read to count: a runner's VM alone holds
-# well over a hundred MiB.
-MIN_DUMP_BYTES = 32 << 20
+# The memory a dump must have read to count: a fresh runner's dump reads
+# some 78 MiB, its program's 22 MiB among them.
+MIN_DUMP_BYTES = 48 << 20
 
 # Every readable mapping of process $1, as /proc/$1/maps lists it, written
 # to stdout. On stderr, one line for each readable mapping dd could not

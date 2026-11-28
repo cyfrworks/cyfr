@@ -293,6 +293,24 @@ def prerequisites(image):
           "(its egress_pin_cases and egress_policy_cases) and worker_api.json", flush=True)
 
 
+def variant(component, n):
+    """`component` with a custom section naming `n` appended: bytes of a digest of their own that run as `component` does.
+
+    A runner fetches and compiles a digest once however many of its
+    children run it, so children that must each ask for their artifact
+    run variants."""
+    def leb(value):
+        out = bytearray()
+        while True:
+            byte, value = value & 0x7F, value >> 7
+            out.append(byte | (0x80 if value else 0))
+            if not value:
+                return bytes(out)
+    name = b"cyfr-variant"
+    payload = leb(len(name)) + name + str(n).encode()
+    return component + b"\x00" + leb(len(payload)) + payload
+
+
 def ms(seconds):
     return round(seconds * 1000, 1)
 
@@ -841,7 +859,8 @@ def test_service_bound(stack, plane):
                          authority=memory.bound_authority(memory.PROBE_REF, BURST_CHILDREN))
 
     def admit(args, caller, entry):
-        child = plane.mint(stack.boot, "reagent", memory.ECHO_REF, memory.wasm(memory.ECHO), args.get("input") or {},
+        input_ = args.get("input") or {}
+        child = plane.mint(stack.boot, "reagent", memory.ECHO_REF, variant(memory.wasm(memory.ECHO), input_.get("child")), input_,
                            formula["athanor_id"], 120_000, parent=formula)
         plane.script("fetch_artifact", artifact, child["execution_id"])
         with lock:

@@ -67,7 +67,8 @@ runner's own uid, outside that namespace, may not):
   holds (the plane holds that emit's answer), a reading the keeper took
   after it is `run` of that athanor and holds at least half of those
   bytes more than the reading before the work was sent; the work then
-  closes its attempt completed and the runner says `complete`, clean.
+  closes its attempt completed and the runner says on its control stream
+  that it entered the work's authority and then `complete`, clean.
   Assigned `warm` for that athanor and `run` again for another run, each
   measure answers above zero under the owner of the moment; after its
   `release`, a measure sent with it is still answered with a reading
@@ -905,9 +906,12 @@ def judge_work(served, calls, attempt):
            and calls[4]["args"]["outcome"]["output"] == {"status": 200, "data": {"held": HOG_BYTES}},
            f"measure: the runner attached, fetched hog.wasm, ran it to its answer while its emit of holding {HOG_BYTES >> 20} MiB "
            "was held until the client had read it, and closed the attempt completed", calls)
-    complete = json.dumps({"v": 1, "type": "complete", "execution_id": attempt["execution_id"], "clean": True}, separators=(",", ":"))
-    expect(served.get("control") == [complete],
-           "measure: the runner said on its control stream that the work's subtree is complete and clean, and nothing else", served)
+    entered = {"v": 1, "type": "event", "name": "engine.authority_entered", "measurements": {},
+               "metadata": {"execution_id": attempt["execution_id"], "reference": HOG_REF}}
+    complete = {"v": 1, "type": "complete", "execution_id": attempt["execution_id"], "clean": True}
+    expect(served.get("control") == [json.dumps(frame, separators=(",", ":")) for frame in (entered, complete)],
+           "measure: the runner said on its control stream that it entered the work's authority and that the work's subtree "
+           "is complete and clean, and nothing else", served)
 
 
 def relay_frame(frame):

@@ -352,9 +352,13 @@ class Work(unittest.TestCase):
 
     ATTEMPT = {"execution_id": "exec_measured"}
 
-    def served(self, clean=True):
-        complete = {"v": 1, "type": "complete", "execution_id": self.ATTEMPT["execution_id"], "clean": clean}
-        return {"relay": list(namespace.WORK_CALLS), "control": [json.dumps(complete, separators=(",", ":"))], "stderr": b""}
+    def served(self, clean=True, entered=True):
+        execution_id = self.ATTEMPT["execution_id"]
+        event = {"v": 1, "type": "event", "name": "engine.authority_entered", "measurements": {},
+                 "metadata": {"execution_id": execution_id, "reference": namespace.HOG_REF}}
+        complete = {"v": 1, "type": "complete", "execution_id": execution_id, "clean": clean}
+        control = [json.dumps(frame, separators=(",", ":")) for frame in ([event] if entered else []) + [complete]]
+        return {"relay": list(namespace.WORK_CALLS), "control": control, "stderr": b""}
 
     def calls(self, let=True):
         calls = [{"op": op, "answered": "ok", "runner": namespace.RUNNER, "args": {}} for op in namespace.WORK_CALLS]
@@ -371,6 +375,11 @@ class Work(unittest.TestCase):
         with self.assertRaises(SystemExit) as failed:
             namespace.judge_work(self.served(clean=False), self.calls(), self.ATTEMPT)
         self.assertIn("complete and clean", str(failed.exception.code).splitlines()[0])
+
+    def test_a_control_stream_without_the_authoritys_event_fails(self):
+        with self.assertRaises(SystemExit) as failed:
+            namespace.judge_work(self.served(entered=False), self.calls(), self.ATTEMPT)
+        self.assertIn("entered the work's authority", str(failed.exception.code).splitlines()[0])
 
     def test_an_emit_not_held_for_the_client_fails(self):
         with self.assertRaises(SystemExit) as failed:
