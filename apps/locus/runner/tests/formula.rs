@@ -1313,8 +1313,8 @@ fn a_finished_result_not_yet_awaited_counts_against_the_tasks_a_formula_holds() 
     let mut service = Service::start();
     let mut job = formula(&[
         ("spawn", run("run", "reagent:local.echo:0.1.0", json!({}))),
-        // The formula's call is answered only once the first task's child
-        // has closed, so its result is in, unawaited.
+        // The formula's call is answered only once the first task has its
+        // child's answer, so its result is in, unawaited.
         ("call", json!({"tool": "component", "action": "wait"})),
         ("poll", json!("task_1")),
         ("spawn", run("run", "reagent:local.echo:0.1.0", json!({}))),
@@ -1322,23 +1322,27 @@ fn a_finished_result_not_yet_awaited_counts_against_the_tasks_a_formula_holds() 
     job = job.bound(json!({"max_concurrent_tasks": 1}));
     job.intercepted = vec!["execution.run".to_owned()];
     let child = echo(&job, "{}");
-    let closed = child.attempt.clone();
     let seen = Arc::new(Mutex::new(false));
     let saw = seen.clone();
     let mut admitted = admitting(vec![child.clone()]);
     service.assign(
         &job,
         Box::new(move |call, job| {
-            if call.op == "complete" && call.attempt == closed {
-                *saw.lock().expect("seen") = true;
-            }
             if call.op == "tool_call" {
-                let seen = seen.clone();
+                let seen = saw.clone();
                 return Reply::When(Box::new(move || *seen.lock().expect("seen")), json!(true));
             }
             admitted(call, job)
         }),
     );
+    // The task queues its event in the same step that hands its result on.
+    loop {
+        let line = service.line(SOON);
+        if line["name"] == "mcp_tool.call" && line["metadata"]["tool_action"] == "execution.run" {
+            break;
+        }
+    }
+    *seen.lock().expect("seen") = true;
     ended(&service, SOON);
     let answers = answers(&service, &job);
     assert_eq!(answers[2]["status"], "completed", "{answers:?}");
@@ -1694,7 +1698,8 @@ fn a_formulas_unawaited_results_are_held_as_bytes() {
             },
         ),
     );
-    // Each spawned call's event follows its outcome's taking.
+    // Each spawned call queues its event in the same step that hands its
+    // result on, after the host has taken its outcome.
     let mut events = 0;
     while events < 4 {
         let line = service.line(SOON);
