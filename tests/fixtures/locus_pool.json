@@ -1,5 +1,5 @@
 {
-  "comment": "The pool's fixed numbers, Prima.LocusPool, for the keeper, which cannot call it: apps/prima/test/prima/locus_pool_test.exs holds this file to the module value by value, and apps/locus/keeper/internal/admission/size_test.go holds the keeper's constants to it. floor_bytes is F, what the warm floor keeps from builds and programs, and floor_runners how many fresh runners it keeps. machine_bytes is a person's VM's own allowance for a guest of a size, the pool's work W in a keeper: base and per_gib a GiB of the guest, by the guest's whole MiB (base + per_gib / 1024 × ⌊guest / MiB⌋), and its cases each a guest's bytes and its allowance; it is held beside the session's by the start that boots it, until allowance_ms after the VMM's start; a VM is then charged by its reading, its sessions inside it by nothing of their own. room_wait_ms is how long a start waits for room before it is refused, the close's own wait (Prima.LocusBackends.close_wait_ms). A place is charged at least its class's allowance_bytes from its place until allowance_ms after its spawn, and a place with no reading for stale_ms no less than its last charge. kinds gives each place's kind its class; a build's memory bound is cap_bytes, a runner's and a session's half of the pool's work, never under their least_cap_bytes (a runner's is its allowance and the components' hard ceiling, Prima.Limits.Ceiling's max_memory_bytes, together; a session's its allowance), and each class's processors are its spawns' bound. counters are the keeper's count of who used what: at most max_counters held, a report carrying at most report_counters, a counter kept keep_ms after its last change, and a gap between a place's readings counted only up to reading_gap_ms. wire is the pool wire every Locus service serves its role's report on (POST route, a body of v and after, answered v and report): a request signed in auth_header as Prima.MacEnvelope signs, the kind pool, the field ts within window_ms, under each service's pool key, derived over its label from the key that service is given (key_hex here, the same for all three): the builds service's through its request key first (request_key_hex, BuilderProtocol.request_key), the key that service holds; so each services entry's header verifies under its own pool key alone; answer is a plain answer carrying a report. Prima.LocusPoolTest holds wire to the module, and the three image suites' memory.py sign with it.",
+  "comment": "The pool's fixed numbers, Prima.LocusPool, for the keeper, which cannot call it: apps/prima/test/prima/locus_pool_test.exs holds this file to the module value by value, and apps/locus/keeper/internal/admission/size_test.go holds the keeper's constants to it. floor_bytes is F, what the warm floor keeps from builds and programs, and floor_runners how many fresh runners it keeps. machine_bytes is a person's VM's own allowance for a guest of a size, the pool's work W in a keeper: base and per_gib a GiB of the guest, by the guest's whole MiB (base + per_gib / 1024 × ⌊guest / MiB⌋), and its cases each a guest's bytes and its allowance; it is held beside the session's by the start that boots it, until allowance_ms after the VMM's start; a VM is then charged by its reading, its sessions inside it by nothing of their own. room_wait_ms is how long a start waits for room before it is refused, the close's own wait (Prima.LocusBackends.close_wait_ms). A place is charged at least its class's allowance_bytes from its place until allowance_ms after its spawn, and a place with no reading for stale_ms no less than its last charge. kinds gives each place's kind its class; a build's memory bound is cap_bytes, a runner's and a session's half of the pool's work, never under their least_cap_bytes (a runner's is its allowance and the components' hard ceiling, Prima.Limits.Ceiling's max_memory_bytes, together; a session's its allowance), and each class's processors are its spawns' bound. counters are the keeper's count of who used what: at most max_counters held, a report carrying at most report_counters, a counter kept keep_ms after its last change, and a gap between a place's readings counted only up to reading_gap_ms. wire is the pool wire every Locus service serves its role's report on (POST route, a body of v and after, answered v and report): a request signed in auth_header as Prima.MacEnvelope signs, the kind pool, the field ts within window_ms, under each service's pool key, derived over its label from the key that service is given (key_hex here, the same for all three): the builds service's through its request key first (request_key_hex, BuilderProtocol.request_key), the key that service holds; so each services entry's header verifies under its own pool key alone; answer is a plain answer carrying a report. Prima.LocusPoolTest holds wire to the module, and the three image suites' memory.py sign with it. wire's headers are pool headers each verified at now under the runtime's pool key (Prima.LocusPool.verify_header/4), accepted with the body hash it names or refused: the pool kind's grammar (v1, then kind pool, ts and body and mac once each, in any order), a version token other than v1 refused unknown_version first and anything else no such header malformed; its verify are headers whose refusal lies past the grammar, in that order then outside_window (a ts more than window_ms from now either side; at window_ms it verifies) and bad_mac (another service's pool header, the service's given key, a MAC no key makes). body_checks are bodies held to the hash a verified header named (verify_body/2). request_bodies are bodies each read as read_request_body/1 reads them, to their rev after or their error: another version, or none, version before anything else is read, and anything else malformed. reports are reports each read strictly (read_report/1) and answered (answer/1) to exactly answer's bytes, or refused (answer null): next only where more follow and from 1, a counter's athanor and subject only where it has them and never null, at most 256 counters in ascending rev, each number a whole number to 2^53 - 1. listener are requests of the runtime's worker listener's pool route over HTTP (http: run against the listener itself, by Locus.PoolRouteTest now and the Go listener from N3), each signed as header says (signed, none, its header_text, late past the window, another service's, under the service's given key, or over another body), its keeper answering, refusing or gone; each answered status with the WorkerWire error error, or 200 with answer, closing the connection where closed says, and refused by the route for refusal: a header's 401 and its reason, a body past max_request_bytes 413 malformed, a body at another version 400 unknown_version and any other 400 malformed, a keeper's 503 unavailable.",
   "floor_bytes": 171966464,
   "floor_runners": 1,
   "machine_bytes": { "base": 356515840, "per_gib": 20971520, "cases": [[0, 356515840], [2684354560, 408944640], [8589934592, 524288000], [62204149760, 1571430400]] },
@@ -39,6 +39,1464 @@
         "pool_key_hex": "dba945a91651cd0b1675406d02b276cf3eef0023542ca8b1e5b62b935e7fbb3b"
       }
     },
-    "answer": "{\"v\":1,\"report\":{\"boot\":\"5f0c3a9e1b7d4c2a8e6f0b3d5a7c9e1f\",\"budget\":6174015488,\"counters\":[{\"athanor\":\"ath_01a09fee-2c3d-7e4f-8a5b-6c7d8e9f0a1b\",\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":513,\"subject\":\"mcp_01a09fee-2c3d-7e4f-8a5b-6c7d8e9f0a1c\"}],\"floor\":171966464,\"used\":268435456,\"work\":5066719232}}"
+    "answer": "{\"v\":1,\"report\":{\"boot\":\"5f0c3a9e1b7d4c2a8e6f0b3d5a7c9e1f\",\"budget\":6174015488,\"counters\":[{\"athanor\":\"ath_01a09fee-2c3d-7e4f-8a5b-6c7d8e9f0a1b\",\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":513,\"subject\":\"mcp_01a09fee-2c3d-7e4f-8a5b-6c7d8e9f0a1c\"}],\"floor\":171966464,\"used\":268435456,\"work\":5066719232}}",
+    "headers": {
+      "accepted": [
+        {
+          "body_hash": "8005830aec8706166d8c883c4af2bb7894b2bc306b10ebcb33bd3e779b568eb9",
+          "header": "v1 kind=pool ts=1795000000000 body=8005830aec8706166d8c883c4af2bb7894b2bc306b10ebcb33bd3e779b568eb9 mac=V0XUAnbPtXQAxrl3IdosISkGnAmPCp0dfuseIIVPtgM",
+          "now": 1795000000000,
+          "why": "the header as it is written"
+        },
+        {
+          "body_hash": "8005830aec8706166d8c883c4af2bb7894b2bc306b10ebcb33bd3e779b568eb9",
+          "header": "v1 mac=V0XUAnbPtXQAxrl3IdosISkGnAmPCp0dfuseIIVPtgM body=8005830aec8706166d8c883c4af2bb7894b2bc306b10ebcb33bd3e779b568eb9 ts=1795000000000 kind=pool",
+          "now": 1795000000000,
+          "why": "its pairs in another order"
+        },
+        {
+          "body_hash": "8005830aec8706166d8c883c4af2bb7894b2bc306b10ebcb33bd3e779b568eb9",
+          "header": "v1 kind=pool ts=0 body=8005830aec8706166d8c883c4af2bb7894b2bc306b10ebcb33bd3e779b568eb9 mac=MSPu-tCLa92LqiZi1fg2o_3XhsiVTtUTo8ibpiYXqAk",
+          "now": 0,
+          "why": "an integer of 0"
+        },
+        {
+          "body_hash": "8005830aec8706166d8c883c4af2bb7894b2bc306b10ebcb33bd3e779b568eb9",
+          "header": "v1 kind=pool ts=9007199254740991 body=8005830aec8706166d8c883c4af2bb7894b2bc306b10ebcb33bd3e779b568eb9 mac=JrzmunQPN0mYbLHqaHMhIEy549S6m3xQdNFHYyB5Dr8",
+          "now": 9007199254740991,
+          "why": "an integer of 2^53 - 1"
+        }
+      ],
+      "refused": [
+        {
+          "error": "malformed",
+          "header": "V1 kind=pool ts=1795000000000 body=8005830aec8706166d8c883c4af2bb7894b2bc306b10ebcb33bd3e779b568eb9 mac=V0XUAnbPtXQAxrl3IdosISkGnAmPCp0dfuseIIVPtgM",
+          "now": 1795000000000,
+          "why": "the version in capitals"
+        },
+        {
+          "error": "malformed",
+          "header": "v01 kind=pool ts=1795000000000 body=8005830aec8706166d8c883c4af2bb7894b2bc306b10ebcb33bd3e779b568eb9 mac=V0XUAnbPtXQAxrl3IdosISkGnAmPCp0dfuseIIVPtgM",
+          "now": 1795000000000,
+          "why": "a version with a leading zero"
+        },
+        {
+          "error": "malformed",
+          "header": "Bearer v1 kind=pool ts=1795000000000 body=8005830aec8706166d8c883c4af2bb7894b2bc306b10ebcb33bd3e779b568eb9 mac=V0XUAnbPtXQAxrl3IdosISkGnAmPCp0dfuseIIVPtgM",
+          "now": 1795000000000,
+          "why": "a scheme's word for a version"
+        },
+        {
+          "error": "malformed",
+          "header": " v1 kind=pool ts=1795000000000 body=8005830aec8706166d8c883c4af2bb7894b2bc306b10ebcb33bd3e779b568eb9 mac=V0XUAnbPtXQAxrl3IdosISkGnAmPCp0dfuseIIVPtgM",
+          "now": 1795000000000,
+          "why": "a leading space"
+        },
+        {
+          "error": "malformed",
+          "header": "v1 kind=pool ts=1795000000000 body=8005830aec8706166d8c883c4af2bb7894b2bc306b10ebcb33bd3e779b568eb9 mac=V0XUAnbPtXQAxrl3IdosISkGnAmPCp0dfuseIIVPtgM ",
+          "now": 1795000000000,
+          "why": "a trailing space"
+        },
+        {
+          "error": "malformed",
+          "header": "v1 kind=pool  ts=1795000000000 body=8005830aec8706166d8c883c4af2bb7894b2bc306b10ebcb33bd3e779b568eb9 mac=V0XUAnbPtXQAxrl3IdosISkGnAmPCp0dfuseIIVPtgM",
+          "now": 1795000000000,
+          "why": "two spaces between pairs"
+        },
+        {
+          "error": "malformed",
+          "header": "v1 kind=pool\tts=1795000000000 body=8005830aec8706166d8c883c4af2bb7894b2bc306b10ebcb33bd3e779b568eb9 mac=V0XUAnbPtXQAxrl3IdosISkGnAmPCp0dfuseIIVPtgM",
+          "now": 1795000000000,
+          "why": "a tab between pairs"
+        },
+        {
+          "error": "malformed",
+          "header": "v1 kind=pool ts=1795000000000 body=8005830aec8706166d8c883c4af2bb7894b2bc306b10ebcb33bd3e779b568eb9 mac=V0XUAnbPtXQAxrl3IdosISkGnAmPCp0dfuseIIVPtgM x=1",
+          "now": 1795000000000,
+          "why": "a pair no field has"
+        },
+        {
+          "error": "malformed",
+          "header": "v1 kind=pool Ts=1795000000000 body=8005830aec8706166d8c883c4af2bb7894b2bc306b10ebcb33bd3e779b568eb9 mac=V0XUAnbPtXQAxrl3IdosISkGnAmPCp0dfuseIIVPtgM",
+          "now": 1795000000000,
+          "why": "a field's name in capitals"
+        },
+        {
+          "error": "malformed",
+          "header": "v1 kind=pool body=8005830aec8706166d8c883c4af2bb7894b2bc306b10ebcb33bd3e779b568eb9 mac=V0XUAnbPtXQAxrl3IdosISkGnAmPCp0dfuseIIVPtgM",
+          "now": 1795000000000,
+          "why": "its ts missing"
+        },
+        {
+          "error": "malformed",
+          "header": "v1 kind=pool ts=1795000000000 mac=V0XUAnbPtXQAxrl3IdosISkGnAmPCp0dfuseIIVPtgM",
+          "now": 1795000000000,
+          "why": "its body missing"
+        },
+        {
+          "error": "malformed",
+          "header": "v1 ts=1795000000000 body=8005830aec8706166d8c883c4af2bb7894b2bc306b10ebcb33bd3e779b568eb9 mac=V0XUAnbPtXQAxrl3IdosISkGnAmPCp0dfuseIIVPtgM",
+          "now": 1795000000000,
+          "why": "its kind missing"
+        },
+        {
+          "error": "malformed",
+          "header": "v1 kind=pool ts=1795000000000 body=8005830aec8706166d8c883c4af2bb7894b2bc306b10ebcb33bd3e779b568eb9 mac=V0XUAnbPtXQAxrl3IdosISkGnAmPCp0dfuseIIVPtgM ts=1795000000000",
+          "now": 1795000000000,
+          "why": "a pair given twice"
+        },
+        {
+          "error": "malformed",
+          "header": "v1 kind=pool body=8005830aec8706166d8c883c4af2bb7894b2bc306b10ebcb33bd3e779b568eb9 mac=V0XUAnbPtXQAxrl3IdosISkGnAmPCp0dfuseIIVPtgM ts",
+          "now": 1795000000000,
+          "why": "a pair without ="
+        },
+        {
+          "error": "malformed",
+          "header": "v1 kind=pool ts=1795000000000 body=8005830aec8706166d8c883c4af2bb7894b2bc306b10ebcb33bd3e779b568eb9 mac=V0XUAnbPtXQAxrl3IdosISkGnAmPCp0dfuseIIVPtgM =x",
+          "now": 1795000000000,
+          "why": "a pair without a name"
+        },
+        {
+          "error": "malformed",
+          "header": "v1 kind=call ts=1795000000000 body=8005830aec8706166d8c883c4af2bb7894b2bc306b10ebcb33bd3e779b568eb9 mac=V0XUAnbPtXQAxrl3IdosISkGnAmPCp0dfuseIIVPtgM",
+          "now": 1795000000000,
+          "why": "another kind"
+        },
+        {
+          "error": "malformed",
+          "header": "v1 kind=pool ts=01795000000000 body=8005830aec8706166d8c883c4af2bb7894b2bc306b10ebcb33bd3e779b568eb9 mac=V0XUAnbPtXQAxrl3IdosISkGnAmPCp0dfuseIIVPtgM",
+          "now": 1795000000000,
+          "why": "an integer with a leading zero"
+        },
+        {
+          "error": "malformed",
+          "header": "v1 kind=pool ts=+1795000000000 body=8005830aec8706166d8c883c4af2bb7894b2bc306b10ebcb33bd3e779b568eb9 mac=V0XUAnbPtXQAxrl3IdosISkGnAmPCp0dfuseIIVPtgM",
+          "now": 1795000000000,
+          "why": "an integer with a sign"
+        },
+        {
+          "error": "malformed",
+          "header": "v1 kind=pool ts=-1 body=8005830aec8706166d8c883c4af2bb7894b2bc306b10ebcb33bd3e779b568eb9 mac=V0XUAnbPtXQAxrl3IdosISkGnAmPCp0dfuseIIVPtgM",
+          "now": 1795000000000,
+          "why": "a negative integer"
+        },
+        {
+          "error": "malformed",
+          "header": "v1 kind=pool ts=9007199254740992 body=8005830aec8706166d8c883c4af2bb7894b2bc306b10ebcb33bd3e779b568eb9 mac=V0XUAnbPtXQAxrl3IdosISkGnAmPCp0dfuseIIVPtgM",
+          "now": 1795000000000,
+          "why": "an integer of 2^53"
+        },
+        {
+          "error": "malformed",
+          "header": "v1 kind=pool ts=1e3 body=8005830aec8706166d8c883c4af2bb7894b2bc306b10ebcb33bd3e779b568eb9 mac=V0XUAnbPtXQAxrl3IdosISkGnAmPCp0dfuseIIVPtgM",
+          "now": 1795000000000,
+          "why": "an integer in an exponent"
+        },
+        {
+          "error": "malformed",
+          "header": "v1 kind=pool ts= body=8005830aec8706166d8c883c4af2bb7894b2bc306b10ebcb33bd3e779b568eb9 mac=V0XUAnbPtXQAxrl3IdosISkGnAmPCp0dfuseIIVPtgM",
+          "now": 1795000000000,
+          "why": "an empty integer"
+        },
+        {
+          "error": "malformed",
+          "header": "v1 kind=pool ts=1795000000000 body=8005830AEC8706166D8C883C4AF2BB7894B2BC306B10EBCB33BD3E779B568EB9 mac=V0XUAnbPtXQAxrl3IdosISkGnAmPCp0dfuseIIVPtgM",
+          "now": 1795000000000,
+          "why": "a body hash in capitals"
+        },
+        {
+          "error": "malformed",
+          "header": "v1 kind=pool ts=1795000000000 body=005830aec8706166d8c883c4af2bb7894b2bc306b10ebcb33bd3e779b568eb9 mac=V0XUAnbPtXQAxrl3IdosISkGnAmPCp0dfuseIIVPtgM",
+          "now": 1795000000000,
+          "why": "a body hash of 63 digits"
+        },
+        {
+          "error": "malformed",
+          "header": "v1 kind=pool ts=1795000000000 body=8005830aec8706166d8c883c4af2bb7894b2bc306b10ebcb33bd3e779b568eb9 mac=",
+          "now": 1795000000000,
+          "why": "no mac"
+        },
+        {
+          "error": "malformed",
+          "header": "v1 kind=pool ts=1795000000000 body=8005830aec8706166d8c883c4af2bb7894b2bc306b10ebcb33bd3e779b568eb9 mac=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "now": 1795000000000,
+          "why": "a mac of 257 bytes"
+        },
+        {
+          "error": "malformed",
+          "header": "v1 kind=pool ts=1795000000000 body=8005830aec8706166d8c883c4af2bb7894b2bc306b10ebcb33bd3e779b568eb9 mac=V0XUAnbPtXQAxrl3IdosISkGnAmPCp0dfuseIIVPtgM x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1 x=1",
+          "now": 1795000000000,
+          "why": "longer than any header of its kind"
+        },
+        {
+          "error": "malformed",
+          "header": "v1",
+          "now": 1795000000000,
+          "why": "the version alone"
+        },
+        {
+          "error": "malformed",
+          "header": "",
+          "now": 1795000000000,
+          "why": "nothing"
+        },
+        {
+          "error": "unknown_version",
+          "header": "v2 kind=pool ts=1795000000000 body=8005830aec8706166d8c883c4af2bb7894b2bc306b10ebcb33bd3e779b568eb9 mac=V0XUAnbPtXQAxrl3IdosISkGnAmPCp0dfuseIIVPtgM",
+          "now": 1795000000000,
+          "why": "another version"
+        },
+        {
+          "error": "unknown_version",
+          "header": "v0 kind=pool ts=1795000000000 body=8005830aec8706166d8c883c4af2bb7894b2bc306b10ebcb33bd3e779b568eb9 mac=V0XUAnbPtXQAxrl3IdosISkGnAmPCp0dfuseIIVPtgM",
+          "now": 1795000000000,
+          "why": "version 0"
+        },
+        {
+          "error": "unknown_version",
+          "header": "v2",
+          "now": 1795000000000,
+          "why": "another version alone"
+        },
+        {
+          "error": "unknown_version",
+          "header": "v2 ???",
+          "now": 1795000000000,
+          "why": "another version before nonsense"
+        }
+      ]
+    },
+    "verify": [
+      {
+        "body_hash": "8005830aec8706166d8c883c4af2bb7894b2bc306b10ebcb33bd3e779b568eb9",
+        "header": "v1 kind=pool ts=1795000000000 body=8005830aec8706166d8c883c4af2bb7894b2bc306b10ebcb33bd3e779b568eb9 mac=V0XUAnbPtXQAxrl3IdosISkGnAmPCp0dfuseIIVPtgM",
+        "now": 1795000030000,
+        "why": "a clock a window behind the header"
+      },
+      {
+        "body_hash": "8005830aec8706166d8c883c4af2bb7894b2bc306b10ebcb33bd3e779b568eb9",
+        "header": "v1 kind=pool ts=1795000000000 body=8005830aec8706166d8c883c4af2bb7894b2bc306b10ebcb33bd3e779b568eb9 mac=V0XUAnbPtXQAxrl3IdosISkGnAmPCp0dfuseIIVPtgM",
+        "now": 1794999970000,
+        "why": "a clock a window ahead of the header"
+      },
+      {
+        "error": "outside_window",
+        "header": "v1 kind=pool ts=1795000000000 body=8005830aec8706166d8c883c4af2bb7894b2bc306b10ebcb33bd3e779b568eb9 mac=V0XUAnbPtXQAxrl3IdosISkGnAmPCp0dfuseIIVPtgM",
+        "now": 1795000030001,
+        "why": "a clock past a window behind the header"
+      },
+      {
+        "error": "outside_window",
+        "header": "v1 kind=pool ts=1795000000000 body=8005830aec8706166d8c883c4af2bb7894b2bc306b10ebcb33bd3e779b568eb9 mac=V0XUAnbPtXQAxrl3IdosISkGnAmPCp0dfuseIIVPtgM",
+        "now": 1794999969999,
+        "why": "a clock past a window ahead of the header"
+      },
+      {
+        "error": "unknown_version",
+        "header": "v2 kind=pool ts=1795000000000 body=8005830aec8706166d8c883c4af2bb7894b2bc306b10ebcb33bd3e779b568eb9 mac=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "now": 1795000000000,
+        "why": "another version before a MAC no key makes"
+      },
+      {
+        "error": "malformed",
+        "header": "v1 ts=1795000000000 body=8005830aec8706166d8c883c4af2bb7894b2bc306b10ebcb33bd3e779b568eb9 mac=V0XUAnbPtXQAxrl3IdosISkGnAmPCp0dfuseIIVPtgM",
+        "now": 1795000030001,
+        "why": "a header that does not parse, past its window"
+      },
+      {
+        "error": "outside_window",
+        "header": "v1 kind=pool ts=1795000000000 body=8005830aec8706166d8c883c4af2bb7894b2bc306b10ebcb33bd3e779b568eb9 mac=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "now": 1795000030001,
+        "why": "a header past its window under a MAC no key makes"
+      },
+      {
+        "error": "bad_mac",
+        "header": "v1 kind=pool ts=1795000000000 body=8005830aec8706166d8c883c4af2bb7894b2bc306b10ebcb33bd3e779b568eb9 mac=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "now": 1795000000000,
+        "why": "a MAC no key makes"
+      },
+      {
+        "error": "bad_mac",
+        "header": "v1 kind=pool ts=1795000000000 body=8005830aec8706166d8c883c4af2bb7894b2bc306b10ebcb33bd3e779b568eb9 mac=5BgnzBgIrEwCmjiuOe5Q30IjLf6xkTGxHghSzG9MOko",
+        "now": 1795000000000,
+        "why": "the builds service's pool header, which the runtime refuses"
+      },
+      {
+        "error": "bad_mac",
+        "header": "v1 kind=pool ts=1795000000000 body=8005830aec8706166d8c883c4af2bb7894b2bc306b10ebcb33bd3e779b568eb9 mac=MGM9U5zSmAZSjELbX-qf1ZO8Tv3A2ufADGAOJw53xsg",
+        "now": 1795000000000,
+        "why": "a header under the service's given key, no pool key"
+      }
+    ],
+    "body_checks": [
+      {
+        "body": "{\"v\":1,\"after\":512}",
+        "body_hash": "8005830aec8706166d8c883c4af2bb7894b2bc306b10ebcb33bd3e779b568eb9",
+        "ok": true,
+        "why": "the body the header hashed"
+      },
+      {
+        "body": "{\"v\":1,\"after\":1}",
+        "body_hash": "8005830aec8706166d8c883c4af2bb7894b2bc306b10ebcb33bd3e779b568eb9",
+        "ok": false,
+        "why": "another body"
+      },
+      {
+        "body": "{\"v\":1,\"after\":512} ",
+        "body_hash": "8005830aec8706166d8c883c4af2bb7894b2bc306b10ebcb33bd3e779b568eb9",
+        "ok": false,
+        "why": "the body with a trailing space"
+      }
+    ],
+    "request_bodies": [
+      {
+        "after": 0,
+        "body": "{\"v\":1,\"after\":0}",
+        "why": "a rev of 0"
+      },
+      {
+        "after": 512,
+        "body": "{\"v\":1,\"after\":512}",
+        "why": "a rev of 512"
+      },
+      {
+        "after": 9007199254740991,
+        "body": "{\"v\":1,\"after\":9007199254740991}",
+        "why": "a rev of 2^53 - 1"
+      },
+      {
+        "after": 3,
+        "body": "{\"after\":3,\"v\":1}",
+        "why": "its members in another order"
+      },
+      {
+        "after": 3,
+        "body": " {\"v\":1,\"after\":3} ",
+        "why": "white space around it"
+      },
+      {
+        "after": 0,
+        "body": "{\"v\":1,\"after\":0,\"v\":2}",
+        "why": "a version given twice, its first 1"
+      },
+      {
+        "body": "{\"v\":2,\"after\":0}",
+        "error": "version",
+        "why": "another version"
+      },
+      {
+        "body": "{\"after\":0}",
+        "error": "version",
+        "why": "no version"
+      },
+      {
+        "body": "{\"v\":\"1\",\"after\":0}",
+        "error": "version",
+        "why": "a version as text"
+      },
+      {
+        "body": "{\"v\":1.0,\"after\":0}",
+        "error": "version",
+        "why": "a version written as a fraction"
+      },
+      {
+        "body": "{\"v\":2}",
+        "error": "version",
+        "why": "another version and no rev, the version first"
+      },
+      {
+        "body": "{}",
+        "error": "version",
+        "why": "an empty object"
+      },
+      {
+        "body": "{\"v\":2,\"after\":0,\"v\":1}",
+        "error": "version",
+        "why": "a version given twice, its first 2"
+      },
+      {
+        "body": "{\"v\":1}",
+        "error": "malformed",
+        "why": "no rev"
+      },
+      {
+        "body": "{\"v\":1,\"after\":-1}",
+        "error": "malformed",
+        "why": "a negative rev"
+      },
+      {
+        "body": "{\"v\":1,\"after\":9007199254740992}",
+        "error": "malformed",
+        "why": "a rev of 2^53"
+      },
+      {
+        "body": "{\"v\":1,\"after\":1.5}",
+        "error": "malformed",
+        "why": "a rev written as a fraction"
+      },
+      {
+        "body": "{\"v\":1,\"after\":1e2}",
+        "error": "malformed",
+        "why": "a rev in an exponent"
+      },
+      {
+        "body": "{\"v\":1,\"after\":\"5\"}",
+        "error": "malformed",
+        "why": "a rev as text"
+      },
+      {
+        "body": "{\"v\":1,\"after\":null}",
+        "error": "malformed",
+        "why": "a null rev"
+      },
+      {
+        "body": "{\"v\":1,\"after\":0,\"pad\":1}",
+        "error": "malformed",
+        "why": "a member more"
+      },
+      {
+        "body": "[1,0]",
+        "error": "malformed",
+        "why": "a list"
+      },
+      {
+        "body": "1",
+        "error": "malformed",
+        "why": "a number"
+      },
+      {
+        "body": "v=1",
+        "error": "malformed",
+        "why": "no JSON"
+      },
+      {
+        "body": "",
+        "error": "malformed",
+        "why": "nothing"
+      },
+      {
+        "body": "{\"v\":1,\"after\":0}x",
+        "error": "malformed",
+        "why": "something after it"
+      }
+    ],
+    "reports": [
+      {
+        "answer": "{\"v\":1,\"report\":{\"boot\":\"5f0c3a9e1b7d4c2a8e6f0b3d5a7c9e1f\",\"budget\":6174015488,\"counters\":[{\"athanor\":\"ath_01a09fee-2c3d-7e4f-8a5b-6c7d8e9f0a1b\",\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":513,\"subject\":\"mcp_01a09fee-2c3d-7e4f-8a5b-6c7d8e9f0a1c\"}],\"floor\":171966464,\"used\":268435456,\"work\":5066719232}}",
+        "report": {
+          "boot": "5f0c3a9e1b7d4c2a8e6f0b3d5a7c9e1f",
+          "budget": 6174015488,
+          "counters": [
+            {
+              "athanor": "ath_01a09fee-2c3d-7e4f-8a5b-6c7d8e9f0a1b",
+              "bytes": 268435456,
+              "cap": 0,
+              "day": "2026-11-27",
+              "either": 0,
+              "kind": "program",
+              "machine": 1,
+              "measured_ms": 2000,
+              "mib_ms": 512000,
+              "peak_bytes": 301989888,
+              "rev": 513,
+              "subject": "mcp_01a09fee-2c3d-7e4f-8a5b-6c7d8e9f0a1c"
+            }
+          ],
+          "floor": 171966464,
+          "used": 268435456,
+          "work": 5066719232
+        },
+        "why": "the vector's report"
+      },
+      {
+        "answer": "{\"v\":1,\"report\":{\"boot\":\"5f0c3a9e1b7d4c2a8e6f0b3d5a7c9e1f\",\"budget\":6174015488,\"counters\":[{\"athanor\":\"ath_01a09fee-2c3d-7e4f-8a5b-6c7d8e9f0a1b\",\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":513,\"subject\":\"mcp_01a09fee-2c3d-7e4f-8a5b-6c7d8e9f0a1c\"}],\"floor\":171966464,\"used\":268435456,\"work\":5066719232}}",
+        "report": {
+          "boot": "5f0c3a9e1b7d4c2a8e6f0b3d5a7c9e1f",
+          "budget": 6174015488,
+          "counters": [
+            {
+              "athanor": "ath_01a09fee-2c3d-7e4f-8a5b-6c7d8e9f0a1b",
+              "bytes": 268435456,
+              "cap": 0,
+              "day": "2026-11-27",
+              "either": 0,
+              "kind": "program",
+              "machine": 1,
+              "measured_ms": 2000,
+              "mib_ms": 512000,
+              "peak_bytes": 301989888,
+              "rev": 513,
+              "subject": "mcp_01a09fee-2c3d-7e4f-8a5b-6c7d8e9f0a1c"
+            }
+          ],
+          "floor": 171966464,
+          "used": 268435456,
+          "work": 5066719232
+        },
+        "why": "the last page: no next"
+      },
+      {
+        "answer": "{\"v\":1,\"report\":{\"boot\":\"5f0c3a9e1b7d4c2a8e6f0b3d5a7c9e1f\",\"budget\":6174015488,\"counters\":[{\"athanor\":\"ath_01a09fee-2c3d-7e4f-8a5b-6c7d8e9f0a1b\",\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":513,\"subject\":\"mcp_01a09fee-2c3d-7e4f-8a5b-6c7d8e9f0a1c\"}],\"floor\":171966464,\"next\":7,\"used\":268435456,\"work\":5066719232}}",
+        "report": {
+          "boot": "5f0c3a9e1b7d4c2a8e6f0b3d5a7c9e1f",
+          "budget": 6174015488,
+          "counters": [
+            {
+              "athanor": "ath_01a09fee-2c3d-7e4f-8a5b-6c7d8e9f0a1b",
+              "bytes": 268435456,
+              "cap": 0,
+              "day": "2026-11-27",
+              "either": 0,
+              "kind": "program",
+              "machine": 1,
+              "measured_ms": 2000,
+              "mib_ms": 512000,
+              "peak_bytes": 301989888,
+              "rev": 513,
+              "subject": "mcp_01a09fee-2c3d-7e4f-8a5b-6c7d8e9f0a1c"
+            }
+          ],
+          "floor": 171966464,
+          "next": 7,
+          "used": 268435456,
+          "work": 5066719232
+        },
+        "why": "a page with more after it"
+      },
+      {
+        "answer": "{\"v\":1,\"report\":{\"boot\":\"5f0c3a9e1b7d4c2a8e6f0b3d5a7c9e1f\",\"budget\":6174015488,\"counters\":[{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":513}],\"floor\":171966464,\"used\":268435456,\"work\":5066719232}}",
+        "report": {
+          "boot": "5f0c3a9e1b7d4c2a8e6f0b3d5a7c9e1f",
+          "budget": 6174015488,
+          "counters": [
+            {
+              "bytes": 268435456,
+              "cap": 0,
+              "day": "2026-11-27",
+              "either": 0,
+              "kind": "program",
+              "machine": 1,
+              "measured_ms": 2000,
+              "mib_ms": 512000,
+              "peak_bytes": 301989888,
+              "rev": 513
+            }
+          ],
+          "floor": 171966464,
+          "used": 268435456,
+          "work": 5066719232
+        },
+        "why": "a counter of neither athanor nor subject, both omitted"
+      },
+      {
+        "answer": "{\"v\":1,\"report\":{\"boot\":\"5f0c3a9e1b7d4c2a8e6f0b3d5a7c9e1f\",\"budget\":6174015488,\"counters\":[{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":513,\"subject\":\"mcp_one\"}],\"floor\":171966464,\"used\":268435456,\"work\":5066719232}}",
+        "report": {
+          "boot": "5f0c3a9e1b7d4c2a8e6f0b3d5a7c9e1f",
+          "budget": 6174015488,
+          "counters": [
+            {
+              "bytes": 268435456,
+              "cap": 0,
+              "day": "2026-11-27",
+              "either": 0,
+              "kind": "program",
+              "machine": 1,
+              "measured_ms": 2000,
+              "mib_ms": 512000,
+              "peak_bytes": 301989888,
+              "rev": 513,
+              "subject": "mcp_one"
+            }
+          ],
+          "floor": 171966464,
+          "used": 268435456,
+          "work": 5066719232
+        },
+        "why": "a counter with its subject"
+      },
+      {
+        "answer": "{\"v\":1,\"report\":{\"boot\":\"5f0c3a9e1b7d4c2a8e6f0b3d5a7c9e1f\",\"budget\":6174015488,\"counters\":[],\"floor\":171966464,\"used\":268435456,\"work\":5066719232}}",
+        "report": {
+          "boot": "5f0c3a9e1b7d4c2a8e6f0b3d5a7c9e1f",
+          "budget": 6174015488,
+          "counters": [],
+          "floor": 171966464,
+          "used": 268435456,
+          "work": 5066719232
+        },
+        "why": "no counters"
+      },
+      {
+        "answer": "{\"v\":1,\"report\":{\"boot\":\"5f0c3a9e1b7d4c2a8e6f0b3d5a7c9e1f\",\"budget\":6174015488,\"counters\":[{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":1},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":2},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":3},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":4},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":5},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":6},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":7},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":8},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":9},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":10},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":11},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":12},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":13},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":14},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":15},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":16},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":17},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":18},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":19},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":20},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":21},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":22},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":23},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":24},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":25},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":26},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":27},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":28},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":29},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":30},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":31},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":32},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":33},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":34},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":35},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":36},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":37},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":38},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":39},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":40},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":41},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":42},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":43},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":44},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":45},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":46},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":47},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":48},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":49},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":50},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":51},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":52},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":53},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":54},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":55},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":56},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":57},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":58},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":59},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":60},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":61},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":62},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":63},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":64},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":65},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":66},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":67},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":68},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":69},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":70},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":71},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":72},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":73},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":74},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":75},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":76},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":77},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":78},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":79},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":80},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":81},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":82},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":83},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":84},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":85},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":86},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":87},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":88},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":89},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":90},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":91},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":92},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":93},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":94},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":95},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":96},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":97},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":98},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":99},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":100},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":101},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":102},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":103},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":104},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":105},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":106},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":107},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":108},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":109},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":110},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":111},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":112},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":113},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":114},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":115},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":116},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":117},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":118},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":119},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":120},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":121},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":122},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":123},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":124},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":125},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":126},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":127},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":128},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":129},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":130},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":131},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":132},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":133},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":134},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":135},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":136},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":137},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":138},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":139},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":140},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":141},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":142},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":143},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":144},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":145},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":146},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":147},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":148},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":149},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":150},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":151},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":152},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":153},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":154},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":155},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":156},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":157},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":158},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":159},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":160},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":161},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":162},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":163},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":164},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":165},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":166},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":167},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":168},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":169},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":170},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":171},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":172},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":173},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":174},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":175},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":176},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":177},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":178},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":179},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":180},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":181},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":182},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":183},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":184},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":185},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":186},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":187},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":188},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":189},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":190},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":191},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":192},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":193},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":194},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":195},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":196},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":197},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":198},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":199},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":200},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":201},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":202},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":203},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":204},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":205},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":206},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":207},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":208},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":209},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":210},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":211},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":212},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":213},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":214},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":215},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":216},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":217},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":218},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":219},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":220},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":221},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":222},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":223},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":224},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":225},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":226},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":227},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":228},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":229},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":230},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":231},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":232},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":233},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":234},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":235},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":236},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":237},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":238},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":239},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":240},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":241},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":242},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":243},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":244},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":245},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":246},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":247},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":248},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":249},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":250},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":251},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":252},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":253},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":254},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":255},{\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":256}],\"floor\":171966464,\"used\":268435456,\"work\":5066719232}}",
+        "report": {"boot":"5f0c3a9e1b7d4c2a8e6f0b3d5a7c9e1f","budget":6174015488,"counters":[{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":1},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":2},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":3},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":4},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":5},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":6},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":7},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":8},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":9},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":10},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":11},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":12},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":13},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":14},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":15},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":16},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":17},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":18},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":19},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":20},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":21},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":22},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":23},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":24},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":25},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":26},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":27},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":28},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":29},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":30},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":31},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":32},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":33},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":34},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":35},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":36},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":37},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":38},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":39},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":40},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":41},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":42},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":43},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":44},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":45},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":46},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":47},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":48},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":49},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":50},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":51},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":52},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":53},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":54},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":55},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":56},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":57},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":58},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":59},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":60},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":61},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":62},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":63},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":64},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":65},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":66},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":67},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":68},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":69},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":70},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":71},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":72},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":73},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":74},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":75},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":76},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":77},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":78},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":79},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":80},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":81},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":82},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":83},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":84},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":85},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":86},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":87},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":88},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":89},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":90},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":91},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":92},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":93},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":94},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":95},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":96},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":97},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":98},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":99},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":100},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":101},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":102},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":103},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":104},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":105},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":106},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":107},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":108},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":109},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":110},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":111},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":112},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":113},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":114},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":115},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":116},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":117},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":118},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":119},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":120},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":121},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":122},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":123},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":124},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":125},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":126},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":127},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":128},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":129},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":130},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":131},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":132},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":133},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":134},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":135},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":136},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":137},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":138},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":139},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":140},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":141},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":142},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":143},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":144},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":145},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":146},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":147},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":148},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":149},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":150},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":151},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":152},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":153},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":154},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":155},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":156},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":157},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":158},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":159},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":160},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":161},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":162},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":163},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":164},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":165},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":166},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":167},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":168},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":169},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":170},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":171},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":172},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":173},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":174},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":175},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":176},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":177},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":178},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":179},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":180},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":181},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":182},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":183},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":184},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":185},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":186},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":187},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":188},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":189},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":190},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":191},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":192},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":193},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":194},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":195},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":196},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":197},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":198},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":199},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":200},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":201},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":202},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":203},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":204},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":205},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":206},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":207},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":208},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":209},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":210},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":211},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":212},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":213},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":214},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":215},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":216},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":217},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":218},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":219},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":220},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":221},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":222},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":223},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":224},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":225},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":226},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":227},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":228},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":229},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":230},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":231},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":232},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":233},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":234},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":235},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":236},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":237},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":238},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":239},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":240},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":241},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":242},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":243},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":244},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":245},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":246},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":247},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":248},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":249},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":250},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":251},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":252},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":253},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":254},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":255},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":256}],"floor":171966464,"used":268435456,"work":5066719232},
+        "why": "256 counters, the most a report carries"
+      },
+      {
+        "answer": null,
+        "report": {"boot":"5f0c3a9e1b7d4c2a8e6f0b3d5a7c9e1f","budget":6174015488,"counters":[{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":1},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":2},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":3},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":4},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":5},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":6},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":7},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":8},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":9},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":10},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":11},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":12},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":13},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":14},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":15},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":16},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":17},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":18},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":19},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":20},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":21},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":22},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":23},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":24},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":25},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":26},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":27},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":28},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":29},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":30},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":31},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":32},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":33},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":34},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":35},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":36},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":37},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":38},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":39},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":40},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":41},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":42},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":43},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":44},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":45},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":46},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":47},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":48},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":49},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":50},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":51},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":52},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":53},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":54},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":55},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":56},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":57},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":58},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":59},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":60},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":61},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":62},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":63},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":64},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":65},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":66},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":67},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":68},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":69},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":70},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":71},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":72},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":73},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":74},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":75},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":76},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":77},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":78},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":79},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":80},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":81},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":82},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":83},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":84},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":85},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":86},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":87},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":88},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":89},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":90},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":91},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":92},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":93},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":94},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":95},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":96},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":97},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":98},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":99},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":100},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":101},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":102},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":103},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":104},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":105},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":106},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":107},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":108},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":109},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":110},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":111},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":112},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":113},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":114},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":115},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":116},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":117},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":118},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":119},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":120},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":121},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":122},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":123},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":124},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":125},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":126},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":127},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":128},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":129},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":130},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":131},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":132},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":133},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":134},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":135},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":136},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":137},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":138},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":139},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":140},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":141},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":142},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":143},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":144},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":145},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":146},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":147},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":148},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":149},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":150},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":151},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":152},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":153},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":154},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":155},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":156},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":157},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":158},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":159},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":160},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":161},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":162},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":163},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":164},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":165},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":166},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":167},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":168},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":169},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":170},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":171},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":172},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":173},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":174},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":175},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":176},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":177},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":178},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":179},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":180},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":181},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":182},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":183},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":184},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":185},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":186},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":187},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":188},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":189},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":190},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":191},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":192},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":193},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":194},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":195},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":196},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":197},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":198},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":199},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":200},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":201},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":202},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":203},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":204},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":205},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":206},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":207},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":208},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":209},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":210},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":211},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":212},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":213},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":214},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":215},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":216},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":217},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":218},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":219},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":220},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":221},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":222},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":223},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":224},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":225},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":226},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":227},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":228},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":229},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":230},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":231},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":232},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":233},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":234},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":235},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":236},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":237},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":238},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":239},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":240},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":241},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":242},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":243},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":244},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":245},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":246},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":247},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":248},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":249},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":250},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":251},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":252},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":253},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":254},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":255},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":256},{"bytes":268435456,"cap":0,"day":"2026-11-27","either":0,"kind":"program","machine":1,"measured_ms":2000,"mib_ms":512000,"peak_bytes":301989888,"rev":257}],"floor":171966464,"used":268435456,"work":5066719232},
+        "why": "257 counters"
+      },
+      {
+        "answer": null,
+        "report": {
+          "boot": "5f0c3a9e1b7d4c2a8e6f0b3d5a7c9e1f",
+          "budget": 6174015488,
+          "counters": [
+            {
+              "athanor": "ath_01a09fee-2c3d-7e4f-8a5b-6c7d8e9f0a1b",
+              "bytes": 268435456,
+              "cap": 0,
+              "day": "2026-11-27",
+              "either": 0,
+              "kind": "program",
+              "machine": 1,
+              "measured_ms": 2000,
+              "mib_ms": 512000,
+              "peak_bytes": 301989888,
+              "rev": 513,
+              "subject": "mcp_01a09fee-2c3d-7e4f-8a5b-6c7d8e9f0a1c"
+            }
+          ],
+          "floor": 171966464,
+          "next": 0,
+          "used": 268435456,
+          "work": 5066719232
+        },
+        "why": "a next of 0"
+      },
+      {
+        "answer": null,
+        "report": {
+          "boot": "5f0c3a9e1b7d4c2a8e6f0b3d5a7c9e1f",
+          "budget": 6174015488,
+          "counters": [
+            {
+              "athanor": "ath_01a09fee-2c3d-7e4f-8a5b-6c7d8e9f0a1b",
+              "bytes": 268435456,
+              "cap": 0,
+              "day": "2026-11-27",
+              "either": 0,
+              "kind": "program",
+              "machine": 1,
+              "measured_ms": 2000,
+              "mib_ms": 512000,
+              "peak_bytes": 301989888,
+              "rev": 513,
+              "subject": "mcp_01a09fee-2c3d-7e4f-8a5b-6c7d8e9f0a1c"
+            }
+          ],
+          "floor": 171966464,
+          "next": null,
+          "used": 268435456,
+          "work": 5066719232
+        },
+        "why": "a null next"
+      },
+      {
+        "answer": null,
+        "report": {
+          "boot": "5f0c3a9e1b7d4c2a8e6f0b3d5a7c9e1f",
+          "budget": 6174015488,
+          "counters": [
+            {
+              "bytes": 268435456,
+              "cap": 0,
+              "day": "2026-11-27",
+              "either": 0,
+              "kind": "program",
+              "machine": 1,
+              "measured_ms": 2000,
+              "mib_ms": 512000,
+              "peak_bytes": 301989888,
+              "rev": 2
+            },
+            {
+              "bytes": 268435456,
+              "cap": 0,
+              "day": "2026-11-27",
+              "either": 0,
+              "kind": "program",
+              "machine": 1,
+              "measured_ms": 2000,
+              "mib_ms": 512000,
+              "peak_bytes": 301989888,
+              "rev": 1
+            }
+          ],
+          "floor": 171966464,
+          "used": 268435456,
+          "work": 5066719232
+        },
+        "why": "counters out of rev order"
+      },
+      {
+        "answer": null,
+        "report": {
+          "boot": "5f0c3a9e1b7d4c2a8e6f0b3d5a7c9e1f",
+          "budget": 6174015488,
+          "counters": [
+            {
+              "bytes": 268435456,
+              "cap": 0,
+              "day": "2026-11-27",
+              "either": 0,
+              "kind": "program",
+              "machine": 1,
+              "measured_ms": 2000,
+              "mib_ms": 512000,
+              "peak_bytes": 301989888,
+              "rev": 513
+            },
+            {
+              "bytes": 268435456,
+              "cap": 0,
+              "day": "2026-11-27",
+              "either": 0,
+              "kind": "program",
+              "machine": 1,
+              "measured_ms": 2000,
+              "mib_ms": 512000,
+              "peak_bytes": 301989888,
+              "rev": 513
+            }
+          ],
+          "floor": 171966464,
+          "used": 268435456,
+          "work": 5066719232
+        },
+        "why": "a rev given twice"
+      },
+      {
+        "answer": null,
+        "report": {
+          "boot": "5f0c3a9e1b7d4c2a8e6f0b3d5a7c9e1f",
+          "budget": 6174015488,
+          "counters": [
+            {
+              "bytes": 268435456,
+              "cap": 0,
+              "day": "2026-11-27",
+              "either": 0,
+              "kind": "program",
+              "machine": 1,
+              "measured_ms": 2000,
+              "mib_ms": 512000,
+              "peak_bytes": 301989888,
+              "rev": 0
+            }
+          ],
+          "floor": 171966464,
+          "used": 268435456,
+          "work": 5066719232
+        },
+        "why": "a rev of 0"
+      },
+      {
+        "answer": null,
+        "report": {
+          "boot": "5f0c3a9e1b7d4c2a8e6f0b3d5a7c9e1f",
+          "budget": 6174015488,
+          "counters": [
+            {
+              "athanor": null,
+              "bytes": 268435456,
+              "cap": 0,
+              "day": "2026-11-27",
+              "either": 0,
+              "kind": "program",
+              "machine": 1,
+              "measured_ms": 2000,
+              "mib_ms": 512000,
+              "peak_bytes": 301989888,
+              "rev": 513
+            }
+          ],
+          "floor": 171966464,
+          "used": 268435456,
+          "work": 5066719232
+        },
+        "why": "a null athanor"
+      },
+      {
+        "answer": null,
+        "report": {
+          "boot": "5f0c3a9e1b7d4c2a8e6f0b3d5a7c9e1f",
+          "budget": 6174015488,
+          "counters": [
+            {
+              "bytes": 268435456,
+              "cap": 0,
+              "day": "2026-11-27",
+              "either": 0,
+              "kind": "program",
+              "machine": 1,
+              "measured_ms": 2000,
+              "mib_ms": 512000,
+              "peak_bytes": 301989888,
+              "rev": 513,
+              "subject": null
+            }
+          ],
+          "floor": 171966464,
+          "used": 268435456,
+          "work": 5066719232
+        },
+        "why": "a null subject"
+      },
+      {
+        "answer": null,
+        "report": {
+          "boot": "5f0c3a9e1b7d4c2a8e6f0b3d5a7c9e1f",
+          "budget": 6174015488,
+          "counters": [
+            {
+              "athanor": "athanor one",
+              "bytes": 268435456,
+              "cap": 0,
+              "day": "2026-11-27",
+              "either": 0,
+              "kind": "program",
+              "machine": 1,
+              "measured_ms": 2000,
+              "mib_ms": 512000,
+              "peak_bytes": 301989888,
+              "rev": 513
+            }
+          ],
+          "floor": 171966464,
+          "used": 268435456,
+          "work": 5066719232
+        },
+        "why": "an athanor of another grammar"
+      },
+      {
+        "answer": null,
+        "report": {
+          "boot": "5f0c3a9e1b7d4c2a8e6f0b3d5a7c9e1f",
+          "budget": 6174015488,
+          "counters": [
+            {
+              "bytes": 268435456,
+              "cap": 0,
+              "day": "2026-11-27",
+              "either": 0,
+              "kind": "program",
+              "machine": 1,
+              "measured_ms": 2000,
+              "mib_ms": 512000,
+              "peak_bytes": 301989888,
+              "rev": 513,
+              "subject": "a b"
+            }
+          ],
+          "floor": 171966464,
+          "used": 268435456,
+          "work": 5066719232
+        },
+        "why": "a subject of another grammar"
+      },
+      {
+        "answer": null,
+        "report": {
+          "boot": "5f0c3a9e1b7d4c2a8e6f0b3d5a7c9e1f",
+          "budget": 6174015488,
+          "counters": [
+            {
+              "athanor": "ath_01a09fee-2c3d-7e4f-8a5b-6c7d8e9f0a1b",
+              "bytes": 268435456,
+              "cap": 0,
+              "day": "2026-11-27",
+              "either": 0,
+              "kind": "program",
+              "machine": 1,
+              "measured_ms": 2000,
+              "mib_ms": 512000,
+              "peak_bytes": 301989888,
+              "rev": 513,
+              "subject": "mcp_01a09fee-2c3d-7e4f-8a5b-6c7d8e9f0a1c"
+            }
+          ],
+          "extra": 1,
+          "floor": 171966464,
+          "used": 268435456,
+          "work": 5066719232
+        },
+        "why": "a member more"
+      },
+      {
+        "answer": null,
+        "report": {
+          "boot": "5f0c3a9e1b7d4c2a8e6f0b3d5a7c9e1f",
+          "budget": 6174015488,
+          "counters": [
+            {
+              "athanor": "ath_01a09fee-2c3d-7e4f-8a5b-6c7d8e9f0a1b",
+              "bytes": 268435456,
+              "cap": 0,
+              "day": "2026-11-27",
+              "either": 0,
+              "kind": "program",
+              "machine": 1,
+              "measured_ms": 2000,
+              "mib_ms": 512000,
+              "peak_bytes": 301989888,
+              "rev": 513,
+              "subject": "mcp_01a09fee-2c3d-7e4f-8a5b-6c7d8e9f0a1c"
+            }
+          ],
+          "used": 268435456,
+          "work": 5066719232
+        },
+        "why": "no floor"
+      },
+      {
+        "answer": null,
+        "report": {
+          "boot": "f0c3a9e1b7d4c2a8e6f0b3d5a7c9e1f",
+          "budget": 6174015488,
+          "counters": [
+            {
+              "athanor": "ath_01a09fee-2c3d-7e4f-8a5b-6c7d8e9f0a1b",
+              "bytes": 268435456,
+              "cap": 0,
+              "day": "2026-11-27",
+              "either": 0,
+              "kind": "program",
+              "machine": 1,
+              "measured_ms": 2000,
+              "mib_ms": 512000,
+              "peak_bytes": 301989888,
+              "rev": 513,
+              "subject": "mcp_01a09fee-2c3d-7e4f-8a5b-6c7d8e9f0a1c"
+            }
+          ],
+          "floor": 171966464,
+          "used": 268435456,
+          "work": 5066719232
+        },
+        "why": "a boot of 31 digits"
+      },
+      {
+        "answer": null,
+        "report": {
+          "boot": "5F0C3A9E1B7D4C2A8E6F0B3D5A7C9E1F",
+          "budget": 6174015488,
+          "counters": [
+            {
+              "athanor": "ath_01a09fee-2c3d-7e4f-8a5b-6c7d8e9f0a1b",
+              "bytes": 268435456,
+              "cap": 0,
+              "day": "2026-11-27",
+              "either": 0,
+              "kind": "program",
+              "machine": 1,
+              "measured_ms": 2000,
+              "mib_ms": 512000,
+              "peak_bytes": 301989888,
+              "rev": 513,
+              "subject": "mcp_01a09fee-2c3d-7e4f-8a5b-6c7d8e9f0a1c"
+            }
+          ],
+          "floor": 171966464,
+          "used": 268435456,
+          "work": 5066719232
+        },
+        "why": "a boot in capitals"
+      },
+      {
+        "answer": null,
+        "report": {
+          "boot": "5f0c3a9e1b7d4c2a8e6f0b3d5a7c9e1f",
+          "budget": -1,
+          "counters": [
+            {
+              "athanor": "ath_01a09fee-2c3d-7e4f-8a5b-6c7d8e9f0a1b",
+              "bytes": 268435456,
+              "cap": 0,
+              "day": "2026-11-27",
+              "either": 0,
+              "kind": "program",
+              "machine": 1,
+              "measured_ms": 2000,
+              "mib_ms": 512000,
+              "peak_bytes": 301989888,
+              "rev": 513,
+              "subject": "mcp_01a09fee-2c3d-7e4f-8a5b-6c7d8e9f0a1c"
+            }
+          ],
+          "floor": 171966464,
+          "used": 268435456,
+          "work": 5066719232
+        },
+        "why": "a negative budget"
+      },
+      {
+        "answer": null,
+        "report": {
+          "boot": "5f0c3a9e1b7d4c2a8e6f0b3d5a7c9e1f",
+          "budget": 9007199254740992,
+          "counters": [
+            {
+              "athanor": "ath_01a09fee-2c3d-7e4f-8a5b-6c7d8e9f0a1b",
+              "bytes": 268435456,
+              "cap": 0,
+              "day": "2026-11-27",
+              "either": 0,
+              "kind": "program",
+              "machine": 1,
+              "measured_ms": 2000,
+              "mib_ms": 512000,
+              "peak_bytes": 301989888,
+              "rev": 513,
+              "subject": "mcp_01a09fee-2c3d-7e4f-8a5b-6c7d8e9f0a1c"
+            }
+          ],
+          "floor": 171966464,
+          "used": 268435456,
+          "work": 5066719232
+        },
+        "why": "a budget of 2^53"
+      },
+      {
+        "answer": null,
+        "report": {
+          "boot": "5f0c3a9e1b7d4c2a8e6f0b3d5a7c9e1f",
+          "budget": 1.5,
+          "counters": [
+            {
+              "athanor": "ath_01a09fee-2c3d-7e4f-8a5b-6c7d8e9f0a1b",
+              "bytes": 268435456,
+              "cap": 0,
+              "day": "2026-11-27",
+              "either": 0,
+              "kind": "program",
+              "machine": 1,
+              "measured_ms": 2000,
+              "mib_ms": 512000,
+              "peak_bytes": 301989888,
+              "rev": 513,
+              "subject": "mcp_01a09fee-2c3d-7e4f-8a5b-6c7d8e9f0a1c"
+            }
+          ],
+          "floor": 171966464,
+          "used": 268435456,
+          "work": 5066719232
+        },
+        "why": "a budget written as a fraction"
+      },
+      {
+        "answer": null,
+        "report": {
+          "boot": "5f0c3a9e1b7d4c2a8e6f0b3d5a7c9e1f",
+          "budget": 6174015488,
+          "counters": [
+            {
+              "bytes": 268435456,
+              "cap": 0,
+              "either": 0,
+              "kind": "program",
+              "machine": 1,
+              "measured_ms": 2000,
+              "mib_ms": 512000,
+              "peak_bytes": 301989888,
+              "rev": 513
+            }
+          ],
+          "floor": 171966464,
+          "used": 268435456,
+          "work": 5066719232
+        },
+        "why": "a counter without its day"
+      },
+      {
+        "answer": null,
+        "report": {
+          "boot": "5f0c3a9e1b7d4c2a8e6f0b3d5a7c9e1f",
+          "budget": 6174015488,
+          "counters": [
+            {
+              "bytes": 268435456,
+              "cap": 0,
+              "day": "2026-13-01",
+              "either": 0,
+              "kind": "program",
+              "machine": 1,
+              "measured_ms": 2000,
+              "mib_ms": 512000,
+              "peak_bytes": 301989888,
+              "rev": 513
+            }
+          ],
+          "floor": 171966464,
+          "used": 268435456,
+          "work": 5066719232
+        },
+        "why": "a day that is no date"
+      },
+      {
+        "answer": null,
+        "report": {
+          "boot": "5f0c3a9e1b7d4c2a8e6f0b3d5a7c9e1f",
+          "budget": 6174015488,
+          "counters": [
+            {
+              "bytes": 268435456,
+              "cap": 0,
+              "day": "2026-1-01",
+              "either": 0,
+              "kind": "program",
+              "machine": 1,
+              "measured_ms": 2000,
+              "mib_ms": 512000,
+              "peak_bytes": 301989888,
+              "rev": 513
+            }
+          ],
+          "floor": 171966464,
+          "used": 268435456,
+          "work": 5066719232
+        },
+        "why": "a day of another spelling"
+      },
+      {
+        "answer": null,
+        "report": {
+          "boot": "5f0c3a9e1b7d4c2a8e6f0b3d5a7c9e1f",
+          "budget": 6174015488,
+          "counters": [
+            {
+              "bytes": 268435456,
+              "cap": 0,
+              "day": "2026-11-27",
+              "either": 0,
+              "kind": "vm",
+              "machine": 1,
+              "measured_ms": 2000,
+              "mib_ms": 512000,
+              "peak_bytes": 301989888,
+              "rev": 513
+            }
+          ],
+          "floor": 171966464,
+          "used": 268435456,
+          "work": 5066719232
+        },
+        "why": "a kind no place has"
+      },
+      {
+        "answer": null,
+        "report": {
+          "boot": "5f0c3a9e1b7d4c2a8e6f0b3d5a7c9e1f",
+          "budget": 6174015488,
+          "counters": [
+            {
+              "bytes": 268435456,
+              "cap": 0,
+              "day": "2026-11-27",
+              "either": 0,
+              "kind": "program",
+              "machine": 1,
+              "measured_ms": 2000,
+              "mib_ms": 512000,
+              "peak_bytes": 301989888,
+              "rev": 513,
+              "x": 1
+            }
+          ],
+          "floor": 171966464,
+          "used": 268435456,
+          "work": 5066719232
+        },
+        "why": "a counter member more"
+      },
+      {
+        "answer": null,
+        "report": {
+          "boot": "5f0c3a9e1b7d4c2a8e6f0b3d5a7c9e1f",
+          "budget": 6174015488,
+          "counters": [
+            {
+              "bytes": 1.0,
+              "cap": 0,
+              "day": "2026-11-27",
+              "either": 0,
+              "kind": "program",
+              "machine": 1,
+              "measured_ms": 2000,
+              "mib_ms": 512000,
+              "peak_bytes": 301989888,
+              "rev": 513
+            }
+          ],
+          "floor": 171966464,
+          "used": 268435456,
+          "work": 5066719232
+        },
+        "why": "a counter's bytes written as a fraction"
+      },
+      {
+        "answer": null,
+        "report": {
+          "boot": "5f0c3a9e1b7d4c2a8e6f0b3d5a7c9e1f",
+          "budget": 6174015488,
+          "counters": {},
+          "floor": 171966464,
+          "used": 268435456,
+          "work": 5066719232
+        },
+        "why": "counters that are no list"
+      },
+      {
+        "answer": null,
+        "report": [
+          {
+            "boot": "5f0c3a9e1b7d4c2a8e6f0b3d5a7c9e1f",
+            "budget": 6174015488,
+            "counters": [
+              {
+                "athanor": "ath_01a09fee-2c3d-7e4f-8a5b-6c7d8e9f0a1b",
+                "bytes": 268435456,
+                "cap": 0,
+                "day": "2026-11-27",
+                "either": 0,
+                "kind": "program",
+                "machine": 1,
+                "measured_ms": 2000,
+                "mib_ms": 512000,
+                "peak_bytes": 301989888,
+                "rev": 513,
+                "subject": "mcp_01a09fee-2c3d-7e4f-8a5b-6c7d8e9f0a1c"
+              }
+            ],
+            "floor": 171966464,
+            "used": 268435456,
+            "work": 5066719232
+          }
+        ],
+        "why": "a report that is no object"
+      }
+    ],
+    "listener": [
+      {
+        "why": "a signed request, answered with the keeper's report after its rev",
+        "http": true,
+        "header": "signed",
+        "body": "{\"v\":1,\"after\":41}",
+        "keeper": "answers",
+        "status": 200,
+        "error": null,
+        "answer": "{\"v\":1,\"report\":{\"boot\":\"5f0c3a9e1b7d4c2a8e6f0b3d5a7c9e1f\",\"budget\":6174015488,\"counters\":[{\"athanor\":\"ath_01a09fee-2c3d-7e4f-8a5b-6c7d8e9f0a1b\",\"bytes\":268435456,\"cap\":0,\"day\":\"2026-11-27\",\"either\":0,\"kind\":\"program\",\"machine\":1,\"measured_ms\":2000,\"mib_ms\":512000,\"peak_bytes\":301989888,\"rev\":513,\"subject\":\"mcp_01a09fee-2c3d-7e4f-8a5b-6c7d8e9f0a1c\"}],\"floor\":171966464,\"used\":268435456,\"work\":5066719232}}",
+        "refusal": null,
+        "closed": false
+      },
+      {
+        "why": "no header",
+        "http": true,
+        "header": "none",
+        "body": "{\"v\":1,\"after\":41}",
+        "keeper": "answers",
+        "status": 401,
+        "error": "malformed",
+        "answer": null,
+        "refusal": "unauthorized malformed",
+        "closed": true
+      },
+      {
+        "why": "a header at another version",
+        "http": true,
+        "header": "text",
+        "header_text": "v2 kind=pool",
+        "body": "{\"v\":1,\"after\":41}",
+        "keeper": "answers",
+        "status": 401,
+        "error": "unknown_version",
+        "answer": null,
+        "refusal": "unauthorized unknown_version",
+        "closed": true
+      },
+      {
+        "why": "a header that does not parse",
+        "http": true,
+        "header": "text",
+        "header_text": "v1 kind=pool",
+        "body": "{\"v\":1,\"after\":41}",
+        "keeper": "answers",
+        "status": 401,
+        "error": "malformed",
+        "answer": null,
+        "refusal": "unauthorized malformed",
+        "closed": true
+      },
+      {
+        "why": "a header past its window",
+        "http": true,
+        "header": "late",
+        "body": "{\"v\":1,\"after\":41}",
+        "keeper": "answers",
+        "status": 401,
+        "error": "outside_window",
+        "answer": null,
+        "refusal": "unauthorized outside_window",
+        "closed": true
+      },
+      {
+        "why": "another service's pool header",
+        "http": true,
+        "header": "other_service",
+        "body": "{\"v\":1,\"after\":41}",
+        "keeper": "answers",
+        "status": 401,
+        "error": "bad_mac",
+        "answer": null,
+        "refusal": "unauthorized bad_mac",
+        "closed": true
+      },
+      {
+        "why": "a header under the service's given key, no pool key",
+        "http": true,
+        "header": "given_key",
+        "body": "{\"v\":1,\"after\":41}",
+        "keeper": "answers",
+        "status": 401,
+        "error": "bad_mac",
+        "answer": null,
+        "refusal": "unauthorized bad_mac",
+        "closed": true
+      },
+      {
+        "why": "a header over another body, refused once the body is read",
+        "http": true,
+        "header": "other_body",
+        "body": "{\"v\":1,\"after\":41}",
+        "keeper": "answers",
+        "status": 401,
+        "error": "bad_mac",
+        "answer": null,
+        "refusal": "unauthorized bad_mac",
+        "closed": false
+      },
+      {
+        "why": "a body of 1,025 bytes, past the bound",
+        "http": true,
+        "header": "signed",
+        "body": "{\"v\":1,\"after\":0,\"pad\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+        "keeper": "answers",
+        "status": 413,
+        "error": "malformed",
+        "answer": null,
+        "refusal": "too_large",
+        "closed": true
+      },
+      {
+        "why": "a body of 1,024 bytes, within the bound and a member more",
+        "http": true,
+        "header": "signed",
+        "body": "{\"v\":1,\"after\":0,\"pad\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+        "keeper": "answers",
+        "status": 400,
+        "error": "malformed",
+        "answer": null,
+        "refusal": "bad_body malformed",
+        "closed": false
+      },
+      {
+        "why": "a body at another version",
+        "http": true,
+        "header": "signed",
+        "body": "{\"v\":2,\"after\":0}",
+        "keeper": "answers",
+        "status": 400,
+        "error": "unknown_version",
+        "answer": null,
+        "refusal": "bad_body version",
+        "closed": false
+      },
+      {
+        "why": "a body without its version",
+        "http": true,
+        "header": "signed",
+        "body": "{\"after\":0}",
+        "keeper": "answers",
+        "status": 400,
+        "error": "unknown_version",
+        "answer": null,
+        "refusal": "bad_body version",
+        "closed": false
+      },
+      {
+        "why": "a body with a negative rev",
+        "http": true,
+        "header": "signed",
+        "body": "{\"v\":1,\"after\":-1}",
+        "keeper": "answers",
+        "status": 400,
+        "error": "malformed",
+        "answer": null,
+        "refusal": "bad_body malformed",
+        "closed": false
+      },
+      {
+        "why": "a body that is no JSON",
+        "http": true,
+        "header": "signed",
+        "body": "v=1",
+        "keeper": "answers",
+        "status": 400,
+        "error": "malformed",
+        "answer": null,
+        "refusal": "bad_body malformed",
+        "closed": false
+      },
+      {
+        "why": "a keeper that refuses",
+        "http": true,
+        "header": "signed",
+        "body": "{\"v\":1,\"after\":41}",
+        "keeper": "refuses",
+        "status": 503,
+        "error": "unavailable",
+        "answer": null,
+        "refusal": "unavailable",
+        "closed": false
+      },
+      {
+        "why": "a keeper that does not answer",
+        "http": true,
+        "header": "signed",
+        "body": "{\"v\":1,\"after\":41}",
+        "keeper": "gone",
+        "status": 503,
+        "error": "unavailable",
+        "answer": null,
+        "refusal": "unavailable",
+        "closed": false
+      },
+      {
+        "why": "no header before a body at another version: the header first",
+        "http": true,
+        "header": "none",
+        "body": "{\"v\":2,\"after\":0}",
+        "keeper": "answers",
+        "status": 401,
+        "error": "malformed",
+        "answer": null,
+        "refusal": "unauthorized malformed",
+        "closed": true
+      },
+      {
+        "why": "a header past its window before a body at another version",
+        "http": true,
+        "header": "late",
+        "body": "{\"v\":2,\"after\":0}",
+        "keeper": "answers",
+        "status": 401,
+        "error": "outside_window",
+        "answer": null,
+        "refusal": "unauthorized outside_window",
+        "closed": true
+      }
+    ]
   }
 }

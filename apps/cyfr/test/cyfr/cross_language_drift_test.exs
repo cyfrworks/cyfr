@@ -616,8 +616,10 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"tests/builder-image/stack_test.py", ~w(bounds lines)}
     ],
     "locus_pool.json" => [
+      {"apps/locus/keeper/internal/wire/locuspool/locuspool_test.go", ~w(wire)},
       {"apps/locus/keeper/internal/admission/size_test.go",
        ~w(allowance_bytes allowance_ms cap_bytes counters floor_bytes floor_runners kinds least_cap_bytes machine_bytes processors room_wait_ms stale_ms)},
+      {"apps/locus/test/locus/pool_route_test.exs", ~w(wire)},
       {"apps/prima/test/prima/locus_pool_test.exs",
        ~w(allowance_bytes allowance_ms cap_bytes counters floor_bytes floor_runners kinds least_cap_bytes machine_bytes processors room_wait_ms stale_ms wire)},
       {"tests/imagesuite.py",

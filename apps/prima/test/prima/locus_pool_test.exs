@@ -106,7 +106,7 @@ defmodule Prima.LocusPoolTest do
 
     test "its vectors are the module's: the route, the body, each service's pool key and header" do
       assert Map.keys(@wire) |> Enum.sort() ==
-               ~w(answer auth_header body key_hex max_request_bytes route services ts version window_ms)
+               ~w(answer auth_header body body_checks headers key_hex listener max_request_bytes reports request_bodies route services ts verify version window_ms)
 
       assert {@wire["version"], @wire["route"], @wire["auth_header"]} ==
                {LocusPool.version(), LocusPool.route(), Prima.MacEnvelope.auth_header()}
@@ -138,6 +138,75 @@ defmodule Prima.LocusPoolTest do
 
       assert {:ok, report} = LocusPool.read_answer(@wire["answer"])
       assert Jason.decode!(LocusPool.answer(report)) == Jason.decode!(@wire["answer"])
+    end
+
+    # A case with exactly `members`, each present and none more, and none
+    # null but those `nullable` names.
+    defp strict!(c, members, nullable \\ []) do
+      assert is_map(c) and Enum.sort(Map.keys(c)) === Enum.sort(members), inspect(c)
+      for m <- members -- nullable, do: refute(is_nil(c[m]), "#{m} is null: #{inspect(c)}")
+      c
+    end
+
+    defp verified(header, now) do
+      pool_key = LocusPool.pool_key(:runtime, @key)
+
+      case LocusPool.verify_header(:runtime, pool_key, header, now) do
+        {:ok, hash} -> %{"body_hash" => hash}
+        {:error, reason} -> %{"error" => Atom.to_string(reason)}
+      end
+    end
+
+    test "every header reads by the pool kind's grammar, or is refused in the order verify_header/4 refuses" do
+      %{"accepted" => accepted, "refused" => refused} = @wire["headers"]
+      assert length(accepted) >= 4 and length(refused) >= 30 and length(@wire["verify"]) >= 10
+
+      for c <- accepted ++ refused ++ @wire["verify"] do
+        answer = if Map.has_key?(c, "error"), do: "error", else: "body_hash"
+        strict!(c, ["why", "header", "now", answer])
+        assert verified(c["header"], c["now"]) === Map.take(c, [answer]), c["why"]
+      end
+    end
+
+    test "every body is held to the hash its header named" do
+      assert length(@wire["body_checks"]) >= 3
+
+      for c <- @wire["body_checks"] do
+        strict!(c, ~w(why body_hash body ok))
+        assert LocusPool.verify_body(c["body_hash"], c["body"]) == :ok === c["ok"], c["why"]
+      end
+    end
+
+    test "every request body reads to its rev, or is refused, its version first" do
+      assert length(@wire["request_bodies"]) >= 25
+
+      for c <- @wire["request_bodies"] do
+        expected =
+          if Map.has_key?(c, "error") do
+            strict!(c, ~w(why body error))
+            {:error, String.to_existing_atom(c["error"])}
+          else
+            strict!(c, ~w(why body after))
+            {:ok, c["after"]}
+          end
+
+        assert LocusPool.read_request_body(c["body"]) === expected, c["why"]
+      end
+    end
+
+    test "every report reads strictly, or is refused, and a read one is answered as its vector writes it" do
+      assert length(@wire["reports"]) >= 30
+
+      for c <- @wire["reports"] do
+        strict!(c, ~w(why report answer), ~w(answer))
+
+        case LocusPool.read_report(c["report"]) do
+          {:ok, report} -> assert LocusPool.answer(report) === c["answer"], c["why"]
+          :error -> assert c["answer"] === nil, c["why"]
+        end
+      end
+
+      assert Enum.count(@wire["reports"], & &1["answer"]) >= 6
     end
 
     test "a pool header of one service is refused by the two others, all three given the same key" do

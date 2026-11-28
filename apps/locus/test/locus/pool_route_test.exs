@@ -122,6 +122,11 @@ defmodule Locus.PoolRouteTest do
   # Post `body` to `service`'s pool route under `header` (signed with
   # `service`'s own pool key at now unless given), asking `keeper`.
   defp post(service, keeper, body, opts \\ []) do
+    conn = post_conn(service, keeper, body, opts)
+    {conn.status, conn.resp_body}
+  end
+
+  defp request(service, body, opts) do
     ts = Keyword.get(opts, :ts, System.system_time(:millisecond))
     signer = Keyword.get(opts, :signer, service)
 
@@ -130,14 +135,15 @@ defmodule Locus.PoolRouteTest do
         LocusPool.header(signer, LocusPool.pool_key(signer, @key), ts, body)
       end)
 
-    conn =
-      :post
-      |> conn(LocusPool.route(), body)
-      |> put_req_header("content-type", "application/json")
-      |> then(&if(header, do: put_req_header(&1, "x-cyfr-auth", header), else: &1))
+    :post
+    |> conn(LocusPool.route(), body)
+    |> put_req_header("content-type", "application/json")
+    |> then(&if(header, do: put_req_header(&1, "x-cyfr-auth", header), else: &1))
+  end
 
-    conn = listener(service).call(conn, listener(service).init(opts(service, keeper)))
-    {conn.status, conn.resp_body}
+  defp post_conn(service, keeper, body, opts) do
+    conn = request(service, body, opts)
+    listener(service).call(conn, listener(service).init(opts(service, keeper)))
   end
 
   defp listener(:runtime), do: WorkerListener
@@ -290,6 +296,95 @@ defmodule Locus.PoolRouteTest do
       end
 
       if is_pid(keeper), do: stop_supervised!({:refusing, service})
+    end
+  end
+
+  @vectors Path.expand("../../../../tests/fixtures/locus_pool.json", __DIR__)
+           |> File.read!()
+           |> Jason.decode!()
+           |> Map.fetch!("wire")
+
+  # How a listener case of the vectors signs its request, as the options
+  # `post_conn/4` takes.
+  defp signing(%{"header" => "signed"}, _body), do: []
+  defp signing(%{"header" => "none"}, _body), do: [header: nil]
+  defp signing(%{"header" => "text", "header_text" => text}, _body), do: [header: text]
+
+  defp signing(%{"header" => "late"}, _body),
+    do: [ts: System.system_time(:millisecond) - LocusPool.window_ms() - 1_000]
+
+  defp signing(%{"header" => "other_service"}, _body), do: [signer: :builds]
+
+  defp signing(%{"header" => "given_key"}, body),
+    do: [header: LocusPool.header(:runtime, @key, System.system_time(:millisecond), body)]
+
+  defp signing(%{"header" => "other_body"}, _body) do
+    pool_key = LocusPool.pool_key(:runtime, @key)
+    ts = System.system_time(:millisecond)
+    [header: LocusPool.header(:runtime, pool_key, ts, LocusPool.request_body(1))]
+  end
+
+  # A refusal of Locus.PoolRoute as the vectors spell it.
+  defp refusal_text({:too_large, _how}), do: "too_large"
+  defp refusal_text({stage, reason}), do: "#{stage} #{reason}"
+  defp refusal_text(:unavailable), do: "unavailable"
+
+  test "answers and refuses each listener case of locus_pool.json as the case says, over HTTP" do
+    cases = @vectors["listener"]
+    assert length(cases) >= 15
+    {:ok, report} = LocusPool.read_answer(@vectors["answer"])
+
+    for c <- cases do
+      assert (Map.keys(c) -- ["header_text"]) |> Enum.sort() ===
+               ~w(answer body closed error header http keeper refusal status why),
+             inspect(c)
+
+      assert c["http"] === true, c["why"]
+      opts = signing(c, c["body"])
+
+      keeper =
+        case c["keeper"] do
+          "answers" ->
+            start_supervised!({Keeper, answer: {:ok, report}}, id: make_ref())
+
+          "refuses" ->
+            start_supervised!({Keeper, answer: {:error, {:refused, "bad_request"}}},
+              id: make_ref()
+            )
+
+          "gone" ->
+            :no_such_keeper
+        end
+
+      conn = post_conn(:runtime, keeper, c["body"], opts)
+      assert conn.status === c["status"], c["why"]
+      assert get_resp_header(conn, "connection") == ["close"] === c["closed"], c["why"]
+
+      case c["refusal"] do
+        nil ->
+          assert {c["error"], conn.resp_body} === {nil, c["answer"]}, c["why"]
+
+        refusal ->
+          assert Jason.decode!(conn.resp_body) === %{"v" => 3, "error" => c["error"]}, c["why"]
+          assert c["answer"] === nil, c["why"]
+
+          # The route's own refusal, before the listener's words.
+          ask = fn after_rev ->
+            case c["keeper"] do
+              "answers" when after_rev >= 0 -> {:ok, report}
+              "refuses" -> {:error, {:refused, "bad_request"}}
+              "gone" -> exit(:gone)
+            end
+          end
+
+          now = System.system_time(:millisecond)
+
+          served =
+            Locus.PoolRoute.serve(request(:runtime, c["body"], opts), :runtime, @key, ask, now)
+
+          assert {:refused, _conn, route_refusal} = served, c["why"]
+          assert refusal_text(route_refusal) === refusal, c["why"]
+      end
     end
   end
 
