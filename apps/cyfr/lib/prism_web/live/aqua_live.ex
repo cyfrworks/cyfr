@@ -492,8 +492,10 @@ defmodule PrismWeb.AquaLive do
   defp models_loaded(socket, ask, {:ok, result}) do
     parsed = PrismWeb.ModelCatalog.parse(result)
     at = socket.assigns.answered_at
-    parts = [models_by_provider: parsed.models, catalyst_refs: parsed.refs] ++
-      [model_errors: parsed.errors, model_refused: parsed.refused]
+
+    parts =
+      [models_by_provider: parsed.models, catalyst_refs: parsed.refs] ++
+        [model_errors: parsed.errors, model_refused: parsed.refused]
 
     named =
       Enum.flat_map(parts, fn {key, read} -> Map.keys(read) ++ Map.keys(socket.assigns[key]) end)
@@ -858,7 +860,6 @@ defmodule PrismWeb.AquaLive do
       :unavailable -> assign(socket, :models_loaded, true)
     end
   end
-  end
 
   # The sentence for a consent that no longer answers, named by its source;
   # each action it lacks by the words the action is declared with.
@@ -1125,10 +1126,12 @@ defmodule PrismWeb.AquaLive do
                 :if={(brain_state(brain) == :not_connected and brain.need) && !brain.shared}
                 data-test="setup-replace-key"
               >
-                If the key is wrong, <.link
+                If the key is wrong,
+                <.link
                   navigate={PrismWeb.Focus.path(@athanor, "/vault")}
                   class="text-blue-400 hover:underline"
-                >replace it in the Vault</.link> with its Rotate button.
+                >replace it in the Vault</.link>
+                with its Rotate button.
               </span>
             </li>
             <%!-- A program brain runs in the program row of its name,
