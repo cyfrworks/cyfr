@@ -605,9 +605,11 @@ func TestAStubThatNeverListsFailsTheStart(t *testing.T) {
 // its server and tool in a fixed form, never by a title, which may carry a
 // folder's path. A call is CYFR's only by the driver's own record of a
 // call on its socket: one titled as CYFR's, or a person's server named
-// cyfr, is shown as the program's own. What a call runs is its detail,
-// from its input, never from its title.
+// cyfr, is shown as the program's own: the person has one, so CYFR's is
+// cyfr-2. What a call runs is its detail, from its input, never from its
+// title.
 func TestOwnToolsAreOwnAndCYFRsCallsAreNot(t *testing.T) {
+	t.Setenv("FAKE_SERVERS", "cyfr")
 	s := startDriver(t)
 	startFresh(s, map[string]any{})
 	postText(s, "stp_own", "trn_1", "own")
@@ -629,8 +631,8 @@ func TestOwnToolsAreOwnAndCYFRsCallsAreNot(t *testing.T) {
 	if !reflect.DeepEqual(seen, want) || strings.Contains(s.output(), "Run m") || strings.Contains(s.output(), "File notes.md") {
 		t.Fatalf("each own tool by its kind or its server and tool, none hidden by its title or its server's name: %v", seen)
 	}
-	if details["call_read"] != `{"Path":"/home/x/notes.md"}` || details["call_other"] != nil {
-		t.Fatalf("a call's start says what its input runs, and an empty input says nothing: %v", details)
+	if details["call_read"] != "/home/x/notes.md" || details["call_other"] != nil {
+		t.Fatalf("a call's start says what its input acts on, and an empty input says nothing: %v", details)
 	}
 }
 
@@ -1463,6 +1465,8 @@ func TestAListingNotHandedDoesNotStart(t *testing.T) {
 // when it ends: the program's own command, and a person's server named
 // cyfr through the program's own call_mcp_tool.
 func TestAnOwnToolIsShownWhileItRuns(t *testing.T) {
+	// The person's server is named cyfr, so CYFR's is cyfr-2.
+	t.Setenv("FAKE_SERVERS", "cyfr")
 	s := startDriver(t)
 	startFresh(s, map[string]any{})
 	postText(s, "stp_running", "trn_1", "running")

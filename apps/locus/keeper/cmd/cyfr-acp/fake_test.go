@@ -63,6 +63,8 @@ import (
 //	          tool, each marked `_meta["opencode/child-session"]`, as 2.4.1
 //	          does (S3 F5); Antigravity's child runs apart and shows nothing
 //	          but the call that started it (S3, sub-agents)
+//	pendingcall  runs a call it leaves pending at the turn's end, then replies
+//	pendingdone  completes that call in this later prompt, then replies
 //	question  asks the person in its reply (fakeQuestion), after its own
 //	          tool's permission, as agy 1.5.16 and OpenCode 2.4.1 ask with no
 //	          form capability advertised (S1 F1), and takes the session's
@@ -408,6 +410,24 @@ func fakeACP() int {
 					"error": map[string]any{"type": "provider.transport", "message": "RETRY-CANARY Can't reach the provider"}}}})
 			}
 			reply("reached it")
+		case strings.Contains(words, "pendingcall"), strings.Contains(words, "pendingdone"):
+			// As agy 1.5.16 left its ask_question on the account path (S1
+			// F1): the call runs, is left pending at the turn's end, and is
+			// completed in the next prompt.
+			call := map[string]any{"sessionUpdate": "tool_call", "toolCallId": "call_pending", "name": "ask_question", "kind": "other",
+				"title": "Run ask_question", "status": "in_progress", "rawInput": map[string]any{"questions": []any{"Which database?"}}}
+			if strings.Contains(words, "pendingcall") {
+				update(call)
+				call["sessionUpdate"], call["status"] = "tool_call_update", "pending"
+				update(call)
+				reply("Which database should the export target?")
+				break
+			}
+			call["sessionUpdate"] = "tool_call_update"
+			update(call)
+			call["status"] = "completed"
+			update(call)
+			reply("I will target PostgreSQL.")
 		case strings.Contains(words, "activity"):
 			say := func(kind, text string) {
 				update(map[string]any{"sessionUpdate": kind, "messageId": "m_act", "content": map[string]any{"type": "text", "text": text}})
@@ -419,7 +439,13 @@ func fakeACP() int {
 				call := map[string]any{"sessionUpdate": "tool_call", "toolCallId": id, "name": "shell", "title": "shell", "kind": "execute",
 					"status": "pending", "rawInput": map[string]any{}}
 				update(call)
-				call["sessionUpdate"], call["status"], call["rawInput"] = "tool_call_update", "in_progress", map[string]any{"command": command, "cwd": home}
+				// Antigravity's run_command names it CommandLine, with a
+				// toolSummary of its own (F4); OpenCode's shell `command`.
+				input := map[string]any{"command": command, "cwd": home}
+				if !oc {
+					input = map[string]any{"CommandLine": command, "WaitMsBeforeAsync": 3000, "toolSummary": "Run it"}
+				}
+				call["sessionUpdate"], call["status"], call["rawInput"] = "tool_call_update", "in_progress", input
 				update(call)
 				return call
 			}

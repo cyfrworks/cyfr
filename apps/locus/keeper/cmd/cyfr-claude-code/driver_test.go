@@ -960,8 +960,9 @@ func TestASubagentsLinesAreNotTheReply(t *testing.T) {
 
 // Wire version 8's activity: each own tool's start and end carry one
 // call, its tool use's id, two commands whose results come in reverse
-// order each ending under its own; a start says what its input runs, cut
-// between characters to a detail's bound; the thinking is thought and
+// order each ending under its own; a start says its command, else the
+// file it acts on, else its input, cut between characters to a detail's
+// bound; the thinking is thought and
 // never said; and a subagent's lines, its reasoning, words and tool, emit
 // nothing while the Task that started it starts and ends.
 func TestClaudeCodesActivityIsItsCallsThoughtsAndOwnWords(t *testing.T) {
@@ -988,16 +989,17 @@ func TestClaudeCodesActivityIsItsCallsThoughtsAndOwnWords(t *testing.T) {
 			}
 		}
 	}
-	want := []string{"toolu_a:Bash:start", "toolu_b:Bash:start", "toolu_edit:Edit:start", "toolu_b:Bash:end", "toolu_a:Bash:end",
-		"toolu_edit:Edit:end", "toolu_task:Task:start", "toolu_task:Task:end"}
+	want := []string{"toolu_a:Bash:start", "toolu_b:Bash:start", "toolu_edit:Edit:start", "toolu_grep:Grep:start", "toolu_b:Bash:end",
+		"toolu_a:Bash:end", "toolu_edit:Edit:end", "toolu_grep:Grep:end", "toolu_task:Task:start", "toolu_task:Task:end"}
 	if !reflect.DeepEqual(seen, want) {
 		t.Fatalf("each own tool starts and ends under its tool use's id, the commands in the order they ended: %v", seen)
 	}
-	whole := `{"file_path":"big.txt","new_string":"` + strings.Repeat("€", 1000) + `","old_string":""}`
-	edit, _ := details["toolu_edit:start"].(string)
+	whole := `{"pattern":"` + strings.Repeat("€", 1000) + `"}`
+	grep, _ := details["toolu_grep:start"].(string)
 	if details["toolu_a:start"] != "echo A" || details["toolu_b:start"] != "echo B" || details["toolu_a:end"] != nil ||
-		len(edit) > brainwire.MaxDetailBytes || len(edit) < brainwire.MaxDetailBytes-3 || !utf8.ValidString(edit) || !strings.HasPrefix(whole, edit) {
-		t.Fatalf("a start says what its input runs, cut between characters to the bound, and an end nothing: %v", details)
+		details["toolu_edit:start"] != "big.txt" || len(grep) > brainwire.MaxDetailBytes || len(grep) < brainwire.MaxDetailBytes-3 ||
+		!utf8.ValidString(grep) || !strings.HasPrefix(whole, grep) {
+		t.Fatalf("a start says its command, else the file it acts on, else its input cut between characters to the bound, and an end nothing: %v", details)
 	}
 	if thought != "THINK-ONE THINK-TWO" || said != "The member said its own words." {
 		t.Fatalf("the thinking is thought, and the reply only the member's own words: %q %q", thought, said)

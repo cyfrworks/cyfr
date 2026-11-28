@@ -144,6 +144,10 @@ type driver struct {
 	output            int
 	held, heldMessage string
 	own               map[string]*ownCall
+	// endedCalls and endedOrder are the ids of the session's calls already
+	// ended, the oldest first (own.go's end).
+	endedCalls map[string]bool
+	endedOrder []string
 	// unclaimed are the arguments of the turn's socket calls no tool_call
 	// update was matched to yet (own.go).
 	unclaimed []any
@@ -1003,4 +1007,5 @@ func (d *driver) Close() {
 	d.held, d.heldMessage = "", ""
 	d.own = map[string]*ownCall{}
 	d.unclaimed = nil
+	d.endedCalls, d.endedOrder = nil, nil
 }

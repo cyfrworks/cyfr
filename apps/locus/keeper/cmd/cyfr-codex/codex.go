@@ -271,8 +271,8 @@ type item struct {
 }
 
 // started is what an own tool's start says it does: a command's command
-// line, the paths a patch changes, a search's query, or a server's call's
-// arguments.
+// line, else what it acts on (a search's query, the paths a patch
+// changes), else a server's call's arguments.
 func (i item) started() string {
 	switch {
 	case i.Command != "":
@@ -286,7 +286,7 @@ func (i item) started() string {
 		}
 		return brainwire.Detail(strings.Join(paths, "\n"))
 	}
-	return brainwire.InputDetail(i.Arguments)
+	return brainwire.InputDetail(i.Arguments, "", "")
 }
 
 // ended is what an own tool's end says it did: a patch's change of each

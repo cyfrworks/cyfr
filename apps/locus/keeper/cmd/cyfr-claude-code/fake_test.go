@@ -42,8 +42,8 @@ import (
 //	       whose singular `user_message_uuid` names the first alone
 //	subagent  streams and says words of a subagent's, runs its tool, then replies
 //	activity  thinks (streamed and in its message), runs two Bash commands
-//	       whose results come in reverse order and an Edit whose input is
-//	       past a detail's bound, and runs Task, whose subagent's lines
+//	       whose results come in reverse order, an Edit, and a Grep whose
+//	       input is past a detail's bound, and runs Task, whose subagent's lines
 //	       think, speak and run a tool of its own, then replies
 //	around replies in one message of text, a call of CYFR's, and text
 //	handed replies with the initialize request it was started with, as JSON
@@ -338,8 +338,9 @@ func fakeClaude() int {
 				map[string]any{"type": "thinking", "thinking": "THINK-ONE THINK-TWO", "signature": "fakesig"},
 				map[string]any{"type": "tool_use", "id": "toolu_a", "name": "Bash", "input": map[string]any{"command": "echo A"}},
 				map[string]any{"type": "tool_use", "id": "toolu_b", "name": "Bash", "input": map[string]any{"command": "echo B"}},
-				map[string]any{"type": "tool_use", "id": "toolu_edit", "name": "Edit", "input": edit}}}})
-			for _, id := range []string{"toolu_b", "toolu_a", "toolu_edit"} {
+				map[string]any{"type": "tool_use", "id": "toolu_edit", "name": "Edit", "input": edit},
+				map[string]any{"type": "tool_use", "id": "toolu_grep", "name": "Grep", "input": map[string]any{"pattern": strings.Repeat("€", 1000)}}}}})
+			for _, id := range []string{"toolu_b", "toolu_a", "toolu_edit", "toolu_grep"} {
 				main(map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": []any{
 					map[string]any{"type": "tool_result", "tool_use_id": id, "content": "OUTPUT-CANARY"}}}})
 			}

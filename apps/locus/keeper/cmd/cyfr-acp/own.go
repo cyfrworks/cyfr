@@ -11,20 +11,26 @@ import (
 	"reflect"
 	"regexp"
 	"sort"
+	"strings"
 
 	"github.com/cyfr/locus/keeper/internal/brainwire"
 )
 
 // The program's own tool calls, as its tool_call updates show them. A call
-// is CYFR's only by the driver's own record: the arguments of a call that
-// reached its socket while the update was open, or before the update was
-// first seen, equal to an argument object the update shows
-// (profile.callArguments), and no other open update's; where the program
-// names a call's server, only a call of the server named as CYFR's own was
-// named in this session, which no server of the person's has (relay.go).
-// Nothing else the program names or titles makes a call CYFR's, so a
-// person's server named as CYFR's is shown as theirs. Since the socket call comes after the update
-// opens, only a call of a kind the program gives a stub server's call
+// is CYFR's by what it is, where the program names a call's server: its
+// rawInput (profile.mcpCall) or its name (profile.toolPrefix) names the
+// server CYFR's took in this session, which no server of the person's has
+// nor begins with followed by `_` (relay.go). Such a call is never an own
+// row and carries no detail, whether the socket took it, its gate refused
+// it or it never reached the socket, so nothing the gate withholds reaches
+// the wire as what a call ran. Otherwise a call is CYFR's by the driver's
+// own record: the arguments of a call that reached its socket while the
+// update was open, or before the update was first seen, equal to an
+// argument object the update shows (profile.callArguments), and no other
+// open update's. Nothing else the program names or titles makes a call
+// CYFR's, so a person's server named as CYFR's is shown as theirs. Since
+// the socket call comes after the update opens, only a call of a kind the
+// program gives a stub server's call
 // (profile.stubKinds) can be CYFR's, and only its end says whether it was:
 // such a call is shown, start and end, once it ends unmatched, and one
 // still open when the native turn ends is shown then. A call of any other
@@ -41,7 +47,13 @@ import (
 // call of CYFR's keeps nothing but its id once matched, until its end, and
 // the turn's end drops the rest. A call still open when the turn ends, the
 // session closes or the program dies is shown as the program's own first,
-// so nothing that ran is missing from the activity.
+// so nothing that ran is missing from the activity. One call id has one
+// start and one end, ever: an update of a call already ended (Antigravity
+// completes in the next prompt a call left pending at a turn's end) shows
+// nothing, by the ids of the session's last endedKept ended calls.
+
+// endedKept bounds the ids of ended calls a session keeps.
+const endedKept = brainwire.MaxList
 
 // ownCall is one of the program's tool calls, by its call id, the `call`
 // its start and end carry. Its detail is the input it last showed, what it
@@ -55,7 +67,9 @@ type ownCall struct {
 	// waits is a call of a stub server's kind, shown only at its end;
 	// started one shown from its start.
 	waits, started bool
-	cyfr           bool
+	// cyfr is a call matched to one on the socket; ours one that is CYFR's
+	// by what it is (cyfrs), matched or not. Neither is ever shown.
+	cyfr, ours bool
 }
 
 // acpKinds are the tool kinds ACP names; any other is shown as other.
@@ -100,6 +114,9 @@ func (d *driver) ownUpdate(callID, status, kind, name string, rawInput, content 
 	if callID == "" {
 		return nil
 	}
+	if d.endedCalls[callID] {
+		return nil
+	}
 	call, seen := d.own[callID]
 	if !seen {
 		call = &ownCall{id: callID, name: d.ownName(kind, name, rawInput), seen: len(d.own), waits: kind == "" || d.p.stubKinds[kind]}
@@ -117,10 +134,13 @@ func (d *driver) ownUpdate(callID, status, kind, name string, rawInput, content 
 	if server, _, ok := d.p.mcpCall(rawInput); ok && call.waits && !call.cyfr && server != d.server {
 		call.waits, call.arguments = false, nil
 	}
-	if brainwire.InputDetail(rawInput) != "" {
+	if !call.ours && d.cyfrs(name, rawInput) {
+		call.ours, call.input = true, nil
+	}
+	if !call.ours && d.inputDetail(rawInput) != "" {
 		call.input = rawInput
 	}
-	if !call.waits && !call.started && status == "in_progress" {
+	if !call.waits && !call.ours && !call.started && status == "in_progress" {
 		if err := d.startOwn(call); err != nil {
 			return err
 		}
@@ -131,6 +151,39 @@ func (d *driver) ownUpdate(callID, status, kind, name string, rawInput, content 
 	}
 	delete(d.own, callID)
 	return d.showOwn(call, changes(content))
+}
+
+// cyfrs says a call is one of CYFR's own tools by what it is: the server
+// its rawInput or its name names is the one CYFR's took in this session.
+func (d *driver) cyfrs(name string, rawInput json.RawMessage) bool {
+	if d.server == "" {
+		return false
+	}
+	if server, _, ok := d.p.mcpCall(rawInput); ok && server == d.server {
+		return true
+	}
+	return d.p.toolPrefix != nil && strings.HasPrefix(name, d.p.toolPrefix(d.server))
+}
+
+// inputDetail is what a call's input says it runs, as its program puts it.
+func (d *driver) inputDetail(rawInput json.RawMessage) string {
+	return brainwire.InputDetail(rawInput, d.p.commandInput, d.p.subjectInput)
+}
+
+// end records that the call `id` ended: nothing of it is shown again.
+func (d *driver) end(id string) {
+	if d.endedCalls[id] {
+		return
+	}
+	if d.endedCalls == nil {
+		d.endedCalls = map[string]bool{}
+	}
+	if len(d.endedOrder) >= endedKept {
+		delete(d.endedCalls, d.endedOrder[0])
+		d.endedOrder = d.endedOrder[1:]
+	}
+	d.endedCalls[id] = true
+	d.endedOrder = append(d.endedOrder, id)
 }
 
 // changes are the file changes a tool call's content shows, its diffs.
@@ -213,13 +266,14 @@ func (d *driver) claim(arguments json.RawMessage) {
 func (d *driver) startOwn(call *ownCall) error {
 	call.started = true
 	return d.c.Emit(d.event("own").Set("call", brainwire.CallID(call.id)).Set("name", call.name).Set("phase", "start").
-		SetOptional("detail", brainwire.InputDetail(call.input)))
+		SetOptional("detail", d.inputDetail(call.input)))
 }
 
 // showOwn shows a call's end, and its start first if it was not shown, the
 // end with the changes it made.
 func (d *driver) showOwn(call *ownCall, made []brainwire.Change) error {
-	if call.cyfr {
+	d.end(call.id)
+	if call.cyfr || call.ours {
 		return nil
 	}
 	if !call.started {

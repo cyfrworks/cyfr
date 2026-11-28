@@ -380,7 +380,11 @@ func fakeCursor() int {
 			if words == "theirs" {
 				server, tool, arguments = "notes", "echo", map[string]any{"text": "two"}
 			}
+			// Each call its own id, as Cursor's are: one id is one call, ever.
 			id := "call-1\nfc_1"
+			if words == "theirs" {
+				id = "call-2\nfc_2"
+			}
 			update(map[string]any{"sessionUpdate": "tool_call", "toolCallId": id, "title": "MCP: tool", "kind": "other", "status": "pending", "rawInput": map[string]any{}})
 			update(map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": id, "title": server + ": " + tool,
 				"rawInput": map[string]any{"providerIdentifier": server, "toolName": tool, "args": arguments}})

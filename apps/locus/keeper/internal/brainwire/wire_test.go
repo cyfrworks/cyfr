@@ -328,13 +328,16 @@ func TestACallIsTheHarnesssIdOrOneDerivedFromIt(t *testing.T) {
 }
 
 func TestADetailSaysWhatARunDoesOrDid(t *testing.T) {
-	if got := InputDetail(json.RawMessage(`{"command":"ls -l","cwd":"/w"}`)); got != "ls -l" {
-		t.Fatalf("an input naming a command is its command: %q", got)
+	if got := InputDetail(json.RawMessage(`{"CommandLine":"ls -l","Path":"/w","toolSummary":"List"}`), "CommandLine", "Path"); got != "ls -l" {
+		t.Fatalf("an input naming a command where the program puts one is its command: %q", got)
 	}
-	if got := InputDetail(json.RawMessage(`{ "path": "/w/a.txt" }`)); got != `{"path":"/w/a.txt"}` {
+	if got := InputDetail(json.RawMessage(`{"Path":"/w/a.txt","Target":"x"}`), "CommandLine", "Path"); got != "/w/a.txt" {
+		t.Fatalf("else it is what the run acts on: %q", got)
+	}
+	if got := InputDetail(json.RawMessage(`{ "pattern": "x" }`), "CommandLine", "Path"); got != `{"pattern":"x"}` {
 		t.Fatalf("any other input is its compact JSON: %q", got)
 	}
-	if InputDetail(json.RawMessage(`{}`)) != "" || InputDetail(nil) != "" || InputDetail(json.RawMessage(`"x"`)) != "" {
+	if InputDetail(json.RawMessage(`{}`), "command", "") != "" || InputDetail(nil, "command", "") != "" || InputDetail(json.RawMessage(`"x"`), "command", "") != "" {
 		t.Fatal("an empty input, or none, is no detail")
 	}
 	got := ChangeDetail([]Change{{"/w/a.txt", "alpha\nbeta\ngamma\n", "alpha\nBETA\ngamma\n"}, {"/w/new.txt", "", "hello\n"}})
