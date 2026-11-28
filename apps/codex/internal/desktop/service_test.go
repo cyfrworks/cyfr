@@ -1012,7 +1012,7 @@ func TestARememberedLocalCYFROpensOnOnePress(t *testing.T) {
 	}
 }
 
-// A CYFR with tailnet access opens over the route read for it, which every
+// A CYFR with a tailnet address opens over the route read for it, which every
 // locked names again.
 func TestALocalCYFROnItsTailnetNamesItsRoute(t *testing.T) {
 	const home = "https://box.tail9f3a3c.ts.net"

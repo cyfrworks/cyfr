@@ -17,8 +17,8 @@ defmodule CyfrWeb.Ingress do
       (`CYFR_BIND_ADDRESS:CYFR_PORT`). It is Phoenix's own child,
       `{endpoint, :http}`.
     * the proxy listener, the endpoint's `proxy:` options (its `ip:` and
-      `port:`), in a tailnet or public home alone: the address Tailscale
-      Serve or Caddy forwards to (`CYFR_PROXY_BIND_ADDRESS:CYFR_PROXY_PORT`).
+      `port:`), with a browser address alone: the address Tailscale
+      Serve, Caddy or the person's own proxy forwards to (`CYFR_PROXY_BIND_ADDRESS:CYFR_PROXY_PORT`).
       It runs under its own supervisor, the child `CyfrWeb.Ingress.Proxy`
       the admission roster names, so the census tells it from the loopback
       listener (`Cyfr.Application.listeners/1`). It takes every Bandit

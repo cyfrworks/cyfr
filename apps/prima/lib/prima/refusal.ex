@@ -295,14 +295,14 @@ defmodule Prima.Refusal do
   }
 
   # The kinds each option is refused with: every kind but those it is for.
-  @access_option_refused (for {option, browsers} <- [
-                                {"--domain", ~w(none tailnet)},
-                                {"--acme-email", ~w(none tailnet proxy)},
-                                {"--publish", ~w(none tailnet domain)}
-                              ],
-                              browser <- browsers,
-                              into: %{},
-                              do: {{option, browser}, true})
+  @access_option_refused for {option, browsers} <- [
+                               {"--domain", ~w(none tailnet)},
+                               {"--acme-email", ~w(none tailnet proxy)},
+                               {"--publish", ~w(none tailnet domain)}
+                             ],
+                             browser <- browsers,
+                             into: %{},
+                             do: {{option, browser}, true}
 
   # What a `cyfr access` input was meant to be.
   @access_input_kinds %{

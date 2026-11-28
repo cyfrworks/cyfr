@@ -939,7 +939,7 @@ func TestEveryBrowserAddressIsReachedOnThisComputer(t *testing.T) {
 	}
 }
 
-// A box in tailnet access with nobody set up sets itself up at its own
+// A box with a tailnet address and nobody set up sets itself up at its own
 // screen, with no proxy and no other device: its first hello brings the
 // setup token to the loopback listener and that person is admitted.
 func TestAFirstPersonIsAdmittedAtABoxInTailnetAccess(t *testing.T) {

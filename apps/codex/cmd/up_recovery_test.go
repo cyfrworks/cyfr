@@ -140,7 +140,7 @@ func (d *stateDocker) Run(ctx context.Context, c access.Call) (access.Result, er
 	return access.Result{}, nil
 }
 
-// interruptedSwitch is a local home whose stack runs, switched to public
+// interruptedSwitch is a server with no browser address whose stack runs, switched to domain
 // by `cyfr access browser domain` in the cyfr process over the real engine, killed
 // at the start of the new head, after the commit: its journal unfinished,
 // as a cyfr that died leaves it. A daemon call in flight when it died has

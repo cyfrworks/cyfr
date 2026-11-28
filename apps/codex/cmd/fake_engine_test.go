@@ -58,7 +58,7 @@ type fakeStack struct {
 	addressChanges       []string
 	join                 func(ctx context.Context, r access.JoinRequest) (access.Receipt, error)
 	joined               map[string]access.Join
-	// serveClosed is a tailnet home's Serve closed, which a preview of the
+	// serveClosed is a tailnet server's Serve closed, which a preview of the
 	// head .env holds answers as a reopen; reopenReceipt, when set, is the
 	// reopen's answer.
 	serveClosed            bool

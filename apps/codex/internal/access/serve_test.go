@@ -394,7 +394,7 @@ func TestHTTPSOffInstructionCanBeFollowed(t *testing.T) {
 	}
 }
 
-// A reopen is for a running home: a stopped tailnet home whose head is
+// A reopen is for a running home: a stopped tailnet server whose head is
 // unchanged previews as access_unchanged, its next start validating the
 // machine and opening Serve; a reopen previewed while the home ran and
 // sent after it stopped is access_stale, and starts nothing.
@@ -425,7 +425,7 @@ func TestReopenIsForARunningHome(t *testing.T) {
 	}
 }
 
-// reopenable is a running tailnet home whose Serve is closed, as a start
+// reopenable is a running tailnet server whose Serve is closed, as a start
 // with HTTPS off leaves it, its HTTPS since turned on: a switch to its
 // own head reopens Serve.
 func reopenable(t *testing.T) *testHome {

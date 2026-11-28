@@ -731,7 +731,7 @@ func TestAccessRolledBackExitsOne(t *testing.T) {
 	}
 }
 
-// A tailnet home whose Serve is closed, its machine not ready when it
+// A tailnet server whose Serve is closed, its machine not ready when it
 // started (HTTPS off, say), is served on the tailnet again by `cyfr access
 // tailnet`, as tailnet_https_off's sentence says: the preview says so, the
 // change is confirmed (or --yes), and the switch of the head .env holds

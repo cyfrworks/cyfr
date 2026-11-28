@@ -47,7 +47,7 @@
 #                 browser address is a domain, on :80 and :443, forwarding
 #                 to cyfr's proxy listener on the edge network.
 #                                                         [profile: domain]
-#   tailscale  — Tailscale Serve in front of a tailnet home, forwarding to
+#   tailscale  — Tailscale Serve in front of a tailnet address, forwarding to
 #                 cyfr's proxy listener on the edge network; SOCKS5 on
 #                 host loopback for this device's browser. [profile: tailnet]
 #

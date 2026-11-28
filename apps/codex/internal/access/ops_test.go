@@ -82,7 +82,7 @@ func TestSwitchFromAnIncoherentEnvStopsEveryAccessService(t *testing.T) {
 }
 
 // A start removes, verified, a running access service its head does not
-// select before it starts: a public home's leftover tailscale goes.
+// select before it starts: a domain server's leftover tailscale goes.
 func TestStartRemovesAnAccessServiceItsHeadDoesNotSelect(t *testing.T) {
 	h := newHome(t)
 	h.fake.startStack(t, h.head())

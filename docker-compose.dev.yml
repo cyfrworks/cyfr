@@ -32,7 +32,7 @@ name: ${DEV_STACK_PROJECT:?scripts/dev-stack.sh sets it}
 
 # Prism's address: the mix boot's loopback listener, at slot 0 the
 # production address the sign-in providers' registrations and the PWA
-# expect; and the proxy listener's port, which a proxied access mode binds.
+# expect; and the proxy listener's port, which a browser address binds.
 x-prism: 127.0.0.1:${DEV_STACK_PRISM_PORT:?scripts/dev-stack.sh sets it}
 x-prism-proxy: ${DEV_STACK_PROXY_PORT:?scripts/dev-stack.sh sets it}
 

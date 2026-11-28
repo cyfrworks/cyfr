@@ -319,7 +319,7 @@ func TestSystemDockerChildren(t *testing.T) {
 }
 
 // Ruling 6's check: COMPOSE_PROFILES=public,tailnet in cyfr's own
-// environment starts neither proxy for a local home.
+// environment starts neither proxy for a server with no browser address.
 // Every compose call names its project, its file, its directory and
 // exactly the head's profiles, none here.
 func TestComposeProfilesInTheEnvironmentStartNeitherProxy(t *testing.T) {
