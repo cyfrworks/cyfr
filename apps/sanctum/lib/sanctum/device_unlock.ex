@@ -245,8 +245,13 @@ defmodule Sanctum.DeviceUnlock do
     end
   end
 
+  # The enrollment's own refusals in the hello's vocabulary. A member that
+  # lost its slot is a pause, as `Sanctum.DeviceCerts.issue/2` says it, for
+  # a first hello and a returning one alike: the device retries, its key
+  # never refused.
   defp issued({:ok, _issued}), do: :ok
   defp issued({:error, :removed}), do: {:error, :removed_here}
+  defp issued({:error, :not_owner}), do: {:error, :unavailable}
   defp issued({:error, :conflict}), do: {:error, :answer_refused}
   defp issued({:error, :database_error}), do: {:error, :unavailable}
   defp issued({:error, {:invalid, _errors}}), do: {:error, :unavailable}

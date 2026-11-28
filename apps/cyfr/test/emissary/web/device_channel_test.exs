@@ -1722,6 +1722,46 @@ defmodule Emissary.Web.DeviceChannelTest do
              ) == [{device.client_id, "removed"}]
     end
 
+    # A member that lost its slot while a paired device says hello again
+    # writes nothing and pauses: the device is told this CYFR could not
+    # check it now and retries, its key never refused.
+    test "a returning device whose hello meets a lost slot is told unavailable, closes 1013, standing",
+         %{account: account, key: key} do
+      %{device: device, session_ctx: session_ctx} = enrolled(%{account: account, key: key})
+      {state, request} = asked(hello_message(account, key, nil))
+
+      standing = :persistent_term.get({Arca.ControlPlane, :standing}, :absent)
+
+      restore = fn ->
+        if standing == :absent,
+          do: :persistent_term.erase({Arca.ControlPlane, :standing}),
+          else: :persistent_term.put({Arca.ControlPlane, :standing}, standing)
+      end
+
+      on_exit(restore)
+
+      # The slot is lost as the pairing reads the person's athanor, right
+      # before its enrollment: the answer's earlier steps ran owning it.
+      me = self()
+      handler = "device-channel-test-lose-slot-#{System.unique_integer([:positive])}"
+      :ok = :telemetry.attach(handler, [:arca, :repo, :query], &__MODULE__.lose_slot/4, me)
+      on_exit(fn -> :telemetry.detach(handler) end)
+      result = send_frame(state, answer_message(request, key))
+      :telemetry.detach(handler)
+      assert_received :slot_lost
+      # The slot is this member's again for what the test reads back.
+      restore.()
+
+      assert_told(result, 1013, "unavailable", Prima.Refusal.message(:unavailable))
+
+      assert Arca.Repo.all(
+               from(c in Arca.Schemas.PairedClient,
+                 where: c.user_id == ^session_ctx.user_id,
+                 select: {c.id, c.standing}
+               )
+             ) == [{device.client_id, "active"}]
+    end
+
     test "a person the door does not admit closes 4403",
          %{account: account, key: key, dir: dir} do
       {asked, request} = asked(hello_message(account, key, {:setup, @token}))
@@ -2675,6 +2715,31 @@ defmodule Emissary.Web.DeviceChannelTest do
   end
 
   def hold_certificate_insert(_event, _measurements, _metadata, _me), do: :ok
+
+  @doc false
+  # A telemetry handler that loses this member's slot at the second read
+  # of a person's own athanor in the test process: during a returning
+  # device's answer the first is the sign-in's fill check
+  # (`Sanctum.Provisioning.after_sign_in/1`) and the second the pairing's
+  # (`Sanctum.DeviceUnlock.pair/4`), right before its enrollment. It tells
+  # the test it fired, so a flow that no longer reads twice fails the case
+  # rather than passing it unexercised.
+  def lose_slot(_event, _measurements, %{source: "athanors", query: query}, me)
+      when is_binary(query) do
+    if self() == me and query =~ "owner_user_id" do
+      seen = Process.get({__MODULE__, :owner_reads}, 0) + 1
+      Process.put({__MODULE__, :owner_reads}, seen)
+
+      if seen == 2 do
+        Arca.ControlPlane.record(:lost)
+        send(me, :slot_lost)
+      end
+    end
+
+    :ok
+  end
+
+  def lose_slot(_event, _measurements, _metadata, _me), do: :ok
 
   # The standing bound a revocation's close is held to (`Sanctum.Caller.fresh?/1`).
   defp two_second_deadline, do: System.monotonic_time(:millisecond) + 2_000

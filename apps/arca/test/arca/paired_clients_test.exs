@@ -636,10 +636,11 @@ end
 defmodule Arca.PairedClientsRaceTest do
   @moduledoc """
   Two first enrollments of one person's device key, on two real
-  connections outside the sandbox: the second waits on the person's lock
-  the first holds, then decides under it from the row the first wrote, so
-  the key stands on one client. On PostgreSQL the waiter blocks on the
-  person's row; on SQLite at the lock its transaction takes at entry.
+  connections outside the sandbox: the second decides under the person's
+  lock from the row the first wrote, so the key stands on one client. On
+  PostgreSQL the case also observes the second waiting on the person's
+  row; on SQLite it observes no wait (the case's own comment says what it
+  establishes there).
   """
 
   use ExUnit.Case, async: false
@@ -757,6 +758,15 @@ defmodule Arca.PairedClientsRaceTest do
       end)
 
     assert_receive {:second, waiting}, 5_000
+
+    # PostgreSQL shows the second enrollment blocked on the person's row
+    # before the first is let go. SQLite shows no waiting writer without a
+    # timed wait: the message only says the second connection is about to
+    # enroll while the first holds the write lock with its row uncommitted.
+    # It may begin its transaction before or after the release; either way
+    # it cannot write past the first, so on SQLite the case establishes the
+    # decision under the lock and the one client, not that the second
+    # writer had blocked.
     if postgres?(), do: LockWait.await_lock_wait!(waiting, [~s("users"), "FOR UPDATE"])
 
     send(first.pid, :go)
