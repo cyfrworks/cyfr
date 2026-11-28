@@ -117,8 +117,8 @@ func TestWithNoHoldTheVMAtRestLongestGivesWay(t *testing.T) {
 }
 
 // A VM held for a folder's operation does not end idle, though it has
-// rested past its bound; it is idle from the operation's end, so the next
-// sweep after the operation leaves it standing.
+// rested past its bound, nor for an ask to give way; it is idle from the
+// operation's end, so the next sweep after the operation leaves it standing.
 func TestAHeldVMEndsNotIdleAndRestsFromItsOperationsEnd(t *testing.T) {
 	idleFor(t, time.Hour)
 	k := newVMKeeper(t)
@@ -137,6 +137,12 @@ func TestAHeldVMEndsNotIdleAndRestsFromItsOperationsEnd(t *testing.T) {
 	k.s.endIdleMachines()
 	if k.ending(m) {
 		t.Fatal("a VM a folder's operation holds ended idle")
+	}
+	// An ask to give way sent before the hold, as the admission's ask runs
+	// apart from it, is refused by the keeper's own test of rest.
+	k.s.giveWay(m)
+	if k.ending(m) {
+		t.Fatal("a VM a folder's operation holds gave way to an ask that came after its hold")
 	}
 	open()
 	if r := k.next(t); r["id"] != "r1" || r["type"] != "home_made" {
