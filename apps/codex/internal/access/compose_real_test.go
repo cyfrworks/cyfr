@@ -348,6 +348,50 @@ func TestRealComposeProxyOverlay(t *testing.T) {
 	}
 }
 
+// Compose merges the files' published ports into one entry per host
+// address, published port, target and protocol: the shipped loopback
+// binding repeated, identical, in an override file is one binding in the
+// configuration cyfr starts with, and a proxy head over it is accepted.
+func TestRealComposeRepeatedBindingIsOneEntry(t *testing.T) {
+	requireCompose(t)
+	e, dir := realHome(t)
+	env := strings.Replace(strings.Replace(string(repoFile(t, ".env.example")), "CYFR_BROWSER=none\n", "CYFR_BROWSER=proxy\n", 1), "CYFR_HOST=localhost\n", "CYFR_HOST=cyfr.example.com\n", 1)
+	env += "CYFR_PUBLIC_URL=https://cyfr.example.com\nCYFR_PROXY_PUBLISH=127.0.0.2:4101\nCYFR_TRUSTED_PROXY_HOPS=1\n"
+	writeFile(t, filepath.Join(dir, ".env"), []byte(env))
+	writeFile(t, filepath.Join(dir, "docker-compose.override.yml"), []byte("services:\n  cyfr:\n    ports:\n      - \"127.0.0.1:${CYFR_PORT:-4000}:${CYFR_PORT:-4000}\"\n"))
+	sys := e.docker.(*systemDocker)
+	sys.watchdog, sys.environ = []string{exeOrSkip(t), "-access.watchdog"}, func() []string { return childEnv() }
+	unlock, err := e.Lock("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	h, err := e.Head()
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, err := e.flatten(bg, h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := parseConfig(content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var loopback int
+	for _, p := range c.Services[cyfrService].Ports {
+		if p.Target == 4000 {
+			loopback++
+		}
+	}
+	if loopback != 1 {
+		t.Errorf("the repeated binding is %d entries in compose's configuration: %v", loopback, c.Services[cyfrService].Ports)
+	}
+	if err := e.checkEffective(h, content); err != nil {
+		t.Errorf("the configuration is refused: %v", err)
+	}
+}
+
 // A profile of the stack's own, one no kind selects, is read from
 // compose itself, every service's whichever selection runs it; a head
 // that names it beside its kind's materializes a configuration holding

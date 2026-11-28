@@ -600,26 +600,36 @@ type fakePort struct {
 	Protocol  string `yaml:"protocol"`
 }
 
-// fakePorts reads a service's ports: as compose does, each file's are
-// added to the ones before it, short syntax (`[ip:]published:target[/proto]`)
-// and long alike, interpolated.
+// fakePorts reads a service's ports as compose flattens them: short syntax
+// (`[ip:][published:]target[/proto]`, either port a range, and a bare
+// integer) and long alike, interpolated, a range one entry per port.
 func fakePorts(raw any, lookup func(string) (string, bool)) []fakePort {
 	items, _ := raw.([]any)
 	var out []fakePort
 	for _, item := range items {
 		switch v := item.(type) {
+		case int:
+			out = append(out, fakePort{Target: v, Protocol: "tcp"})
 		case string:
 			text, proto, _ := strings.Cut(interpolate(v, lookup), "/")
 			parts := strings.Split(text, ":")
-			p := fakePort{Protocol: cmp.Or(proto, "tcp")}
-			p.Target, _ = strconv.Atoi(parts[len(parts)-1])
+			host, published := "", ""
 			if len(parts) > 1 {
-				p.Published = parts[len(parts)-2]
+				published = parts[len(parts)-2]
 			}
 			if len(parts) > 2 {
-				p.HostIP = strings.Join(parts[:len(parts)-2], ":")
+				host = strings.Join(parts[:len(parts)-2], ":")
 			}
-			out = append(out, p)
+			targets, publishes := portRange(parts[len(parts)-1]), portRange(published)
+			for i, target := range targets {
+				p := fakePort{Target: target, HostIP: host, Protocol: cmp.Or(proto, "tcp")}
+				if i < len(publishes) {
+					p.Published = strconv.Itoa(publishes[i])
+				} else if published != "" && len(publishes) == 0 {
+					p.Published = published
+				}
+				out = append(out, p)
+			}
 		case map[string]any:
 			p := fakePort{HostIP: fmt.Sprint(cmp.Or(v["host_ip"], any(""))), Published: interpolate(fmt.Sprint(cmp.Or(v["published"], any(""))), lookup), Protocol: fmt.Sprint(cmp.Or(v["protocol"], any("tcp")))}
 			p.Target, _ = strconv.Atoi(interpolate(fmt.Sprint(v["target"]), lookup))
@@ -627,6 +637,39 @@ func fakePorts(raw any, lookup func(string) (string, bool)) []fakePort {
 		}
 	}
 	return out
+}
+
+// portRange is a short syntax port, `n` or `n-m`, as its ports; none for
+// text that is neither.
+func portRange(text string) []int {
+	from, to, ranged := strings.Cut(text, "-")
+	a, err := strconv.Atoi(from)
+	if err != nil {
+		return nil
+	}
+	b := a
+	if ranged {
+		if b, err = strconv.Atoi(to); err != nil || b < a {
+			return nil
+		}
+	}
+	var out []int
+	for n := a; n <= b; n++ {
+		out = append(out, n)
+	}
+	return out
+}
+
+// mergePorts adds ports to a service's, as compose merges the files of a
+// stack: one entry per host address, published port, target and
+// protocol, the first kept.
+func mergePorts(have, add []fakePort) []fakePort {
+	for _, p := range add {
+		if !slices.Contains(have, p) {
+			have = append(have, p)
+		}
+	}
+	return have
 }
 
 // load reads the compose files and flattens them for the profiles: a
@@ -699,7 +742,7 @@ func (f *fakeDocker) load(files, profiles []string, env []string, stdin string) 
 			if v, ok := raw["image"].(string); ok {
 				svc.Image = interpolate(v, lookup)
 			}
-			svc.Ports = append(svc.Ports, fakePorts(raw["ports"], lookup)...)
+			svc.Ports = mergePorts(svc.Ports, fakePorts(raw["ports"], lookup))
 			if v, ok := raw["profiles"].([]any); ok {
 				svc.Profiles = nil
 				for _, p := range v {
