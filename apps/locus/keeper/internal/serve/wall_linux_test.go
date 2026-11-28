@@ -234,3 +234,45 @@ func TestTheKeepersStartRetiresEveryNeverKeptDisk(t *testing.T) {
 		t.Fatal("a disk with no mark was retired at the keeper's start")
 	}
 }
+
+// Every role's report carries the wall the keeper's start decided, in its
+// three values, as giveWall set it: given only where the start gave it.
+func TestAReportCarriesTheWallTheKeepersStartDecided(t *testing.T) {
+	dev := t.TempDir()
+	files := []string{filepath.Join(dev, "firecracker"), filepath.Join(dev, "vmlinux")}
+	for _, f := range files {
+		if err := os.WriteFile(f, nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	wallSeams(t)
+	usableDevices(t)
+	for _, c := range []struct {
+		want string
+		set  func(k *vmKeeper)
+	}{
+		{protocol.WallGiven, func(*vmKeeper) {}},
+		{protocol.WallLacking, func(*vmKeeper) { kvmPath = "/dev/null" }},
+		{protocol.WallLacking, func(*vmKeeper) { guestFiles = []string{filepath.Join(dev, "absent")} }},
+		{protocol.WallLacking, func(k *vmKeeper) { k.guard.machines = "the guard routes no machine" }},
+		{protocol.WallLacking, func(k *vmKeeper) { k.c.role.spec.Kept = false }},
+		{protocol.WallNoRoom, func(k *vmKeeper) { k.s.rest = 512 << 20 }},
+	} {
+		kvmPath, tunPath, guestFiles = vm.KVM, tunDevice, files
+		openDevice = func(string) error { return nil }
+		k := newVMKeeper(t)
+		k.s.wall, k.s.imageDisks = false, false
+		k.s.roles = []*role{k.c.role}
+		c.set(k)
+		k.s.giveWall()
+		req, perr := protocol.ParseRequest([]byte(`{"v":9,"type":"report","id":"rp","after":0}`))
+		if perr != nil {
+			t.Fatal(perr)
+		}
+		k.s.handle(k.c, req)
+		got := k.expect(t, protocol.TypeReported)
+		if wall := got["report"].(map[string]any)["wall"]; wall != c.want || k.s.wall != (c.want == protocol.WallGiven) {
+			t.Errorf("a keeper whose start found %q reports the wall %v (it gives the wall: %t)", c.want, wall, k.s.wall)
+		}
+	}
+}

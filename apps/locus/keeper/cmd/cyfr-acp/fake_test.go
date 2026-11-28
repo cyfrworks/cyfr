@@ -42,6 +42,10 @@ import (
 //	params    replies with what the session, its config options and the prompt were given
 //	own       runs its own tools, a person's server's, and two of CYFR's that are not asks
 //	twice     replies in two messages, each with its own messageId
+//	around    says words in two chunks, runs a tool of its own, then says more:
+//	          with no messageId, as agy 1.5.16 writes its chunks (F4), and
+//	          for OpenCode under a messageId of each model step's, as 2.4.1
+//	          names them (F5)
 //	strange   sends updates of kinds the driver does not use, another session's text
 //	          and a request of its own, then replies with that request's answer code
 //	missing   answers with a usage missing a count
@@ -642,6 +646,25 @@ func fakeACP() int {
 				"title": "Run broken_tool", "rawInput": map[string]any{},
 				"content": []any{map[string]any{"type": "content", "content": map[string]any{"type": "text", "text": "it failed"}}}})
 			reply("ran them")
+		case strings.Contains(words, "around"):
+			say := func(step, text string) {
+				u := map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": text}}
+				if oc {
+					u["messageId"] = step
+				}
+				update(u)
+			}
+			say("msg_step_1", "Before ")
+			say("msg_step_1", "the tool.")
+			call := map[string]any{"sessionUpdate": "tool_call", "toolCallId": "call_around", "title": "read", "kind": "read",
+				"status": "pending", "rawInput": map[string]any{}}
+			update(call)
+			call["sessionUpdate"], call["status"], call["rawInput"] = "tool_call_update", "in_progress", map[string]any{"path": "a.txt"}
+			update(call)
+			call["status"] = "completed"
+			update(call)
+			say("msg_step_2", "After it.")
+			finish(map[string]any{"stopReason": "end_turn", "usage": usage})
 		case strings.Contains(words, "twice"):
 			update(map[string]any{"sessionUpdate": "agent_message_chunk", "messageId": "m1", "content": map[string]any{"type": "text", "text": "One."}})
 			update(map[string]any{"sessionUpdate": "agent_message_chunk", "messageId": "m2", "content": map[string]any{"type": "text", "text": "Two."}})

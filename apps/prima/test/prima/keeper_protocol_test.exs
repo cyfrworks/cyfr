@@ -631,6 +631,7 @@ defmodule Prima.KeeperProtocolTest do
        work: report["work"],
        floor: report["floor"],
        used: report["used"],
+       wall: %{"given" => :given, "no_room" => :no_room, "lacking" => :lacking}[report["wall"]],
        next: report["next"],
        counters:
          Enum.map(report["counters"], fn c ->

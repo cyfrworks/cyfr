@@ -55,6 +55,15 @@ defmodule PrismWeb.SettingsLive do
       answered are said under the machines in one sentence, each as the
       service it is, never as a machine; a read that
       fails says memory use cannot be read, never that nothing reported.
+    * **Where each person's programs run** — for the platform administrator,
+      above the invitations, one of four sentences from the same read
+      (`Opus.Memory`'s `programs_wall`): a small computer of their own, as
+      the programs' machine's keeper decided at its start; a space of
+      their own because it lacks what that needs, or because a first one
+      does not fit its memory; or, while that machine has not answered
+      within the record's bound, that CYFR has not heard from it and
+      takes the programs to run in a space of their own. With no programs
+      service there is no section.
     * **Administrators** — in the allowlist, for a platform administrator:
       the people carrying the mark, another person made an administrator
       (`door.mark_admin`) and a mark taken away (`door.clear_admin`), never
@@ -512,6 +521,54 @@ defmodule PrismWeb.SettingsLive do
       {:error, _not_read} -> assign(socket, :memory, :unreadable)
     end
   end
+
+  # Where each person's programs run, in a person's words: the wall the
+  # programs' machine's keeper decided at its start (`Opus.Memory`'s
+  # `programs_wall`), and, until that machine has answered within the
+  # record's bound, spaces, never the wall. Each line is its parts, a
+  # command `{:code, text}`.
+  defp wall_words(:given),
+    do: [["Each person's programs run in a small computer of their own on this machine."]]
+
+  defp wall_words(:lacking),
+    do: [
+      [
+        "Each person's programs run in a space of their own on this machine, not in a small " <>
+          "computer of their own."
+      ],
+      [
+        "On a machine that can run virtual machines, ",
+        {:code, "cyfr update"},
+        " turns that on, and says first what it removes. If it has and this still shows, the ",
+        {:code, "locus"},
+        " log says why where it starts."
+      ]
+    ]
+
+  defp wall_words(:no_room),
+    do: [
+      [
+        "Each person's programs run in a space of their own on this machine, not in a small " <>
+          "computer of their own: the machine has too little memory for one beside CYFR."
+      ]
+    ]
+
+  defp wall_words(:unknown),
+    do: [
+      [
+        "CYFR has not heard from this machine yet. Until it has, take each person's programs " <>
+          "to run in a space of their own here, not in a small computer of their own."
+      ]
+    ]
+
+  attr :part, :any, required: true
+
+  defp wall_part(%{part: {:code, text}} = assigns) do
+    assigns = assign(assigns, :text, text)
+    ~H"<code>{@text}</code>"
+  end
+
+  defp wall_part(assigns), do: ~H"{@part}"
 
   # A machine's numbers: what is in use of what work may use, how much of
   # it the rows below account for, and what is kept ready for the next
@@ -1106,6 +1163,16 @@ defmodule PrismWeb.SettingsLive do
                 </.button>
               </div>
             </form>
+          </section>
+        </.card>
+
+        <%!-- Where each person's programs run, as the keeper found it (platform admins) --%>
+        <.card :if={is_map(@memory) and @memory.programs_wall != nil}>
+          <section id="programs-wall" data-test="programs-wall">
+            <h3 class="text-sm font-medium text-gray-400 mb-1">Where each person's programs run</h3>
+            <p :for={line <- wall_words(@memory.programs_wall)} class="text-sm text-gray-300">
+              <.wall_part :for={part <- line} part={part} />
+            </p>
           </section>
         </.card>
 

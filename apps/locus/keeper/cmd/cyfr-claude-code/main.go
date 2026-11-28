@@ -35,9 +35,9 @@
 // run in its box: their asks are allowed and they are shown by name, each
 // run under its tool use's id with what its input runs, all but its own
 // question (`AskUserQuestion`), which is declined with
-// `brainwire.QuestionsDeclined`, so the model asks in its reply. Its
-// thinking is `thought`. A subagent's lines (`parent_tool_use_id`) are
-// none of the member's: only the Task call that started it is shown.
+// `brainwire.QuestionsDeclined`, so the model asks in its reply. A
+// subagent's lines (`parent_tool_use_id`) are none of the member's: only
+// the Task call that started it is shown.
 // The driver keeps no account of calls: which post a result answers is
 // the result's own naming of the posts' uuids, which `idle` passes on.
 // A turn's error is said at its result, typed by what the result says

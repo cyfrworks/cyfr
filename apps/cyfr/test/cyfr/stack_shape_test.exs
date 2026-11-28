@@ -1172,7 +1172,10 @@ defmodule Cyfr.StackShapeTest do
       {"with the run root writable by all", "/run/locus:mode=0711,", "/run/locus:mode=1777,",
        ["tmpfs"]},
       {"with the runtime's run folder another's", "/run/locus/runtime:uid=10011,gid=10011,",
-       "/run/locus/runtime:uid=10012,gid=10012,", ["tmpfs"]}
+       "/run/locus/runtime:uid=10012,gid=10012,", ["tmpfs"]},
+      {"given a third device", "      - #{@kvm}\n      - #{@tun}\n",
+       "      - #{@kvm}\n      - #{@tun}\n      - /dev/fuse:/dev/fuse\n", ["devices"]},
+      {"given no KVM", "      - #{@kvm}\n      - #{@tun}\n", "      - #{@tun}\n", ["devices"]}
     ]
 
     # Each plant replaces one exact text, found once; one that is not
@@ -1224,7 +1227,9 @@ defmodule Cyfr.StackShapeTest do
        "      - \"4101\"\n", ["expose"]},
       {"forwarding with the ICMP rate limit on",
        "      net.ipv4.icmp_ratelimit: \"0\"\n    # The ready file's tmpfs",
-       "    # The ready file's tmpfs", ["sysctls"]}
+       "    # The ready file's tmpfs", ["sysctls"]},
+      {"given KVM beside the tun device", "    devices:\n      - #{@tun}\n",
+       "    devices:\n      - #{@kvm}\n      - #{@tun}\n", ["devices"]}
     ]
 
     outcomes =

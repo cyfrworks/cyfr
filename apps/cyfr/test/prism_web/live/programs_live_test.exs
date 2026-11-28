@@ -2124,6 +2124,7 @@ defmodule PrismWeb.ProgramsLiveTest do
         work: 4_800 * @mib,
         floor: 164 * @mib,
         used: 1_000 * @mib,
+        wall: :given,
         counters: counters,
         next: nil
       }

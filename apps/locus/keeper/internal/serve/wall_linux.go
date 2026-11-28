@@ -14,6 +14,7 @@ import (
 
 	"github.com/cyfr/locus/keeper/internal/admission"
 	"github.com/cyfr/locus/keeper/internal/home"
+	"github.com/cyfr/locus/keeper/internal/protocol"
 	"github.com/cyfr/locus/keeper/internal/retire"
 	"github.com/cyfr/locus/keeper/internal/vm"
 )
@@ -58,24 +59,26 @@ const (
 	tunMinor  = 200
 )
 
-// wallOf is the decision and, where it is no, why not.
-func (s *server) wallOf() (bool, string) {
+// wallOf is the decision, as the keeper's report carries it
+// (protocol.WallGiven, WallNoRoom or WallLacking), and, where it is no,
+// why not.
+func (s *server) wallOf() (string, string) {
 	kept := false
 	for _, r := range s.roles {
 		kept = kept || r.spec.Kept
 	}
 	if s.cfg.Kept == nil || !kept {
-		return false, "no role of it keeps homes"
+		return protocol.WallLacking, "no role of it keeps homes"
 	}
 	if why := deviceHeld(kvmPath, vm.KVM, kvmMinor, true); why != "" {
-		return false, why
+		return protocol.WallLacking, why
 	}
 	if why := deviceHeld(tunPath, tunDevice, tunMinor, false); why != "" {
-		return false, why
+		return protocol.WallLacking, why
 	}
 	for _, f := range guestFiles {
 		if _, err := os.Stat(f); err != nil {
-			return false, "the image carries no guest (" + f + ")"
+			return protocol.WallLacking, "the image carries no guest (" + f + ")"
 		}
 	}
 	// The kept role's pool is routed, so the keeper's start has proved its
@@ -83,12 +86,12 @@ func (s *server) wallOf() (bool, string) {
 	// guest's own keeper, which has none, never takes its own guard's
 	// answer for the host's.
 	if why := s.guard.Machines(); why != "" {
-		return false, why
+		return protocol.WallLacking, why
 	}
 	if need := admission.Allowance(admission.Session) + admission.MachineBytes(s.machineGuest()); s.rest < need {
-		return false, "a first session in a VM, " + describeBytes(need) + ", does not fit the work pool's " + describeBytes(s.rest) + " beside the floor"
+		return protocol.WallNoRoom, "a first session in a VM, " + describeBytes(need) + ", does not fit the work pool's " + describeBytes(s.rest) + " beside the floor"
 	}
-	return true, ""
+	return protocol.WallGiven, ""
 }
 
 // deviceHeld says why the device named name, at path, is not one a VMM can
@@ -125,8 +128,10 @@ func deviceHeld(path, name string, minor uint32, byGroup bool) string {
 // VM. Nothing turns one form into the other. A retirement that does not
 // finish leaves that disk refusing every session of it (startKeptSpawn).
 func (s *server) giveWall() {
-	wall, why := s.wallOf()
-	s.wall, s.imageDisks, s.wallWhy = wall, wall, why
+	class, why := s.wallOf()
+	// The one place the report's wall is set: handleReport copies it.
+	wall := class == protocol.WallGiven
+	s.wall, s.wallClass, s.imageDisks, s.wallWhy = wall, class, wall, why
 	if !wall {
 		s.log.Info("each person's work runs in its own space on this machine: %s", why)
 		return

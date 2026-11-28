@@ -117,45 +117,6 @@ defmodule Aqua.Loop.StreamTest do
     assert Stream.texts(Stream.add(abandoned_unseen, delta("s1", 1, {1, 1}, "late"))) == []
   end
 
-  # A program's reasoning for the message `step_id`, as its attendant
-  # announces it: no ordinal, of kind `:thought`.
-  defp thought(step_id, seq, text, opts \\ []) do
-    step_id
-    |> delta(0, seq, text, opts)
-    |> Map.delete(:ordinal)
-    |> Map.put(:kind, :thought)
-  end
-
-  defp said_row(message),
-    do: %Message{kind: "text", payload: Jason.encode!(%{"brain_message" => message})}
-
-  test "reasoning interleaved with an answer of one message is kept apart from it, and stays " <>
-         "once the answer lands, until the fence moves" do
-    kept =
-      keep([
-        delta("msg_1", 0, {0, 1}, "The answer "),
-        thought("msg_1", {0, 2}, "weighing"),
-        delta("msg_1", 0, {0, 3}, "is 42."),
-        thought("msg_1", {0, 4}, " it"),
-        thought("msg_1", {0, 4}, " it")
-      ])
-
-    assert Stream.texts(kept) == [%{step_id: "msg_1", role: nil, text: "The answer is 42."}]
-    assert Stream.thoughts(kept) == [%{step_id: "msg_1", role: nil, text: "weighing it"}]
-
-    landed = Stream.landed(kept, said_row("msg_1"))
-    assert Stream.texts(landed) == []
-    assert Stream.thoughts(landed) == Stream.thoughts(kept)
-
-    assert Stream.thoughts(Stream.add(landed, thought("msg_2", {0, 5}, "next"))) == [
-             %{step_id: "msg_1", role: nil, text: "weighing it"},
-             %{step_id: "msg_2", role: nil, text: "next"}
-           ]
-
-    assert Stream.thoughts(keep([thought("msg_1", {0, 1}, "stale", fence: @fence - 1)])) == []
-    assert Stream.thoughts(Stream.advance(landed, @fence + 1)) == []
-  end
-
   test "a list of calls is kept under the kept fence only, and a higher fence starts over " <>
          "with none" do
     calls = [%{tool: "Bash", sentence: "Used a tool", status: :running, details: ["mix test"]}]

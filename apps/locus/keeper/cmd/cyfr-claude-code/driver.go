@@ -584,9 +584,8 @@ func (d *driver) streamEvent(raw json.RawMessage) error {
 			ID string `json:"id"`
 		} `json:"message"`
 		Delta struct {
-			Type     string `json:"type"`
-			Text     string `json:"text"`
-			Thinking string `json:"thinking"`
+			Type string `json:"type"`
+			Text string `json:"text"`
 		} `json:"delta"`
 	}
 	if json.Unmarshal(raw, &e) != nil {
@@ -597,10 +596,6 @@ func (d *driver) streamEvent(raw json.RawMessage) error {
 		d.message = e.Message.ID
 	case e.Type == "content_block_delta" && e.Delta.Type == "text_delta" && e.Delta.Text != "":
 		return d.c.EmitText(brainwire.NewEvent("text").Set("gen", d.gen).SetOptional("work", d.turnWork).Set("message", d.messageID("")), "delta", e.Delta.Text)
-	case e.Type == "content_block_delta" && e.Delta.Type == "thinking_delta" && e.Delta.Thinking != "":
-		// The model's reasoning, never part of what it said: the whole
-		// message's thinking block is not said either (assistant).
-		return d.c.EmitText(brainwire.NewEvent("thought").Set("gen", d.gen).SetOptional("work", d.turnWork).Set("message", d.messageID("")), "delta", e.Delta.Thinking)
 	}
 	return nil
 }
