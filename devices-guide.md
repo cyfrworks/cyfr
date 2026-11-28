@@ -82,9 +82,9 @@ A device certificate is one CYFR's own word that a device of your account is adm
 - **Sleep.** A device that wakes, or reconnects, with an expired certificate renews by proving its key before it sends anything else.
 - **Streams.** When a CYFR cannot check the device's standing in time to pass on a change, or the device falls behind, the stream ends and the device opens it again and reads what is waiting.
 - **Your account's keys.** Every request the device makes is checked against your account's keys as that CYFR last read them, within `identity_freshness_seconds` (five minutes by default). Removing the device's key from your account ends its certificates and sessions at each CYFR once that CYFR reads the removal, and replacing everything with your recovery code ends all of them. A device whose key was removed says so at its next unlock and shows the same key's code and QR code again; approving it adds that same key back, and no new key is made.
-- **Signing it out of one CYFR.** **Sign out this device** under **Devices** in Prism's shell needs a fresh confirmation. The device's channel there closes within 30 seconds, ending its streams and its session. Its key stays on your account, so its next unlock introduces it to that CYFR again: to end a device everywhere, remove its key from your account. **Settings → Keys on your account** lists the device by its name, with its sessions at that CYFR; **Sign out** there ends one session alone and leaves the device's channel connected.
+- **Removing it from one CYFR.** **Remove from this CYFR** under **Devices** in Prism's shell needs a fresh confirmation. The device's channel there closes within 30 seconds, ending its streams and its session, and its key stays out of that CYFR: its next unlock there is refused, and says it was removed there. A device that was offline when you removed it, still holding its old certificate, is first told only that CYFR no longer takes it, drops that certificate, and reads that it was removed there at the unlock after. Removing a device signs no one out of your account: on that computer or box, your passkey still signs you in to that CYFR, since the device's key and your passkeys stay on your account. It stays listed under **Devices** as removed, and **Allow again** beside it, with a fresh confirmation, lets its next unlock introduce it to that CYFR again. Its key stays on your account and works at every other CYFR: to end a device everywhere, remove its key from your account, at your account page. **Settings → Keys on your account** links to that page, and lists the device by its name, with its sessions at that CYFR; **Sign out** there ends one session alone and leaves the device's channel connected. A passkey's **Sign out this passkey** under **Devices** ends its sessions at that CYFR and keeps it out of nothing, since every browser that syncs it shares it: signing in with it again brings it back.
 
-Signing out erases nothing already shown on the device. Until its key is removed, what the device shows and what its unlocked key signs are the exposure of a lost device.
+Removing it erases nothing already shown on the device. Until its key is removed, what the device shows and what its unlocked key signs are the exposure of a lost device.
 
 ---
 
@@ -103,7 +103,7 @@ Using what was granted and making a grant need only your session. A short list o
 - entering or rotating a credential, and widening where a credential may go or what a component may read of it (narrowing needs only your session);
 - sharing a key, or widening who it is shared with;
 - issuing or rotating a credential that outlives the session: an API key, a webhook secret, or registry push tokens minted under a stored push token;
-- revoking a device connected at that CYFR;
+- removing a device from that CYFR, or allowing a removed one again;
 - re-enabling an API key or a webhook after a declared restore;
 - for the platform administrator of a CYFR that serves its own account service, closing an account there.
 

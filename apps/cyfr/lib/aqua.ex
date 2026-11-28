@@ -22,7 +22,7 @@ defmodule Aqua do
   - `Aqua.Hands` — the pseudo-tools that run on the bundled catalysts, and
     the console intents (`Aqua.Intents`).
   - `Aqua.AgentConfig` — the soul's and the crew's definitions and their catalysts;
-    `Aqua.Roster` — who may be addressed.
+    `Aqua.Roster` — who is on its threads.
   - `Aqua.Models` — what a model can do, the model listing, an agent's
     brain options, whether each agent's brain is ready and what is known
     of its program; `Aqua.ConsentStatus` — whether what the
@@ -207,7 +207,7 @@ defmodule Aqua do
   @spec note_pinned?(String.t()) :: boolean()
   defdelegate note_pinned?(name), to: Notes, as: :pinned?
 
-  @doc "Who in the athanor may be addressed (`Aqua.Roster.roster/1`)."
+  @doc "Who is on the athanor's threads, the soul first (`Aqua.Roster.roster/1`)."
   @spec roster(Context.t()) :: [map()]
   defdelegate roster(ctx), to: Aqua.Roster
 

@@ -6,8 +6,8 @@ Code.require_file("support/support.exs", __DIR__)
 defmodule Cyfr.Cluster.PersonTest do
   @moduledoc """
   A person's work on a cell of two members, entered by the doors a person
-  has (`Cyfr.Cluster.Person`): a turn sent through the runner, a crew
-  member asked by its `@name`,
+  has (`Cyfr.Cluster.Person`): a turn sent through the runner, a job
+  Aqua hands a crew member,
   a consent walked through plan, preview and commit, and a schedule made
   through the gate. Each case does part of that work on one member and
   asks the other what became of it, since a person's next request can
@@ -83,7 +83,7 @@ defmodule Cyfr.Cluster.PersonTest do
     end
   end
 
-  describe "a person's @name of a crew member" do
+  describe "a job Aqua hands a crew member" do
     # Both members run the crew's delivery as a shipped member does: woken
     # by the request's commit, at boot and on their tick. Nothing here
     # drains it by hand.
@@ -92,11 +92,13 @@ defmodule Cyfr.Cluster.PersonTest do
       :ok = Cell.call(:a, Person, :crew_member!, [person.token, "planner"], 120_000)
       room = Cell.call(:a, Person, :thread!, [person.token])
 
-      # Whichever member delivers runs the member's turn, on its own worker.
-      for member <- [:a, :b], do: worker!(member, [reply("Plan: read, then write.")])
+      # Whichever member delivers runs the member's turn, on its own worker,
+      # and the reply opens Aqua's turn on the room, on either.
+      for member <- [:a, :b],
+          do: worker!(member, [reply("Plan: read, then write."), reply("The plan is in.")])
 
-      assert {:ok, %{admitted: :request, message_id: request}} =
-               Cell.call(:a, Person, :send, [person.token, room, "@planner plan the move"])
+      assert {:ok, request} =
+               Cell.call(:a, Person, :ask, [person.token, room, "planner", "plan the move"])
 
       Wait.until!(
         fn ->

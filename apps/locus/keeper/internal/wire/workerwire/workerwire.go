@@ -18,6 +18,7 @@ import (
 	"strings"
 
 	"github.com/cyfr/locus/keeper/internal/wire/macenvelope"
+	"github.com/cyfr/locus/keeper/internal/wire/network"
 	"github.com/cyfr/locus/keeper/internal/wire/wirejson"
 	"github.com/cyfr/locus/keeper/internal/wire/workerapi"
 )
@@ -77,117 +78,14 @@ var MaxReportAttempts = func() int {
 
 // BaseURL is the base URL text spells, with no trailing slash: an http or
 // https URL with a host, and no user information, path, query or fragment,
-// its parts read as Elixir's URI.parse/1 reads them.
+// its parts read as Elixir's URI.parse/1 reads them (network.ParseURI).
 func BaseURL(text string) (string, bool) {
-	u := parseURI(text)
-	if (u.scheme != "http" && u.scheme != "https") || u.host == nil || *u.host == "" ||
-		u.userinfo != nil || u.query != nil || u.fragment != nil || (u.path != "" && u.path != "/") {
+	u := network.ParseURI(text)
+	if (u.Scheme != "http" && u.Scheme != "https") || u.Host == nil || *u.Host == "" ||
+		u.Userinfo != nil || u.Query != nil || u.Fragment != nil || (u.Path != "" && u.Path != "/") {
 		return "", false
 	}
 	return strings.TrimRight(text, "/"), true
-}
-
-type uri struct {
-	scheme   string
-	userinfo *string
-	host     *string
-	path     string
-	query    *string
-	fragment *string
-}
-
-func alpha(c byte) bool { return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' }
-func digit(c byte) bool { return c >= '0' && c <= '9' }
-
-// parseURI reads text as URI.parse/1 does, by RFC 3986's appendix B,
-// ^(([a-z][a-z0-9+\-.]*):)?(//([^/?#]*))?([^?#]*)(\?([^#]*))?(#(.*))?
-// without case, the fragment's . stopping at a line feed; and an
-// authority as (^(.*)@)?(\[[a-zA-Z0-9:.]*\]|[^:]*)(:(\d*))?, its
-// userinfo's . likewise, an empty userinfo none and a host its brackets
-// trimmed.
-func parseURI(text string) uri {
-	var u uri
-	rest := text
-	if len(text) > 0 && alpha(text[0]) {
-		i := 1
-		for i < len(text) && (alpha(text[i]) || digit(text[i]) || strings.IndexByte("+-.", text[i]) >= 0) {
-			i++
-		}
-		if i < len(text) && text[i] == ':' {
-			u.scheme = strings.ToLower(text[:i])
-			rest = text[i+1:]
-		}
-	}
-	if strings.HasPrefix(rest, "//") {
-		after := rest[2:]
-		end := strings.IndexAny(after, "/?#")
-		if end < 0 {
-			end = len(after)
-		}
-		u.userinfo, u.host = splitAuthority(after[:end])
-		rest = after[end:]
-	}
-	end := strings.IndexAny(rest, "?#")
-	if end < 0 {
-		end = len(rest)
-	}
-	u.path, rest = rest[:end], rest[end:]
-	if strings.HasPrefix(rest, "?") {
-		q := rest[1:]
-		if i := strings.IndexByte(q, '#'); i >= 0 {
-			q, rest = q[:i], q[i:]
-		} else {
-			rest = ""
-		}
-		u.query = &q
-	}
-	if strings.HasPrefix(rest, "#") {
-		f := rest[1:]
-		if i := strings.IndexByte(f, '\n'); i >= 0 {
-			f = f[:i]
-		}
-		u.fragment = &f
-	}
-	return u
-}
-
-func splitAuthority(authority string) (userinfo, host *string) {
-	rest := authority
-	line := authority
-	if i := strings.IndexByte(line, '\n'); i >= 0 {
-		line = line[:i]
-	}
-	if at := strings.LastIndexByte(line, '@'); at >= 0 {
-		if at > 0 {
-			info := authority[:at]
-			userinfo = &info
-		}
-		rest = authority[at+1:]
-	}
-	h := rest[:bracketed(rest)]
-	if h == "" {
-		return userinfo, nil
-	}
-	h = strings.TrimRight(strings.TrimLeft(h, "["), "]")
-	return userinfo, &h
-}
-
-// bracketed is the length of the host at the head of rest: a bracketed
-// address of letters, digits, : and ., or everything to the first colon.
-func bracketed(rest string) int {
-	if strings.HasPrefix(rest, "[") {
-		i := 1
-		for i < len(rest) && (alpha(rest[i]) || digit(rest[i]) || rest[i] == ':' || rest[i] == '.') {
-			i++
-		}
-		if i < len(rest) && rest[i] == ']' {
-			return i + 1
-		}
-	}
-	if i := strings.IndexByte(rest, ':'); i >= 0 {
-		return i
-	}
-	return len(rest)
 }
 
 // RequestBody is the request body for callback with args: v, then op,

@@ -1044,19 +1044,25 @@ pub fn read_pin(pin: &Value) -> Option<Pin> {
     })
 }
 
-/// The family of an IP literal as Erlang's `inet:parse_strict_address/1`
-/// reads one (`Prima.PinnedTarget`): a dotted quad of four decimal octets
-/// without leading zeros, or an IPv6 address, which may carry a zone after
-/// `%`, of any text, only when its first group is `fe80` or `ff02` and it
-/// embeds no IPv4 address. None for anything else.
+/// The family of an IP literal as `Prima.PinnedTarget` reads one, which is
+/// Erlang's `inet:parse_strict_address/1` with no sign in the address (Rust's
+/// parsers take none either): a dotted quad of four decimal octets
+/// without leading zeros, or an IPv6 address. An IPv6 address may carry a
+/// zone after its first `%` only when its first group is `fe80` or `ff02`,
+/// its second group is 0, and it embeds no IPv4 address; a zone that
+/// begins with `0` is a decimal number up to 65535, and any other zone is
+/// any text. None for anything else.
 pub fn ip_family(ip: &str) -> Option<u8> {
     if let Ok(address) = ip.parse::<std::net::IpAddr>() {
         return Some(if address.is_ipv4() { 4 } else { 6 });
     }
-    let (address, _zone) = ip.split_once('%')?;
-    let address = address.parse::<std::net::Ipv6Addr>().ok()?;
-    let scoped = matches!(address.segments()[0], 0xfe80 | 0xff02);
-    (scoped && !ip[..ip.find('%')?].contains('.')).then_some(6)
+    let (address, zone) = ip.split_once('%')?;
+    let segments = address.parse::<std::net::Ipv6Addr>().ok()?.segments();
+    let scoped = matches!(segments[0], 0xfe80 | 0xff02) && segments[1] == 0;
+    let zone_read = !zone.starts_with('0')
+        || (zone.bytes().all(|b| b.is_ascii_digit())
+            && zone.parse::<u32>().is_ok_and(|n| n <= 65_535));
+    (scoped && zone_read && !address.contains('.')).then_some(6)
 }
 
 // A pin's host: an IPv6 address in brackets (`ip_family`), or a hostname of labels of

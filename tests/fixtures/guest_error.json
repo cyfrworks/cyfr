@@ -151,7 +151,7 @@
     {"why": "a credential that was revoked", "class": "unauthenticated", "reason": {"atom": "revoked"}, "sentence": "The presented credential has been revoked"},
     {"why": "an actor outside the athanor", "class": "forbidden", "reason": {"atom": "not_member"}, "sentence": "Only the athanor's person can act in its threads"},
     {"why": "a consent signal naming its cause and component", "class": "consent_required", "reason": {"tuple": [{"atom": "consent_required"}, {"map": {"cause": {"atom": "no_grant"}, "ref": "catalyst:local.claude"}}]}, "sentence": "Consent required: catalyst:local.claude has not been granted — grant it to run it"},
-    {"why": "an athanor with no assistant", "class": "setup_required", "reason": {"atom": "no_agent"}, "sentence": "This athanor has no assistant to address — reset its Aqua tree"},
+    {"why": "a CYFR its operator has not set up", "class": "setup_required", "reason": {"atom": "not_set_up"}, "sentence": "This CYFR is not set up yet. Its operator opens the setup link first."},
     {"why": "a message over its bound", "class": "invalid_argument", "reason": {"atom": "message_too_long"}, "sentence": "The message is longer than the 32 KiB bound"},
     {"why": "a named resource that is absent", "class": "not_found", "reason": {"tuple": [{"atom": "not_found"}, "component", "c:1"]}, "sentence": "component not found: c:1"},
     {"why": "a unit another write landed on first", "class": "conflict", "reason": {"atom": "stale_revision"}, "sentence": "Another write to this unit landed first — read it again and retry"},

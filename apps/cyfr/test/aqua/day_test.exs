@@ -59,8 +59,7 @@ defmodule Aqua.DayTest do
     assert {:ok, %{accepted: true, message_id: message_id, thread: thread_id}} =
              Tool.handle("thread", ctx, %{
                "action" => "send",
-               "message" => text,
-               "agent" => "aqua"
+               "message" => text
              })
 
     {thread_id, message_id}

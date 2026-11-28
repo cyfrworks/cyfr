@@ -31,7 +31,7 @@ defmodule Prima.PinnedTarget do
     * `id` — CYFR's name for this pin, 1 to 128 characters of unpadded
       base64url text, which a redirect's `from` names;
     * `ip` — the validated address, as text an IP literal parses from
-      (`:inet.parse_strict_address/1`);
+      (`:inet.parse_strict_address/1`, with no sign in the address);
     * `family` — `4` or `6`, the family of `ip`;
     * `scheme` and `port` — the URL's own scheme and port (the scheme's
       default when the URL names none), 1 to 65535;
@@ -155,13 +155,14 @@ defmodule Prima.PinnedTarget do
 
   @doc """
   Whether `pin` is a `t:t/0` whose every field is as the module doc says:
-  an id, an IP literal that parses and a family that matches it, an
+  an id, an IP literal that parses with no sign in it and a family, an
+  integer, that matches it, an
   `http` or `https` scheme, a port of 1 to 65535, a hostname or bracketed
   IPv6 literal, and an expiry of 0 to 2^53 − 1.
   """
   @spec valid?(term()) :: boolean()
   def valid?(%__MODULE__{} = pin) do
-    valid_id?(pin.id) and family_of(pin.ip) == {:ok, pin.family} and
+    valid_id?(pin.id) and is_integer(pin.family) and family_of(pin.ip) == {:ok, pin.family} and
       pin.scheme in ["http", "https"] and is_integer(pin.port) and pin.port in 1..65_535 and
       valid_host?(pin.host) and is_integer(pin.expires_at) and
       pin.expires_at in 0..@max_integer
@@ -210,20 +211,37 @@ defmodule Prima.PinnedTarget do
   def expired?(%__MODULE__{expires_at: expires_at}, now) when is_integer(now),
     do: now > expires_at
 
+  # An address as Erlang's strict parser reads one, but with no sign in
+  # it: the parser reads a field's sign (`1.2.3.+4`), which no address
+  # CYFR writes (`:inet.ntoa/1`) carries and no other reader takes. A zone
+  # after the address is its own text.
   defp family_of(ip) when is_binary(ip) do
-    case :inet.parse_strict_address(String.to_charlist(ip)) do
-      {:ok, {_, _, _, _}} -> {:ok, 4}
-      {:ok, {_, _, _, _, _, _, _, _}} -> {:ok, 6}
-      {:error, _} -> :error
+    with false <- signed?(ip),
+         {:ok, address} <- :inet.parse_strict_address(String.to_charlist(ip)) do
+      case address do
+        {_, _, _, _} -> {:ok, 4}
+        {_, _, _, _, _, _, _, _} -> {:ok, 6}
+      end
+    else
+      _ -> :error
     end
   end
 
   defp family_of(_ip), do: :error
 
+  defp signed?(literal) do
+    [address | _zone] = :binary.split(literal, "%")
+    String.contains?(address, ["+", "-"])
+  end
+
   defp valid_host?("[" <> rest) when byte_size(rest) > 1 do
     case :binary.split(rest, "]") do
-      [literal, ""] -> match?({:ok, _}, :inet.parse_ipv6strict_address(to_charlist(literal)))
-      _ -> false
+      [literal, ""] ->
+        not signed?(literal) and
+          match?({:ok, _}, :inet.parse_ipv6strict_address(to_charlist(literal)))
+
+      _ ->
+        false
     end
   end
 

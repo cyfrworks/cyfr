@@ -152,6 +152,20 @@ defmodule Prima.WorkerWire do
   def attached_frames_content_type, do: "application/vnd.cyfr.frames"
 
   @doc """
+  Whether an answer of these `content-type` values carries frames: one of
+  them, cut at its first `;` and trimmed, is
+  `attached_frames_content_type/0` in any case. The vectors are
+  `tests/fixtures/host_api.json`'s `frames_content_types`.
+  """
+  @spec frames_content_type?([String.t()]) :: boolean()
+  def frames_content_type?(values) when is_list(values) do
+    Enum.any?(values, fn type ->
+      type |> String.split(";") |> hd() |> String.trim() |> String.downcase() ==
+        attached_frames_content_type()
+    end)
+  end
+
+  @doc """
   The base URL `text` spells, with no trailing slash, or `:error`: an
   `http` or `https` URL with a host, and no path, query or fragment, since
   a route is appended to it as it is.

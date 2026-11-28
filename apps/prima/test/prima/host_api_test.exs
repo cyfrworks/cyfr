@@ -58,6 +58,8 @@ defmodule Prima.HostAPITest do
   @attached_guest_types ~w(invalid_request method_blocked scheme_blocked domain_blocked
                            private_ip_blocked dns_error rate_limited request_too_large)
 
+  defp unhex(text), do: Base.decode16!(text, case: :lower)
+
   defp root, do: Base.decode16!(@vectors["keys"]["root_hex"], case: :lower)
   defp atoms(wire, names), do: Map.new(names, &{&1, Map.fetch!(wire, Atom.to_string(&1))})
   defp standing(wire), do: %{generation: wire["generation"], member: wire["member"]}
@@ -436,6 +438,184 @@ defmodule Prima.HostAPITest do
         assert request.purpose == :redirect
         assert request.from == answer_of(cases["fetch"])["id"]
       end
+    end
+  end
+
+  # A case of the service side's vectors with exactly `members`, each
+  # present and none more, and none null but those `nullable` names: a
+  # case that drifts fails here instead of being skipped.
+  defp strict!(c, members, nullable \\ []) do
+    assert is_map(c) and Enum.sort(Map.keys(c)) === Enum.sort(members), inspect(c)
+    for m <- members -- nullable, do: refute(is_nil(c[m]), "#{m} is null: #{inspect(c)}")
+    c
+  end
+
+  defp cases!(cases, least) do
+    assert is_list(cases) and length(cases) >= least, inspect(cases, limit: 2)
+    cases
+  end
+
+  describe "the service side's vectors" do
+    test "every stream of answer frames splits, unopened, as its vector says" do
+      for c <- cases!(@vectors["frame_splits"], 10) do
+        expected =
+          if Map.has_key?(c, "error") do
+            strict!(c, ~w(why stream_hex error))
+            {:error, String.to_existing_atom(c["error"])}
+          else
+            strict!(c, ~w(why stream_hex frames_hex rest_hex))
+            {:ok, Enum.map(c["frames_hex"], &unhex/1), unhex(c["rest_hex"])}
+          end
+
+        assert WorkerAuth.split_frames(unhex(c["stream_hex"])) === expected, c["why"]
+      end
+    end
+
+    test "every frame's body bytes are counted from its sealed length alone" do
+      for c <- cases!(@vectors["frame_body_bytes"], 10) do
+        strict!(c, ~w(why frame_hex bytes))
+        assert WorkerAuth.frame_body_bytes(unhex(c["frame_hex"])) === c["bytes"], c["why"]
+      end
+    end
+
+    test "an answer carries frames by its content type" do
+      for c <- cases!(@vectors["frames_content_types"], 12) do
+        %{"content_types" => types, "frames" => frames} = strict!(c, ~w(content_types frames))
+        assert WorkerWire.frames_content_type?(types) === frames, inspect(types)
+      end
+    end
+
+    test "every host matches the egress domains as its vector says" do
+      for c <- cases!(@vectors["domain_cases"], 20) do
+        strict!(c, ~w(why host patterns allowed))
+        assert Prima.Network.domain_allowed?(c["host"], c["patterns"]) === c["allowed"], c["why"]
+      end
+    end
+
+    test "every host of bytes that are no UTF-8 matches as its vector says, each byte kept" do
+      for c <- cases!(@vectors["domain_bytes"], 100) do
+        # A case marked go is Go's own refusal of bytes that are no UTF-8,
+        # which Prima matches: Prima's answer is the case's allowed.
+        if Map.has_key?(c, "go") do
+          strict!(c, ~w(host_hex patterns_hex allowed go))
+          inputs = [c["host_hex"] | c["patterns_hex"]] |> Enum.map(&unhex/1)
+          assert c["go"] === %{"allowed" => false} and c["allowed"] === true, inspect(c)
+          refute Enum.all?(inputs, &String.valid?/1), inspect(c)
+        else
+          strict!(c, ~w(host_hex patterns_hex allowed))
+        end
+
+        patterns = Enum.map(c["patterns_hex"], &unhex/1)
+
+        assert Prima.Network.domain_allowed?(unhex(c["host_hex"]), patterns) === c["allowed"],
+               inspect(c)
+      end
+    end
+
+    test "every URL reads whole as its vector says, the scheme's default port where it names none" do
+      for c <- cases!(@vectors["urls"], 30) do
+        %{"text" => text, "url" => url} = strict!(c, ~w(text url), ~w(url))
+
+        read =
+          case Prima.Network.parse_url(text) do
+            {:ok, uri} ->
+              %{
+                "scheme" => uri.scheme,
+                "userinfo" => uri.userinfo,
+                "host" => uri.host,
+                "port" => uri.port,
+                "path" => uri.path,
+                "query" => uri.query,
+                "fragment" => uri.fragment
+              }
+
+            {:error, _type, _message} ->
+              nil
+          end
+
+        assert read === url, text
+      end
+    end
+
+    test "every special character upcases as its vector says" do
+      for c <- cases!(@vectors["upcase_special"], 100) do
+        strict!(c, ~w(char_hex upcase_hex))
+        assert String.upcase(unhex(c["char_hex"])) === unhex(c["upcase_hex"]), c["char_hex"]
+      end
+    end
+
+    test "every header name is ruled as its vector says" do
+      for c <- cases!(@vectors["header_rules"], 25) do
+        strict!(c, ~w(name framing_or_override credential))
+
+        assert Prima.Network.framing_or_override_header?(c["name"]) === c["framing_or_override"],
+               c["name"]
+
+        assert Prima.Network.credential_header?(c["name"]) === c["credential"], c["name"]
+      end
+    end
+
+    test "every Host header is written as its vector says" do
+      for c <- cases!(@vectors["host_headers"], 10) do
+        %{"scheme" => scheme, "host" => host, "port" => port, "header" => header} =
+          strict!(c, ~w(scheme host port header), ~w(port))
+
+        assert Prima.Network.host_header(%URI{scheme: scheme, host: host, port: port}) === header
+      end
+    end
+
+    test "every attached request is posted with its vector's args, which read back to it" do
+      for c <- cases!(@vectors["attached_requests"], 3) do
+        %{"request" => r, "args" => args} = strict!(c, ~w(why request args))
+        strict!(r, ~w(call_id connection method url headers body_b64 purpose))
+
+        request = %Prima.AttachedRequest{
+          call_id: r["call_id"],
+          connection: r["connection"],
+          method: r["method"],
+          url: r["url"],
+          headers: Enum.map(r["headers"], &List.to_tuple/1),
+          body: Base.decode64!(r["body_b64"]),
+          purpose: String.to_existing_atom(r["purpose"])
+        }
+
+        assert Jason.encode!(Prima.AttachedRequest.to_args(request)) === args, c["why"]
+        assert {:ok, ^request} = Prima.AttachedRequest.read(Jason.decode!(args))
+      end
+    end
+
+    test "a pin expires past its expiry, and every pin request reads as its vector says" do
+      pin = %Prima.PinnedTarget{
+        id: "p",
+        ip: "203.0.113.10",
+        family: 4,
+        scheme: "https",
+        port: 443,
+        host: "h",
+        expires_at: 0
+      }
+
+      for c <- cases!(@vectors["pin_expiry"], 6) do
+        %{"expires_at" => at, "now" => now, "expired" => expired} =
+          strict!(c, ~w(expires_at now expired))
+
+        assert Prima.PinnedTarget.expired?(%{pin | expires_at: at}, now) === expired
+      end
+
+      for c <- cases!(@vectors["pin_requests"], 15) do
+        strict!(c, ~w(why args read))
+
+        assert match?({:ok, _}, Prima.PinnedTarget.read_request(c["args"])) === c["read"],
+               c["why"]
+      end
+    end
+
+    test "a pin's purposes and refusals are the vector's" do
+      assert Enum.map(Prima.PinnedTarget.purposes(), &Atom.to_string/1) ===
+               @vectors["pin_purposes"]
+
+      assert Enum.map(Prima.PinnedTarget.refusals(), &Atom.to_string/1) ===
+               @vectors["pin_refusal_names"]
     end
   end
 

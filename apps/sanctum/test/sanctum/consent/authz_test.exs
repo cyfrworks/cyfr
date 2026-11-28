@@ -229,7 +229,7 @@ defmodule Sanctum.Consent.AuthzTest do
           Sanctum.TestContext.pairing_revocation(session_ctx, client_id)
         )
 
-      {:ok, _row} = Sanctum.Pairing.revoke(confirmed, client_id)
+      {:ok, _row} = Sanctum.Pairing.remove(confirmed, client_id)
 
       assert Authz.authorize(device_ctx, request()) == {:error, :not_standing}
     end

@@ -16,7 +16,8 @@ defmodule Sanctum.Gate.ReducesAuthorityRosterTest do
 
   # Each takes authority away and gives none: signing out, one session of
   # one's own ended, a command line withdrawing its sign-in, revoking (a command line's session and a
-  # shared key among them), withdrawing consent, leaving or removing
+  # shared key among them), removing a device from this CYFR, withdrawing
+  # consent, leaving or removing
   # someone from a shared thread, withdrawing its invitation, denying
   # someone at a door, taking an administrator's mark away, archiving a
   # shared thread and stopping Aqua using the person's browser.
@@ -26,7 +27,7 @@ defmodule Sanctum.Gate.ReducesAuthorityRosterTest do
     door.deny
     invitation.revoke
     key.revoke
-    pairing.revoke
+    pairing.remove
     profile.revoke
     program.stop
     session.end

@@ -396,6 +396,34 @@ defmodule Arca.DirectoryHeadsTest do
     assert {:ok, %{head_hash: ^old}} = PersonIdentities.get(server(), other.id)
   end
 
+  # A device its person removed from this CYFR stays out when its key is
+  # then removed from the account or the account recovered: the walk
+  # revokes nothing removed, from where a hello would pair it again.
+  test "a removed device's client stays removed when its key is retired or the account recovered" do
+    old = digest("old")
+    mid = digest("mid")
+    new = digest("new")
+    %{person: person, identifier: id} = account!(old)
+    athanor = athanor()
+
+    key = device_key()
+    kid = Prima.Identity.Key.kid(key)
+    removed = client!(athanor, person.id, key, old)
+    other = client!(athanor, person.id, device_key(), old)
+    assert {:ok, %{standing: "removed"}} = PairedClients.remove(athanor, removed.id)
+
+    assert {:ok, %{retired: retired}} = advance(id, old, mid, [{:remove_key, kid}])
+    assert retired.client_ids == []
+
+    assert {:ok, %{retired: recovered}} = advance(id, mid, new, [:recover])
+    assert recovered.client_ids == [other.id]
+
+    assert {:ok, rows} = PairedClients.list(athanor, user_id: person.id, standing: :all)
+
+    assert Enum.map(rows, &{&1.id, &1.standing}) ==
+             [{removed.id, "removed"}, {other.id, "revoked"}]
+  end
+
   test "a recovery retires every binding of the account and every session of its people, a session no key signed included" do
     old = digest("old")
     new = digest("new")

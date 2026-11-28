@@ -8,7 +8,7 @@ defmodule Cyfr.StorageReserveTest do
   file it keeps, and what the gate, Arca's write gate and the decision log
   do while it reads `depleted`.
 
-  A device revocation completes through the gate while depleted, its
+  A device removal completes through the gate while depleted, its
   confirmation read by its `request`, proven and spent, while a note
   write is refused and an ordinary confirmation beside it can be neither
   read, proven nor spent. The latch stays `depleted` across the polls
@@ -342,7 +342,7 @@ defmodule Cyfr.StorageReserveTest do
       Map.merge(seated, %{authenticator: authenticator, device: device, monitor: pid})
     end
 
-    test "a device revocation completes, read by its request, while a note write is refused",
+    test "a device removal completes, read by its request, while a note write is refused",
          %{session_ctx: ctx, authenticator: authenticator, device: device, monitor: pid} do
       Disk.set_free(@bytes - 1)
       assert Cyfr.StorageReserve.poll(pid) == :depleted
@@ -355,9 +355,9 @@ defmodule Cyfr.StorageReserveTest do
       assert {:error, {:unavailable, :storage_reserve}} =
                Arca.put(Context.actor(ctx), ["notes", "reserve.md"], "a note")
 
-      # The revocation opens its confirmation…
+      # The removal opens its confirmation…
       assert {:error, {:confirmation_required, %{id: id}}} =
-               call(ctx, "pairing", "revoke", %{"client_id" => device.client_id})
+               call(ctx, "pairing", "remove", %{"client_id" => device.client_id})
 
       ref = Prima.Confirmation.ref(id)
 
@@ -369,23 +369,23 @@ defmodule Cyfr.StorageReserveTest do
                call(ctx, "confirmation", "pending", %{"request" => ref})
 
       assert entry.ref == ref
-      assert entry.operation == "pairing.revoke"
+      assert entry.operation == "pairing.remove"
 
-      # The proof, then the revocation repeated naming it.
+      # The proof, then the removal repeated naming it.
       assert {:ok, %{state: "confirmed"}} =
                call(ctx, "confirmation", "confirm", proof(ctx, ref, authenticator))
 
       assert {:ok, %{client_id: client_id, standing: standing}} =
-               call(%{ctx | confirmation_id: id}, "pairing", "revoke", %{
+               call(%{ctx | confirmation_id: id}, "pairing", "remove", %{
                  "client_id" => device.client_id
                })
 
       assert client_id == device.client_id
-      assert standing == "revoked"
+      assert standing == "removed"
 
-      # Committed: read back from the store.
+      # Committed: read back from the store, listed as removed.
       assert {:ok, %{clients: clients}} = call(ctx, "pairing", "list", %{})
-      refute Enum.any?(clients, &(&1.client_id == device.client_id))
+      assert [%{standing: "removed"}] = Enum.filter(clients, &(&1.client_id == device.client_id))
     end
 
     test "an ordinary confirmation beside it is neither read, proven, cancelled nor spent",
@@ -404,7 +404,7 @@ defmodule Cyfr.StorageReserveTest do
       assert Cyfr.StorageReserve.poll(pid) == :depleted
 
       assert {:error, {:confirmation_required, %{id: flagged_id}}} =
-               call(ctx, "pairing", "revoke", %{"client_id" => device.client_id})
+               call(ctx, "pairing", "remove", %{"client_id" => device.client_id})
 
       flagged = Prima.Confirmation.ref(flagged_id)
 

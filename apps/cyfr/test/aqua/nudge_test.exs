@@ -658,9 +658,8 @@ defmodule Aqua.NudgeTest do
     {:ok, today} = Aqua.Day.current(ctx)
     assert [%{addressee: "aqua", turn_id: turn_id} = post] = posts(ctx, today.id)
 
-    # The roster holds the member, and the post's words name it.
-    assert {_text, %{"name" => "planner"}} =
-             Aqua.Roster.parse_mention(post.content, Aqua.Roster.roster(ctx))
+    # The post's words name the member.
+    assert post.content =~ "@planner"
 
     assert {:ok, %{agent: "aqua"}} = Tape.turn(ctx, turn_id)
     await_status(ctx, turn_id, "completed")

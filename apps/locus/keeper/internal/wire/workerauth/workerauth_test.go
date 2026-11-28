@@ -9,11 +9,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/cyfr/locus/keeper/internal/wire/wiretest"
 
 	"github.com/cyfr/locus/keeper/internal/wire/macenvelope"
 )
@@ -39,10 +39,16 @@ type vectors struct {
 		Runner    string `json:"runner"`
 		TS        uint64 `json:"ts"`
 	} `json:"call"`
-	Request           dispatchVector `json:"request"`
-	Report            dispatchVector `json:"report"`
+	Request dispatchVector `json:"request"`
+	Report  struct {
+		dispatchVector
+		// The runner a report names, carried by its canonical string.
+		Runner string `json:"runner"`
+	} `json:"report"`
 	SealedAttemptKeys struct {
 		Sealed string `json:"sealed"`
+		// Its iv is macenvelope's test's, which reproduces the seal.
+		IV json.RawMessage `json:"iv_hex"`
 	} `json:"sealed_attempt_keys"`
 	SealedCall struct {
 		Answer       string `json:"answer"`
@@ -60,14 +66,14 @@ type vectors struct {
 		Why      string  `json:"why"`
 		BodyHash string  `json:"body_hash"`
 		Body     string  `json:"body_b64"`
-		Error    *string `json:"error"`
+		Error    *string `json:"error" wire:"null,required"`
 	} `json:"body_checks"`
 	OpenAttemptKeys []struct {
 		Why     string                     `json:"why"`
 		Sealed  string                     `json:"sealed"`
-		Attempt map[string]json.RawMessage `json:"attempt"`
-		CallHex string                     `json:"call_hex"`
-		SealHex string                     `json:"seal_hex"`
+		Attempt map[string]json.RawMessage `json:"attempt" wire:"optional"`
+		CallHex string                     `json:"call_hex" wire:"optional"`
+		SealHex string                     `json:"seal_hex" wire:"optional"`
 		Error   *string                    `json:"error"`
 		// Go is the Go reader's own answer where the two ends differ.
 		Go *struct {
@@ -97,8 +103,8 @@ type headerCase struct {
 	Why      string                     `json:"why"`
 	Header   string                     `json:"header"`
 	Now      int64                      `json:"now"`
-	Fields   map[string]json.RawMessage `json:"fields"`
-	BodyHash string                     `json:"body_hash"`
+	Fields   map[string]json.RawMessage `json:"fields" wire:"optional"`
+	BodyHash string                     `json:"body_hash" wire:"optional"`
 	Error    *string                    `json:"error"`
 }
 
@@ -130,11 +136,11 @@ func workerKey(root macenvelope.Key, service string) (macenvelope.Key, error) {
 }
 
 func attemptCallKey(root macenvelope.Key, attempt macenvelope.Message) (macenvelope.Key, error) {
-	return deriveOver(root, label+"/call", AttemptFields, attempt)
+	return deriveOver(root, label+"/call", AttemptFields(), attempt)
 }
 
 func attemptSealKey(root macenvelope.Key, attempt macenvelope.Message) (macenvelope.Key, error) {
-	return deriveOver(root, label+"/seal", AttemptFields, attempt)
+	return deriveOver(root, label+"/seal", AttemptFields(), attempt)
 }
 
 func requestHeader(dispatchKey macenvelope.Key, d macenvelope.Message, body []byte) (string, error) {
@@ -181,14 +187,8 @@ func sameFields(e macenvelope.Envelope, got macenvelope.Message, raw map[string]
 
 func load(t *testing.T) vectors {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "..", "..", "tests", "fixtures", "worker_auth.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
 	var v vectors
-	if err := json.Unmarshal(data, &v); err != nil {
-		t.Fatal(err)
-	}
+	wiretest.LoadStrict(t, "worker_auth.json", &v)
 	return v
 }
 
@@ -228,7 +228,7 @@ func message(t *testing.T, e macenvelope.Envelope, raw map[string]json.RawMessag
 	return m
 }
 
-func attemptFields() macenvelope.Envelope { return macenvelope.Envelope{Fields: AttemptFields} }
+func attemptFields() macenvelope.Envelope { return macenvelope.Envelope{Fields: AttemptFields()} }
 
 func (v vectors) call(t *testing.T) macenvelope.Message {
 	m := message(t, attemptFields(), v.Attempt)
@@ -292,7 +292,7 @@ func TestEveryHeaderAndCanonicalStringReproduces(t *testing.T) {
 		d      dispatchVector
 		e      macenvelope.Envelope
 		header func(macenvelope.Key, macenvelope.Message, []byte) (string, error)
-	}{"request": {v.Request, Request, requestHeader}, "report": {v.Report, Report, ReportHeader}} {
+	}{"request": {v.Request, Request, requestHeader}, "report": {v.Report.dispatchVector, Report, ReportHeader}} {
 		m := v.dispatch(c.d)
 		if got, err := c.header(dk, m, []byte(c.d.Body)); err != nil || got != c.d.Header {
 			t.Errorf("the %s's header: %q, %v", name, got, err)
@@ -301,15 +301,12 @@ func TestEveryHeaderAndCanonicalStringReproduces(t *testing.T) {
 			t.Errorf("the %s's canonical string: %q", name, got)
 		}
 	}
-	relay, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "..", "..", "tests", "fixtures", "runner_relay.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
 	var r struct {
 		MaxSignedHeaderBytes int `json:"max_signed_header_bytes"`
 	}
-	if err := json.Unmarshal(relay, &r); err != nil || r.MaxSignedHeaderBytes == 0 || MaxCallHeaderBytes != r.MaxSignedHeaderBytes {
-		t.Errorf("the longest call header is %d bytes; runner_relay.json's %d (%v)", MaxCallHeaderBytes, r.MaxSignedHeaderBytes, err)
+	wiretest.LoadStrict(t, "runner_relay.json", &r)
+	if r.MaxSignedHeaderBytes == 0 || MaxCallHeaderBytes != r.MaxSignedHeaderBytes {
+		t.Errorf("the longest call header is %d bytes; runner_relay.json's %d", MaxCallHeaderBytes, r.MaxSignedHeaderBytes)
 	}
 }
 

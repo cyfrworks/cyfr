@@ -6,7 +6,8 @@ defmodule Arca.PairedClientsTest do
   The paired client rows: recorded active, with a known source (a
   device's carrying its public key), once per credential in an athanor,
   and only by a member that owns its slot; listed and revoked in the
-  actor's own athanor, with `revoked` terminal; revoked by person, across
+  actor's own athanor, with `revoked` terminal, and a device's removed
+  until it is allowed again, revoked; revoked by person, across
   athanors only for the platform's own actor. Standing alone decides: no
   row carries a rank. A suspended row, a declared restore's, is listed only
   when its standing is asked for, and re-enabled only from `suspended`,
@@ -103,6 +104,9 @@ defmodule Arca.PairedClientsTest do
 
   defp standing(id),
     do: Arca.Repo.one(from(p in PairedClient, where: p.id == ^id, select: p.standing))
+
+  defp allow_again(actor, id, user_id \\ "usr_pcl"),
+    do: PairedClients.allow_again(actor, user_id, id, verify: fn _row -> :ok end)
 
   describe "record/2" do
     test "records an active client in the actor's athanor, as a plain map", %{actor: actor} do
@@ -249,6 +253,82 @@ defmodule Arca.PairedClientsTest do
       assert enrolled.holder_kind == "chip"
       assert_received {:also, id}
       assert id == enrolled.id
+    end
+
+    # The decision is made under the person's lock, from their rows of
+    # that key: a second enrollment finds the active row, and a removed one
+    # keeps the key out until it is allowed again.
+    test "an enrollment of a key the person holds finds its row, and a removed one refuses",
+         %{actor: actor} do
+      user_id = person!()
+      identity!(user_id)
+      key = :crypto.strong_rand_bytes(32)
+      also = fn row -> {:ok, row} end
+
+      assert {:ok, first} =
+               PairedClients.enroll(actor, device_attrs(user_id, %{device_public_key: key}),
+                 also: also
+               )
+
+      assert {:ok, again} =
+               PairedClients.enroll(actor, device_attrs(user_id, %{device_public_key: key}),
+                 also: also
+               )
+
+      assert again.id == first.id
+      assert {:ok, %{standing: "removed"}} = PairedClients.remove(actor, first.id)
+
+      assert {:error, :removed} =
+               PairedClients.enroll(actor, device_attrs(user_id, %{device_public_key: key}),
+                 also: also
+               )
+
+      assert {:ok, _revoked} = allow_again(actor, first.id, user_id)
+
+      assert {:ok, readmitted} =
+               PairedClients.enroll(actor, device_attrs(user_id, %{device_public_key: key}),
+                 also: also
+               )
+
+      assert Arca.Repo.all(
+               from(p in PairedClient,
+                 where: p.user_id == ^user_id,
+                 order_by: [asc: p.inserted_at, asc: p.id],
+                 select: {p.id, p.standing}
+               )
+             ) == [{first.id, "revoked"}, {readmitted.id, "active"}]
+    end
+
+    # The store holds the one row a person's device key stands on, active
+    # or removed, whichever write reaches it.
+    test "the store refuses a second active row of one person's device key", %{actor: actor} do
+      key = :crypto.strong_rand_bytes(32)
+      first = record!(actor, %{source_kind: "device_cert", device_public_key: key})
+
+      assert {:error, :conflict} =
+               PairedClients.record(
+                 actor,
+                 attrs(%{source_kind: "device_cert", device_public_key: key})
+               )
+
+      {:ok, _removed} = PairedClients.remove(actor, first.id)
+
+      assert {:error, :conflict} =
+               PairedClients.record(
+                 actor,
+                 attrs(%{source_kind: "device_cert", device_public_key: key})
+               )
+
+      # Another person's key, or another athanor's row, is its own.
+      assert {:ok, _theirs} =
+               PairedClients.record(
+                 actor,
+                 attrs(%{
+                   user_id: "usr_pcl_other",
+                   source_kind: "device_cert",
+                   device_public_key: key
+                 })
+               )
     end
 
     test "a refusal of its also: step rolls the enrollment back", %{actor: actor} do
@@ -464,6 +544,82 @@ defmodule Arca.PairedClientsTest do
       assert standing(row.id) == "revoked"
     end
 
+    test "remove/2 removes an active device's row alone, which revoke/2 keeps and allow_again/4 revokes",
+         %{actor: actor} do
+      device =
+        record!(actor, %{
+          source_kind: "device_cert",
+          device_public_key: :crypto.strong_rand_bytes(32)
+        })
+
+      session = record!(actor)
+      other = Prima.Actor.in_athanor("ath_pcl_other")
+
+      assert {:error, :not_found} = PairedClients.remove(actor, session.id)
+      assert {:error, :not_found} = PairedClients.remove(other, device.id)
+      assert {:error, :not_found} = allow_again(actor, device.id)
+
+      assert {:ok, %{standing: "removed", revoked_session_hashes: []}} =
+               PairedClients.remove(actor, device.id)
+
+      # A stale id of a row no longer active removes nothing.
+      assert {:error, :not_found} = PairedClients.remove(actor, device.id)
+      assert {:ok, %{standing: "removed"}} = PairedClients.revoke(actor, device.id)
+      assert standing(device.id) == "removed"
+
+      assert {:error, :not_found} = allow_again(other, device.id)
+      assert {:error, :not_found} = allow_again(actor, device.id, "usr_pcl_other")
+      assert {:ok, %{standing: "revoked"}} = allow_again(actor, device.id)
+      assert standing(device.id) == "revoked"
+      assert {:error, :not_found} = allow_again(actor, device.id)
+      assert {:error, :not_found} = PairedClients.remove(actor, device.id)
+      assert standing(session.id) == "active"
+    end
+
+    # Allowing a removed device again widens what may be admitted: a
+    # member that lost its slot writes nothing and runs no verify, and a
+    # verify that refuses rolls the write back.
+    test "allow_again/4 runs under the ownership fence, its verify inside the write",
+         %{actor: actor, slot: slot} do
+      test = self()
+
+      device =
+        record!(actor, %{
+          source_kind: "device_cert",
+          device_public_key: :crypto.strong_rand_bytes(32)
+        })
+
+      {:ok, _removed} = PairedClients.remove(actor, device.id)
+
+      assert {:error, :refused} =
+               PairedClients.allow_again(actor, "usr_pcl", device.id,
+                 verify: fn row ->
+                   send(test, {:verified, row.id})
+                   {:error, :refused}
+                 end
+               )
+
+      assert_received {:verified, id}
+      assert id == device.id
+      assert standing(device.id) == "removed"
+
+      {1, _} =
+        Arca.Repo.update_all(from(l in CellLease, where: l.node == ^slot.node),
+          set: [owner: "someone-else", generation: slot.generation + 1]
+        )
+
+      assert {:error, :not_owner} =
+               PairedClients.allow_again(actor, "usr_pcl", device.id,
+                 verify: fn row ->
+                   send(test, {:verified, row.id})
+                   :ok
+                 end
+               )
+
+      refute_received {:verified, _id}
+      assert standing(device.id) == "removed"
+    end
+
     test "a member that lost its slot may still revoke", %{actor: actor, slot: slot} do
       row = record!(actor)
 
@@ -474,5 +630,153 @@ defmodule Arca.PairedClientsTest do
 
       assert {:ok, %{standing: "revoked"}} = PairedClients.revoke(actor, row.id)
     end
+  end
+end
+
+defmodule Arca.PairedClientsRaceTest do
+  @moduledoc """
+  Two first enrollments of one person's device key, on two real
+  connections outside the sandbox: the second decides under the person's
+  lock from the row the first wrote, so the key stands on one client. On
+  PostgreSQL the case also observes the second waiting on the person's
+  row; on SQLite it observes no wait (the case's own comment says what it
+  establishes there).
+  """
+
+  use ExUnit.Case, async: false
+
+  import Ecto.Query
+  import Arca.Test.Adapter, only: [postgres?: 0]
+
+  alias Arca.{ControlPlane, PairedClients}
+  alias Arca.Schemas.{CellLease, PairedClient, User}
+  alias Arca.Test.LockWait
+  alias Ecto.Adapters.SQL.Sandbox
+
+  @slot_keys [
+    {Arca.ControlPlane, :standing},
+    {Arca.ControlPlane, :generation},
+    {Arca.ControlPlane, :slot}
+  ]
+
+  defp unboxed(fun), do: Sandbox.unboxed_run(Arca.Repo, fun)
+
+  setup do
+    hold_slot!()
+    now = DateTime.utc_now()
+    user_id = Prima.UUID7.generate_id(Prima.PersonId.prefix())
+    actor = Prima.Actor.in_athanor("ath_pcl_race_#{System.unique_integer([:positive])}")
+
+    on_exit(fn ->
+      unboxed(fn ->
+        Arca.Repo.delete_all(where(PairedClient, user_id: ^user_id))
+        Arca.Repo.delete_all(where(User, id: ^user_id))
+      end)
+    end)
+
+    unboxed(fn ->
+      {:ok, _} =
+        Arca.Test.People.mint(Prima.Actor.system(), %{
+          id: user_id,
+          first_seen_at: now,
+          last_seen_at: now,
+          created_at: now,
+          updated_at: now
+        })
+    end)
+
+    {:ok, user_id: user_id, actor: actor}
+  end
+
+  # This member's slot, taken on a real connection so every connection
+  # reads the lease; the lease row and the process-wide standing are given
+  # back after the case, the claim switch by `Prima.Test.Env`.
+  defp hold_slot! do
+    saved = Map.new(@slot_keys, &{&1, :persistent_term.get(&1, :absent)})
+    node = "node-pcl-race-#{System.unique_integer([:positive])}"
+
+    on_exit(fn ->
+      unboxed(fn -> Arca.Repo.delete_all(from(l in CellLease, where: l.node == ^node)) end)
+
+      for {key, value} <- saved do
+        if value == :absent,
+          do: :persistent_term.erase(key),
+          else: :persistent_term.put(key, value)
+      end
+    end)
+
+    Prima.Test.Env.put_app_env(:arca, :control_plane_claim_enabled, true)
+    {:ok, _slot} = unboxed(fn -> ControlPlane.take(node, node <> "#boot", 60_000) end)
+  end
+
+  defp backend do
+    if postgres?(), do: hd(hd(Arca.Repo.query!("SELECT pg_backend_pid()").rows))
+  end
+
+  defp attrs(user_id, key) do
+    id = Prima.UUID7.generate_id("pcl")
+
+    %{
+      id: id,
+      user_id: user_id,
+      source_kind: "device_cert",
+      source_id: id,
+      device_public_key: key
+    }
+  end
+
+  test "two first enrollments of one key at once stand on one client",
+       %{user_id: user_id, actor: actor} do
+    test = self()
+    key = :crypto.strong_rand_bytes(32)
+
+    first =
+      Task.async(fn ->
+        unboxed(fn ->
+          # The enrollment holds the person's lock, its row written and not
+          # committed, until the test lets it go.
+          PairedClients.enroll(actor, attrs(user_id, key),
+            also: fn row ->
+              send(test, {:enrolling, row.id})
+
+              receive do
+                :go -> {:ok, row}
+              end
+            end
+          )
+        end)
+      end)
+
+    assert_receive {:enrolling, first_id}, 5_000
+
+    second =
+      Task.async(fn ->
+        unboxed(fn ->
+          send(test, {:second, backend()})
+          PairedClients.enroll(actor, attrs(user_id, key), also: fn row -> {:ok, row} end)
+        end)
+      end)
+
+    assert_receive {:second, waiting}, 5_000
+
+    # PostgreSQL shows the second enrollment blocked on the person's row
+    # before the first is let go. SQLite shows no waiting writer without a
+    # timed wait: the message only says the second connection is about to
+    # enroll while the first holds the write lock with its row uncommitted.
+    # It may begin its transaction before or after the release; either way
+    # it cannot write past the first, so on SQLite the case establishes the
+    # decision under the lock and the one client, not that the second
+    # writer had blocked.
+    if postgres?(), do: LockWait.await_lock_wait!(waiting, [~s("users"), "FOR UPDATE"])
+
+    send(first.pid, :go)
+    assert {:ok, %{id: ^first_id}} = Task.await(first, 25_000)
+    assert {:ok, %{id: ^first_id}} = Task.await(second, 25_000)
+
+    assert unboxed(fn ->
+             Arca.Repo.all(
+               from(p in PairedClient, where: p.user_id == ^user_id, select: {p.id, p.standing})
+             )
+           end) == [{first_id, "active"}]
   end
 end
