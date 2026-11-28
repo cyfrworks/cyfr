@@ -15,12 +15,20 @@
 //!
 //! **A subtree** is its root's attempt and every child a formula of it
 //! starts (`Tree::start_child`), each an attempt of its own run on a task
-//! of its own, its own store with it, announced to the service with
-//! `child` before it runs. A `cancel_child` naming one of them stops it:
-//! its component's call is dropped and it closes `abandoned`. So does a
-//! child whose waiter is gone (its formula's call, task or store), which
-//! is how nothing of a formula's children outlives it. A cancel naming the
-//! root, or nothing of the subtree, is ignored.
+//! of its own, its own store with it. A child runs only once its `child`
+//! frame is written to the service; one whose frame is not written runs
+//! nothing and is given back. The subtree holds an attempt only while it
+//! runs: an attempt that ends leaves it, and a child's leaves the relay
+//! once nothing of it is outstanding there, so a thousand children one
+//! after another hold what one holds. At most `crate::control::MAX_OPEN`
+//! run at once, as many as one `exit` can name; a child past them is not
+//! started, and is given back. An execution the subtree runs already,
+//! admitted again, is not started again, and the running child is left as
+//! it is. A `cancel_child` naming a running child stops it: its
+//! component's call is dropped and it closes `abandoned`. So does a child
+//! whose waiter is gone (its formula's call, task or store), which is how
+//! nothing of a formula's children outlives it. A cancel naming the root,
+//! or nothing running in the subtree, is ignored.
 //!
 //! **The subtree completes** once every attempt of it has ended with its
 //! close recorded, a cancelled child's close excepted, whose cancel fences
@@ -117,13 +125,20 @@ impl Drop for StopOnDrop {
     }
 }
 
-/// Why a child was not started.
+/// Why a child was not started: nothing of it ran, and its admission is
+/// to be given back.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Unstarted {
-    /// The subtree already runs or ran its execution.
+    /// The subtree runs its execution already: the running child is left
+    /// as it is.
     Known,
-    /// The subtree is ending, or its service no longer reads it: the child
-    /// is named open in the runner's `exit`.
+    /// The subtree runs as many attempts as one `exit` can name
+    /// (`crate::control::MAX_OPEN`).
+    Full,
+    /// Its `child` frame was not written: the service would not know of
+    /// it.
+    Unannounced,
+    /// The subtree is ending.
     Ending,
 }
 
@@ -146,6 +161,8 @@ struct Launch {
 
 #[derive(Default)]
 struct State {
+    /// The subtree's attempts still running, or reserved and not yet
+    /// started, by execution: each leaves when it ends.
     entries: BTreeMap<String, Entry>,
     /// A child was cancelled, or an attempt ended what the runner does not
     /// know: the subtree completes not clean.
@@ -159,9 +176,6 @@ struct Entry {
     attempt: String,
     stop: Stop,
     task: Option<tokio::task::AbortHandle>,
-    ended: bool,
-    /// It ended with its attempt left open.
-    left_open: bool,
     cancelled: bool,
 }
 
@@ -171,8 +185,6 @@ impl Entry {
             attempt: attempt.to_owned(),
             stop,
             task: None,
-            ended: false,
-            left_open: false,
             cancelled: false,
         }
     }
@@ -221,10 +233,10 @@ impl Tree {
         self.state.lock().expect("the subtree's state")
     }
 
-    /// Start the child `start` on `runner`, announced to the service with
-    /// `child` before it runs; `waiter` is answered its close, and `stop`
+    /// Start the child `start` on `runner`, once its `child` frame is
+    /// written to the service; `waiter` is answered its close, and `stop`
     /// stops it, as its waiter's going and a `cancel_child` do. A child not
-    /// started is handed back, with why.
+    /// started is handed back, with why: nothing of it ran.
     pub async fn start_child(
         self: &Arc<Tree>,
         start: Start,
@@ -242,14 +254,17 @@ impl Tree {
             if execution_id == self.root || state.entries.contains_key(&execution_id) {
                 return Err((Unstarted::Known, Box::new(start)));
             }
+            if state.entries.len() >= crate::control::MAX_OPEN {
+                return Err((Unstarted::Full, Box::new(start)));
+            }
             state
                 .entries
                 .insert(execution_id.clone(), Entry::new(&attempt, stop.clone()));
         }
-        // Until it is handed to the loop, a child CYFR admitted for this
-        // runner is reported left open however this ends (its formula
-        // stopped while the channel had no room, or the channel gone): the
-        // subtree ends naming it, and never waits for it.
+        // Until it is handed to the loop, a child whose formula stopped
+        // while its frame was being written is reported left open: whether
+        // the service has it is not known, so the subtree ends naming it,
+        // and never waits for it.
         let reserved = Reserved {
             tree: self,
             execution_id: Some(execution_id.clone()),
@@ -258,8 +273,12 @@ impl Tree {
             execution_id: execution_id.clone(),
             attempt,
         };
-        if runner.control.send(&child).await.is_err() {
-            return Err((Unstarted::Ending, Box::new(start)));
+        // The child runs only once its frame is written: a write that
+        // failed runs nothing of it.
+        if runner.control.send_flushed(&child).await.is_err() {
+            reserved.handed();
+            self.lock().entries.remove(&execution_id);
+            return Err((Unstarted::Unannounced, Box::new(start)));
         }
         let launch = Launch {
             start,
@@ -305,7 +324,8 @@ impl Tree {
     }
 
     /// Record a doubt about the subtree that no attempt's end carries (a
-    /// child not started whose close was not recorded): it completes not
+    /// child's admission not given back, or given back unconfirmed; a
+    /// formula's task stopped while its call was out): it completes not
     /// clean.
     pub fn doubt(&self) {
         self.lock().unclean = true;
@@ -319,8 +339,10 @@ impl Tree {
     }
 
     /// Stop the child `execution_id` for its service's `cancel_child`: the
-    /// subtree completes not clean, and the child's close is not waited on
-    /// to be recorded. Whether it is a child of this subtree, ended or not.
+    /// subtree completes not clean, however the child then ends (a cancel
+    /// racing its close included), and a close CYFR does not record for it
+    /// ends nothing: the cancel fences it. Whether it is a running child of
+    /// this subtree; one that ended is no longer.
     fn cancel(&self, execution_id: &str) -> bool {
         let mut state = self.lock();
         let Some(entry) = state.entries.get_mut(execution_id) else {
@@ -334,28 +356,32 @@ impl Tree {
 
     // Record the end of `execution_id`'s attempt: what the subtree comes
     // to, or none while any attempt of it still runs.
-    fn ended(&self, execution_id: &str, ended: Ended) -> Option<Settled> {
+    // Record the end of `execution_id`'s attempt, which the subtree holds
+    // no more: the attempt, and what the subtree comes to, or none while
+    // any attempt of it still runs.
+    fn ended(&self, execution_id: &str, ended: Ended) -> (String, Option<Settled>) {
         let mut state = self.lock();
-        let cancelled = match state.entries.get_mut(execution_id) {
-            Some(entry) => {
-                entry.ended = true;
-                entry.left_open = !ended.closed;
-                entry.cancelled
-            }
-            None => false,
-        };
-        if !ended.closed && !cancelled {
-            let open = self.end(&mut state);
-            return Some(Settled::Open(open));
+        let entry = state
+            .entries
+            .remove(execution_id)
+            .expect("an attempt the subtree holds");
+        if !ended.closed && !entry.cancelled {
+            let mut open = self.end(&mut state);
+            open.push(entry.attempt.clone());
+            return (entry.attempt, Some(Settled::Open(open)));
         }
         state.unclean |= ended.unclean || !ended.closed;
-        if state.entries.values().all(|entry| entry.ended) {
+        if state.entries.is_empty() {
             state.ending = true;
-            return Some(Settled::Closed {
-                unclean: state.unclean,
-            });
+            let unclean = state.unclean;
+            return (entry.attempt, Some(Settled::Closed { unclean }));
         }
-        None
+        (entry.attempt, None)
+    }
+
+    /// How many attempt records the subtree holds.
+    fn held(&self) -> usize {
+        self.lock().entries.len()
     }
 
     /// End the subtree where it stands: no child starts, every attempt
@@ -373,7 +399,7 @@ impl Tree {
             if let Some(task) = &entry.task {
                 task.abort();
             }
-            if !entry.cancelled && (!entry.ended || entry.left_open) {
+            if !entry.cancelled {
                 open.push(entry.attempt.clone());
             }
         }
@@ -598,7 +624,14 @@ where
                 if !current.tree.lock().entries.contains_key(&execution_id) {
                     continue;
                 }
-                let settled = current.tree.ended(&execution_id, ended);
+                let (attempt, settled) = current.tree.ended(&execution_id, ended);
+                // A child that ended leaves the relay once nothing of it is
+                // outstanding; the root's attempt stays until the next bind.
+                if execution_id != current.execution_id
+                    && let Some(relay) = &relay
+                {
+                    relay.retire(&attempt);
+                }
                 match settled {
                     None => {}
                     Some(Settled::Open(open)) => {
@@ -606,12 +639,17 @@ where
                         return 1;
                     }
                     Some(Settled::Closed { unclean }) => {
-                        let Running { execution_id, .. } =
+                        let Running { execution_id, tree } =
                             running.take().expect("a running subtree");
-                        let idle = match &relay {
-                            Some(relay) => relay.idle().await,
-                            None => true,
+                        let (idle, carried) = match &relay {
+                            Some(relay) => (relay.idle().await, relay.carried().await),
+                            None => (true, 0),
                         };
+                        eprintln!(
+                            "cyfr-runner: {execution_id} completed, holding {} attempt records, \
+                             its relay carrying {carried} attempts",
+                            tree.held()
+                        );
                         let clean = !unclean && idle;
                         ran.unclean |= !clean;
                         let complete = Message::Complete { execution_id, clean };

@@ -92,13 +92,30 @@ pub struct Ended {
 }
 
 /// What an attempt's waiter is answered, as its close was recorded (a
-/// formula's call of a child, or its task): the output, the failure, or
-/// for a run the runner stopped, a failure whose effect is not known.
-#[derive(Debug, PartialEq)]
+/// formula's call of a child, or its task): the output as its JSON text,
+/// the failure, or for a run the runner stopped, a failure whose effect is
+/// not known. Each is a peer's, held cleared and printed by no `Debug`.
+#[derive(PartialEq)]
 pub enum Answer {
-    Output(Json),
-    Failed(String),
-    Uncertain(String),
+    Output(Zeroizing<Vec<u8>>),
+    Failed(Zeroizing<String>),
+    Uncertain(Zeroizing<String>),
+}
+
+impl Answer {
+    fn failed(sentence: &str) -> Answer {
+        Answer::Failed(Zeroizing::new(sentence.to_owned()))
+    }
+}
+
+impl std::fmt::Debug for Answer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Answer::Output(_) => f.write_str("Output(..)"),
+            Answer::Failed(_) => f.write_str("Failed(..)"),
+            Answer::Uncertain(_) => f.write_str("Uncertain(..)"),
+        }
+    }
 }
 
 /// The attempt's side of its host calls, which its imports make too.
@@ -110,6 +127,8 @@ pub struct Host {
     notes: std::sync::Mutex<std::collections::BTreeMap<&'static str, u64>>,
     /// The attempt's streams whose answers are still to be recorded.
     watchers: std::sync::Mutex<Vec<Arc<crate::imports::stream::Watcher>>>,
+    /// The formula's tasks that were stopped, until each has ended.
+    stopping: std::sync::Mutex<Vec<tokio::task::JoinHandle<()>>>,
 }
 
 impl Host {
@@ -121,6 +140,7 @@ impl Host {
             lost: std::sync::atomic::AtomicBool::new(false),
             notes: std::sync::Mutex::new(std::collections::BTreeMap::new()),
             watchers: std::sync::Mutex::new(Vec::new()),
+            stopping: std::sync::Mutex::new(Vec::new()),
         }
     }
 
@@ -154,6 +174,29 @@ impl Host {
     /// Whether a call of the attempt ended lost or uncertain: what it did
     /// is unknown, and so is what its guest holds, so its runner is not
     /// reused.
+    /// Record that something of the attempt may have acted unseen (a task
+    /// stopped while its call was out): its runner is not reused.
+    pub fn doubt(&self) {
+        self.lost.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Keep `task`, which was told to stop, until it has: the attempt does
+    /// not close before it.
+    pub fn stopping(&self, task: tokio::task::JoinHandle<()>) {
+        let mut stopping = self.stopping.lock().expect("the attempt's tasks");
+        stopping.retain(|task| !task.is_finished());
+        stopping.push(task);
+    }
+
+    /// Wait until every task of the attempt's that was told to stop has
+    /// ended, before the attempt closes.
+    pub async fn settle_tasks(&self) {
+        let tasks = std::mem::take(&mut *self.stopping.lock().expect("the attempt's tasks"));
+        for task in tasks {
+            let _ = task.await;
+        }
+    }
+
     pub fn lost(&self) -> bool {
         self.lost.load(std::sync::atomic::Ordering::Relaxed)
     }
@@ -161,8 +204,22 @@ impl Host {
     /// Make the host call `op` with `args`, whose strings (a token, a
     /// guest's output or content) are cleared once the call has ended.
     pub async fn call(&self, op: &'static str, args: Map<String, Value>) -> Outcome {
+        self.call_watched(op, args, None).await
+    }
+
+    /// `call`, setting `answered` once any answer to it reaches the runner:
+    /// from then on what CYFR did is known, whoever reads the answer.
+    pub async fn call_watched(
+        &self,
+        op: &'static str,
+        args: Map<String, Value>,
+        answered: Option<Arc<std::sync::atomic::AtomicBool>>,
+    ) -> Outcome {
         let op = Op::named(op).expect("a callback of the host API");
-        let mut poster = self.relay.poster(&self.caller.keys.attempt.attempt);
+        let mut poster = Watched {
+            poster: self.relay.poster(&self.caller.keys.attempt.attempt),
+            answered,
+        };
         let args = Json::from_value(Value::Object(args));
         let Value::Object(members) = args.value() else {
             unreachable!("an object")
@@ -251,6 +308,33 @@ impl Host {
     }
 }
 
+/// A poster whose calls' places the relay marks when an answer to them
+/// reaches the runner.
+struct Watched {
+    poster: crate::relay::Poster,
+    answered: Option<Arc<std::sync::atomic::AtomicBool>>,
+}
+
+impl host::Post for Watched {
+    async fn place(&mut self, op: Op) -> Option<host::Place> {
+        let place = self.poster.place(op).await?;
+        Some(match &self.answered {
+            Some(answered) => place.watched(answered.clone()),
+            None => place,
+        })
+    }
+
+    fn post(
+        &mut self,
+        op: Op,
+        header: String,
+        body: Vec<u8>,
+        place: host::Place,
+    ) -> impl std::future::Future<Output = Option<host::Reached>> {
+        self.poster.post(op, header, body, place)
+    }
+}
+
 /// What a run of the component came to.
 enum Run_ {
     Output(Json),
@@ -278,26 +362,6 @@ fn caller(start: &Start, runner: &Runner) -> Caller {
         boot: runner.boot.clone(),
         runner: runner.runner_id.clone(),
         member: start.assignment.member.clone(),
-    }
-}
-
-/// Close the child `start`, which CYFR admitted for `runner` and the runner
-/// does not run, failed with `sentence`: the failure CYFR recorded, or none
-/// when it recorded none, which leaves the subtree in doubt.
-pub async fn refuse(start: &Start, runner: &Runner, sentence: &str) -> Option<String> {
-    let host = Host::new(
-        caller(start, runner),
-        runner.relay.clone(),
-        runner.control.clone(),
-    );
-    let (ended, answer) = close(&host, Run_::Failed(sentence.to_owned())).await;
-    host.noted();
-    if ended.unclean || !ended.closed {
-        runner.tree.doubt();
-    }
-    match (ended.closed, answer) {
-        (true, Answer::Failed(recorded)) => Some(recorded),
-        _ => None,
     }
 }
 
@@ -449,7 +513,7 @@ async fn attached(start: &Start, host: &Host) -> Result<Fields, (Ended, Answer)>
                 closed: true,
                 unclean: host.lost(),
             },
-            Answer::Failed(words::ENDED.to_owned()),
+            Answer::failed(words::ENDED),
         )),
         _ => Err(left_open(
             assignment,
@@ -468,7 +532,7 @@ fn left_open(assignment: &Assignment, why: &str) -> (Ended, Answer) {
             closed: false,
             unclean: false,
         },
-        Answer::Failed(words::ENDED.to_owned()),
+        Answer::failed(words::ENDED),
     )
 }
 
@@ -495,6 +559,7 @@ async fn execute(
         return Run_::Failed(words::NO_MEMORY.to_owned());
     }
     let digest = &digest;
+    let turn = engine.turn(digest).await;
     let component = match engine.kept(digest) {
         Some(component) => component,
         None => {
@@ -508,6 +573,7 @@ async fn execute(
             }
         }
     };
+    drop(turn);
     match engine.run(kind, &component, imports, &input).await {
         Ok(output) if depth(output.as_bytes()) > MAX_OUTPUT_DEPTH => {
             Run_::Failed(words::output_too_deep())
@@ -555,6 +621,7 @@ async fn fetch(host: &Host, digest: &str) -> Result<Vec<u8>, String> {
 }
 
 async fn close(host: &Host, outcome: Run_) -> (Ended, Answer) {
+    host.settle_tasks().await;
     host.settle_streams().await;
     let (op, fields, stopped) = match outcome {
         Run_::Output(mut output) => (
@@ -570,8 +637,10 @@ async fn close(host: &Host, outcome: Run_) -> (Ended, Answer) {
     };
     // What the runner itself knows of the run, should CYFR not record it.
     let unrecorded = match (stopped, &fields[1]) {
-        (true, ("error", Value::String(sentence))) => Answer::Uncertain(sentence.clone()),
-        _ => Answer::Failed(words::ENDED.to_owned()),
+        (true, ("error", Value::String(sentence))) => {
+            Answer::Uncertain(Zeroizing::new(sentence.clone()))
+        }
+        _ => Answer::failed(words::ENDED),
     };
     let mut outcome = args([
         ("attempt", Value::String(host.attempt().to_owned())),
@@ -593,13 +662,15 @@ async fn close(host: &Host, outcome: Run_) -> (Ended, Answer) {
     // failure it recorded instead; a fail with the failure as recorded. A
     // run the runner stopped is answered as one whose effect is not known.
     let recorded = match (op, answer) {
-        ("complete", Outcome::Answered(Reading::Ok(output))) => Some(Answer::Output(output)),
-        ("complete", Outcome::Answered(Reading::Failed(message))) => {
-            Some(Answer::Failed(message.as_str().to_owned()))
+        ("complete", Outcome::Answered(Reading::Ok(output))) => {
+            Some(Answer::Output(crate::wire::to_bytes(output.value())))
         }
+        ("complete", Outcome::Answered(Reading::Failed(message))) => Some(Answer::Failed(message)),
         ("fail", Outcome::Answered(Reading::Ok(recorded))) => match recorded.value() {
-            Value::String(message) if stopped => Some(Answer::Uncertain(message.clone())),
-            Value::String(message) => Some(Answer::Failed(message.clone())),
+            Value::String(message) if stopped => {
+                Some(Answer::Uncertain(Zeroizing::new(message.clone())))
+            }
+            Value::String(message) => Some(Answer::Failed(Zeroizing::new(message.clone()))),
             _ => None,
         },
         _ => None,

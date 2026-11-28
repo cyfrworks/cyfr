@@ -34,9 +34,6 @@ pub const CANCELLED: &str = "Execution cancelled before it completed";
 /// runner could not run to its close.
 pub const ENDED: &str = "Execution attempt ended before it closed";
 
-/// A child CYFR admitted that the runner does not start, closed failed.
-pub const CHILD_UNSTARTED: &str = "Execution refused: its runner could not start";
-
 /// The uncertain end of a call never asked again.
 pub const UNCERTAIN: &str = "The call's answer was lost and its effect is unknown";
 

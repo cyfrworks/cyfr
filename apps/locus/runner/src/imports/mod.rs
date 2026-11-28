@@ -135,6 +135,7 @@ impl Guest {
     /// The store data of a run under `run`: one linear memory of at most
     /// the node's `max_memory_bytes`, and the bounds above.
     pub fn new(run: Arc<Run>) -> Guest {
+        let tasks = formula::Tasks::new(run.host.clone());
         let memory = usize::try_from(run.limits.max_memory_bytes).unwrap_or(usize::MAX);
         let limits = StoreLimitsBuilder::new()
             .memory_size(memory)
@@ -158,7 +159,7 @@ impl Guest {
             asks: 0,
             hops: std::collections::VecDeque::new(),
             streams: stream::Streams::new(),
-            tasks: formula::Tasks::new(),
+            tasks,
         }
     }
 

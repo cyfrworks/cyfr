@@ -174,6 +174,9 @@ pub struct Engine {
     compiler: Compiler,
     kept: Arc<Mutex<HashMap<String, (Component, u64)>>>,
     compiles: std::sync::atomic::AtomicU64,
+    /// Each digest whose bytes are being fetched or compiled, by the one
+    /// attempt doing so; the others wait for its compile.
+    fetching: Mutex<HashMap<String, std::sync::Weak<tokio::sync::Mutex<()>>>>,
 }
 
 impl Engine {
@@ -207,12 +210,33 @@ impl Engine {
             compiler,
             kept: Arc::new(Mutex::new(HashMap::new())),
             compiles: std::sync::atomic::AtomicU64::new(0),
+            fetching: Mutex::new(HashMap::new()),
         }))
     }
 
     /// How many compiles the engine holds.
     pub fn kept_count(&self) -> usize {
         self.kept.lock().expect("the kept compiles").len()
+    }
+
+    /// Wait until no other attempt fetches or compiles `digest`, and hold
+    /// that turn until the guard is dropped: N attempts of one new digest
+    /// make one fetch and one compile, the rest finding it kept. An attempt
+    /// stopped while it holds the turn gives it up as it is dropped.
+    pub async fn turn(&self, digest: &str) -> tokio::sync::OwnedMutexGuard<()> {
+        let turn = {
+            let mut fetching = self.fetching.lock().expect("the digests fetched");
+            fetching.retain(|_digest, turn| turn.strong_count() > 0);
+            match fetching.get(digest).and_then(std::sync::Weak::upgrade) {
+                Some(turn) => turn,
+                None => {
+                    let turn = Arc::new(tokio::sync::Mutex::new(()));
+                    fetching.insert(digest.to_owned(), Arc::downgrade(&turn));
+                    turn
+                }
+            }
+        };
+        turn.lock_owned().await
     }
 
     /// The compile kept for `digest`, if one is.

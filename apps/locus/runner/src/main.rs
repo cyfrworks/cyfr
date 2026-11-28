@@ -99,6 +99,11 @@ fn run(
         .worker_threads(workers)
         .thread_name("runner-worker")
         .thread_stack_size(STACK_BYTES)
+        // A worker serves the timers and I/O after every task it polls, not
+        // every 61st: with every worker computing a guest that yields each
+        // epoch tick, a budget, a lease, a stop and the channels keep their
+        // time within a tick of it.
+        .event_interval(1)
         .enable_io()
         .enable_time()
         .build()

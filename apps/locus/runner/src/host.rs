@@ -74,6 +74,19 @@ const CALLBACKS: [(&str, Retry, u64); 16] = [
     ("question_wait", Retry::Idempotent, 30_000),
 ];
 
+/// The callbacks a guest's import makes on its behalf.
+const GUEST_CALLS: [&str; 9] = [
+    "push_deltas",
+    "oauth_token",
+    "take_rate",
+    "storage",
+    "admit_child",
+    "tool_call",
+    "egress_pin",
+    "question_ask",
+    "question_wait",
+];
+
 /// The refusals by name any callback's answer may be.
 pub const REFUSALS: [&str; 7] = [
     "lost",
@@ -123,6 +136,14 @@ impl Op {
         CALLBACKS[self.0].1
     }
 
+    /// Whether a guest starts the call, through an import: such calls
+    /// share fewer places than the relay has, so none of them can keep the
+    /// runner's own (an attach, a renewal, a close, a fetch of a
+    /// component, a denial's report, a release) from a place.
+    pub fn guest(self) -> bool {
+        GUEST_CALLS.contains(&self.name())
+    }
+
     /// How long an answer is waited for before the try is lost.
     pub fn timeout(self) -> Duration {
         Duration::from_millis(CALLBACKS[self.0].2)
@@ -140,8 +161,12 @@ pub struct Reached {
 /// A place among the host calls the relay carries, which a call holds from
 /// before it is signed until its answer.
 pub struct Place {
-    // Held, never read: dropped, it frees the place.
+    // Held, never read: dropped, each frees its place.
     _permit: Option<tokio::sync::OwnedSemaphorePermit>,
+    _guest: Option<tokio::sync::OwnedSemaphorePermit>,
+    /// Set by the relay when an answer to the call reaches the runner,
+    /// whoever then reads it.
+    answered: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 
 impl Place {
@@ -149,12 +174,44 @@ impl Place {
     pub fn held(permit: tokio::sync::OwnedSemaphorePermit) -> Place {
         Place {
             _permit: Some(permit),
+            _guest: None,
+            answered: None,
+        }
+    }
+
+    /// The place, marking `answered` when an answer to its call arrives.
+    pub fn watched(mut self, answered: std::sync::Arc<std::sync::atomic::AtomicBool>) -> Place {
+        self.answered = Some(answered);
+        self
+    }
+
+    /// Record that an answer to the place's call has reached the runner.
+    pub fn mark_answered(&self) {
+        if let Some(answered) = &self.answered {
+            answered.store(true, std::sync::atomic::Ordering::Release);
+        }
+    }
+
+    /// A place of the relay's taken by a call a guest started, which holds
+    /// one of the guests' share too.
+    pub fn held_for_guest(
+        permit: tokio::sync::OwnedSemaphorePermit,
+        guest: tokio::sync::OwnedSemaphorePermit,
+    ) -> Place {
+        Place {
+            _permit: Some(permit),
+            _guest: Some(guest),
+            answered: None,
         }
     }
 
     /// A place of a poster that counts none.
     pub fn free() -> Place {
-        Place { _permit: None }
+        Place {
+            _permit: None,
+            _guest: None,
+            answered: None,
+        }
     }
 }
 
@@ -162,7 +219,7 @@ impl Place {
 /// when no call is posted again; then post the header and sealed body, and
 /// answer what reached the service, or none when nothing did.
 pub trait Post {
-    fn place(&mut self) -> impl Future<Output = Option<Place>>;
+    fn place(&mut self, op: Op) -> impl Future<Output = Option<Place>>;
 
     fn post(
         &mut self,
@@ -282,7 +339,7 @@ async fn placed(
     op: Op,
     body: &str,
 ) -> Option<Result<(CallFields, Reached), Outcome>> {
-    let place = post.place().await?;
+    let place = post.place(op).await?;
     let fields = CallFields {
         attempt: caller.keys.attempt.clone(),
         boot: caller.boot.clone(),

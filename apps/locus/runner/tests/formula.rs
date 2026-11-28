@@ -10,7 +10,7 @@ mod support;
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
@@ -60,7 +60,7 @@ fn admitting(children: Vec<Job>) -> support::Script {
     let children = Arc::new(Mutex::new(VecDeque::from(children)));
     Box::new(move |call, job| match call.op.as_str() {
         "admit_child" => match children.lock().expect("the children").pop_front() {
-            Some(child) => Reply::Ok(job.admitted(&child)),
+            Some(child) => Reply::Ok(job.of(&call.attempt).admitted(&child)),
             None => Reply::Error(
                 "guest_error",
                 json!({"type": "dispatch_error",
@@ -121,6 +121,21 @@ fn answers(service: &Service, formula: &Job) -> Vec<Value> {
         .as_array()
         .expect("the probe's answers")
         .clone()
+}
+
+/// What `found` finds within `within`, polled; none when it finds nothing
+/// in that time.
+fn waited<T>(within: Duration, mut found: impl FnMut() -> Option<T>) -> Option<T> {
+    let until = Instant::now() + within;
+    loop {
+        if let Some(found) = found() {
+            return Some(found);
+        }
+        if Instant::now() >= until {
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(20)); // sleep-ok: polls what the runner reaches, bounded by `within`
+    }
 }
 
 fn error(kind: &str, message: &str) -> Value {
@@ -232,6 +247,8 @@ fn refused_admission(name: &str, child: Job, spoil: fn(&mut Value, &Job, &Job)) 
     );
     let ended = ended(&service, SOON);
     assert_eq!(ended.last["type"], "complete", "{name}: {}", ended.last);
+    // CYFR confirmed the child given back: nothing of it is left.
+    assert_eq!(ended.last["clean"], json!(true), "{name}: {}", ended.last);
     assert_eq!(
         answers(&service, &job),
         [error("dispatch_error", words::CALL_FAILED)],
@@ -366,11 +383,7 @@ fn a_cancelled_child_with_a_fetch_outstanding_closes_abandoned_and_its_sibling_c
     })
     .expect("a frame");
     service.send_line(&root);
-    let cancel = control::encode(&control::Message::CancelChild {
-        execution_id: fetcher.execution_id.clone(),
-    })
-    .expect("a frame");
-    service.send_line(&cancel);
+    service.send_line(&job.cancel(&fetcher));
     let ended = ended(&service, SOON);
     assert_eq!(ended.last["type"], "complete", "{}", ended.last);
     assert_eq!(ended.last["execution_id"], json!(job.execution_id));
@@ -404,12 +417,17 @@ fn a_cancelled_child_with_a_fetch_outstanding_closes_abandoned_and_its_sibling_c
     let next = echo(&job, "{}");
     job.family.lock().expect("the family").push(next.clone());
     service.send_line(&control::encode(&next.assign()).expect("an assign"));
-    let exit = service.frame(SOON);
-    assert_eq!(
-        exit,
-        json!({"v": 1, "type": "exit", "runner": support::RUNNER, "open": []})
-    );
     assert_eq!(service.exit(SOON).code(), Some(1));
+    let said: Vec<Value> = service
+        .rest(Duration::from_secs(5))
+        .into_iter()
+        .filter(|line| line["type"] != "event")
+        .collect();
+    assert_eq!(
+        said,
+        [json!({"v": 1, "type": "exit", "runner": support::RUNNER, "open": []})],
+        "the runner refused the next subtree in its exit"
+    );
     assert!(calls(&service, "attach", &next).is_empty());
     assert!(
         service
@@ -425,8 +443,16 @@ fn a_formula_stopped_while_its_child_runs_stops_the_child_which_closes_abandoned
     // Long enough for the formula's compile on a loaded host, which its
     // budget counts.
     job.timeout_ms = 8_000;
-    let child = spin(&job, 60_000);
+    let child = spin(&job, 120_000);
     service.assign(&job, admitting(vec![child.clone()]));
+    let stopped = waited(Duration::from_secs(40), || {
+        calls(&service, "fail", &child).first().cloned()
+    });
+    assert!(
+        stopped.is_some(),
+        "the child ran on past its formula: {:?}",
+        service.ops()
+    );
     let ended = ended(&service, SOON);
     assert_eq!(ended.last["type"], "complete", "{}", ended.last);
     assert_eq!(ended.last["clean"], json!(false));
@@ -445,8 +471,16 @@ fn a_formula_stopped_while_its_child_runs_stops_the_child_which_closes_abandoned
 fn a_task_its_formula_left_running_is_stopped_with_its_store() {
     let mut service = Service::start();
     let job = formula(&[("spawn", run("run", "reagent:local.spin:0.1.0", json!({})))]);
-    let child = spin(&job, 60_000);
+    let child = spin(&job, 120_000);
     service.assign(&job, admitting(vec![child.clone()]));
+    let stopped = waited(Duration::from_secs(40), || {
+        calls(&service, "fail", &child).first().cloned()
+    });
+    assert!(
+        stopped.is_some(),
+        "the task ran on past its formula: {:?}",
+        service.ops()
+    );
     let ended = ended(&service, SOON);
     assert_eq!(ended.last["type"], "complete", "{}", ended.last);
     assert_eq!(ended.last["clean"], json!(false));
@@ -965,5 +999,730 @@ fn nothing_of_a_childs_token_or_keys_is_left_in_the_runners_memory_after_its_sub
         &found[1..],
         &[0, 0, 0, 0, 0],
         "token, keys' hex, keys' bytes"
+    );
+}
+
+// ============================================================================
+// The mend of the first review round: authority, what a subtree holds,
+// what keeps a runner from reuse, and its time.
+// ============================================================================
+
+/// A child whose keys name its attempt with `field` changed to `value`.
+fn keys_naming(formula: &Job, field: &str, value: Value) -> Job {
+    let mut child = echo(formula, "{}");
+    let mut named = serde_json::to_value(json!({
+        "athanor_id": child.athanor, "execution_id": child.execution_id,
+        "attempt": child.attempt, "fence": 2, "generation": 7, "service": child.service,
+    }))
+    .expect("an attempt");
+    named[field] = value;
+    child.keys_attempt = Some(cyfr_runner::auth::Attempt {
+        athanor_id: named["athanor_id"].as_str().expect("a string").to_owned(),
+        execution_id: named["execution_id"].as_str().expect("a string").to_owned(),
+        attempt: named["attempt"].as_str().expect("a string").to_owned(),
+        fence: named["fence"].as_u64().expect("a fence"),
+        generation: named["generation"].as_u64().expect("a generation"),
+        service: named["service"].as_str().expect("a string").to_owned(),
+    });
+    child
+}
+
+#[test]
+fn an_admission_whose_keys_name_another_fence_is_given_back() {
+    let formula = formula(&[]);
+    refused_admission(
+        "fence",
+        keys_naming(&formula, "fence", json!(3)),
+        |_, _, _| {},
+    );
+}
+
+#[test]
+fn an_admission_whose_keys_name_another_generation_is_given_back() {
+    let formula = formula(&[]);
+    let child = keys_naming(&formula, "generation", json!(8));
+    refused_admission("generation", child, |_, _, _| {});
+}
+
+#[test]
+fn an_admission_whose_keys_name_another_athanor_is_given_back() {
+    let formula = formula(&[]);
+    let child = keys_naming(&formula, "athanor_id", json!("ath_test-keys"));
+    refused_admission("keys' athanor", child, |_, _, _| {});
+}
+
+#[test]
+fn an_admission_whose_keys_name_another_execution_is_given_back() {
+    let formula = formula(&[]);
+    let child = keys_naming(&formula, "execution_id", json!("exec_test-keys"));
+    refused_admission("keys' execution", child, |_, _, _| {});
+}
+
+#[test]
+fn an_admission_whose_keys_name_another_service_is_given_back() {
+    let formula = formula(&[]);
+    let child = keys_naming(&formula, "service", json!("wrk_keysservice"));
+    refused_admission("keys' service", child, |_, _, _| {});
+}
+
+#[test]
+fn an_admission_without_its_projection_is_given_back() {
+    let parent = formula(&[]);
+    refused_admission("projection", echo(&parent, "{}"), |answer, _, _| {
+        answer.as_object_mut().expect("an answer").remove("secrets");
+    });
+}
+
+#[test]
+fn a_release_cyfr_does_not_confirm_leaves_the_runner_not_clean() {
+    let mut service = Service::start();
+    let parent = formula(&[("call", run("run", "reagent:local.echo:0.1.0", json!({})))]);
+    let child = echo(&parent, "{}");
+    service.assign(
+        &parent,
+        Box::new(move |call, job| match call.op.as_str() {
+            "admit_child" => {
+                let mut answer = job.admitted(&child);
+                answer["input"] = json!("null");
+                Reply::Ok(answer)
+            }
+            "release_child" => Reply::Error("unavailable", json!({})),
+            _ => standard(call, job),
+        }),
+    );
+    let frames = ended(&service, SOON);
+    assert_eq!(calls(&service, "release_child", &parent).len(), 1);
+    assert_eq!(frames.last["clean"], json!(false), "{}", frames.last);
+}
+
+#[test]
+fn an_admission_whose_assignment_does_not_read_leaves_the_runner_not_clean() {
+    let mut service = Service::start();
+    let parent = formula(&[("call", run("run", "reagent:local.echo:0.1.0", json!({})))]);
+    let child = echo(&parent, "{}");
+    service.assign(
+        &parent,
+        Box::new(move |call, job| match call.op.as_str() {
+            "admit_child" => {
+                let mut answer = job.admitted(&child);
+                answer["assignment"] = json!("not.a token");
+                Reply::Ok(answer)
+            }
+            _ => standard(call, job),
+        }),
+    );
+    let frames = ended(&service, SOON);
+    assert_eq!(
+        answers(&service, &parent),
+        [error("dispatch_error", words::CALL_FAILED)]
+    );
+    // It names no child to give back, and so leaves the runner in doubt.
+    assert!(calls(&service, "release_child", &parent).is_empty());
+    assert_eq!(frames.last["clean"], json!(false), "{}", frames.last);
+}
+
+#[test]
+fn a_batch_await_hands_on_a_services_refusal_as_it_was_sent() {
+    let mut service = Service::start();
+    let parent = formula(&[
+        ("spawn", json!({"tool": "example", "action": "read"})),
+        ("await-all", json!({"task_ids": ["task_1"]})),
+    ]);
+    service.assign(
+        &parent,
+        Box::new(|call, job| match call.op.as_str() {
+            "tool_call" => Reply::Error(
+                "guest_error",
+                json!({"type": "dispatch_error", "message": "Unexpected result format"}),
+            ),
+            _ => standard(call, job),
+        }),
+    );
+    ended(&service, SOON);
+    assert_eq!(
+        answers(&service, &parent)[1]["results"][0]["error"],
+        json!({"type": "dispatch_error", "message": "Unexpected result format"})
+    );
+}
+
+#[test]
+fn a_cancelled_tool_call_whose_answer_comes_late_leaves_the_runner_not_clean() {
+    let mut service = Service::start();
+    let tool = |name| json!({"tool": "example", "action": name});
+    let parent = formula(&[
+        ("spawn", tool("work")),
+        ("call", tool("entered")),
+        ("cancel", json!("task_1")),
+        ("call", tool("finished")),
+    ]);
+    service.assign(
+        &parent,
+        Box::new(|call, job| match call.op.as_str() {
+            "tool_call" => match call.args["args"]["action"].as_str().expect("an action") {
+                "work" => Reply::Later(Duration::from_secs(2), json!(true)),
+                "entered" => Reply::Later(Duration::from_millis(250), json!(true)),
+                _ => Reply::Later(Duration::from_secs(4), json!(true)),
+            },
+            _ => standard(call, job),
+        }),
+    );
+    let frames = ended(&service, SOON);
+    assert_eq!(answers(&service, &parent)[2]["cancelled"], json!(true));
+    let posted = service.calls.lock().expect("the calls").clone();
+    let at = |op: &str, action: &str| {
+        posted
+            .iter()
+            .position(|call| call.op == op && call.args["args"]["action"] == action)
+            .expect("a call")
+    };
+    // The cancelled call was out, and its answer came after the cancel.
+    assert!(at("tool_call", "work") < at("answered:tool_call", "entered"));
+    assert!(at("tool_call", "finished") < at("answered:tool_call", "work"));
+    assert_eq!(frames.last["clean"], json!(false), "{}", frames.last);
+}
+
+#[tokio::test]
+async fn a_child_whose_frame_is_not_written_runs_nothing_and_is_given_back() {
+    use cyfr_runner::control::{Environment, Lines, Writer};
+    use cyfr_runner::subtree::{RelayAt, serve};
+    use tokio::io::AsyncWriteExt as _;
+
+    // A control channel that takes every line but a child's.
+    struct RejectChild;
+    impl tokio::io::AsyncWrite for RejectChild {
+        fn poll_write(
+            self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+            bytes: &[u8],
+        ) -> std::task::Poll<std::io::Result<usize>> {
+            let line: Value = serde_json::from_slice(bytes).expect("a line");
+            std::task::Poll::Ready(if line["type"] == "child" {
+                Err(std::io::ErrorKind::BrokenPipe.into())
+            } else {
+                Ok(bytes.len())
+            })
+        }
+        fn poll_flush(
+            self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            std::task::Poll::Ready(Ok(()))
+        }
+        fn poll_shutdown(
+            self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            std::task::Poll::Ready(Ok(()))
+        }
+    }
+
+    let parent = formula(&[("call", run("run", "reagent:local.echo:0.1.0", json!({})))]);
+    let child = echo(&parent, "{}");
+    let script = admitting(vec![child.clone()]);
+    let (up, down) = std::os::unix::net::UnixStream::pair().expect("a pair");
+    down.set_nonblocking(true).expect("nonblocking");
+    let relay = RelayAt::Stream(tokio::net::UnixStream::from_std(down).expect("a stream"));
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let recorded = calls.clone();
+    let job = parent.clone();
+    std::thread::Builder::new()
+        .stack_size(64 * 1024 * 1024)
+        .spawn(move || support::relay(up, job, script, recorded))
+        .expect("the service end");
+    let (mut lines, read) = tokio::io::duplex(1 << 20);
+    lines
+        .write_all(&control::encode(&parent.assign()).expect("an assign"))
+        .await
+        .expect("written");
+    drop(lines);
+    let environment = Environment {
+        runner_id: support::RUNNER.to_owned(),
+        service_id: support::SERVICE.to_owned(),
+        boot: support::BOOT.to_owned(),
+        control_fd: 0,
+        relay: control::Relay::Fd(4),
+    };
+    let status = serve(
+        environment,
+        cyfr_runner::engine::Engine::new().expect("an engine"),
+        Lines::new(read),
+        Writer::start(RejectChild),
+        Some(relay),
+    )
+    .await;
+    assert_eq!(status, 1);
+    let calls = calls.lock().expect("the calls").clone();
+    let of_child: Vec<&str> = calls
+        .iter()
+        .filter(|call| call.attempt == child.attempt)
+        .map(|call| call.op.as_str())
+        .collect();
+    assert!(of_child.is_empty(), "the child ran: {of_child:?}");
+    let released: Vec<&support::Call> = calls
+        .iter()
+        .filter(|call| call.op == "release_child")
+        .collect();
+    assert_eq!(released.len(), 1, "{calls:?}");
+    assert_eq!(
+        released[0].args,
+        json!({"execution_id": child.execution_id})
+    );
+}
+
+#[test]
+fn a_childs_recorded_failure_is_printed_by_no_debug() {
+    let marker = "review-only-recorded-message";
+    let answer = cyfr_runner::attempt::Answer::Failed(zeroize::Zeroizing::new(marker.to_owned()));
+    assert!(!format!("{answer:?}").contains(marker));
+}
+
+#[test]
+fn a_child_reads_its_own_vault_fields_and_not_its_formulas() {
+    let mut service = Service::start();
+    let job = formula(&[
+        (
+            "call",
+            run("run", "catalyst:local.vault-probe:0.1.0", json!({})),
+        ),
+        (
+            "call",
+            run("run", "catalyst:local.vault-probe:0.1.0", json!({})),
+        ),
+    ]);
+    let mut given = job.child("catalyst", &format!("{HOSTILE}/vault_probe.wasm"), "{}");
+    given.secrets = json!({"PROBE_KEY": "the-childs-value"});
+    let bare = job.child("catalyst", &format!("{HOSTILE}/vault_probe.wasm"), "{}");
+    let mut admitted = admitting(vec![given, bare]);
+    service.assign(
+        &job,
+        Box::new(move |call, job| match call.op.as_str() {
+            // The formula's own fields, which no child is handed.
+            "attach" => Reply::Ok(json!({"PROBE_KEY": "the-formulas", "PROBE_HIDDEN": "too"})),
+            _ => admitted(call, job),
+        }),
+    );
+    ended(&service, SOON);
+    let read = |answer: &Value| answer["output"]["data"]["read"].clone();
+    let answers = answers(&service, &job);
+    assert_eq!(read(&answers[0]), json!("OEEE"), "{answers:?}");
+    assert_eq!(read(&answers[1]), json!("EEEE"), "{answers:?}");
+}
+
+#[test]
+fn a_finished_result_not_yet_awaited_counts_against_the_tasks_a_formula_holds() {
+    let mut service = Service::start();
+    let mut job = formula(&[
+        ("spawn", run("run", "reagent:local.echo:0.1.0", json!({}))),
+        // The formula's call is answered only once the first task's child
+        // has closed, so its result is in, unawaited.
+        ("call", json!({"tool": "component", "action": "wait"})),
+        ("poll", json!("task_1")),
+        ("spawn", run("run", "reagent:local.echo:0.1.0", json!({}))),
+    ]);
+    job = job.bound(json!({"max_concurrent_tasks": 1}));
+    job.intercepted = vec!["execution.run".to_owned()];
+    let child = echo(&job, "{}");
+    let closed = child.attempt.clone();
+    let seen = Arc::new(Mutex::new(false));
+    let saw = seen.clone();
+    let mut admitted = admitting(vec![child.clone()]);
+    service.assign(
+        &job,
+        Box::new(move |call, job| {
+            if call.op == "complete" && call.attempt == closed {
+                *saw.lock().expect("seen") = true;
+            }
+            if call.op == "tool_call" {
+                let seen = seen.clone();
+                return Reply::When(Box::new(move || *seen.lock().expect("seen")), json!(true));
+            }
+            admitted(call, job)
+        }),
+    );
+    ended(&service, SOON);
+    let answers = answers(&service, &job);
+    assert_eq!(answers[2]["status"], "completed", "{answers:?}");
+    assert_eq!(
+        answers[3],
+        error("resource_limit", words::TASKS_EXCEEDED),
+        "{answers:?}"
+    );
+    assert_eq!(calls(&service, "admit_child", &job).len(), 1);
+}
+
+#[test]
+fn a_cancel_that_races_a_childs_close_leaves_the_runner_not_clean() {
+    let mut service = Service::start();
+    let job = formula(&[("call", run("run", "reagent:local.echo:0.1.0", json!({})))]);
+    let child = echo(&job, "{}");
+    let closing = child.attempt.clone();
+    let (complete_tx, complete_seen) = std::sync::mpsc::channel::<()>();
+    let complete_tx = Mutex::new(complete_tx);
+    let mut admitted = admitting(vec![child.clone()]);
+    service.assign(
+        &job,
+        Box::new(move |call, job| {
+            if call.op == "complete" && call.attempt == closing {
+                let _ = complete_tx.lock().expect("the signal").send(());
+                // The child's close is in flight while the cancel arrives.
+                return Reply::Later(
+                    Duration::from_secs(1),
+                    call.args["outcome"]["output"].clone(),
+                );
+            }
+            admitted(call, job)
+        }),
+    );
+    complete_seen.recv_timeout(SOON).expect("the child's close");
+    // Not `job.cancel`: CYFR still takes this close, which raced the cancel.
+    service.send_line(
+        &control::encode(&control::Message::CancelChild {
+            execution_id: child.execution_id.clone(),
+        })
+        .expect("a frame"),
+    );
+    let ended = ended(&service, SOON);
+    assert_eq!(ended.last["type"], "complete", "{}", ended.last);
+    assert_eq!(
+        answers(&service, &job),
+        [json!({"status": "completed", "output": {}})]
+    );
+    // The child closed as it ran; only the cancel keeps the runner from
+    // reuse.
+    assert_eq!(ended.last["clean"], json!(false), "{}", ended.last);
+}
+
+#[test]
+fn a_cancelled_childs_close_cyfr_refuses_ends_nothing() {
+    let mut service = Service::start();
+    let job = formula(&[
+        ("spawn", run("run", "reagent:local.spin:0.1.0", json!({}))),
+        ("await", json!("task_1")),
+    ]);
+    let child = spin(&job, 60_000);
+    service.assign(&job, admitting(vec![child.clone()]));
+    support::eventually(|| !calls(&service, "fetch_artifact", &child).is_empty());
+    service.send_line(&job.cancel(&child));
+    let ended = ended(&service, SOON);
+    // The cancel fenced it: its refused close is the service's to report.
+    assert_eq!(ended.last["type"], "complete", "{}", ended.last);
+    assert_eq!(ended.last["clean"], json!(false));
+    assert_eq!(calls(&service, "fail", &child).len(), 1);
+    assert_eq!(
+        answers(&service, &job)[1]["error"],
+        json!({"type": "uncertain", "message": words::CANCELLED})
+    );
+}
+
+#[test]
+fn a_child_admitted_again_while_it_runs_changes_nothing_of_it() {
+    let mut service = Service::start();
+    let job = formula(&[
+        ("spawn", run("run", "reagent:local.spin:0.1.0", json!({}))),
+        ("call", run("run", "reagent:local.spin:0.1.0", json!({}))),
+        ("cancel", json!("task_1")),
+    ]);
+    let child = spin(&job, 60_000);
+    let twice = child.clone();
+    service.assign(
+        &job,
+        Box::new(move |call, job| match call.op.as_str() {
+            // CYFR answers the second admission with the child it admitted
+            // first.
+            "admit_child" => Reply::Ok(job.admitted(&twice)),
+            "release_child" => Reply::Ok(json!(true)),
+            _ => standard(call, job),
+        }),
+    );
+    let ended = ended(&service, SOON);
+    assert_eq!(ended.last["type"], "complete", "{}", ended.last);
+    assert_eq!(ended.last["clean"], json!(false));
+    assert_eq!(ended.children.len(), 1, "{:?}", ended.children);
+    assert_eq!(
+        answers(&service, &job)[1],
+        error("dispatch_error", words::CALL_FAILED)
+    );
+    // The running child is not given back nor failed for the second
+    // answer: it closes once, at its own cancel.
+    assert!(calls(&service, "release_child", &job).is_empty());
+    let fail = calls(&service, "fail", &child);
+    assert_eq!(fail.len(), 1, "{:?}", service.ops());
+    assert_eq!(fail[0].args["outcome"]["error"], words::CANCELLED);
+}
+
+#[test]
+fn a_subtree_of_many_children_one_after_another_holds_what_one_holds() {
+    let mut service = Service::start();
+    let steps: Vec<(&str, Value)> = (0..60)
+        .map(|_| ("call", run("run", "reagent:local.echo:0.1.0", json!({}))))
+        .collect();
+    let job = formula(&steps);
+    let children: Vec<Job> = (0..60).map(|_| echo(&job, "{}")).collect();
+    service.assign(&job, admitting(children));
+    let ended = ended(&service, SOON);
+    assert_eq!(ended.last["clean"], json!(true), "{}", ended.last);
+    assert_eq!(ended.children.len(), 60);
+    assert_eq!(service.exit_after_close(SOON).code(), Some(0));
+    let errors = service.errors();
+    let line = format!(
+        "{} completed, holding 0 attempt records, its relay carrying 1 attempts",
+        job.execution_id
+    );
+    assert!(errors.contains(&line), "{errors}");
+}
+
+#[test]
+fn children_of_one_new_digest_fetch_and_compile_it_once() {
+    let mut service = Service::start();
+    let job = formula(&[
+        ("spawn", run("run", "reagent:local.echo:0.1.0", json!({}))),
+        ("spawn", run("run", "reagent:local.echo:0.1.0", json!({}))),
+        ("spawn", run("run", "reagent:local.echo:0.1.0", json!({}))),
+        ("spawn", run("run", "reagent:local.echo:0.1.0", json!({}))),
+        (
+            "await-all",
+            json!({"task_ids": ["task_1", "task_2", "task_3", "task_4"]}),
+        ),
+    ]);
+    let children: Vec<Job> = (0..4).map(|_| echo(&job, "{}")).collect();
+    service.assign(&job, admitting(children.clone()));
+    let ended = ended(&service, SOON);
+    assert_eq!(ended.last["clean"], json!(true), "{}", ended.last);
+    assert_eq!(answers(&service, &job)[4]["count"], json!(4));
+    let fetched: usize = children
+        .iter()
+        .map(|child| calls(&service, "fetch_artifact", child).len())
+        .sum();
+    assert_eq!(fetched, 1, "{:?}", service.ops());
+}
+
+/// The time from the first to the last of `calls` tool calls a formula
+/// makes beside `spinners` computing children, its runner held to one
+/// processor: each answered at once.
+fn tool_calls_beside(spinners: usize, calls: usize) -> Duration {
+    let mut service = Service::start_held(1);
+    let mut steps: Vec<(&str, Value)> = Vec::new();
+    for _ in 0..spinners {
+        steps.push(("spawn", run("run", "reagent:local.spin:0.1.0", json!({}))));
+    }
+    for _ in 0..calls {
+        steps.push(("call", json!({"tool": "component", "action": "search"})));
+    }
+    let mut job = formula(&steps);
+    job.timeout_ms = 120_000;
+    let children: Vec<Job> = (0..spinners).map(|_| spin(&job, 120_000)).collect();
+    let times = Arc::new(Mutex::new(Vec::<Instant>::new()));
+    let seen = times.clone();
+    let mut admitted = admitting(children);
+    service.assign(
+        &job,
+        Box::new(move |call, job| {
+            if call.op == "tool_call" {
+                seen.lock().expect("the times").push(Instant::now());
+            }
+            admitted(call, job)
+        }),
+    );
+    let all = waited(Duration::from_secs(60), || {
+        let times = times.lock().expect("the times");
+        (times.len() == calls).then(|| times[calls - 1] - times[0])
+    });
+    all.unwrap_or_else(|| panic!("the {calls} calls did not all come within a minute"))
+}
+
+#[test]
+fn a_formulas_calls_keep_their_pace_beside_a_computing_sibling_on_one_processor() {
+    // A worker serving its timers and I/O only every 61st poll took 17.5 s
+    // here for these 40 calls (about 0.6 s a call); serving them at every
+    // poll, about 0.6 s for all 40.
+    let took = tool_calls_beside(1, 40);
+    eprintln!("40 tool calls beside one computing sibling, on one processor: {took:?}");
+    assert!(
+        took < Duration::from_secs(8),
+        "40 calls took {took:?} beside a computing sibling"
+    );
+}
+
+#[test]
+fn a_childs_budget_keeps_its_time_beside_a_computing_sibling_on_one_processor() {
+    let mut service = Service::start_held(1);
+    let mut job = formula(&[
+        ("spawn", run("run", "reagent:local.spin:0.1.0", json!({}))),
+        ("spawn", run("run", "reagent:local.spin:0.1.0", json!({}))),
+        ("await", json!("task_1")),
+    ]);
+    job.timeout_ms = 60_000;
+    // The first child has a budget of one second; the other computes on.
+    let timed = spin(&job, 1_000);
+    let other = spin(&job, 60_000);
+    let at = Arc::new(Mutex::new((None::<Instant>, None::<Instant>)));
+    let seen = at.clone();
+    let watched = timed.attempt.clone();
+    let mut admitted = admitting(vec![timed.clone(), other]);
+    service.assign(
+        &job,
+        Box::new(move |call, job| {
+            if call.attempt == watched {
+                let mut at = seen.lock().expect("the times");
+                match call.op.as_str() {
+                    "fetch_artifact" => at.0 = Some(Instant::now()),
+                    "fail" => at.1 = Some(Instant::now()),
+                    _ => {}
+                }
+            }
+            admitted(call, job)
+        }),
+    );
+    let closed = waited(Duration::from_secs(30), || {
+        let at = at.lock().expect("the times");
+        match *at {
+            (Some(fetched), Some(failed)) => Some(failed - fetched),
+            _ => None,
+        }
+    })
+    .expect("the timed child closed within 30 s");
+    eprintln!(
+        "a 1000 ms budget beside a computing sibling, on one processor: closed {closed:?} after its fetch"
+    );
+    // Its budget counts from before its fetch: the close comes within a
+    // few ticks of it, not 0.5 s late as when timers waited 61 polls.
+    assert!(
+        closed < Duration::from_millis(1_400),
+        "a 1000 ms budget closed {closed:?} after its fetch"
+    );
+}
+
+/// A formula child of `parent` that spawns `count` tool calls and awaits
+/// them all.
+fn flooding(parent: &Job, count: usize) -> Job {
+    let mut steps: Vec<Value> = (0..count)
+        .map(|_| json!({"fn": "spawn", "arg": {"tool": "component", "action": "hold"}}))
+        .collect();
+    let ids: Vec<String> = (1..=count).map(|n| format!("task_{n}")).collect();
+    steps.push(json!({"fn": "await-all", "arg": {"task_ids": ids}}));
+    let mut flooder = parent
+        .child("formula", PROBE, &json!({ "steps": steps }).to_string())
+        .bound(json!({"max_concurrent_tasks": count, "batch_timeout": "170s", "timeout": "175s"}));
+    flooder.intercepted = vec!["execution.run".to_owned()];
+    flooder.timeout_ms = 175_000;
+    flooder
+}
+
+#[test]
+fn guests_held_calls_never_keep_a_siblings_close_from_the_relay() {
+    let mut service = Service::start();
+    let mut job = formula(&[
+        ("spawn", run("run", "reagent:local.spin:0.1.0", json!({}))),
+        ("spawn", run("run", "formula:local.flood:0.1.0", json!({}))),
+        ("spawn", run("run", "formula:local.flood:0.1.0", json!({}))),
+        ("await", json!("task_1")),
+    ])
+    .bound(json!({"max_concurrent_tasks": 4, "batch_timeout": "170s", "timeout": "180s"}));
+    job.intercepted = vec!["execution.run".to_owned()];
+    job.timeout_ms = 180_000;
+    let spinner = spin(&job, 3_000);
+    let (a, b) = (flooding(&job, 50), flooding(&job, 50));
+    let held = Arc::new(Mutex::new(0usize));
+    let counted = held.clone();
+    let failed = Arc::new(Mutex::new(None::<Instant>));
+    let closed = failed.clone();
+    let spinning = spinner.attempt.clone();
+    let mut admitted = admitting(vec![spinner.clone(), a, b]);
+    let started = Instant::now();
+    service.assign(
+        &job,
+        Box::new(move |call, job| {
+            if call.op == "tool_call" {
+                *counted.lock().expect("held") += 1;
+                return Reply::Silent;
+            }
+            if call.op == "fail" && call.attempt == spinning {
+                *closed.lock().expect("closed") = Some(Instant::now());
+            }
+            admitted(call, job)
+        }),
+    );
+    let at = waited(Duration::from_secs(40), || *failed.lock().expect("closed"));
+    let held = *held.lock().expect("held");
+    let at =
+        at.unwrap_or_else(|| panic!("the sibling's close never came beside {held} held calls"));
+    eprintln!(
+        "{held} guests' calls held: the sibling's close came {:?} after the assign",
+        at - started
+    );
+    // Its 3 s budget, its compile and the formulas' starts: far short of
+    // the 60 s two lost tries of its close would take.
+    assert!(
+        at - started < Duration::from_secs(25),
+        "the sibling's close came {:?} after the assign",
+        at - started
+    );
+    assert_eq!(held, cyfr_runner::relay::MAX_GUEST_CALLS, "the calls held");
+}
+
+/// The most the runner may peak at for four 300 KB results held, each
+/// held as its bytes: about 72 MiB here, a formula's own runner included.
+/// Each held as a parsed tree, as the runner did before, holds about 11 MiB
+/// more apiece.
+const RESULTS_PEAK_KIB: u64 = 96 * 1024;
+
+#[test]
+fn a_formulas_unawaited_results_are_held_as_bytes() {
+    let mut service = Service::start();
+    // Four tool calls each answered with 300 KB of small numbers, their
+    // results held unawaited until the formula returns.
+    let numbers: Value =
+        serde_json::from_str(&format!("{{\"a\":[{}0]}}", "0,".repeat(150_000))).expect("JSON");
+    let tool = |action: &str| json!({"tool": "component", "action": action});
+    let mut steps: Vec<(&str, Value)> = (0..4).map(|_| ("spawn", tool("big"))).collect();
+    steps.push(("call", tool("wait")));
+    let job = formula(&steps);
+    let log = service.calls.clone();
+    service.assign(
+        &job,
+        Box::new(
+            move |call, job| match call.args["args"]["action"].as_str() {
+                Some("big") if call.op == "tool_call" => {
+                    Reply::When(Box::new(|| true), numbers.clone())
+                }
+                // Answered once the four answers are written, so their results
+                // are the runner's, held unawaited, as the formula returns.
+                Some("wait") if call.op == "tool_call" => {
+                    let log = log.clone();
+                    Reply::When(
+                        Box::new(move || {
+                            let log = log.lock().expect("the calls");
+                            log.iter()
+                                .filter(|call| {
+                                    call.op == "answered:tool_call"
+                                        && call.args["args"]["action"] == "big"
+                                })
+                                .count()
+                                == 4
+                        }),
+                        json!(true),
+                    )
+                }
+                _ => standard(call, job),
+            },
+        ),
+    );
+    let ended = ended(&service, SOON);
+    let (resident, peak) = (
+        support::resident_kib(service.pid()),
+        support::peak_kib(service.pid()),
+    );
+    assert_eq!(service.exit_after_close(SOON).code(), Some(0));
+    eprintln!("four unawaited 300 KB results: resident {resident} KiB, peak {peak} KiB");
+    assert_eq!(
+        ended.last["clean"],
+        json!(true),
+        "{}: {}",
+        ended.last,
+        service.errors()
+    );
+    assert!(
+        peak < RESULTS_PEAK_KIB,
+        "the runner peaked at {peak} KiB, past {RESULTS_PEAK_KIB}"
     );
 }

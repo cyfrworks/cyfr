@@ -1288,7 +1288,7 @@ fn header_fields(header: &str) -> CallFields {
 }
 
 impl Post for Scripted {
-    async fn place(&mut self) -> Option<Place> {
+    async fn place(&mut self, _op: cyfr_runner::host::Op) -> Option<Place> {
         Some(Place::free())
     }
 
@@ -1415,7 +1415,7 @@ async fn every_answer_outcome() {
 struct Silent(usize);
 
 impl Post for Silent {
-    async fn place(&mut self) -> Option<Place> {
+    async fn place(&mut self, _op: cyfr_runner::host::Op) -> Option<Place> {
         Some(Place::free())
     }
 
@@ -1854,7 +1854,8 @@ fn formula_every_type_its_invoke_answers_itself_is_an_invoke_type() {
         .iter()
         .map(s)
         .collect();
-    for kind in cyfr_runner::imports::formula::TYPES {
-        assert!(invoke.contains(&kind), "{kind} is no invoke type");
+    // Every error the runner makes itself is made of one of these.
+    for kind in cyfr_runner::imports::formula::Kind::ALL {
+        assert!(invoke.contains(&kind.name()), "{kind:?} is no invoke type");
     }
 }

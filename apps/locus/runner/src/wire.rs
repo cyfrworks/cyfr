@@ -528,6 +528,27 @@ pub fn request_body(op: &str, args: &Map<String, Value>) -> Zeroizing<String> {
     Zeroizing::new(String::from_utf8(std::mem::take(&mut *bytes)).expect("JSON is UTF-8"))
 }
 
+/// `value` as JSON, written into one buffer of its exact length, which is
+/// cleared when it is dropped: what the runner holds of a peer's value as
+/// bytes, never as a parsed tree.
+pub fn to_bytes(value: &Value) -> Zeroizing<Vec<u8>> {
+    struct Count(usize);
+    impl std::io::Write for Count {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0 += bytes.len();
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut count = Count(0);
+    serde_json::to_writer(&mut count, value).expect("a JSON value is written");
+    let mut bytes = Zeroizing::new(Vec::with_capacity(count.0));
+    serde_json::to_writer(&mut *bytes, value).expect("a JSON value is written");
+    bytes
+}
+
 /// What an answer at this wire's version says. Its `Debug` prints nothing
 /// the answer carries, the refusal's name included.
 #[derive(PartialEq)]
