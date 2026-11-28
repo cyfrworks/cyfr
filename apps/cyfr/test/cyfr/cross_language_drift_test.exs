@@ -554,7 +554,7 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"tests/locus-runtime-image/control_plane.py", ~w()},
       {"tests/locus-runtime-image/runners.py", ~w(report)},
       {"tests/locus-runtime-image/worker_auth.py",
-       ~w(version auth_header routes retries timeouts_ms window_ms standing keys calls pre_body_refusals body_refusals report retry_identity connection_cases question_cases egress_pin_cases egress_policy_cases egress_pin_internal_purposes frame_cases framing_headers override_headers override_prefixes credential_headers)}
+       ~w(version auth_header routes retries timeouts_ms window_ms standing keys calls pre_body_refusals body_refusals report events_report retry_identity connection_cases question_cases egress_pin_cases egress_policy_cases egress_pin_internal_purposes frame_cases framing_headers override_headers override_prefixes credential_headers)}
     ],
     "directory_wire.json" => [
       {"apps/codex/internal/account/wire_test.go", ~w(keys scenarios)},

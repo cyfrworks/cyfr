@@ -104,6 +104,9 @@ ZERO_AUTHORITY = {
 ACTOR = {"authenticated": True, "user_id": "usr_worker_image_test"}
 FRAMES_CONTENT_TYPE = "application/vnd.cyfr.frames"
 MASK = "[REDACTED]"
+# A worker service's reports: plain under its dispatch key, a runner's exit
+# and its runners' operator events, each answered plain and recorded.
+REPORTS = ("runner_exited", "report_events")
 # The headers an attached request may not set beyond the credential roster:
 # those that route or frame it and those that override it, as
 # `tests/fixtures/host_api.json` lists them.
@@ -300,7 +303,7 @@ class ControlPlane:
 
         # Everything the header alone decides is refused before the body is
         # read, on a connection closed with the body unread.
-        if op == "runner_exited":
+        if op in REPORTS:
             verified, refusal = auth.verify_report_header(self.root, header, now)
         else:
             verified, refusal = auth.verify_host_call_header(self.root, header, now, self.generation, self.member)
@@ -314,7 +317,7 @@ class ControlPlane:
             self.record({"op": op, "refused": "bad_mac"})
             return self.refuse(handler, 401, "lost")
 
-        if op == "runner_exited":
+        if op in REPORTS:
             args, refusal = auth.read_body(op, body)
             if refusal:
                 self.record({"op": op, "refused": refusal})
@@ -414,7 +417,7 @@ class ControlPlane:
         # CYFR refuses it (Opus.Host): lost.
         if op == "runner_exited" and "memory" in args and args["memory"] not in ("cap", "machine", "either"):
             return {"error": "lost"}
-        if op in ("take_rate", "record_denial", "release_child", "runner_exited"):
+        if op in ("take_rate", "record_denial", "release_child", *REPORTS):
             return {"ok": True}
         return {"error": "guest_error", "type": "dispatch_error", "message": "The scripted control plane has no answer for this call."}
 

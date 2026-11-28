@@ -11,8 +11,9 @@ attempt's close, or its absence), and what the operating system shows
 inside the container (the runner's process gone, its uid free, its home
 scrubbed, the container's CPU flat).
 
-- A spinning WASM guest assigned with a short deadline is killed at the
-  bound: the runner process is gone within the watchdog grace and CPU
+- A spinning WASM guest assigned with a short deadline is stopped at the
+  bound: the runner closes its attempt, the service retires the runner,
+  its process gone within the watch's and the release's grace, and CPU
   stays flat afterwards.
 - A sibling subtree in another runner completes while the first is
   killed, and its runner survives.
@@ -93,7 +94,7 @@ scrubbed, the container's CPU flat).
   of a page past the window, under an authority whose limits admit it,
   finds the link at its very end. A fetch naming a pin the control plane
   never granted is refused by the service's end of the relay; no process
-  but the runner's own VM holds a runner's relay, so no shipped guest can
+  but the runner's own holds a runner's relay, so no shipped guest can
   send one, and `apps/locus/test/locus/runtime/relay_test.exs` covers it.
 - What the runtime service holds of its runners' answers and fetches is
   held within its count (`service_bound`): a formula's six children, in its
@@ -218,7 +219,7 @@ SHIPPED_PATHS = {
     "openrouter": ("/api/v1/models", "/api/v1/chat/completions"),
 }
 STUB_KEY = {"STUB_API_KEY": "sk-locus-runtime-image-test"}
-# A runner is a VM booting from nothing: its first attach takes seconds.
+# A runner's first attach, bounded for a loaded host.
 BOOT_S = 60
 # The runtime role's own memory and the release's shared figures
 # (Prima.LocusRoles): the count of what the service holds of its runners'
@@ -328,8 +329,8 @@ def home_scrubbed(stack, runner):
 
 
 def os_cleanup(stack, runner, label):
-    """The OS facts of a retired runner: no process of it is left, its VM by
-    pid nor anything it started (`Stack.runner_left`), and its home is
+    """The OS facts of a retired runner: no process of it is left, its own
+    by pid nor anything it started (`Stack.runner_left`), and its home is
     scrubbed."""
     left = stack.runner_left(runner)
     expect(left == [], f"{label}: no process of uid {runner['uid']}'s runner, in {runner['home']}, remains", stack.processes())
@@ -514,7 +515,7 @@ def test_process_model(stack):
            f"the service runs as {SERVICE_USER} with no capability", procs)
     expect(len(runners) == FLOOR_RUNNERS and all(POOL_FIRST <= r["uid"] <= POOL_LAST for r in runners)
            and len({r["uid"] for r in runners}) == len(runners) and all(r["runner"] for r in runners),
-           f"the warm floor's {FLOOR_RUNNERS} fresh runner(s) run ahead, each a VM under a pooled uid of its own", runners)
+           f"the warm floor's {FLOOR_RUNNERS} fresh runner(s) run ahead, each a process under a pooled uid of its own", runners)
     homes = stack.homes()
     expect(sorted(homes) == sorted(os.path.basename(r["home"]) for r in runners),
            "the home root holds exactly the fresh runners' homes", {"homes": homes, "runners": runners})
@@ -1195,10 +1196,11 @@ def tainted_runner_case(stack, plane, athanor, last):
 
 
 def fresh_runners_booted(stack, first_seen, settle_s=4.0):
-    """Whether the pool holds only its fresh runners, each of whose VMs has
-    had `settle_s` to boot, and nothing idle, busy or ending is left: a
-    runner counts as fresh from its spawn, seconds before its VM reads its
-    first assignment, and the VM of a runner still ending is no fresh one's."""
+    """Whether the pool holds only its fresh runners, each of whose processes
+    has had `settle_s` to start, and nothing idle, busy or ending is left: a
+    runner counts as fresh from its spawn, before its process reads its
+    first assignment, and the process of a runner still ending is no fresh
+    one's."""
     now = time.monotonic()
     live = {r["runner"] for r in stack.runner_processes()}
     for runner in live:
@@ -1279,7 +1281,7 @@ def main(image):
         stack.work_bytes = memory.WORK
         stack.up()
         memory.test_runner_bound(stack, plane)
-        # The runners spawned behind the last starts are VMs still booting.
+        # The runners spawned behind the last starts are processes still starting.
         settled = {}
         wait_until(lambda: fresh_runners_booted(stack, settled, settle_s=6.0), BOOT_S, "the pool to settle", interval=0.5)
         share = stack.cpu_share(2.0)

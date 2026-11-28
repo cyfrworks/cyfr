@@ -191,7 +191,7 @@ class PlacesClient(unittest.TestCase):
     def setUpClass(cls):
         marks = tempfile.mkdtemp(prefix="cyfr-marks-")
         parent, child = socket.socketpair()
-        script = namespace.places_client({"LANG": "C.UTF-8", **namespace.RUNNER_ENV}, marks=marks, client_marks=marks)
+        script = namespace.places_client(namespace.RUNNER_ENV, marks=marks, client_marks=marks)
         process = subprocess.Popen(["/bin/sh", "-c", f"exec 3<&{child.fileno()}\n{script}"], pass_fds=(child.fileno(),),
                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         child.close()
@@ -238,7 +238,7 @@ class PlacesClient(unittest.TestCase):
         self.assertFalse({"memory_bytes", "cpu_quota"} & spawn.keys(), spawn)
         self.assertEqual({key: spawn[key] for key in ("v", "id", "place", "pool", "argv", "env", "control")},
                          {"v": V, "id": "1", "place": place, "pool": stack.ROLE["pool"], "argv": namespace.RUNNER_ARGV,
-                          "env": {"LANG": "C.UTF-8", **namespace.RUNNER_ENV}, "control": True})
+                          "env": namespace.RUNNER_ENV, "control": True})
         self.assertEqual([r for r in self.requests if r["type"] == "assign"],
                          [{**assign, "id": "as1", "kind": "run"}, {**assign, "id": "as2", "kind": "warm"},
                           {**assign, "id": "as3", "kind": "run"}])

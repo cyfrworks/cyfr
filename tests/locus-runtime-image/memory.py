@@ -7,7 +7,7 @@ cyfr-locus bounds every runner by its kind, at half of the pool's work and
 never under a runner's least bound (Prima.LocusPool), and the service names
 no bound: cyfr-locus gives the runner a cgroup v2 group of its own at that
 bound, with no swap and the group killed whole, charged for the runner's
-VM, every guest's linear memory, the pages of its home and the kernel
+process, every guest's linear memory, the pages of its home and the kernel
 memory it causes, together. It can do so only where the service mounts the
 container's cgroup writable (`security_opt: writable-cgroups=true`);
 anywhere else it can make no role's group and refuses its boot, so no
@@ -21,7 +21,7 @@ runner starts.
   catalyst) first proves the engine refuses it more than its consented
   64 MiB of linear memory, then touches every page of the 64 MiB and keeps
   it, and as many of them as hold the bound together are spawned, so the
-  runner's VM is the margin by which they pass it. The
+  runner's own memory is the margin by which they pass it. The
   children take their memory one at a time, the group read after each, and
   the kernel ends the runner at the bound while a child's pages are
   charged: the keeper reports the end at the bound (the service logs it),
@@ -79,7 +79,7 @@ from stack import (  # noqa: E402
 import imagesuite  # noqa: E402
 
 MIB = 1 << 20
-# A runner is a VM booting from nothing: its first attach takes seconds.
+# A runner's first attach, bounded for a loaded host.
 BOOT_S = 60
 # The formula whose children run in its runner: the nested probe, which
 # spawns every request it is given and awaits them all.
@@ -100,17 +100,17 @@ CHILD_BYTES = 64 * MIB
 # The pool's work of the bound case, 1 GiB. A runner's bound is half of
 # it, never under a runner's least, 512 MiB, so the formula's runner ends at
 # its bound with the other half left to the case's two other runners, the
-# sibling's and the warm floor's fresh one. A VM alone measured 143-208 MiB:
-# the two hold at most 416 MiB, 96 MiB under that half, so the kernel's
-# bound over the pool could end the formula's runner first only if each of
-# them held RUNNER_VM, 48 MiB above the largest measured, or more.
-RUNNER_VM = 256 * MIB
-WORK = 2 * max(imagesuite.LEAST_CAP_BYTES["runner"], 2 * RUNNER_VM)
+# sibling's and the warm floor's fresh one. RUNNER_ALONE is what each may
+# hold beside it, far above what a runner alone holds (the runner program
+# with a guest compiled), so the kernel's bound over the pool cannot end
+# the formula's runner first.
+RUNNER_ALONE = 256 * MIB
+WORK = 2 * max(imagesuite.LEAST_CAP_BYTES["runner"], 2 * RUNNER_ALONE)
 
 
 def children_for(bound):
-    """The children the formula spawns: as many as hold `bound` before their runner's VM holds a byte, so whatever
-    else the runner holds is the margin by which they pass it, however small a VM another architecture gives."""
+    """The children the formula spawns: as many as hold `bound` before their runner holds a byte of its own, so
+    whatever else the runner holds is the margin by which they pass it, however little another architecture gives it."""
     return -(-bound // CHILD_BYTES)
 
 ECHO = os.path.join(ROOT, "apps", "locus", "test", "support", "runtime", "test_wasm", "echo.wasm")

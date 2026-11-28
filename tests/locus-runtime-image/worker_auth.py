@@ -1118,7 +1118,7 @@ def check_host_api(path, primitives):
         return args
 
     callbacks = [call["callback"] for call in v["calls"]]
-    assert sorted(callbacks) == sorted(c for c in v["routes"] if c != "runner_exited"), "host_api: one call per host callback"
+    assert sorted(callbacks) == sorted(c for c in v["routes"] if c not in ("runner_exited", "report_events")), "host_api: one call per host callback"
     for call in v["calls"]:
         args = reproduce(call, f"host_api {call['callback']}", call["callback"])
         for refusal in call["refusals"]:
@@ -1233,6 +1233,19 @@ def check_host_api(path, primitives):
         assert known == (case is report["memory"]), f"{what}: read as {'a limit' if known else 'none of the three'}"
     _check_answer(report["memory"]["answer"], "host_api report memory")
     assert [r["error"] for r in report["memory_refusals"]] == ["lost", "lost"], "host_api report memory refusals: lost"
+
+    # A report of runner events: plain under the dispatch key, naming no
+    # member, its batch the args' one member; one record off the roster is
+    # CYFR's to refuse when it reads the batch, after the header and body.
+    for what, case in (("host_api events report", v["events_report"]), ("host_api events report off the roster", v["events_report"]["off_roster"])):
+        body = case["body"].encode()
+        assert report_header(dispatch_key(wkey), case["fields"], body) == case["header"], f"{what}: the header"
+        verified, refusal = verify_report(root, case["header"], body, case["fields"]["ts"])
+        assert refusal is None and verified == case["fields"], f"{what}: verifies"
+        args, refusal = read_body("report_events", case["body"])
+        assert refusal is None and set(args) == {"events"} and args["events"], f"{what}: carries its batch alone"
+    _check_answer(v["events_report"]["answer"], "host_api events report")
+    assert v["retries"]["report_events"] == "never", "host_api events report: never sent again"
 
     first, second = v["retry_identity"]["first"], v["retry_identity"]["second"]
     reproduce(first, "host_api retry first", "admit_child")

@@ -673,15 +673,12 @@ def test_compat_killed(image):
                "as every 32-bit call is", {"stdout": ran.stdout, "stderr": ran.stderr[-1000:]})
 
 
-# The runner as the shipped service spawns it from a release (Locus.Runtime.Release.runner_command/1): the release's
-# own command, the service's environment it shares (that module's shared names, as the image sets them) and the
-# runner's own (Locus.Runtime.Settings.runner_environment/1), under the grace the service's defaults give
-# (Locus.Runtime.Settings) and the bound the keeper sets on a runner. Its id names its place, as the runner pool's does.
-RUNNER_ARGV = ["/bin/sh", "-c", 'RELEASE_TMP="${TMPDIR:-/tmp}" exec "$0" start', RELEASE["bin"]]
-SHARED_ENVIRONMENT = ("LANG", "LANGUAGE", "LC_ALL", "ELIXIR_ERL_OPTIONS")
+# The runner as the shipped service spawns it (Locus.Runtime.Settings.runner_command/0): the runner program, with no
+# argument and none of the service's environment, and the runner's own (Locus.Runtime.Settings.runner_environment/1),
+# under the bound the keeper sets on a runner. Its id names its place, as the runner pool's does.
+RUNNER_ARGV = ["/usr/local/bin/cyfr-runner"]
 RUNNER = "runner_measured"
-RUNNER_ENV = {"RELEASE_DISTRIBUTION": "none", "RUNTIME_ROLE": "runner", "RUNTIME_RUNNER_ID": RUNNER, "RUNTIME_SERVICE_ID": SERVICE,
-              "RUNTIME_BOOT_ID": "boot_measured", "RUNTIME_WATCHDOG_GRACE_MS": "5000"}
+RUNNER_ENV = {"RUNTIME_RUNNER_ID": RUNNER, "RUNTIME_SERVICE_ID": SERVICE, "RUNTIME_BOOT_ID": "boot_measured"}
 RELEASE_GRACE_MS = 2_000
 ATHANOR = "ath_measured"
 # The runner's owners, one step each, read once the keeper has read its group: the place's own, then the owner an
@@ -760,13 +757,6 @@ while read -r line <&3; do
 done
 ask after
 """
-
-
-def runner_env(image):
-    """The runner's whole environment: the shared names as the image sets them, then the runner's own."""
-    config = json.loads(run("docker", "image", "inspect", "--format", "{{json .Config.Env}}", image).stdout or "null") or []
-    image_env = dict(entry.split("=", 1) for entry in config)
-    return {**{name: image_env[name] for name in SHARED_ENVIRONMENT if name in image_env}, **RUNNER_ENV}
 
 
 def assigns():
@@ -1030,7 +1020,7 @@ def held_until_measured(plane, attach):
 
 
 def test_measure(image):
-    env = runner_env(image)
+    env = RUNNER_ENV
     plane = ControlPlane(secrets.token_bytes(32), SERVICE).serve()
     marks = ClientMarks()
     attach = Attach(marks)
