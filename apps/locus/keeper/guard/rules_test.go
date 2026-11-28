@@ -390,7 +390,7 @@ func TestEachReachsRouteIsItsChainsAndJumps(t *testing.T) {
 	refuseAll := "-A CYFR_GUARD_R3 -j CYFR_GUARD_REFUSE\n-A CYFR_GUARD_R3 -j REJECT --reject-with icmp-admin-prohibited\n"
 	// A machine's route drops, before routing, what its guest sends from
 	// any address but its own.
-	sources := "*raw\n-A PREROUTING -i sp3 ! -s 10.213.0.14/32 -j DROP\nCOMMIT\n"
+	sources := "*raw\n-A PREROUTING ! -s 10.213.0.14/32 -i sp3 -j DROP\nCOMMIT\n"
 	if got, want := routeRules(none, st), head+other+refuseAll+jumps+"COMMIT\n"+sources; got != want {
 		t.Errorf("a machine's route with no session:\n%s\nwant:\n%s", got, want)
 	}
@@ -451,11 +451,11 @@ func TestARoutesRecordAndRemovalAreItsOwnLinesAlone(t *testing.T) {
 	// record, and removed first, and another machine's stays.
 	machine := installed{r: "-N CYFR_GUARD_R3\n", p: "-N CYFR_GUARD_P3\n", out: "-N CYFR_GUARD_ROUTES\n", in: "-N CYFR_GUARD_REPLIES\n",
 		roles: "-N CYFR_GUARD_ROLES\n",
-		raw:   "-P PREROUTING ACCEPT\n-A PREROUTING -i sp3 ! -s 10.213.0.14/32 -j DROP\n-A PREROUTING -i sp31 ! -s 10.213.0.126/32 -j DROP\n"}
-	if got, want := routeText("sp3", machine), machine.r+machine.p+"-A PREROUTING -i sp3 ! -s 10.213.0.14/32 -j DROP\n"; got != want {
+		raw:   "-P PREROUTING ACCEPT\n-A PREROUTING ! -s 10.213.0.14/32 -i sp3 -j DROP\n-A PREROUTING ! -s 10.213.0.126/32 -i sp31 -j DROP\n"}
+	if got, want := routeText("sp3", machine), machine.r+machine.p+"-A PREROUTING ! -s 10.213.0.14/32 -i sp3 -j DROP\n"; got != want {
 		t.Errorf("a machine's record:\n%s\nwant:\n%s", got, want)
 	}
-	if got, want := removal("sp3", machine), "*raw\n-D PREROUTING -i sp3 ! -s 10.213.0.14/32 -j DROP\nCOMMIT\n*nat\nCOMMIT\n*filter\n"+
+	if got, want := removal("sp3", machine), "*raw\n-D PREROUTING ! -s 10.213.0.14/32 -i sp3 -j DROP\nCOMMIT\n*nat\nCOMMIT\n*filter\n"+
 		"-F CYFR_GUARD_R3\n-F CYFR_GUARD_P3\n-X CYFR_GUARD_R3\n-X CYFR_GUARD_P3\nCOMMIT\n"; got != want {
 		t.Errorf("a machine's removal:\n%s\nwant:\n%s", got, want)
 	}
@@ -495,6 +495,15 @@ func TestTheDigestIsOfTheStaticRulesAlone(t *testing.T) {
 		if digest(s[0], s[1], s[2]) == base {
 			t.Errorf("%s leaves the digest", name)
 		}
+	}
+	// A machine's route's raw-table line, as iptables lists it back, is the
+	// route's, and leaves the digest as it is; any other raw line moves it.
+	raw := func(lines string) string { return v4 + "*raw\n:PREROUTING ACCEPT [0:0]\n" + lines + "COMMIT\n" }
+	if digest(raw("-A PREROUTING ! -s 10.213.0.14/32 -i sp3 -j DROP\n"), v6, nat) != digest(raw(""), v6, nat) {
+		t.Error("a machine's source line moves the digest")
+	}
+	if digest(raw("-A PREROUTING -i sp3 -j DROP\n"), v6, nat) == digest(raw(""), v6, nat) {
+		t.Error("another raw line leaves the digest")
 	}
 }
 

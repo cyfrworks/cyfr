@@ -67,6 +67,8 @@ func TestMain(m *testing.M) {
 		os.Exit(standInForgedGuard(os.Getenv(forgedGuardMode)))
 	case os.Getenv(forgerMode) != "":
 		os.Exit(standInForger())
+	case os.Getenv(recordMode) != "":
+		os.Exit(standInRecords())
 	case os.Getenv(probeMode) != "":
 		os.Exit(standInProbe())
 	}

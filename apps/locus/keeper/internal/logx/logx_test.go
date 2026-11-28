@@ -6,6 +6,8 @@ package logx
 import (
 	"bytes"
 	"encoding/json"
+	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -24,5 +26,18 @@ func TestTextAndJSONLines(t *testing.T) {
 	}
 	if entry["level"] != "error" || entry["message"] != "channel closed" || entry["service"] != "cyfr-locus" || entry["timestamp"] == "" {
 		t.Fatalf("json line %v", entry)
+	}
+}
+
+// An untrusted word is quoted, so it cannot end a line or forge another,
+// and cut to its bound.
+func TestAnUntrustedWordIsQuotedAndCut(t *testing.T) {
+	forged := "no_room\n[cyfr-locus] error: another person's VM ended"
+	if got := Untrusted(forged); strings.ContainsAny(got, "\n\r") || got != strconv.Quote(forged) {
+		t.Fatalf("Untrusted(%q) = %q", forged, got)
+	}
+	long := strings.Repeat("x", 1<<20)
+	if got := Untrusted(long); len(got) > UntrustedMax+40 || !strings.HasSuffix(got, "(cut at 64 bytes)") {
+		t.Fatalf("a long word is carried as %d bytes: %.80q", len(got), got)
 	}
 }

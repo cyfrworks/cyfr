@@ -7,10 +7,10 @@
 // and processes under uids on each one's behalf, every one in a space of
 // its own (a user, pid, IPC, mount, cgroup and network namespace each).
 //
-//	cyfr-locus serve --role <name>:<uid>:<port>:<pool>[:private][:kept] [--role …] --pool <name>:<first>-<last>:<relay|routed> [--pool …] --home-root <dir> [--kept-homes <dir>:<first>-<last>] --guard <socket> -- <command> [args…]
+//	cyfr-locus serve --role <name>:<uid>:<port>:<pool>[:private][:kept] [--role …] --pool <name>:<first>-<last>:<relay|routed> [--pool …] --home-root <dir> [--kept-homes <dir>:<first>-<last>] --guard <socket> [--resolver <ipv4>:<port>] -- <command> [args…]
 //	cyfr-locus guard-control
 //	cyfr-locus guard-check
-//	cyfr-locus guest-check [--kernel-reporting] [--beside] [-- <command> [args…]]
+//	cyfr-locus guest-check --kept-root <dir> [--kernel-reporting] [--beside] [-- <command> [args…]]
 //	cyfr-locus image-digest
 //
 // `serve` is the only subcommand an operator runs; `guard-control` is an

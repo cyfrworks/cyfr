@@ -602,11 +602,12 @@ defmodule Cyfr.CrossLanguageDriftTest do
     ],
     "locus_pool.json" => [
       {"apps/locus/keeper/internal/admission/size_test.go",
-       ~w(allowance_bytes allowance_ms cap_bytes counters floor_bytes floor_runners kinds least_cap_bytes processors room_wait_ms stale_ms)},
+       ~w(allowance_bytes allowance_ms cap_bytes counters floor_bytes floor_runners kinds least_cap_bytes machine_bytes processors room_wait_ms stale_ms)},
       {"apps/prima/test/prima/locus_pool_test.exs",
-       ~w(allowance_bytes allowance_ms cap_bytes counters floor_bytes floor_runners kinds least_cap_bytes processors room_wait_ms stale_ms wire)},
+       ~w(allowance_bytes allowance_ms cap_bytes counters floor_bytes floor_runners kinds least_cap_bytes machine_bytes processors room_wait_ms stale_ms wire)},
       {"tests/imagesuite.py",
-       ~w(allowance_ms cap_bytes counters floor_runners kinds least_cap_bytes wire)},
+       ~w(allowance_ms cap_bytes counters floor_runners kinds least_cap_bytes machine_bytes wire)},
+      {"tests/imagesuite_test.py", ~w(machine_bytes)},
       {"tests/locus-backends-image/roles.py", ~w(floor_bytes)}
     ],
     "locus_roles.json" => [

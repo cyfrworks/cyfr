@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -31,6 +32,7 @@ import (
 	"github.com/cyfr/locus/keeper/internal/logx"
 	"github.com/cyfr/locus/keeper/internal/packview"
 	"github.com/cyfr/locus/keeper/internal/pool"
+	"github.com/cyfr/locus/keeper/internal/proc"
 	"github.com/cyfr/locus/keeper/internal/procfs"
 	"github.com/cyfr/locus/keeper/internal/protocol"
 	"github.com/cyfr/locus/keeper/internal/relay"
@@ -97,6 +99,9 @@ func Main(args []string) int {
 	if err != nil {
 		log.Error("%v; usage: %s", err, Usage)
 		return ExitUsage
+	}
+	if cfg.Resolver != "" {
+		lookupHost = resolverAt(cfg.Resolver)
 	}
 	if err := CheckEnviron(os.Environ()); err != nil {
 		log.Error("refusing to start: %v", err)
@@ -306,6 +311,7 @@ func Main(args []string) int {
 func (s *server) begin(sizes admission.Sizes, floor bool) {
 	s.boot = randomHex(16)
 	s.budget = sizes.Budget
+	s.rest = sizes.Rest
 	s.ledger = admission.New(sizes.Work, floor)
 }
 
@@ -580,6 +586,7 @@ func makePool(log *logx.Logger, tree poolTree, roles []*role, cpus []uint64, con
 		}
 		floor = floor || r.spec.Floor
 		service := cgroup.ServiceCPU(cpus[i])
+		r.workCPU = cpus[i] - service
 		log.Info("role %s: processors %s for its service and %s for its work, its spawns' groups in %s", r.spec.Name,
 			describeQuota(service), describeQuota(cpus[i]-service), r.groups.Path())
 	}
@@ -723,6 +730,35 @@ type spawn struct {
 	// packs is the generation its space binds (packview.Store.Acquire),
 	// whose release its final release calls (forget); nil for none.
 	packs func()
+
+	// machine is the person's VM a kept spawn of an image disk runs in
+	// (machine_linux.go): such a spawn has no leader, group, relay or route
+	// of its own on the host. egress is what it may reach, its VM's route
+	// holding it among its person's live sessions'; link the VM's control
+	// connection it was made over, guest and guestPlace its spawn and place
+	// there, guestPID its leader's pid there; s.mu guards the four.
+	machine    *machine
+	egress     egress
+	link       *guestLink
+	guest      string
+	guestPlace string
+	guestPID   int
+	// announced closes once its start has settled, its `spawned` sent or
+	// its refusal's exit settled as none; guestEvents carries its guest's
+	// exit and release to its follower (followGuest); guestEnded closes
+	// once its guest released it, or is lost to it (gone), lost saying
+	// which and lostMemory why.
+	announced   chan struct{}
+	guestEvents chan []byte
+	guestEnded  chan struct{}
+	goneOnce    sync.Once
+	lost        bool
+	lostMemory  *string
+	// spliceMu guards ends and spliced, its standard streams' two halves
+	// and the channel that closes once they are joined no more.
+	spliceMu sync.Mutex
+	ends     []net.Conn
+	spliced  chan struct{}
 }
 
 // releasePacks lets go of the generation the spawn's space binds.
@@ -741,10 +777,13 @@ type role struct {
 	runDir   string
 	homeRoot string
 	// groups makes the role's spawns' groups, inside the role's group in
-	// work; nil where none can be made, and every spawn is refused. leaf is
-	// the role's leaf in service, which holds its process and its relays.
-	groups *cgroup.Manager
-	leaf   *cgroup.Group
+	// work, its people's VMs' among them; nil where none can be made, and
+	// every spawn is refused. leaf is the role's leaf in service, which
+	// holds its process and its relays. workCPU is its work's processors,
+	// in microseconds of every period, 0 for no bound.
+	groups  *cgroup.Manager
+	leaf    *cgroup.Group
+	workCPU uint64
 	// client is the role's process standing, nil from its end until it is
 	// started again; starting is its start in progress, from its channel's
 	// making until it is published as client (publishRole) or fails, so the
@@ -818,9 +857,9 @@ type server struct {
 	// that ended, so an admit answered over one is never recorded.
 	routing    map[string]*spawn
 	lostRoutes map[uint64]bool
-	// uncleared holds every withdrawn spawn's route the guard has not yet
-	// said cleared, by spawn id, asked again at each sweep.
-	uncleared map[string]guard.Route
+	// uncleared holds every withdrawn route the guard has not yet said
+	// cleared, by its spawn id, asked again at each sweep.
+	uncleared map[string]unclearedRoute
 	// exit ends the keeper (os.Exit in production) and groupKilled kills a
 	// spawn's group and answers whether it is empty (killGroup); tests set
 	// either. readerStarts, nil in production, runs as a role's channel
@@ -871,6 +910,17 @@ type server struct {
 	// imageDisks says a disk made now takes the image form, a person's VM's
 	// drive (home.FormImage).
 	imageDisks bool
+	// wall says this keeper gives the VM wall (plan D18): it was given KVM
+	// and the image's guest, and a first session in a VM fits rest; then
+	// imageDisks too, and every session of a person runs in their VM;
+	// wallWhy is why it gives none, as its start line says.
+	// vms is each person's VM by their athanor (machine_linux.go), and
+	// bootVM starts one, startVM in production.
+	wall      bool
+	wallWhy   string
+	vms       map[string]*machine
+	vmsEnding map[*machine]bool
+	bootVM    func(vmBoot) (guestVM, error)
 
 	// boot is this start's id, 16 random bytes in hex, minted at the start
 	// and of nothing else: every report carries it, its counters' revs
@@ -879,6 +929,7 @@ type server struct {
 	// it.
 	boot      string
 	budget    uint64
+	rest      uint64
 	uncounted uint64
 
 	stopping atomic.Bool
@@ -888,6 +939,9 @@ type server struct {
 	ended   chan struct{}
 	endOnce sync.Once
 	endCode int
+	// rolesKilled, nil in production, runs once the guard's loss has
+	// killed the roles routed over the lost connection (guardLost).
+	rolesKilled func()
 }
 
 func (s *server) run() int {
@@ -906,6 +960,9 @@ func (s *server) run() int {
 // or not, outlives the keeper.
 func (s *server) serve(stop <-chan os.Signal) int {
 	defer s.killRoleGroups()
+	// The wall is decided, and a disk of the directory form retired as its
+	// uid where it is given, once the reaper runs and before any role.
+	s.giveWall()
 	if !s.bootRoles() {
 		s.markClosing()
 		s.endRoles()
@@ -1098,6 +1155,43 @@ func (s *server) startWith(argv0 string, argv, env []string, files []uintptr, di
 	return c, nil
 }
 
+// startTool is the start the keeper hands a package that waits for a
+// process of its own (proc.Start): the keeper's own start, so the reaper
+// that takes every exited child gives the package its child's end, and no
+// child of the keeper is waited for but by it.
+func (s *server) startTool(argv0 string, argv, env []string, files []uintptr, dir string, sys *syscall.SysProcAttr) (proc.Process, error) {
+	c, err := s.startWith(argv0, argv, env, files, dir, sys)
+	if err != nil {
+		return nil, err
+	}
+	return tool{s: s, c: c}, nil
+}
+
+// tool is a child started by startTool, as a proc.Process.
+type tool struct {
+	s *server
+	c *child
+}
+
+func (t tool) Pid() int                         { return t.c.pid }
+func (t tool) Done() <-chan struct{}            { return t.c.done }
+func (t tool) Status() (unix.WaitStatus, error) { return t.c.status, nil }
+
+// Kill signals under the reaper's lock, as signalChild does, so no kill
+// reaches a pid or a group's id once the child is reaped.
+func (t tool) Kill(group bool) {
+	t.s.mu.Lock()
+	defer t.s.mu.Unlock()
+	if t.c.reaped() {
+		return
+	}
+	pid := t.c.pid
+	if group {
+		pid = -pid
+	}
+	_ = unix.Kill(pid, unix.SIGKILL)
+}
+
 // signalChild signals one child unless it has been reaped.
 func (s *server) signalChild(c *child, sig syscall.Signal) {
 	s.mu.Lock()
@@ -1284,6 +1378,11 @@ func (s *server) handleSignal(c *client, req *protocol.Request) {
 	sig := signalNumbers[req.Sig]
 	s.mu.Lock()
 	sp := s.heldSpawn(c, req.SpawnID)
+	if sp != nil && sp.machine != nil {
+		s.mu.Unlock()
+		s.guestSignal(sp, req)
+		return
+	}
 	running := sp != nil && sp.leader != nil && !sp.leader.reaped()
 	if running {
 		_ = unix.Kill(-sp.leader.pid, sig)
@@ -1302,6 +1401,11 @@ func (s *server) handleSignal(c *client, req *protocol.Request) {
 func (s *server) handleResize(c *client, req *protocol.Request) {
 	s.mu.Lock()
 	sp := s.heldSpawn(c, req.SpawnID)
+	if sp != nil && sp.machine != nil {
+		s.mu.Unlock()
+		s.guestResize(sp, req)
+		return
+	}
 	hasPty := sp != nil && sp.pty != nil
 	var err error
 	if hasPty {
@@ -1427,6 +1531,20 @@ func (s *server) startSpawn(c *client, req *protocol.Request, limits admission.L
 	}
 	if req.HomeMode == protocol.HomeKept {
 		return s.startKeptSpawn(c, req, spec.Reach, reach, known, limits)
+	}
+	// Every session of a person runs in their VM where the keeper gives the
+	// wall, a scratch one too: its place names the VM.
+	s.mu.Lock()
+	var m *machine
+	if p := c.places[req.Place]; p != nil {
+		m = p.machine
+	}
+	s.mu.Unlock()
+	if m != nil {
+		if !known {
+			return nil, protocol.CodeUnknownPool
+		}
+		return s.startScratchInMachine(c, req, m.athanor, spec.Reach, reach, limits)
 	}
 	s.mu.Lock()
 	var p *pool.Pool
@@ -1957,6 +2075,10 @@ func (s *server) memoryEnd(sp *spawn) *string {
 // `released` follows, once the spawn's relay has ended and its group is
 // removed.
 func (s *server) retire(sp *spawn, grace time.Duration, notify bool) {
+	if sp.machine != nil {
+		s.retireGuest(sp, grace, notify)
+		return
+	}
 	if sp.kept {
 		s.retireKept(sp, grace, notify)
 		return
@@ -2181,6 +2303,9 @@ func (s *server) sweep() {
 	s.sweepKept()
 	if s.guard != nil {
 		s.retryClears()
+		s.retryNarrowing()
+		s.finishMachines()
+		s.endIdleMachines()
 	}
 	for _, e := range todo {
 		if !s.scrub(s.accounts[e.uid], 0, nil, "") {
