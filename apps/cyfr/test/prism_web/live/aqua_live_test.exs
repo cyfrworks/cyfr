@@ -259,7 +259,82 @@ defmodule PrismWeb.AquaLiveTest do
 
   # What the setup says while nothing is connected and nothing ticked.
   @setup_needs "Tick what you have: a key from a model provider, or Claude Code, " <>
-                 "OpenAI Codex, Antigravity, OpenCode or Cursor on your own plan."
+                 "OpenAI Codex, Antigravity or Cursor on your own plan. With neither, tick " <>
+                 "OpenCode: its own free models need no key and no sign-in."
+
+  # What a program's row says it needs, and its step once its row stands
+  # and nothing is known of its account: OpenCode alone answers unsigned.
+  defp program_need("opencode"),
+    do:
+      "runs in its own folder on OpenCode's free models, with no key or sign-in; " <>
+        "sign in only to use a provider of yours"
+
+  defp program_need(_name), do: "runs in its own folder, signed in to your own plan"
+
+  defp install_step("opencode", _title), do: "OpenCode: install its program."
+  defp install_step(_name, title), do: "#{title}: install its program, then sign it in."
+
+  defp installed_step("opencode", _title),
+    do: "OpenCode: ready on its free models. Sign in only to use a provider of yours."
+
+  defp installed_step(_name, title), do: "#{title}: sign it in on its terminal."
+
+  # Aqua's setup rendered alone (`PrismWeb.AquaLive.setup/1`), with what
+  # the page holds for it.
+  defp setup_html(assigns) do
+    render_component(
+      &PrismWeb.AquaLive.setup/1,
+      Map.merge(
+        %{
+          open: true,
+          providers: {:ok, []},
+          programs: [],
+          known: %{},
+          runnable: [],
+          listings: %{},
+          terminal: nil,
+          ticked: MapSet.new(),
+          asking: %{},
+          model_errors: %{},
+          model_refused: %{},
+          models_loaded: true,
+          agents_read: nil,
+          models_by_provider: %{},
+          catalyst_refs: %{},
+          member_draft: PrismWeb.AquaLive.AgentsComponent.empty_draft(),
+          athanor: "home",
+          admin_next: false
+        },
+        assigns
+      )
+    )
+  end
+
+  # The row of the brain `keyed` there, and whether step 1 is done.
+  defp setup_row(assigns) do
+    tree = assigns |> setup_html() |> LazyHTML.from_fragment()
+
+    words = fn selector ->
+      tree
+      |> LazyHTML.query(selector)
+      |> Enum.map(&(&1 |> LazyHTML.text() |> String.replace(~r/\s+/, " ") |> String.trim()))
+    end
+
+    %{
+      standing: words.(~s(#aqua-setup-brain-keyed [data-test="setup-standing"])),
+      answer: words.(~s(#aqua-setup-brain-keyed [data-test="setup-answer"])),
+      replace: words.(~s(#aqua-setup-brain-keyed [data-test="setup-replace-key"])),
+      done: LazyHTML.attribute(LazyHTML.query(tree, "#aqua-setup-step-brains"), "data-done")
+    }
+  end
+
+  # The words of the setup's row of a brain: how it stands, what its
+  # provider answered, and its way to replace a refused key.
+  defp standing(view, provider),
+    do: texts(view, ~s(#aqua-setup-brain-#{provider} [data-test="setup-standing"]))
+
+  defp answer(view, provider),
+    do: texts(view, ~s(#aqua-setup-brain-#{provider} [data-test="setup-answer"]))
 
   # The setup read again, as the page reads it after a write of its own,
   # which asks no program.
@@ -1391,11 +1466,265 @@ defmodule PrismWeb.AquaLiveTest do
       # The refused key offers none of the old models; nothing else moved.
       assert picker(view) == {%{"other" => ["other-1"]}, refs}
 
+      # A provider that gave no list and did not refuse the key gave no
+      # answer: the row says so, offers no key to replace, and neither the
+      # first step nor the crew's counts it.
+      assert standing(view, "keyed") == ["no answer"]
+      refute has_element?(view, ~s(#aqua-setup-brain-keyed [data-test="setup-replace-key"]))
+
+      assert has_element?(view, ~s(#aqua-setup-step-brains[data-done="false"]))
+
+      assert has_element?(
+               view,
+               ~s([data-test="setup-crew-waits"]),
+               "Connect a program or key first."
+             )
+
       {:ok, [%{id: profile_id} | _]} = Sanctum.Consent.profiles(ctx, ref)
       {:ok, head} = Sanctum.Consent.head_consent(ctx, profile_id)
       assert Enum.any?(head.vault_refs, &(&1.vault_entry_id == entry.id))
 
+      # The page opened again asks nothing of the person and still says
+      # it: the listing every load runs carries what the provider said.
+      {view, _html} = mount_athanor(conn, "/aqua?setup=1")
+
+      Prima.Test.Wait.wait_until(
+        fn -> standing(view, "keyed") == ["no answer"] end,
+        10_000,
+        "what the provider said, read again"
+      )
+
+      assert answer(view, "keyed") == [
+               ~s(keyed answered: the catalyst answered something that is not the envelope: %{"ran" => true})
+             ]
+
+      refute has_element?(view, ~s(#aqua-setup-brain-keyed [data-test="setup-replace-key"]))
+      assert has_element?(view, ~s(#aqua-setup-step-brains[data-done="false"]))
+
       # The brain's models call runs beside the page; it ends before the test does.
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    # The row of a brain whose key is saved, in each state the page can
+    # hold for it (`PrismWeb.AquaLive.setup/1`): only a provider that
+    # listed models reads connected, and only a refused key of the
+    # person's own is theirs to replace.
+    test "a saved key reads one state at a time: key saved while asked, connected, no models, " <>
+           "no answer, or not connected with the way to replace it" do
+      brain = %{
+        provider: "keyed",
+        ref: "catalyst:local.keyed",
+        need: %{qualifier: "keyed.test", reason: nil},
+        state: :ready,
+        shared: nil
+      }
+
+      row = &setup_row(Map.merge(%{providers: {:ok, [brain]}}, &1))
+
+      # The page's first listing is still out, or a grant here is asking.
+      asking = %{standing: ["key saved"], answer: ["Asking keyed…"], replace: [], done: ["true"]}
+      assert row.(%{models_loaded: false}) == asking
+      assert row.(%{asking: %{"catalyst:local.keyed" => 1}}) == asking
+
+      # The listing came back with nothing for it.
+      assert row.(%{}) == %{standing: ["key saved"], answer: [], replace: [], done: ["true"]}
+
+      assert row.(%{models_by_provider: %{"keyed" => ["m-1", "m-2"]}}) ==
+               %{
+                 standing: ["connected"],
+                 answer: ["keyed answered with 2 models."],
+                 replace: [],
+                 done: ["true"]
+               }
+
+      # The key was taken and there is nothing to choose.
+      assert row.(%{models_by_provider: %{"keyed" => []}}) ==
+               %{
+                 standing: ["no models"],
+                 answer: ["keyed answered with no models."],
+                 replace: [],
+                 done: ["false"]
+               }
+
+      # No answer is not a refused key: nothing to replace.
+      assert row.(%{model_errors: %{"keyed" => "the listing did not answer"}}) ==
+               %{
+                 standing: ["no answer"],
+                 answer: ["keyed answered: the listing did not answer"],
+                 replace: [],
+                 done: ["false"]
+               }
+
+      refused = %{model_refused: %{"keyed" => "invalid x-api-key"}}
+
+      assert row.(refused) ==
+               %{
+                 standing: ["not connected"],
+                 answer: ["keyed answered: invalid x-api-key"],
+                 replace: ["If the key is wrong, replace it in the Vault with its Rotate button."],
+                 done: ["false"]
+               }
+
+      # The link is the Vault's, on the words that name it.
+      assert Map.merge(%{providers: {:ok, [brain]}}, refused)
+             |> setup_html()
+             |> LazyHTML.from_fragment()
+             |> LazyHTML.query(~s([data-test="setup-replace-key"] a[href="/a/home/vault"]))
+             |> LazyHTML.text() == "replace it in the Vault"
+
+      # A key someone shared is not the person's to replace, and while it
+      # is asked the row says only that.
+      shared = %{brain | shared: %{owner: "Mira", person_daily: nil}}
+
+      assert %{standing: ["not connected"], replace: []} =
+               row.(Map.put(refused, :providers, {:ok, [shared]}))
+
+      assert %{standing: [], answer: ["Asking keyed…"]} =
+               row.(%{providers: {:ok, [shared]}, models_loaded: false})
+
+      assert %{standing: ["not asked yet"], answer: []} = row.(%{providers: {:ok, [shared]}})
+
+      # A brain that takes no key has none saved and none to replace.
+      keyless = %{brain | need: nil}
+      assert %{standing: ["granted"]} = row.(%{providers: {:ok, [keyless]}})
+
+      assert %{standing: ["not connected"], replace: []} =
+               row.(Map.put(refused, :providers, {:ok, [keyless]}))
+    end
+
+    # Steps 2 and 3 read a member's brain as step 1 reads it.
+    test "a crew member on a key whose provider is not connected is not ready, says why in " <>
+           "the row's words, and is not offered for Aqua" do
+      brain = %{
+        provider: "keyed",
+        ref: "catalyst:local.keyed",
+        need: %{qualifier: "keyed.test", reason: nil},
+        state: :ready,
+        shared: nil
+      }
+
+      agent = %{
+        "name" => "scout",
+        "title" => "Scout",
+        "catalyst_ref" => "catalyst:local.keyed:0.1.0"
+      }
+
+      read = %{
+        soul: "aqua",
+        soul_ready: true,
+        soul_state: :ready,
+        soul_program: nil,
+        member: "scout",
+        members: [%{name: "scout", title: "Scout", agent: agent, ready: true}],
+        unconnected: [],
+        listable: []
+      }
+
+      steps = fn assigns ->
+        tree =
+          Map.merge(%{providers: {:ok, [brain]}, agents_read: read}, assigns)
+          |> setup_html()
+          |> LazyHTML.from_fragment()
+
+        words = fn selector ->
+          tree
+          |> LazyHTML.query(selector)
+          |> Enum.map(&(&1 |> LazyHTML.text() |> String.replace(~r/\s+/, " ") |> String.trim()))
+        end
+
+        attr = fn selector, name ->
+          tree |> LazyHTML.query(selector) |> LazyHTML.attribute(name)
+        end
+
+        %{
+          made: words.("#aqua-setup-made-scout"),
+          crew_done: attr.("#aqua-setup-step-crew", "data-done"),
+          disabled: attr.(~s(#aqua-setup-member option[value="scout"]), "disabled") != [],
+          aqua_done: attr.("#aqua-setup-step-aqua", "data-done"),
+          runs_on: words.(~s([data-test="setup-aqua-done"]))
+        }
+      end
+
+      assert steps.(%{models_by_provider: %{"keyed" => ["m-1"]}}) == %{
+               made: ["Scout: ready."],
+               crew_done: ["true"],
+               disabled: false,
+               aqua_done: ["true"],
+               runs_on: ["Aqua runs on Scout."]
+             }
+
+      down = %{crew_done: ["false"], disabled: true, aqua_done: ["false"], runs_on: []}
+
+      assert steps.(%{model_refused: %{"keyed" => "invalid x-api-key"}}) ==
+               Map.put(down, :made, ["Scout: not ready — keyed is not connected."])
+
+      assert steps.(%{models_by_provider: %{"keyed" => []}}) ==
+               Map.put(down, :made, ["Scout: not ready — keyed answered with no models."])
+
+      assert steps.(%{model_errors: %{"keyed" => "the listing did not answer"}}) ==
+               Map.put(down, :made, ["Scout: not ready — keyed gave no answer."])
+    end
+
+    test "a provider that lists no models is not connected, and its row says no models",
+         %{conn: conn, ctx: ctx} do
+      ref = "catalyst:local.empty"
+      publish_brain!(ctx, "empty", %{})
+      grant!(ctx, ref, %{bindings: []})
+      remember_catalogue!(%{"empty" => []}, %{"empty" => ref})
+
+      {view, _html} = mount_athanor(conn, "/aqua?setup=1")
+      settled(fn -> standing(view, "empty") == ["no models"] end, "the empty list")
+      assert answer(view, "empty") == ["empty answered with no models."]
+      assert has_element?(view, ~s(#aqua-setup-step-brains[data-done="false"]))
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    # Each ask carries its number and its answer comes back with it, so
+    # of two answers for a brain the one asked last stands, whichever
+    # arrives last.
+    test "an answer asked before the one the page holds for a brain does not replace it, " <>
+           "whichever arrives last, and one asked after does",
+         %{conn: conn, ctx: ctx} do
+      ref = "catalyst:local.ordering"
+      publish_brain!(ctx, "ordering", %{})
+      grant!(ctx, ref, %{bindings: []})
+      remember_catalogue!(%{"ordering" => ["previous-model"]}, %{"ordering" => ref})
+      {view, _html} = mount_athanor(conn, "/aqua?setup=1")
+      settled(fn -> standing(view, "ordering") == ["connected"] end, "the first catalogue")
+      socket = :sys.get_state(view.pid).socket
+      tag = CyfrWeb.ContextGuard.capture(socket.assigns.context)
+      asked = socket.assigns.asks
+
+      listed = %{"models" => %{"ordering" => ["previous-model"]}, "refs" => %{"ordering" => ref}}
+
+      refused = %{
+        "refs" => %{"ordering" => ref},
+        "refused" => %{"ordering" => "invalid x-api-key"}
+      }
+
+      catalogue = &send(view.pid, {:list_models_result, tag, &1, {:ok, &2}})
+
+      # A grant's answer, then the page's first catalogue arriving again.
+      send(view.pid, {:setup_answer, tag, ref, {:refused, "invalid x-api-key"}})
+      assert standing(view, "ordering") == ["not connected"]
+      catalogue.(asked, listed)
+      assert standing(view, "ordering") == ["not connected"]
+      assert elem(picker(view), 0) == %{}
+
+      # Two catalogues out at once: A asked under the working key, the key
+      # rotated, B asked; B's refusal arrives first and A's list after it.
+      catalogue.(asked + 11, refused)
+      assert standing(view, "ordering") == ["not connected"]
+      catalogue.(asked + 10, listed)
+      assert standing(view, "ordering") == ["not connected"]
+      assert answer(view, "ordering") == ["ordering answered: invalid x-api-key"]
+      assert elem(picker(view), 0) == %{}
+
+      # One asked after them replaces what the page holds.
+      catalogue.(asked + 12, listed)
+      assert standing(view, "ordering") == ["connected"]
+      assert elem(picker(view), 0) == %{"ordering" => ["previous-model"]}
+
       Cyfr.Test.Sandbox.end_views()
     end
 
@@ -1430,11 +1759,15 @@ defmodule PrismWeb.AquaLiveTest do
       :erlang.trace_pattern({Aqua.Models, :ask_models, 2}, true, [:local])
       view |> element(~s(#system-layer-dialog button[phx-click="confirm"])) |> render_click()
 
+      # The row reads the old list as one model too, so the answer is
+      # awaited where only it shows: the picker's entry.
       Prima.Test.Wait.wait_until(
-        fn -> render(view) =~ "brain answered with one model." end,
+        fn -> elem(picker(view), 0)["acme.brain"] == ["chat-fixture"] end,
         10_000,
         "acme's brain's answer"
       )
+
+      assert render(view) =~ "brain answered with one model."
 
       _ = :sys.get_state(view.pid)
       :erlang.trace(:all, false, [:call])
@@ -1562,12 +1895,21 @@ defmodule PrismWeb.AquaLiveTest do
 
     test "a brain that needs nothing asks only for the grant, and is connected once granted",
          %{conn: conn, ctx: ctx} do
-      publish_brain!(ctx, "open", %{})
+      # The chat fixture answers its models with one model.
+      {:ok, _} =
+        Compendium.Registry.publish_bytes(ctx, File.read!(Cyfr.Test.ChatFixture.wasm_path()), %{
+          name: "open",
+          version: "0.1.0",
+          type: "catalyst",
+          description: "A model catalyst",
+          manifest: Jason.encode!(%{"contracts" => [Prima.Model.chat_contract()]})
+        })
+
       {view, _html} = mount_athanor(conn, "/aqua?setup=1")
 
       assert has_element?(view, ~s(#aqua-setup-brain-open[data-state="needs_grant"]))
       assert has_element?(view, "#aqua-setup-brain-open label", "needs only your grant")
-      refute has_element?(view, "#aqua-setup-brain-open", "connected")
+      assert standing(view, "open") == []
 
       assert has_element?(view, ~s([data-test="setup-needs"]), @setup_needs)
 
@@ -1588,14 +1930,16 @@ defmodule PrismWeb.AquaLiveTest do
       view |> element(~s(#system-layer-dialog button[phx-click="confirm"])) |> render_click()
 
       Prima.Test.Wait.wait_until(
-        fn -> has_element?(view, ~s(#aqua-setup-brain-open[data-state="ready"]), "connected") end,
-        5_000,
+        fn -> standing(view, "open") == ["connected"] end,
+        10_000,
         "the brain connected"
       )
 
+      assert has_element?(view, ~s(#aqua-setup-brain-open[data-state="ready"]))
+      assert answer(view, "open") == ["open answered with one model."]
+
       # A connected brain is a member's: the crew's step waits on none, and
-      # Aqua's waits for a member to run on. (The form offers a key once
-      # its provider lists models, which this one's does not.)
+      # Aqua's waits for a member to run on.
       refute has_element?(view, ~s([data-test="setup-crew-waits"]))
       assert has_element?(view, ~s([data-test="setup-aqua-waits"]), "Make a crew member first.")
       refute has_element?(view, "#aqua-setup-member")
@@ -2543,12 +2887,15 @@ defmodule PrismWeb.AquaLiveTest do
 
         assert texts(view, brain <> " label span") == [
                  title,
-                 "a plan: to run #{title} in its own folder, signed in to your own plan"
+                 program_need(name)
                ]
 
         view |> element(brain <> " input") |> render_click()
         step = "#aqua-setup-step-program-" <> name
-        assert has_element?(view, step, "#{title}: install its program, then sign it in.")
+
+        assert Enum.map(texts(view, step), &String.replace(&1, ~r/\s+/, " ")) == [
+                 install_step(name, title) <> " install #{name}"
+               ]
 
         assert has_element?(
                  view,
@@ -2571,7 +2918,8 @@ defmodule PrismWeb.AquaLiveTest do
         row = program_row!(ctx, name, command)
         reread_setup(view)
         settled(fn -> has_element?(view, brain <> ~s([data-state="installed"])) end, "installed")
-        assert has_element?(view, step, "#{title}: sign it in on its terminal.")
+        assert has_element?(view, step, installed_step(name, title))
+        assert has_element?(view, step <> ~s( [data-test="sign-in"]), "Sign in")
         refute has_element?(view, step <> ~s( a[data-test="install-program"]))
         harness!(view, "mine", "program:#{name}")
 

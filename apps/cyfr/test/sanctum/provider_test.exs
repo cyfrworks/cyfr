@@ -644,7 +644,7 @@ defmodule Sanctum.ProviderTest do
                 }}
     end
 
-    # "No profiles" tells a person to publish one; a store that could not
+    # "No profiles" tells a person to grant it first; a store that could not
     # answer says nothing of the tincture's profiles, so it is refused.
     @tag :capture_log
     test "an outage is refused in its own sentence, never read as a tincture with no profile",
@@ -657,7 +657,12 @@ defmodule Sanctum.ProviderTest do
         })
       end
 
-      assert {:ok, %{public: false, note: "No profiles — publish with profile.publish"}} =
+      assert {:ok,
+              %{
+                public: false,
+                note:
+                  "No profiles — grant it first; a public profile is published from its owner profile"
+              }} =
                get.("vis-none")
 
       {:ok, _} =
