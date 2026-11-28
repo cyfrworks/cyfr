@@ -1043,7 +1043,10 @@ func TestAccessBrowserProxy(t *testing.T) {
 	want := "CYFR will be reached " + reached + ".\n" +
 		"Done. CYFR is reached " + reached + ".\n" +
 		addressShown(t, "https://cyfr.example.com") +
-		"Every program on this machine that can connect to 127.0.0.1:4001 is trusted as your proxy: CYFR sees Docker's gateway as the peer, so it cannot tell your proxy from any other local program, and believes the forwarded headers any of them sends.\n"
+		"A stated limit: every program on this machine that can connect to 127.0.0.1:4001 counts as your proxy: CYFR sees Docker's gateway as the peer and cannot tell one local program from another. " +
+		"With CYFR_TRUSTED_PROXY_HOPS=0 no forwarded address is believed, and every caller counts as one address. " +
+		"With one hop or more, or a CYFR_TRUSTED_PROXY_CIDRS that covers Docker's gateway, any such program chooses the client address CYFR uses for its per-address limits and for an API key's address allowlist. " +
+		"Credentials are still required either way, and the scheme is the listener's, not a header's.\n"
 	if !strings.HasPrefix(out.String(), want) {
 		t.Errorf("cyfr access browser proxy printed:\n%s\nwant it to begin:\n%s", out.String(), want)
 	}

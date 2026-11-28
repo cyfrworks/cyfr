@@ -839,7 +839,10 @@ var lookupDomain = func(ctx context.Context, domain string) error {
 // taken: the publication is on this machine's loopback, where CYFR cannot
 // tell the person's proxy from any other program that connects to it.
 func proxyTrustLimit(publish string) string {
-	return "Every program on this machine that can connect to " + publish + " is trusted as your proxy: CYFR sees Docker's gateway as the peer, so it cannot tell your proxy from any other local program, and believes the forwarded headers any of them sends."
+	return "A stated limit: every program on this machine that can connect to " + publish + " counts as your proxy: CYFR sees Docker's gateway as the peer and cannot tell one local program from another. " +
+		"With CYFR_TRUSTED_PROXY_HOPS=0 no forwarded address is believed, and every caller counts as one address. " +
+		"With one hop or more, or a CYFR_TRUSTED_PROXY_CIDRS that covers Docker's gateway, any such program chooses the client address CYFR uses for its per-address limits and for an API key's address allowlist. " +
+		"Credentials are still required either way, and the scheme is the listener's, not a header's."
 }
 
 // printAddress prints the address a change gave CYFR and its QR code, for
