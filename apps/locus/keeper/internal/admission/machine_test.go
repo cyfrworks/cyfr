@@ -433,3 +433,40 @@ func TestTwoStartsInARunningVMHoldBothAllowances(t *testing.T) {
 		t.Fatalf("two starts under way in a VM at rest hold %d MiB, want the VM's reading and both allowances, %d", got/mib, want/mib)
 	}
 }
+
+// A VM a folder's operation holds is not at rest: a start that needs room
+// asks the other VM at rest, though the held one has rested longer. Let go,
+// it is at rest from then, so the VM that has rested longer is asked first.
+func TestAHeldVMIsNotAtRestAndRestsFromItsLetGo(t *testing.T) {
+	l := New(4096*mib, false)
+	a := NewMachine("backends", "ath_a", testGuest, "vm-a")
+	b := NewMachine("backends", "ath_b", testGuest, "vm-b")
+	for i, m := range []*Entry{a, b} {
+		s := inVM(m, "p1")
+		spawned(t, l, s, float64(i), 100*mib)
+		l.Spawned(m, at(float64(i)))
+		l.Read(m, 1900*mib, false, at(20))
+		l.Drop(s, at(21+float64(i)))
+	}
+	if !l.Rests(a) || !l.Rests(b) {
+		t.Fatalf("two VMs whose sessions left: a at rest %t, b %t", l.Rests(a), l.Rests(b))
+	}
+	l.Hold(a)
+	if l.Rests(a) {
+		t.Fatal("a VM a folder's operation holds is at rest")
+	}
+	c := session("ath_c", "q1")
+	if ev := l.Place(c, at(23)); !slices.Equal(ev.GiveWay, []*Entry{b}) {
+		t.Fatalf("asked %v to give way while a was held, want b alone", ev.GiveWay)
+	}
+	l.Drop(c, at(23))
+	l.LetGo(a, at(24))
+	if !l.Rests(a) {
+		t.Fatal("a VM let go with no session is not at rest")
+	}
+	// A second with less than a program's allowance free asks the VM at
+	// rest longest: b, at rest since 22, before a, at rest since 24.
+	if ev := l.Tick(at(25)); !slices.Equal(ev.GiveWay, []*Entry{b}) {
+		t.Fatalf("asked %v to give way, want b, at rest longer than a let go at 24", ev.GiveWay)
+	}
+}

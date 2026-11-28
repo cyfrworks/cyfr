@@ -1092,34 +1092,49 @@ func (s *server) homeInMachine(c *client, req *protocol.Request, at keptAt) {
 	case answer.Type == "home_made" && req.Type == protocol.TypeHomeReset:
 		s.log.Info("kept home %s of uid %d reset in its person's VM", req.Home, at.uid)
 		s.send(c, protocol.NewHomeMade(req.ID, at.uid))
+	case answer.Type == "home_retired" && req.Type == protocol.TypeHomeReset:
+		// The guest holds nothing of a home the disk's record holds: the
+		// home is empty, which is what a reset makes it, so it is answered
+		// made and stays recorded, as the host's own reset of a recorded
+		// home answers. Only a retirement takes a home out of the record.
+		s.log.Info("kept home %s of uid %d reset in its person's VM, which held nothing of it", req.Home, at.uid)
+		s.send(c, protocol.NewHomeMade(req.ID, at.uid))
 	case answer.Type == "home_retired":
 		s.homeRetired(c, req, at)
 	default:
-		s.log.Warn("%s %s refused: its VM's keeper refused it: %s", req.Type, req.ID, answer.Code)
+		s.log.Warn("%s %s refused: its VM's keeper refused it: %s", req.Type, req.ID, logx.Untrusted(answer.Code))
 		s.send(c, protocol.NewError(req.ID, "", guestCode(answer.Code)))
 	}
 }
 
-// holdMachine holds the VM of at's person for a folder's operation, req's:
-// a place on it, so it neither ends idle nor gives way while the operation
-// runs, and, where it is not admitted, its admission on its own allowance
-// alone, waited for as a start waits. Its person's ceiling is a session's
-// place's, which a folder's operation names none of: their VM counts
-// toward it at their every session, as any VM does. A VM whose session's
-// place waits for its room refuses the operation as no room. It answers
-// the code the operation is refused with.
+// holdMachine holds the VM of at's person for a folder's operation, req's,
+// in the ledger (admission's Hold), so it is not at rest while the
+// operation runs: it neither gives way nor ends idle, and the admission asks
+// other idle work in its place. The hold names the VM as a place does, so
+// one not yet booted is not let go meanwhile. Where it is not admitted, it
+// is placed alone, on its own allowance, and waited for as a start waits.
+// Its person's ceiling is a session's place's, which a folder's operation
+// names none of: their VM counts toward it at their every session, as any
+// VM does. A VM not yet admitted that waits for room for one of the
+// person's sessions, or for another folder's operation, refuses this one as
+// no room. It answers the code the operation is refused with.
 func (s *server) holdMachine(r *role, at keptAt, req *protocol.Request) (*machine, string) {
 	s.mu.Lock()
 	m := s.machineFor(r, at.athanor)
 	m.places++
+	s.ledger.Hold(m.entry)
 	if m.entry.Admitted() {
 		s.mu.Unlock()
 		return m, ""
 	}
 	if m.places > 1 || m.alone != nil {
-		s.unplaced(m)
+		waits := "one of their sessions"
+		if m.alone != nil {
+			waits = "another operation on their folders"
+		}
+		s.letGo(m)
 		s.mu.Unlock()
-		s.log.Warn("%s %s refused: its person's VM waits for room for another start", req.Type, req.ID)
+		s.log.Warn("%s %s refused: its person's VM is not yet started and waits for room for %s; asked again once that has room, it goes ahead", req.Type, req.ID, waits)
 		return nil, protocol.CodeCapacity
 	}
 	alone := make(chan bool, 1)
@@ -1130,7 +1145,7 @@ func (s *server) holdMachine(r *role, at keptAt, req *protocol.Request) (*machin
 	s.mu.Lock()
 	m.alone = nil
 	if !admitted {
-		s.unplaced(m)
+		s.letGo(m)
 	}
 	s.mu.Unlock()
 	if !admitted {
@@ -1139,16 +1154,22 @@ func (s *server) holdMachine(r *role, at keptAt, req *protocol.Request) (*machin
 	return m, ""
 }
 
-// releaseMachine lets go of a folder operation's hold on m: a VM that then
-// holds no session is idle from now, and may be asked to give way.
+// releaseMachine lets go of a folder operation's hold on m: a VM then at
+// rest is idle from now, and may be asked to give way.
 func (s *server) releaseMachine(m *machine) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.unplaced(m)
-	if m.places == 0 && len(m.sessions) == 0 {
+	s.letGo(m)
+	if s.ledger.Rests(m.entry) {
 		m.idleSince = now()
-		s.ledger.AtRest(m.entry, now())
 	}
+}
+
+// letGo takes a folder operation's hold off m, in the ledger and as a place
+// that names it, with s.mu held.
+func (s *server) letGo(m *machine) {
+	s.ledger.LetGo(m.entry, now())
+	s.unplaced(m)
 }
 
 // guestCode is the code a refusal of the guest's keeper refuses its

@@ -41,6 +41,9 @@ type Entry struct {
 	// a refusal names it by once it holds none.
 	own  uint64
 	kind string
+	// holds counts, for a VM's place, the folder operations that hold it
+	// (Hold): a VM held is not at rest.
+	holds int
 	// base is, for a session in a VM, the VM's reading at the session's
 	// admission: while its allowance's time runs, the VM is charged at
 	// least that and the allowances of its sessions still starting.
@@ -376,7 +379,7 @@ func (l *Ledger) Drop(e *Entry, now time.Time) Events {
 	was := e.admitted
 	l.admitted = slices.DeleteFunc(l.admitted, func(o *Entry) bool { return o == e })
 	l.counters.withdraw(e, now)
-	if m := e.Machine; m != nil && was && l.sessionsIn(m) == 0 {
+	if m := e.Machine; m != nil && was && l.Rests(m) {
 		m.assignedAt, m.asked = now, false
 	}
 	return l.step(now, false)
@@ -386,11 +389,27 @@ func (l *Ledger) Drop(e *Entry, now time.Time) Events {
 // rest.
 func (l *Ledger) Sessions(m *Entry) int { return l.sessionsIn(m) }
 
-// AtRest says the VM m is at rest from now, as when its last session left:
-// it may be asked to give way again. A VM held for a folder's operation is
-// at rest once the operation ends.
-func (l *Ledger) AtRest(m *Entry, now time.Time) {
-	if m.vm && l.sessionsIn(m) == 0 {
+// Rests says the VM m is at rest: admitted, with no session's place
+// admitted in it or waiting for it, and no folder's operation holding it.
+// It is the one test of a VM's rest: only a VM at rest is asked to give way
+// to a start, and the keeper ends only one at rest, for room or idle.
+func (l *Ledger) Rests(m *Entry) bool {
+	if !m.vm || !m.admitted || m.holds > 0 || l.sessionsIn(m) > 0 {
+		return false
+	}
+	return !slices.ContainsFunc(l.waiting, func(e *Entry) bool { return e.Machine == m })
+}
+
+// Hold holds the VM m for a folder's operation, admitted or not yet: until
+// its LetGo it is not at rest.
+func (l *Ledger) Hold(m *Entry) { m.holds++ }
+
+// LetGo lets go of a hold of the VM m: one then at rest is at rest from
+// now, as when its last session leaves, and the last of the VMs at rest to
+// be asked to give way.
+func (l *Ledger) LetGo(m *Entry, now time.Time) {
+	m.holds--
+	if l.Rests(m) {
 		m.assignedAt, m.asked = now, false
 	}
 }
@@ -524,9 +543,9 @@ func (l *Ledger) step(now time.Time, second bool) Events {
 
 // giveWay asks, of the idle work not yet asked, enough to cover what the
 // waiting starts need beyond what is free and what those already asked
-// will give: kept runners and VMs at rest, which hold no session, oldest at
-// rest first, then fresh runners above the floor. A VM a waiting start
-// would run in is not asked: that start needs it. A second with less than a
+// will give: kept runners and VMs at rest (Rests), oldest at rest first,
+// then fresh runners above the floor. A VM a waiting start would run in, or
+// a folder's operation holds, is not at rest. A second with less than a
 // program's allowance free asks alike.
 func (l *Ledger) giveWay(in map[*Entry]bool, now time.Time, second bool) []*Entry {
 	var need uint64
@@ -547,17 +566,11 @@ func (l *Ledger) giveWay(in map[*Entry]bool, now time.Time, second bool) []*Entr
 		return nil
 	}
 	short := need - free
-	needed := map[*Entry]bool{}
-	for _, e := range l.waiting {
-		if e.Machine != nil {
-			needed[e.Machine] = true
-		}
-	}
 	var kept, fresh []*Entry
 	for _, e := range l.admitted {
 		switch {
 		case e.ending || in[e]:
-		case e.kept(), e.vm && !needed[e] && l.sessionsIn(e) == 0:
+		case e.kept(), l.Rests(e):
 			kept = append(kept, e)
 		case e.fresh():
 			fresh = append(fresh, e)
