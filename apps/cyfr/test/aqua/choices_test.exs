@@ -489,7 +489,8 @@ defmodule Aqua.ChoicesTest do
                })
 
       # A send that is no press still names its line.
-      assert {:error, {:invalid_argument, "send requires a non-empty 'message'"}} =
+      assert {:error,
+              {:invalid_argument, "A send that is no press says a line or carries files."}} =
                Tool.handle("thread", ctx, %{"action" => "send", "thread" => today.id})
     end
 
@@ -557,6 +558,144 @@ defmodule Aqua.ChoicesTest do
                for(m <- Threads.messages(actor(ctx), today.id), Choices.pressed(m) != nil, do: m)
 
       assert Choices.pressed(only)["row"] == card.id
+    end
+  end
+
+  describe "a send bound for a daily thread across midnight" do
+    # The day turns `days` back for `thread`: what was today is that many
+    # days ago, and the next send of today makes today's thread anew.
+    defp aged!(ctx, thread, days) do
+      {1, _} =
+        Arca.Repo.update_all(from(t in Arca.Schemas.Thread, where: t.id == ^thread.id),
+          set: [day: Date.add(Aqua.Day.today(ctx), -days)]
+        )
+
+      thread
+    end
+
+    defp line(ctx, text, client_id),
+      do:
+        Tool.handle("thread", ctx, %{
+          "action" => "send",
+          "message" => text,
+          "agent" => "aqua",
+          "client_id" => client_id
+        })
+
+    defp under(ctx, client_id),
+      do:
+        Arca.Repo.all(
+          from(m in Arca.Schemas.Message,
+            where: m.athanor_id == ^ctx.athanor_id and m.client_id == ^client_id
+          )
+        )
+
+    test "a plain line under yesterday's press id is refused and writes nothing",
+         %{ctx: ctx, today: today} do
+      turn = turn!(ctx, today)
+      card = said!(ctx, today, turn, block(turn.id))
+      assert {:ok, %{message_id: id}} = press(ctx, card, 0, "snd_press")
+
+      aged!(ctx, today, 1)
+      assert line(ctx, "PostgreSQL", "snd_press") == {:error, :client_id_reused}
+      assert [%{id: ^id}] = under(ctx, "snd_press")
+
+      # The press's own line is the label; the refused one wrote none.
+      assert [] =
+               Arca.Repo.all(
+                 from(m in Arca.Schemas.Message,
+                   where:
+                     m.athanor_id == ^ctx.athanor_id and m.sent_by == "person" and
+                       m.content == "PostgreSQL" and m.id != ^id
+                 )
+               )
+    end
+
+    test "three days on, with a plain line tried under its id between, the press retried " <>
+           "answers its first receipt and leaves one row under the id",
+         %{ctx: ctx, today: today} do
+      turn = turn!(ctx, today)
+      card = said!(ctx, today, turn, block(turn.id))
+      assert {:ok, %{message_id: id, thread: landed}} = press(ctx, card, 0, "snd_press")
+
+      aged!(ctx, today, 1)
+      _ = line(ctx, "PostgreSQL", "snd_press")
+
+      # A second day turns, past a daily thread made in between.
+      aged!(ctx, today, 2)
+      {:ok, between} = Aqua.Day.current(ctx)
+      aged!(ctx, between, 1)
+
+      assert {:ok, %{replayed: true, message_id: ^id, thread: ^landed}} =
+               press(ctx, card, 0, "snd_press")
+
+      assert [%{id: ^id}] = under(ctx, "snd_press")
+    end
+
+    test "a plain line retried across midnight answers its first receipt and writes once",
+         %{ctx: ctx, today: today} do
+      assert {:ok, %{message_id: id, thread: landed, replayed: false}} =
+               line(ctx, "hello", "snd_plain")
+
+      assert landed == today.id
+      aged!(ctx, today, 1)
+
+      assert {:ok, %{message_id: ^id, thread: ^landed, replayed: true}} =
+               line(ctx, "hello", "snd_plain")
+
+      assert [%{id: ^id}] = under(ctx, "snd_plain")
+    end
+
+    test "a plain line under a new client id after midnight lands in today's thread",
+         %{ctx: ctx, today: today} do
+      assert {:ok, %{thread: first}} = line(ctx, "hello", "snd_one")
+      assert first == today.id
+      aged!(ctx, today, 1)
+      assert {:ok, %{thread: second, replayed: false}} = line(ctx, "hello again", "snd_two")
+      assert {:ok, %{id: ^second, day: day}} = Aqua.Day.current(ctx)
+      assert second != first and day == Aqua.Day.today(ctx)
+    end
+  end
+
+  describe "a send that is no press" do
+    test "carrying files and no message is accepted; with neither it is refused",
+         %{ctx: ctx, today: today} do
+      mid = Prima.UUID7.generate_id("msg")
+
+      assert {:ok, %{attachments: refs}} =
+               Tool.handle("thread", ctx, %{
+                 "action" => "attach",
+                 "thread" => today.id,
+                 "message_id" => mid,
+                 "files" => [
+                   %{
+                     "filename" => "note.txt",
+                     "media_type" => "text/plain",
+                     "data" => Base.encode64("notes")
+                   }
+                 ]
+               })
+
+      assert {:ok, %{accepted: true, message_id: ^mid}} =
+               Tool.handle("thread", ctx, %{
+                 "action" => "send",
+                 "thread" => today.id,
+                 "id" => mid,
+                 "attachments" => refs,
+                 "agent" => "aqua"
+               })
+
+      refused =
+        {:error, {:invalid_argument, "A send that is no press says a line or carries files."}}
+
+      for args <- [%{}, %{"message" => "  "}, %{"attachments" => []}] do
+        assert Tool.handle(
+                 "thread",
+                 ctx,
+                 Map.merge(%{"action" => "send", "thread" => today.id}, args)
+               ) ==
+                 refused
+      end
     end
   end
 end

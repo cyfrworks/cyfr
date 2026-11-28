@@ -301,7 +301,7 @@ defmodule Aqua.Providers.Thread do
             ),
             Arg.new("message", :string,
               description:
-                "send: the text to say (at most 32 KiB of text); every send but a press names one",
+                "send: the text to say (at most 32 KiB of text); a send that is no press says a line or carries files",
               max: 32768
             ),
             Arg.new("agent", :string,
@@ -741,14 +741,10 @@ defmodule Aqua.Providers.Thread do
     end
   end
 
-  # A send joins the daily thread current when it is accepted: one that
-  # names no thread, or names a daily thread, of today or another day. Its
-  # files are stored under the thread they were attached to, so a send
-  # that carries files names that thread: a crew member's, or a daily
-  # thread that is still today's. One whose day has turned since is
-  # refused and leaves nothing behind: no row, no new day's thread, and
-  # none of the files this caller stored under the message, so a message
-  # never names files another thread holds.
+  # A send that is no press and says nothing, refused before a thread is
+  # chosen, and by admission (`:empty`) for a line that trims to nothing.
+  @says_nothing "A send that is no press says a line or carries files."
+
   # A press of Aqua's question names its choice and a client id, and
   # nothing else: no argument the card did not show, and no destination.
   # It is checked before anything is written, today's thread included, and
@@ -763,13 +759,21 @@ defmodule Aqua.Providers.Thread do
     end
   end
 
-  # A send that is no press says something, a line or files, checked
-  # before a thread is chosen, so an empty one makes no thread.
+  # A send that names no thread, or names a daily thread of today or
+  # another day, joins the daily thread its client id was accepted in, or
+  # else the one current when it is accepted (`daily_lands/2`). Its files
+  # are stored under the thread they were attached to, so a send that
+  # carries files names that thread: a crew member's, or a daily thread
+  # that is still today's. One whose day has turned since is refused and
+  # leaves nothing behind: no row, no new day's thread, and none of the
+  # files this caller stored under the message, so a message never names
+  # files another thread holds. A send that says nothing is refused before
+  # a thread is chosen, so it makes no thread.
   defp dispatch(ctx, %{"action" => "send"} = args) do
     if String.trim(args["message"] || "") == "" and (args["attachments"] || []) == [] do
-      {:error, {:invalid_argument, "send requires a non-empty 'message'"}}
+      {:error, {:invalid_argument, @says_nothing}}
     else
-      case sends_to(ctx, args["thread"], args["attachments"] || []) do
+      case sends_to(ctx, args["thread"], args["attachments"] || [], args["client_id"]) do
         {:ok, id} ->
           act("send", ctx, id, args)
 
@@ -802,22 +806,24 @@ defmodule Aqua.Providers.Thread do
   end
 
   # Where a press lands, from its card alone: the workspace thread the card
-  # is in, or today's daily thread for a card in a daily thread of any day,
-  # as a line typed there lands. A daily card's press already accepted
-  # under its client id lands again where it did, found across the daily
-  # threads (`Arca.ThreadStorage.daily_message/2`), so the day's turning
-  # never splits one press in two: the runner there answers its receipt,
-  # or refuses another send under that id.
+  # is in, or the daily thread a daily card's press lands in
+  # (`daily_lands/2`), as a line typed there lands.
   defp press_lands(ctx, choice, client_id) do
     with {:ok, room} <- Aqua.Choices.room(ctx, choice) do
       case room do
-        %{kind: "daily"} -> pressed_in(ctx, client_id)
+        %{kind: "daily"} -> daily_lands(ctx, client_id)
         %{id: id} -> {:ok, id}
       end
     end
   end
 
-  defp pressed_in(ctx, client_id) when is_binary(client_id) do
+  # The one way a send bound for a daily thread, a press or not, is given
+  # its thread: where its client id was already accepted across the
+  # person's daily threads (`Arca.ThreadStorage.daily_message/2`), else
+  # today's. So the day's turning never splits one send in two: the runner
+  # there answers the same send's receipt and refuses any other under that
+  # id, a plain line under a press's included.
+  defp daily_lands(ctx, client_id) when is_binary(client_id) do
     case Arca.ThreadStorage.daily_message(Sanctum.Context.actor(ctx), client_id) do
       {:ok, %{thread_id: id}} -> {:ok, id}
       {:error, :not_found} -> today_id(ctx)
@@ -825,15 +831,15 @@ defmodule Aqua.Providers.Thread do
     end
   end
 
-  defp pressed_in(ctx, _none), do: today_id(ctx)
+  defp daily_lands(ctx, _none), do: today_id(ctx)
 
-  defp sends_to(ctx, id, files) when is_binary(id) and id != "" do
+  defp sends_to(ctx, id, files, client_id) when is_binary(id) and id != "" do
     case Arca.ThreadStorage.get(Sanctum.Context.actor(ctx), id) do
       {:ok, %{kind: "daily", day: day}} when files != [] ->
         if day == Aqua.Day.today(ctx), do: {:ok, id}, else: {:error, :day_turned}
 
       {:ok, %{kind: "daily"}} ->
-        today_id(ctx)
+        daily_lands(ctx, client_id)
 
       {:ok, %{id: id}} ->
         {:ok, id}
@@ -843,8 +849,8 @@ defmodule Aqua.Providers.Thread do
     end
   end
 
-  defp sends_to(_ctx, _none, [_ | _]), do: {:error, :files_need_thread}
-  defp sends_to(ctx, _none, []), do: today_id(ctx)
+  defp sends_to(_ctx, _none, [_ | _], _client_id), do: {:error, :files_need_thread}
+  defp sends_to(ctx, _none, [], client_id), do: daily_lands(ctx, client_id)
 
   # What this caller's own session stored under the refused message, and
   # nothing anyone else stored (`Aqua.Attachments.discard_unsent/3`).
@@ -1160,7 +1166,7 @@ defmodule Aqua.Providers.Thread do
 
   defp translate(:not_found, id), do: {:not_found, "thread", id}
 
-  defp translate(:empty, _id), do: {:invalid_argument, "send requires a non-empty 'message'"}
+  defp translate(:empty, _id), do: {:invalid_argument, @says_nothing}
 
   defp translate(:day_turned, _id),
     do:
