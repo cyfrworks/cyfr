@@ -710,7 +710,7 @@ defmodule Aqua.Harness.Program do
             state
             |> stream(of_work(lines, "text", turn), effects.commit.said)
             |> think(of_work(lines, "thought", turn))
-            |> own(of_work(lines, "own", turn))
+            |> own(of_activity(lines, turn))
             |> tell_usage(effects.commit.usage)
             |> act(effects)
             |> arm()
@@ -738,6 +738,12 @@ defmodule Aqua.Harness.Program do
   # its line's number.
   defp of_work(lines, t, %{id: work_id}),
     do: for({seq, %{"t" => ^t, "work" => ^work_id} = event} <- lines, do: {seq, event})
+
+  # The batch's own tools of the turn's work and the idles that end its
+  # native turns, in the order of their lines (`own/2`).
+  defp of_activity(lines, %{id: work_id}),
+    do:
+      for({_seq, %{"t" => t, "work" => ^work_id} = event} <- lines, t in ~w(own idle), do: event)
 
   # What a batch's events do, judged here: the commit's attrs, and what
   # this process acts on once they are committed.
@@ -937,22 +943,43 @@ defmodule Aqua.Harness.Program do
 
   # The open work's own tools of the program, told to the loop as they
   # start and end, each run by its `call` and with what the harness said
-  # it runs or changed: the loop keeps the one list of what runs, and
-  # nothing of them is stored.
-  defp own(state, owns) do
-    Enum.reduce(owns, state, fn {_seq, %{"call" => call, "name" => name, "phase" => phase} = own},
-                                state ->
-      tell(state, {:activity, {:own, call, own_name(name), phase, own["detail"]}})
+  # it runs or changed, and its native turn's end, after which none of
+  # them runs: in the order of their lines, so an end that follows the
+  # idle is as late in one read as in two. The loop keeps the one list of
+  # what runs, and nothing of them is stored.
+  defp own(state, events) do
+    Enum.reduce(events, state, fn
+      %{"t" => "idle"}, state ->
+        tell(state, {:activity, :idle})
+
+      %{"call" => call, "name" => name, "phase" => phase} = own, state ->
+        tell(state, {:activity, {:own, call, own_name(name), phase, shown(own["detail"])}})
     end)
   end
+
+  # The characters a harness's words never show by their effect: every
+  # control or format character.
+  defp unshown, do: ~r/\p{C}/u
 
   # The program's word for its tool is shown as text: a name as long as
   # the wire holds a tool's name to and with no control or format
   # character, or else a fixed word.
   defp own_name(name) do
-    if Opus.Brain.tool_name?(name) and not String.match?(name, ~r/\p{C}/u),
+    if Opus.Brain.tool_name?(name) and not String.match?(name, unshown()),
       do: name,
       else: "tool"
+  end
+
+  # What a run did, as the harness said it, shown as what is there: each
+  # control or format character but a line feed and a tab is shown as
+  # its escape, so an override reads as one rather than turning the text.
+  defp shown(nil), do: nil
+
+  defp shown(detail) do
+    Regex.replace(unshown(), detail, fn
+      char when char in ["\n", "\t"] -> char
+      <<code::utf8>> -> "\\u{" <> String.pad_leading(Integer.to_string(code, 16), 4, "0") <> "}"
+    end)
   end
 
   # What this process does once a batch is committed.
@@ -1079,13 +1106,12 @@ defmodule Aqua.Harness.Program do
   defp on_errors(%{work: work} = state, %{errors: [error | _]}),
     do: fail(state, lost(work, {:provider, error["type"], error["message"]}))
 
-  # The native turn ended: none of its own tools runs any more, which the
-  # loop settles wherever it waits (`{:native, :idle}`), and the loop finds
-  # whether its turn is done. Only the idle that names the turn's work is
-  # its end: a resumed harness may send one of none first.
+  # The native turn ended, which the loop was told in the order of the
+  # lines (`own/2`), and the loop finds whether its turn is done. Only the
+  # idle that names the turn's work is its end: a resumed harness may send
+  # one of none first.
   defp on_idle(%{work: %{turn: %{id: id}} = work} = state, %{idle: %{"work" => id} = idle}) do
     state = withdraw(state)
-    state = tell(state, {:activity, :idle})
 
     cond do
       state.phase == :over -> state

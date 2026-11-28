@@ -2496,6 +2496,67 @@ defmodule Aqua.ProgramTest do
       refute_received %Cyfr.Bus.ThreadEvent{kind: :tool_activity}
     end
 
+    test "an own end that follows the native turn's idle in the same read shows nothing, as " <>
+           "it shows nothing in a later read",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      watch!(ctx, thread)
+      turn = accept!(ctx, thread, row, "work in parallel")
+      loop = run(ctx, turn)
+      started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+      assert [activity!(), activity!()] == [[start_entry(:running)], [start_entry(:done)]]
+
+      opening = held_start!(fake, row, turn, "ask-1")
+      on_exit(fn -> send(opening, :go) end)
+      assert activity!() == [start_entry(:done), ask_start_entry(:running)]
+      say(fake, row, own_run(turn, "item_7", "commandExecution", "start", "echo sample"))
+      command = own_entry("commandExecution", :running, ["echo sample"])
+      assert activity!() == [start_entry(:done), ask_start_entry(:running), command]
+
+      # One read: the idle, then the run's end after it.
+      lines = [
+        idle(turn, [input.id]),
+        own_run(turn, "item_7", "commandExecution", "end", "late end")
+      ]
+
+      Scripted.write_lines(fake, row.id, Enum.map(lines, &Jason.encode!/1))
+      settled = %{command | status: :done}
+      assert activity!() == [start_entry(:done), ask_start_entry(:running), settled]
+
+      send(opening, :go)
+      assert activity!() == [start_entry(:done), ask_start_entry(:done), settled]
+      _answer = accept_next!(fake, row)
+      say(fake, row, idle(turn, [input.id]))
+      assert :completed = Task.await(loop, 30_000)
+      refute_received %Cyfr.Bus.ThreadEvent{kind: :tool_activity}
+    end
+
+    test "a run's detail shows each control or format character but a line feed and a tab " <>
+           "as its escape",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      watch!(ctx, thread)
+      turn = accept!(ctx, thread, row, "run it")
+      loop = run(ctx, turn)
+      started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+      assert [activity!(), activity!()] == [[start_entry(:running)], [start_entry(:done)]]
+
+      ran = "echo \u202Eabc\u202C a\u200Db \e[31mred"
+      changed = "--- a/x\n+++ b/x\n@@ -1 +1 @@\n-\told\n+\tnew"
+      say(fake, row, own_run(turn, "call_1", "Shell", "start", ran))
+      shown = ~S"echo \u{202E}abc\u{202C} a\u{200D}b \u{001B}[31mred"
+      assert activity!() == [start_entry(:done), own_entry("Shell", :running, [shown])]
+      say(fake, row, own_run(turn, "call_1", "Shell", "end", changed))
+      assert activity!() == [start_entry(:done), own_entry("Shell", :done, [shown, changed])]
+
+      say(fake, row, idle(turn, [input.id]))
+      assert :completed = Task.await(loop, 30_000)
+    end
+
     test "the program's reasoning streams apart from its text, as thought of the open work " <>
            "only, and no row lands it",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do

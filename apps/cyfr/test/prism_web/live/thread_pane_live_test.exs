@@ -4122,6 +4122,70 @@ defmodule PrismWeb.ThreadPaneLiveTest do
       for tag <- ~w(img b script i), do: refute(html =~ "<#{tag}")
     end
 
+    test "a pane opened while its thread's turn runs on another member draws that turn's " <>
+           "rows from the bus, and never an older turn's",
+         %{conn: conn, athanor: athanor, here: here, thread: thread} do
+      Sanctum.TestContext.ready!(athanor.id)
+      turn = soul_turn!(here, thread, "running")
+      node = "s3b-peer-#{System.unique_integer([:positive])}"
+      boot = node <> "#boot"
+      now = DateTime.utc_now()
+
+      # The peer's slot as its row, rolled back with the test: a take would
+      # record a slot of this member's that outlives it.
+      Arca.Repo.insert!(%Arca.Schemas.CellLease{
+        node: node,
+        owner: boot,
+        generation: 1,
+        fence: 1,
+        lease_until: DateTime.add(now, 60, :second),
+        taken_at: now,
+        release: Prima.Version.current()
+      })
+
+      {1, _} =
+        Arca.Repo.update_all(from(t in Arca.Schemas.Turn, where: t.id == ^turn.id),
+          set: [runner_id: boot, fence: 1]
+        )
+
+      {1, _} =
+        Arca.Repo.update_all(from(t in Arca.Schemas.Thread, where: t.id == ^thread.id),
+          set: [active_turn_id: turn.id]
+        )
+
+      assert {:error, :held_elsewhere} = Aqua.thread_state(thread.id, athanor.id)
+      pane = open_pane(conn, athanor, thread)
+
+      Aqua.Tape.announce(here, thread.id, :turn_fence, %{turn_id: turn.id, fence: 1})
+
+      Aqua.Tape.announce(
+        here,
+        thread.id,
+        :tool_activity,
+        listed(turn.id, 1, [ran("Read", :running)])
+      )
+
+      Prima.Test.Wait.wait_until(fn -> has_element?(pane, @rows, "Read") end)
+
+      Aqua.Tape.announce(
+        here,
+        thread.id,
+        :tool_activity,
+        listed("trn_older", 1, [ran("Grep", :done)])
+      )
+
+      Aqua.Tape.announce(
+        here,
+        thread.id,
+        :tool_activity,
+        listed(turn.id, 0, [ran("Bash", :done)])
+      )
+
+      assert has_element?(pane, @rows, "Read")
+      refute has_element?(pane, @rows, "Grep")
+      refute has_element?(pane, @rows, "Bash")
+    end
+
     test "reasoning folds under Thinking apart from the answer it shares a message with, " <>
            "outlives the answer's row while the turn goes on, and goes with the rows at its " <>
            "end while the final answer stays",

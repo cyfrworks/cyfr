@@ -1249,31 +1249,42 @@ defmodule PrismWeb.ThreadPaneLive do
 
   # Streamed text, reasoning and the list of calls belong to the running
   # turn alone: an announcement, a delta or a list for any other turn, or
-  # while none runs, is not kept, nor a list under a fence the pane no
-  # longer holds (`Aqua.Loop.Stream`).
+  # while none is held, is not kept, nor a list under a fence the pane no
+  # longer holds (`Aqua.Loop.Stream`). A pane that holds no turn, such as
+  # one whose thread runs on another member, learns the running turn from
+  # the fence its loop announces.
+  defp handle_thread_event(%{assigns: %{live_turn_id: nil}} = socket, :turn_fence, %{
+         turn_id: turn_id,
+         fence: fence
+       }) do
+    socket
+    |> assign(:live_turn_id, turn_id)
+    |> assign(:partials, Aqua.stream_advance(Aqua.stream_new(), fence))
+  end
+
   defp handle_thread_event(
-         %{assigns: %{running: true, live_turn_id: turn_id}} = socket,
+         %{assigns: %{live_turn_id: turn_id}} = socket,
          :turn_fence,
          %{turn_id: turn_id, fence: fence}
        ),
        do: assign(socket, :partials, Aqua.stream_advance(socket.assigns.partials, fence))
 
   defp handle_thread_event(
-         %{assigns: %{running: true, live_turn_id: turn_id}} = socket,
+         %{assigns: %{live_turn_id: turn_id}} = socket,
          :delta_abandoned,
          %{turn_id: turn_id} = marker
        ),
        do: assign(socket, :partials, Aqua.stream_abandoned(socket.assigns.partials, marker))
 
   defp handle_thread_event(
-         %{assigns: %{running: true, live_turn_id: turn_id}} = socket,
+         %{assigns: %{live_turn_id: turn_id}} = socket,
          :delta,
          %{turn_id: turn_id} = delta
        ),
        do: assign(socket, :partials, Aqua.stream_add(socket.assigns.partials, delta))
 
   defp handle_thread_event(
-         %{assigns: %{running: true, live_turn_id: turn_id}} = socket,
+         %{assigns: %{live_turn_id: turn_id}} = socket,
          :tool_activity,
          %{turn_id: turn_id} = update
        ),
